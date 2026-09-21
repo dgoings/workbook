@@ -403,7 +403,7 @@ func writeFixtureHistory(w io.Writer, config core.ProjectConfig, plans []fixture
 			}
 			timestamp := ids.timestamp()
 			pack := fixturePlanOperationPack(config, plan, taskIndex, logicalClock, operationID, timestamp, plannedOperation)
-			state, err := core.Apply(parent, pack, config.Key)
+			state, err := core.Apply(parent, pack)
 			if err != nil {
 				return Fixture{}, fmt.Errorf("apply task %q operation %d: %w", plan.TaskID, logicalClock, err)
 			}
@@ -477,7 +477,7 @@ func appendFixtureOperation(
 		return fixtureCommit{}, fmt.Errorf("generate fixture operation ID: %w", err)
 	}
 	pack := fixtureOperationPack(config, taskID, generation, taskIndex, logicalClock, operationID, ids.timestamp())
-	state, err := core.Apply(&parent.State, pack, config.Key)
+	state, err := core.Apply(&parent.State, pack)
 	if err != nil {
 		return fixtureCommit{}, fmt.Errorf("apply fixture operation: %w", err)
 	}

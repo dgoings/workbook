@@ -34,7 +34,7 @@ func unassign(id, value string) Operation {
 // createdTask is the state every assignment test folds onto.
 func createdTask(t *testing.T) StateDocument {
 	t.Helper()
-	state, err := Apply(nil, createPack(), "WB")
+	state, err := Apply(nil, createPack())
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}
@@ -45,7 +45,7 @@ func createdTask(t *testing.T) StateDocument {
 func assignedTask(t *testing.T, value, actor string) StateDocument {
 	t.Helper()
 	state := createdTask(t)
-	next, err := Apply(&state, assignmentPack(actor, 2, updatedAt, assign(assignID1, value)), "WB")
+	next, err := Apply(&state, assignmentPack(actor, 2, updatedAt, assign(assignID1, value)))
 	if err != nil {
 		t.Fatalf("Apply(assign %s by %s) error = %v", value, actor, err)
 	}
@@ -89,11 +89,11 @@ func TestApplyAssignAddAccumulatesEveryDistinctAssignment(t *testing.T) {
 	state, err := Apply(&state, assignmentPack(dylan, 2, updatedAt,
 		assign(assignID1, dylan+"/impl-1"),
 		assign(assignID2, dylan+"/impl-2"),
-	), "WB")
+	))
 	if err != nil {
 		t.Fatalf("Apply(two agents) error = %v", err)
 	}
-	state, err = Apply(&state, assignmentPack(teammate, 3, updatedAt, assign(assignID3, teammate)), "WB")
+	state, err = Apply(&state, assignmentPack(teammate, 3, updatedAt, assign(assignID3, teammate)))
 	if err != nil {
 		t.Fatalf("Apply(teammate) error = %v", err)
 	}
@@ -113,7 +113,7 @@ func TestAssignmentsAreStoredInCanonicalOrder(t *testing.T) {
 		assign(assignID2, dylan+"/impl-2"),
 		assign(assignID3, dylan+"/impl-1"),
 		assign(assignID4, "aaron@example.com"),
-	), "WB")
+	))
 	if err != nil {
 		t.Fatalf("Apply(forward) error = %v", err)
 	}
@@ -132,7 +132,7 @@ func TestAssignmentsAreStoredInCanonicalOrder(t *testing.T) {
 		assign(assignID3, dylan+"/impl-1"),
 		assign(assignID2, dylan+"/impl-2"),
 		assign(assignID1, "zoe@example.com"),
-	), "WB")
+	))
 	if err != nil {
 		t.Fatalf("Apply(reverse) error = %v", err)
 	}
@@ -155,7 +155,7 @@ func TestApplyAssignAddIsIdempotentAndKeepsTheFirstAttribution(t *testing.T) {
 	state := assignedTask(t, dylan+"/impl-1", teammate)
 	later := updatedAt.Add(time.Hour)
 
-	state, err := Apply(&state, assignmentPack(stranger, 3, later, assign(assignID2, dylan+"/impl-1")), "WB")
+	state, err := Apply(&state, assignmentPack(stranger, 3, later, assign(assignID2, dylan+"/impl-1")))
 	if err != nil {
 		t.Fatalf("Apply(duplicate add) error = %v", err)
 	}
@@ -171,7 +171,7 @@ func TestApplyAssignAddIsIdempotentAndKeepsTheFirstAttribution(t *testing.T) {
 func TestApplyAssignRemoveHonorsTheAssigneePrincipal(t *testing.T) {
 	state := assignedTask(t, dylan+"/impl-1", teammate)
 
-	state, err := Apply(&state, assignmentPack(dylan, 3, updatedAt, unassign(assignID2, dylan+"/impl-1")), "WB")
+	state, err := Apply(&state, assignmentPack(dylan, 3, updatedAt, unassign(assignID2, dylan+"/impl-1")))
 	if err != nil {
 		t.Fatalf("Apply(self removal) error = %v", err)
 	}
@@ -185,7 +185,7 @@ func TestApplyAssignRemoveHonorsTheAssigneePrincipal(t *testing.T) {
 func TestApplyAssignRemoveHonorsTheCreator(t *testing.T) {
 	state := assignedTask(t, teammate+"/review", dylan)
 
-	state, err := Apply(&state, assignmentPack(dylan, 3, updatedAt, unassign(assignID2, teammate+"/review")), "WB")
+	state, err := Apply(&state, assignmentPack(dylan, 3, updatedAt, unassign(assignID2, teammate+"/review")))
 	if err != nil {
 		t.Fatalf("Apply(creator removal) error = %v", err)
 	}
@@ -201,7 +201,7 @@ func TestApplyAssignRemoveFoldsAForeignRemovalToANoOp(t *testing.T) {
 	before := copyTaskData(state.Task)
 
 	after, err := Apply(&state, assignmentPack(stranger, 3, updatedAt.Add(time.Minute),
-		unassign(assignID2, dylan+"/impl-1")), "WB")
+		unassign(assignID2, dylan+"/impl-1")))
 	if err != nil {
 		t.Fatalf("Apply(foreign removal) error = %v; a foreign removal must fold, not fail", err)
 	}
@@ -221,7 +221,7 @@ func TestApplyAssignRemoveIgnoresTheAgentLabelWhenDecidingAuthority(t *testing.T
 	state, err := Apply(&state, assignmentPack(dylan, 2, updatedAt,
 		assign(assignID1, dylan+"/impl-1"),
 		assign(assignID2, dylan+"/impl-2"),
-	), "WB")
+	))
 	if err != nil {
 		t.Fatalf("Apply(fleet) error = %v", err)
 	}
@@ -229,7 +229,7 @@ func TestApplyAssignRemoveIgnoresTheAgentLabelWhenDecidingAuthority(t *testing.T
 	state, err = Apply(&state, assignmentPack(dylan, 3, updatedAt,
 		unassign(assignID3, dylan+"/impl-1"),
 		unassign(assignID4, dylan+"/impl-2"),
-	), "WB")
+	))
 	if err != nil {
 		t.Fatalf("Apply(sweep) error = %v", err)
 	}
@@ -243,7 +243,7 @@ func TestApplyAssignRemoveIgnoresTheAgentLabelWhenDecidingAuthority(t *testing.T
 func TestApplyAssignRemoveToleratesAnAbsentAssignment(t *testing.T) {
 	state := assignedTask(t, dylan, dylan)
 
-	after, err := Apply(&state, assignmentPack(dylan, 3, updatedAt, unassign(assignID2, teammate)), "WB")
+	after, err := Apply(&state, assignmentPack(dylan, 3, updatedAt, unassign(assignID2, teammate)))
 	if err != nil {
 		t.Fatalf("Apply(absent removal) error = %v", err)
 	}
@@ -266,7 +266,7 @@ func TestTheRemovalRuleIsDecidedOnlyFromTheHistory(t *testing.T) {
 	fold := func() []byte {
 		var parent *StateDocument
 		for _, pack := range packs {
-			state, err := Apply(parent, pack, "WB")
+			state, err := Apply(parent, pack)
 			if err != nil {
 				t.Fatalf("Apply(%s) error = %v", pack.Operations[0].Type, err)
 			}
@@ -343,7 +343,7 @@ func TestAnAssignmentPutsAPermanentWatermarkOnTheCheckpoint(t *testing.T) {
 	if got, want := ordinary.MinReader, 0; got != want {
 		t.Fatalf("ordinary pack minReader = %d, want %d", got, want)
 	}
-	next, err := Apply(&state, ordinary, "WB")
+	next, err := Apply(&state, ordinary)
 	if err != nil {
 		t.Fatalf("Apply(ordinary) error = %v", err)
 	}
@@ -362,7 +362,7 @@ func TestApplyRefusesATaskCreateCarryingAssignments(t *testing.T) {
 	task.Assignments = []Assignment{{Principal: dylan, Creator: dylan, CreatedAt: createdAt}}
 	pack.Operations[0].Task = &task
 
-	_, err := Apply(nil, pack, "WB")
+	_, err := Apply(nil, pack)
 	if err == nil {
 		t.Fatal("Apply(create with assignments) error = nil, want a refusal")
 	}
@@ -392,7 +392,7 @@ func TestApplyRejectsMalformedAssignmentOperations(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			state := createdTask(t)
-			_, err := Apply(&state, assignmentPack(dylan, 2, updatedAt, operation), "WB")
+			_, err := Apply(&state, assignmentPack(dylan, 2, updatedAt, operation))
 			if err == nil {
 				t.Fatalf("Apply(%#v) error = nil, want a refusal", operation)
 			}
@@ -409,7 +409,7 @@ func TestApplyRejectsMalformedAssignmentOperations(t *testing.T) {
 // corrupt data.
 func TestApplyAcceptsAPrincipalTheBoundaryWouldRefuse(t *testing.T) {
 	state := createdTask(t)
-	state, err := Apply(&state, assignmentPack(dylan, 2, updatedAt, assign(assignID1, "dylan")), "WB")
+	state, err := Apply(&state, assignmentPack(dylan, 2, updatedAt, assign(assignID1, "dylan")))
 	if err != nil {
 		t.Fatalf("Apply(bare principal) error = %v; replay must not judge an identity", err)
 	}
@@ -476,7 +476,7 @@ func TestTheChangeLogReportsAssignmentOperationsByTheirEffect(t *testing.T) {
 			unassign(assignID4, dylan+"/impl-1"))},
 	}}
 
-	log := BuildChangeLog("WB", history, 0, true)
+	log := BuildChangeLog(history, 0, true)
 	if log.Truncated != nil {
 		t.Fatalf("change log truncated at %#v; every entry must replay", log.Truncated)
 	}
@@ -530,7 +530,7 @@ func TestTheChangeLogReportsAnAssignmentWhoseAttributionAPackReplaced(t *testing
 			unassign(assignID2, dylan), assign(assignID3, dylan))},
 	}}
 
-	log := BuildChangeLog("WB", history, 0, true)
+	log := BuildChangeLog(history, 0, true)
 	if log.Truncated != nil {
 		t.Fatalf("change log truncated at %#v", log.Truncated)
 	}
@@ -545,7 +545,7 @@ func TestTheChangeLogReportsAnAssignmentWhoseAttributionAPackReplaced(t *testing
 	}
 
 	// And the record really did move, which is what makes the row true.
-	steps, _ := ReplayHistory("WB", history)
+	steps, _ := ReplayHistory(history)
 	final := steps[len(steps)-1].After.Assignments[0]
 	if final.Creator != dylan {
 		t.Fatalf("creator = %q, want %q", final.Creator, dylan)
@@ -612,7 +612,7 @@ func TestNormalizeTaskRejectsNoncanonicalAssignments(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			task := base()
 			task.Assignments = assignments
-			if _, err := NormalizeTask("WB", task); err == nil {
+			if _, err := NormalizeTask(task); err == nil {
 				t.Fatalf("NormalizeTask(%#v) error = nil, want a refusal", assignments)
 			}
 		})
@@ -625,7 +625,7 @@ func TestNormalizeTaskRejectsNoncanonicalAssignments(t *testing.T) {
 			{Principal: dylan, Label: "b", Creator: dylan, CreatedAt: createdAt},
 			{Principal: dylan, Label: "a", Creator: dylan, CreatedAt: createdAt},
 		}
-		normalized, err := NormalizeTask("WB", task)
+		normalized, err := NormalizeTask(task)
 		if err != nil {
 			t.Fatalf("NormalizeTask() error = %v", err)
 		}
@@ -653,7 +653,7 @@ func TestTheFoldDoesNotEnforceTheAssignmentCeiling(t *testing.T) {
 			CreatedAt: createdAt,
 		})
 	}
-	if _, err := NormalizeTask("WB", task); err != nil {
+	if _, err := NormalizeTask(task); err != nil {
 		t.Fatalf("NormalizeTask(over the ceiling) error = %v; the fold must not enforce a count", err)
 	}
 }

@@ -199,7 +199,7 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 		return MutationResult{}, err
 	}
 	now := s.now()
-	taskData, err := normalizeCanonicalTask(s.Config.Key, TaskData{
+	taskData, err := normalizeCanonicalTask(TaskData{
 		Title:        input.Title,
 		Description:  input.Description,
 		Status:       status,
@@ -224,7 +224,7 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 		s.Config.ProjectID, taskID, generation, s.Actor, 1, now,
 		[]Operation{{ID: operationID, Type: OperationTaskCreate, Task: &taskData}},
 	)
-	state, err := Apply(nil, pack, s.Config.Key)
+	state, err := Apply(nil, pack)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -547,7 +547,7 @@ func (s Service) ShowDetail(ctx context.Context, idOrPrefix string, options Show
 		if err != nil {
 			return TaskDetail{}, err
 		}
-		log := BuildChangeLog(s.Config.Key, history, options.Limit, options.All)
+		log := BuildChangeLog(history, options.Limit, options.All)
 		detail.History = &log
 	}
 	if options.Compare != nil {
@@ -580,7 +580,7 @@ func (s Service) stateAtCommit(ctx context.Context, taskID, commit string) (Task
 	if err != nil {
 		return TaskData{}, err
 	}
-	return StateAt(s.Config.Key, history)
+	return StateAt(history)
 }
 
 func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input UpdateInput) (MutationResult, error) {
@@ -617,7 +617,7 @@ func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input Up
 	if input.Labels != nil {
 		next.Labels = append([]string(nil), (*input.Labels)...)
 	}
-	next, err = normalizeCanonicalTask(s.Config.Key, next)
+	next, err = normalizeCanonicalTask(next)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -1168,7 +1168,7 @@ func (s Service) writeMutation(ctx context.Context, parent *Snapshot, operations
 		s.now(),
 		operations,
 	)
-	state, err := Apply(&parent.State, pack, s.Config.Key)
+	state, err := Apply(&parent.State, pack)
 	if err != nil {
 		return MutationResult{}, err
 	}

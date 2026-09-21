@@ -328,7 +328,7 @@ func appendFixtureLabel(
 		parent.Pack.LogicalClock+1, ids.timestamp(),
 		[]core.Operation{{ID: operationID, Type: core.OperationSetAdd, Field: "labels", Value: label}},
 	)
-	state, err := core.Apply(&parent.State, pack, config.Key)
+	state, err := core.Apply(&parent.State, pack)
 	if err != nil {
 		return fmt.Errorf("apply fixture label operation: %w", err)
 	}
@@ -386,7 +386,7 @@ func writeBuriedCheckpointCorruption(ctx context.Context, root string, config co
 	if err != nil {
 		return err
 	}
-	derivedState, err := core.Apply(&corrupt.State, validChild.Pack, config.Key)
+	derivedState, err := core.Apply(&corrupt.State, validChild.Pack)
 	if err != nil {
 		return fmt.Errorf("derive descendant from corrupt checkpoint: %w", err)
 	}

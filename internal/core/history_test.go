@@ -29,7 +29,7 @@ func TestBuildChangeLogRendersEachFieldInItsOwnTerms(t *testing.T) {
 		},
 	)
 
-	log := BuildChangeLog(historyProjectKey, history, 0, true)
+	log := BuildChangeLog(history, 0, true)
 	if log.Total != 5 || log.Showing != 5 {
 		t.Fatalf("log window = %d of %d, want all five changes", log.Showing, log.Total)
 	}
@@ -77,7 +77,7 @@ func TestBuildChangeLogKeepsTheChainOrderWhenWallTimesDisagree(t *testing.T) {
 	// clock is rewritten, so the newest chain position can be the oldest clock.
 	history.Entries[2].Operation.WallTime = historyOrigin.Add(-time.Hour)
 
-	log := BuildChangeLog(historyProjectKey, history, 0, true)
+	log := BuildChangeLog(history, 0, true)
 	if got, want := log.Changes[2].Summary, "changed title"; got != want {
 		t.Fatalf("last change = %q, want %q at the end of the chain", got, want)
 	}
@@ -102,7 +102,7 @@ func TestBuildChangeLogWindowsTheMostRecentChanges(t *testing.T) {
 	}
 	history := historyOf(t, packs...)
 
-	defaulted := BuildChangeLog(historyProjectKey, history, 0, false)
+	defaulted := BuildChangeLog(history, 0, false)
 	if defaulted.Showing != DefaultChangeLimit || defaulted.Total != 21 {
 		t.Fatalf("default window = %d of %d, want %d of 21", defaulted.Showing, defaulted.Total, DefaultChangeLimit)
 	}
@@ -110,12 +110,12 @@ func TestBuildChangeLogWindowsTheMostRecentChanges(t *testing.T) {
 		t.Fatalf("newest windowed change = %q, want %q", got, want)
 	}
 
-	limited := BuildChangeLog(historyProjectKey, history, 3, false)
+	limited := BuildChangeLog(history, 3, false)
 	if limited.Showing != 3 || limited.Total != 21 {
 		t.Fatalf("limited window = %d of %d, want 3 of 21", limited.Showing, limited.Total)
 	}
 
-	all := BuildChangeLog(historyProjectKey, history, 3, true)
+	all := BuildChangeLog(history, 3, true)
 	if all.Showing != 21 || all.Total != 21 {
 		t.Fatalf("unlimited window = %d of %d, want 21 of 21", all.Showing, all.Total)
 	}
@@ -131,7 +131,7 @@ func TestBuildChangeLogTruncatesSoftlyWhenAnOperationCannotBeApplied(t *testing.
 	)
 	history.Entries[2].Operation.LogicalClock = 99
 
-	log := BuildChangeLog(historyProjectKey, history, 0, true)
+	log := BuildChangeLog(history, 0, true)
 	if log.Showing != 2 || log.Total != 2 {
 		t.Fatalf("log = %d of %d, want the two-entry valid prefix", log.Showing, log.Total)
 	}

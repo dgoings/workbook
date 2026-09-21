@@ -413,5 +413,5 @@ func checkpointMatchesParent(t *testing.T, root string, config core.ProjectConfi
 	if err != nil {
 		t.Fatal(err)
 	}
-	return core.ValidateCheckpoint(&parentState, operation, stored, config.Key) == nil
+	return core.ValidateCheckpoint(&parentState, operation, stored) == nil
 }

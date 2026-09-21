@@ -60,7 +60,7 @@ func TestNormalizeTaskRejectsOversizedFields(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := NormalizeTask("WB", test.task)
+			_, err := NormalizeTask(test.task)
 			if got, want := CategoryOf(err), CategoryValidation; got != want {
 				t.Fatalf("NormalizeTask() category = %q, want %q; error = %v", got, want, err)
 			}
@@ -79,7 +79,7 @@ func TestNormalizeTaskAcceptsFieldsExactlyAtTheCeiling(t *testing.T) {
 		task.Dependencies = distinctDependencies(MaxDependencyCount)
 	})
 
-	normalized, err := NormalizeTask("WB", task)
+	normalized, err := NormalizeTask(task)
 	if err != nil {
 		t.Fatalf("NormalizeTask() error = %v", err)
 	}
@@ -114,7 +114,7 @@ func TestNormalizeTaskRefusesAnAbsurdRankWithoutParsingIt(t *testing.T) {
 	task := sizedTask(func(task *TaskData) { task.Rank = oversizedRank(4_000_002) })
 
 	start := time.Now()
-	_, err := NormalizeTask("WB", task)
+	_, err := NormalizeTask(task)
 	elapsed := time.Since(start)
 
 	if got, want := CategoryOf(err), CategoryValidation; got != want {
@@ -137,7 +137,7 @@ func TestNormalizeTaskCountsDependenciesAfterDeduplication(t *testing.T) {
 	}
 	task := sizedTask(func(task *TaskData) { task.Dependencies = dependencies })
 
-	normalized, err := NormalizeTask("WB", task)
+	normalized, err := NormalizeTask(task)
 	if err != nil {
 		t.Fatalf("NormalizeTask() error = %v", err)
 	}
@@ -181,7 +181,7 @@ func TestNormalizeTaskCountsLabelsAfterDeduplication(t *testing.T) {
 	}
 	task := sizedTask(func(task *TaskData) { task.Labels = labels })
 
-	normalized, err := NormalizeTask("WB", task)
+	normalized, err := NormalizeTask(task)
 	if err != nil {
 		t.Fatalf("NormalizeTask() error = %v", err)
 	}

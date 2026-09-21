@@ -233,7 +233,7 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 	// would make the replayed history a different claim than the original.
 	pack := local.Operation
 	pack.LogicalClock = replay.parent.State.LogicalClock + 1
-	state, err := core.Apply(&replay.parent.State, pack, replay.config.Key)
+	state, err := core.Apply(&replay.parent.State, pack)
 	if err != nil {
 		// A newer-writer refusal keeps its own category rather than being
 		// restated as corruption. reconcileDivergentTasks refuses such a

@@ -764,7 +764,7 @@ func writeAddLabelPack(clock uint64, operationID, label string) core.OperationPa
 
 func writeState(t *testing.T, parent *core.StateDocument, pack core.OperationPack) core.StateDocument {
 	t.Helper()
-	state, err := core.Apply(parent, pack, "WB")
+	state, err := core.Apply(parent, pack)
 	if err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}

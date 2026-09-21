@@ -302,7 +302,7 @@ func craftAssignRemoveCommit(t *testing.T, repo *Repository, config core.Project
 		parent.State.LogicalClock+1, time.Now().UTC(),
 		[]core.Operation{{ID: newAssignmentULID(t), Type: core.OperationAssignRemove, Value: value}},
 	)
-	state, err := core.Apply(&parent.State, pack, config.Key)
+	state, err := core.Apply(&parent.State, pack)
 	if err != nil {
 		t.Fatalf("Apply(crafted removal) error = %v", err)
 	}

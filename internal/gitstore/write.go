@@ -41,14 +41,14 @@ func (r *Repository) Write(
 	}
 
 	if parent == nil {
-		if err := core.ValidateCheckpoint(nil, pack, state, config.Key); err != nil {
+		if err := core.ValidateCheckpoint(nil, pack, state); err != nil {
 			return core.Snapshot{}, err
 		}
 	} else {
 		if err := r.validateParentHead(ctx, parent.Head); err != nil {
 			return core.Snapshot{}, err
 		}
-		if err := core.ValidateCheckpoint(&parent.State, pack, state, config.Key); err != nil {
+		if err := core.ValidateCheckpoint(&parent.State, pack, state); err != nil {
 			return core.Snapshot{}, err
 		}
 		current, found, err := r.taskRef(ctx, pack.TaskID)
@@ -65,7 +65,7 @@ func (r *Repository) Write(
 		if err := validateStoredParentIdentity(config, pack, storedParent.State); err != nil {
 			return core.Snapshot{}, err
 		}
-		if err := core.ValidateCheckpoint(&storedParent.State, pack, state, config.Key); err != nil {
+		if err := core.ValidateCheckpoint(&storedParent.State, pack, state); err != nil {
 			return core.Snapshot{}, err
 		}
 	}
@@ -93,14 +93,14 @@ func (r *Repository) WriteValidated(
 
 	ref := taskRefPrefix + pack.TaskID
 	if parent == nil {
-		if err := core.ValidateCheckpoint(nil, pack, state, config.Key); err != nil {
+		if err := core.ValidateCheckpoint(nil, pack, state); err != nil {
 			return core.Snapshot{}, err
 		}
 	} else {
 		if err := r.validateFullObjectID(parent.Head); err != nil {
 			return core.Snapshot{}, core.Wrap(core.CategoryValidation, "parent head must be a canonical object ID", err)
 		}
-		if err := core.ValidateCheckpoint(&parent.State, pack, state, config.Key); err != nil {
+		if err := core.ValidateCheckpoint(&parent.State, pack, state); err != nil {
 			return core.Snapshot{}, err
 		}
 	}

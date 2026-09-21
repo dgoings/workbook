@@ -314,7 +314,17 @@ func foldedMinReader(parent *StateDocument, pack OperationPack) int {
 }
 
 // Apply validates and applies one immutable operation pack to a task state.
-func Apply(parent *StateDocument, pack OperationPack, projectKey string) (StateDocument, error) {
+//
+// It takes no project key, and asks nothing about ownership. A task ID is
+// checked for shape — ValidateTaskIDShape — and which keys a project actually
+// has is core.KeySet's question, asked once at each boundary where an untrusted
+// name enters: a ref read from the local namespace or from a remote, an ID
+// somebody typed, a pack this clone is about to author. That split is what
+// keeps the fold total over a teammate's history: a pack minted under a key
+// this clone has not fetched the ledger for is unfamiliar, not corrupt, which
+// is the same reading NormalizeTask already gives a stored status and a stored
+// priority.
+func Apply(parent *StateDocument, pack OperationPack) (StateDocument, error) {
 	// The generation gate runs before anything else, because everything else is
 	// a judgment this build is not entitled to make about a document it has
 	// been told it cannot read. A pack that needs a newer reader is refused as
@@ -329,7 +339,7 @@ func Apply(parent *StateDocument, pack OperationPack, projectKey string) (StateD
 	if err := refuseNewerTaskWriter(parent, pack); err != nil {
 		return StateDocument{}, err
 	}
-	if err := validateOperationPackDocument(pack, projectKey); err != nil {
+	if err := validateOperationPackDocument(pack); err != nil {
 		return StateDocument{}, err
 	}
 
@@ -340,10 +350,10 @@ func Apply(parent *StateDocument, pack OperationPack, projectKey string) (StateD
 		if len(pack.Operations) != 1 || pack.Operations[0].Type != OperationTaskCreate {
 			return StateDocument{}, corrupt("root operation pack must contain exactly one task.create operation")
 		}
-		return applyCreate(pack, projectKey)
+		return applyCreate(pack)
 	}
 
-	if err := validateStateDocument(*parent, projectKey); err != nil {
+	if err := validateStateDocument(*parent); err != nil {
 		return StateDocument{}, err
 	}
 	if err := validateParentMatchesPack(*parent, pack); err != nil {
@@ -416,13 +426,13 @@ func Apply(parent *StateDocument, pack OperationPack, projectKey string) (StateD
 		if operation.Type == OperationTaskCreate {
 			return StateDocument{}, corrupt("task.create requires no parent")
 		}
-		if err := applyOperation(&task, operation, projectKey, authored); err != nil {
+		if err := applyOperation(&task, operation, authored); err != nil {
 			return StateDocument{}, err
 		}
 	}
 
 	task.UpdatedAt = pack.WallTime
-	normalized, err := normalizeCanonicalTask(projectKey, task)
+	normalized, err := normalizeCanonicalTask(task)
 	if err != nil {
 		return StateDocument{}, Wrap(CategoryCorruptData, "operation pack produced an invalid task", err)
 	}
@@ -440,8 +450,8 @@ func Apply(parent *StateDocument, pack OperationPack, projectKey string) (StateD
 }
 
 // ValidateCheckpoint verifies that a stored state is the canonical result of applying a pack.
-func ValidateCheckpoint(parent *StateDocument, pack OperationPack, stored StateDocument, projectKey string) error {
-	computed, err := Apply(parent, pack, projectKey)
+func ValidateCheckpoint(parent *StateDocument, pack OperationPack, stored StateDocument) error {
+	computed, err := Apply(parent, pack)
 	if err != nil {
 		return err
 	}
@@ -459,7 +469,7 @@ func ValidateCheckpoint(parent *StateDocument, pack OperationPack, stored StateD
 	return nil
 }
 
-func applyCreate(pack OperationPack, projectKey string) (StateDocument, error) {
+func applyCreate(pack OperationPack) (StateDocument, error) {
 	operation := pack.Operations[0]
 	if operation.Task == nil || operation.Field != "" || operation.Value != "" {
 		return StateDocument{}, corrupt("task.create must contain only task data")
@@ -478,7 +488,7 @@ func applyCreate(pack OperationPack, projectKey string) (StateDocument, error) {
 
 	task := copyTaskData(*operation.Task)
 	task.UpdatedAt = pack.WallTime
-	normalized, err := normalizeCanonicalTask(projectKey, task)
+	normalized, err := normalizeCanonicalTask(task)
 	if err != nil {
 		return StateDocument{}, Wrap(CategoryCorruptData, "task.create contains an invalid task", err)
 	}
@@ -507,7 +517,7 @@ type authorship struct {
 	at    time.Time
 }
 
-func applyOperation(task *TaskData, operation Operation, projectKey string, authored authorship) error {
+func applyOperation(task *TaskData, operation Operation, authored authorship) error {
 	if err := validateOperation(operation); err != nil {
 		return err
 	}
@@ -515,9 +525,9 @@ func applyOperation(task *TaskData, operation Operation, projectKey string, auth
 	case OperationFieldSet:
 		return applyFieldSet(task, operation)
 	case OperationSetAdd:
-		return applySetAdd(task, operation, projectKey)
+		return applySetAdd(task, operation)
 	case OperationSetRemove:
-		return applySetRemove(task, operation, projectKey)
+		return applySetRemove(task, operation)
 	case OperationAssignAdd:
 		return applyAssignAdd(task, operation, authored)
 	case OperationAssignRemove:
@@ -629,8 +639,8 @@ func applyFieldSet(task *TaskData, operation Operation) error {
 	return nil
 }
 
-func applySetAdd(task *TaskData, operation Operation, projectKey string) error {
-	if err := validateSetOperation(operation, projectKey); err != nil {
+func applySetAdd(task *TaskData, operation Operation) error {
+	if err := validateSetOperation(operation); err != nil {
 		return err
 	}
 	switch operation.Field {
@@ -642,8 +652,8 @@ func applySetAdd(task *TaskData, operation Operation, projectKey string) error {
 	return nil
 }
 
-func applySetRemove(task *TaskData, operation Operation, projectKey string) error {
-	if err := validateSetOperation(operation, projectKey); err != nil {
+func applySetRemove(task *TaskData, operation Operation) error {
+	if err := validateSetOperation(operation); err != nil {
 		return err
 	}
 	switch operation.Field {
@@ -655,7 +665,7 @@ func applySetRemove(task *TaskData, operation Operation, projectKey string) erro
 	return nil
 }
 
-func validateOperationPackEnvelope(pack OperationPack, projectKey string) error {
+func validateOperationPackEnvelope(pack OperationPack) error {
 	if pack.Format != operationPackFormat {
 		return corrupt("unsupported operation pack format %q", pack.Format)
 	}
@@ -676,7 +686,7 @@ func validateOperationPackEnvelope(pack OperationPack, projectKey string) error 
 	if err := validateCanonicalULID("operation pack project ID", pack.ProjectID); err != nil {
 		return err
 	}
-	if err := ValidateTaskID(projectKey, pack.TaskID); err != nil {
+	if err := ValidateTaskIDShape(pack.TaskID); err != nil {
 		return Wrap(CategoryCorruptData, "operation pack task ID is invalid", err)
 	}
 	if err := validateCanonicalULID("operation pack history generation", pack.HistoryGeneration); err != nil {
@@ -702,11 +712,11 @@ func validateOperationPackEnvelope(pack OperationPack, projectKey string) error 
 	return nil
 }
 
-func validateStateDocument(state StateDocument, projectKey string) error {
-	if err := validateStateEnvelope(state, projectKey); err != nil {
+func validateStateDocument(state StateDocument) error {
+	if err := validateStateEnvelope(state); err != nil {
 		return err
 	}
-	normalized, err := normalizeCanonicalTask(projectKey, state.Task)
+	normalized, err := normalizeCanonicalTask(state.Task)
 	if err != nil {
 		return Wrap(CategoryCorruptData, "task state contains an invalid task", err)
 	}
@@ -716,7 +726,7 @@ func validateStateDocument(state StateDocument, projectKey string) error {
 	return nil
 }
 
-func validateStateEnvelope(state StateDocument, projectKey string) error {
+func validateStateEnvelope(state StateDocument) error {
 	if state.Format != stateDocumentFormat {
 		return corrupt("unsupported task state format %q", state.Format)
 	}
@@ -732,7 +742,7 @@ func validateStateEnvelope(state StateDocument, projectKey string) error {
 	if err := validateCanonicalULID("task state project ID", state.ProjectID); err != nil {
 		return err
 	}
-	if err := ValidateTaskID(projectKey, state.TaskID); err != nil {
+	if err := ValidateTaskIDShape(state.TaskID); err != nil {
 		return Wrap(CategoryCorruptData, "task state task ID is invalid", err)
 	}
 	if err := validateCanonicalULID("task state history generation", state.History.Generation); err != nil {
@@ -801,13 +811,13 @@ func validateNoThreadPayload(operation Operation) error {
 	return nil
 }
 
-func validateOperationPackDocument(pack OperationPack, projectKey string) error {
-	if err := validateOperationPackEnvelope(pack, projectKey); err != nil {
+func validateOperationPackDocument(pack OperationPack) error {
+	if err := validateOperationPackEnvelope(pack); err != nil {
 		return err
 	}
 	seen := make(map[string]struct{}, len(pack.Operations))
 	for _, operation := range pack.Operations {
-		if err := validateOperationDocument(operation, projectKey); err != nil {
+		if err := validateOperationDocument(operation); err != nil {
 			return err
 		}
 		if _, duplicate := seen[operation.ID]; duplicate {
@@ -818,13 +828,13 @@ func validateOperationPackDocument(pack OperationPack, projectKey string) error 
 	return nil
 }
 
-func validateOperationDocument(operation Operation, projectKey string) error {
+func validateOperationDocument(operation Operation) error {
 	if err := validateOperationID(operation.ID); err != nil {
 		return err
 	}
 	switch operation.Type {
 	case OperationTaskCreate:
-		return validateTaskCreateOperation(operation, projectKey)
+		return validateTaskCreateOperation(operation)
 	case OperationFieldSet:
 		if err := validateNoThreadPayload(operation); err != nil {
 			return err
@@ -834,7 +844,7 @@ func validateOperationDocument(operation Operation, projectKey string) error {
 		if err := validateNoThreadPayload(operation); err != nil {
 			return err
 		}
-		return validateSetOperation(operation, projectKey)
+		return validateSetOperation(operation)
 	case OperationAssignAdd, OperationAssignRemove:
 		return validateAssignOperation(operation)
 	case OperationTaskTombstone:
@@ -868,7 +878,7 @@ func validateCanonicalULID(description, id string) error {
 	return nil
 }
 
-func validateTaskCreateOperation(operation Operation, projectKey string) error {
+func validateTaskCreateOperation(operation Operation) error {
 	if operation.Task == nil || operation.Field != "" || operation.Value != "" {
 		return corrupt("task.create must contain only task data")
 	}
@@ -900,7 +910,7 @@ func validateTaskCreateOperation(operation Operation, projectKey string) error {
 	if len(operation.Task.Assignments) > 0 {
 		return corrupt("task.create must not contain assignments")
 	}
-	normalized, err := normalizeCanonicalTask(projectKey, copyTaskData(*operation.Task))
+	normalized, err := normalizeCanonicalTask(copyTaskData(*operation.Task))
 	if err != nil {
 		return Wrap(CategoryCorruptData, "task.create contains an invalid task", err)
 	}
@@ -956,7 +966,7 @@ func validateFieldSetOperation(operation Operation) error {
 	return nil
 }
 
-func validateSetOperation(operation Operation, projectKey string) error {
+func validateSetOperation(operation Operation) error {
 	if operation.Task != nil {
 		return corrupt("%s must not contain task data", operation.Type)
 	}
@@ -966,7 +976,15 @@ func validateSetOperation(operation Operation, projectKey string) error {
 			return corrupt("%s label must not be empty", operation.Type)
 		}
 	case "dependencies":
-		if err := ValidateTaskID(projectKey, operation.Value); err != nil {
+		// Structural, not membership, for the reason the status and priority
+		// cases above give: this gate runs during replay, over operations
+		// another clone already committed, and a dependency may name a task
+		// under a project key this clone has not fetched the ledger for.
+		// Refusing it would turn a teammate's history into corrupt data rather
+		// than into a dependency on a task this clone has not heard of. Whether
+		// a key is this project's is asked where a name enters — a ref listing,
+		// a remote listing, an ID somebody typed — by core.KeySet.
+		if err := ValidateTaskIDShape(operation.Value); err != nil {
 			return Wrap(CategoryCorruptData, string(operation.Type)+" dependency is invalid", err)
 		}
 	default:
@@ -994,8 +1012,8 @@ func validateAssignOperation(operation Operation) error {
 	return nil
 }
 
-func normalizeCanonicalTask(projectKey string, task TaskData) (TaskData, error) {
-	normalized, err := NormalizeTask(projectKey, task)
+func normalizeCanonicalTask(task TaskData) (TaskData, error) {
+	normalized, err := NormalizeTask(task)
 	if err != nil {
 		return TaskData{}, err
 	}

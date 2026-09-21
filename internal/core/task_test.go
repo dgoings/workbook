@@ -18,7 +18,7 @@ func TestNormalizeTaskSortsSetsAndValidatesValues(t *testing.T) {
 		},
 	}
 
-	got, err := NormalizeTask("WB", task)
+	got, err := NormalizeTask(task)
 	if err != nil {
 		t.Fatalf("NormalizeTask() error = %v", err)
 	}
@@ -44,7 +44,7 @@ func TestNormalizeTaskAcceptsEveryStatusAndPriority(t *testing.T) {
 	for _, status := range statuses {
 		for _, priority := range priorities {
 			t.Run(string(status)+"/"+string(priority), func(t *testing.T) {
-				_, err := NormalizeTask("WB", TaskData{
+				_, err := NormalizeTask(TaskData{
 					Title:    "Task",
 					Status:   status,
 					Priority: priority,
@@ -92,7 +92,7 @@ func TestLegacyVocabularyReturnsTheShippedSixStatuses(t *testing.T) {
 func TestNormalizeTaskAcceptsCanonicalPositiveReducedRanks(t *testing.T) {
 	for _, rank := range []string{"1/2", "5/3", "9/1"} {
 		t.Run(rank, func(t *testing.T) {
-			if _, err := NormalizeTask("WB", validTask(rank)); err != nil {
+			if _, err := NormalizeTask(validTask(rank)); err != nil {
 				t.Fatalf("NormalizeTask() error = %v", err)
 			}
 		})
@@ -166,6 +166,6 @@ func validTask(rank string) TaskData {
 }
 
 func mustNormalize(task TaskData) error {
-	_, err := NormalizeTask("WB", task)
+	_, err := NormalizeTask(task)
 	return err
 }

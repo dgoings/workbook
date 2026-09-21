@@ -278,7 +278,7 @@ func validateBatchSnapshot(
 	// the read that only has to show it.
 	if !pack.RequiresNewerReader() &&
 		len(pack.Operations) == 1 && pack.Operations[0].Type == core.OperationTaskCreate {
-		if err := core.ValidateCheckpoint(nil, pack, state, config.Key); err != nil {
+		if err := core.ValidateCheckpoint(nil, pack, state); err != nil {
 			return core.Snapshot{}, err
 		}
 	}
