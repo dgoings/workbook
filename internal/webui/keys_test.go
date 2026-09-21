@@ -475,15 +475,17 @@ func TestCreateTaskAcceptsAKey(t *testing.T) {
 	}
 }
 
-// The digest that rides on the task poll follows the keys as well as the
-// columns and the priorities: a key added, retired or made current is a change
-// the page cannot take on live — the create form's chooser and its default are
-// rendered into the document — so the standing notice has to go up for one,
-// exactly as it does for a new status.
+// The digest that rides on the task poll says nothing about the keys, and that
+// is a decision rather than an omission.
 //
-// What does not move it is a head that moved without touching the keys, which
-// is the whole reason this is a digest rather than the head itself.
-func TestVocabularyShapeCarriesTheProjectKeys(t *testing.T) {
+// What the standing reload notice protects is the card nodes: rebuilding the
+// columns to show a new status or a new priority would destroy a reader's open
+// form, a change staged against a head, and a refusal they have not read.
+// Adding a key changes no column and no priority, so nothing on the page has to
+// be rebuilt to show it — the page picks a new key up from the answer it
+// already re-renders from. A digest that moved for one would ask every open
+// board to reload for something no card is drawn from.
+func TestVocabularyShapeIgnoresKeys(t *testing.T) {
 	base := VocabularyState{
 		Vocabulary: handlerVocabulary(t),
 		Head:       "head-1",
@@ -493,12 +495,6 @@ func TestVocabularyShapeCarriesTheProjectKeys(t *testing.T) {
 	shape := vocabularyShape(base)
 	if shape == "" {
 		t.Fatal("a configured project has no shape at all, so nothing here could be compared")
-	}
-	same := base
-	same.Head = "head-2"
-	same.Keys = projectKeys(t)
-	if got := vocabularyShape(same); got != shape {
-		t.Fatal("the same keys at a later head move the shape, so the board is told to reload for nothing")
 	}
 
 	retired, err := core.NewKeySet(core.KeyDocument{
@@ -530,13 +526,22 @@ func TestVocabularyShapeCarriesTheProjectKeys(t *testing.T) {
 		{name: "a key added", keys: widenedKeys(t)},
 		{name: "a key retired", keys: retired},
 		{name: "the current key moved", keys: moved},
+		{name: "no keys read at all", keys: core.KeySet{}},
 	} {
 		changed := base
 		changed.Head = "head-2"
 		changed.Keys = test.keys
-		if got := vocabularyShape(changed); got == shape {
-			t.Errorf("%s leaves the shape where it was, so an open board is never told its keys are out of date", test.name)
+		if got := vocabularyShape(changed); got != shape {
+			t.Errorf("%s moves the shape, so every open board is told to reload for a change no card is drawn from", test.name)
 		}
+	}
+
+	// And the columns and the priorities still move it, so this test cannot
+	// pass by digesting nothing at all.
+	widened := base
+	widened.Priorities = widenedPriorities(t)
+	if vocabularyShape(widened) == shape {
+		t.Fatal("a priority added leaves the shape where it was")
 	}
 }
 

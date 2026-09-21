@@ -1567,6 +1567,23 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		if err != nil {
 			return webui.VocabularyState{}, err
 		}
+		// And the store's own key memo is brought up to this read, which is the
+		// third part of the same refresh and the one nothing else can do.
+		//
+		// The set that every ref listing and every write boundary classifies
+		// names against is memoized for the life of the opened repository, and
+		// dropped where this process moves the ledger. A teammate's `workbook
+		// key add` moves nothing here, so a board that had answered one task
+		// request went on classifying against the set that request loaded — and
+		// a task under the new key is not another project's ref to this handle,
+		// it is a task ref with an invalid ID. The poll and the page answered
+		// 500, and the board's own create was refused, until serve restarted.
+		//
+		// The reload is explicit because a long-lived handle's is: the fetch
+		// stage does exactly this for exactly this reason, and says so. It costs
+		// no Git process — the head below is this read's own, and a head that
+		// has not moved is a string comparison.
+		repository.ForgetKeySetUnlessAt(state.Head)
 		return webui.VocabularyState{
 			Vocabulary: state.Vocabulary,
 			Head:       state.Head,

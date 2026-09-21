@@ -286,10 +286,11 @@ func keyViews(keys core.KeySet, counts map[string]int) []keyView {
 	definitions := keys.Keys()
 	views := make([]keyView, 0, len(definitions))
 	for _, definition := range definitions {
-		state := core.KeyStateActive
-		if definition.Retired {
-			state = core.KeyStateRetired
-		}
+		// The word comes from the set rather than from the stored bool beside
+		// it. KeySet.State is where "what is this key" is decided, and a second
+		// reading of the same bool is a second thing to update the day a key
+		// can be something else.
+		state, _ := keys.State(definition.Key)
 		view := keyView{
 			Key:     definition.Key,
 			State:   state,

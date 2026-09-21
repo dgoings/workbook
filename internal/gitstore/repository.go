@@ -76,6 +76,12 @@ type Repository struct {
 	keysLoaded   bool
 	keysFounding string
 	keys         core.KeySet
+	// keysHead is the ledger tip the memoized set was resolved at, so a
+	// long-lived handle can ask whether the memo is still about the ledger in
+	// front of it. It is not part of the memo's key — a caller of keySet has no
+	// head to offer and must not be made to read one — it is what
+	// ForgetKeySetUnlessAt compares against for a caller that has just read one.
+	keysHead string
 	// stateHead and stateConfig memoize the last checkpoint
 	// LoadVocabularyState decoded, keyed by the commit it came from and by the
 	// founding key it was decoded for: three of its four sections are a

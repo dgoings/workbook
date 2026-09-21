@@ -222,6 +222,17 @@ func TestBoardMintsUnderAKeyAddedWhileItWasRunning(t *testing.T) {
 	if before.Current != "WB" {
 		t.Fatalf("keys = %q, want the founding key current", boardKeyStates(before))
 	}
+	// One task request first, which is the whole reason this test is not the
+	// same test twice. Every open page makes one within a second, and it is
+	// what loads the store's own key memo: the set every ref listing and every
+	// write boundary classifies names against is memoized for the life of the
+	// opened repository and dropped only where this process moves the ledger.
+	// Without this request the board would still be holding nothing, and the
+	// read below would look fresh while proving nothing about a long-lived
+	// handle.
+	if ids := boardTaskIDs(t, "http://"+addr+"/api/tasks"); len(ids) != 0 {
+		t.Fatalf("board lists %v, want an empty project", ids)
+	}
 
 	// Another process moves the project's key, exactly as a teammate's pull
 	// would.
@@ -333,15 +344,15 @@ func TestBoardReportsTheStaleGuidelinesAfterAKeyChange(t *testing.T) {
 	}
 }
 
-// Every board write into the configuration ledger answers with this project's
-// keys, not only the key routes.
+// Every board write that answers with the vocabulary answers with this
+// project's keys, not only the key routes.
 //
-// The client adopts a mutation answer wholesale. A status or priority or
-// display write that left the keys zero would not say "this answer is about
-// statuses", it would say "this project has no keys" — and the create form's
-// chooser would empty out and its default would vanish on the strength of a
-// column rename. That is the hazard the display settings already learned the
-// hard way; see boardDisplay.set's own note.
+// The client adopts a mutation answer wholesale. A status or priority write
+// that left the keys zero would not say "this answer is about statuses", it
+// would say "this project has no keys" — and the create form's chooser would
+// empty out and its default would vanish on the strength of a column rename.
+// That is the hazard the display settings already learned the hard way; see
+// boardDisplay.set's own note.
 func TestBoardWritesAnswerWithTheProjectsKeys(t *testing.T) {
 	repository := initializedRepository(t)
 	if code, _, stderr := run(t, repository, "key", "add", "NEW", "--current", "--no-sync"); code != 0 {
@@ -364,17 +375,67 @@ func TestBoardWritesAnswerWithTheProjectsKeys(t *testing.T) {
 		t.Fatalf("a priority add answered with keys %q, want this project's own", got)
 	}
 
-	// The display save carries no vocabulary at all, so it cannot lose the keys
-	// that way — but it carries the digest of the whole configuration, and the
-	// keys are in that. A save that read its state without them would answer
-	// with a shape naming no keys, and the page would raise its reload notice
-	// for a change nobody made.
-	save := boardDisplaySave(t, addr, `{"name":"Atlas","expectedHead":`+quoteJSON(priorities.Vocabulary.Head)+`}`)
-	after := boardVocabularyDocument(t, addr)
-	if save.Shape != after.Shape {
-		t.Fatalf("display save shape = %q, want the configuration's own %q", save.Shape, after.Shape)
+	// The display route is deliberately not asserted here. Its answer carries
+	// the settings and the configuration's shape, and neither mentions a key —
+	// the shape is the columns and the priorities, for the reason
+	// vocabularyShape gives — so there is nothing about keys for that save to
+	// get wrong. What is asserted instead is that the keys are still what this
+	// project configured after every write above.
+	if got := boardKeyStates(boardKeyDocument(t, addr)); got != "WB:active NEW:current" {
+		t.Fatalf("keys after two writes = %q, want this project's own", got)
 	}
-	if got := boardKeyStates(after.Keys); got != "WB:active NEW:current" {
-		t.Fatalf("keys after three writes = %q, want this project's own", got)
+}
+
+// A teammate adds a key and files a task under it while the board is open, and
+// the board goes on reading the project rather than reporting it as corrupt.
+//
+// This is the same long-lived-handle question as the mint above, asked from the
+// reading side, and it is the one that fails loudly. The store memoizes the key
+// set for the life of the opened repository, because it is what every ref
+// listing classifies names against, and it drops that memo only where this
+// process moves or fetches the ledger. A board that had served one task request
+// and then met another process's `key add` was left classifying the new key's
+// refs against the set it had memoized — so a task ID it had never heard of was
+// not "another project's ref" but a task ref with an invalid ID, and both the
+// poll and the page answered 500 until serve was restarted.
+//
+// It takes a real second process for the same reason the mint test does: the
+// bug is a memo held across a change this handle did not make.
+func TestBoardListsATaskTheCLIMintedUnderANewKey(t *testing.T) {
+	repository := initializedRepository(t)
+	addr := startServeBoard(t, repository)
+
+	// The request that loads the memo, as any open page's poll does.
+	if ids := boardTaskIDs(t, "http://"+addr+"/api/tasks"); len(ids) != 0 {
+		t.Fatalf("board lists %v, want an empty project", ids)
+	}
+
+	if code, _, stderr := run(t, repository, "key", "add", "TWO", "--current", "--no-sync"); code != 0 {
+		t.Fatalf("key add TWO --current = code %d; stderr = %q", code, stderr)
+	}
+	code, stdout, stderr := run(t, repository, "create", "Filed by a teammate", "--no-sync", "--json")
+	if code != 0 {
+		t.Fatalf("create = code %d; stderr = %q", code, stderr)
+	}
+	task := decodeMutationTask(t, stdout, "create")
+	if !strings.HasPrefix(task.ID, "TWO-") {
+		t.Fatalf("the CLI minted %q, want it under the key it just made current", task.ID)
+	}
+
+	body, status := boardRequest(t, http.MethodGet, "http://"+addr+"/api/tasks", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET /api/tasks = %d, want %d; body = %s", status, http.StatusOK, body)
+	}
+	if ids := boardTaskIDs(t, "http://"+addr+"/api/tasks"); !contains(ids, task.ID) {
+		t.Fatalf("board lists %v, want the task a teammate minted under the new key", ids)
+	}
+	// And the page itself, which is the surface a reader is looking at while
+	// this happens.
+	page, status := boardRequest(t, http.MethodGet, "http://"+addr+"/", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET / = %d, want %d; body = %s", status, http.StatusOK, page)
+	}
+	if !strings.Contains(string(page), task.ID) {
+		t.Fatalf("the board page does not draw the task minted under the new key:\n%s", page)
 	}
 }

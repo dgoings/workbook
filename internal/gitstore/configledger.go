@@ -388,8 +388,41 @@ func (r *Repository) keySet(ctx context.Context, config core.ProjectConfig) (cor
 	defer r.metadataMu.Unlock()
 	if !r.keysLoaded || r.keysFounding != config.Key {
 		r.keys, r.keysFounding, r.keysLoaded = state.Keys, config.Key, true
+		r.keysHead = state.Head
 	}
 	return r.keys, nil
+}
+
+// ForgetKeySetUnlessAt drops the memo when the ledger tip a caller has just
+// read is not the tip the memo was resolved at.
+//
+// It exists for the one caller that outlives the ledger: `workbook serve` runs
+// for hours, resolves the configuration on every request, and meets a
+// teammate's `workbook key add` between two of them. The memo above is dropped
+// where *this* process moves the ledger — a configuration write, and the
+// configuration stage of a fetch — and a change made by another process moves
+// nothing here, so a board that had served one task request went on
+// classifying refs against the set it had memoized. The consequence was not a
+// stale reading but a broken one: a task ID under the new key is not another
+// project's ref, it is a task ref whose ID this handle calls invalid, so the
+// poll and the page answered 500 and the board's own writes were refused.
+//
+// It drops and never installs, which is what makes it safe to call from a
+// request. A caller hands over the head it observed, not the set it read: two
+// requests racing a third's write could hand back a set the ledger is already
+// past, and installing that would put a superseded answer where every ref
+// listing reads it. Dropping is monotone — the next caller re-reads the tip —
+// and a memo another path has already dropped is left alone.
+//
+// It asks Git nothing, which is what keeps it off the hot path. The head is one
+// the caller already has from LoadVocabularyState, and a head that has not
+// moved costs a mutex and a string comparison.
+func (r *Repository) ForgetKeySetUnlessAt(head string) {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	if r.keysLoaded && r.keysHead != head {
+		r.forgetKeySetLocked()
+	}
 }
 
 // forgetKeySet drops the memo after this process moved the configuration ledger
@@ -405,6 +438,7 @@ func (r *Repository) forgetKeySet() {
 // critical section rather than leaving a window between them.
 func (r *Repository) forgetKeySetLocked() {
 	r.keys, r.keysFounding, r.keysLoaded = core.KeySet{}, "", false
+	r.keysHead = ""
 }
 
 // WriteConfigOperation records one batch of configuration changes as the

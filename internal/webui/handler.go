@@ -2040,7 +2040,7 @@ func vocabularyDocument(state VocabularyState) VocabularyDocument {
 
 // vocabularyShape is a digest of what a board draws of a project's
 // configuration: its columns and its priorities, each by token, order and
-// label, and its keys by name, state and which one mints new tasks.
+// label.
 //
 // It rides beside the head everywhere the head rides, and it answers the
 // question the head cannot. The head moves for every configuration write, a
@@ -2058,14 +2058,10 @@ func vocabularyDocument(state VocabularyState) VocabularyDocument {
 // none of that — it is either already drawn or is a difference nobody loses
 // work over.
 //
-// The keys are in it, which is the one place this parts company with "only what
-// draws a card". A key is not drawn on a card at all, but the create form's key
-// chooser and the key it defaults to are rendered into the document at load,
-// and no answer the page already re-renders from carries them: a teammate's
-// `workbook key add` would otherwise reach an open board never, and a reader
-// would file a task under a key the project had moved off hours ago. So a key
-// added, retired or made current raises the notice, exactly as a new column
-// does, and a head that moved without touching the keys does not.
+// Keys are deliberately not in it either, for the reason colors are not:
+// adding a key changes no column and no priority, so nothing on the page has to
+// be rebuilt to show it. The page picks a new key up from the answer it already
+// re-renders from.
 //
 // A digest rather than the two lists themselves because this rides on the task
 // poll, which the board makes once a second and which deliberately carries no
@@ -2083,9 +2079,7 @@ func vocabularyShape(state VocabularyState) string {
 	drawn := struct {
 		Statuses   [][2]string `json:"statuses"`
 		Priorities [][2]string `json:"priorities"`
-		Keys       [][2]string `json:"keys"`
-		CurrentKey string      `json:"currentKey"`
-	}{CurrentKey: state.Keys.Current()}
+	}{}
 	for _, definition := range statuses.Definitions() {
 		drawn.Statuses = append(drawn.Statuses, [2]string{string(definition.Status), definition.Label})
 	}
@@ -2093,13 +2087,6 @@ func vocabularyShape(state VocabularyState) string {
 	// priorities is drawing the built-in three.
 	for _, definition := range state.Priorities.EffectiveDocument().Priorities {
 		drawn.Priorities = append(drawn.Priorities, [2]string{string(definition.Priority), definition.Label})
-	}
-	// The keys as the set reports them, with no substitution: the founding key
-	// is not a fact this package holds, and a project that has recorded nothing
-	// about keys is reported by its producer as the one key it has. See
-	// vocabularyDocument's own note on that.
-	for _, view := range keyViews(state.Keys) {
-		drawn.Keys = append(drawn.Keys, [2]string{view.Key, string(view.State)})
 	}
 	encoded, err := json.Marshal(drawn)
 	if err != nil {
@@ -2146,10 +2133,11 @@ func keyViews(keys core.KeySet) []KeyView {
 	definitions := keys.Keys()
 	views := make([]KeyView, 0, len(definitions))
 	for _, definition := range definitions {
-		state := core.KeyStateActive
-		if definition.Retired {
-			state = core.KeyStateRetired
-		}
+		// The state word comes from the set rather than from the stored bool
+		// beside it. core.KeySet.State is where "what is this key" is decided,
+		// and this package re-deriving it from `retired` would be a second
+		// reading to update the day a key can be something else.
+		state, _ := keys.State(definition.Key)
 		views = append(views, KeyView{
 			Key:     definition.Key,
 			State:   state,

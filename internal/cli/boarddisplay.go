@@ -71,7 +71,6 @@ func (board *boardDisplay) set(
 				Vocabulary: state.Vocabulary,
 				Display:    state.Display,
 				Priorities: state.Priorities,
-				Keys:       state.Keys,
 			},
 		}, nil
 	}
@@ -104,12 +103,13 @@ func (board *boardDisplay) set(
 			Vocabulary: written.Vocabulary(),
 			Display:    written.State.Display(),
 			Priorities: written.State.PriorityVocabulary(),
-			// And this project's keys, which this route's own document does not
-			// carry either — but its shape does, and the keys are in that. A
-			// save that read its state without them would answer with a digest
-			// naming no keys, and the page would raise its reload notice for a
-			// change nobody made.
-			Keys: written.KeySet(board.config.Key),
+			// The keys are deliberately not filled, where the two vocabulary
+			// writers fill them. This route answers with the display settings
+			// and the configuration's shape, and neither mentions a key: the
+			// shape is the columns and the priorities, for the reason
+			// vocabularyShape gives. A field filled for nothing to read would
+			// be the wrong kind of insurance — it would cost a ledger read on
+			// every save and say that something here depends on it.
 		},
 		Warnings: board.publisher.publishConfig(ctx),
 	}, nil
