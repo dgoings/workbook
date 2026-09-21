@@ -261,18 +261,31 @@ func Remove(options Options) (Report, error) {
 
 func plan(options Options) ([]target, error) {
 	targets := []target{guidelinesTarget(options)}
+	userOrigin := userConfigOrigin()
 
 	if !options.SkipSkill {
 		skill, err := skillDocument(options.Generator)
 		if err != nil {
 			return nil, err
 		}
-		skillDirectory := options.SkillDir
+		// A configured directory may be written with forward slashes whatever
+		// the platform, so settle it into the OS spelling here, once, where the
+		// layer is chosen: the validation below and the Join that follows then
+		// judge and use the same string.
+		skillDirectory := filepath.FromSlash(options.SkillDir)
+		setting, origin := "--skill-dir", ""
 		if skillDirectory == "" {
-			skillDirectory = options.User.SkillDir
+			skillDirectory = filepath.FromSlash(options.User.SkillDir)
+			setting, origin = "skillDir", userOrigin
 		}
 		if skillDirectory == "" {
+			// Nothing was configured on either layer, so the built-in default
+			// stands, and it is in-project by construction. Validating it here
+			// would risk a refusal naming a setting the reader never wrote,
+			// sending them to look for a value that is not in their file.
 			skillDirectory = userconfig.Default().SkillDir
+		} else if err := validateSkillDirectory(skillDirectory, setting, origin); err != nil {
+			return nil, err
 		}
 		skillPath := filepath.Join(skillDirectory, "workbook", "SKILL.md")
 		display := filepath.ToSlash(skillPath)
@@ -292,17 +305,121 @@ func plan(options Options) ([]target, error) {
 		}
 	}
 	for _, name := range options.User.DocTargets {
+		if err := validateDocTarget(name, userOrigin); err != nil {
+			return nil, err
+		}
 		path := filepath.Join(options.Root, filepath.FromSlash(name))
 		if !slices.Contains(options.Create, name) {
-			if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+			info, err := os.Stat(path)
+			if errors.Is(err, fs.ErrNotExist) {
 				continue
 			} else if err != nil {
 				return nil, core.Wrap(core.CategoryOperational, "inspect "+name, err)
+			}
+			// .claude, docs and .github are all easy things to list here by
+			// mistake, and a directory cannot carry a managed block. Catching
+			// it while the plan is still being drawn up is what keeps the
+			// refusal whole: discovering it at the write turned the operation
+			// into a half-finished install reporting the operating system's
+			// "is a directory", and broke `docs status` too, so the reader
+			// could not even inspect what had gone wrong.
+			if info.IsDir() {
+				return nil, core.Errorf(core.CategoryValidation,
+					"docTargets entry %q%s is a directory, not a documentation file", name, userOrigin)
 			}
 		}
 		targets = append(targets, target{path: path, display: name, document: reference})
 	}
 	return targets, nil
+}
+
+// userConfigOrigin names the user-global configuration file, as the trailing
+// clause of a refusal about a value that came from it.
+//
+// It is the path and not just "the user configuration file" because no command
+// will tell the reader where that file is once a bad value is in it:
+// `workbook config show` reports the project's configuration path, and the one
+// place that prints this one renders only in a successful `workbook setup`
+// result — a command this refusal aborts. So the message that stops them is
+// the only thing left that can say which file to open.
+//
+// A path lookup that fails degrades to the generic wording rather than
+// returning an error. Being unable to name the file is no reason to turn a
+// validation refusal into an operational failure about the home directory,
+// which would bury the configuration mistake that is the actual problem.
+func userConfigOrigin() string {
+	path, err := userconfig.Path()
+	if err != nil {
+		return " in the user configuration file"
+	}
+	return " in " + path
+}
+
+// validateDocTarget refuses a documentation target that does not name a file
+// inside the project. A target is only ever joined against the project root, so
+// a value carrying ".." reaches a file the repository does not own.
+//
+// The three refusals are worded separately because they are three different
+// mistakes, and one wording cannot be true of all of them. A value resolving
+// to the project root — "." or "docs/.." — is perfectly local and simply names
+// a directory where a file was asked for. An absolute value does not escape
+// anything either: filepath.IsLocal rejects every absolute path, so this
+// project's own AGENTS.md spelled in full would be reported as escaping the
+// project it plainly sits in. Telling either reader their entry escaped the
+// project sends them hunting for a ".." they never typed. The escape wording is
+// left to the values that actually escape.
+//
+// An absolute target is still refused. It never meant what it said:
+// filepath.Join(root, "/etc/motd") yields <root>/etc/motd, so the old behavior
+// silently wrote somewhere the configuration never named, and a target is
+// documented as relative to the project.
+func validateDocTarget(name, origin string) error {
+	target := filepath.FromSlash(name)
+	switch {
+	case filepath.Clean(target) == ".":
+		return core.Errorf(core.CategoryValidation,
+			"docTargets entry %q%s names the project directory itself, "+
+				"not a documentation file inside it", name, origin)
+	case filepath.IsAbs(target):
+		return core.Errorf(core.CategoryValidation,
+			"docTargets entry %q%s is an absolute path; "+
+				"documentation targets are named relative to the project directory", name, origin)
+	case filepath.IsLocal(target):
+		return nil
+	}
+	return core.Errorf(core.CategoryValidation,
+		"docTargets entry %q%s escapes the project directory; "+
+			"documentation targets must be inside the project", name, origin)
+}
+
+// validateSkillDirectory refuses a relative skill destination that climbs out
+// of the project, naming the layer the value arrived on so the reader knows
+// which file or flag to go change.
+//
+// An absolute value is exempt on purpose. Installing the skill once into a
+// personal directory shared across projects is a documented feature, and an
+// absolute destination is spelled out in full and printed in full by the
+// report, so it cannot be mistaken for something in the repository. The
+// footgun is the relative value that looks in-project and is not.
+//
+// The judgment is lexical rather than symlink resolving. A verdict that
+// depends on filesystem state cannot keep its promise — the link can be
+// repointed between the check and the write — and a CLAUDE.md or .claude
+// symlinked into a dotfiles repository is a deliberate arrangement made in the
+// project itself, which is not Workbook's to overrule.
+//
+// Unlike a documentation target, a value naming the project root is fine here:
+// "." puts the skill at <root>/workbook/SKILL.md, which is a real destination
+// inside the project. The directory is expected already settled into the OS
+// spelling by the caller, so the string judged here is the string joined there.
+func validateSkillDirectory(directory, setting, origin string) error {
+	if filepath.IsAbs(directory) || filepath.IsLocal(directory) {
+		return nil
+	}
+	return core.Errorf(core.CategoryValidation,
+		"%s %q%s escapes the project directory; "+
+			"the skill directory must be inside the project or an absolute path",
+		setting, directory, origin)
 }
 
 func blockedError(report Report, action string) error {

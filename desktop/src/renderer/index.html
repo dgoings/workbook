@@ -56,18 +56,53 @@
           </p>
         </div>
 
-        <!-- The one irreversible step in the wizard, set beside the heading
-             rather than above the list: it is a caution to read once, not a
-             banner to scroll past every time. -->
-        <aside class="key-note" id="key-note" hidden>
-          <button class="key-note__dismiss" id="dismiss-key-note" type="button"
-                  aria-label="Dismiss">&times;</button>
-          This is the project's founding key, minted once and
-          <strong>fixed afterwards</strong>, and every task ID it mints keeps
-          that prefix. A project can add keys later — workbook key add, then
-          workbook key current — to move where new tasks are minted. Edit the
-          suggestion now if it is wrong.
-        </aside>
+        <!-- Notices, set beside the heading rather than above the list: things
+             to read once, not banners to scroll past every time. They stack in
+             their own column because the first launch after an install can
+             raise both of them at once. -->
+        <div class="view-head__notes">
+          <!-- Said once, on the launch that put the bundled CLI on the user's
+               PATH; the main process decides whether there is anything to say
+               and records that it was said as it answers. Neutral rather than
+               the caution's warning colors: this reports something done, not
+               something to be careful about. -->
+          <aside class="path-note" id="path-note" hidden>
+            <button class="path-note__dismiss" id="dismiss-path-note" type="button"
+                    aria-label="Dismiss">&times;</button>
+            <!-- "to your PATH" rather than naming files: which files were
+                 written depends on the platform and on which profiles exist,
+                 and on Windows there is no profile at all — the user PATH in
+                 the registry is what changed. The startup log names the exact
+                 files; this sentence must be true everywhere. -->
+            <strong><code>workbook</code> is installed.</strong> Workbench keeps its
+            own copy of the CLI in <code id="path-note-directory"></code> and added
+            that directory to your PATH.
+            <!-- Windows caches the environment per process tree: reg add does
+                 not broadcast WM_SETTINGCHANGE, so Explorer hands every new
+                 terminal the old PATH until the user signs out. -->
+            <span id="path-note-terminal">Open a new terminal to use
+              <code>workbook</code> there.</span>
+            <span id="path-note-terminal-windows" hidden>Sign out and back in to use
+              <code>workbook</code> there — until then Windows hands even a new
+              terminal the old PATH.</span>
+            <!-- Not "a Homebrew install": Homebrew is not a Windows thing, and
+                 the rule is about position on PATH rather than about how the
+                 other build was installed. -->
+            An existing <code>workbook</code> earlier on your PATH keeps
+            precedence.
+          </aside>
+
+          <!-- The one irreversible step in the wizard. -->
+          <aside class="key-note" id="key-note" hidden>
+            <button class="key-note__dismiss" id="dismiss-key-note" type="button"
+                    aria-label="Dismiss">&times;</button>
+            This is the project's founding key, minted once and
+            <strong>fixed afterwards</strong>, and every task ID it mints keeps
+            that prefix. A project can add keys later — workbook key add, then
+            workbook key current — to move where new tasks are minted. Edit the
+            suggestion now if it is wrong.
+          </aside>
+        </div>
       </header>
 
       <div class="import-controls">

@@ -1,6 +1,7 @@
 'use strict'
 
 const { app, BaseWindow, WebContentsView, ipcMain, dialog, shell, nativeTheme } = require('electron')
+const fs = require('node:fs/promises')
 const path = require('node:path')
 
 const { Registry } = require('./registry')
@@ -8,6 +9,7 @@ const { Supervisor } = require('./supervisor')
 const discovery = require('./discovery')
 const repoinfo = require('./repoinfo')
 const workbook = require('./workbook')
+const clipath = require('./clipath')
 const { setupUpdater } = require('./updater')
 
 const SIDEBAR_WIDTH = 260
@@ -25,6 +27,11 @@ let chromeView = null
 /** Board views, one per project, kept warm once opened. @type {Map<string, WebContentsView>} */
 const boardViews = new Map()
 let activeProjectId = null
+/**
+ * The PATH install, started at launch and asked about once by `path:notice`.
+ * @type {Promise<object>|null}
+ */
+let cliPathInstall = null
 
 const registry = new Registry(app.getPath('userData'))
 const supervisor = new Supervisor(app.getPath('userData'))
@@ -273,11 +280,146 @@ function closeProject (projectId) {
   if (activeProjectId === projectId) showChrome()
 }
 
+// --- the CLI on PATH -------------------------------------------------------
+
+/**
+ * Copy the bundled CLI somewhere permanent and put that somewhere on PATH.
+ *
+ * All of the deciding lives in clipath.js, which never throws: every step's
+ * failure lands in `errors` and the rest still runs, so a read-only `.zshrc`
+ * does not cost the user the binary copy. This wrapper exists to name the one
+ * input the module cannot work out for itself — where the bundle put the
+ * binary — and to say out loud what happened, the way the supervisor says what
+ * it reaped.
+ */
+async function installCli () {
+  // A development run (`npm start`) has no packaged Resources directory with a
+  // `workbook` in it, so there is nothing to copy — which is also what keeps a
+  // development run from writing to the developer's own shell profiles.
+  if (!process.resourcesPath) {
+    return { skipped: true, reason: 'not a packaged app', errors: [] }
+  }
+
+  const result = await clipath.install({
+    bundled: path.join(process.resourcesPath, workbook.BINARY)
+  })
+  const errors = result.errors ?? []
+
+  if (result.skipped) {
+    console.log(`workbench: did not put workbook on PATH (${result.reason})`)
+  } else {
+    // `pathChanged`, not `changed`: `changed` is true for a binary copy alone,
+    // and a launch that copied the binary but had every profile write fail must
+    // not be logged as though PATH were now set up. The three endings below are
+    // the three things that can actually have happened.
+    const copy = result.copied
+      ? `copied workbook to ${result.binary}`
+      : `workbook at ${result.binary} was already current`
+    let ending
+    if (result.pathChanged) {
+      ending = `added ${result.directory} to ${(await writtenForLog(result)).join(', ')}`
+    } else if (errors.length > 0) {
+      ending = `could not add ${result.directory} to PATH`
+    } else {
+      ending = `${result.directory} was already on PATH`
+    }
+    console.log(`workbench: ${copy}; ${ending}`)
+  }
+  // One line per failure, like the reaping log: a profile that could not be
+  // written is worth seeing even though it did not stop anything.
+  for (const error of errors) {
+    console.error(`workbench: could not finish putting workbook on PATH: ${error}`)
+  }
+
+  // Arm the notice, on the launch that earned it, for whichever launch's page
+  // gets around to asking. The registry refuses to re-arm once the notice has
+  // been shown, so an app update that re-copies the binary stays quiet.
+  //
+  // Only a launch that wrote every target it chose gets to say it. A partial
+  // write — `.zshrc` taken and fish's config refused, say — would otherwise
+  // get the same sentence about PATH while the shell the user actually types
+  // in was the one that was missed, and the notice is not repeatable: it would
+  // be wrong once and then silent forever. A launch that tries again and
+  // succeeds arms it then, since a target already carrying the block reports no
+  // change and only the failed one has anything left to do.
+  if (result.pathChanged && errors.length === 0) {
+    try {
+      await registry.setPendingPathNotice(result.directory)
+    } catch (error) {
+      // Logged rather than thrown: the PATH work itself succeeded and is worth
+      // reporting above, and the only casualty is the sentence about it.
+      console.error('workbench: could not record that the PATH notice is owed', error)
+    }
+  }
+  return result
+}
+
+/**
+ * The files a write actually landed in, named as the log should name them.
+ *
+ * A profile is very often a symlink into a dotfiles repository — the owner's
+ * own `~/.zshrc` and `~/.config/fish/config.fish` both are — and the write
+ * follows it, so the block appears as a change inside that repository. Naming
+ * the resolved file is how someone reads the log and knows which file to go
+ * look at. Best effort by construction: realpath failing, or a path vanishing
+ * between the write and this line, falls back to the name we asked for rather
+ * than turning a successful install into an error.
+ */
+async function writtenForLog (result) {
+  const written = []
+  for (const profile of result.profiles.filter((profile) => profile.changed)) {
+    let real = profile.file
+    try {
+      real = await fs.realpath(profile.file)
+    } catch {
+      // Keep the name we wrote to.
+    }
+    written.push(real === profile.file ? profile.file : `${profile.file} (really ${real})`)
+  }
+  if (result.windows?.changed) written.push('the user PATH in the registry')
+  return written
+}
+
 // --- IPC -------------------------------------------------------------------
 
 ipcMain.handle('workbook:version', async () => {
   const data = await workbook.version()
   return data
+})
+
+/**
+ * What, if anything, to tell the user about the CLI being on their PATH.
+ *
+ * Answered from the registry's pending directory rather than from this
+ * launch's install result, which is what makes the notice reliable in both
+ * directions. A launch whose `reg add` failed changed no PATH, armed nothing,
+ * and says nothing — where reading `changed` would have claimed a profile was
+ * edited and then never corrected itself. And a launch that did change PATH but
+ * never got as far as answering this leaves the directory armed, so the next
+ * launch says it instead of losing it.
+ *
+ * The renderer asks rather than being pushed to, because the install races the
+ * shell page's load: a push can arrive before the page is listening, and a
+ * question cannot. The awaited promise is only about *this* launch's arming
+ * landing before the question is answered; an older launch's is already stored.
+ * Marking it as the answer is handed over, rather than when the dismiss button
+ * is clicked, is what makes it once: a user who quits without dismissing it has
+ * still been told, and a dismissal must not be the thing that records it.
+ */
+ipcMain.handle('path:notice', async () => {
+  if (registry.pathNoticeShown) return null
+  await cliPathInstall
+  const directory = registry.pendingPathNotice
+  if (!directory) return null
+  try {
+    await registry.setPathNoticeShown()
+  } catch (error) {
+    // Not worth rejecting an invoke the page does not guard — boot() would stop
+    // where it asked. The directory stays armed, so the next launch says it
+    // again rather than never: one repeat beats one silence.
+    console.error('workbench: could not record that the PATH notice was shown', error)
+  }
+  return { directory }
 })
 
 ipcMain.handle('registry:list', async () => ({
@@ -451,7 +593,8 @@ nativeTheme.on('updated', () => {
 // A second copy would start a second server per project and both would write
 // the same refs. Git's compare-and-swap keeps that safe, but it is still two of
 // everything for no benefit.
-if (!app.requestSingleInstanceLock()) {
+const isPrimaryInstance = app.requestSingleInstanceLock()
+if (!isPrimaryInstance) {
   app.quit()
 } else {
   app.on('second-instance', () => {
@@ -463,6 +606,16 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.whenReady().then(async () => {
+  // A second copy of the app has already called quit() above, but quit() is not
+  // instant: 'ready' can fire first, and everything below it would then run in
+  // a process that is on its way out. Both of the things it starts with reach
+  // outside this process — reapOrphans() would kill the *winning* instance's
+  // board servers, and the PATH install would copy the binary and rewrite the
+  // user's shell profiles alongside the winner doing the same, with two
+  // setPathNoticeShown() writes racing for one registry file. Nothing here is
+  // the losing instance's business.
+  if (!isPrimaryInstance) return
+
   // Before anything else starts a server: clear out any left by a run that did
   // not get to shut down.
   const reaped = supervisor.reapOrphans()
@@ -471,6 +624,20 @@ app.whenReady().then(async () => {
   }
 
   await registry.load()
+
+  // Started here and deliberately not awaited: copying a binary and rewriting
+  // shell profiles is filesystem work that has nothing to do with drawing the
+  // window, and a slow or busy disk must not hold the window shut. The promise
+  // is kept so `path:notice` can ask for an answer that may not have arrived by
+  // the time the page boots. It runs after registry.load() because the notice's
+  // "said it once" flag comes from the loaded registry, and before
+  // createWindow() so the work is already under way when the page asks.
+  cliPathInstall = installCli().catch((error) => {
+    // clipath.install() collects its own failures and does not throw, so this
+    // is the module itself failing to run at all.
+    console.error('workbench: could not put workbook on PATH', error)
+    return { skipped: true, reason: error.message, errors: [] }
+  })
 
   createWindow()
   // The launch check still runs, but the shell page has nowhere to show what it

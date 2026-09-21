@@ -1099,6 +1099,64 @@ func TestServiceFreeRemovesStoredDependencyWhenReferencedTaskIsUnavailable(t *te
 	}})
 }
 
+// TestServiceFreeRemovesTombstonedDependencyNamedByPrefix asserts that a
+// tombstoned dependency can be removed on the call that goes through
+// resolution, rather than only on the call that skips it.
+//
+// FreeMutation has a fast path (service.go, just below the tombstoned-parent
+// guard) that skips resolution entirely when the caller's argument is already
+// an exact canonical ID present in the parent's dependency set; that path never
+// reads the dependency's own row, so it cannot observe the Deleted flag either
+// way. A prefix forces the other branch, because ValidateTaskID rejects the
+// truncated argument: FreeMutation calls resolveSnapshot, which goes through
+// Reader.Resolve to expand the prefix and Reader.Get to load the tombstoned
+// snapshot.
+//
+// That branch was not entirely uncovered before this.
+// TestServiceFreeRemovesExistingDependencyAndIsIdempotentWhenAbsent reaches it
+// on its second call, once the edge is gone and hasDependency is false — but
+// all it asks there is that nothing more is written. Nothing asserted a
+// successful removal through resolution, which is the half of the rule that
+// matters: removal must tolerate a tombstoned dependency even though addition
+// must refuse one, and an asymmetry like that is what an incautious refactor
+// makes symmetric. Naming the dependency by a prefix is what keeps this test on
+// that branch instead of drifting onto the fast path.
+func TestServiceFreeRemovesTombstonedDependencyNamedByPrefix(t *testing.T) {
+	dependent := "WB-01K0M6B8A4FTT8C39MXXYTW7E1"
+	dependency := "WB-01K0M6B8A4FTT8C39MXXYTW7F2"
+	// Diverges from dependent's body at "F" (dependent has "E" there), so any
+	// prefix built from it is unambiguous against the only other task in the
+	// store even after the final character is dropped.
+	dependencyPrefix := "WB-01K0M6B8A4FTT8C39MXXYTW7F"
+	if err := ValidateTaskIDShape(dependencyPrefix); err == nil {
+		t.Fatalf("dependencyPrefix %q must not be a valid canonical task ID, or this test takes the fast path instead of resolving", dependencyPrefix)
+	}
+
+	parent := serviceSnapshot(dependent, TaskData{Title: "dependent", Status: StatusReady, Priority: PriorityHigh, Rank: "1/1", Dependencies: []string{dependency}})
+	store := newMemoryTaskStore(parent, serviceSnapshot(dependency, TaskData{Title: "dependency", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1", Deleted: true}))
+	service := serviceUnderTest(store, &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7E3"}})
+
+	result, err := service.FreeMutation(context.Background(), dependent, dependencyPrefix)
+	if err != nil {
+		t.Fatalf("FreeMutation(prefix of tombstoned dependency) error = %v", err)
+	}
+	if got, want := result.Task.Dependencies, []string{}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Free() dependencies = %#v, want %#v", got, want)
+	}
+	if got, want := len(store.writes), 1; got != want {
+		t.Fatalf("Free() Write() calls = %d, want %d", got, want)
+	}
+	// The removed value must be the dependency's resolved canonical ID, proving
+	// the prefix was actually expanded through resolution rather than passed
+	// through unchanged.
+	assertOperations(t, store.writes[0].pack.Operations, []Operation{{
+		ID:    "01K0M6B8A4FTT8C39MXXYTW7E3",
+		Type:  OperationSetRemove,
+		Field: "dependencies",
+		Value: dependency,
+	}})
+}
+
 func TestServiceDependRejectsCycleInActiveGraphWithoutWriting(t *testing.T) {
 	a := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E1", TaskData{Title: "a", Status: StatusReady, Priority: PriorityHigh, Rank: "1/1", Dependencies: []string{"WB-01K0M6B8A4FTT8C39MXXYTW7E2"}})
 	b := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{Title: "b", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1", Dependencies: []string{"WB-01K0M6B8A4FTT8C39MXXYTW7E3"}})

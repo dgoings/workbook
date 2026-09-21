@@ -345,6 +345,39 @@ function dismissKeyNote () {
   }
 }
 
+// --- the PATH notice --------------------------------------------------------
+
+/**
+ * Say, once, that the CLI was copied somewhere permanent and put on PATH.
+ *
+ * Asked for rather than pushed: the install runs while this page is loading, so
+ * a message sent the moment it finished could arrive before anything here was
+ * listening. The main process answers null whenever there is nothing to say —
+ * already said, nothing bundled to install, or nothing changed because an
+ * earlier launch had already done it — and records that it has been said as it
+ * answers. Dismissal therefore only hides it, and needs no storage of its own.
+ */
+async function showPathNotice () {
+  let notice
+  try {
+    notice = await api.pathNotice()
+  } catch (error) {
+    // The least important thing on the page. Not being able to read it is not a
+    // reason for anything else to go unpainted.
+    console.error('workbench: could not read the PATH notice', error)
+    return
+  }
+  if (!notice?.directory) return
+  el('path-note-directory').textContent = notice.directory
+  // A new terminal is enough everywhere except Windows, which caches the
+  // environment until the user signs out: the two sentences are both in the
+  // markup and the platform picks one, so neither is assembled in a string.
+  const windows = api.platform === 'windows'
+  el('path-note-terminal').hidden = windows
+  el('path-note-terminal-windows').hidden = !windows
+  el('path-note').hidden = false
+}
+
 // --- theme -----------------------------------------------------------------
 
 /**
@@ -403,6 +436,9 @@ for (const button of document.querySelectorAll('.rail-item')) {
 }
 
 el('dismiss-key-note').addEventListener('click', dismissKeyNote)
+// Nothing is stored: the main process recorded "said it" when it handed the
+// notice over, so this launch is the only one that could ever show it anyway.
+el('dismiss-path-note').addEventListener('click', () => { el('path-note').hidden = true })
 el('pick-folder').addEventListener('click', pickFolder)
 el('rescan').addEventListener('click', () => {
   if (state.scan.root) runScan(state.scan.root)
@@ -464,14 +500,23 @@ async function boot () {
     // Which binary is driving these repositories is the first thing worth
     // knowing when the app and a terminal disagree about a project, and the
     // version line is the only place left that can say so: the build on one
-    // line, where it came from on the next.
+    // line, the version it reports on the next, where it came from on the
+    // third. The version is repeated here rather than left to the line above
+    // because that line is one nowrap line inside a narrow sidebar and a
+    // version like 0.6.0-rc1-16-ge935d54 is ellipsized away — the tooltip is
+    // the only place the whole string can be read.
     const build = version.bundled ? 'Bundled build' : 'Installed build'
-    el('version').title = `${build}\n${version.path}`
+    el('version').title = [build, `workbook ${version.version ?? '(no version reported)'}`, version.path]
+      .join('\n')
   } catch (error) {
     el('version').textContent = 'workbook not found'
     el('version').title = error.message
     el('version').classList.add('missing')
   }
+  // Not awaited: the answer waits on the PATH install, which is copying a
+  // binary and rewriting shell profiles, and the project list must not queue
+  // behind a busy disk. It unhides itself whenever it arrives.
+  showPathNotice()
   await loadProjects()
   setView('import')
 }
