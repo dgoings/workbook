@@ -507,6 +507,15 @@ const (
 	ignoredRefPlausible = "may be another Workbook's task"
 )
 
+// adoptAdvice is the clause the verdict gains for a ref a project key would
+// take ownership of, phrased as what the command would do rather than as an
+// instruction: whether this project wants another project's task history is
+// the reader's decision, and the report's job is only to say that the decision
+// exists and how it is made.
+func adoptAdvice(key string) string {
+	return "; `workbook key add " + key + "` would adopt it"
+}
+
 // writeIgnoredRefs names every skipped ref, whether any project's ID format
 // could produce that name, why it was skipped, and — only when some name no
 // project can own is listed — the command that removes one. Synchronization
@@ -515,6 +524,13 @@ const (
 //
 // It takes the refs rather than a phase because the same report is written for
 // one phase, for a whole run, and for what a watcher last observed.
+//
+// A name that is exactly a task ID under a key this project does not have gets
+// one clause more: the command that would adopt it. The verdict beside it still
+// says the ref may be another Workbook's, because that judgment does not
+// change — what changes is that the reader is told the whole choice, since for
+// this one shape of name the answer is usually neither deleting the ref nor
+// living with the warning, but adding the key.
 //
 // It is also the only place Workbook suggests deleting anything from a shared
 // remote, and shared task history is append-only. A name this build does not
@@ -549,6 +565,9 @@ func writeIgnoredRefs(output io.Writer, remote string, refs []gitstore.IgnoredRe
 		if !ignored.PlausibleTask {
 			verdict = ignoredRefRemovable
 			removable++
+		}
+		if ignored.AdoptableKey != "" {
+			verdict += adoptAdvice(ignored.AdoptableKey)
 		}
 		fmt.Fprintf(output, "Ignored:\t%s\t%s\t%s\n", ignored.Ref, verdict, ignored.Reason)
 	}

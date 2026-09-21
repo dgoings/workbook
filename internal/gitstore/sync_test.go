@@ -482,6 +482,97 @@ func TestFetchAcceptsUpdateWhoseCheckpointDoesNotMatchItsOperation(t *testing.T)
 	}
 }
 
+// A fetch that delivers a ledger update and a task minted under the key that
+// update introduces has to accept the task. The configuration ref is fetched
+// and applied before task refs are classified, and the classification uses the
+// key set as of that update — so one `workbook fetch` is enough, and a clone
+// never has to fetch twice to see a teammate's new subproject.
+func TestFetchAcceptsTasksUnderAKeyTheSameFetchIntroduces(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+
+	writeConfig(t, first, config,
+		core.ConfigOperation{Type: core.ConfigKeyAdd, Key: "NEW"},
+		core.ConfigOperation{Type: core.ConfigKeyCurrent, Key: "NEW"})
+	keys, err := first.LoadVocabularyState(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := syncService(first, config)
+	service.Keys = keys.Keys
+	created, err := service.CreateMutation(ctx, core.CreateInput{Title: "Second key task"})
+	if err != nil {
+		t.Fatalf("CreateMutation() error = %v", err)
+	}
+	if !strings.HasPrefix(created.Task.ID, "NEW-") {
+		t.Fatalf("task ID = %q, want the current key NEW", created.Task.ID)
+	}
+
+	// One publication carries the ledger and the task ref together, which is
+	// the arrangement this test exists to hold: Push publishes the
+	// configuration before the task refs whose keys it explains.
+	if _, err := first.Push(ctx, config); err != nil {
+		t.Fatalf("Push() error = %v", err)
+	}
+
+	// The clone does its own work before fetching, which is not scene-setting:
+	// writing a task reads this clone's key set, so by the time the fetch runs,
+	// the set the clone opened with is memoized. That is the state every
+	// inline-synchronizing mutation reaches the fetch in, and the state the
+	// fetch has to reload out of before it classifies a single ref.
+	local := createSyncTask(t, second, config, "Local task")
+	if !strings.HasPrefix(local.ID, config.Key+"-") {
+		t.Fatalf("local task ID = %q, want the founding key %s", local.ID, config.Key)
+	}
+
+	fetched, err := second.Fetch(ctx, config)
+	if err != nil {
+		t.Fatalf("Fetch() error = %v; result = %#v", err, fetched)
+	}
+	assertSyncOutcome(t, fetched, created.Task.ID, SyncCreated)
+	if len(fetched.Ignored) != 0 {
+		t.Fatalf("Fetch() ignored = %#v, want none: the key arrived in the same fetch", fetched.Ignored)
+	}
+	if !refExists(t, second, taskRefPrefix+created.Task.ID) {
+		t.Fatalf("%s was not created locally", taskRefPrefix+created.Task.ID)
+	}
+}
+
+// And the negative, which is what keeps the reload above from being an
+// indiscriminate welcome: a ref under a key origin's ledger never added is
+// still ignored, still flagged as possibly another Workbook's history, and now
+// reported with the key that would adopt it.
+func TestFetchReportsTheKeyThatWouldAdoptAnIgnoredRef(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+	task := createSyncTask(t, first, config, "Adoptable")
+	head := refValue(t, first, taskRefPrefix+task.ID)
+	foreign := "OTHER-" + strings.TrimPrefix(task.ID, config.Key+"-")
+	syncGit(t, first.Root, "update-ref", taskRefPrefix+foreign, head)
+	publishTaskRefs(t, first)
+
+	fetched, err := second.Fetch(ctx, config)
+	if err != nil {
+		t.Fatalf("Fetch() error = %v; result = %#v", err, fetched)
+	}
+	for _, ignored := range fetched.Ignored {
+		if ignored.Ref != taskRefPrefix+foreign {
+			continue
+		}
+		if !ignored.PlausibleTask {
+			t.Errorf("plausibleTask = false, want true")
+		}
+		if ignored.AdoptableKey != "OTHER" {
+			t.Errorf("adoptableKey = %q, want OTHER", ignored.AdoptableKey)
+		}
+		if !strings.Contains(ignored.Reason, `project key "OTHER", which this project does not have`) {
+			t.Errorf("reason = %q, want it to name the key this project does not have", ignored.Reason)
+		}
+		return
+	}
+	t.Fatalf("Fetch() ignored = %#v, want an entry for %s", fetched.Ignored, foreign)
+}
+
 func TestPushPublishesAllTaskRefsAndReportsUpToDate(t *testing.T) {
 	first, _, config := syncRepositories(t)
 	firstTask := createSyncTask(t, first, config, "First task")

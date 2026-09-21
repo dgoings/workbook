@@ -169,6 +169,16 @@ type IgnoredRef struct {
 	// must never suggest deleting such a ref; only a name no project's format
 	// can produce is safe to offer for removal.
 	PlausibleTask bool `json:"plausibleTask"`
+	// AdoptableKey names the project key `workbook key add` would adopt this
+	// ref under, and is empty for every ref adoption is not the answer for.
+	//
+	// It is narrower than PlausibleTask: that member gates destructive advice
+	// and is true for anything some Workbook could have written, while this is
+	// only set for a name that is exactly a task ID under a key this project
+	// does not have. Every known case of a second key on one origin is one
+	// project that ended up with two — a split, a re-initialization, an older
+	// build — and for those the ref is not junk to delete but history to adopt.
+	AdoptableKey string `json:"adoptableKey,omitempty"`
 }
 
 func (r *Repository) listTaskRefs(ctx context.Context) ([]taskRefRecord, error) {
@@ -344,6 +354,7 @@ func ignoredTaskRef(keys core.KeySet, prefix, refName, reason string) IgnoredRef
 		Ref:           taskRefPrefix + name,
 		Reason:        reason,
 		PlausibleTask: keys.PlausibleTaskID(name),
+		AdoptableKey:  keys.AdoptableKey(name),
 	}
 }
 

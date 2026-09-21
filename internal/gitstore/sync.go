@@ -491,6 +491,27 @@ func (r *Repository) fetch(
 		return state, result, fatal
 	}
 
+	// The key set is loaded here, between the configuration stage and the task
+	// refs, and that ordering is the whole of this feature's fetch contract: a
+	// push that delivers `key.add NEW` and a task under NEW arrives as one
+	// fetch, and the classification below has to use the set as of the update
+	// this run just applied. Loading it earlier — at the top of the function,
+	// or lazily inside the listings — would classify that task against the set
+	// this clone opened with and report a teammate's work as another project's
+	// ref until somebody fetched a second time.
+	//
+	// The reload is explicit rather than inherited from the stage's own memo
+	// drop, because the memo is not a barrier: keySet publishes a set it read
+	// before taking the metadata lock, so a set superseded by the stage above
+	// can still be the memoized one afterwards. Dropping it and reading the
+	// ledger again here makes the ordering a property of this function instead
+	// of a side effect of another one.
+	r.forgetKeySet()
+	if _, err := r.keySet(ctx, config); err != nil {
+		result, err = failedSyncPhase(result, "fetch failed before completion", err)
+		return state, result, err
+	}
+
 	canonicalRefs, _, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
 	if err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)

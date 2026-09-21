@@ -15,12 +15,16 @@ const (
 )
 
 // ignoredRefLine is the whole line the report writes for one ref, so a test
-// that matches it proves the verdict sits on that name's own line rather than
+// that matches it proves the verdict — and the adopt advice, when the name is
+// one a project key would take over — sits on that name's own line rather than
 // somewhere in the report.
 func ignoredRefLine(ignored gitstore.IgnoredRef) string {
 	verdict := ignoredRefRemovable
 	if ignored.PlausibleTask {
 		verdict = ignoredRefPlausible
+	}
+	if ignored.AdoptableKey != "" {
+		verdict += "; `workbook key add " + ignored.AdoptableKey + "` would adopt it"
 	}
 	return "Ignored:\t" + ignored.Ref + "\t" + verdict + "\t" + ignored.Reason + "\n"
 }
@@ -40,10 +44,20 @@ func TestWriteIgnoredRefsOffersRemovalOnlyForNamesNoProjectCanOwn(t *testing.T) 
 		Ref:    "refs/workbook/tasks/EVIL",
 		Reason: "the ref does not name one task",
 	}
+	// The reason is the sentence the key set itself refuses that name with,
+	// built here rather than quoted, so the fixture cannot drift from what a
+	// user is shown: a ref carrying a key this project does not have is the
+	// case the adopt advice exists for.
+	foreignID := "OPS-01K0M6B8A4FTT8C39MXXYTW7D9"
+	foreignReason := core.FoundingKeySet("WB").RequireOwned(foreignID)
+	if foreignReason == nil {
+		t.Fatalf("RequireOwned(%q) = nil, want a refusal naming the key", foreignID)
+	}
 	foreign := gitstore.IgnoredRef{
-		Ref:           "refs/workbook/tasks/OPS-01K0M6B8A4FTT8C39MXXYTW7D9",
-		Reason:        `task ID "OPS-01K0M6B8A4FTT8C39MXXYTW7D9" must begin with "WB-"`,
+		Ref:           "refs/workbook/tasks/" + foreignID,
+		Reason:        foreignReason.Error(),
 		PlausibleTask: true,
+		AdoptableKey:  "OPS",
 	}
 
 	for _, test := range []struct {
@@ -88,6 +102,16 @@ func TestWriteIgnoredRefsOffersRemovalOnlyForNamesNoProjectCanOwn(t *testing.T) 
 			if strings.Contains(got, keepWarning) != test.wantWarning {
 				t.Fatalf("output = %q, keep warning present = %t, want %t",
 					got, !test.wantWarning, test.wantWarning)
+			}
+			// The advice names a key, so it may only appear for a list that
+			// holds a name a key would adopt. A junk name fits no key, and
+			// telling its reader to add one would be nonsense.
+			wantAdvice := false
+			for _, ignored := range test.ignored {
+				wantAdvice = wantAdvice || ignored.AdoptableKey != ""
+			}
+			if present := strings.Contains(got, adoptAdvice("OPS")); present != wantAdvice {
+				t.Fatalf("output = %q, adopt advice present = %t, want %t", got, present, wantAdvice)
 			}
 		})
 	}

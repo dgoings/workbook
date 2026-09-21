@@ -226,7 +226,15 @@ func TestRunSyncToleratesAndReportsUnrecognizedRemoteTaskRef(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("poisoned fetch code = %d, want 0; stderr = %q", code, stderr)
 	}
-	assertCLIIgnoredRefs(t, decodeSyncResult(t, stdout, "fetch"), wantIgnored)
+	fetched := decodeSyncResult(t, stdout, "fetch")
+	assertCLIIgnoredRefs(t, fetched, wantIgnored)
+	// The envelope names the key that would adopt the ref, so a script can put
+	// the same choice in front of somebody as the human report below does, and
+	// names nothing for a ref no key explains.
+	assertCLIAdoptableKeys(t, fetched, map[string]string{
+		"refs/workbook/tasks/EVIL": "",
+		foreignRef:                 "OPS",
+	})
 
 	code, stdout, stderr = run(t, second, "push", "--json")
 	if code != 0 || stderr != "" {
@@ -251,9 +259,16 @@ func TestRunSyncToleratesAndReportsUnrecognizedRemoteTaskRef(t *testing.T) {
 	// verdict: the deletion command below names a placeholder, and the only
 	// thing telling the reader which of these two refs it may be filled with is
 	// the verdict on the ref's line.
+	//
+	// The foreign ref's whole line is asserted, because three things have to
+	// reach a person there at once: the verdict that keeps the deletion command
+	// away from it, the command that would adopt it instead, and the refusal's
+	// own sentence naming the key this project does not have.
 	for _, want := range []string{
 		"Ignored:\trefs/workbook/tasks/EVIL\t" + ignoredRefRemovable + "\t",
-		"Ignored:\t" + foreignRef + "\t" + ignoredRefPlausible + "\t",
+		"Ignored:\t" + foreignRef + "\t" + ignoredRefPlausible + adoptAdvice("OPS") +
+			"\ttask ID \"OPS-01K0M6B8A4FTT8C39MXXYTW7D9\" carries project key \"OPS\", " +
+			"which this project does not have",
 		removalAdvice,
 		keepWarning,
 	} {
@@ -285,6 +300,20 @@ func assertCLIIgnoredRefs(t *testing.T, result gitstore.SyncResult, want map[str
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ignored refs = %#v, want %#v", got, want)
+	}
+}
+
+// assertCLIAdoptableKeys requires exactly the named refs and, for each, the
+// project key the report would offer to adopt it under — empty for a name no
+// key would make readable.
+func assertCLIAdoptableKeys(t *testing.T, result gitstore.SyncResult, want map[string]string) {
+	t.Helper()
+	got := make(map[string]string, len(result.Ignored))
+	for _, ignored := range result.Ignored {
+		got[ignored.Ref] = ignored.AdoptableKey
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("adoptable keys = %#v, want %#v", got, want)
 	}
 }
 
