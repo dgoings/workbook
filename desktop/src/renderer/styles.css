@@ -241,9 +241,10 @@ body {
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
   font-size: .75rem;
   cursor: default;
-  /* One line always: a wrapped version pushes the rail down. Which build it is
-     lives on this line's own tooltip, which has room for the words and the
-     path both. */
+  /* One line always: a wrapped version pushes the rail down. So a long version
+     is ellipsized here, and this line's own tooltip carries the whole of it —
+     which build it is, the full version string, and the path — since the
+     tooltip is the one place with room for all three. */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

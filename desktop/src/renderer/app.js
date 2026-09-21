@@ -498,9 +498,14 @@ async function boot () {
     // Which binary is driving these repositories is the first thing worth
     // knowing when the app and a terminal disagree about a project, and the
     // version line is the only place left that can say so: the build on one
-    // line, where it came from on the next.
+    // line, the version it reports on the next, where it came from on the
+    // third. The version is repeated here rather than left to the line above
+    // because that line is one nowrap line inside a narrow sidebar and a
+    // version like 0.6.0-rc1-16-ge935d54 is ellipsized away — the tooltip is
+    // the only place the whole string can be read.
     const build = version.bundled ? 'Bundled build' : 'Installed build'
-    el('version').title = `${build}\n${version.path}`
+    el('version').title = [build, `workbook ${version.version ?? '(no version reported)'}`, version.path]
+      .join('\n')
   } catch (error) {
     el('version').textContent = 'workbook not found'
     el('version').title = error.message
