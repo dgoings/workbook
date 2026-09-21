@@ -714,6 +714,64 @@ func TestFetchIgnoresAFetchedRefWhoseDocumentsNameAnotherProject(t *testing.T) {
 	assertSyncOutcome(t, planted, foreignID, SyncInvalid)
 }
 
+// And the boundary of that tolerance: a tip whose two documents name two
+// different projects is not another project's ref, because no project writes
+// that pair. One document names this project and the other does not, so any
+// report saying "the ref belongs to project X" would be false of one of them.
+// It stays a fetched ref that failed validation, which is what it was before
+// the foreign-project classification existed.
+func TestFetchKeepsATipWhoseDocumentsDisagreeAboutTheProjectInvalid(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+	task := createSyncTask(t, first, config, "Documents that disagree")
+	head := refValue(t, first, taskRefPrefix+task.ID)
+
+	// The state document is rewritten to name another project; the operation
+	// beside it still names this one.
+	snapshot, err := first.ReadTaskHead(ctx, config, TaskHead{TaskID: task.ID, ObjectID: head})
+	if err != nil {
+		t.Fatalf("ReadTaskHead() error = %v", err)
+	}
+	const otherProjectID = "01K0M6B8A4FTT8C39MXXYTW7C1"
+	if config.ProjectID == otherProjectID {
+		t.Fatalf("fixture project ID collided with the literal this test rewrites to")
+	}
+	state := snapshot.State
+	state.ProjectID = otherProjectID
+	encoded, err := core.EncodeDocument(state)
+	if err != nil {
+		t.Fatalf("EncodeDocument() error = %v", err)
+	}
+	stateBlob := syncGitInput(t, first.Root, encoded, "hash-object", "-w", "--stdin")
+	operationBlob := syncGit(t, first.Root, "rev-parse", head+":operation.json")
+	tree := syncGitInput(t, first.Root, []byte(
+		"100644 blob "+operationBlob+"\toperation.json\n"+
+			"100644 blob "+stateBlob+"\tstate.json\n"), "mktree")
+	// No parent, matching the root pack the operation document carries, so the
+	// tip fails on its documents rather than on its topology.
+	mixed := syncGitInput(t, first.Root, []byte("workbook: documents that disagree about the project"),
+		"commit-tree", tree)
+	syncGit(t, first.Root, "update-ref", taskRefPrefix+task.ID, mixed, head)
+	syncGit(t, first.Root, "push", "--force", "origin", taskRefPrefix+task.ID+":"+taskRefPrefix+task.ID)
+
+	result, err := second.Fetch(ctx, config)
+	if err == nil {
+		t.Fatalf("Fetch() error = nil, want the tracking ref refused; result = %#v", result)
+	}
+	if got := core.CategoryOf(err); got != core.CategoryCorruptData {
+		t.Fatalf("Fetch() category = %q, want %q; error = %v", got, core.CategoryCorruptData, err)
+	}
+	assertSyncOutcome(t, result, task.ID, SyncInvalid)
+	for _, ignored := range result.Ignored {
+		if ignored.Ref == taskRefPrefix+task.ID {
+			t.Fatalf("a tip whose documents disagree was reported as another project's ref: %#v", ignored)
+		}
+	}
+	if refExists(t, second, taskRefPrefix+task.ID) {
+		t.Fatalf("the refused tip reached the canonical namespace at %s", taskRefPrefix+task.ID)
+	}
+}
+
 // publishForeignProjectTask builds a whole second Workbook project and pushes
 // one of its task refs into the origin the named repository shares.
 //

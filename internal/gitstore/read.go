@@ -538,6 +538,11 @@ func validateReadConfig(config core.ProjectConfig) error {
 // ask keeps the exit code and the wording it had before this type existed. What
 // it adds is the project ID, so the one caller that does ask can say in its
 // report which project the ref belongs to.
+//
+// It is therefore only produced when both documents name that same project. A
+// tip whose operation and state name two different projects gets
+// mismatchedProjectDocuments instead: there is no project such a ref belongs
+// to, so there is nothing for this type to carry.
 type foreignProjectDocumentsError struct {
 	// ProjectID is the project the documents name, which is the one fact a
 	// report about such a ref has that the reader does not.
@@ -549,10 +554,17 @@ func (e *foreignProjectDocumentsError) Error() string { return e.cause.Error() }
 
 func (e *foreignProjectDocumentsError) Unwrap() error { return e.cause }
 
+// mismatchedProjectDocuments is the same refusal without the claim that some
+// one other project owns the tip. Both forms carry one message, so a caller
+// that tells them apart does it by asking rather than by reading text.
+func mismatchedProjectDocuments() error {
+	return core.Errorf(core.CategoryCorruptData, "task documents do not match the configured project")
+}
+
 func foreignProjectDocuments(projectID string) error {
 	return &foreignProjectDocumentsError{
 		ProjectID: projectID,
-		cause:     core.Errorf(core.CategoryCorruptData, "task documents do not match the configured project"),
+		cause:     mismatchedProjectDocuments(),
 	}
 }
 
@@ -582,6 +594,19 @@ func (r *Repository) validateRepositoryConfig(config core.ProjectConfig) error {
 
 func validateTipIdentity(config core.ProjectConfig, taskID string, pack core.OperationPack, state core.StateDocument) error {
 	if pack.ProjectID != config.ProjectID || state.ProjectID != config.ProjectID {
+		// Another project's tip only when both documents name the same other
+		// project. That pair is what a project writes, so a ref carrying it on
+		// a shared origin is somebody else's history arriving intact, and the
+		// fetch may report it rather than refuse the run.
+		//
+		// Two documents naming two different projects are no project's history:
+		// nothing writes that pair, and a report about it would have to pick one
+		// of the two IDs and say the ref belongs to it, which is false of the
+		// other. So it keeps the refusal this check has always given, and the
+		// fetch keeps treating it as a tracking ref that failed validation.
+		if pack.ProjectID != state.ProjectID {
+			return mismatchedProjectDocuments()
+		}
 		return foreignProjectDocuments(pack.ProjectID)
 	}
 	if pack.TaskID != taskID || state.TaskID != taskID {

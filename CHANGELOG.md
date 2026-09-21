@@ -41,11 +41,10 @@ described under Changed.
   another project's rather than as junk to delete, and a fetched ref whose key
   this project has but whose documents name another project is reported the
   same way instead of failing the synchronization, so adding a key by mistake
-  is undone by retiring it. A
-  project that adds a key records a configuration a Workbook older than this
-  release cannot fold: it reads the ledger as newer than it can read and sees
-  tasks under the new key as another project's refs, so everyone on the team
-  upgrades together.
+  is undone by retiring it. A project that adds a key records a configuration
+  a Workbook older than this release cannot fold: it reads the ledger as newer
+  than it can read and sees tasks under the new key as another project's refs,
+  so everyone on the team upgrades together.
 - **A project defines its own priorities.** `high`, `medium` and `low` stop
   being the only ones there are: `workbook priority` gains `list`, `add`,
   `rename`, `label`, `move`, `tag`, `delete`, `color` and `log`, the same verbs
