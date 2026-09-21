@@ -90,6 +90,27 @@ test('setPathNoticeShown survives a reload', async () => {
   })
 })
 
+test('a setTheme whose save fails leaves the theme where it was', async () => {
+  await withUserData(async (directory) => {
+    // A registry the app cannot write at all: its directory's parent is a
+    // regular file, so the mkdir every save begins with fails with ENOTDIR.
+    // That stands in for the real reasons a save fails — a full disk, a
+    // userData directory that is not writable — without needing either.
+    const blocked = path.join(directory, 'not-a-directory')
+    await fs.writeFile(blocked, '')
+    const registry = new Registry(path.join(blocked, 'userData'))
+    await registry.load()
+    assert.equal(registry.theme, 'system')
+
+    await assert.rejects(registry.setTheme('dark'))
+    // save() writes the whole state, so a theme left in memory at the value
+    // the file refused would be committed by the next successful save of
+    // anything else — a sidebar toggle, an import — and the user would be
+    // handed a mode they were never given and never asked for again.
+    assert.equal(registry.theme, 'system')
+  })
+})
+
 const INSTALLED = '/tmp/not-a-real-place/Workbench/bin'
 
 test('pendingPathNotice is null until something arms it', async () => {

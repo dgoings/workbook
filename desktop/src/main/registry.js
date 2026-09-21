@@ -104,9 +104,26 @@ class Registry {
     return this.state.theme ?? 'system'
   }
 
+  /**
+   * Store the theme, or leave it exactly as it was.
+   *
+   * Rolled back like setSidebarCollapsed below, for a reason that comes out of
+   * save() writing the whole state: a theme left in memory at the value the
+   * file refused would be committed by the next successful save of anything
+   * else — a sidebar toggle, an import — and the user would be handed a mode
+   * they were never given and have no reason to ask for again. The caller
+   * reports the failure, so keeping memory and file at one answer is what makes
+   * what it reports true.
+   */
   async setTheme (theme) {
+    const previous = this.state.theme
     this.state.theme = theme
-    await this.save()
+    try {
+      await this.save()
+    } catch (error) {
+      this.state.theme = previous
+      throw error
+    }
   }
 
   /**
