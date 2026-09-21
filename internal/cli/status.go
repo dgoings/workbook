@@ -1807,7 +1807,13 @@ func regenerateGuidelines(
 		Project:    session.config,
 		Vocabulary: vocabulary,
 		Priorities: priorities,
-		Generator:  release.Version,
+		// Keys travels off the session's own service, from the same read every
+		// other boundary opened this session with, rather than off either
+		// parameter above: neither a status change nor a priority change touches
+		// the key set, so there is no "as this write left it" value to take it
+		// from the way vocabulary and priorities are taken above.
+		Keys:      session.service.Keys,
+		Generator: release.Version,
 	})
 	return &report, err
 }

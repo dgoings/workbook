@@ -27,6 +27,12 @@ type Options struct {
 	// section is using; PriorityVocabulary's own accessors make that
 	// substitution, so there is no LegacyVocabulary-style split to mirror here.
 	Priorities core.PriorityVocabulary
+	// Keys supplies the project's task-ID keys the guidelines document,
+	// mirroring Vocabulary and Priorities above. The zero value means the
+	// caller configured none and renders the founding key alone, active and
+	// current, which is what a project whose ledger records no key change is
+	// using.
+	Keys core.KeySet
 	// User supplies the documentation targets and skill destination.
 	User userconfig.Config
 	// Generator is the Workbook version recorded in each stamp.
@@ -92,7 +98,7 @@ func guidelinesTarget(options Options) target {
 		display: GuidelinesPath,
 		document: Document{
 			Generator: options.Generator,
-			Body:      RenderGuidelines(options.Project, options.Vocabulary, options.Priorities),
+			Body:      RenderGuidelines(options.Project, options.Vocabulary, options.Priorities, options.Keys),
 		},
 		owned: true,
 	}

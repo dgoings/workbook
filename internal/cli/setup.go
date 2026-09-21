@@ -208,6 +208,7 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 		Project:    config,
 		Vocabulary: state.Vocabulary,
 		Priorities: state.Priorities,
+		Keys:       state.Keys,
 		User:       user,
 		Generator:  release.Version,
 		Force:      *force,
@@ -248,6 +249,17 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 		return err
 	}
 	result.TaskCount = len(tasks)
+
+	// The key a new task would get, which is what somebody reading this report
+	// needs. It is the founding key for every project that has not moved it, and
+	// it is read after the synchronization above rather than before it, because a
+	// clone joining a project that changed its current key learns that from the
+	// fetch this run just made.
+	post, err := repository.LoadVocabularyState(ctx, config)
+	if err != nil {
+		return err
+	}
+	result.Key = post.Keys.Current()
 
 	if *jsonMode {
 		writeSyncPhaseResultWithConfig(stdout, "setup", result, conflicts, configConflicts, nil, true, func(io.Writer) {})
@@ -414,6 +426,11 @@ func refreshFetchedGuidelines(
 	// only half of it would hand a fresh clone a file naming the built-in three
 	// over the priorities the project it just joined actually configured.
 	options.Priorities = state.Priorities
+	// And the keys, for the same reason again: a clone joining a project that
+	// moved its current key learns that from this fetch, and a refresh that left
+	// this half behind would document the founding key over the one new tasks
+	// actually mint under.
+	options.Keys = state.Keys
 	refreshed, err := agentdocs.ApplyGuidelines(options)
 	if err != nil {
 		return err
@@ -511,6 +528,7 @@ func runDocs(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		Project:    config,
 		Vocabulary: state.Vocabulary,
 		Priorities: state.Priorities,
+		Keys:       state.Keys,
 		User:       user,
 		Generator:  release.Version,
 		Create:     create.values,

@@ -360,7 +360,7 @@ func (board *boardPriorities) apply(
 		},
 		Tasks: plan.tasks,
 		Warnings: append(board.publisher.publishConfig(ctx),
-			stalePriorityGuidelinesWarnings(board, vocabulary, after)...),
+			stalePriorityGuidelinesWarnings(board, vocabulary, after, written.KeySet(board.config.Key))...),
 	}, nil
 }
 
@@ -388,20 +388,22 @@ func stalePriorityWrite(expected string) error {
 // does not rewrite them. It is best-effort: a file it cannot read is not a
 // reason to report a recorded, published change as anything but recorded.
 //
-// It takes the statuses as well as the priorities although it changes neither,
-// for the reason staleGuidelinesWarnings takes the priorities: the comparison
-// renders the whole document, so a reader supplied with only the half that
-// moved would find a difference it had just invented.
+// It takes the statuses and the keys as well as the priorities although it
+// changes neither, for the reason staleGuidelinesWarnings takes the
+// priorities: the comparison renders the whole document, so a reader supplied
+// with only the part that moved would find a difference it had just invented.
 func stalePriorityGuidelinesWarnings(
 	board *boardPriorities,
 	vocabulary core.Vocabulary,
 	priorities core.PriorityVocabulary,
+	keys core.KeySet,
 ) []core.Warning {
 	state, err := agentdocs.GuidelinesState(agentdocs.Options{
 		Root:       board.repository.Root,
 		Project:    board.config,
 		Vocabulary: vocabulary,
 		Priorities: priorities,
+		Keys:       keys,
 		Generator:  release.Version,
 	})
 	if err != nil {

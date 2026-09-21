@@ -112,6 +112,21 @@ func keyStates(t *testing.T, repository string) []string {
 	return states
 }
 
+// cliCreateTaskWithKey mints a task under a named key, mirroring cliCreateTask
+// for the one flag that suite has no reason to pass.
+func cliCreateTaskWithKey(t *testing.T, repository, title, key string) core.Task {
+	t.Helper()
+	code, stdout, stderr := run(t, repository, "create", title, "--key", key, "--no-sync", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("create --key %s = code %d, stderr %q", key, code, stderr)
+	}
+	var task core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "create").Data, &task); err != nil {
+		t.Fatal(err)
+	}
+	return task
+}
+
 func mustRunKey(t *testing.T, repository string, args ...string) {
 	t.Helper()
 	if code, _, stderr := run(t, repository, args...); code != 0 {
@@ -583,6 +598,120 @@ func TestKeyVerbsExitFiveOnAValidationError(t *testing.T) {
 	if !strings.Contains(stderr, "workbook show WB-01K0M6B8A4FTT8C39MXXYTW7C2") {
 		t.Fatalf("stderr = %q, want the command the caller wanted", stderr)
 	}
+}
+
+// `create --key` mints under the key the flag names rather than the current
+// one, which is the whole point of offering the choice: a caller preparing a
+// second subproject's first task should not have to make that key current
+// first just to mint under it.
+func TestCreateMintsUnderTheKeyTheFlagNames(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunKey(t, repository, "key", "add", "NEW", "--no-sync")
+	if got, want := keyStates(t, repository), []string{"WB current", "NEW active"}; !equalStrings(got, want) {
+		t.Fatalf("keys = %v, want %v", got, want)
+	}
+
+	task := cliCreateTaskWithKey(t, repository, "Under NEW", "NEW")
+	if !strings.HasPrefix(task.ID, "NEW-") {
+		t.Fatalf("task ID = %q, want a NEW- ID", task.ID)
+	}
+
+	// Without the flag, the current key still wins.
+	other := cliCreateTask(t, repository, "Under WB")
+	if !strings.HasPrefix(other.ID, "WB-") {
+		t.Fatalf("task ID = %q, want a WB- ID", other.ID)
+	}
+}
+
+// A retired key mints nothing new: its tasks are still this project's, but
+// `create --key` on it is refused, naming the keys that are still active —
+// the retired one is not among them, which is the whole difference between
+// retiring a key and deleting it.
+func TestCreateRefusesARetiredKeyAndNamesTheActiveOnes(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunKey(t, repository, "key", "add", "NEW", "--current", "--no-sync")
+	mustRunKey(t, repository, "key", "retire", "WB", "--no-sync")
+
+	code, stdout, stderr := run(t, repository, "create", "Under WB", "--key", "WB", "--no-sync", "--json")
+	if code != 5 {
+		t.Fatalf("create --key WB = code %d, want 5; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("create --key WB stdout = %q, want nothing minted", stdout)
+	}
+	assertJSONError(t, stderr, core.CategoryValidation,
+		`project key "WB" is retired, so no new task is minted under it; the active keys are: NEW`)
+}
+
+// A key this project has never heard of is refused the same way, naming every
+// key it does have so the caller can tell a typo from a teammate's key this
+// checkout has not fetched yet.
+func TestCreateRefusesAnUnknownKey(t *testing.T) {
+	repository := initializedRepository(t)
+
+	code, stdout, stderr := run(t, repository, "create", "Under ZZ", "--key", "ZZ", "--no-sync", "--json")
+	if code != 5 {
+		t.Fatalf("create --key ZZ = code %d, want 5; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("create --key ZZ stdout = %q, want nothing minted", stdout)
+	}
+	assertJSONError(t, stderr, core.CategoryValidation,
+		`no project key "ZZ" in this project; its active keys are: WB`)
+}
+
+// `list --key` on a retired key still answers: its tasks did not stop
+// existing when the key stopped minting new ones, and a filter that refused a
+// retired key would make a project's own history unreadable by the key it was
+// recorded under.
+func TestListFiltersByKeyIncludingARetiredOne(t *testing.T) {
+	repository := initializedRepository(t)
+	underWB := cliCreateTask(t, repository, "Under WB")
+	mustRunKey(t, repository, "key", "add", "NEW", "--current", "--no-sync")
+	underNew := cliCreateTask(t, repository, "Under NEW")
+	mustRunKey(t, repository, "key", "retire", "WB", "--no-sync")
+
+	code, stdout, stderr := run(t, repository, "list", "--key", "WB", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("list --key WB = code %d, stderr %q", code, stderr)
+	}
+	var listed []core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "list").Data, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != underWB.ID {
+		t.Fatalf("list --key WB = %#v, want the one task minted under the now-retired WB", listed)
+	}
+
+	code, stdout, stderr = run(t, repository, "list", "--key", "NEW", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("list --key NEW = code %d, stderr %q", code, stderr)
+	}
+	listed = nil
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "list").Data, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != underNew.ID {
+		t.Fatalf("list --key NEW = %#v, want the one task minted under NEW", listed)
+	}
+}
+
+// An unknown key filter is refused rather than answered with an empty list,
+// the same way an unknown status filter is: an empty table cannot be told
+// apart from "no such key" any other way.
+func TestListRefusesAnUnknownKeyNamingTheKnownOnes(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunKey(t, repository, "key", "add", "NEW", "--no-sync")
+
+	code, stdout, stderr := run(t, repository, "list", "--key", "ZZ", "--json")
+	if code != 5 {
+		t.Fatalf("list --key ZZ = code %d, want 5; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("list --key ZZ stdout = %q, want nothing listed", stdout)
+	}
+	assertJSONError(t, stderr, core.CategoryValidation,
+		`no project key "ZZ" in this project; its keys are: WB, NEW; fetch if a teammate added it`)
 }
 
 func TestKeyHelpDocumentsTheFamily(t *testing.T) {

@@ -647,3 +647,37 @@ func TestSetupNamesTheRefsItsSynchronizationIgnored(t *testing.T) {
 			got, stdout)
 	}
 }
+
+// setup's "Key:" line and JSON "key" member report the key a new task would
+// get, which is the current key — the founding key only for a project that
+// has never moved it. A clone that runs `key add NEW --current` and then
+// setup again has to see NEW, because that is what `workbook create` will
+// mint under from here on, and a report still naming the founding key would
+// send somebody looking for WB- prefixed tasks under the key that stopped
+// minting them.
+func TestSetupReportsTheCurrentKeyAfterKeyCurrent(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunKey(t, repository, "key", "add", "NEW", "--current", "--no-sync")
+
+	code, stdout, stderr := run(t, repository, "setup", "--no-sync")
+	if code != 0 {
+		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "Key:\tNEW\n") {
+		t.Errorf("setup output = %q, want the current key NEW", stdout)
+	}
+
+	code, stdout, stderr = run(t, repository, "setup", "--no-sync", "--json")
+	if code != 0 {
+		t.Fatalf("setup --json code = %d, want 0; stderr = %q", code, stderr)
+	}
+	var result struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "setup").Data, &result); err != nil {
+		t.Fatalf("decode setup: %v; output = %s", err, stdout)
+	}
+	if result.Key != "NEW" {
+		t.Fatalf("setup key = %q, want NEW", result.Key)
+	}
+}

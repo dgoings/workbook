@@ -34,9 +34,17 @@ const GuidelinesPath = ".workbook/guidelines.md"
 // Vocabulary above does: PriorityVocabulary.Definitions() already reads its
 // own zero value as "this caller configured none" and substitutes the
 // built-in three itself.
-func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary, priorities core.PriorityVocabulary) string {
+//
+// The zero KeySet is substituted the way the zero Vocabulary is, for the same
+// reason: a caller that read no configuration ledger is a project that has
+// recorded no key change, and that project is using its founding key alone,
+// active and current.
+func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary, priorities core.PriorityVocabulary, keys core.KeySet) string {
 	if vocabulary.IsZero() {
 		vocabulary = core.LegacyVocabulary()
+	}
+	if keys.IsZero() {
+		keys = core.FoundingKeySet(project.Key)
 	}
 	definitions := vocabulary.Definitions()
 	var builder strings.Builder
@@ -49,7 +57,11 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary, pr
 	builder.WriteString("## This project\n\n")
 	builder.WriteString("| Setting | Value |\n| --- | --- |\n")
 	builder.WriteString("| Project ID | `" + project.ProjectID + "` |\n")
-	builder.WriteString("| Task ID prefix | `" + project.Key + "-` |\n\n")
+	builder.WriteString("| Task ID prefix | `" + keys.Current() + "-` |\n\n")
+	builder.WriteString("A task ID is `<KEY>-<ULID>`. A project may have more than one key, so IDs in\n")
+	builder.WriteString("one project can carry different prefixes; all of them are this project's.\n")
+	builder.WriteString("`workbook create --key <KEY>` mints a task under another of this project's\n")
+	builder.WriteString("active keys; without it, a task is minted under the current key.\n\n")
 
 	builder.WriteString("## Statuses\n\n")
 	builder.WriteString("This project's statuses, in order. Pass the machine value, never the display\n")

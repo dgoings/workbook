@@ -11,8 +11,8 @@ both human-readable output and a versioned machine-readable result envelope:
 
 ```text
 workbook setup [--key <key>] [--no-docs] [--no-sync] [--skill-dir <dir>] [--no-skill] [--force] [--json]
-workbook create <title> [--description <text>] [--status <status>] [--priority <priority>] [--label <label>] [--no-sync] [--json]
-workbook list [--status <status>] [--priority <priority>] [--label <label>] [--all] [--json]
+workbook create <title> [--description <text>] [--status <status>] [--priority <priority>] [--key <key>] [--label <label>] [--no-sync] [--json]
+workbook list [--status <status>] [--priority <priority>] [--key <key>] [--label <label>] [--all] [--json]
 workbook board [--wide | --narrow] [--json]
 workbook show <task> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--get-attachment <attachment> [--out <path>]] [--json]
 workbook update <task> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--label <label>] [--clear-labels] [--comment <body>] [--edit-comment <comment>] [--remove-comment <comment>] [--attach-file <path>] [--attach-url <url>] [--attach-label <text>] [--remove-attachment <attachment>] [--assign <who>] [--unassign <who>] [--force] [--no-sync] [--json]

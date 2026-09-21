@@ -513,6 +513,7 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	description := flags.String("description", "", "task description")
 	status := flags.String("status", "", "task status")
 	priority := flags.String("priority", "", "task priority")
+	key := flags.String("key", "", "mint the task under this key")
 	var labels stringListValue
 	flags.Var(&labels, "label", "task label")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
@@ -535,6 +536,7 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io
 			Status:      core.Status(*status),
 			Priority:    core.Priority(*priority),
 			Labels:      labels.values,
+			Key:         *key,
 		})
 	})
 	return writeMutationOutcome(stdout, stderr, "create", session, result, err, *jsonMode)
@@ -544,6 +546,7 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	flags := newFlagSet("list")
 	status := flags.String("status", "", "task status")
 	priority := flags.String("priority", "", "task priority")
+	key := flags.String("key", "", "only tasks whose ID carries this key")
 	label := flags.String("label", "", "task label")
 	all := flags.Bool("all", false, "include tombstoned tasks")
 	jsonMode := flags.Bool("json", false, "emit JSON")
@@ -555,7 +558,7 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
-	filter := core.ListFilter{Label: *label, All: *all}
+	filter := core.ListFilter{Label: *label, All: *all, Key: *key}
 	if *status != "" {
 		value := core.Status(*status)
 		filter.Status = &value

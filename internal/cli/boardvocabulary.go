@@ -195,7 +195,7 @@ func (board *boardVocabulary) apply(
 			ClaimableAfter: plan.tasks.ClaimableAfter,
 		},
 		Warnings: append(board.publisher.publishConfig(ctx),
-			staleGuidelinesWarnings(board, after, priorities)...),
+			staleGuidelinesWarnings(board, after, priorities, written.KeySet(board.config.Key))...),
 	}, nil
 }
 
@@ -246,23 +246,26 @@ func staleVocabularyWrite(expected string) error {
 // rewrite them. It is best-effort: a file it cannot read is not a reason to
 // report a recorded, published change as anything but recorded.
 //
-// It takes the priorities as well as the statuses although it changes neither,
-// because the comparison renders the whole document: a reader that supplied
-// only the statuses would render the built-in three over the priorities the
-// project configured, find the difference it had just invented, and tell every
-// project that named its own priorities that its guidelines are stale after
-// every board change — including a change that left them exactly as the
+// It takes the priorities and the keys as well as the statuses although it
+// changes neither, because the comparison renders the whole document: a reader
+// that supplied only the statuses would render the built-in three over the
+// priorities the project configured, or the founding key over one it moved,
+// find the difference it had just invented, and tell every project that named
+// its own priorities or moved its current key that its guidelines are stale
+// after every board change — including a change that left them exactly as the
 // installed file describes.
 func staleGuidelinesWarnings(
 	board *boardVocabulary,
 	vocabulary core.Vocabulary,
 	priorities core.PriorityVocabulary,
+	keys core.KeySet,
 ) []core.Warning {
 	state, err := agentdocs.GuidelinesState(agentdocs.Options{
 		Root:       board.repository.Root,
 		Project:    board.config,
 		Vocabulary: vocabulary,
 		Priorities: priorities,
+		Keys:       keys,
 		Generator:  release.Version,
 	})
 	if err != nil {

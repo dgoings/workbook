@@ -582,6 +582,7 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "description", Kind: stringFlag, Value: "<text>", Description: "task description"},
 			{Name: "status", Kind: stringFlag, Value: "<status>", Description: "task status"},
 			{Name: "priority", Kind: stringFlag, Value: "<priority>", Description: "task priority"},
+			{Name: "key", Kind: stringFlag, Value: "<key>", Description: "mint the task under this key (default: the current key)"},
 			{Name: "label", Kind: stringFlag, Value: "<label>", Description: "task label"},
 			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
@@ -594,6 +595,7 @@ var commandSchemas = map[string]commandMetadata{
 		Options: []optionMetadata{
 			{Name: "status", Kind: stringFlag, Value: "<status>", Description: "task status"},
 			{Name: "priority", Kind: stringFlag, Value: "<priority>", Description: "task priority"},
+			{Name: "key", Kind: stringFlag, Value: "<key>", Description: "only tasks whose ID carries this key"},
 			{Name: "label", Kind: stringFlag, Value: "<label>", Description: "task label"},
 			{Name: "all", Kind: boolFlag, Description: "include tombstoned tasks"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
