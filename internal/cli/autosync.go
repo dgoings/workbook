@@ -110,9 +110,14 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 		Config:     config,
 		Vocabulary: state.Vocabulary,
 		Priorities: state.Priorities,
-		Reader:     store,
-		IDs:        core.CryptoULIDSource{},
-		Now:        time.Now,
+		// And the keys, from the same read. Without them every Service in this
+		// package falls back to the founding key, so `create` on a project that
+		// has moved its current key would mint under the key the identity was
+		// written with rather than under the one the ledger names.
+		Keys:   state.Keys,
+		Reader: store,
+		IDs:    core.CryptoULIDSource{},
+		Now:    time.Now,
 	}
 	if withWriter {
 		actor, err := repository.Actor(ctx)
@@ -338,8 +343,8 @@ func (session *taskSession) pushInline(ctx context.Context, taskID string) {
 	session.report.Status = syncStatusCompleted
 }
 
-// refreshConfiguration re-reads the project's statuses and priorities after the
-// fetch that may have changed them, from one read of one tip.
+// refreshConfiguration re-reads the project's statuses, priorities and keys
+// after the fetch that may have changed them, from one read of one tip.
 //
 // A mutation must be validated against the configuration this command ends up
 // writing into, not the one it started with. A teammate who renamed `ready` to
@@ -348,7 +353,12 @@ func (session *taskSession) pushInline(ctx context.Context, taskID string) {
 // the same is true of a teammate who added `urgent`. Both are properties of the
 // fetched configuration, and the fetch happens after the session was opened.
 //
-// It is one refresher for both sections rather than one per section, and that
+// It refreshes the keys from the same read, so a `create --key` typed against a
+// teammate's newly added key is accepted rather than refused by the set this
+// command opened with — and so a `key retire` lands on the set the fetch settled
+// on rather than on one that has since grown a key.
+//
+// It is one refresher for every section rather than one per section, and that
 // is the point. Reading the statuses and the priorities separately would let a
 // fetch land between them and render a project out of two configurations, which
 // is what gitstore.VocabularyState exists to prevent — and a task mutation that
@@ -367,6 +377,7 @@ func (session *taskSession) refreshConfiguration(ctx context.Context) error {
 	}
 	session.service.Vocabulary = state.Vocabulary
 	session.service.Priorities = state.Priorities
+	session.service.Keys = state.Keys
 	return nil
 }
 

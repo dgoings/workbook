@@ -102,6 +102,8 @@ func Run(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout
 		err = runStatus(ctx, commandArgs, cwd, stdout, stderr)
 	case "priority":
 		err = runPriority(ctx, commandArgs, cwd, stdout, stderr)
+	case "key":
+		err = runKey(ctx, commandArgs, cwd, stdout, stderr)
 	case "config":
 		err = runConfig(ctx, commandArgs, cwd, stdout, stderr)
 	case "docs":
@@ -2248,9 +2250,14 @@ func openServiceParts(ctx context.Context, cwd string, stderr io.Writer) (core.S
 		Config:     config,
 		Vocabulary: state.Vocabulary,
 		Priorities: state.Priorities,
-		Reader:     store,
-		Writer:     repository,
-		Blobs:      repository,
+		// And the keys, from the same read, so every surface this constructor
+		// serves — `serve` included — mints under the key the ledger names and
+		// decides which task IDs are this project's from the set rather than
+		// from the founding key in the identity.
+		Keys:   state.Keys,
+		Reader: store,
+		Writer: repository,
+		Blobs:  repository,
 		// The read half of the same store, beside the write half above. The one
 		// long-running caller of this constructor is `serve`, whose attachment
 		// download route serves an attachment's bytes through
@@ -2290,8 +2297,12 @@ func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Se
 		Config:     config,
 		Vocabulary: state.Vocabulary,
 		Priorities: state.Priorities,
-		Reader:     store,
-		History:    store,
+		// And the keys, for the reason the two vocabularies are here: a read
+		// service without them would refuse `list --key` for a key the project
+		// configured, and resolve a prefix against the founding key alone.
+		Keys:    state.Keys,
+		Reader:  store,
+		History: store,
 		// A read service reads attachments too: their bytes are Git objects
 		// rather than projection rows, and serving one is a read like any
 		// other. It is the read half alone — nothing here may write.

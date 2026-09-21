@@ -451,6 +451,75 @@ var commandSchemas = map[string]commandMetadata{
 			},
 		},
 	},
+	"key": {
+		Name:     "key",
+		Synopsis: "workbook key <command> [options]",
+		Description: "Inspect and change this project's task-ID keys.\n\n" +
+			"A key is the prefix on every task ID, as in `WB-01K0M6…`. A project starts\n" +
+			"with the key `workbook setup` gave it and may add more: one key is current,\n" +
+			"which is where a new task is minted, others may be active, and a key that has\n" +
+			"stopped minting is retired. A retired key is never deleted — a task ID is a\n" +
+			"permanent name, so every key this project has ever minted under stays valid\n" +
+			"and its tasks stay this project's.\n\n" +
+			"Keys are project configuration, recorded in the same synchronized history as\n" +
+			"the statuses and shared with everyone who fetches. Every change prints the\n" +
+			"command that reverses it.",
+		Positionals:     []string{"<command>"},
+		SubcommandOrder: []string{"list", "add", "current", "retire", "log"},
+		Subcommands: map[string]commandMetadata{
+			"list": {
+				Name:        "list",
+				Synopsis:    "workbook key list [--json]",
+				Description: "List this project's keys, in the order they were added, with the tasks under each.",
+				Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+			},
+			"add": {
+				Name:     "add",
+				Synopsis: "workbook key add <key> [--current] [--no-sync] [--json]",
+				Description: "Add a key new tasks may be minted under.\n\n" +
+					"The key is added last and is not current unless --current says so. Adding a\n" +
+					"retired key back makes it active again in the place it already had.",
+				Positionals: []string{"<key>"},
+				Options: []optionMetadata{
+					{Name: "current", Kind: boolFlag, Description: "also make it the key new tasks are minted under"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"current": {
+				Name:        "current",
+				Synopsis:    "workbook key current <key> [--no-sync] [--json]",
+				Description: "Mint new tasks under this key.\n\nThe key that held it gives it up in the same change; exactly one key is current.",
+				Positionals: []string{"<key>"},
+				Options: []optionMetadata{
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"retire": {
+				Name:     "retire",
+				Synopsis: "workbook key retire <key> [--no-sync] [--json]",
+				Description: "Stop minting new tasks under a key.\n\n" +
+					"Its tasks are untouched and stay this project's. The current key and the last\n" +
+					"active key cannot be retired.",
+				Positionals: []string{"<key>"},
+				Options: []optionMetadata{
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"log": {
+				Name:        "log",
+				Synopsis:    "workbook key log [--limit <n>] [--all] [--json]",
+				Description: "List the recorded changes to this project's keys, oldest first, with the\ncommand that reverses each one.",
+				Options: []optionMetadata{
+					{Name: "limit", Kind: stringFlag, Value: "<n>", Description: "show this many recent changes (default 10)"},
+					{Name: "all", Kind: boolFlag, Description: "show every change"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+		},
+	},
 	"docs": {
 		Name:            "docs",
 		Synopsis:        "workbook docs <command> [options]",
@@ -751,7 +820,7 @@ var commandSchemas = map[string]commandMetadata{
 }
 
 var commandOrder = []string{
-	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "version", "fetch", "push", "sync", "status", "priority", "config", "docs", "hooks", "serve",
+	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "version", "fetch", "push", "sync", "status", "priority", "key", "config", "docs", "hooks", "serve",
 }
 
 type commandFlagSet struct {

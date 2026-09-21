@@ -209,6 +209,7 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"docs":     {},
 		"status":   {},
 		"priority": {},
+		"key":      {},
 		"create":   {"description": stringFlag, "status": stringFlag, "priority": stringFlag, "label": stringFlag, "no-sync": boolFlag, "json": boolFlag},
 		"list":     {"status": stringFlag, "priority": stringFlag, "label": stringFlag, "all": boolFlag, "json": boolFlag},
 		"board":    {"wide": boolFlag, "narrow": boolFlag, "json": boolFlag},

@@ -722,6 +722,16 @@ type configBefore struct {
 	// and reading it from a different commit than the pack would describe a
 	// configuration that never existed.
 	priorities core.PriorityVocabulary
+	// keys is the fourth section, carried for the reason the other three are: a
+	// key inverse is a statement about what the change replaced, and reading it
+	// from a different commit than the pack would describe a configuration that
+	// never existed.
+	//
+	// It is never the zero set. ConfigStateDocument.KeySet substitutes the
+	// founding key for a parent that recorded nothing about keys, which is what
+	// lets a reader of this member tell the project that has one key from the
+	// project that has several — the distinction authoredKeyOperations turns on.
+	keys core.KeySet
 }
 
 // configLedgerWindow is what one bounded read of the ledger saw: the commits it
@@ -781,6 +791,7 @@ func readConfigLedgerWindow(
 				vocabulary: commit.State.Vocabulary(),
 				display:    commit.State.Display(),
 				priorities: commit.State.PriorityVocabulary(),
+				keys:       commit.State.KeySet(config.Key),
 			}
 			return nil
 		},
@@ -2075,6 +2086,11 @@ func statusPackInverse(before configBefore, operations []core.ConfigOperation) *
 		// keeps the doctrine this function's comment states — one place decides
 		// an inverse — across a second verb family.
 		return displayPackInverse(before.display, operation)
+	case core.ConfigKeyAdd, core.ConfigKeyCurrent, core.ConfigKeyRetire:
+		// The key family renders its own inverses, with its own command prefix,
+		// routed from here rather than from a second entry point so that one
+		// place decides an inverse across a fourth verb family.
+		return keyPackInverse(before.keys, operations)
 	case core.ConfigStatusAdd:
 		return addInverse(before.vocabulary, operation)
 	case core.ConfigStatusRename:
@@ -2427,6 +2443,10 @@ func configOperationSummary(operation core.ConfigOperation) string {
 		// through to its wire name, which is what an older ledger's unknown
 		// operation has always rendered as.
 		if summary, worded := priorityOperationSummary(operation); worded {
+			return summary
+		}
+		// And the key section words its own, in key.go, for the same reason.
+		if summary, worded := keyOperationSummary(operation); worded {
 			return summary
 		}
 		return string(operation.Type)
