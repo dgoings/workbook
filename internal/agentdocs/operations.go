@@ -261,10 +261,14 @@ func plan(options Options) ([]target, error) {
 		if err != nil {
 			return nil, err
 		}
-		skillDirectory := options.SkillDir
+		// A configured directory may be written with forward slashes whatever
+		// the platform, so settle it into the OS spelling here, once, where the
+		// layer is chosen: the validation below and the Join that follows then
+		// judge and use the same string.
+		skillDirectory := filepath.FromSlash(options.SkillDir)
 		setting, origin := "--skill-dir", ""
 		if skillDirectory == "" {
-			skillDirectory = options.User.SkillDir
+			skillDirectory = filepath.FromSlash(options.User.SkillDir)
 			setting, origin = "skillDir", " in the user configuration file"
 		}
 		if skillDirectory == "" {
@@ -310,15 +314,28 @@ func plan(options Options) ([]target, error) {
 	return targets, nil
 }
 
-// validateDocTarget refuses a documentation target that would not land inside
-// the project. A target is only ever joined against the project root, so a
-// value carrying ".." reaches a file the repository does not own, and an
+// validateDocTarget refuses a documentation target that does not name a file
+// inside the project. A target is only ever joined against the project root, so
+// a value carrying ".." reaches a file the repository does not own, and an
 // absolute one never meant what it said: filepath.Join(root, "/etc/motd")
 // yields <root>/etc/motd, so honoring it wrote somewhere the configuration
-// never named. filepath.IsLocal rejects both, along with the empty string,
-// which would otherwise resolve to the project root itself.
+// never named. filepath.IsLocal rejects both.
+//
+// A value that resolves to the project root itself is refused separately,
+// because it is a different mistake and the "escapes the project directory"
+// wording would be a lie about it: "." and "docs/.." are perfectly local, they
+// simply name a directory where a file was asked for. filepath.IsLocal accepts
+// them, so without this they reached write() and surfaced as the operating
+// system's "is a directory" — a message that describes the symptom and not the
+// configuration line that caused it.
 func validateDocTarget(name string) error {
-	if filepath.IsLocal(filepath.FromSlash(name)) {
+	target := filepath.FromSlash(name)
+	if filepath.Clean(target) == "." {
+		return core.Errorf(core.CategoryValidation,
+			"docTargets entry %q in the user configuration file names the project directory itself, "+
+				"not a documentation file inside it", name)
+	}
+	if filepath.IsLocal(target) {
 		return nil
 	}
 	return core.Errorf(core.CategoryValidation,
@@ -341,8 +358,13 @@ func validateDocTarget(name string) error {
 // repointed between the check and the write — and a CLAUDE.md or .claude
 // symlinked into a dotfiles repository is a deliberate arrangement made in the
 // project itself, which is not Workbook's to overrule.
+//
+// Unlike a documentation target, a value naming the project root is fine here:
+// "." puts the skill at <root>/workbook/SKILL.md, which is a real destination
+// inside the project. The directory is expected already settled into the OS
+// spelling by the caller, so the string judged here is the string joined there.
 func validateSkillDirectory(directory, setting, origin string) error {
-	if filepath.IsAbs(directory) || filepath.IsLocal(filepath.FromSlash(directory)) {
+	if filepath.IsAbs(directory) || filepath.IsLocal(directory) {
 		return nil
 	}
 	return core.Errorf(core.CategoryValidation,

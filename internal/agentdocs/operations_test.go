@@ -1,6 +1,7 @@
 package agentdocs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -488,5 +489,58 @@ func TestApplyWritesNothingWhenADocumentationTargetEscapesTheProject(t *testing.
 	}
 	if got, want := readFile(t, filepath.Join(options.Root, "AGENTS.md")), "# AGENTS.md\n\nMy own rules.\n"; got != want {
 		t.Fatalf("AGENTS.md after refusal = %q, want %q", got, want)
+	}
+}
+
+func TestApplyRefusesADocumentationTargetThatNamesTheProjectDirectory(t *testing.T) {
+	// Production mutation: filepath.IsLocal accepts these, and every one of
+	// them resolves to the project root, so letting them through means
+	// write() reports the operating system's "is a directory" instead of the
+	// configuration mistake that caused it.
+	for name, value := range map[string]string{
+		"the current directory": ".",
+		"a climb back to it":    "docs/..",
+		"a trailing separator":  "./",
+		"the empty string":      "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			options := testOptions(t)
+			options.User.DocTargets = []string{value}
+
+			_, err := Apply(options)
+
+			if err == nil {
+				t.Fatalf("Apply() accepted the documentation target %q", value)
+			}
+			if got := core.CategoryOf(err); got != core.CategoryValidation {
+				t.Fatalf("Apply() category = %q, want %q", got, core.CategoryValidation)
+			}
+			got := err.Error()
+			if !strings.Contains(got, "names the project directory itself") {
+				t.Fatalf("Apply() error = %q, want it to say the target names the project directory itself", got)
+			}
+			if !strings.Contains(got, fmt.Sprintf("%q", value)) {
+				t.Fatalf("Apply() error = %q, want it to quote %q as configured", got, value)
+			}
+			if strings.Contains(got, "escapes") {
+				t.Fatalf("Apply() error = %q, want it not to claim the target escapes the project", got)
+			}
+		})
+	}
+}
+
+func TestApplyHonoursASkillDirectoryNamingTheProjectRoot(t *testing.T) {
+	// A skillDir of "." is not the same mistake as a doc target of ".": it
+	// installs the skill at <root>/workbook/SKILL.md, which is inside the
+	// project and works, so the doc-target refusal must not spread to it.
+	options := testOptions(t)
+	options.User.SkillDir = "."
+
+	if _, err := Apply(options); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(options.Root, "workbook", "SKILL.md")); err != nil {
+		t.Fatalf("skill not installed at the project root: %v", err)
 	}
 }
