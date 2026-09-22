@@ -551,7 +551,7 @@ func TestServicePlaceMutationAcceptsAnAnchorSharingAResolvedPriorityBucket(t *te
 // (a real project's clone tomorrow might) has to read the same way an
 // already-shipped unfamiliar status does.
 func TestNormalizeTaskAcceptsAPriorityTheVocabularyDoesNotDefine(t *testing.T) {
-	_, err := NormalizeTask("WB", TaskData{
+	_, err := NormalizeTask(TaskData{
 		Title: "Task", Status: StatusReady, Priority: "critical", Rank: "1/1",
 	})
 	if err != nil {

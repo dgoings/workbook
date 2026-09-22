@@ -159,11 +159,11 @@ type ReplayStep struct {
 // rather than stored per row, so a chain that a reconciliation rewrote needs no
 // checkpoint invalidation. An entry that cannot be applied truncates the replay
 // softly: the valid prefix is returned with the boundary named.
-func ReplayHistory(projectKey string, history TaskHistory) ([]ReplayStep, *HistoryTruncation) {
+func ReplayHistory(history TaskHistory) ([]ReplayStep, *HistoryTruncation) {
 	steps := make([]ReplayStep, 0, len(history.Entries))
 	var parent *StateDocument
 	for _, entry := range history.Entries {
-		state, err := Apply(parent, entry.Operation, projectKey)
+		state, err := Apply(parent, entry.Operation)
 		if err != nil {
 			truncation := &HistoryTruncation{
 				Commit:  entry.Commit,
@@ -190,8 +190,8 @@ func ReplayHistory(projectKey string, history TaskHistory) ([]ReplayStep, *Histo
 }
 
 // StateAt replays a whole chain and returns the task as it stood at its end.
-func StateAt(projectKey string, history TaskHistory) (TaskData, error) {
-	steps, truncation := ReplayHistory(projectKey, history)
+func StateAt(history TaskHistory) (TaskData, error) {
+	steps, truncation := ReplayHistory(history)
 	if truncation != nil {
 		category := truncation.Category
 		if category == "" {
@@ -214,8 +214,8 @@ func StateAt(projectKey string, history TaskHistory) (TaskData, error) {
 // Ordering follows the parent chain and wall times are printed as attribution
 // only, so timestamps that read out of order after a reconciliation are shown
 // as they are rather than reordered.
-func BuildChangeLog(projectKey string, history TaskHistory, limit int, all bool) ChangeLog {
-	steps, truncation := ReplayHistory(projectKey, history)
+func BuildChangeLog(history TaskHistory, limit int, all bool) ChangeLog {
+	steps, truncation := ReplayHistory(history)
 	changes := make([]Change, 0, len(steps))
 	for _, step := range steps {
 		changes = append(changes, describeStep(step))

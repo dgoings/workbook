@@ -243,7 +243,7 @@ func TestStoreProjectsOperationsWrittenThroughAMutation(t *testing.T) {
 		t.Fatalf("history = %d entries, want the create and the mutation", len(history.Entries))
 	}
 	assertChainIsWellFormed(t, history)
-	log := core.BuildChangeLog(config.Key, history, 0, true)
+	log := core.BuildChangeLog(history, 0, true)
 	if got, want := log.Changes[1].Summary, "changed status"; got != want {
 		t.Fatalf("newest change = %q, want %q", got, want)
 	}
@@ -582,7 +582,7 @@ func assertChainIsWellFormed(t *testing.T, history core.TaskHistory) {
 
 func titleAt(t *testing.T, config core.ProjectConfig, history core.TaskHistory) string {
 	t.Helper()
-	task, err := core.StateAt(config.Key, history)
+	task, err := core.StateAt(history)
 	if err != nil {
 		t.Fatalf("StateAt() error = %v", err)
 	}

@@ -291,10 +291,12 @@ func TestValidateCachedInvalidHeadStillExitsNonzeroWithoutHistoryBatch(t *testin
 	if strings.Contains(string(logged), "rev-list --reverse --topo-order --parents --stdin") {
 		t.Fatalf("cached invalid Git commands = %q, want no history walk", logged)
 	}
-	// One object batch is expected and bounded: reading the canonical project
-	// identity, which every command does before it touches a task. What must
-	// not happen is a batch after task work begins, because that is the history
-	// read the cache hit exists to avoid.
+	// Two object batches are expected and bounded, both before any task work:
+	// the canonical project identity, which every command reads, and the
+	// configuration ledger's tip, which every command now reads too because the
+	// key set decides which task refs are this project's. What must not happen
+	// is a batch after task work begins, because that is the history read the
+	// cache hit exists to avoid.
 	assertNoObjectBatchAfterTaskWork(t, string(logged))
 }
 
@@ -316,14 +318,25 @@ func TestValidateCachedInvalidHeadStillExitsNonzeroWithoutHistoryBatch(t *testin
 // ordered: a task batch outside the window is a batch after the config read,
 // which is a different check's business, and a config read that never happens
 // leaves the window open to the end of the log.
+//
+// Only a configuration listing that follows the first task-ref enumeration ends
+// the window. Every command now reads the ledger before its task work, to
+// resolve the key set that decides which refs are this project's, so a config
+// line also appears ahead of the window — and treating that one as the end left
+// the window unopened and reported a perfectly good log as unbounded.
 func assertNoObjectBatchAfterTaskWork(t *testing.T, logged string) {
 	t.Helper()
 	lines := strings.Split(logged, "\n")
 	start := -1
 	end := len(lines)
 	for index, line := range lines {
-		if start < 0 && strings.Contains(line, "refs/workbook/tasks/") {
-			start = index
+		if start < 0 {
+			if strings.Contains(line, "refs/workbook/tasks/") {
+				start = index
+			}
+			// A configuration listing before the window opens is not its end:
+			// it is the key-set read that precedes the task work. Closing on it
+			// would leave the window unopened and report the log as unbounded.
 			continue
 		}
 		if strings.Contains(line, "refs/workbook/config") {

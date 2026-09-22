@@ -36,6 +36,11 @@ the resolved full ID for every Workbook CLI invocation, but build prose —
 progress reports, completion summaries, questions, and error reports — around
 the task title.
 
+A task ID is `<KEY>-<ULID>`. A project may have more than one key, so IDs in
+one project can carry different prefixes; all of them are this project's.
+`workbook create --key <KEY>` mints a task under another of this project's
+active keys; without it, a task is minted under the current key.
+
 - Announce a selected task by title: `Taking "Add remote claim and lease
   workflow".`, not `Taking WB-01KYD730XZ9S88N1GGGSSG2CJ5.`
 - Report lifecycle transitions the same way: `"Add remote claim and lease

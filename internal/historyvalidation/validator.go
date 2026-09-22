@@ -420,7 +420,7 @@ func (f *historyFold) commit(taskID string, record gitstore.HistoryCommit) error
 	// The checkpoint is compared first so that the pack this reads has already
 	// been validated as a document, and so a commit this build cannot fold keeps
 	// its own newer-writer verdict instead of being restated as damage.
-	if err := core.ValidateCheckpoint(f.parent, record.Operation, record.State, f.validator.config.Key); err != nil {
+	if err := core.ValidateCheckpoint(f.parent, record.Operation, record.State); err != nil {
 		f.completion.Status = StatusInvalid
 		f.completion.Failure = validationFailure(taskID, record.ObjectID, err)
 		f.failed = true

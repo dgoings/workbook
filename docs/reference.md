@@ -11,8 +11,8 @@ both human-readable output and a versioned machine-readable result envelope:
 
 ```text
 workbook setup [--key <key>] [--no-docs] [--no-sync] [--skill-dir <dir>] [--no-skill] [--force] [--json]
-workbook create <title> [--description <text>] [--status <status>] [--priority <priority>] [--label <label>] [--no-sync] [--json]
-workbook list [--status <status>] [--priority <priority>] [--label <label>] [--all] [--json]
+workbook create <title> [--description <text>] [--status <status>] [--priority <priority>] [--key <key>] [--label <label>] [--no-sync] [--json]
+workbook list [--status <status>] [--priority <priority>] [--key <key>] [--label <label>] [--all] [--json]
 workbook board [--wide | --narrow] [--json]
 workbook show <task> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--get-attachment <attachment> [--out <path>]] [--json]
 workbook update <task> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--label <label>] [--clear-labels] [--comment <body>] [--edit-comment <comment>] [--remove-comment <comment>] [--attach-file <path>] [--attach-url <url>] [--attach-label <text>] [--remove-attachment <attachment>] [--assign <who>] [--unassign <who>] [--force] [--no-sync] [--json]
@@ -46,6 +46,11 @@ workbook priority tag <priority> --tag <tag> [--no-sync] [--no-docs] [--json]
 workbook priority delete <priority> --into <priority> [--no-sync] [--no-docs] [--json]
 workbook priority color <priority> [<color>] [--no-sync] [--no-docs] [--json]
 workbook priority log [--limit <n>] [--all] [--json]
+workbook key list [--json]
+workbook key add <key> [--current] [--no-sync] [--no-docs] [--json]
+workbook key current <key> [--no-sync] [--no-docs] [--json]
+workbook key retire <key> [--no-sync] [--no-docs] [--json]
+workbook key log [--limit <n>] [--all] [--json]
 workbook config show [--json]
 workbook config set <setting> <value> [--no-sync] [--json]
 workbook config unset <setting> [--no-sync] [--json]
@@ -66,19 +71,22 @@ refreshes managed agent documentation, and synchronizes shared task refs with
 solo local project needs no remote. Use `--no-sync` to bootstrap without
 exchanging refs and `--no-docs` to create project identity alone.
 
-The project key, the prefix every task ID carries, is asked for only when
-setup creates a new project. A clone joining a project that already exists, in
-the working tree or on `origin`, takes that project's key, and `--key` is then
-a claim that has to agree with it. For a new project on a terminal, setup
-prompts `Project key [WORK]:` with a key derived from the repository's
-directory name, and an answer is trimmed and uppercased before the grammar
+The project key, the prefix a task ID carries, is asked for only when setup
+creates a new project; it is that project's founding key, and a project may add
+more later. A clone joining a project that already exists, in the working tree
+or on `origin`, takes that project's founding key, and `--key` is then a claim
+that has to agree with it. For a new project on a terminal, setup prompts
+`Project key [WORK]:` with a key derived from the repository's directory name,
+and an answer is trimmed and uppercased before the grammar
 `^[A-Z][A-Z0-9]{1,9}$` is checked. Enter accepts the suggestion, an answer the
 grammar refuses is explained and asked again up to five times, and Ctrl-D or
 Ctrl-C ends setup without creating anything. Setup asks only when stdin and
 stdout are both terminals and `--json` was not passed; otherwise, including
 `workbook setup > setup.log` from a terminal, it takes the derived key without
 asking, so scripts and the desktop app get a key that names the project. Pass
-`--key` to choose without being asked.
+`--key` to choose without being asked. The key setup reports is the project's
+*current* key, which is the founding key until `workbook key current` moves it;
+see [Project keys](#project-keys).
 
 The derived key is the initials of the directory name's words when it has
 more than one (`my-app` becomes `MA`, `workbook-desktop-shell` becomes `WDS`,
@@ -89,7 +97,10 @@ in front (`2024-planning` becomes `W2P`), and a name with no ASCII letters or
 digits gives `WB`; accented and non-Latin characters are treated as word
 breaks rather than kept (`café` becomes `CAF`). A long or unusual directory
 name, and any script or CI job, is a reason to pass `--key` rather than
-inherit a key that cannot be changed later.
+inherit a key derived from a directory. A project that inherits one it does not
+want is not stuck with it — `workbook key add` and `workbook key current` move
+where new tasks are minted — but the task IDs already minted keep the prefix
+they were given, because a task ID is a permanent name.
 
 A checkout whose working tree has no `.workbook/config.json` does not
 necessarily mean the project is new: a branch cut before the project adopted
@@ -583,7 +594,11 @@ not exist is the mistake it exists to catch.
 The configuration lives in its own synchronized ref, `refs/workbook/config`,
 seeded the first time anybody changes a status and published wherever a task is
 published. A project that has never changed a status has no ledger at all, which
-`workbook status list --json` reports as `"seeded": false`.
+`workbook status list --json` reports as `"seeded": false`. One ledger carries
+everything a project configures — its statuses, its priorities, its
+[board display settings](#board-display-settings) and its
+[keys](#project-keys) — so all four are recorded the same way, reversed by the
+command every result prints, and synchronized with everyone who fetches.
 
 Reading with a status this project does not have is refused the same way
 supplying one is: `workbook list --status <value>` exits `5`. An empty table
@@ -714,6 +729,158 @@ adding, renaming, relabeling, recoloring, the `default` role, reordering and
 removal — against this same ledger and with these same refusals, the way its
 **Statuses** section administers the columns; see
 [Terminal board](#terminal-board).
+
+## Project keys
+
+A task ID is `<KEY>-<ULID>`, and the key is the prefix — the `WB` in
+`WB-01K0M6B8A4FTT8C39MXXYTW7C1`. A project may have more than one, so IDs in one
+project can carry different prefixes and every one of them is that project's. A
+repository made of several subprojects can therefore give each one its own
+prefix, and a project that has outgrown the key it was created with can mint
+under a new one without renaming a thing.
+
+The keys are configuration, in the same ledger the statuses and the priorities
+live in. `workbook key list` shows them in the order they were added, with each
+one's state and the tasks under it; `add`, `current` and `retire` change them;
+and `workbook key log` lists what has been changed, oldest first, with the
+command that reverses each entry, exactly as `workbook status log` does.
+
+A key is **active** or **retired**, and exactly one active key is **current**.
+The current key is where a new task is minted; any active key is one a create
+may name. A retired key mints nothing, and that is the whole of what retiring
+does: its tasks are untouched, they stay this project's, and they keep
+resolving, listing, ordering and synchronizing as they always did. Nothing here
+renames or deletes a key, and nothing rewrites a task ID. A task ID is a
+permanent name, so a key that has ever minted one stays valid forever — which is
+why there is no removal verb, and why retirement is what "we do not file new
+work under that prefix any more" means.
+
+`workbook key add <KEY>` adds an active key, last in the order and not current;
+`--current` makes it current in the same change. A key this project already has
+as active is refused, naming the command that was meant, and a key that does not
+match `^[A-Z][A-Z0-9]{1,9}$` is refused with the grammar:
+
+```
+$ workbook key add NEW
+workbook: project key "NEW" is already active; to mint new tasks under it: workbook key current NEW
+$ workbook key add ops
+workbook: project key "ops" must match ^[A-Z][A-Z0-9]{1,9}$
+```
+
+Adding a **retired** key back is how it is reactivated: it becomes active again
+in the place it already had rather than as a new entry at the end, so the order
+a project reads is still the order it added things in. Sixteen **active** keys
+is the ceiling, and the seventeenth is refused with the retirement that would
+make room rather than recorded. Retired keys are not counted: a key is never
+deleted, so a ceiling on the whole list would be one a project could reach and
+never come back under, and retiring one really does make room for the add that
+was refused.
+
+`workbook key current <KEY>` moves where new tasks are minted. The key that held
+it gives it up in the same operation, so exactly one key is ever current. A
+retired key is refused naming the command that brings it back, an unknown key is
+refused naming every key this project has, and the key that is already current
+is refused rather than recorded — a configuration change that would change
+nothing is not written here either.
+
+```
+$ workbook key current WB
+workbook: project key "WB" is retired; bring it back first: workbook key add WB
+```
+
+`workbook key retire <KEY>` stops minting under an active key. The current key is
+refused, because new tasks would have nowhere to go, and so is the last active
+key, because a project has to keep one; each refusal names the command that
+comes first:
+
+```
+$ workbook key retire NEW
+workbook: project key "NEW" is this project's current key, so new tasks would have nowhere to go; make another key current first: workbook key current <key>
+$ workbook key retire WB
+workbook: project key "WB" is this project's only active key, and a project must keep one to mint new tasks under; add another first: workbook key add <key>
+```
+
+Every one of the three prints the command that reverses it. An addition reverses
+with `workbook key retire`, a retirement with `workbook key add`, and
+`workbook key current` with the key that was current before.
+
+An addition's reversal is marked **not exact**, because a key is never deleted:
+retiring it stops it minting and leaves it on the list, which is not the state
+the addition found.
+
+```
+	inverse:	workbook key retire THIRD	(not exact)
+	note:	THIRD stays on this project's list as a retired key; a key is never deleted
+```
+
+`workbook key add --current` is inexact for a second reason — no single command
+undoes both halves — and says which half it undoes rather than printing a
+command that only half works:
+
+```
+	inverse:	workbook key current NEW	(not exact)
+	note:	then `workbook key retire THIRD` if it should not stay
+```
+
+Each of the three synchronizes with `origin` unless `--no-sync` says not to, and
+each regenerates `.workbook/guidelines.md`, whose "This project" table names the
+key a new task is minted under; `--no-docs` skips that for one command and
+`workbook docs update` catches up afterwards, exactly as for a status change.
+
+`workbook create --key <KEY>` mints one task under another active key instead of
+the current one. A retired or unknown key is refused, naming the keys a task may
+be minted under. `workbook list --key <KEY>` lists the tasks whose IDs carry one
+key: a retired key is accepted there, because its tasks still exist, and an
+unknown one is refused naming this project's keys and saying that fetching is
+what fixes a name a teammate has and this clone does not. Both flags name a key
+that already exists, so both accept it in any case — `--key api` means `API` —
+and the refusal names the key it looked for. `workbook key add` does not: it
+records the name a project reads from then on, so it is held to the grammar.
+
+```
+$ workbook create "Under retired" --key WB
+workbook: project key "WB" is retired, so no new task is minted under it; the active keys are: NEW
+$ workbook list --key ZZ
+workbook: no project key "ZZ" in this project; its keys are: WB (retired), NEW; fetch if a teammate added it
+```
+
+The ledger records only what somebody changed. A project that has never run a
+`workbook key` verb has no key section at all — the founding key in its identity
+ref is its one key, active and current — and its stored history does not change
+by a byte. Its first key change writes the founding key ahead of itself in the
+same commit, so the recorded order begins with the key this project's existing
+task IDs already carry rather than with something this release invented; a
+project's first priority change backfills the built-in priorities the same way
+and for the same reason.
+
+Which task IDs belong to this project is decided by the key set, so a ref under
+a key the project does not have is another project's as far as this clone is
+concerned. Adding the key does not make it this project's: the ref's documents
+name the project that wrote them, and that is what every read compares against.
+The ignored-ref report under [Explicit task sharing](#explicit-task-sharing)
+names such a ref, offers nothing to run against it, and says the same thing
+about a ref under a key this project *does* have whose documents name another
+project.
+
+Recording a key raises what the configuration history requires of a reader, the
+way recording a display setting or a priority does. `key.add`, `key.current` and
+`key.retire` carry minimum reader generation 3, the generation this release
+introduces, so a teammate running a released Workbook reads the ledger as newer
+than it can read: every read and every task synchronization still works, a
+configuration change is refused with the message that says to upgrade rather
+than one that says the project is corrupt, and — because that clone drops a key
+section it has no field for and decides what a task ref is from the key in the
+identity record alone — tasks minted under a key added since it last upgraded
+are reported as another project's refs rather than as this project's tasks.
+Everyone on the team upgrades together; see
+[Mixed versions and forks](#mixed-versions-and-forks).
+
+The web board's **Keys** section administers the same key set from the
+browser — add a key, make one current, retire one, reactivate one — against
+this same ledger and with these same refusals, the way its **Statuses** section
+administers the columns; see [Terminal board](#terminal-board). Its new-task
+form offers the key to mint under when there is more than one to choose from;
+see [Local web board](#local-web-board).
 
 ## Board display settings
 
@@ -908,15 +1075,48 @@ Workbook never deletes a ref on `origin`, and being unreadable to this build is
 not evidence that a ref is junk: a newer version's task ID format and a second
 project's key sharing the namespace both land in the same report while naming
 real append-only history. Each entry therefore carries a `plausibleTask`
-boolean, true when the name still fits some Workbook's task ID — this project's
-`WB-` prefix, or any valid project key followed by a ULID-shaped body, including
-a ref nested under either or a peeled name pointing at one. Human output states
-that verdict on each ref's own line, as `no project's task` or `may be another
-Workbook's task`, so a mixed report never leaves a reader matching advice to a
-name by guesswork. Only a name that fits neither is offered for removal, with
+boolean, true when the name still fits some Workbook's task ID — one of
+[this project's keys](#project-keys) with an ID format this build predates, or
+any valid project key followed by a ULID-shaped body, including a ref nested
+under either or a peeled name pointing at one. Human output states that verdict
+on each ref's own line, as `no project's task` or `may be another Workbook's
+task`, so a mixed report never leaves a reader matching advice to a name by
+guesswork. Only a name that fits neither is offered for removal, with
 `git push origin --delete <ref>`; an entry that may be another project's or
 another version's task is reported as kept, together with what deleting it would
 cost. Judge such a ref yourself before removing it.
+
+Which names are this project's is decided by its whole key set, active and
+retired keys alike, rather than by the key in its identity record. A ref under a
+key this project does *not* have — the ID itself, or the peeled `…^{}` form of
+it — is reported with the key it carries and with the keys this project has:
+
+```
+Ignored:	refs/workbook/tasks/OPS-01M32R58CBNDXTAAQBCQFSXYAZ	may be another Workbook's task	task ID "OPS-01M32R58CBNDXTAAQBCQFSXYAZ" carries project key "OPS", which this project does not have; its keys are: WB (retired), NEW
+```
+
+No command is offered for such a ref, and `workbook key add OPS` is not one: the
+ref carries another project's task documents, which every read refuses whatever
+this project's keys say, so adding the key would change the report's wording and
+nothing else. A second key on one origin is a second project identity — a split,
+a re-initialization, or another project pushing into the same remote — and the
+report's job is to name it and leave it alone.
+
+Adding a key a stranger's tasks are minted under is therefore a mistake the
+report absorbs rather than one that breaks synchronization. A fetched ref whose
+name this project's keys do cover, but whose documents carry another project ID,
+is reported the same way, with that mismatch as its reason, and the fetch
+completes:
+
+```
+Ignored:	refs/workbook/tasks/QQ-01M32X6CZRQNKG4QYJVHM3162K	may be another Workbook's task	task ID "QQ-01M32X6CZRQNKG4QYJVHM3162K" carries this project's key, but its documents carry project ID 01M32X6BJ6T19THJJVDBA407HG rather than this project's 01M32X6A5MF3JQF2TZ2S5VFC28, so the ref belongs to another project sharing this origin
+```
+
+`workbook key retire QQ` — or leaving the key where it is — costs nothing but
+the line, because a key is never deleted and its refs are read whatever its
+state. The local canonical namespace is stricter: only Workbook writes there, so
+documents naming another project under `refs/workbook/tasks/*` are corruption
+and are refused as such.
 
 `workbook push` publishes validated local `refs/workbook/tasks/*` refs to
 `origin` without force or deletion. One bounded, non-atomic publication retains
@@ -1148,30 +1348,44 @@ A row's color is the `#rrggbb` its edit form holds, with a swatch beside the
 field as a way into it; emptying that field clears the color and returns the
 priority to the one the board derives from its position, which is why the field
 rather than the swatch is the control — a swatch has no empty value to pick.
+**Keys** administers the project's [task-ID keys](#project-keys) in the order
+they were added: each row shows the key, whether it is active or retired, a
+badge on the one that is current, and the controls that key can have —
+**Make current** and **Retire** on an active key, **Reactivate** on a retired
+one — with a form below to add a key and a box to mint new tasks under it at
+once. There is no reorder, no rename and no removal, because a key has no rank,
+is never renamed, and is a permanent name; retiring one is what the page offers
+instead, and the current row carries no control at all, since the way it stops
+being current is another key becoming so. Every refusal is the `workbook key`
+verb's own sentence, the grammar a name must match included, which the page
+does not spell out for itself.
 **Board settings** is the project's name and its two colors, as three fields and
 one Save; an empty field is a setting cleared, and a save records only the
 settings that actually changed — a Save you have not edited records nothing at
 all, which matters because a display setting is what marks a project's
 configuration as needing Workbook 0.6 or newer. Every section writes the same
-ledger the command line writes, so `workbook status`, `workbook priority` and
-`workbook config set` see exactly what the page records.
+ledger the command line writes, so `workbook status`, `workbook priority`,
+`workbook key` and `workbook config set` see exactly what the page records.
 
 It is a page rather than a drawer over the board, so its forms have room, and it
 is a route like any other here — a bookmark, a reload and a middle-click all
 land on it, and `Back` returns to the board. It is `workbook status`, `workbook
-priority` and `workbook config` reached from the browser — the same rules, the
-same refusals, in the same words — and everything it refuses is refused by the
-vocabulary or by the configuration rather than by the page, so an unknown tag, a
-name that is already taken, a color that is not six hexadecimal digits, or a
-color a priority already has reads exactly as it does in the terminal. A removal
-reports how many tasks it moved and how many of those `workbook next` can claim
-where they landed, and any warning a change carries, such as generated
-guidelines the server did not rewrite, is shown rather than swallowed. A board
-served without the four vocabulary mutations has no such page: no link, and
-`/config` is a 404; one served without the display writer has the page and not
-its Board settings section; and one served without all six priority
-mutations — the addition, the rename-and-relabel, the recolor, the `default`
-role, the move and the removal — has the page and not its Priorities section.
+priority`, `workbook key` and `workbook config` reached from the browser — the
+same rules, the same refusals, in the same words — and everything it refuses is
+refused by the vocabulary or by the configuration rather than by the page, so an
+unknown tag, a name that is already taken, a color that is not six hexadecimal
+digits, or a color a priority already has reads exactly as it does in the
+terminal. A removal reports how many tasks it moved and how many of those
+`workbook next` can claim where they landed, and any warning a change carries,
+such as generated guidelines the server did not rewrite, is shown rather than
+swallowed. A board served without the four vocabulary mutations has no such
+page: no link, and `/config` is a 404; one served without the display writer
+has the page and not its Board settings section; and one served without all six
+priority mutations — the addition, the rename-and-relabel, the recolor, the
+`default` role, the move and the removal — has the page and not its Priorities
+section. One served without both key mutations — the addition and the edit that
+makes a key current, retires it or reactivates it — has the page and not its
+Keys section, and still mints tasks under the project's current key.
 
 The route was `/statuses` before it held more than statuses, and nothing
 forwards the old address: a bookmark to it now lands on this board's
@@ -1399,7 +1613,9 @@ GET /api/vocabulary           versioned status vocabulary JSON: the project's
                               forwarding chains, the configuration ledger head
                               they were read from, a `priorities` member carrying
                               the project's priorities, their labels, tags and
-                              colors, and — for a project that has recorded
+                              colors, a `keys` member carrying the project's
+                              keys in add order with each one's state and which
+                              is current, and — for a project that has recorded
                               any — a `display` member carrying its name and
                               colors at that same head
 POST /api/vocabulary/statuses            define a status, optionally placed
@@ -1423,6 +1639,11 @@ PATCH /api/vocabulary/priorities/<priority>/default
 PATCH /api/vocabulary/priorities/<priority>/color
                                          record the color a priority is drawn
                                          in, or clear it with an empty value
+POST /api/vocabulary/keys                add a project key, optionally making
+                                         it the one new tasks are minted under
+PATCH /api/vocabulary/keys/<key>         make a key current, retire it, or
+                                         reactivate a retired one; the body
+                                         names exactly one of the three
 PATCH /api/display                       record the project's name and colors;
                                          the body states all three, an empty
                                          value clears a setting, and only what
@@ -1550,11 +1771,11 @@ produce — is answered `404`. So is an identifier the addressed task does not
 carry: an attachment is read out of that task's own live list, so naming another
 task's attachment, or a comment, reaches nothing.
 
-The vocabulary routes are `workbook status` and `workbook priority` reached over
-HTTP: they run the same planners, so they refuse what the verbs refuse, in the
-same words, and record the same operations into the same configuration ledger.
-Three things follow from being a server rather than a command, and each is
-deliberate:
+The vocabulary routes are `workbook status`, `workbook priority` and
+`workbook key` reached over HTTP: they run the same planners, so they refuse
+what the verbs refuse, in the same words, and record the same operations into
+the same configuration ledger. Three things follow from being a server rather
+than a command, and each is deliberate:
 
 - Every one of them requires an `expectedHead` member naming the vocabulary head
   the change was composed against — the `head` that `GET /api/vocabulary`
@@ -1562,18 +1783,22 @@ deliberate:
   seeded. A head that no longer matches is answered `409` with a `stale-write`
   document carrying the current vocabulary, and nothing is merged or rebased: a
   status is somebody's decision about how the project works, and applying two of
-  them would invent a third that neither author chose.
+  them would invent a third that neither author chose. A key change is composed
+  against the same head and refused the same way.
 - Each answers with the whole vocabulary document, in the same shape
   `GET /api/vocabulary` serves, including the head the next change must name. A
   status removal also reports how many tasks it moved and how many of those
   become claimable where they land, which is what `workbook status delete`
   reports; a priority removal reports the tasks it moved, claimability being a
-  property of a status rather than of a priority.
+  property of a status rather than of a priority. A key change reports no tasks
+  at all, because no key change moves one. Keys also have two routes where the
+  statuses have four: a key is added and edited, never removed and never
+  reordered, so there is no `DELETE` for one and no order to `PUT`.
 - None of them writes the generated `.workbook/guidelines.md`. The board is a
   long-running server that may be answering while somebody rebases the checkout
   it lives in, so it records the change and reports that the file is stale; the
-  next `workbook status` or `workbook priority` verb, or `workbook docs update`,
-  rewrites it.
+  next `workbook status`, `workbook priority` or `workbook key` verb, or
+  `workbook docs update`, rewrites it.
 
 The board answers only its own pages. It has no accounts and no tokens, so three
 checks stand in for them and every route is subject to all three:
@@ -1767,10 +1992,14 @@ eligible active tasks through an integrated combobox and uses the nested
 Git-durable mutation routes above.
 
 Task forms use a wide main column and a compact Properties sidebar for status,
-priority, labels, Depends On, and Blocks. New Task stages both Depends On and
-Blocks without writing task refs; relationship mutations run after the task
-receives its durable ID. If only some edges succeed, successful relationships
-remain durable while failed relationships remain available to retry or remove.
+priority, labels, Depends On, and Blocks. A New Task form on a project with more
+than one active [key](#project-keys) also offers the key to mint under, standing
+at the current one; a project with a single key draws no such field, and a form
+whose reader took the default sends the create every client sent before keys
+could be chosen. New Task stages both Depends On and Blocks without writing task
+refs; relationship mutations run after the task receives its durable ID. If
+only some edges succeed, successful relationships remain durable while failed
+relationships remain available to retry or remove.
 On narrow screens, the task editor, Properties, Relationships, and actions
 stack in that order.
 
@@ -1846,9 +2075,10 @@ inline beside the ID without shifting the board or task form;
 polite live announcements identify the full task ID.
 
 The shared new-task and detail form creates or edits title, description, status,
-priority, and labels through the versioned APIs. Saving returns to the board and
-refreshes it. A failed save leaves the entered values in place and shows the
-server error in the form; Back returns to the board without mutating a task.
+priority, and labels through the versioned APIs, and a create may name the key
+as well. Saving returns to the board and refreshes it. A failed save leaves the
+entered values in place and shows the server error in the form; Back returns to
+the board without mutating a task.
 
 An edit to an existing task sends only the fields that form changed, together
 with the task tip it rendered. A change someone else made to a field you did not
@@ -2008,8 +2238,15 @@ refs/workbook/project
 ```
 
 The document holds only the project ID and the project key, both immutable after
-mint. The ref holds exactly one root commit and that commit's tree holds exactly
-one entry; a tip with parents or a second entry is rejected rather than
+mint. That key is the project's *founding* key: it is the implied first entry of
+the project's key set and is current until the configuration ledger says
+otherwise, and which task IDs belong to this project is decided by that set
+rather than by this document alone. See [Project keys](#project-keys) for how
+the set is changed and for what a key the ledger has added means for a clone
+that cannot read it.
+
+The ref holds exactly one root commit and that commit's tree holds exactly one
+entry; a tip with parents or a second entry is rejected rather than
 interpreted. `refs/workbook/project` is a leaf name and must stay one — Git's
 directory/file rule means no ref may ever be created under it, so a future family
 of project documents belongs in a sibling namespace.

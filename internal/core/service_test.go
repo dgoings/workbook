@@ -1128,7 +1128,7 @@ func TestServiceFreeRemovesTombstonedDependencyNamedByPrefix(t *testing.T) {
 	// prefix built from it is unambiguous against the only other task in the
 	// store even after the final character is dropped.
 	dependencyPrefix := "WB-01K0M6B8A4FTT8C39MXXYTW7F"
-	if err := ValidateTaskID(serviceTestConfig.Key, dependencyPrefix); err == nil {
+	if err := ValidateTaskIDShape(dependencyPrefix); err == nil {
 		t.Fatalf("dependencyPrefix %q must not be a valid canonical task ID, or this test takes the fast path instead of resolving", dependencyPrefix)
 	}
 

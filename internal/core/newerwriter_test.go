@@ -114,7 +114,7 @@ func TestAMarkerAtOrBelowTheSupportedGenerationFoldsNormally(t *testing.T) {
 			if pack.RequiresNewerReader() {
 				t.Fatalf("pack with minReader %d requires a newer reader", pack.MinReader)
 			}
-			state, err := Apply(&parent, pack, goldenProjectKey)
+			state, err := Apply(&parent, pack)
 			if err != nil {
 				t.Fatalf("Apply() error = %v", err)
 			}
@@ -170,7 +170,7 @@ func TestAnOrdinaryPackDoesNotBuryAnEarlierWatermark(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeOperationPack(marked) error = %v", err)
 	}
-	state, err := Apply(&parent, marked, goldenProjectKey)
+	state, err := Apply(&parent, marked)
 	if err != nil {
 		t.Fatalf("Apply(marked) error = %v", err)
 	}
@@ -184,7 +184,7 @@ func TestAnOrdinaryPackDoesNotBuryAnEarlierWatermark(t *testing.T) {
 	}
 	ordinary.LogicalClock = state.LogicalClock + 1
 	ordinary.Operations[0].Value = "done"
-	buried, err := Apply(&state, ordinary, goldenProjectKey)
+	buried, err := Apply(&state, ordinary)
 	if err != nil {
 		t.Fatalf("Apply(ordinary) error = %v", err)
 	}
@@ -221,7 +221,7 @@ func TestAPackAboveTheSupportedGenerationIsRefusedAsNewerWriter(t *testing.T) {
 				t.Fatalf("decoded task ID = %q, want the fixture's", pack.TaskID)
 			}
 
-			_, err = Apply(&parent, pack, goldenProjectKey)
+			_, err = Apply(&parent, pack)
 			assertNewerWriterRefusal(t, err, pack.TaskID)
 
 			if _, err := EncodeDocument(pack); CategoryOf(err) != CategoryNewerWriter {
@@ -272,7 +272,7 @@ func TestACheckpointWatermarkRefusesEveryLaterFold(t *testing.T) {
 	if ordinary.MinReader != 0 {
 		t.Fatalf("an ordinary pack carries minReader %d, want 0", ordinary.MinReader)
 	}
-	_, err = Apply(&parent, ordinary, goldenProjectKey)
+	_, err = Apply(&parent, ordinary)
 	assertNewerWriterRefusal(t, err, parent.TaskID)
 }
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -128,6 +129,70 @@ func TestSetupWritesThePrioritiesTheFetchDelivered(t *testing.T) {
 	}
 }
 
+// The founding key is what setup's first pass writes before it fetches, the
+// same way the built-in three priorities are. A clone joining a project that
+// moved its current key has to see that key in the file its own setup
+// installs and has to agree with itself afterwards, the same two properties
+// TestSetupWritesThePrioritiesTheFetchDelivered pins for priorities.
+func TestSetupWritesTheKeyTheFetchDelivered(t *testing.T) {
+	author, _ := cliSyncRepositories(t)
+	founding := cliKeyList(t, author).Current
+	if code, _, stderr := run(t, author, "key", "add", "NEW", "--current"); code != 0 {
+		t.Fatalf("key add NEW --current = code %d; stderr = %q", code, stderr)
+	}
+	origin := gitOutput(t, author, "remote", "get-url", "origin")
+
+	joining := cliClone(t, origin)
+	code, stdout, stderr := run(t, joining, "setup")
+	if code != 0 {
+		t.Fatalf("setup = code %d; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	// The report is read by a human on this very run, before any second
+	// `setup` would find the fetched key locally regardless of when this run
+	// itself read it — so the assertion has to be against this run's own
+	// output, not a later re-read.
+	if !strings.Contains(stdout, "Key:\tNEW\n") {
+		t.Fatalf("setup in a joining clone reported = %q, want the fetched current key NEW", stdout)
+	}
+
+	guidelines := readProjectFile(t, joining, agentdocs.GuidelinesPath)
+	if !strings.Contains(guidelines, "| Task ID prefix | `NEW-` |") {
+		t.Fatalf("setup in a joining clone did not install the fetched current key:\n%s", guidelines)
+	}
+	if strings.Contains(guidelines, "| Task ID prefix | `"+founding+"-` |") {
+		t.Fatalf("setup in a joining clone kept the founding key %q instead of the fetched current one:\n%s",
+			founding, guidelines)
+	}
+
+	// And the clone agrees with itself afterwards, rather than reporting the
+	// file it just installed as stale.
+	code, stdout, stderr = run(t, joining, "docs", "status")
+	if code != 0 {
+		t.Fatalf("docs status = code %d; stderr = %q", code, stderr)
+	}
+	if strings.Contains(stdout, string(agentdocs.StateStale)) {
+		t.Fatalf("docs status in a joining clone called the installed guidelines stale:\n%s", stdout)
+	}
+
+	// The JSON surface says the same thing, on a second clone joining fresh:
+	// this is the same property the text report above pins, on the surface a
+	// script reads to learn what `workbook create` will mint under.
+	secondJoining := cliClone(t, origin)
+	code, stdout, stderr = run(t, secondJoining, "setup", "--json")
+	if code != 0 {
+		t.Fatalf("setup --json = code %d; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	var result struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "setup").Data, &result); err != nil {
+		t.Fatalf("decode setup: %v; output = %s", err, stdout)
+	}
+	if result.Key != "NEW" {
+		t.Fatalf("setup --json key = %q, want the fetched current key NEW", result.Key)
+	}
+}
+
 // The board never writes the guidelines; it reads how they compare and reports
 // staleness. That comparison renders the document, so it needs this project's
 // priorities for the same reason every writer does — otherwise a project that
@@ -143,9 +208,36 @@ func TestBoardDoesNotCallTheProjectsOwnPrioritiesStale(t *testing.T) {
 		t.Fatalf("load the project's configuration: %v", err)
 	}
 
-	warnings := staleGuidelinesWarnings(board, state.Vocabulary, state.Priorities)
+	warnings := staleGuidelinesWarnings(board, state.Vocabulary, state.Priorities, state.Keys)
 
 	if len(warnings) != 0 {
 		t.Fatalf("warnings = %#v, want none for guidelines that match this project's configuration", warnings)
+	}
+}
+
+// The same comparison has to use this project's real keys, not the founding
+// one, for the reason it has to use this project's own priorities: otherwise a
+// project that moved its current key is told its guidelines are stale on
+// every board write, forever, even though the installed file already names
+// the key `key add --current` put there.
+func TestBoardDoesNotCallTheProjectsOwnKeysStale(t *testing.T) {
+	repository := initializedRepository(t)
+	if code, _, stderr := run(t, repository, "key", "add", "NEW", "--current", "--no-sync"); code != 0 {
+		t.Fatalf("key add NEW --current = code %d; stderr = %q", code, stderr)
+	}
+	ctx := context.Background()
+	board := openBoardVocabulary(t, ctx, repository)
+	state, err := board.repository.LoadVocabularyState(ctx, board.config)
+	if err != nil {
+		t.Fatalf("load the project's configuration: %v", err)
+	}
+	if state.Keys.Current() != "NEW" {
+		t.Fatalf("current key = %q, want NEW", state.Keys.Current())
+	}
+
+	warnings := staleGuidelinesWarnings(board, state.Vocabulary, state.Priorities, state.Keys)
+
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %#v, want none for guidelines that already name the moved key", warnings)
 	}
 }

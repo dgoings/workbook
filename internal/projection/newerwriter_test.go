@@ -308,7 +308,7 @@ func TestAProjectedPackKeepsItsDeclaredGeneration(t *testing.T) {
 
 	// Replaying that chain stops at the newer pack, and says so in the right
 	// words rather than calling the history corrupt.
-	_, truncation := core.ReplayHistory(config.Key, history)
+	_, truncation := core.ReplayHistory(history)
 	if truncation == nil {
 		t.Fatal("the replay folded a pack this build cannot read")
 	}

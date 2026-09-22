@@ -794,7 +794,7 @@ func validationHistory(t *testing.T, id, generation string, base, count int) []g
 		} else {
 			pack.Operations = []core.Operation{{ID: validatorULID(base + i), Type: core.OperationFieldSet, Field: "status", Value: string(core.StatusReady)}}
 		}
-		state, err := core.Apply(parent, pack, testConfig().Key)
+		state, err := core.Apply(parent, pack)
 		if err != nil {
 			t.Fatalf("Apply(%d) error = %v", i, err)
 		}

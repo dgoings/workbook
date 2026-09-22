@@ -73,7 +73,7 @@ func threadPack(parent StateDocument, operations ...Operation) OperationPack {
 
 func applyThread(t *testing.T, parent StateDocument, operations ...Operation) StateDocument {
 	t.Helper()
-	state, err := Apply(&parent, threadPack(parent, operations...), serviceTestConfig.Key)
+	state, err := Apply(&parent, threadPack(parent, operations...))
 	if err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
@@ -358,7 +358,7 @@ func TestMalformedThreadOperationsAreCorruptData(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			parent := threadParent(TaskData{})
-			_, err := Apply(&parent, threadPack(parent, testCase.operation), serviceTestConfig.Key)
+			_, err := Apply(&parent, threadPack(parent, testCase.operation))
 			if got := CategoryOf(err); got != CategoryCorruptData {
 				t.Fatalf("Apply() category = %q, want %q; error = %v", got, CategoryCorruptData, err)
 			}
@@ -375,7 +375,7 @@ func TestTaskCreateMayNotCarryAThread(t *testing.T) {
 		serviceTestConfig.ProjectID, threadTaskID, "01K0M6B8A4FTT8C39MXXYTW7D9", threadActor, 1, threadWallTime,
 		[]Operation{{ID: commentTwoID, Type: OperationTaskCreate, Task: &task}},
 	)
-	_, err := Apply(nil, pack, serviceTestConfig.Key)
+	_, err := Apply(nil, pack)
 	if got := CategoryOf(err); got != CategoryCorruptData {
 		t.Fatalf("Apply() category = %q, want %q; error = %v", got, CategoryCorruptData, err)
 	}
@@ -484,7 +484,7 @@ func TestTheChangeLogDescribesThreadOperations(t *testing.T) {
 		t.Fatalf("fixture attachments = %#v", attached.Task.Attachments)
 	}
 
-	log := BuildChangeLog(serviceTestConfig.Key, history, 0, true)
+	log := BuildChangeLog(history, 0, true)
 	if log.Truncated != nil {
 		t.Fatalf("change log truncated at %#v", log.Truncated)
 	}
@@ -1066,7 +1066,7 @@ func TestAStoredMediaTypeIsRefusedUnlessItIsAPlainToken(t *testing.T) {
 		operation := Operation{ID: attachOneID, Type: OperationAttachmentAdd, Attachment: &AttachmentData{
 			Name: "a.txt", Kind: AttachmentFile, Media: media, Size: 1, Blob: threadBlobOID,
 		}}
-		_, err := Apply(&parent, threadPack(parent, operation), serviceTestConfig.Key)
+		_, err := Apply(&parent, threadPack(parent, operation))
 		if got := CategoryOf(err); got != CategoryCorruptData {
 			t.Fatalf("Apply(media %q) category = %q, want %q; error = %v",
 				media, got, CategoryCorruptData, err)
@@ -1080,7 +1080,7 @@ func TestAStoredMediaTypeIsRefusedUnlessItIsAPlainToken(t *testing.T) {
 		operation := Operation{ID: attachOneID, Type: OperationAttachmentAdd, Attachment: &AttachmentData{
 			Name: "a.bin", Kind: AttachmentFile, Media: media, Size: 1, Blob: threadBlobOID,
 		}}
-		if _, err := Apply(&parent, threadPack(parent, operation), serviceTestConfig.Key); err != nil {
+		if _, err := Apply(&parent, threadPack(parent, operation)); err != nil {
 			t.Fatalf("Apply(media %q) error = %v", media, err)
 		}
 	}
@@ -1114,7 +1114,7 @@ func TestAnSVGIsNeverStoredAsAnImage(t *testing.T) {
 		operation := Operation{ID: attachOneID, Type: OperationAttachmentAdd, Attachment: &AttachmentData{
 			Name: "diagram.svg", Kind: AttachmentFile, Media: media, Size: 1, Blob: threadBlobOID,
 		}}
-		if _, err := Apply(&parent, threadPack(parent, operation), serviceTestConfig.Key); CategoryOf(err) != CategoryCorruptData {
+		if _, err := Apply(&parent, threadPack(parent, operation)); CategoryOf(err) != CategoryCorruptData {
 			t.Fatalf("Apply(media %q) category = %q, want %q; error = %v",
 				media, CategoryOf(err), CategoryCorruptData, err)
 		}

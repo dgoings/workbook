@@ -722,6 +722,16 @@ type configBefore struct {
 	// and reading it from a different commit than the pack would describe a
 	// configuration that never existed.
 	priorities core.PriorityVocabulary
+	// keys is the fourth section, carried for the reason the other three are: a
+	// key inverse is a statement about what the change replaced, and reading it
+	// from a different commit than the pack would describe a configuration that
+	// never existed.
+	//
+	// It is never the zero set. ConfigStateDocument.KeySet substitutes the
+	// founding key for a parent that recorded nothing about keys, which is what
+	// lets a reader of this member tell the project that has one key from the
+	// project that has several — the distinction authoredKeyOperations turns on.
+	keys core.KeySet
 }
 
 // configLedgerWindow is what one bounded read of the ledger saw: the commits it
@@ -781,6 +791,7 @@ func readConfigLedgerWindow(
 				vocabulary: commit.State.Vocabulary(),
 				display:    commit.State.Display(),
 				priorities: commit.State.PriorityVocabulary(),
+				keys:       commit.State.KeySet(config.Key),
 			}
 			return nil
 		},
@@ -842,19 +853,29 @@ func forwardingTimes(ledger configLedgerWindow) map[core.Status]time.Time {
 func buildStatusLog(ledger configLedgerWindow) statusLogResult {
 	entries := make([]statusLogEntry, 0, len(ledger.Commits))
 	for _, commit := range ledger.Commits {
-		if len(commit.Pack.Operations) == 0 {
+		// The authored operations, not the recorded pack. Two sections record a
+		// backfill ahead of a project's first change to them — the founding key
+		// and the built-in priorities — and an entry built from operations[0]
+		// names, summarizes, counts and identifies that prefix while the
+		// inverse beside it, which already strips, describes the change
+		// somebody ran. One entry then says two different things about one
+		// commit. Both strippings are idempotent and neither can fire on the
+		// other's prefix, since each is identified by its own first operation.
+		operations := authoredKeyOperations(commit.Before.keys, commit.Pack.Operations)
+		operations = authoredPriorityOperations(commit.Before, operations)
+		if len(operations) == 0 {
 			continue
 		}
-		primary := commit.Pack.Operations[0]
+		primary := operations[0]
 		entries = append(entries, statusLogEntry{
 			Commit:      commit.Commit,
 			OperationID: primary.ID,
 			WallTime:    commit.Pack.WallTime,
 			Actor:       commit.Pack.Actor.ID,
 			Operation:   primary.Type,
-			Summary:     configPackSummary(commit.Pack.Operations),
-			Collapsed:   len(commit.Pack.Operations) - 1,
-			Inverse:     statusPackInverse(commit.Before, commit.Pack.Operations),
+			Summary:     configPackSummary(operations),
+			Collapsed:   len(operations) - 1,
+			Inverse:     statusPackInverse(commit.Before, operations),
 		})
 	}
 	return statusLogResult{
@@ -1753,30 +1774,34 @@ func runStatusMutation(
 	if position := result.Change.Position; position != nil {
 		position.Order = after.Order(plan.change.Status) + 1
 	}
-	docs, docsErr := regenerateGuidelines(session, after, session.service.Priorities, noDocs)
+	docs, docsErr := regenerateGuidelines(session, after, session.service.Priorities, session.service.KeySet(), noDocs)
 	result.Docs = docs
 	writeStatusMutation(stdout, stderr, command, result, session, docsErr, jsonMode)
 	return nil
 }
 
-// regenerateGuidelines rewrites the generated guidelines against the statuses
-// and priorities this change produced.
+// regenerateGuidelines rewrites the generated guidelines against the statuses,
+// priorities, and keys this change produced.
 //
-// The guidelines state a project's statuses and priorities, so every status
-// change and every priority change makes them stale, and a generated file
-// that has to be refreshed by hand is a generated file that is wrong most of
-// the time. It goes through the same Reconcile the documentation commands
-// use, which is what keeps the one promise that matters about a generated
-// file: Workbook rewrites what it wrote, and never overwrites what somebody
-// edited.
+// The guidelines state a project's statuses, priorities, and keys, so every
+// status change, every priority change, and every key change makes them
+// stale, and a generated file that has to be refreshed by hand is a generated
+// file that is wrong most of the time. It goes through the same Reconcile the
+// documentation commands use, which is what keeps the one promise that
+// matters about a generated file: Workbook rewrites what it wrote, and never
+// overwrites what somebody edited.
 //
-// This is called from status mutations as well as priority ones, so both
-// parameters are required at every call site regardless of which vocabulary
-// the caller's own change touched: a status rename that passed only the
-// statuses and let priorities default to the zero value would silently
-// overwrite a project's configured priorities with the built-in three the
-// moment somebody renamed a column. Passing the priorities a caller did not
-// itself change is exactly what keeps that half of the document accurate.
+// This is called from status mutations, priority mutations, and key
+// mutations, so all three parameters are required at every call site
+// regardless of which section the caller's own change touched: a status
+// rename that passed only the statuses and let priorities default to the zero
+// value would silently overwrite a project's configured priorities with the
+// built-in three the moment somebody renamed a column, and the same is true of
+// a key change that let the statuses or priorities default. Passing the
+// sections a caller did not itself change is exactly what keeps the rest of
+// the document accurate; each caller passes its own freshly-written section
+// and reads the other two off the session's own service, which is what it
+// opened the fetch-then-refresh with.
 //
 // It returns its failure rather than raising it. The configuration change is
 // already recorded and published by the time this runs, so a documentation
@@ -1786,6 +1811,7 @@ func regenerateGuidelines(
 	session *taskSession,
 	vocabulary core.Vocabulary,
 	priorities core.PriorityVocabulary,
+	keys core.KeySet,
 	noDocs bool,
 ) (*agentdocs.Report, error) {
 	if noDocs {
@@ -1796,6 +1822,7 @@ func regenerateGuidelines(
 		Project:    session.config,
 		Vocabulary: vocabulary,
 		Priorities: priorities,
+		Keys:       keys,
 		Generator:  release.Version,
 	})
 	return &report, err
@@ -2075,6 +2102,11 @@ func statusPackInverse(before configBefore, operations []core.ConfigOperation) *
 		// keeps the doctrine this function's comment states — one place decides
 		// an inverse — across a second verb family.
 		return displayPackInverse(before.display, operation)
+	case core.ConfigKeyAdd, core.ConfigKeyCurrent, core.ConfigKeyRetire:
+		// The key family renders its own inverses, with its own command prefix,
+		// routed from here rather than from a second entry point so that one
+		// place decides an inverse across a fourth verb family.
+		return keyPackInverse(before.keys, operations)
 	case core.ConfigStatusAdd:
 		return addInverse(before.vocabulary, operation)
 	case core.ConfigStatusRename:
@@ -2427,6 +2459,10 @@ func configOperationSummary(operation core.ConfigOperation) string {
 		// through to its wire name, which is what an older ledger's unknown
 		// operation has always rendered as.
 		if summary, worded := priorityOperationSummary(operation); worded {
+			return summary
+		}
+		// And the key section words its own, in key.go, for the same reason.
+		if summary, worded := keyOperationSummary(operation); worded {
 			return summary
 		}
 		return string(operation.Type)

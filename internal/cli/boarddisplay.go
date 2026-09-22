@@ -103,6 +103,13 @@ func (board *boardDisplay) set(
 			Vocabulary: written.Vocabulary(),
 			Display:    written.State.Display(),
 			Priorities: written.State.PriorityVocabulary(),
+			// The keys are deliberately not filled, where the two vocabulary
+			// writers fill them. This route answers with the display settings
+			// and the configuration's shape, and neither mentions a key: the
+			// shape is the columns and the priorities, for the reason
+			// vocabularyShape gives. A field filled for nothing to read would
+			// be the wrong kind of insurance — it would cost a ledger read on
+			// every save and say that something here depends on it.
 		},
 		Warnings: board.publisher.publishConfig(ctx),
 	}, nil

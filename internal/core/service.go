@@ -30,8 +30,14 @@ type Service struct {
 	// keeps exactly today's behavior without this type needing a vocabulary()
 	// equivalent.
 	Priorities PriorityVocabulary
-	Reader     TaskReader
-	Writer     CanonicalTaskWriter
+	// Keys is the project's task-ID keys, read the same way Vocabulary and
+	// Priorities are. The zero value means "not configured", and keys()
+	// substitutes the founding key from Config for it, so a Service built the
+	// way every caller built one before keys were configurable keeps exactly
+	// its previous behavior.
+	Keys   KeySet
+	Reader TaskReader
+	Writer CanonicalTaskWriter
 	// Blobs records an attached file's bytes. A Service without one refuses to
 	// attach a file and does everything else; see AttachmentBlobStore.
 	Blobs AttachmentBlobStore
@@ -54,6 +60,21 @@ func (s Service) vocabulary() Vocabulary {
 	}
 	return s.Vocabulary
 }
+
+// keys returns the configured key set, or the set a project whose ledger
+// records nothing about keys has: its founding key alone.
+func (s Service) keys() KeySet {
+	if s.Keys.IsZero() {
+		return FoundingKeySet(s.Config.Key)
+	}
+	return s.Keys
+}
+
+// KeySet is keys() for a caller outside this package — the CLI's conflict
+// lookup and the board's create form — so no surface re-derives the
+// substitution and disagrees with the service about which IDs are this
+// project's.
+func (s Service) KeySet() KeySet { return s.keys() }
 
 // requireStatusMember rejects a status the project does not define.
 //
@@ -97,6 +118,10 @@ type CreateInput struct {
 	Status      Status
 	Priority    Priority
 	Labels      []string
+	// Key mints the task under one of this project's active keys instead of
+	// the current one. Empty means the current key, which is what every caller
+	// that does not offer the choice asks for.
+	Key string
 }
 
 type UpdateInput struct {
@@ -172,6 +197,10 @@ type ListFilter struct {
 	Priority *Priority
 	Label    string
 	All      bool
+	// Key keeps only the tasks whose ID carries one project key. A retired key
+	// is a perfectly good filter — its tasks still exist — so this asks about
+	// membership and not about activity.
+	Key string
 }
 
 func (s Service) CreateMutation(ctx context.Context, input CreateInput) (MutationResult, error) {
@@ -198,8 +227,18 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 	if err != nil {
 		return MutationResult{}, err
 	}
+	// The one place Current() is read. A caller that named a key is held to the
+	// active ones, because minting under a retired key is the one thing
+	// retirement means; which keys those are is said in the refusal.
+	key := s.keys().Current()
+	if input.Key != "" {
+		if err := s.keys().RequireActive(input.Key); err != nil {
+			return MutationResult{}, err
+		}
+		key = input.Key
+	}
 	now := s.now()
-	taskData, err := normalizeCanonicalTask(s.Config.Key, TaskData{
+	taskData, err := normalizeCanonicalTask(TaskData{
 		Title:        input.Title,
 		Description:  input.Description,
 		Status:       status,
@@ -219,12 +258,12 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 		return MutationResult{}, err
 	}
 	taskULID, generation, operationID := ids[0], ids[1], ids[2]
-	taskID := s.Config.Key + "-" + taskULID
+	taskID := key + "-" + taskULID
 	pack := NewOperationPack(
 		s.Config.ProjectID, taskID, generation, s.Actor, 1, now,
 		[]Operation{{ID: operationID, Type: OperationTaskCreate, Task: &taskData}},
 	)
-	state, err := Apply(nil, pack, s.Config.Key)
+	state, err := Apply(nil, pack)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -399,11 +438,30 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 		}
 		wantedPriority = resolution.Resolved
 	}
+	// Resolved once, beside the vocabulary above, rather than per task: the
+	// substitution behind keys() is the same answer every time, and asking it
+	// inside the loop below built a founding key set per task on every project
+	// whose ledger records nothing about keys.
+	keys := s.keys()
+	// An unknown key is refused rather than answered with an empty list, the
+	// same way a status filter that resolves to nothing is: a caller cannot tell
+	// "no such key" from "no tasks under it" from an empty table. A retired key
+	// is perfectly askable — its tasks still exist.
+	if filter.Key != "" && !keys.Contains(filter.Key) {
+		return nil, Errorf(CategoryValidation, "no project key %q in this project; its keys are: %s%s",
+			filter.Key, KeyNameList(keys), unfetchedFilterClause)
+	}
 	tasks := make([]Task, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		task := s.Project(snapshot)
 		if !filter.All && task.Deleted {
 			continue
+		}
+		if filter.Key != "" {
+			key, _, ok := keys.Parse(task.ID)
+			if !ok || key != filter.Key {
+				continue
+			}
 		}
 		if filter.Status != nil && task.Status != wanted {
 			continue
@@ -547,7 +605,7 @@ func (s Service) ShowDetail(ctx context.Context, idOrPrefix string, options Show
 		if err != nil {
 			return TaskDetail{}, err
 		}
-		log := BuildChangeLog(s.Config.Key, history, options.Limit, options.All)
+		log := BuildChangeLog(history, options.Limit, options.All)
 		detail.History = &log
 	}
 	if options.Compare != nil {
@@ -580,7 +638,7 @@ func (s Service) stateAtCommit(ctx context.Context, taskID, commit string) (Task
 	if err != nil {
 		return TaskData{}, err
 	}
-	return StateAt(s.Config.Key, history)
+	return StateAt(history)
 }
 
 func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input UpdateInput) (MutationResult, error) {
@@ -617,7 +675,7 @@ func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input Up
 	if input.Labels != nil {
 		next.Labels = append([]string(nil), (*input.Labels)...)
 	}
-	next, err = normalizeCanonicalTask(s.Config.Key, next)
+	next, err = normalizeCanonicalTask(next)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -653,7 +711,7 @@ func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input Up
 			next.Status = corrected.To
 		}
 	}
-	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
+	if err := s.assignOperationIDs(operations, taskULIDBody(parent.State.TaskID), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
 	subject := updateCommitSubject(parent.State.TaskID, parent.State.Task, next,
@@ -737,7 +795,7 @@ func (s Service) DeleteMutation(ctx context.Context, idOrPrefix string, input De
 		return MutationResult{}, Errorf(CategoryValidation, "cannot delete a tombstoned task")
 	}
 	operations := []Operation{{Type: OperationTaskTombstone}}
-	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
+	if err := s.assignOperationIDs(operations, taskULIDBody(parent.State.TaskID), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
 	return s.writeMutation(ctx, &parent, operations, "delete task")
@@ -802,7 +860,7 @@ func (s Service) RestoreMutation(ctx context.Context, idOrPrefix string, input R
 		operations = append(operations, destination.operations...)
 		corrected = destination.corrected
 	}
-	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
+	if err := s.assignOperationIDs(operations, taskULIDBody(parent.State.TaskID), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
 	result, err := s.writeMutation(ctx, &parent, operations, "restore task")
@@ -922,7 +980,7 @@ func (s Service) MoveMutation(ctx context.Context, idOrPrefix string, input Move
 		[]Operation{{Type: OperationFieldSet, Field: "rank", Value: rank}},
 		parent.State.Task,
 	)
-	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
+	if err := s.assignOperationIDs(operations, taskULIDBody(parent.State.TaskID), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
 	result, err := s.writeMutation(ctx, &parent, operations, "move task")
@@ -1010,7 +1068,7 @@ func (s Service) PlaceMutation(ctx context.Context, idOrPrefix string, input Pla
 	if len(operations) == 0 {
 		return MutationResult{Task: s.Project(parent)}, nil
 	}
-	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
+	if err := s.assignOperationIDs(operations, taskULIDBody(parent.State.TaskID), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
 	result, err := s.writeMutation(ctx, &parent, operations, "place task")
@@ -1050,7 +1108,7 @@ func (s Service) DependMutation(ctx context.Context, idOrPrefix, dependencyOrPre
 		[]Operation{{Type: OperationSetAdd, Field: "dependencies", Value: dependency.State.TaskID}},
 		parent.State.Task,
 	)
-	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
+	if err := s.assignOperationIDs(operations, taskULIDBody(parent.State.TaskID), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
 	result, err := s.writeMutation(ctx, &parent, operations, "add dependency")
@@ -1070,7 +1128,7 @@ func (s Service) FreeMutation(ctx context.Context, idOrPrefix, dependencyOrPrefi
 		return MutationResult{}, Errorf(CategoryValidation, "cannot remove a dependency from a tombstoned task")
 	}
 	dependencyID := dependencyOrPrefix
-	if ValidateTaskID(s.Config.Key, dependencyID) != nil ||
+	if !s.keys().Owns(dependencyID) ||
 		!hasDependency(parent.State.Task.Dependencies, dependencyID) {
 		dependency, err := s.resolveSnapshot(ctx, dependencyOrPrefix)
 		if err != nil {
@@ -1085,7 +1143,7 @@ func (s Service) FreeMutation(ctx context.Context, idOrPrefix, dependencyOrPrefi
 		[]Operation{{Type: OperationSetRemove, Field: "dependencies", Value: dependencyID}},
 		parent.State.Task,
 	)
-	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
+	if err := s.assignOperationIDs(operations, taskULIDBody(parent.State.TaskID), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
 	result, err := s.writeMutation(ctx, &parent, operations, "remove dependency")
@@ -1145,7 +1203,7 @@ func requireExpectedHead(parent Snapshot, expected string) error {
 }
 
 func (s Service) resolveSnapshot(ctx context.Context, idOrPrefix string) (Snapshot, error) {
-	if ValidateTaskID(s.Config.Key, idOrPrefix) == nil {
+	if s.keys().Owns(idOrPrefix) {
 		return s.Reader.Get(ctx, s.Config, idOrPrefix)
 	}
 	id, err := s.Reader.Resolve(ctx, s.Config, idOrPrefix)
@@ -1168,7 +1226,7 @@ func (s Service) writeMutation(ctx context.Context, parent *Snapshot, operations
 		s.now(),
 		operations,
 	)
-	state, err := Apply(&parent.State, pack, s.Config.Key)
+	state, err := Apply(&parent.State, pack)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -1266,8 +1324,19 @@ func validateGeneratedULID(id string) error {
 	return nil
 }
 
-func taskULIDSuffix(taskID, projectKey string) string {
-	return strings.TrimPrefix(taskID, projectKey+"-")
+// taskULIDBody is the ULID half of a task ID, which a mutation reserves so that
+// no operation it mints can collide with the task's own identifier.
+//
+// It parses the ID rather than trimming this project's key off it. A project
+// may have more than one key, and trimming the wrong prefix left the whole ID
+// in hand — reserving "NEW-01K0…" instead of "01K0…", which reserves nothing a
+// generated ULID could ever equal. A stored task ID always parses; the fallback
+// returns the whole name, which reserves at least what trimming did.
+func taskULIDBody(taskID string) string {
+	if _, body, ok := ParseTaskID(taskID); ok {
+		return body
+	}
+	return taskID
 }
 
 func createCommitSubject(taskID string, task TaskData) string {
@@ -1298,9 +1367,14 @@ func updateCommitSubject(taskID string, before, after TaskData, thread []string)
 	return "workbook: update " + taskCommitShortID(taskID) + " " + strings.Join(changes, "; ")
 }
 
+// taskCommitShortID abbreviates a task ID for a commit subject, keeping the key
+// so that a subject says which of a project's keys the task carries.
 func taskCommitShortID(taskID string) string {
-	projectKey, _, _ := strings.Cut(taskID, "-")
-	return projectKey + "-" + taskULIDSuffix(taskID, projectKey)[:8]
+	key, body, ok := ParseTaskID(taskID)
+	if !ok {
+		return taskID
+	}
+	return key + "-" + body[:8]
 }
 
 func formatCommitTitle(title string) string {

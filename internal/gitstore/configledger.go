@@ -121,6 +121,12 @@ func (result ConfigWriteResult) Display() core.DisplaySettings {
 	return result.State.Display()
 }
 
+// KeySet reads the written checkpoint's project keys, so a key change reports
+// the set its own write produced rather than the one the session opened with.
+func (result ConfigWriteResult) KeySet(founding string) core.KeySet {
+	return result.State.KeySet(founding)
+}
+
 // LoadVocabulary returns the project's configured status vocabulary, resolving
 // it once per opened repository exactly as LoadConfig and LoadIdentity resolve
 // theirs.
@@ -190,6 +196,15 @@ type VocabularyState struct {
 	// needs no substitution of its own, and a caller writing a checkpoint
 	// still has the un-substituted answer.
 	Priorities core.PriorityVocabulary
+	// Keys is this project's task-ID keys, read from the same tip as the
+	// statuses because it is the same read. A caller that asked for the columns
+	// and then for the keys could be answered from either side of a fetch, and
+	// would classify a ref against one configuration while drawing another.
+	//
+	// It is never the zero KeySet: a project whose ledger records nothing about
+	// keys reports the founding key alone, which is the set that project
+	// actually has.
+	Keys core.KeySet
 }
 
 // LoadVocabularyState reads the project's statuses and reports whether a ledger
@@ -215,9 +230,9 @@ func (r *Repository) LoadVocabularyState(ctx context.Context, config core.Projec
 	}
 	head, found := listing.Heads[configRef]
 	if !found {
-		return VocabularyState{Vocabulary: core.LegacyVocabulary()}, nil
+		return VocabularyState{Vocabulary: core.LegacyVocabulary(), Keys: core.FoundingKeySet(config.Key)}, nil
 	}
-	if decoded, found := r.decodedConfigAt(head); found {
+	if decoded, found := r.decodedConfigAt(head, config.Key); found {
 		return vocabularyStateAt(head, decoded), nil
 	}
 	record, err := r.readConfigRecordAt(ctx, config, configRef, head)
@@ -228,6 +243,8 @@ func (r *Repository) LoadVocabularyState(ctx context.Context, config core.Projec
 		vocabulary: record.State.Vocabulary(),
 		display:    record.State.Display(),
 		priorities: record.State.PriorityVocabulary(),
+		keys:       record.State.KeySet(config.Key),
+		founding:   config.Key,
 	}
 	r.rememberDecodedConfig(head, decoded)
 	return vocabularyStateAt(head, decoded), nil
@@ -242,6 +259,7 @@ func vocabularyStateAt(head string, decoded decodedConfig) VocabularyState {
 		Vocabulary: decoded.vocabulary,
 		Display:    decoded.display,
 		Priorities: decoded.priorities,
+		Keys:       decoded.keys,
 	}
 }
 
@@ -257,14 +275,29 @@ type decodedConfig struct {
 	// from either side of a fetch that moved the ledger, and would describe a
 	// project out of two configurations.
 	priorities core.PriorityVocabulary
+	// keys is the fourth section of the same tip. It is resolved here rather
+	// than by the caller because resolving it takes the project's founding key,
+	// and a memo holding the un-substituted section would hand every reader the
+	// same substitution to make — and the chance to make it differently.
+	keys core.KeySet
+	// founding records which founding key the set above was resolved against.
+	// It is part of the memo's key, not part of its answer: every other section
+	// is a function of the commit alone, so the tip identifies it, while an
+	// absent key section is read as whichever founding key the caller supplied.
+	// Keying on the tip alone would answer a question about one project's keys
+	// out of a substitution made for another's.
+	founding string
 }
 
 // decodedConfigAt returns the configuration this process already decoded from a
 // ledger tip.
-func (r *Repository) decodedConfigAt(head string) (decodedConfig, bool) {
+func (r *Repository) decodedConfigAt(head, founding string) (decodedConfig, bool) {
 	r.metadataMu.RLock()
 	defer r.metadataMu.RUnlock()
 	if r.stateHead == "" || r.stateHead != head {
+		return decodedConfig{}, false
+	}
+	if r.stateConfig.founding != founding {
 		return decodedConfig{}, false
 	}
 	return r.stateConfig, true
@@ -317,6 +350,95 @@ func (r *Repository) replaceVocabulary(vocabulary core.Vocabulary, head string) 
 	r.vocabulary = vocabulary
 	r.vocabularyLoaded = true
 	r.configLocalHead = head
+	// The key set is dropped rather than replaced, because this function's
+	// callers have the new vocabulary in hand and not the founding key the key
+	// set is resolved against. Dropping it is the safe half of the same job:
+	// the next caller that needs keys re-reads the tip this write just made.
+	// It happens under this lock so that no reader can see the new vocabulary
+	// beside the superseded keys.
+	r.forgetKeySetLocked()
+}
+
+// keySet resolves the project's keys for the boundaries that classify names.
+//
+// It is memoized for the life of the opened repository, because a key set is
+// read by every ref listing and `internal/perf` prices synchronization in Git
+// processes: a fresh enumeration per listing would add one process per listing
+// to every command. The memo is dropped exactly where the ledger moves — a
+// configuration write, and the configuration stage of a fetch — so no caller
+// can classify a ref against a key set the same command has already superseded.
+//
+// The founding key is part of the memo's key for the reason it is part of the
+// decoded tip's: a project that has recorded no key section has the set its
+// founding key implies, so the answer depends on the caller's argument and not
+// on the ledger alone. A memo keyed on "this repository" would answer a
+// question about one project's keys out of a substitution made for another's.
+func (r *Repository) keySet(ctx context.Context, config core.ProjectConfig) (core.KeySet, error) {
+	r.metadataMu.RLock()
+	loaded, founding, keys := r.keysLoaded, r.keysFounding, r.keys
+	r.metadataMu.RUnlock()
+	if loaded && founding == config.Key {
+		return keys, nil
+	}
+	state, err := r.LoadVocabularyState(ctx, config)
+	if err != nil {
+		return core.KeySet{}, err
+	}
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	if !r.keysLoaded || r.keysFounding != config.Key {
+		r.keys, r.keysFounding, r.keysLoaded = state.Keys, config.Key, true
+		r.keysHead = state.Head
+	}
+	return r.keys, nil
+}
+
+// ForgetKeySetUnlessAt drops the memo when the ledger tip a caller has just
+// read is not the tip the memo was resolved at.
+//
+// It exists for the one caller that outlives the ledger: `workbook serve` runs
+// for hours, resolves the configuration on every request, and meets a
+// teammate's `workbook key add` between two of them. The memo above is dropped
+// where *this* process moves the ledger — a configuration write, and the
+// configuration stage of a fetch — and a change made by another process moves
+// nothing here, so a board that had served one task request went on
+// classifying refs against the set it had memoized. The consequence was not a
+// stale reading but a broken one: a task ID under the new key is not another
+// project's ref, it is a task ref whose ID this handle calls invalid, so the
+// poll and the page answered 500 and the board's own writes were refused.
+//
+// It drops and never installs, which is what makes it safe to call from a
+// request. A caller hands over the head it observed, not the set it read: two
+// requests racing a third's write could hand back a set the ledger is already
+// past, and installing that would put a superseded answer where every ref
+// listing reads it. Dropping is monotone — the next caller re-reads the tip —
+// and a memo another path has already dropped is left alone.
+//
+// It asks Git nothing, which is what keeps it off the hot path. The head is one
+// the caller already has from LoadVocabularyState, and a head that has not
+// moved costs a mutex and a string comparison.
+func (r *Repository) ForgetKeySetUnlessAt(head string) {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	if r.keysLoaded && r.keysHead != head {
+		r.forgetKeySetLocked()
+	}
+}
+
+// forgetKeySet drops the memo after this process moved the configuration ledger
+// or fetched a new one.
+func (r *Repository) forgetKeySet() {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	r.forgetKeySetLocked()
+}
+
+// forgetKeySetLocked is forgetKeySet for a caller already holding the metadata
+// lock, so that a write which also replaces another memo can do both in one
+// critical section rather than leaving a window between them.
+func (r *Repository) forgetKeySetLocked() {
+	r.keys, r.keysFounding, r.keysLoaded = core.KeySet{}, "", false
+	r.keysHead = ""
 }
 
 // WriteConfigOperation records one batch of configuration changes as the
@@ -468,7 +590,7 @@ func (r *Repository) writeConfigOperation(
 			return ConfigWriteResult{}, supersededConfigLedger(*expected, tip.Head)
 		}
 	}
-	return r.appendConfigOperation(ctx, tip, ids, authored, actor, reason)
+	return r.appendConfigOperation(ctx, config, tip, ids, authored, actor, reason)
 }
 
 // supersededConfigLedger refuses a write whose caller named a tip that is no
@@ -559,6 +681,19 @@ func (r *Repository) seedConfigLedger(
 	genesisState, genesisHead, err := r.writeConfigGenesis(
 		ctx, config, ids, generation, actor, core.LegacyVocabulary(), core.BuiltInPriorityVocabulary())
 	if err != nil {
+		return ConfigWriteResult{}, false, err
+	}
+
+	// The genesis above carries statuses and priorities and deliberately not
+	// keys, so this write is the project's first key change if it touches keys
+	// at all — and the backfill has to run here too, against the genesis this
+	// function just wrote rather than against a tip somebody else recorded.
+	authored := len(operations)
+	operations, err = backfilledConfigOperations(&genesisState, config, ids, operations)
+	if err != nil {
+		return ConfigWriteResult{}, false, err
+	}
+	if err := checkBackfilledPackBudget(operations, authored); err != nil {
 		return ConfigWriteResult{}, false, err
 	}
 
@@ -711,6 +846,7 @@ func (r *Repository) MintConfigLedger(
 // appendConfigOperation records one pack on top of an observed tip.
 func (r *Repository) appendConfigOperation(
 	ctx context.Context,
+	config core.ProjectConfig,
 	tip configRecord,
 	ids core.IDSource,
 	operations []core.ConfigOperation,
@@ -718,22 +854,12 @@ func (r *Repository) appendConfigOperation(
 	reason string,
 ) (ConfigWriteResult, error) {
 	authored := len(operations)
-	operations, err := prependBuiltInPriorities(tip, ids, operations)
+	operations, err := backfilledConfigOperations(&tip.State, config, ids, operations)
 	if err != nil {
 		return ConfigWriteResult{}, err
 	}
-	// writeConfigOperation already refused a batch over the ceiling, but it
-	// counted what the caller asked for, and the backfill above has since
-	// added to it. The ceiling has to hold against what is actually written:
-	// the reader's budget check refuses an oversized pack, and a ledger is
-	// append-only, so a pack written past it is a configuration no clone can
-	// ever fold again — including the one that wrote it.
-	if len(operations) > core.MaxConfigOperationsPerPack {
-		return ConfigWriteResult{}, core.Errorf(core.CategoryValidation,
-			"a configuration write carries %d operations and must not exceed %d: %d were authored, and this project's "+
-				"first priority change also records the %d built-in priorities its existing tasks depend on; "+
-				"split it into several commands",
-			len(operations), core.MaxConfigOperationsPerPack, authored, len(operations)-authored)
+	if err := checkBackfilledPackBudget(operations, authored); err != nil {
+		return ConfigWriteResult{}, err
 	}
 	pack, err := core.NewConfigOperationPack(
 		tip.State.ProjectID,
@@ -772,6 +898,137 @@ func (r *Repository) appendConfigOperation(
 	return ConfigWriteResult{Head: head, State: state}, nil
 }
 
+// backfilledConfigOperations adds what a project's first change to a section
+// has to record beside it, for the sections a genesis does not carry.
+//
+// Two sections need it, for two different reasons, and both are the same
+// mechanism: one pack is one commit, so there is no folded state in which the
+// caller's change exists without the facts it depends on.
+func backfilledConfigOperations(
+	state *core.ConfigStateDocument,
+	config core.ProjectConfig,
+	ids core.IDSource,
+	operations []core.ConfigOperation,
+) ([]core.ConfigOperation, error) {
+	operations, err := prependBuiltInPriorities(state, ids, operations)
+	if err != nil {
+		return nil, err
+	}
+	return prependFoundingKey(state, config, ids, operations)
+}
+
+// checkBackfilledPackBudget re-asks the pack ceiling about what is actually
+// going to be written.
+//
+// The write path already refused a batch over the ceiling, but it counted what
+// the caller asked for, and the backfill has since added to it. The ceiling has
+// to hold against what is actually written: the reader's budget check refuses
+// an oversized pack, and a ledger is append-only, so a pack written past it is
+// a configuration no clone can ever fold again — including the one that wrote
+// it.
+//
+// The refusal names the backfill that pushed the pack over, composed from what
+// was actually prepended, because "split it into several commands" is only
+// actionable to a caller who knows the pack is bigger than the batch they
+// wrote.
+func checkBackfilledPackBudget(operations []core.ConfigOperation, authored int) error {
+	if len(operations) <= core.MaxConfigOperationsPerPack {
+		return nil
+	}
+	priorities := 0
+	keys := false
+	for _, operation := range operations[:len(operations)-authored] {
+		switch {
+		case operation.Type.TouchesPriorities():
+			priorities++
+		case operation.Type.TouchesKeys():
+			keys = true
+		}
+	}
+	// Each clause is a bare predicate, so one of them completes "and this
+	// project's …" exactly as the single-backfill sentence always read, and two
+	// of them join into one sentence about one project rather than two
+	// sentences stapled together.
+	var clauses []string
+	if priorities > 0 {
+		clauses = append(clauses, fmt.Sprintf("first priority change also records the %d built-in "+
+			"priorities its existing tasks depend on", priorities))
+	}
+	if keys {
+		clauses = append(clauses, "first key change also records the key its existing task IDs carry")
+	}
+	if len(clauses) == 0 {
+		// No backfill fired, so the batch itself is over the ceiling — which
+		// the write path refuses before it reaches here. Said plainly anyway,
+		// because a message that promised a backfill nobody made would send the
+		// caller looking for one.
+		return core.Errorf(core.CategoryValidation,
+			"a configuration write carries %d operations and must not exceed %d; split it into several commands",
+			len(operations), core.MaxConfigOperationsPerPack)
+	}
+	return core.Errorf(core.CategoryValidation,
+		"a configuration write carries %d operations and must not exceed %d: %d were authored, and this project's "+
+			"%s; split it into several commands",
+		len(operations), core.MaxConfigOperationsPerPack, authored, strings.Join(clauses, " and its "))
+}
+
+// prependFoundingKey records the project's founding key in the same pack as its
+// first key change.
+//
+// Every task ID this project has ever minted carries that key, and the ledger
+// does not record it: it lives in the identity ref, and the fold reads an absent
+// key section as "the founding key alone". The moment a pack writes the section,
+// that substitution stops — every later reader reads only what has been folded —
+// so a pack that recorded `key.add NEW` alone would tell the next reader that
+// NEW is this project's only key, and every existing task would become another
+// project's ref.
+//
+// It is also what makes the order and the reverse commands well defined: the
+// founding key is the first entry, so `workbook key list` reads in add order
+// from the beginning of the project rather than from the day somebody added a
+// second key.
+//
+// Any key operation triggers it, not only key.add. A key.current or key.retire
+// authored against an unrecorded section names a key the fold cannot see, so it
+// would fold to nothing at all; prepending the founding key is what makes the
+// rule one sentence — a project's first key change records the key its existing
+// task IDs carry — rather than three cases a later operation could be added
+// outside of.
+func prependFoundingKey(
+	state *core.ConfigStateDocument,
+	config core.ProjectConfig,
+	ids core.IDSource,
+	operations []core.ConfigOperation,
+) ([]core.ConfigOperation, error) {
+	if state != nil && state.Config.Keys != nil {
+		return operations, nil
+	}
+	if !operationsTouchKeys(operations) {
+		return operations, nil
+	}
+	id, err := ids.New()
+	if err != nil {
+		return nil, core.Wrap(core.CategoryOperational, "cannot generate configuration operation ID", err)
+	}
+	return append([]core.ConfigOperation{{
+		ID:   id,
+		Type: core.ConfigKeyAdd,
+		Key:  config.Key,
+	}}, operations...), nil
+}
+
+// operationsTouchKeys reports whether any operation in the batch belongs to the
+// key section. Which types those are is ConfigOperationType.TouchesKeys's to
+// say, for the reason operationsTouchPriorities defers to TouchesPriorities.
+func operationsTouchKeys(operations []core.ConfigOperation) bool {
+	for _, operation := range operations {
+		if operation.Type.TouchesKeys() {
+			return true
+		}
+	}
+	return false
+}
+
 // prependBuiltInPriorities backfills the built-in three into the same pack as
 // a project's first priority change, for the one case seedConfigLedger and
 // MintConfigLedger cannot reach: a ledger whose genesis was written before
@@ -790,12 +1047,18 @@ func (r *Repository) appendConfigOperation(
 // unreachable rather than merely unlikely: one pack is one commit, so there
 // is no folded state in which the caller's change exists without the
 // priorities it depends on.
+//
+// backfilledConfigOperations asks it on the seed path too, where it never
+// fires: a genesis this build writes carries priorities, so the guard below
+// short-circuits. It is asked anyway because the sections must not each have
+// their own idea of where a backfill is due — see prependFoundingKey, whose
+// answer on that same path is the opposite one.
 func prependBuiltInPriorities(
-	tip configRecord,
+	state *core.ConfigStateDocument,
 	ids core.IDSource,
 	operations []core.ConfigOperation,
 ) ([]core.ConfigOperation, error) {
-	if tip.State.Config.Priorities != nil {
+	if state != nil && state.Config.Priorities != nil {
 		return operations, nil
 	}
 	if !operationsTouchPriorities(operations) {

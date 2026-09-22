@@ -181,7 +181,7 @@ func TestDecodeOperationPackRejectsInvalidOperations(t *testing.T) {
 }
 
 func TestEncodeDocumentRejectsMalformedDurableDocuments(t *testing.T) {
-	validState, err := Apply(nil, createPack(), "WB")
+	validState, err := Apply(nil, createPack())
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}
@@ -236,7 +236,7 @@ func TestEncodeDocumentRejectsMalformedDurableDocuments(t *testing.T) {
 }
 
 func TestDecodeDocumentsRejectMalformedIdentifiersAndCompactionMetadata(t *testing.T) {
-	validState, err := Apply(nil, createPack(), "WB")
+	validState, err := Apply(nil, createPack())
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}

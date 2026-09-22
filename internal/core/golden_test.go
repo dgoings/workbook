@@ -211,7 +211,7 @@ func assertGoldenCheckpoint(t *testing.T, fixture goldenTaskRef) {
 		}
 		parent = &decoded
 	}
-	if err := ValidateCheckpoint(parent, pack, state, goldenProjectKey); err != nil {
+	if err := ValidateCheckpoint(parent, pack, state); err != nil {
 		t.Fatalf("ValidateCheckpoint() error = %v", err)
 	}
 }
@@ -266,14 +266,14 @@ func TestNormalizeTaskNeverRewritesAStatus(t *testing.T) {
 					Labels:   append([]string(nil), labels...),
 					Rank:     "1/1",
 				}
-				normalized, err := NormalizeTask("WB", task)
+				normalized, err := NormalizeTask(task)
 				if err != nil {
 					continue
 				}
 				if normalized.Status != status {
 					t.Fatalf("NormalizeTask(%q) status = %q, want it unchanged", status, normalized.Status)
 				}
-				again, err := NormalizeTask("WB", normalized)
+				again, err := NormalizeTask(normalized)
 				if err != nil {
 					t.Fatalf("NormalizeTask() is not idempotent for status %q: %v", status, err)
 				}
@@ -338,7 +338,7 @@ func TestAStoredStatusOutsideEveryVocabularyStillReads(t *testing.T) {
 	if got := decoded.Task.Status; got != "awaiting-review" {
 		t.Fatalf("decoded status = %q, want it preserved", got)
 	}
-	if err := ValidateCheckpoint(nil, pack, decoded, goldenProjectKey); err != nil {
+	if err := ValidateCheckpoint(nil, pack, decoded); err != nil {
 		t.Fatalf("ValidateCheckpoint() error = %v", err)
 	}
 }

@@ -65,8 +65,29 @@ type Repository struct {
 	// task path.
 	vocabularyLoaded bool
 	vocabulary       core.Vocabulary
+	// keysLoaded and keys memoize the project's task-ID keys on the same terms
+	// as the vocabulary above, and for a sharper reason: the key set is what
+	// every ref listing classifies names against, so a fresh read per listing
+	// would add a Git process to every command that touches more than one task.
+	// It is dropped, not replaced, wherever this process moves the ledger — see
+	// forgetKeySet. keysFounding records which founding key the set was
+	// resolved against, and is part of the memo's key rather than its answer,
+	// for the reason stateConfig.founding is.
+	keysLoaded   bool
+	keysFounding string
+	keys         core.KeySet
+	// keysHead is the ledger tip the memoized set was resolved at, so a
+	// long-lived handle can ask whether the memo is still about the ledger in
+	// front of it. It is not part of the memo's key — a caller of keySet has no
+	// head to offer and must not be made to read one — it is what
+	// ForgetKeySetUnlessAt compares against for a caller that has just read one.
+	keysHead string
 	// stateHead and stateConfig memoize the last checkpoint
-	// LoadVocabularyState decoded, keyed by the commit it came from.
+	// LoadVocabularyState decoded, keyed by the commit it came from and by the
+	// founding key it was decoded for: three of its four sections are a
+	// function of the commit alone, but an absent key section is read as
+	// whichever founding key the caller supplied, so the tip does not identify
+	// that one on its own. See decodedConfig.founding.
 	//
 	// This is a different memo from the one above and cannot replace it: that
 	// one answers "the statuses", this one answers "the whole configuration at

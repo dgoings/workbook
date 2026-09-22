@@ -174,7 +174,7 @@ func section(t *testing.T, guidelines, heading string) string {
 }
 
 func TestRenderGuidelinesPinsTheDefaultVocabularyRendering(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), core.DefaultVocabulary(), core.PriorityVocabulary{})
+	guidelines := RenderGuidelines(testProject(), core.DefaultVocabulary(), core.PriorityVocabulary{}, core.KeySet{})
 
 	if got := section(t, guidelines, "## Statuses"); got != defaultVocabularySections {
 		t.Errorf("statuses section =\n%s\nwant\n%s", got, defaultVocabularySections)
@@ -196,7 +196,7 @@ func TestRenderGuidelinesPinsTheDefaultVocabularyRendering(t *testing.T) {
 // from tags: `blocked` never carried one, so removing it from the default set
 // changed a table row and nothing a reader is told to do.
 func TestRenderGuidelinesPinsTheLegacyVocabularyRendering(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), core.LegacyVocabulary(), core.PriorityVocabulary{})
+	guidelines := RenderGuidelines(testProject(), core.LegacyVocabulary(), core.PriorityVocabulary{}, core.KeySet{})
 
 	if got := section(t, guidelines, "## Statuses"); got != legacyVocabularySections {
 		t.Errorf("statuses section =\n%s\nwant\n%s", got, legacyVocabularySections)
@@ -210,7 +210,7 @@ func TestRenderGuidelinesPinsTheLegacyVocabularyRendering(t *testing.T) {
 	// A caller that configured no vocabulary documents these six statuses,
 	// because that is what such a project is using — not the five this build
 	// would mint a new project with.
-	if unconfigured := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}); unconfigured != guidelines {
+	if unconfigured := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{}); unconfigured != guidelines {
 		t.Errorf("the zero vocabulary renders differently from the pre-ledger one:\n%s", unconfigured)
 	}
 }
@@ -219,7 +219,7 @@ func TestRenderGuidelinesPinsTheLegacyVocabularyRendering(t *testing.T) {
 // its own lifecycle prose. Every value here is one the built-in vocabulary does
 // not contain, so a rendering that fell back to the default fails.
 func TestRenderGuidelinesRendersACustomVocabulary(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), customVocabulary(t), core.PriorityVocabulary{})
+	guidelines := RenderGuidelines(testProject(), customVocabulary(t), core.PriorityVocabulary{}, core.KeySet{})
 
 	for _, want := range []string{
 		"| 1 | `icebox` | Icebox | none |",
@@ -256,7 +256,7 @@ func TestRenderGuidelinesSaysWhenATagIsUnheld(t *testing.T) {
 		t.Fatalf("NewVocabulary() error = %v", err)
 	}
 
-	guidelines := RenderGuidelines(testProject(), vocabulary, core.PriorityVocabulary{})
+	guidelines := RenderGuidelines(testProject(), vocabulary, core.PriorityVocabulary{}, core.KeySet{})
 
 	for _, want := range []string{
 		"No status is tagged `default`, so a new task has nowhere to land.",
@@ -289,7 +289,7 @@ func TestRenderGuidelinesKeepsAHostileLabelInsideItsCell(t *testing.T) {
 		t.Fatalf("NewVocabulary() error = %v", err)
 	}
 
-	guidelines := RenderGuidelines(testProject(), vocabulary, core.PriorityVocabulary{})
+	guidelines := RenderGuidelines(testProject(), vocabulary, core.PriorityVocabulary{}, core.KeySet{})
 
 	if !strings.Contains(guidelines, "| 1 | `todo` | Next \\| Up and more | `default`, `next` |") {
 		t.Fatalf("the label escaped its cell:\n%s", guidelines)
@@ -330,7 +330,7 @@ func TestRenderGuidelinesNeutralizesMarkersAndBackticksInALabel(t *testing.T) {
 		t.Fatalf("NewVocabulary() error = %v", err)
 	}
 
-	guidelines := RenderGuidelines(testProject(), vocabulary, core.PriorityVocabulary{})
+	guidelines := RenderGuidelines(testProject(), vocabulary, core.PriorityVocabulary{}, core.KeySet{})
 
 	if strings.Contains(guidelines, endMarker) {
 		t.Fatalf("the rendered body carries this block's end marker:\n%s", guidelines)
@@ -366,7 +366,7 @@ func TestRenderGuidelinesNeutralizesAnOpenerThatCompletesNoMarkerInALabel(t *tes
 			t.Fatalf("NewVocabulary() error = %v", err)
 		}
 
-		guidelines := RenderGuidelines(testProject(), vocabulary, core.PriorityVocabulary{})
+		guidelines := RenderGuidelines(testProject(), vocabulary, core.PriorityVocabulary{}, core.KeySet{})
 
 		// The rendered body is the block's contents, so it may carry no comment
 		// opener at all: the two the file ends up with are the markers wrapped
@@ -419,7 +419,7 @@ func customVocabulary(t *testing.T) core.Vocabulary {
 func TestRenderGuidelinesStatesEveryCanonicalStatus(t *testing.T) {
 	// Production mutation: hardcoding a status list here instead of deriving it
 	// from core would let generated documentation drift from CLI validation.
-	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{})
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{})
 
 	for _, definition := range core.LegacyVocabulary().Definitions() {
 		if !strings.Contains(guidelines, string(definition.Status)) {
@@ -438,7 +438,7 @@ func TestRenderGuidelinesStatesEveryCanonicalStatus(t *testing.T) {
 // own statuses table. Every value here is one the built-in three does not
 // contain, so a rendering that fell back to the built-in set fails.
 func TestRenderGuidelinesRendersTheProjectsOwnPriorities(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, customPriorities(t))
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, customPriorities(t), core.KeySet{})
 
 	for _, want := range []string{"`critical`", "`normal`"} {
 		if !strings.Contains(guidelines, want) {
@@ -455,7 +455,7 @@ func TestRenderGuidelinesRendersTheProjectsOwnPriorities(t *testing.T) {
 // A project that configured no priorities is using the built-in three, so the
 // zero PriorityVocabulary must render exactly what it always has.
 func TestRenderGuidelinesRendersTheBuiltInPrioritiesForTheZeroValue(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{})
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{})
 
 	for _, want := range []string{"`high`", "`medium`", "`low`"} {
 		if !strings.Contains(guidelines, want) {
@@ -507,7 +507,7 @@ change.
 `
 
 func TestRenderGuidelinesPinsTheBuiltInPrioritiesRendering(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{})
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{})
 
 	if got := section(t, guidelines, "## Priorities"); got != builtInPrioritiesSection {
 		t.Errorf("priorities section =\n%s\nwant\n%s", got, builtInPrioritiesSection)
@@ -515,7 +515,7 @@ func TestRenderGuidelinesPinsTheBuiltInPrioritiesRendering(t *testing.T) {
 }
 
 func TestRenderGuidelinesWarnsAgainstDisplayLabels(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{})
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{})
 
 	if !strings.Contains(guidelines, "in-progress") {
 		t.Errorf("guidelines missing the canonical in-progress value:\n%s", guidelines)
@@ -526,7 +526,7 @@ func TestRenderGuidelinesWarnsAgainstDisplayLabels(t *testing.T) {
 }
 
 func TestRenderGuidelinesIncludesProjectIdentity(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{})
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{})
 
 	for _, want := range []string{"01KY8964C8TQVBKVACB45DYTNY", "WB-"} {
 		if !strings.Contains(guidelines, want) {
@@ -536,7 +536,7 @@ func TestRenderGuidelinesIncludesProjectIdentity(t *testing.T) {
 }
 
 func TestRenderGuidelinesDocumentsExitCodesFromCore(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{})
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{})
 
 	for _, category := range []core.Category{
 		core.CategoryInvocation,
@@ -551,10 +551,54 @@ func TestRenderGuidelinesDocumentsExitCodesFromCore(t *testing.T) {
 }
 
 func TestRenderGuidelinesNamesTheRefreshCommand(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{})
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{})
 
 	if !strings.Contains(guidelines, "workbook docs update") {
 		t.Errorf("guidelines do not name the refresh command:\n%s", guidelines)
+	}
+}
+
+// A caller that read no configuration ledger passes the zero KeySet, and the
+// guidelines document the founding key as current — the same substitution
+// Vocabulary gets from LegacyVocabulary and Priorities gets from its own
+// accessors, so a project with no key section still gets a true "This
+// project" table rather than an empty one.
+func TestRenderGuidelinesSubstitutesTheFoundingKeyForTheZeroKeySet(t *testing.T) {
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{})
+
+	if !strings.Contains(guidelines, "| Task ID prefix | `WB-` |") {
+		t.Errorf("guidelines do not name the founding key as current:\n%s", guidelines)
+	}
+}
+
+// A project that moved its current key is documented by that key, not the
+// founding one — the report a fresh clone gets after joining has to match what
+// `workbook create` actually mints under, which is `keys.Current()` and not
+// `project.Key`.
+func TestRenderGuidelinesNamesTheCurrentKeyAndMentionsTheCreateFlag(t *testing.T) {
+	keys, err := core.NewKeySet(core.KeyDocument{
+		Keys:    []core.KeyDefinition{{Key: "WB"}, {Key: "NEW"}},
+		Current: "NEW",
+	})
+	if err != nil {
+		t.Fatalf("NewKeySet() error = %v", err)
+	}
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}, keys)
+
+	if !strings.Contains(guidelines, "| Task ID prefix | `NEW-` |") {
+		t.Errorf("guidelines do not name the current key NEW:\n%s", guidelines)
+	}
+	if strings.Contains(guidelines, "| Task ID prefix | `WB-` |") {
+		t.Errorf("guidelines still name the founding key WB as current:\n%s", guidelines)
+	}
+	for _, want := range []string{
+		"A task ID is `<KEY>-<ULID>`",
+		"a project may have more than one key",
+		"`workbook create --key <KEY>`",
+	} {
+		if !strings.Contains(strings.ToLower(guidelines), strings.ToLower(want)) {
+			t.Errorf("guidelines = %q, want to contain %q", guidelines, want)
+		}
 	}
 }
 

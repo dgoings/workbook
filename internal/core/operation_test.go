@@ -24,7 +24,7 @@ var (
 func TestApplyCreateUpdateAndTombstone(t *testing.T) {
 	create := createPack()
 
-	state, err := Apply(nil, create, "WB")
+	state, err := Apply(nil, create)
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}
@@ -64,7 +64,7 @@ func TestApplyCreateUpdateAndTombstone(t *testing.T) {
 			{ID: operationID3, Type: OperationSetAdd, Field: "labels", Value: "git"},
 		},
 	}
-	state, err = Apply(&state, update, "WB")
+	state, err = Apply(&state, update)
 	if err != nil {
 		t.Fatalf("Apply(update) error = %v", err)
 	}
@@ -86,7 +86,7 @@ func TestApplyCreateUpdateAndTombstone(t *testing.T) {
 	tombstone.WallTime = updatedAt.Add(time.Minute)
 	tombstone.Operations = []Operation{{ID: "01K0M6B8A4FTT8C39MXXYTW7C7", Type: OperationTaskTombstone}}
 	beforeTombstone := copyTaskData(state.Task)
-	state, err = Apply(&state, tombstone, "WB")
+	state, err = Apply(&state, tombstone)
 	if err != nil {
 		t.Fatalf("Apply(tombstone) error = %v", err)
 	}
@@ -100,13 +100,13 @@ func TestApplyCreateUpdateAndTombstone(t *testing.T) {
 	mutation := tombstone
 	mutation.LogicalClock = 4
 	mutation.Operations = []Operation{{ID: "01K0M6B8A4FTT8C39MXXYTW7C8", Type: OperationFieldSet, Field: "title", Value: "Revive task"}}
-	assertCorrupt(t, applyError(&state, mutation, "WB"))
+	assertCorrupt(t, applyError(&state, mutation))
 
 	restore := tombstone
 	restore.LogicalClock = 4
 	restore.WallTime = tombstone.WallTime.Add(time.Minute)
 	restore.Operations = []Operation{{ID: "01K0M6B8A4FTT8C39MXXYTW7C9", Type: OperationTaskRestore}}
-	state, err = Apply(&state, restore, "WB")
+	state, err = Apply(&state, restore)
 	if err != nil {
 		t.Fatalf("Apply(restore) error = %v", err)
 	}
@@ -118,24 +118,24 @@ func TestApplyCreateUpdateAndTombstone(t *testing.T) {
 }
 
 func TestApplyRejectsRestoreForActiveTaskAndPayloadBearingRestore(t *testing.T) {
-	created, err := Apply(nil, createPack(), "WB")
+	created, err := Apply(nil, createPack())
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}
 
 	restore := updatePack(2)
 	restore.Operations = []Operation{{ID: operationID2, Type: OperationTaskRestore}}
-	assertCorrupt(t, applyError(&created, restore, "WB"))
+	assertCorrupt(t, applyError(&created, restore))
 
 	tombstone := updatePack(2)
 	tombstone.Operations = []Operation{{ID: operationID2, Type: OperationTaskTombstone}}
-	deleted, err := Apply(&created, tombstone, "WB")
+	deleted, err := Apply(&created, tombstone)
 	if err != nil {
 		t.Fatalf("Apply(tombstone) error = %v", err)
 	}
 	restore = updatePack(3)
 	restore.Operations = []Operation{{ID: operationID3, Type: OperationTaskRestore, Field: "title", Value: "must be ignored"}}
-	assertCorrupt(t, applyError(&deleted, restore, "WB"))
+	assertCorrupt(t, applyError(&deleted, restore))
 }
 
 // A pack against a tombstone may carry ordinary operations after its restore,
@@ -143,13 +143,13 @@ func TestApplyRejectsRestoreForActiveTaskAndPayloadBearingRestore(t *testing.T) 
 // The restore has to come first: everything after it applies to a task that is
 // live again, and everything before it would be an edit to a tombstone.
 func TestApplyAcceptsARestorePackThatCarriesMoreThanTheRestore(t *testing.T) {
-	created, err := Apply(nil, createPack(), "WB")
+	created, err := Apply(nil, createPack())
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}
 	tombstone := updatePack(2)
 	tombstone.Operations = []Operation{{ID: operationID2, Type: OperationTaskTombstone}}
-	deleted, err := Apply(&created, tombstone, "WB")
+	deleted, err := Apply(&created, tombstone)
 	if err != nil {
 		t.Fatalf("Apply(tombstone) error = %v", err)
 	}
@@ -160,7 +160,7 @@ func TestApplyAcceptsARestorePackThatCarriesMoreThanTheRestore(t *testing.T) {
 		{ID: operationID2, Type: OperationFieldSet, Field: "status", Value: "in-progress"},
 		{ID: operationID3, Type: OperationFieldSet, Field: "rank", Value: "4/1"},
 	}
-	state, err := Apply(&deleted, restore, "WB")
+	state, err := Apply(&deleted, restore)
 	if err != nil {
 		t.Fatalf("Apply(restore with a destination) error = %v", err)
 	}
@@ -209,7 +209,7 @@ func TestApplyAcceptsARestorePackThatCarriesMoreThanTheRestore(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			pack := updatePack(3)
 			pack.Operations = test.operations
-			err := applyError(&deleted, pack, "WB")
+			err := applyError(&deleted, pack)
 			assertCorrupt(t, err)
 			if got := err.Error(); got != test.want {
 				t.Fatalf("Apply(%s) error = %q, want %q", name, got, test.want)
@@ -227,13 +227,13 @@ func TestApplyAcceptsARestorePackThatCarriesMoreThanTheRestore(t *testing.T) {
 // to every later reader. A restore and a delete are separate intents and belong
 // to separate packs.
 func TestApplyRejectsARestorePackThatTombstonesAgain(t *testing.T) {
-	created, err := Apply(nil, createPack(), "WB")
+	created, err := Apply(nil, createPack())
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}
 	tombstone := updatePack(2)
 	tombstone.Operations = []Operation{{ID: operationID2, Type: OperationTaskTombstone}}
-	deleted, err := Apply(&created, tombstone, "WB")
+	deleted, err := Apply(&created, tombstone)
 	if err != nil {
 		t.Fatalf("Apply(tombstone) error = %v", err)
 	}
@@ -245,7 +245,7 @@ func TestApplyRejectsARestorePackThatTombstonesAgain(t *testing.T) {
 		{ID: operationID1, Type: OperationTaskRestore},
 		{ID: operationID3, Type: OperationTaskTombstone},
 	}
-	state, err := Apply(&deleted, retombstoned, "WB")
+	state, err := Apply(&deleted, retombstoned)
 	if err == nil {
 		t.Fatalf("Apply(restore then tombstone) = %#v, want a refusal", state.Task)
 	}
@@ -255,7 +255,7 @@ func TestApplyRejectsARestorePackThatTombstonesAgain(t *testing.T) {
 	}
 	// The state a fold would have produced is the reason this matters: it is a
 	// tombstone, and ValidateCheckpoint would have called it canonical.
-	if err := ValidateCheckpoint(&deleted, retombstoned, deleted, "WB"); err == nil {
+	if err := ValidateCheckpoint(&deleted, retombstoned, deleted); err == nil {
 		t.Fatal("ValidateCheckpoint accepted a restore-then-tombstone pack")
 	}
 
@@ -266,7 +266,7 @@ func TestApplyRejectsARestorePackThatTombstonesAgain(t *testing.T) {
 		{ID: operationID3, Type: OperationTaskTombstone},
 		{ID: operationID2, Type: OperationFieldSet, Field: "title", Value: "Deleted again"},
 	}
-	assertCorrupt(t, applyError(&deleted, buried, "WB"))
+	assertCorrupt(t, applyError(&deleted, buried))
 
 	// And the pack this rule must not touch still folds.
 	destination := updatePack(3)
@@ -275,7 +275,7 @@ func TestApplyRejectsARestorePackThatTombstonesAgain(t *testing.T) {
 		{ID: operationID2, Type: OperationFieldSet, Field: "status", Value: "in-progress"},
 		{ID: operationID3, Type: OperationFieldSet, Field: "rank", Value: "4/1"},
 	}
-	restored, err := Apply(&deleted, destination, "WB")
+	restored, err := Apply(&deleted, destination)
 	if err != nil {
 		t.Fatalf("Apply(restore with a destination) error = %v", err)
 	}
@@ -285,7 +285,7 @@ func TestApplyRejectsARestorePackThatTombstonesAgain(t *testing.T) {
 }
 
 func TestApplyRejectsInvalidHistoryAndIdentity(t *testing.T) {
-	created, err := Apply(nil, createPack(), "WB")
+	created, err := Apply(nil, createPack())
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}
@@ -329,14 +329,14 @@ func TestApplyRejectsInvalidHistoryAndIdentity(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := Apply(test.parent, test.pack, "WB")
+			_, err := Apply(test.parent, test.pack)
 			assertCorrupt(t, err)
 		})
 	}
 }
 
 func TestApplyValidatesOperationFieldsAndValues(t *testing.T) {
-	created, err := Apply(nil, createPack(), "WB")
+	created, err := Apply(nil, createPack())
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}
@@ -369,14 +369,14 @@ func TestApplyValidatesOperationFieldsAndValues(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			pack := updatePack(2)
 			pack.Operations = []Operation{test.op}
-			_, err := Apply(&created, pack, "WB")
+			_, err := Apply(&created, pack)
 			assertCorrupt(t, err)
 		})
 	}
 }
 
 func TestApplyFieldSetRequiresCanonicalRationalRank(t *testing.T) {
-	created, err := Apply(nil, createPack(), "WB")
+	created, err := Apply(nil, createPack())
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}
@@ -384,13 +384,13 @@ func TestApplyFieldSetRequiresCanonicalRationalRank(t *testing.T) {
 	t.Run("rejects noncanonical rank", func(t *testing.T) {
 		update := updatePack(2)
 		update.Operations = []Operation{{ID: operationID2, Type: OperationFieldSet, Field: "rank", Value: "2/4"}}
-		assertCorrupt(t, applyError(&created, update, "WB"))
+		assertCorrupt(t, applyError(&created, update))
 	})
 
 	t.Run("accepts canonical rank", func(t *testing.T) {
 		update := updatePack(2)
 		update.Operations = []Operation{{ID: operationID2, Type: OperationFieldSet, Field: "rank", Value: "1/2"}}
-		state, err := Apply(&created, update, "WB")
+		state, err := Apply(&created, update)
 		if err != nil {
 			t.Fatalf("Apply(field.set rank) error = %v", err)
 		}
@@ -410,7 +410,7 @@ func TestValidateFieldSetOperationRequiresCanonicalRationalRank(t *testing.T) {
 }
 
 func TestApplySetOperationsAreIdempotent(t *testing.T) {
-	created, err := Apply(nil, createPack(), "WB")
+	created, err := Apply(nil, createPack())
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}
@@ -420,7 +420,7 @@ func TestApplySetOperationsAreIdempotent(t *testing.T) {
 		{ID: operationID2, Type: OperationSetAdd, Field: "labels", Value: "git"},
 		{ID: operationID3, Type: OperationSetAdd, Field: "labels", Value: "git"},
 	}
-	state, err := Apply(&created, add, "WB")
+	state, err := Apply(&created, add)
 	if err != nil {
 		t.Fatalf("Apply(repeated add) error = %v", err)
 	}
@@ -430,7 +430,7 @@ func TestApplySetOperationsAreIdempotent(t *testing.T) {
 
 	remove := updatePack(3)
 	remove.Operations = []Operation{{ID: "01K0M6B8A4FTT8C39MXXYTW7C7", Type: OperationSetRemove, Field: "labels", Value: "missing"}}
-	state, err = Apply(&state, remove, "WB")
+	state, err = Apply(&state, remove)
 	if err != nil {
 		t.Fatalf("Apply(missing remove) error = %v", err)
 	}
@@ -440,7 +440,7 @@ func TestApplySetOperationsAreIdempotent(t *testing.T) {
 }
 
 func TestApplyRejectsMutationAfterTombstoneInTheSamePack(t *testing.T) {
-	created, err := Apply(nil, createPack(), "WB")
+	created, err := Apply(nil, createPack())
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}
@@ -450,11 +450,11 @@ func TestApplyRejectsMutationAfterTombstoneInTheSamePack(t *testing.T) {
 		{ID: operationID3, Type: OperationFieldSet, Field: "title", Value: "Revive task"},
 	}
 
-	assertCorrupt(t, applyError(&created, pack, "WB"))
+	assertCorrupt(t, applyError(&created, pack))
 }
 
 func TestApplySupportsDocumentedFieldsAndSets(t *testing.T) {
-	created, err := Apply(nil, createPack(), "WB")
+	created, err := Apply(nil, createPack())
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}
@@ -469,7 +469,7 @@ func TestApplySupportsDocumentedFieldsAndSets(t *testing.T) {
 		{ID: "01K0M6B8A4FTT8C39MXXYTW7CA", Type: OperationSetAdd, Field: "labels", Value: "git"},
 		{ID: "01K0M6B8A4FTT8C39MXXYTW7CB", Type: OperationSetAdd, Field: "dependencies", Value: "WB-01K0M6B8A4FTT8C39MXXYTW7CC"},
 	}
-	state, err := Apply(&created, update, "WB")
+	state, err := Apply(&created, update)
 	if err != nil {
 		t.Fatalf("Apply(supported operations) error = %v", err)
 	}
@@ -498,7 +498,7 @@ func TestApplyRejectsUnknownPackFormatsAndVersions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			pack := createPack()
 			mutate(&pack)
-			assertCorrupt(t, applyError(nil, pack, "WB"))
+			assertCorrupt(t, applyError(nil, pack))
 		})
 	}
 }
@@ -530,11 +530,11 @@ func TestApplyRejectsMalformedDurableIdentifiersAndDuplicateOperations(t *testin
 		t.Run(name, func(t *testing.T) {
 			pack := createPack()
 			mutate(&pack)
-			assertCorrupt(t, applyError(nil, pack, "WB"))
+			assertCorrupt(t, applyError(nil, pack))
 		})
 	}
 
-	parent, err := Apply(nil, createPack(), "WB")
+	parent, err := Apply(nil, createPack())
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}
@@ -542,29 +542,29 @@ func TestApplyRejectsMalformedDurableIdentifiersAndDuplicateOperations(t *testin
 	duplicate.Operations = append(duplicate.Operations, Operation{
 		ID: operationID2, Type: OperationFieldSet, Field: "priority", Value: "high",
 	})
-	assertCorrupt(t, applyError(&parent, duplicate, "WB"))
+	assertCorrupt(t, applyError(&parent, duplicate))
 }
 
 func TestApplyRejectsUnsupportedCompactionMetadata(t *testing.T) {
-	parent, err := Apply(nil, createPack(), "WB")
+	parent, err := Apply(nil, createPack())
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}
 	compactedFrom := "0123456789abcdef"
 	parent.History.CompactedFrom = &compactedFrom
 
-	assertCorrupt(t, applyError(&parent, updatePack(2), "WB"))
+	assertCorrupt(t, applyError(&parent, updatePack(2)))
 }
 
 func TestValidateCheckpointRejectsByteDifferentState(t *testing.T) {
 	pack := createPack()
-	stored, err := Apply(nil, pack, "WB")
+	stored, err := Apply(nil, pack)
 	if err != nil {
 		t.Fatalf("Apply(create) error = %v", err)
 	}
 	stored.Task.Title = "Different"
 
-	assertCorrupt(t, ValidateCheckpoint(nil, pack, stored, "WB"))
+	assertCorrupt(t, ValidateCheckpoint(nil, pack, stored))
 }
 
 func createPack() OperationPack {
@@ -603,8 +603,8 @@ func updatePack(clock uint64) OperationPack {
 	}
 }
 
-func applyError(parent *StateDocument, pack OperationPack, projectKey string) error {
-	_, err := Apply(parent, pack, projectKey)
+func applyError(parent *StateDocument, pack OperationPack) error {
+	_, err := Apply(parent, pack)
 	return err
 }
 

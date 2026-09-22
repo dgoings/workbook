@@ -1,0 +1,950 @@
+package cli
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/dgoings/workbook/internal/agentdocs"
+	"github.com/dgoings/workbook/internal/core"
+)
+
+// The decoded shapes are declared here rather than reused from production, for
+// the reason the status suite declares its own: a change to an envelope member
+// has to be made twice, once where it is produced and once where a caller reads
+// it, which is the whole value of a machine interface's test.
+type keyChangeDocument struct {
+	Operation   string `json:"operation"`
+	Key         string `json:"key"`
+	From        string `json:"from"`
+	Reactivated bool   `json:"reactivated"`
+	State       string `json:"state"`
+}
+
+type keySetDocument struct {
+	Head    string `json:"head"`
+	Seeded  bool   `json:"seeded"`
+	Current string `json:"current"`
+	Keys    []struct {
+		Key     string `json:"key"`
+		State   string `json:"state"`
+		Current bool   `json:"current"`
+		Tasks   *int   `json:"tasks"`
+	} `json:"keys"`
+}
+
+type keyMutationDocument struct {
+	Change  keyChangeDocument `json:"change"`
+	Keys    keySetDocument    `json:"keys"`
+	Inverse inverseDocument   `json:"inverse"`
+	Docs    *docsDocument     `json:"docs"`
+}
+
+type keyLogDocument struct {
+	Showing int `json:"showing"`
+	Total   int `json:"total"`
+	Entries []struct {
+		Commit      string           `json:"commit"`
+		OperationID string           `json:"operationId"`
+		WallTime    time.Time        `json:"wallTime"`
+		Actor       string           `json:"actor"`
+		Operation   string           `json:"operation"`
+		Summary     string           `json:"summary"`
+		Collapsed   int              `json:"collapsed"`
+		Inverse     *inverseDocument `json:"inverse"`
+	} `json:"entries"`
+	Truncated *core.HistoryTruncation `json:"truncated"`
+}
+
+func cliKeyMutation(t *testing.T, repository, command string, args ...string) keyMutationDocument {
+	t.Helper()
+	code, stdout, stderr := run(t, repository, args...)
+	if code != 0 || stderr != "" {
+		t.Fatalf("%v = code %d, stderr %q", args, code, stderr)
+	}
+	var document keyMutationDocument
+	if err := json.Unmarshal(assertJSONResult(t, stdout, command).Data, &document); err != nil {
+		t.Fatalf("decode %s result: %v; output = %s", command, err, stdout)
+	}
+	return document
+}
+
+func cliKeyList(t *testing.T, repository string) keySetDocument {
+	t.Helper()
+	code, stdout, stderr := run(t, repository, "key", "list", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("key list = code %d, stderr %q", code, stderr)
+	}
+	var document keySetDocument
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "key list").Data, &document); err != nil {
+		t.Fatalf("decode key list: %v; output = %s", err, stdout)
+	}
+	return document
+}
+
+func cliKeyLog(t *testing.T, repository string, args ...string) keyLogDocument {
+	t.Helper()
+	code, stdout, stderr := run(t, repository, append(append([]string{"key", "log"}, args...), "--json")...)
+	if code != 0 || stderr != "" {
+		t.Fatalf("key log = code %d, stderr %q", code, stderr)
+	}
+	var document keyLogDocument
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "key log").Data, &document); err != nil {
+		t.Fatalf("decode key log: %v; output = %s", err, stdout)
+	}
+	return document
+}
+
+// keyStates is the project's keys in add order, each with the word `key list`
+// marks it with. Most assertions here are really about this sequence: a key
+// command's whole job is to change it and nothing else.
+func keyStates(t *testing.T, repository string) []string {
+	t.Helper()
+	document := cliKeyList(t, repository)
+	states := make([]string, 0, len(document.Keys))
+	for _, row := range document.Keys {
+		state := row.State
+		if row.Current {
+			state = "current"
+		}
+		states = append(states, row.Key+" "+state)
+	}
+	return states
+}
+
+// cliCreateTaskWithKey mints a task under a named key, mirroring cliCreateTask
+// for the one flag that suite has no reason to pass.
+func cliCreateTaskWithKey(t *testing.T, repository, title, key string) core.Task {
+	t.Helper()
+	code, stdout, stderr := run(t, repository, "create", title, "--key", key, "--no-sync", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("create --key %s = code %d, stderr %q", key, code, stderr)
+	}
+	var task core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "create").Data, &task); err != nil {
+		t.Fatal(err)
+	}
+	return task
+}
+
+func mustRunKey(t *testing.T, repository string, args ...string) {
+	t.Helper()
+	if code, _, stderr := run(t, repository, args...); code != 0 {
+		t.Fatalf("%v = code %d; stderr = %q", args, code, stderr)
+	}
+}
+
+// A project nobody has given a second key reports exactly the key it was
+// created with, current, and says that nothing is recorded. That flag is the
+// whole difference between "this project chose these keys" and "nobody has
+// chosen anything yet", and a consumer that cannot tell them apart cannot
+// decide whether to offer the setup.
+func TestKeyListReportsTheFoundingKeyAsCurrent(t *testing.T) {
+	repository := initializedRepository(t)
+	cliCreateTask(t, repository, "Alpha")
+	cliCreateTask(t, repository, "Beta")
+
+	document := cliKeyList(t, repository)
+	if document.Current != "WB" {
+		t.Fatalf("current = %q, want WB", document.Current)
+	}
+	if document.Seeded {
+		t.Fatalf("seeded = true, want false for a project that has recorded no key change")
+	}
+	if len(document.Keys) != 1 {
+		t.Fatalf("keys = %#v, want the founding key alone", document.Keys)
+	}
+	row := document.Keys[0]
+	if row.Key != "WB" || row.State != string(core.KeyStateActive) || !row.Current {
+		t.Fatalf("key = %#v, want WB active and current", row)
+	}
+	if row.Tasks == nil || *row.Tasks != 2 {
+		t.Fatalf("tasks = %v, want both tasks counted under WB", row.Tasks)
+	}
+
+	code, stdout, stderr := run(t, repository, "key", "list")
+	if code != 0 || stderr != "" {
+		t.Fatalf("key list = code %d, stderr %q", code, stderr)
+	}
+	for _, want := range []string{
+		"KEY  STATE    TASKS",
+		"WB   current  2",
+		"No key change is recorded, so this is the key this project was created with.",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("key list text = %q, want %q", stdout, want)
+		}
+	}
+}
+
+// A project that predates the configuration ledger has no ledger at all, which
+// is the state most existing installations are in. Its keys read as the founding
+// key, and its first key change seeds the ledger and records that key beside the
+// new one in the same commit — so the tasks it already has stay its own.
+func TestKeyChangeOnAProjectWithNoLedgerRecordsTheFoundingKey(t *testing.T) {
+	repository := preLedgerRepository(t)
+	existing := cliCreateTask(t, repository, "Minted before any ledger")
+
+	document := cliKeyList(t, repository)
+	if document.Current != "WB" || document.Seeded || document.Head != "" {
+		t.Fatalf("list = %#v, want the founding key alone and no ledger", document)
+	}
+
+	mustRunKey(t, repository, "key", "add", "NEW", "--current", "--no-sync")
+	if got, want := keyStates(t, repository), []string{"WB active", "NEW current"}; !equalStrings(got, want) {
+		t.Fatalf("keys = %v, want %v", got, want)
+	}
+	// The whole point of the backfill: WB is in the recorded set, so the task
+	// minted under it is still this project's.
+	if code, _, stderr := run(t, repository, "show", existing.ID, "--json"); code != 0 {
+		t.Fatalf("show %s = code %d; stderr = %q", existing.ID, code, stderr)
+	}
+}
+
+// `key add` without --current adds a key nothing is minted under yet, and the
+// reverse is the single command that takes it back out. The current key is
+// untouched, which is what makes a project able to prepare a key before it
+// switches to it.
+func TestKeyAddPrintsTheReverseCommandAndMintsUnderTheCurrentKey(t *testing.T) {
+	repository := initializedRepository(t)
+
+	document := cliKeyMutation(t, repository, "key add", "key", "add", "NEW", "--no-sync", "--json")
+	if document.Change.Operation != "add" || document.Change.Key != "NEW" ||
+		document.Change.State != string(core.KeyStateActive) {
+		t.Fatalf("change = %#v, want an add of NEW leaving it active", document.Change)
+	}
+	if document.Change.From != "" || document.Change.Reactivated {
+		t.Fatalf("change = %#v, want nothing moved and nothing reactivated", document.Change)
+	}
+	if document.Keys.Current != "WB" {
+		t.Fatalf("current = %q, want WB: an add that was not asked to move it must not", document.Keys.Current)
+	}
+	if !document.Keys.Seeded || document.Keys.Head == "" {
+		t.Fatalf("keys = %#v, want a recorded set naming the ledger tip", document.Keys)
+	}
+	if got, want := document.Inverse.Command, "workbook key retire NEW"; got != want {
+		t.Fatalf("inverse = %q, want %q", got, want)
+	}
+	// Not exact, and the note says why: retiring NEW stops it minting but does
+	// not take it off the list. A key is never deleted — a task ID minted under
+	// it would lose its name — so nothing this command can be given puts the
+	// project back in the state the add found, and an inverse claiming
+	// otherwise is a claim a reader acts on.
+	if document.Inverse.Exact {
+		t.Fatalf("inverse = %#v, want exact false: a retired NEW is still on this project's list", document.Inverse)
+	}
+	for _, want := range []string{"NEW", "retired key"} {
+		if !strings.Contains(document.Inverse.Note, want) {
+			t.Fatalf("inverse note = %q, want it to mention %q", document.Inverse.Note, want)
+		}
+	}
+	if got, want := keyStates(t, repository), []string{"WB current", "NEW active"}; !equalStrings(got, want) {
+		t.Fatalf("keys = %v, want %v", got, want)
+	}
+
+	// The founding key is still where new tasks are minted, which is the half
+	// of `key add` a caller is most likely to get wrong.
+	task := cliCreateTask(t, repository, "Still WB")
+	if !strings.HasPrefix(task.ID, "WB-") {
+		t.Fatalf("task ID = %q, want a WB- ID", task.ID)
+	}
+}
+
+// `key add NEW --current` is one commit, and its reverse is one command: give
+// the role back. Retiring NEW is deliberately not joined onto it — a reverse
+// command is something a person pastes, and `workbook key retire NEW` is
+// refused while NEW is current, so the note says what the paste leaves behind
+// rather than printing a line that would fail halfway.
+func TestKeyAddCurrentMovesTheCurrentKeyAndReversesInOneLine(t *testing.T) {
+	repository := initializedRepository(t)
+	before := cliCreateTask(t, repository, "Minted under WB")
+	if !strings.HasPrefix(before.ID, "WB-") {
+		t.Fatalf("task ID = %q, want a WB- ID", before.ID)
+	}
+
+	document := cliKeyMutation(t, repository, "key add", "key", "add", "NEW", "--current", "--no-sync", "--json")
+	if document.Change.Operation != "add" || document.Change.Key != "NEW" || document.Change.From != "WB" {
+		t.Fatalf("change = %#v, want an add of NEW taking the role from WB", document.Change)
+	}
+	if got := document.Keys.Current; got != "NEW" {
+		t.Fatalf("current = %q, want NEW", got)
+	}
+	if got, want := document.Inverse.Command, "workbook key current WB"; got != want {
+		t.Fatalf("inverse = %q, want %q", got, want)
+	}
+	if document.Inverse.Exact {
+		t.Fatalf("inverse = %#v, want exact false: giving the role back leaves NEW active", document.Inverse)
+	}
+	if want := "workbook key retire NEW"; !strings.Contains(document.Inverse.Note, want) {
+		t.Fatalf("note = %q, want it to name %q", document.Inverse.Note, want)
+	}
+	if got, want := keyStates(t, repository), []string{"WB active", "NEW current"}; !equalStrings(got, want) {
+		t.Fatalf("keys = %v, want %v", got, want)
+	}
+
+	// The controller's requirement, and the reason Service.Keys is wired in
+	// this package: `create` mints under the key the ledger says is current,
+	// not under the founding key in the project identity.
+	after := cliCreateTask(t, repository, "Minted under NEW")
+	if !strings.HasPrefix(after.ID, "NEW-") {
+		t.Fatalf("task ID = %q, want a NEW- ID", after.ID)
+	}
+	// And the task minted under the old key is still this project's.
+	code, _, stderr := run(t, repository, "show", before.ID, "--json")
+	if code != 0 {
+		t.Fatalf("show %s = code %d; stderr = %q", before.ID, code, stderr)
+	}
+
+	document = cliKeyMutation(t, repository, "key current", "key", "current", "WB", "--no-sync", "--json")
+	if document.Change.Operation != "current" || document.Change.Key != "WB" || document.Change.From != "NEW" {
+		t.Fatalf("change = %#v, want the role moving from NEW back to WB", document.Change)
+	}
+	if got, want := document.Inverse.Command, "workbook key current NEW"; got != want {
+		t.Fatalf("inverse = %q, want %q", got, want)
+	}
+	if !document.Inverse.Exact {
+		t.Fatalf("inverse = %#v, want exact true: moving the role back restores the set", document.Inverse)
+	}
+}
+
+// The fold converges on a key that is already active by doing nothing. A person
+// who typed it is told so instead, and told what to type if what they meant was
+// to mint under it.
+func TestKeyAddRefusesAKeyThisProjectAlreadyHas(t *testing.T) {
+	repository := initializedRepository(t)
+
+	code, _, stderr := run(t, repository, "key", "add", "WB", "--no-sync")
+	if code != 5 {
+		t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stderr, `project key "WB" is already active and already current`) {
+		t.Fatalf("stderr = %q, want the sentence that says the key is already the current one", stderr)
+	}
+
+	mustRunKey(t, repository, "key", "add", "NEW", "--no-sync")
+	code, _, stderr = run(t, repository, "key", "add", "NEW", "--no-sync")
+	if code != 5 {
+		t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+	}
+	for _, want := range []string{
+		`project key "NEW" is already active`,
+		"workbook key current NEW",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr = %q, want %q", stderr, want)
+		}
+	}
+}
+
+// Adding a retired key back is the reactivation, and it keeps the key's place in
+// the order: the order is add order, and a key that has minted tasks was added
+// when it was added.
+func TestKeyAddReactivatesARetiredKey(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunKey(t, repository, "key", "add", "OLD", "--no-sync")
+	mustRunKey(t, repository, "key", "add", "NEW", "--no-sync")
+	mustRunKey(t, repository, "key", "retire", "OLD", "--no-sync")
+	if got, want := keyStates(t, repository),
+		[]string{"WB current", "OLD retired", "NEW active"}; !equalStrings(got, want) {
+		t.Fatalf("keys = %v, want %v", got, want)
+	}
+
+	document := cliKeyMutation(t, repository, "key add", "key", "add", "OLD", "--no-sync", "--json")
+	if !document.Change.Reactivated {
+		t.Fatalf("change = %#v, want it to report a reactivation", document.Change)
+	}
+	if document.Change.State != string(core.KeyStateActive) {
+		t.Fatalf("state = %q, want active", document.Change.State)
+	}
+	if got, want := document.Inverse.Command, "workbook key retire OLD"; got != want {
+		t.Fatalf("inverse = %q, want %q", got, want)
+	}
+	if got, want := keyStates(t, repository),
+		[]string{"WB current", "OLD active", "NEW active"}; !equalStrings(got, want) {
+		t.Fatalf("keys = %v, want OLD back in its own place %v", got, want)
+	}
+
+	code, stdout, stderr := run(t, repository, "key", "add", "OLD2", "--no-sync")
+	if code != 0 || stderr != "" {
+		t.Fatalf("key add = code %d, stderr %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "Key:\tadd\tOLD2") {
+		t.Errorf("key add text = %q, want the change heading", stdout)
+	}
+}
+
+// A retired key cannot become current, and the refusal names the way to the
+// command somebody wanted: bring the key back. That is the remedy for this verb
+// and for no other — `create --key` on a retired key is told the active keys,
+// because minting elsewhere is what a create wants, while somebody who typed
+// `key current OLD` has already said which key they mean and needs the one
+// command that makes it possible.
+//
+// An unknown key names every key instead, including the retired ones, because a
+// typo against a retired key is explained by seeing it listed.
+func TestKeyCurrentRefusesARetiredKeyAndNamesTheWayBack(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunKey(t, repository, "key", "add", "OLD", "--no-sync")
+	mustRunKey(t, repository, "key", "retire", "OLD", "--no-sync")
+
+	code, _, stderr := run(t, repository, "key", "current", "OLD", "--no-sync")
+	if code != 5 {
+		t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+	}
+	if want := `project key "OLD" is retired; bring it back first: workbook key add OLD`; !strings.Contains(stderr, want) {
+		t.Errorf("stderr = %q, want %q", stderr, want)
+	}
+
+	code, _, stderr = run(t, repository, "key", "current", "ZZ", "--no-sync")
+	if code != 5 {
+		t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+	}
+	for _, want := range []string{`no project key "ZZ"`, "its keys are: WB, OLD (retired)"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr = %q, want %q", stderr, want)
+		}
+	}
+
+	code, _, stderr = run(t, repository, "key", "current", "WB", "--no-sync")
+	if code != 5 {
+		t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stderr, `project key "WB" is already this project's current key`) {
+		t.Fatalf("stderr = %q, want the no-op sentence", stderr)
+	}
+}
+
+// The two retirements that would leave a project unable to mint are refused in
+// words, each naming what to do instead. The fold refuses them silently, because
+// by the time a pack reaches it the change has already happened somewhere; the
+// author is the one who can still act.
+//
+// Which of the two answers a project gets is decided by the order planKeyRetire
+// asks in, and the order is load-bearing: the current key is always active, so a
+// project down to one active key would otherwise be told to make another key
+// current when it has no other key to name.
+func TestKeyRetireRefusesTheCurrentKeyAndTheLastActiveKey(t *testing.T) {
+	repository := initializedRepository(t)
+
+	// One key, so it is both the current one and the last active one, and the
+	// answer is the one a person can act on.
+	code, _, stderr := run(t, repository, "key", "retire", "WB", "--no-sync")
+	if code != 5 {
+		t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+	}
+	for _, want := range []string{
+		`project key "WB" is this project's only active key`,
+		"workbook key add <key>",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr = %q, want %q", stderr, want)
+		}
+	}
+	if strings.Contains(stderr, "make another key current first") {
+		t.Errorf("stderr = %q, names a command with no argument this project could give it", stderr)
+	}
+
+	// A second active key makes the current one the only thing in the way, and
+	// the refusal becomes the other one.
+	mustRunKey(t, repository, "key", "add", "NEW", "--no-sync")
+	code, _, stderr = run(t, repository, "key", "retire", "WB", "--no-sync")
+	if code != 5 {
+		t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stderr, "make another key current first") {
+		t.Fatalf("stderr = %q, want the sentence that says what to do", stderr)
+	}
+
+	// And the brief's case: the same refusal for a key `key add --current` has
+	// just made current.
+	mustRunKey(t, repository, "key", "current", "NEW", "--no-sync")
+	code, _, stderr = run(t, repository, "key", "retire", "NEW", "--no-sync")
+	if code != 5 {
+		t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stderr, "make another key current first") {
+		t.Fatalf("stderr = %q, want the current-key refusal for NEW", stderr)
+	}
+
+	document := cliKeyMutation(t, repository, "key retire", "key", "retire", "WB", "--no-sync", "--json")
+	if document.Change.Operation != "retire" || document.Change.State != string(core.KeyStateRetired) {
+		t.Fatalf("change = %#v, want a retirement of WB", document.Change)
+	}
+	if got, want := document.Inverse.Command, "workbook key add WB"; got != want {
+		t.Fatalf("inverse = %q, want %q", got, want)
+	}
+	if !document.Inverse.Exact {
+		t.Fatalf("inverse = %#v, want exact true: adding the key back restores the set", document.Inverse)
+	}
+
+	code, _, stderr = run(t, repository, "key", "retire", "WB", "--no-sync")
+	if code != 5 {
+		t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stderr, `project key "WB" is already retired`) {
+		t.Fatalf("stderr = %q, want the already-retired refusal", stderr)
+	}
+}
+
+// The ceiling is enforced in core at the authoring boundary, where a fold can
+// never fail on a count. The planner asks first so the refusal is a sentence
+// naming the verb that makes room, rather than the boundary's report of a
+// configuration that was never written.
+func TestKeyAddRefusesPastTheKeyCeiling(t *testing.T) {
+	repository := initializedRepository(t)
+	// The founding key counts, and the store back-fills it into the first key
+	// change, so filling the ceiling takes one fewer add than the ceiling.
+	for index := 1; index < core.MaxProjectKeys; index++ {
+		mustRunKey(t, repository, "key", "add", fmt.Sprintf("K%d", index), "--no-sync")
+	}
+	if got := len(cliKeyList(t, repository).Keys); got != core.MaxProjectKeys {
+		t.Fatalf("keys = %d, want the ceiling %d", got, core.MaxProjectKeys)
+	}
+
+	code, _, stderr := run(t, repository, "key", "add", "LAST", "--no-sync")
+	if code != 5 {
+		t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+	}
+	for _, want := range []string{
+		fmt.Sprintf("at most %d", core.MaxProjectKeys),
+		"active",
+		"workbook key retire",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr = %q, want %q", stderr, want)
+		}
+	}
+
+	// A reactivation does not grow the set, so the ceiling does not refuse it.
+	mustRunKey(t, repository, "key", "retire", "K1", "--no-sync")
+	mustRunKey(t, repository, "key", "add", "K1", "--no-sync")
+
+	// And the advice above is true, which is the whole reason the ceiling
+	// counts active keys: retiring one makes room for the add it just refused,
+	// although the project now holds one key more than the ceiling names. A key
+	// is never deleted, so a ceiling on the whole list would be one a project
+	// reaches once and can never come back under.
+	mustRunKey(t, repository, "key", "retire", "K2", "--no-sync")
+	mustRunKey(t, repository, "key", "add", "LAST", "--no-sync")
+	listed := cliKeyList(t, repository)
+	if len(listed.Keys) != core.MaxProjectKeys+1 {
+		t.Fatalf("keys = %d, want %d: a retired key stays on the list", len(listed.Keys), core.MaxProjectKeys+1)
+	}
+	if code, _, stderr := run(t, repository, "key", "add", "AGAIN", "--no-sync"); code != 5 {
+		t.Fatalf("code = %d, want 5 at the ceiling again; stderr = %q", code, stderr)
+	}
+}
+
+// `key log` mirrors `status log`: one entry per commit that changed a key,
+// oldest first, each with the command that reverses it. The founding key the
+// store records ahead of a project's first key change is bookkeeping rather than
+// news, so the entry is about what somebody ran.
+func TestKeyLogListsKeyOperationsWithTheirInverses(t *testing.T) {
+	repository := initializedRepository(t)
+	if empty := cliKeyLog(t, repository); empty.Total != 0 || len(empty.Entries) != 0 {
+		t.Fatalf("log = %#v, want nothing before any key change", empty)
+	}
+	// A status change proves the log reports its own section: this commit is in
+	// the same ledger and is not a key change.
+	mustRunKey(t, repository, "status", "add", "triage", "--no-sync", "--no-docs")
+
+	mustRunKey(t, repository, "key", "add", "NEW", "--current", "--no-sync")
+	mustRunKey(t, repository, "key", "add", "OLD", "--no-sync")
+	mustRunKey(t, repository, "key", "retire", "OLD", "--no-sync")
+
+	document := cliKeyLog(t, repository)
+	if document.Total != 3 || len(document.Entries) != 3 {
+		t.Fatalf("log = %#v, want the three key commits", document)
+	}
+	first := document.Entries[0]
+	if first.Operation != string(core.ConfigKeyAdd) {
+		t.Fatalf("first operation = %q, want %q; the back-filled founding key is not the news",
+			first.Operation, core.ConfigKeyAdd)
+	}
+	if !strings.Contains(first.Summary, "added project key NEW") {
+		t.Fatalf("first summary = %q, want it to name NEW", first.Summary)
+	}
+	if first.Collapsed != 1 {
+		t.Fatalf("first collapsed = %d, want 1: the same commit made NEW current", first.Collapsed)
+	}
+	if first.Inverse == nil || first.Inverse.Command != "workbook key current WB" {
+		t.Fatalf("first inverse = %#v, want the role going back to WB", first.Inverse)
+	}
+	if first.Actor == "" || first.OperationID == "" || first.Commit == "" {
+		t.Fatalf("first entry = %#v, want the ledger's own attribution", first)
+	}
+	if last := document.Entries[2]; last.Inverse == nil ||
+		last.Inverse.Command != "workbook key add OLD" || !last.Inverse.Exact {
+		t.Fatalf("last inverse = %#v, want an exact `key add OLD`", document.Entries[2].Inverse)
+	}
+
+	if limited := cliKeyLog(t, repository, "--limit", "1"); limited.Showing != 1 || limited.Total != 3 {
+		t.Fatalf("limited log = %#v, want 1 of 3", limited)
+	}
+
+	code, stdout, stderr := run(t, repository, "key", "log")
+	if code != 0 || stderr != "" {
+		t.Fatalf("key log = code %d, stderr %q", code, stderr)
+	}
+	for _, want := range []string{
+		"Showing all 3 change(s).",
+		"inverse:\tworkbook key current WB",
+		"inverse:\tworkbook key add OLD",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("key log text = %q, want %q", stdout, want)
+		}
+	}
+}
+
+// `status log` is the whole ledger's log, so a key change appears there too —
+// and it has to describe the change somebody ran. A project's first key change
+// carries the founding key ahead of itself, and that entry used to be named,
+// summarized and counted as the news: `status log` reported "added project key
+// WB (+1 more change(s) in this commit)" with the identifier of an operation
+// nobody authored, while the inverse beside it correctly said `workbook key
+// retire SEC`. One entry described two different changes.
+func TestStatusLogDescribesTheAuthoredKeyOperation(t *testing.T) {
+	repository := initializedRepository(t)
+	// A status change first, so the ledger exists and the key commit is not the
+	// project's first — the backfill rides on the first *key* change, whatever
+	// else the ledger holds.
+	mustRunKey(t, repository, "status", "add", "triage", "--no-sync", "--no-docs")
+	mustRunKey(t, repository, "key", "add", "SEC", "--no-sync")
+
+	logged := cliStatusLog(t, repository)
+	if len(logged.Entries) == 0 {
+		t.Fatalf("status log = %#v, want the key commit", logged)
+	}
+	newest := logged.Entries[len(logged.Entries)-1]
+	if newest.Summary != "added project key SEC" {
+		t.Errorf("summary = %q, want %q: the back-filled founding key is not what was run",
+			newest.Summary, "added project key SEC")
+	}
+	if newest.Operation != string(core.ConfigKeyAdd) {
+		t.Errorf("operation = %q, want %q", newest.Operation, core.ConfigKeyAdd)
+	}
+	if newest.Collapsed != 0 {
+		t.Errorf("collapsed = %d, want 0: one key was added, and the backfill is not a second change",
+			newest.Collapsed)
+	}
+	if newest.Inverse == nil || newest.Inverse.Command != "workbook key retire SEC" {
+		t.Fatalf("inverse = %#v, want `workbook key retire SEC`", newest.Inverse)
+	}
+	// And the operation the entry is named by is the one the key log names for
+	// the same commit, so a caller cross-referencing the two logs finds one
+	// operation rather than two.
+	keyed := cliKeyLog(t, repository)
+	if len(keyed.Entries) != 1 {
+		t.Fatalf("key log = %#v, want the one key commit", keyed)
+	}
+	if newest.OperationID != keyed.Entries[0].OperationID {
+		t.Errorf("status log operationId = %q, key log = %q, want one commit to carry one operation name",
+			newest.OperationID, keyed.Entries[0].OperationID)
+	}
+	if newest.Commit != keyed.Entries[0].Commit {
+		t.Fatalf("the two logs named different commits (%q, %q)", newest.Commit, keyed.Entries[0].Commit)
+	}
+
+	code, stdout, stderr := run(t, repository, "status", "log")
+	if code != 0 || stderr != "" {
+		t.Fatalf("status log = code %d, stderr %q", code, stderr)
+	}
+	for _, want := range []string{"added project key SEC", "inverse:\tworkbook key retire SEC"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("status log text = %q, want %q", stdout, want)
+		}
+	}
+	if strings.Contains(stdout, "added project key WB") {
+		t.Errorf("status log text = %q, want no entry for the back-filled founding key", stdout)
+	}
+}
+
+// Every refusal in this family is a validation error, which is exit 5 and the
+// voice the status and priority refusals use. A malformed key never reaches the
+// ledger, and a missing subcommand names the ones that exist.
+func TestKeyVerbsExitFiveOnAValidationError(t *testing.T) {
+	repository := initializedRepository(t)
+	for _, verb := range []string{"add", "current", "retire"} {
+		code, _, stderr := run(t, repository, "key", verb, "lower", "--no-sync")
+		if code != 5 {
+			t.Errorf("key %s lower = code %d, want 5; stderr = %q", verb, code, stderr)
+		}
+		if !strings.Contains(stderr, "project key") {
+			t.Errorf("key %s lower stderr = %q, want the key grammar refusal", verb, stderr)
+		}
+	}
+
+	code, _, stderr := run(t, repository, "key")
+	if code != 2 {
+		t.Fatalf("bare key = code %d, want 2; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stderr, "the subcommands are list, add, current, retire, log") {
+		t.Fatalf("stderr = %q, want the subcommand list", stderr)
+	}
+
+	code, _, stderr = run(t, repository, "key", "WB-01K0M6B8A4FTT8C39MXXYTW7C2")
+	if code != 2 {
+		t.Fatalf("key <task> = code %d, want 2; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stderr, "workbook show WB-01K0M6B8A4FTT8C39MXXYTW7C2") {
+		t.Fatalf("stderr = %q, want the command the caller wanted", stderr)
+	}
+}
+
+// `create --key` mints under the key the flag names rather than the current
+// one, which is the whole point of offering the choice: a caller preparing a
+// second subproject's first task should not have to make that key current
+// first just to mint under it.
+func TestCreateMintsUnderTheKeyTheFlagNames(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunKey(t, repository, "key", "add", "NEW", "--no-sync")
+	if got, want := keyStates(t, repository), []string{"WB current", "NEW active"}; !equalStrings(got, want) {
+		t.Fatalf("keys = %v, want %v", got, want)
+	}
+
+	task := cliCreateTaskWithKey(t, repository, "Under NEW", "NEW")
+	if !strings.HasPrefix(task.ID, "NEW-") {
+		t.Fatalf("task ID = %q, want a NEW- ID", task.ID)
+	}
+
+	// Without the flag, the current key still wins.
+	other := cliCreateTask(t, repository, "Under WB")
+	if !strings.HasPrefix(other.ID, "WB-") {
+		t.Fatalf("task ID = %q, want a WB- ID", other.ID)
+	}
+}
+
+// A retired key mints nothing new: its tasks are still this project's, but
+// `create --key` on it is refused, naming the keys that are still active —
+// the retired one is not among them, which is the whole difference between
+// retiring a key and deleting it.
+func TestCreateRefusesARetiredKeyAndNamesTheActiveOnes(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunKey(t, repository, "key", "add", "NEW", "--current", "--no-sync")
+	mustRunKey(t, repository, "key", "retire", "WB", "--no-sync")
+
+	code, stdout, stderr := run(t, repository, "create", "Under WB", "--key", "WB", "--no-sync", "--json")
+	if code != 5 {
+		t.Fatalf("create --key WB = code %d, want 5; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("create --key WB stdout = %q, want nothing minted", stdout)
+	}
+	assertJSONError(t, stderr, core.CategoryValidation,
+		`project key "WB" is retired, so no new task is minted under it; the active keys are: NEW`)
+}
+
+// A key this project has never heard of is refused the same way, naming every
+// key it does have so the caller can tell a typo from a teammate's key this
+// checkout has not fetched yet.
+func TestCreateRefusesAnUnknownKey(t *testing.T) {
+	repository := initializedRepository(t)
+
+	code, stdout, stderr := run(t, repository, "create", "Under ZZ", "--key", "ZZ", "--no-sync", "--json")
+	if code != 5 {
+		t.Fatalf("create --key ZZ = code %d, want 5; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("create --key ZZ stdout = %q, want nothing minted", stdout)
+	}
+	assertJSONError(t, stderr, core.CategoryValidation,
+		`no project key "ZZ" in this project; its active keys are: WB`)
+}
+
+// `list --key` on a retired key still answers: its tasks did not stop
+// existing when the key stopped minting new ones, and a filter that refused a
+// retired key would make a project's own history unreadable by the key it was
+// recorded under.
+func TestListFiltersByKeyIncludingARetiredOne(t *testing.T) {
+	repository := initializedRepository(t)
+	underWB := cliCreateTask(t, repository, "Under WB")
+	mustRunKey(t, repository, "key", "add", "NEW", "--current", "--no-sync")
+	underNew := cliCreateTask(t, repository, "Under NEW")
+	mustRunKey(t, repository, "key", "retire", "WB", "--no-sync")
+
+	code, stdout, stderr := run(t, repository, "list", "--key", "WB", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("list --key WB = code %d, stderr %q", code, stderr)
+	}
+	var listed []core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "list").Data, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != underWB.ID {
+		t.Fatalf("list --key WB = %#v, want the one task minted under the now-retired WB", listed)
+	}
+
+	code, stdout, stderr = run(t, repository, "list", "--key", "NEW", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("list --key NEW = code %d, stderr %q", code, stderr)
+	}
+	listed = nil
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "list").Data, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != underNew.ID {
+		t.Fatalf("list --key NEW = %#v, want the one task minted under NEW", listed)
+	}
+}
+
+// A key typed in lowercase is the key. Keys are uppercase by grammar, and a
+// shell history full of lowercase task IDs is how somebody arrives at `--key
+// api` — so the two flags that name an existing key uppercase what they were
+// given rather than refusing a name whose only fault is its case. The refusal
+// that is left is the honest one: no such key.
+func TestKeyFiltersAcceptALowercaseKey(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunKey(t, repository, "key", "add", "API", "--no-sync")
+	under := cliCreateTaskWithKey(t, repository, "Under API", "api")
+	if !strings.HasPrefix(under.ID, "API-") {
+		t.Fatalf("task ID = %q, want a task minted under API", under.ID)
+	}
+
+	code, stdout, stderr := run(t, repository, "list", "--key", "api", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("list --key api = code %d, stderr %q", code, stderr)
+	}
+	var listed []core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "list").Data, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != under.ID {
+		t.Fatalf("list --key api = %#v, want the one task under API", listed)
+	}
+
+	// And a lowercase name for a key that does not exist is still refused, by
+	// the key it names rather than by its case.
+	code, _, stderr = run(t, repository, "list", "--key", "zz", "--json")
+	if code != 5 {
+		t.Fatalf("list --key zz = code %d, want 5; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stderr, `no project key \"ZZ\"`) {
+		t.Fatalf("stderr = %q, want the refusal to name the key it looked for", stderr)
+	}
+}
+
+// An unknown key filter is refused rather than answered with an empty list,
+// the same way an unknown status filter is: an empty table cannot be told
+// apart from "no such key" any other way.
+func TestListRefusesAnUnknownKeyNamingTheKnownOnes(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunKey(t, repository, "key", "add", "NEW", "--no-sync")
+
+	code, stdout, stderr := run(t, repository, "list", "--key", "ZZ", "--json")
+	if code != 5 {
+		t.Fatalf("list --key ZZ = code %d, want 5; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("list --key ZZ stdout = %q, want nothing listed", stdout)
+	}
+	assertJSONError(t, stderr, core.CategoryValidation,
+		`no project key "ZZ" in this project; its keys are: WB, NEW; fetch if a teammate added it`)
+}
+
+// The generated guidelines name the current key in their "Task ID prefix"
+// row, so `key current` invalidates them exactly as a status or priority
+// change does: `docs status` has to call the file stale until it is
+// regenerated, and current once it is. `--no-docs` is the same escape hatch
+// `status add`/`priority add` already use for the same decision.
+func TestKeyCurrentRegeneratesTheGuidelinesAndNoDocsSkipsIt(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunKey(t, repository, "key", "add", "NEW", "--no-sync")
+
+	// The JSON envelope carries the same docs member a status or priority
+	// mutation's does (status_test.go's TestStatusChangesRegenerateTheGuidelines
+	// pins the shape), so a caller that already reads one does not need a
+	// second parser for the other.
+	document := cliKeyMutation(t, repository, "key current", "key", "current", "NEW", "--no-sync", "--json")
+	if document.Docs == nil || len(document.Docs.Artifacts) != 1 {
+		t.Fatalf("key current docs = %#v, want the guidelines alone", document.Docs)
+	}
+	if artifact := document.Docs.Artifacts[0]; artifact.Path != agentdocs.GuidelinesPath || !artifact.Written {
+		t.Fatalf("key current docs artifact = %#v, want %s rewritten", artifact, agentdocs.GuidelinesPath)
+	}
+
+	guidelines := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	if !strings.Contains(guidelines, "| Task ID prefix | `NEW-` |") {
+		t.Fatalf("key current did not regenerate the guidelines with the new current key:\n%s", guidelines)
+	}
+	code, stdout, stderr := run(t, repository, "docs", "status")
+	if code != 0 {
+		t.Fatalf("docs status = code %d; stderr = %q", code, stderr)
+	}
+	if strings.Contains(stdout, string(agentdocs.StateStale)) {
+		t.Fatalf("docs status after key current = %q, want the guidelines current", stdout)
+	}
+
+	// The text surface reports the file it rewrote, the same way `status add`
+	// and `setup` do.
+	code, stdout, stderr = run(t, repository, "key", "current", "WB", "--no-sync")
+	if code != 0 {
+		t.Fatalf("key current WB = code %d; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "\tdocs:\t"+agentdocs.GuidelinesPath+"\twritten") {
+		t.Errorf("key current text = %q, want the regenerated guidelines line", stdout)
+	}
+
+	// Move it again with --no-docs: the file is left describing the key that
+	// just stopped being current, and docs status has to say so.
+	code, stdout, stderr = run(t, repository, "key", "current", "NEW", "--no-sync", "--no-docs")
+	if code != 0 {
+		t.Fatalf("key current --no-docs = code %d; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "\tdocs:\tskipped") {
+		t.Errorf("key current --no-docs text = %q, want the skipped line", stdout)
+	}
+
+	stillWB := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	if !strings.Contains(stillWB, "| Task ID prefix | `WB-` |") {
+		t.Fatalf("--no-docs regenerated the guidelines anyway:\n%s", stillWB)
+	}
+	code, stdout, stderr = run(t, repository, "docs", "status")
+	if code != 0 {
+		t.Fatalf("docs status = code %d; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, string(agentdocs.StateStale)) {
+		t.Fatalf("docs status after key current --no-docs = %q, want the guidelines reported stale", stdout)
+	}
+}
+
+// A status or priority mutation regenerates the guidelines against the key
+// set the session already holds, not the founding key — a project that moved
+// its current key must see that key in the file a status change rewrites,
+// the same way it sees the statuses and priorities that change touched.
+func TestStatusChangeWritesTheGuidelinesUnderTheMovedKey(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunKey(t, repository, "key", "add", "NEW", "--current", "--no-sync")
+
+	code, _, stderr := run(t, repository, "status", "add", "triage", "--no-sync")
+	if code != 0 {
+		t.Fatalf("status add = code %d; stderr = %q", code, stderr)
+	}
+
+	guidelines := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	if !strings.Contains(guidelines, "| Task ID prefix | `NEW-` |") {
+		t.Fatalf("status add did not carry the project's moved key into the guidelines:\n%s", guidelines)
+	}
+	if strings.Contains(guidelines, "| Task ID prefix | `WB-` |") {
+		t.Fatalf("status add wrote the founding key instead of the current one:\n%s", guidelines)
+	}
+}
+
+func TestKeyHelpDocumentsTheFamily(t *testing.T) {
+	repository := initializedRepository(t)
+	code, stdout, stderr := run(t, repository, "help", "key")
+	if code != 0 || stderr != "" {
+		t.Fatalf("help key = code %d, stderr %q", code, stderr)
+	}
+	for _, want := range []string{
+		"workbook key <command> [options]",
+		"list", "add", "current", "retire", "log",
+		"A retired key is never deleted",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("help key = %q, want %q", stdout, want)
+		}
+	}
+}

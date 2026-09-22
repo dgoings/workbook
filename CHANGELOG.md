@@ -23,11 +23,28 @@ version was cut.
 
 ## Unreleased
 
-Priorities become a per-project vocabulary, the way statuses already are, and
-`workbook setup` stops assuming a project key. Three of the changes below
-affect scripts; all three are described under Changed.
+Priorities become a per-project vocabulary, the way statuses already are, a
+project may have more than one task-ID key, and `workbook setup` stops assuming
+a project key. Three of the changes below affect scripts; all three are
+described under Changed.
 
 ### Added
+- **A project may have more than one task-ID key.** `workbook key` gains
+  `list`, `add`, `current`, `retire` and `log`; `workbook create --key` mints
+  under another active key and `workbook list --key` shows one key's tasks.
+  Keys are project configuration, recorded in the same synchronized history as
+  the statuses, and the web board's configuration page administers them beside
+  the statuses and the priorities, with the new-task form offering the key to
+  mint under once there is more than one. Existing task IDs never change, a
+  retired key's tasks stay this project's, and nothing renames or deletes a
+  key. A ref on `origin` under a key this project does not have is reported as
+  another project's rather than as junk to delete, and a fetched ref whose key
+  this project has but whose documents name another project is reported the
+  same way instead of failing the synchronization, so adding a key by mistake
+  is undone by retiring it. A project that adds a key records a configuration
+  a Workbook older than this release cannot fold: it reads the ledger as newer
+  than it can read and sees tasks under the new key as another project's refs,
+  so everyone on the team upgrades together.
 - **A project defines its own priorities.** `high`, `medium` and `low` stop
   being the only ones there are: `workbook priority` gains `list`, `add`,
   `rename`, `label`, `move`, `tag`, `delete`, `color` and `log`, the same verbs

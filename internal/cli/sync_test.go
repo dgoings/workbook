@@ -226,7 +226,14 @@ func TestRunSyncToleratesAndReportsUnrecognizedRemoteTaskRef(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("poisoned fetch code = %d, want 0; stderr = %q", code, stderr)
 	}
-	assertCLIIgnoredRefs(t, decodeSyncResult(t, stdout, "fetch"), wantIgnored)
+	fetched := decodeSyncResult(t, stdout, "fetch")
+	assertCLIIgnoredRefs(t, fetched, wantIgnored)
+	// And the envelope offers no key to adopt either name under. A ref under a
+	// key this project does not have is a ref from another project identity,
+	// whose documents the tip check refuses whatever this project's keys say,
+	// so a member naming a key to add would have described a remedy that is
+	// not one.
+	assertCLIOffersNoAdoption(t, stdout)
 
 	code, stdout, stderr = run(t, second, "push", "--json")
 	if code != 0 || stderr != "" {
@@ -251,9 +258,16 @@ func TestRunSyncToleratesAndReportsUnrecognizedRemoteTaskRef(t *testing.T) {
 	// verdict: the deletion command below names a placeholder, and the only
 	// thing telling the reader which of these two refs it may be filled with is
 	// the verdict on the ref's line.
+	//
+	// The foreign ref's whole line is asserted, because two things have to
+	// reach a person there at once: the verdict that keeps the deletion command
+	// away from it, and the refusal's own sentence naming the key this project
+	// does not have.
 	for _, want := range []string{
 		"Ignored:\trefs/workbook/tasks/EVIL\t" + ignoredRefRemovable + "\t",
-		"Ignored:\t" + foreignRef + "\t" + ignoredRefPlausible + "\t",
+		"Ignored:\t" + foreignRef + "\t" + ignoredRefPlausible +
+			"\ttask ID \"OPS-01K0M6B8A4FTT8C39MXXYTW7D9\" carries project key \"OPS\", " +
+			"which this project does not have",
 		removalAdvice,
 		keepWarning,
 	} {
@@ -261,6 +275,7 @@ func TestRunSyncToleratesAndReportsUnrecognizedRemoteTaskRef(t *testing.T) {
 			t.Fatalf("human sync stdout = %q, want it to contain %q", stdout, want)
 		}
 	}
+	assertCLIOffersNoAdoption(t, stdout)
 
 	cliGit(t, second, "push", "origin", "--delete", "refs/workbook/tasks/EVIL", foreignRef)
 	code, stdout, stderr = run(t, second, "sync", "--json")
@@ -285,6 +300,20 @@ func assertCLIIgnoredRefs(t *testing.T, result gitstore.SyncResult, want map[str
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ignored refs = %#v, want %#v", got, want)
+	}
+}
+
+// assertCLIOffersNoAdoption requires that no ignored-ref report — envelope or
+// human line — names a `workbook key add` as the answer to a ref it skipped.
+// It is asserted over the whole output rather than over one member, because the
+// point is that no surface says it.
+func assertCLIOffersNoAdoption(t *testing.T, output string) {
+	t.Helper()
+	for _, absent := range []string{"workbook key add", "adoptableKey", "would adopt"} {
+		if strings.Contains(output, absent) {
+			t.Fatalf("ignored-ref report = %q, want no %q: adding a key cannot make another project's ref readable",
+				output, absent)
+		}
 	}
 }
 

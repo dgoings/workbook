@@ -223,11 +223,17 @@ type Task struct {
 	NewerWriter bool `json:"newerWriter,omitempty"`
 }
 
-func NormalizeTask(projectKey string, task TaskData) (TaskData, error) {
-	if err := ValidateProjectKey(projectKey); err != nil {
-		return TaskData{}, err
-	}
-
+// NormalizeTask puts a stored task into its canonical form, checking every
+// member for shape and none of them for membership in this project's
+// configuration.
+//
+// It takes no project key for the reason the three comments below give about a
+// status, a priority and a dependency: this runs on every read of every ref,
+// including refs a clone wrote under configuration this one has not fetched, so
+// a value that is well formed but unfamiliar has to be readable. Which statuses
+// and priorities a project defines is asked at the mutation boundary in Service,
+// and which task-ID keys it has is asked by core.KeySet where a name enters.
+func NormalizeTask(task TaskData) (TaskData, error) {
 	task.Title = strings.TrimSpace(task.Title)
 	if task.Title == "" {
 		return TaskData{}, Errorf(CategoryValidation, "task title must not be blank")
@@ -258,7 +264,7 @@ func NormalizeTask(projectKey string, task TaskData) (TaskData, error) {
 	if err != nil {
 		return TaskData{}, err
 	}
-	dependencies, err := normalizeDependencies(projectKey, task.Dependencies)
+	dependencies, err := normalizeDependencies(task.Dependencies)
 	if err != nil {
 		return TaskData{}, err
 	}
@@ -327,14 +333,22 @@ func normalizeLabels(labels []string) ([]string, error) {
 	return sortedKeys(unique), nil
 }
 
-func normalizeDependencies(projectKey string, dependencies []string) ([]string, error) {
+// normalizeDependencies checks stored dependency values for shape, not for
+// membership.
+//
+// It runs on every read of every ref, so a dependency naming a task under a
+// project key this clone has not fetched the ledger for has to be readable: the
+// alternative is a teammate's task that cannot be shown at all. Ownership is
+// asked where a name enters, by core.KeySet, the same division the stored
+// status and the stored priority above are held to.
+func normalizeDependencies(dependencies []string) ([]string, error) {
 	if len(dependencies) == 0 {
 		return nil, nil
 	}
 
 	unique := make(map[string]struct{}, len(dependencies))
 	for _, dependency := range dependencies {
-		if err := ValidateTaskID(projectKey, dependency); err != nil {
+		if err := ValidateTaskIDShape(dependency); err != nil {
 			return nil, err
 		}
 		unique[dependency] = struct{}{}

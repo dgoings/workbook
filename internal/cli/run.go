@@ -102,6 +102,8 @@ func Run(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout
 		err = runStatus(ctx, commandArgs, cwd, stdout, stderr)
 	case "priority":
 		err = runPriority(ctx, commandArgs, cwd, stdout, stderr)
+	case "key":
+		err = runKey(ctx, commandArgs, cwd, stdout, stderr)
 	case "config":
 		err = runConfig(ctx, commandArgs, cwd, stdout, stderr)
 	case "docs":
@@ -281,13 +283,21 @@ func fetchSharingWarnings(
 	if err != nil {
 		return nil
 	}
-	vocabulary, err := repository.LoadVocabulary(ctx)
+	// All three configured sections, from one read, exactly as the service
+	// constructors above open on them. Reading the statuses alone left this
+	// service deciding which task IDs are this project's from the founding key
+	// in the identity record, so on a project that has added a key the warning
+	// beside a replayed task under that key had to be read out of a service
+	// that does not think the task is ours.
+	state, err := repository.LoadVocabularyState(ctx, config)
 	if err != nil {
 		return nil
 	}
 	service := core.Service{
 		Config:     config,
-		Vocabulary: vocabulary,
+		Vocabulary: state.Vocabulary,
+		Priorities: state.Priorities,
+		Keys:       state.Keys,
 		Reader:     store,
 		History:    store,
 		IDs:        core.CryptoULIDSource{},
@@ -511,6 +521,7 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	description := flags.String("description", "", "task description")
 	status := flags.String("status", "", "task status")
 	priority := flags.String("priority", "", "task priority")
+	key := flags.String("key", "", "mint the task under this key")
 	var labels stringListValue
 	flags.Var(&labels, "label", "task label")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
@@ -533,6 +544,7 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io
 			Status:      core.Status(*status),
 			Priority:    core.Priority(*priority),
 			Labels:      labels.values,
+			Key:         namedProjectKey(*key),
 		})
 	})
 	return writeMutationOutcome(stdout, stderr, "create", session, result, err, *jsonMode)
@@ -542,6 +554,7 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	flags := newFlagSet("list")
 	status := flags.String("status", "", "task status")
 	priority := flags.String("priority", "", "task priority")
+	key := flags.String("key", "", "only tasks whose ID carries this key")
 	label := flags.String("label", "", "task label")
 	all := flags.Bool("all", false, "include tombstoned tasks")
 	jsonMode := flags.Bool("json", false, "emit JSON")
@@ -553,7 +566,7 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
-	filter := core.ListFilter{Label: *label, All: *all}
+	filter := core.ListFilter{Label: *label, All: *all, Key: namedProjectKey(*key)}
 	if *status != "" {
 		value := core.Status(*status)
 		filter.Status = &value
@@ -1562,11 +1575,34 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		if err != nil {
 			return webui.VocabularyState{}, err
 		}
+		// And the store's own key memo is brought up to this read, which is the
+		// third part of the same refresh and the one nothing else can do.
+		//
+		// The set that every ref listing and every write boundary classifies
+		// names against is memoized for the life of the opened repository, and
+		// dropped where this process moves the ledger. A teammate's `workbook
+		// key add` moves nothing here, so a board that had answered one task
+		// request went on classifying against the set that request loaded — and
+		// a task under the new key is not another project's ref to this handle,
+		// it is a task ref with an invalid ID. The poll and the page answered
+		// 500, and the board's own create was refused, until serve restarted.
+		//
+		// The reload is explicit because a long-lived handle's is: the fetch
+		// stage does exactly this for exactly this reason, and says so. It costs
+		// no Git process — the head below is this read's own, and a head that
+		// has not moved is a string comparison.
+		repository.ForgetKeySetUnlessAt(state.Head)
 		return webui.VocabularyState{
 			Vocabulary: state.Vocabulary,
 			Head:       state.Head,
 			Display:    state.Display,
 			Priorities: state.Priorities,
+			// And this project's keys from the same read, for the reason every
+			// other section travels in this state: a board open for hours meets
+			// a teammate's `workbook key add`, and a set read once at startup
+			// would go on offering a key chooser the project had moved off and a
+			// default it no longer mints under.
+			Keys: state.Keys,
 		}, nil
 	}
 	current := func(requestContext context.Context) (core.Service, error) {
@@ -1588,6 +1624,13 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		// hour ago. The single-command paths refresh both together and say so;
 		// see taskSession.refreshConfiguration.
 		fresh.Priorities = state.Priorities
+		// And the keys from the same read, for the same reason again. This is
+		// the half that decides where a new task goes: a service left holding
+		// the set this process opened with would mint a task under a key the
+		// project retired at lunchtime, and refuse the key the board had just
+		// offered the reader. The single-command paths refresh all three
+		// together; see taskSession.refreshConfiguration.
+		fresh.Keys = state.Keys
 		return fresh, nil
 	}
 	// The board's status administration goes through the verb family's own
@@ -1619,6 +1662,11 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			return reader
 		},
 	}
+	// The board's key administration goes through the key verb family's own
+	// planners, for the reason its status and priority administration go through
+	// theirs: what the page refuses and what it records are what `workbook key`
+	// refuses and records.
+	keys := &boardKeys{repository: repository, config: service.Config, publisher: publisher}
 	// The board's display settings go through a writer of their own rather than
 	// through the status planners, because a save is not a status change: what it
 	// records is the difference between what it proposes and what the ledger
@@ -1679,6 +1727,25 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		RecolorPriority: func(requestContext context.Context, priority core.Priority, change webui.VocabularyPriorityRecolor) (webui.VocabularyPriorityMutation, error) {
 			return boardPriorityAnswer(priorities.recolor(requestContext, priority, boardPriorityRecolor{
 				Color:        change.Color,
+				ExpectedHead: change.ExpectedHead,
+			}))
+		},
+		// The two key mutations, each adapting the writer's answer to the
+		// board's envelope, the way the priority mutations above do. See
+		// boardKeyAnswer for why the adaptation is written out rather than
+		// replaced by one shared type.
+		AddKey: func(requestContext context.Context, addition webui.VocabularyKeyAddition) (webui.VocabularyKeyMutation, error) {
+			return boardKeyAnswer(keys.add(requestContext, boardKeyAddition{
+				Key:          addition.Key,
+				Current:      addition.Current,
+				ExpectedHead: addition.ExpectedHead,
+			}))
+		},
+		EditKey: func(requestContext context.Context, key string, change webui.VocabularyKeyEdit) (webui.VocabularyKeyMutation, error) {
+			return boardKeyAnswer(keys.edit(requestContext, key, boardKeyEdit{
+				Current:      change.Current,
+				Retire:       change.Retire,
+				Reactivate:   change.Reactivate,
 				ExpectedHead: change.ExpectedHead,
 			}))
 		},
@@ -1927,6 +1994,28 @@ func boardPriorityAnswer(mutation boardPriorityMutation, err error) (webui.Vocab
 		Tasks:    webui.VocabularyPriorityTaskCounts{Affected: mutation.Tasks.Affected},
 		Warnings: mutation.Warnings,
 	}, nil
+}
+
+// boardKeyAnswer carries a key writer's result across to the board's own
+// envelope.
+//
+// Both of these envelopes are the same two facts — the configuration as it now
+// stands, and what could not be done about the generated guidelines — and
+// neither prices anything, because a key change moves no task: a task ID is a
+// permanent name and the key it carries is part of it. So this adapter is two
+// field copies where boardPriorityAnswer is three, and it is written out rather
+// than replaced by one shared type for the reason that one is: webui owns the
+// shape it answers with, and the day these two part company should be a compile
+// error here rather than a silent change to an HTTP contract.
+//
+// It takes the writer's error as its second argument so a caller is one
+// expression rather than four lines of the same check, and so there is no path
+// where a failed change is adapted into an answer.
+func boardKeyAnswer(mutation boardKeyMutation, err error) (webui.VocabularyKeyMutation, error) {
+	if err != nil {
+		return webui.VocabularyKeyMutation{}, err
+	}
+	return webui.VocabularyKeyMutation{State: mutation.State, Warnings: mutation.Warnings}, nil
 }
 
 // boardFallbackNotice says why the board is not at the address the user
@@ -2248,9 +2337,14 @@ func openServiceParts(ctx context.Context, cwd string, stderr io.Writer) (core.S
 		Config:     config,
 		Vocabulary: state.Vocabulary,
 		Priorities: state.Priorities,
-		Reader:     store,
-		Writer:     repository,
-		Blobs:      repository,
+		// And the keys, from the same read, so every surface this constructor
+		// serves — `serve` included — mints under the key the ledger names and
+		// decides which task IDs are this project's from the set rather than
+		// from the founding key in the identity.
+		Keys:   state.Keys,
+		Reader: store,
+		Writer: repository,
+		Blobs:  repository,
 		// The read half of the same store, beside the write half above. The one
 		// long-running caller of this constructor is `serve`, whose attachment
 		// download route serves an attachment's bytes through
@@ -2290,8 +2384,12 @@ func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Se
 		Config:     config,
 		Vocabulary: state.Vocabulary,
 		Priorities: state.Priorities,
-		Reader:     store,
-		History:    store,
+		// And the keys, for the reason the two vocabularies are here: a read
+		// service without them would refuse `list --key` for a key the project
+		// configured, and resolve a prefix against the founding key alone.
+		Keys:    state.Keys,
+		Reader:  store,
+		History: store,
 		// A read service reads attachments too: their bytes are Git objects
 		// rather than projection rows, and serving one is a read like any
 		// other. It is the read half alone — nothing here may write.

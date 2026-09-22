@@ -28,7 +28,11 @@ func (r *Repository) Write(
 	if err := r.validateRepositoryConfig(config); err != nil {
 		return core.Snapshot{}, err
 	}
-	if err := validateWriteIdentity(config, pack, state); err != nil {
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		return core.Snapshot{}, err
+	}
+	if err := validateWriteIdentity(config, keys, pack, state); err != nil {
 		return core.Snapshot{}, err
 	}
 
@@ -41,14 +45,14 @@ func (r *Repository) Write(
 	}
 
 	if parent == nil {
-		if err := core.ValidateCheckpoint(nil, pack, state, config.Key); err != nil {
+		if err := core.ValidateCheckpoint(nil, pack, state); err != nil {
 			return core.Snapshot{}, err
 		}
 	} else {
 		if err := r.validateParentHead(ctx, parent.Head); err != nil {
 			return core.Snapshot{}, err
 		}
-		if err := core.ValidateCheckpoint(&parent.State, pack, state, config.Key); err != nil {
+		if err := core.ValidateCheckpoint(&parent.State, pack, state); err != nil {
 			return core.Snapshot{}, err
 		}
 		current, found, err := r.taskRef(ctx, pack.TaskID)
@@ -65,7 +69,7 @@ func (r *Repository) Write(
 		if err := validateStoredParentIdentity(config, pack, storedParent.State); err != nil {
 			return core.Snapshot{}, err
 		}
-		if err := core.ValidateCheckpoint(&storedParent.State, pack, state, config.Key); err != nil {
+		if err := core.ValidateCheckpoint(&storedParent.State, pack, state); err != nil {
 			return core.Snapshot{}, err
 		}
 	}
@@ -87,20 +91,24 @@ func (r *Repository) WriteValidated(
 	if err := r.validateRepositoryConfig(config); err != nil {
 		return core.Snapshot{}, err
 	}
-	if err := validateWriteIdentity(config, pack, state); err != nil {
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		return core.Snapshot{}, err
+	}
+	if err := validateWriteIdentity(config, keys, pack, state); err != nil {
 		return core.Snapshot{}, err
 	}
 
 	ref := taskRefPrefix + pack.TaskID
 	if parent == nil {
-		if err := core.ValidateCheckpoint(nil, pack, state, config.Key); err != nil {
+		if err := core.ValidateCheckpoint(nil, pack, state); err != nil {
 			return core.Snapshot{}, err
 		}
 	} else {
 		if err := r.validateFullObjectID(parent.Head); err != nil {
 			return core.Snapshot{}, core.Wrap(core.CategoryValidation, "parent head must be a canonical object ID", err)
 		}
-		if err := core.ValidateCheckpoint(&parent.State, pack, state, config.Key); err != nil {
+		if err := core.ValidateCheckpoint(&parent.State, pack, state); err != nil {
 			return core.Snapshot{}, err
 		}
 	}
@@ -298,7 +306,18 @@ func (r *Repository) validateParentHead(ctx context.Context, head string) error 
 	return nil
 }
 
-func validateWriteIdentity(config core.ProjectConfig, pack core.OperationPack, state core.StateDocument) error {
+// validateWriteIdentity settles that the pack this clone is about to author
+// belongs to this project, which is the third boundary ownership is asked at:
+// a ref name read from a namespace, an ID somebody typed, and a pack about to
+// be written. It takes the key set rather than deriving one from config.Key,
+// because a project may mint under any of its active keys and only the ledger
+// knows which those are.
+func validateWriteIdentity(
+	config core.ProjectConfig,
+	keys core.KeySet,
+	pack core.OperationPack,
+	state core.StateDocument,
+) error {
 	if config.Format != projectFormat {
 		return core.Errorf(core.CategoryValidation, "unsupported Workbook configuration format %q", config.Format)
 	}
@@ -311,7 +330,7 @@ func validateWriteIdentity(config core.ProjectConfig, pack core.OperationPack, s
 	if err := core.ValidateProjectKey(config.Key); err != nil {
 		return err
 	}
-	if err := core.ValidateTaskID(config.Key, pack.TaskID); err != nil {
+	if err := keys.RequireOwned(pack.TaskID); err != nil {
 		return core.Wrap(core.CategoryValidation, "operation pack task ID is invalid", err)
 	}
 	if pack.ProjectID != config.ProjectID {

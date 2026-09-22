@@ -4442,6 +4442,17 @@ const boardDefaultStatus = ` + strconv.Quote(string(vocabulary.Default())) + `;
 // the attribute after this harness.
 const boardPriorities = ` + strconv.Quote(pagePriorities(core.PriorityVocabulary{})) + `;
 const boardDefaultPriority = ` + strconv.Quote(string(core.PriorityVocabulary{}.Default())) + `;
+// This project's task-ID keys, as the served page publishes them: every key in
+// add order with its state and whether new tasks are minted under it, and the
+// current key beside them. It is written by the encoder the page itself uses, so
+// the harness cannot drift from the wire format, and it answers for a board
+// built without a key resolver: no keys at all and no current key, which is what
+// such a board renders. That is what every test that is not about keys wants —
+// with no keys published the create form offers no chooser and sends no key,
+// which is the form and the request they have always asserted against. A test
+// that is about keys overrides both attributes after this harness.
+const boardKeys = ` + strconv.Quote(pageKeys(core.KeySet{})) + `;
+const boardCurrentKey = ` + strconv.Quote(core.KeySet{}.Current()) + `;
 const boardVocabularyHead = ` + strconv.Quote(vocabularyHead) + `;
 // The digest of the columns and priorities this page was drawn from, as the
 // served page states it. It is composed by the server's own function over the
@@ -4707,6 +4718,12 @@ boardView.dataset.priorities = boardPriorities;
 boardView.dataset.defaultPriority = boardDefaultPriority;
 boardView.dataset.vocabularyHead = boardVocabularyHead;
 boardView.dataset.vocabularyShape = boardVocabularyShape;
+// The keys and the current one, as the server renders them into the page. The
+// create form's chooser reads them there before anything has been fetched, so a
+// harness that published none is a harness for a project with one key — which
+// is what every test that is not about keys is testing.
+boardView.dataset.keys = boardKeys;
+boardView.dataset.currentKey = boardCurrentKey;
 // What the board is called and what every other route's title ends in, as the
 // server resolves them. A harness that invented either would be testing a
 // fallback core owns rather than the one the page is served with.
@@ -4823,6 +4840,15 @@ displayPanel.hidden = true;
 const displayPanelStatus = new TestElement("div");
 const displayPanelBody = new TestElement("div");
 displayPanel.append(displayPanelStatus, displayPanelBody);
+// The keys section beside them, as the server renders it for a board built with
+// the two key mutations. Its list is the client's, drawn from the keys member of
+// the same vocabulary document the statuses come from — one read, one head,
+// because all four are sections of one ledger.
+const keyPanel = new TestElement("div");
+keyPanel.hidden = true;
+const keyPanelStatus = new TestElement("div");
+const keyPanelBody = new TestElement("div");
+keyPanel.append(keyPanelStatus, keyPanelBody);
 // The two stylesheets the server composed for this page: the colors the project
 // chose, and the ink each of its priorities is drawn in. They are served as
 // elements whatever the project configured — empty is a real reading — because
@@ -4858,6 +4884,9 @@ const documentEventListeners = {};
     if (selector === "[data-display-panel]") return displayPanel;
     if (selector === "[data-display-panel-status]") return displayPanelStatus;
     if (selector === "[data-display-panel-body]") return displayPanelBody;
+    if (selector === "[data-key-panel]") return keyPanel;
+    if (selector === "[data-key-panel-status]") return keyPanelStatus;
+    if (selector === "[data-key-panel-body]") return keyPanelBody;
     if (selector === "style[data-board-theme]") return boardThemeStyle;
     if (selector === "style[data-board-priority-ink]") return boardPriorityInkStyle;
     return null;
@@ -5176,6 +5205,31 @@ function panelPriorities() {
 }
 function priorityMessages() {
   return priorityPanelStatus.children.map((line) => line.textContent);
+}
+// The keys section's row for one key, the keys it is listing in the order it
+// drew them, and everything it is currently saying. Its own live region again,
+// because a refused key change must not blank a label somebody is typing into a
+// status row.
+function keyPanelRow(key) {
+  return findElement(keyPanelBody, (element) => element.dataset.vocabularyKey === key);
+}
+function panelKeys() {
+  return findElements(keyPanelBody, (element) => Boolean(element.dataset.vocabularyKey))
+    .map((row) => row.dataset.vocabularyKey);
+}
+function keyMessages() {
+  return keyPanelStatus.children.map((line) => line.textContent);
+}
+// The state word a row draws for its key, and whether it draws the badge that
+// says new tasks are minted under it. Both are chips the section builds from the
+// document rather than words the script keeps, so a row that lost one fails
+// here.
+function keyRowState(key) {
+  const chip = findElement(keyPanelRow(key), (element) => Boolean(element.dataset.keyState));
+  return chip ? chip.dataset.keyState : "";
+}
+function keyRowIsCurrent(key) {
+  return Boolean(findElement(keyPanelRow(key), (element) => hasDataKey(element, "keyCurrent")));
 }
 // Picks an option the way a reader does. A select reports the option that is
 // selected rather than a value written at it, here as in a browser.

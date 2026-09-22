@@ -229,7 +229,7 @@ func constructRemoteTopology(ctx context.Context, sourceRoot, localRoot, peerRoo
 		if err := populateSynchronizedFixture(ctx, sourceRoot, localRoot, peerRoot, originRoot); err != nil {
 			return err
 		}
-		return writeBuriedCheckpointCorruption(ctx, localRoot, config, taskRefName(activeTaskIDs[0]))
+		return writeBuriedCheckpointCorruption(ctx, localRoot, taskRefName(activeTaskIDs[0]))
 	default:
 		return fmt.Errorf("unsupported remote topology %q", topology)
 	}
@@ -328,7 +328,7 @@ func appendFixtureLabel(
 		parent.Pack.LogicalClock+1, ids.timestamp(),
 		[]core.Operation{{ID: operationID, Type: core.OperationSetAdd, Field: "labels", Value: label}},
 	)
-	state, err := core.Apply(&parent.State, pack, config.Key)
+	state, err := core.Apply(&parent.State, pack)
 	if err != nil {
 		return fmt.Errorf("apply fixture label operation: %w", err)
 	}
@@ -359,7 +359,7 @@ func replaceFixtureRefWithMalformedCommit(ctx context.Context, root, ref string)
 	return updateFixtureRef(ctx, root, ref, commit, head)
 }
 
-func writeBuriedCheckpointCorruption(ctx context.Context, root string, config core.ProjectConfig, ref string) error {
+func writeBuriedCheckpointCorruption(ctx context.Context, root string, ref string) error {
 	head, err := fixtureRefObjectID(ctx, root, ref)
 	if err != nil {
 		return err
@@ -386,7 +386,7 @@ func writeBuriedCheckpointCorruption(ctx context.Context, root string, config co
 	if err != nil {
 		return err
 	}
-	derivedState, err := core.Apply(&corrupt.State, validChild.Pack, config.Key)
+	derivedState, err := core.Apply(&corrupt.State, validChild.Pack)
 	if err != nil {
 		return fmt.Errorf("derive descendant from corrupt checkpoint: %w", err)
 	}

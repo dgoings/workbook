@@ -174,11 +174,16 @@ func validateNewerStateDocument(state StateDocument) (StateDocument, error) {
 		return StateDocument{}, newerWriter(
 			"a task state written by a newer workbook names no task; upgrade workbook")
 	}
-	projectKey, _, found := strings.Cut(state.TaskID, "-")
-	if !found {
+	// A task ID that is not one at all is reported as newer-writer rather than
+	// corrupt, for the reason this whole function gives: under a marker this
+	// build cannot meet, a name it cannot parse is explained by the marker. The
+	// question is the ID's shape only — which keys this project has is
+	// core.KeySet's, and a newer writer minting under a key this clone has not
+	// fetched is exactly the case that must not read as corruption.
+	if _, _, ok := ParseTaskID(state.TaskID); !ok {
 		return StateDocument{}, newerWriterTask(state.TaskID)
 	}
-	normalized, err := normalizeCanonicalTask(projectKey, state.Task)
+	normalized, err := normalizeCanonicalTask(state.Task)
 	if err != nil {
 		return StateDocument{}, newerWriterTask(state.TaskID)
 	}
@@ -283,19 +288,11 @@ func validateProjectIdentityDocument(identity ProjectIdentity) error {
 }
 
 func validateOperationPackDurableDocument(pack OperationPack) error {
-	projectKey, err := projectKeyFromTaskID(pack.TaskID)
-	if err != nil {
-		return Wrap(CategoryCorruptData, "operation pack task ID is invalid", err)
-	}
-	return validateOperationPackDocument(pack, projectKey)
+	return validateOperationPackDocument(pack)
 }
 
 func validateStateDurableDocument(state StateDocument) error {
-	projectKey, err := projectKeyFromTaskID(state.TaskID)
-	if err != nil {
-		return Wrap(CategoryCorruptData, "task state task ID is invalid", err)
-	}
-	return validateStateDocument(state, projectKey)
+	return validateStateDocument(state)
 }
 
 func decodeOneJSON(data []byte, destination any) error {
@@ -325,15 +322,4 @@ func decodeOne(decoder *json.Decoder, destination any) error {
 		return Wrap(CategoryCorruptData, "cannot decode document suffix", err)
 	}
 	return nil
-}
-
-func projectKeyFromTaskID(taskID string) (string, error) {
-	projectKey, _, found := strings.Cut(taskID, "-")
-	if !found {
-		return "", Errorf(CategoryValidation, "task ID %q is missing a project key", taskID)
-	}
-	if err := ValidateTaskID(projectKey, taskID); err != nil {
-		return "", err
-	}
-	return projectKey, nil
 }

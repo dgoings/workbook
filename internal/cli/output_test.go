@@ -40,9 +40,17 @@ func TestWriteIgnoredRefsOffersRemovalOnlyForNamesNoProjectCanOwn(t *testing.T) 
 		Ref:    "refs/workbook/tasks/EVIL",
 		Reason: "the ref does not name one task",
 	}
+	// The reason is the sentence the key set itself refuses that name with,
+	// built here rather than quoted, so the fixture cannot drift from what a
+	// user is shown.
+	foreignID := "OPS-01K0M6B8A4FTT8C39MXXYTW7D9"
+	foreignReason := core.FoundingKeySet("WB").RequireOwned(foreignID)
+	if foreignReason == nil {
+		t.Fatalf("RequireOwned(%q) = nil, want a refusal naming the key", foreignID)
+	}
 	foreign := gitstore.IgnoredRef{
-		Ref:           "refs/workbook/tasks/OPS-01K0M6B8A4FTT8C39MXXYTW7D9",
-		Reason:        `task ID "OPS-01K0M6B8A4FTT8C39MXXYTW7D9" must begin with "WB-"`,
+		Ref:           "refs/workbook/tasks/" + foreignID,
+		Reason:        foreignReason.Error(),
 		PlausibleTask: true,
 	}
 
@@ -88,6 +96,13 @@ func TestWriteIgnoredRefsOffersRemovalOnlyForNamesNoProjectCanOwn(t *testing.T) 
 			if strings.Contains(got, keepWarning) != test.wantWarning {
 				t.Fatalf("output = %q, keep warning present = %t, want %t",
 					got, !test.wantWarning, test.wantWarning)
+			}
+			// And no line offers to adopt the foreign name under a key of
+			// this project's. Adding the key would not make that ref
+			// readable — its documents name another project — so advice to
+			// try is advice to run a command that cannot work.
+			if strings.Contains(got, "workbook key add") {
+				t.Fatalf("output = %q, want no advice to adopt a foreign ref by adding a key", got)
 			}
 		})
 	}

@@ -60,7 +60,7 @@ func (r *Repository) ReadTaskOperations(
 	}
 	// A commit named on a command line is caller input, so a bad one is a
 	// validation failure the caller can fix rather than repository corruption.
-	if err := r.validateHistoryRequests(ctx, config, requests, core.CategoryValidation); err != nil {
+	if err := r.validateHistoryRequests(ctx, requests, core.CategoryValidation); err != nil {
 		return nil, err
 	}
 
@@ -161,7 +161,6 @@ func (r *Repository) ReadTaskOperations(
 // are corrupt data, while a caller-supplied commit is a validation failure.
 func (r *Repository) validateHistoryRequests(
 	ctx context.Context,
-	config core.ProjectConfig,
 	requests []TaskHistoryRequest,
 	objectIDCategory core.Category,
 ) error {
@@ -175,7 +174,11 @@ func (r *Repository) validateHistoryRequests(
 			)
 		}
 		seenTaskIDs[request.Head.TaskID] = struct{}{}
-		if err := core.ValidateTaskID(config.Key, request.Head.TaskID); err != nil {
+		// Shape, not ownership: these requests are built from a listing this
+		// clone made or from a projection row it wrote, both of which decided
+		// ownership already. What is still worth refusing before a Git process
+		// runs is a name that is not a task ID at all.
+		if err := core.ValidateTaskIDShape(request.Head.TaskID); err != nil {
 			return core.Wrap(core.CategoryCorruptData, "task history request ID is invalid", err)
 		}
 	}

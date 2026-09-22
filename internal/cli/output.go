@@ -37,6 +37,7 @@ Commands:
   sync [--watch [--interval <duration>]] [--status] [--json]
   status <command> [options]
   priority <command> [options]
+  key <command> [options]
   config <command> [options]
   docs <command> [options]
   hooks install [--json]
@@ -507,22 +508,6 @@ const (
 	ignoredRefPlausible = "may be another Workbook's task"
 )
 
-// writeIgnoredRefs names every skipped ref, whether any project's ID format
-// could produce that name, why it was skipped, and — only when some name no
-// project can own is listed — the command that removes one. Synchronization
-// succeeded despite these refs, so the report is the only thing standing
-// between a poisoned namespace and nobody noticing.
-//
-// It takes the refs rather than a phase because the same report is written for
-// one phase, for a whole run, and for what a watcher last observed.
-//
-// It is also the only place Workbook suggests deleting anything from a shared
-// remote, and shared task history is append-only. A name this build does not
-// recognize can still be a task written by a newer version or under a second
-// project's key, so every line says which of the two it is, a warning stands in
-// for the command on the ones that may be history, and even the command that is
-// offered is phrased as a decision the reader makes about a specific ref rather
-// than a step to take.
 // writeIdentityWarning states what a command could not settle about the
 // project identity, on the same channel every other warning uses.
 //
@@ -539,6 +524,29 @@ func writeIdentityWarning(stderr io.Writer, identity *gitstore.SyncIdentityResul
 	}
 }
 
+// writeIgnoredRefs names every skipped ref, whether any project's ID format
+// could produce that name, why it was skipped, and — only when some name no
+// project can own is listed — the command that removes one. Synchronization
+// succeeded despite these refs, so the report is the only thing standing
+// between a poisoned namespace and nobody noticing.
+//
+// It takes the refs rather than a phase because the same report is written for
+// one phase, for a whole run, and for what a watcher last observed.
+//
+// It offers no advice to adopt such a name under a key of this project's. A
+// task ref under a key this project does not have is a ref from another project
+// identity — a split, a re-initialization, another project sharing the origin —
+// and its documents name that project, which the tip check refuses whatever
+// this project's key set says. Naming `workbook key add` would have pointed at
+// a command that cannot make the ref readable.
+//
+// It is the only place Workbook suggests deleting anything from a shared
+// remote, and shared task history is append-only. A name this build does not
+// recognize can still be a task written by a newer version or under a second
+// project's key, so every line says which of the two it is, a warning stands in
+// for the command on the ones that may be history, and even the command that is
+// offered is phrased as a decision the reader makes about a specific ref rather
+// than a step to take.
 func writeIgnoredRefs(output io.Writer, remote string, refs []gitstore.IgnoredRef) {
 	if len(refs) == 0 {
 		return

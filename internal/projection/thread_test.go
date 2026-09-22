@@ -123,7 +123,7 @@ func TestAProjectedChainReplaysCommentOperations(t *testing.T) {
 	// Replaying the projected chain has to reconstruct the same task the
 	// checkpoint holds; an operation stored without its payload would either
 	// refuse here or fold to a different thread.
-	state, err := core.StateAt(config.Key, history)
+	state, err := core.StateAt(history)
 	if err != nil {
 		t.Fatalf("StateAt() error = %v", err)
 	}

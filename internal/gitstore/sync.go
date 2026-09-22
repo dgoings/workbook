@@ -155,7 +155,20 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	} else if published != nil {
 		result.Config = published
 	}
-	remoteHeads, ignored, err := r.parseRemoteTaskHeads(config, remoteOutput)
+	// The keys are read after the configuration ledger went out, so a key this
+	// push just published classifies the refs it published beside it.
+	//
+	// The memo is dropped first, for the reason the fetch path drops it
+	// (sync.go's fetch, above): this handle's memoized set can predate a ledger
+	// another handle on the same repository moved, and a push that classified
+	// origin's namespace against it would report a teammate's refs as another
+	// project's in its own report.
+	r.forgetKeySet()
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
+	}
+	remoteHeads, ignored, err := r.parseRemoteTaskHeads(keys, remoteOutput)
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}
@@ -485,6 +498,31 @@ func (r *Repository) fetch(
 		return state, result, fatal
 	}
 
+	// The key set is loaded here, between the configuration stage and the task
+	// refs, and that ordering is the whole of this feature's fetch contract: a
+	// push that delivers `key.add NEW` and a task under NEW arrives as one
+	// fetch, and the classification below has to use the set as of the update
+	// this run just applied. Loading it earlier — at the top of the function,
+	// or lazily inside the listings — would classify that task against the set
+	// this clone opened with and report a teammate's work as another project's
+	// ref until somebody fetched a second time.
+	//
+	// The reload is explicit rather than inherited from the configuration
+	// stage's own memo drop, because that drop happens only when the stage
+	// moves the ledger. A ledger that moved out of band — another handle on
+	// this repository fetched it, a second command or the watcher beside an
+	// ordinary one — leaves this stage with nothing to do and the memo
+	// untouched, and a long-lived handle would then classify a teammate's new
+	// key against the set it opened with for as long as it lived. Reading the
+	// ledger again here makes the ordering a property of this function rather
+	// than of what the stage happened to have to do.
+	r.forgetKeySet()
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		result, err = failedSyncPhase(result, "fetch failed before completion", err)
+		return state, result, err
+	}
+
 	canonicalRefs, _, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
 	if err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
@@ -515,6 +553,9 @@ func (r *Repository) fetch(
 
 	invalidCanonical := 0
 	invalidTracking := 0
+	// Collected rather than appended straight to the report, so the whole
+	// listing can be put back in ref-name order once, after the pass.
+	var foreignIgnored []IgnoredRef
 	invalidCanonicalTasks := make(map[string]struct{})
 	for index, tip := range partial {
 		if index < len(canonicalRefs) {
@@ -528,11 +569,33 @@ func (r *Repository) fetch(
 			continue
 		}
 		if tip.Err != nil {
+			// A fetched tip whose documents name another project is the one
+			// refusal here that says nothing about this repository. Origin's
+			// task namespace is shared, this project has the key the name
+			// carries — somebody added it — and what arrived is intact history
+			// belonging to whoever owns that project ID. Counting it as a
+			// failed validation made a mistaken `key add` permanent: every
+			// synchronization from then on exited nonzero, and `key retire` did
+			// not undo it, because a retired key is still one of this project's
+			// keys and its refs are still read. So it joins the ignored refs,
+			// which is the report that already exists for a name on origin this
+			// clone will not read, and the run completes.
+			if projectID, foreign := foreignProjectOf(tip.Err); foreign {
+				foreignIgnored = append(foreignIgnored, ignoredForeignProjectRef(keys, config, tip.Head.TaskID, projectID))
+				continue
+			}
 			invalidTracking++
 			state.Outcomes[tip.Head.TaskID] = SyncTaskResult{TaskID: tip.Head.TaskID, Status: SyncInvalid, Detail: tip.Err.Error()}
 			continue
 		}
 		state.Tracking[tip.Head.TaskID] = tip.Snapshot
+	}
+	if len(foreignIgnored) > 0 {
+		// Reported beside the names the listing above could not read at all,
+		// in the one order this report promises: by ref name, so one run's
+		// report reads the same as the next whichever pass found an entry.
+		result.Ignored = append(result.Ignored, foreignIgnored...)
+		sort.Slice(result.Ignored, func(i, j int) bool { return result.Ignored[i].Ref < result.Ignored[j].Ref })
 	}
 
 	pairs := make([]taskHeadPair, 0, len(state.Tracking))

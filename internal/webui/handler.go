@@ -179,6 +179,20 @@ type VocabularyState struct {
 	// client that adopts an answer wholesale would write that over a project's
 	// own priorities on the strength of a status rename.
 	Priorities core.PriorityVocabulary
+	// Keys is this project's task-ID keys: which ones there are, what each one
+	// is, and which one mints new tasks. It is read from the same commit as the
+	// statuses, for the reason Display and Priorities are — a board that read
+	// its columns and then its keys could be answered from either side of a
+	// fetch, and would offer a key chooser composed against a configuration
+	// nobody was shown.
+	//
+	// It is the zero set for a board built without a resolver, which has no
+	// project to read one from. Every producer that does read one fills this
+	// field: gitstore never reports a zero set — a project whose ledger records
+	// nothing about keys reports its founding key alone — so a zero set
+	// reaching a client is this package losing a project's keys rather than a
+	// project having none.
+	Keys core.KeySet
 }
 
 // VocabularyResolver reads the project's current statuses.
@@ -240,6 +254,38 @@ type VocabularyDocument struct {
 	// draws. So this member is the effective reading, and a client never has to
 	// carry a fallback set of its own.
 	Priorities PriorityVocabularyDocument `json:"priorities"`
+	// Keys is this project's task-ID keys: which ones there are, what each one
+	// is, and which is current. Present always rather than omitted, like
+	// Priorities and unlike Display: a project that has recorded nothing about
+	// keys still has one, and a client must never carry a fallback of its own.
+	Keys KeyVocabularyDocument `json:"keys"`
+}
+
+// KeyVocabularyDocument is a project's task-ID keys as the board reads them:
+// every key in add order with what it is, and which one new tasks are minted
+// under.
+//
+// It is thinner than its status and priority siblings, and each missing member
+// is missing because a key has no such fact. There is no Default, because
+// Current is the same idea named the way the ledger names it; no Aliases or
+// Retired forwarding tables, because a key is never renamed and a task ID
+// minted under one keeps it forever; and no Ink, because keys are not drawn in
+// a color.
+type KeyVocabularyDocument struct {
+	Current string    `json:"current"`
+	Keys    []KeyView `json:"keys"`
+}
+
+// KeyView is one key as the board reads it.
+//
+// Current is a member of its own rather than a third KeyState, exactly as the
+// CLI's own key envelope presents it: being current is not a state a key set
+// stores — the document names the current key once — so a client that folded it
+// into the state word would have to take it back apart to say what the key is.
+type KeyView struct {
+	Key     string        `json:"key"`
+	State   core.KeyState `json:"state"`
+	Current bool          `json:"current"`
 }
 
 // PriorityVocabularyDocument is a project's priority configuration as the board
@@ -519,6 +565,87 @@ type VocabularyPriorityMutationDocument struct {
 	Warnings   []core.Warning               `json:"warnings,omitempty"`
 }
 
+// VocabularyKeyAddition is a key the board asks this project to add.
+//
+// Current carries the same choice `workbook key add --current` offers: a key
+// added and immediately minting new tasks is one change, because the two
+// operations are one pack the fold already understands. False is the ordinary
+// addition, which leaves the current key where it is.
+type VocabularyKeyAddition struct {
+	Key     string
+	Current bool
+	// ExpectedHead is the configuration ledger tip the client composed this
+	// change against. See vocabularyHead for why it is required here and
+	// optional on a task mutation.
+	ExpectedHead string
+}
+
+// VocabularyKeyEdit is one of the three things that happen to a key a project
+// already has: it starts minting new tasks, it stops minting them, or a retired
+// one comes back.
+//
+// Exactly one member is true, and the route refuses a body that names two —
+// which is where this parts company with VocabularyStatusEdit, whose members
+// are a subset of one form's fields. These are not fields of a key; they are
+// three different changes to it, and no planner has a reading of two at once.
+//
+// They are bools rather than pointers for that same reason. An omitted member
+// and a false one are the same request here, because a key change is not a form
+// that sends every field it has: there is no value to leave alone.
+type VocabularyKeyEdit struct {
+	Current      bool
+	Retire       bool
+	Reactivate   bool
+	ExpectedHead string
+}
+
+// VocabularyKeyMutation is what one key change produced: the configuration as
+// it now stands, and the tip it was written to.
+//
+// It prices nothing, where both of its siblings do, and the missing member is
+// the point rather than an omission. A status removal forwards the tasks in a
+// column and a priority removal forwards the tasks at a priority; a key change
+// moves no task at all, because a task ID is a permanent name and the key it
+// carries is part of it. A `tasks` member here would be zero for every key
+// change this project will ever record.
+type VocabularyKeyMutation struct {
+	State    VocabularyState
+	Warnings []core.Warning
+}
+
+// The two capabilities behind the key mutation routes. Each answers with the
+// whole configuration rather than with what it changed, for the reason the
+// status and priority mutations do: a key change can move a key the client did
+// not name — making one current takes the role off whoever held it — and a
+// client that patched its own model from a description of one change would
+// disagree with the server about the rest.
+//
+// There are two where the priorities have six because the key section has three
+// verbs over two shapes: a key is added, and after that the only things that
+// happen to one are the state changes a PATCH carries.
+type (
+	VocabularyKeyAdder  func(context.Context, VocabularyKeyAddition) (VocabularyKeyMutation, error)
+	VocabularyKeyEditor func(context.Context, string, VocabularyKeyEdit) (VocabularyKeyMutation, error)
+)
+
+// VocabularyKeyMutationDocument is what every key mutation answers with.
+//
+// It carries the whole vocabulary document, in the shape GET /api/vocabulary
+// serves it, so the client renders the result of a change through the same code
+// that rendered the page — including the new head, which is what its next
+// change has to name.
+//
+// Its format names the key half rather than reusing either sibling's, and it
+// carries no `tasks` member at all. See VocabularyKeyMutation for why a key
+// change has nothing to price: a client reading this as a priority mutation
+// would be reading for a member that is deliberately absent.
+type VocabularyKeyMutationDocument struct {
+	Format     string             `json:"format"`
+	Version    int                `json:"version"`
+	Vocabulary VocabularyDocument `json:"vocabulary"`
+	Warnings   []core.Warning     `json:"warnings,omitempty"`
+}
+
 // VocabularyErrorDocument is the error envelope with the statuses a refused
 // change should be recomposed against.
 //
@@ -761,6 +888,17 @@ type Options struct {
 	MovePriority       VocabularyPriorityMover
 	SetDefaultPriority VocabularyPriorityDefaulter
 	RecolorPriority    VocabularyPriorityRecolorer
+	// The two key mutations, which administer the third section of the same
+	// configuration ledger. A board given neither draws this project's keys and
+	// refuses to change them, which is every board that predates the routes
+	// that administer them.
+	//
+	// Two rather than six, because the key verbs are three over two shapes: a
+	// key is added, and after that the only things that happen to one are the
+	// state changes a PATCH carries. There is no remover, because a key that
+	// has ever minted a task is a permanent name.
+	AddKey  VocabularyKeyAdder
+	EditKey VocabularyKeyEditor
 	// SetDisplay records what this project calls its board and the colors it
 	// draws it in. A board given none draws no board settings section on its
 	// configuration page, the way a board given no vocabulary mutations draws
@@ -1006,6 +1144,30 @@ type pageData struct {
 	// the field landed; before it, counting the recolor would have withheld a
 	// working section over a capability nothing on it used.
 	PrioritiesAdministrable bool
+	// Keys are this project's task-ID keys in add order, as JSON, rendered into
+	// the page for the reason Priorities is: the create form offers a key
+	// chooser and the keys section lists what a project has, and both need the
+	// answer before anything has been fetched. A project that has moved its key
+	// draws what it configured; nothing here is a set the script keeps a copy
+	// of. See pageKeys for what it carries.
+	Keys string
+	// CurrentKey is the key a new task is minted under when nobody chooses one,
+	// rendered as its own attribute for the reason DefaultPriority is: which
+	// key that is belongs to the server, and a client re-deriving it from the
+	// list could disagree about where a task it just created went.
+	CurrentKey string
+	// KeysAdministrable is whether this board was built with the key mutations
+	// the configuration page's keys section drives, and it decides whether that
+	// section is served at all.
+	//
+	// It is asked separately from Administrable for the reason
+	// PrioritiesAdministrable is: the capabilities are separate, and a board
+	// that could list a project's keys but change none of them would draw
+	// controls that could only ever answer "this board has no such capability".
+	// It still requires Administrable, because /config answers 404 without the
+	// status mutations and a section served onto a page nobody can reach is a
+	// section that is never seen.
+	KeysAdministrable bool
 }
 
 // expectedHead is the task tip the browser rendered before proposing a change.
@@ -1051,6 +1213,26 @@ type createTaskRequest struct {
 	Status      core.Status   `json:"status"`
 	Priority    core.Priority `json:"priority"`
 	Labels      []string      `json:"labels"`
+	// Key mints the task under one of this project's active keys. Empty is the
+	// current key, which is what every client that predates several keys sends.
+	Key string `json:"key"`
+}
+
+// input maps the request onto the service input field by field.
+//
+// It was a struct conversion, which required the two shapes to stay identical
+// in name, type and order — the coupling updateTaskRequest's comment records
+// paying for. Naming the fields is what keeps a new member of core.CreateInput
+// from silently becoming part of this API.
+func (body createTaskRequest) input() core.CreateInput {
+	return core.CreateInput{
+		Title:       body.Title,
+		Description: body.Description,
+		Status:      body.Status,
+		Priority:    body.Priority,
+		Labels:      body.Labels,
+		Key:         body.Key,
+	}
 }
 
 // The four vocabulary mutation bodies. expectedHead is a member of each rather
@@ -1130,6 +1312,41 @@ type defaultPriorityRequest struct {
 type recolorPriorityRequest struct {
 	Color        *string `json:"color"`
 	ExpectedHead *string `json:"expectedHead"`
+}
+
+// The two key mutation bodies. expectedHead is a member of each for the reason
+// it is a member of the status and priority bodies: it is part of the change,
+// and the two travel together.
+type addKeyRequest struct {
+	Key          string  `json:"key"`
+	Current      bool    `json:"current"`
+	ExpectedHead *string `json:"expectedHead"`
+}
+
+// editKeyRequest names exactly one of three changes to a key this project
+// already has. The members are bools rather than the pointers the status and
+// priority edits take, and countKeyIntents refuses a body naming two or none:
+// see VocabularyKeyEdit for why these are three changes rather than three
+// fields of one form.
+type editKeyRequest struct {
+	Current      bool    `json:"current"`
+	Retire       bool    `json:"retire"`
+	Reactivate   bool    `json:"reactivate"`
+	ExpectedHead *string `json:"expectedHead"`
+}
+
+// countKeyIntents counts the changes one key request names, so the route can
+// refuse a body that names more than one and a body that names none in the same
+// sentence — which is the honest refusal for both, because the caller has to do
+// the same thing about either: send one.
+func countKeyIntents(body editKeyRequest) int {
+	intents := 0
+	for _, named := range []bool{body.Current, body.Retire, body.Reactivate} {
+		if named {
+			intents++
+		}
+	}
+	return intents
 }
 
 // updateTaskRequest is the shape this endpoint accepts, which is deliberately
@@ -1267,6 +1484,11 @@ func NewHandler(options Options) http.Handler {
 	handler.mux.HandleFunc("PATCH /api/vocabulary/priorities/{priority}/position", handler.moveVocabularyPriority)
 	handler.mux.HandleFunc("PATCH /api/vocabulary/priorities/{priority}/default", handler.setDefaultVocabularyPriority)
 	handler.mux.HandleFunc("PATCH /api/vocabulary/priorities/{priority}/color", handler.recolorVocabularyPriority)
+	// The key half of the same ledger. Two routes rather than four: a key is
+	// added, and after that the only things that happen to one are the three
+	// state changes a PATCH carries.
+	handler.mux.HandleFunc("POST /api/vocabulary/keys", handler.addVocabularyKey)
+	handler.mux.HandleFunc("PATCH /api/vocabulary/keys/{key}", handler.editVocabularyKey)
 	handler.mux.HandleFunc("PATCH /api/display", handler.updateDisplay)
 	handler.mux.HandleFunc("GET /api/tasks/{id}/history", handler.serveTaskHistory)
 	handler.mux.HandleFunc("POST /api/tasks", handler.createTask)
@@ -1380,6 +1602,8 @@ func allowedMethod(path string) (string, bool) {
 		return http.MethodPost, true
 	case "/api/vocabulary/priorities":
 		return http.MethodPost, true
+	case "/api/vocabulary/keys":
+		return http.MethodPost, true
 	case "/api/vocabulary/order":
 		return http.MethodPut, true
 	case "/api/display":
@@ -1398,6 +1622,13 @@ func allowedMethod(path string) (string, bool) {
 		// answered 404: a method refusal naming what it allows would be this
 		// table claiming a route exists.
 		if _, _, ok := vocabularyPriorityMemberPath(path); ok {
+			return http.MethodPatch, true
+		}
+		// PATCH alone on a key, where a status and a priority also answer
+		// DELETE. A key that has ever minted a task is a permanent name, so
+		// there is nothing to delete; what a reader means by "remove this key"
+		// is the retirement that PATCH carries.
+		if vocabularyKeyPathName(path) != "" {
 			return http.MethodPatch, true
 		}
 		if _, _, ok := taskDependencyPathIDs(path); ok {
@@ -1555,6 +1786,27 @@ func vocabularyPriorityMemberPath(path string) (string, string, bool) {
 	}
 }
 
+// vocabularyKeyPathName reads the key the per-key route addresses. It is the
+// key half of vocabularyStatusPathName and exists for what that comment says:
+// the method table has to answer for a path the mux has not matched yet, and a
+// request built without the mux's pattern variables falls back to it.
+//
+// It asks nothing about whether the key is a key. What every key name goes
+// through instead is core.ValidateProjectKey, at the planner, on both surfaces
+// — which is where a name that is not a key gets an answer naming the grammar
+// it has to match.
+func vocabularyKeyPathName(path string) string {
+	const prefix = "/api/vocabulary/keys/"
+	if !strings.HasPrefix(path, prefix) {
+		return ""
+	}
+	key := strings.TrimPrefix(path, prefix)
+	if key == "" || strings.Contains(key, "/") {
+		return ""
+	}
+	return key
+}
+
 // vocabularyPrioritySegments splits a priority route's path into the priority
 // it addresses and the member beneath it, either of which may be empty for a
 // path that is not one of these routes.
@@ -1693,6 +1945,9 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 			handler.EditPriority != nil && handler.RemovePriority != nil &&
 			handler.MovePriority != nil && handler.SetDefaultPriority != nil &&
 			handler.RecolorPriority != nil,
+		Keys:              pageKeys(vocabulary.Keys),
+		CurrentKey:        vocabulary.Keys.Current(),
+		KeysAdministrable: handler.keysAdministrable(),
 	}); err != nil {
 		return
 	}
@@ -1729,6 +1984,13 @@ func (handler *handler) administrable() bool {
 		handler.RemoveStatus != nil && handler.ReorderStatus != nil
 }
 
+// keysAdministrable is whether this board can administer the key section of the
+// configuration it already draws. See pageData.KeysAdministrable for why it
+// asks for the statuses as well as for both key capabilities.
+func (handler *handler) keysAdministrable() bool {
+	return handler.administrable() && handler.AddKey != nil && handler.EditKey != nil
+}
+
 // serveVocabulary reports the project's statuses to a client that wants more
 // than the columns already in the page — the labels behind a token in a history
 // entry, or the chain a stored status was forwarded along.
@@ -1761,6 +2023,13 @@ func vocabularyDocument(state VocabularyState) VocabularyDocument {
 		// is the built-in three, not an empty list. Document is for a caller
 		// writing a checkpoint, which this is not.
 		Priorities: priorityVocabularyDocument(state.Priorities),
+		// Nothing is substituted here, where both sections above substitute
+		// something. There is nothing to substitute: a project's founding key is
+		// the one fact this package cannot derive, and every producer of this
+		// state that has a project to read reports the set that project has —
+		// gitstore never answers with a zero one. So a board with no resolver
+		// reports no keys, which is the truth about a board with no project.
+		Keys: keyVocabularyDocument(state.Keys),
 	}
 	if state.Display.Configured() {
 		display := displayDocument(state)
@@ -1788,6 +2057,11 @@ func vocabularyDocument(state VocabularyState) VocabularyDocument {
 // change staged against a head, and a refusal they have not read. A color is
 // none of that — it is either already drawn or is a difference nobody loses
 // work over.
+//
+// Keys are deliberately not in it either, for the reason colors are not:
+// adding a key changes no column and no priority, so nothing on the page has to
+// be rebuilt to show it. The page picks a new key up from the answer it already
+// re-renders from.
 //
 // A digest rather than the two lists themselves because this rides on the task
 // poll, which the board makes once a second and which deliberately carries no
@@ -1840,6 +2114,57 @@ func priorityVocabularyDocument(priorities core.PriorityVocabulary) PriorityVoca
 		// code that drew the board the change was made from.
 		Ink: string(priorityInk(priorities)),
 	}
+}
+
+// keyVocabularyDocument renders one read of the project's keys, in the shape
+// the read route and every key mutation answer with.
+func keyVocabularyDocument(keys core.KeySet) KeyVocabularyDocument {
+	return KeyVocabularyDocument{Current: keys.Current(), Keys: keyViews(keys)}
+}
+
+// keyViews is every key in add order with what it is, which is the one shape
+// both the document and the page's own attribute carry.
+//
+// It is one list rather than an active one and a retired one, for the reason
+// the CLI's `key list` is one table: a retired key is still this project's key
+// — every task ID minted under it keeps it — and a client drawing the section
+// has to show it saying so.
+func keyViews(keys core.KeySet) []KeyView {
+	definitions := keys.Keys()
+	views := make([]KeyView, 0, len(definitions))
+	for _, definition := range definitions {
+		// The state word comes from the set rather than from the stored bool
+		// beside it. core.KeySet.State is where "what is this key" is decided,
+		// and this package re-deriving it from `retired` would be a second
+		// reading to update the day a key can be something else.
+		state, _ := keys.State(definition.Key)
+		views = append(views, KeyView{
+			Key:     definition.Key,
+			State:   state,
+			Current: definition.Key == keys.Current(),
+		})
+	}
+	return views
+}
+
+// pageKeys encodes a project's keys for the attribute the page carries them in.
+//
+// It is JSON rather than a space-separated list for the reason pagePriorities
+// is: a key is three facts — its name, its state and whether new tasks are
+// minted under it — and the client must not carry a second copy of any of them.
+// It is the same KeyView the document carries, so the create form's chooser and
+// the keys section read one shape whether they were rendered from the page or
+// re-rendered from a change.
+func pageKeys(keys core.KeySet) string {
+	encoded, err := json.Marshal(keyViews(keys))
+	if err != nil {
+		// A key view is two strings and a bool, so there is nothing here
+		// encoding/json can refuse. An empty list is a better answer to the
+		// impossible case than a page that will not load: the create form
+		// offers no chooser, and a task is minted under the current key.
+		return "[]"
+	}
+	return string(encoded)
 }
 
 // pagePriority is one priority as the page carries it: what it is called, what
@@ -2244,6 +2569,111 @@ func (handler *handler) recolorVocabularyPriority(writer http.ResponseWriter, re
 	handler.writePriorityMutation(writer, mutation)
 }
 
+// The two key mutation routes.
+//
+// They are the priority routes' shape, and the paragraph above them applies
+// here word for word: almost nothing about a request is refused at this layer.
+// The key writer already refuses a key that is not a key, one this project
+// already mints under, one it does not have at all, a retirement of the current
+// key or of the last active one, and a project past the key ceiling — each in
+// the sentence `workbook key` uses, each tested once against the real planners.
+//
+// The one check that does belong here is the one no planner has a reading of:
+// a PATCH names exactly one of current, retire and reactivate, because those
+// are three different changes rather than three fields of one form.
+
+// addVocabularyKey adds a key this project does not have, or brings a retired
+// one back — which is the same operation, and the reason the add route and the
+// reactivate intent both reach planKeyAdd.
+func (handler *handler) addVocabularyKey(writer http.ResponseWriter, request *http.Request) {
+	if handler.AddKey == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "key addition is not configured"))
+		return
+	}
+	var body addKeyRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, decodeRequestError("decode key add", err))
+		return
+	}
+	head, err := vocabularyHead(body.ExpectedHead)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	mutation, err := handler.AddKey(request.Context(), VocabularyKeyAddition{
+		Key:          body.Key,
+		Current:      body.Current,
+		ExpectedHead: head,
+	})
+	if err != nil {
+		handler.writeVocabularyError(writer, request, err)
+		return
+	}
+	handler.writeKeyMutation(writer, mutation)
+}
+
+// editVocabularyKey changes the state of a key this project already has: it
+// starts minting new tasks, it stops minting them, or a retired one comes back.
+//
+// There is no rename and no removal, where a status and a priority have both. A
+// task ID is a permanent name and the key is part of it, so a key cannot be
+// renamed without renaming every task minted under it, and it cannot be deleted
+// without orphaning them. Retirement is what a reader means by either.
+func (handler *handler) editVocabularyKey(writer http.ResponseWriter, request *http.Request) {
+	if handler.EditKey == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "key editing is not configured"))
+		return
+	}
+	var body editKeyRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, decodeRequestError("decode key change", err))
+		return
+	}
+	if intents := countKeyIntents(body); intents != 1 {
+		handler.writeError(writer, core.Errorf(core.CategoryInvocation,
+			"a key change names exactly one of current, retire or reactivate"))
+		return
+	}
+	head, err := vocabularyHead(body.ExpectedHead)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	mutation, err := handler.EditKey(request.Context(), vocabularyKeyOf(request), VocabularyKeyEdit{
+		Current:      body.Current,
+		Retire:       body.Retire,
+		Reactivate:   body.Reactivate,
+		ExpectedHead: head,
+	})
+	if err != nil {
+		handler.writeVocabularyError(writer, request, err)
+		return
+	}
+	handler.writeKeyMutation(writer, mutation)
+}
+
+// vocabularyKeyOf reads the key a per-key route addresses, from the mux's
+// pattern where there is one and from the path where a caller built the request
+// itself.
+func vocabularyKeyOf(request *http.Request) string {
+	if key := request.PathValue("key"); key != "" {
+		return key
+	}
+	return vocabularyKeyPathName(request.URL.Path)
+}
+
+// writeKeyMutation answers a recorded key change with the whole configuration,
+// in its own envelope rather than either sibling's. See VocabularyKeyMutation
+// for what that envelope is not carrying and why.
+func (handler *handler) writeKeyMutation(writer http.ResponseWriter, mutation VocabularyKeyMutation) {
+	writeJSON(writer, http.StatusOK, VocabularyKeyMutationDocument{
+		Format:     "workbook.key-mutation",
+		Version:    1,
+		Vocabulary: vocabularyDocument(mutation.State),
+		Warnings:   mutation.Warnings,
+	})
+}
+
 // vocabularyPriorityOf reads the priority a per-priority route addresses, from
 // the mux's pattern where there is one and from the path where a caller built
 // the request itself.
@@ -2516,7 +2946,7 @@ func (handler *handler) createTask(writer http.ResponseWriter, request *http.Req
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task creation is not configured"))
 		return
 	}
-	result, err := handler.Create(request.Context(), core.CreateInput(body))
+	result, err := handler.Create(request.Context(), body.input())
 	if err != nil {
 		handler.writeError(writer, err)
 		return

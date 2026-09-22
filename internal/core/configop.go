@@ -100,6 +100,25 @@ const (
 	// empty Value means clear, the same convention ConfigOperation.Value
 	// already carries for display.set.
 	ConfigPriorityRecolor ConfigOperationType = "priority.recolor"
+	// The three key operations are the fourth section's mutations, and there
+	// are three rather than eight because a key is not a vocabulary entry: it
+	// is a name tasks were minted under, so it has no label, no rank, no role
+	// and no forwarding. It can only be added, made current, or retired.
+	//
+	// There is deliberately no key.rename and no key.remove. A task ID is a
+	// permanent name, so a key that has ever minted a task stays valid
+	// forever; retirement says "mint nothing new here" and nothing more.
+	//
+	// ConfigKeyAdd adds an active key, and re-activates a retired one in place.
+	ConfigKeyAdd ConfigOperationType = "key.add"
+	// ConfigKeyCurrent marks an active key as the one new tasks are minted
+	// under. It is one operation rather than a tag-and-untag pair for the
+	// reason status.tag transfers the default tag atomically: an intermediate
+	// state with no current key is a state a concurrent clone could fetch.
+	ConfigKeyCurrent ConfigOperationType = "key.current"
+	// ConfigKeyRetire stops a key minting new tasks, leaving every task
+	// already under it owned by this project.
+	ConfigKeyRetire ConfigOperationType = "key.retire"
 )
 
 // ConfigOperation is one immutable configuration change.
@@ -177,6 +196,11 @@ type ConfigOperation struct {
 	PriorityTag PriorityTag `json:"priorityTag,omitempty"`
 	// PriorityTags carries the initial roles of a priority.add.
 	PriorityTags []PriorityTag `json:"priorityTags,omitempty"`
+
+	// Key is the project key every key operation names. It is one member for
+	// all three types because a key is a bare token: there is no rename pair to
+	// keep apart, and the operation's type says what is being done to it.
+	Key string `json:"key,omitempty"`
 }
 
 // ConfigOperationPack is one commit's worth of configuration changes.
@@ -237,6 +261,20 @@ type ConfigData struct {
 	// PriorityVocabulary.Document, never from EffectiveDocument — see their
 	// comments for why the two must not be confused here.
 	Priorities *PriorityDocument `json:"priorities,omitempty"`
+	// Keys is this project's task-ID keys: the ordered set, and which one new
+	// tasks are minted under. It is a pointer with omitempty, and nil — not an
+	// empty document — is the canonical value for a project that has recorded
+	// nothing about keys, so every checkpoint written before this section
+	// existed still encodes to exactly the bytes it was stored as.
+	//
+	// Unlike the priorities section, nothing seeds this one. A project's
+	// founding key lives in its identity ref, and a genesis that recorded it
+	// here would put a second copy of that fact in a second ref, where the two
+	// can disagree — and it would spend bytes in every project's checkpoint to
+	// say what every one of that project's task IDs already spells out. The
+	// fold reads nil as "the founding key alone", and the first key.add records
+	// the founding key explicitly — see gitstore.prependFoundingKey.
+	Keys *KeyDocument `json:"keys,omitempty"`
 }
 
 // ConfigStateDocument is a resolved configuration checkpoint, written beside
@@ -279,6 +317,15 @@ type ConfigStateDocument struct {
 // that predates them would compute a different — or no — configuration from a
 // checkpoint carrying a `priorities` section, so it is told to upgrade rather
 // than left to misfold silently.
+//
+// The key entries are three as well, and ride the priority operations'
+// generation rather than opening a fourth, because both families ship in one
+// release: no build folds a priority vocabulary without also folding a key set,
+// so a fourth number would describe a reader that never exists. What the
+// entries have to say is what a generation-two build cannot do, and that is the
+// same thing for both — a build that folded `key.add` by ignoring it would
+// compute a different key set from the same bytes, so it is told to upgrade
+// rather than left to read a teammate's new tasks as another project's refs.
 var configOperationMinReader = map[ConfigOperationType]int{
 	ConfigGenesis:         0,
 	ConfigStatusAdd:       0,
@@ -298,6 +345,9 @@ var configOperationMinReader = map[ConfigOperationType]int{
 	ConfigPriorityTag:     3,
 	ConfigPriorityUntag:   3,
 	ConfigPriorityRecolor: 3,
+	ConfigKeyAdd:          3,
+	ConfigKeyCurrent:      3,
+	ConfigKeyRetire:       3,
 }
 
 // ConfigPackMinReader returns the generation a reader needs to fold these
@@ -339,6 +389,11 @@ func ConfigPackMinReader(operations []ConfigOperation) int {
 		}
 		if operation.Config != nil && operation.Config.Priorities != nil {
 			if required := configOperationMinReader[ConfigPriorityAdd]; required > generation {
+				generation = required
+			}
+		}
+		if operation.Config != nil && operation.Config.Keys != nil {
+			if required := configOperationMinReader[ConfigKeyAdd]; required > generation {
 				generation = required
 			}
 		}
@@ -388,6 +443,20 @@ func (state ConfigStateDocument) PriorityVocabulary() PriorityVocabulary {
 		return PriorityVocabulary{}
 	}
 	return newPriorityVocabularyFromCanonical(*state.Config.Priorities)
+}
+
+// KeySet reads the checkpoint's project keys, substituting the founding key for
+// a checkpoint that records none.
+//
+// It takes the founding key because the ledger deliberately does not record it
+// until somebody adds a second one: the identity ref is where a project's first
+// key lives, and a section that duplicated it would keep the same fact in two
+// refs that can disagree. See ConfigData.Keys.
+func (state ConfigStateDocument) KeySet(founding string) KeySet {
+	if state.Config.Keys == nil {
+		return FoundingKeySet(founding)
+	}
+	return newKeySetFromCanonical(*state.Config.Keys)
 }
 
 // NewConfigOperationPack stamps one authored batch of configuration operations
@@ -472,6 +541,11 @@ func ApplyConfig(parent *ConfigStateDocument, pack ConfigOperationPack) (ConfigS
 	if err != nil {
 		return ConfigStateDocument{}, Wrap(CategoryCorruptData, "configuration pack produced an invalid priority vocabulary", err)
 	}
+	folded.keys.normalizeArity()
+	keys, err := folded.keys.document()
+	if err != nil {
+		return ConfigStateDocument{}, Wrap(CategoryCorruptData, "configuration pack produced an invalid key set", err)
+	}
 	minReader := pack.MinReader
 	if parent != nil && parent.MinReader > minReader {
 		minReader = parent.MinReader
@@ -483,7 +557,12 @@ func ApplyConfig(parent *ConfigStateDocument, pack ConfigOperationPack) (ConfigS
 		ProjectID:    pack.ProjectID,
 		History:      History{Generation: generation},
 		LogicalClock: pack.LogicalClock,
-		Config:       ConfigData{Vocabulary: document, Display: folded.display.canonical(), Priorities: priorities},
+		Config: ConfigData{
+			Vocabulary: document,
+			Display:    folded.display.canonical(),
+			Priorities: priorities,
+			Keys:       keys,
+		},
 	}, nil
 }
 
@@ -559,6 +638,40 @@ func ValidateConfigAuthoring(parent *ConfigStateDocument, pack ConfigOperationPa
 			return err
 		}
 	}
+
+	// The key section's two authoring questions: the set stays usable, and it
+	// stays bounded. Both are asked here rather than in the fold for the reason
+	// every other ceiling is — a fold that could fail on a count can be made to
+	// fail forever by two clones each doing something they were allowed to do.
+	keyDocument, err := folded.keys.document()
+	if err != nil {
+		return err
+	}
+	if keyDocument != nil {
+		// The ceiling counts the keys that can mint, which is what makes the
+		// advice beside it true. A key is never deleted — a task ID is a
+		// permanent name — so retiring one is the whole of what a project at
+		// the ceiling can do about it, and counting retired keys too would make
+		// the sentence name a remedy that changes nothing.
+		active := 0
+		for _, definition := range keyDocument.Keys {
+			if !definition.Retired {
+				active++
+			}
+		}
+		if active > MaxProjectKeys {
+			return Errorf(CategoryValidation,
+				"this project would have %d active keys and may have at most %d; retire one instead of adding another",
+				active, MaxProjectKeys)
+		}
+		set, err := NewKeySet(*keyDocument)
+		if err != nil {
+			return err
+		}
+		if err := set.Validate(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -595,6 +708,11 @@ type configFold struct {
 	// arity invariant ApplyConfig repairs after the fold, which display's
 	// three independent, arity-free settings have no equivalent of.
 	priorities *configPriorities
+	// keys is the mutable working form of the key section. Like priorities it
+	// routes its own operation types and carries an invariant ApplyConfig
+	// repairs after the fold — here, that the current key is one of the active
+	// ones.
+	keys *configKeys
 }
 
 // applyConfigOperations folds a pack over its parent and returns the raw
@@ -689,7 +807,11 @@ func newConfigFold(config ConfigData) (configFold, error) {
 	if err != nil {
 		return configFold{}, err
 	}
-	return configFold{vocabulary: vocabulary, display: display, priorities: priorities}, nil
+	keys, err := newConfigKeys(config.Keys)
+	if err != nil {
+		return configFold{}, err
+	}
+	return configFold{vocabulary: vocabulary, display: display, priorities: priorities, keys: keys}, nil
 }
 
 // apply routes one operation to the section that owns it.
@@ -705,6 +827,8 @@ func (folded configFold) apply(operation ConfigOperation) error {
 		return folded.display.apply(operation)
 	case operation.Type.TouchesPriorities():
 		return folded.priorities.apply(operation)
+	case operation.Type.TouchesKeys():
+		return folded.keys.apply(operation)
 	default:
 		return folded.vocabulary.apply(operation)
 	}
@@ -736,6 +860,21 @@ func (operationType ConfigOperationType) TouchesPriorities() bool {
 	switch operationType {
 	case ConfigPriorityAdd, ConfigPriorityRename, ConfigPriorityRelabel, ConfigPriorityRemove,
 		ConfigPriorityReorder, ConfigPriorityTag, ConfigPriorityUntag, ConfigPriorityRecolor:
+		return true
+	default:
+		return false
+	}
+}
+
+// TouchesKeys reports whether an operation type belongs to the key section. It
+// is the single answer to which section owns a type, and it is exported for the
+// reason TouchesPriorities is: gitstore records the founding key in the same
+// pack as a project's first key change, and a second copy of this list there
+// would send that project's first key change out without the key every one of
+// its existing task IDs carries.
+func (operationType ConfigOperationType) TouchesKeys() bool {
+	switch operationType {
+	case ConfigKeyAdd, ConfigKeyCurrent, ConfigKeyRetire:
 		return true
 	default:
 		return false
@@ -1630,6 +1769,174 @@ func (priorities *configPriorities) sortedPriorities() []*configPriorityEntry {
 	return sorted
 }
 
+// configKeys is the mutable working form of a project's key set during a fold.
+//
+// It holds order, retirement and the current key and nothing else, because that
+// is all a key has. Like configPriorities it can start empty — a project that
+// has never recorded a key operation folds every pack with an empty one, and
+// document() reports that state as nil — and unlike it, an empty one is not a
+// project missing something: the founding key lives in the identity ref, and
+// every reader substitutes it. See ConfigData.Keys.
+type configKeys struct {
+	order   []string
+	retired map[string]bool
+	current string
+}
+
+func newConfigKeys(document *KeyDocument) (*configKeys, error) {
+	normalized, err := normalizeKeyDocument(document)
+	if err != nil {
+		return nil, Wrap(CategoryCorruptData, "configuration contains an invalid key set", err)
+	}
+	keys := &configKeys{retired: map[string]bool{}}
+	if normalized == nil {
+		return keys, nil
+	}
+	for _, definition := range normalized.Keys {
+		keys.order = append(keys.order, definition.Key)
+		keys.retired[definition.Key] = definition.Retired
+	}
+	keys.current = normalized.Current
+	return keys, nil
+}
+
+// document returns the section in the canonical stored form: nil when nothing
+// has been recorded, matching normalizeKeyDocument's rule that an empty section
+// canonicalizes to the absent member rather than an empty-but-present one.
+func (keys *configKeys) document() (*KeyDocument, error) {
+	if len(keys.order) == 0 {
+		return nil, nil
+	}
+	document := KeyDocument{Keys: make([]KeyDefinition, 0, len(keys.order)), Current: keys.current}
+	for _, key := range keys.order {
+		document.Keys = append(document.Keys, KeyDefinition{Key: key, Retired: keys.retired[key]})
+	}
+	return normalizeKeyDocument(&document)
+}
+
+func (keys *configKeys) apply(operation ConfigOperation) error {
+	switch operation.Type {
+	case ConfigKeyAdd:
+		keys.applyAdd(operation.Key)
+		return nil
+	case ConfigKeyCurrent:
+		keys.applyCurrent(operation.Key)
+		return nil
+	case ConfigKeyRetire:
+		keys.applyRetire(operation.Key)
+		return nil
+	default:
+		return corrupt("unsupported configuration operation type %q", operation.Type)
+	}
+}
+
+// applyAdd adds a key, re-activates a retired one in place, and does nothing at
+// all when the key is already active.
+//
+// Doing nothing is what makes a duplicated pack a no-op and what makes two
+// clones that both add NEW converge on one key rather than on an error. A
+// retired key keeps its place in the order when it comes back, because the order
+// is add order and a key that has minted tasks was added when it was added.
+//
+// The first key a project ever records is also its current key, which is what
+// makes the founding key current until a key.current says otherwise.
+func (keys *configKeys) applyAdd(key string) {
+	if _, known := keys.retired[key]; known {
+		keys.retired[key] = false
+	} else {
+		keys.order = append(keys.order, key)
+		keys.retired[key] = false
+	}
+	if keys.current == "" {
+		keys.current = key
+	}
+}
+
+// applyCurrent moves the current key, and does nothing for a key this project
+// does not have or has retired. A key.current naming the key that is already
+// current is the same no-op, which is what makes a redelivered pack idempotent.
+func (keys *configKeys) applyCurrent(key string) {
+	if retired, known := keys.retired[key]; !known || retired {
+		return
+	}
+	keys.current = key
+}
+
+// applyRetire stops a key minting new tasks, and refuses — silently — the three
+// retirements that would leave the project unable to mint at all: the current
+// key, the last active key, and a key it does not have.
+//
+// Silently, because by the time a pack reaches the fold it has already happened
+// somewhere: refusing it would strand the clone that fetched it rather than the
+// person who authored it. The author is refused instead, in words, by the
+// planners in internal/cli.
+func (keys *configKeys) applyRetire(key string) {
+	retired, known := keys.retired[key]
+	if !known || retired || key == keys.current {
+		return
+	}
+	if keys.activeCount() <= 1 {
+		return
+	}
+	keys.retired[key] = true
+}
+
+func (keys *configKeys) activeCount() int {
+	count := 0
+	for _, key := range keys.order {
+		if !keys.retired[key] {
+			count++
+		}
+	}
+	return count
+}
+
+// normalizeArity keeps one invariant: the current key is one of the active
+// ones. It picks the first active key by position, the same way
+// configVocabulary.normalizeArity picks by rank, so two clones folding the same
+// history reach the same answer without consulting anything outside the section.
+//
+// Unlike the vocabulary's and the priorities' repairs, this one is prophylactic
+// rather than load-bearing. Those two exist because their folds really do break
+// their invariants — untagging the last done status, or a genesis carrying two
+// defaults, are states an author can reach. Nothing reaches this one today:
+// applyCurrent refuses a key that is not active, applyRetire refuses the current
+// key, and a parent's section arrives through normalizeKeyDocument already
+// holding an active current key. It is here because it is the fourth section's
+// share of a rule ApplyConfig applies to all of them — repair, do not refuse —
+// and because a fifth key operation, a compaction, or a hand-built genesis that
+// slips past the canonicality checks would each land here rather than on a
+// section nobody can mint under.
+//
+// A section holding nothing has nothing to keep: that is the project whose key
+// set is its founding key alone.
+func (keys *configKeys) normalizeArity() {
+	if len(keys.order) == 0 {
+		return
+	}
+	if retired, known := keys.retired[keys.current]; known && !retired {
+		return
+	}
+	for _, key := range keys.order {
+		if !keys.retired[key] {
+			keys.current = key
+			return
+		}
+	}
+	// Every key is retired, so there was no active key to promote above. The
+	// choice here is not between repairing and doing nothing: without this arm
+	// document() hands the retired or blank current key to
+	// normalizeKeyDocument, which refuses it, and ApplyConfig turns that into a
+	// CategoryCorruptData "configuration pack produced an invalid key set" —
+	// silent repair against loud refusal. Refusal is the wrong half of that
+	// trade for a fold: the pack has already happened somewhere, so refusing it
+	// strands the clone that fetched it rather than the person who wrote it,
+	// which is the rule ApplyConfig's own comment states. The oldest key comes
+	// back, deterministically, so two clones that got here agree.
+	keys.retired[keys.order[0]] = false
+	keys.current = keys.order[0]
+}
+
 func validateConfigOperationPackDocument(pack ConfigOperationPack) error {
 	if pack.Format != configOperationPackFormat {
 		return corrupt("unsupported configuration operation pack format %q", pack.Format)
@@ -1705,6 +2012,9 @@ type configOperationMembers struct {
 	priorityDestination bool
 	priorityTag         bool
 	priorityTags        bool
+	// key is the key section's only member, carried by all three of its
+	// operation types — see ConfigOperation.Key.
+	key bool
 }
 
 var configOperationShapes = map[ConfigOperationType]configOperationMembers{
@@ -1726,6 +2036,9 @@ var configOperationShapes = map[ConfigOperationType]configOperationMembers{
 	ConfigPriorityTag:     {priority: true, priorityTag: true},
 	ConfigPriorityUntag:   {priority: true, priorityTag: true},
 	ConfigPriorityRecolor: {priority: true, value: true},
+	ConfigKeyAdd:          {key: true},
+	ConfigKeyCurrent:      {key: true},
+	ConfigKeyRetire:       {key: true},
 }
 
 func validateConfigOperationDocument(operation ConfigOperation) error {
@@ -1756,6 +2069,7 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 		priorityDestination: operation.PriorityDestination != "",
 		priorityTag:         operation.PriorityTag != "",
 		priorityTags:        operation.PriorityTags != nil,
+		key:                 operation.Key != "",
 	}
 	// status.add and priority.add are the two types with an optional member:
 	// a status or priority may legitimately carry no tags, and an absent list
@@ -1794,6 +2108,11 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 		}
 		if err := ValidatePriorityToken(token); err != nil {
 			return Wrap(CategoryCorruptData, string(operation.Type)+" names an invalid priority", err)
+		}
+	}
+	if operation.Key != "" {
+		if err := ValidateProjectKey(operation.Key); err != nil {
+			return Wrap(CategoryCorruptData, string(operation.Type)+" names an invalid project key", err)
 		}
 	}
 	if operation.Label != "" {
@@ -1905,6 +2224,13 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 		if !reflect.DeepEqual(operation.Config.Priorities, priorities) {
 			return corrupt("config.genesis configuration is not canonical")
 		}
+		keys, err := normalizeKeyDocument(operation.Config.Keys)
+		if err != nil {
+			return Wrap(CategoryCorruptData, "config.genesis carries an invalid key set", err)
+		}
+		if !reflect.DeepEqual(operation.Config.Keys, keys) {
+			return corrupt("config.genesis configuration is not canonical")
+		}
 	}
 	return nil
 }
@@ -1953,6 +2279,13 @@ func validateConfigStateDocument(state ConfigStateDocument) error {
 		return Wrap(CategoryCorruptData, "configuration state contains an invalid priority vocabulary", err)
 	}
 	if !reflect.DeepEqual(state.Config.Priorities, priorities) {
+		return corrupt("configuration state is not canonical")
+	}
+	keys, err := normalizeKeyDocument(state.Config.Keys)
+	if err != nil {
+		return Wrap(CategoryCorruptData, "configuration state contains an invalid key set", err)
+	}
+	if !reflect.DeepEqual(state.Config.Keys, keys) {
 		return corrupt("configuration state is not canonical")
 	}
 	return nil

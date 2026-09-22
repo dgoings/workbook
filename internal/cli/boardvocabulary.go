@@ -181,6 +181,13 @@ func (board *boardVocabulary) apply(
 	// configured no name and no colors" — and the reader's next Save, pressed
 	// without touching a field, would record that over the board they named.
 	display := written.Display()
+	// And this project's keys, off the same result once more. They ride here for
+	// the reason the display settings do rather than because a status change
+	// touches them: the client adopts this answer wholesale, the create form's
+	// key chooser and its default are drawn out of it, and a state that left
+	// them zero would tell a page that this project has no keys on the strength
+	// of a column rename.
+	keys := written.KeySet(board.config.Key)
 	return webui.VocabularyMutation{
 		// The priorities travel with the statuses because the answer is the
 		// whole vocabulary and the client adopts it wholesale: a state that
@@ -188,14 +195,14 @@ func (board *boardVocabulary) apply(
 		// would say "this project's priorities are the built-in three", and a
 		// project that named its own would watch a status rename replace them.
 		State: webui.VocabularyState{
-			Vocabulary: after, Head: written.Head, Display: display, Priorities: priorities,
+			Vocabulary: after, Head: written.Head, Display: display, Priorities: priorities, Keys: keys,
 		},
 		Tasks: webui.VocabularyTaskCounts{
 			Affected:       plan.tasks.Affected,
 			ClaimableAfter: plan.tasks.ClaimableAfter,
 		},
 		Warnings: append(board.publisher.publishConfig(ctx),
-			staleGuidelinesWarnings(board, after, priorities)...),
+			staleGuidelinesWarnings(board, after, priorities, keys)...),
 	}, nil
 }
 
@@ -246,23 +253,26 @@ func staleVocabularyWrite(expected string) error {
 // rewrite them. It is best-effort: a file it cannot read is not a reason to
 // report a recorded, published change as anything but recorded.
 //
-// It takes the priorities as well as the statuses although it changes neither,
-// because the comparison renders the whole document: a reader that supplied
-// only the statuses would render the built-in three over the priorities the
-// project configured, find the difference it had just invented, and tell every
-// project that named its own priorities that its guidelines are stale after
-// every board change — including a change that left them exactly as the
+// It takes the priorities and the keys as well as the statuses although it
+// changes neither, because the comparison renders the whole document: a reader
+// that supplied only the statuses would render the built-in three over the
+// priorities the project configured, or the founding key over one it moved,
+// find the difference it had just invented, and tell every project that named
+// its own priorities or moved its current key that its guidelines are stale
+// after every board change — including a change that left them exactly as the
 // installed file describes.
 func staleGuidelinesWarnings(
 	board *boardVocabulary,
 	vocabulary core.Vocabulary,
 	priorities core.PriorityVocabulary,
+	keys core.KeySet,
 ) []core.Warning {
 	state, err := agentdocs.GuidelinesState(agentdocs.Options{
 		Root:       board.repository.Root,
 		Project:    board.config,
 		Vocabulary: vocabulary,
 		Priorities: priorities,
+		Keys:       keys,
 		Generator:  release.Version,
 	})
 	if err != nil {

@@ -250,7 +250,7 @@ than per release:
 | 0 | `task.create`, `field.set`, `set.add`, `set.remove`, `task.tombstone`, `task.restore` |
 | 1 | `assign.add`, `assign.remove`, `comment.add`, `comment.edit`, `comment.remove`, `attachment.add`, `attachment.remove` |
 | 2 | `display.set`, `display.unset` |
-| 3 | `priority.add`, `priority.rename`, `priority.relabel`, `priority.remove`, `priority.reorder`, `priority.tag`, `priority.untag`, `priority.recolor` |
+| 3 | `priority.add`, `priority.rename`, `priority.relabel`, `priority.remove`, `priority.reorder`, `priority.tag`, `priority.untag`, `priority.recolor`, `key.add`, `key.current`, `key.retire` |
 
 Generation 0 is every operation type Workbook shipped before assignments, and it
 is the only generation that writes no marker. So a create, a field change, a
@@ -299,6 +299,26 @@ command at all — a v0.5.0 clone reads such a project and synchronizes it, and 
 told to upgrade the moment it tries to rename a status. That is a deliberate
 trade: Workbook is built for teams working closely together on one project, so
 when one of them upgrades, all of them do.
+
+**A project's keys are in that same ledger, and nothing seeds them.** The
+statuses and the priorities are written into the genesis; the key set is not,
+because a project's founding key already lives in its identity ref and a second
+copy in the checkpoint would be a second place for the same fact to be wrong.
+The fold reads a ledger with no key section as "the founding key alone, active
+and current", and the first `key.add` records that key explicitly ahead of the
+change itself, so the recorded order starts where the project's existing task
+IDs already do. Which task IDs are this project's is then decided by that set
+rather than by the identity record, which is why a fetch applies the
+configuration ref before it classifies task refs: a push that delivers a new key
+and the first task minted under it has to arrive as one fetch. A `key.*`
+operation carries generation 3, like a priority operation, so a project that
+adds a key is in exactly the position the paragraph above describes. A clone
+released before keys existed reads such a checkpoint the way it reads any
+newer-generation one — leniently, dropping the section it has no field for
+rather than refusing it, so the project still has statuses and columns — and
+then decides what a task ref is against the key in the identity record alone.
+That project's newest tasks therefore read to it as another project's refs,
+which is the signal to upgrade rather than a judgment about the refs.
 
 **Divergence is the hard edge**, and the answer is deliberate. If a clone has
 unpublished operations on a task whose `origin` history has since gained a
@@ -448,7 +468,9 @@ dgoings/tap/workbook`, or `./scripts/install.sh` to build from source.
    guard this checkout already has, and only then mint a new one, asking for the
    project key on a terminal and deriving it from the directory name otherwise —
    publishing `refs/workbook/project` and writing `.workbook/config.json` when it
-   is absent;
+   is absent. The key minted here is the project's founding key, which seeds its
+   key set: the configuration ledger can add keys and move which one new tasks
+   are minted under, and this is the one the set starts from;
 3. repair or write the private common-directory guard from that identity;
 4. write the user-global configuration file when it is missing;
 5. install or refresh managed agent documentation and the project-local Workbook skill;
