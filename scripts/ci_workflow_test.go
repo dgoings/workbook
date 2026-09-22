@@ -236,6 +236,43 @@ func TestCIWorkflowVerifiesBothPublishedPlatforms(t *testing.T) {
 			t.Errorf("matrix os = %v, want an entry for %q", job.Strategy.Matrix.OS, want)
 		}
 	}
+	// windows-2025 carries the desktop shell's checks but no Go verification;
+	// see TestCIWorkflowGatesTheExpensiveStepsRatherThanTheJob for the
+	// condition that keeps it out of the Go steps.
+	for _, name := range expensiveCIWorkflowSteps {
+		_, step := ciWorkflowStep(t, job, name)
+		if strings.Contains(step.If, "windows-2025") {
+			t.Errorf("Go step %q names windows-2025 (%q), but Workbook publishes no "+
+				"Windows archive, so Windows must carry no Go verification", name, step.If)
+		}
+	}
+}
+
+// Production mutation: until windows-2025 joined it, every entry in this matrix
+// carried the whole Go verification by construction, so a runner that verified
+// nothing was not a shape the workflow could take. It is now. A fourth entry
+// added later and named by no step's condition would produce a green
+// `Verify on <that runner>` that executed nothing at all -- and
+// scripts/check-commit-verified.sh matches check runs by the `Verify on `
+// prefix, so the release gate would count that empty run as a platform it had
+// verified. Every runner in the matrix therefore has to be named by the
+// condition of at least one gated step.
+func TestCIWorkflowGivesEveryRunnerSomethingToVerify(t *testing.T) {
+	job := readCIWorkflow(t).job(t)
+
+	var conditions strings.Builder
+	for _, name := range append(append([]string{}, expensiveCIWorkflowSteps...), desktopCIWorkflowSteps...) {
+		_, step := ciWorkflowStep(t, job, name)
+		conditions.WriteString(step.If)
+		conditions.WriteString("\n")
+	}
+
+	for _, operatingSystem := range job.Strategy.Matrix.OS {
+		if !strings.Contains(conditions.String(), operatingSystem) {
+			t.Errorf("matrix entry %q is named by no gated step's condition, so that runner "+
+				"reports a green check having verified nothing:\n%s", operatingSystem, conditions.String())
+		}
+	}
 }
 
 // Production mutation: a floating action reference lets a third party change
@@ -254,7 +291,7 @@ func TestCIWorkflowPinsActionsAndRunners(t *testing.T) {
 		}
 	}
 	contents := readCIWorkflowFile(t)
-	for _, forbidden := range []string{"ubuntu-latest", "macos-latest"} {
+	for _, forbidden := range []string{"ubuntu-latest", "macos-latest", "windows-latest"} {
 		if strings.Contains(contents, forbidden) {
 			t.Errorf("workflow pins the moving runner label %q:\n%s", forbidden, contents)
 		}
@@ -354,8 +391,14 @@ func TestCIWorkflowGatesTheExpensiveStepsRatherThanTheJob(t *testing.T) {
 	// The condition is spelled out rather than merely searched for, because
 	// GitHub's expression parser reads a hyphen as subtraction: an output named
 	// `code-changed` would silently evaluate to nothing and skip every gated
-	// step, including on a change to the Go program.
-	want := "steps." + gate.ID + ".outputs." + decision + " == 'true'"
+	// step, including on a change to the Go program. The platform clause is
+	// part of that same exact string for the same reason: Workbook publishes
+	// darwin and linux archives, not windows, so these steps must name
+	// ubuntu-24.04 and macos-15 positively rather than merely excluding
+	// windows-2025 -- a third published platform added to the matrix later
+	// should not silently inherit Go verification it was never asked to carry.
+	want := "steps." + gate.ID + ".outputs." + decision +
+		" == 'true' && (matrix.os == 'ubuntu-24.04' || matrix.os == 'macos-15')"
 	for _, name := range expensiveCIWorkflowSteps {
 		index, step := ciWorkflowStep(t, job, name)
 		if step.If != want {
@@ -424,7 +467,11 @@ var desktopCIWorkflowSteps = []string{
 // verifying it some other way lands desktop changes behind a green tick that
 // checked nothing. The checks are the shell's own (`npm run check`), they run
 // inside the single verification job so the required checks still report, and
-// they run on one runner because nothing in them depends on the platform.
+// they run on the Ubuntu and Windows runners because the app ships installers
+// for both and its tests do depend on the platform: the v0.6.0-rc2 release
+// found nine node:test cases that only passed on a POSIX host, none of which
+// any pull request had ever caught because the desktop checks had never run
+// on Windows before that release tried to build one.
 func TestCIWorkflowChecksTheDesktopShellWhenItChanges(t *testing.T) {
 	job := readCIWorkflow(t).job(t)
 	gate, _ := ciWorkflowGate(t, job)
@@ -432,7 +479,15 @@ func TestCIWorkflowChecksTheDesktopShellWhenItChanges(t *testing.T) {
 	if desktop == "" {
 		t.Fatal("no step is conditional on a desktop decision of the deciding step")
 	}
-	want := "steps." + gate.ID + ".outputs." + desktop + " == 'true' && matrix.os == 'ubuntu-24.04'"
+	want := "steps." + gate.ID + ".outputs." + desktop +
+		" == 'true' && (matrix.os == 'ubuntu-24.04' || matrix.os == 'windows-2025')"
+
+	// windows-2025 has to actually be in the matrix, or the condition above is
+	// satisfied vacuously and the desktop checks never run there.
+	if !containsString(job.Strategy.Matrix.OS, "windows-2025") {
+		t.Errorf("matrix os = %v, want an entry for %q so the desktop checks run there",
+			job.Strategy.Matrix.OS, "windows-2025")
+	}
 
 	gateIndex, _ := ciWorkflowStep(t, job, gate.Name)
 	for _, name := range desktopCIWorkflowSteps {
