@@ -93,9 +93,11 @@ Use help to discover commands and their options:
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push to `main` and every pull request
-against it, on `ubuntu-24.04` and `macos-15` because Workbook publishes darwin
-and linux archives. Each job verifies formatting with `gofmt -l .`, runs
-`go vet ./...`, and runs `go test ./...`.
+against it. The Go verification runs on `ubuntu-24.04` and `macos-15`, because
+Workbook publishes darwin and linux archives: each of those jobs verifies
+formatting with `gofmt -l .`, runs `go vet ./...`, and runs `go test ./...`.
+A third runner, `windows-2025`, is in the matrix for the desktop app alone and
+carries no Go verification; see below.
 
 The one change that does not pay for all of that is a change to the marketing
 site. Nothing builds `site/` or `render.yaml`, no package embeds them, and no
@@ -114,11 +116,21 @@ The desktop app under `desktop/` is the other exemption, with a different
 answer. The Go program cannot see a change confined to it, so such a change
 skips the Go matrix by the same gate; but the app is not inert, so the gate's
 second decision, `desktop_changed`, runs the shell's own checks instead:
-`npm ci` and `npm run check` in `desktop/`, on the Ubuntu runner only, since
-nothing in them depends on the platform. A change touching both `desktop/`
-and the Go program runs both; every uncertainty runs both. The stage script
-that builds the CLI the app bundles is covered by the Go suite through
-`scripts/desktop_stage_test.go`.
+`npm ci` and `npm run check` in `desktop/`, on the Ubuntu and Windows
+runners. The app ships a Windows installer, and the v0.6.0-rc2 release was
+the first time the desktop tests ever ran on Windows, where nine of them
+failed on POSIX assumptions the checks had never been asked to prove wrong
+before. A change touching both `desktop/` and the Go program runs both;
+every uncertainty runs both. The stage script that builds the CLI the app
+bundles is covered by the Go suite through `scripts/desktop_stage_test.go`.
+
+`Verify on windows-2025` reports like the other two, but it is not yet in the
+branch ruleset, so today it blocks a release rather than a merge:
+`scripts/check-commit-verified.sh` requires every `Verify on ` check run to
+have succeeded before a release is cut, while a merge waits only on the two
+required checks. Adding it to the ruleset is a repository setting, not
+something this workflow can assert, and until that happens a Windows-only
+desktop regression can reach `main` behind a green tick.
 
 A suite that skips is the failure this workflow is built to prevent. The
 embedded web board tests execute the rendered client with `node`, and the

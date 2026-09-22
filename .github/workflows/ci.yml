@@ -28,8 +28,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Workbook publishes darwin and linux archives, so verify both.
-        os: [ubuntu-24.04, macos-15]
+        # Workbook publishes darwin and linux archives, so ubuntu-24.04 and
+        # macos-15 carry the Go verification. windows-2025 is in the matrix
+        # for the desktop shell alone: the desktop app ships a Windows
+        # installer, and its tests had never run on Windows before a release
+        # tried to build one.
+        os: [ubuntu-24.04, macos-15, windows-2025]
     steps:
       # Release tags must be present: scripts/setup_dev_env_test.go builds the
       # newest one, and treats its absence as a missing capability.
@@ -155,7 +159,7 @@ jobs:
           fi
 
       - name: Set up Go
-        if: steps.scope.outputs.code_changed == 'true'
+        if: steps.scope.outputs.code_changed == 'true' && (matrix.os == 'ubuntu-24.04' || matrix.os == 'macos-15')
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.5"
@@ -163,7 +167,7 @@ jobs:
       # The embedded web client behavior tests execute the rendered script with
       # node. Without one they skip, and a skipped suite reports "ok".
       - name: Set up Node
-        if: steps.scope.outputs.code_changed == 'true'
+        if: steps.scope.outputs.code_changed == 'true' && (matrix.os == 'ubuntu-24.04' || matrix.os == 'macos-15')
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -171,11 +175,11 @@ jobs:
       # Fail before the suite runs when a capability it depends on is absent,
       # so the reason is a named missing tool rather than a shrunken run.
       - name: Verify test capabilities
-        if: steps.scope.outputs.code_changed == 'true'
+        if: steps.scope.outputs.code_changed == 'true' && (matrix.os == 'ubuntu-24.04' || matrix.os == 'macos-15')
         run: scripts/check-ci-capabilities.sh
 
       - name: Check formatting
-        if: steps.scope.outputs.code_changed == 'true'
+        if: steps.scope.outputs.code_changed == 'true' && (matrix.os == 'ubuntu-24.04' || matrix.os == 'macos-15')
         shell: bash
         run: |
           unformatted=$(gofmt -l .)
@@ -186,14 +190,14 @@ jobs:
           fi
 
       - name: Vet
-        if: steps.scope.outputs.code_changed == 'true'
+        if: steps.scope.outputs.code_changed == 'true' && (matrix.os == 'ubuntu-24.04' || matrix.os == 'macos-15')
         run: go vet ./...
 
       # WORKBOOK_TEST_REQUIRE_CAPABILITIES turns a missing-capability skip into
       # a failure, and skipreport writes every skip to the job summary, so a
       # suite that quietly stopped covering something cannot report success.
       - name: Test
-        if: steps.scope.outputs.code_changed == 'true'
+        if: steps.scope.outputs.code_changed == 'true' && (matrix.os == 'ubuntu-24.04' || matrix.os == 'macos-15')
         shell: bash
         env:
           WORKBOOK_TEST_REQUIRE_CAPABILITIES: "1"
@@ -203,14 +207,16 @@ jobs:
 
       # The desktop app under desktop/ is Node, not Go, and nothing in the
       # matrix above can see a bug in it. Its own checks run here, inside this
-      # job so the required checks keep reporting, and on one runner because
-      # nothing in them depends on the platform: every renderer class styled,
-      # every export defined, element ids and IPC channels lining up on both
-      # sides, every source file parsing. The stage script that builds the CLI
-      # the app bundles is exercised by the Go suite, since its test lives
-      # under scripts/.
+      # job so the required checks keep reporting. They run on the Ubuntu and
+      # Windows runners because the app ships installers for both and its
+      # tests do depend on the platform: the v0.6.0-rc2 release found nine
+      # node:test cases that assumed a POSIX host. macOS is left out because
+      # the POSIX behavior Ubuntu proves is the same there, and a third runner
+      # would buy nothing. The stage script that builds the CLI the app
+      # bundles is exercised by the Go suite, since its test lives under
+      # scripts/.
       - name: Set up Node for the desktop app
-        if: steps.scope.outputs.desktop_changed == 'true' && matrix.os == 'ubuntu-24.04'
+        if: steps.scope.outputs.desktop_changed == 'true' && (matrix.os == 'ubuntu-24.04' || matrix.os == 'windows-2025')
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -218,11 +224,13 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
 
       - name: Install the desktop app's dependencies
-        if: steps.scope.outputs.desktop_changed == 'true' && matrix.os == 'ubuntu-24.04'
+        if: steps.scope.outputs.desktop_changed == 'true' && (matrix.os == 'ubuntu-24.04' || matrix.os == 'windows-2025')
         working-directory: desktop
+        shell: bash
         run: npm ci
 
       - name: Check the desktop shell
-        if: steps.scope.outputs.desktop_changed == 'true' && matrix.os == 'ubuntu-24.04'
+        if: steps.scope.outputs.desktop_changed == 'true' && (matrix.os == 'ubuntu-24.04' || matrix.os == 'windows-2025')
         working-directory: desktop
+        shell: bash
         run: npm run check
