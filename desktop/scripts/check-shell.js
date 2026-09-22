@@ -104,6 +104,29 @@ if (ignored.length > 0) fail(`sent to the shell but not listened for: ${ignored.
 const expected = [...awaited].filter((channel) => !pushed.has(channel))
 if (expected.length > 0) fail(`listened for in the shell but never sent: ${expected.join(', ')}`)
 
+// A closed window lets go of its views. Nothing else can catch this going
+// missing: every check above and every test still passes without it, because
+// the damage is done to the *next* window — one built by the dock on macOS,
+// inheriting a destroyed window's board views and laying them out. The handler
+// is asserted here for the same reason the channels are, that main.js cannot be
+// loaded to be asked.
+if (!/\.(?:once|on)\('closed'[\s\S]{0,600}?lifecycle\.releaseClosedWindow/.test(mainSource)) {
+  fail("src/main/main.js has no 'closed' handler calling lifecycle.releaseClosedWindow: " +
+    "a reopened window would inherit the closed window's board views")
+}
+
+// No ipcMain.on listener is an async function. Nothing awaits one, so a
+// rejection inside it is an unhandled rejection in the main process and the
+// click that caused it looks like it did nothing — which is what `board:scheme`
+// did with a failed theme save. The fix is the shape the sidebar chord uses: a
+// synchronous listener over a named async function it catches.
+const asyncListeners = [...mainSource.matchAll(/ipcMain\.on\('([^']+)',\s*async\b/g)]
+  .map((m) => m[1])
+if (asyncListeners.length > 0) {
+  fail('ipcMain.on listeners are async functions, so nothing handles a rejection ' +
+    `inside them: ${asyncListeners.join(', ')}`)
+}
+
 // The sidebar's two widths are one measurement written in two files: main.js
 // positions every board view at the current width, styles.css draws the sidebar
 // at it. Neither file refers to the other, so changing one alone leaves the
@@ -147,4 +170,5 @@ if (failures > 0) {
 }
 console.log(`${sources.length} files parse, ${used.size} element ids exist, ` +
   `${invoked.size + sent.size + pushed.size} channels line up, ` +
+  `${listened.size} fire-and-forget listeners are synchronous, ` +
   `${widths.length} sidebar widths match the stylesheet`)

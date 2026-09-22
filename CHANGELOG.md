@@ -201,6 +201,28 @@ described under Changed.
   on the deleted task itself, that Workbook will not touch — and the rule is now
   covered by tests, including when the deleted dependency is named by a prefix
   rather than its full ID.
+- **Closing the desktop app's window and reopening it from the dock no longer
+  leaves the new window half broken.** Closing the window does not quit
+  Workbench on macOS, and the window it built next inherited every board view
+  belonging to the window that was gone. Cmd+B was the visible casualty:
+  collapsing the sidebar moves each board to the new width, and moving a view
+  whose window has been destroyed fails, so the chord did nothing at all. A
+  closed window now lets go of its boards and its own chrome, and the window
+  that replaces it starts with nothing borrowed — including from a board that
+  was still starting up as the window went. The board servers are left running,
+  so reopening a board afterwards is as quick as opening one whose server is
+  already up, which is the part of the wait worth saving.
+- **A Dark Mode choice Workbench could not store no longer turns up later
+  anyway.** A board's switch is the whole window's: the board that was clicked
+  changes at once, and Workbench stores the choice and passes it to the shell
+  and to every other open board. When that write failed — a full disk, a
+  preferences directory that is not writable — the clicked board went dark and
+  everything around it quietly stayed behind, and the refused choice was still
+  held in memory, so the next save of anything at all, a sidebar collapse or an
+  import, wrote it out: the rest of the window adopted, at some unrelated
+  moment, a mode that had been asked for once and denied. A refused write is now
+  rolled back, and the failure is reported instead of going unhandled in the
+  app's main process.
 
 ## v0.5.1 — 2026-08-23
 

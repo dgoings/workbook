@@ -7,6 +7,7 @@ const path = require('node:path')
 const { Registry } = require('./registry')
 const { Supervisor } = require('./supervisor')
 const discovery = require('./discovery')
+const lifecycle = require('./lifecycle')
 const repoinfo = require('./repoinfo')
 const workbook = require('./workbook')
 const clipath = require('./clipath')
@@ -103,6 +104,42 @@ function createWindow () {
   watchSidebarShortcut(chromeView.webContents)
 
   window.on('resize', layout)
+
+  // The window's views and the project showing in it are module state that
+  // outlives the window it describes, and on macOS a closed window is not a
+  // quit: `window-all-closed` deliberately does not quit there, and the dock
+  // icon brings the app back through `activate`, which calls this function
+  // again. A new window that inherited the old one's boardViews would lay out
+  // views belonging to a destroyed window — which is what made Cmd+B do nothing
+  // in a reopened window, since the layout inside toggleSidebar() threw.
+  //
+  // `once`, because a window closes once. There is no guard against `window`
+  // having moved on to a newer one by the time this runs, because it cannot
+  // have: createWindow() has two callers, and the `activate` one only builds a
+  // window when none are left, which a window leaves by being destroyed — the
+  // very thing that emits this.
+  window.once('closed', () => {
+    const { dropped, errors } = lifecycle.releaseClosedWindow({ boardViews, chromeView })
+    window = null
+    chromeView = null
+    activeProjectId = null
+    // Said only when there was something to let go of, the way the reaping log
+    // speaks only when it reaped: every ordinary quit closes the window too,
+    // and on Windows and Linux that makes this the last line of every session.
+    // The board servers are left running on purpose — reopening from the dock
+    // is meant to be quick, and quitting is what stops them (see
+    // `before-quit`).
+    if (dropped.length > 0) {
+      console.log(`workbench: window closed; released ${dropped.length} board view(s): ` +
+        dropped.join(', '))
+    }
+    // One line per failure, like the PATH install: a view that would not close
+    // has already been let go of, and is still worth seeing.
+    for (const error of errors) {
+      console.error(`workbench: ${error}`)
+    }
+  })
+
   layout()
 
   if (process.argv.includes('--dev')) {
@@ -151,6 +188,27 @@ async function applyTheme () {
     })
   }
   toChrome('theme:changed', { theme: registry.theme, dark })
+}
+
+/**
+ * Take on the theme a board chose: store it, repaint, align the other boards.
+ *
+ * Which theme a reported scheme asks for is lifecycle.schemeToTheme's to say;
+ * this is only the doing of it. The reporting board is not told, because it is
+ * already there — and a board that is told and finds itself already aligned
+ * says nothing back, which is what keeps the alignment from reporting itself
+ * round the loop again.
+ *
+ * Stored before anything is painted, like setSidebarCollapsed: a board's
+ * switch has already moved in its own page, but the shell and every other board
+ * must not follow a choice the registry refused to keep.
+ */
+async function adoptBoardScheme (theme, sender) {
+  await registry.setTheme(theme)
+  await applyTheme()
+  for (const [, view] of boardViews) {
+    if (view.webContents !== sender) view.webContents.send('board:align', { theme })
+  }
 }
 
 // --- sidebar ---------------------------------------------------------------
@@ -232,6 +290,15 @@ async function openProject (projectId, taskId = null) {
   // rather than the board it lives on.
   const target = taskId ? new URL(`/tasks/${encodeURIComponent(taskId)}`, url).href : url
 
+  // A first open spawns `workbook serve` and waits for the address it bound,
+  // which is the one await here long enough for a user to close the window
+  // inside it. The window is checked rather than the view being added to
+  // nothing: the invoke rejects into a renderer that has gone, which is the
+  // right ending, where carrying on would put a view in boardViews that no
+  // window holds — precisely the state the `closed` handler exists to prevent,
+  // arriving just after it ran.
+  if (!window) throw new Error('the window closed while the board was starting')
+
   let view = boardViews.get(projectId)
   if (!view) {
     view = new WebContentsView({
@@ -249,9 +316,13 @@ async function openProject (projectId, taskId = null) {
       shell.openExternal(target)
       return { action: 'deny' }
     })
-    boardViews.set(projectId, view)
     watchSidebarShortcut(view.webContents)
+    // Into the window first and into the map second, so that a failure to
+    // attach leaves nothing behind: an entry in boardViews is a promise that
+    // the window holds that view, and the next window would inherit and lay
+    // out anything that broke the promise.
     window.contentView.addChildView(view)
+    boardViews.set(projectId, view)
     await view.webContents.loadURL(target)
   } else if (view.webContents.getURL() !== target) {
     // A warm view showing something else — another task, or the board root, or
@@ -272,7 +343,12 @@ function showChrome () {
 function closeProject (projectId) {
   const view = boardViews.get(projectId)
   if (view) {
-    window.contentView.removeChildView(view)
+    // Detached only while there is a window to detach it from. This is the one
+    // place an IPC handler reaches into the window's contentView, and doing
+    // that to a destroyed window throws: a close or a forget arriving as the
+    // window goes would fail in the renderer over a view the next line lets go
+    // of regardless.
+    if (window) window.contentView.removeChildView(view)
     view.webContents.close()
     boardViews.delete(projectId)
   }
@@ -528,8 +604,6 @@ ipcMain.handle('import:apply', async (_event, { selections }) => {
   return { results }
 })
 
-const THEMES = ['system', 'light', 'dark']
-
 ipcMain.handle('theme:get', async () => ({ theme: registry.theme, dark: resolveDark() }))
 
 ipcMain.handle('sidebar:get', async () => ({ collapsed: registry.sidebarCollapsed }))
@@ -544,27 +618,29 @@ ipcMain.handle('sidebar:toggle', async () => {
 // the page script runs the moment the preload ends, and a promise would land
 // after the board had already read its preference.
 ipcMain.on('theme:current', (event) => {
-  event.returnValue = THEMES.includes(registry.theme) ? registry.theme : 'system'
+  event.returnValue = lifecycle.THEMES.includes(registry.theme) ? registry.theme : 'system'
 })
 
 /**
  * A board's Dark Mode switch was clicked: its choice becomes the window's.
  *
- * The board reports its stored preference, in its own terms: 'light', 'dark',
- * or '' for "follow the system", which the shell has always spelled 'system'.
- * The shell repaints itself and every other open board is told to align. The
- * reporting board is not told; it is already there, and a board that is told
- * and finds itself already aligned does nothing, which is what stops the
- * alignment's own click from reporting back into a loop.
+ * The board reports its stored preference, in its own terms, and what that asks
+ * for is lifecycle.schemeToTheme's to answer, and the doing of it is
+ * adoptBoardScheme's. Synchronous over an async function, the way the sidebar
+ * chord is, for the reason in the body.
  */
-ipcMain.on('board:scheme', async (event, { scheme }) => {
-  const theme = scheme === '' ? 'system' : scheme
-  if (!THEMES.includes(theme) || theme === registry.theme) return
-  await registry.setTheme(theme)
-  await applyTheme()
-  for (const [, view] of boardViews) {
-    if (view.webContents !== event.sender) view.webContents.send('board:align', { theme })
-  }
+ipcMain.on('board:scheme', (event, payload) => {
+  // Read rather than destructured: a message with no payload would throw
+  // inside Electron's own dispatch, where nothing catches it.
+  const theme = lifecycle.schemeToTheme(payload?.scheme, registry.theme)
+  if (!theme) return
+  // Nothing awaits an ipcMain.on listener, so a save that rejects — a full
+  // disk, an unwritable userData directory — would otherwise be an unhandled
+  // rejection in the main process, and the switch the user just clicked would
+  // look like it simply did nothing.
+  adoptBoardScheme(theme, event.sender).catch((error) => {
+    console.error('workbench: could not take on the theme a board chose', error)
+  })
 })
 
 ipcMain.handle('project:open', async (_event, { projectId, taskId }) =>
@@ -598,10 +674,19 @@ if (!isPrimaryInstance) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    if (window) {
-      if (window.isMinimized()) window.restore()
-      window.focus()
-    }
+    // Letting go of the window on close makes "running with no window" a real
+    // state, and this deliberately does not answer it by building one. This
+    // handler is armed from module scope, before `ready`, so it would have to
+    // ask whether the app is up — and even then it races the startup's own
+    // createWindow(): a copy arriving while registry.load() is awaited finds
+    // the app ready and no window, both build one, and the orphan's `closed`
+    // handler would later let go of the surviving window's views. Nothing is
+    // lost by declining. Closing the window quits the app everywhere but
+    // macOS, and on macOS the way back is the dock icon, which fires
+    // `activate` and builds a window there.
+    if (!window) return
+    if (window.isMinimized()) window.restore()
+    window.focus()
   })
 }
 
