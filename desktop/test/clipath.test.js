@@ -45,6 +45,25 @@ function findFish () {
 
 const fish = findFish()
 
+// Mirrors what syncBinary names the installed copy on this host, so seeding
+// or occupying that exact path keeps the default-platform branch of
+// syncBinary under test everywhere, not just on POSIX.
+const INSTALLED_NAME = process.platform === 'win32' ? 'workbook.exe' : 'workbook'
+
+// /bin/sh does not exist on Windows, so any case that sources a block
+// through it cannot run there. posixBlock's exact text is still asserted on
+// every platform, by the two cases at the top of its describe block; what
+// goes unproven on Windows is what a real sh does with that text — a literal
+// quote surviving into PATH, a command substitution never running, a second
+// sourcing adding no second entry. That is unavoidable there, not covered
+// elsewhere, and worth saying rather than glossing.
+const noPosixShell = process.platform === 'win32' ? 'POSIX /bin/sh is not available on Windows' : false
+
+// Windows has no POSIX file mode; Node reports 0666 for any writable file
+// there, so an expected mode computed per platform would pass whether or
+// not writeBlock actually preserved anything.
+const noPosixModes = process.platform === 'win32' ? 'Windows has no POSIX file mode; Node reports 0666 for any writable file' : false
+
 describe('syncBinary', () => {
   test('a missing installed copy is created, executable, byte-identical', async () => {
     const root = await tempDirectory('missing')
@@ -60,7 +79,12 @@ describe('syncBinary', () => {
     assert.equal(result.reason, 'missing')
     assert.equal((await fs.readFile(result.path, 'utf8')), 'bundled contents')
     const stat = await fs.stat(result.path)
-    assert.equal(stat.mode & 0o777, 0o755)
+    // Windows has no executable bit and Node reports 0o666 for any writable
+    // file there, so this assertion says nothing on that platform; the
+    // copy-happened, reason and byte-identity assertions above still run.
+    if (process.platform !== 'win32') {
+      assert.equal(stat.mode & 0o777, 0o755)
+    }
   })
 
   test('a differing bundled binary of the same size is re-copied', async () => {
@@ -70,7 +94,7 @@ describe('syncBinary', () => {
     await fs.writeFile(bundled, 'AAAA')
     const directory = path.join(root, 'installed')
     await fs.mkdir(directory, { recursive: true })
-    const destination = path.join(directory, 'workbook')
+    const destination = path.join(directory, INSTALLED_NAME)
     await fs.writeFile(destination, 'BBBB') // same size as bundled, different bytes
     await fs.chmod(destination, 0o755)
 
@@ -89,7 +113,7 @@ describe('syncBinary', () => {
     await fs.chmod(bundled, 0o755)
     const directory = path.join(root, 'installed')
     await fs.mkdir(directory, { recursive: true })
-    const destination = path.join(directory, 'workbook')
+    const destination = path.join(directory, INSTALLED_NAME)
     await fs.writeFile(destination, 'same bytes')
     await fs.chmod(destination, 0o755)
     const before = await fs.stat(destination)
@@ -122,10 +146,11 @@ describe('syncBinary', () => {
     await fs.mkdir(path.dirname(bundled), { recursive: true })
     await fs.writeFile(bundled, 'bundled contents')
     const directory = path.join(root, 'installed')
-    // Occupy the destination path with a non-empty directory: fs.rename(file,
-    // thisPath) can never succeed, which is what forces syncBinary's rename
-    // step to fail after the temp file has already been written.
-    const destination = path.join(directory, 'workbook')
+    // Occupy the destination path (named as syncBinary would install it on
+    // this host) with a non-empty directory: fs.rename(file, thisPath) can
+    // never succeed, which is what forces syncBinary's rename step to fail
+    // after the temp file has already been written.
+    const destination = path.join(directory, INSTALLED_NAME)
     await fs.mkdir(destination, { recursive: true })
     await fs.writeFile(path.join(destination, 'occupied'), 'x')
 
@@ -184,7 +209,7 @@ describe('posixBlock', () => {
     assert.ok(block.includes('PATH="${PATH}:"\'/tmp/o\'\\\'\'brien\''), block)
   })
 
-  test('a directory holding a literal single quote still sources cleanly and lands on PATH intact', async () => {
+  test('a directory holding a literal single quote still sources cleanly and lands on PATH intact', { skip: noPosixShell }, async () => {
     const root = await tempDirectory('posix-quote')
     const directory = "/tmp/o'brien"
     const block = clipath.posixBlock(directory)
@@ -199,7 +224,7 @@ describe('posixBlock', () => {
     assert.ok(output.split(':').includes(directory), `PATH was: ${output}`)
   })
 
-  test('a directory holding a command substitution or backtick does not execute when sourced', async () => {
+  test('a directory holding a command substitution or backtick does not execute when sourced', { skip: noPosixShell }, async () => {
     const root = await tempDirectory('posix-injection')
     const marker = path.join(root, 'marker')
     const maliciousDirectory = `/tmp/$(touch ${marker})\`touch ${marker}2\``
@@ -304,7 +329,7 @@ describe('writeBlock', () => {
     assert.ok(content.includes('/opt/workbench/bin-2'))
   })
 
-  test('preserves an existing profile\'s exact mode, across a write and a repeat write', async () => {
+  test('preserves an existing profile\'s exact mode, across a write and a repeat write', { skip: noPosixModes }, async () => {
     const root = await tempDirectory('write-mode')
     const profile = path.join(root, '.profile')
     await fs.writeFile(profile, '# secrets live near here\n')
@@ -318,7 +343,7 @@ describe('writeBlock', () => {
     assert.equal((await fs.stat(profile)).mode & 0o777, 0o600, 'mode after the second (no-op) write')
   })
 
-  test('the temp file that briefly holds the whole profile is created at mode 0600', async () => {
+  test('the temp file that briefly holds the whole profile is created at mode 0600', { skip: noPosixModes }, async () => {
     const root = await tempDirectory('write-temp-mode')
     const profile = path.join(root, '.profile')
     const block = clipath.posixBlock('/opt/workbench/bin')
@@ -378,7 +403,7 @@ describe('writeBlock', () => {
     assert.ok(content.includes(clipath.MARK_BEGIN))
   })
 
-  test('sourcing the POSIX block in sh twice puts the directory on PATH once, after an earlier Homebrew entry', async () => {
+  test('sourcing the POSIX block in sh twice puts the directory on PATH once, after an earlier Homebrew entry', { skip: noPosixShell }, async () => {
     const root = await tempDirectory('write-source')
     const appDirectory = '/opt/workbench/bin'
     const block = clipath.posixBlock(appDirectory)
