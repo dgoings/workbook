@@ -785,7 +785,7 @@ var commandSchemas = map[string]commandMetadata{
 	},
 	"next": {
 		Name:     "next",
-		Synopsis: "workbook next [--any] [--claim] [--no-sync] [--json]",
+		Synopsis: "workbook next [--any] [--claim] [--limit <n>] [--no-sync] [--json]",
 		Description: "Show the next eligible task.\n\n" +
 			"A task somebody else is assigned to and you are not is skipped, because it\n" +
 			"is work already being done; a task you hold too is still offered, however\n" +
@@ -796,10 +796,14 @@ var commandSchemas = map[string]commandMetadata{
 			"is nothing left to refuse: a board whose eligible work is all held answers\n" +
 			"with no task and says so, and claiming a task you already hold records\n" +
 			"nothing. If the publication loses a race, the claim still stands and the\n" +
-			"synchronization that replays it reports who it is shared with.",
+			"synchronization that replays it reports who it is shared with.\n\n" +
+			"--limit <n> offers the first n eligible tasks in the order next walks them; in\n" +
+			"--json the document also says how many qualified in all. It cannot be combined\n" +
+			"with --claim, which takes one task.",
 		Options: []optionMetadata{
 			{Name: "any", Kind: boolFlag, Description: "include tasks somebody else is assigned to"},
 			{Name: "claim", Kind: boolFlag, Description: "assign the chosen task to yourself and publish it"},
+			{Name: "limit", Kind: stringFlag, Value: "<n>", Description: "offer up to this many eligible tasks, in next's order"},
 			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},

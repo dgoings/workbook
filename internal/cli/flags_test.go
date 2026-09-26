@@ -65,8 +65,8 @@ func TestCommandHelp(t *testing.T) {
 		{
 			name:     "next",
 			target:   []string{"next"},
-			synopsis: "Usage: workbook next [--any] [--claim] [--no-sync] [--json]",
-			options:  []string{"any", "claim", "no-sync", "json"},
+			synopsis: "Usage: workbook next [--any] [--claim] [--limit <n>] [--no-sync] [--json]",
+			options:  []string{"any", "claim", "limit", "no-sync", "json"},
 		},
 		{
 			name:        "hooks install",
@@ -236,7 +236,7 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"move":     {"before": stringFlag, "after": stringFlag, "no-sync": boolFlag, "json": boolFlag},
 		"depend":   {"no-sync": boolFlag, "json": boolFlag},
 		"free":     {"no-sync": boolFlag, "json": boolFlag},
-		"next":     {"any": boolFlag, "claim": boolFlag, "no-sync": boolFlag, "json": boolFlag},
+		"next":     {"any": boolFlag, "claim": boolFlag, "limit": stringFlag, "no-sync": boolFlag, "json": boolFlag},
 		"rebuild":  {"json": boolFlag},
 		"validate": {"full": boolFlag, "json": boolFlag},
 		"version":  {"json": boolFlag},

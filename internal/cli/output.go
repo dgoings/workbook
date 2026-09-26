@@ -28,7 +28,7 @@ Commands:
   move <id-or-prefix> (--before <id-or-prefix> | --after <id-or-prefix>) [--json]
   depend <id-or-prefix> <dependency-id-or-prefix> [--json]
   free <id-or-prefix> <dependency-id-or-prefix> [--json]
-  next [--any] [--claim] [--no-sync] [--json]
+  next [--any] [--claim] [--limit <n>] [--no-sync] [--json]
   rebuild [--json]
   validate [--full] [--json]
   version [--json]
@@ -131,6 +131,14 @@ type ErrorEnvelope struct {
 	Format  string    `json:"format"`
 	Version int       `json:"version"`
 	Error   ErrorBody `json:"error"`
+}
+
+// nextCandidatesDocument is `next --limit`'s answer: the first tasks next would
+// pick, in its order, and how many qualified in all, so a caller can show
+// "and three more" without asking again. Tasks is never null.
+type nextCandidatesDocument struct {
+	Tasks    []core.Task `json:"tasks"`
+	Eligible int         `json:"eligible"`
 }
 
 func writeResult(output io.Writer, command string, data any) {

@@ -269,6 +269,138 @@ func TestRunNextNoEligibleHumanMessage(t *testing.T) {
 	}
 }
 
+func TestRunNextLimitOffersTheEligibleSetInOrder(t *testing.T) {
+	repository := initializedRepository(t)
+	low := createOrderingTask(t, repository, "Low", "low")
+	high := createOrderingTask(t, repository, "High", "high")
+	medium := createOrderingTask(t, repository, "Medium", "medium")
+
+	decode := func(t *testing.T, stdout string) (ids []string, eligible int) {
+		t.Helper()
+		result := assertJSONResult(t, stdout, "next")
+		var document struct {
+			Tasks    []core.Task `json:"tasks"`
+			Eligible int         `json:"eligible"`
+		}
+		if err := json.Unmarshal(result.Data, &document); err != nil {
+			t.Fatalf("decode next --limit document: %v", err)
+		}
+		for _, task := range document.Tasks {
+			ids = append(ids, task.ID)
+		}
+		return ids, document.Eligible
+	}
+
+	t.Run("limit below the eligible count truncates and reports the whole count", func(t *testing.T) {
+		code, stdout, stderr := run(t, repository, "next", "--limit", "2", "--json")
+		if code != 0 {
+			t.Fatalf("code = %d, want 0; stderr = %q", code, stderr)
+		}
+		ids, eligible := decode(t, stdout)
+		if got, want := strings.Join(ids, ","), high.ID+","+medium.ID; got != want {
+			t.Fatalf("tasks = %q, want %q", got, want)
+		}
+		if eligible != 3 {
+			t.Fatalf("eligible = %d, want 3", eligible)
+		}
+	})
+
+	t.Run("limit 1 keeps the document shape", func(t *testing.T) {
+		code, stdout, stderr := run(t, repository, "next", "--limit", "1", "--json")
+		if code != 0 {
+			t.Fatalf("code = %d, want 0; stderr = %q", code, stderr)
+		}
+		ids, eligible := decode(t, stdout)
+		if got, want := strings.Join(ids, ","), high.ID; got != want {
+			t.Fatalf("tasks = %q, want %q", got, want)
+		}
+		if eligible != 3 {
+			t.Fatalf("eligible = %d, want 3", eligible)
+		}
+	})
+
+	t.Run("limit above the eligible count offers everything", func(t *testing.T) {
+		code, stdout, stderr := run(t, repository, "next", "--limit", "10", "--json")
+		if code != 0 {
+			t.Fatalf("code = %d, want 0; stderr = %q", code, stderr)
+		}
+		ids, eligible := decode(t, stdout)
+		if got, want := strings.Join(ids, ","), high.ID+","+medium.ID+","+low.ID; got != want {
+			t.Fatalf("tasks = %q, want %q", got, want)
+		}
+		if eligible != 3 {
+			t.Fatalf("eligible = %d, want 3", eligible)
+		}
+	})
+
+	t.Run("text output is one list line per task", func(t *testing.T) {
+		code, stdout, stderr := run(t, repository, "next", "--limit", "2")
+		if code != 0 {
+			t.Fatalf("code = %d, want 0; stderr = %q", code, stderr)
+		}
+		var want strings.Builder
+		if err := writeList(&want, []core.Task{high, medium}); err != nil {
+			t.Fatalf("writeList: %v", err)
+		}
+		if stdout != want.String() {
+			t.Fatalf("stdout = %q, want %q", stdout, want.String())
+		}
+	})
+
+	t.Run("plain next still returns one task", func(t *testing.T) {
+		code, stdout, stderr := run(t, repository, "next", "--json")
+		if code != 0 {
+			t.Fatalf("code = %d, want 0; stderr = %q", code, stderr)
+		}
+		result := assertJSONResult(t, stdout, "next")
+		var task core.Task
+		if err := json.Unmarshal(result.Data, &task); err != nil {
+			t.Fatalf("plain next data is no longer one task: %v", err)
+		}
+		if task.ID != high.ID {
+			t.Fatalf("plain next = %s, want %s", task.ID, high.ID)
+		}
+	})
+}
+
+func TestRunNextLimitWithNothingEligible(t *testing.T) {
+	repository := initializedRepository(t)
+	code, stdout, stderr := run(t, repository, "next", "--limit", "3", "--json")
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr = %q", code, stderr)
+	}
+	result := assertJSONResult(t, stdout, "next")
+	if got, want := string(result.Data), `{"tasks":[],"eligible":0}`; got != want {
+		t.Fatalf("data = %s, want %s", got, want)
+	}
+	code, stdout, stderr = run(t, repository, "next", "--limit", "3")
+	if code != 0 || stdout != "No eligible task.\n" {
+		t.Fatalf("text code/stdout = %d/%q, want 0/empty-state message; stderr = %q", code, stdout, stderr)
+	}
+}
+
+func TestRunNextLimitRefusals(t *testing.T) {
+	repository := initializedRepository(t)
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"zero", []string{"next", "--limit", "0", "--json"}, "next --limit must be at least 1"},
+		{"negative", []string{"next", "--limit", "-2", "--json"}, "next --limit must be at least 1"},
+		{"not a number", []string{"next", "--limit", "two", "--json"}, "next --limit must be at least 1"},
+		{"with claim", []string{"next", "--limit", "2", "--claim", "--no-sync", "--json"}, "next accepts --limit or --claim, not both"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, stdout, stderr := run(t, repository, tc.args...)
+			if code != 2 || stdout != "" {
+				t.Fatalf("code/stdout = %d/%q, want 2/empty; stderr = %q", code, stdout, stderr)
+			}
+			assertJSONError(t, stderr, core.CategoryInvocation, tc.want)
+		})
+	}
+}
+
 func TestRunOrderingCommandsUseInitializedRepository(t *testing.T) {
 	repository := testrepo.New(t)
 	code, stdout, stderr := run(t, repository, "next", "--json")
