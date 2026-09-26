@@ -386,6 +386,7 @@ func TestRunNextLimitRefusals(t *testing.T) {
 		args []string
 		want string
 	}{
+		{"empty", []string{"next", "--limit=", "--json"}, "next --limit must be at least 1"},
 		{"zero", []string{"next", "--limit", "0", "--json"}, "next --limit must be at least 1"},
 		{"negative", []string{"next", "--limit", "-2", "--json"}, "next --limit must be at least 1"},
 		{"not a number", []string{"next", "--limit", "two", "--json"}, "next --limit must be at least 1"},

@@ -537,8 +537,10 @@ func (s Service) NextCandidates(ctx context.Context, options NextOptions) ([]Tas
 		}
 		candidates = append(candidates, candidate{task: s.Project(snapshot), rank: rank})
 	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		left, right := candidates[i], candidates[j]
+	// sort.Slice, not sort.SliceStable: the ID tie-break makes the order total,
+	// so stability buys nothing here.
+	sort.Slice(candidates, func(i, j int) bool {
+		left, right := &candidates[i], &candidates[j]
 		if a, b := priorities.Order(left.task.Priority), priorities.Order(right.task.Priority); a != b {
 			return a < b
 		}
@@ -580,7 +582,8 @@ func (s Service) Next(ctx context.Context, options NextOptions) (*Task, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	return &candidates[0], nil
+	first := candidates[0]
+	return &first, nil
 }
 
 func (s Service) Show(ctx context.Context, idOrPrefix string) (Task, error) {
