@@ -97,6 +97,10 @@ described under Changed.
   prepended, so an existing Homebrew or `go install` build earlier on your PATH
   keeps winning; `WORKBENCH_SKIP_PATH_SETUP` turns the whole thing off, and a
   development run does nothing because it has no bundled binary to copy.
+- **The desktop app gains a Next view.** With two or more projects imported,
+  a Next entry above the project list shows what each project would hand out
+  next, as `workbook next` decides it, with a number for how many per project;
+  a row opens that task on its board. It refreshes every five seconds.
 
 ### Changed
 - **`workbook setup` asks for the project key only when it creates a
@@ -139,6 +143,9 @@ described under Changed.
   `status-filter-forwarded`.** It was minted when that warning also covered the
   case the refusal above has taken away, so its name described the one thing it
   no longer reports.
+- **The desktop app starts every imported project's board server at launch**
+  and on import, rather than when a board is first opened, so each project's
+  synchronization loop runs for as long as the app does.
 
 ### Fixed
 - **Saving the board's settings after changing a status or a priority no longer
