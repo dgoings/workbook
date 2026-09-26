@@ -80,6 +80,9 @@ described under Changed.
   table above it carries — each priority's position, machine value, display
   label and tag, with a legend saying that a task created without `--priority`
   lands on the tagged one.
+- **`workbook next --limit <n>`** offers the first `n` eligible tasks in
+  `next`'s order, with a count of every task that qualified, so a caller can
+  show what comes after the first choice. Plain `next` is unchanged.
 - **The desktop app puts `workbook` on your PATH.** On launch Workbench copies
   the CLI it bundles into a directory of its own — `~/Library/Application
   Support/Workbench/bin` on macOS, `%LOCALAPPDATA%\Workbench\bin` on Windows,

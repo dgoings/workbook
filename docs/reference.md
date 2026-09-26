@@ -351,7 +351,10 @@ edge and rejects cycles; `free` removes one prerequisite edge and is idempotent.
 all active and in a status tagged `done`, sorting by priority, rank, and task
 ID; it reports no eligible task when none qualify. It skips the tasks somebody
 else is assigned to — see [Assignments](#assignments) — and `--any` offers the
-whole eligible set instead. `board` uses the same core task order and presents an actionable,
+whole eligible set instead. `--limit <n>` offers the first `n` eligible tasks in that same order; its JSON
+`data` is `{"tasks": [...], "eligible": N}`, where `eligible` counts every task
+that qualified, and its text output is one `list` line per task. `--limit`
+cannot be combined with `--claim`, which takes one task. `board` uses the same core task order and presents an actionable,
 unambiguous task-ID prefix with each card's priority, title, labels, and
 assignees. Its JSON
 output retains full task IDs, descriptions, and the rest of the task data. Normal
