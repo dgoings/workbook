@@ -421,6 +421,10 @@ body {
   scrollbar-width: none;
 }
 
+/* The list's side padding narrows in the rail, so the NEXT tile's own gutter
+   narrows with it or the two columns of tiles no longer line up. */
+:root.sidebar-collapsed .next-item { width: calc(100% - .7rem); margin: 0 .35rem .35rem; }
+
 :root.sidebar-collapsed .project-item {
   gap: .25rem;
   padding-left: .25rem;
@@ -789,6 +793,48 @@ h1 {
 }
 
 button.ghost.inline { width: auto; }
+
+/* --- next --------------------------------------------------------------- */
+
+/* The Next entry is a button rather than a list row, so it needs the words
+   the list's own <li> never had to ask for; the gutter matches the project
+   list's padding so the two columns of rows line up. */
+.next-item { width: calc(100% - 1rem); margin: 0 .5rem .35rem; background: none; color: inherit; font: inherit; text-align: left; }
+.next-item .project-key { color: var(--wb-primary); border-color: var(--wb-primary-tint-1); }
+
+.next-controls { display: flex; align-items: center; gap: .75rem; margin-bottom: .7rem; }
+
+/* One column of groups, like the scan results it sits where. */
+.next-groups { display: flex; flex-direction: column; }
+
+.next-group { margin-bottom: 1.1rem; }
+.next-group__name { display: flex; align-items: center; gap: .5rem; margin: 0 0 .4rem; font-size: .86rem; font-weight: 600; }
+.next-group__foot { margin: .3rem 0 0; color: var(--wb-muted); font-size: .78rem; }
+.next-group__foot--error { color: var(--wb-danger); }
+
+.next-row {
+  display: grid;
+  grid-template-columns: 4.2rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: .75rem;
+  width: 100%;
+  margin-bottom: .35rem;
+  padding: .5rem .7rem;
+  border: 1px solid var(--wb-rule);
+  border-radius: 4px;
+  background: var(--wb-surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 1px 0 var(--wb-shadow-faint);
+}
+.next-row:hover { background: var(--wb-primary-tint-4); }
+.next-row__priority { text-align: center; }
+.next-row__priority--high { color: var(--wb-danger); border-color: var(--wb-danger); }
+.next-row__title { font-size: .86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.next-row__meta { display: flex; align-items: center; flex-wrap: wrap; gap: .25rem .4rem; justify-content: flex-end; }
+.next-row__assignee { color: var(--wb-primary); }
 
 /* --- shared ------------------------------------------------------------- */
 
