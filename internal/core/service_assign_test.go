@@ -598,6 +598,38 @@ func TestNextSkipsTasksHeldByAnotherPrincipal(t *testing.T) {
 	}
 }
 
+// NextCandidates applies the same held/unheld skip Next does: the zero options
+// omit a task held only by another principal, and IncludeHeldByOthers includes
+// it.
+func TestNextCandidatesSkipsTasksHeldByAnotherPrincipal(t *testing.T) {
+	held := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{
+		Title: "Theirs", Status: StatusReady, Priority: PriorityHigh, Rank: "1/1",
+	})
+	held.State.Task.Assignments = []Assignment{heldBy("sam@example.com", "impl-1", "sam@example.com")}
+	mine := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E3", TaskData{
+		Title: "Mine", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1",
+	})
+	mine.State.Task.Assignments = []Assignment{heldBy(serviceActor, "impl-2", serviceActor)}
+	store := newMemoryTaskStore(held, mine)
+	service := assignService(store, serviceActor)
+
+	candidates, err := service.NextCandidates(context.Background(), NextOptions{})
+	if err != nil {
+		t.Fatalf("NextCandidates() error = %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].ID != mine.State.TaskID {
+		t.Fatalf("NextCandidates() = %#v, want only the task this identity already holds", candidates)
+	}
+
+	candidates, err = service.NextCandidates(context.Background(), NextOptions{IncludeHeldByOthers: true})
+	if err != nil {
+		t.Fatalf("NextCandidates(--any) error = %v", err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("NextCandidates(--any) = %#v, want both eligible tasks", candidates)
+	}
+}
+
 // The spike's own claimants keep being offered their work. A task two identities
 // deliberately share is skipped by neither of them — the alternative is that the
 // pairing the design calls a meaningful outcome leaves both agents told there is
