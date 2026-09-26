@@ -10,6 +10,7 @@ const discovery = require('./discovery')
 const lifecycle = require('./lifecycle')
 const repoinfo = require('./repoinfo')
 const workbook = require('./workbook')
+const nextview = require('./nextview')
 const clipath = require('./clipath')
 const { setupUpdater } = require('./updater')
 
@@ -520,6 +521,9 @@ ipcMain.handle('registry:list', async () => ({
   })),
   scanRoots: registry.scanRoots
 }))
+
+ipcMain.handle('next:load', async (_event, { limit } = {}) =>
+  nextview.loadNext({ projects: registry.projects, limit }))
 
 ipcMain.handle('discovery:pickFolder', async () => {
   const result = await dialog.showOpenDialog(window, {

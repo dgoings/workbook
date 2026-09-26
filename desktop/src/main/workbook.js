@@ -199,6 +199,17 @@ async function setup (repoPath, key, { binary, sync = false } = {}) {
   return runJSON(repoPath, args, { binary })
 }
 
+/**
+ * The first `limit` tasks `next` would pick, and how many qualified in all.
+ *
+ * --no-sync on purpose: every imported project's board server runs the sync
+ * loop that keeps it current, so this read is a local one and must not fetch
+ * once per project per tick.
+ */
+async function nextTasks (repoPath, limit, options = {}) {
+  return runJSON(repoPath, ['next', '--limit', String(limit), '--no-sync'], options)
+}
+
 module.exports = {
-  resolveBinary, runJSON, version, setup, BINARY
+  resolveBinary, runJSON, version, setup, nextTasks, BINARY
 }
