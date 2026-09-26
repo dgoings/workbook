@@ -39,7 +39,7 @@ function shapeTask (task) {
  * One project failing — a repository moved, a binary too old for --limit —
  * answers with its error beside an empty list, so the others still show.
  *
- * @param {{ projects: Array<{id:string,key:string,name:string,path:string}>, limit: unknown, run?: (repoPath: string, limit: number) => Promise<{tasks: object[], eligible: number}> }} input
+ * @param {{ projects: Array<{id:string,key:string,name:string,path:string,status?:string}>, limit: unknown, run?: (repoPath: string, limit: number) => Promise<{tasks: object[], eligible: number}> }} input
  */
 async function loadNext ({ projects, limit, run = workbook.nextTasks }) {
   const wanted = clampLimit(limit)
@@ -48,7 +48,16 @@ async function loadNext ({ projects, limit, run = workbook.nextTasks }) {
     limit: wanted,
     projects: projects.map((project, index) => {
       const outcome = outcomes[index]
-      const base = { id: project.id, key: project.key, name: project.name }
+      const base = {
+        id: project.id,
+        key: project.key,
+        name: project.name,
+        // The board server's health, carried through rather than looked up
+        // again: a project whose server is not running answers from a repository
+        // nothing is keeping synchronized, and the view has to be able to say
+        // so. A project the supervisor has never started is simply stopped.
+        status: String(project.status ?? 'stopped')
+      }
       if (outcome.status === 'rejected') {
         const error = outcome.reason?.message ?? String(outcome.reason)
         return { ...base, tasks: [], eligible: 0, error }

@@ -10,8 +10,11 @@ const assert = require('node:assert/strict')
 
 const nextview = require('../src/main/nextview')
 
+// Only the first project carries a status, the way the main process sends one
+// for a project whose board server it has started; the other two stand for a
+// project the supervisor has never started.
 const projects = [
-  { id: 'p1', key: 'ONE', name: 'One', path: '/one' },
+  { id: 'p1', key: 'ONE', name: 'One', path: '/one', status: 'running' },
   { id: 'p2', key: 'TWO', name: 'Two', path: '/two' },
   { id: 'p3', key: 'THR', name: 'Three', path: '/three' }
 ]
@@ -36,7 +39,7 @@ describe('loadNext', () => {
     assert.deepEqual(result.projects.map((entry) => entry.id), ['p1', 'p2', 'p3'])
     assert.equal(result.limit, 2)
     assert.deepEqual(result.projects[0], {
-      id: 'p1', key: 'ONE', name: 'One', eligible: 4, error: null,
+      id: 'p1', key: 'ONE', name: 'One', status: 'running', eligible: 4, error: null,
       tasks: [{
         id: '/one-1', title: 'Task /one-1', priority: 'medium', status: 'ready',
         labels: ['a'], assignees: ['me@example.com'], updatedAt: '2026-09-26T10:00:00Z'
@@ -61,6 +64,19 @@ describe('loadNext', () => {
     assert.deepEqual(result.projects[0].tasks[0], {
       id: 'X-1', title: 'Bare', priority: '', status: '', labels: [], assignees: [], updatedAt: ''
     })
+  })
+
+  test('carries each project\'s server status and calls a missing one stopped', async () => {
+    const run = async () => ({ tasks: [], eligible: 0 })
+    const result = await nextview.loadNext({ projects, limit: 1, run })
+    assert.deepEqual(result.projects.map((entry) => entry.status),
+      ['running', 'stopped', 'stopped'])
+  })
+
+  test('carries the status of a project that failed to answer too', async () => {
+    const run = async () => { throw new Error('workbook next exited 3') }
+    const result = await nextview.loadNext({ projects: projects.slice(0, 1), limit: 1, run })
+    assert.equal(result.projects[0].status, 'running')
   })
 
   test('clamps the limit before asking', async () => {

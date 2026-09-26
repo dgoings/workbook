@@ -348,6 +348,10 @@ async function openProject (projectId, taskId = null) {
 
   activeProjectId = projectId
   layout()
+  // Keyboard focus follows the board. Clicking a row in the chrome document
+  // leaves focus there, so the board arrives in front of a reader whose next
+  // keystroke would have gone to the page behind it.
+  view.webContents.focus()
   return { url }
 }
 
@@ -523,7 +527,17 @@ ipcMain.handle('registry:list', async () => ({
 }))
 
 ipcMain.handle('next:load', async (_event, { limit } = {}) =>
-  nextview.loadNext({ projects: registry.projects, limit }))
+  nextview.loadNext({
+    // The board server's status travels with each project, the same way
+    // registry:list sends it: what this view shows is only as fresh as the
+    // server keeping that project synchronized, so the view has to be able to
+    // say which projects have one running.
+    projects: registry.projects.map((project) => ({
+      ...project,
+      ...supervisor.status(project.id)
+    })),
+    limit
+  }))
 
 ipcMain.handle('discovery:pickFolder', async () => {
   const result = await dialog.showOpenDialog(window, {

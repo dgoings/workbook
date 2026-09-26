@@ -809,7 +809,16 @@ button.ghost.inline { width: auto; }
 
 .next-group { margin-bottom: 1.1rem; }
 .next-group__name { display: flex; align-items: center; gap: .5rem; margin: 0 0 .4rem; font-size: .86rem; font-weight: 600; }
-.next-group__foot { margin: .3rem 0 0; color: var(--wb-muted); font-size: .78rem; }
+/* One line, whatever the message is: the renderer already cuts an error down to
+   its first line, and this keeps a long one from widening the group. */
+.next-group__foot {
+  margin: .3rem 0 0;
+  overflow: hidden;
+  color: var(--wb-muted);
+  font-size: .78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .next-group__foot--error { color: var(--wb-danger); }
 
 .next-row {

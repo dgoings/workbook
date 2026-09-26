@@ -16,15 +16,20 @@ const state = {
   selected: new Set(),
   keys: new Map(),
   // The Next view: how many per project, the last payload read, the payload
-  // the DOM currently shows, the poll timer while it is showing, a counter that
-  // tells a stale answer from the current one, whether a read is out, and
-  // whether any read has ever settled.
+  // the DOM currently shows, the poll timer while it is showing, the timer that
+  // lets the limit control settle before reading, a counter that tells a stale
+  // answer from the current one, the read that is out — the request itself,
+  // because a flag beside it can be cleared by something that is not the
+  // request and then no longer means what it says — whether a forced read is
+  // owed once that one lands, and whether any read has ever settled.
   nextLimit: 1,
   next: null,
   nextDrawn: null,
   nextTimer: null,
+  nextLimitTimer: null,
   nextGeneration: 0,
-  nextInFlight: false,
+  nextPending: null,
+  nextReloadWanted: false,
   nextSettled: false
 }
 
@@ -69,7 +74,14 @@ function renderProjects () {
   list.innerHTML = ''
 
   // Two or more: with one project its board already answers "what is next".
-  el('next-item').hidden = state.projects.length < 2
+  const hideNext = state.projects.length < 2
+  el('next-item').hidden = hideNext
+  // Forgetting projects down to one takes the rail entry away underneath a
+  // reader who is standing on it, leaving a view with nothing that points at it
+  // and no way back. The import view is where a second project comes from, so
+  // that is where they land. setView does not render the project list, so this
+  // cannot come back around.
+  if (hideNext && state.view === 'next') setView('import')
 
   if (state.projects.length === 0) {
     const empty = document.createElement('li')
@@ -128,6 +140,11 @@ async function openProject (projectId) {
 
 const NEXT_POLL_MS = 5000
 
+// How long the limit control has to settle before its value is read. Holding a
+// number input's arrow fires a change per step, and each one would otherwise be
+// a sweep of `workbook next` across every project.
+const NEXT_LIMIT_DEBOUNCE_MS = 300
+
 function readStoredLimit () {
   try {
     const stored = Number(localStorage.getItem('next.limit'))
@@ -159,9 +176,14 @@ function stopNextPolling () {
   // An answer already on its way belongs to a view nobody is looking at any
   // more: moving the generation on drops it when it lands.
   state.nextGeneration += 1
-  // The bumped generation makes the outstanding read's finally leave the flag
-  // alone, so it is reset here.
-  state.nextInFlight = false
+  // A forced read owed to a view nobody is looking at any more is owed to
+  // nothing: leaving it armed would fire a sweep on the next view's first tick.
+  state.nextReloadWanted = false
+  // state.nextPending is deliberately left alone. The request really is still
+  // out — one `workbook next` per project, running whatever this view does
+  // next — and clearing it here would be this function claiming otherwise, so
+  // the very next forced read would start a second sweep beside it. It is the
+  // request's own finally that says the request is over.
 }
 
 async function loadNext (force = false) {
@@ -169,14 +191,26 @@ async function loadNext (force = false) {
   // would otherwise stack another process every tick, and each answer would be
   // discarded by the one behind it — the view would freeze on the last payload
   // it managed to draw while the machine kept spawning processes.
-  if (state.nextInFlight && !force) return
+  if (state.nextPending) {
+    if (!force) return
+    // A forced read — returning to the view, or a new limit — supersedes the
+    // sweep that is out rather than running beside it. Beside it would spawn
+    // `workbook next` a second time in every project and then discard whichever
+    // answer lost the race, which is the pile-up this guard exists to prevent.
+    // So the want is recorded and the sweep that is out re-runs once it lands.
+    state.nextReloadWanted = true
+    return
+  }
   const generation = ++state.nextGeneration
-  state.nextInFlight = true
   // Only before the first read settles: a project that fails every tick would
   // otherwise flicker between 'Loading…' and its error forever.
   if (!state.nextSettled) el('next-state').textContent = 'Loading…'
   try {
-    const payload = await api.loadNext(state.nextLimit)
+    // Held in state while it is out, so anything asking for a read can see
+    // there is one rather than being told by a flag somebody else may have
+    // reset. Nothing but the finally below puts it back.
+    state.nextPending = api.loadNext(state.nextLimit)
+    const payload = await state.nextPending
     // A slower answer arriving after a newer one must not paint over it.
     if (generation !== state.nextGeneration) return
     state.next = payload
@@ -186,10 +220,22 @@ async function loadNext (force = false) {
     if (generation !== state.nextGeneration) return
     el('next-state').textContent = `Could not read next tasks: ${error.message}`
   } finally {
-    // Only the newest read opens the gate again: an older one settling later
-    // must not let a tick through while the newest is still out.
-    if (generation === state.nextGeneration) state.nextInFlight = false
+    // Whatever became of the answer — drawn, discarded as stale, or an outright
+    // failure — the request is over, so the gate opens here and only here. No
+    // generation test guards this: there is only ever one read out, because
+    // that is what the gate above enforces, and a read that could not clear its
+    // own record of itself would shut the view's polling down for good.
+    state.nextPending = null
     state.nextSettled = true
+    // Now the forced read that arrived while this one was out runs — once,
+    // however many arrived, and with the limit as it now stands. Only if the
+    // view is still showing: a read owed to a view somebody has left is owed to
+    // nothing, and starting one would spawn a process per project for a list
+    // nobody can see.
+    if (state.nextReloadWanted) {
+      state.nextReloadWanted = false
+      if (state.view === 'next') loadNext(true)
+    }
   }
 }
 
@@ -209,7 +255,7 @@ function renderNext () {
   // A redraw that does have to happen keeps the reader's place and their
   // keyboard focus, which is on a task rather than on a position in the list.
   const scrollTop = container.scrollTop
-  const focused = document.activeElement?.closest?.('.next-row')?.title ?? null
+  const focused = document.activeElement?.closest?.('.next-row')?.dataset.taskId ?? null
 
   container.innerHTML = ''
 
@@ -219,10 +265,21 @@ function renderNext () {
 
     const heading = document.createElement('h2')
     heading.className = 'next-group__name'
+    // The same dot the sidebar draws, for the same reason it draws it there:
+    // this list is only as current as that project's server, and a group under
+    // a stopped one is the last thing it answered rather than what is next now.
+    // The word goes on the heading, not on the dot: a title of its own on a
+    // .4rem circle is the hardest target on the view to land the pointer on.
+    const status = project.status ?? 'stopped'
+    heading.title = status
+
+    const dot = document.createElement('span')
+    dot.className = `dot ${status}`
+
     const key = document.createElement('span')
     key.className = 'project-key'
     key.textContent = project.key
-    heading.append(key, document.createTextNode(` ${project.name}`))
+    heading.append(dot, key, document.createTextNode(` ${project.name}`))
     group.append(heading)
 
     for (const task of project.tasks) group.append(renderNextRow(project, task))
@@ -231,7 +288,13 @@ function renderNext () {
     foot.className = 'next-group__foot'
     if (project.error) {
       foot.classList.add('next-group__foot--error')
-      foot.textContent = project.error
+      // A CLI too old for --limit answers with its entire usage block, and the
+      // footer is one line in a group: the first line is the part that names
+      // the problem, and the whole of it is on the hover rather than pushing
+      // every other project off the view.
+      const first = project.error.split('\n')[0]
+      foot.textContent = first.length > 140 ? `${first.slice(0, 139)}…` : first
+      foot.title = project.error
     } else if (project.tasks.length === 0) {
       foot.textContent = 'Nothing eligible.'
     } else if (project.eligible > project.tasks.length) {
@@ -245,7 +308,14 @@ function renderNext () {
   }
 
   container.scrollTop = scrollTop
-  if (focused) container.querySelector(`.next-row[title="${CSS.escape(focused)}"]`)?.focus()
+  // Compared in JavaScript rather than matched by a selector: a task id is
+  // Workbook's, not ours, and building a selector out of one puts its escaping
+  // on the critical path of a redraw that happens every five seconds.
+  if (focused) {
+    [...container.querySelectorAll('.next-row')]
+      .find((row) => row.dataset.taskId === focused)
+      ?.focus()
+  }
 }
 
 function renderNextRow (project, task) {
@@ -253,6 +323,9 @@ function renderNextRow (project, task) {
   row.type = 'button'
   row.className = 'next-row'
   row.title = task.id
+  // What a redraw looks the focused row up by, so the comparison is against a
+  // value of our own rather than against whatever the tooltip happens to say.
+  row.dataset.taskId = task.id
   row.addEventListener('click', () => openNextTask(project.id, task))
 
   const priority = document.createElement('span')
@@ -333,7 +406,15 @@ el('next-limit').addEventListener('change', () => {
   input.value = String(wanted)
   state.nextLimit = wanted
   storeLimit(wanted)
-  if (state.view === 'next') startNextPolling()
+  // Stepping the spinner from 1 to 8 is seven changes, and reading at each one
+  // would sweep every project seven times for a number nobody stopped at. The
+  // value is kept immediately — it is what the next read asks for — and only
+  // the read waits for the control to settle.
+  if (state.nextLimitTimer) clearTimeout(state.nextLimitTimer)
+  state.nextLimitTimer = setTimeout(() => {
+    state.nextLimitTimer = null
+    if (state.view === 'next') startNextPolling()
+  }, NEXT_LIMIT_DEBOUNCE_MS)
 })
 
 // --- import wizard ---------------------------------------------------------
