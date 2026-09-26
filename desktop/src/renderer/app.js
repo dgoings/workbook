@@ -488,6 +488,10 @@ api.onProjectExited(({ projectId }) => {
   }
 })
 
+// Each server start settles on its own; the sidebar's dot is drawn from the
+// supervisor's status, so the list is reloaded rather than patched.
+api.onProjectStarted(() => { loadProjects() })
+
 async function boot () {
   // Drives the one piece of chrome that differs by platform: the space macOS
   // needs above the sidebar for its inset traffic lights.

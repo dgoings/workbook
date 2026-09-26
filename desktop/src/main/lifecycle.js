@@ -93,4 +93,34 @@ function closeContents (view) {
   }
 }
 
-module.exports = { THEMES, schemeToTheme, releaseClosedWindow }
+/**
+ * Start every imported project's board server, all at once.
+ *
+ * Using the desktop app is meant to replace running `workbook serve` in every
+ * repository by hand: each server carries the five-second synchronization loop
+ * that keeps its project current with origin, so a project that is imported but
+ * not yet clicked would otherwise sit unsynchronized until it was. One project
+ * failing to bind must not stop the others, so each failure is logged and
+ * reported beside its project rather than thrown.
+ *
+ * @param {{ projects: Array<{id: string, path: string}>, start: (project: object) => Promise<string>, log?: (line: string) => void }} input
+ * @returns {Promise<{ started: string[], failed: Array<{ projectId: string, error: string }> }>}
+ */
+async function startEveryProject ({ projects, start, log = () => {} }) {
+  const outcomes = await Promise.allSettled(projects.map((project) => start(project)))
+  const started = []
+  const failed = []
+  outcomes.forEach((outcome, index) => {
+    const project = projects[index]
+    if (outcome.status === 'fulfilled') {
+      started.push(project.id)
+      return
+    }
+    const error = outcome.reason?.message ?? String(outcome.reason)
+    failed.push({ projectId: project.id, error })
+    log(`workbench: could not start the board for ${project.id}: ${error}`)
+  })
+  return { started, failed }
+}
+
+module.exports = { THEMES, schemeToTheme, releaseClosedWindow, startEveryProject }

@@ -274,6 +274,21 @@ function watchSidebarShortcut (webContents) {
 }
 
 /**
+ * Start one project's board server and tell the shell how it went.
+ *
+ * `supervisor.start` already emits `started` on success; the failure branch
+ * has no event of its own, so both are announced here as `project:started`
+ * with the supervisor's status, and the sidebar repaints its dot from that.
+ */
+async function startProjectServer (project) {
+  try {
+    return await supervisor.start(project)
+  } finally {
+    toChrome('project:started', { projectId: project.id, ...supervisor.status(project.id) })
+  }
+}
+
+/**
  * Show one project's board, starting its server if it is not already running.
  *
  * Each board is its own WebContentsView loading the child server's real
@@ -595,6 +610,10 @@ ipcMain.handle('import:apply', async (_event, { selections }) => {
       }
 
       await registry.upsert(project)
+      // Not awaited: an import that binds slowly must not hold the wizard's
+      // progress, and startProjectServer already announces the outcome either
+      // way via `project:started`.
+      startProjectServer(project).catch(() => {})
       results.push({ ok: true, path: selection.path, project, adopted: Boolean(project.adopted) })
     } catch (error) {
       results.push({ ok: false, path: selection.path, error: error.message })
@@ -725,6 +744,16 @@ app.whenReady().then(async () => {
   })
 
   createWindow()
+  // Every imported project's server starts now, not on first click: using the
+  // app is meant to replace running `workbook serve` in each repository by
+  // hand, and each server carries the sync loop that keeps its project
+  // current. Not awaited — the window is up and the sidebar's status dots
+  // report each start as it settles.
+  lifecycle.startEveryProject({
+    projects: registry.projects,
+    start: startProjectServer,
+    log: (line) => console.error(line)
+  })
   // The launch check still runs, but the shell page has nowhere to show what it
   // finds and no action to offer: when an update action returns it belongs in
   // the native application menu, which reaches a board's view as well as this

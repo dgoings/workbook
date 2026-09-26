@@ -61,5 +61,10 @@ contextBridge.exposeInMainWorld('workbench', {
     const listener = (_event, payload) => handler(payload)
     ipcRenderer.on('project:exited', listener)
     return () => ipcRenderer.removeListener('project:exited', listener)
+  },
+  onProjectStarted: (handler) => {
+    const listener = (_event, payload) => handler(payload)
+    ipcRenderer.on('project:started', listener)
+    return () => ipcRenderer.removeListener('project:started', listener)
   }
 })
