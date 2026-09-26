@@ -529,6 +529,98 @@ func TestTheNeedsUpgradeStatusStringsAreWhatCallersRead(t *testing.T) {
 	}
 }
 
+// next and next --limit carry the same newer-writer advisory the read
+// commands do, for the task(s) they offer.
+//
+// This reuses the fixture TestANewerWritersHistoryIsServedRefusedAndNeverWedged
+// stages: a task written by a future clone, synced into this build. Here
+// neither task carries a local, unpublished change — there is nothing to fold
+// against the newer history — so this is the fixture's "fetched" case, not its
+// "diverged" one, and sync fast-forwards cleanly rather than refusing.
+func TestNextReportsATaskWrittenByANewerWorkbook(t *testing.T) {
+	local, future := cliSyncRepositories(t)
+
+	// Higher priority, so next picks it first regardless of ID order.
+	first := createOrderingTask(t, local, "Chosen by next, written by the future", "high")
+	second := createOrderingTask(t, local, "Runner-up, written by this build", "medium")
+	if code, _, stderr := run(t, local, "sync"); code != 0 {
+		t.Fatalf("initial sync code = %d; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, future, "sync"); code != 0 {
+		t.Fatalf("future clone sync code = %d; stderr = %q", code, stderr)
+	}
+
+	writeFutureTaskCommit(t, future, first.ID)
+	cliGit(t, future, "push", "--quiet", "origin", "refs/workbook/tasks/"+first.ID)
+
+	// Local has no unpublished change on either task, so this sync only needs
+	// to fast-forward the first task's ref to origin's newer-writer tip — it
+	// does not need to fold anything, and it succeeds (exit 0), unlike the
+	// "diverged" case in TestANewerWritersHistoryIsServedRefusedAndNeverWedged
+	// where a local mutation forces a fold against the newer history and the
+	// run exits 9.
+	if code, _, stderr := run(t, local, "sync"); code != 0 {
+		t.Fatalf("sync code = %d, want 0 (no local divergence to fold); stderr = %q", code, stderr)
+	}
+
+	// Plain next: the newer-writer task is the only one eligible ahead of its
+	// neighbor by priority, and it carries the advisory.
+	code, stdout, stderr := run(t, local, "next", "--json", "--no-sync")
+	if code != 0 {
+		t.Fatalf("next code = %d, want 0; stderr = %q", code, stderr)
+	}
+	envelope := assertJSONResult(t, stdout, "next")
+	var task core.Task
+	if err := json.Unmarshal(envelope.Data, &task); err != nil {
+		t.Fatalf("decode next task: %v", err)
+	}
+	if task.ID != first.ID {
+		t.Fatalf("next chose %s, want %s", task.ID, first.ID)
+	}
+	if !task.NewerWriter {
+		t.Fatal("next's task does not report a newer writer")
+	}
+	assertNewerWriterWarning(t, envelope.Warnings, first.ID)
+
+	code, _, stderr = run(t, local, "next", "--no-sync")
+	if code != 0 {
+		t.Fatalf("next (text) code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stderr, "newer workbook") {
+		t.Fatalf("next stderr = %q, want it to name a newer workbook", stderr)
+	}
+
+	// next --limit: the advisory follows the specific task it names, not its
+	// neighbor, which this build wrote.
+	code, stdout, stderr = run(t, local, "next", "--limit", "2", "--json", "--no-sync")
+	if code != 0 {
+		t.Fatalf("next --limit code = %d, want 0; stderr = %q", code, stderr)
+	}
+	envelope = assertJSONResult(t, stdout, "next")
+	var document struct {
+		Tasks    []core.Task `json:"tasks"`
+		Eligible int         `json:"eligible"`
+	}
+	if err := json.Unmarshal(envelope.Data, &document); err != nil {
+		t.Fatalf("decode next --limit document: %v", err)
+	}
+	if len(document.Tasks) != 2 {
+		t.Fatalf("next --limit offered %d tasks, want 2", len(document.Tasks))
+	}
+	if document.Tasks[0].ID != first.ID || !document.Tasks[0].NewerWriter {
+		t.Fatalf("first offered task = %+v, want %s with NewerWriter set", document.Tasks[0], first.ID)
+	}
+	if document.Tasks[1].ID != second.ID || document.Tasks[1].NewerWriter {
+		t.Fatalf("second offered task = %+v, want %s without NewerWriter", document.Tasks[1], second.ID)
+	}
+	assertNewerWriterWarning(t, envelope.Warnings, first.ID)
+	for _, warning := range envelope.Warnings {
+		if warning.Code == core.WarningNewerWriter && strings.Contains(warning.Message, second.ID) {
+			t.Fatalf("advisory = %q, want it not to name %s, which this build wrote", warning.Message, second.ID)
+		}
+	}
+}
+
 func assertNewerWriterWarning(t *testing.T, warnings []core.Warning, taskID string) {
 	t.Helper()
 	for _, warning := range warnings {

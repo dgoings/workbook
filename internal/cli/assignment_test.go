@@ -466,6 +466,40 @@ func TestNextSaysWhenEveryEligibleTaskIsHeldBySomebodyElse(t *testing.T) {
 	if !strings.Contains(stderr, "assigned to somebody else") || !strings.Contains(stderr, "--any") {
 		t.Fatalf("stderr = %q, want the explanation and the flag that lifts the skip", stderr)
 	}
+
+	// --limit answers the same skip: an empty candidate document, carrying the
+	// same warning that explains why.
+	code, stdout, stderr = run(t, repository, "next", "--limit", "4", "--no-sync", "--json")
+	if code != 0 {
+		t.Fatalf("next --limit code = %d, want 0; stderr = %q", code, stderr)
+	}
+	result = assertJSONResult(t, stdout, "next")
+	if string(result.Data) != `{"tasks":[],"eligible":0}` {
+		t.Fatalf("next --limit data = %s, want an empty candidate document", result.Data)
+	}
+	if got, want := warningCodes(result.Warnings), []string{core.WarningNextHeldByOthers}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("next --limit warnings = %q, want %q", got, want)
+	}
+
+	// --any --limit lifts the skip the same way plain --any does: the held task
+	// counts toward eligible and the held-by-others warning does not appear.
+	code, stdout, stderr = run(t, repository, "next", "--any", "--limit", "4", "--no-sync", "--json")
+	if code != 0 {
+		t.Fatalf("next --any --limit code = %d, want 0; stderr = %q", code, stderr)
+	}
+	result = assertJSONResult(t, stdout, "next")
+	var document nextCandidatesDocument
+	if err := json.Unmarshal(result.Data, &document); err != nil {
+		t.Fatalf("decode next --any --limit data: %v; data = %s", err, result.Data)
+	}
+	if document.Eligible != 1 {
+		t.Fatalf("next --any --limit eligible = %d, want 1 (the held task)", document.Eligible)
+	}
+	for _, code := range warningCodes(result.Warnings) {
+		if code == core.WarningNextHeldByOthers {
+			t.Fatalf("next --any --limit warnings = %q, want no held-by-others warning", warningCodes(result.Warnings))
+		}
+	}
 }
 
 // A board with nothing eligible answers the same way whether or not a claim was
@@ -694,6 +728,45 @@ func TestAReconciledClaimIsReportedByTheNextCommandThatFetches(t *testing.T) {
 	// it too.
 	if got := decodeNextTask(t, stdout); got == nil || got.ID != task.ID {
 		t.Fatalf("next = %#v, want the shared task %s offered back to a holder", got, task.ID)
+	}
+}
+
+// The same contract again, through --limit. The first command to fetch is the
+// one that reconciles, so a second `next` on the same clone would find
+// nothing left to report — this races `next --limit` into the reconciling
+// role itself instead, on a fresh staged race, rather than layering a second
+// invocation onto the test above.
+func TestAReconciledClaimIsReportedByTheNextLimitCommandThatFetches(t *testing.T) {
+	_, second, task := stagedClaimRace(t)
+
+	code, stdout, stderr := run(t, second, "next", "--limit", "3", "--json")
+	if code != 0 {
+		t.Fatalf("second next --limit code = %d, want 0; stderr = %q", code, stderr)
+	}
+	result := assertJSONResult(t, stdout, "next")
+	var shared bool
+	for _, warning := range result.Warnings {
+		if warning.Code == core.WarningAssignmentShared && strings.Contains(warning.Message, "one@example.com") {
+			shared = true
+		}
+	}
+	if !shared {
+		t.Fatalf("next --limit warnings = %#v, want the shared claim reported by the command that reconciled it", result.Warnings)
+	}
+	// And the task it shares is still among the candidates offered, because it
+	// holds it too.
+	var document nextCandidatesDocument
+	if err := json.Unmarshal(result.Data, &document); err != nil {
+		t.Fatalf("decode next --limit data: %v; data = %s", err, result.Data)
+	}
+	var offered bool
+	for _, candidate := range document.Tasks {
+		if candidate.ID == task.ID {
+			offered = true
+		}
+	}
+	if !offered {
+		t.Fatalf("next --limit tasks = %#v, want the shared task %s offered back to a holder", document.Tasks, task.ID)
 	}
 }
 

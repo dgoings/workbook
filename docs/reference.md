@@ -21,7 +21,7 @@ workbook restore <task> [--into <status>] [--no-sync] [--json]
 workbook move <task> (--before <task> | --after <task>) [--no-sync] [--json]
 workbook depend <task> <dependency> [--no-sync] [--json]
 workbook free <task> <dependency> [--no-sync] [--json]
-workbook next [--any] [--claim] [--no-sync] [--json]
+workbook next [--any] [--claim] [--limit <n>] [--no-sync] [--json]
 workbook rebuild [--json]
 workbook validate [--full] [--json]
 workbook version [--json]
@@ -344,18 +344,22 @@ when one is named.
 List and show read the current task checkpoint from each task ref's tip. A new
 project's statuses are Backlog, Ready, In Progress, In Review, and Done, in that
 order; a project may change them with `workbook status` (see
-[Project statuses](#project-statuses)). `move` orders a task inside its status-and-priority bucket with
-an exact rational rank; it changes only that task. `depend` adds a prerequisite
-edge and rejects cycles; `free` removes one prerequisite edge and is idempotent.
-`next` chooses the first task in a status tagged `next` whose dependencies are
-all active and in a status tagged `done`, sorting by priority, rank, and task
-ID; it reports no eligible task when none qualify. It skips the tasks somebody
-else is assigned to — see [Assignments](#assignments) — and `--any` offers the
-whole eligible set instead. `board` uses the same core task order and presents an actionable,
-unambiguous task-ID prefix with each card's priority, title, labels, and
-assignees. Its JSON
-output retains full task IDs, descriptions, and the rest of the task data. Normal
-`list`, `show`, `board`, and `next` reads use the local SQLite projection.
+[Project statuses](#project-statuses)). `move` orders a task inside its
+status-and-priority bucket with an exact rational rank; it changes only that
+task. `depend` adds a prerequisite edge and rejects cycles; `free` removes one
+prerequisite edge and is idempotent. `next` chooses the first task in a status
+tagged `next` whose dependencies are all active and in a status tagged `done`,
+sorting by priority, rank, and task ID; it reports no eligible task when none
+qualify. It skips the tasks somebody else is assigned to — see
+[Assignments](#assignments) — and `--any` offers the whole eligible set instead.
+`--limit <n>` offers the first `n` eligible tasks in that same order; its JSON
+`data` is `{"tasks": [...], "eligible": N}`, where `eligible` counts every task
+that qualified, and its text output is a `list` header and one row per task.
+`--limit` cannot be combined with `--claim`, which takes one task. `board` uses
+the same core task order and presents an actionable, unambiguous task-ID prefix
+with each card's priority, title, labels, and assignees. Its JSON output retains
+full task IDs, descriptions, and the rest of the task data. Normal `list`,
+`show`, `board`, and `next` reads use the local SQLite projection.
 Implementation links remain future work.
 
 ## Assignments

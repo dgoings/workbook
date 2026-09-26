@@ -495,6 +495,67 @@ type NextOptions struct {
 	IncludeHeldByOthers bool
 }
 
+// NextCandidates returns every task Next may pick, in the order Next picks
+// them: priority order first, then rank, then task ID. Next is the first
+// element, so the two can never disagree about what comes first. The slice is
+// empty rather than nil when nothing is eligible, because a caller that
+// encodes it wants `[]`, not `null`.
+func (s Service) NextCandidates(ctx context.Context, options NextOptions) ([]Task, error) {
+	snapshots, err := s.Reader.List(ctx, s.Config)
+	if err != nil {
+		return nil, err
+	}
+	vocabulary := s.vocabulary()
+	priorities := s.Priorities
+
+	active := make(map[string]TaskData, len(snapshots))
+	for _, snapshot := range snapshots {
+		task := snapshot.State.Task
+		if !task.Deleted {
+			active[snapshot.State.TaskID] = task
+		}
+	}
+	skipHeld := !options.IncludeHeldByOthers && strings.TrimSpace(s.Actor) != ""
+
+	type candidate struct {
+		task Task
+		rank *big.Rat
+	}
+	candidates := []candidate{}
+	for _, snapshot := range snapshots {
+		task := snapshot.State.Task
+		resolved, _ := vocabulary.Resolve(task.Status)
+		if task.Deleted || !vocabulary.IsNext(resolved) || !dependenciesDone(vocabulary, task.Dependencies, active) {
+			continue
+		}
+		if skipHeld && HeldOnlyByOthers(task.Assignments, s.Actor) {
+			continue
+		}
+		rank, err := parseRank(task.Rank)
+		if err != nil {
+			return nil, Errorf(CategoryCorruptData, "task %q has invalid rank %q", snapshot.State.TaskID, task.Rank)
+		}
+		candidates = append(candidates, candidate{task: s.Project(snapshot), rank: rank})
+	}
+	// sort.Slice, not sort.SliceStable: the ID tie-break makes the order total,
+	// so stability buys nothing here.
+	sort.Slice(candidates, func(i, j int) bool {
+		left, right := &candidates[i], &candidates[j]
+		if a, b := priorities.Order(left.task.Priority), priorities.Order(right.task.Priority); a != b {
+			return a < b
+		}
+		if compare := left.rank.Cmp(right.rank); compare != 0 {
+			return compare < 0
+		}
+		return left.task.ID < right.task.ID
+	})
+	tasks := make([]Task, len(candidates))
+	for i, item := range candidates {
+		tasks[i] = item.task
+	}
+	return tasks, nil
+}
+
 // Next returns the highest-priority task in a status tagged next whose
 // dependencies are all active tasks in a status tagged done, skipping the ones
 // another principal holds and this one does not, unless the options say
@@ -514,46 +575,15 @@ type NextOptions struct {
 // moment the pairing succeeded, which is the one state where a claimant most
 // needs its own work offered back to it.
 func (s Service) Next(ctx context.Context, options NextOptions) (*Task, error) {
-	snapshots, err := s.Reader.List(ctx, s.Config)
+	candidates, err := s.NextCandidates(ctx, options)
 	if err != nil {
 		return nil, err
 	}
-	vocabulary := s.vocabulary()
-	priorities := s.Priorities
-
-	active := make(map[string]TaskData, len(snapshots))
-	for _, snapshot := range snapshots {
-		task := snapshot.State.Task
-		if !task.Deleted {
-			active[snapshot.State.TaskID] = task
-		}
+	if len(candidates) == 0 {
+		return nil, nil
 	}
-	skipHeld := !options.IncludeHeldByOthers && strings.TrimSpace(s.Actor) != ""
-
-	var selected *Task
-	var selectedRank *big.Rat
-	for _, snapshot := range snapshots {
-		task := snapshot.State.Task
-		resolved, _ := vocabulary.Resolve(task.Status)
-		if task.Deleted || !vocabulary.IsNext(resolved) || !dependenciesDone(vocabulary, task.Dependencies, active) {
-			continue
-		}
-		if skipHeld && HeldOnlyByOthers(task.Assignments, s.Actor) {
-			continue
-		}
-		rank, err := parseRank(task.Rank)
-		if err != nil {
-			return nil, Errorf(CategoryCorruptData, "task %q has invalid rank %q", snapshot.State.TaskID, task.Rank)
-		}
-		projected := s.Project(snapshot)
-		if selected == nil || priorities.Order(projected.Priority) < priorities.Order(selected.Priority) ||
-			(priorities.Order(projected.Priority) == priorities.Order(selected.Priority) &&
-				(rank.Cmp(selectedRank) < 0 || (rank.Cmp(selectedRank) == 0 && projected.ID < selected.ID))) {
-			selected = &projected
-			selectedRank = rank
-		}
-	}
-	return selected, nil
+	first := candidates[0]
+	return &first, nil
 }
 
 func (s Service) Show(ctx context.Context, idOrPrefix string) (Task, error) {

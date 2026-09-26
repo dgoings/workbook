@@ -1199,6 +1199,7 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	flags := newFlagSet("next")
 	any := flags.Bool("any", false, "include tasks somebody else is assigned to")
 	claim := flags.Bool("claim", false, "assign the chosen task to yourself and publish it")
+	limitText := flags.String("limit", "", "offer up to this many eligible tasks, in next's order")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
@@ -1209,6 +1210,29 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		// path refuses, so the two flags together describe a command that would
 		// pick a task only to refuse to record it.
 		return core.Errorf(core.CategoryInvocation, "next accepts --any or --claim, not both")
+	}
+	// A string flag parsed by hand, as runShow's --limit and runKeyLog's --limit
+	// are, so flags.go keeps declaring it as a `<n>` string option and the
+	// refusal names the command rather than the flag package. flags.Visit checks
+	// whether --limit was given at all, for the same reason runKeyLog's does:
+	// --limit= would otherwise slip past as "not given".
+	limited := false
+	flags.Visit(func(visited *flag.Flag) {
+		if visited.Name == "limit" {
+			limited = true
+		}
+	})
+	if limited && *claim {
+		// A claim takes one task; a list of candidates is a different question.
+		return core.Errorf(core.CategoryInvocation, "next accepts --limit or --claim, not both")
+	}
+	limit := 0
+	if limited {
+		parsed, err := strconv.Atoi(*limitText)
+		if err != nil || parsed < 1 {
+			return core.Errorf(core.CategoryInvocation, "next --limit must be at least 1")
+		}
+		limit = parsed
 	}
 	// A claim writes, so it needs the writer half of the session and an acting
 	// identity. A plain `next` still opens read-only and reads the identity out
@@ -1230,6 +1254,9 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	session.fetchBefore(ctx)
 	if err := session.refreshConfiguration(ctx); err != nil {
 		return err
+	}
+	if limited {
+		return writeNextCandidates(ctx, session, options, limit, stdout, stderr, *jsonMode)
 	}
 	task, err := session.service.Next(ctx, options)
 	if err != nil {
@@ -1260,6 +1287,54 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		fmt.Fprintln(stdout, "No eligible task.")
 	} else {
 		writeShow(stdout, *task)
+	}
+	writeConflicts(stdout, session.conflicts)
+	writeWarnings(stderr, warnings)
+	return nil
+}
+
+// writeNextCandidates answers `next --limit`: the first n candidates in next's
+// order and the size of the whole set. The warnings follow the plain command:
+// a newer-writer warning per task offered, the held-by-others explanation when
+// nothing is, and the reconciled-sharing report either way.
+func writeNextCandidates(
+	ctx context.Context,
+	session *taskSession,
+	options core.NextOptions,
+	limit int,
+	stdout, stderr io.Writer,
+	jsonMode bool,
+) error {
+	candidates, err := session.service.NextCandidates(ctx, options)
+	if err != nil {
+		return err
+	}
+	offered := candidates
+	if len(offered) > limit {
+		offered = offered[:limit]
+	}
+	var warnings []core.Warning
+	if len(candidates) == 0 {
+		skipped, err := session.skippedHeldTasks(ctx, options)
+		if err != nil {
+			return err
+		}
+		warnings = skipped
+	} else {
+		for _, task := range offered {
+			warnings = append(warnings, newerWriterTaskWarnings(task)...)
+		}
+	}
+	warnings = append(warnings, reconciledSharingWarnings(ctx, session.service, session.fetched, "")...)
+	document := nextCandidatesDocument{Tasks: offered, Eligible: len(candidates)}
+	if jsonMode {
+		writeSyncedResult(stdout, "next", document, &session.report, session.conflicts, warnings)
+		return nil
+	}
+	if len(offered) == 0 {
+		fmt.Fprintln(stdout, "No eligible task.")
+	} else if err := writeList(stdout, offered); err != nil {
+		return err
 	}
 	writeConflicts(stdout, session.conflicts)
 	writeWarnings(stderr, warnings)
