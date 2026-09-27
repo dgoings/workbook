@@ -2590,17 +2590,73 @@
       // somewhere in the title or the description, case folded. It is kept
       // between the two markers below and depends on nothing else on this page,
       // so a parity test can lift it out and ask it what core is asked.
-      // find:begin
-      function findTerms(query) {
-        return String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
+      //
+      // The markers are strings rather than comments because the parity test asks
+      // the page the handler served, the way every other test here does, and
+      // html/template strips the comments out of that page: a marker that existed
+      // only in this file would be one the test could not find.
+      "find:begin";
+      // Folded one code point at a time, because Go folds one rune at a time.
+      // JavaScript's toLowerCase reads the text around a letter and Go's
+      // strings.ToLower cannot: a browser answers "ΟΔΟΣ".toLowerCase() with
+      // "οδος", applying the Greek final-sigma rule, while Go answers "οδοσ", so
+      // a reader searching a board for "οδοσ" found nothing the CLI found. Taking
+      // each code point on its own takes that context away, which is the only
+      // thing the two matchers disagreed about here.
+      //
+      // The one pair they still cannot agree on is "İ" (U+0130). JavaScript's
+      // special casing lowercases it to "i" followed by a combining dot above and
+      // Go's simple case mapping answers a bare "i", and reconciling that would
+      // mean shipping a case-mapping table to the browser. The parity test names
+      // the pair and asserts it still diverges, so whoever changes either side is
+      // told about it.
+      //
+      // An all-ASCII string folds the same both ways, and the whole-string call is
+      // the one the engine has a fast path for, so it takes it: no ASCII code
+      // point has a special or a context-sensitive lowercase mapping — final sigma
+      // needs a Greek sigma and the dotted capital I is not ASCII — so with
+      // nothing outside ASCII in the string there is no context left to read.
+      // Measured on a 2 KB description: 29.3 us per code point against 0.7 us
+      // this way, which is what makes a searched board of long descriptions cost
+      // a fraction of a frame rather than several of them.
+      const nonAsciiFind = /[^\x00-\x7F]/;
+      function foldFindCase(text) {
+        if (!nonAsciiFind.test(text)) return text.toLowerCase();
+        return [...text].map((character) => character.toLowerCase()).join("");
       }
+      // The text a task is searched over: its title and its description, joined
+      // with a newline so a term cannot straddle the two, folded once.
+      function foldTaskHaystack(task) {
+        return foldFindCase(String(task.title || "") + "\n" + String(task.description || ""));
+      }
+      // The characters Go's unicode.IsSpace accepts, which is what strings.Fields
+      // splits a query on — and only those. JavaScript's \s is a different set in
+      // both directions: it splits on U+FEFF, which Go does not call whitespace,
+      // and it does not split on U+0085, which Go does. Either difference turns
+      // one query into two terms on one side and one term on the other.
+      const findSpace = /[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+/;
+      function findTerms(query) {
+        return foldFindCase(String(query || "")).split(findSpace).filter(Boolean);
+      }
+      // The predicate over work already done: a haystack this task's text has
+      // already been folded into, and terms the query has already been split into.
+      // An empty term list matches, which is what makes an empty query cost
+      // nothing — no caller has to fold a haystack to be told it matches.
+      function matchesFoldedFind(foldedHaystack, terms) {
+        if (terms.length === 0) return true;
+        return terms.every((term) => foldedHaystack.includes(term));
+      }
+      // The whole predicate, folding for itself. This is the one the parity test
+      // asks and the one every caller outside a render uses; a render that is
+      // about to ask the same task about twenty-five options folds once and goes
+      // through matchesFoldedFind instead, which is the same answer arrived at
+      // without doing the same work twenty-five times.
       function matchesFind(task, query) {
         const terms = findTerms(query);
         if (terms.length === 0) return true;
-        const haystack = (String(task.title || "") + "\n" + String(task.description || "")).toLowerCase();
-        return terms.every((term) => haystack.includes(term));
+        return matchesFoldedFind(foldTaskHaystack(task), terms);
       }
-      // find:end
+      "find:end";
       function emptyFilters() {
         return { q: "", priority: new Set(), label: new Set(), key: new Set() };
       }
@@ -2617,6 +2673,13 @@
           key: new Set(params.getAll("key").filter(Boolean).map((value) => value.toUpperCase())),
         };
       }
+      // The board's whole address, built from nothing but the column setting and
+      // the filters. It drops the fragment and every parameter these two do not
+      // own, which is deliberate: this is the one function that says what a board
+      // address is, and a landing that carried an unrecognized parameter through
+      // would be promising to honor something no control here reads. Nothing on
+      // `/` uses a fragment or any other parameter today, so nothing is being
+      // taken away; a future one has to be named here to survive.
       function boardAddress(deleted, filters) {
         const params = new URLSearchParams();
         if (deleted) params.set("deleted", "1");
@@ -2661,11 +2724,41 @@
         const dash = id.indexOf("-");
         return dash > 0 ? id.slice(0, dash).toUpperCase() : "";
       }
-      function passesFilters(task, filters) {
+      function passesFilters(task, filters, search) {
         if (filters.priority.size > 0 && !filters.priority.has(task.priority)) return false;
         if (filters.label.size > 0 && !(task.labels || []).some((label) => filters.label.has(label))) return false;
         if (filters.key.size > 0 && !filters.key.has(taskKey(task))) return false;
+        // Handed a render's folded text, the search is a substring test over work
+        // already done. The query it was folded for is carried with it and checked
+        // here rather than assumed: every caller that passes one is asking about
+        // the same query it was built from — withOnly replaces one group and never
+        // the search — and a caller that ever is not gets the slow, correct answer
+        // instead of a wrong fast one.
+        if (search && search.folded && search.query === filters.q) {
+          const folded = search.folded.get(task.id);
+          if (folded !== undefined) return matchesFoldedFind(folded, search.terms);
+        }
         return matchesFind(task, filters.q);
+      }
+      // Everything one render needs to answer the search with: the query, its
+      // terms split once, and each task's text folded once.
+      //
+      // It exists because of what the same render used to cost. passesFilters is
+      // asked about every task once for the columns and once more for every option
+      // in every chooser, and each of those asks used to fold that task's whole
+      // description again — 29.3 us of it on a 2 KB description, and the counts
+      // are recomputed on every poll. Folding once per task per render and handing
+      // the result to both halves took a 500-task board of 2 KB descriptions with
+      // a search standing from 37.4 ms a second to 0.7 ms.
+      //
+      // An empty query folds nothing at all: matchesFoldedFind answers an empty
+      // term list before it looks at a haystack, so an unsearched board — which is
+      // most boards, most of the time — pays none of this.
+      function foldedSearch(tasks) {
+        const query = boardFilters.q;
+        const terms = findTerms(query);
+        if (terms.length === 0) return { query, terms, folded: null };
+        return { query, terms, folded: new Map(tasks.map((task) => [task.id, foldTaskHaystack(task)])) };
       }
       let boardFilters = emptyFilters();
       function route(url = new URL(window.location.href)) {
@@ -3091,7 +3184,11 @@
         if (createMoreTasks) {
           return { path: newTaskPath(recovery.status), stageRecovery: false, replace: true, focusTitle: true };
         }
-        return { path: "/", stageRecovery: false, replace: false, focusTaskID: recovery.taskID };
+        // The board the reader left, filters and Deleted column and all, rather
+        // than the bare board: they filed this task from a board they had narrowed
+        // down, and landing them on an unfiltered one would throw away the state
+        // they were working in and make them set it up again.
+        return { path: boardAddress(deletedColumnShown, boardFilters), stageRecovery: false, replace: false, focusTaskID: recovery.taskID };
       }
       // A save that re-arms the New Task form destroys the node the user was
       // standing on, and a browser blurs an element on its way out of the
@@ -3144,7 +3241,9 @@
         if (createMoreTasks) {
           return { path: newTaskPath(creation.task.status), replace: true, focusTitle: true };
         }
-        return { path: "/", replace: false, focusTaskID: creation.key };
+        // The board the reader left, for the reason createdTaskLanding lands
+        // there: this is the same landing, taken before the server has answered.
+        return { path: boardAddress(deletedColumnShown, boardFilters), replace: false, focusTaskID: creation.key };
       }
       // The task a create draws before the server has named one. It carries no
       // head and no relationships, because those are the server's answers.
@@ -6412,7 +6511,15 @@
         const actions = document.createElement("div"); actions.className = "form-actions";
         const primaryActions = document.createElement("div"); primaryActions.className = "form-primary-actions";
         const save = document.createElement("button"); save.className = "save-button"; save.type = "submit"; text(save, "Save");
-        const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
+        // Back is the board the reader came from, which is the same board every
+        // landing in this client goes to: a reader who narrowed the board down,
+        // opened a task and then changed their mind should not be punished for
+        // not having saved. Computed as this form is built, and this form is
+        // built by the render of the route it is on, so it is the state the
+        // address was in when the reader left the board — or the bare board,
+        // when they opened this page by its own address and there is no board
+        // state to return to.
+        const back = document.createElement("a"); back.className = "board-link"; back.href = boardAddress(deletedColumnShown, boardFilters); text(back, "Back");
         primaryActions.append(save, back); actions.append(primaryActions);
         // The way out of the one state this form does not leave on its own: the
         // task was created and some of its attachments were not attached. It is
@@ -6431,8 +6538,10 @@
 		    remove.disabled = true; text(result, "");
 		    // The board with its Deleted column shown, which is where the task
 		    // now is: the reader lands looking at what they just deleted, with
-		    // the Restore that undoes it on the card.
-		    try { await mutateTask("DELETE", "/api/tasks/" + encodeURIComponent(task.id)); navigate("/?deleted=1"); }
+		    // the Restore that undoes it on the card. Built rather than written
+		    // out, so the filters the reader had set come along: the column is
+		    // the only thing this landing decides.
+		    try { await mutateTask("DELETE", "/api/tasks/" + encodeURIComponent(task.id)); navigate(boardAddress(true, boardFilters)); }
 		    catch (error) { text(result, error instanceof Error ? error.message : "Task deletion failed."); }
 		    finally { remove.disabled = false; }
 		  });
@@ -6684,8 +6793,9 @@
               // The server refuses an update that changes nothing, and it is
               // right to: there is no operation to record. Saving an untouched
               // form is not an error though, it is finished, so it leaves the
-              // way an accepted save does.
-              navigate("/");
+              // way an accepted save does — onto the board the reader came from,
+              // filters and all.
+              navigate(boardAddress(deletedColumnShown, boardFilters));
               return;
             }
             if (expectedHead) values.expectedHead = expectedHead;
@@ -6802,7 +6912,10 @@
               // is showing it.
               await refresh();
             } else {
-              navigate("/");
+              // The board the reader came from rather than the bare one: an
+              // accepted save is not a reason to undo the narrowing they were
+              // reading the board through.
+              navigate(boardAddress(deletedColumnShown, boardFilters));
               await refresh();
             }
           } catch (error) {
@@ -7202,9 +7315,9 @@
       // it and is never filtered away: a card the reader just made must not vanish
       // under them because it does not match a search they typed before they made
       // it. Only a task the server has answered for can be filtered out.
-      function shownTasks(projected, known) {
+      function shownTasks(projected, known, search) {
         if (!filtersActive(boardFilters)) return projected;
-        return projected.filter((task) => !known.has(task.id) || passesFilters(task, boardFilters));
+        return projected.filter((task) => !known.has(task.id) || passesFilters(task, boardFilters, search));
       }
       function rerender() {
         if (!tasksLoaded) return;
@@ -7212,12 +7325,16 @@
         // carries, so the presentation it is paired with names exactly the
         // stand-ins that survived.
         const tasks = projectTasks(latestTasks);
-        const shown = shownTasks(tasks, new Set(latestTasks.map((task) => task.id)));
+        // Folded once here and handed to both halves of the render, because both
+        // ask the same question of the same text: which cards the columns draw,
+        // and what each chooser option would leave.
+        const search = foldedSearch(tasks);
+        const shown = shownTasks(tasks, new Set(latestTasks.map((task) => task.id)), search);
         // Both readings are handed over — what the columns draw, and everything
         // the board holds — because a column that says three of nine has to be
         // told the nine. The presentation is derived over everything, so a task
         // the filters hide still has its view for whatever else is reading one.
-        render(shown, projectPresentation(latestPresentation, tasks), tasks);
+        render(shown, projectPresentation(latestPresentation, tasks), tasks, search);
       }
       function replaceProjectedTask(task) {
         const index = latestTasks.findIndex((candidate) => candidate.id === task.id);
@@ -9507,10 +9624,12 @@
         naming.append(eyebrow, heading);
         // The way back, where a task's page keeps it: a link to the board, in
         // the same words and the same class, rather than a control that only
-        // this page would have.
+        // this page would have. It names the board the reader came from for the
+        // reason a task's page does — this page is a detour, and a detour should
+        // not cost them the board they were reading.
         const back = document.createElement("a");
         back.className = "board-link";
-        back.href = "/";
+        back.href = boardAddress(deletedColumnShown, boardFilters);
         text(back, "Back");
         header.append(naming, back);
         section.append(header);
@@ -9872,7 +9991,10 @@
         const heading = document.createElement("h2"); heading.id = "route-message-title"; text(heading, titleText); header.append(heading);
         const body = document.createElement("div"); body.className = "route-message";
         const copy = document.createElement("p"); text(copy, message);
-        const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
+        // The board the reader came from, for the reason the other two Back links
+        // name it: the message is a dead end, and the way out of it is the board
+        // they were reading rather than a board they were not.
+        const back = document.createElement("a"); back.className = "board-link"; back.href = boardAddress(deletedColumnShown, boardFilters); text(back, "Back");
         body.append(copy);
         if (retryable) {
           const retry = document.createElement("button"); retry.className = "save-button"; retry.type = "button"; text(retry, "Retry");
@@ -10014,28 +10136,59 @@
         narrowed[group] = new Set([value]);
         return narrowed;
       }
-      // What one chooser lists. Every group answers from the project rather than
+      // What one chooser lists: everything the group offers, plus anything this
+      // group already has ticked. Every group answers from the project rather than
       // from the board except the labels, which are not a vocabulary: nobody
       // declares a label, so the only list there is the one the cards carry.
+      //
+      // The union is what keeps a ticked value reachable. What a group offers
+      // moves as the board does — a label is offered only while a card the board
+      // is drawing carries it, so hiding the Deleted column takes away every label
+      // that only a tombstone had — and an option that left the menu used to take
+      // its row with it while leaving the filter in the address: the badge went on
+      // saying "1 selected", the columns went on being empty, and there was no row
+      // left to untick. Listing what is ticked as well as what is offered also
+      // gives a token the project has never heard of a row that names it, so
+      // /?priority=bogus or an address shared before a rename says which word
+      // emptied the board instead of presenting an empty board and no reason.
       function chooserOptions(group, drawn) {
+        const chosen = boardFilters[group];
         if (group === "priority") {
           // In vocabulary order, which is the order the board sorts by and the
           // order the create form offers. Sorting them here would be a second
           // opinion about a sequence the project has already stated.
-          return priorityDefinitions.map(([token, label]) => ({ value: token, name: label }));
+          const offered = priorityDefinitions.map(([token, label]) => ({ value: token, name: label }));
+          return offered.concat(tickedOptionsBeyond(offered, chosen));
         }
         if (group === "key") {
           // Retired keys included, and said to be retired. Their tasks exist and
           // are on the board, so a chooser that listed only the keys that can
           // mint would be a chooser that cannot reach half the cards.
-          return publishedKeys.map((entry) => ({
+          const offered = publishedKeys.map((entry) => ({
             value: entry.key,
             name: entry.key + (entry.state === "retired" ? " (retired)" : ""),
           }));
+          return offered.concat(tickedOptionsBeyond(offered, chosen));
         }
         const present = new Set();
         drawn.forEach((task) => (task.labels || []).forEach((label) => present.add(label)));
+        // Sorted in with the rest rather than appended, because a label has no
+        // order of its own for a stray one to be kept out of.
+        chosen.forEach((value) => present.add(value));
         return [...present].sort().map((value) => ({ value, name: value }));
+      }
+      // A ticked value the group does not offer, named as the address spells it.
+      // There is no display name to give it — that is exactly what the project
+      // does not have for this token — and the token is the one thing that tells
+      // the reader what they are looking at. Appended after the offered options
+      // and sorted among themselves, so the order the project stated stays the
+      // order the reader sees at the top of the menu.
+      function tickedOptionsBeyond(offered, chosen) {
+        const known = new Set(offered.map((option) => option.value));
+        return [...chosen]
+          .filter((value) => !known.has(value))
+          .sort()
+          .map((value) => ({ value, name: value }));
       }
       // What a menu says when the group has nothing to list. A blank menu reads
       // as a menu that failed to draw; this says which of the two it is.
@@ -10116,7 +10269,7 @@
       // because every count here is a count of what a tick would leave — a
       // question about cards the filters are currently hiding as much as about
       // the ones they are not.
-      function renderChoosers(allTasks) {
+      function renderChoosers(allTasks, search) {
         // The tombstones count only while the column that draws them is shown,
         // exactly as that column's own total does. With it hidden they are in the
         // model only because the poll that read it asked for them.
@@ -10126,9 +10279,16 @@
           // A project with one key has nothing to choose between, so the chooser
           // is not offered at all. Retired keys count towards the two: their
           // tasks are on the board and the chooser is how a reader reaches them.
-          if (group === "key") chooser.root.hidden = publishedKeys.length < 2;
+          //
+          // Unless a key is ticked. ?key=ZZ on a one-key project is an address
+          // someone can reach — a typo, or a link from a project that has since
+          // dropped a key — and hiding the chooser there would hide the only row
+          // that says what is emptying the board, which is the defect the union in
+          // chooserOptions exists to prevent. The chooser comes back the moment
+          // the reader unticks it.
+          if (group === "key") chooser.root.hidden = publishedKeys.length < 2 && boardFilters.key.size === 0;
           const options = chooserOptions(group, drawn).map((option) => Object.assign({}, option, {
-            count: drawn.filter((task) => passesFilters(task, withOnly(boardFilters, group, option.value))).length,
+            count: drawn.filter((task) => passesFilters(task, withOnly(boardFilters, group, option.value), search)).length,
           }));
           renderChooserOptions(chooser, group, options);
           if (chooser.badge) chooser.badge.hidden = chosen.size === 0;
@@ -10752,6 +10912,22 @@
         filterEmpties.set(list, empty);
         return empty;
       }
+      // Whether a column says "No matches.", and whether a count is drawn as the
+      // "3 / 9" reading. Both are written only when the answer has changed, which
+      // is the rule every count on this board follows and for the same reason:
+      // this runs on every poll, and a property set to the value it already holds
+      // is a mutation an assistive technology may announce — once a second, for as
+      // long as the reader leaves the board open.
+      function setFilterEmpty(list, emptied) {
+        const empty = filterEmptyFor(list);
+        if (empty.hidden === !emptied) return;
+        empty.hidden = !emptied;
+      }
+      function setFilteredCount(count, label) {
+        const filtered = label.includes("/");
+        if (count.classList.contains("column__count--filtered") === filtered) return;
+        count.classList.toggle("column__count--filtered", filtered);
+      }
       // When a task was deleted, which is what orders the Deleted column. A
       // tombstone is the last thing that can happen to a task, so the time it
       // was last updated is the time it was deleted.
@@ -10801,7 +10977,10 @@
       function entriesFor(tasks, presentation) {
         return tasks.map((task) => ({ task, view: presentation.get(task.id) }));
       }
-      function render(tasks, presentation, allTasks = tasks) {
+      function render(tasks, presentation, allTasks = tasks, search = null) {
+        // A caller that folded already hands it over; one that did not gets the
+        // fold done here, so this function answers for itself either way.
+        const searching = search || foldedSearch(allTasks);
         const grouped = new Map([...lists.keys()].map((status) => [status, []]));
         // A task whose status matches no column is shown under its own heading
         // rather than dropped. The terminal board has always printed an UNKNOWN
@@ -10901,8 +11080,8 @@
           const total = totals.get(status) || 0;
           const label = filtering && items.length !== total ? items.length + " / " + total : String(items.length);
           if (count.textContent !== label) text(count, label);
-          count.classList.toggle("column__count--filtered", label.includes("/"));
-          filterEmptyFor(list).hidden = !(filtering && items.length === 0 && total > 0);
+          setFilteredCount(count, label);
+          setFilterEmpty(list, filtering && items.length === 0 && total > 0);
         });
         // Reconciled from the same survivor pool as the columns, so a status
         // that becomes recognized — or stops being — moves the card the reader
@@ -10912,8 +11091,8 @@
           ? stranded.length + " / " + totalStranded
           : String(stranded.length);
         if (unknownCount.textContent !== strandedLabel) text(unknownCount, strandedLabel);
-        unknownCount.classList.toggle("column__count--filtered", strandedLabel.includes("/"));
-        filterEmptyFor(unknownList).hidden = !(filtering && stranded.length === 0 && totalStranded > 0);
+        setFilteredCount(unknownCount, strandedLabel);
+        setFilterEmpty(unknownList, filtering && stranded.length === 0 && totalStranded > 0);
         // The region stays on screen while the filters are what emptied it, so a
         // task stranded on a status no column matches cannot be filtered into
         // silence: it says "No matches." for the reason a column does.
@@ -10927,7 +11106,7 @@
             ? removed.length + " / " + totalRemoved
             : String(removed.length);
           if (deletedCount.textContent !== removedLabel) text(deletedCount, removedLabel);
-          deletedCount.classList.toggle("column__count--filtered", removedLabel.includes("/"));
+          setFilteredCount(deletedCount, removedLabel);
           const filteredOut = filtering && removed.length === 0 && totalRemoved > 0;
           // "No deleted tasks." is a claim about what the server holds, so it
           // waits for a poll that actually asked. Until one has landed the
@@ -10935,7 +11114,7 @@
           // says nothing over a column the filters emptied either, because there
           // the true answer is the other line.
           deletedEmpty.hidden = removed.length > 0 || !deletedRead || filteredOut;
-          filterEmptyFor(deletedList).hidden = !filteredOut;
+          setFilterEmpty(deletedList, filteredOut);
         }
         // A report whose card the board no longer draws has nowhere left to be
         // read, and letting it go with the card would put the reader back where
@@ -10972,7 +11151,7 @@
         // the board this render just drew. Every path that renders the board
         // comes through here, so neither the poll nor a navigation can draw
         // cards the choosers have not been told about.
-        renderChoosers(allTasks);
+        renderChoosers(allTasks, searching);
       }
       // The outcome of the newest refresh that has superseded the one this
       // caller started, which is what waiting on your own refresh is actually
@@ -11102,8 +11281,9 @@
             // task page is a page about one task, not a view of the board, and a
             // poll that stopped feeding it because the board is searched would
             // break a form the reader is filling in.
-            const shown = shownTasks(projected, new Set(document.tasks.map((task) => task.id)));
-            render(shown, projectedPresentation, projected); stale.dataset.visible = "false"; markSynchronized();
+            const search = foldedSearch(projected);
+            const shown = shownTasks(projected, new Set(document.tasks.map((task) => task.id)), search);
+            render(shown, projectedPresentation, projected, search); stale.dataset.visible = "false"; markSynchronized();
             // The open task page's thread and attachments follow this read in
             // place, the way the relationship sidebar below does. Nothing else
             // about that form moves on a poll: a field is corrected only by a

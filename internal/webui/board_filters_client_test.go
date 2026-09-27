@@ -894,3 +894,373 @@ setTimeout(async () => {
 `
 	runBoardFiltersClient(t, "a drop into a filter-emptied column", program)
 }
+
+// A ticked value stays in its menu even when the board stops offering it.
+//
+// The reproduction a browser found: tick a label only a deleted task carries, then
+// hide the Deleted column. The label leaves the board with the card that carried
+// it, so the menu stopped listing it — and the filter was still in the address,
+// still counted by the badge, and still emptying every column, with no row left to
+// untick and nothing on the page saying what was narrowing it.
+func TestHandlerClientKeepsATickedLabelTheBoardStoppedDrawing(t *testing.T) {
+	active := clientPlacementTask(filterAuditID, "Audit the ledger", core.StatusReady, core.PriorityHigh)
+	active.Labels = []string{"ledger"}
+	doomed := clientPlacementTask(filterQueueID, "Rebuild the queue", core.StatusReady, core.PriorityHigh)
+	doomed.Rank = "2/1"
+	doomed.Labels = []string{"doomed"}
+	doomed.Deleted = true
+	script := boardFiltersClientScript(t)
+
+	program := clientDOMHarness("/?deleted=1", tasksDocumentJSON(t, []core.Task{active})) + script + boardFilterChooserHelpers + `
+includedTaskResponse = ` + tasksDocumentJSON(t, []core.Task{active, doomed}) + `;
+setTimeout(async () => {
+  await intervalCallback();
+  if (!deletedColumn()) throw new Error("the deleted address drew no Deleted column to carry the tombstone");
+  // The label is on the board only because that column is drawing the one card
+  // that has it, which is what makes this the case the menus used to lose.
+  if (chooserRow("label", "doomed").count !== "1") {
+    throw new Error("the label the tombstone carries counts " +
+      JSON.stringify(chooserRow("label", "doomed").count) + ", want \"1\"");
+  }
+  tickOption("label", "doomed");
+  if (historyPaths.at(-1) !== "/?deleted=1&label=doomed") {
+    throw new Error("ticking the label wrote " + JSON.stringify(historyPaths.at(-1)));
+  }
+
+  // Hiding the column takes the only card carrying that label off the board. The
+  // filter is untouched — the switch decides a column and nothing else — so the
+  // menu now has to list a value the board is not offering.
+  await documentEventListeners.click({ target: deletedToggle, button: 0, preventDefault() {} });
+  if (historyPaths.at(-1) !== "/?label=doomed") {
+    throw new Error("hiding the column wrote " + JSON.stringify(historyPaths.at(-1)));
+  }
+  if (deletedColumn()) throw new Error("hiding the column left it on the board");
+  const chooser = filterChooser("label");
+  if (chooser.badge.hidden || chooser.count.textContent !== "1") {
+    throw new Error("the badge stopped counting a filter the address still carries: hidden=" +
+      chooser.badge.hidden + " count=" + JSON.stringify(chooser.count.textContent));
+  }
+  const row = chooserRow("label", "doomed");
+  if (!row.checked) {
+    throw new Error("the label the reader ticked is listed unticked, so the badge counts something the menu denies");
+  }
+  // Zero, honestly: nothing the board is drawing carries it. That is the whole
+  // reading a reader needs — the filter is on, and it is what emptied the board.
+  if (row.count !== "0") {
+    throw new Error("the ticked label counts " + JSON.stringify(row.count) + ", want \"0\"");
+  }
+  const ready = boardLists.find((list) => list.dataset.status === "ready");
+  if (ready.querySelectorAll(".task-card").length !== 0) {
+    throw new Error("the filter the address carries is not narrowing the board");
+  }
+
+  // And the row is the way back out, which is the point of listing it.
+  tickOption("label", "doomed");
+  if (historyPaths.at(-1) !== "/") {
+    throw new Error("unticking the label wrote " + JSON.stringify(historyPaths.at(-1)));
+  }
+  if (!filterChooser("label").badge.hidden) {
+    throw new Error("unticking the only ticked label left the chooser counting one");
+  }
+  if (!boardCard(` + strconv.Quote(filterAuditID) + `)) {
+    throw new Error("clearing the label did not bring the board back");
+  }
+}, 0);
+`
+	runBoardFiltersClient(t, "a ticked label the board stopped drawing", program)
+}
+
+// A token the project has never heard of gets a row that names it. An address is
+// shareable and hand-editable, so ?priority=bogus happens — a typo, or a priority
+// renamed since the link was sent — and an empty board with an empty menu tells
+// the reader nothing about which word emptied it.
+func TestHandlerClientNamesAnUnknownPriorityInItsChooser(t *testing.T) {
+	tasks := boardFilterTasks()
+	script := boardFiltersClientScript(t)
+
+	program := clientDOMHarness("/?priority=bogus", tasksDocumentJSON(t, tasks)) + script + boardFilterChooserHelpers + `
+setTimeout(async () => {
+  await intervalCallback();
+  const row = chooserRow("priority", "bogus");
+  if (row.name !== "bogus") {
+    throw new Error("the unknown priority is listed as " + JSON.stringify(row.name) +
+      ", want the token the address spells");
+  }
+  if (!row.checked) throw new Error("the priority the address is filtering by is listed unticked");
+  if (row.count !== "0") {
+    throw new Error("the unknown priority counts " + JSON.stringify(row.count) + ", want \"0\"");
+  }
+  // After the vocabulary's own options, so the order the project stated is still
+  // the order the reader reads down the menu.
+  const values = chooserRows("priority").map((candidate) => candidate.value);
+  if (values.at(-1) !== "bogus" || values.slice(0, -1).join(",") !== "high,medium,low") {
+    throw new Error("the Priority menu lists " + JSON.stringify(values));
+  }
+  const chooser = filterChooser("priority");
+  if (chooser.badge.hidden || chooser.count.textContent !== "1") {
+    throw new Error("the badge does not count the filter the address carries");
+  }
+  if (boardCard(` + strconv.Quote(filterAuditID) + `)) {
+    throw new Error("a priority no task holds did not narrow the board");
+  }
+  tickOption("priority", "bogus");
+  if (historyPaths.at(-1) !== "/") {
+    throw new Error("unticking the unknown priority wrote " + JSON.stringify(historyPaths.at(-1)));
+  }
+  if (!boardCard(` + strconv.Quote(filterAuditID) + `)) {
+    throw new Error("clearing the unknown priority did not bring the board back");
+  }
+}, 0);
+`
+	runBoardFiltersClient(t, "an unknown priority in the address", program)
+}
+
+// Every landing on the board is the board the reader came from. Saving a task —
+// new or existing — used to go to the bare address and throw away whatever the
+// reader had the board narrowed down to, so filing a task from a searched board
+// cost them the search.
+func TestHandlerClientSavingATaskLandsOnTheFilteredBoard(t *testing.T) {
+	existing := clientPlacementTask(filterPerfID, "Perf sweep", core.StatusReady, core.PriorityHigh)
+	existing.Head = "head-1"
+	saved := existing
+	saved.Description = "Swept."
+	saved.Head = "head-2"
+	created := clientPlacementTask(filterAuditID, "Sweep the ledger", core.StatusReady, core.PriorityMedium)
+	created.Rank = "2/1"
+	// A create that staged a relationship is the other create: it waits for the
+	// server rather than leaving the moment Save is pressed, and it decides its
+	// landing in a second place. Both places have to reach the same board.
+	second := clientPlacementTask(filterBacklogA, "Sweep the backlog", core.StatusReady, core.PriorityMedium)
+	second.Rank = "3/1"
+	linked := second
+	linked.Dependencies = []string{existing.ID}
+	script := boardFiltersClientScript(t)
+
+	program := clientDOMHarness("/?q=sweep", tasksDocumentJSON(t, []core.Task{existing})) + script + `
+setTimeout(async () => {
+  await intervalCallback();
+  if (filterSearch.value !== "sweep") throw new Error("the board did not read the search out of the address");
+  const boardFetch = globalThis.fetch;
+  let createCalls = 0;
+  let nextCreate = ` + taskMutationJSON(tasksDocumentJSON(t, []core.Task{created}), "") + `;
+  globalThis.fetch = async (url, options = {}) => {
+    if (url === "/api/tasks" && options.method === "POST") {
+      createCalls += 1;
+      fetchCalls.push({ url, options });
+      return { ok: true, json: async () => nextCreate };
+    }
+    if (options.method === "PUT" && url.includes("/dependencies/")) {
+      fetchCalls.push({ url, options });
+      return { ok: true, json: async () => (` + taskMutationJSON(tasksDocumentJSON(t, []core.Task{linked}), "") + `) };
+    }
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      return { ok: true, json: async () => (` + taskMutationJSON(tasksDocumentJSON(t, []core.Task{saved}), "") + `) };
+    }
+    return boardFetch(url, options);
+  };
+
+  // A reader opens a task from the board they had narrowed down, edits it, saves.
+  const detail = new TestElement("a");
+  detail.href = "/tasks/" + encodeURIComponent(` + strconv.Quote(existing.ID) + `);
+  await documentEventListeners.click({
+    target: detail, button: 0, defaultPrevented: false,
+    metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+    preventDefault() {}
+  });
+  const description = findElement(main, (element) => element.id === "task-description");
+  if (!description) throw new Error("the task's detail form did not render");
+  description.value = "Swept.";
+  await findElement(main, (element) => element.tagName === "FORM").eventListeners.submit({ preventDefault() {} });
+  if (historyPaths.at(-1) !== "/?q=sweep") {
+    throw new Error("the detail save landed on " + JSON.stringify(historyPaths.at(-1)) + ", want the filtered board");
+  }
+  if (filterSearch.value !== "sweep") throw new Error("the save landed on a board whose search box is empty");
+
+  // And a task filed from that board, which is the other landing.
+  taskResponse = ` + tasksDocumentJSON(t, []core.Task{existing, created}) + `;
+  const newTask = new TestElement("a");
+  newTask.href = "/tasks/new?status=ready";
+  await documentEventListeners.click({
+    target: newTask, button: 0, defaultPrevented: false,
+    metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+    preventDefault() {}
+  });
+  const title = findElement(main, (element) => element.id === "task-title");
+  if (!title) throw new Error("the New Task form did not render");
+  title.value = ` + strconv.Quote(created.Title) + `;
+  await findElement(main, (element) => element.tagName === "FORM").eventListeners.submit({ preventDefault() {} });
+  if (createCalls !== 1) throw new Error("Save created " + createCalls + " tasks");
+  if (historyPaths.at(-1) !== "/?q=sweep") {
+    throw new Error("the create landed on " + JSON.stringify(historyPaths.at(-1)) + ", want the filtered board");
+  }
+  if (filterSearch.value !== "sweep") throw new Error("the create landed on a board whose search box is empty");
+  if (main.firstElementChild !== boardView) throw new Error("the create did not land on the board");
+
+  // And the create that waits for the server, which chooses its landing in a
+  // place of its own: one that staged a relationship, so the ID the server
+  // assigns is needed before the second write can go.
+  nextCreate = ` + taskMutationJSON(tasksDocumentJSON(t, []core.Task{linked}), "") + `;
+  taskResponse = ` + tasksDocumentJSON(t, []core.Task{existing, created, linked}) + `;
+  const filedAgain = new TestElement("a");
+  filedAgain.href = "/tasks/new?status=ready";
+  await documentEventListeners.click({
+    target: filedAgain, button: 0, defaultPrevented: false,
+    metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+    preventDefault() {}
+  });
+  findElement(main, (element) => element.id === "task-title").value = ` + strconv.Quote(second.Title) + `;
+  const dependsGroup = findElement(main, (element) => element.textContent === "Depends On").parentElement;
+  const combobox = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
+  combobox.value = ` + strconv.Quote(existing.Title) + `;
+  combobox.eventListeners.input();
+  findElement(dependsGroup, (element) => element.attributes.role === "option" &&
+    element.dataset.candidateId === ` + strconv.Quote(existing.ID) + `).eventListeners.click();
+  await findElement(dependsGroup, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+  await findElement(main, (element) => element.tagName === "FORM").eventListeners.submit({ preventDefault() {} });
+  if (createCalls !== 2) throw new Error("the second Save created " + createCalls + " tasks in total");
+  if (historyPaths.at(-1) !== "/?q=sweep") {
+    throw new Error("a create that waited for the server landed on " +
+      JSON.stringify(historyPaths.at(-1)) + ", want the filtered board");
+  }
+  if (filterSearch.value !== "sweep") throw new Error("that create landed on a board whose search box is empty");
+}, 0);
+`
+	runBoardFiltersClient(t, "a save landing on the filtered board", program)
+}
+
+// Back is the board the reader came from, on every page that offers it. A reader
+// who narrowed the board down, opened a task or the configuration page and then
+// changed their mind should land where they left rather than on a board they never
+// asked for — the same rule Save now follows, applied to the control that means
+// "never mind".
+func TestHandlerClientBackFromAPageReturnsToTheFilteredBoard(t *testing.T) {
+	existing := clientPlacementTask(filterPerfID, "Perf sweep", core.StatusReady, core.PriorityHigh)
+	script := boardFiltersClientScript(t)
+	const backLinkHelper = `
+// Every page that offers a way back writes it the same way: an anchor of class
+// board-link reading "Back". A test asks for it the way a reader finds it.
+function backLink() {
+  return findElement(main, (element) =>
+    element.tagName === "A" && element.className === "board-link" && element.textContent === "Back");
+}
+function visit(href) {
+  const link = new TestElement("a");
+  link.href = href;
+  return documentEventListeners.click({
+    target: link, button: 0, defaultPrevented: false,
+    metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+    preventDefault() {}
+  });
+}
+`
+
+	program := clientDOMHarness("/?q=sweep&priority=high", tasksDocumentJSON(t, []core.Task{existing})) + script + backLinkHelper + `
+setTimeout(async () => {
+  await intervalCallback();
+  const want = "/?q=sweep&priority=high";
+
+  await visit("/tasks/" + encodeURIComponent(` + strconv.Quote(existing.ID) + `));
+  const fromDetail = backLink();
+  if (!fromDetail) throw new Error("the task's own page offers no way back to the board");
+  if (fromDetail.href !== want) {
+    throw new Error("Back from a task points at " + JSON.stringify(fromDetail.href) + ", want " + JSON.stringify(want));
+  }
+  // And it is still that board after the poll redraws the route, because the
+  // link is written by the render rather than once.
+  await intervalCallback();
+  if (backLink().href !== want) {
+    throw new Error("a poll rewrote Back as " + JSON.stringify(backLink().href));
+  }
+
+  await visit(window.location.origin + "/config");
+  const fromConfig = backLink();
+  if (!fromConfig) throw new Error("the configuration page offers no way back to the board");
+  if (fromConfig.href !== want) {
+    throw new Error("Back from the configuration page points at " +
+      JSON.stringify(fromConfig.href) + ", want " + JSON.stringify(want));
+  }
+
+  // The third Back link is the one a route message carries, which is the only
+  // thing a reader who mistyped an address has to act on.
+  await visit(window.location.origin + "/nowhere");
+  const fromMessage = backLink();
+  if (!fromMessage) throw new Error("the not-found message offers no way back to the board");
+  if (fromMessage.href !== want) {
+    throw new Error("Back from a route message points at " +
+      JSON.stringify(fromMessage.href) + ", want " + JSON.stringify(want));
+  }
+}, 0);
+`
+	runBoardFiltersClient(t, "Back from a page over a filtered board", program)
+
+	// A page opened by its own address is a page with no board behind it: nothing
+	// has read a board address, so the filters are the empty ones the client
+	// starts with and Back is the bare board — which is what it has always been.
+	direct := clientDOMHarness("/tasks/"+existing.ID, tasksDocumentJSON(t, []core.Task{existing})) + script + backLinkHelper + `
+setTimeout(async () => {
+  await intervalCallback();
+  if (!backLink()) throw new Error("a task page loaded by its own address offers no way back");
+  if (backLink().href !== "/") {
+    throw new Error("Back from a directly loaded task points at " + JSON.stringify(backLink().href) + ", want \"/\"");
+  }
+  await visit(window.location.origin + "/config");
+  if (backLink().href !== "/") {
+    throw new Error("Back from a directly loaded configuration page points at " + JSON.stringify(backLink().href));
+  }
+}, 0);
+`
+	runBoardFiltersClient(t, "Back from a page nobody reached through a board", direct)
+}
+
+// A project with one key is offered no Key chooser — there is nothing to choose
+// between — but a ticked key overrides that. /?key=ZZ on a one-key project is an
+// address someone can reach (a typo, a link from a project that has since dropped
+// a key), and hiding the chooser there hid the only row that said what was
+// emptying the board: the union in chooserOptions built the row and the hidden
+// chooser then made it unreachable.
+func TestHandlerClientKeyChooserStaysVisibleWhileAKeyIsTicked(t *testing.T) {
+	only := clientPlacementTask("WB-01J0000000000000000000FF21", "Audit the ledger", core.StatusReady, core.PriorityHigh)
+	script := boardFiltersClientScript(t)
+
+	program := clientDOMHarness("/?key=ZZ", tasksDocumentJSON(t, []core.Task{only})) +
+		keyChooserPrelude(t, oneKeyProject()) + script + boardFilterChooserHelpers + `
+setTimeout(async () => {
+  await intervalCallback();
+  const chooser = filterChooser("key");
+  if (chooser.root.hidden) {
+    throw new Error("the Key chooser is hidden while a key is ticked, so the filter cannot be reached");
+  }
+  const row = chooserRow("key", "ZZ");
+  if (!row.checked) throw new Error("the key the address is filtering by is listed unticked");
+  if (row.name !== "ZZ") {
+    throw new Error("the unknown key is listed as " + JSON.stringify(row.name) + ", want the token the address spells");
+  }
+  if (row.count !== "0") {
+    throw new Error("the unknown key counts " + JSON.stringify(row.count) + ", want \"0\"");
+  }
+  if (chooser.badge.hidden || chooser.count.textContent !== "1") {
+    throw new Error("the badge does not count the key the address carries: hidden=" +
+      chooser.badge.hidden + " count=" + JSON.stringify(chooser.count.textContent));
+  }
+  if (boardCard(` + strconv.Quote(only.ID) + `)) {
+    throw new Error("a key nothing was minted under did not narrow the board");
+  }
+
+  // Unticking it is what the row is for, and with nothing ticked the project is
+  // back to having nothing to choose between.
+  tickOption("key", "ZZ");
+  if (historyPaths.at(-1) !== "/") {
+    throw new Error("unticking the key wrote " + JSON.stringify(historyPaths.at(-1)));
+  }
+  if (!filterChooser("key").root.hidden) {
+    throw new Error("a one-key project with nothing ticked is still offered a choice of keys");
+  }
+  if (!boardCard(` + strconv.Quote(only.ID) + `)) {
+    throw new Error("clearing the key did not bring the board back");
+  }
+}, 0);
+`
+	runBoardFiltersClient(t, "the key chooser with an unknown key ticked", program)
+}
