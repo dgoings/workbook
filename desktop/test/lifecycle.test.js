@@ -154,3 +154,27 @@ describe('schemeToTheme', () => {
     assert.equal(lifecycle.schemeToTheme(0, 'system'), null)
   })
 })
+
+describe('startEveryProject', () => {
+  test('starts every project at once and isolates a failure to its own entry', async () => {
+    const order = []
+    const projects = [{ id: 'a', path: '/a' }, { id: 'b', path: '/b' }, { id: 'c', path: '/c' }]
+    const start = async (project) => {
+      order.push(project.id)
+      if (project.id === 'b') throw new Error('port in use')
+      return `http://127.0.0.1:1${project.id.charCodeAt(0)}`
+    }
+    const logged = []
+    const result = await lifecycle.startEveryProject({ projects, start, log: (line) => logged.push(line) })
+    assert.deepEqual(order, ['a', 'b', 'c'])
+    assert.deepEqual(result.started, ['a', 'c'])
+    assert.deepEqual(result.failed, [{ projectId: 'b', error: 'port in use' }])
+    assert.equal(logged.length, 1)
+    assert.match(logged[0], /b.*port in use/)
+  })
+
+  test('an empty registry starts nothing and reports nothing', async () => {
+    const result = await lifecycle.startEveryProject({ projects: [], start: async () => { throw new Error('never') } })
+    assert.deepEqual(result, { started: [], failed: [] })
+  })
+})

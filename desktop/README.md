@@ -33,6 +33,13 @@ the shell. The choice is remembered across launches. The rail keeps every route
 it had: the import glyph, and each project as its key with its status dot, with
 the name and path on the tile's tooltip.
 
+With two or more projects imported, a Next entry sits above them. It shows what
+each project would hand out next — the top of its Ready work, unblocked and not
+already somebody else's, exactly as `workbook next` decides it — with one
+number for how many per project. The list refreshes every five seconds while it
+is showing, and a row opens that task on its board. It is the view the app
+opens on when there is more than one project.
+
 ## Checks
 
 ```
@@ -286,8 +293,11 @@ rest still runs, and what went wrong is logged.
 ## How the boards run
 
 Each imported project gets its own `workbook serve` child process, supervised
-by `src/main/supervisor.js`, and its own `WebContentsView` loading that
-server's real address. That is what keeps Workbook's same-origin guard
+by `src/main/supervisor.js` and started when the app launches or the project
+is imported — not when its board is first opened — so every project's
+five-second synchronization loop runs for as long as the app does. Opening a
+board gives the project its own `WebContentsView` loading that server's real
+address. That is what keeps Workbook's same-origin guard
 satisfied: the Host header names the address the listener bound, and the
 Origin the board sees is its own. A proxy or an iframe would break one or
 both, and the board's `frame-ancestors 'none'` rules the iframe out anyway.

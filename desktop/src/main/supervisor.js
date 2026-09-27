@@ -41,10 +41,17 @@ function reapPreviousRun (recordPath) {
   let recorded
   try {
     recorded = JSON.parse(fs.readFileSync(recordPath, 'utf8'))
-  } catch {
-    return [] // No previous run, or an unreadable record: nothing to reap.
+  } catch (error) {
+    // No previous run is nothing to reap. A record that exists and cannot be
+    // read is nothing to reap either, but leaving it would mean reading and
+    // failing on it at every launch from here on, so it goes.
+    if (error.code !== 'ENOENT') discardRecord(recordPath)
+    return []
   }
-  if (!Array.isArray(recorded)) return []
+  if (!Array.isArray(recorded)) {
+    discardRecord(recordPath)
+    return []
+  }
 
   const reaped = []
   for (const entry of recorded) {
@@ -66,12 +73,20 @@ function reapPreviousRun (recordPath) {
       // Gone between the check and the signal, or not ours to kill.
     }
   }
+  // Unlinked whether or not anything was signalled: every pid in it has now been
+  // checked, and a record of pids that were all dead already is a record that
+  // will never say anything again.
+  discardRecord(recordPath)
+  return reaped
+}
+
+/** Remove the record of a previous run, tolerating one that is already gone. */
+function discardRecord (recordPath) {
   try {
     fs.unlinkSync(recordPath)
   } catch {
-    // Already gone.
+    // Already gone, which is the state we were asking for.
   }
-  return reaped
 }
 
 class Supervisor extends EventEmitter {
@@ -100,7 +115,15 @@ class Supervisor extends EventEmitter {
       .map((entry) => ({ pid: entry.child.pid, binary: entry.binary }))
     try {
       if (entries.length === 0) fs.rmSync(this.recordPath, { force: true })
-      else fs.writeFileSync(this.recordPath, JSON.stringify(entries))
+      else {
+        // Written aside and moved into place, because this file is rewritten on
+        // every start and stop while a launch or a crash could be reading it:
+        // a rename is the one write a reader cannot catch half finished, and
+        // half a JSON document is a record no later launch can reap from.
+        const staging = `${this.recordPath}.tmp`
+        fs.writeFileSync(staging, JSON.stringify(entries))
+        fs.renameSync(staging, this.recordPath)
+      }
     } catch {
       // A record that cannot be written only costs the next run its cleanup.
     }
@@ -190,7 +213,14 @@ class Supervisor extends EventEmitter {
         this.emit('exited', { projectId: project.id, code, wasRunning })
         if (!settled) {
           settled = true
-          reject(new Error(entry.error ?? `serve exited with code ${code}`))
+          // A start still in flight when the app quits was killed by us, and
+          // `code` is null because it died on a signal. Saying so is the
+          // difference between a launch-time quit logging one informative line
+          // per project and logging a dozen exit codes of null, which reads
+          // like every board server failed at once.
+          reject(new Error(this.stopping
+            ? 'serve stopped before it started'
+            : entry.error ?? `serve exited with code ${code}`))
         }
       })
     })
@@ -240,8 +270,15 @@ class Supervisor extends EventEmitter {
     for (const [, entry] of this.processes) {
       this.terminate(entry.child)
     }
+    // The record is deliberately left on disk. SIGTERM has been sent and
+    // nothing here waits for it to land — quit does not give us the time —
+    // so at this moment the pids in that file are the best account anyone has
+    // of children that may still be holding their ports. Erasing it would
+    // strand exactly the processes a hard exit leaves behind, and reapOrphans
+    // on the next launch exists to reap precisely these: it checks each pid is
+    // still our own `serve` before signalling, so a record of pids that all
+    // shut down cleanly costs the next launch one `ps` each and then goes.
     this.processes.clear()
-    this.recordRunning()
   }
 }
 

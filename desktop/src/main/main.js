@@ -10,6 +10,7 @@ const discovery = require('./discovery')
 const lifecycle = require('./lifecycle')
 const repoinfo = require('./repoinfo')
 const workbook = require('./workbook')
+const nextview = require('./nextview')
 const clipath = require('./clipath')
 const { setupUpdater } = require('./updater')
 
@@ -274,6 +275,21 @@ function watchSidebarShortcut (webContents) {
 }
 
 /**
+ * Start one project's board server and tell the shell how it went.
+ *
+ * `supervisor.start` already emits `started` on success; the failure branch
+ * has no event of its own, so both are announced here as `project:started`
+ * with the supervisor's status, and the sidebar repaints its dot from that.
+ */
+async function startProjectServer (project) {
+  try {
+    return await supervisor.start(project)
+  } finally {
+    toChrome('project:started', { projectId: project.id, ...supervisor.status(project.id) })
+  }
+}
+
+/**
  * Show one project's board, starting its server if it is not already running.
  *
  * Each board is its own WebContentsView loading the child server's real
@@ -332,6 +348,10 @@ async function openProject (projectId, taskId = null) {
 
   activeProjectId = projectId
   layout()
+  // Keyboard focus follows the board. Clicking a row in the chrome document
+  // leaves focus there, so the board arrives in front of a reader whose next
+  // keystroke would have gone to the page behind it.
+  view.webContents.focus()
   return { url }
 }
 
@@ -506,6 +526,19 @@ ipcMain.handle('registry:list', async () => ({
   scanRoots: registry.scanRoots
 }))
 
+ipcMain.handle('next:load', async (_event, { limit } = {}) =>
+  nextview.loadNext({
+    // The board server's status travels with each project, the same way
+    // registry:list sends it: what this view shows is only as fresh as the
+    // server keeping that project synchronized, so the view has to be able to
+    // say which projects have one running.
+    projects: registry.projects.map((project) => ({
+      ...project,
+      ...supervisor.status(project.id)
+    })),
+    limit
+  }))
+
 ipcMain.handle('discovery:pickFolder', async () => {
   const result = await dialog.showOpenDialog(window, {
     title: 'Choose a folder to scan for repositories',
@@ -595,6 +628,10 @@ ipcMain.handle('import:apply', async (_event, { selections }) => {
       }
 
       await registry.upsert(project)
+      // Not awaited: an import that binds slowly must not hold the wizard's
+      // progress, and startProjectServer already announces the outcome either
+      // way via `project:started`.
+      startProjectServer(project).catch(() => {})
       results.push({ ok: true, path: selection.path, project, adopted: Boolean(project.adopted) })
     } catch (error) {
       results.push({ ok: false, path: selection.path, error: error.message })
@@ -725,6 +762,16 @@ app.whenReady().then(async () => {
   })
 
   createWindow()
+  // Every imported project's server starts now, not on first click: using the
+  // app is meant to replace running `workbook serve` in each repository by
+  // hand, and each server carries the sync loop that keeps its project
+  // current. Not awaited — the window is up and the sidebar's status dots
+  // report each start as it settles.
+  lifecycle.startEveryProject({
+    projects: registry.projects,
+    start: startProjectServer,
+    log: (line) => console.error(line)
+  })
   // The launch check still runs, but the shell page has nowhere to show what it
   // finds and no action to offer: when an update action returns it belongs in
   // the native application menu, which reaches a board's view as well as this

@@ -38,6 +38,15 @@
     </nav>
 
     <div class="rail-label">Projects</div>
+    <!-- Above the projects rather than among the rail items: it is a view of
+         the projects, and it is only there when there are enough of them for
+         "what is next across these" to be a different question from one
+         board. app.js hides it below two projects. -->
+    <button id="next-item" class="project-item next-item" type="button" hidden
+      title="Next across every project" aria-label="Next across every project">
+      <span class="project-key">NEXT</span>
+      <span class="project-name">Next</span>
+    </button>
     <ul id="project-list" class="project-list"></ul>
 
   </aside>
@@ -138,6 +147,31 @@
         <span id="import-status" class="import-status"></span>
         <button id="do-import" class="primary" type="button">Import selected</button>
       </footer>
+    </section>
+
+    <!-- What each project would hand out next. Read through `workbook next`
+         so the tool's rule decides; nothing here filters or sorts. -->
+    <section id="view-next" class="view" hidden>
+      <header class="view-head view-head--split">
+        <div class="view-head__lead">
+          <h1>Next</h1>
+          <p class="subtitle">
+            What each project would hand out next: the top of its Ready work,
+            unblocked and not already somebody else's. Keep each backlog in
+            order and this is the list to start a session from.
+          </p>
+        </div>
+      </header>
+
+      <div class="next-controls">
+        <label class="depth">
+          Per project
+          <input id="next-limit" type="number" min="1" max="20" value="1">
+        </label>
+        <span id="next-state" class="scan-root"></span>
+      </div>
+
+      <div id="next-groups" class="next-groups view-scroll"></div>
     </section>
 
     <!-- Shown while a board is loading or after it fails. The board itself is a

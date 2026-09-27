@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('workbench', {
   pathNotice: () => ipcRenderer.invoke('path:notice'),
 
   listProjects: () => ipcRenderer.invoke('registry:list'),
+  loadNext: (limit) => ipcRenderer.invoke('next:load', { limit }),
   pickFolder: () => ipcRenderer.invoke('discovery:pickFolder'),
   scan: (root, maxDepth) => ipcRenderer.invoke('discovery:scan', { root, maxDepth }),
   importRepositories: (selections) => ipcRenderer.invoke('import:apply', { selections }),
@@ -61,5 +62,10 @@ contextBridge.exposeInMainWorld('workbench', {
     const listener = (_event, payload) => handler(payload)
     ipcRenderer.on('project:exited', listener)
     return () => ipcRenderer.removeListener('project:exited', listener)
+  },
+  onProjectStarted: (handler) => {
+    const listener = (_event, payload) => handler(payload)
+    ipcRenderer.on('project:started', listener)
+    return () => ipcRenderer.removeListener('project:started', listener)
   }
 })
