@@ -101,6 +101,11 @@ described under Changed.
   a Next entry above the project list shows what each project would hand out
   next, as `workbook next` decides it, with a number for how many per project;
   a row opens that task on its board. It refreshes every five seconds.
+- **The web board gains a filter row.** A search over title and description
+  and Priority, Labels and Key choosers narrow the columns, every control
+  writes the address so a filtered board is a link, and columns report
+  `visible / total`. `workbook list --find <text>` applies the same search
+  rule from the CLI.
 
 ### Changed
 - **`workbook setup` asks for the project key only when it creates a
@@ -146,6 +151,8 @@ described under Changed.
 - **The desktop app starts every imported project's board server at launch**
   and on import, rather than when a board is first opened, so each project's
   synchronization loop runs for as long as the app does.
+- **Show Deleted moved from the header into the board's new filter row.** Its
+  address, `/?deleted=1`, is unchanged, so existing links keep working.
 
 ### Fixed
 - **Saving the board's settings after changing a status or a priority no longer
