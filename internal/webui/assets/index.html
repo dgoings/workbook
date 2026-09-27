@@ -182,8 +182,13 @@
        control that scrolled away from the columns it acts on would be one the
        reader has to go looking for. The count modifier sits here beside it for
        the same reason the row does: "3 / 9" is the row's reading of a column
-       rather than the column's own. */
-    .filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .95rem; padding: .5rem 1.25rem; border-bottom: 1px solid var(--wb-hairline); }
+       rather than the column's own.
+
+       No rule under it. The row already reads as a band of its own — it is the
+       only thing between the header's line and the columns — and a second
+       hairline a few pixels under the first one read as a thickened header
+       border rather than as an edge of anything. */
+    .filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .95rem; padding: .5rem 1.25rem; }
     .filter-row[hidden] { display: none; }
     .filter-row__search { flex: 1 1 14rem; min-width: 10rem; max-width: 26rem; border: 1px solid var(--wb-border-soft); border-radius: 4px; background: var(--wb-surface-1); color: var(--wb-ink); font: inherit; font-size: .84rem; padding: .35rem .55rem; }
     .filter-row__choosers { display: flex; flex-wrap: wrap; gap: .45rem; }
@@ -210,8 +215,24 @@
     .filter-chooser__button[aria-expanded="true"], .filter-chooser--active .filter-chooser__button { border-color: var(--wb-primary); color: var(--wb-primary); }
     .filter-chooser__badge { min-width: 1.1rem; padding: 0 .3rem; border-radius: 999px; background: var(--wb-primary); color: var(--wb-surface-1); font-size: .68rem; text-align: center; }
     .filter-chooser__badge[hidden] { display: none; }
-    .filter-chooser__menu { position: absolute; top: calc(100% + .3rem); left: 0; z-index: 5; min-width: 12rem; max-height: 18rem; overflow-y: auto; padding: .4rem; border: 1px solid var(--wb-border-soft); border-radius: 4px; background: var(--wb-surface-1); box-shadow: 0 6px 20px var(--wb-text-shadow); }
+    .filter-chooser__menu { position: absolute; top: calc(100% + .3rem); left: 0; z-index: 5; min-width: 12rem; padding: .4rem; border: 1px solid var(--wb-border-soft); border-radius: 4px; background: var(--wb-surface-1); box-shadow: 0 6px 20px var(--wb-text-shadow); }
     .filter-chooser__menu[hidden] { display: none; }
+    /* The box at the top of the Labels menu. A project carries as many labels as
+       its cards do, and a list that long is a scroll rather than a choice, so
+       that one menu narrows itself. It is drawn quieter and smaller than the
+       row's own search box — this one narrows a list of ticks, not the board —
+       and it takes the menu's whole width rather than a width of its own, so the
+       menu is one column of things however long the longest label is. */
+    .filter-chooser__search { display: block; width: 100%; box-sizing: border-box; margin: 0 0 .35rem; border: 1px solid var(--wb-border-soft); border-radius: 4px; background: var(--wb-surface-1); color: var(--wb-ink); font: inherit; font-size: .8rem; padding: .3rem .45rem; }
+    /* The rows are what scrolls, not the menu. The height and the scroll used to
+       be the menu's, which put the box that narrows these rows inside the scroller
+       it narrows: a reader who scrolled a long Labels menu to read further down it
+       pushed the box off the top of the menu — measured at -17.6px on eight labels
+       — and the control they were about to type into was somewhere above the
+       border. Here the menu keeps its frame, the box and the no-match line hold
+       their place in it, and the list under them takes the height and the scrollbar
+       that the list is what needs. */
+    .filter-chooser__options { max-height: 18rem; overflow-y: auto; }
     .filter-option { display: flex; align-items: center; gap: .45rem; padding: .25rem .3rem; font-size: .82rem; cursor: pointer; }
     .filter-option .count { margin-left: auto; color: var(--wb-ink-soft); font-size: .72rem; }
     .filter-option--none { color: var(--wb-ink-soft); }
@@ -275,7 +296,25 @@
     .nav-switch__label--descriptions { min-width: 8.25rem; }
     .nav-switch__label--sync { min-width: 5rem; }
     @media (prefers-reduced-motion: reduce) { .nav-switch__track, .nav-switch__knob { transition: none; } }
-    main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 1.25rem; }
+    /* No padding at the top. The filter row is what separates the header from the
+       columns now, and a board inset under it stood the columns a row's height
+       below a control that acts on them. */
+    main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 1.25rem 1.25rem; }
+    /* The routes that draw no columns want that inset back: a task's page, the
+       configuration page and a route message are each a bordered card with a
+       shadow, and one flush under the header's own line reads as a thickened
+       header border rather than as the top of anything.
+
+       The condition is the row being hidden, which is exactly the condition of
+       being off the board — renderRoute hides the row for every other route — so
+       the state is read off the page rather than kept a second time. It is padding
+       on main rather than a margin on the card because main is the scroller: a
+       margin adds to what is inside the scroller and a page that fitted the window
+       gains a margin's worth of scroll, which is what every route whose shell is
+       `height: auto; min-height: 100%` — the configuration page, a task page with
+       its history open, a phone, a short window — would have gained. Padding comes
+       off the height those percentages resolve against instead, so they still fit. */
+    .filter-row[hidden] ~ main { padding-top: 1.25rem; }
     /* Reports leave only by being dismissed, so the notice has to be able to run
        out of room rather than out of page: it shares a viewport-height flex
        column with main, and the body never scrolls. The cap keeps the route
@@ -1257,15 +1296,30 @@
     <div class="filter-row__choosers" data-filter-choosers>
       <div class="filter-chooser" data-filter-chooser="priority">
         <button type="button" class="filter-chooser__button" aria-expanded="false" aria-controls="filter-menu-priority" data-filter-chooser-button>Priority <span class="filter-chooser__badge" data-filter-chooser-badge hidden><span data-filter-chooser-count></span><span class="visually-hidden"> selected</span></span></button>
-        <div class="filter-chooser__menu" id="filter-menu-priority" role="group" aria-label="Priority" data-filter-chooser-menu hidden></div>
+        <div class="filter-chooser__menu" id="filter-menu-priority" role="group" aria-label="Priority" data-filter-chooser-menu hidden><div class="filter-chooser__options" data-filter-chooser-options></div></div>
       </div>
       <div class="filter-chooser" data-filter-chooser="label">
         <button type="button" class="filter-chooser__button" aria-expanded="false" aria-controls="filter-menu-label" data-filter-chooser-button>Labels <span class="filter-chooser__badge" data-filter-chooser-badge hidden><span data-filter-chooser-count></span><span class="visually-hidden"> selected</span></span></button>
-        <div class="filter-chooser__menu" id="filter-menu-label" role="group" aria-label="Labels" data-filter-chooser-menu hidden></div>
+        <!-- The one menu with a box of its own. Nobody declares a label, so this
+             is the only chooser whose list is as long as the project's cards make
+             it, and a menu of dozens is a scroll rather than a choice. What is
+             typed here is menu state and not board state: it never reaches the
+             address, and it is cleared when the menu closes. The line under the
+             box is what the menu says when the box has hidden every row, which is
+             a different sentence from the one an unlabelled board gets. It is a
+             live region and it stands in the document whether or not it is
+             showing, so a reader who cannot see the rows go is told that the
+             letter they just typed left nothing — a line created in the same
+             frame as its own first message announces nothing at all. -->
+        <div class="filter-chooser__menu" id="filter-menu-label" role="group" aria-label="Labels" data-filter-chooser-menu hidden>
+          <input class="filter-chooser__search" type="search" autocomplete="off" placeholder="Find a label" aria-label="Find a label" data-filter-chooser-search>
+          <p class="filter-option filter-option--none" aria-live="polite" data-filter-chooser-nomatch hidden>No labels match</p>
+          <div class="filter-chooser__options" data-filter-chooser-options></div>
+        </div>
       </div>
       <div class="filter-chooser" data-filter-chooser="key" hidden>
         <button type="button" class="filter-chooser__button" aria-expanded="false" aria-controls="filter-menu-key" data-filter-chooser-button>Key <span class="filter-chooser__badge" data-filter-chooser-badge hidden><span data-filter-chooser-count></span><span class="visually-hidden"> selected</span></span></button>
-        <div class="filter-chooser__menu" id="filter-menu-key" role="group" aria-label="Key" data-filter-chooser-menu hidden></div>
+        <div class="filter-chooser__menu" id="filter-menu-key" role="group" aria-label="Key" data-filter-chooser-menu hidden><div class="filter-chooser__options" data-filter-chooser-options></div></div>
       </div>
     </div>
     <a class="nav-switch" href="/?deleted=1" role="switch" aria-checked="false" data-deleted-toggle><span class="nav-switch__label nav-switch__label--deleted" data-deleted-label>Show Deleted</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></a>
@@ -1816,6 +1870,15 @@
         // badge itself would throw that word away on every render.
         count: root.querySelector("[data-filter-chooser-count]"),
         menu: root.querySelector("[data-filter-chooser-menu]"),
+        // The box that narrows this menu's rows, the line the menu says when it
+        // has narrowed them all away, and the container the rows are drawn into.
+        // Only the Labels menu is served a box and a line — it is the one chooser
+        // whose list is as long as the project's cards make it — so both are null
+        // on the other two, and every branch that touches them asks first. The
+        // options container is served for all three, so the render has one path.
+        search: root.querySelector("[data-filter-chooser-search]"),
+        noMatch: root.querySelector("[data-filter-chooser-nomatch]"),
+        optionsList: root.querySelector("[data-filter-chooser-options]"),
         options: new Map(),
         builtFrom: null,
       }]));
@@ -1823,23 +1886,53 @@
       // `except` is the chooser the reader is acting inside, which is left alone:
       // a tick navigates, and the menu they are working through has to survive
       // the render that navigation causes.
+      //
+      // A menu that closes forgets what was typed into it. The box is menu state
+      // rather than board state, so a reader who reopens the Labels menu is
+      // offered the labels the board has and not the three a search they have
+      // since forgotten left standing — and this is the one place every close
+      // path goes through: the button, a click outside, Escape, and a route that
+      // leaves the board.
       function closeChoosersExcept(except) {
-        filterChoosers.forEach((chooser) => {
+        filterChoosers.forEach((chooser, group) => {
           if (chooser.root === except) return;
           if (chooser.menu) chooser.menu.hidden = true;
           if (chooser.button) chooser.button.setAttribute("aria-expanded", "false");
+          if (chooser.search && chooser.search.value !== "") {
+            chooser.search.value = "";
+            applyChooserSearch(chooser, group);
+          }
         });
       }
       function chooserIsOpen(chooser) {
         return Boolean(chooser.menu) && chooser.menu.hidden === false;
       }
-      filterChoosers.forEach((chooser) => {
+      filterChoosers.forEach((chooser, group) => {
         if (!chooser.button || !chooser.menu) return;
         chooser.button.addEventListener("click", () => {
           const opening = chooser.menu.hidden;
           closeChoosersExcept(opening ? chooser.root : null);
           chooser.menu.hidden = !opening;
           chooser.button.setAttribute("aria-expanded", opening ? "true" : "false");
+          // A menu with a box opens with the caret in it, so a reader who came
+          // here to find one label out of forty types rather than scrolls. It is
+          // focused after the menu is shown: a browser will not put the caret in
+          // something that is not on screen yet.
+          if (opening && chooser.search) chooser.search.focus();
+        });
+        if (!chooser.search) return;
+        chooser.search.addEventListener("input", () => applyChooserSearch(chooser, group));
+        chooser.search.addEventListener("keydown", (event) => {
+          if (event.key !== "Escape") return;
+          // Escape empties the box first and closes the menu second, which is the
+          // order of what the reader is undoing: the narrowing they typed, and
+          // then the menu they opened. The first press is claimed here and kept
+          // from the document, which is where the second one is heard — the box is
+          // empty by then, so this listener lets it through.
+          if (chooser.search.value === "") return;
+          event.stopPropagation();
+          chooser.search.value = "";
+          applyChooserSearch(chooser, group);
         });
       });
       const schemeToggle = document.querySelector("[data-scheme-toggle]");
@@ -10222,8 +10315,30 @@
           navigate(boardAddress(deletedColumnShown, next));
         });
         label.append(input, name, count);
-        chooser.options.set(option.value, { label, input, count });
+        // The name is kept as well as the box and the count, because the box at
+        // the top of a menu narrows by what a row says: see applyChooserSearch.
+        chooser.options.set(option.value, { label, input, name, count });
         return label;
+      }
+      // Narrow a menu's rows to the ones whose name contains what the reader
+      // typed into it. Menu state, not board state: nothing here touches the
+      // address, and closing the menu clears it. A ticked row is always shown,
+      // so a filter the reader set can always be unset from where it was set.
+      function applyChooserSearch(chooser, group) {
+        if (!chooser.search) return;
+        const needle = foldFindCase(chooser.search.value.trim());
+        let shown = 0;
+        chooser.options.forEach((parts, value) => {
+          const ticked = boardFilters[group].has(value);
+          const matches = needle === "" || foldFindCase(parts.name.textContent).includes(needle);
+          const visible = ticked || matches;
+          if (parts.label.hidden !== !visible) parts.label.hidden = !visible;
+          if (visible) shown += 1;
+        });
+        if (chooser.noMatch) {
+          const none = needle !== "" && shown === 0 && chooser.options.size > 0;
+          if (chooser.noMatch.hidden !== !none) chooser.noMatch.hidden = !none;
+        }
       }
       // One chooser's options, drawn in place.
       //
@@ -10233,9 +10348,13 @@
       // their way to a tick, once a second, for as long as they left it open.
       // A count that has changed is written; a count that has not is left alone,
       // for the reason every other count on this board is.
+      //
+      // The rows go into the options container rather than into the menu, because
+      // the Labels menu holds two things the render must not throw away: the box
+      // the reader is typing into and the line that says it has matched nothing.
       function renderChooserOptions(chooser, group, options) {
-        const menu = chooser.menu;
-        if (!menu) return;
+        const list = chooser.optionsList;
+        if (!list) return;
         const wanted = options.map((option) => option.value).join("\n");
         if (chooser.builtFrom !== wanted) {
           chooser.builtFrom = wanted;
@@ -10244,9 +10363,9 @@
             const empty = document.createElement("p");
             empty.className = "filter-option filter-option--none";
             text(empty, chooserEmptyLine(group));
-            menu.replaceChildren(empty);
+            list.replaceChildren(empty);
           } else {
-            menu.replaceChildren(...options.map((option) => buildChooserOption(chooser, group, option)));
+            list.replaceChildren(...options.map((option) => buildChooserOption(chooser, group, option)));
           }
         }
         options.forEach((option) => {
@@ -10262,6 +10381,10 @@
           // wondering whether the control worked.
           parts.label.classList.toggle("filter-option--none", option.count === 0 && !ticked);
         });
+        // Applied after the loop rather than when the reader types, so a poll that
+        // adds or drops a label keeps the narrowing: the rows may be new nodes,
+        // and what the box says about them is the same either way.
+        applyChooserSearch(chooser, group);
       }
       // The choosers, drawn from the board they are narrowing.
       //
@@ -11353,6 +11476,11 @@
       // where they were rather than at the top of the document. Heard at the
       // document because the caret may have left the menu since — the reader can
       // tab out of it — and a menu nobody can dismiss is worse than no menu.
+      //
+      // Heard after the box inside the Labels menu, because neither listener
+      // captures and a bubbling event reaches its target first. That is what lets
+      // that box claim the first Escape to empty itself and leave this one the
+      // second, with stopPropagation as the whole of the arrangement.
       document.addEventListener("keydown", (event) => {
         if (event.key !== "Escape") return;
         // Only while the row is on screen. Off the board there is no menu of ours

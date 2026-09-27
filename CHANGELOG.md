@@ -104,8 +104,8 @@ described under Changed.
 - **The web board gains a filter row.** A search over title and description
   and Priority, Labels and Key choosers narrow the columns, every control
   writes the address so a filtered board is a link, and columns report
-  `visible / total`. `workbook list --find <text>` applies the same search
-  rule from the CLI.
+  `visible / total`; the Labels menu has a search box of its own.
+  `workbook list --find <text>` applies the same search rule from the CLI.
 
 ### Changed
 - **`workbook setup` asks for the project key only when it creates a

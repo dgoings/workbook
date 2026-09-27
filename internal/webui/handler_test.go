@@ -4584,6 +4584,25 @@ class TestElement {
     if (this.eventListeners.click) this.eventListeners.click(event);
     if (documentEventListeners.click) documentEventListeners.click(event);
   }
+  // A keystroke, raised the way the browser raises one: the element's own
+  // listener hears it, and then it bubbles to the document, where this page
+  // closes an open chooser with Escape. Neither listener captures, so the target
+  // is first — and a listener that calls stopPropagation ends it there, which is
+  // the whole of how the box in the Labels menu claims the first Escape for
+  // emptying itself and leaves the second one to the document. A test that
+  // called the element's listener by hand would exercise neither half of that.
+  keydown(event) {
+    const raised = Object.assign({ target: this, key: "", preventDefault() {} }, event);
+    let stopped = false;
+    const declared = raised.stopPropagation;
+    raised.stopPropagation = () => {
+      stopped = true;
+      if (typeof declared === "function") declared.call(raised);
+    };
+    if (this.eventListeners.keydown) this.eventListeners.keydown(raised);
+    if (!stopped && documentEventListeners.keydown) documentEventListeners.keydown(raised);
+    return raised;
+  }
   get id() { return this.attributes.id || this._id || ""; }
   set id(value) { this._id = String(value); this.attributes.id = String(value); }
   addEventListener(name, listener) { this.eventListeners[name] = listener; }
@@ -4624,7 +4643,14 @@ class TestElement {
       ["[data-filter-chooser-button]", "filterChooserButton"],
       ["[data-filter-chooser-badge]", "filterChooserBadge"],
       ["[data-filter-chooser-count]", "filterChooserCount"],
-      ["[data-filter-chooser-menu]", "filterChooserMenu"]
+      ["[data-filter-chooser-menu]", "filterChooserMenu"],
+      // The three parts of a menu that narrows itself: the box, the line it says
+      // when the box has hidden every row, and the container the rows are drawn
+      // into. Only the Labels menu is served the first two, so the other two
+      // choosers answer null here exactly as the served page does.
+      ["[data-filter-chooser-search]", "filterChooserSearch"],
+      ["[data-filter-chooser-nomatch]", "filterChooserNomatch"],
+      ["[data-filter-chooser-options]", "filterChooserOptions"]
     ]) {
       if (selector === marker) return findElement(this, (element) => Object.prototype.hasOwnProperty.call(element.dataset, key));
     }
@@ -4875,6 +4901,28 @@ function filterChooserElement(group, startsHidden) {
   menu.hidden = true;
   menu.id = menuID;
   menu.dataset.filterChooserMenu = "";
+  // The Labels menu narrows itself, and only that one: nobody declares a label,
+  // so it is the one chooser whose list is as long as the project's cards make
+  // it. The box and the line it says when the box has matched nothing are served
+  // in it, above the rows, in the order the page serves them — a harness that
+  // built them for every chooser would let a client that gave Priority a box pass.
+  if (group === "label") {
+    const search = new TestElement("input");
+    search.attributes.type = "search";
+    search.dataset.filterChooserSearch = "";
+    const noMatch = new TestElement("p");
+    noMatch.hidden = true;
+    noMatch.setAttribute("aria-live", "polite");
+    noMatch.dataset.filterChooserNomatch = "";
+    noMatch.textContent = "No labels match";
+    menu.append(search, noMatch);
+  }
+  // Every menu has one of these, so the client draws rows down one path. It is a
+  // container inside the menu rather than the menu itself, which is what keeps a
+  // rebuilt option set from taking the box above it with it.
+  const optionsList = new TestElement("div");
+  optionsList.dataset.filterChooserOptions = "";
+  menu.append(optionsList);
   root.append(button, menu);
   return root;
 }

@@ -338,7 +338,13 @@ function filterChooser(group) {
     // count is read off the span the client writes.
     badge: root.querySelector("[data-filter-chooser-badge]"),
     count: root.querySelector("[data-filter-chooser-count]"),
-    menu: root.querySelector("[data-filter-chooser-menu]")
+    menu: root.querySelector("[data-filter-chooser-menu]"),
+    // The parts only a menu that narrows itself has: the box, the line it says
+    // when the box has hidden every row, and the container the rows are drawn
+    // into. The first two are null on the choosers the page serves without them.
+    search: root.querySelector("[data-filter-chooser-search]"),
+    noMatch: root.querySelector("[data-filter-chooser-nomatch]"),
+    optionsList: root.querySelector("[data-filter-chooser-options]")
   };
 }
 // One chooser's options, in the order it lists them: the value a tick writes, the
@@ -357,9 +363,36 @@ function chooserRows(group) {
       count: count ? count.textContent : "",
       checked: input.checked === true,
       none: hasClassToken(label, "filter-option--none"),
-      input
+      // Whether the menu's own box has narrowed this row away. Rows are hidden
+      // rather than removed, so the list is the whole list whatever is typed and
+      // the keyed rebuild above has nothing to do with the narrowing.
+      hidden: label.hidden === true,
+      input,
+      label
     };
   });
+}
+// The rows a reader can see, by name, which is what a claim about a narrowing is
+// a claim about.
+function visibleChooserNames(group) {
+  return chooserRows(group).filter((row) => !row.hidden).map((row) => row.name);
+}
+// A reader typing into a menu's own box: the value, then the input event the
+// browser raises. Nothing else — what is typed here is menu state, so a
+// keystroke that reached the address would be the defect.
+function typeIntoChooserSearch(group, text) {
+  const search = filterChooser(group).search;
+  if (!search) throw new Error("the " + group + " menu has no search box");
+  search.value = text;
+  search.eventListeners.input({ target: search });
+  return search;
+}
+// Escape pressed inside that box, raised the way the browser raises it: the box's
+// own listener, and then the document unless the box stopped it there.
+function escapeChooserSearch(group) {
+  const search = filterChooser(group).search;
+  if (!search) throw new Error("the " + group + " menu has no search box");
+  return search.keydown({ key: "Escape" });
 }
 // What a menu reads as, one option per entry, which is what a test states when it
 // is making a claim about the whole list rather than about one option in it.
@@ -769,14 +802,24 @@ setTimeout(async () => {
   if (chooserRows("label").length !== 0) {
     throw new Error("the Labels chooser offered " + chooserRows("label").length + " labels over a board carrying none");
   }
-  const menu = filterChooser("label").menu;
-  if (menu.children.length !== 1) {
-    throw new Error("the empty Labels menu holds " + menu.children.length + " lines, want the one that explains it");
+  // Read off the container the rows are drawn into rather than off the menu: the
+  // menu also holds the box that narrows the rows and the line that says the box
+  // has matched nothing, and neither is a row.
+  const chooser = filterChooser("label");
+  if (chooser.optionsList.children.length !== 1) {
+    throw new Error("the empty Labels menu holds " + chooser.optionsList.children.length +
+      " lines, want the one that explains it");
   }
-  const line = menu.children[0];
+  const line = chooser.optionsList.children[0];
   if (!hasClassToken(line, "filter-option--none") || line.textContent !== "No labels") {
     throw new Error("the empty Labels menu says " + JSON.stringify(line.textContent) +
       " in " + JSON.stringify(line.className));
+  }
+  // "No labels" and "No labels match" are different sentences, and a board with
+  // no labels at all is the first of them: nothing was typed, so nothing has been
+  // narrowed away.
+  if (!chooser.noMatch.hidden) {
+    throw new Error("a board carrying no labels is told its search matched nothing");
   }
   // The Priority chooser is not empty over the same board: the priorities are the
   // project's, so they are listed whether or not a card holds one.
@@ -1263,4 +1306,286 @@ setTimeout(async () => {
 }, 0);
 `
 	runBoardFiltersClient(t, "the key chooser with an unknown key ticked", program)
+}
+
+// boardLabelMenuTasks is three Ready tasks carrying six labels between them,
+// which is what the box inside the Labels menu is for: nobody declares a label,
+// so that list is as long as a project's cards make it and the other two menus
+// never are. Three of the six contain "au" and three do not, and one of the three
+// spells it with a capital, so a narrowing that folded nothing would be caught.
+func boardLabelMenuTasks() []core.Task {
+	audit := clientPlacementTask(filterAuditID, "Audit the ledger", core.StatusReady, core.PriorityHigh)
+	audit.Labels = []string{"Audit", "author"}
+	perf := clientPlacementTask(filterPerfID, "Perf sweep", core.StatusReady, core.PriorityHigh)
+	perf.Rank = "2/1"
+	perf.Labels = []string{"perf", "gauge"}
+	queue := clientPlacementTask(filterQueueID, "Rebuild the queue", core.StatusReady, core.PriorityLow)
+	queue.Rank = "3/1"
+	queue.Labels = []string{"queue", "release"}
+	return []core.Task{audit, perf, queue}
+}
+
+// The whole list of labels this board carries, in the order the menu lists them,
+// which is the reading every claim about a narrowing is made against.
+const boardLabelMenuWholeList = "Audit, author, gauge, perf, queue, release"
+
+// The box at the top of the Labels menu narrows its rows as the reader types. It
+// is menu state and not board state: the caret lands in it when the menu opens,
+// the narrowing is case-insensitive on the same rule the board's own search uses,
+// and nothing about it reaches the address — a filtered board is a link, and what
+// somebody typed to find a label in a menu is no part of the board they found.
+func TestHandlerClientLabelMenuNarrowsItsRowsAsTheReaderTypes(t *testing.T) {
+	script := boardFiltersClientScript(t)
+
+	program := clientDOMHarness("/", tasksDocumentJSON(t, boardLabelMenuTasks())) + script + boardFilterChooserHelpers + `
+setTimeout(async () => {
+  await intervalCallback();
+  // Only the Labels menu has a box. The other two list a vocabulary the project
+  // states, which is short by construction, and a box over three priorities is a
+  // control asking to be used instead of read.
+  ["priority", "key"].forEach((group) => {
+    if (filterChooser(group).search) throw new Error("the " + group + " menu carries a search box of its own");
+  });
+  const chooser = openChooserMenu("label");
+  if (!chooser.search) throw new Error("the Labels menu carries no search box");
+  // Opened with the caret in it, so a reader who came to find one label out of
+  // six types rather than reads.
+  if (document.activeElement !== chooser.search) {
+    throw new Error("opening the Labels menu left the caret out of its box");
+  }
+  if (visibleChooserNames("label").join(", ") !== ` + strconv.Quote(boardLabelMenuWholeList) + `) {
+    throw new Error("the menu opened narrowed: " + visibleChooserNames("label").join(", "));
+  }
+  // Where the address stands before anything is typed. Nothing below may move it.
+  const pushed = historyPaths.length;
+  const replaced = historyReplacements.length;
+
+  typeIntoChooserSearch("label", "au");
+  if (visibleChooserNames("label").join(", ") !== "Audit, author, gauge") {
+    throw new Error("typing au left " + visibleChooserNames("label").join(", "));
+  }
+  // Hidden, not removed: the list is the whole list whatever is typed, so the
+  // keyed rebuild the poll relies on has nothing to do with the narrowing.
+  if (chooserRows("label").length !== 6) {
+    throw new Error("the narrowing removed rows rather than hiding them: " + chooserRows("label").length + " left");
+  }
+  if (!chooser.noMatch.hidden) throw new Error("a search that matched three rows says it matched none");
+
+  typeIntoChooserSearch("label", "zzz");
+  if (visibleChooserNames("label").length !== 0) {
+    throw new Error("zzz left " + visibleChooserNames("label").join(", ") + " showing");
+  }
+  // A menu with every row hidden says which of the two empty menus it is: a
+  // search that matched nothing, not a board carrying no labels.
+  if (chooser.noMatch.hidden) throw new Error("a search that matched nothing left the menu blank");
+  if (chooser.noMatch.textContent !== "No labels match") {
+    throw new Error("the line reads " + JSON.stringify(chooser.noMatch.textContent));
+  }
+
+  typeIntoChooserSearch("label", "");
+  if (visibleChooserNames("label").join(", ") !== ` + strconv.Quote(boardLabelMenuWholeList) + `) {
+    throw new Error("clearing the box left " + visibleChooserNames("label").join(", "));
+  }
+  if (!chooser.noMatch.hidden) throw new Error("an empty box left the no-match line standing");
+
+  // The whole of the claim that this is menu state: three narrowings and a
+  // clearing, and the address is where it was.
+  if (historyPaths.length !== pushed || historyReplacements.length !== replaced) {
+    throw new Error("typing into a menu wrote the address: " +
+      JSON.stringify(historyPaths) + " " + JSON.stringify(historyReplacements));
+  }
+}, 0);
+`
+	runBoardFiltersClient(t, "the Labels menu's own search", program)
+}
+
+// A ticked row is shown however the box is narrowed. A filter can always be unset
+// from where it was set: a reader who types something the ticked label does not
+// match must not be left with a badge saying "1 selected", empty columns, and no
+// row to untick — which is the same defect the union in chooserOptions exists to
+// prevent, arriving by another road.
+func TestHandlerClientLabelMenuAlwaysShowsATickedRow(t *testing.T) {
+	script := boardFiltersClientScript(t)
+
+	program := clientDOMHarness("/?label=perf", tasksDocumentJSON(t, boardLabelMenuTasks())) + script + boardFilterChooserHelpers + `
+setTimeout(async () => {
+  await intervalCallback();
+  const chooser = openChooserMenu("label");
+  typeIntoChooserSearch("label", "zzz");
+  const perf = chooserRow("label", "perf");
+  if (perf.hidden) throw new Error("a search nothing matches hid the row the reader had ticked");
+  if (!perf.checked) throw new Error("the ticked row came back unticked");
+  if (visibleChooserNames("label").join(", ") !== "perf") {
+    throw new Error("the narrowed menu shows " + visibleChooserNames("label").join(", "));
+  }
+  // A row is showing, so the menu has matched something to offer: the no-match
+  // line would be arguing with the row above it.
+  if (!chooser.noMatch.hidden) {
+    throw new Error("the menu says it matched nothing over a row it is still showing");
+  }
+}, 0);
+`
+	runBoardFiltersClient(t, "a ticked row under a narrowing", program)
+}
+
+// A menu that closes forgets what was typed into it, by every path a menu closes
+// by. Reopening the Labels menu offers the labels the board has rather than the
+// three that a search the reader has since forgotten left standing.
+func TestHandlerClientLabelMenuSearchClearsWhenTheMenuCloses(t *testing.T) {
+	script := boardFiltersClientScript(t)
+
+	program := clientDOMHarness("/", tasksDocumentJSON(t, boardLabelMenuTasks())) + script + boardFilterChooserHelpers + `
+function assertMenuForgot(path) {
+  const chooser = filterChooser("label");
+  if (chooser.search.value !== "") {
+    throw new Error("closing by " + path + " left " + JSON.stringify(chooser.search.value) + " in the box");
+  }
+  const narrowed = chooserRows("label").filter((row) => row.hidden).map((row) => row.name);
+  if (narrowed.length !== 0) {
+    throw new Error("closing by " + path + " left rows narrowed away: " + JSON.stringify(narrowed));
+  }
+  if (!chooser.noMatch.hidden) {
+    throw new Error("closing by " + path + " left the no-match line standing");
+  }
+}
+setTimeout(async () => {
+  await intervalCallback();
+
+  // The button that opened it, clicked again.
+  openChooserMenu("label");
+  typeIntoChooserSearch("label", "au");
+  openChooserMenu("label");
+  if (chooserIsOpen("label")) throw new Error("a second click on the button left the menu open");
+  assertMenuForgot("the button");
+
+  // A click on the board, which is how a reader who has changed their mind
+  // dismisses any menu on this page.
+  openChooserMenu("label");
+  typeIntoChooserSearch("label", "au");
+  await clickOutsideChoosers(main);
+  if (chooserIsOpen("label")) throw new Error("a click on the board left the menu open");
+  assertMenuForgot("a click outside");
+
+  // A route that draws no columns. The row goes with the board and the menu goes
+  // with the row, so what was typed into it goes too — otherwise Back brings the
+  // board back with a narrowing nobody asked for standing in a menu.
+  openChooserMenu("label");
+  typeIntoChooserSearch("label", "au");
+  returnTo("/tasks/" + ` + strconv.Quote(filterAuditID) + `);
+  if (chooserIsOpen("label")) throw new Error("leaving the board left the menu open");
+  assertMenuForgot("a route change");
+
+  returnTo("/");
+  await intervalCallback();
+  const chooser = openChooserMenu("label");
+  if (chooser.search.value !== "") {
+    throw new Error("the board came back with " + JSON.stringify(chooser.search.value) + " in the menu's box");
+  }
+  if (visibleChooserNames("label").join(", ") !== ` + strconv.Quote(boardLabelMenuWholeList) + `) {
+    throw new Error("the reopened menu shows " + visibleChooserNames("label").join(", "));
+  }
+}, 0);
+`
+	runBoardFiltersClient(t, "a menu that closes forgetting its search", program)
+}
+
+// Escape empties the box first and closes the menu second, which is the order of
+// what the reader is undoing: the narrowing they typed, then the menu they opened.
+// The box claims the first press and keeps it from the document; the second press
+// finds an empty box, is let through, and reaches the handler that closes the menu
+// and hands the caret back to the button.
+func TestHandlerClientEscapeInTheLabelSearchClearsThenCloses(t *testing.T) {
+	script := boardFiltersClientScript(t)
+
+	program := clientDOMHarness("/", tasksDocumentJSON(t, boardLabelMenuTasks())) + script + boardFilterChooserHelpers + `
+setTimeout(async () => {
+  await intervalCallback();
+  const chooser = openChooserMenu("label");
+  typeIntoChooserSearch("label", "au");
+  if (visibleChooserNames("label").length !== 3) {
+    throw new Error("the harness could not narrow the menu: " + visibleChooserNames("label").join(", "));
+  }
+
+  escapeChooserSearch("label");
+  if (chooser.search.value !== "") {
+    throw new Error("the first Escape left " + JSON.stringify(chooser.search.value) + " in the box");
+  }
+  if (!chooserIsOpen("label")) {
+    throw new Error("the first Escape closed the menu as well as emptying the box");
+  }
+  if (visibleChooserNames("label").join(", ") !== ` + strconv.Quote(boardLabelMenuWholeList) + `) {
+    throw new Error("the first Escape emptied the box and left the rows narrowed: " +
+      visibleChooserNames("label").join(", "));
+  }
+
+  escapeChooserSearch("label");
+  if (chooserIsOpen("label")) throw new Error("the second Escape left the menu open");
+  if (document.activeElement !== chooser.button) {
+    throw new Error("the second Escape dropped the caret rather than handing it back to the button");
+  }
+}, 0);
+`
+	runBoardFiltersClient(t, "Escape inside the Labels menu's box", program)
+}
+
+// The narrowing survives the poll, because it is applied where the rows are drawn
+// rather than where the keystroke is heard. A reader who typed three letters and
+// paused must not watch the menu fill back up a second later — and the box keeps
+// the caret, because it is a sibling of the rows rather than one of them, so the
+// render that rebuilds every row does not touch it.
+//
+// The poll that matters here is the one that changes what the group offers. A poll
+// that changes nothing keeps the row nodes and would keep a narrowing written into
+// them whatever the render did; a card arriving with a label nobody had rebuilds
+// every row, and rows built a moment ago know nothing about what was typed before
+// they existed. So this walks both, and says which is which.
+func TestHandlerClientLabelMenuKeepsItsNarrowingAcrossAPoll(t *testing.T) {
+	arrival := clientPlacementTask(filterBacklogA, "Gate the tokens", core.StatusReady, core.PriorityHigh)
+	arrival.Rank = "4/1"
+	arrival.Labels = []string{"auth", "stale"}
+	script := boardFiltersClientScript(t)
+
+	program := clientDOMHarness("/", tasksDocumentJSON(t, boardLabelMenuTasks())) + script + boardFilterChooserHelpers + `
+setTimeout(async () => {
+  await intervalCallback();
+  const chooser = openChooserMenu("label");
+  typeIntoChooserSearch("label", "au");
+  const gauge = chooserRow("label", "gauge").label;
+
+  // A poll over the same cards: the rows are the rows, and the narrowing stands.
+  await intervalCallback();
+  if (chooserRow("label", "gauge").label !== gauge) {
+    throw new Error("a poll that changed nothing rebuilt the menu's rows");
+  }
+  if (visibleChooserNames("label").join(", ") !== "Audit, author, gauge") {
+    throw new Error("a poll widened the narrowing: " + visibleChooserNames("label").join(", "));
+  }
+
+  // A card arriving with a label nobody had. The option set has changed, so every
+  // row is a new node — and the narrowing is the reader's, not the nodes'.
+  taskResponse = ` + tasksDocumentJSON(t, append(boardLabelMenuTasks(), arrival)) + `;
+  await intervalCallback();
+  if (chooserRows("label").length !== 8) {
+    throw new Error("the arriving labels left the menu listing " + chooserRows("label").length + ", want 8");
+  }
+  if (chooserRow("label", "gauge").label === gauge) {
+    throw new Error("the changed option set did not rebuild the rows, so this poll is not the one the test is about");
+  }
+  if (visibleChooserNames("label").join(", ") !== "Audit, auth, author, gauge") {
+    throw new Error("the rebuilt rows came back unnarrowed: " + visibleChooserNames("label").join(", "));
+  }
+
+  if (chooser.search.value !== "au") {
+    throw new Error("the poll wrote the box: " + JSON.stringify(chooser.search.value));
+  }
+  if (filterChooser("label").search !== chooser.search) {
+    throw new Error("the poll replaced the box, so the caret it kept is on a node nobody can see");
+  }
+  if (document.activeElement !== chooser.search) {
+    throw new Error("the poll took the caret out of the box the reader was typing into");
+  }
+  if (!chooserIsOpen("label")) throw new Error("the poll closed the open menu");
+}, 0);
+`
+	runBoardFiltersClient(t, "a narrowed menu across two polls", program)
 }

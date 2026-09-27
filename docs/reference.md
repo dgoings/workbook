@@ -1981,7 +1981,9 @@ cards whose title or description contains every word typed, case-insensitively
 — the same rule `workbook list --find` uses — and its Priority, Labels and Key
 choosers each offer a list of ticks with the count of cards each would leave;
 ticks within a chooser are alternatives, and the search and the choosers narrow
-one another. The Key chooser appears only once a project has more than one key,
+one another. The Labels menu has a box of its own that narrows its rows as you
+type, since a project may carry many labels; what is typed there is not part of
+the address. The Key chooser appears only once a project has more than one key,
 retired keys included because their tasks still exist, and a board already open
 learns of a second key when the configuration page is visited or on its next
 load; a key added from the CLI does not reveal the chooser on a board left
