@@ -556,17 +556,32 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	priority := flags.String("priority", "", "task priority")
 	key := flags.String("key", "", "only tasks whose ID carries this key")
 	label := flags.String("label", "", "task label")
+	find := flags.String("find", "", "only tasks whose title or description contains every word")
 	all := flags.Bool("all", false, "include tombstoned tasks")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
+	}
+	// A string flag parsed by hand, as runNext's --limit is, so flags.go keeps
+	// declaring it as a `<text>` string option and the refusal names the
+	// command rather than the flag package. flags.Visit checks whether --find
+	// was given at all, for the same reason runNext's does: --find= would
+	// otherwise slip past as "not given" rather than "given, empty".
+	found := false
+	flags.Visit(func(visited *flag.Flag) {
+		if visited.Name == "find" {
+			found = true
+		}
+	})
+	if found && len(core.FindTerms(*find)) == 0 {
+		return core.Errorf(core.CategoryInvocation, "list --find needs at least one word")
 	}
 
 	service, err := openReadService(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
-	filter := core.ListFilter{Label: *label, All: *all, Key: namedProjectKey(*key)}
+	filter := core.ListFilter{Label: *label, Find: *find, All: *all, Key: namedProjectKey(*key)}
 	if *status != "" {
 		value := core.Status(*status)
 		filter.Status = &value

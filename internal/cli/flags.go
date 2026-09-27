@@ -603,6 +603,7 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "priority", Kind: stringFlag, Value: "<priority>", Description: "task priority"},
 			{Name: "key", Kind: stringFlag, Value: "<key>", Description: "only tasks whose ID carries this key"},
 			{Name: "label", Kind: stringFlag, Value: "<label>", Description: "task label"},
+			{Name: "find", Kind: stringFlag, Value: "<text>", Description: "only tasks whose title or description contains every word"},
 			{Name: "all", Kind: boolFlag, Description: "include tombstoned tasks"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
