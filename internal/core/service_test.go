@@ -131,6 +131,29 @@ func TestListFiltersTombstonesAndUsesDeterministicOrder(t *testing.T) {
 	assertTaskIDs(t, filtered, []string{backlogHighLater.State.TaskID})
 }
 
+func TestServiceListFindNarrowsByTitleAndDescription(t *testing.T) {
+	audit := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "Audit card abilities", Description: "resolve correctly", Status: StatusReady, Priority: PriorityHigh, Rank: "1/1"})
+	perf := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "Performance audit", Description: "", Status: StatusReady, Priority: PriorityLow, Rank: "1/1"})
+	other := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D3", TaskData{Title: "Trip templates", Description: "", Status: StatusBacklog, Priority: PriorityLow, Rank: "1/1"})
+	service := serviceUnderTest(newMemoryTaskStore(audit, perf, other), &sequenceIDSource{})
+
+	tasks, err := service.List(context.Background(), ListFilter{Find: "AUDIT"})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(tasks) != 2 || tasks[0].ID != audit.State.TaskID || tasks[1].ID != perf.State.TaskID {
+		t.Fatalf("List(find audit) = %v, want the two audit tasks in list order", tasks)
+	}
+	low := PriorityLow
+	tasks, err = service.List(context.Background(), ListFilter{Find: "audit", Priority: &low})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != perf.State.TaskID {
+		t.Fatalf("List(find audit, low) = %v, want only the performance audit", tasks)
+	}
+}
+
 func TestServiceListOrdersRanksAsExactRationals(t *testing.T) {
 	twoThirds := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "two thirds", Status: StatusBacklog, Priority: PriorityHigh, Rank: "2/3"})
 	nineTenths := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "nine tenths", Status: StatusBacklog, Priority: PriorityHigh, Rank: "9/10"})

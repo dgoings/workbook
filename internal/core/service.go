@@ -201,6 +201,9 @@ type ListFilter struct {
 	// is a perfectly good filter — its tasks still exist — so this asks about
 	// membership and not about activity.
 	Key string
+	// Find keeps only the tasks whose title or description contains every
+	// whitespace-separated term, case-insensitively; see MatchesFind.
+	Find string
 }
 
 func (s Service) CreateMutation(ctx context.Context, input CreateInput) (MutationResult, error) {
@@ -470,6 +473,9 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 			continue
 		}
 		if filter.Label != "" && !hasLabel(task.Labels, filter.Label) {
+			continue
+		}
+		if filter.Find != "" && !MatchesFind(task, filter.Find) {
 			continue
 		}
 		tasks = append(tasks, task)
