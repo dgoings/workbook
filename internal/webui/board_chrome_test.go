@@ -388,3 +388,64 @@ func TestHandlerBoardColumnHeadersCarryNoInertMinimumHeight(t *testing.T) {
 		t.Error("the column header reserves a height again")
 	}
 }
+
+// filterRowElement returns the served page's filter row, which is where every
+// claim about the board's filters is made. It is a region of the page rather than
+// a part of the board — the board scrolls sideways and the filters must not go
+// with it — so it is found by its own marker rather than by walking the columns.
+func filterRowElement(t *testing.T, body string) string {
+	t.Helper()
+	start := strings.Index(body, `<div class="filter-row"`)
+	if start < 0 {
+		t.Fatal("the served page has no filter row")
+	}
+	end := strings.Index(body[start:], "\n  </div>")
+	if end < 0 {
+		t.Fatal("the filter row is never closed")
+	}
+	return body[start : start+end+len("\n  </div>")]
+}
+
+// The board's filters are served rather than built: the row, the search box, the
+// space the choosers are drawn into, and the Deleted switch inside it beside
+// them, because it was already the one filter the board had. The row ships hidden
+// and the board's render reveals it, so a page whose script never ran offers no
+// filters rather than dead ones.
+func TestHandlerDrawsTheDeletedSwitchInTheFilterRow(t *testing.T) {
+	body := boardPage(t)
+	row := filterRowElement(t, body)
+
+	for _, marker := range []string{
+		"data-filter-row",
+		"data-filter-q",
+		"data-filter-choosers",
+		"data-deleted-toggle",
+		"data-filter-clear",
+	} {
+		if !strings.Contains(row, marker) {
+			t.Errorf("the filter row carries no %s: %s", marker, row)
+		}
+	}
+	// The search says what it searches, to a reader and to a screen reader alike:
+	// a placeholder is not a label, and a box with no name is a box.
+	if !strings.Contains(row, `aria-label="Search title and description"`) {
+		t.Errorf("the search box has no accessible name: %s", row)
+	}
+	if !strings.Contains(row, "hidden>") {
+		t.Errorf("the filter row ships visible, so a route that draws no columns still offers it: %s", row)
+	}
+	// The switch is inside the row rather than back in the header beside the
+	// settings, which an ordering claim over the whole body is what states.
+	rowAt := strings.Index(body, "data-filter-row")
+	switchAt := strings.Index(body, "data-deleted-toggle")
+	headerEnd := strings.Index(body, "</header>")
+	if rowAt < 0 || switchAt < 0 || headerEnd < 0 {
+		t.Fatal("the page no longer carries a header, a filter row and a Deleted switch")
+	}
+	if switchAt < rowAt {
+		t.Error("the Deleted switch is drawn before the filter row, so it is not in it")
+	}
+	if switchAt < headerEnd {
+		t.Error("the Deleted switch is still drawn inside the header rather than in the filter row")
+	}
+}

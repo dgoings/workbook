@@ -597,8 +597,9 @@ func TestHandlerRemovesTheDeletedTasksRoute(t *testing.T) {
 
 // The header's link to the deleted tasks is now the column's switch: an anchor,
 // so it can be cmd-clicked, bookmarked and walked with Back, pointing at the
-// address that shows the column. It ships hidden and the board's render reveals
-// it, exactly as the Descriptions setting beside it does.
+// address that shows the column. It ships inside the filter row, which is the
+// element the board's render reveals — the switch itself is not hidden, because
+// everything in that row appears and goes together.
 func TestHandlerServesTheDeletedColumnToggleAndBoardNavigation(t *testing.T) {
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 
@@ -615,8 +616,11 @@ func TestHandlerServesTheDeletedColumnToggleAndBoardNavigation(t *testing.T) {
 		if !strings.Contains(tag, `href="/?deleted=1"`) {
 			t.Errorf("GET %s deleted-column toggle does not name the address that shows it: %s", path, tag)
 		}
-		if !strings.Contains(tag, " hidden") {
-			t.Errorf("GET %s served the deleted-column toggle unhidden: %s", path, tag)
+		if strings.Contains(tag, " hidden") {
+			t.Errorf("GET %s hides the deleted-column toggle itself rather than the row it sits in: %s", path, tag)
+		}
+		if !strings.Contains(body, `<div class="filter-row" data-filter-row hidden>`) {
+			t.Errorf("GET %s served no hidden filter row for the switch to sit in", path)
 		}
 		if !strings.Contains(body, `href="/"`) {
 			t.Errorf("GET %s does not provide header navigation to the board", path)
@@ -4795,14 +4799,31 @@ const descriptionToggle = new TestElement("button");
 descriptionToggle.hidden = true;
 const descriptionLabel = new TestElement("span");
 descriptionToggle.append(descriptionLabel, switchTrack());
-// The Deleted column's switch, shipped hidden beside it and revealed by the
-// board's render for the same reason. It is an anchor, because the state it
-// sets is the address.
+// The Deleted column's switch. It is an anchor, because the state it sets is the
+// address, and it ships visible: it lives in the filter row now, and the row is
+// the element the board's render reveals and every other route hides.
 const deletedToggle = new TestElement("a");
-deletedToggle.hidden = true;
 deletedToggle.href = "/?deleted=1";
 const deletedLabel = new TestElement("span");
 deletedToggle.append(deletedLabel, switchTrack());
+// The filter row itself, as the page ships it: hidden, with the search box, the
+// space the choosers are drawn into, the Deleted switch and the Clear link in it.
+// A test reads the switch's visibility off this element for the reason the page
+// writes it there — every control in the row acts on the columns, so one route
+// decides all of them at once.
+const filterRow = new TestElement("div");
+filterRow.hidden = true;
+filterRow.dataset.filterRow = "";
+const filterSearch = new TestElement("input");
+filterSearch.attributes.type = "search";
+filterSearch.dataset.filterQ = "";
+const filterChoosers = new TestElement("div");
+filterChoosers.dataset.filterChoosers = "";
+const filterClear = new TestElement("a");
+filterClear.hidden = true;
+filterClear.dataset.filterClear = "";
+filterClear.href = "/";
+filterRow.append(filterSearch, filterChoosers, deletedToggle, filterClear);
 // The publishing switch, which no route reveals: it is the answer from
 // /api/sync that decides whether there is a mode to report, so it starts hidden
 // and stays hidden on a harness whose server says nothing about publishing.
@@ -4871,6 +4892,10 @@ const documentEventListeners = {};
     if (selector === "[data-vocabulary-reload]") return vocabularyReload;
     if (selector === "[data-description-toggle]") return descriptionToggle;
     if (selector === "[data-deleted-toggle]") return deletedToggle;
+    if (selector === "[data-filter-row]") return filterRow;
+    if (selector === "[data-filter-q]") return filterSearch;
+    if (selector === "[data-filter-choosers]") return filterChoosers;
+    if (selector === "[data-filter-clear]") return filterClear;
     if (selector === "[data-sync-toggle]") return syncToggle;
     if (selector === "[data-description-label]") return descriptionLabel;
     if (selector === "[data-deleted-label]") return deletedLabel;

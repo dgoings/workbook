@@ -177,6 +177,19 @@
        them. */
     .header-settings { display: flex; flex-direction: column; align-items: flex-end; gap: .5rem; min-width: 0; }
     .header-switches { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .45rem .95rem; }
+    /* The board's filter row. It is a row of the page rather than a band inside
+       the board, because the board scrolls sideways under a narrow window and a
+       control that scrolled away from the columns it acts on would be one the
+       reader has to go looking for. The count modifier sits here beside it for
+       the same reason the row does: "3 / 9" is the row's reading of a column
+       rather than the column's own. */
+    .filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .95rem; padding: .5rem 1.25rem; border-bottom: 1px solid var(--wb-hairline); }
+    .filter-row[hidden] { display: none; }
+    .filter-row__search { flex: 1 1 14rem; min-width: 10rem; max-width: 26rem; border: 1px solid var(--wb-border-soft); border-radius: 4px; background: var(--wb-surface-1); color: var(--wb-ink); font: inherit; font-size: .84rem; padding: .35rem .55rem; }
+    .filter-row__choosers { display: flex; flex-wrap: wrap; gap: .45rem; }
+    .filter-row__clear { font-size: .8rem; color: var(--wb-ink-soft); }
+    .filter-row__clear[hidden] { display: none; }
+    .column__count--filtered { color: var(--wb-ink-soft); }
     /* A setting reads as its state before it reads as anything else, so it is
        drawn as one: a track the knob sits at one end of. The words before it
        say what happens next — "Hide Deleted" over a board that is showing them
@@ -1192,8 +1205,22 @@
          The label is a child rather than the control's own text because the
          control is no longer only text: writing to it would take the track and
          the knob with it. -->
-    <div class="header-settings"><p class="updated" data-updated><span class="sync-dot" data-sync-dot aria-hidden="true"></span><span data-updated-text>Loaded from this checkout</span></p><div class="header-switches"><a class="nav-switch" href="/?deleted=1" role="switch" aria-checked="false" data-deleted-toggle hidden><span class="nav-switch__label nav-switch__label--deleted" data-deleted-label>Show Deleted</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></a><button type="button" class="nav-switch" role="switch" aria-checked="false" data-scheme-toggle><span class="nav-switch__label" data-scheme-label>Dark Mode</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-description-toggle hidden><span class="nav-switch__label nav-switch__label--descriptions" data-description-label>Show Descriptions</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-sync-toggle hidden><span class="nav-switch__label nav-switch__label--sync" data-sync-label></span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button></div></div>
+    <div class="header-settings"><p class="updated" data-updated><span class="sync-dot" data-sync-dot aria-hidden="true"></span><span data-updated-text>Loaded from this checkout</span></p><div class="header-switches"><button type="button" class="nav-switch" role="switch" aria-checked="false" data-scheme-toggle><span class="nav-switch__label" data-scheme-label>Dark Mode</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-description-toggle hidden><span class="nav-switch__label nav-switch__label--descriptions" data-description-label>Show Descriptions</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-sync-toggle hidden><span class="nav-switch__label nav-switch__label--sync" data-sync-label></span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button></div></div>
   </header>
+  <!-- The board's filters. Everything here is a view of the columns: the
+       search narrows by title and description, the choosers by priority,
+       label and key, and the Deleted switch adds the one column that is not
+       a status. Each control writes the address rather than a variable, so
+       a filtered board is shareable, bookmarkable and walked by Back — the
+       Deleted switch has always worked this way and the others follow it.
+       The row ships hidden and the board's render reveals it, because it acts
+       on the columns and a task's page draws none. -->
+  <div class="filter-row" data-filter-row hidden>
+    <input class="filter-row__search" type="search" data-filter-q autocomplete="off" placeholder="Search title and description" aria-label="Search title and description">
+    <div class="filter-row__choosers" data-filter-choosers></div>
+    <a class="nav-switch" href="/?deleted=1" role="switch" aria-checked="false" data-deleted-toggle><span class="nav-switch__label nav-switch__label--deleted" data-deleted-label>Show Deleted</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></a>
+    <a class="filter-row__clear" href="/" data-filter-clear hidden>Clear filters</a>
+  </div>
   <!-- What the board has to say to a reader who has moved on: a save that
        already returned, or a refused change whose card the board has since
        stopped drawing. It sits outside main so it is readable from whatever
@@ -1716,6 +1743,13 @@
       const syncToggle = document.querySelector("[data-sync-toggle]");
       const descriptionToggle = document.querySelector("[data-description-toggle]");
       const deletedToggle = document.querySelector("[data-deleted-toggle]");
+      // The board's filter row, and the two controls in it that are not a
+      // switch. The row is what a route reveals and hides, because every
+      // control in it is a view of the columns; the Deleted switch inside it is
+      // no longer hidden on its own.
+      const filterRow = document.querySelector("[data-filter-row]");
+      const filterSearch = document.querySelector("[data-filter-q]");
+      const filterClear = document.querySelector("[data-filter-clear]");
       const schemeToggle = document.querySelector("[data-scheme-toggle]");
       const schemeLabel = document.querySelector("[data-scheme-label]");
       // The words in front of each switch. They are written to instead of the
@@ -1738,6 +1772,19 @@
         });
       }
       activateSwitchOnSpace(deletedToggle);
+      // Typing narrows the board by writing the address, which is what makes a
+      // narrowed board a link. It replaces the entry rather than pushing one:
+      // Back through nine keystrokes of "dependency" is not a history anybody
+      // asked for, and the entry the reader came from is the one Back should
+      // reach. The value is trimmed on the way out so that a trailing space
+      // never becomes an address of its own, and the render leaves the control
+      // alone while it has the caret, so nothing rewrites what is being typed.
+      if (filterSearch) {
+        filterSearch.addEventListener("input", () => {
+          const next = Object.assign({}, boardFilters, { q: filterSearch.value.trim() });
+          navigate(boardAddress(deletedColumnShown, next), { replace: true });
+        });
+      }
       // Whether the board is drawing its Deleted column, and the parts of that
       // column while it is. The column is board state rather than route state:
       // a reader who opens a task from a board showing it comes back to a board
@@ -2428,13 +2475,97 @@
         }
         return article;
       }
+      // The board's filters, read from and written to the address. Values are
+      // repeated parameters rather than a joined list because a label may hold
+      // any character, a comma included. Written in one fixed order with each
+      // group sorted, so one filter state has one address.
+      //
+      // The text search is the predicate core's MatchesFind is, and the one
+      // `list --find` narrows by: every whitespace-separated term has to appear
+      // somewhere in the title or the description, case folded. It is kept
+      // between the two markers below and depends on nothing else on this page,
+      // so a parity test can lift it out and ask it what core is asked.
+      // find:begin
+      function findTerms(query) {
+        return String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
+      }
+      function matchesFind(task, query) {
+        const terms = findTerms(query);
+        if (terms.length === 0) return true;
+        const haystack = (String(task.title || "") + "\n" + String(task.description || "")).toLowerCase();
+        return terms.every((term) => haystack.includes(term));
+      }
+      // find:end
+      function emptyFilters() {
+        return { q: "", priority: new Set(), label: new Set(), key: new Set() };
+      }
+      function filtersFromURL(url) {
+        const params = url.searchParams;
+        return {
+          q: (params.get("q") || "").trim(),
+          priority: new Set(params.getAll("priority").filter(Boolean)),
+          label: new Set(params.getAll("label").filter(Boolean)),
+          key: new Set(params.getAll("key").filter(Boolean)),
+        };
+      }
+      function boardAddress(deleted, filters) {
+        const params = new URLSearchParams();
+        if (deleted) params.set("deleted", "1");
+        if (filters.q) params.set("q", filters.q);
+        [...filters.priority].sort().forEach((value) => params.append("priority", value));
+        [...filters.label].sort().forEach((value) => params.append("label", value));
+        [...filters.key].sort().forEach((value) => params.append("key", value));
+        const query = params.toString();
+        return "/" + (query ? "?" + query : "");
+      }
+      function filtersActive(filters) {
+        return Boolean(filters.q) || filters.priority.size > 0 || filters.label.size > 0 || filters.key.size > 0;
+      }
+      // Whether two readings of the address are the same filter state.
+      //
+      // A navigation that changed only the filters is the same route at the same
+      // pathname, and nothing else in the board's render would notice it: the
+      // columns are re-attached rather than rebuilt, and the Deleted column's
+      // render runs only when that column appears or goes. So this is what tells
+      // the route there is anything to redraw.
+      function sameFilterValues(left, right) {
+        if (left.size !== right.size) return false;
+        for (const value of left) {
+          if (!right.has(value)) return false;
+        }
+        return true;
+      }
+      function sameFilters(left, right) {
+        return left.q === right.q &&
+          sameFilterValues(left.priority, right.priority) &&
+          sameFilterValues(left.label, right.label) &&
+          sameFilterValues(left.key, right.key);
+      }
+      // The key a task's ID was minted under: the part before the first dash. It
+      // is read off the ID rather than asked of the server for the reason the
+      // search is computed here — the board already holds everything the filters
+      // need, and a filter that waited on a round trip would lag the typing.
+      function taskKey(task) {
+        const id = String(task.id || "");
+        const dash = id.indexOf("-");
+        return dash > 0 ? id.slice(0, dash) : "";
+      }
+      function passesFilters(task, filters) {
+        if (filters.priority.size > 0 && !filters.priority.has(task.priority)) return false;
+        if (filters.label.size > 0 && !(task.labels || []).some((label) => filters.label.has(label))) return false;
+        if (filters.key.size > 0 && !filters.key.has(taskKey(task))) return false;
+        return matchesFind(task, filters.q);
+      }
+      let boardFilters = emptyFilters();
       function route(url = new URL(window.location.href)) {
         // The board with its Deleted column shown is the board at another
-        // address rather than a page of its own, which is what makes the
-        // header's toggle an ordinary link: it is shareable, it is
-        // bookmarkable, and Back and Forward walk it like any other
-        // navigation.
-        if (url.pathname === "/") return { view: "board", deleted: url.searchParams.get("deleted") === "1" };
+        // address rather than a page of its own, which is what makes the row's
+        // toggle an ordinary link: it is shareable, it is bookmarkable, and Back
+        // and Forward walk it like any other navigation. Every filter beside it
+        // in that row is read from the same address for exactly that reason.
+        if (url.pathname === "/") {
+          return { view: "board", deleted: url.searchParams.get("deleted") === "1", filters: filtersFromURL(url) };
+        }
         // A board built without the four vocabulary mutations was served none of
         // the configuration page, so this address is not a route on it. The
         // server answers it with a 404 for the same reason; a client that drew
@@ -6952,13 +7083,30 @@
         pendingCreations.forEach((_creation, key) => projected.set(key, pendingCreationView));
         return projected;
       }
+      // Which of a projected model the columns actually draw. Everything that
+      // renders the board goes through this, so the filters cannot be applied on
+      // one path and forgotten on another.
+      //
+      // known is the model the server answered with. A create's stand-in is not in
+      // it and is never filtered away: a card the reader just made must not vanish
+      // under them because it does not match a search they typed before they made
+      // it. Only a task the server has answered for can be filtered out.
+      function shownTasks(projected, known) {
+        if (!filtersActive(boardFilters)) return projected;
+        return projected.filter((task) => !known.has(task.id) || passesFilters(task, boardFilters));
+      }
       function rerender() {
         if (!tasksLoaded) return;
         // projectTasks runs first and retires the creations the board now
         // carries, so the presentation it is paired with names exactly the
         // stand-ins that survived.
         const tasks = projectTasks(latestTasks);
-        render(tasks, projectPresentation(latestPresentation, tasks));
+        const shown = shownTasks(tasks, new Set(latestTasks.map((task) => task.id)));
+        // Both readings are handed over — what the columns draw, and everything
+        // the board holds — because a column that says three of nine has to be
+        // told the nine. The presentation is derived over everything, so a task
+        // the filters hide still has its view for whatever else is reading one.
+        render(shown, projectPresentation(latestPresentation, tasks), tasks);
       }
       function replaceProjectedTask(task) {
         const index = latestTasks.findIndex((candidate) => candidate.id === task.id);
@@ -9713,12 +9861,33 @@
       }
       function renderDeletedToggle() {
         if (!deletedToggle) return;
-        deletedToggle.href = deletedColumnShown ? "/" : "/?deleted=1";
+        // The column's own state is the only thing this switch changes, so its
+        // address carries whatever else the row is filtering by: turning the
+        // column off over a searched board leaves the search alone.
+        deletedToggle.href = boardAddress(!deletedColumnShown, boardFilters);
         deletedToggle.setAttribute("aria-checked", deletedColumnShown ? "true" : "false");
         text(deletedLabel, deletedColumnShown ? "Hide Deleted" : "Show Deleted");
         deletedToggle.title = deletedColumnShown
           ? "The board is drawing its Deleted column. Click to hide it."
           : "The board is drawing no Deleted column. Click to show it.";
+      }
+      // The row's own controls, drawn from the filters the address is holding.
+      //
+      // Clear keeps the Deleted column: it is the one control in this row whose
+      // state is a column rather than a narrowing, and a reader who cleared a
+      // search should not also lose the tombstones they were reading.
+      function renderFilterRow(deleted) {
+        if (!filterRow) return;
+        // Never written over while the reader has the caret in it. The address is
+        // behind the typing by a keystroke at most, and a render that assigned
+        // this value would move the caret to the end of whatever it assigned.
+        if (filterSearch && filterSearch.value !== boardFilters.q && document.activeElement !== filterSearch) {
+          filterSearch.value = boardFilters.q;
+        }
+        if (filterClear) {
+          filterClear.hidden = !filtersActive(boardFilters);
+          filterClear.href = boardAddress(deleted, emptyFilters());
+        }
       }
       function renderRoute() {
         const current = route();
@@ -9764,12 +9933,14 @@
         // offers no setting rather than a dead one that lies about the state of
         // a board it can no longer change.
         //
-        // The Deleted column's toggle travels the same way and for the same
-        // reason: it adds a column to the board, and a header that offered to
-        // do that from a task's page would be naming a state the reader cannot
-        // see.
+        // The filter row travels the same way and for the same reason: every
+        // control in it is a view of the columns — the Deleted switch adds one,
+        // the search narrows them all — and a page that draws no columns offering
+        // to do either would be naming a state the reader cannot see. The row is
+        // what hides rather than each control in it, because the row is the thing
+        // whose whole purpose is the board.
         if (descriptionToggle) descriptionToggle.hidden = current.view !== "board";
-        if (deletedToggle) deletedToggle.hidden = current.view !== "board";
+        if (filterRow) filterRow.hidden = current.view !== "board";
         // The configuration page's bodies are served elements rather than built
         // ones, so leaving that route has to put them away — the render below
         // would drop them from the document either way, and what they were
@@ -9785,9 +9956,22 @@
           // says so and offers the reload, exactly as it does for a change
           // another clone made.
           //
-          // The Deleted column is the one thing about the board this route
-          // decides, and appending or removing that section is all it does.
+          // The filters and the Deleted column are the two things about the board
+          // this route decides. The filters are read first, so the render that
+          // showing or hiding that column triggers already draws the narrowing
+          // this address asked for; appending or removing that one section is all
+          // the call below does.
+          const nextFilters = current.filters || emptyFilters();
+          const filtersChanged = !sameFilters(boardFilters, nextFilters);
+          boardFilters = nextFilters;
+          renderFilterRow(current.deleted === true);
           showDeletedColumn(current.deleted === true);
+          // A navigation that changed nothing but the filters changes no column
+          // and no route, and nothing above would have redrawn a card: the board
+          // is re-attached rather than rebuilt, and the call above renders only
+          // when the Deleted column itself appears or goes. So the narrowing asks
+          // for its own redraw.
+          if (filtersChanged) rerender();
           if (main.firstElementChild !== boardView) main.replaceChildren(boardView);
           focusCreatedCard();
           return;
@@ -10287,6 +10471,29 @@
         if (deletedList) all.push(deletedList);
         return all;
       }
+      // The line a column shows when the filters, and not the board, are what
+      // left it with nothing in it. An empty column and a column the reader has
+      // filtered down to nothing look identical, and the second one is the reader
+      // asking a question the board has to answer.
+      //
+      // Built once per list and kept first in it, the way the Deleted column's own
+      // empty state is: reconcile() places cards by index among the nodes that
+      // carry a task ID and passes over the ones that do not, so a paragraph at
+      // the top costs the renderer nothing. The record is weak because the Deleted
+      // column's list is a new element every time that column is shown.
+      const filterEmpties = new WeakMap();
+      function filterEmptyFor(list) {
+        const known = filterEmpties.get(list);
+        if (known) return known;
+        const empty = document.createElement("p");
+        empty.className = "column__empty";
+        empty.dataset.filterEmpty = "";
+        empty.hidden = true;
+        text(empty, "No matches.");
+        list.insertBefore(empty, list.firstElementChild);
+        filterEmpties.set(list, empty);
+        return empty;
+      }
       // When a task was deleted, which is what orders the Deleted column. A
       // tombstone is the last thing that can happen to a task, so the time it
       // was last updated is the time it was deleted.
@@ -10336,7 +10543,7 @@
       function entriesFor(tasks, presentation) {
         return tasks.map((task) => ({ task, view: presentation.get(task.id) }));
       }
-      function render(tasks, presentation) {
+      function render(tasks, presentation, allTasks = tasks) {
         const grouped = new Map([...lists.keys()].map((status) => [status, []]));
         // A task whose status matches no column is shown under its own heading
         // rather than dropped. The terminal board has always printed an UNKNOWN
@@ -10354,6 +10561,21 @@
         // anywhere: it is in the model only because the poll that read it asked
         // for it, and the next poll that does not will take it back out.
         const removed = [];
+        // How many cards each column would hold with nothing filtered, counted
+        // the same way the groups below are so that the two readings can only
+        // differ by what the filters removed. Without filters every total equals
+        // its group and no count says anything extra.
+        const totals = new Map([...lists.keys()].map((status) => [status, 0]));
+        let totalStranded = 0;
+        let totalRemoved = 0;
+        allTasks.forEach((task) => {
+          if (task.deleted) {
+            if (deletedList) totalRemoved += 1;
+            return;
+          }
+          if (totals.has(task.status)) totals.set(task.status, totals.get(task.status) + 1);
+          else totalStranded += 1;
+        });
         tasks.forEach((task) => {
           if (task.deleted) {
             if (deletedList) removed.push(task);
@@ -10411,31 +10633,51 @@
           if (destinations.get(taskID) === node.parentElement) return;
           node.remove();
         });
+        const filtering = filtersActive(boardFilters);
         grouped.forEach((items, status) => {
           const list = lists.get(status);
           reconcile(list, entriesFor(items, presentation), survivors);
           const count = counts.get(status);
-          const total = String(items.length);
-          if (count.textContent !== total) text(count, total);
+          // "3 / 9" only while the filters are actually holding something back.
+          // A column the filters did not touch reads the way it always has.
+          const total = totals.get(status) || 0;
+          const label = filtering && items.length !== total ? items.length + " / " + total : String(items.length);
+          if (count.textContent !== label) text(count, label);
+          count.classList.toggle("column__count--filtered", label.includes("/"));
+          filterEmptyFor(list).hidden = !(filtering && items.length === 0 && total > 0);
         });
         // Reconciled from the same survivor pool as the columns, so a status
         // that becomes recognized — or stops being — moves the card the reader
         // is already looking at instead of destroying it and building a stranger.
         reconcile(unknownList, entriesFor(stranded, presentation), survivors);
-        const strandedTotal = String(stranded.length);
-        if (unknownCount.textContent !== strandedTotal) text(unknownCount, strandedTotal);
-        unknownSection.dataset.visible = stranded.length > 0 ? "true" : "false";
+        const strandedLabel = filtering && stranded.length !== totalStranded
+          ? stranded.length + " / " + totalStranded
+          : String(stranded.length);
+        if (unknownCount.textContent !== strandedLabel) text(unknownCount, strandedLabel);
+        unknownCount.classList.toggle("column__count--filtered", strandedLabel.includes("/"));
+        filterEmptyFor(unknownList).hidden = !(filtering && stranded.length === 0 && totalStranded > 0);
+        // The region stays on screen while the filters are what emptied it, so a
+        // task stranded on a status no column matches cannot be filtered into
+        // silence: it says "No matches." for the reason a column does.
+        unknownSection.dataset.visible = stranded.length > 0 || (filtering && totalStranded > 0) ? "true" : "false";
         // Reconciled from the same survivor pool again, so a card the reader
         // deletes moves its own node out of its column and into this one, and a
         // card they restore moves the same node back.
         if (deletedList) {
           reconcile(deletedList, entriesFor(removed, presentation), survivors);
-          const removedTotal = String(removed.length);
-          if (deletedCount.textContent !== removedTotal) text(deletedCount, removedTotal);
+          const removedLabel = filtering && removed.length !== totalRemoved
+            ? removed.length + " / " + totalRemoved
+            : String(removed.length);
+          if (deletedCount.textContent !== removedLabel) text(deletedCount, removedLabel);
+          deletedCount.classList.toggle("column__count--filtered", removedLabel.includes("/"));
+          const filteredOut = filtering && removed.length === 0 && totalRemoved > 0;
           // "No deleted tasks." is a claim about what the server holds, so it
           // waits for a poll that actually asked. Until one has landed the
-          // column says nothing rather than something it has not read.
-          deletedEmpty.hidden = removed.length > 0 || !deletedRead;
+          // column says nothing rather than something it has not read — and it
+          // says nothing over a column the filters emptied either, because there
+          // the true answer is the other line.
+          deletedEmpty.hidden = removed.length > 0 || !deletedRead || filteredOut;
+          filterEmptyFor(deletedList).hidden = !filteredOut;
         }
         // A report whose card the board no longer draws has nowhere left to be
         // read, and letting it go with the card would put the reader back where
@@ -10592,7 +10834,12 @@
             // page are drawn from one answer rather than from two derivations of
             // the same read.
             const projectedPresentation = projectPresentation(presentation, projected);
-            render(projected, projectedPresentation); stale.dataset.visible = "false"; markSynchronized();
+            // The filters narrow what the columns draw and nothing else: the open
+            // task page is a page about one task, not a view of the board, and a
+            // poll that stopped feeding it because the board is searched would
+            // break a form the reader is filling in.
+            const shown = shownTasks(projected, new Set(document.tasks.map((task) => task.id)));
+            render(shown, projectedPresentation, projected); stale.dataset.visible = "false"; markSynchronized();
             // The open task page's thread and attachments follow this read in
             // place, the way the relationship sidebar below does. Nothing else
             // about that form moves on a poll: a field is corrected only by a

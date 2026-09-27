@@ -87,7 +87,7 @@ includedTaskResponse = ` + tasksDocumentJSON(t, tasks) + `;
 setTimeout(async () => {
   await intervalCallback();
   if (deletedColumn()) throw new Error("the board drew the Deleted column before anyone asked for it");
-  if (deletedToggle.hidden) throw new Error("the board did not reveal the Deleted column's toggle");
+  if (filterRow.hidden) throw new Error("the board did not reveal the filter row the column's toggle sits in");
   if (deletedLabel.textContent !== "Show Deleted" || deletedToggle.href !== "/?deleted=1") {
     throw new Error("the toggle does not offer the column: " + deletedLabel.textContent + " " + deletedToggle.href);
   }
@@ -795,7 +795,7 @@ setTimeout(async () => {
   if (document.title !== "Page not found · Workbook") {
     throw new Error("the removed route rendered as " + JSON.stringify(document.title));
   }
-  if (!deletedToggle.hidden) throw new Error("a route that is not the board revealed the column's toggle");
+  if (!filterRow.hidden) throw new Error("a route that is not the board revealed the filter row and the column's toggle");
 }, 0);
 `
 	runDeletedColumnClient(t, "removed deleted route behavior", program)
