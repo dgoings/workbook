@@ -4532,6 +4532,10 @@ class TestElement {
     this.selected = false;
     this.disabled = false;
     this.required = false;
+    // What a checkbox is reporting. Every element has it for the reason every
+    // element has selected: the harness does not know which tag a client is
+    // about to build, and a tick the client wrote has to read back.
+    this.checked = false;
   }
   append(...children) {
     children.forEach((child) => {
@@ -4598,6 +4602,9 @@ class TestElement {
       if (selector === "[data-drop-status]" && element.dataset.dropStatus) return element;
       if (selector === "[data-drop-deleted]" && element.dataset.dropDeleted) return element;
       if (selector === "[data-status]" && element.dataset.status) return element;
+      // The chooser a click landed in, which is what tells the document listener
+      // whether the click was inside an open menu or outside every one of them.
+      if (selector === "[data-filter-chooser]" && Object.prototype.hasOwnProperty.call(element.dataset, "filterChooser")) return element;
     }
     return null;
   }
@@ -4610,6 +4617,17 @@ class TestElement {
   querySelector(selector) {
     if (selector === "[data-stale]") return stale;
     if (selector === "[data-copy-status]") return findElement(this, (element) => Object.prototype.hasOwnProperty.call(element.dataset, "copyStatus"));
+    // The parts of one chooser, asked for inside its own root exactly as the
+    // client asks for them: the button, the badge counting what is ticked, and
+    // the menu the options are drawn into.
+    for (const [marker, key] of [
+      ["[data-filter-chooser-button]", "filterChooserButton"],
+      ["[data-filter-chooser-badge]", "filterChooserBadge"],
+      ["[data-filter-chooser-count]", "filterChooserCount"],
+      ["[data-filter-chooser-menu]", "filterChooserMenu"]
+    ]) {
+      if (selector === marker) return findElement(this, (element) => Object.prototype.hasOwnProperty.call(element.dataset, key));
+    }
     if (selector.startsWith("#")) {
       const id = selector.slice(1);
       return findElement(this, (element) => element.id === id);
@@ -4623,6 +4641,7 @@ class TestElement {
         if (selector === ".task-card" && hasClassToken(child, "task-card")) matches.push(child);
         if (selector === "[role=\"option\"]" && child.attributes.role === "option") matches.push(child);
         if (selector === "[data-relationship-row]" && Object.hasOwn(child.dataset, "relationshipRow")) matches.push(child);
+        if (selector === "[data-filter-option]" && Object.hasOwn(child.dataset, "filterOption")) matches.push(child);
         visit(child);
       }
     };
@@ -4819,6 +4838,56 @@ filterSearch.attributes.type = "search";
 filterSearch.dataset.filterQ = "";
 const filterChoosers = new TestElement("div");
 filterChoosers.dataset.filterChoosers = "";
+// One chooser as the page ships it: a button carrying the badge that counts what
+// is ticked, and the menu the client draws the options into. Both start hidden —
+// the badge because nothing is ticked and the menu because nothing has opened it
+// — which is what lets a test tell a client that revealed one from a harness that
+// was born showing it.
+//
+// The badge holds the count in a span of its own beside a word only a screen
+// reader hears, exactly as the served page does: the client writes the count into
+// that span, and a harness holding a bare badge would let a client that wrote over
+// the whole badge — throwing the word away every render — pass.
+//
+// The button names the menu it opens through aria-controls rather than claiming an
+// unnamed popup, so the menu carries the id it is named by.
+function filterChooserElement(group, startsHidden) {
+  const menuID = "filter-menu-" + group;
+  const root = new TestElement("div");
+  root.className = "filter-chooser";
+  root.dataset.filterChooser = group;
+  root.hidden = startsHidden;
+  const button = new TestElement("button");
+  button.dataset.filterChooserButton = "";
+  button.setAttribute("aria-expanded", "false");
+  button.setAttribute("aria-controls", menuID);
+  const badge = new TestElement("span");
+  badge.hidden = true;
+  badge.dataset.filterChooserBadge = "";
+  const count = new TestElement("span");
+  count.dataset.filterChooserCount = "";
+  const screenReaderWord = new TestElement("span");
+  screenReaderWord.className = "visually-hidden";
+  screenReaderWord.textContent = " selected";
+  badge.append(count, screenReaderWord);
+  button.append(badge);
+  const menu = new TestElement("div");
+  menu.hidden = true;
+  menu.id = menuID;
+  menu.dataset.filterChooserMenu = "";
+  root.append(button, menu);
+  return root;
+}
+// The three of them, in the order the row serves them. The Key one ships hidden,
+// because a project with one key has nothing to choose between and the served
+// page says so rather than leaving the client to hide a control the reader has
+// already seen.
+const filterChooserRoots = [
+  filterChooserElement("priority", false),
+  filterChooserElement("label", false),
+  filterChooserElement("key", true)
+];
+filterChooserRoots.forEach((root) => filterChoosers.append(root));
 const filterClear = new TestElement("a");
 filterClear.hidden = true;
 filterClear.dataset.filterClear = "";
@@ -4916,7 +4985,13 @@ const documentEventListeners = {};
     if (selector === "style[data-board-priority-ink]") return boardPriorityInkStyle;
     return null;
   },
-  querySelectorAll() { return []; },
+  querySelectorAll(selector) {
+    // The choosers are collected once, by this selector, the way the client
+    // collects them: the row holds three and the group each one narrows is its
+    // own attribute.
+    if (selector === "[data-filter-chooser]") return filterChooserRoots;
+    return [];
+  },
   // The browser's own hit test, over the boxes a test has stated. The drag
   // loop asks the document what is under a cursor that has not moved after the
   // board track has slid beneath it, which is the one question the loop cannot

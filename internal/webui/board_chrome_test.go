@@ -99,8 +99,23 @@ func TestHandlerBoardColumnsHoldAMinimumWidthAndScroll(t *testing.T) {
 	// literal left behind in any of them is how they could disagree again, so
 	// the guard covers the shape of the declaration rather than one spelling of
 	// it — `minmax(12rem` catches both the old track size and the strip's.
+	//
+	// It reads the rules that size a card or a column, not the whole stylesheet.
+	// The literal is only a defect there: something else on the page may be
+	// 12rem wide for a reason of its own — a chooser's menu is — and a guard over
+	// the served body claimed those too, which is a guard that grows into an
+	// obstacle rather than a rule.
+	widths := strings.Join([]string{
+		// Where the property is defined, desktop and phone alike: the phone's
+		// override lives in a :root inside the narrow-screen media block.
+		cssRules(t, body, ":root {"),
+		boardRules(t, body),
+		cssRules(t, body, ".column {"),
+		cssRules(t, body, ".unknown-status__list {"),
+		cssRules(t, body, ".task-card {"),
+	}, "\n")
 	for _, stale := range []string{`minmax(12rem`, `min-width: 12rem`, `min-width: min(18rem`} {
-		if strings.Contains(body, stale) {
+		if strings.Contains(widths, stale) {
 			t.Errorf("a board card still carries the hardcoded minimum width %q", stale)
 		}
 	}
@@ -223,7 +238,17 @@ func assertBoardTracks(t *testing.T, subject string, children []string, columns 
 // declaration sits in is not something a test should hold still.
 func boardRules(t *testing.T, body string) string {
 	t.Helper()
-	const selector = ".board {"
+	return cssRules(t, body, ".board {")
+}
+
+// cssRules returns every declaration block in the served stylesheet that opens
+// with this selector, joined — the desktop rule and whatever the media queries
+// restate, which for a property like --board-column-min is the whole of what the
+// page says about it. It is the shape boardRules always had, named so that a
+// claim about one family of rules can be scoped to them instead of being made
+// over the entire body.
+func cssRules(t *testing.T, body, selector string) string {
+	t.Helper()
 	var rules []string
 	for rest := body; ; {
 		start := strings.Index(rest, selector)
@@ -233,13 +258,13 @@ func boardRules(t *testing.T, body string) string {
 		rest = rest[start:]
 		end := strings.IndexByte(rest, '}')
 		if end < 0 {
-			t.Fatalf("a .board rule is unterminated: %q", rest)
+			t.Fatalf("a %s rule is unterminated: %q", selector, rest)
 		}
 		rules = append(rules, rest[:end+1])
 		rest = rest[end+1:]
 	}
 	if len(rules) == 0 {
-		t.Fatal("the rendered page has no .board rule")
+		t.Fatalf("the rendered page has no %s rule", selector)
 	}
 	return strings.Join(rules, "\n")
 }
@@ -421,6 +446,43 @@ func TestHandlerDrawsTheDeletedSwitchInTheFilterRow(t *testing.T) {
 		"data-filter-choosers",
 		"data-deleted-toggle",
 		"data-filter-clear",
+		// The three choosers themselves. They are served rather than built, so a
+		// page whose script never ran offers no control that cannot work — and
+		// the group each one narrows is the attribute the client collects them
+		// by, which is why the value is asserted rather than the bare name.
+		`data-filter-chooser="priority"`,
+		`data-filter-chooser="label"`,
+		`data-filter-chooser="key"`,
+		// The parts of a chooser. The client asks for each of these inside the
+		// chooser's own root, and the fake DOM hand-builds them — so without
+		// these three the served markup could lose a part and every client test
+		// would go on passing against a harness that still had it.
+		"data-filter-chooser-button",
+		"data-filter-chooser-badge",
+		"data-filter-chooser-menu",
+		"data-filter-chooser-count",
+		// A collapsed menu says so, which is the half of the state a sighted
+		// reader gets from the menu not being there.
+		`aria-expanded="false"`,
+		// The button names the menu it opens rather than only claiming to have a
+		// popup, so the two are one control to a screen reader.
+		`aria-controls="filter-menu-priority"`,
+		`aria-controls="filter-menu-label"`,
+		`aria-controls="filter-menu-key"`,
+		`id="filter-menu-priority"`,
+		// The badge is a bare number on screen. The word beside it is there for a
+		// reader who cannot see which chooser it is sitting on, and it reads the
+		// same for one as for two — which is why the markup can own it rather
+		// than the client having to choose a plural every render. Counted below,
+		// once per chooser, because a substring check is satisfied by any one of
+		// the three and would pass over two badges that had lost it.
+		`<span class="visually-hidden"> selected</span>`,
+		// A search box is a search box, which is what gives a reader the clear
+		// affordance the browser draws in one.
+		`type="search"`,
+		// Clear ships hidden: an unfiltered board has nothing to clear, and the
+		// client reveals it once the address holds a filter.
+		"data-filter-clear hidden",
 	} {
 		if !strings.Contains(row, marker) {
 			t.Errorf("the filter row carries no %s: %s", marker, row)
@@ -431,8 +493,38 @@ func TestHandlerDrawsTheDeletedSwitchInTheFilterRow(t *testing.T) {
 	if !strings.Contains(row, `aria-label="Search title and description"`) {
 		t.Errorf("the search box has no accessible name: %s", row)
 	}
-	if !strings.Contains(row, "hidden>") {
+	// The row's own hidden attribute, on its own opening tag. A substring check
+	// over the whole row is satisfied by any hidden thing inside it — the Clear
+	// anchor ships hidden too — which would have passed over a row that shipped
+	// visible and offered the board's filters from a task's page.
+	if !strings.HasPrefix(row, `<div class="filter-row" data-filter-row hidden>`) {
 		t.Errorf("the filter row ships visible, so a route that draws no columns still offers it: %s", row)
+	}
+	// Every chooser's badge carries the word, not just one of them.
+	const screenReaderWord = `<span class="visually-hidden"> selected</span>`
+	if got := strings.Count(row, screenReaderWord); got != 3 {
+		t.Errorf("%d of the three badges carry the screen-reader word: %s", got, row)
+	}
+	// aria-haspopup only claims that something opens; aria-controls names what,
+	// which is what lets a screen reader treat the button and the menu as one
+	// control. A page carrying both would be stating the weaker fact twice.
+	if strings.Contains(row, "aria-haspopup") {
+		t.Errorf("a chooser still claims a popup it does not name: %s", row)
+	}
+	// The visually-hidden word needs the rule that hides it, or it is a word in
+	// the middle of the row.
+	if !strings.Contains(body, ".visually-hidden { position: absolute;") {
+		t.Error("the stylesheet does not hide the badge's screen-reader word")
+	}
+	// The Key chooser ships hidden as well, and for a reason of its own: most
+	// projects have one key, and a chooser offering one alternative is a control
+	// with nothing to choose. The client reveals it once a project has two.
+	keyAt := strings.Index(row, `data-filter-chooser="key"`)
+	if keyAt < 0 {
+		t.Fatalf("the filter row carries no Key chooser: %s", row)
+	}
+	if !strings.HasPrefix(row[keyAt:], `data-filter-chooser="key" hidden>`) {
+		t.Errorf("the Key chooser ships visible over a project that may have one key: %s", row)
 	}
 	// The switch is inside the row rather than back in the header beside the
 	// settings, which an ordering claim over the whole body is what states.
