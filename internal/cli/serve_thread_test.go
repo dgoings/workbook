@@ -23,6 +23,7 @@ import (
 // and only a round trip through the binary's own service says so — verified by
 // deleting the field and watching this test alone fail.
 func TestRunServeWritesAndReadsAThreadThroughWebRoutes(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Discussed through the board", "--json")
 	if code != 0 || stderr != "" {
@@ -163,6 +164,7 @@ func TestRunServeWritesAndReadsAThreadThroughWebRoutes(t *testing.T) {
 // kind is something this address can serve, and both answer as not found rather
 // than reaching the blob store with an object ID from somewhere else.
 func TestRunServeScopesAnAttachmentToItsOwnTask(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Holds the attachment", "--json")
 	if code != 0 || stderr != "" {

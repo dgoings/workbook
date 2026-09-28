@@ -69,6 +69,7 @@ func cliNextTaskID(t *testing.T, repository string) string {
 // reads the new one: `workbook next` hands out the task at the priority that is
 // now the most urgent, without either task being touched.
 func TestPriorityMoveReordersAndTheBoardSortFollows(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	least := createOrderingTask(t, repository, "Least urgent work", "low")
 	most := createOrderingTask(t, repository, "Most urgent work", "high")
@@ -125,6 +126,7 @@ func TestPriorityMoveReordersAndTheBoardSortFollows(t *testing.T) {
 // A move says where it goes, and every way of failing to say it is refused
 // before anything is recorded.
 func TestPriorityMoveRefusesAnAnchorItCannotUse(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	before := cliPriorityList(t, repository).Head
 
@@ -191,6 +193,7 @@ func TestPriorityMoveRefusesAnAnchorItCannotUse(t *testing.T) {
 // marker with a change of nothing. docs/reference.md says it plainly: a command
 // that changes nothing should not be what costs a team its compatibility.
 func TestPriorityMoveRefusesThePositionThePriorityAlreadyHolds(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	before := cliPriorityList(t, repository).Head
 
@@ -252,6 +255,7 @@ func TestPriorityMoveRefusesThePositionThePriorityAlreadyHolds(t *testing.T) {
 // held while reordering nobody — it is the neighbours, not the arithmetic, that
 // decide whether anything moved.
 func TestPriorityMoveStillMovesAtBothEndsAndInTheMiddle(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	// To the back: high leaves the front and becomes the least urgent.
@@ -288,6 +292,7 @@ func TestPriorityMoveStillMovesAtBothEndsAndInTheMiddle(t *testing.T) {
 // a regression which refused on the surface but wrote anyway would still park
 // every teammate on a build that can read generation three.
 func TestPriorityMoveNoOpRefusalDoesNotBumpAnUnconfiguredProjectsLedger(t *testing.T) {
+	t.Parallel()
 	repository := legacyDisplayConfiguredRepository(t)
 
 	before := cliGitOutput(t, repository, "rev-parse", configLedgerRefName)

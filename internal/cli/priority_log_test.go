@@ -45,6 +45,7 @@ func cliPriorityLog(t *testing.T, repository string, args ...string) priorityLog
 // rather than failing. The ledger is seeded lazily, so its absence is the
 // ordinary state of most projects.
 func TestPriorityLogOnALedgerlessProjectReportsNothingRecorded(t *testing.T) {
+	t.Parallel()
 	repository := preLedgerRepository(t)
 
 	document := cliPriorityLog(t, repository)
@@ -65,6 +66,7 @@ func TestPriorityLogOnALedgerlessProjectReportsNothingRecorded(t *testing.T) {
 // nothing rather than listing somebody else's history. The two sections share a
 // ledger and do not share a log.
 func TestPriorityLogSkipsCommitsThatChangedNoPriority(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunStatus(t, repository, "status", "add", "triage", "--after", "backlog", "--no-sync")
 
@@ -87,6 +89,7 @@ func TestPriorityLogSkipsCommitsThatChangedNoPriority(t *testing.T) {
 
 // --limit and --all describe the same window and cannot both decide it.
 func TestPriorityLogRefusesLimitWithAll(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, _, stderr := run(t, repository, "priority", "log", "--limit", "2", "--all")
 	if code != 2 {
@@ -98,6 +101,7 @@ func TestPriorityLogRefusesLimitWithAll(t *testing.T) {
 }
 
 func TestPriorityLogRefusesANonPositiveLimit(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, _, stderr := run(t, repository, "priority", "log", "--limit", "0")
 	if code != 2 {
@@ -119,6 +123,7 @@ func TestPriorityLogRefusesANonPositiveLimit(t *testing.T) {
 // word but default, so that command exits 5 the moment somebody pastes it, and
 // an inverse nobody can run is worse than no inverse at all.
 func TestPriorityLogOffersNoInverseForARoleThisBuildCannotName(t *testing.T) {
+	t.Parallel()
 	before := configBefore{priorities: core.BuiltInPriorityVocabulary()}
 
 	foreign := []core.ConfigOperation{{
@@ -229,6 +234,7 @@ func writeLegacyPriorityLessLedger(t *testing.T, repository string) {
 // paste it, so such an entry destroys a priority the project still uses and
 // forwards its tasks away from it.
 func TestPriorityLogDescribesTheAuthoredChangeRatherThanTheBackfill(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	writeLegacyPriorityLessLedger(t, repository)
 	urgentWork := cliCreateTaskAtPriority(t, repository, "Ship the fix", "high")

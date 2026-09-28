@@ -35,6 +35,7 @@ import (
 // last synchronization failed is disqualified here too, and telling that reader
 // nothing is running would be a claim about their machine that is false.
 func TestBoardPublicationStateNamesWhyNoWatcherAnswers(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repository := initializedRepository(t)
 	service, store, err := openBoardServiceParts(ctx, repository)
@@ -68,6 +69,7 @@ func TestBoardPublicationStateNamesWhyNoWatcherAnswers(t *testing.T) {
 }
 
 func TestSyncWatchRejectsInvalidInvocations(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 	for _, args := range [][]string{
 		{"sync", "--interval", "5s"},
@@ -83,6 +85,7 @@ func TestSyncWatchRejectsInvalidInvocations(t *testing.T) {
 }
 
 func TestSyncStatusReportsNoWatcher(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 
 	code, stdout, stderr := run(t, second, "sync", "--status", "--json")
@@ -104,6 +107,7 @@ func TestSyncStatusReportsNoWatcher(t *testing.T) {
 }
 
 func TestSyncStatusReportsALiveWatcher(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 	startCLIWatcher(t, second, "1h")
 
@@ -125,6 +129,7 @@ func TestSyncStatusReportsALiveWatcher(t *testing.T) {
 // this build does not read. Both stayed silent while the watcher was skipping
 // it on every tick.
 func TestWatcherAndSyncStatusNameTheIgnoredRefsItObserved(t *testing.T) {
+	t.Parallel()
 	const strayRef = "refs/workbook/tasks/EVIL"
 	first, second := cliSyncRepositories(t)
 	cliGit(t, first, "push", "origin", "HEAD:"+strayRef)
@@ -160,6 +165,7 @@ func TestWatcherAndSyncStatusNameTheIgnoredRefsItObserved(t *testing.T) {
 // The whole point of a watcher: another clone's work arrives without anyone
 // running a command here.
 func TestSyncWatchObservesAnotherClonePushWithNoLocalCommand(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	task := cliCreateTask(t, first, "Watched task")
 	if code, _, stderr := run(t, first, "push"); code != 0 {
@@ -179,6 +185,7 @@ func TestSyncWatchObservesAnotherClonePushWithNoLocalCommand(t *testing.T) {
 }
 
 func TestSecondSyncWatchRefusesToStart(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 	startCLIWatcher(t, second, "1h")
 
@@ -192,6 +199,7 @@ func TestSecondSyncWatchRefusesToStart(t *testing.T) {
 // over. The watcher's interval is an hour, so origin only holds the tip if the
 // nudge delivered it rather than a scheduled tick.
 func TestMutationDefersToALiveWatcher(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 	task := cliCreateTask(t, second, "Deferred task")
 	startCLIWatcher(t, second, "1h")
@@ -214,6 +222,7 @@ func TestMutationDefersToALiveWatcher(t *testing.T) {
 }
 
 func TestMutationFallsBackWhenTheWatcherIsGone(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 	task := cliCreateTask(t, second, "Orphaned pointer")
 	watchertest.StartDead(t, commonGitDir(t, second))
@@ -229,6 +238,7 @@ func TestMutationFallsBackWhenTheWatcherIsGone(t *testing.T) {
 }
 
 func TestMutationFallsBackWhenTheWatcherStatusIsStale(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 	task := cliCreateTask(t, second, "Stale watcher")
 	watchertest.Start(t, commonGitDir(t, second), syncloop.Status{
@@ -251,6 +261,7 @@ func TestMutationFallsBackWhenTheWatcherStatusIsStale(t *testing.T) {
 // A watcher whose last synchronization failed knows origin is unreachable.
 // Deferring would swallow the warning that says the work is local-only.
 func TestMutationFallsBackWhenTheWatcherLastSyncFailed(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 	task := cliCreateTask(t, second, "Failing watcher")
 	watchertest.Start(t, commonGitDir(t, second), syncloop.Status{
@@ -271,6 +282,7 @@ func TestMutationFallsBackWhenTheWatcherLastSyncFailed(t *testing.T) {
 // A watcher that answers but cannot publish must not leave the caller believing
 // the change was handed off.
 func TestMutationPublishesInlineWhenTheNudgeIsRefused(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 	task := cliCreateTask(t, second, "Refused nudge")
 	recorder := watchertest.Start(t, commonGitDir(t, second), syncloop.Status{
@@ -295,6 +307,7 @@ func TestMutationPublishesInlineWhenTheNudgeIsRefused(t *testing.T) {
 }
 
 func TestDeferredMutationGatesOnAWatcherConflict(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 	task := cliCreateTask(t, second, "Conflicted task")
 	recorder := watchertest.Start(t, commonGitDir(t, second), syncloop.Status{
@@ -322,6 +335,7 @@ func TestDeferredMutationGatesOnAWatcherConflict(t *testing.T) {
 }
 
 func TestDeferredMutationIgnoresAnUnrelatedWatcherConflict(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 	task := cliCreateTask(t, second, "Unaffected task")
 	other := cliCreateTask(t, second, "Conflicted elsewhere")
@@ -352,6 +366,7 @@ func TestDeferredMutationIgnoresAnUnrelatedWatcherConflict(t *testing.T) {
 // The board polls its own API once a second, so hosting the loop is the whole
 // change: a teammate's push reaches the browser with no client work.
 func TestRunServeSurfacesAnOriginAdvanceWithoutACommand(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	task := cliCreateTask(t, first, "Board task")
 	if code, _, stderr := run(t, first, "push"); code != 0 {
@@ -373,6 +388,7 @@ func TestRunServeSurfacesAnOriginAdvanceWithoutACommand(t *testing.T) {
 }
 
 func TestRunServeDefersToAnExternalWatcher(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 	startCLIWatcher(t, second, "1h")
 
@@ -398,6 +414,7 @@ func TestRunServeDefersToAnExternalWatcher(t *testing.T) {
 // The external watcher's interval is an hour, so origin only holds the new ref
 // if the mutation handed it over.
 func TestWebMutationPublishesWithoutWaitingForATick(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 	startCLIWatcher(t, second, "1h")
 
@@ -421,6 +438,7 @@ func TestWebMutationPublishesWithoutWaitingForATick(t *testing.T) {
 // Inline means the response returns only after origin has the change, so a
 // watcher that refuses to publish cannot hide behind a receipt.
 func TestBoardInlineModePublishesBeforeResponding(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 	startCLIWatcher(t, second, "1h")
 
@@ -444,6 +462,7 @@ func TestBoardInlineModePublishesBeforeResponding(t *testing.T) {
 // A repository with no origin has nothing to publish to. The mutation still
 // has to succeed, because the local write is the durable result.
 func TestWebMutationSucceedsWithoutAnOrigin(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	address := reserveAddress(t)
 	_, stopServe := startServeCapturing(t, repository, address)
@@ -457,6 +476,7 @@ func TestWebMutationSucceedsWithoutAnOrigin(t *testing.T) {
 
 // Ctrl-C must not strand work the watcher was still holding.
 func TestWatcherPublishesUnsyncedWorkOnShutdown(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 	task := cliCreateTask(t, second, "Shutdown task")
 
@@ -490,6 +510,7 @@ func TestWatcherPublishesUnsyncedWorkOnShutdown(t *testing.T) {
 // The board's final synchronization runs alongside the HTTP drain rather than
 // after it, so shutdown stays inside one budget instead of two.
 func TestServeShutdownStaysWithinBudget(t *testing.T) {
+	t.Parallel()
 	_, second := cliSyncRepositories(t)
 	address := reserveAddress(t)
 

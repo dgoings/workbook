@@ -22,6 +22,7 @@ import (
 // A recolor through the board is a recolor: the CLI sees it, the ledger moves,
 // and the answer prices the change in the one term a priority change has.
 func TestBoardRecolorsAPriorityThroughTheSharedLedger(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	before := boardVocabularyDocument(t, addr)
@@ -79,6 +80,7 @@ func TestBoardRecolorsAPriorityThroughTheSharedLedger(t *testing.T) {
 // role is one operation the fold transfers, and no planner renames and
 // transfers in one pack.
 func TestBoardTakesARenameAndTheDefaultRoleAsTwoChainedChanges(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	head := boardVocabularyDocument(t, addr).Head
@@ -118,6 +120,7 @@ func TestBoardTakesARenameAndTheDefaultRoleAsTwoChainedChanges(t *testing.T) {
 // change that changes nothing must be refused rather than recorded — and the
 // refusal has to read as an explanation.
 func TestBoardRefusesPriorityChanges(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	head := boardVocabularyDocument(t, addr).Head
@@ -268,6 +271,7 @@ func TestBoardRefusesPriorityChanges(t *testing.T) {
 // removal in the words the verb refuses it with — naming the command that makes
 // the removal possible.
 func TestBoardRefusesToRemoveTheLastPriority(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 
@@ -304,6 +308,7 @@ func TestBoardRefusesToRemoveTheLastPriority(t *testing.T) {
 // actually looking at — priorities included, which is the half that made
 // attaching it worth doing here.
 func TestBoardAnswersAStalePriorityWriteWithTheCurrentConfiguration(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	stale := boardVocabularyDocument(t, addr).Head
@@ -376,6 +381,7 @@ func boardPriorityChange(t *testing.T, method, url, body string) webui.Vocabular
 // first priority write on a project that never configured its priorities
 // backfills the built-in three and stamps the generation-three marker.
 func TestBoardRefusesAPriorityMoveToThePositionItAlreadyHolds(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	head := boardVocabularyDocument(t, addr).Head

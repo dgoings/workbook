@@ -21,6 +21,20 @@ import (
 // Workbook configuration this isolation exists to protect.
 var toolchainEnvironment []string
 
+// Tests that stay serial, and why. Go runs these before the parallel batch,
+// so each gets a quiet process environment.
+//
+//	TestRunReportsGitProcessFailuresAsOperationalWithoutUsage — t.Setenv
+//	TestValidateCachedInvalidHeadStillExitsNonzeroWithoutHistoryBatch — t.Setenv
+//
+// Nothing else in the package needs to be serial. Every other test builds its
+// own repository under t.TempDir and drives the CLI in process, and the one
+// piece of state they share — the user-global configuration under the home
+// directory TestMain replaces — is only ever read, or created with its
+// defaults by `workbook setup`, which userconfig.Save publishes with a rename
+// rather than a write in place. No test in this package asserts on that file's
+// contents, so concurrent setups cannot disagree about it.
+
 // TestMain isolates the user-global configuration Workbook reads from the
 // environment. Without this, running the suite would read and write the
 // developer's real ~/.config/workbook/config.json.

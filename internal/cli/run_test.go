@@ -47,6 +47,7 @@ type errorDocument struct {
 }
 
 func TestWriteMutationResultRendersWarning(t *testing.T) {
+	t.Parallel()
 	result := core.MutationResult{
 		Task: core.Task{
 			ID: "WB-01K0M6B8A4FTT8C39MXXYTW7D1",
@@ -98,6 +99,7 @@ func TestWriteMutationResultRendersWarning(t *testing.T) {
 }
 
 func TestRunInvalidInvocationAndEarlyJSONErrors(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 
 	t.Run("no command renders global help", func(t *testing.T) {
@@ -203,6 +205,7 @@ func TestRunReportsGitProcessFailuresAsOperationalWithoutUsage(t *testing.T) {
 }
 
 func TestRunReportsConfigurationFilesystemFailureAsOperational(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	blockingPath := filepath.Join(repository, ".workbook")
 	if err := os.WriteFile(blockingPath, []byte("not a directory"), 0o600); err != nil {
@@ -230,6 +233,7 @@ func TestRunReportsConfigurationFilesystemFailureAsOperational(t *testing.T) {
 }
 
 func TestRunJSONIntentAccountsForStringFlagValuesAndParserStops(t *testing.T) {
+	t.Parallel()
 	t.Run("init string value consumes terminator before JSON flag", func(t *testing.T) {
 		repository := testrepo.New(t)
 		code, stdout, stderr := run(t, repository, "setup", "--key", "--", "--json")
@@ -292,6 +296,7 @@ func TestRunJSONIntentAccountsForStringFlagValuesAndParserStops(t *testing.T) {
 }
 
 func TestRunHooksInvocationErrorsRetainJSONIntent(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name string
 		args []string
@@ -315,6 +320,7 @@ func TestRunHooksInvocationErrorsRetainJSONIntent(t *testing.T) {
 }
 
 func TestRunJSONIntentMatchesGoBooleanFlagSyntax(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	for _, spelling := range []string{
@@ -422,6 +428,7 @@ func TestRunJSONIntentMatchesGoBooleanFlagSyntax(t *testing.T) {
 }
 
 func TestRunRequiresInitializationAndSetupIsIdempotent(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 
 	code, stdout, stderr := run(t, repository, "list")
@@ -513,6 +520,7 @@ func projectIdentityLine(t *testing.T, output string) (string, string) {
 }
 
 func TestRunRebuildProducesVersionedResult(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, _, stderr := run(t, repository, "create", "Projected")
 	if code != 0 || stderr != "" {
@@ -537,6 +545,7 @@ func TestRunRebuildProducesVersionedResult(t *testing.T) {
 }
 
 func TestOpenServiceUsesSplitMutationStores(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	service, err := openService(context.Background(), repository, io.Discard)
@@ -560,6 +569,7 @@ func TestOpenServiceUsesSplitMutationStores(t *testing.T) {
 }
 
 func TestRunExactMutationPathAdvancesCanonicalRefOnce(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, stdout, stderr := run(t, repository, "create", "Created", "--json")
@@ -592,6 +602,7 @@ func TestRunExactMutationPathAdvancesCanonicalRefOnce(t *testing.T) {
 }
 
 func TestReadCommandsRefreshCachedProjectionAfterGitTipAdvances(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Before advance", "--status", "ready", "--json")
 	if code != 0 || stderr != "" {
@@ -637,6 +648,7 @@ func TestReadCommandsRefreshCachedProjectionAfterGitTipAdvances(t *testing.T) {
 }
 
 func TestRunCRUDLifecycleAndOutputContracts(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 
 	code, _, stderr := run(t, repository, "setup", "--key", "PROJ")
@@ -811,6 +823,7 @@ func TestRunCRUDLifecycleAndOutputContracts(t *testing.T) {
 }
 
 func TestCLIInReviewStatus(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, stdout, stderr := run(t, repository, "create", "Review from creation", "--status", "in-review", "--json")
@@ -859,6 +872,7 @@ func TestCLIInReviewStatus(t *testing.T) {
 }
 
 func TestRunJSONFailureIsCompactAndUsesStableExitCodes(t *testing.T) {
+	t.Parallel()
 	t.Run("validation", func(t *testing.T) {
 		repository := initializedRepository(t)
 		code, stdout, stderr := run(t, repository, "create", "", "--json")
@@ -927,6 +941,7 @@ func repositoryDoc(t *testing.T, parts ...string) string {
 }
 
 func TestCommandReferenceDocumentsImplementedCommands(t *testing.T) {
+	t.Parallel()
 	reference := repositoryDoc(t, "docs", "reference.md")
 	commandList := firstFencedCodeBlock(t, reference)
 	var lines []string
@@ -1096,6 +1111,7 @@ func assertREADMEDocumentsEveryExitCode(t *testing.T, readme string) {
 }
 
 func TestREADMEDocumentsInstallationPaths(t *testing.T) {
+	t.Parallel()
 	readme := repositoryDoc(t, "README.md")
 
 	for _, required := range []string{
@@ -1118,6 +1134,7 @@ func TestREADMEDocumentsInstallationPaths(t *testing.T) {
 // output: which record decides, what a fork inherits, and what a teammate on the
 // previous version sees. The command reference has to state all of it.
 func TestCommandReferenceDocumentsProjectIdentity(t *testing.T) {
+	t.Parallel()
 	readme := strings.Join(strings.Fields(repositoryDoc(t, "docs", "reference.md")), " ")
 
 	for _, required := range []string{
@@ -1151,6 +1168,7 @@ func TestCommandReferenceDocumentsProjectIdentity(t *testing.T) {
 }
 
 func TestREADMECommandPolicyRejectsUnimplementedCommandOutsideProposedSection(t *testing.T) {
+	t.Parallel()
 	const claim = "## Current workflow\n\nRun `workbook claim` to acquire work.\n"
 	violations := readmeCommandPolicyViolations(claim)
 	if len(violations) != 1 || !strings.Contains(violations[0], `"claim"`) {
@@ -1210,6 +1228,7 @@ func firstFencedCodeBlock(t *testing.T, section string) string {
 }
 
 func TestRunServeRejectsInvalidArguments(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	for _, args := range [][]string{
@@ -1229,6 +1248,7 @@ func TestRunServeRejectsInvalidArguments(t *testing.T) {
 }
 
 func TestRunServeUpdatesTaskStatusThroughWebRoute(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Serve mutation task", "--status", "ready", "--json")
 	if code != 0 {
@@ -1297,6 +1317,7 @@ func TestRunServeUpdatesTaskStatusThroughWebRoute(t *testing.T) {
 }
 
 func TestRunServePositionsTaskThroughWebRoute(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Moved through web position", "--status", "ready", "--priority", "medium", "--json")
 	if code != 0 {
@@ -1405,6 +1426,7 @@ func TestRunServePositionsTaskThroughWebRoute(t *testing.T) {
 }
 
 func TestRunServeMutatesDependenciesThroughWebRoutes(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Dependent through web", "--json")
 	if code != 0 {
@@ -1527,6 +1549,7 @@ func assertDependencyOperation(t *testing.T, repository, head string, operationT
 }
 
 func TestRunServeListsGitTipAdvancedAfterStarting(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Before web advance", "--json")
 	if code != 0 || stderr != "" {
@@ -1578,6 +1601,7 @@ func TestRunServeListsGitTipAdvancedAfterStarting(t *testing.T) {
 }
 
 func TestRunServeCreatesTaskThroughWebRoute(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1641,6 +1665,7 @@ func TestRunServeCreatesTaskThroughWebRoute(t *testing.T) {
 }
 
 func TestRunServeUpdatesAllTaskFieldsThroughWebRoute(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Before web update", "--json")
 	if code != 0 {
@@ -1711,6 +1736,7 @@ func TestRunServeUpdatesAllTaskFieldsThroughWebRoute(t *testing.T) {
 // them may reach the Git-backed service, because a task the board writes
 // publishes to origin and is later read as instructions by coding agents.
 func TestRunServeRefusesCrossSiteRequestsThroughTheRealListener(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Only legitimate task", "--json")
 	if code != 0 {
@@ -1850,6 +1876,7 @@ func TestRunServeRefusesCrossSiteRequestsThroughTheRealListener(t *testing.T) {
 }
 
 func TestRunServeWarnsWhenTheBoardLeavesThisMachine(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1894,6 +1921,7 @@ func TestRunServeWarnsWhenTheBoardLeavesThisMachine(t *testing.T) {
 }
 
 func TestBoardExposureWarning(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		address string
 		warns   bool
@@ -1930,6 +1958,7 @@ func TestBoardExposureWarning(t *testing.T) {
 }
 
 func TestRunServeReportsListenerFailureAsOperational(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1951,6 +1980,7 @@ func TestRunServeReportsListenerFailureAsOperational(t *testing.T) {
 }
 
 func TestOpenBoardListenerKeepsRequestedAddressWhenFree(t *testing.T) {
+	t.Parallel()
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -1974,6 +2004,7 @@ func TestOpenBoardListenerKeepsRequestedAddressWhenFree(t *testing.T) {
 }
 
 func TestOpenBoardListenerFallsBackWhenDefaultAddressTaken(t *testing.T) {
+	t.Parallel()
 	// An OS-assigned port stands in for 7331 so this test never competes with a
 	// board or another test run for the real default; the address serve did not
 	// choose is what drives the fallback, not the number.
@@ -2011,6 +2042,7 @@ func TestOpenBoardListenerFallsBackWhenDefaultAddressTaken(t *testing.T) {
 }
 
 func TestOpenBoardListenerNeverFallsBackForExplicitAddress(t *testing.T) {
+	t.Parallel()
 	blocker, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -2035,6 +2067,7 @@ func TestOpenBoardListenerNeverFallsBackForExplicitAddress(t *testing.T) {
 }
 
 func TestOpenBoardListenerNeverFallsBackOnOtherBindFailures(t *testing.T) {
+	t.Parallel()
 	// Permission denied on a privileged port is the archetypal failure another
 	// port would not cure, and a test process cannot provoke it portably, so
 	// the bind is injected. The recorded attempts prove serve did not quietly
@@ -2066,6 +2099,7 @@ func TestOpenBoardListenerNeverFallsBackOnOtherBindFailures(t *testing.T) {
 }
 
 func TestOpenBoardListenerFallsBackOnlyOnce(t *testing.T) {
+	t.Parallel()
 	// An in-use default earns exactly one retry, and it asks for port 0 on the
 	// same host rather than guessing at 7332.
 	var attempts []string
@@ -2092,6 +2126,7 @@ func TestOpenBoardListenerFallsBackOnlyOnce(t *testing.T) {
 }
 
 func TestBoardFallbackNoticeNamesTheCollision(t *testing.T) {
+	t.Parallel()
 	notice := boardFallbackNotice(defaultServeAddr, "127.0.0.1:53321")
 
 	if !strings.Contains(notice, defaultServeAddr) {
@@ -2128,6 +2163,7 @@ func (w *lockedWriter) String() string {
 }
 
 func TestRunServeFallsBackWhenDefaultAddressTaken(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	// Occupy the default address ourselves. When the bind fails, an unrelated
@@ -2200,6 +2236,7 @@ func TestRunServeFallsBackWhenDefaultAddressTaken(t *testing.T) {
 }
 
 func TestRunServeSaysNothingWhenTheDefaultAddressIsFree(t *testing.T) {
+	t.Parallel()
 	// The ordinary start, and the one the notice must stay out of: a notice on
 	// every default-port start would train the reader to ignore it, which is
 	// exactly the reader a squatted default port needs to reach. Nothing here

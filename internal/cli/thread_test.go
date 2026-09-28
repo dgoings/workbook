@@ -46,6 +46,7 @@ func writeAttachmentFile(t *testing.T, name string, content []byte) string {
 }
 
 func TestUpdateAddsEditsAndRemovesAComment(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: dropping --edit-comment's body, or reading --comment
 	// beside --edit-comment as a second comment to add rather than as the new
 	// body — either of which leaves the original text on the task.
@@ -119,6 +120,7 @@ func TestUpdateAddsEditsAndRemovesAComment(t *testing.T) {
 }
 
 func TestUpdateAttachesAndRemovesFilesAndLinks(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: deriving the attachment's name or media type from
 	// something other than the file it was read from, or letting --attach-label
 	// land on the file rather than on the link.
@@ -183,6 +185,7 @@ func TestUpdateAttachesAndRemovesFilesAndLinks(t *testing.T) {
 }
 
 func TestUpdateThreadFlagsRefuseInvocationsWithNoMeaning(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: reading a flag whose partner is missing as the intent it
 	// resembles. --edit-comment without a body has no new text, and an
 	// --edit-comment whose value is empty would reach core as an addition and
@@ -246,6 +249,7 @@ func TestUpdateThreadFlagsRefuseInvocationsWithNoMeaning(t *testing.T) {
 }
 
 func TestUpdateThreadFlagsCompose(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: refusing a --comment beside --remove-comment as
 	// ambiguous. Removing one remark and writing another is two intents, and
 	// the pair belongs in one pack rather than in two commits.
@@ -268,6 +272,7 @@ func TestUpdateThreadFlagsCompose(t *testing.T) {
 }
 
 func TestUpdateRefusesBlankAndMissingThreadTargets(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: letting an identifier nobody holds reach the pack, or
 	// resolving a prefix that names two things by picking one. Both are refused
 	// before anything is written, and each reports the category its caller can
@@ -348,6 +353,7 @@ func TestUpdateRefusesBlankAndMissingThreadTargets(t *testing.T) {
 }
 
 func TestUpdateWritesOnePackForFieldsCommentsAndAttachments(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: sending the thread intents through a second write, which
 	// would give one invocation two commits, two change-log entries, and two
 	// chances to half-succeed.
@@ -399,6 +405,7 @@ func TestUpdateWritesOnePackForFieldsCommentsAndAttachments(t *testing.T) {
 }
 
 func TestShowRendersTheThreadAndTheAttachmentList(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: leaving the thread out of the text rendering, where it
 	// is the only place a reader learns the identifiers the update flags take.
 	repository := initializedRepository(t)
@@ -449,6 +456,7 @@ func TestShowRendersTheThreadAndTheAttachmentList(t *testing.T) {
 }
 
 func TestShowLeavesATaskWithoutAThreadUnchanged(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: printing empty Comments and Attachments sections, which
 	// would change what `show` prints for every task written before this
 	// existed.
@@ -468,6 +476,7 @@ func TestShowLeavesATaskWithoutAThreadUnchanged(t *testing.T) {
 }
 
 func TestShowJSONCarriesTheThread(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: the thread reaching the text rendering while the
 	// envelope every machine consumer reads stays empty.
 	repository := initializedRepository(t)
@@ -503,6 +512,7 @@ func TestShowJSONCarriesTheThread(t *testing.T) {
 }
 
 func TestShowGetAttachmentWritesExactlyWhatWasAttached(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: writing the attachment through anything that transforms
 	// bytes. The content is deliberately not text: a NUL, an ESC, and a byte no
 	// UTF-8 decoder accepts all survive a byte-exact path and none survive a
@@ -545,6 +555,7 @@ func TestShowGetAttachmentWritesExactlyWhatWasAttached(t *testing.T) {
 }
 
 func TestShowGetAttachmentRefusesWhatHasNoBytes(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: answering a link with an empty file, or a missing
 	// attachment with one. A link's URL is what the caller was reaching for, so
 	// the refusal hands it back rather than only naming the kind.
@@ -588,6 +599,7 @@ func TestShowGetAttachmentRefusesWhatHasNoBytes(t *testing.T) {
 }
 
 func TestShowGetAttachmentRefusesEveryOptionThatRendersATask(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: ignoring --json beside --get-attachment, which would
 	// answer a request for a JSON document with raw bytes on the same stream a
 	// consumer is parsing.
@@ -643,6 +655,7 @@ func TestShowGetAttachmentRefusesEveryOptionThatRendersATask(t *testing.T) {
 }
 
 func TestUpdateRefusesAnOversizedFileBeforeReadingIt(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: reading the file into memory and letting core refuse it,
 	// which turns a mistyped path at a large file into a large allocation. The
 	// refusal names the size and the ceiling, and suggests the link that has no
@@ -680,6 +693,7 @@ func TestUpdateRefusesAnOversizedFileBeforeReadingIt(t *testing.T) {
 }
 
 func TestUpdateRefusesToAttachAnythingButARegularFile(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: gating --attach-file on IsDir and the stat's size alone.
 	// A ceiling read off a stat bounds only a file whose size a stat describes.
 	// A character device reports zero bytes and then reads forever — /dev/zero
@@ -713,6 +727,7 @@ func TestUpdateRefusesToAttachAnythingButARegularFile(t *testing.T) {
 }
 
 func TestShowGetAttachmentReportsBytesThisCloneDoesNotHave(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: reading the blob without reporting a missing object as a
 	// missing attachment. The checkpoint records an object ID, and a clone can
 	// hold the checkpoint without holding the object — a partial clone, a
@@ -755,6 +770,7 @@ func TestShowGetAttachmentReportsBytesThisCloneDoesNotHave(t *testing.T) {
 // in the stale view, the second because the stale view is missing the second
 // comment that makes the prefix ambiguous.
 func TestUpdateResolvesThreadTargetsAgainstTheFetchedThread(t *testing.T) {
+	t.Parallel()
 	author, editor := cliSyncRepositories(t)
 	task := cliCreateTask(t, author, "Shared task")
 	if code, _, stderr := run(t, author, "push"); code != 0 {
@@ -844,6 +860,7 @@ func commonPrefix(left, right string) string {
 }
 
 func TestShowSanitizesThreadTextAndKeepsJSONExact(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: printing a comment body or an attachment name verbatim.
 	// Both are attacker-controlled text on the same terminal every other task
 	// field is sanitized for, and a comment is the easiest of all of them to
@@ -895,6 +912,7 @@ func TestShowSanitizesThreadTextAndKeepsJSONExact(t *testing.T) {
 }
 
 func TestShowNeutralizesBidiControlsInACommentBody(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: neutralizing Cc but passing Cf through, which leaves
 	// U+202E RIGHT-TO-LEFT OVERRIDE in the printed line. A comment is the
 	// easiest sink to reach with one, and the terminal renders everything after
@@ -924,6 +942,7 @@ func TestShowNeutralizesBidiControlsInACommentBody(t *testing.T) {
 }
 
 func TestUpdateThreadOutcomeSanitizesWhatItEchoes(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: the confirmation line echoing a comment body verbatim,
 	// which is the same sink createForgedTask covers for a title.
 	repository := initializedRepository(t)

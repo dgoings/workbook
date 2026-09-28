@@ -16,6 +16,7 @@ import (
 // checkpoints one, and `show --compare` takes two on the command line — so a
 // 40-character assumption in any of them is invisible to the SHA-1 suite.
 func TestRunLifecycleInASHA256Repository(t *testing.T) {
+	t.Parallel()
 	testrepo.RequireObjectFormat(t, testrepo.FormatSHA256)
 	repository := testrepo.New(t, testrepo.WithObjectFormat(testrepo.FormatSHA256))
 	if code, _, stderr := run(t, repository, "setup"); code != 0 {

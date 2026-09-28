@@ -19,6 +19,7 @@ import (
 // bootstrap that leaned on the clone's own refspec, or on task history being
 // reachable from a branch, passes every full-clone test and fails here.
 func TestSetupBootstrapsNarrowedClones(t *testing.T) {
+	t.Parallel()
 	tests := map[string]struct {
 		cloneArgs []string
 		assert    func(t *testing.T, clone string)
@@ -95,6 +96,7 @@ func TestSetupBootstrapsNarrowedClones(t *testing.T) {
 // project rather than mint a second identity whose private guard then rejects
 // the real configuration on every later command.
 func TestSetupJoinsExistingOriginProjectFromPreWorkbookBranch(t *testing.T) {
+	t.Parallel()
 	_, seed, stale := originAdoptedAfterClone(t)
 
 	if code, _, stderr := run(t, seed, "setup"); code != 0 {
@@ -135,6 +137,7 @@ func TestSetupJoinsExistingOriginProjectFromPreWorkbookBranch(t *testing.T) {
 // push carries task refs and nothing else. The fixture reproduces that by
 // removing origin's identity ref after the seed publishes it.
 func TestSetupRefusesToMintWhenOriginHasTasksButNothingNamingTheProject(t *testing.T) {
+	t.Parallel()
 	bare, seed, stale := originAdoptedAfterClone(t)
 
 	if code, _, stderr := run(t, seed, "setup"); code != 0 {
@@ -165,6 +168,7 @@ func TestSetupRefusesToMintWhenOriginHasTasksButNothingNamingTheProject(t *testi
 // cannot even be reached — it is the escape hatch the origin probe's failure
 // message recommends.
 func TestSetupNoSyncSkipsOriginProbe(t *testing.T) {
+	t.Parallel()
 	repo := testrepo.New(t)
 	cliGit(t, repo, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing.git"))
 	if code, _, stderr := run(t, repo, "setup", "--no-sync"); code != 0 {

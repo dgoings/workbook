@@ -169,6 +169,7 @@ func gitWithInput(t *testing.T, repository, input string, args ...string) string
 // this build, and everything asserted below is what it must do — serve what it
 // can, refuse what it must, keep synchronizing, and lose nothing.
 func TestANewerWritersHistoryIsServedRefusedAndNeverWedged(t *testing.T) {
+	t.Parallel()
 	local, future := cliSyncRepositories(t)
 
 	fetched := cliCreateTask(t, local, "Fetched from the future")
@@ -317,6 +318,7 @@ func TestANewerWritersHistoryIsServedRefusedAndNeverWedged(t *testing.T) {
 // The configuration ledger answers the same way, and vocabulary resolution
 // keeps working from the checkpoint while it does.
 func TestANewerWritersConfigurationLedgerIsResolvedAndRefused(t *testing.T) {
+	t.Parallel()
 	local, future := cliSyncRepositories(t)
 	task := cliCreateTask(t, local, "A task to file")
 	if code, _, stderr := run(t, local, "sync"); code != 0 {
@@ -394,6 +396,7 @@ func TestANewerWritersConfigurationLedgerIsResolvedAndRefused(t *testing.T) {
 // is untouched and its own statuses keep working — and publishing is what
 // waits for the upgrade.
 func TestANewerWritersConfigurationDivergenceIsRefusedAndPreserved(t *testing.T) {
+	t.Parallel()
 	local, future := cliSyncRepositories(t)
 	if code, _, stderr := run(t, future, "sync"); code != 0 {
 		t.Fatalf("future clone sync code = %d; stderr = %q", code, stderr)
@@ -439,6 +442,7 @@ func TestANewerWritersConfigurationDivergenceIsRefusedAndPreserved(t *testing.T)
 // which describes the same refusal twice and blames the wrong thing the second
 // time.
 func TestANewerWritersLedgerIsNotRepublishedOverOrigin(t *testing.T) {
+	t.Parallel()
 	local, future := cliSyncRepositories(t)
 	if code, _, stderr := run(t, future, "sync"); code != 0 {
 		t.Fatalf("future clone sync code = %d; stderr = %q", code, stderr)
@@ -483,6 +487,7 @@ func TestANewerWritersLedgerIsNotRepublishedOverOrigin(t *testing.T) {
 // that origin rejects a push nobody should have made, and the run says so in a
 // second, transport-flavored error.
 func TestANewerWritersDivergentTaskIsNotPushed(t *testing.T) {
+	t.Parallel()
 	local, future := cliSyncRepositories(t)
 	diverged := cliCreateTask(t, local, "Diverged from the future")
 	if code, _, stderr := run(t, local, "sync"); code != 0 {
@@ -516,6 +521,7 @@ func TestANewerWritersDivergentTaskIsNotPushed(t *testing.T) {
 // The status strings are contract: a caller filters on them, and collapsing
 // either into "invalid" would tell a script the repository is damaged.
 func TestTheNeedsUpgradeStatusStringsAreWhatCallersRead(t *testing.T) {
+	t.Parallel()
 	if got := string(gitstore.SyncNeedsUpgrade); got != "needs-upgrade" {
 		t.Fatalf("SyncNeedsUpgrade = %q, want %q", got, "needs-upgrade")
 	}
@@ -538,6 +544,7 @@ func TestTheNeedsUpgradeStatusStringsAreWhatCallersRead(t *testing.T) {
 // against the newer history — so this is the fixture's "fetched" case, not its
 // "diverged" one, and sync fast-forwards cleanly rather than refusing.
 func TestNextReportsATaskWrittenByANewerWorkbook(t *testing.T) {
+	t.Parallel()
 	local, future := cliSyncRepositories(t)
 
 	// Higher priority, so next picks it first regardless of ID order.

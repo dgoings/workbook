@@ -138,6 +138,7 @@ func assignThroughTheService(t *testing.T, repository, taskID, to string) {
 // and it is the assertion that would fail first if the fold's removal rule ever
 // stopped being a pure function of the history.
 func TestThisBuildValidatesAnAssignmentHistory(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := cliCreateTask(t, repository, "Assigned task")
 	assignThroughTheService(t, repository, task.ID, "dylan@example.com/impl-1")
@@ -169,6 +170,7 @@ func TestThisBuildValidatesAnAssignmentHistory(t *testing.T) {
 }
 
 func TestAGenerationZeroBuildTreatsAnAssignedTaskAsANewerWritersWork(t *testing.T) {
+	t.Parallel()
 	binary := buildGenerationZeroBinary(t)
 	repository := initializedRepository(t)
 	assigned := cliCreateTask(t, repository, "Assigned task")
@@ -265,6 +267,7 @@ func TestAGenerationZeroBuildTreatsAnAssignedTaskAsANewerWritersWork(t *testing.
 // unrelated work publishes, its local commit survives, and running again
 // changes nothing rather than compounding.
 func TestAGenerationZeroBuildStillSynchronizesAProjectWithAssignments(t *testing.T) {
+	t.Parallel()
 	binary := buildGenerationZeroBinary(t)
 	upgraded, old := cliSyncRepositories(t)
 

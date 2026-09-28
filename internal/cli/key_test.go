@@ -142,6 +142,7 @@ func mustRunKey(t *testing.T, repository string, args ...string) {
 // chosen anything yet", and a consumer that cannot tell them apart cannot
 // decide whether to offer the setup.
 func TestKeyListReportsTheFoundingKeyAsCurrent(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	cliCreateTask(t, repository, "Alpha")
 	cliCreateTask(t, repository, "Beta")
@@ -184,6 +185,7 @@ func TestKeyListReportsTheFoundingKeyAsCurrent(t *testing.T) {
 // key, and its first key change seeds the ledger and records that key beside the
 // new one in the same commit — so the tasks it already has stay its own.
 func TestKeyChangeOnAProjectWithNoLedgerRecordsTheFoundingKey(t *testing.T) {
+	t.Parallel()
 	repository := preLedgerRepository(t)
 	existing := cliCreateTask(t, repository, "Minted before any ledger")
 
@@ -208,6 +210,7 @@ func TestKeyChangeOnAProjectWithNoLedgerRecordsTheFoundingKey(t *testing.T) {
 // untouched, which is what makes a project able to prepare a key before it
 // switches to it.
 func TestKeyAddPrintsTheReverseCommandAndMintsUnderTheCurrentKey(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	document := cliKeyMutation(t, repository, "key add", "key", "add", "NEW", "--no-sync", "--json")
@@ -258,6 +261,7 @@ func TestKeyAddPrintsTheReverseCommandAndMintsUnderTheCurrentKey(t *testing.T) {
 // refused while NEW is current, so the note says what the paste leaves behind
 // rather than printing a line that would fail halfway.
 func TestKeyAddCurrentMovesTheCurrentKeyAndReversesInOneLine(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	before := cliCreateTask(t, repository, "Minted under WB")
 	if !strings.HasPrefix(before.ID, "WB-") {
@@ -313,6 +317,7 @@ func TestKeyAddCurrentMovesTheCurrentKeyAndReversesInOneLine(t *testing.T) {
 // who typed it is told so instead, and told what to type if what they meant was
 // to mint under it.
 func TestKeyAddRefusesAKeyThisProjectAlreadyHas(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, _, stderr := run(t, repository, "key", "add", "WB", "--no-sync")
@@ -342,6 +347,7 @@ func TestKeyAddRefusesAKeyThisProjectAlreadyHas(t *testing.T) {
 // the order: the order is add order, and a key that has minted tasks was added
 // when it was added.
 func TestKeyAddReactivatesARetiredKey(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunKey(t, repository, "key", "add", "OLD", "--no-sync")
 	mustRunKey(t, repository, "key", "add", "NEW", "--no-sync")
@@ -385,6 +391,7 @@ func TestKeyAddReactivatesARetiredKey(t *testing.T) {
 // An unknown key names every key instead, including the retired ones, because a
 // typo against a retired key is explained by seeing it listed.
 func TestKeyCurrentRefusesARetiredKeyAndNamesTheWayBack(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunKey(t, repository, "key", "add", "OLD", "--no-sync")
 	mustRunKey(t, repository, "key", "retire", "OLD", "--no-sync")
@@ -426,6 +433,7 @@ func TestKeyCurrentRefusesARetiredKeyAndNamesTheWayBack(t *testing.T) {
 // project down to one active key would otherwise be told to make another key
 // current when it has no other key to name.
 func TestKeyRetireRefusesTheCurrentKeyAndTheLastActiveKey(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	// One key, so it is both the current one and the last active one, and the
@@ -493,6 +501,7 @@ func TestKeyRetireRefusesTheCurrentKeyAndTheLastActiveKey(t *testing.T) {
 // naming the verb that makes room, rather than the boundary's report of a
 // configuration that was never written.
 func TestKeyAddRefusesPastTheKeyCeiling(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	// The founding key counts, and the store back-fills it into the first key
 	// change, so filling the ceiling takes one fewer add than the ceiling.
@@ -542,6 +551,7 @@ func TestKeyAddRefusesPastTheKeyCeiling(t *testing.T) {
 // store records ahead of a project's first key change is bookkeeping rather than
 // news, so the entry is about what somebody ran.
 func TestKeyLogListsKeyOperationsWithTheirInverses(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	if empty := cliKeyLog(t, repository); empty.Total != 0 || len(empty.Entries) != 0 {
 		t.Fatalf("log = %#v, want nothing before any key change", empty)
@@ -607,6 +617,7 @@ func TestKeyLogListsKeyOperationsWithTheirInverses(t *testing.T) {
 // nobody authored, while the inverse beside it correctly said `workbook key
 // retire SEC`. One entry described two different changes.
 func TestStatusLogDescribesTheAuthoredKeyOperation(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	// A status change first, so the ledger exists and the key commit is not the
 	// project's first — the backfill rides on the first *key* change, whatever
@@ -666,6 +677,7 @@ func TestStatusLogDescribesTheAuthoredKeyOperation(t *testing.T) {
 // voice the status and priority refusals use. A malformed key never reaches the
 // ledger, and a missing subcommand names the ones that exist.
 func TestKeyVerbsExitFiveOnAValidationError(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	for _, verb := range []string{"add", "current", "retire"} {
 		code, _, stderr := run(t, repository, "key", verb, "lower", "--no-sync")
@@ -699,6 +711,7 @@ func TestKeyVerbsExitFiveOnAValidationError(t *testing.T) {
 // second subproject's first task should not have to make that key current
 // first just to mint under it.
 func TestCreateMintsUnderTheKeyTheFlagNames(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunKey(t, repository, "key", "add", "NEW", "--no-sync")
 	if got, want := keyStates(t, repository), []string{"WB current", "NEW active"}; !equalStrings(got, want) {
@@ -722,6 +735,7 @@ func TestCreateMintsUnderTheKeyTheFlagNames(t *testing.T) {
 // the retired one is not among them, which is the whole difference between
 // retiring a key and deleting it.
 func TestCreateRefusesARetiredKeyAndNamesTheActiveOnes(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunKey(t, repository, "key", "add", "NEW", "--current", "--no-sync")
 	mustRunKey(t, repository, "key", "retire", "WB", "--no-sync")
@@ -741,6 +755,7 @@ func TestCreateRefusesARetiredKeyAndNamesTheActiveOnes(t *testing.T) {
 // key it does have so the caller can tell a typo from a teammate's key this
 // checkout has not fetched yet.
 func TestCreateRefusesAnUnknownKey(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, stdout, stderr := run(t, repository, "create", "Under ZZ", "--key", "ZZ", "--no-sync", "--json")
@@ -759,6 +774,7 @@ func TestCreateRefusesAnUnknownKey(t *testing.T) {
 // retired key would make a project's own history unreadable by the key it was
 // recorded under.
 func TestListFiltersByKeyIncludingARetiredOne(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	underWB := cliCreateTask(t, repository, "Under WB")
 	mustRunKey(t, repository, "key", "add", "NEW", "--current", "--no-sync")
@@ -796,6 +812,7 @@ func TestListFiltersByKeyIncludingARetiredOne(t *testing.T) {
 // given rather than refusing a name whose only fault is its case. The refusal
 // that is left is the honest one: no such key.
 func TestKeyFiltersAcceptALowercaseKey(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunKey(t, repository, "key", "add", "API", "--no-sync")
 	under := cliCreateTaskWithKey(t, repository, "Under API", "api")
@@ -830,6 +847,7 @@ func TestKeyFiltersAcceptALowercaseKey(t *testing.T) {
 // the same way an unknown status filter is: an empty table cannot be told
 // apart from "no such key" any other way.
 func TestListRefusesAnUnknownKeyNamingTheKnownOnes(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunKey(t, repository, "key", "add", "NEW", "--no-sync")
 
@@ -850,6 +868,7 @@ func TestListRefusesAnUnknownKeyNamingTheKnownOnes(t *testing.T) {
 // regenerated, and current once it is. `--no-docs` is the same escape hatch
 // `status add`/`priority add` already use for the same decision.
 func TestKeyCurrentRegeneratesTheGuidelinesAndNoDocsSkipsIt(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunKey(t, repository, "key", "add", "NEW", "--no-sync")
 
@@ -915,6 +934,7 @@ func TestKeyCurrentRegeneratesTheGuidelinesAndNoDocsSkipsIt(t *testing.T) {
 // its current key must see that key in the file a status change rewrites,
 // the same way it sees the statuses and priorities that change touched.
 func TestStatusChangeWritesTheGuidelinesUnderTheMovedKey(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunKey(t, repository, "key", "add", "NEW", "--current", "--no-sync")
 
@@ -933,6 +953,7 @@ func TestStatusChangeWritesTheGuidelinesUnderTheMovedKey(t *testing.T) {
 }
 
 func TestKeyHelpDocumentsTheFamily(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "help", "key")
 	if code != 0 || stderr != "" {

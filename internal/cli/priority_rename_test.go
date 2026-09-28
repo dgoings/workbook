@@ -12,6 +12,7 @@ import (
 // resolves through the rename chain to the priority it now means, which is the
 // whole reason renaming a priority is safe on a project with history.
 func TestPriorityRenameLeavesTasksStoredUnderTheOldValueResolving(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := cliCreateTaskAtPriority(t, repository, "Ship the fix", "high")
 
@@ -65,6 +66,7 @@ func TestPriorityRenameLeavesTasksStoredUnderTheOldValueResolving(t *testing.T) 
 // The derived-label rule, both arms, plus the override. A label nobody chose
 // follows the name it came from; a label somebody chose is theirs.
 func TestPriorityRenameFollowsADerivedLabelAndKeepsAChosenOne(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	// --label wins over both arms of the rule.
@@ -122,6 +124,7 @@ func TestPriorityRenameFollowsADerivedLabelAndKeepsAChosenOne(t *testing.T) {
 // the no-op rename that would otherwise author an operation the document calls
 // corrupt.
 func TestPriorityRenameRefusesUnknownExistingAndUnchangedValues(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, _, stderr := run(t, repository, "priority", "rename", "blocker", "critical", "--no-sync", "--json")

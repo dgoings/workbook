@@ -35,6 +35,7 @@ import (
 // forwards to the new one, and the ledger records the pack `status rename`
 // records rather than something the board invented.
 func TestBoardRenamesAStatusThroughTheSharedLedger(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	before := boardVocabularyDocument(t, addr)
@@ -106,6 +107,7 @@ func TestBoardRenamesAStatusThroughTheSharedLedger(t *testing.T) {
 // the tags it was given, and takes the default tag off whoever held it — the
 // exclusivity rule, enforced by the same authoring gate the CLI writes through.
 func TestBoardAddsAPositionedTaggedStatus(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	before := boardVocabularyDocument(t, addr)
@@ -136,6 +138,7 @@ func TestBoardAddsAPositionedTaggedStatus(t *testing.T) {
 // them an agent can claim where they land. The CLI reports both, so the panel
 // that is about to ask "are you sure" can too.
 func TestBoardReportsWhatARemovalMoves(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	for _, title := range []string{"First", "Second"} {
 		code, stdout, stderr := run(t, repository, "create", title, "--status", "in-review", "--json")
@@ -173,6 +176,7 @@ func TestBoardReportsWhatARemovalMoves(t *testing.T) {
 
 // A drag across the board is one intent: the whole order, applied in one commit.
 func TestBoardReordersEveryColumnInOneCommit(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	before := boardVocabularyDocument(t, addr)
@@ -238,6 +242,7 @@ func TestBoardReordersEveryColumnInOneCommit(t *testing.T) {
 // asserted whole for the same reason, so that changing one is a decision rather
 // than a slip.
 func TestBoardRefusesStatusChanges(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	head := boardVocabularyDocument(t, addr).Head
@@ -387,6 +392,7 @@ func TestBoardRefusesStatusChanges(t *testing.T) {
 // reports 409, the stale-write category the queue matches on, and the statuses
 // the reader is actually looking at.
 func TestBoardAnswersAStaleVocabularyWriteWithTheCurrentOne(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	stale := boardVocabularyDocument(t, addr).Head
@@ -435,6 +441,7 @@ func TestBoardAnswersAStaleVocabularyWriteWithTheCurrentOne(t *testing.T) {
 // is no torn state to hold because the ledger's own compare-and-swap is what
 // settles the race, exactly as it does for two CLI processes.
 func TestBoardSerializesRacingVocabularyChanges(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	before := boardVocabularyDocument(t, addr)
@@ -524,6 +531,7 @@ func TestBoardSerializesRacingVocabularyChanges(t *testing.T) {
 // change is still recorded, and the reader is told that the generated file now
 // describes statuses this project no longer has.
 func TestBoardLeavesTheWorkingTreeAloneAndSaysSo(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	guidelines := filepath.Join(repository, agentdocs.GuidelinesPath)
 	generated, err := os.ReadFile(guidelines)
@@ -606,6 +614,7 @@ func TestBoardLeavesTheWorkingTreeAloneAndSaysSo(t *testing.T) {
 // second write's rendered content is byte-for-byte the file the first pass
 // already installed, and nothing is reported stale.
 func TestBoardDoesNotCallTheGuidelinesStaleAfterTheProjectMovedItsKey(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	if code, _, stderr := run(t, repository, "key", "add", "NEW", "--current", "--no-sync"); code != 0 {
 		t.Fatalf("key add NEW --current = code %d; stderr = %q", code, stderr)
@@ -654,6 +663,7 @@ func TestBoardDoesNotCallTheGuidelinesStaleAfterTheProjectMovedItsKey(t *testing
 // the first change seeds the ledger — which is exactly what a status verb does
 // for the same project.
 func TestBoardAdministersAProjectWithNoLedgerYet(t *testing.T) {
+	t.Parallel()
 	repository := preLedgerRepository(t)
 	addr := startServeBoard(t, repository)
 	before := boardVocabularyDocument(t, addr)
@@ -680,6 +690,7 @@ func TestBoardAdministersAProjectWithNoLedgerYet(t *testing.T) {
 // The panel edits a status as one form, so a rename, a relabel and a tag set
 // arrive together and are recorded as one commit against one head.
 func TestBoardEditsNameLabelAndTagsInOneChange(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	head := boardVocabularyDocument(t, addr).Head
@@ -732,6 +743,7 @@ func TestBoardEditsNameLabelAndTagsInOneChange(t *testing.T) {
 // A change where nothing at all differs is still refused, because a commit that
 // records nothing is a commit nobody can read.
 func TestBoardTakesAFormThatRepeatsWhatItDoesNotChange(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	head := boardVocabularyDocument(t, addr).Head
@@ -769,6 +781,7 @@ func TestBoardTakesAFormThatRepeatsWhatItDoesNotChange(t *testing.T) {
 // through is the same one the verbs write through: a project cannot be left
 // without the status a `workbook next` needs.
 func TestBoardRefusesAChangeThatWouldLeaveTheProjectUnusable(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	head := boardVocabularyDocument(t, addr).Head
@@ -794,6 +807,7 @@ func TestBoardRefusesAChangeThatWouldLeaveTheProjectUnusable(t *testing.T) {
 // The routes answer the methods they have and refuse the ones they do not,
 // which is what the board's own method gate is for.
 func TestBoardVocabularyRoutesEnforceTheirMethods(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 
@@ -836,6 +850,7 @@ func TestBoardVocabularyRoutesEnforceTheirMethods(t *testing.T) {
 // builder below is that window, held open until an interloping CLI change has
 // landed.
 func TestBoardRefusesAChangeTheLedgerMovedUnderneath(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	ctx := context.Background()
 	board := openBoardVocabulary(t, ctx, repository)
@@ -902,6 +917,7 @@ func TestBoardRefusesAChangeTheLedgerMovedUnderneath(t *testing.T) {
 // refusal path changes: what the fetch settles on is what the write has to land
 // on.
 func TestBoardFetchesBeforeItAuthorsAChange(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	if code, _, stderr := run(t, second, "sync"); code != 0 {
 		t.Fatalf("second clone sync code = %d, want 0; stderr = %q", code, stderr)
@@ -948,6 +964,7 @@ func TestBoardFetchesBeforeItAuthorsAChange(t *testing.T) {
 // the error would tell a reader their column change was published when origin
 // never took it.
 func TestBoardWarnsWhenOriginRefusesTheConfigurationLedger(t *testing.T) {
+	t.Parallel()
 	bare, seed, _ := originAdoptedAfterClone(t)
 	if code, _, stderr := run(t, seed, "setup"); code != 0 {
 		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)

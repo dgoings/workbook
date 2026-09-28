@@ -94,6 +94,7 @@ func storedMinReader(t *testing.T, document storedDocument) (int, bool) {
 // under-marked genesis is exactly what this test is here to catch, and ">="
 // cannot see one.
 func TestTheWriterFormatMarkerIsSpentOnlyAtTheConfigurationGenesis(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	commands := [][]string{

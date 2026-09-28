@@ -62,6 +62,7 @@ func projectWithUrgentPriority(t *testing.T) string {
 // the project had put on file — the verbs would have written a configuration
 // the rest of the tool was blind to.
 func TestCreateAcceptsAPriorityOnlyTheProjectConfigured(t *testing.T) {
+	t.Parallel()
 	repository := projectWithUrgentPriority(t)
 
 	code, stdout, stderr := run(t, repository, "create", "Ship the release", "--priority", "urgent", "--no-sync", "--json")
@@ -82,6 +83,7 @@ func TestCreateAcceptsAPriorityOnlyTheProjectConfigured(t *testing.T) {
 // stored under it rather than being refused as a priority the project does not
 // have.
 func TestListFindsATaskUnderAPriorityOnlyTheProjectConfigured(t *testing.T) {
+	t.Parallel()
 	repository := projectWithUrgentPriority(t)
 
 	code, stdout, stderr := run(t, repository, "create", "Ship the release", "--priority", "urgent", "--no-sync", "--json")
@@ -114,6 +116,7 @@ func TestListFindsATaskUnderAPriorityOnlyTheProjectConfigured(t *testing.T) {
 // three and dropped a project's configured priority out of it — the loss that
 // parameter was added to prevent.
 func TestAStatusRenameKeepsTheProjectsOwnPrioritiesInTheGuidelines(t *testing.T) {
+	t.Parallel()
 	repository := projectWithUrgentPriority(t)
 
 	if code, stdout, stderr := run(t, repository, "status", "rename", "ready", "todo", "--no-sync"); code != 0 {

@@ -22,6 +22,7 @@ import (
 // each task ref, and the config guard are all cross-process contracts that a
 // single-process test cannot exercise. A multi-agent beta creates exactly this.
 func TestBuiltBinariesMutateOneRepositoryConcurrently(t *testing.T) {
+	t.Parallel()
 	binary := buildWorkbookBinary(t)
 	repository := initializedRepository(t)
 
@@ -131,6 +132,7 @@ func TestBuiltBinariesMutateOneRepositoryConcurrently(t *testing.T) {
 // binaries bootstrapping the same repository at the same moment, each willing to
 // mint, must converge on exactly one project.
 func TestBuiltBinariesBootstrapOneRepositoryConcurrently(t *testing.T) {
+	t.Parallel()
 	binary := buildWorkbookBinary(t)
 	repository := testrepo.New(t)
 

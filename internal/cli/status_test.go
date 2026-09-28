@@ -206,6 +206,7 @@ func mustRunStatus(t *testing.T, repository string, args ...string) {
 // tasks without being asked. The listing says so instead, and prints the command
 // that does the removal when its reader wants it.
 func TestStatusListReadsTheBuiltInVocabularyOnALedgerlessProject(t *testing.T) {
+	t.Parallel()
 	repository := preLedgerRepository(t)
 	cliCreateTask(t, repository, "Alpha")
 	cliCreateTask(t, repository, "Beta")
@@ -262,6 +263,7 @@ func TestStatusListReadsTheBuiltInVocabularyOnALedgerlessProject(t *testing.T) {
 // in a genesis rather than leaning on a fallback, and is told nothing about a
 // status it does not have.
 func TestStatusListReportsTheMintedVocabularyOnAFreshProject(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	cliCreateTask(t, repository, "Alpha")
 
@@ -297,6 +299,7 @@ func TestStatusListReportsTheMintedVocabularyOnAFreshProject(t *testing.T) {
 // change on an existing project writes — still defines `blocked`, and still has
 // the same thing to be told about it.
 func TestStatusListNotesTheDroppedDefaultOnASeededLegacyProject(t *testing.T) {
+	t.Parallel()
 	repository := preLedgerRepository(t)
 	mustRunStatus(t, repository, "status", "label", "ready", "Up Next")
 
@@ -332,6 +335,7 @@ func TestStatusListNotesTheDroppedDefaultOnASeededLegacyProject(t *testing.T) {
 // of membership could tell the two apart — the `status.add` in its ledger is
 // what does.
 func TestStatusListSaysNothingAboutADeliberatelyAddedBlocked(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunStatus(t, repository, "status", "add", "blocked", "--label", "Blocked", "--after", "ready")
 
@@ -364,6 +368,7 @@ func TestStatusListSaysNothingAboutADeliberatelyAddedBlocked(t *testing.T) {
 // what a caller reads the difference from, and `first` carries the step that
 // makes a removal expressible at all.
 func TestStatusListNamesTheFirstStepWhenBlockedHoldsTheDefaultTag(t *testing.T) {
+	t.Parallel()
 	repository := preLedgerRepository(t)
 	mustRunStatus(t, repository, "status", "tag", "blocked", "--tag", "default")
 
@@ -410,6 +415,7 @@ func TestStatusListNamesTheFirstStepWhenBlockedHoldsTheDefaultTag(t *testing.T) 
 // resolving afterwards so a teammate who names it is told what happened rather
 // than that it never existed.
 func TestStatusDeleteBlockedMigratesAPreLedgerProject(t *testing.T) {
+	t.Parallel()
 	repository := preLedgerRepository(t)
 	free := cliCreateTask(t, repository, "Was blocked")
 	dependent := cliCreateTask(t, repository, "Was blocked and waiting")
@@ -524,6 +530,7 @@ func configLedgerOf(operations ...core.ConfigOperation) configLedgerWindow {
 // what somebody did: a `status.add` naming `blocked` after the genesis is a
 // decision, and a `blocked` the genesis itself carried is an inheritance.
 func TestDroppedDefaultStatusesKeysOnProvenance(t *testing.T) {
+	t.Parallel()
 	genesis := core.ConfigOperation{Type: core.ConfigGenesis}
 	add := core.ConfigOperation{Type: core.ConfigStatusAdd, Name: core.StatusBlocked, Rank: "2/1"}
 	remove := core.ConfigOperation{
@@ -633,6 +640,7 @@ func TestDroppedDefaultStatusesKeysOnProvenance(t *testing.T) {
 // records. The membership test comes first, so the common listing pays for no
 // walk at all.
 func TestDroppedDefaultStatusesSaysNothingWithoutBlocked(t *testing.T) {
+	t.Parallel()
 	vocabulary, err := core.NewVocabulary([]core.StatusDefinition{
 		{Status: "backlog", Label: "Backlog", Rank: "1/1", Tags: []core.StatusTag{core.StatusTagDefault}},
 		{Status: "done", Label: "Done", Rank: "2/1", Tags: []core.StatusTag{core.StatusTagDone}},
@@ -651,6 +659,7 @@ func TestDroppedDefaultStatusesSaysNothingWithoutBlocked(t *testing.T) {
 // its own answer: a forgotten subcommand, and a caller who wanted a task's
 // status and found a verb family.
 func TestStatusWithoutASubcommandNamesTheSubcommandsOrTheTaskCommand(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	for _, test := range []struct {
@@ -719,6 +728,7 @@ func TestStatusWithoutASubcommandNamesTheSubcommandsOrTheTaskCommand(t *testing.
 // what the envelope says about it, and that the command member is the whole verb
 // string a caller dispatches on.
 func TestStatusVerbsRecordTheirChangeInBothModes(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	add := cliStatusMutation(t, repository, "status add",
@@ -837,6 +847,7 @@ func TestStatusVerbsRecordTheirChangeInBothModes(t *testing.T) {
 // alone would ship a generated file that is wrong from the moment it is
 // committed. Every mutating verb rewrites them, and the envelope says so.
 func TestStatusChangesRegenerateTheGuidelines(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	rename := cliStatusMutation(t, repository, "status rename",
@@ -903,6 +914,7 @@ func TestStatusChangesRegenerateTheGuidelines(t *testing.T) {
 // refresh runs, so the refusal is reported beside a success rather than turned
 // into a failure that would leave the ledger ahead of the exit code.
 func TestStatusChangeReportsGuidelinesItWillNotOverwrite(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	edited := strings.Replace(
 		readProjectFile(t, repository, agentdocs.GuidelinesPath),
@@ -988,6 +1000,7 @@ var statusVerbFixtures = map[string]struct {
 var statusReadingVerbs = map[string]bool{"list": true, "log": true}
 
 func TestEveryMutatingStatusVerbRegeneratesTheGuidelines(t *testing.T) {
+	t.Parallel()
 	for _, verb := range statusSubcommands() {
 		if statusReadingVerbs[verb] {
 			continue
@@ -1033,6 +1046,7 @@ func TestEveryMutatingStatusVerbRegeneratesTheGuidelines(t *testing.T) {
 // it forever, `docs update --force` grew the file by a whole block per run, and
 // `workbook setup` exited 5 in every clone — from one label.
 func TestAStatusLabelCarryingTheBlockTerminatorDoesNotWedgeTheDocs(t *testing.T) {
+	t.Parallel()
 	author, _ := cliSyncRepositories(t)
 	origin := gitOutput(t, author, "remote", "get-url", "origin")
 	if code, _, stderr := run(t, author, "setup"); code != 0 {
@@ -1103,6 +1117,7 @@ func TestAStatusLabelCarryingTheBlockTerminatorDoesNotWedgeTheDocs(t *testing.T)
 // as the truth, which is the one moment a fresh clone is most likely to believe
 // them.
 func TestSetupWritesTheGuidelinesTheFetchDelivered(t *testing.T) {
+	t.Parallel()
 	author, _ := cliSyncRepositories(t)
 	mustRunStatus(t, author, "status", "rename", "ready", "todo", "--label", "Next Up")
 
@@ -1133,6 +1148,7 @@ func TestSetupWritesTheGuidelinesTheFetchDelivered(t *testing.T) {
 // --no-docs` or `workbook docs remove`. A status change refreshes generated
 // documentation and never installs it, so that decision survives.
 func TestStatusChangeDoesNotInstallGuidelinesAProjectDeclined(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	if code, _, stderr := run(t, repository, "setup", "--no-docs"); code != 0 {
 		t.Fatalf("setup --no-docs = code %d; stderr = %q", code, stderr)
@@ -1167,6 +1183,7 @@ func TestStatusChangeDoesNotInstallGuidelinesAProjectDeclined(t *testing.T) {
 // project never asked for — the same decision as having no file at all, made a
 // different way.
 func TestStatusChangeLeavesAGuidelinesFileWithNoManagedBlockAlone(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	if code, _, stderr := run(t, repository, "docs", "remove", "--no-skill"); code != 0 {
 		t.Fatalf("docs remove = code %d; stderr = %q", code, stderr)
@@ -1190,6 +1207,7 @@ func TestStatusChangeLeavesAGuidelinesFileWithNoManagedBlockAlone(t *testing.T) 
 // --no-docs is the escape hatch, and it is the same word `workbook setup`
 // already uses for the same decision.
 func TestStatusChangeSkipsTheGuidelinesOnRequest(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	before := readProjectFile(t, repository, agentdocs.GuidelinesPath)
 
@@ -1221,6 +1239,7 @@ func TestStatusChangeSkipsTheGuidelinesOnRequest(t *testing.T) {
 // is how an empty set is spelled. Both together is a contradiction rather than a
 // precedence rule to remember.
 func TestStatusTagReplacesTheWholeSet(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	replaced := cliStatusMutation(t, repository, "status tag",
@@ -1292,6 +1311,7 @@ func TestStatusTagReplacesTheWholeSet(t *testing.T) {
 // An unknown tag is a typo, not corrupt data, and the refusal names the three
 // tags that exist rather than sending somebody to the help.
 func TestStatusRefusesAnUnknownTagAsAValidationFailure(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	for _, args := range [][]string{
 		{"status", "add", "triage", "--tag", "urgent", "--json"},
@@ -1314,6 +1334,7 @@ func TestStatusRefusesAnUnknownTagAsAValidationFailure(t *testing.T) {
 // message through untouched. Rewording it here would produce two answers to the
 // same question, and this one already names the command that fixes the state.
 func TestStatusArityRefusalsSurfaceCoreMessagesVerbatim(t *testing.T) {
+	t.Parallel()
 	repository := preLedgerRepository(t)
 
 	for _, test := range []struct {
@@ -1363,6 +1384,7 @@ func TestStatusArityRefusalsSurfaceCoreMessagesVerbatim(t *testing.T) {
 // A value that is no longer live is explained rather than reported missing: the
 // chain says where it went, and the ledger says when.
 func TestStatusNamesTheChainForARetiredValue(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunStatus(t, repository, "status", "rename", "ready", "queued")
 	mustRunStatus(t, repository, "status", "add", "triage", "--after", "backlog")
@@ -1409,6 +1431,7 @@ func TestStatusNamesTheChainForARetiredValue(t *testing.T) {
 // --into is required, never prompted for, and the refusal carries the answer:
 // agents run this command, and a prompt would hang one.
 func TestStatusDeleteRequiresIntoAndRefusesItself(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, stdout, stderr := run(t, repository, "status", "delete", "in-review", "--json")
@@ -1448,6 +1471,7 @@ func TestStatusDeleteRequiresIntoAndRefusesItself(t *testing.T) {
 // finished is claimable, and counting only the tasks with no dependencies at all
 // reported a queue growing by one where `workbook next` would hand out two.
 func TestStatusDeleteCountsAffectedAndClaimableTasks(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunStatus(t, repository, "status", "add", "triage", "--after", "backlog")
 
@@ -1520,6 +1544,7 @@ func TestStatusDeleteCountsAffectedAndClaimableTasks(t *testing.T) {
 // A destination outside `next` leaves nothing claimable, which is the other half
 // of the count and the reason it is reported separately from the total.
 func TestStatusDeleteReportsNoClaimableTasksForAParkedDestination(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunStatus(t, repository, "status", "add", "triage", "--after", "backlog")
 	task := cliCreateTask(t, repository, "Alpha")
@@ -1543,6 +1568,7 @@ func TestStatusDeleteReportsNoClaimableTasksForAParkedDestination(t *testing.T) 
 // that. And exact:true has to mean the vocabulary comes back, which is the only
 // claim a reader has no way to check for themselves.
 func TestStatusInverseMatrixRoundTripsThroughAShell(t *testing.T) {
+	t.Parallel()
 	binary := buildWorkbookBinary(t)
 
 	for _, test := range []struct {
@@ -1728,6 +1754,7 @@ func shellQuote(value string) string {
 // unit a person recognizes: one command they ran. It is also what lets the
 // total stay exact while the read is bounded by the window.
 func TestStatusLogMirrorsShowHistoryWindowing(t *testing.T) {
+	t.Parallel()
 	// The ledgerless report needs a project with no ledger, and a mint writes
 	// one, so the fixture is the pre-ledger shape a real upgrade lands on.
 	repository := preLedgerRepository(t)
@@ -1813,6 +1840,7 @@ func TestStatusLogMirrorsShowHistoryWindowing(t *testing.T) {
 // also moves the label writes two operations into one commit, and the entry
 // reports the command — with the inverse that undoes all of it.
 func TestStatusLogReportsOneEntryPerRecordedCommand(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunStatus(t, repository, "status", "rename", "ready", "queued")
 
@@ -1852,6 +1880,7 @@ func TestStatusLogReportsOneEntryPerRecordedCommand(t *testing.T) {
 // defines, and nothing but this test notices if the verb stops emitting the shape
 // gitstore's fixtures reproduce by hand.
 func TestStatusRenameReplaysAfterATeammatePublishes(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	mustRunStatus(t, first, "status", "add", "triage", "--after", "backlog")
 	if code, _, stderr := run(t, second, "fetch"); code != 0 {
@@ -1912,6 +1941,7 @@ func TestStatusRenameReplaysAfterATeammatePublishes(t *testing.T) {
 // report says what it did, --no-sync says it deliberately did nothing, and the
 // ledger reaches origin without a task ref to carry it.
 func TestStatusChangesReportAndPublishSynchronization(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 
 	deliberate := cliStatusMutation(t, first, "status add", "status", "add", "triage", "--no-sync", "--json")
@@ -1969,6 +1999,7 @@ func TestStatusChangesReportAndPublishSynchronization(t *testing.T) {
 // A stored status that resolves nowhere is invisible to every count — it is in
 // no column — so the census that produces the counts is what has to find it.
 func TestStatusListReportsUnresolvedStoredStatuses(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	kept := cliCreateTask(t, repository, "In a real column")
 	stranded := writeTaskInAnUndefinedStatus(t, repository, "shipped", "Written by a newer clone")
@@ -2010,6 +2041,7 @@ func TestStatusListReportsUnresolvedStoredStatuses(t *testing.T) {
 // sampled: "how much is stranded" stays exact while "which tasks" becomes a
 // place to start.
 func TestStatusListBoundsTheUnresolvedTaskIDs(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	stranded := make([]string, 0, maxUnresolvedTaskIDs+2)
 	for index := range maxUnresolvedTaskIDs + 2 {
@@ -2047,6 +2079,7 @@ func TestStatusListBoundsTheUnresolvedTaskIDs(t *testing.T) {
 // been refused anything: two clones adding statuses concurrently is enough. The
 // list says so where a person is already looking at what they would remove.
 func TestStatusListReportsTheOverCeilingAdvisory(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 
 	// One clone fills the project to the ceiling and publishes it.
@@ -2117,6 +2150,7 @@ const unknownFilterStatusRefusal = `no status "typoo" in this project; ` +
 	`the statuses are: backlog, queued, in-progress, in-review, done; fetch if a teammate added it`
 
 func TestListStatusFilterRefusesAnUnknownStatusAndFollowsAResolvableOne(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := cliCreateTask(t, repository, "Alpha")
 	mustRunStatus(t, repository, "update", task.ID, "--status", "ready", "--no-sync")
@@ -2185,6 +2219,7 @@ func TestListStatusFilterRefusesAnUnknownStatusAndFollowsAResolvableOne(t *testi
 // reached `backlog` because somebody later removed that. Both surfaces say the
 // hop, then the end of the chain, and they say it the same way.
 func TestStatusChainsAreDescribedByWhatHappened(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := cliCreateTask(t, repository, "Carried along")
 	mustRunStatus(t, repository, "status", "add", "triage", "--after", "backlog")
@@ -2268,6 +2303,7 @@ func TestStatusChainsAreDescribedByWhatHappened(t *testing.T) {
 // settled, because correct-on-touch rewrote its stored value to the destination
 // and no configuration change can find it again.
 func TestStatusDeleteInverseReturnsStoredTasksAndLeavesSettledOnes(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunStatus(t, repository, "status", "add", "triage", "--after", "backlog")
 	stored := cliCreateTask(t, repository, "Never touched again")
@@ -2315,6 +2351,7 @@ func taskStatus(t *testing.T, repository, id string) string {
 // one older than that, rather than reading a history that only grows to answer
 // a courtesy.
 func TestStatusListDatesRecentRetirementsAndDegradesBeyondItsBound(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	// One early retirement, then enough commits to push it past the bound.
 	mustRunStatus(t, repository, "status", "add", "ancient", "--after", "backlog")
@@ -2363,6 +2400,7 @@ func TestStatusListDatesRecentRetirementsAndDegradesBeyondItsBound(t *testing.T)
 // it can act on, nothing half-written survives, and the retry the refusal asks
 // for succeeds.
 func TestStatusWritesUnderContentionAreRefusedAndRetryable(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	const writers = 4
 
@@ -2424,6 +2462,7 @@ func TestStatusWritesUnderContentionAreRefusedAndRetryable(t *testing.T) {
 // a caller retries and one it reports. Provoking the race is the concurrency
 // test above; this pins what the caller is told when it happens.
 func TestStatusStaleWriteAdvisesTheRetry(t *testing.T) {
+	t.Parallel()
 	err := statusWriteError(core.Wrap(core.CategoryStaleWrite,
 		"the configuration ledger changed concurrently", nil))
 	if got := core.ExitCode(err); got != 6 {
@@ -2442,6 +2481,7 @@ func TestStatusStaleWriteAdvisesTheRetry(t *testing.T) {
 }
 
 func TestStatusHelpDocumentsTheFamily(t *testing.T) {
+	t.Parallel()
 	output := assertHelpOutput(t, []string{"help", "status"}, "Usage: workbook status <command> [options]")
 	for _, want := range []string{"list", "add", "rename", "label", "move", "tag", "untag", "delete", "log"} {
 		if !strings.Contains(output, "  "+want) {

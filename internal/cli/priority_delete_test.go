@@ -62,6 +62,7 @@ func cliShowTask(t *testing.T, repository, taskID string) core.Task {
 // rewritten, and it reads as being at the destination on every clone from the
 // moment the removal folds.
 func TestPriorityDeleteForwardsTheTasksItRemoves(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	filed := createOrderingTask(t, repository, "Filed under low", "low")
 
@@ -118,6 +119,7 @@ func TestPriorityDeleteForwardsTheTasksItRemoves(t *testing.T) {
 // Where the tasks go is never guessed, and the refusal names the priorities it
 // could have been.
 func TestPriorityDeleteRequiresIntoAndRefusesItself(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	before := cliPriorityList(t, repository).Head
 
@@ -166,6 +168,7 @@ func TestPriorityDeleteRequiresIntoAndRefusesItself(t *testing.T) {
 // a priority to be at, so the last one cannot be removed however the caller
 // phrases it.
 func TestPriorityDeleteRefusesTheLastPriority(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	cliPriorityDelete(t, repository, "high", "--into", "medium", "--no-sync", "--json")
 	cliPriorityDelete(t, repository, "low", "--into", "medium", "--no-sync", "--json")

@@ -64,6 +64,7 @@ func boardKeyStates(document webui.KeyVocabularyDocument) string {
 // brings it back, and every answer is the whole configuration with the keys as
 // they now stand.
 func TestBoardAdministersProjectKeysThroughItsRoutes(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 
@@ -126,6 +127,7 @@ func TestBoardAdministersProjectKeysThroughItsRoutes(t *testing.T) {
 // internal/cli asserts against the planners; what is pinned here is that the
 // board's wiring reaches those planners rather than a second reading of them.
 func TestBoardRefusesKeyChangesInTheVerbsOwnWords(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	head := boardVocabularyDocument(t, addr).Head
@@ -215,6 +217,7 @@ func TestBoardRefusesKeyChangesInTheVerbsOwnWords(t *testing.T) {
 // board offer a key chooser the service then refused to mint under, because the
 // service's own membership check reads the set it was built with.
 func TestBoardMintsUnderAKeyAddedWhileItWasRunning(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 
@@ -278,6 +281,7 @@ func TestBoardMintsUnderAKeyAddedWhileItWasRunning(t *testing.T) {
 // the create form's chooser sends. The board and the CLI agree about where the
 // task went, because one service answered both.
 func TestBoardCreatesATaskUnderAChosenKey(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	if code, _, stderr := run(t, repository, "key", "add", "NEW", "--no-sync"); code != 0 {
 		t.Fatalf("key add NEW = code %d; stderr = %q", code, stderr)
@@ -304,6 +308,7 @@ func TestBoardCreatesATaskUnderAChosenKey(t *testing.T) {
 // board does not write files, for the reason boardVocabulary.apply gives, and
 // the next key verb or `workbook docs update` settles it.
 func TestBoardReportsTheStaleGuidelinesAfterAKeyChange(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	head := boardVocabularyDocument(t, addr).Head
@@ -354,6 +359,7 @@ func TestBoardReportsTheStaleGuidelinesAfterAKeyChange(t *testing.T) {
 // That is the hazard the display settings already learned the hard way; see
 // boardDisplay.set's own note.
 func TestBoardWritesAnswerWithTheProjectsKeys(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	if code, _, stderr := run(t, repository, "key", "add", "NEW", "--current", "--no-sync"); code != 0 {
 		t.Fatalf("key add NEW --current = code %d; stderr = %q", code, stderr)
@@ -402,6 +408,7 @@ func TestBoardWritesAnswerWithTheProjectsKeys(t *testing.T) {
 // It takes a real second process for the same reason the mint test does: the
 // bug is a memo held across a change this handle did not make.
 func TestBoardListsATaskTheCLIMintedUnderANewKey(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 
