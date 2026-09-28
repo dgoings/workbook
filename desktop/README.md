@@ -28,10 +28,10 @@ shell's developer tools.
 ## The sidebar
 
 The sidebar collapses to a narrow rail, with the chevron in its header or Cmd+B
-on macOS and Ctrl+B elsewhere; the chord works from a board too, not only from
-the shell. The choice is remembered across launches. The rail keeps every route
-it had: the import glyph, and each project as its key with its status dot, with
-the name and path on the tile's tooltip.
+(see Keyboard shortcuts). The chord works from a board too, not only from the
+shell. The choice is remembered across launches. The rail keeps every route it
+had: the import glyph, and each project as its key with its status dot, with the
+name and path on the tile's tooltip.
 
 With two or more projects imported, a Next entry sits above them. It shows what
 each project would hand out next — the top of its Ready work, unblocked and not
@@ -39,6 +39,26 @@ already somebody else's, exactly as `workbook next` decides it — with one
 number for how many per project. The list refreshes every five seconds while it
 is showing, and a row opens that task on its board. It is the view the app
 opens on when there is more than one project.
+
+## Keyboard shortcuts
+
+Every shortcut is an application-menu item, so it works from the shell and
+from any board, and the menu bar shows the chord beside the action. Cmd is
+Ctrl on Windows and Linux.
+
+| Chord | Does |
+| --- | --- |
+| Cmd+1 … Cmd+9 | Open the first to ninth project in sidebar order |
+| Cmd+Option+Up / Down | Previous / next project; from Next or Import, the last / first. On Windows and Linux this is Ctrl+Alt+Up/Down; some European layouts treat this as AltGr. |
+| Cmd+0 | The Next view (with two or more projects) |
+| Cmd+Shift+I | Import repositories |
+| Cmd+B | Show or hide the sidebar |
+| Cmd+Shift+D | Cycle dark mode: follow system, light, dark |
+| Cmd+N | New task on the active board |
+| Cmd+F | Search the active board |
+| Cmd+, | The active project's configuration page |
+| Cmd+[ / Cmd+] | Back / forward in the active board |
+| Cmd+R | Reload the active board |
 
 ## Checks
 
