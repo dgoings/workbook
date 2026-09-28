@@ -895,3 +895,73 @@ button.ghost:hover { background: var(--wb-primary-tint-1); }
 }
 
 .board-state { color: var(--wb-muted); padding: 2.5rem 0; font-size: .84rem; }
+
+/* An empty status line must not push the identity form down by its padding. */
+.board-state:empty { display: none; }
+
+/* --- git identity ------------------------------------------------------- */
+
+/* Shown in place of a board whose checkout has no Git identity. One narrow
+   column: two fields and a choice, read top to bottom. */
+.identity-form {
+  display: flex;
+  flex-direction: column;
+  gap: .9rem;
+  max-width: 34rem;
+  padding-bottom: 1.5rem;
+}
+
+.identity-form .view-head { margin-bottom: .2rem; }
+
+.identity-form code {
+  font-size: .76rem;
+  overflow-wrap: anywhere;
+}
+
+.identity-field { display: flex; flex-direction: column; gap: .3rem; }
+
+.identity-field__label {
+  color: var(--wb-text-2);
+  font-size: .78rem;
+  font-weight: 700;
+}
+
+.identity-field input {
+  padding: .42rem .6rem;
+  border: 1px solid var(--wb-control);
+  border-radius: 4px;
+  background: var(--wb-surface);
+  color: var(--wb-text);
+  font: inherit;
+  font-size: .86rem;
+}
+
+.identity-field input.invalid { border-color: var(--wb-danger); }
+
+.identity-field__error { color: var(--wb-danger); font-size: .74rem; }
+
+.identity-scope {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.identity-scope legend { padding: 0; margin-bottom: .35rem; }
+
+.identity-scope__option {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  color: var(--wb-text-2);
+  font-size: .84rem;
+  cursor: pointer;
+}
+
+.identity-scope__option code { color: var(--wb-muted); font-size: .7rem; }
+
+.identity-actions { display: flex; align-items: center; gap: .75rem; margin-top: .2rem; }
+
+.identity-status { color: var(--wb-muted); font-size: .78rem; }

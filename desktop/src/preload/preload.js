@@ -31,6 +31,12 @@ contextBridge.exposeInMainWorld('workbench', {
   closeProject: (projectId) => ipcRenderer.invoke('project:close', { projectId }),
   forgetProject: (projectId) => ipcRenderer.invoke('project:forget', { projectId }),
 
+  // The Git identity a board records changes against; see identity:get.
+  // `scope` is 'global' or 'local'.
+  getIdentity: (projectId) => ipcRenderer.invoke('identity:get', { projectId }),
+  setIdentity: (projectId, { name, email, scope }) =>
+    ipcRenderer.invoke('identity:set', { projectId, name, email, scope }),
+
   getTheme: () => ipcRenderer.invoke('theme:get'),
 
   // The sidebar's collapsed state lives in the main process, which positions the

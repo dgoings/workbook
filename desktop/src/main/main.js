@@ -9,6 +9,7 @@ const { Supervisor } = require('./supervisor')
 const discovery = require('./discovery')
 const lifecycle = require('./lifecycle')
 const repoinfo = require('./repoinfo')
+const gitidentity = require('./gitidentity')
 const workbook = require('./workbook')
 const nextview = require('./nextview')
 const clipath = require('./clipath')
@@ -775,6 +776,27 @@ ipcMain.on('board:scheme', (event, payload) => {
 ipcMain.handle('project:open', async (_event, { projectId, taskId }) =>
   openProject(projectId, taskId ?? null))
 ipcMain.handle('project:showChrome', async () => { showChrome() })
+
+/**
+ * The Git identity a project's board would record changes against.
+ *
+ * Asked by the shell before it starts a board that is not already running:
+ * `workbook serve` refuses to start without a user.email, and the shell would
+ * rather ask for one than show Git's exit status.
+ */
+ipcMain.handle('identity:get', async (_event, { projectId }) => {
+  const project = registry.find(projectId)
+  if (!project) throw new Error(`unknown project: ${projectId}`)
+  return gitidentity.read(project.path)
+})
+
+// Written with `git config`, so the identity is Git's, not Workbench's: the
+// user's own commits carry it too, and a terminal in the same checkout agrees.
+ipcMain.handle('identity:set', async (_event, { projectId, name, email, scope }) => {
+  const project = registry.find(projectId)
+  if (!project) throw new Error(`unknown project: ${projectId}`)
+  return gitidentity.write(project.path, { name, email, scope })
+})
 ipcMain.handle('project:close', async (_event, { projectId }) => { closeProject(projectId) })
 
 ipcMain.handle('project:forget', async (_event, { projectId }) => {

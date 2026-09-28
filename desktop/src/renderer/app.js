@@ -15,6 +15,9 @@ const state = {
   // a repository checked and then filtered out must still import.
   selected: new Set(),
   keys: new Map(),
+  // The open waiting on a Git identity, while the form asking for one is up:
+  // { projectId, retry }. Null otherwise.
+  identity: null,
   // The Next view: how many per project, the last payload read, the payload
   // the DOM currently shows, the poll timer while it is showing, the timer that
   // lets the limit control settle before reading, a counter that tells a stale
@@ -125,8 +128,10 @@ function renderProjects () {
 
 async function openProject (projectId) {
   setView('project', projectId)
+  hideIdentityForm()
   const project = state.projects.find((candidate) => candidate.id === projectId)
   el('board-state').textContent = `Starting the board for ${project?.name ?? projectId}…`
+  if (await askForIdentity(projectId, () => openProject(projectId))) return
   try {
     await api.openProject(projectId)
     el('board-state').textContent = ''
@@ -135,6 +140,114 @@ async function openProject (projectId) {
   }
   loadProjects()
 }
+
+// --- git identity -----------------------------------------------------------
+
+/**
+ * Ask for a Git identity instead of starting a board that would refuse one.
+ *
+ * `workbook serve` will not start in a checkout with no user.email, and all it
+ * says is that `git config --get user.email` failed. So before a board that is
+ * not already running is started, the shell asks Git what it would use, and if
+ * the answer is incomplete it shows a form in place of the board. `retry` is
+ * the open that was interrupted, run again once the identity is saved.
+ *
+ * Resolves true when the form was shown (or the open went stale while Git was
+ * asked), false when the board should go ahead and start. A running board
+ * already has an identity, so it is not asked about; and a failure to ask is
+ * not a reason to stop — the start that follows will report the real problem.
+ */
+async function askForIdentity (projectId, retry) {
+  const project = state.projects.find((candidate) => candidate.id === projectId)
+  if (!project || project.status === 'running') return false
+
+  let identity
+  try {
+    identity = await api.getIdentity(projectId)
+  } catch (error) {
+    console.error('workbench: could not read the Git identity', error)
+    return false
+  }
+  if (identity.complete) return false
+  // Another project was picked while Git answered; that open owns the view now.
+  if (state.view !== 'project' || state.activeProjectId !== projectId) return true
+
+  state.identity = { projectId, retry }
+  // A board opened before this one may still be showing, and it is a native
+  // view drawn over this document: the form would be underneath it.
+  api.showChrome()
+  el('board-state').textContent = ''
+  el('identity-repo').textContent = project.path
+  el('identity-name').value = identity.name ?? ''
+  el('identity-email').value = identity.email ?? ''
+  showIdentityError('name', '')
+  showIdentityError('email', '')
+  el('identity-status').textContent = ''
+  el('identity-save').disabled = false
+  el('identity-form').hidden = false
+  // Straight to the half that is missing, which is usually the email: a name is
+  // the one Git can sometimes make up for itself.
+  el(identity.name ? 'identity-email' : 'identity-name').focus()
+  return true
+}
+
+function hideIdentityForm () {
+  state.identity = null
+  el('identity-form').hidden = true
+}
+
+function showIdentityError (field, message) {
+  const node = el(`identity-${field}-error`)
+  node.textContent = message
+  node.hidden = !message
+  el(`identity-${field}`).classList.toggle('invalid', Boolean(message))
+}
+
+// An invoke that rejects arrives as "Error invoking remote method 'x': Error:
+// the message". Only the message is for the user.
+function remoteMessage (error) {
+  return String(error?.message ?? error)
+    .replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
+}
+
+async function saveIdentity (event) {
+  event.preventDefault()
+  const pending = state.identity
+  if (!pending) return
+
+  const name = el('identity-name').value.trim()
+  const email = el('identity-email').value.trim()
+  const scope = document.querySelector('input[name="identity-scope"]:checked')?.value ?? 'global'
+
+  // The obvious mistakes are caught here so they can sit beside their field.
+  // The main process checks again, properly, and anything it refuses lands in
+  // the status line below.
+  showIdentityError('name', name ? '' : 'Enter a name.')
+  showIdentityError('email', /^[^\s@]+@[^\s@]+$/.test(email) ? '' : 'Enter an address like you@example.com.')
+  if (!name || !/^[^\s@]+@[^\s@]+$/.test(email)) return
+
+  el('identity-save').disabled = true
+  el('identity-status').textContent = 'Saving…'
+  let identity
+  try {
+    identity = await api.setIdentity(pending.projectId, { name, email, scope })
+  } catch (error) {
+    el('identity-status').textContent = remoteMessage(error)
+    el('identity-save').disabled = false
+    return
+  }
+  // The reader moved on while Git wrote; the identity is saved all the same.
+  if (state.identity !== pending) return
+  if (!identity.complete) {
+    el('identity-status').textContent = 'Git still reports no identity for this repository.'
+    el('identity-save').disabled = false
+    return
+  }
+  hideIdentityForm()
+  pending.retry()
+}
+
+el('identity-form').addEventListener('submit', saveIdentity)
 
 // --- next -------------------------------------------------------------------
 
@@ -388,7 +501,9 @@ function relativeDate (iso) {
 /** Open the board on this task, rather than on the board it lives in. */
 async function openNextTask (projectId, task) {
   setView('project', projectId)
+  hideIdentityForm()
   el('board-state').textContent = `Opening ${task.title}…`
+  if (await askForIdentity(projectId, () => openNextTask(projectId, task))) return
   try {
     await api.openProject(projectId, task.id)
     el('board-state').textContent = ''

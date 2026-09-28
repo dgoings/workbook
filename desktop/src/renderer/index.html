@@ -178,6 +178,51 @@
          separate top-level view, not part of this document. -->
     <section id="view-project" class="view" hidden>
       <div class="board-state" id="board-state"></div>
+
+      <!-- Asked for in place of the board when the checkout has no Git
+           identity: `workbook serve` will not start without a user.email, and
+           Git's own complaint about it names no fix. Written with git config,
+           so it is the identity the user's commits carry too. -->
+      <form id="identity-form" class="identity-form" hidden novalidate>
+        <header class="view-head">
+          <h1>Who should changes be recorded as?</h1>
+          <p class="subtitle">
+            Workbook records every change on a board against your Git identity,
+            and Git has none set for <code id="identity-repo"></code>. This sets
+            <code>user.name</code> and <code>user.email</code> with
+            <code>git config</code> — the same identity your commits carry.
+          </p>
+        </header>
+
+        <label class="identity-field">
+          <span class="identity-field__label">Name</span>
+          <input id="identity-name" type="text" autocomplete="name" maxlength="200" spellcheck="false">
+          <span class="identity-field__error" id="identity-name-error" hidden></span>
+        </label>
+
+        <label class="identity-field">
+          <span class="identity-field__label">Email</span>
+          <input id="identity-email" type="email" autocomplete="email" maxlength="254" spellcheck="false">
+          <span class="identity-field__error" id="identity-email-error" hidden></span>
+        </label>
+
+        <fieldset class="identity-scope">
+          <legend class="identity-field__label">Save it for</legend>
+          <label class="identity-scope__option">
+            <input type="radio" name="identity-scope" value="global" checked>
+            Every repository on this computer <code>--global</code>
+          </label>
+          <label class="identity-scope__option">
+            <input type="radio" name="identity-scope" value="local">
+            Only this repository <code>--local</code>
+          </label>
+        </fieldset>
+
+        <div class="identity-actions">
+          <button id="identity-save" class="primary" type="submit">Save and open board</button>
+          <span id="identity-status" class="identity-status"></span>
+        </div>
+      </form>
     </section>
   </main>
 
