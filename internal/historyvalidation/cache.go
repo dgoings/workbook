@@ -670,7 +670,7 @@ func scanCachedTask(row scanner) (CachedTask, error) {
 }
 
 func openDatabase(path string) (*sql.DB, error) {
-	dsn := &url.URL{Scheme: "file", Path: path}
+	dsn := &url.URL{Scheme: "file", Path: sqliteURIPath(path)}
 	query := dsn.Query()
 	query.Add("_pragma", "busy_timeout(5000)")
 	query.Add("_pragma", "foreign_keys(1)")
@@ -688,6 +688,17 @@ func openDatabase(path string) (*sql.DB, error) {
 		return nil, cacheError("open validation cache", err)
 	}
 	return db, nil
+}
+
+// sqliteURIPath spells a filesystem path the way a SQLite file: URI wants it:
+// forward slashes, and a leading slash before a Windows drive, which would
+// otherwise be read as the URI's host. The projection cache opens its
+// database the same way and carries the same helper.
+func sqliteURIPath(path string) string {
+	if filepath.VolumeName(path) == "" {
+		return path
+	}
+	return "/" + filepath.ToSlash(path)
 }
 
 func openUsableDatabase(ctx context.Context, path, projectID string) (*sql.DB, bool, error) {

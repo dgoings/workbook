@@ -1513,7 +1513,7 @@ func equalHeads(left, right []gitstore.TaskHead) bool {
 }
 
 func openDatabase(_ context.Context, path string) (*sql.DB, error) {
-	dsn := &url.URL{Scheme: "file", Path: path}
+	dsn := &url.URL{Scheme: "file", Path: sqliteURIPath(path)}
 	query := dsn.Query()
 	query.Set("_pragma", "busy_timeout(5000)")
 	query.Set("_txlock", "immediate")
@@ -1523,6 +1523,19 @@ func openDatabase(_ context.Context, path string) (*sql.DB, error) {
 		return nil, cacheError("open projection cache", err)
 	}
 	return db, nil
+}
+
+// sqliteURIPath spells a filesystem path the way a SQLite file: URI wants it.
+// A Windows path has backslashes and starts with a drive, so left as it is the
+// URI comes out as file://C:%5CUsers%5C… and SQLite reads the drive as a host.
+// SQLite's form is file:///C:/Users/…: forward slashes, and a leading slash
+// before the drive. VolumeName is empty on every other platform, so a Unix
+// path, relative or absolute, is left exactly as it was.
+func sqliteURIPath(path string) string {
+	if filepath.VolumeName(path) == "" {
+		return path
+	}
+	return "/" + filepath.ToSlash(path)
 }
 
 func (s *Store) databaseError(action string, err error) error {
