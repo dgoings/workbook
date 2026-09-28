@@ -51,13 +51,13 @@ Ctrl on Windows and Linux.
 | Cmd+1 … Cmd+9 | Open the first to ninth project in sidebar order |
 | Cmd+Option+Up / Down | Previous / next project; from Next or Import, the last / first. On Windows and Linux this is Ctrl+Alt+Up/Down; some European layouts treat this as AltGr. |
 | Cmd+0 | The Next view (with two or more projects) |
-| Cmd+Shift+I | Import repositories |
+| Cmd+Shift+I on macOS, Ctrl+Shift+O elsewhere | Import repositories. Ctrl+Shift+I is the devtools chord on Windows and Linux, so Import steps aside there. |
 | Cmd+B | Show or hide the sidebar |
 | Cmd+Shift+D | Cycle dark mode: follow system, light, dark |
 | Cmd+N | New task on the active board |
 | Cmd+F | Search the active board |
-| Cmd+, | The active project's configuration page |
-| Cmd+[ / Cmd+] | Back / forward in the active board |
+| Cmd+, | The active project's configuration page, on a board you can administer |
+| Cmd+[ / Cmd+] | Back / forward in the active board. Windows and Linux match these keys by physical position, so on a layout where `[` and `]` need AltGr the chord lands elsewhere or cannot be typed at all. |
 | Cmd+R | Reload the active board |
 
 ## Checks

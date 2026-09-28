@@ -124,4 +124,19 @@ describe('buildMenuTemplate', () => {
     assert.ok(!winRoles.includes('hide'))
     assert.ok(winRoles.includes('quit'))
   })
+
+  test('Import keeps off the devtools chord on win32/linux', () => {
+    const { spy, calls } = actionsSpy()
+    // Ctrl+Shift+I opens devtools on Windows and Linux, so Import cannot have
+    // it there; on macOS devtools is Cmd+Alt+I and Cmd+Shift+I is free.
+    const mac = buildMenuTemplate({ platform: 'darwin', projects, activeProjectId: null, nextAvailable: true, actions: spy })
+    byAccelerator(mac, 'CmdOrCtrl+Shift+I').click()
+    assert.equal(flatten(mac).filter((item) => item.accelerator === 'CmdOrCtrl+Shift+O').length, 0)
+    for (const platform of ['win32', 'linux']) {
+      const template = buildMenuTemplate({ platform, projects, activeProjectId: null, nextAvailable: true, actions: spy })
+      byAccelerator(template, 'CmdOrCtrl+Shift+O').click()
+      assert.equal(flatten(template).filter((item) => item.accelerator === 'CmdOrCtrl+Shift+I').length, 0, platform)
+    }
+    assert.deepEqual(calls, [['showImport'], ['showImport'], ['showImport']])
+  })
 })

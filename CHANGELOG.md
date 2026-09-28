@@ -24,9 +24,10 @@ version was cut.
 ## Unreleased
 
 Priorities become a per-project vocabulary, the way statuses already are, a
-project may have more than one task-ID key, and `workbook setup` stops assuming
-a project key. Three of the changes below affect scripts; all three are
-described under Changed.
+project may have more than one task-ID key, `workbook setup` stops assuming
+a project key, and the desktop app grows keyboard shortcuts for switching
+projects and driving the board it is showing. Three of the changes below affect
+scripts; all three are described under Changed.
 
 ### Added
 - **The desktop app has keyboard shortcuts**, all in the application menu:

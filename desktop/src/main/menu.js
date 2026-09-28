@@ -73,7 +73,11 @@ function buildMenuTemplate ({ platform, projects, activeProjectId, nextAvailable
     label: 'Go',
     submenu: [
       { label: 'Next', accelerator: 'CmdOrCtrl+0', enabled: nextAvailable, click: () => actions.showNext() },
-      { label: 'Import Repositories', accelerator: 'CmdOrCtrl+Shift+I', click: () => actions.showImport() },
+      // Cmd+Shift+I is Import on macOS, where the devtools chord is
+      // Cmd+Alt+I. On Windows and Linux Ctrl+Shift+I *is* the devtools chord,
+      // which Electron binds itself, so Import takes Ctrl+Shift+O there rather
+      // than fight over it.
+      { label: 'Import Repositories', accelerator: mac ? 'CmdOrCtrl+Shift+I' : 'CmdOrCtrl+Shift+O', click: () => actions.showImport() },
       { type: 'separator' },
       { label: 'Previous Project', accelerator: 'CmdOrCtrl+Alt+Up', enabled: projects.length > 0, click: () => actions.stepProject(-1) },
       { label: 'Next Project', accelerator: 'CmdOrCtrl+Alt+Down', enabled: projects.length > 0, click: () => actions.stepProject(1) },

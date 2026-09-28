@@ -30,6 +30,19 @@ const END = '// boardcommand:end'
  */
 function extractFunction () {
   const lines = fs.readFileSync(source, 'utf8').split('\n')
+  // Only runBoardCommand is copied across, so a second top-level function —
+  // a helper pulled out of it, say — would be tested here and missing from the
+  // board, where the call to it would throw at the first shortcut. That is
+  // exactly the silent drift this script exists to catch, so it is refused
+  // rather than copied halfway.
+  const declared = lines.filter((line) => line.startsWith('function ')).map((line) => line.slice('function '.length).split(/[\s(]/)[0])
+  if (declared.length > 1) {
+    fatal(`${rel(source)} declares more than one top-level function (${declared.join(', ')}), ` +
+      'and only runBoardCommand is copied into the board preload.\n' +
+      'The board would call a helper that is not there. Inline the helper into ' +
+      'runBoardCommand, or teach this script and the markers in ' +
+      `${rel(target)} to carry both.`)
+  }
   const start = lines.findIndex((line) => line.startsWith('function runBoardCommand '))
   if (start < 0) fatal(`${rel(source)} no longer declares a top-level runBoardCommand`)
   const end = lines.findIndex((line, index) => index > start && line === '}')

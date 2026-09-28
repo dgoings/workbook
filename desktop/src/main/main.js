@@ -31,6 +31,11 @@ let chromeView = null
 const boardViews = new Map()
 let activeProjectId = null
 /**
+ * How many opens have been asked for. Each openProject() call takes the next
+ * number and stands down if a newer one has started; see the comment there.
+ */
+let openGeneration = 0
+/**
  * The PATH install, started at launch and asked about once by `path:notice`.
  * @type {Promise<object>|null}
  */
@@ -124,6 +129,10 @@ function createWindow () {
     window = null
     chromeView = null
     activeProjectId = null
+    // No board is showing any more, so the board items go gray — the same call
+    // showChrome() makes for the same reason. On macOS the menu outlives the
+    // window, and without this Cmd+N would stay lit over nothing.
+    installMenu()
     // Said only when there was something to let go of, the way the reaping log
     // speaks only when it reaped: every ordinary quit closes the window too,
     // and on Windows and Linux that makes this the last line of every session.
@@ -306,11 +315,24 @@ const menuActions = {
   },
   reloadBoard: () => {
     const view = activeProjectId && boardViews.get(activeProjectId)
-    if (view) view.webContents.reload()
+    if (!view) return
+    // The keyboard goes with the board, the way opening one already takes it
+    // there. An accelerator fires wherever focus happens to be, and any click
+    // in the sidebar leaves it in the shell page; a reload that left it behind
+    // would hand the fresh board back to a reader whose next keystroke still
+    // went to the page behind it.
+    view.webContents.focus()
+    view.webContents.reload()
   },
   boardCommand: (command) => {
     const view = activeProjectId && boardViews.get(activeProjectId)
-    if (view) view.webContents.send('board:command', { command })
+    if (!view) return
+    // Focus first, for the same reason and more sharply: these commands open
+    // things meant to be typed into. Fired with focus still in the shell page,
+    // Cmd+N would open a New Task form nobody could type into and Cmd+F would
+    // focus a search box the keystrokes never reached.
+    view.webContents.focus()
+    view.webContents.send('board:command', { command })
   }
 }
 
@@ -341,7 +363,19 @@ async function openProject (projectId, taskId = null) {
   const project = registry.find(projectId)
   if (!project) throw new Error(`unknown project: ${projectId}`)
 
+  // Two project shortcuts in quick succession race, and the awaits below are
+  // where they overtake each other: Cmd+1 on a cold project spawns a server and
+  // waits seconds for it, Cmd+2 on a warm one is back almost at once, so the
+  // cold open lands last and sets activeProjectId, the layout and the menu to
+  // the project the reader has already moved off. The same nextGeneration
+  // pattern the renderer's Next view uses settles it — each open takes a
+  // number on the way in and, at every await, leaves the state alone if a newer
+  // one has started. The url is still returned: the caller asked for this
+  // project's address and that much is true whoever is showing.
+  const generation = ++openGeneration
+
   const url = await supervisor.start(project)
+  if (generation !== openGeneration) return { url }
   // The board has a route per task, so a row can open the thing it names
   // rather than the board it lives on.
   const target = taskId ? new URL(`/tasks/${encodeURIComponent(taskId)}`, url).href : url
@@ -385,10 +419,15 @@ async function openProject (projectId, taskId = null) {
     window.contentView.addChildView(view)
     boardViews.set(projectId, view)
     await view.webContents.loadURL(target)
+    // Superseded while the page loaded. The view stays in boardViews, parked
+    // off-screen by the next layout() and warm for the next time this project
+    // is asked for; what it must not do is take the window over now.
+    if (generation !== openGeneration) return { url }
   } else if (view.webContents.getURL() !== target) {
     // A warm view showing something else — another task, or the board root, or
     // an address from a server that has since restarted on a new port.
     await view.webContents.loadURL(target)
+    if (generation !== openGeneration) return { url }
   }
 
   activeProjectId = projectId
