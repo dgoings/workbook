@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -586,6 +587,11 @@ func (r *Repository) repairProjectGuard(config core.ProjectConfig) error {
 }
 
 func syncDirectory(path string) error {
+	// Windows cannot flush a directory handle (FlushFileBuffers returns
+	// ERROR_ACCESS_DENIED), and NTFS journals the rename itself.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	directory, err := os.Open(path)
 	if err != nil {
 		return core.Wrap(core.CategoryOperational, "cannot open Workbook private cache for sync", err)
