@@ -79,9 +79,13 @@ func TestOpenOutsideGitIsNotInitialized(t *testing.T) {
 var gitRevParseArgs = []string{"rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir"}
 
 // installGitInvocationCounter puts a shim named "git" ahead of the real one
-// on PATH that appends one line per invocation to a counter file, then execs
-// the real git it resolved before installing itself, so the command still
-// succeeds. It returns a function that reads back the recorded invocations.
+// on PATH that appends one argument per line to a counter file, followed by a
+// blank line marking the end of the invocation, then execs the real git it
+// resolved before installing itself, so the command still succeeds. One
+// argument per line, rather than a single space-joined line, survives an
+// argument (such as a -C directory) that itself contains a space — a plain
+// space-joined line would let strings.Fields split that argument in two. It
+// returns a function that reads back the recorded invocations.
 func installGitInvocationCounter(t *testing.T) func() [][]string {
 	t.Helper()
 	realGit, err := exec.LookPath("git")
@@ -90,7 +94,7 @@ func installGitInvocationCounter(t *testing.T) func() [][]string {
 	}
 	shimDir := t.TempDir()
 	counterFile := filepath.Join(shimDir, "invocations.log")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shellQuote(counterFile) + "\nexec " + shellQuote(realGit) + " \"$@\"\n"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + shellQuote(counterFile) + "\nprintf '\\n' >> " + shellQuote(counterFile) + "\nexec " + shellQuote(realGit) + " \"$@\"\n"
 	shimPath := filepath.Join(shimDir, "git")
 	if err := os.WriteFile(shimPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("WriteFile(shim git) error = %v", err)
@@ -106,13 +110,15 @@ func installGitInvocationCounter(t *testing.T) func() [][]string {
 			}
 			t.Fatalf("ReadFile(counter) error = %v", err)
 		}
-		trimmed := strings.TrimRight(string(data), "\n")
-		if trimmed == "" {
+		if len(data) == 0 {
 			return nil
 		}
 		var invocations [][]string
-		for _, line := range strings.Split(trimmed, "\n") {
-			invocations = append(invocations, strings.Fields(line))
+		for _, block := range strings.Split(string(data), "\n\n") {
+			if block == "" {
+				continue
+			}
+			invocations = append(invocations, strings.Split(block, "\n"))
 		}
 		return invocations
 	}

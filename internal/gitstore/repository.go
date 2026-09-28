@@ -137,7 +137,7 @@ func Open(ctx context.Context, startDir string) (*Repository, error) {
 
 	out, err := runGit(ctx, gitPath, startDir, nil, "rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
-		return nil, core.Wrap(core.CategoryNotInitialized, "cannot find Git repository", err)
+		return nil, core.Wrap(core.CategoryNotInitialized, "cannot find Git repository root and common directory", err)
 	}
 	rootPath, commonGitPath, err := gitTwoLines(out)
 	if err != nil {
@@ -161,7 +161,7 @@ func (r *Repository) verifyIdentity(ctx context.Context) error {
 
 	out, err := r.Git(ctx, nil, "rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
-		return core.Wrap(core.CategoryNotInitialized, "cannot verify Git repository", err)
+		return core.Wrap(core.CategoryNotInitialized, "cannot verify Git repository root and common directory", err)
 	}
 	rootPath, commonGitPath, err := gitTwoLines(out)
 	if err != nil {
@@ -368,7 +368,10 @@ func gitEnvironment(environ []string, extra []string) []string {
 // gitTwoLines splits the two-line output of a rev-parse invocation asking two
 // questions at once (for example --show-toplevel and --git-common-dir) into
 // its answers, in the order asked. It rejects anything but exactly two
-// non-empty lines, on the same terms as gitSingleLine.
+// non-empty lines, which is stricter than gitSingleLine: gitSingleLine
+// returns ("", nil) for a lone newline, but an empty line here would answer
+// one of the two questions with a root or common directory that
+// filepath.Clean would turn into ".".
 func gitTwoLines(output []byte) (string, string, error) {
 	if len(output) == 0 || output[len(output)-1] != '\n' {
 		return "", "", fmt.Errorf("expected two trailing-newline-terminated lines")

@@ -2447,10 +2447,11 @@ func copyTree(t *testing.T, source, target string) {
 // A test that asks for a repository gets one of two things: a fresh
 // testrepo.New, or a copy of the template testrepo.InitAt built. They have to
 // be configured identically, because hundreds of tests treat them as the same
-// fixture. Both go through InitAt today, so this fails when a setting is added
-// to one path and not the other — a `git init` flag on the template, a config
-// in New's object-format branch — which is the kind of difference that
-// otherwise shows up as one inexplicable test.
+// fixture. This pins that `workbook setup`, which only the template goes
+// through, writes no local git configuration of its own, so the copied
+// template's .git/config still equals a freshly initialized repository's; and
+// that copyTree, which builds the copy, carries .git/config across intact
+// rather than dropping or rewriting it.
 func TestTemplateCopyAndFreshRepositoryShareTheirLocalConfiguration(t *testing.T) {
 	t.Parallel()
 	fresh := localConfiguration(t, testrepo.New(t))

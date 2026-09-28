@@ -165,10 +165,12 @@ go test ./... -json | go run ./scripts/skipreport
 
 ### Running tests locally
 
-A bare `go test ./...` needs no flags and no slicing. `internal/cli`, where
-most of the suite lives, runs its tests in parallel and finishes in about two
-minutes on an 18-core dev laptop, well inside Go's 600-second default test
-timeout.
+`go test ./internal/cli/` needs no flags and no slicing: it runs its tests in
+parallel and finishes in about two minutes on an 18-core dev laptop, well
+inside Go's 600-second default test timeout. `internal/gitstore` is a
+different story: its own suite runs about nine minutes, close to that same
+per-package default, so a whole-tree run still wants a timeout, for example
+`go test -timeout 45m ./...`, which is what `ci.yml` uses.
 
 A new test in that package starts with `t.Parallel()` as its first statement.
 One that must stay serial — because it calls `t.Setenv` or otherwise touches
