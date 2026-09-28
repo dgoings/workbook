@@ -349,7 +349,10 @@ func TestInitIsReplacedBySetup(t *testing.T) {
 
 func TestDocsStatusReportsEachManagedArtifact(t *testing.T) {
 	t.Parallel()
-	repository := initializedRepository(t)
+	// A real mint, not a copy of the package template: the claim here is
+	// about what setup leaves behind, so the artifacts this reads have to be
+	// the ones setup just wrote rather than ones copied from elsewhere.
+	repository := freshlyInitializedRepository(t)
 
 	code, stdout, stderr := run(t, repository, "docs", "status", "--json")
 

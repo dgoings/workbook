@@ -11,7 +11,6 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
-	"github.com/dgoings/workbook/internal/testrepo"
 )
 
 func TestRunPushAndFetchJSONAcrossClones(t *testing.T) {
@@ -520,11 +519,11 @@ func cliSyncRepositories(t *testing.T) (string, string) {
 	t.Helper()
 	bare := cliBareOrigin(t)
 
-	seed := testrepo.New(t)
+	// The seed is a copy of the package template, which is a project setup
+	// has already minted; what the sync tests need from it is the tracked
+	// configuration to commit and the refs to push, and those copy.
+	seed := initializedRepository(t)
 	cliGit(t, seed, "branch", "-M", "main")
-	if code, _, stderr := run(t, seed, "setup"); code != 0 {
-		t.Fatalf("setup code = %d; stderr = %q", code, stderr)
-	}
 	cliGit(t, seed, "add", ".workbook/config.json")
 	cliGit(t, seed, "commit", "--quiet", "-m", "Initialize Workbook")
 	cliGit(t, seed, "remote", "add", "origin", bare)

@@ -21,6 +21,12 @@ import (
 // Workbook configuration this isolation exists to protect.
 var toolchainEnvironment []string
 
+// templateRoot holds the one project this package mints, which every test
+// asking for an initialized repository copies. It lives under the isolated
+// home so that removing the home removes it, and so that the template is
+// minted with the same user-global configuration every test runs against.
+var templateRoot string
+
 // Tests that stay serial, and why. Go runs these before the parallel batch,
 // so each gets a quiet process environment.
 //
@@ -47,6 +53,19 @@ func TestMain(m *testing.M) {
 	}
 	os.Setenv("HOME", home)
 	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	templateRoot = filepath.Join(home, "template")
+	if err := os.MkdirAll(templateRoot, 0o755); err != nil {
+		panic("create template root: " + err.Error())
+	}
+	// Mint the template here, not on whichever test asks for it first: the
+	// mint then runs with the environment this function has just arranged
+	// rather than with whatever a parallel test has done to its own, and a
+	// mint that cannot succeed says so once instead of failing every test
+	// that copies it.
+	if _, err := templateProject(); err != nil {
+		panic("mint template project: " + err.Error())
+	}
 
 	code := m.Run()
 

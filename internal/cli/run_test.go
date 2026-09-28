@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math/big"
 	"net"
 	"net/http"
@@ -2320,7 +2321,73 @@ func waitForHTTP(t *testing.T, url string) {
 	t.Fatalf("timed out waiting for %s: %v", url, lastErr)
 }
 
+var (
+	templateOnce sync.Once
+	templateDir  string
+	templateErr  error
+)
+
+// templateProject mints one project for the package — git init, the test
+// identity, and `workbook setup --key WB` — so that every test that wants an
+// initialized repository copies it rather than paying the mint again. setup is
+// exercised by setup_test.go; a fixture is not where it should be tested.
+//
+// TestMain calls this before m.Run, so the mint happens once in a quiet process
+// with the environment TestMain has just arranged, and a mint that fails stops
+// the package with one message instead of failing whichever few hundred
+// parallel tests happen to reach it. The sync.Once and the error every caller
+// still checks are what make that ordering an optimization rather than a
+// requirement.
+//
+// Nothing setup writes records where it was written. The repository's own
+// configuration names only the test identity, and both copies of the project
+// document — .workbook/config.json and .git/workbook/project.json — carry an
+// identifier and a key and no path. setup leaves no projection cache behind
+// either; the first command that reads one builds it beside the copy.
+func templateProject() (string, error) {
+	templateOnce.Do(func() {
+		dir := filepath.Join(templateRoot, "project")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			templateErr = fmt.Errorf("create template project directory: %w", err)
+			return
+		}
+		if err := testrepo.InitAt(dir); err != nil {
+			templateErr = err
+			return
+		}
+		// --key WB is explicit: this suite's WB- task-ID assertions must
+		// not depend on the directory's last path element deriving to WB
+		// by chance.
+		var stdout, stderr bytes.Buffer
+		if code := Run(context.Background(), []string{"setup", "--key", "WB"}, dir, strings.NewReader(""), &stdout, &stderr); code != 0 {
+			templateErr = fmt.Errorf("setup code = %d, want 0; stderr = %q", code, stderr.String())
+			return
+		}
+		templateDir = dir
+	})
+	return templateDir, templateErr
+}
+
+// initializedRepository returns a private copy of the package's template
+// project. A copy costs a couple of dozen milliseconds where a mint costs a
+// second, and it is the same project every time, which is what the tests that
+// ask for one actually want.
 func initializedRepository(t *testing.T) string {
+	t.Helper()
+	template, err := templateProject()
+	if err != nil {
+		t.Fatalf("template project: %v", err)
+	}
+	target := t.TempDir()
+	copyTree(t, template, target)
+	return target
+}
+
+// freshlyInitializedRepository mints a project of its own, for a test whose
+// subject is the minting: the identity setup publishes, what setup writes to
+// the repository it is run in, or a second project that must not share the
+// template's identifier.
+func freshlyInitializedRepository(t *testing.T) string {
 	t.Helper()
 	repository := testrepo.New(t)
 	// --key WB is explicit: this suite's WB- task-ID assertions must not
@@ -2330,6 +2397,78 @@ func initializedRepository(t *testing.T) string {
 		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
 	}
 	return repository
+}
+
+// copyTree copies a directory's contents onto target, which already exists.
+// Files, directories and symlinks travel with their modes; nothing is
+// hardlinked, so a test that writes to its copy cannot reach the template.
+func copyTree(t *testing.T, source, target string) {
+	t.Helper()
+	err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if relative == "." {
+			return nil
+		}
+		destination := filepath.Join(target, relative)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		switch {
+		case entry.IsDir():
+			return os.MkdirAll(destination, info.Mode().Perm())
+		case entry.Type()&fs.ModeSymlink != 0:
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, destination)
+		case entry.Type().IsRegular():
+			contents, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(destination, contents, info.Mode().Perm())
+		default:
+			return fmt.Errorf("%s is neither a file, a directory nor a symlink", path)
+		}
+	})
+	if err != nil {
+		t.Fatalf("copy template project: %v", err)
+	}
+}
+
+// A test that asks for a repository gets one of two things: a fresh
+// testrepo.New, or a copy of the template testrepo.InitAt built. They have to
+// be configured identically, because hundreds of tests treat them as the same
+// fixture. Both go through InitAt today, so this fails when a setting is added
+// to one path and not the other — a `git init` flag on the template, a config
+// in New's object-format branch — which is the kind of difference that
+// otherwise shows up as one inexplicable test.
+func TestTemplateCopyAndFreshRepositoryShareTheirLocalConfiguration(t *testing.T) {
+	t.Parallel()
+	fresh := localConfiguration(t, testrepo.New(t))
+	copied := localConfiguration(t, initializedRepository(t))
+
+	if !reflect.DeepEqual(fresh, copied) {
+		t.Fatalf("local configuration differs\ntestrepo.New:   %v\ntemplate copy:  %v", fresh, copied)
+	}
+}
+
+// localConfiguration lists a repository's own settings, sorted, so that the
+// comparison is about which settings are set rather than the order the file
+// happens to hold them in.
+func localConfiguration(t *testing.T, repository string) []string {
+	t.Helper()
+	settings := strings.Split(gitOutput(t, repository, "config", "--list", "--local"), "\n")
+	sort.Strings(settings)
+	return settings
 }
 
 // preLedgerRepository is an initialized project with its configuration ledger
