@@ -53,7 +53,7 @@ Ctrl on Windows and Linux.
 | Cmd+0 | The Next view (with two or more projects) |
 | Cmd+Shift+I on macOS, Ctrl+Shift+O elsewhere | Import repositories. Ctrl+Shift+I is the devtools chord on Windows and Linux, so Import steps aside there. |
 | Cmd+B | Show or hide the sidebar |
-| Cmd+Shift+D | Cycle dark mode: follow system, light, dark |
+| Cmd+Shift+D | Toggle dark mode; when the result matches the system, the app follows the system |
 | Cmd+N | New task on the active board |
 | Cmd+F | Search the active board |
 | Cmd+, | The active project's configuration page, on a board you can administer |

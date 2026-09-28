@@ -179,12 +179,49 @@ describe('startEveryProject', () => {
   })
 })
 
-describe('nextTheme', () => {
-  test('cycles system, light, dark and back, and starts over from anything else', () => {
-    assert.equal(lifecycle.nextTheme('system'), 'light')
-    assert.equal(lifecycle.nextTheme('light'), 'dark')
-    assert.equal(lifecycle.nextTheme('dark'), 'system')
-    assert.equal(lifecycle.nextTheme('bogus'), 'system')
-    assert.equal(lifecycle.nextTheme(undefined), 'system')
+describe('toggleTheme', () => {
+  test('flips the scheme in force and stores system when the flip matches the system', () => {
+    const cases = [
+      // [current, systemDark, expected]
+      ['system', false, 'dark'],
+      ['dark', false, 'system'],
+      ['light', false, 'dark'],
+      ['system', true, 'light'],
+      ['light', true, 'system'],
+      ['dark', true, 'light'],
+      // Anything unrecognized is read as 'system', the way schemeToTheme's
+      // callers already treat an unstored theme.
+      [undefined, false, 'dark'],
+      ['bogus', false, 'dark'],
+      [undefined, true, 'light'],
+      ['bogus', true, 'light']
+    ]
+    for (const [current, systemDark, expected] of cases) {
+      assert.equal(lifecycle.toggleTheme(current, systemDark), expected, `toggleTheme(${current}, ${systemDark})`)
+    }
+  })
+
+  test('every press changes the visible scheme, with the system staying light', () => {
+    // The bug this replaces: cycling system -> light -> dark -> system with
+    // the system light left one press in three showing nothing new, because
+    // 'system' and 'light' paint the same. Toggling instead must alternate
+    // the visible scheme on every single press.
+    const systemDark = false
+    const visibleOf = (theme) => (theme === 'dark' ? true : theme === 'light' ? false : systemDark)
+
+    let theme = 'system'
+    const themes = []
+    const visibles = []
+    for (let i = 0; i < 4; i++) {
+      theme = lifecycle.toggleTheme(theme, systemDark)
+      themes.push(theme)
+      visibles.push(visibleOf(theme))
+    }
+
+    assert.deepEqual(themes, ['dark', 'system', 'dark', 'system'])
+    assert.deepEqual(visibles, [true, false, true, false])
+    for (let i = 1; i < visibles.length; i++) {
+      assert.notEqual(visibles[i], visibles[i - 1], `press ${i + 1} did not change the visible scheme`)
+    }
   })
 })

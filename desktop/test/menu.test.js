@@ -12,7 +12,7 @@ const { buildMenuTemplate } = require('../src/main/menu')
 function actionsSpy () {
   const calls = []
   const spy = {}
-  for (const name of ['selectProject', 'stepProject', 'showNext', 'showImport', 'cycleTheme', 'toggleSidebar', 'reloadBoard', 'boardCommand']) {
+  for (const name of ['selectProject', 'stepProject', 'showNext', 'showImport', 'toggleTheme', 'toggleSidebar', 'reloadBoard', 'boardCommand']) {
     spy[name] = (...args) => calls.push([name, ...args])
   }
   return { spy, calls }
@@ -109,7 +109,7 @@ describe('buildMenuTemplate', () => {
     byAccelerator(two, 'CmdOrCtrl+Shift+I').click()
     byAccelerator(two, 'CmdOrCtrl+Shift+D').click()
     byAccelerator(two, 'CmdOrCtrl+B').click()
-    assert.deepEqual(calls, [['showNext'], ['stepProject', -1], ['stepProject', 1], ['showImport'], ['cycleTheme'], ['toggleSidebar']])
+    assert.deepEqual(calls, [['showNext'], ['stepProject', -1], ['stepProject', 1], ['showImport'], ['toggleTheme'], ['toggleSidebar']])
   })
 
   test('keeps the standard editing and window roles so text fields keep working', () => {

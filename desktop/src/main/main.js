@@ -294,19 +294,20 @@ function notRepeating (key, ms = 250) {
 
 // What each menu item does. A view or a project is the renderer's state to
 // change, so those are named to the shell page and decided there; a board
-// action goes to that board's own preload; and the theme cycle goes through
+// action goes to that board's own preload; and the theme toggle goes through
 // the same path a board's Dark Mode switch uses, so every board follows.
 const menuActions = {
   selectProject: (index) => toChrome('shortcut', { kind: 'project', index }),
   stepProject: (delta) => toChrome('shortcut', { kind: 'step', delta }),
   showNext: () => toChrome('shortcut', { kind: 'view', view: 'next' }),
   showImport: () => toChrome('shortcut', { kind: 'view', view: 'import' }),
-  cycleTheme: () => {
+  toggleTheme: () => {
     if (!notRepeating('theme')) return
-    // No sender to spare: the cycle is the shell's own choice, so every open
-    // board is aligned to it.
-    adoptBoardScheme(lifecycle.nextTheme(registry.theme), null).catch((error) => {
-      console.error('workbench: could not cycle the theme', error)
+    // No sender to spare: the toggle is the shell's own choice, so every open
+    // board is aligned to it. nativeTheme.shouldUseDarkColors is the same
+    // system reading resolveDark falls back to for 'system'.
+    adoptBoardScheme(lifecycle.toggleTheme(registry.theme, nativeTheme.shouldUseDarkColors), null).catch((error) => {
+      console.error('workbench: could not toggle the theme', error)
     })
   },
   toggleSidebar: () => {

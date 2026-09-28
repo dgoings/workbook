@@ -59,7 +59,7 @@ function buildMenuTemplate ({ platform, projects, activeProjectId, nextAvailable
     label: 'View',
     submenu: [
       { label: 'Toggle Sidebar', accelerator: 'CmdOrCtrl+B', click: () => actions.toggleSidebar() },
-      { label: 'Cycle Dark Mode', accelerator: 'CmdOrCtrl+Shift+D', click: () => actions.cycleTheme() },
+      { label: 'Toggle Dark Mode', accelerator: 'CmdOrCtrl+Shift+D', click: () => actions.toggleTheme() },
       { type: 'separator' },
       boardItem('Find on Board', 'CmdOrCtrl+F', 'search'),
       boardItem('Configuration', 'CmdOrCtrl+,', 'config'),
