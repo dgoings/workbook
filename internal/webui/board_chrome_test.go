@@ -655,3 +655,39 @@ func TestHandlerFilterRowDrawsNoRuleAndMainPadsNoTop(t *testing.T) {
 		t.Errorf("the route shell insets itself with a margin the scroller has to find room for: %s", shell)
 	}
 }
+
+// Every class the filter row toggles `hidden` on hides when it is hidden.
+//
+// The hidden attribute hides a thing by the user agent's own `display: none`,
+// which any display in this stylesheet outranks: a rule as ordinary as
+// `display: flex` on the class leaves the attribute doing nothing but flipping a
+// property, and the element keeps its place on screen. That is what happened to
+// the Labels menu's rows — the box narrowed them by setting hidden on each one,
+// every row stayed drawn, and the search read as a control that did nothing at
+// all.
+//
+// The client tests cannot catch it. Their DOM has no layout and no stylesheet,
+// so a row that sets hidden is a row they see hidden, which is why they passed
+// while the page did not. The rule is the thing to pin, and it is pinned here for
+// every class on this row the client hides rather than only for the one that was
+// found missing it.
+func TestHandlerEveryHiddenToggledClassHidesWhenHidden(t *testing.T) {
+	body := boardPage(t)
+	// Each of these the client hides at some point: the row itself off the board,
+	// the Clear link with nothing to clear, the Key chooser on a one-key project,
+	// a count badge with nothing counted, a menu that is closed, and an option row
+	// the menu's own search box has narrowed away.
+	for _, class := range []string{
+		".filter-row",
+		".filter-row__clear",
+		".filter-chooser",
+		".filter-chooser__badge",
+		".filter-chooser__menu",
+		".filter-option",
+	} {
+		rule := class + "[hidden] { display: none; }"
+		if !strings.Contains(body, rule) {
+			t.Errorf("the stylesheet carries no %q, so setting hidden on a %s leaves it drawn", rule, class)
+		}
+	}
+}

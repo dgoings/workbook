@@ -234,6 +234,8 @@
        that the list is what needs. */
     .filter-chooser__options { max-height: 18rem; overflow-y: auto; }
     .filter-option { display: flex; align-items: center; gap: .45rem; padding: .25rem .3rem; font-size: .82rem; cursor: pointer; }
+    /* The row's own display outranks the one the hidden attribute hides by, so the search box narrows nothing without this — the reason every other [hidden] rule here exists. */
+    .filter-option[hidden] { display: none; }
     .filter-option .count { margin-left: auto; color: var(--wb-ink-soft); font-size: .72rem; }
     .filter-option--none { color: var(--wb-ink-soft); }
     /* A setting reads as its state before it reads as anything else, so it is
