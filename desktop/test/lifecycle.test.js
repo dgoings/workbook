@@ -178,3 +178,13 @@ describe('startEveryProject', () => {
     assert.deepEqual(result, { started: [], failed: [] })
   })
 })
+
+describe('nextTheme', () => {
+  test('cycles system, light, dark and back, and starts over from anything else', () => {
+    assert.equal(lifecycle.nextTheme('system'), 'light')
+    assert.equal(lifecycle.nextTheme('light'), 'dark')
+    assert.equal(lifecycle.nextTheme('dark'), 'system')
+    assert.equal(lifecycle.nextTheme('bogus'), 'system')
+    assert.equal(lifecycle.nextTheme(undefined), 'system')
+  })
+})

@@ -123,4 +123,11 @@ async function startEveryProject ({ projects, start, log = () => {} }) {
   return { started, failed }
 }
 
-module.exports = { THEMES, schemeToTheme, releaseClosedWindow, startEveryProject }
+/** The theme after this one on the Cmd+Shift+D cycle: system, light, dark. */
+function nextTheme (current) {
+  const index = THEMES.indexOf(current)
+  if (index < 0) return THEMES[0]
+  return THEMES[(index + 1) % THEMES.length]
+}
+
+module.exports = { THEMES, schemeToTheme, releaseClosedWindow, startEveryProject, nextTheme }
