@@ -12,7 +12,7 @@ both human-readable output and a versioned machine-readable result envelope:
 ```text
 workbook setup [--key <key>] [--no-docs] [--no-sync] [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook create <title> [--description <text>] [--status <status>] [--priority <priority>] [--key <key>] [--label <label>] [--no-sync] [--json]
-workbook list [--status <status>] [--priority <priority>] [--key <key>] [--label <label>] [--all] [--json]
+workbook list [--status <status>] [--priority <priority>] [--key <key>] [--label <label>] [--find <text>] [--all] [--json]
 workbook board [--wide | --narrow] [--json]
 workbook show <task> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--get-attachment <attachment> [--out <path>]] [--json]
 workbook update <task> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--label <label>] [--clear-labels] [--comment <body>] [--edit-comment <comment>] [--remove-comment <comment>] [--attach-file <path>] [--attach-url <url>] [--attach-label <text>] [--remove-attachment <attachment>] [--assign <who>] [--unassign <who>] [--force] [--no-sync] [--json]
@@ -62,6 +62,12 @@ workbook hooks install [--json]
 workbook serve [--addr <address>]
 workbook help [command]
 ```
+
+`workbook list --find <text>` keeps the tasks whose title or description
+contains every whitespace-separated word of `<text>`, case-insensitively, or,
+for a word shaped like the start of a task ID (a project key, a dash, and more
+characters), whose ID begins with it; it combines with the other `list` filters,
+and an empty `--find` is refused.
 
 `workbook setup` is the single bootstrap path for a fresh clone. It creates or
 validates the tracked `.workbook/config.json` holding the project ID and key,
@@ -1606,7 +1612,9 @@ workbook serve &
 The embedded page and its API expose these routes:
 
 ```text
-GET /                         board HTML; `?deleted=1` shows the Deleted column
+GET /                         board HTML; `?deleted=1` shows the Deleted column;
+                              `?q=`, `?priority=`, `?label=` and `?key=` filter
+                              the columns
 GET /tasks/new                new-task shell; client-rendered form
 GET /tasks/<id>               linkable task-detail shell; client-rendered form
 GET /api/tasks                versioned task JSON: the active tasks, or
@@ -1970,22 +1978,46 @@ poll, and the reconciling poll has no preference to reset. The toggle
 accompanies the board alone; task pages draw no cards for it to act on and so
 do not offer it.
 
+A filter row sits under the header. Its search box narrows the columns to the
+cards whose title or description contains every word typed, case-insensitively,
+or whose task ID begins with a word shaped like one — a key, a dash, and more
+characters — so a pasted ID finds its card and a stray word never matches the
+inside of an ID; that is the same rule `workbook list --find` uses. Its
+Priority, Labels and Key choosers each offer a list of ticks with the count of
+cards each would leave; ticks within a chooser are alternatives, and the search
+and the choosers narrow one another. The Labels menu has a box of its own that
+narrows its rows as you type, since a project may carry many labels; what is
+typed there is not part of the address. The Key chooser appears only once a
+project has more than one key, retired keys included because their tasks still
+exist, and a board already open learns of a second key when the configuration
+page is visited or on its next load; a key added from the CLI does not reveal
+the chooser on a board left open, because a key change moves no column and the
+board is never asked to reload for one. Every control writes the address —
+`/?q=audit&priority=high&label=web&key=WB` — so a filtered board is shareable,
+bookmarkable, and walked by Back and Forward, and typing in the search replaces
+the current entry rather than filling history with keystrokes. A column's count
+reads `3 / 12` while a filter hides cards, and a column the filters empty says
+**No matches.** rather than looking empty. Dragging is unchanged while
+filtered: a card dropped between two visible cards is placed between them,
+whatever hidden cards lie in that stretch.
+
 Deleted tasks are a column of the board rather than a page of their own. The
-header's **Show Deleted** switch is a link to `/?deleted=1`, so the state is
-shareable, bookmarkable, and walked by Back and Forward; showing it appends a
-muted **Deleted** column after the last status column and hiding it takes that
-section away, and neither touches another column or another card. The column is
-fed by the same one-second poll as every other column, which asks
-`/api/tasks?deleted=include` for as long as the board is set to show it — opening
-a task's page does not stop the asking, so the column is already current when you
-come back to it — and orders its cards most-recently-deleted first. Each card carries a **Restore** button that returns
-the task to the status it was deleted from. Dragging a deleted card onto a
-status column restores it into that column at the position it was dropped, and
-dragging a live card onto the Deleted column deletes it; both are queued
-optimistic changes like every other board drag, with the same head check, the
-same rollback, and the same refusal report on the card. A deleted task has no
-detail page — a tombstone cannot be edited — so its card offers Restore instead
-of a link.
+row's **Show Deleted** switch is a link to `/?deleted=1`, so that state is
+shareable, bookmarkable, and walked by Back and Forward like the filters beside
+it; showing it appends a muted **Deleted** column after the last status column
+and hiding it takes that section away, and neither touches another column or
+another card. The column is fed by the same one-second poll as every other
+column, which asks `/api/tasks?deleted=include` for as long as the board is set
+to show it — opening a task's page does not stop the asking, so the column is
+already current when you come back to it — and orders its cards
+most-recently-deleted first. Each card carries a **Restore** button that
+returns the task to the status it was deleted from. Dragging a deleted card
+onto a status column restores it into that column at the position it was
+dropped, and dragging a live card onto the Deleted column deletes it; both are
+queued optimistic changes like every other board drag, with the same head
+check, the same rollback, and the same refusal report on the card. A deleted
+task has no detail page — a tombstone cannot be edited — so its card offers
+Restore instead of a link.
 
 Cards with prerequisites show completed versus total dependency progress.
 Ready cards whose prerequisites are not all active and Done also say

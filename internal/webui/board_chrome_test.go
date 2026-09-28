@@ -99,8 +99,23 @@ func TestHandlerBoardColumnsHoldAMinimumWidthAndScroll(t *testing.T) {
 	// literal left behind in any of them is how they could disagree again, so
 	// the guard covers the shape of the declaration rather than one spelling of
 	// it — `minmax(12rem` catches both the old track size and the strip's.
+	//
+	// It reads the rules that size a card or a column, not the whole stylesheet.
+	// The literal is only a defect there: something else on the page may be
+	// 12rem wide for a reason of its own — a chooser's menu is — and a guard over
+	// the served body claimed those too, which is a guard that grows into an
+	// obstacle rather than a rule.
+	widths := strings.Join([]string{
+		// Where the property is defined, desktop and phone alike: the phone's
+		// override lives in a :root inside the narrow-screen media block.
+		cssRules(t, body, ":root {"),
+		boardRules(t, body),
+		cssRules(t, body, ".column {"),
+		cssRules(t, body, ".unknown-status__list {"),
+		cssRules(t, body, ".task-card {"),
+	}, "\n")
 	for _, stale := range []string{`minmax(12rem`, `min-width: 12rem`, `min-width: min(18rem`} {
-		if strings.Contains(body, stale) {
+		if strings.Contains(widths, stale) {
 			t.Errorf("a board card still carries the hardcoded minimum width %q", stale)
 		}
 	}
@@ -223,7 +238,17 @@ func assertBoardTracks(t *testing.T, subject string, children []string, columns 
 // declaration sits in is not something a test should hold still.
 func boardRules(t *testing.T, body string) string {
 	t.Helper()
-	const selector = ".board {"
+	return cssRules(t, body, ".board {")
+}
+
+// cssRules returns every declaration block in the served stylesheet that opens
+// with this selector, joined — the desktop rule and whatever the media queries
+// restate, which for a property like --board-column-min is the whole of what the
+// page says about it. It is the shape boardRules always had, named so that a
+// claim about one family of rules can be scoped to them instead of being made
+// over the entire body.
+func cssRules(t *testing.T, body, selector string) string {
+	t.Helper()
 	var rules []string
 	for rest := body; ; {
 		start := strings.Index(rest, selector)
@@ -233,13 +258,13 @@ func boardRules(t *testing.T, body string) string {
 		rest = rest[start:]
 		end := strings.IndexByte(rest, '}')
 		if end < 0 {
-			t.Fatalf("a .board rule is unterminated: %q", rest)
+			t.Fatalf("a %s rule is unterminated: %q", selector, rest)
 		}
 		rules = append(rules, rest[:end+1])
 		rest = rest[end+1:]
 	}
 	if len(rules) == 0 {
-		t.Fatal("the rendered page has no .board rule")
+		t.Fatalf("the rendered page has no %s rule", selector)
 	}
 	return strings.Join(rules, "\n")
 }
@@ -386,5 +411,288 @@ func TestHandlerBoardColumnHeadersCarryNoInertMinimumHeight(t *testing.T) {
 	}
 	if strings.Contains(body, `.column__header { min-height:`) {
 		t.Error("the column header reserves a height again")
+	}
+}
+
+// filterRowElement returns the served page's filter row, which is where every
+// claim about the board's filters is made. It is a region of the page rather than
+// a part of the board — the board scrolls sideways and the filters must not go
+// with it — so it is found by its own marker rather than by walking the columns.
+func filterRowElement(t *testing.T, body string) string {
+	t.Helper()
+	start := strings.Index(body, `<div class="filter-row"`)
+	if start < 0 {
+		t.Fatal("the served page has no filter row")
+	}
+	end := strings.Index(body[start:], "\n  </div>")
+	if end < 0 {
+		t.Fatal("the filter row is never closed")
+	}
+	return body[start : start+end+len("\n  </div>")]
+}
+
+// The board's filters are served rather than built: the row, the search box, the
+// space the choosers are drawn into, and the Deleted switch inside it beside
+// them, because it was already the one filter the board had. The row ships hidden
+// and the board's render reveals it, so a page whose script never ran offers no
+// filters rather than dead ones.
+func TestHandlerDrawsTheDeletedSwitchInTheFilterRow(t *testing.T) {
+	body := boardPage(t)
+	row := filterRowElement(t, body)
+
+	for _, marker := range []string{
+		"data-filter-row",
+		"data-filter-q",
+		"data-filter-choosers",
+		"data-deleted-toggle",
+		"data-filter-clear",
+		// The three choosers themselves. They are served rather than built, so a
+		// page whose script never ran offers no control that cannot work — and
+		// the group each one narrows is the attribute the client collects them
+		// by, which is why the value is asserted rather than the bare name.
+		`data-filter-chooser="priority"`,
+		`data-filter-chooser="label"`,
+		`data-filter-chooser="key"`,
+		// The parts of a chooser. The client asks for each of these inside the
+		// chooser's own root, and the fake DOM hand-builds them — so without
+		// these three the served markup could lose a part and every client test
+		// would go on passing against a harness that still had it.
+		"data-filter-chooser-button",
+		"data-filter-chooser-badge",
+		"data-filter-chooser-menu",
+		"data-filter-chooser-count",
+		// The Labels menu narrows itself: a box at the top of it, and the line it
+		// says when the box has hidden every row. Both are served, because the
+		// client reads them out of the chooser's own root the way it reads the
+		// button and the menu.
+		"data-filter-chooser-search",
+		"data-filter-chooser-nomatch",
+		`placeholder="Find a label"`,
+		// The rows go into a container of their own in every menu, so the client
+		// draws them down one path — and so that rebuilding a menu's rows cannot
+		// take the box above them with it.
+		"data-filter-chooser-options",
+		// A collapsed menu says so, which is the half of the state a sighted
+		// reader gets from the menu not being there.
+		`aria-expanded="false"`,
+		// The button names the menu it opens rather than only claiming to have a
+		// popup, so the two are one control to a screen reader.
+		`aria-controls="filter-menu-priority"`,
+		`aria-controls="filter-menu-label"`,
+		`aria-controls="filter-menu-key"`,
+		`id="filter-menu-priority"`,
+		// The badge is a bare number on screen. The word beside it is there for a
+		// reader who cannot see which chooser it is sitting on, and it reads the
+		// same for one as for two — which is why the markup can own it rather
+		// than the client having to choose a plural every render. Counted below,
+		// once per chooser, because a substring check is satisfied by any one of
+		// the three and would pass over two badges that had lost it.
+		`<span class="visually-hidden"> selected</span>`,
+		// A search box is a search box, which is what gives a reader the clear
+		// affordance the browser draws in one.
+		`type="search"`,
+		// Clear ships hidden: an unfiltered board has nothing to clear, and the
+		// client reveals it once the address holds a filter.
+		"data-filter-clear hidden",
+	} {
+		if !strings.Contains(row, marker) {
+			t.Errorf("the filter row carries no %s: %s", marker, row)
+		}
+	}
+	// The search says what it searches, to a reader and to a screen reader alike:
+	// a placeholder is not a label, and a box with no name is a box.
+	if !strings.Contains(row, `aria-label="Search title, description or task ID"`) {
+		t.Errorf("the search box has no accessible name: %s", row)
+	}
+	// And it says the ID too, since a pasted ID is a search a reader has no other
+	// way to know the box takes.
+	if !strings.Contains(row, `placeholder="Search title, description or task ID"`) {
+		t.Errorf("the search box does not offer to search by task ID: %s", row)
+	}
+	// The row's own hidden attribute, on its own opening tag. A substring check
+	// over the whole row is satisfied by any hidden thing inside it — the Clear
+	// anchor ships hidden too — which would have passed over a row that shipped
+	// visible and offered the board's filters from a task's page.
+	if !strings.HasPrefix(row, `<div class="filter-row" data-filter-row hidden>`) {
+		t.Errorf("the filter row ships visible, so a route that draws no columns still offers it: %s", row)
+	}
+	// Every chooser's badge carries the word, not just one of them.
+	const screenReaderWord = `<span class="visually-hidden"> selected</span>`
+	if got := strings.Count(row, screenReaderWord); got != 3 {
+		t.Errorf("%d of the three badges carry the screen-reader word: %s", got, row)
+	}
+	// One box, in one menu. The Priority and Key menus list a vocabulary the
+	// project states — short by construction — and a box over three priorities is
+	// a control asking to be used where the list could simply be read. A substring
+	// check is satisfied by any one of the three menus carrying it, so the claim is
+	// the count.
+	if got := strings.Count(row, "data-filter-chooser-search"); got != 1 {
+		t.Errorf("%d menus carry a search box, want the Labels menu alone: %s", got, row)
+	}
+	if got := strings.Count(row, "data-filter-chooser-nomatch"); got != 1 {
+		t.Errorf("%d menus carry a no-match line, want the Labels menu alone: %s", got, row)
+	}
+	// All three menus have somewhere to draw their rows, though, which is what
+	// gives the client one path for them.
+	if got := strings.Count(row, "data-filter-chooser-options"); got != 3 {
+		t.Errorf("%d of the three menus hold an options container: %s", got, row)
+	}
+	// The box the search sits in is inside the Labels menu rather than beside it in
+	// the row: what it narrows is that menu's rows, and a box in the row would read
+	// as a second search over the board.
+	labelMenuAt := strings.Index(row, `id="filter-menu-label"`)
+	searchAt := strings.Index(row, "data-filter-chooser-search")
+	if labelMenuAt < 0 || searchAt < labelMenuAt {
+		t.Errorf("the Labels menu's search box is not inside the Labels menu: %s", row)
+	}
+	// The box says what it finds, to a reader and to a screen reader alike, for the
+	// reason the row's own search box does: a placeholder is not a label.
+	if !strings.Contains(row, `aria-label="Find a label"`) {
+		t.Errorf("the Labels menu's search box has no accessible name: %s", row)
+	}
+	// The line reads as the sentence it is, and it is a different sentence from the
+	// one an unlabelled board gets: a search that matched nothing, not a project
+	// with nothing to match.
+	if !strings.Contains(row, `data-filter-chooser-nomatch hidden>No labels match</p>`) {
+		t.Errorf("the Labels menu's no-match line is not served hidden with its own words: %s", row)
+	}
+	// A live region, so a reader who cannot see the rows go is told that the letter
+	// they just typed left nothing. It stands in the document whether or not it is
+	// showing, for the reason every live region on this page does: one created in
+	// the same frame as its own first message announces nothing.
+	if !strings.Contains(row, `aria-live="polite" data-filter-chooser-nomatch`) {
+		t.Errorf("the Labels menu's no-match line is not a live region: %s", row)
+	}
+	// The rule that draws the box, without which it is an input the page never
+	// styled sitting on top of a menu.
+	if !strings.Contains(body, ".filter-chooser__search { display: block;") {
+		t.Error("the stylesheet does not draw the Labels menu's search box")
+	}
+	// The rows are what scrolls, and the menu is not: the box that narrows these
+	// rows would otherwise sit inside the scroller it narrows, and a reader
+	// scrolling down a long list pushed it off the top of the menu.
+	options := cssRules(t, body, ".filter-chooser__options {")
+	for _, fragment := range []string{"max-height: 18rem", "overflow-y: auto"} {
+		if !strings.Contains(options, fragment) {
+			t.Errorf("the options container %q does not contain %q", options, fragment)
+		}
+	}
+	if menu := cssRules(t, body, ".filter-chooser__menu {"); strings.Contains(menu, "overflow-y") ||
+		strings.Contains(menu, "max-height") {
+		t.Errorf("the menu is still the scroller, so its search box scrolls away with the rows: %s", menu)
+	}
+	// aria-haspopup only claims that something opens; aria-controls names what,
+	// which is what lets a screen reader treat the button and the menu as one
+	// control. A page carrying both would be stating the weaker fact twice.
+	if strings.Contains(row, "aria-haspopup") {
+		t.Errorf("a chooser still claims a popup it does not name: %s", row)
+	}
+	// The visually-hidden word needs the rule that hides it, or it is a word in
+	// the middle of the row.
+	if !strings.Contains(body, ".visually-hidden { position: absolute;") {
+		t.Error("the stylesheet does not hide the badge's screen-reader word")
+	}
+	// The Key chooser ships hidden as well, and for a reason of its own: most
+	// projects have one key, and a chooser offering one alternative is a control
+	// with nothing to choose. The client reveals it once a project has two.
+	keyAt := strings.Index(row, `data-filter-chooser="key"`)
+	if keyAt < 0 {
+		t.Fatalf("the filter row carries no Key chooser: %s", row)
+	}
+	if !strings.HasPrefix(row[keyAt:], `data-filter-chooser="key" hidden>`) {
+		t.Errorf("the Key chooser ships visible over a project that may have one key: %s", row)
+	}
+	// The switch is inside the row rather than back in the header beside the
+	// settings, which an ordering claim over the whole body is what states.
+	rowAt := strings.Index(body, "data-filter-row")
+	switchAt := strings.Index(body, "data-deleted-toggle")
+	headerEnd := strings.Index(body, "</header>")
+	if rowAt < 0 || switchAt < 0 || headerEnd < 0 {
+		t.Fatal("the page no longer carries a header, a filter row and a Deleted switch")
+	}
+	if switchAt < rowAt {
+		t.Error("the Deleted switch is drawn before the filter row, so it is not in it")
+	}
+	if switchAt < headerEnd {
+		t.Error("the Deleted switch is still drawn inside the header rather than in the filter row")
+	}
+}
+
+// The filter row draws no rule under itself and main pads no top, which are one
+// change rather than two: the row is what separates the header from the columns
+// now, so a hairline a few pixels under the header's own read as a thickened
+// header border, and an inset under that stood the columns a row's height below
+// the control that narrows them. The routes that draw no columns get that inset
+// back on the one condition that says they are not the board — the row being
+// hidden — so nothing of theirs sits flush against the header.
+func TestHandlerFilterRowDrawsNoRuleAndMainPadsNoTop(t *testing.T) {
+	body := boardPage(t)
+	if rule := cssRules(t, body, ".filter-row {"); strings.Contains(rule, "border-bottom") {
+		t.Errorf("the filter row still draws a rule under itself: %s", rule)
+	}
+	if !strings.Contains(body, "main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 1.25rem 1.25rem; }") {
+		t.Errorf("main no longer pads its sides and its bottom alone: %s", cssRules(t, body, "main {"))
+	}
+	// One bare main rule in the whole stylesheet. The scheme blocks redefine colors
+	// and nothing else, and a second main rule inside one of them would be a top
+	// padding that came back in one palette. Counted at the indentation the
+	// stylesheet writes a top-level selector at, so the one rule below — a main with
+	// a condition in front of it — is not one of these.
+	if got := strings.Count(body, "\n    main {"); got != 1 {
+		t.Errorf("the stylesheet holds %d unconditional main rules, want the one", got)
+	}
+	// A task's page, the configuration page and a route message are each a bordered
+	// card, and each wants the inset main gave up. The condition is the filter row
+	// being hidden, which is exactly the condition of being off the board, so the
+	// state is read off the page rather than kept a second time.
+	//
+	// Padding on main rather than a margin on the card, because main is the
+	// scroller: a margin adds to what is inside it, so every route whose shell is
+	// `height: auto; min-height: 100%` — the configuration page, a task page with
+	// its history open, a phone, a short window — would have gained a margin's worth
+	// of scroll on a page that fitted. Padding comes off the height those
+	// percentages resolve against instead.
+	inset := cssRules(t, body, ".filter-row[hidden] ~ main {")
+	if !strings.Contains(inset, "padding-top: 1.25rem") {
+		t.Errorf("the routes that draw no columns take no inset back: %s", inset)
+	}
+	if shell := cssRules(t, body, ".task-route {"); strings.Contains(shell, "margin: 1.25rem auto 0") {
+		t.Errorf("the route shell insets itself with a margin the scroller has to find room for: %s", shell)
+	}
+}
+
+// Every class the filter row toggles `hidden` on hides when it is hidden.
+//
+// The hidden attribute hides a thing by the user agent's own `display: none`,
+// which any display in this stylesheet outranks: a rule as ordinary as
+// `display: flex` on the class leaves the attribute doing nothing but flipping a
+// property, and the element keeps its place on screen. That is what happened to
+// the Labels menu's rows — the box narrowed them by setting hidden on each one,
+// every row stayed drawn, and the search read as a control that did nothing at
+// all.
+//
+// The client tests cannot catch it. Their DOM has no layout and no stylesheet,
+// so a row that sets hidden is a row they see hidden, which is why they passed
+// while the page did not. The rule is the thing to pin, and it is pinned here for
+// every class on this row the client hides rather than only for the one that was
+// found missing it.
+func TestHandlerEveryHiddenToggledClassHidesWhenHidden(t *testing.T) {
+	body := boardPage(t)
+	// Each of these the client hides at some point: the row itself off the board,
+	// the Clear link with nothing to clear, the Key chooser on a one-key project,
+	// a count badge with nothing counted, a menu that is closed, and an option row
+	// the menu's own search box has narrowed away.
+	for _, class := range []string{
+		".filter-row",
+		".filter-row__clear",
+		".filter-chooser",
+		".filter-chooser__badge",
+		".filter-chooser__menu",
+		".filter-option",
+	} {
+		rule := class + "[hidden] { display: none; }"
+		if !strings.Contains(body, rule) {
+			t.Errorf("the stylesheet carries no %q, so setting hidden on a %s leaves it drawn", rule, class)
+		}
 	}
 }

@@ -230,7 +230,7 @@ storedPreferences.set(`+strconv.Quote(descriptionPreferenceKey)+`, "shown");
 func TestHandlerClientOffersTheDescriptionSettingOnlyWhereItDrawsCards(t *testing.T) {
 	runBoardClient(t, "description setting on the board", reconcileBoardTasks(), `
   if (descriptionToggle.hidden) throw new Error("the board withheld its own description setting");
-  if (deletedToggle.hidden) throw new Error("the board withheld the Deleted column's toggle");
+  if (filterRow.hidden) throw new Error("the board withheld the filter row the Deleted column's toggle sits in");
 `)
 
 	for _, route := range []struct{ name, url string }{
@@ -243,8 +243,8 @@ func TestHandlerClientOffersTheDescriptionSettingOnlyWhereItDrawsCards(t *testin
   if (!descriptionToggle.hidden) {
     throw new Error("a route that draws no cards still offered the description setting");
   }
-  if (!deletedToggle.hidden) {
-    throw new Error("a route that draws no columns still offered the Deleted column's toggle");
+  if (!filterRow.hidden) {
+    throw new Error("a route that draws no columns still offered the filter row and its Deleted toggle");
   }
 `)
 		})

@@ -82,7 +82,10 @@ func TestHandlerHeaderDrawsTheRouteLinksBeforeEverySettingThatComesAndGoes(t *te
 	if strings.Contains(nav, "hidden") {
 		t.Errorf("the header's navigation holds something a route can take away: %s", nav)
 	}
-	for _, setting := range []string{"data-deleted-toggle", "data-description-toggle", "data-sync-toggle", "data-scheme-toggle"} {
+	// The Deleted switch is not among these any more: it moved into the filter
+	// row under the header, where it sits beside the other filters rather than
+	// among the settings. See TestHandlerDrawsTheDeletedSwitchInTheFilterRow.
+	for _, setting := range []string{"data-description-toggle", "data-sync-toggle", "data-scheme-toggle"} {
 		at := strings.Index(header, setting)
 		if at < 0 {
 			t.Fatalf("the header carries no %s", setting)
@@ -131,15 +134,21 @@ func TestHandlerServesOneHeaderToEveryRoute(t *testing.T) {
 // writing over its text would throw away, and role/aria-checked are on the
 // control itself because that is the half a screen reader reads.
 func TestHandlerHeaderDrawsEverySettingAsASwitch(t *testing.T) {
-	header := headerElement(t, administrableBoardPage(t, core.DefaultVocabulary()))
+	page := administrableBoardPage(t, core.DefaultVocabulary())
+	header := headerElement(t, page)
+	// The Deleted switch is drawn in the filter row rather than the header now, so
+	// it is read out of that row. What a switch is made of is the same claim
+	// wherever it is drawn, which is why it is still asserted here.
+	row := filterRowElement(t, page)
 
-	for marker, label := range map[string]string{
-		"data-deleted-toggle":     "data-deleted-label",
-		"data-description-toggle": "data-description-label",
-		"data-sync-toggle":        "data-sync-label",
-		"data-scheme-toggle":      "data-scheme-label",
+	for marker, where := range map[string]string{
+		"data-deleted-toggle":     row,
+		"data-description-toggle": header,
+		"data-sync-toggle":        header,
+		"data-scheme-toggle":      header,
 	} {
-		element := switchElement(t, header, marker)
+		label := strings.Replace(marker, "-toggle", "-label", 1)
+		element := switchElement(t, where, marker)
 		for _, want := range []string{
 			`class="nav-switch"`,
 			`role="switch"`,
@@ -167,12 +176,14 @@ func TestHandlerHeaderDrawsEverySettingAsASwitch(t *testing.T) {
 	}
 }
 
-// Three of the four settings ship hidden, and the fourth does not.
+// Two of the three settings the header still draws ship hidden, and the third
+// does not.
 //
 // Hidden is how a setting says it acts on something the current route may not be
-// showing: Deleted adds a column to the board, Descriptions redraws its cards,
-// and the sync switch names what the board is doing. A header that offered any
-// of them from a task's page would be naming a state the reader cannot see.
+// showing: Descriptions redraws the board's cards, and the sync switch names what
+// the board is doing. A header that offered either from a task's page would be
+// naming a state the reader cannot see. The Deleted switch says the same thing
+// through the filter row it moved into, which ships hidden around it.
 //
 // The scheme is not about the board. It is about the room the reader is sitting
 // in, and it is true of every route the same way — so it ships visible and no
@@ -182,7 +193,7 @@ func TestHandlerHeaderDrawsEverySettingAsASwitch(t *testing.T) {
 func TestHandlerHeaderHidesTheBoardSettingsAndNotTheScheme(t *testing.T) {
 	header := headerElement(t, administrableBoardPage(t, core.DefaultVocabulary()))
 
-	for _, marker := range []string{"data-deleted-toggle", "data-description-toggle", "data-sync-toggle"} {
+	for _, marker := range []string{"data-description-toggle", "data-sync-toggle"} {
 		if element := switchElement(t, header, marker); !strings.Contains(element, " hidden") {
 			t.Errorf("the %s switch ships visible, so a route that cannot act on it still offers it: %s", marker, element)
 		}
@@ -196,9 +207,9 @@ func TestHandlerHeaderHidesTheBoardSettingsAndNotTheScheme(t *testing.T) {
 // has to keep being one a browser can cmd-click, bookmark and walk with Back;
 // what role="switch" changes is what it is called, not where it goes.
 func TestHandlerDeletedSwitchIsStillTheAddressItSets(t *testing.T) {
-	header := headerElement(t, administrableBoardPage(t, core.DefaultVocabulary()))
+	row := filterRowElement(t, administrableBoardPage(t, core.DefaultVocabulary()))
 
-	element := switchElement(t, header, "data-deleted-toggle")
+	element := switchElement(t, row, "data-deleted-toggle")
 	if !strings.HasPrefix(element, "<a ") {
 		t.Errorf("the Deleted setting is no longer an anchor: %s", element)
 	}
@@ -299,7 +310,7 @@ func TestHandlerStylesheetHoldsTheTwoHeaderGroupsApart(t *testing.T) {
 // listener that turns every link on this page into a render.
 func TestHandlerClientActivatesTheDeletedSwitchFromTheSpaceBar(t *testing.T) {
 	runBoardClient(t, "the Deleted switch under the space bar", reconcileBoardTasks(), `
-  if (deletedToggle.hidden) throw new Error("the board did not reveal the Deleted setting");
+  if (filterRow.hidden) throw new Error("the board did not reveal the row the Deleted setting sits in");
   if (!deletedToggle.eventListeners.keydown) throw new Error("the Deleted switch answers no key at all");
 
   // A key that is not Space is the browser's business, and Enter is already the

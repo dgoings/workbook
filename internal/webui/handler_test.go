@@ -597,8 +597,9 @@ func TestHandlerRemovesTheDeletedTasksRoute(t *testing.T) {
 
 // The header's link to the deleted tasks is now the column's switch: an anchor,
 // so it can be cmd-clicked, bookmarked and walked with Back, pointing at the
-// address that shows the column. It ships hidden and the board's render reveals
-// it, exactly as the Descriptions setting beside it does.
+// address that shows the column. It ships inside the filter row, which is the
+// element the board's render reveals — the switch itself is not hidden, because
+// everything in that row appears and goes together.
 func TestHandlerServesTheDeletedColumnToggleAndBoardNavigation(t *testing.T) {
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 
@@ -615,8 +616,11 @@ func TestHandlerServesTheDeletedColumnToggleAndBoardNavigation(t *testing.T) {
 		if !strings.Contains(tag, `href="/?deleted=1"`) {
 			t.Errorf("GET %s deleted-column toggle does not name the address that shows it: %s", path, tag)
 		}
-		if !strings.Contains(tag, " hidden") {
-			t.Errorf("GET %s served the deleted-column toggle unhidden: %s", path, tag)
+		if strings.Contains(tag, " hidden") {
+			t.Errorf("GET %s hides the deleted-column toggle itself rather than the row it sits in: %s", path, tag)
+		}
+		if !strings.Contains(body, `<div class="filter-row" data-filter-row hidden>`) {
+			t.Errorf("GET %s served no hidden filter row for the switch to sit in", path)
 		}
 		if !strings.Contains(body, `href="/"`) {
 			t.Errorf("GET %s does not provide header navigation to the board", path)
@@ -4528,6 +4532,10 @@ class TestElement {
     this.selected = false;
     this.disabled = false;
     this.required = false;
+    // What a checkbox is reporting. Every element has it for the reason every
+    // element has selected: the harness does not know which tag a client is
+    // about to build, and a tick the client wrote has to read back.
+    this.checked = false;
   }
   append(...children) {
     children.forEach((child) => {
@@ -4576,6 +4584,25 @@ class TestElement {
     if (this.eventListeners.click) this.eventListeners.click(event);
     if (documentEventListeners.click) documentEventListeners.click(event);
   }
+  // A keystroke, raised the way the browser raises one: the element's own
+  // listener hears it, and then it bubbles to the document, where this page
+  // closes an open chooser with Escape. Neither listener captures, so the target
+  // is first — and a listener that calls stopPropagation ends it there, which is
+  // the whole of how the box in the Labels menu claims the first Escape for
+  // emptying itself and leaves the second one to the document. A test that
+  // called the element's listener by hand would exercise neither half of that.
+  keydown(event) {
+    const raised = Object.assign({ target: this, key: "", preventDefault() {} }, event);
+    let stopped = false;
+    const declared = raised.stopPropagation;
+    raised.stopPropagation = () => {
+      stopped = true;
+      if (typeof declared === "function") declared.call(raised);
+    };
+    if (this.eventListeners.keydown) this.eventListeners.keydown(raised);
+    if (!stopped && documentEventListeners.keydown) documentEventListeners.keydown(raised);
+    return raised;
+  }
   get id() { return this.attributes.id || this._id || ""; }
   set id(value) { this._id = String(value); this.attributes.id = String(value); }
   addEventListener(name, listener) { this.eventListeners[name] = listener; }
@@ -4594,6 +4621,9 @@ class TestElement {
       if (selector === "[data-drop-status]" && element.dataset.dropStatus) return element;
       if (selector === "[data-drop-deleted]" && element.dataset.dropDeleted) return element;
       if (selector === "[data-status]" && element.dataset.status) return element;
+      // The chooser a click landed in, which is what tells the document listener
+      // whether the click was inside an open menu or outside every one of them.
+      if (selector === "[data-filter-chooser]" && Object.prototype.hasOwnProperty.call(element.dataset, "filterChooser")) return element;
     }
     return null;
   }
@@ -4606,6 +4636,24 @@ class TestElement {
   querySelector(selector) {
     if (selector === "[data-stale]") return stale;
     if (selector === "[data-copy-status]") return findElement(this, (element) => Object.prototype.hasOwnProperty.call(element.dataset, "copyStatus"));
+    // The parts of one chooser, asked for inside its own root exactly as the
+    // client asks for them: the button, the badge counting what is ticked, and
+    // the menu the options are drawn into.
+    for (const [marker, key] of [
+      ["[data-filter-chooser-button]", "filterChooserButton"],
+      ["[data-filter-chooser-badge]", "filterChooserBadge"],
+      ["[data-filter-chooser-count]", "filterChooserCount"],
+      ["[data-filter-chooser-menu]", "filterChooserMenu"],
+      // The three parts of a menu that narrows itself: the box, the line it says
+      // when the box has hidden every row, and the container the rows are drawn
+      // into. Only the Labels menu is served the first two, so the other two
+      // choosers answer null here exactly as the served page does.
+      ["[data-filter-chooser-search]", "filterChooserSearch"],
+      ["[data-filter-chooser-nomatch]", "filterChooserNomatch"],
+      ["[data-filter-chooser-options]", "filterChooserOptions"]
+    ]) {
+      if (selector === marker) return findElement(this, (element) => Object.prototype.hasOwnProperty.call(element.dataset, key));
+    }
     if (selector.startsWith("#")) {
       const id = selector.slice(1);
       return findElement(this, (element) => element.id === id);
@@ -4619,6 +4667,7 @@ class TestElement {
         if (selector === ".task-card" && hasClassToken(child, "task-card")) matches.push(child);
         if (selector === "[role=\"option\"]" && child.attributes.role === "option") matches.push(child);
         if (selector === "[data-relationship-row]" && Object.hasOwn(child.dataset, "relationshipRow")) matches.push(child);
+        if (selector === "[data-filter-option]" && Object.hasOwn(child.dataset, "filterOption")) matches.push(child);
         visit(child);
       }
     };
@@ -4795,14 +4844,103 @@ const descriptionToggle = new TestElement("button");
 descriptionToggle.hidden = true;
 const descriptionLabel = new TestElement("span");
 descriptionToggle.append(descriptionLabel, switchTrack());
-// The Deleted column's switch, shipped hidden beside it and revealed by the
-// board's render for the same reason. It is an anchor, because the state it
-// sets is the address.
+// The Deleted column's switch. It is an anchor, because the state it sets is the
+// address, and it ships visible: it lives in the filter row now, and the row is
+// the element the board's render reveals and every other route hides.
 const deletedToggle = new TestElement("a");
-deletedToggle.hidden = true;
 deletedToggle.href = "/?deleted=1";
 const deletedLabel = new TestElement("span");
 deletedToggle.append(deletedLabel, switchTrack());
+// The filter row itself, as the page ships it: hidden, with the search box, the
+// space the choosers are drawn into, the Deleted switch and the Clear link in it.
+// A test reads the switch's visibility off this element for the reason the page
+// writes it there — every control in the row acts on the columns, so one route
+// decides all of them at once.
+const filterRow = new TestElement("div");
+filterRow.hidden = true;
+filterRow.dataset.filterRow = "";
+const filterSearch = new TestElement("input");
+filterSearch.attributes.type = "search";
+filterSearch.dataset.filterQ = "";
+const filterChoosers = new TestElement("div");
+filterChoosers.dataset.filterChoosers = "";
+// One chooser as the page ships it: a button carrying the badge that counts what
+// is ticked, and the menu the client draws the options into. Both start hidden —
+// the badge because nothing is ticked and the menu because nothing has opened it
+// — which is what lets a test tell a client that revealed one from a harness that
+// was born showing it.
+//
+// The badge holds the count in a span of its own beside a word only a screen
+// reader hears, exactly as the served page does: the client writes the count into
+// that span, and a harness holding a bare badge would let a client that wrote over
+// the whole badge — throwing the word away every render — pass.
+//
+// The button names the menu it opens through aria-controls rather than claiming an
+// unnamed popup, so the menu carries the id it is named by.
+function filterChooserElement(group, startsHidden) {
+  const menuID = "filter-menu-" + group;
+  const root = new TestElement("div");
+  root.className = "filter-chooser";
+  root.dataset.filterChooser = group;
+  root.hidden = startsHidden;
+  const button = new TestElement("button");
+  button.dataset.filterChooserButton = "";
+  button.setAttribute("aria-expanded", "false");
+  button.setAttribute("aria-controls", menuID);
+  const badge = new TestElement("span");
+  badge.hidden = true;
+  badge.dataset.filterChooserBadge = "";
+  const count = new TestElement("span");
+  count.dataset.filterChooserCount = "";
+  const screenReaderWord = new TestElement("span");
+  screenReaderWord.className = "visually-hidden";
+  screenReaderWord.textContent = " selected";
+  badge.append(count, screenReaderWord);
+  button.append(badge);
+  const menu = new TestElement("div");
+  menu.hidden = true;
+  menu.id = menuID;
+  menu.dataset.filterChooserMenu = "";
+  // The Labels menu narrows itself, and only that one: nobody declares a label,
+  // so it is the one chooser whose list is as long as the project's cards make
+  // it. The box and the line it says when the box has matched nothing are served
+  // in it, above the rows, in the order the page serves them — a harness that
+  // built them for every chooser would let a client that gave Priority a box pass.
+  if (group === "label") {
+    const search = new TestElement("input");
+    search.attributes.type = "search";
+    search.dataset.filterChooserSearch = "";
+    const noMatch = new TestElement("p");
+    noMatch.hidden = true;
+    noMatch.setAttribute("aria-live", "polite");
+    noMatch.dataset.filterChooserNomatch = "";
+    noMatch.textContent = "No labels match";
+    menu.append(search, noMatch);
+  }
+  // Every menu has one of these, so the client draws rows down one path. It is a
+  // container inside the menu rather than the menu itself, which is what keeps a
+  // rebuilt option set from taking the box above it with it.
+  const optionsList = new TestElement("div");
+  optionsList.dataset.filterChooserOptions = "";
+  menu.append(optionsList);
+  root.append(button, menu);
+  return root;
+}
+// The three of them, in the order the row serves them. The Key one ships hidden,
+// because a project with one key has nothing to choose between and the served
+// page says so rather than leaving the client to hide a control the reader has
+// already seen.
+const filterChooserRoots = [
+  filterChooserElement("priority", false),
+  filterChooserElement("label", false),
+  filterChooserElement("key", true)
+];
+filterChooserRoots.forEach((root) => filterChoosers.append(root));
+const filterClear = new TestElement("a");
+filterClear.hidden = true;
+filterClear.dataset.filterClear = "";
+filterClear.href = "/";
+filterRow.append(filterSearch, filterChoosers, deletedToggle, filterClear);
 // The publishing switch, which no route reveals: it is the answer from
 // /api/sync that decides whether there is a mode to report, so it starts hidden
 // and stays hidden on a harness whose server says nothing about publishing.
@@ -4871,6 +5009,10 @@ const documentEventListeners = {};
     if (selector === "[data-vocabulary-reload]") return vocabularyReload;
     if (selector === "[data-description-toggle]") return descriptionToggle;
     if (selector === "[data-deleted-toggle]") return deletedToggle;
+    if (selector === "[data-filter-row]") return filterRow;
+    if (selector === "[data-filter-q]") return filterSearch;
+    if (selector === "[data-filter-choosers]") return filterChoosers;
+    if (selector === "[data-filter-clear]") return filterClear;
     if (selector === "[data-sync-toggle]") return syncToggle;
     if (selector === "[data-description-label]") return descriptionLabel;
     if (selector === "[data-deleted-label]") return deletedLabel;
@@ -4891,7 +5033,13 @@ const documentEventListeners = {};
     if (selector === "style[data-board-priority-ink]") return boardPriorityInkStyle;
     return null;
   },
-  querySelectorAll() { return []; },
+  querySelectorAll(selector) {
+    // The choosers are collected once, by this selector, the way the client
+    // collects them: the row holds three and the group each one narrows is its
+    // own attribute.
+    if (selector === "[data-filter-chooser]") return filterChooserRoots;
+    return [];
+  },
   // The browser's own hit test, over the boxes a test has stated. The drag
   // loop asks the document what is under a cursor that has not moved after the
   // board track has slid beneath it, which is the one question the loop cannot

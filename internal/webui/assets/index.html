@@ -177,6 +177,67 @@
        them. */
     .header-settings { display: flex; flex-direction: column; align-items: flex-end; gap: .5rem; min-width: 0; }
     .header-switches { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .45rem .95rem; }
+    /* The board's filter row. It is a row of the page rather than a band inside
+       the board, because the board scrolls sideways under a narrow window and a
+       control that scrolled away from the columns it acts on would be one the
+       reader has to go looking for. The count modifier sits here beside it for
+       the same reason the row does: "3 / 9" is the row's reading of a column
+       rather than the column's own.
+
+       No rule under it. The row already reads as a band of its own — it is the
+       only thing between the header's line and the columns — and a second
+       hairline a few pixels under the first one read as a thickened header
+       border rather than as an edge of anything. */
+    .filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .95rem; padding: .5rem 1.25rem; }
+    .filter-row[hidden] { display: none; }
+    .filter-row__search { flex: 1 1 14rem; min-width: 10rem; max-width: 26rem; border: 1px solid var(--wb-border-soft); border-radius: 4px; background: var(--wb-surface-1); color: var(--wb-ink); font: inherit; font-size: .84rem; padding: .35rem .55rem; }
+    .filter-row__choosers { display: flex; flex-wrap: wrap; gap: .45rem; }
+    .filter-row__clear { font-size: .8rem; color: var(--wb-ink-soft); }
+    .filter-row__clear[hidden] { display: none; }
+    .column__count--filtered { color: var(--wb-ink-soft); }
+    /* A word that is there for a screen reader and not for the page: the badge
+       reads "2" to the eye and "2 selected" to a reader who cannot see which
+       chooser it is sitting on. The word reads the same for one as for two,
+       which is what keeps it in the markup: a plural the client had to choose
+       between would be a word this page no longer owns. The recipe is the one .relationship-editor__label
+       uses — a 1px box, clipped, with the text kept on one line so it is not
+       read out a character at a time. */
+    .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    /* One chooser: a button that says what it narrows by, and a menu of ticks
+       under it. The menu is positioned against the chooser rather than laid out
+       in the row, because a list that took up room would push the row's other
+       controls sideways every time one was opened. The shadow is the token the
+       relationship listbox above uses, so the menu is as legible over a dark
+       board as over a light one. */
+    .filter-chooser { position: relative; }
+    .filter-chooser[hidden] { display: none; }
+    .filter-chooser__button { display: inline-flex; align-items: center; gap: .35rem; border: 1px solid var(--wb-border-soft); border-radius: 4px; background: var(--wb-surface-1); color: var(--wb-ink); font: inherit; font-size: .8rem; padding: .3rem .55rem; cursor: pointer; }
+    .filter-chooser__button[aria-expanded="true"], .filter-chooser--active .filter-chooser__button { border-color: var(--wb-primary); color: var(--wb-primary); }
+    .filter-chooser__badge { min-width: 1.1rem; padding: 0 .3rem; border-radius: 999px; background: var(--wb-primary); color: var(--wb-surface-1); font-size: .68rem; text-align: center; }
+    .filter-chooser__badge[hidden] { display: none; }
+    .filter-chooser__menu { position: absolute; top: calc(100% + .3rem); left: 0; z-index: 5; min-width: 12rem; padding: .4rem; border: 1px solid var(--wb-border-soft); border-radius: 4px; background: var(--wb-surface-1); box-shadow: 0 6px 20px var(--wb-text-shadow); }
+    .filter-chooser__menu[hidden] { display: none; }
+    /* The box at the top of the Labels menu. A project carries as many labels as
+       its cards do, and a list that long is a scroll rather than a choice, so
+       that one menu narrows itself. It is drawn quieter and smaller than the
+       row's own search box — this one narrows a list of ticks, not the board —
+       and it takes the menu's whole width rather than a width of its own, so the
+       menu is one column of things however long the longest label is. */
+    .filter-chooser__search { display: block; width: 100%; box-sizing: border-box; margin: 0 0 .35rem; border: 1px solid var(--wb-border-soft); border-radius: 4px; background: var(--wb-surface-1); color: var(--wb-ink); font: inherit; font-size: .8rem; padding: .3rem .45rem; }
+    /* The rows are what scrolls, not the menu. The height and the scroll used to
+       be the menu's, which put the box that narrows these rows inside the scroller
+       it narrows: a reader who scrolled a long Labels menu to read further down it
+       pushed the box off the top of the menu — measured at -17.6px on eight labels
+       — and the control they were about to type into was somewhere above the
+       border. Here the menu keeps its frame, the box and the no-match line hold
+       their place in it, and the list under them takes the height and the scrollbar
+       that the list is what needs. */
+    .filter-chooser__options { max-height: 18rem; overflow-y: auto; }
+    .filter-option { display: flex; align-items: center; gap: .45rem; padding: .25rem .3rem; font-size: .82rem; cursor: pointer; }
+    /* The row's own display outranks the one the hidden attribute hides by, so the search box narrows nothing without this — the reason every other [hidden] rule here exists. */
+    .filter-option[hidden] { display: none; }
+    .filter-option .count { margin-left: auto; color: var(--wb-ink-soft); font-size: .72rem; }
+    .filter-option--none { color: var(--wb-ink-soft); }
     /* A setting reads as its state before it reads as anything else, so it is
        drawn as one: a track the knob sits at one end of. The words before it
        say what happens next — "Hide Deleted" over a board that is showing them
@@ -237,7 +298,25 @@
     .nav-switch__label--descriptions { min-width: 8.25rem; }
     .nav-switch__label--sync { min-width: 5rem; }
     @media (prefers-reduced-motion: reduce) { .nav-switch__track, .nav-switch__knob { transition: none; } }
-    main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 1.25rem; }
+    /* No padding at the top. The filter row is what separates the header from the
+       columns now, and a board inset under it stood the columns a row's height
+       below a control that acts on them. */
+    main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 1.25rem 1.25rem; }
+    /* The routes that draw no columns want that inset back: a task's page, the
+       configuration page and a route message are each a bordered card with a
+       shadow, and one flush under the header's own line reads as a thickened
+       header border rather than as the top of anything.
+
+       The condition is the row being hidden, which is exactly the condition of
+       being off the board — renderRoute hides the row for every other route — so
+       the state is read off the page rather than kept a second time. It is padding
+       on main rather than a margin on the card because main is the scroller: a
+       margin adds to what is inside the scroller and a page that fitted the window
+       gains a margin's worth of scroll, which is what every route whose shell is
+       `height: auto; min-height: 100%` — the configuration page, a task page with
+       its history open, a phone, a short window — would have gained. Padding comes
+       off the height those percentages resolve against instead, so they still fit. */
+    .filter-row[hidden] ~ main { padding-top: 1.25rem; }
     /* Reports leave only by being dismissed, so the notice has to be able to run
        out of room rather than out of page: it shares a viewport-height flex
        column with main, and the body never scrolls. The cap keeps the route
@@ -1192,8 +1271,62 @@
          The label is a child rather than the control's own text because the
          control is no longer only text: writing to it would take the track and
          the knob with it. -->
-    <div class="header-settings"><p class="updated" data-updated><span class="sync-dot" data-sync-dot aria-hidden="true"></span><span data-updated-text>Loaded from this checkout</span></p><div class="header-switches"><a class="nav-switch" href="/?deleted=1" role="switch" aria-checked="false" data-deleted-toggle hidden><span class="nav-switch__label nav-switch__label--deleted" data-deleted-label>Show Deleted</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></a><button type="button" class="nav-switch" role="switch" aria-checked="false" data-scheme-toggle><span class="nav-switch__label" data-scheme-label>Dark Mode</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-description-toggle hidden><span class="nav-switch__label nav-switch__label--descriptions" data-description-label>Show Descriptions</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-sync-toggle hidden><span class="nav-switch__label nav-switch__label--sync" data-sync-label></span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button></div></div>
+    <div class="header-settings"><p class="updated" data-updated><span class="sync-dot" data-sync-dot aria-hidden="true"></span><span data-updated-text>Loaded from this checkout</span></p><div class="header-switches"><button type="button" class="nav-switch" role="switch" aria-checked="false" data-scheme-toggle><span class="nav-switch__label" data-scheme-label>Dark Mode</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-description-toggle hidden><span class="nav-switch__label nav-switch__label--descriptions" data-description-label>Show Descriptions</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-sync-toggle hidden><span class="nav-switch__label nav-switch__label--sync" data-sync-label></span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button></div></div>
   </header>
+  <!-- The board's filters. Everything here is a view of the columns: the
+       search narrows by title and description, the choosers by priority,
+       label and key, and the Deleted switch adds the one column that is not
+       a status. Each control writes the address rather than a variable, so
+       a filtered board is shareable, bookmarkable and walked by Back — the
+       Deleted switch has always worked this way and the others follow it.
+       The row ships hidden and the board's render reveals it, because it acts
+       on the columns and a task's page draws none. -->
+  <div class="filter-row" data-filter-row hidden>
+    <input class="filter-row__search" type="search" data-filter-q autocomplete="off" placeholder="Search title, description or task ID" aria-label="Search title, description or task ID">
+    <!-- The three choosers, served rather than built, so a page whose script
+         never ran offers no control that cannot work. Each is a button and an
+         empty menu: what a chooser lists is the board's own priorities, labels
+         and keys, which only the client knows, so the options are drawn there.
+         The Key chooser ships hidden because most projects have one key and a
+         chooser offering one alternative is a control with nothing to choose.
+
+         The badge holds two spans rather than a number: the count is written into
+         the first, and the second is a word only a screen reader hears, so the
+         badge reads "2 selected" to a reader who cannot see which chooser it is
+         sitting on. Writing the count straight into the badge would take that
+         word with it every render. -->
+    <div class="filter-row__choosers" data-filter-choosers>
+      <div class="filter-chooser" data-filter-chooser="priority">
+        <button type="button" class="filter-chooser__button" aria-expanded="false" aria-controls="filter-menu-priority" data-filter-chooser-button>Priority <span class="filter-chooser__badge" data-filter-chooser-badge hidden><span data-filter-chooser-count></span><span class="visually-hidden"> selected</span></span></button>
+        <div class="filter-chooser__menu" id="filter-menu-priority" role="group" aria-label="Priority" data-filter-chooser-menu hidden><div class="filter-chooser__options" data-filter-chooser-options></div></div>
+      </div>
+      <div class="filter-chooser" data-filter-chooser="label">
+        <button type="button" class="filter-chooser__button" aria-expanded="false" aria-controls="filter-menu-label" data-filter-chooser-button>Labels <span class="filter-chooser__badge" data-filter-chooser-badge hidden><span data-filter-chooser-count></span><span class="visually-hidden"> selected</span></span></button>
+        <!-- The one menu with a box of its own. Nobody declares a label, so this
+             is the only chooser whose list is as long as the project's cards make
+             it, and a menu of dozens is a scroll rather than a choice. What is
+             typed here is menu state and not board state: it never reaches the
+             address, and it is cleared when the menu closes. The line under the
+             box is what the menu says when the box has hidden every row, which is
+             a different sentence from the one an unlabelled board gets. It is a
+             live region and it stands in the document whether or not it is
+             showing, so a reader who cannot see the rows go is told that the
+             letter they just typed left nothing — a line created in the same
+             frame as its own first message announces nothing at all. -->
+        <div class="filter-chooser__menu" id="filter-menu-label" role="group" aria-label="Labels" data-filter-chooser-menu hidden>
+          <input class="filter-chooser__search" type="search" autocomplete="off" placeholder="Find a label" aria-label="Find a label" data-filter-chooser-search>
+          <p class="filter-option filter-option--none" aria-live="polite" data-filter-chooser-nomatch hidden>No labels match</p>
+          <div class="filter-chooser__options" data-filter-chooser-options></div>
+        </div>
+      </div>
+      <div class="filter-chooser" data-filter-chooser="key" hidden>
+        <button type="button" class="filter-chooser__button" aria-expanded="false" aria-controls="filter-menu-key" data-filter-chooser-button>Key <span class="filter-chooser__badge" data-filter-chooser-badge hidden><span data-filter-chooser-count></span><span class="visually-hidden"> selected</span></span></button>
+        <div class="filter-chooser__menu" id="filter-menu-key" role="group" aria-label="Key" data-filter-chooser-menu hidden><div class="filter-chooser__options" data-filter-chooser-options></div></div>
+      </div>
+    </div>
+    <a class="nav-switch" href="/?deleted=1" role="switch" aria-checked="false" data-deleted-toggle><span class="nav-switch__label nav-switch__label--deleted" data-deleted-label>Show Deleted</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></a>
+    <a class="filter-row__clear" href="/" data-filter-clear hidden>Clear filters</a>
+  </div>
   <!-- What the board has to say to a reader who has moved on: a save that
        already returned, or a refused change whose card the board has since
        stopped drawing. It sits outside main so it is readable from whatever
@@ -1716,6 +1849,94 @@
       const syncToggle = document.querySelector("[data-sync-toggle]");
       const descriptionToggle = document.querySelector("[data-description-toggle]");
       const deletedToggle = document.querySelector("[data-deleted-toggle]");
+      // The board's filter row, and the two controls in it that are not a
+      // switch. The row is what a route reveals and hides, because every
+      // control in it is a view of the columns; the Deleted switch inside it is
+      // no longer hidden on its own.
+      const filterRow = document.querySelector("[data-filter-row]");
+      const filterSearch = document.querySelector("[data-filter-q]");
+      const filterClear = document.querySelector("[data-filter-clear]");
+      // The row's three choosers, collected once and held by the group each one
+      // narrows: "priority", "label", "key". Each is a button, the badge on it
+      // that counts what is ticked, and the menu the ticks are drawn into.
+      //
+      // `options` is this chooser's option nodes by value, and `builtFrom` the
+      // option set they were built for. Both are here rather than rebuilt per
+      // render because this runs every second: see renderChooserOptions.
+      const filterChoosers = new Map([...document.querySelectorAll("[data-filter-chooser]")].map((root) => [root.dataset.filterChooser, {
+        root,
+        button: root.querySelector("[data-filter-chooser-button]"),
+        badge: root.querySelector("[data-filter-chooser-badge]"),
+        // The number inside the badge. It is a node of its own because the badge
+        // also holds a word for screen readers, and writing the count into the
+        // badge itself would throw that word away on every render.
+        count: root.querySelector("[data-filter-chooser-count]"),
+        menu: root.querySelector("[data-filter-chooser-menu]"),
+        // The box that narrows this menu's rows, the line the menu says when it
+        // has narrowed them all away, and the container the rows are drawn into.
+        // Only the Labels menu is served a box and a line — it is the one chooser
+        // whose list is as long as the project's cards make it — so both are null
+        // on the other two, and every branch that touches them asks first. The
+        // options container is served for all three, so the render has one path.
+        search: root.querySelector("[data-filter-chooser-search]"),
+        noMatch: root.querySelector("[data-filter-chooser-nomatch]"),
+        optionsList: root.querySelector("[data-filter-chooser-options]"),
+        options: new Map(),
+        builtFrom: null,
+      }]));
+      // One menu open at a time, and a menu open only while the reader is in it.
+      // `except` is the chooser the reader is acting inside, which is left alone:
+      // a tick navigates, and the menu they are working through has to survive
+      // the render that navigation causes.
+      //
+      // A menu that closes forgets what was typed into it. The box is menu state
+      // rather than board state, so a reader who reopens the Labels menu is
+      // offered the labels the board has and not the three a search they have
+      // since forgotten left standing — and this is the one place every close
+      // path goes through: the button, a click outside, Escape, and a route that
+      // leaves the board.
+      function closeChoosersExcept(except) {
+        filterChoosers.forEach((chooser, group) => {
+          if (chooser.root === except) return;
+          if (chooser.menu) chooser.menu.hidden = true;
+          if (chooser.button) chooser.button.setAttribute("aria-expanded", "false");
+          if (chooser.search && chooser.search.value !== "") {
+            chooser.search.value = "";
+            applyChooserSearch(chooser, group);
+          }
+        });
+      }
+      function chooserIsOpen(chooser) {
+        return Boolean(chooser.menu) && chooser.menu.hidden === false;
+      }
+      filterChoosers.forEach((chooser, group) => {
+        if (!chooser.button || !chooser.menu) return;
+        chooser.button.addEventListener("click", () => {
+          const opening = chooser.menu.hidden;
+          closeChoosersExcept(opening ? chooser.root : null);
+          chooser.menu.hidden = !opening;
+          chooser.button.setAttribute("aria-expanded", opening ? "true" : "false");
+          // A menu with a box opens with the caret in it, so a reader who came
+          // here to find one label out of forty types rather than scrolls. It is
+          // focused after the menu is shown: a browser will not put the caret in
+          // something that is not on screen yet.
+          if (opening && chooser.search) chooser.search.focus();
+        });
+        if (!chooser.search) return;
+        chooser.search.addEventListener("input", () => applyChooserSearch(chooser, group));
+        chooser.search.addEventListener("keydown", (event) => {
+          if (event.key !== "Escape") return;
+          // Escape empties the box first and closes the menu second, which is the
+          // order of what the reader is undoing: the narrowing they typed, and
+          // then the menu they opened. The first press is claimed here and kept
+          // from the document, which is where the second one is heard — the box is
+          // empty by then, so this listener lets it through.
+          if (chooser.search.value === "") return;
+          event.stopPropagation();
+          chooser.search.value = "";
+          applyChooserSearch(chooser, group);
+        });
+      });
       const schemeToggle = document.querySelector("[data-scheme-toggle]");
       const schemeLabel = document.querySelector("[data-scheme-label]");
       // The words in front of each switch. They are written to instead of the
@@ -1738,6 +1959,32 @@
         });
       }
       activateSwitchOnSpace(deletedToggle);
+      // Typing narrows the board by writing the address, which is what makes a
+      // narrowed board a link. It replaces the entry rather than pushing one:
+      // Back through nine keystrokes of "dependency" is not a history anybody
+      // asked for, and the entry the reader came from is the one Back should
+      // reach. The value is trimmed on the way out so that a trailing space
+      // never becomes an address of its own, and the render the keystroke causes
+      // leaves the control alone, so nothing rewrites what is being typed.
+      //
+      // That exemption is this flag rather than "the box has the caret", which
+      // is the difference between a render caused by the typing and any other
+      // render. A reader who presses Back over a search still has the caret in
+      // the box, and a render that skipped the box there would leave the typed
+      // text sitting over an address that no longer holds it — a board drawing
+      // every card under a search box that says otherwise.
+      let typingIntoSearch = false;
+      if (filterSearch) {
+        filterSearch.addEventListener("input", () => {
+          const next = Object.assign({}, boardFilters, { q: filterSearch.value.trim() });
+          typingIntoSearch = true;
+          try {
+            navigate(boardAddress(deletedColumnShown, next), { replace: true });
+          } finally {
+            typingIntoSearch = false;
+          }
+        });
+      }
       // Whether the board is drawing its Deleted column, and the parts of that
       // column while it is. The column is board state rather than route state:
       // a reader who opens a task from a board showing it comes back to a board
@@ -2428,13 +2675,272 @@
         }
         return article;
       }
+      // The board's filters, read from and written to the address. Values are
+      // repeated parameters rather than a joined list because a label may hold
+      // any character, a comma included. Written in one fixed order with each
+      // group sorted, so one filter state has one address.
+      //
+      // The text search is the predicate core's MatchesFind is, and the one
+      // `list --find` narrows by: every whitespace-separated term has to appear
+      // somewhere in the title or the description, case folded, or name the start
+      // of the task's ID. It is kept between the two markers below and depends on
+      // nothing else on this page — the keys it needs are passed in — so a parity
+      // test can lift it out and ask it what core is asked.
+      //
+      // The markers are strings rather than comments because the parity test asks
+      // the page the handler served, the way every other test here does, and
+      // html/template strips the comments out of that page: a marker that existed
+      // only in this file would be one the test could not find.
+      "find:begin";
+      // Folded one code point at a time, because Go folds one rune at a time.
+      // JavaScript's toLowerCase reads the text around a letter and Go's
+      // strings.ToLower cannot: a browser answers "ΟΔΟΣ".toLowerCase() with
+      // "οδος", applying the Greek final-sigma rule, while Go answers "οδοσ", so
+      // a reader searching a board for "οδοσ" found nothing the CLI found. Taking
+      // each code point on its own takes that context away, which is the only
+      // thing the two matchers disagreed about here.
+      //
+      // The one pair they still cannot agree on is "İ" (U+0130). JavaScript's
+      // special casing lowercases it to "i" followed by a combining dot above and
+      // Go's simple case mapping answers a bare "i", and reconciling that would
+      // mean shipping a case-mapping table to the browser. The parity test names
+      // the pair and asserts it still diverges, so whoever changes either side is
+      // told about it.
+      //
+      // An all-ASCII string folds the same both ways, and the whole-string call is
+      // the one the engine has a fast path for, so it takes it: no ASCII code
+      // point has a special or a context-sensitive lowercase mapping — final sigma
+      // needs a Greek sigma and the dotted capital I is not ASCII — so with
+      // nothing outside ASCII in the string there is no context left to read.
+      // Measured on a 2 KB description: 29.3 us per code point against 0.7 us
+      // this way, which is what makes a searched board of long descriptions cost
+      // a fraction of a frame rather than several of them.
+      const nonAsciiFind = /[^\x00-\x7F]/;
+      function foldFindCase(text) {
+        if (!nonAsciiFind.test(text)) return text.toLowerCase();
+        return [...text].map((character) => character.toLowerCase()).join("");
+      }
+      // The text a task is searched over: its title and its description, joined
+      // with a newline so a term cannot straddle the two, folded once.
+      function foldTaskHaystack(task) {
+        return foldFindCase(String(task.title || "") + "\n" + String(task.description || ""));
+      }
+      // The characters Go's unicode.IsSpace accepts, which is what strings.Fields
+      // splits a query on — and only those. JavaScript's \s is a different set in
+      // both directions: it splits on U+FEFF, which Go does not call whitespace,
+      // and it does not split on U+0085, which Go does. Either difference turns
+      // one query into two terms on one side and one term on the other.
+      const findSpace = /[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+/;
+      function findTerms(query) {
+        return foldFindCase(String(query || "")).split(findSpace).filter(Boolean);
+      }
+      // Whether a term names the start of a task ID under one of these keys: the
+      // key, a dash, and at least one more character, answered upper-cased
+      // because that is the case an ID is written in. core.FindKeyPrefixTerm is
+      // the same function and the parity test holds the two together.
+      //
+      // "WB" and "WB-" are words rather than prefixes, and an ID is matched only
+      // from its beginning — a word that happens to occur inside a ULID must
+      // never drag in a card nobody was looking for. findTerms has already
+      // lower-cased the term; upper-casing it again here is what makes a pasted
+      // ID work whatever case it arrived in.
+      // The term is checked before it is upper-cased, and only ASCII letters,
+      // digits and dashes pass. Upper case is not a per-character operation and
+      // the two languages expand differently: "ß".toUpperCase() here is "SS" and
+      // Go's strings.ToUpper leaves the letter alone, so "wb-01m2ßkb" named the ID
+      // WB-01M2SSKB… on this board and named nothing to `list --find`. Refusing
+      // the term rather than folding it is the fix that needs no case table in the
+      // browser — with nothing outside ASCII left there is nothing the two can
+      // fold differently. A term that is refused here still has the whole text
+      // route open to it.
+      //
+      // Both loops walk code points against the letters and digits they accept,
+      // the way core.FindKeyPrefixTerm does, rather than testing a pattern: a
+      // pattern here would be a second spelling of a rule that lives in Go, and
+      // the page deliberately spells none of those. Neither is the grammar of a
+      // key's name — that one the page never reads at all, and the server answers.
+      function findKeyPrefixTerm(term, keys) {
+        const text = String(term);
+        for (const character of text) {
+          const upperLetter = character >= "A" && character <= "Z";
+          const lowerLetter = character >= "a" && character <= "z";
+          const digit = character >= "0" && character <= "9";
+          if (!upperLetter && !lowerLetter && !digit && character !== "-") return null;
+        }
+        const upper = text.toUpperCase();
+        for (const key of keys) {
+          if (upper.length <= key.length + 1 || !upper.startsWith(key + "-")) continue;
+          // Only a second dash can fail here, now that the term is ASCII; the
+          // check is written as the alphabet it is so that it stays true of the
+          // rule rather than of what the validation above happens to leave.
+          let alphabet = true;
+          for (const character of upper.slice(key.length + 1)) {
+            const letter = character >= "A" && character <= "Z";
+            const digit = character >= "0" && character <= "9";
+            if (!letter && !digit) {
+              alphabet = false;
+              break;
+            }
+          }
+          if (alphabet) return upper;
+        }
+        return null;
+      }
+      // The predicate over work already done: a haystack this task's text has
+      // already been folded into, and terms the query has already been split into.
+      // An empty term list matches, which is what makes an empty query cost
+      // nothing — no caller has to fold a haystack to be told it matches.
+      //
+      // The ID is taken alongside the haystack rather than folded into it, since
+      // the two are matched by different rules: the text anywhere, the ID only
+      // from its start.
+      function matchesFoldedFind(foldedHaystack, terms, id, keys) {
+        if (terms.length === 0) return true;
+        const names = keys || [];
+        return terms.every((term) => {
+          if (foldedHaystack.includes(term)) return true;
+          const prefix = findKeyPrefixTerm(term, names);
+          return prefix !== null && String(id || "").startsWith(prefix);
+        });
+      }
+      // The whole predicate, folding for itself. This is the one the parity test
+      // asks and the one every caller outside a render uses; a render that is
+      // about to ask the same task about twenty-five options folds once and goes
+      // through matchesFoldedFind instead, which is the same answer arrived at
+      // without doing the same work twenty-five times.
+      function matchesFind(task, query, keys) {
+        const terms = findTerms(query);
+        if (terms.length === 0) return true;
+        return matchesFoldedFind(foldTaskHaystack(task), terms, task.id, keys);
+      }
+      "find:end";
+      function emptyFilters() {
+        return { q: "", priority: new Set(), label: new Set(), key: new Set() };
+      }
+      function filtersFromURL(url) {
+        const params = url.searchParams;
+        return {
+          q: (params.get("q") || "").trim(),
+          priority: new Set(params.getAll("priority").filter(Boolean)),
+          label: new Set(params.getAll("label").filter(Boolean)),
+          // Upper-cased, because a key is upper-case everywhere it is written:
+          // in a task's ID, in the chooser's own options, and in `workbook key`.
+          // ?key=wb is a reader typing an address by hand, and answering it with
+          // an empty board would be answering a question they did not ask.
+          key: new Set(params.getAll("key").filter(Boolean).map((value) => value.toUpperCase())),
+        };
+      }
+      // The board's whole address, built from nothing but the column setting and
+      // the filters. It drops the fragment and every parameter these two do not
+      // own, which is deliberate: this is the one function that says what a board
+      // address is, and a landing that carried an unrecognized parameter through
+      // would be promising to honor something no control here reads. Nothing on
+      // `/` uses a fragment or any other parameter today, so nothing is being
+      // taken away; a future one has to be named here to survive.
+      function boardAddress(deleted, filters) {
+        const params = new URLSearchParams();
+        if (deleted) params.set("deleted", "1");
+        if (filters.q) params.set("q", filters.q);
+        [...filters.priority].sort().forEach((value) => params.append("priority", value));
+        [...filters.label].sort().forEach((value) => params.append("label", value));
+        [...filters.key].sort().forEach((value) => params.append("key", value));
+        const query = params.toString();
+        return "/" + (query ? "?" + query : "");
+      }
+      function filtersActive(filters) {
+        return Boolean(filters.q) || filters.priority.size > 0 || filters.label.size > 0 || filters.key.size > 0;
+      }
+      // Whether two readings of the address are the same filter state.
+      //
+      // A navigation that changed only the filters is the same route at the same
+      // pathname, and nothing else in the board's render would notice it: the
+      // columns are re-attached rather than rebuilt, and the Deleted column's
+      // render runs only when that column appears or goes. So this is what tells
+      // the route there is anything to redraw.
+      function sameFilterValues(left, right) {
+        if (left.size !== right.size) return false;
+        for (const value of left) {
+          if (!right.has(value)) return false;
+        }
+        return true;
+      }
+      function sameFilters(left, right) {
+        return left.q === right.q &&
+          sameFilterValues(left.priority, right.priority) &&
+          sameFilterValues(left.label, right.label) &&
+          sameFilterValues(left.key, right.key);
+      }
+      // The key a task's ID was minted under: the part before the first dash. It
+      // is read off the ID rather than asked of the server for the reason the
+      // search is computed here — the board already holds everything the filters
+      // need, and a filter that waited on a round trip would lag the typing.
+      // Upper-cased for the reason the key filter is: the two are compared, so
+      // they have to be folded the same way or the folding is only half done.
+      function taskKey(task) {
+        const id = String(task.id || "");
+        const dash = id.indexOf("-");
+        return dash > 0 ? id.slice(0, dash).toUpperCase() : "";
+      }
+      // Every key this project has ever minted under, which is the list the
+      // search compares an ID-prefix term against. All states count: a retired
+      // key mints nothing, but everything it ever minted is still on the board,
+      // so a pasted ID under one still has to find its card.
+      function searchKeyNames() {
+        return publishedKeys.map((entry) => entry.key);
+      }
+      function passesFilters(task, filters, search) {
+        if (filters.priority.size > 0 && !filters.priority.has(task.priority)) return false;
+        if (filters.label.size > 0 && !(task.labels || []).some((label) => filters.label.has(label))) return false;
+        if (filters.key.size > 0 && !filters.key.has(taskKey(task))) return false;
+        // Handed a render's folded text, the search is a substring test over work
+        // already done. The query it was folded for is carried with it and checked
+        // here rather than assumed: every caller that passes one is asking about
+        // the same query it was built from — withOnly replaces one group and never
+        // the search — and a caller that ever is not gets the slow, correct answer
+        // instead of a wrong fast one.
+        if (search && search.folded && search.query === filters.q) {
+          const folded = search.folded.get(task.id);
+          if (folded !== undefined) return matchesFoldedFind(folded, search.terms, task.id, search.keys);
+        }
+        // The render's own list where there is one, since this path is the only
+        // one an unsearched board takes and it is taken once per task per option
+        // per poll — building a fresh array of key names for each of those asks
+        // is work nobody reads. foldedSearch carries the list even when it folds
+        // nothing, which is exactly the empty-query case.
+        return matchesFind(task, filters.q, (search && search.keys) || searchKeyNames());
+      }
+      // Everything one render needs to answer the search with: the query, its
+      // terms split once, the project's keys read once, and each task's text
+      // folded once.
+      //
+      // It exists because of what the same render used to cost. passesFilters is
+      // asked about every task once for the columns and once more for every option
+      // in every chooser, and each of those asks used to fold that task's whole
+      // description again — 29.3 us of it on a 2 KB description, and the counts
+      // are recomputed on every poll. Folding once per task per render and handing
+      // the result to both halves took a 500-task board of 2 KB descriptions with
+      // a search standing from 37.4 ms a second to 0.7 ms.
+      //
+      // An empty query folds nothing at all: matchesFoldedFind answers an empty
+      // term list before it looks at a haystack, so an unsearched board — which is
+      // most boards, most of the time — pays none of this.
+      function foldedSearch(tasks) {
+        const query = boardFilters.q;
+        const terms = findTerms(query);
+        const keys = searchKeyNames();
+        if (terms.length === 0) return { query, terms, keys, folded: null };
+        return { query, terms, keys, folded: new Map(tasks.map((task) => [task.id, foldTaskHaystack(task)])) };
+      }
+      let boardFilters = emptyFilters();
       function route(url = new URL(window.location.href)) {
         // The board with its Deleted column shown is the board at another
-        // address rather than a page of its own, which is what makes the
-        // header's toggle an ordinary link: it is shareable, it is
-        // bookmarkable, and Back and Forward walk it like any other
-        // navigation.
-        if (url.pathname === "/") return { view: "board", deleted: url.searchParams.get("deleted") === "1" };
+        // address rather than a page of its own, which is what makes the row's
+        // toggle an ordinary link: it is shareable, it is bookmarkable, and Back
+        // and Forward walk it like any other navigation. Every filter beside it
+        // in that row is read from the same address for exactly that reason.
+        if (url.pathname === "/") {
+          return { view: "board", deleted: url.searchParams.get("deleted") === "1", filters: filtersFromURL(url) };
+        }
         // A board built without the four vocabulary mutations was served none of
         // the configuration page, so this address is not a route on it. The
         // server answers it with a 404 for the same reason; a client that drew
@@ -2849,7 +3355,11 @@
         if (createMoreTasks) {
           return { path: newTaskPath(recovery.status), stageRecovery: false, replace: true, focusTitle: true };
         }
-        return { path: "/", stageRecovery: false, replace: false, focusTaskID: recovery.taskID };
+        // The board the reader left, filters and Deleted column and all, rather
+        // than the bare board: they filed this task from a board they had narrowed
+        // down, and landing them on an unfiltered one would throw away the state
+        // they were working in and make them set it up again.
+        return { path: boardAddress(deletedColumnShown, boardFilters), stageRecovery: false, replace: false, focusTaskID: recovery.taskID };
       }
       // A save that re-arms the New Task form destroys the node the user was
       // standing on, and a browser blurs an element on its way out of the
@@ -2902,7 +3412,9 @@
         if (createMoreTasks) {
           return { path: newTaskPath(creation.task.status), replace: true, focusTitle: true };
         }
-        return { path: "/", replace: false, focusTaskID: creation.key };
+        // The board the reader left, for the reason createdTaskLanding lands
+        // there: this is the same landing, taken before the server has answered.
+        return { path: boardAddress(deletedColumnShown, boardFilters), replace: false, focusTaskID: creation.key };
       }
       // The task a create draws before the server has named one. It carries no
       // head and no relationships, because those are the server's answers.
@@ -6170,7 +6682,15 @@
         const actions = document.createElement("div"); actions.className = "form-actions";
         const primaryActions = document.createElement("div"); primaryActions.className = "form-primary-actions";
         const save = document.createElement("button"); save.className = "save-button"; save.type = "submit"; text(save, "Save");
-        const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
+        // Back is the board the reader came from, which is the same board every
+        // landing in this client goes to: a reader who narrowed the board down,
+        // opened a task and then changed their mind should not be punished for
+        // not having saved. Computed as this form is built, and this form is
+        // built by the render of the route it is on, so it is the state the
+        // address was in when the reader left the board — or the bare board,
+        // when they opened this page by its own address and there is no board
+        // state to return to.
+        const back = document.createElement("a"); back.className = "board-link"; back.href = boardAddress(deletedColumnShown, boardFilters); text(back, "Back");
         primaryActions.append(save, back); actions.append(primaryActions);
         // The way out of the one state this form does not leave on its own: the
         // task was created and some of its attachments were not attached. It is
@@ -6189,8 +6709,10 @@
 		    remove.disabled = true; text(result, "");
 		    // The board with its Deleted column shown, which is where the task
 		    // now is: the reader lands looking at what they just deleted, with
-		    // the Restore that undoes it on the card.
-		    try { await mutateTask("DELETE", "/api/tasks/" + encodeURIComponent(task.id)); navigate("/?deleted=1"); }
+		    // the Restore that undoes it on the card. Built rather than written
+		    // out, so the filters the reader had set come along: the column is
+		    // the only thing this landing decides.
+		    try { await mutateTask("DELETE", "/api/tasks/" + encodeURIComponent(task.id)); navigate(boardAddress(true, boardFilters)); }
 		    catch (error) { text(result, error instanceof Error ? error.message : "Task deletion failed."); }
 		    finally { remove.disabled = false; }
 		  });
@@ -6442,8 +6964,9 @@
               // The server refuses an update that changes nothing, and it is
               // right to: there is no operation to record. Saving an untouched
               // form is not an error though, it is finished, so it leaves the
-              // way an accepted save does.
-              navigate("/");
+              // way an accepted save does — onto the board the reader came from,
+              // filters and all.
+              navigate(boardAddress(deletedColumnShown, boardFilters));
               return;
             }
             if (expectedHead) values.expectedHead = expectedHead;
@@ -6560,7 +7083,10 @@
               // is showing it.
               await refresh();
             } else {
-              navigate("/");
+              // The board the reader came from rather than the bare one: an
+              // accepted save is not a reason to undo the narrowing they were
+              // reading the board through.
+              navigate(boardAddress(deletedColumnShown, boardFilters));
               await refresh();
             }
           } catch (error) {
@@ -6952,13 +7478,34 @@
         pendingCreations.forEach((_creation, key) => projected.set(key, pendingCreationView));
         return projected;
       }
+      // Which of a projected model the columns actually draw. Everything that
+      // renders the board goes through this, so the filters cannot be applied on
+      // one path and forgotten on another.
+      //
+      // known is the model the server answered with. A create's stand-in is not in
+      // it and is never filtered away: a card the reader just made must not vanish
+      // under them because it does not match a search they typed before they made
+      // it. Only a task the server has answered for can be filtered out.
+      function shownTasks(projected, known, search) {
+        if (!filtersActive(boardFilters)) return projected;
+        return projected.filter((task) => !known.has(task.id) || passesFilters(task, boardFilters, search));
+      }
       function rerender() {
         if (!tasksLoaded) return;
         // projectTasks runs first and retires the creations the board now
         // carries, so the presentation it is paired with names exactly the
         // stand-ins that survived.
         const tasks = projectTasks(latestTasks);
-        render(tasks, projectPresentation(latestPresentation, tasks));
+        // Folded once here and handed to both halves of the render, because both
+        // ask the same question of the same text: which cards the columns draw,
+        // and what each chooser option would leave.
+        const search = foldedSearch(tasks);
+        const shown = shownTasks(tasks, new Set(latestTasks.map((task) => task.id)), search);
+        // Both readings are handed over — what the columns draw, and everything
+        // the board holds — because a column that says three of nine has to be
+        // told the nine. The presentation is derived over everything, so a task
+        // the filters hide still has its view for whatever else is reading one.
+        render(shown, projectPresentation(latestPresentation, tasks), tasks, search);
       }
       function replaceProjectedTask(task) {
         const index = latestTasks.findIndex((candidate) => candidate.id === task.id);
@@ -9248,10 +9795,12 @@
         naming.append(eyebrow, heading);
         // The way back, where a task's page keeps it: a link to the board, in
         // the same words and the same class, rather than a control that only
-        // this page would have.
+        // this page would have. It names the board the reader came from for the
+        // reason a task's page does — this page is a detour, and a detour should
+        // not cost them the board they were reading.
         const back = document.createElement("a");
         back.className = "board-link";
-        back.href = "/";
+        back.href = boardAddress(deletedColumnShown, boardFilters);
         text(back, "Back");
         header.append(naming, back);
         section.append(header);
@@ -9613,7 +10162,10 @@
         const heading = document.createElement("h2"); heading.id = "route-message-title"; text(heading, titleText); header.append(heading);
         const body = document.createElement("div"); body.className = "route-message";
         const copy = document.createElement("p"); text(copy, message);
-        const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
+        // The board the reader came from, for the reason the other two Back links
+        // name it: the message is a dead end, and the way out of it is the board
+        // they were reading rather than a board they were not.
+        const back = document.createElement("a"); back.className = "board-link"; back.href = boardAddress(deletedColumnShown, boardFilters); text(back, "Back");
         body.append(copy);
         if (retryable) {
           const retry = document.createElement("button"); retry.className = "save-button"; retry.type = "button"; text(retry, "Retry");
@@ -9713,12 +10265,243 @@
       }
       function renderDeletedToggle() {
         if (!deletedToggle) return;
-        deletedToggle.href = deletedColumnShown ? "/" : "/?deleted=1";
+        // The column's own state is the only thing this switch changes, so its
+        // address carries whatever else the row is filtering by: turning the
+        // column off over a searched board leaves the search alone.
+        deletedToggle.href = boardAddress(!deletedColumnShown, boardFilters);
         deletedToggle.setAttribute("aria-checked", deletedColumnShown ? "true" : "false");
         text(deletedLabel, deletedColumnShown ? "Hide Deleted" : "Show Deleted");
         deletedToggle.title = deletedColumnShown
           ? "The board is drawing its Deleted column. Click to hide it."
           : "The board is drawing no Deleted column. Click to show it.";
+      }
+      // The row's own controls, drawn from the filters the address is holding.
+      //
+      // Clear keeps the Deleted column: it is the one control in this row whose
+      // state is a column rather than a narrowing, and a reader who cleared a
+      // search should not also lose the tombstones they were reading.
+      function renderFilterRow(deleted) {
+        if (!filterRow) return;
+        // Never written over by the render the typing itself caused. The address
+        // is behind the typing by a keystroke at most, and a render that assigned
+        // this value would move the caret to the end of whatever it assigned.
+        // Every other render does write it, which is what makes Back and Forward
+        // correct the box rather than leave a stale term standing over a board
+        // that is no longer narrowed by it.
+        if (filterSearch && filterSearch.value !== boardFilters.q && !typingIntoSearch) {
+          filterSearch.value = boardFilters.q;
+        }
+        if (filterClear) {
+          filterClear.hidden = !filtersActive(boardFilters);
+          filterClear.href = boardAddress(deleted, emptyFilters());
+        }
+      }
+      // The filters with one group replaced by one value, which is the state an
+      // option's count is a count of: "how many cards would be left if this were
+      // the only thing ticked in this group, with every other filter as it is".
+      // That is what makes the numbers in one menu add up to something a reader
+      // can act on — a count computed against no other filter would promise a
+      // board the search is about to take away again.
+      function withOnly(filters, group, value) {
+        const narrowed = Object.assign({}, filters);
+        narrowed[group] = new Set([value]);
+        return narrowed;
+      }
+      // What one chooser lists: everything the group offers, plus anything this
+      // group already has ticked. Every group answers from the project rather than
+      // from the board except the labels, which are not a vocabulary: nobody
+      // declares a label, so the only list there is the one the cards carry.
+      //
+      // The union is what keeps a ticked value reachable. What a group offers
+      // moves as the board does — a label is offered only while a card the board
+      // is drawing carries it, so hiding the Deleted column takes away every label
+      // that only a tombstone had — and an option that left the menu used to take
+      // its row with it while leaving the filter in the address: the badge went on
+      // saying "1 selected", the columns went on being empty, and there was no row
+      // left to untick. Listing what is ticked as well as what is offered also
+      // gives a token the project has never heard of a row that names it, so
+      // /?priority=bogus or an address shared before a rename says which word
+      // emptied the board instead of presenting an empty board and no reason.
+      function chooserOptions(group, drawn) {
+        const chosen = boardFilters[group];
+        if (group === "priority") {
+          // In vocabulary order, which is the order the board sorts by and the
+          // order the create form offers. Sorting them here would be a second
+          // opinion about a sequence the project has already stated.
+          const offered = priorityDefinitions.map(([token, label]) => ({ value: token, name: label }));
+          return offered.concat(tickedOptionsBeyond(offered, chosen));
+        }
+        if (group === "key") {
+          // Retired keys included, and said to be retired. Their tasks exist and
+          // are on the board, so a chooser that listed only the keys that can
+          // mint would be a chooser that cannot reach half the cards.
+          const offered = publishedKeys.map((entry) => ({
+            value: entry.key,
+            name: entry.key + (entry.state === "retired" ? " (retired)" : ""),
+          }));
+          return offered.concat(tickedOptionsBeyond(offered, chosen));
+        }
+        const present = new Set();
+        drawn.forEach((task) => (task.labels || []).forEach((label) => present.add(label)));
+        // Sorted in with the rest rather than appended, because a label has no
+        // order of its own for a stray one to be kept out of.
+        chosen.forEach((value) => present.add(value));
+        return [...present].sort().map((value) => ({ value, name: value }));
+      }
+      // A ticked value the group does not offer, named as the address spells it.
+      // There is no display name to give it — that is exactly what the project
+      // does not have for this token — and the token is the one thing that tells
+      // the reader what they are looking at. Appended after the offered options
+      // and sorted among themselves, so the order the project stated stays the
+      // order the reader sees at the top of the menu.
+      function tickedOptionsBeyond(offered, chosen) {
+        const known = new Set(offered.map((option) => option.value));
+        return [...chosen]
+          .filter((value) => !known.has(value))
+          .sort()
+          .map((value) => ({ value, name: value }));
+      }
+      // What a menu says when the group has nothing to list. A blank menu reads
+      // as a menu that failed to draw; this says which of the two it is.
+      function chooserEmptyLine(group) {
+        if (group === "priority") return "No priorities";
+        if (group === "key") return "No keys";
+        return "No labels";
+      }
+      function buildChooserOption(chooser, group, option) {
+        const label = document.createElement("label");
+        label.className = "filter-option";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.dataset.filterOption = "";
+        input.value = option.value;
+        const name = document.createElement("span");
+        text(name, option.name);
+        const count = document.createElement("span");
+        count.className = "count";
+        // A tick is a navigation, pushed rather than replaced: it is a board the
+        // reader chose, the way the Deleted switch is, and Back should undo it.
+        // The ticks in one group are alternatives — a card matching any of them
+        // passes — so this adds to or removes from that group's set and leaves
+        // every other group alone.
+        input.addEventListener("change", () => {
+          const next = Object.assign({}, boardFilters);
+          const chosen = new Set(boardFilters[group]);
+          if (input.checked) chosen.add(option.value);
+          else chosen.delete(option.value);
+          next[group] = chosen;
+          navigate(boardAddress(deletedColumnShown, next));
+        });
+        label.append(input, name, count);
+        // The name is kept as well as the box and the count, because the box at
+        // the top of a menu narrows by what a row says: see applyChooserSearch.
+        chooser.options.set(option.value, { label, input, name, count });
+        return label;
+      }
+      // Narrow a menu's rows to the ones whose name contains what the reader
+      // typed into it. Menu state, not board state: nothing here touches the
+      // address, and closing the menu clears it. A ticked row is always shown,
+      // so a filter the reader set can always be unset from where it was set.
+      function applyChooserSearch(chooser, group) {
+        if (!chooser.search) return;
+        const needle = foldFindCase(chooser.search.value.trim());
+        let shown = 0;
+        chooser.options.forEach((parts, value) => {
+          const ticked = boardFilters[group].has(value);
+          const matches = needle === "" || foldFindCase(parts.name.textContent).includes(needle);
+          const visible = ticked || matches;
+          if (parts.label.hidden !== !visible) parts.label.hidden = !visible;
+          if (visible) shown += 1;
+        });
+        if (chooser.noMatch) {
+          const none = needle !== "" && shown === 0 && chooser.options.size > 0;
+          if (chooser.noMatch.hidden !== !none) chooser.noMatch.hidden = !none;
+        }
+      }
+      // One chooser's options, drawn in place.
+      //
+      // The nodes are keyed by value and reused, and only a changed option set
+      // costs new ones. This runs on every poll: a menu that replaced its
+      // children every second would take the caret out from under a reader on
+      // their way to a tick, once a second, for as long as they left it open.
+      // A count that has changed is written; a count that has not is left alone,
+      // for the reason every other count on this board is.
+      //
+      // The rows go into the options container rather than into the menu, because
+      // the Labels menu holds two things the render must not throw away: the box
+      // the reader is typing into and the line that says it has matched nothing.
+      function renderChooserOptions(chooser, group, options) {
+        const list = chooser.optionsList;
+        if (!list) return;
+        const wanted = options.map((option) => option.value).join("\n");
+        if (chooser.builtFrom !== wanted) {
+          chooser.builtFrom = wanted;
+          chooser.options = new Map();
+          if (options.length === 0) {
+            const empty = document.createElement("p");
+            empty.className = "filter-option filter-option--none";
+            text(empty, chooserEmptyLine(group));
+            list.replaceChildren(empty);
+          } else {
+            list.replaceChildren(...options.map((option) => buildChooserOption(chooser, group, option)));
+          }
+        }
+        options.forEach((option) => {
+          const parts = chooser.options.get(option.value);
+          if (!parts) return;
+          const ticked = boardFilters[group].has(option.value);
+          if (parts.input.checked !== ticked) parts.input.checked = ticked;
+          const reading = String(option.count);
+          if (parts.count.textContent !== reading) text(parts.count, reading);
+          // An option that would leave nothing is drawn as one and stays
+          // tickable: ticking it answers "none of them", which is the honest
+          // answer, and the columns say "No matches." rather than the reader
+          // wondering whether the control worked.
+          parts.label.classList.toggle("filter-option--none", option.count === 0 && !ticked);
+        });
+        // Applied after the loop rather than when the reader types, so a poll that
+        // adds or drops a label keeps the narrowing: the rows may be new nodes,
+        // and what the box says about them is the same either way.
+        applyChooserSearch(chooser, group);
+      }
+      // The choosers, drawn from the board they are narrowing.
+      //
+      // `allTasks` is everything the board holds rather than what it is drawing,
+      // because every count here is a count of what a tick would leave — a
+      // question about cards the filters are currently hiding as much as about
+      // the ones they are not.
+      function renderChoosers(allTasks, search) {
+        // The tombstones count only while the column that draws them is shown,
+        // exactly as that column's own total does. With it hidden they are in the
+        // model only because the poll that read it asked for them.
+        const drawn = allTasks.filter((task) => !task.deleted || Boolean(deletedList));
+        filterChoosers.forEach((chooser, group) => {
+          const chosen = boardFilters[group];
+          // A project with one key has nothing to choose between, so the chooser
+          // is not offered at all. Retired keys count towards the two: their
+          // tasks are on the board and the chooser is how a reader reaches them.
+          //
+          // Unless a key is ticked. ?key=ZZ on a one-key project is an address
+          // someone can reach — a typo, or a link from a project that has since
+          // dropped a key — and hiding the chooser there would hide the only row
+          // that says what is emptying the board, which is the defect the union in
+          // chooserOptions exists to prevent. The chooser comes back the moment
+          // the reader unticks it.
+          if (group === "key") chooser.root.hidden = publishedKeys.length < 2 && boardFilters.key.size === 0;
+          const options = chooserOptions(group, drawn).map((option) => Object.assign({}, option, {
+            count: drawn.filter((task) => passesFilters(task, withOnly(boardFilters, group, option.value), search)).length,
+          }));
+          renderChooserOptions(chooser, group, options);
+          if (chooser.badge) chooser.badge.hidden = chosen.size === 0;
+          if (chooser.count) {
+            // Written only when it has changed, the way every other count on this
+            // board is: this runs every second, and a node rewritten with the
+            // number it already held is a mutation a screen reader may announce.
+            const reading = String(chosen.size);
+            if (chooser.count.textContent !== reading) text(chooser.count, reading);
+          }
+          chooser.root.classList.toggle("filter-chooser--active", chosen.size > 0);
+        });
       }
       function renderRoute() {
         const current = route();
@@ -9764,12 +10547,19 @@
         // offers no setting rather than a dead one that lies about the state of
         // a board it can no longer change.
         //
-        // The Deleted column's toggle travels the same way and for the same
-        // reason: it adds a column to the board, and a header that offered to
-        // do that from a task's page would be naming a state the reader cannot
-        // see.
+        // The filter row travels the same way and for the same reason: every
+        // control in it is a view of the columns — the Deleted switch adds one,
+        // the search narrows them all — and a page that draws no columns offering
+        // to do either would be naming a state the reader cannot see. The row is
+        // what hides rather than each control in it, because the row is the thing
+        // whose whole purpose is the board.
         if (descriptionToggle) descriptionToggle.hidden = current.view !== "board";
-        if (deletedToggle) deletedToggle.hidden = current.view !== "board";
+        if (filterRow) filterRow.hidden = current.view !== "board";
+        // A menu goes with the row. Hiding the row leaves an open one open — the
+        // reader cannot see it, so nothing closes it — and that is a menu that is
+        // still standing when Back brings the board back, and an Escape this page
+        // claims on a route where the relationship combobox needs it.
+        if (current.view !== "board") closeChoosersExcept(null);
         // The configuration page's bodies are served elements rather than built
         // ones, so leaving that route has to put them away — the render below
         // would drop them from the document either way, and what they were
@@ -9785,9 +10575,22 @@
           // says so and offers the reload, exactly as it does for a change
           // another clone made.
           //
-          // The Deleted column is the one thing about the board this route
-          // decides, and appending or removing that section is all it does.
+          // The filters and the Deleted column are the two things about the board
+          // this route decides. The filters are read first, so the render that
+          // showing or hiding that column triggers already draws the narrowing
+          // this address asked for; appending or removing that one section is all
+          // the call below does.
+          const nextFilters = current.filters || emptyFilters();
+          const filtersChanged = !sameFilters(boardFilters, nextFilters);
+          boardFilters = nextFilters;
+          renderFilterRow(current.deleted === true);
           showDeletedColumn(current.deleted === true);
+          // A navigation that changed nothing but the filters changes no column
+          // and no route, and nothing above would have redrawn a card: the board
+          // is re-attached rather than rebuilt, and the call above renders only
+          // when the Deleted column itself appears or goes. So the narrowing asks
+          // for its own redraw.
+          if (filtersChanged) rerender();
           if (main.firstElementChild !== boardView) main.replaceChildren(boardView);
           focusCreatedCard();
           return;
@@ -10287,6 +11090,45 @@
         if (deletedList) all.push(deletedList);
         return all;
       }
+      // The line a column shows when the filters, and not the board, are what
+      // left it with nothing in it. An empty column and a column the reader has
+      // filtered down to nothing look identical, and the second one is the reader
+      // asking a question the board has to answer.
+      //
+      // Built once per list and kept first in it, the way the Deleted column's own
+      // empty state is: reconcile() places cards by index among the nodes that
+      // carry a task ID and passes over the ones that do not, so a paragraph at
+      // the top costs the renderer nothing. The record is weak because the Deleted
+      // column's list is a new element every time that column is shown.
+      const filterEmpties = new WeakMap();
+      function filterEmptyFor(list) {
+        const known = filterEmpties.get(list);
+        if (known) return known;
+        const empty = document.createElement("p");
+        empty.className = "column__empty";
+        empty.dataset.filterEmpty = "";
+        empty.hidden = true;
+        text(empty, "No matches.");
+        list.insertBefore(empty, list.firstElementChild);
+        filterEmpties.set(list, empty);
+        return empty;
+      }
+      // Whether a column says "No matches.", and whether a count is drawn as the
+      // "3 / 9" reading. Both are written only when the answer has changed, which
+      // is the rule every count on this board follows and for the same reason:
+      // this runs on every poll, and a property set to the value it already holds
+      // is a mutation an assistive technology may announce — once a second, for as
+      // long as the reader leaves the board open.
+      function setFilterEmpty(list, emptied) {
+        const empty = filterEmptyFor(list);
+        if (empty.hidden === !emptied) return;
+        empty.hidden = !emptied;
+      }
+      function setFilteredCount(count, label) {
+        const filtered = label.includes("/");
+        if (count.classList.contains("column__count--filtered") === filtered) return;
+        count.classList.toggle("column__count--filtered", filtered);
+      }
       // When a task was deleted, which is what orders the Deleted column. A
       // tombstone is the last thing that can happen to a task, so the time it
       // was last updated is the time it was deleted.
@@ -10336,7 +11178,10 @@
       function entriesFor(tasks, presentation) {
         return tasks.map((task) => ({ task, view: presentation.get(task.id) }));
       }
-      function render(tasks, presentation) {
+      function render(tasks, presentation, allTasks = tasks, search = null) {
+        // A caller that folded already hands it over; one that did not gets the
+        // fold done here, so this function answers for itself either way.
+        const searching = search || foldedSearch(allTasks);
         const grouped = new Map([...lists.keys()].map((status) => [status, []]));
         // A task whose status matches no column is shown under its own heading
         // rather than dropped. The terminal board has always printed an UNKNOWN
@@ -10354,6 +11199,21 @@
         // anywhere: it is in the model only because the poll that read it asked
         // for it, and the next poll that does not will take it back out.
         const removed = [];
+        // How many cards each column would hold with nothing filtered, counted
+        // the same way the groups below are so that the two readings can only
+        // differ by what the filters removed. Without filters every total equals
+        // its group and no count says anything extra.
+        const totals = new Map([...lists.keys()].map((status) => [status, 0]));
+        let totalStranded = 0;
+        let totalRemoved = 0;
+        allTasks.forEach((task) => {
+          if (task.deleted) {
+            if (deletedList) totalRemoved += 1;
+            return;
+          }
+          if (totals.has(task.status)) totals.set(task.status, totals.get(task.status) + 1);
+          else totalStranded += 1;
+        });
         tasks.forEach((task) => {
           if (task.deleted) {
             if (deletedList) removed.push(task);
@@ -10411,31 +11271,51 @@
           if (destinations.get(taskID) === node.parentElement) return;
           node.remove();
         });
+        const filtering = filtersActive(boardFilters);
         grouped.forEach((items, status) => {
           const list = lists.get(status);
           reconcile(list, entriesFor(items, presentation), survivors);
           const count = counts.get(status);
-          const total = String(items.length);
-          if (count.textContent !== total) text(count, total);
+          // "3 / 9" only while the filters are actually holding something back.
+          // A column the filters did not touch reads the way it always has.
+          const total = totals.get(status) || 0;
+          const label = filtering && items.length !== total ? items.length + " / " + total : String(items.length);
+          if (count.textContent !== label) text(count, label);
+          setFilteredCount(count, label);
+          setFilterEmpty(list, filtering && items.length === 0 && total > 0);
         });
         // Reconciled from the same survivor pool as the columns, so a status
         // that becomes recognized — or stops being — moves the card the reader
         // is already looking at instead of destroying it and building a stranger.
         reconcile(unknownList, entriesFor(stranded, presentation), survivors);
-        const strandedTotal = String(stranded.length);
-        if (unknownCount.textContent !== strandedTotal) text(unknownCount, strandedTotal);
-        unknownSection.dataset.visible = stranded.length > 0 ? "true" : "false";
+        const strandedLabel = filtering && stranded.length !== totalStranded
+          ? stranded.length + " / " + totalStranded
+          : String(stranded.length);
+        if (unknownCount.textContent !== strandedLabel) text(unknownCount, strandedLabel);
+        setFilteredCount(unknownCount, strandedLabel);
+        setFilterEmpty(unknownList, filtering && stranded.length === 0 && totalStranded > 0);
+        // The region stays on screen while the filters are what emptied it, so a
+        // task stranded on a status no column matches cannot be filtered into
+        // silence: it says "No matches." for the reason a column does.
+        unknownSection.dataset.visible = stranded.length > 0 || (filtering && totalStranded > 0) ? "true" : "false";
         // Reconciled from the same survivor pool again, so a card the reader
         // deletes moves its own node out of its column and into this one, and a
         // card they restore moves the same node back.
         if (deletedList) {
           reconcile(deletedList, entriesFor(removed, presentation), survivors);
-          const removedTotal = String(removed.length);
-          if (deletedCount.textContent !== removedTotal) text(deletedCount, removedTotal);
+          const removedLabel = filtering && removed.length !== totalRemoved
+            ? removed.length + " / " + totalRemoved
+            : String(removed.length);
+          if (deletedCount.textContent !== removedLabel) text(deletedCount, removedLabel);
+          setFilteredCount(deletedCount, removedLabel);
+          const filteredOut = filtering && removed.length === 0 && totalRemoved > 0;
           // "No deleted tasks." is a claim about what the server holds, so it
           // waits for a poll that actually asked. Until one has landed the
-          // column says nothing rather than something it has not read.
-          deletedEmpty.hidden = removed.length > 0 || !deletedRead;
+          // column says nothing rather than something it has not read — and it
+          // says nothing over a column the filters emptied either, because there
+          // the true answer is the other line.
+          deletedEmpty.hidden = removed.length > 0 || !deletedRead || filteredOut;
+          setFilterEmpty(deletedList, filteredOut);
         }
         // A report whose card the board no longer draws has nowhere left to be
         // read, and letting it go with the card would put the reader back where
@@ -10467,6 +11347,12 @@
         const heir = retiredCreationHeir;
         retiredCreationHeir = null;
         restoreCardFocus(heir && heir.key === focusedID ? heir.taskID : focusedID);
+        // Drawn here rather than beside the rest of the row, because what a
+        // chooser lists and what each of its options would leave are readings of
+        // the board this render just drew. Every path that renders the board
+        // comes through here, so neither the poll nor a navigation can draw
+        // cards the choosers have not been told about.
+        renderChoosers(allTasks, searching);
       }
       // The outcome of the newest refresh that has superseded the one this
       // caller started, which is what waiting on your own refresh is actually
@@ -10592,7 +11478,13 @@
             // page are drawn from one answer rather than from two derivations of
             // the same read.
             const projectedPresentation = projectPresentation(presentation, projected);
-            render(projected, projectedPresentation); stale.dataset.visible = "false"; markSynchronized();
+            // The filters narrow what the columns draw and nothing else: the open
+            // task page is a page about one task, not a view of the board, and a
+            // poll that stopped feeding it because the board is searched would
+            // break a form the reader is filling in.
+            const search = foldedSearch(projected);
+            const shown = shownTasks(projected, new Set(document.tasks.map((task) => task.id)), search);
+            render(shown, projectedPresentation, projected, search); stale.dataset.visible = "false"; markSynchronized();
             // The open task page's thread and attachments follow this read in
             // place, the way the relationship sidebar below does. Nothing else
             // about that form moves on a poll: a field is corrected only by a
@@ -10623,6 +11515,13 @@
       window.addEventListener("popstate", renderRoute);
       document.addEventListener("click", async (event) => {
         if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        // A click outside an open chooser closes it, which is what every menu on
+        // every page does and the only thing that makes one dismissable by a
+        // reader who has changed their mind. A click inside one closes nothing:
+        // the chooser the click landed in is exempt, so the button that opens a
+        // menu does not immediately close it again and a tick leaves the menu
+        // standing for the next one.
+        closeChoosersExcept(event.target && event.target.closest && event.target.closest("[data-filter-chooser]"));
         const copyControl = event.target && event.target.closest && event.target.closest("[data-copy-task-id]");
         if (copyControl) {
           event.preventDefault();
@@ -10650,6 +11549,29 @@
       // never has any. The handler answers only a paste carrying a file, and
       // only while a surface that takes one is on screen.
       document.addEventListener("paste", attachmentPaste);
+      // Escape closes the open chooser and hands the caret back to the button
+      // that opened it, so a reader who opened a menu with the keyboard is left
+      // where they were rather than at the top of the document. Heard at the
+      // document because the caret may have left the menu since — the reader can
+      // tab out of it — and a menu nobody can dismiss is worse than no menu.
+      //
+      // Heard after the box inside the Labels menu, because neither listener
+      // captures and a bubbling event reaches its target first. That is what lets
+      // that box claim the first Escape to empty itself and leave this one the
+      // second, with stopPropagation as the whole of the arrangement.
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        // Only while the row is on screen. Off the board there is no menu of ours
+        // to dismiss, and claiming Escape there would take it from whatever does
+        // want it — the relationship combobox closes its listbox with it.
+        if (!filterRow || filterRow.hidden) return;
+        let dismissed = null;
+        filterChoosers.forEach((chooser) => { if (chooserIsOpen(chooser)) dismissed = chooser; });
+        if (!dismissed) return;
+        event.preventDefault();
+        closeChoosersExcept(null);
+        if (dismissed.button) dismissed.button.focus();
+      });
       document.addEventListener("dragstart", (event) => {
         const item = event.target.closest(".task-card");
         if (!item) return;
