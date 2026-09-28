@@ -1,0 +1,9 @@
+# Check text out with LF everywhere, whatever core.autocrlf says.
+#
+# Git for Windows installs with core.autocrlf=true, which converts every text
+# file to CRLF on checkout. Several files here are read byte-for-byte: the
+# skill and the board page are compiled in with go:embed, and the skill's
+# frontmatter parser expects "---\n". A Windows build from a default checkout
+# embedded CRLF copies and refused to set up a project ("embedded skill is
+# missing YAML frontmatter"). Binary files are detected and left alone.
+* text=auto eol=lf
