@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"math/big"
 	"net"
 	"net/http"
@@ -2399,47 +2398,12 @@ func freshlyInitializedRepository(t *testing.T) string {
 	return repository
 }
 
-// copyTree copies a directory's contents onto target, which already exists.
-// Files, directories and symlinks travel with their modes; nothing is
-// hardlinked, so a test that writes to its copy cannot reach the template.
+// copyTree copies a directory's contents onto target, which already exists,
+// and fails the test if it cannot. The copying itself is testrepo.CopyTree,
+// which internal/gitstore's templates use too.
 func copyTree(t *testing.T, source, target string) {
 	t.Helper()
-	err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		relative, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		if relative == "." {
-			return nil
-		}
-		destination := filepath.Join(target, relative)
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		switch {
-		case entry.IsDir():
-			return os.MkdirAll(destination, info.Mode().Perm())
-		case entry.Type()&fs.ModeSymlink != 0:
-			link, err := os.Readlink(path)
-			if err != nil {
-				return err
-			}
-			return os.Symlink(link, destination)
-		case entry.Type().IsRegular():
-			contents, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			return os.WriteFile(destination, contents, info.Mode().Perm())
-		default:
-			return fmt.Errorf("%s is neither a file, a directory nor a symlink", path)
-		}
-	})
-	if err != nil {
+	if err := testrepo.CopyTree(source, target); err != nil {
 		t.Fatalf("copy template project: %v", err)
 	}
 }

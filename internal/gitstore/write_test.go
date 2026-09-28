@@ -3,6 +3,7 @@ package gitstore
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -729,17 +730,52 @@ func TestWriteAcceptsValidatedRootAndLinearParents(t *testing.T) {
 	}
 }
 
+// writeRepository hands a test a private copy of the package's write template:
+// an initialized project with the fixed writeProjectID, no configuration
+// ledger, and .workbook/config.json still uncommitted in the working tree.
+//
+// It is a copy rather than a mint — one tree copy and one rev-parse instead of
+// nine git processes, across 115 call sites — and the copy is the same
+// repository the mint produced. The project ID is fixed and the identity commit
+// is a pure function of the document it carries (constant author, committer,
+// date and message, with signing off), so the template is byte-identical to
+// what every one of those call sites used to build for itself.
 func writeRepository(t *testing.T) (*Repository, core.ProjectConfig) {
 	t.Helper()
-	repo, err := Open(context.Background(), testrepo.New(t))
+	template, config, err := writeTemplate()
+	if err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+	target := t.TempDir()
+	if err := testrepo.CopyTree(template, target); err != nil {
+		t.Fatalf("copy write template: %v", err)
+	}
+	repo, err := Open(context.Background(), target)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
+	return repo, config
+}
+
+// mintWriteRepository builds the write template's repository in dir, which must
+// already exist.
+//
+// TestMain calls it once, for the template; the test that pins the copy against
+// a mint calls it again. It takes no *testing.T so that the mint before m.Run
+// and the mint under a test are the same code.
+func mintWriteRepository(dir string) (core.ProjectConfig, error) {
+	if err := testrepo.InitAt(dir); err != nil {
+		return core.ProjectConfig{}, err
+	}
+	repo, err := Open(context.Background(), dir)
+	if err != nil {
+		return core.ProjectConfig{}, err
+	}
 	config, _, err := repo.Init(context.Background(), "WB", idsFor(writeProjectID))
 	if err != nil {
-		t.Fatalf("Init() error = %v", err)
+		return core.ProjectConfig{}, err
 	}
-	return repo, config
+	return config, nil
 }
 
 func writeRoot(t *testing.T, repo *Repository, config core.ProjectConfig) (core.Snapshot, core.OperationPack, core.StateDocument) {
@@ -810,6 +846,57 @@ func assertTaskTree(t *testing.T, repo *Repository, head string, pack core.Opera
 	}
 	if got := gitOutput(t, repo, "show", head+":state.json"); !bytes.Equal([]byte(got+"\n"), stateBytes) {
 		t.Fatalf("state blob = %q, want %q", got+"\n", stateBytes)
+	}
+}
+
+// A test that asks for an initialized project gets a copy of the template
+// rather than a mint of its own, and 115 tests treat the two as the same
+// fixture. This pins that they are: the same local git configuration, the same
+// refs at the same object IDs, and the same two copies of the project document.
+//
+// The object IDs are the load-bearing half. writeProjectID is fixed and the
+// identity commit is a pure function of the document it carries, so a mint is
+// reproducible — and this is the test that would fail if something gave that
+// commit a timestamp, an author from the environment, or a signature.
+func TestTemplateCopyAndMintedWriteRepositoryAgree(t *testing.T) {
+	t.Parallel()
+	minted := testrepo.New(t)
+	mintedConfig, err := mintWriteRepository(minted)
+	if err != nil {
+		t.Fatalf("mint write repository: %v", err)
+	}
+	copied, copiedConfig := writeRepository(t)
+
+	if mintedConfig != copiedConfig {
+		t.Fatalf("project config: mint %#v, copy %#v", mintedConfig, copiedConfig)
+	}
+	mintedRepo, err := Open(context.Background(), minted)
+	if err != nil {
+		t.Fatalf("Open(minted) error = %v", err)
+	}
+	for _, args := range [][]string{
+		{"config", "--list", "--local"},
+		{"for-each-ref", "--format=%(refname) %(objectname)"},
+	} {
+		if got, want := gitOutput(t, copied, args...), gitOutput(t, mintedRepo, args...); got != want {
+			t.Fatalf("git %v\ncopy: %q\nmint: %q", args, got, want)
+		}
+	}
+	for _, name := range []string{
+		filepath.Join(".workbook", "config.json"),
+		filepath.Join(".git", "workbook", "project.json"),
+	} {
+		got, err := os.ReadFile(filepath.Join(copied.Root, name))
+		if err != nil {
+			t.Fatalf("read %s from the copy: %v", name, err)
+		}
+		want, err := os.ReadFile(filepath.Join(minted, name))
+		if err != nil {
+			t.Fatalf("read %s from the mint: %v", name, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("%s\ncopy: %q\nmint: %q", name, got, want)
+		}
 	}
 }
 

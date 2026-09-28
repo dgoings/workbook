@@ -1,9 +1,14 @@
 package gitstore
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+
+	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testrepo"
 )
 
 // Tests that stay serial, and why. Go runs these before the parallel batch,
@@ -43,8 +48,8 @@ import (
 // t.TempDir's cleanup, which fails with "directory not empty" if a stray
 // process still has the directory open. Three sync fixtures already guard
 // against this on their own bare origin by setting receive.autogc, gc.auto,
-// and maintenance.auto there — in syncRepositoriesWithObjectFormat
-// (sync_test.go), in adoptOrigin (adopt_test.go), and directly inside
+// and maintenance.auto there — in mintSyncRepositories (sync_test.go), in
+// adoptOrigin (adopt_test.go), and directly inside
 // TestAdoptOriginProjectTaskRefsWithoutCommittedConfigFails (adopt_test.go)
 // — but nothing guards the clones, the plain repositories writeRepository
 // builds, or the other bare origins. Writing gc.auto=0,
@@ -53,6 +58,10 @@ import (
 // the three that were guarded per-origin. The three existing per-origin
 // git config lines stay in place; they are redundant with the global file
 // but harmless.
+//
+// TestMain also mints the two fixture templates, after the environment above
+// and before m.Run. What they are and why they are minted here is on
+// templateRoot, writeTemplate and syncTemplate.
 func TestMain(m *testing.M) {
 	home, err := os.MkdirTemp("", "workbook-gitstore-home")
 	if err != nil {
@@ -70,8 +79,89 @@ func TestMain(m *testing.M) {
 	os.Setenv("HOME", home)
 	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 
+	// The fixture templates are minted here, after the environment above and
+	// not on whichever test asks for one first: the mint then runs with the
+	// configuration every copy of it will be read under, and a mint that
+	// cannot succeed says so once rather than failing every test that copies
+	// it.
+	templateRoot = filepath.Join(home, "template")
+	if err := os.MkdirAll(templateRoot, 0o755); err != nil {
+		panic("create template root: " + err.Error())
+	}
+	if _, _, err := writeTemplate(); err != nil {
+		panic("mint write template: " + err.Error())
+	}
+	if _, err := syncTemplate(); err != nil {
+		panic("mint sync template: " + err.Error())
+	}
+
 	code := m.Run()
 
 	os.RemoveAll(home)
 	os.Exit(code)
+}
+
+// templateRoot holds the two fixtures this package mints once and every test
+// that wants one copies: the initialized project writeRepository hands out, and
+// the bare-origin-and-two-clones trio syncRepositories hands out. They live
+// under the isolated home directory TestMain creates, so that removing the home
+// removes them, and so that they are minted against the same user-global git
+// configuration every test runs against.
+var templateRoot string
+
+var (
+	writeTemplateOnce   sync.Once
+	writeTemplateDir    string
+	writeTemplateConfig core.ProjectConfig
+	writeTemplateErr    error
+)
+
+// writeTemplate mints the initialized project writeRepository copies, once for
+// the package.
+//
+// TestMain calls this before m.Run, so the mint happens in a quiet process with
+// the environment TestMain has just arranged, and a mint that fails stops the
+// package with one message instead of failing each of the 115 tests that copy
+// it. The sync.Once and the error every caller still checks are what make that
+// ordering an optimization rather than a requirement.
+func writeTemplate() (string, core.ProjectConfig, error) {
+	writeTemplateOnce.Do(func() {
+		dir := filepath.Join(templateRoot, "write")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			writeTemplateErr = err
+			return
+		}
+		config, err := mintWriteRepository(dir)
+		if err != nil {
+			writeTemplateErr = err
+			return
+		}
+		writeTemplateDir, writeTemplateConfig = dir, config
+	})
+	return writeTemplateDir, writeTemplateConfig, writeTemplateErr
+}
+
+var (
+	syncTemplateOnce  sync.Once
+	syncTemplateTrees syncTrees
+	syncTemplateErr   error
+)
+
+// syncTemplate mints the SHA-1 sync fixture syncRepositories copies, once for
+// the package, for the same reasons writeTemplate does.
+//
+// Only SHA-1 gets a template. SHA-256 is a capability an old Git does not have,
+// and a mint that fails here can only panic; the test that wanted SHA-256 has
+// to be the one that reports the capability missing, so those callers keep
+// minting.
+func syncTemplate() (syncTrees, error) {
+	syncTemplateOnce.Do(func() {
+		root := filepath.Join(templateRoot, "sync")
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			syncTemplateErr = err
+			return
+		}
+		syncTemplateTrees, syncTemplateErr = mintSyncRepositories(context.Background(), root, testrepo.FormatSHA1)
+	})
+	return syncTemplateTrees, syncTemplateErr
 }

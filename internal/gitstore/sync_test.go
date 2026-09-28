@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -1486,58 +1487,364 @@ func TestTaskOperationCommitsStayOutsideCheckedOutBranchHistory(t *testing.T) {
 	}
 }
 
+// syncRepositories hands a test the two-clones-and-a-bare-origin fixture as a
+// copy of the package's template rather than a fresh mint: 14 git processes
+// instead of 37, across 97 call sites, and no `git init`, `git clone` or
+// `git push` among them.
+//
+// The copy is a private one, so a test still pushes to, deletes from and plants
+// junk refs on an origin nothing else can see. What it does not get is a
+// project identity of its own — every copy carries the one project the template
+// minted. A test that needs two projects to differ builds the second one
+// itself, with core.CryptoULIDSource, which cannot collide with the template's;
+// a test whose subject is the minting calls mintedSyncRepositories.
 func syncRepositories(t *testing.T) (*Repository, *Repository, core.ProjectConfig) {
+	t.Helper()
+	template, err := syncTemplate()
+	if err != nil {
+		t.Fatalf("sync template: %v", err)
+	}
+	root := t.TempDir()
+	copied := syncTrees{
+		bare:   filepath.Join(root, "origin.git"),
+		first:  filepath.Join(root, "first"),
+		second: filepath.Join(root, "second"),
+		config: template.config,
+	}
+	for _, pair := range [][2]string{
+		{template.bare, copied.bare},
+		{template.first, copied.first},
+		{template.second, copied.second},
+	} {
+		if err := os.MkdirAll(pair[1], 0o755); err != nil {
+			t.Fatalf("create %s: %v", pair[1], err)
+		}
+		if err := testrepo.CopyTree(pair[0], pair[1]); err != nil {
+			t.Fatalf("copy %s to %s: %v", pair[0], pair[1], err)
+		}
+	}
+
+	for _, clone := range []string{copied.first, copied.second} {
+		// remote.origin.url still names the template's origin by absolute
+		// path, and it is the only absolute path in a clone that anything
+		// reads. The three reflogs that also carry the old path carry it in
+		// their "clone: from" messages, and no test in this package reads
+		// them: every reflog assertion here is on a task ref the test body
+		// created.
+		syncGit(t, clone, "config", "remote.origin.url", copied.bare)
+	}
+	return openSyncFixture(t, copied)
+}
+
+// mintedSyncRepositories builds the fixture from nothing, for a test whose
+// subject is the minting itself or that needs a project identity no other test
+// shares. Every test the fixture audit flagged as needing a distinct project
+// turned out to build its second project itself, so the only caller is the
+// test that pins the copy and the mint against each other.
+func mintedSyncRepositories(t *testing.T) (*Repository, *Repository, core.ProjectConfig) {
 	t.Helper()
 	return syncRepositoriesWithObjectFormat(t, testrepo.FormatSHA1)
 }
 
-// syncRepositoriesWithObjectFormat builds the two-clones-and-a-bare-origin
-// fixture in the named Git object format. The origin has to be created in the
-// same format as the seed, because Git will not clone across object formats.
+// syncRepositoriesWithObjectFormat mints the fixture in the named Git object
+// format. SHA-256 has no template — a template minted in TestMain could not
+// report a missing capability against the test that needed it — so these
+// callers pay the mint.
 func syncRepositoriesWithObjectFormat(t *testing.T, objectFormat string) (*Repository, *Repository, core.ProjectConfig) {
 	t.Helper()
 	testrepo.RequireObjectFormat(t, objectFormat)
-	ctx := context.Background()
-	bare := filepath.Join(t.TempDir(), "origin.git")
-	bareArgs := []string{"init", "--bare", "--quiet"}
-	if objectFormat != testrepo.FormatSHA1 {
-		bareArgs = append(bareArgs, "--object-format="+objectFormat)
-	}
-	syncGit(t, t.TempDir(), append(bareArgs, bare)...)
-	// Background auto-gc spawned by receive-pack can outlive the test and race
-	// t.TempDir cleanup with "directory not empty" on slow runners.
-	syncGit(t, bare, "config", "receive.autogc", "false")
-	syncGit(t, bare, "config", "gc.auto", "0")
-	syncGit(t, bare, "config", "maintenance.auto", "false")
-
-	seedPath := testrepo.New(t, testrepo.WithObjectFormat(objectFormat))
-	syncGit(t, seedPath, "branch", "-M", "main")
-	seed, err := Open(ctx, seedPath)
+	trees, err := mintSyncRepositories(context.Background(), t.TempDir(), objectFormat)
 	if err != nil {
 		t.Fatal(err)
 	}
-	config, _, err := seed.Init(ctx, "WB", core.CryptoULIDSource{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	syncGit(t, seedPath, "add", ".workbook/config.json")
-	syncGit(t, seedPath, "commit", "--quiet", "-m", "Initialize Workbook")
-	syncGit(t, seedPath, "remote", "add", "origin", bare)
-	syncGit(t, seedPath, "push", "--quiet", "-u", "origin", "main")
-	syncGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
+	return openSyncFixture(t, trees)
+}
 
-	first := openSyncClone(t, bare)
-	second := openSyncClone(t, bare)
-	for _, repo := range []*Repository{first, second} {
+// openSyncFixture opens the fixture's two clones and requires each to load the
+// project the origin carries.
+//
+// LoadConfig is where a clone publishes the project's identity ref into itself,
+// from the configuration the seed committed — the one-time migration every
+// pre-v0.5.0 clone performs, which the handle remembers and a test's first Sync
+// then reports. That is per-handle state 97 tests inherit from this fixture, so
+// a copied clone has to perform the publication itself rather than receive the
+// ref in the copy: the template is handed over as `git clone` left it, and both
+// the mint and the copy come through here.
+func openSyncFixture(t *testing.T, trees syncTrees) (*Repository, *Repository, core.ProjectConfig) {
+	t.Helper()
+	opened := make([]*Repository, 0, 2)
+	for _, clone := range []string{trees.first, trees.second} {
+		repo, err := Open(context.Background(), clone)
+		if err != nil {
+			t.Fatal(err)
+		}
 		loaded, err := repo.LoadConfig()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if loaded != config {
-			t.Fatalf("clone config = %#v, want %#v", loaded, config)
+		if loaded != trees.config {
+			t.Fatalf("clone config = %#v, want %#v", loaded, trees.config)
+		}
+		opened = append(opened, repo)
+	}
+	return opened[0], opened[1], trees.config
+}
+
+// A test that asks for the sync fixture gets a copy of the template rather than
+// a mint of its own, and 97 tests treat the two as the same fixture. This pins
+// that they are, across all three trees: the same refs, HEAD and local settings
+// on the bare origin and on each clone, an origin that is the copy's own rather
+// than the template's, and a tracked configuration whose bytes match the mint's.
+//
+// Object IDs cannot be compared between the copy and the mint: the project ID
+// comes from core.CryptoULIDSource, so a mint names a different project and
+// commits a different document. Where object identity matters — that the copied
+// origin holds exactly what the copied clones track, and that every object the
+// origin's history names is present — the copy is compared against itself.
+// Keeping both halves in one test is also what keeps mintedSyncRepositories, and
+// so the minting path, executed on every run.
+func TestTemplateCopyAndMintedSyncRepositoriesAgree(t *testing.T) {
+	t.Parallel()
+	mintedFirst, mintedSecond, mintedConfig := mintedSyncRepositories(t)
+	copiedFirst, copiedSecond, copiedConfig := syncRepositories(t)
+
+	if mintedConfig.Key != copiedConfig.Key {
+		t.Fatalf("project key: mint %q, copy %q", mintedConfig.Key, copiedConfig.Key)
+	}
+	if mintedConfig.ProjectID == copiedConfig.ProjectID {
+		t.Fatalf("mint and template share project ID %q; each mint must name its own project", copiedConfig.ProjectID)
+	}
+	pairs := [][2]*Repository{{mintedFirst, copiedFirst}, {mintedSecond, copiedSecond}}
+	for index, pair := range pairs {
+		minted, copied := pair[0], pair[1]
+		assertRepositoriesAgree(t, fmt.Sprintf("clone %d", index), copied.Root, minted.Root)
+		// The copy's origin has to be the one beside it, not the template's:
+		// remote.origin.url is the whole of what a copied clone rewrites.
+		// Both paths are resolved, because Repository.Root comes back with
+		// symlinks resolved and the temporary directory on macOS is one.
+		origin := resolved(t, gitOutput(t, copied, "config", "remote.origin.url"))
+		if want := filepath.Join(resolved(t, filepath.Dir(copied.Root)), "origin.git"); origin != want {
+			t.Fatalf("clone %d origin = %q, want the copy's own origin %q", index, origin, want)
+		}
+		// The tracked configuration byte for byte, with the one field that
+		// legitimately differs substituted: the documents cannot be equal
+		// because the mint invented its own project, but nothing else about
+		// their shape — key order, formatting, which fields exist — may drift.
+		tracked := readTrackedConfig(t, copied.Root)
+		want := strings.ReplaceAll(readTrackedConfig(t, minted.Root), mintedConfig.ProjectID, copiedConfig.ProjectID)
+		if tracked != want {
+			t.Fatalf("clone %d tracked configuration\ncopy: %q\nmint, project ID substituted: %q", index, tracked, want)
 		}
 	}
-	return first, second, config
+
+	// The bare origin, which the clones push to and fetch from. A copy that
+	// lost its HEAD, its packed-refs or a loose object would leave both clones
+	// intact and only fail later, in whichever test first pushed or fetched.
+	copiedBare := gitOutput(t, copiedFirst, "config", "remote.origin.url")
+	mintedBare := gitOutput(t, mintedFirst, "config", "remote.origin.url")
+	assertRepositoriesAgree(t, "origin", copiedBare, mintedBare)
+	if got, want := syncGit(t, copiedBare, "rev-parse", "refs/heads/main"),
+		refValue(t, copiedFirst, "refs/remotes/origin/main"); got != want {
+		t.Fatalf("copied origin main = %q, want what the copied clone tracks, %q", got, want)
+	}
+	// rev-list walks every object the origin's refs name, so it fails outright
+	// on one the copy dropped; the count then pins that none was added either.
+	if got, want := reachableObjects(t, copiedBare), reachableObjects(t, mintedBare); got != want {
+		t.Fatalf("copied origin reachable objects = %d, want the mint's %d", got, want)
+	}
+
+	// The two clones' origins are the same repository, which is what makes one
+	// clone's push the other's fetch.
+	if got, want := gitOutput(t, copiedSecond, "config", "remote.origin.url"), copiedBare; got != want {
+		t.Fatalf("second clone origin = %q, want the first's %q", got, want)
+	}
+}
+
+// assertRepositoriesAgree requires two repositories to hold the same refs by
+// name, the same HEAD, and the same settings of their own. Object IDs are left
+// to the caller, which knows whether the two were minted as the same project.
+func assertRepositoriesAgree(t *testing.T, subject, copied, minted string) {
+	t.Helper()
+	for _, check := range []struct {
+		name string
+		of   func(*testing.T, string) string
+	}{
+		{"refs", refNames},
+		{"HEAD", headRef},
+		{"local configuration", localSettings},
+	} {
+		if got, want := check.of(t, copied), check.of(t, minted); got != want {
+			t.Fatalf("%s %s\ncopy: %q\nmint: %q", subject, check.name, got, want)
+		}
+	}
+}
+
+// resolved is path with its symlinks resolved, so that a path git reported and
+// a path Go built can be compared on a platform whose temporary directory is
+// itself a symlink.
+func resolved(t *testing.T, path string) string {
+	t.Helper()
+	actual, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", path, err)
+	}
+	return actual
+}
+
+// refNames lists a repository's refs by name, sorted, so a comparison is about
+// which refs exist rather than what they point at.
+func refNames(t *testing.T, directory string) string {
+	t.Helper()
+	names := strings.Split(syncGit(t, directory, "for-each-ref", "--format=%(refname)"), "\n")
+	sort.Strings(names)
+	return strings.Join(names, "\n")
+}
+
+// headRef is the branch a repository's HEAD names, which is what a bare origin
+// hands a fresh clone as its default branch.
+func headRef(t *testing.T, directory string) string {
+	t.Helper()
+	return syncGit(t, directory, "symbolic-ref", "HEAD")
+}
+
+// localSettings lists a repository's own git settings, sorted, minus
+// remote.origin.url, which is the one setting a copy has to rewrite.
+func localSettings(t *testing.T, directory string) string {
+	t.Helper()
+	kept := []string{}
+	for _, setting := range strings.Split(syncGit(t, directory, "config", "--list", "--local"), "\n") {
+		if strings.HasPrefix(setting, "remote.origin.url=") {
+			continue
+		}
+		kept = append(kept, setting)
+	}
+	sort.Strings(kept)
+	return strings.Join(kept, "\n")
+}
+
+// reachableObjects counts the objects a repository's refs reach, and fails the
+// test if any of them is missing.
+func reachableObjects(t *testing.T, directory string) int {
+	t.Helper()
+	return len(strings.Split(syncGit(t, directory, "rev-list", "--objects", "--all"), "\n"))
+}
+
+// readTrackedConfig reads the Workbook configuration a repository has committed.
+func readTrackedConfig(t *testing.T, directory string) string {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join(directory, ".workbook", "config.json"))
+	if err != nil {
+		t.Fatalf("read tracked configuration under %s: %v", directory, err)
+	}
+	return string(contents)
+}
+
+// syncTrees is the sync fixture: a bare origin and the two clones of it a test
+// drives, carrying the project all three agree on. The seed that pushed the
+// project into the origin is not part of it; nothing reads the seed after the
+// push.
+type syncTrees struct {
+	bare   string
+	first  string
+	second string
+	config core.ProjectConfig
+}
+
+// mintSyncRepositories builds the fixture under root in the named object
+// format, leaving the two clones exactly as `git clone` left them: Workbook
+// has not been opened on either, so neither has published the project's
+// identity ref. openSyncFixture is the other half, and the half that a copy of
+// these trees performs for itself.
+//
+// The origin has to be created in the same format as the seed, because Git
+// will not clone across object formats.
+//
+// This is the one definition of the fixture: TestMain calls it once to build
+// the SHA-1 template every copy comes from, and syncRepositoriesWithObjectFormat
+// calls it per test for the formats and the tests a copy cannot serve. It takes
+// no *testing.T and returns an error so that the template mint, which happens
+// before m.Run where there is no test to fail, runs the same code the per-test
+// mint does rather than a second copy of it that could drift.
+func mintSyncRepositories(ctx context.Context, root, objectFormat string) (syncTrees, error) {
+	trees := syncTrees{
+		bare:   filepath.Join(root, "origin.git"),
+		first:  filepath.Join(root, "first"),
+		second: filepath.Join(root, "second"),
+	}
+	bareArgs := []string{"init", "--bare", "--quiet"}
+	if objectFormat != testrepo.FormatSHA1 {
+		bareArgs = append(bareArgs, "--object-format="+objectFormat)
+	}
+	if _, err := plainGit(root, append(bareArgs, trees.bare)...); err != nil {
+		return trees, err
+	}
+	// Background auto-gc spawned by receive-pack can outlive the test and race
+	// t.TempDir cleanup with "directory not empty" on slow runners.
+	for _, args := range [][]string{
+		{"config", "receive.autogc", "false"},
+		{"config", "gc.auto", "0"},
+		{"config", "maintenance.auto", "false"},
+	} {
+		if _, err := plainGit(trees.bare, args...); err != nil {
+			return trees, err
+		}
+	}
+
+	seedPath := filepath.Join(root, "seed")
+	if err := os.MkdirAll(seedPath, 0o755); err != nil {
+		return trees, fmt.Errorf("create seed directory: %w", err)
+	}
+	if err := testrepo.InitAtWithObjectFormat(seedPath, objectFormat); err != nil {
+		return trees, err
+	}
+	if _, err := plainGit(seedPath, "branch", "-M", "main"); err != nil {
+		return trees, err
+	}
+	seed, err := Open(ctx, seedPath)
+	if err != nil {
+		return trees, err
+	}
+	config, _, err := seed.Init(ctx, "WB", core.CryptoULIDSource{})
+	if err != nil {
+		return trees, err
+	}
+	trees.config = config
+	for _, args := range [][]string{
+		{"add", ".workbook/config.json"},
+		{"commit", "--quiet", "-m", "Initialize Workbook"},
+		{"remote", "add", "origin", trees.bare},
+		{"push", "--quiet", "-u", "origin", "main"},
+	} {
+		if _, err := plainGit(seedPath, args...); err != nil {
+			return trees, err
+		}
+	}
+	if _, err := plainGit(trees.bare, "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
+		return trees, err
+	}
+
+	for _, clone := range []string{trees.first, trees.second} {
+		if _, err := plainGit(root, "clone", "--quiet", trees.bare, clone); err != nil {
+			return trees, err
+		}
+		if err := testrepo.ConfigureIdentity(clone); err != nil {
+			return trees, err
+		}
+	}
+	return trees, nil
+}
+
+// plainGit runs git in a directory and returns its trimmed output, for the
+// fixture mint TestMain performs before there is any test to fail. syncGit is
+// this plus a *testing.T to fail, so there is one wrapper rather than two that
+// could drift.
+func plainGit(directory string, args ...string) (string, error) {
+	command := exec.Command("git", append([]string{"-C", directory}, args...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %v in %s: %w\n%s", args, directory, err, output)
+	}
+	return stringTrimLine(output), nil
 }
 
 func openSyncClone(t *testing.T, bare string) *Repository {
@@ -1673,12 +1980,11 @@ func mergeBaseIsAncestor(t *testing.T, directory, ancestor, descendant string) b
 
 func syncGit(t *testing.T, directory string, args ...string) string {
 	t.Helper()
-	command := exec.Command("git", append([]string{"-C", directory}, args...)...)
-	output, err := command.CombinedOutput()
+	output, err := plainGit(directory, args...)
 	if err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, output)
+		t.Fatalf("%v", err)
 	}
-	return stringTrimLine(output)
+	return output
 }
 
 func syncGitInput(t *testing.T, directory string, input []byte, args ...string) string {
