@@ -101,11 +101,14 @@ described under Changed.
   a Next entry above the project list shows what each project would hand out
   next, as `workbook next` decides it, with a number for how many per project;
   a row opens that task on its board. It refreshes every five seconds.
-- **The web board gains a filter row.** A search over title and description
-  and Priority, Labels and Key choosers narrow the columns, every control
-  writes the address so a filtered board is a link, and columns report
-  `visible / total`; the Labels menu has a search box of its own.
-  `workbook list --find <text>` applies the same search rule from the CLI.
+- **The web board gains a filter row.** A search over title, description or a
+  task-ID prefix and Priority, Labels and Key choosers narrow the columns, every
+  control writes the address so a filtered board is a link, and columns report
+  `visible / total`; the Labels menu has a search box of its own. A pasted task
+  ID finds that one card, since an ID is matched from its beginning — a key, a
+  dash and more characters — and never from the middle.
+  `workbook list --find <text>` applies the same search rule, title,
+  description or a task-ID prefix alike, from the CLI.
 
 ### Changed
 - **`workbook setup` asks for the project key only when it creates a

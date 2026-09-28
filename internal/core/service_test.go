@@ -152,6 +152,22 @@ func TestServiceListFindNarrowsByTitleAndDescription(t *testing.T) {
 	if len(tasks) != 1 || tasks[0].ID != perf.State.TaskID {
 		t.Fatalf("List(find audit, low) = %v, want only the performance audit", tasks)
 	}
+	// The same filter finds one task by the start of its ID, under the key this
+	// service's key set holds, and never from the middle of a ULID.
+	tasks, err = service.List(context.Background(), ListFilter{Find: "wb-01K0M6B8A4FTT8C39MXXYTW7D3"})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != other.State.TaskID {
+		t.Fatalf("List(find by ID) = %v, want only %s", tasks, other.State.TaskID)
+	}
+	tasks, err = service.List(context.Background(), ListFilter{Find: "01K0M6B8"})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("List(find a ULID fragment) = %v, want nothing: an ID matches only from its beginning", tasks)
+	}
 }
 
 func TestServiceListOrdersRanksAsExactRationals(t *testing.T) {

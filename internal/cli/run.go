@@ -556,7 +556,7 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	priority := flags.String("priority", "", "task priority")
 	key := flags.String("key", "", "only tasks whose ID carries this key")
 	label := flags.String("label", "", "task label")
-	find := flags.String("find", "", "only tasks whose title or description contains every word")
+	find := flags.String("find", "", "only tasks whose title or description contains every word, or whose ID one starts")
 	all := flags.Bool("all", false, "include tombstoned tasks")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {

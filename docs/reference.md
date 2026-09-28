@@ -64,8 +64,10 @@ workbook help [command]
 ```
 
 `workbook list --find <text>` keeps the tasks whose title or description
-contains every whitespace-separated word of `<text>`, case-insensitively; it
-combines with the other `list` filters, and an empty `--find` is refused.
+contains every whitespace-separated word of `<text>`, case-insensitively, or,
+for a word shaped like the start of a task ID (a project key, a dash, and more
+characters), whose ID begins with it; it combines with the other `list` filters,
+and an empty `--find` is refused.
 
 `workbook setup` is the single bootstrap path for a fresh clone. It creates or
 validates the tracked `.workbook/config.json` holding the project ID and key,
@@ -1977,18 +1979,20 @@ accompanies the board alone; task pages draw no cards for it to act on and so
 do not offer it.
 
 A filter row sits under the header. Its search box narrows the columns to the
-cards whose title or description contains every word typed, case-insensitively
-— the same rule `workbook list --find` uses — and its Priority, Labels and Key
-choosers each offer a list of ticks with the count of cards each would leave;
-ticks within a chooser are alternatives, and the search and the choosers narrow
-one another. The Labels menu has a box of its own that narrows its rows as you
-type, since a project may carry many labels; what is typed there is not part of
-the address. The Key chooser appears only once a project has more than one key,
-retired keys included because their tasks still exist, and a board already open
-learns of a second key when the configuration page is visited or on its next
-load; a key added from the CLI does not reveal the chooser on a board left
-open, because a key change moves no column and the board is never asked to
-reload for one. Every control writes the address —
+cards whose title or description contains every word typed, case-insensitively,
+or whose task ID begins with a word shaped like one — a key, a dash, and more
+characters — so a pasted ID finds its card and a stray word never matches the
+inside of an ID; that is the same rule `workbook list --find` uses. Its
+Priority, Labels and Key choosers each offer a list of ticks with the count of
+cards each would leave; ticks within a chooser are alternatives, and the search
+and the choosers narrow one another. The Labels menu has a box of its own that
+narrows its rows as you type, since a project may carry many labels; what is
+typed there is not part of the address. The Key chooser appears only once a
+project has more than one key, retired keys included because their tasks still
+exist, and a board already open learns of a second key when the configuration
+page is visited or on its next load; a key added from the CLI does not reveal
+the chooser on a board left open, because a key change moves no column and the
+board is never asked to reload for one. Every control writes the address —
 `/?q=audit&priority=high&label=web&key=WB` — so a filtered board is shareable,
 bookmarkable, and walked by Back and Forward, and typing in the search replaces
 the current entry rather than filling history with keystrokes. A column's count

@@ -1282,7 +1282,7 @@
        The row ships hidden and the board's render reveals it, because it acts
        on the columns and a task's page draws none. -->
   <div class="filter-row" data-filter-row hidden>
-    <input class="filter-row__search" type="search" data-filter-q autocomplete="off" placeholder="Search title and description" aria-label="Search title and description">
+    <input class="filter-row__search" type="search" data-filter-q autocomplete="off" placeholder="Search title, description or task ID" aria-label="Search title, description or task ID">
     <!-- The three choosers, served rather than built, so a page whose script
          never ran offers no control that cannot work. Each is a button and an
          empty menu: what a chooser lists is the board's own priorities, labels
@@ -2682,9 +2682,10 @@
       //
       // The text search is the predicate core's MatchesFind is, and the one
       // `list --find` narrows by: every whitespace-separated term has to appear
-      // somewhere in the title or the description, case folded. It is kept
-      // between the two markers below and depends on nothing else on this page,
-      // so a parity test can lift it out and ask it what core is asked.
+      // somewhere in the title or the description, case folded, or name the start
+      // of the task's ID. It is kept between the two markers below and depends on
+      // nothing else on this page — the keys it needs are passed in — so a parity
+      // test can lift it out and ask it what core is asked.
       //
       // The markers are strings rather than comments because the parity test asks
       // the page the handler served, the way every other test here does, and
@@ -2733,23 +2734,84 @@
       function findTerms(query) {
         return foldFindCase(String(query || "")).split(findSpace).filter(Boolean);
       }
+      // Whether a term names the start of a task ID under one of these keys: the
+      // key, a dash, and at least one more character, answered upper-cased
+      // because that is the case an ID is written in. core.FindKeyPrefixTerm is
+      // the same function and the parity test holds the two together.
+      //
+      // "WB" and "WB-" are words rather than prefixes, and an ID is matched only
+      // from its beginning — a word that happens to occur inside a ULID must
+      // never drag in a card nobody was looking for. findTerms has already
+      // lower-cased the term; upper-casing it again here is what makes a pasted
+      // ID work whatever case it arrived in.
+      // The term is checked before it is upper-cased, and only ASCII letters,
+      // digits and dashes pass. Upper case is not a per-character operation and
+      // the two languages expand differently: "ß".toUpperCase() here is "SS" and
+      // Go's strings.ToUpper leaves the letter alone, so "wb-01m2ßkb" named the ID
+      // WB-01M2SSKB… on this board and named nothing to `list --find`. Refusing
+      // the term rather than folding it is the fix that needs no case table in the
+      // browser — with nothing outside ASCII left there is nothing the two can
+      // fold differently. A term that is refused here still has the whole text
+      // route open to it.
+      //
+      // Both loops walk code points against the letters and digits they accept,
+      // the way core.FindKeyPrefixTerm does, rather than testing a pattern: a
+      // pattern here would be a second spelling of a rule that lives in Go, and
+      // the page deliberately spells none of those. Neither is the grammar of a
+      // key's name — that one the page never reads at all, and the server answers.
+      function findKeyPrefixTerm(term, keys) {
+        const text = String(term);
+        for (const character of text) {
+          const upperLetter = character >= "A" && character <= "Z";
+          const lowerLetter = character >= "a" && character <= "z";
+          const digit = character >= "0" && character <= "9";
+          if (!upperLetter && !lowerLetter && !digit && character !== "-") return null;
+        }
+        const upper = text.toUpperCase();
+        for (const key of keys) {
+          if (upper.length <= key.length + 1 || !upper.startsWith(key + "-")) continue;
+          // Only a second dash can fail here, now that the term is ASCII; the
+          // check is written as the alphabet it is so that it stays true of the
+          // rule rather than of what the validation above happens to leave.
+          let alphabet = true;
+          for (const character of upper.slice(key.length + 1)) {
+            const letter = character >= "A" && character <= "Z";
+            const digit = character >= "0" && character <= "9";
+            if (!letter && !digit) {
+              alphabet = false;
+              break;
+            }
+          }
+          if (alphabet) return upper;
+        }
+        return null;
+      }
       // The predicate over work already done: a haystack this task's text has
       // already been folded into, and terms the query has already been split into.
       // An empty term list matches, which is what makes an empty query cost
       // nothing — no caller has to fold a haystack to be told it matches.
-      function matchesFoldedFind(foldedHaystack, terms) {
+      //
+      // The ID is taken alongside the haystack rather than folded into it, since
+      // the two are matched by different rules: the text anywhere, the ID only
+      // from its start.
+      function matchesFoldedFind(foldedHaystack, terms, id, keys) {
         if (terms.length === 0) return true;
-        return terms.every((term) => foldedHaystack.includes(term));
+        const names = keys || [];
+        return terms.every((term) => {
+          if (foldedHaystack.includes(term)) return true;
+          const prefix = findKeyPrefixTerm(term, names);
+          return prefix !== null && String(id || "").startsWith(prefix);
+        });
       }
       // The whole predicate, folding for itself. This is the one the parity test
       // asks and the one every caller outside a render uses; a render that is
       // about to ask the same task about twenty-five options folds once and goes
       // through matchesFoldedFind instead, which is the same answer arrived at
       // without doing the same work twenty-five times.
-      function matchesFind(task, query) {
+      function matchesFind(task, query, keys) {
         const terms = findTerms(query);
         if (terms.length === 0) return true;
-        return matchesFoldedFind(foldTaskHaystack(task), terms);
+        return matchesFoldedFind(foldTaskHaystack(task), terms, task.id, keys);
       }
       "find:end";
       function emptyFilters() {
@@ -2819,6 +2881,13 @@
         const dash = id.indexOf("-");
         return dash > 0 ? id.slice(0, dash).toUpperCase() : "";
       }
+      // Every key this project has ever minted under, which is the list the
+      // search compares an ID-prefix term against. All states count: a retired
+      // key mints nothing, but everything it ever minted is still on the board,
+      // so a pasted ID under one still has to find its card.
+      function searchKeyNames() {
+        return publishedKeys.map((entry) => entry.key);
+      }
       function passesFilters(task, filters, search) {
         if (filters.priority.size > 0 && !filters.priority.has(task.priority)) return false;
         if (filters.label.size > 0 && !(task.labels || []).some((label) => filters.label.has(label))) return false;
@@ -2831,12 +2900,18 @@
         // instead of a wrong fast one.
         if (search && search.folded && search.query === filters.q) {
           const folded = search.folded.get(task.id);
-          if (folded !== undefined) return matchesFoldedFind(folded, search.terms);
+          if (folded !== undefined) return matchesFoldedFind(folded, search.terms, task.id, search.keys);
         }
-        return matchesFind(task, filters.q);
+        // The render's own list where there is one, since this path is the only
+        // one an unsearched board takes and it is taken once per task per option
+        // per poll — building a fresh array of key names for each of those asks
+        // is work nobody reads. foldedSearch carries the list even when it folds
+        // nothing, which is exactly the empty-query case.
+        return matchesFind(task, filters.q, (search && search.keys) || searchKeyNames());
       }
       // Everything one render needs to answer the search with: the query, its
-      // terms split once, and each task's text folded once.
+      // terms split once, the project's keys read once, and each task's text
+      // folded once.
       //
       // It exists because of what the same render used to cost. passesFilters is
       // asked about every task once for the columns and once more for every option
@@ -2852,8 +2927,9 @@
       function foldedSearch(tasks) {
         const query = boardFilters.q;
         const terms = findTerms(query);
-        if (terms.length === 0) return { query, terms, folded: null };
-        return { query, terms, folded: new Map(tasks.map((task) => [task.id, foldTaskHaystack(task)])) };
+        const keys = searchKeyNames();
+        if (terms.length === 0) return { query, terms, keys, folded: null };
+        return { query, terms, keys, folded: new Map(tasks.map((task) => [task.id, foldTaskHaystack(task)])) };
       }
       let boardFilters = emptyFilters();
       function route(url = new URL(window.location.href)) {

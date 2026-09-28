@@ -202,7 +202,8 @@ type ListFilter struct {
 	// membership and not about activity.
 	Key string
 	// Find keeps only the tasks whose title or description contains every
-	// whitespace-separated term, case-insensitively; see MatchesFind.
+	// whitespace-separated term, case-insensitively, or whose ID begins with a
+	// term shaped like the start of one; see MatchesFind.
 	Find string
 }
 
@@ -454,6 +455,19 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 		return nil, Errorf(CategoryValidation, "no project key %q in this project; its keys are: %s%s",
 			filter.Key, KeyNameList(keys), unfetchedFilterClause)
 	}
+	// The names a --find term may be the start of an ID under, retired keys
+	// included: what a retired key minted is still a task, and a pasted ID is
+	// pasted whole. Built here beside the key set rather than inside the loop,
+	// for the reason keys() is resolved there, and only for a list that asked to
+	// search — every other list would copy the names and never read them.
+	var findKeys []string
+	if filter.Find != "" {
+		definitions := keys.Keys()
+		findKeys = make([]string, 0, len(definitions))
+		for _, definition := range definitions {
+			findKeys = append(findKeys, definition.Key)
+		}
+	}
 	tasks := make([]Task, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		task := s.Project(snapshot)
@@ -475,7 +489,7 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 		if filter.Label != "" && !hasLabel(task.Labels, filter.Label) {
 			continue
 		}
-		if filter.Find != "" && !MatchesFind(task, filter.Find) {
+		if filter.Find != "" && !MatchesFind(task, filter.Find, findKeys) {
 			continue
 		}
 		tasks = append(tasks, task)

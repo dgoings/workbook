@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -1588,4 +1589,131 @@ setTimeout(async () => {
 }, 0);
 `
 	runBoardFiltersClient(t, "a narrowed menu across two polls", program)
+}
+
+// The IDs the search's own tests use. They are written out rather than taken from
+// boardFilterTasks because those five share their first ten characters, and a
+// prefix that names more than one task cannot show that a pasted ID names one.
+const (
+	filterNotarizeID = "WB-01M2JEC8CBKB5S0THJNSF15WMV"
+	filterDrainID    = "WB-01M2QRS1CBKB5S0THJNSF15WMV"
+	filterWebhookID  = "WB-01M2TUV2CBKB5S0THJNSF15WMV"
+	filterRetiredID  = "ZZ-01M2XYZ3CBKB5S0THJNSF15WMV"
+)
+
+// Pasting a task's ID into the search box finds that one card, which is what was
+// asked for after the row was first tested. The rest of this is what keeps that
+// from being a search which matches too much: a fragment out of the middle of a
+// ULID finds nothing, and the key on its own is a word like any other.
+func TestHandlerClientSearchFindsATaskByIDPrefix(t *testing.T) {
+	notarize := clientPlacementTask(filterNotarizeID, "Notarize macOS builds", core.StatusReady, core.PriorityHigh)
+	notarize.Description = "Staple the ticket."
+	drain := clientPlacementTask(filterDrainID, "Drain the queue", core.StatusReady, core.PriorityLow)
+	drain.Rank = "2/1"
+	// The one task whose text holds the key, so that typing the key is answered by
+	// a title rather than by every card on the board.
+	webhook := clientPlacementTask(filterWebhookID, "Retry the wb webhook", core.StatusReady, core.PriorityLow)
+	webhook.Rank = "3/1"
+	tasks := []core.Task{notarize, drain, webhook}
+	script := boardFiltersClientScript(t)
+
+	program := clientDOMHarness("/", tasksDocumentJSON(t, tasks)) +
+		keyChooserPrelude(t, oneKeyProject()) + script + `
+const listFor = (status) => boardLists.find((list) => list.dataset.status === status);
+const emptyLineIn = (status) => findElement(listFor(status), (element) => hasDataKey(element, "filterEmpty"));
+const type = (value) => {
+  filterSearch.value = value;
+  filterSearch.eventListeners.input({ target: filterSearch });
+};
+const drawn = () => [` + strconv.Quote(filterNotarizeID) + `, ` + strconv.Quote(filterDrainID) + `, ` +
+		strconv.Quote(filterWebhookID) + `].filter((id) => boardCard(id));
+setTimeout(async () => {
+  await intervalCallback();
+  if (drawn().length !== 3) throw new Error("the unfiltered board drew " + drawn().join(", "));
+
+  // Ten characters of the ID, in the case a paste from a terminal or another
+  // board may well arrive in.
+  type("wb-01m2jec");
+  if (drawn().join(", ") !== ` + strconv.Quote(filterNotarizeID) + `) {
+    throw new Error("the start of an ID drew " + drawn().join(", ") + ", want only the task it names");
+  }
+
+  // The whole of it names the same one task.
+  type(` + strconv.Quote(strings.ToLower(filterNotarizeID)) + `);
+  if (drawn().join(", ") !== ` + strconv.Quote(filterNotarizeID) + `) {
+    throw new Error("a whole pasted ID drew " + drawn().join(", ") + ", want only the task it names");
+  }
+
+  // Eight characters out of the middle of that same ULID. An ID is matched from
+  // its beginning, so this names nothing at all — and the column says so rather
+  // than looking like a column with nothing in it.
+  type(` + strconv.Quote(strings.ToLower(filterNotarizeID[8:16])) + `);
+  if (drawn().length !== 0) {
+    throw new Error("a fragment from inside a ULID drew " + drawn().join(", "));
+  }
+  const emptied = emptyLineIn("ready");
+  if (!emptied || emptied.hidden || emptied.textContent !== "No matches.") {
+    throw new Error("the emptied column says " + JSON.stringify(emptied && emptied.textContent));
+  }
+
+  // The key alone is a word. It finds the card whose title says it and leaves the
+  // other two, rather than every card the project has ever minted.
+  type("WB");
+  if (drawn().join(", ") !== ` + strconv.Quote(filterWebhookID) + `) {
+    throw new Error("the key alone drew " + drawn().join(", ") + ", want only the card whose text holds it");
+  }
+  // And a key with a dash after it is no more of a prefix than the key was.
+  type("WB-");
+  if (drawn().length !== 0) {
+    throw new Error("a key and a dash drew " + drawn().join(", ") + ", want nothing: it names no ID");
+  }
+}, 0);
+`
+	runBoardFiltersClient(t, "the search finding a task by the start of its ID", program)
+}
+
+// A retired key's tasks are still on the board, so a pasted ID under one still
+// finds its card. The keys the search reads are every key the project has, which
+// is the same list the Key chooser draws its rows from.
+func TestHandlerClientSearchFindsATaskUnderARetiredKeyByIDPrefix(t *testing.T) {
+	notarize := clientPlacementTask(filterNotarizeID, "Notarize macOS builds", core.StatusReady, core.PriorityHigh)
+	retired := clientPlacementTask(filterRetiredID, "Drain the queue", core.StatusReady, core.PriorityLow)
+	retired.Rank = "2/1"
+	tasks := []core.Task{notarize, retired}
+	keys, err := core.NewKeySet(core.KeyDocument{
+		Keys:    []core.KeyDefinition{{Key: "WB"}, {Key: "ZZ", Retired: true}},
+		Current: "WB",
+	})
+	if err != nil {
+		t.Fatalf("NewKeySet() error = %v", err)
+	}
+	script := boardFiltersClientScript(t)
+
+	program := clientDOMHarness("/", tasksDocumentJSON(t, tasks)) +
+		keyChooserPrelude(t, keys) + script + `
+const type = (value) => {
+  filterSearch.value = value;
+  filterSearch.eventListeners.input({ target: filterSearch });
+};
+setTimeout(async () => {
+  await intervalCallback();
+  type("zz-01");
+  if (!boardCard(` + strconv.Quote(filterRetiredID) + `)) {
+    throw new Error("the start of an ID under a retired key drew no card, so its tasks cannot be pasted for");
+  }
+  if (boardCard(` + strconv.Quote(filterNotarizeID) + `)) {
+    throw new Error("a prefix under one key drew a card minted under another");
+  }
+  // The active key's own prefix still answers for its own task, which is what
+  // says the retired key was added to the list rather than put in place of it.
+  type("wb-01m2");
+  if (!boardCard(` + strconv.Quote(filterNotarizeID) + `)) {
+    throw new Error("the active key's prefix drew no card");
+  }
+  if (boardCard(` + strconv.Quote(filterRetiredID) + `)) {
+    throw new Error("the active key's prefix drew the retired key's card");
+  }
+}, 0);
+`
+	runBoardFiltersClient(t, "the search over a project with a retired key", program)
 }

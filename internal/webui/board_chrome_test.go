@@ -501,8 +501,13 @@ func TestHandlerDrawsTheDeletedSwitchInTheFilterRow(t *testing.T) {
 	}
 	// The search says what it searches, to a reader and to a screen reader alike:
 	// a placeholder is not a label, and a box with no name is a box.
-	if !strings.Contains(row, `aria-label="Search title and description"`) {
+	if !strings.Contains(row, `aria-label="Search title, description or task ID"`) {
 		t.Errorf("the search box has no accessible name: %s", row)
+	}
+	// And it says the ID too, since a pasted ID is a search a reader has no other
+	// way to know the box takes.
+	if !strings.Contains(row, `placeholder="Search title, description or task ID"`) {
+		t.Errorf("the search box does not offer to search by task ID: %s", row)
 	}
 	// The row's own hidden attribute, on its own opening tag. A substring check
 	// over the whole row is satisfied by any hidden thing inside it — the Clear
