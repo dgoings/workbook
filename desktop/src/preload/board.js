@@ -18,6 +18,7 @@
 // is preserved untouched, because the click goes through that rule.
 
 const { ipcRenderer } = require('electron')
+const { runBoardCommand } = require('./boardcommand')
 
 // The board's own key and values, from internal/webui/assets/index.html.
 const PREFERENCE_KEY = 'workbook.board.scheme'
@@ -99,3 +100,7 @@ function align (theme) {
 }
 
 ipcRenderer.on('board:align', (_event, { theme }) => align(theme))
+
+// A shortcut in the shell reaches the board here: find the control that
+// already does the thing and drive it, so the page's own router runs.
+ipcRenderer.on('board:command', (_event, payload) => { runBoardCommand(payload?.command, { document, history }) })
