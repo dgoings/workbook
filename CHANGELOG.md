@@ -156,6 +156,10 @@ described under Changed.
   synchronization loop runs for as long as the app does.
 - **Show Deleted moved from the header into the board's new filter row.** Its
   address, `/?deleted=1`, is unchanged, so existing links keep working.
+- **Every command opens its repository with one `git rev-parse` process
+  instead of two.** The root and the common directory were two questions in
+  two processes; rev-parse answers both in one, about twenty-five
+  milliseconds saved per command.
 
 ### Fixed
 - **Saving the board's settings after changing a status or a priority no longer

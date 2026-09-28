@@ -163,6 +163,27 @@ set -o pipefail
 go test ./... -json | go run ./scripts/skipreport
 ```
 
+### Running tests locally
+
+A bare `go test ./...` needs no flags and no slicing. `internal/cli`, where
+most of the suite lives, runs its tests in parallel and finishes in about two
+minutes on an 18-core dev laptop, well inside Go's 600-second default test
+timeout.
+
+A new test in that package starts with `t.Parallel()` as its first statement.
+One that must stay serial — because it calls `t.Setenv` or otherwise touches
+process-wide state — is listed instead, with its reason, in the comment block
+at the top of `internal/cli/main_test.go`.
+
+Most tests build their repository with `initializedRepository(t)`, a copy of
+a template project the package mints once per run; a copy costs a couple of
+dozen milliseconds where a mint costs closer to a second. Every copy shares
+the template's project ID, so a test whose subject is the minting itself, or
+that needs a second, distinct project, calls `freshlyInitializedRepository(t)`
+to mint its own. `internal/testrepo.InitAt` is the one place the init
+sequence — `git init` and the test identity — lives; `testrepo.New` calls it
+too, so a repository built inside a test and the package's template are
+initialized by the same code.
 
 ## Releasing
 
