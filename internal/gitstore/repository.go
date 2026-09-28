@@ -135,21 +135,13 @@ func Open(ctx context.Context, startDir string) (*Repository, error) {
 		return nil, core.Wrap(core.CategoryOperational, "cannot find git executable", err)
 	}
 
-	root, err := runGit(ctx, gitPath, startDir, nil, "rev-parse", "--show-toplevel")
+	out, err := runGit(ctx, gitPath, startDir, nil, "rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		return nil, core.Wrap(core.CategoryNotInitialized, "cannot find Git repository", err)
 	}
-	commonGitDir, err := runGit(ctx, gitPath, startDir, nil, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return nil, core.Wrap(core.CategoryNotInitialized, "cannot find Git common directory", err)
-	}
-	rootPath, err := gitSingleLine(root)
+	rootPath, commonGitPath, err := gitTwoLines(out)
 	if err != nil {
 		return nil, core.Wrap(core.CategoryOperational, "Git returned an invalid repository root", err)
-	}
-	commonGitPath, err := gitSingleLine(commonGitDir)
-	if err != nil {
-		return nil, core.Wrap(core.CategoryOperational, "Git returned an invalid common directory", err)
 	}
 
 	return &Repository{
@@ -167,21 +159,13 @@ func (r *Repository) verifyIdentity(ctx context.Context) error {
 		return nil
 	}
 
-	root, err := r.Git(ctx, nil, "rev-parse", "--show-toplevel")
+	out, err := r.Git(ctx, nil, "rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		return core.Wrap(core.CategoryNotInitialized, "cannot verify Git repository", err)
 	}
-	commonGitDir, err := r.Git(ctx, nil, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return core.Wrap(core.CategoryNotInitialized, "cannot verify Git common directory", err)
-	}
-	rootPath, err := gitSingleLine(root)
+	rootPath, commonGitPath, err := gitTwoLines(out)
 	if err != nil {
 		return core.Wrap(core.CategoryOperational, "Git returned an invalid repository root", err)
-	}
-	commonGitPath, err := gitSingleLine(commonGitDir)
-	if err != nil {
-		return core.Wrap(core.CategoryOperational, "Git returned an invalid common directory", err)
 	}
 	if filepath.Clean(rootPath) != filepath.Clean(r.Root) ||
 		filepath.Clean(commonGitPath) != filepath.Clean(r.CommonGitDir) {
@@ -379,6 +363,35 @@ func gitEnvironment(environ []string, extra []string) []string {
 	}
 	result = append(result, "GIT_NO_REPLACE_OBJECTS=1")
 	return append(result, extra...)
+}
+
+// gitTwoLines splits the two-line output of a rev-parse invocation asking two
+// questions at once (for example --show-toplevel and --git-common-dir) into
+// its answers, in the order asked. It rejects anything but exactly two
+// non-empty lines, on the same terms as gitSingleLine.
+func gitTwoLines(output []byte) (string, string, error) {
+	if len(output) == 0 || output[len(output)-1] != '\n' {
+		return "", "", fmt.Errorf("expected two trailing-newline-terminated lines")
+	}
+	trimmed := output[:len(output)-1]
+	parts := bytes.SplitN(trimmed, []byte("\n"), 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("expected exactly two output lines")
+	}
+	first, second := parts[0], parts[1]
+	if len(first) > 0 && first[len(first)-1] == '\r' {
+		first = first[:len(first)-1]
+	}
+	if len(second) > 0 && second[len(second)-1] == '\r' {
+		second = second[:len(second)-1]
+	}
+	if len(first) == 0 || len(second) == 0 {
+		return "", "", fmt.Errorf("expected two non-empty output lines")
+	}
+	if bytes.ContainsAny(first, "\r\n") || bytes.ContainsAny(second, "\r\n") {
+		return "", "", fmt.Errorf("expected exactly two output lines")
+	}
+	return string(first), string(second), nil
 }
 
 func gitSingleLine(output []byte) (string, error) {
