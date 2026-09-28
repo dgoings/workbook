@@ -13,7 +13,6 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
-	"github.com/dgoings/workbook/internal/testrepo"
 )
 
 const projectionFutureGeneration = core.SupportedFormatGeneration + 1
@@ -89,8 +88,9 @@ func gitWithInput(t *testing.T, repository *gitstore.Repository, input string, a
 // assertions below deliberately look at the second read and at a freshly opened
 // store, where the answer can only have come out of the database.
 func TestTheProjectionCarriesTheWatermarkThroughSQLite(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Ordinary title")
 	writeFutureTaskCommit(t, repository, created.ID)
 
@@ -150,8 +150,9 @@ func TestTheProjectionCarriesTheWatermarkThroughSQLite(t *testing.T) {
 // checkpoint on top of a generation-one history — the silent wrong write, and
 // the reason the column exists.
 func TestAMutationThroughTheProjectionIsRefusedOnANewerHistory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Ordinary title")
 	writeFutureTaskCommit(t, repository, created.ID)
 
@@ -197,8 +198,9 @@ func TestAMutationThroughTheProjectionIsRefusedOnANewerHistory(t *testing.T) {
 // the behavior rather than either guard, so removing one still leaves the
 // promise checked; removing both fails here.
 func TestACacheWrittenBeforeTheMarkerIsDiscarded(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Ordinary title")
 	writeFutureTaskCommit(t, repository, created.ID)
 
@@ -281,8 +283,9 @@ CREATE TABLE operations (
 // A pack's own declared generation survives the operation rows too, so a replay
 // rebuilt from the projection refuses where a replay from Git would.
 func TestAProjectedPackKeepsItsDeclaredGeneration(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Ordinary title")
 	writeFutureTaskCommit(t, repository, created.ID)
 
