@@ -14,7 +14,17 @@ function fakeDocument (nodes) {
   return { querySelector: (selector) => nodes[selector] || null }
 }
 function clickable () { const node = { clicks: 0, click () { node.clicks += 1 } }; return node }
-function focusable (hiddenRow) { const node = { focused: 0, focus () { node.focused += 1 }, closest: () => ({ hidden: hiddenRow }) }; return node }
+// `asked` records what was passed to closest: the row is found by selector, and
+// a typo there would answer for every command with a row that is never hidden.
+function focusable (hiddenRow) {
+  const node = {
+    focused: 0,
+    asked: [],
+    focus () { node.focused += 1 },
+    closest: (selector) => { node.asked.push(selector); return { hidden: hiddenRow } }
+  }
+  return node
+}
 
 describe('runBoardCommand', () => {
   test('new-task clicks the first New Task link', () => {
@@ -29,6 +39,7 @@ describe('runBoardCommand', () => {
     const box = focusable(false)
     assert.equal(runBoardCommand('search', { document: fakeDocument({ '[data-filter-q]': box }), history: {} }), true)
     assert.equal(box.focused, 1)
+    assert.deepEqual(box.asked, ['[data-filter-row]'])
     const hidden = focusable(true)
     assert.equal(runBoardCommand('search', { document: fakeDocument({ '[data-filter-q]': hidden }), history: {} }), false)
     assert.equal(hidden.focused, 0)

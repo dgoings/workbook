@@ -1,0 +1,76 @@
+#!/usr/bin/env node
+'use strict'
+
+// board.js runs in a sandboxed preload, where `require` reaches the electron
+// module and a few Node builtins and nothing else — a sibling file cannot be
+// required, and a preload that fails to load fails entirely. So runBoardCommand
+// is written once in boardcommand.js, where the tests can reach it without
+// Electron, and copied into board.js between two markers.
+//
+// A copy nobody checks is a copy that drifts, and this one would drift
+// silently: the tests would still pass against boardcommand.js while the board
+// ran the old text. This asserts the two are the same, and with --write it
+// makes them so.
+
+const fs = require('node:fs')
+const path = require('node:path')
+
+const root = path.join(__dirname, '..')
+const source = path.join(root, 'src', 'preload', 'boardcommand.js')
+const target = path.join(root, 'src', 'preload', 'board.js')
+const BEGIN = '// boardcommand:begin'
+const END = '// boardcommand:end'
+
+/**
+ * The text of runBoardCommand in boardcommand.js.
+ *
+ * Taken by its opening line and the first line that closes it at column zero,
+ * rather than by parsing: the function is top-level and the file is this
+ * project's own, so the brace that starts a line is its end.
+ */
+function extractFunction () {
+  const lines = fs.readFileSync(source, 'utf8').split('\n')
+  const start = lines.findIndex((line) => line.startsWith('function runBoardCommand '))
+  if (start < 0) fatal(`${rel(source)} no longer declares a top-level runBoardCommand`)
+  const end = lines.findIndex((line, index) => index > start && line === '}')
+  if (end < 0) fatal(`${rel(source)}: runBoardCommand has no closing brace at column zero`)
+  return lines.slice(start, end + 1).join('\n')
+}
+
+/** Where the copy sits in board.js, by its markers. */
+function locateCopy (text) {
+  const begin = text.indexOf(BEGIN)
+  const finish = text.indexOf(END)
+  if (begin < 0 || finish < 0 || finish < begin) {
+    fatal(`${rel(target)} has no ${BEGIN} … ${END} pair around the copy of runBoardCommand`)
+  }
+  return { from: begin + BEGIN.length, to: finish }
+}
+
+function rel (file) { return path.relative(root, file) }
+
+function fatal (message) {
+  console.error(message)
+  process.exit(1)
+}
+
+const wanted = extractFunction()
+const text = fs.readFileSync(target, 'utf8')
+const { from, to } = locateCopy(text)
+const found = text.slice(from, to).trim()
+
+if (process.argv.includes('--write')) {
+  if (found === wanted) {
+    console.log(`${rel(target)} already carries ${rel(source)}'s runBoardCommand`)
+  } else {
+    fs.writeFileSync(target, `${text.slice(0, from)}\n${wanted}\n${text.slice(to)}`)
+    console.log(`copied runBoardCommand from ${rel(source)} into ${rel(target)}`)
+  }
+} else if (found !== wanted) {
+  fatal(`${rel(target)}'s inlined runBoardCommand is not ${rel(source)}'s.\n` +
+    'The tests cover boardcommand.js, so the board would be running text nothing tests. ' +
+    'Run `npm run sync:boardcommand` to copy it across.')
+} else {
+  console.log(`${rel(target)} carries ${rel(source)}'s runBoardCommand verbatim ` +
+    `(${wanted.split('\n').length} lines)`)
+}

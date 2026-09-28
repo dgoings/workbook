@@ -46,11 +46,20 @@ opens on when there is more than one project.
 npm run check
 ```
 
-`check-styles.js` verifies every class the renderer applies has a rule, and
+`check-styles.js` verifies every class the renderer applies has a rule,
 `check-shell.js` verifies every source file parses, every export is defined,
 the renderer references only element ids that exist, and the channels the
-preload invokes are the channels the main process handles. They are cheap and
-each catches a mistake this project has actually made.
+preload invokes are the channels the main process handles, and
+`check-preload-inline.js` verifies the board preload's copy of
+`runBoardCommand` is still the one in `src/preload/boardcommand.js`. They are
+cheap and each catches a mistake this project has actually made.
+
+That last one guards a deliberate duplicate. The board view keeps Electron's
+renderer sandbox — it is the one view that renders text out of a repository —
+and a sandboxed preload cannot require a file beside it, so `board.js` carries
+its own copy of `runBoardCommand` between `// boardcommand:begin` and
+`// boardcommand:end`. `boardcommand.js` stays the source of truth and the
+tested one: edit it, then run `npm run sync:boardcommand` to copy it across.
 
 That one command also runs the tests, which is why it is the only one listed:
 CI runs `npm run check` and nothing else for the desktop app, so anything
