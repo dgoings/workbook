@@ -14,6 +14,7 @@ import (
 )
 
 func TestOpenFromNestedWorkingTree(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	nestedDir := filepath.Join(repoDir, "a", "deep", "directory")
 	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
@@ -45,6 +46,7 @@ func TestOpenFromNestedWorkingTree(t *testing.T) {
 }
 
 func TestOpenPreservesLeadingAndTrailingWhitespaceInRepositoryPath(t *testing.T) {
+	t.Parallel()
 	repoDir := filepath.Join(t.TempDir(), " repository ")
 	if err := os.Mkdir(repoDir, 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
@@ -64,6 +66,7 @@ func TestOpenPreservesLeadingAndTrailingWhitespaceInRepositoryPath(t *testing.T)
 }
 
 func TestOpenOutsideGitIsNotInitialized(t *testing.T) {
+	t.Parallel()
 	_, err := Open(context.Background(), t.TempDir())
 	if got, want := core.CategoryOf(err), core.CategoryNotInitialized; got != want {
 		t.Fatalf("Open() category = %q, want %q; error = %v", got, want, err)
@@ -139,6 +142,7 @@ func gitRevParseArgsOf(invocation []string) []string {
 }
 
 func TestOpenFromLinkedWorktreeUsesReportedPaths(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	gitRun(t, repoDir, "commit", "--allow-empty", "--quiet", "-m", "initial")
 	linkedDir := filepath.Join(t.TempDir(), "linked")
@@ -218,6 +222,7 @@ func TestOpenFromLinkedWorktreeSpawnsOneGitProcess(t *testing.T) {
 }
 
 func TestActorReturnsRepositoryEmail(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -233,6 +238,7 @@ func TestActorReturnsRepositoryEmail(t *testing.T) {
 }
 
 func TestRepositoryCachesProcessStableActor(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatal(err)
@@ -262,6 +268,7 @@ func TestRepositoryCachesProcessStableActor(t *testing.T) {
 }
 
 func TestOpenRepositorySkipsRepeatedIdentityDiscovery(t *testing.T) {
+	t.Parallel()
 	opened, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatal(err)
@@ -296,6 +303,7 @@ func TestOpenRepositorySkipsRepeatedIdentityDiscovery(t *testing.T) {
 }
 
 func TestGitUsesResolvedPathForValidConstructedRepository(t *testing.T) {
+	t.Parallel()
 	opened, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -337,6 +345,7 @@ printf 'warning on stderr\n' >&2
 }
 
 func TestGitFailureReportsStderrWithoutContaminatingItWithStdout(t *testing.T) {
+	t.Parallel()
 	gitPath := filepath.Join(t.TempDir(), "git")
 	script := `#!/bin/sh
 printf 'misleading stdout\n'
@@ -361,6 +370,7 @@ exit 9
 }
 
 func TestGitResultRetainsNonzeroStreamsAndNotifiesObserverOnce(t *testing.T) {
+	t.Parallel()
 	gitPath := filepath.Join(t.TempDir(), "git")
 	script := `#!/bin/sh
 printf 'porcelain stdout\n'

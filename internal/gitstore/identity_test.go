@@ -49,6 +49,7 @@ func publishIdentityRefByHand(t *testing.T, directory, projectID, key string) st
 // no history to disagree about, and one tree entry means the ref has one
 // authority.
 func TestInitPublishesOneRootCommitCarryingOneDocument(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repoDir := testrepo.New(t)
 	repo, err := Open(ctx, repoDir)
@@ -87,6 +88,7 @@ func TestInitPublishesOneRootCommitCarryingOneDocument(t *testing.T) {
 // must not depend on a particular hash, and the expected ID is derived from the
 // first clone rather than written down.
 func TestIdentityCommitConvergesForIndependentAdopters(t *testing.T) {
+	t.Parallel()
 	for _, objectFormat := range []string{testrepo.FormatSHA1, testrepo.FormatSHA256} {
 		t.Run(objectFormat, func(t *testing.T) {
 			testrepo.RequireObjectFormat(t, objectFormat)
@@ -128,6 +130,7 @@ func TestIdentityCommitConvergesForIndependentAdopters(t *testing.T) {
 
 // TestLoadIdentityPrecedence walks all four links of the chain.
 func TestLoadIdentityPrecedence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	tracked := core.ProjectConfig{
 		Format: projectFormat, Version: projectVersion, ProjectID: fixedProjectID, Key: "WB",
@@ -224,6 +227,7 @@ func TestLoadIdentityPrecedence(t *testing.T) {
 // are not state, so the retry must simply succeed — and, because the commit is
 // deterministic, write the very same object.
 func TestInterruptedIdentityPublicationLeavesNoHalfState(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repoDir := testrepo.New(t)
 	repo, err := Open(ctx, repoDir)
@@ -267,6 +271,7 @@ func TestInterruptedIdentityPublicationLeavesNoHalfState(t *testing.T) {
 // TestReadIdentityRefRejectsMalformedRefs covers every structural rule a reader
 // enforces on a ref a collaborator can push.
 func TestReadIdentityRefRejectsMalformedRefs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for name, corrupt := range map[string]func(t *testing.T, repoDir string){
 		"commit with a parent": func(t *testing.T, repoDir string) {
@@ -326,6 +331,7 @@ func TestReadIdentityRefRejectsMalformedRefs(t *testing.T) {
 // versions a project can hold are covered, because a v1 document predates the
 // policy field entirely.
 func TestLoadConfigKeepsTrackedPreferencesAfterAdoption(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for name, tracked := range map[string]core.ProjectConfig{
 		"version 1": {
@@ -375,6 +381,7 @@ func TestLoadConfigKeepsTrackedPreferencesAfterAdoption(t *testing.T) {
 // repository carries .workbook/config.json, and setup must still join the
 // existing project instead of minting a second one.
 func TestAdoptOriginProjectAdoptsOriginIdentityRefWithoutAnyCommittedConfig(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	bare := filepath.Join(t.TempDir(), "origin.git")
 	syncGit(t, t.TempDir(), "init", "--bare", "--quiet", bare)
@@ -423,6 +430,7 @@ func TestAdoptOriginProjectAdoptsOriginIdentityRefWithoutAnyCommittedConfig(t *t
 // role of the private guard: the ref is canonical, so a guard naming another
 // project is repaired rather than a wedge that no command can get past.
 func TestLoadConfigRepairsDisagreeingProjectGuardFromIdentityRef(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repoDir := testrepo.New(t)
 	repo, err := Open(ctx, repoDir)
@@ -462,6 +470,7 @@ func TestLoadConfigRepairsDisagreeingProjectGuardFromIdentityRef(t *testing.T) {
 // identity disagreement that stays fatal, so the message has to carry every
 // source and the way out.
 func TestLoadConfigRejectsTrackedConfigDisagreeingWithIdentityRef(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repoDir := testrepo.New(t)
 	repo, err := Open(ctx, repoDir)
@@ -498,6 +507,7 @@ func TestLoadConfigRejectsTrackedConfigDisagreeingWithIdentityRef(t *testing.T) 
 // TestSyncPublishesTheIdentityRefOnceAndThenAgrees covers the migration a
 // project performs exactly once, and what every run after it reports.
 func TestSyncPublishesTheIdentityRefOnceAndThenAgrees(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -539,6 +549,7 @@ func TestSyncPublishesTheIdentityRefOnceAndThenAgrees(t *testing.T) {
 // migration race. Determinism is what makes it safe: both build the same commit,
 // so one push creates the ref and the other is up to date.
 func TestConcurrentFirstPublicationsConverge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 	for _, repo := range []*Repository{first, second} {
@@ -575,6 +586,7 @@ func TestConcurrentFirstPublicationsConverge(t *testing.T) {
 // Fetch runs the identity stage but reports nothing, so it must not swallow the
 // one-time publication announcement that the next synchronization owes the user.
 func TestFetchDoesNotSwallowTheIdentityPublicationReport(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, _, config := syncRepositories(t)
 
@@ -593,6 +605,7 @@ func TestFetchDoesNotSwallowTheIdentityPublicationReport(t *testing.T) {
 // Refs under origin's identity name are origin's business. A clone reads past
 // them and says what it skipped, exactly as it does for the task namespace.
 func TestSyncReportsRefsItCannotReadUnderOriginsIdentityName(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 	blocked := writeIdentityCommit(t, first.Root, fixedProjectID, "WB")
@@ -617,6 +630,7 @@ func TestSyncReportsRefsItCannotReadUnderOriginsIdentityName(t *testing.T) {
 // exception: origin holds a different commit object for the same document, so
 // this clone converges on origin's instead of being rejected forever.
 func TestSyncAdoptsOriginIdentityCommitCarryingTheSameDocument(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 	if _, err := first.Sync(ctx, config); err != nil {
@@ -650,6 +664,7 @@ func TestSyncAdoptsOriginIdentityCommitCarryingTheSameDocument(t *testing.T) {
 // TestSyncStopsBeforeTasksWhenOriginIsADifferentProject is the reason the stage
 // runs first: task history must never be replayed across projects.
 func TestSyncStopsBeforeTasksWhenOriginIsADifferentProject(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Published before the swap")
@@ -694,6 +709,7 @@ func TestSyncStopsBeforeTasksWhenOriginIsADifferentProject(t *testing.T) {
 // Fetch runs the same stage but never writes to origin: downloading is not the
 // moment to publish.
 func TestFetchRunsTheIdentityStageWithoutPublishing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, _, config := syncRepositories(t)
 
@@ -713,6 +729,7 @@ func TestFetchRunsTheIdentityStageWithoutPublishing(t *testing.T) {
 // new ref. A mixed-version team keeps working only if those patterns stay blind
 // to it.
 func TestVersionZeroFourClientNeverSeesTheIdentityRef(t *testing.T) {
+	t.Parallel()
 	bare := filepath.Join(t.TempDir(), "origin.git")
 	syncGit(t, t.TempDir(), "init", "--bare", "--quiet", bare)
 	seedPath := testrepo.New(t)

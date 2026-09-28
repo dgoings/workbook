@@ -16,6 +16,7 @@ import (
 )
 
 func TestReadBatchObjectRefusesAnObjectOverTheCeilingWithoutKeepingIt(t *testing.T) {
+	t.Parallel()
 	// Production mutation: trusting the size in a batch header and allocating it
 	// lets one pushed object exhaust memory in every clone that reads it.
 	//
@@ -56,6 +57,7 @@ func TestReadBatchObjectRefusesAnObjectOverTheCeilingWithoutKeepingIt(t *testing
 }
 
 func TestReadBatchObjectRejectsASizeNoObjectCouldHave(t *testing.T) {
+	t.Parallel()
 	// Production mutation: a size that cannot be skipped is framing, not a
 	// record, and treating it as one would make the span to discard overflow.
 	header := fmt.Sprintf("%s blob %d\n", strings.Repeat("ab", 20), uint64(math.MaxUint64))
@@ -67,6 +69,7 @@ func TestReadBatchObjectRejectsASizeNoObjectCouldHave(t *testing.T) {
 }
 
 func TestReadBatchObjectAcceptsAnObjectExactlyAtTheCeiling(t *testing.T) {
+	t.Parallel()
 	// Production mutation: an off-by-one in the ceiling would reject a document
 	// a previous version wrote and stored.
 	objectID := strings.Repeat("ab", 20)
@@ -85,6 +88,7 @@ func TestReadBatchObjectAcceptsAnObjectExactlyAtTheCeiling(t *testing.T) {
 }
 
 func TestReadTaskHeadRejectsATipDocumentOverTheCeiling(t *testing.T) {
+	t.Parallel()
 	// Production mutation: a hand-built task tip whose operation document is
 	// larger than any task could legitimately be must not be read into memory
 	// just because a collaborator pushed it.
@@ -129,6 +133,7 @@ func TestReadTaskHeadRejectsATipDocumentOverTheCeiling(t *testing.T) {
 // that can read past it. Git states the size before the body, so the record can
 // be skipped without being allocated and the stream stays synchronized.
 func TestReadTaskHeadsPartialAttributesAnOverCeilingObjectToItsOwnRequest(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	first, _, _ := writeRoot(t, repository, config)
 	oversized := gitOutputWithInput(
@@ -181,6 +186,7 @@ func TestReadTaskHeadsPartialAttributesAnOverCeilingObjectToItsOwnRequest(t *tes
 // nothing. Git's stderr is the only text that says what went wrong, so a read
 // failure must reap the process before reporting, not return past it.
 func TestReadTaskHeadsPartialReportsGitStderrWhenTheBatchProcessDies(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	snapshot, _, _ := writeRoot(t, repository, config)
 	fakeGit := filepath.Join(t.TempDir(), "git")

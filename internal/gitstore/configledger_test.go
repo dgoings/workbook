@@ -52,6 +52,7 @@ func writeConfig(t *testing.T, repo *Repository, config core.ProjectConfig, oper
 // brought into existence and records what this release gives a new one. Reading
 // the wrong accessor in either place would silently re-columnize a board.
 func TestMintConfigLedgerRecordsTheDefaultVocabulary(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 
@@ -104,6 +105,7 @@ func TestMintConfigLedgerRecordsTheDefaultVocabulary(t *testing.T) {
 // seed never runs again, and an authored change appends. The pair of tests is
 // what keeps the two vocabularies from being read in each other's place.
 func TestWriteConfigOperationAppendsToAMintedLedger(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 	if _, err := repo.MintConfigLedger(ctx, config, core.CryptoULIDSource{}); err != nil {
@@ -131,6 +133,7 @@ func TestWriteConfigOperationAppendsToAMintedLedger(t *testing.T) {
 // vocabulary it was already using, and the author's own change is the commit
 // after it rather than folded into the root.
 func TestWriteConfigOperationSeedsGenesisLazily(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 
@@ -183,6 +186,7 @@ func TestWriteConfigOperationSeedsGenesisLazily(t *testing.T) {
 }
 
 func TestWriteConfigOperationAppendsOntoTheExistingLedger(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	first := writeConfig(t, repo, config, configOperations(renameOperation("ready", "todo"))...)
 	second := writeConfig(t, repo, config, configOperations(relabelOperation("todo", "To Do"))...)
@@ -209,6 +213,7 @@ func TestWriteConfigOperationAppendsOntoTheExistingLedger(t *testing.T) {
 // gate's half of the asymmetry: what a peer's pack folds silently, an author is
 // refused, with a message naming the command that fixes it.
 func TestWriteConfigOperationRefusesArityTheAuthorCanStillFix(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 
@@ -235,6 +240,7 @@ func TestWriteConfigOperationRefusesArityTheAuthorCanStillFix(t *testing.T) {
 // turns into "run it again", which is only sound advice because the losing
 // write left the ledger exactly where it found it.
 func TestWriteConfigOperationRefusesALostCompareAndSwap(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repo, config := writeRepository(t)
 	seeded := writeConfig(t, repo, config, configOperations(addOperation("triage", "Triage", "1/2"))...)
@@ -283,6 +289,7 @@ func TestWriteConfigOperationRefusesALostCompareAndSwap(t *testing.T) {
 // because it comes from the commit walk, which is one rev-list whatever the
 // window is.
 func TestReadConfigHistoryTailDeliversOnlyTheNewestCommits(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repo, config := writeRepository(t)
 	const changes = 12
@@ -340,6 +347,7 @@ func TestReadConfigHistoryTailDeliversOnlyTheNewestCommits(t *testing.T) {
 }
 
 func TestWriteConfigOperationRefusesAnAuthoredGenesis(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	_, err := repo.WriteConfigOperation(context.Background(), config, core.CryptoULIDSource{},
 		configOperations(core.ConfigOperation{
@@ -355,6 +363,7 @@ func TestWriteConfigOperationRefusesAnAuthoredGenesis(t *testing.T) {
 // free half of the resource-bound contract: a pack this clone declines to fold
 // is an operational refusal that names the bound, never a verdict on the data.
 func TestConfigPackBudgetRefusalNamesItsBoundAndIsOperational(t *testing.T) {
+	t.Parallel()
 	operations := make([]core.ConfigOperation, core.MaxConfigOperationsPerPack+1)
 	for index := range operations {
 		operations[index] = core.ConfigOperation{
@@ -387,6 +396,7 @@ func TestConfigPackBudgetRefusalNamesItsBoundAndIsOperational(t *testing.T) {
 // refusal through a real ledger: the ref stays exactly where it was, so raising
 // the bound is the only thing standing between this clone and the history.
 func TestOverBudgetLedgerIsRefusedWithoutTouchingTheCheckpoint(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 	seeded := writeConfig(t, repo, config, configOperations(renameOperation("ready", "todo"))...)
@@ -441,6 +451,7 @@ func TestOverBudgetLedgerIsRefusedWithoutTouchingTheCheckpoint(t *testing.T) {
 // namespace is not under refs/workbook/reconciled/: that lister name-splits on
 // task IDs and would skip every configuration entry forever.
 func TestParkedConfigRefsAreInvisibleToTheTaskParkedSweep(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 	seeded := writeConfig(t, repo, config, configOperations(renameOperation("ready", "todo"))...)
@@ -486,6 +497,7 @@ func TestParkedConfigRefsAreInvisibleToTheTaskParkedSweep(t *testing.T) {
 // TestConfigRefRejectsChildrenLocallyAndToleratesThemOnOrigin pins the two
 // verdicts the singleton earns in its two namespaces.
 func TestConfigRefRejectsChildrenLocallyAndToleratesThemOnOrigin(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	seeded := writeConfig(t, repo, config, configOperations(renameOperation("ready", "todo"))...)
 
@@ -518,6 +530,7 @@ func TestConfigRefRejectsChildrenLocallyAndToleratesThemOnOrigin(t *testing.T) {
 // nothing. Every one of them has to say which ref stopped it and what reads it
 // in detail.
 func TestUnreadableLedgerNamesTheRefAndTheCommandThatDiagnosesIt(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 	writeConfig(t, repo, config, configOperations(renameOperation("ready", "todo"))...)
@@ -553,6 +566,7 @@ func TestUnreadableLedgerNamesTheRefAndTheCommandThatDiagnosesIt(t *testing.T) {
 // about pulling and merging a branch, which is not what a Workbook ref is, and
 // flattening it buried the reason under a paragraph aimed at the wrong workflow.
 func TestPushRefusalReasonKeepsTheReasonAndDropsTheAdvice(t *testing.T) {
+	t.Parallel()
 	refused := gitCommandResult{stderr: []byte(
 		"To /tmp/origin.git\n" +
 			" ! [remote rejected] refs/workbook/config -> refs/workbook/config (pre-receive hook declined)\n" +
@@ -625,6 +639,7 @@ func mustConfigOperationID(t *testing.T, index int) string {
 // still happens every call. This test states the part that could regress: the
 // answer after a write is the new one, not the remembered one.
 func TestLoadVocabularyStateFollowsTheLedgerPastItsMemo(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 
@@ -678,6 +693,7 @@ func TestLoadVocabularyStateFollowsTheLedgerPastItsMemo(t *testing.T) {
 // this read reports is the founding key alone rather than the zero set, which
 // would classify every one of that project's own refs as somebody else's.
 func TestLoadVocabularyStateReportsTheFoundingKeyWithoutALedger(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	state, err := repo.LoadVocabularyState(context.Background(), config)
 	if err != nil {
@@ -697,6 +713,7 @@ func TestLoadVocabularyStateReportsTheFoundingKeyWithoutALedger(t *testing.T) {
 // would therefore tell the next reader that NEW is this project's only key, and
 // every task already minted under the founding key would become a foreign ref.
 func TestFirstKeyAddRecordsTheFoundingKeyBesideIt(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	written := writeConfig(t, repo, config, core.ConfigOperation{Type: core.ConfigKeyAdd, Key: "NEW"})
 	keys := written.KeySet(config.Key)
@@ -718,6 +735,7 @@ func TestFirstKeyAddRecordsTheFoundingKeyBesideIt(t *testing.T) {
 // through the store's own write path, and then the question every boundary will
 // ask — does this project still own the task IDs it has already minted.
 func TestARecordedKeySectionStillOwnsTheFoundingKeysTaskIDs(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 	writeConfig(t, repo, config, core.ConfigOperation{Type: core.ConfigKeyAdd, Key: "NEW"})
@@ -742,6 +760,7 @@ func TestARecordedKeySectionStillOwnsTheFoundingKeysTaskIDs(t *testing.T) {
 // change against a project that has recorded no keys must come out with no key
 // section at all, exactly as it must come out with no priorities section.
 func TestAStatusChangeLeavesTheKeySectionAbsent(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	written := writeConfig(t, repo, config, relabelOperation("todo", "To Do"))
 	if written.State.Config.Keys != nil {
@@ -755,6 +774,7 @@ func TestAStatusChangeLeavesTheKeySectionAbsent(t *testing.T) {
 // sentence long instead of three: a project's first key change records the key
 // its existing task IDs carry.
 func TestAFirstKeyChangeWithoutAnAddStillRecordsTheFoundingKey(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		name          string
 		operationType core.ConfigOperationType
@@ -784,6 +804,7 @@ func TestAFirstKeyChangeWithoutAnAddStillRecordsTheFoundingKey(t *testing.T) {
 // The write result and the next read agree. A key change reports the set its
 // own write produced, and the state read afterwards reports the same one.
 func TestKeySetRefreshesAfterAConfigurationWrite(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	writeConfig(t, repo, config, core.ConfigOperation{Type: core.ConfigKeyAdd, Key: "NEW"},
 		core.ConfigOperation{Type: core.ConfigKeyCurrent, Key: "NEW"})
@@ -802,6 +823,7 @@ func TestKeySetRefreshesAfterAConfigurationWrite(t *testing.T) {
 // memo that outlived a write would classify refs against a configuration the
 // same command had already superseded.
 func TestKeySetMemoHoldsUntilThisProcessMovesTheLedger(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 
@@ -870,6 +892,7 @@ func keySetMemoized(repo *Repository) bool {
 // and dropping is monotone where installing could put a superseded set where
 // every ref listing reads it.
 func TestForgetKeySetUnlessAtKeepsTheMemoAtTheHeadItWasResolvedAt(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 
@@ -912,6 +935,7 @@ func TestForgetKeySetUnlessAtKeepsTheMemoAtTheHeadItWasResolvedAt(t *testing.T) 
 // guards: a ledger is append-only, and a pack written past the reader's budget
 // is a configuration no clone can ever fold again, the writer's included.
 func TestAFirstKeyChangeRefusedWhenTheBackfillWouldPushItOverTheCeiling(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	operations := make([]core.ConfigOperation, 0, core.MaxConfigOperationsPerPack)
 	for i := 0; i < core.MaxConfigOperationsPerPack; i++ {
@@ -946,6 +970,7 @@ func TestAFirstKeyChangeRefusedWhenTheBackfillWouldPushItOverTheCeiling(t *testi
 // into one of them would leave the other writing the pack this whole task
 // exists to make unwritable.
 func TestAppendConfigOperationRecordsTheFoundingKeyOnAFirstKeyChange(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 
@@ -1020,6 +1045,7 @@ func assertFoundingKeyBesideNEW(t *testing.T, keys core.KeySet, founding string)
 // that ignored the argument would answer a question about one project's keys out
 // of a substitution made for another's.
 func TestKeySetMemoIsKeyedOnTheFoundingKey(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 
@@ -1051,6 +1077,7 @@ func TestKeySetMemoIsKeyedOnTheFoundingKey(t *testing.T) {
 // has seen it once must not have to re-read it — and two backfills compose into
 // one clause list about one project rather than two sentences stapled together.
 func TestBackfilledPackBudgetRefusalReadsAsOneSentence(t *testing.T) {
+	t.Parallel()
 	over := core.MaxConfigOperationsPerPack + 1
 	filler := func(prepended []core.ConfigOperation) []core.ConfigOperation {
 		operations := append([]core.ConfigOperation{}, prepended...)

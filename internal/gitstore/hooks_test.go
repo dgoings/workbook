@@ -12,6 +12,7 @@ import (
 )
 
 func TestInstallHooksCreatesExecutableManagedHookAndIsIdempotent(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatal(err)
@@ -53,6 +54,7 @@ func TestInstallHooksCreatesExecutableManagedHookAndIsIdempotent(t *testing.T) {
 }
 
 func TestInstallHooksUpdatesOlderManagedHook(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatal(err)
@@ -151,6 +153,7 @@ func TestManagedPrePushHookBlocksPushWhenWorkbookPushFails(t *testing.T) {
 }
 
 func TestInstallHooksPreservesUnmanagedHookAndGivesChainingGuidance(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatal(err)

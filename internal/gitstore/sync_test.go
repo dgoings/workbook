@@ -16,6 +16,7 @@ import (
 )
 
 func TestFetchDiscoversAndFastForwardsTasksWithoutOverwritingLocalWork(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Shared task")
 
@@ -51,6 +52,7 @@ func TestFetchDiscoversAndFastForwardsTasksWithoutOverwritingLocalWork(t *testin
 }
 
 func TestFetchReplaysDivergentLocalHistory(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Divergent task")
 	publishTaskRefs(t, first)
@@ -108,6 +110,7 @@ func TestFetchReplaysDivergentLocalHistory(t *testing.T) {
 }
 
 func TestFetchReportsDescriptionConflictAndStopsAtTheFetchedTip(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Described task")
 	setSyncTaskDescription(t, first, config, task.ID, "Base text")
@@ -146,6 +149,7 @@ func TestFetchReportsDescriptionConflictAndStopsAtTheFetchedTip(t *testing.T) {
 }
 
 func TestFetchKeepsInvalidRemoteTipIsolated(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Corrupt task")
 	publishTaskRefs(t, first)
@@ -174,6 +178,7 @@ func TestFetchKeepsInvalidRemoteTipIsolated(t *testing.T) {
 // A second project's key is unrecognized for the same reason and is not junk at
 // all, so every phase reports it as a name another Workbook could own.
 func TestSyncToleratesUnrecognizedRefUnderOriginTaskNamespace(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	shared := createSyncTask(t, first, config, "Shared task")
 	publishTaskRefs(t, first)
@@ -257,6 +262,7 @@ func assertIgnoredRefs(t *testing.T, result SyncResult, want map[string]bool) {
 // isolated per task. The sync it belongs to must still publish every canonical
 // tip that validated, for the same reason a stray name must not stop one.
 func TestSyncPublishesValidTasksWhenAnotherTrackingTipIsInvalid(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	valid := createSyncTask(t, first, config, "Valid task")
 	invalid := createSyncTask(t, first, config, "Invalid task")
@@ -282,6 +288,7 @@ func TestSyncPublishesValidTasksWhenAnotherTrackingTipIsInvalid(t *testing.T) {
 }
 
 func TestFetchReconcilesValidRemoteTipWhenAnotherTrackingTipIsInvalid(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	valid := createSyncTask(t, first, config, "Valid task")
 	invalid := createSyncTask(t, first, config, "Invalid task")
@@ -306,6 +313,7 @@ func TestFetchReconcilesValidRemoteTipWhenAnotherTrackingTipIsInvalid(t *testing
 }
 
 func TestFetchReconcilesValidRemoteTipWhenAnotherCanonicalTipIsInvalid(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	invalidLocal := createSyncTask(t, second, config, "Invalid local task")
 	invalidHead := refValue(t, second, taskRefPrefix+invalidLocal.ID)
@@ -329,6 +337,7 @@ func TestFetchReconcilesValidRemoteTipWhenAnotherCanonicalTipIsInvalid(t *testin
 }
 
 func TestFetchIsolatesGenerationMismatchAndReconcilesUnrelatedRemoteTip(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	generationTask := createSyncTask(t, first, config, "Original generation")
 	publishTaskRefs(t, first)
@@ -376,6 +385,7 @@ func TestFetchIsolatesGenerationMismatchAndReconcilesUnrelatedRemoteTip(t *testi
 }
 
 func TestFetchFreshCheckoutUsesCompleteTwentyOperationTip(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Revision 01")
 	for revision := 2; revision <= 20; revision++ {
@@ -405,6 +415,7 @@ func TestFetchFreshCheckoutUsesCompleteTwentyOperationTip(t *testing.T) {
 }
 
 func TestFetchLeavesCanonicalRefsUnchangedWhenTransactionLosesCASRace(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Shared task")
 	publishTaskRefs(t, first)
@@ -445,6 +456,7 @@ func TestFetchLeavesCanonicalRefsUnchangedWhenTransactionLosesCASRace(t *testing
 }
 
 func TestFetchAcceptsUpdateWhoseCheckpointDoesNotMatchItsOperation(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Original title")
 	publishTaskRefs(t, first)
@@ -488,6 +500,7 @@ func TestFetchAcceptsUpdateWhoseCheckpointDoesNotMatchItsOperation(t *testing.T)
 // key set as of that update — so one `workbook fetch` is enough, and a clone
 // never has to fetch twice to see a teammate's new subproject.
 func TestFetchAcceptsTasksUnderAKeyTheSameFetchIntroduces(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -547,6 +560,7 @@ func TestFetchAcceptsTasksUnderAKeyTheSameFetchIntroduces(t *testing.T) {
 // as long as it lived. This is the case the explicit reload exists for, and the
 // only one no other code path covers.
 func TestFetchReloadsTheKeySetWhenTheLedgerMovedOutOfBand(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -618,6 +632,7 @@ func TestFetchReloadsTheKeySetWhenTheLedgerMovedOutOfBand(t *testing.T) {
 // that project — which the tip check refuses whatever this project's key set
 // says — so `workbook key add` would not make it readable.
 func TestFetchReportsTheKeyAnIgnoredRefCarries(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Adoptable")
@@ -661,6 +676,7 @@ func TestFetchReportsTheKeyAnIgnoredRefCarries(t *testing.T) {
 // be: only this tool writes it, so documents naming another project there are
 // corruption rather than somebody else's history.
 func TestFetchIgnoresAFetchedRefWhoseDocumentsNameAnotherProject(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -721,6 +737,7 @@ func TestFetchIgnoresAFetchedRefWhoseDocumentsNameAnotherProject(t *testing.T) {
 // It stays a fetched ref that failed validation, which is what it was before
 // the foreign-project classification existed.
 func TestFetchKeepsATipWhoseDocumentsDisagreeAboutTheProjectInvalid(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Documents that disagree")
@@ -825,6 +842,7 @@ func assertForeignProjectIgnored(t *testing.T, result SyncResult, taskID, projec
 }
 
 func TestPushPublishesAllTaskRefsAndReportsUpToDate(t *testing.T) {
+	t.Parallel()
 	first, _, config := syncRepositories(t)
 	firstTask := createSyncTask(t, first, config, "First task")
 	secondTask := createSyncTask(t, first, config, "Second task")
@@ -845,6 +863,7 @@ func TestPushPublishesAllTaskRefsAndReportsUpToDate(t *testing.T) {
 }
 
 func TestPushUsesOneBoundedPublication(t *testing.T) {
+	t.Parallel()
 	repository, _, config := syncRepositories(t)
 	for i := 0; i < 25; i++ {
 		createSyncTask(t, repository, config, fmt.Sprintf("Task %02d", i))
@@ -916,6 +935,7 @@ func TestPushUsesOneBoundedPublication(t *testing.T) {
 }
 
 func TestPushRejectsNonFastForwardButPublishesUnrelatedTasks(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	conflicting := createSyncTask(t, first, config, "Conflicting task")
 	unrelated := createSyncTask(t, first, config, "Unrelated task")
@@ -978,6 +998,7 @@ func TestPushBypassesManagedHookRecursion(t *testing.T) {
 }
 
 func TestPushRejectsLocallyCorruptHistoryBeforePublishing(t *testing.T) {
+	t.Parallel()
 	first, _, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Valid root")
 	if _, err := first.Push(context.Background(), config); err != nil {
@@ -1000,6 +1021,7 @@ func TestPushRejectsLocallyCorruptHistoryBeforePublishing(t *testing.T) {
 }
 
 func TestPushOmitsInvalidTaskButPublishesIndependentValidTask(t *testing.T) {
+	t.Parallel()
 	repository, _, config := syncRepositories(t)
 	invalid := createSyncTask(t, repository, config, "Invalid task")
 	valid := createSyncTask(t, repository, config, "Valid task")
@@ -1019,6 +1041,7 @@ func TestPushOmitsInvalidTaskButPublishesIndependentValidTask(t *testing.T) {
 }
 
 func TestPushLocalCorruptionPrecedesRemoteTransportFailure(t *testing.T) {
+	t.Parallel()
 	repository, _, config := syncRepositories(t)
 	task := createSyncTask(t, repository, config, "Invalid before transport")
 	validHead := refValue(t, repository, taskRefPrefix+task.ID)
@@ -1037,6 +1060,7 @@ func TestPushLocalCorruptionPrecedesRemoteTransportFailure(t *testing.T) {
 }
 
 func TestPushReportsLocalChangedWhenHeadAdvancesDuringPublication(t *testing.T) {
+	t.Parallel()
 	repository, _, config := syncRepositories(t)
 	task := createSyncTask(t, repository, config, "Race task")
 	advanced := false
@@ -1056,6 +1080,7 @@ func TestPushReportsLocalChangedWhenHeadAdvancesDuringPublication(t *testing.T) 
 }
 
 func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
+	t.Parallel()
 	commandCount := 0
 	synchronizedCommandCount := 0
 	for _, fixture := range []struct {
@@ -1234,6 +1259,7 @@ func commandHasPrefix(got []string, want ...string) bool {
 }
 
 func TestSyncFetchesThenPushesWorkbookTaskRefs(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	firstTask := createSyncTask(t, first, config, "First shared task")
 
@@ -1257,6 +1283,7 @@ func TestSyncFetchesThenPushesWorkbookTaskRefs(t *testing.T) {
 }
 
 func TestSyncRepublishesCanonicalTaskAfterRemoteRefDeletion(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Restore remotely deleted task ref")
 	if _, err := first.Sync(context.Background(), config); err != nil {
@@ -1283,6 +1310,7 @@ func TestSyncRepublishesCanonicalTaskAfterRemoteRefDeletion(t *testing.T) {
 }
 
 func TestSyncReplaysDivergentHistoryAndPublishesIt(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	divergent := createSyncTask(t, first, config, "Divergent task")
 	if _, err := first.Sync(context.Background(), config); err != nil {
@@ -1315,6 +1343,7 @@ func TestSyncReplaysDivergentHistoryAndPublishesIt(t *testing.T) {
 // publishes exactly what push would. Stopping at the conflict decides how far
 // the ref advances; it does not decide whether that advance is shareable.
 func TestSyncPublishesEveryReplayedOperationBeforeAConflict(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	conflicting := createSyncTask(t, first, config, "Conflicting task")
 	setSyncTaskDescription(t, first, config, conflicting.ID, "Base text")
@@ -1378,6 +1407,7 @@ func TestSyncPublishesEveryReplayedOperationBeforeAConflict(t *testing.T) {
 // Sync and push must agree about the same refs, so a partial replay that sync
 // publishes is already up to date when push runs next.
 func TestPushAgreesWithSyncAfterAPartialReplay(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Contested task")
 	setSyncTaskDescription(t, first, config, task.ID, "Base text")
@@ -1406,6 +1436,7 @@ func TestPushAgreesWithSyncAfterAPartialReplay(t *testing.T) {
 }
 
 func TestSyncReportsFailedFetchAndSkipsPushWhenOriginIsMissing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := testrepo.New(t)
 	repo, err := Open(ctx, path)
@@ -1436,6 +1467,7 @@ func TestSyncReportsFailedFetchAndSkipsPushWhenOriginIsMissing(t *testing.T) {
 }
 
 func TestTaskOperationCommitsStayOutsideCheckedOutBranchHistory(t *testing.T) {
+	t.Parallel()
 	first, _, config := syncRepositories(t)
 	mainBefore := refValue(t, first, "HEAD")
 	task := createSyncTask(t, first, config, "Branch-independent task")
@@ -1669,6 +1701,7 @@ func stringTrimLine(output []byte) string {
 }
 
 func TestPushTaskPublishesOnlyTheNamedRef(t *testing.T) {
+	t.Parallel()
 	repository, _, config := syncRepositories(t)
 	target := createSyncTask(t, repository, config, "Targeted task")
 	untouched := createSyncTask(t, repository, config, "Untouched task")
@@ -1689,6 +1722,7 @@ func TestPushTaskPublishesOnlyTheNamedRef(t *testing.T) {
 }
 
 func TestPushTaskReportsUpToDateWhenRemoteAlreadyMatches(t *testing.T) {
+	t.Parallel()
 	repository, _, config := syncRepositories(t)
 	task := createSyncTask(t, repository, config, "Repeated task")
 	if _, err := repository.PushTask(context.Background(), config, task.ID); err != nil {
@@ -1705,6 +1739,7 @@ func TestPushTaskReportsUpToDateWhenRemoteAlreadyMatches(t *testing.T) {
 }
 
 func TestPushTaskReportsRejectionWhenRemoteAdvanced(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Contested task")
 	if _, err := first.PushTask(context.Background(), config, task.ID); err != nil {
@@ -1738,6 +1773,7 @@ func TestPushTaskReportsRejectionWhenRemoteAdvanced(t *testing.T) {
 // nothing at all on the path every mutation takes, where the fetch in the same
 // command already compared the two identity refs.
 func TestPushTaskListsNoPerTaskRemoteRefsAndPublishesOnce(t *testing.T) {
+	t.Parallel()
 	repository, _, config := syncRepositories(t)
 	task := createSyncTask(t, repository, config, "Bounded task")
 	for i := 0; i < 10; i++ {
@@ -1781,6 +1817,7 @@ func TestPushTaskListsNoPerTaskRemoteRefsAndPublishesOnce(t *testing.T) {
 }
 
 func TestPushTaskIgnoresUnrelatedMalformedLocalRef(t *testing.T) {
+	t.Parallel()
 	repository, _, config := syncRepositories(t)
 	target := createSyncTask(t, repository, config, "Valid target")
 	broken := createSyncTask(t, repository, config, "Malformed neighbour")
@@ -1798,6 +1835,7 @@ func TestPushTaskIgnoresUnrelatedMalformedLocalRef(t *testing.T) {
 }
 
 func TestPushTaskRejectsMalformedTargetBeforePublishing(t *testing.T) {
+	t.Parallel()
 	repository, _, config := syncRepositories(t)
 	task := createSyncTask(t, repository, config, "Malformed target")
 	head := refValue(t, repository, taskRefPrefix+task.ID)

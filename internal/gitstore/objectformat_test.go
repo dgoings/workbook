@@ -16,6 +16,7 @@ import (
 // that path — a prefix length, a fixed-width parse, a same-length comparison —
 // survives the rest of this package untouched.
 func TestSyncFetchesReplaysAndConflictsThroughASHA256Origin(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositoriesWithObjectFormat(t, testrepo.FormatSHA256)
 	for name, repo := range map[string]*Repository{"first": first, "second": second} {

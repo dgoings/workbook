@@ -20,6 +20,7 @@ const writeGenerationID = "01K0M6B8A4FTT8C39MXXYTW7C3"
 var writeCreatedAt = time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
 
 func TestWriteCreatesRootCommitAndTaskRef(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	pack := writeCreatePack()
 	state := writeState(t, nil, pack)
@@ -55,6 +56,7 @@ func TestWriteCreatesRootCommitAndTaskRef(t *testing.T) {
 }
 
 func TestWriteAppendsCommitToCurrentHead(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	created, createPack, createState := writeRoot(t, repo, config)
 	pack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", "ready")
@@ -81,6 +83,7 @@ func TestWriteAppendsCommitToCurrentHead(t *testing.T) {
 }
 
 func TestWriteValidatedUsesSixGitCommandsToAppendCanonicalTaskCommit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repo, config := writeRepository(t)
 	created, createPack, createState := writeRoot(t, repo, config)
@@ -147,6 +150,7 @@ func TestWriteValidatedUsesSixGitCommandsToAppendCanonicalTaskCommit(t *testing.
 }
 
 func TestWriteValidatedRejectsAbbreviatedObservedParentBeforeGit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repo, config := writeRepository(t)
 	created, createPack, _ := writeRoot(t, repo, config)
@@ -190,6 +194,7 @@ func TestWriteValidatedRejectsAbbreviatedObservedParentBeforeGit(t *testing.T) {
 }
 
 func TestWriteValidatedRejectsStaleCASWithoutReplacingConcurrentHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repo, config := writeRepository(t)
 	_, createPack, _ := writeRoot(t, repo, config)
@@ -224,6 +229,7 @@ func TestWriteValidatedRejectsStaleCASWithoutReplacingConcurrentHead(t *testing.
 }
 
 func TestWriteRetainsLegacyReflogPrefix(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	created, createPack, createState := writeRoot(t, repo, config)
 	pack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", "ready")
@@ -243,6 +249,7 @@ func TestWriteRetainsLegacyReflogPrefix(t *testing.T) {
 }
 
 func TestServicePersistsGitSafeCreateSubjectFromControlCharacters(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	service := testService(repo, config)
 	title := "Plan\x00phase\none"
@@ -266,6 +273,7 @@ func TestServicePersistsGitSafeCreateSubjectFromControlCharacters(t *testing.T) 
 }
 
 func TestServicePersistsGitSafeUpdateSubjectFromControlCharacters(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	service := testService(repo, config)
 	createResult, err := service.CreateMutation(context.Background(), core.CreateInput{Title: "Control labels"})
@@ -294,6 +302,7 @@ func TestServicePersistsGitSafeUpdateSubjectFromControlCharacters(t *testing.T) 
 }
 
 func TestWriteRejectsStaleHeadWithoutMovingTaskRef(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	created, createPack, createState := writeRoot(t, repo, config)
 	firstPack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", "ready")
@@ -315,6 +324,7 @@ func TestWriteRejectsStaleHeadWithoutMovingTaskRef(t *testing.T) {
 }
 
 func TestWriteNeverDereferencesSymbolicTaskRef(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	created, createPack, createState := writeRoot(t, repo, config)
 	targetRef := "refs/workbook/symbolic-target"
@@ -338,6 +348,7 @@ func TestWriteNeverDereferencesSymbolicTaskRef(t *testing.T) {
 }
 
 func TestGitStoreRejectsCallerSuppliedForeignProjectConfig(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		call func(t *testing.T, repo *Repository, config core.ProjectConfig) error
@@ -384,6 +395,7 @@ func TestGitStoreRejectsCallerSuppliedForeignProjectConfig(t *testing.T) {
 }
 
 func TestConflictingLinkedWorktreeConfigCannotAccessSharedTaskRefs(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		call func(t *testing.T, repo *Repository, config core.ProjectConfig) error
@@ -460,6 +472,7 @@ func TestConflictingLinkedWorktreeConfigCannotAccessSharedTaskRefs(t *testing.T)
 }
 
 func TestWriteRejectsNonCanonicalParentHeadsBeforeWritingObjectsOrMovingRefs(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	created, _, createState := writeRoot(t, repo, config)
 	tree := gitOutput(t, repo, "rev-parse", created.Head+"^{tree}")
@@ -496,6 +509,7 @@ func TestWriteRejectsNonCanonicalParentHeadsBeforeWritingObjectsOrMovingRefs(t *
 }
 
 func TestWriteClassifiesNamespaceCollisionAsOperationalNotStale(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	pack := writeCreatePack()
 	state := writeState(t, nil, pack)
@@ -521,6 +535,7 @@ func TestWriteClassifiesNamespaceCollisionAsOperationalNotStale(t *testing.T) {
 }
 
 func TestWriteRejectsInvalidCheckpointBeforeWritingObjectsOrRefs(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	pack := writeCreatePack()
 	state := writeState(t, nil, pack)
@@ -540,6 +555,7 @@ func TestWriteRejectsInvalidCheckpointBeforeWritingObjectsOrRefs(t *testing.T) {
 }
 
 func TestWriteRejectsMalformedAndDuplicateOperationIDsBeforePublishing(t *testing.T) {
+	t.Parallel()
 	t.Run("malformed operation ID", func(t *testing.T) {
 		repo, config := writeRepository(t)
 		pack := writeCreatePack()
@@ -591,6 +607,7 @@ func TestWriteRejectsMalformedAndDuplicateOperationIDsBeforePublishing(t *testin
 }
 
 func TestWriteRejectsUnsupportedCompactionMetadataBeforePublishing(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	pack := writeCreatePack()
 	state := writeState(t, nil, pack)
@@ -611,6 +628,7 @@ func TestWriteRejectsUnsupportedCompactionMetadataBeforePublishing(t *testing.T)
 }
 
 func TestWriteValidatesAgainstStateStoredAtParentHead(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	created, _, createState := writeRoot(t, repo, config)
 	forged := created
@@ -631,6 +649,7 @@ func TestWriteValidatesAgainstStateStoredAtParentHead(t *testing.T) {
 }
 
 func TestWriteRejectsDivergentRootParentEvenWhenCallerMatchesStoredState(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	created, createPack, _ := writeRoot(t, repo, config)
 	tamperedState := created.State
@@ -657,6 +676,7 @@ func TestWriteRejectsDivergentRootParentEvenWhenCallerMatchesStoredState(t *test
 }
 
 func TestWriteRejectsRootParentWhoseLogicalClockStartsAtTwo(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	created, createPack, _ := writeRoot(t, repo, config)
 	tamperedPack := created.Operation
@@ -685,6 +705,7 @@ func TestWriteRejectsRootParentWhoseLogicalClockStartsAtTwo(t *testing.T) {
 }
 
 func TestWriteAcceptsValidatedRootAndLinearParents(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	created, createPack, createState := writeRoot(t, repo, config)
 	firstPack := writeAddLabelPack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", "first")

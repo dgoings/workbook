@@ -15,6 +15,7 @@ import (
 )
 
 func TestReadTaskHeadsBatchesCurrentTips(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	first, _, _ := writeRoot(t, repository, config)
 	second := writeIndependentRoot(
@@ -54,6 +55,7 @@ func TestReadTaskHeadsBatchesCurrentTips(t *testing.T) {
 }
 
 func TestInspectTaskHeadRejectsSymbolicExactRef(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	snapshot, pack, _ := writeRoot(t, repository, config)
 	gitOutput(t, repository, "update-ref", "refs/workbook/symbolic-target", snapshot.Head)
@@ -67,6 +69,7 @@ func TestInspectTaskHeadRejectsSymbolicExactRef(t *testing.T) {
 }
 
 func TestInspectTaskHeadRejectsNestedEntriesUnderExactName(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	snapshot, pack, _ := writeRoot(t, repository, config)
 	gitOutput(t, repository, "update-ref", "-d", taskRef(pack.TaskID))
@@ -79,6 +82,7 @@ func TestInspectTaskHeadRejectsNestedEntriesUnderExactName(t *testing.T) {
 }
 
 func TestInspectTaskHeadReturnsAbsentValidTaskID(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	var commands [][]string
 	repository.commandObserver = func(args []string) {
@@ -102,6 +106,7 @@ func TestInspectTaskHeadReturnsAbsentValidTaskID(t *testing.T) {
 }
 
 func TestInspectTaskHeadRejectsInvalidFullIDBeforeRunningGit(t *testing.T) {
+	t.Parallel()
 	opened, config := writeRepository(t)
 	repository := &Repository{
 		Root:         opened.Root,
@@ -123,6 +128,7 @@ func TestInspectTaskHeadRejectsInvalidFullIDBeforeRunningGit(t *testing.T) {
 }
 
 func TestInspectTaskHeadDoesNotEnumerateOrReadUnrelatedTaskObjects(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	snapshot, pack, _ := writeRoot(t, repository, config)
 	unrelatedBlob := gitOutputWithInput(t, repository, []byte("not a task"), "hash-object", "-w", "--stdin")
@@ -150,6 +156,7 @@ func TestInspectTaskHeadDoesNotEnumerateOrReadUnrelatedTaskObjects(t *testing.T)
 }
 
 func TestReadTaskHeadsSupportsRepositoryObjectFormats(t *testing.T) {
+	t.Parallel()
 	for _, objectFormat := range []string{"sha1", "sha256"} {
 		t.Run(objectFormat, func(t *testing.T) {
 			repository, config := writeRepositoryWithObjectFormat(t, objectFormat)
@@ -171,6 +178,7 @@ func TestReadTaskHeadsSupportsRepositoryObjectFormats(t *testing.T) {
 }
 
 func TestTipReadAcceptsInternallyValidNonRootCheckpointMismatch(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	created, pack, state := writeRoot(t, repository, config)
 	update := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", string(core.StatusReady))
@@ -199,6 +207,7 @@ func TestTipReadAcceptsInternallyValidNonRootCheckpointMismatch(t *testing.T) {
 }
 
 func TestOwnedRefsValidateCanonicalAndTrackingNamespaces(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	snapshot, pack, _ := writeRoot(t, repository, config)
 	if err := repository.ensureGitObjectIDWidth(context.Background()); err != nil {
@@ -257,6 +266,7 @@ const foreignTaskID = "OPS-01K0M6B8A4FTT8C39MXXYTW7D9"
 // report also says whether the name could belong to another Workbook, because
 // that is what separates junk from history a caller must not offer to delete.
 func TestOwnedRefsSkipUnrecognizedNamesOnlyInTheTrackingNamespace(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	snapshot, pack, _ := writeRoot(t, repository, config)
 	if err := repository.ensureGitObjectIDWidth(context.Background()); err != nil {
@@ -338,6 +348,7 @@ func TestOwnedRefsSkipUnrecognizedNamesOnlyInTheTrackingNamespace(t *testing.T) 
 }
 
 func TestOwnedRefsCannotLearnObjectIDWidthFromUntrustedRecords(t *testing.T) {
+	t.Parallel()
 	repository := &Repository{}
 	config := core.ProjectConfig{Key: "WB"}
 	abbreviated := strings.Repeat("a", 38)
@@ -353,6 +364,7 @@ func TestOwnedRefsCannotLearnObjectIDWidthFromUntrustedRecords(t *testing.T) {
 }
 
 func TestOwnedRefsUseOneEnumerationForCanonicalAndTrackingRefs(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	snapshot, pack, _ := writeRoot(t, repository, config)
 	gitOutput(t, repository, "update-ref", trackingTaskRefPrefix+pack.TaskID, snapshot.Head)
@@ -380,6 +392,7 @@ func TestOwnedRefsUseOneEnumerationForCanonicalAndTrackingRefs(t *testing.T) {
 }
 
 func TestValidateTaskHeadAdvancesBatchesIndependentHistories(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	firstPrevious, _, firstState := writeRoot(t, repository, config)
 	secondPrevious := writeIndependentRoot(
@@ -441,6 +454,7 @@ func TestValidateTaskHeadAdvancesBatchesIndependentHistories(t *testing.T) {
 }
 
 func TestValidateTaskHeadAdvancesRejectsBackwardAndSidewaysMovement(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		current func(t *testing.T, repository *Repository, previous, root core.Snapshot) TaskHead
@@ -490,6 +504,7 @@ func TestValidateTaskHeadAdvancesRejectsBackwardAndSidewaysMovement(t *testing.T
 }
 
 func TestValidateTaskHeadAdvancesRejectsInvalidPairsBeforeWalkingHistory(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	previous, _, _ := writeRoot(t, repository, config)
 	valid := HeadAdvance{
@@ -534,6 +549,7 @@ func TestValidateTaskHeadAdvancesRejectsInvalidPairsBeforeWalkingHistory(t *test
 }
 
 func TestListTaskHeadsAndReadTaskHead(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	ids := []string{
 		"01K0M6B8A4FTT8C39MXXYTW7D1", "01K0M6B8A4FTT8C39MXXYTW7D2", "01K0M6B8A4FTT8C39MXXYTW7D3",
@@ -586,6 +602,7 @@ func TestListTaskHeadsAndReadTaskHead(t *testing.T) {
 }
 
 func TestGetReadsCanonicalTipWithoutReplayingParents(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	created, _, _ := writeRoot(t, repo, config)
 	pack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", string(core.StatusReady))
@@ -619,6 +636,7 @@ func TestGetReadsCanonicalTipWithoutReplayingParents(t *testing.T) {
 }
 
 func TestGetAcceptsRootAndLinearTipTopology(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	created, pack, state := writeRoot(t, repo, config)
 	if _, err := repo.Get(context.Background(), config, pack.TaskID); err != nil {
@@ -636,6 +654,7 @@ func TestGetAcceptsRootAndLinearTipTopology(t *testing.T) {
 }
 
 func TestGetValidatesRootOperationAndStateCheckpointEquivalence(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(t *testing.T, repo *Repository, snapshot core.Snapshot)
@@ -690,6 +709,7 @@ func TestGetValidatesRootOperationAndStateCheckpointEquivalence(t *testing.T) {
 }
 
 func TestCRUDCannotExtendMalformedRootCheckpoint(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	snapshot, pack, _ := writeRoot(t, repo, config)
 	state := snapshot.State
@@ -715,6 +735,7 @@ func TestCRUDCannotExtendMalformedRootCheckpoint(t *testing.T) {
 }
 
 func TestGetRejectsUnsupportedTipTopology(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(t *testing.T, repo *Repository, snapshot core.Snapshot) string
@@ -772,6 +793,7 @@ func TestGetRejectsUnsupportedTipTopology(t *testing.T) {
 }
 
 func TestGetIgnoresGitReplaceObjects(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	original, _, _ := writeRoot(t, repo, config)
 
@@ -799,6 +821,7 @@ func TestGetIgnoresGitReplaceObjects(t *testing.T) {
 }
 
 func TestGetRejectsAnnotatedTagTarget(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	snapshot, pack, _ := writeRoot(t, repo, config)
 	gitOutput(t, repo, "tag", "-a", "workbook-task-tip", "-m", "tagged task tip", snapshot.Head)
@@ -812,6 +835,7 @@ func TestGetRejectsAnnotatedTagTarget(t *testing.T) {
 }
 
 func TestGetAndListRejectSymbolicTaskRefs(t *testing.T) {
+	t.Parallel()
 	reads := []struct {
 		name string
 		read func(context.Context, *Repository, core.ProjectConfig, string) error
@@ -849,6 +873,7 @@ func TestGetAndListRejectSymbolicTaskRefs(t *testing.T) {
 }
 
 func TestListFindsCanonicalTasksAfterPackingRefs(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	first, firstPack, _ := writeRoot(t, repo, config)
 	secondPack := writeCreatePack()
@@ -867,6 +892,7 @@ func TestListFindsCanonicalTasksAfterPackingRefs(t *testing.T) {
 }
 
 func TestResolveAcceptsFullIDsAndUnambiguousCaseInsensitivePrefixes(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	_, firstPack, _ := writeRoot(t, repo, config)
 	secondPack := writeCreatePack()
@@ -889,6 +915,7 @@ func TestResolveAcceptsFullIDsAndUnambiguousCaseInsensitivePrefixes(t *testing.T
 }
 
 func TestResolveRejectsUnknownAndAmbiguousPrefixes(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	_, _, _ = writeRoot(t, repo, config)
 	secondPack := writeCreatePack()
@@ -916,6 +943,7 @@ func TestResolveRejectsUnknownAndAmbiguousPrefixes(t *testing.T) {
 }
 
 func TestListRejectsCorruptTaskRefsAndTipDocuments(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(t *testing.T, repo *Repository, config core.ProjectConfig, snapshot core.Snapshot)
@@ -1131,6 +1159,7 @@ func writeRepositoryWithObjectFormat(t *testing.T, objectFormat string) (*Reposi
 }
 
 func TestGetRejectsNonCanonicalStateBytes(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	snapshot, _, _ := writeRoot(t, repo, config)
 	operation := gitOutput(t, repo, "rev-parse", snapshot.Head+":operation.json")
@@ -1152,6 +1181,7 @@ func TestGetRejectsNonCanonicalStateBytes(t *testing.T) {
 // mirror, and a pack this clone is about to author — because they are three
 // places one question used to be asked against config.Key.
 func TestRefsUnderASecondKeyAreOwnedOnceTheKeyIsAdded(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	ctx := context.Background()
 	snapshot, pack, _ := writeRoot(t, repository, config)

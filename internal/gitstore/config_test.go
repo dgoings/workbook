@@ -25,6 +25,7 @@ func idsFor(projectID string) core.IDSource {
 }
 
 func TestInitCreatesTrackedConfigAndPrivateCache(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	repo, err := Open(context.Background(), repoDir)
 	if err != nil {
@@ -82,6 +83,7 @@ func TestInitCreatesTrackedConfigAndPrivateCache(t *testing.T) {
 }
 
 func TestInitClassifiesProjectIDGenerationFailureAsOperational(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -102,6 +104,7 @@ func TestInitClassifiesProjectIDGenerationFailureAsOperational(t *testing.T) {
 }
 
 func TestInitIsIdempotentForTheSameKey(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	repo, err := Open(context.Background(), repoDir)
 	if err != nil {
@@ -138,6 +141,7 @@ func TestInitIsIdempotentForTheSameKey(t *testing.T) {
 }
 
 func TestInitPublishesTrackedConfigAsCommonProjectGuard(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	repo, err := Open(context.Background(), repoDir)
 	if err != nil {
@@ -165,6 +169,7 @@ func TestInitPublishesTrackedConfigAsCommonProjectGuard(t *testing.T) {
 }
 
 func TestInitRestoresTrackedConfigFromCommonProjectGuard(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -191,6 +196,7 @@ func TestInitRestoresTrackedConfigFromCommonProjectGuard(t *testing.T) {
 }
 
 func TestInitRejectsMismatchedTrackedConfigAndCommonProjectGuard(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -212,6 +218,7 @@ func TestInitRejectsMismatchedTrackedConfigAndCommonProjectGuard(t *testing.T) {
 }
 
 func TestInitRejectsConflictingKeyWithoutRewriting(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	repo, err := Open(context.Background(), repoDir)
 	if err != nil {
@@ -240,6 +247,7 @@ func TestInitRejectsConflictingKeyWithoutRewriting(t *testing.T) {
 }
 
 func TestInitRejectsCorruptExistingConfig(t *testing.T) {
+	t.Parallel()
 	tests := map[string][]byte{
 		"malformed":             []byte(`{"format":`),
 		"foreign format":        []byte(`{"format":"other.project","version":1,"projectId":"01K0M65GBZ8F5ZQX0VC1J8H3TP","key":"WB"}`),
@@ -282,6 +290,7 @@ func TestInitRejectsCorruptExistingConfig(t *testing.T) {
 }
 
 func TestLoadConfigReturnsExistingConfig(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -301,6 +310,7 @@ func TestLoadConfigReturnsExistingConfig(t *testing.T) {
 }
 
 func TestLoadConfigCachesFirstValidatedConfiguration(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -332,6 +342,7 @@ func TestLoadConfigCachesFirstValidatedConfiguration(t *testing.T) {
 }
 
 func TestLoadConfigPublishesTrackedIdentityAsMissingCommonGuard(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -352,6 +363,7 @@ func TestLoadConfigPublishesTrackedIdentityAsMissingCommonGuard(t *testing.T) {
 }
 
 func TestLoadConfigRejectsMismatchedCommonProjectGuard(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -376,6 +388,7 @@ func TestLoadConfigRejectsMismatchedCommonProjectGuard(t *testing.T) {
 // repository. Reading a configuration still writes no tracked file: that is a
 // working-tree change, and only a command the user ran on purpose makes one.
 func TestLoadConfigAdoptsCommonProjectGuardIdentityWhenNoRefExists(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -403,6 +416,7 @@ func TestLoadConfigAdoptsCommonProjectGuardIdentityWhenNoRefExists(t *testing.T)
 }
 
 func TestLoadConfigRequiresInitWhenNothingRecordsAProject(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -419,6 +433,7 @@ func TestLoadConfigRequiresInitWhenNothingRecordsAProject(t *testing.T) {
 }
 
 func TestConfigurationFilesystemFailuresAreOperational(t *testing.T) {
+	t.Parallel()
 	config := core.ProjectConfig{
 		Format: projectFormat, Version: projectVersion, ProjectID: fixedProjectID, Key: "WB",
 	}
@@ -466,6 +481,7 @@ func TestConfigurationFilesystemFailuresAreOperational(t *testing.T) {
 }
 
 func TestInitRejectsInvalidConstructedRepository(t *testing.T) {
+	t.Parallel()
 	baseDir := t.TempDir()
 	repository := &Repository{
 		Root:         filepath.Join(baseDir, "not-a-repository"),
@@ -481,6 +497,7 @@ func TestInitRejectsInvalidConstructedRepository(t *testing.T) {
 }
 
 func TestInitConcurrentSameKeyReturnsPersistedConfig(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	results := concurrentInit(t, repoDir,
 		initRequest{key: "WB", ids: idsFor("01K0M65GBZ8F5ZQX0VC1J8H3TP")},
@@ -516,6 +533,7 @@ func TestInitConcurrentSameKeyReturnsPersistedConfig(t *testing.T) {
 }
 
 func TestInitConcurrentSameRepositoryReturnsPersistedConfig(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -544,6 +562,7 @@ func TestInitConcurrentSameRepositoryReturnsPersistedConfig(t *testing.T) {
 }
 
 func TestInitConcurrentLinkedWorktreesSharesOneStableIdentity(t *testing.T) {
+	t.Parallel()
 	repositories := linkedWorktreeRepositories(t)
 	results := concurrentInitOnRepositories(t, repositories,
 		initRequest{key: "WB", ids: idsFor("01K0M65GBZ8F5ZQX0VC1J8H3TP")},
@@ -572,6 +591,7 @@ func TestInitConcurrentLinkedWorktreesSharesOneStableIdentity(t *testing.T) {
 }
 
 func TestInitConcurrentDifferentKeysReturnsValidationError(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	results := concurrentInit(t, repoDir,
 		initRequest{key: "WB", ids: idsFor("01K0M65GBZ8F5ZQX0VC1J8H3TP")},
@@ -596,6 +616,7 @@ func TestInitConcurrentDifferentKeysReturnsValidationError(t *testing.T) {
 }
 
 func TestInitIgnoresStaleWorktreeLocalInitializationLock(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	repo, err := Open(context.Background(), repoDir)
 	if err != nil {
@@ -772,6 +793,7 @@ func assertPathMissing(t *testing.T, path string) {
 }
 
 func TestDecodeConfigReadsVersionOneAsAutoSyncUnset(t *testing.T) {
+	t.Parallel()
 	contents := []byte(`{"format":"workbook.project","version":1,"projectId":"` + fixedProjectID + `","key":"WB"}` + "\n")
 
 	config, err := decodeConfig(contents)
@@ -784,6 +806,7 @@ func TestDecodeConfigReadsVersionOneAsAutoSyncUnset(t *testing.T) {
 }
 
 func TestDecodeConfigReadsProjectAutoSyncPolicy(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		name  string
 		value string
@@ -808,6 +831,7 @@ func TestDecodeConfigReadsProjectAutoSyncPolicy(t *testing.T) {
 }
 
 func TestDecodeConfigRejectsAutoSyncInVersionOneDocument(t *testing.T) {
+	t.Parallel()
 	contents := []byte(`{"format":"workbook.project","version":1,"projectId":"` + fixedProjectID +
 		`","key":"WB","autoSync":true}` + "\n")
 
@@ -821,6 +845,7 @@ func TestDecodeConfigRejectsAutoSyncInVersionOneDocument(t *testing.T) {
 }
 
 func TestEncodeConfigOmitsUnsetAutoSync(t *testing.T) {
+	t.Parallel()
 	config := core.ProjectConfig{
 		Format: projectFormat, Version: projectVersion, ProjectID: fixedProjectID, Key: "WB",
 	}
@@ -836,6 +861,7 @@ func TestEncodeConfigOmitsUnsetAutoSync(t *testing.T) {
 }
 
 func TestProjectConfigRoundTripsAutoSyncPolicyCanonically(t *testing.T) {
+	t.Parallel()
 	config := core.ProjectConfig{
 		Format: projectFormat, Version: projectVersion, ProjectID: fixedProjectID, Key: "WB",
 		AutoSync: core.AutoSyncDisabled,
@@ -858,6 +884,7 @@ func TestProjectConfigRoundTripsAutoSyncPolicyCanonically(t *testing.T) {
 // automatic synchronization policy is a mutable preference, so changing it must
 // not read as corruption.
 func TestLoadConfigAcceptsProjectPolicyChangedAfterGuardPublication(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repoDir := testrepo.New(t)
 	repo, err := Open(ctx, repoDir)
@@ -893,6 +920,7 @@ func TestLoadConfigAcceptsProjectPolicyChangedAfterGuardPublication(t *testing.T
 }
 
 func TestLoadConfigStillRejectsProjectIdentityMismatch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repoDir := testrepo.New(t)
 	repo, err := Open(ctx, repoDir)
@@ -932,6 +960,7 @@ func TestLoadConfigStillRejectsProjectIdentityMismatch(t *testing.T) {
 // published yet. With a ref present the same disagreement is arbitrated by it
 // instead, which the identity tests cover.
 func TestLoadConfigGuardMismatchNamesGuardPathAndRecovery(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repoDir := testrepo.New(t)
 	repo, err := Open(ctx, repoDir)
@@ -965,6 +994,7 @@ func TestLoadConfigGuardMismatchNamesGuardPathAndRecovery(t *testing.T) {
 }
 
 func TestUpgradeConfigRewritesLegacyDocumentAtCurrentVersion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repoDir := testrepo.New(t)
 	repo, err := Open(ctx, repoDir)
@@ -989,6 +1019,7 @@ func TestUpgradeConfigRewritesLegacyDocumentAtCurrentVersion(t *testing.T) {
 }
 
 func TestUpgradeConfigLeavesACurrentDocumentByteIdentical(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repoDir := testrepo.New(t)
 	repo, err := Open(ctx, repoDir)
@@ -1021,6 +1052,7 @@ func TestUpgradeConfigLeavesACurrentDocumentByteIdentical(t *testing.T) {
 }
 
 func TestSetProjectAutoSyncWritesPolicyAndUpgradesLegacyDocument(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repoDir := testrepo.New(t)
 	repo, err := Open(ctx, repoDir)
@@ -1047,6 +1079,7 @@ func TestSetProjectAutoSyncWritesPolicyAndUpgradesLegacyDocument(t *testing.T) {
 }
 
 func TestSetProjectAutoSyncClearsPolicy(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repoDir := testrepo.New(t)
 	repo, err := Open(ctx, repoDir)
