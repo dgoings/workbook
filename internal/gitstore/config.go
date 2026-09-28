@@ -493,6 +493,10 @@ func readConfigFile(path, description string) (core.ProjectConfig, bool, error) 
 	if err != nil {
 		return core.ProjectConfig{}, false, core.Wrap(core.CategoryOperational, "cannot read "+description, err)
 	}
+	// A Windows checkout with core.autocrlf=true (Git for Windows' default)
+	// writes the tracked file with CRLF. Canonical JSON never carries a raw
+	// carriage return, so folding CRLF back to LF only undoes that conversion.
+	contents = bytes.ReplaceAll(contents, []byte("\r\n"), []byte("\n"))
 	config, err := decodeConfig(contents)
 	if err != nil {
 		return core.ProjectConfig{}, false, err
