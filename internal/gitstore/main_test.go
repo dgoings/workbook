@@ -22,14 +22,19 @@ import (
 //	TestOpenFromLinkedWorktreeSpawnsOneGitProcess — repository_test.go
 //	TestGitSeparatesStdoutAndStderrAndSetsReplaceProtection — repository_test.go
 //	TestPushBypassesManagedHookRecursion — sync_test.go
+//	TestReadTaskHistoriesStreamHoldsOneCommitNotTheWholeCorpus — history_test.go
 //
-// The first two and the last set PATH and WORKBOOK_TEST_LOG to put a fake
+// The first two and the sixth set PATH and WORKBOOK_TEST_LOG to put a fake
 // workbook ahead of the real one for the managed pre-push hook to resolve.
 // The middle two set PATH to install a git-invocation counter and then count
 // every git process the whole test binary spawns, so a concurrently running
 // test's git would land in the same counter. The fifth sets
 // WORKBOOK_ENV_SENTINEL to prove gitEnvironment preserves the ambient
-// process environment. Nothing else in the package needs to be serial.
+// process environment. The last measures the live heap of the whole test
+// binary against a fixed ceiling while streaming a corpus; the heap is
+// shared by every test running at the same time, and inside the parallel
+// batch it failed on a CI runner with the other tests' allocations counted
+// against it. Nothing else in the package needs to be serial.
 //
 // TestMain isolates the user-global and system git configuration that every
 // test repository in this package would otherwise read. Two reasons.
