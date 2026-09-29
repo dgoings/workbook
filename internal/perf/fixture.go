@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -23,6 +24,11 @@ const (
 )
 
 var benchmarkOrigin = time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+// disabledHooksFallbacks numbers the rootless core.hooksPath names
+// fixtureDisabledHooksPath hands out, so that two of them are never the same
+// path.
+var disabledHooksFallbacks atomic.Int64
 
 // Fixture is a deterministic Workbook repository populated with valid task
 // operation histories.
@@ -65,7 +71,11 @@ func BuildFixture(ctx context.Context, root string, spec FixtureSpec) (Fixture, 
 	if err != nil {
 		return Fixture{}, fmt.Errorf("resolve fixture root: %w", err)
 	}
-	if err := runFixtureGit(ctx, "init", "--quiet", "--object-format="+spec.ObjectFormat, absRoot); err != nil {
+	// The root is passed explicitly because this is the one fixture command
+	// that cannot carry -C: the repository does not exist yet. Without it
+	// fixtureGitRoot finds no root and fixtureDisabledHooksPath falls back to a
+	// path outside the fixture. See fixtureDisabledHooksPath.
+	if err := runFixtureGitInRoot(ctx, absRoot, "init", "--quiet", "--object-format="+spec.ObjectFormat, absRoot); err != nil {
 		return Fixture{}, err
 	}
 	if err := configureFixtureRepository(ctx, absRoot); err != nil {
@@ -604,9 +614,24 @@ func fixtureGitConfig(root string) []string {
 	}
 }
 
+// fixtureDisabledHooksPath names the directory a fixture's core.hooksPath
+// points at. It is never created: hooks are disabled by naming a directory that
+// does not exist, and assertFixtureIsolationConfig in the tests pins that.
+//
+// The path has to belong to one repository rather than be one fixed name. It
+// used to fall back to os.TempDir()/workbook-fixture-hooks-disabled whenever
+// the caller had no root to offer, which was a single path shared by every
+// fixture in the process and by every other process on the machine: anything
+// that created a directory there would silently re-enable hooks for every
+// fixture at once, and two fixtures built in parallel would share whatever it
+// found. Callers that know their root now get a path under it, which their own
+// cleanup removes if it ever appears. The rootless fallback remains for a
+// future caller that has no root, and gets a name unique to this process and
+// call so that it too is nobody else's path.
 func fixtureDisabledHooksPath(root string) string {
 	if root == "" {
-		return filepath.Join(os.TempDir(), "workbook-fixture-hooks-disabled")
+		return filepath.Join(os.TempDir(), fmt.Sprintf("workbook-fixture-hooks-disabled-%d-%d",
+			os.Getpid(), disabledHooksFallbacks.Add(1)))
 	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {

@@ -19,6 +19,7 @@ import (
 )
 
 func TestDecodeRemoteScenarioResult(t *testing.T) {
+	t.Parallel()
 	fetch := `{"format":"workbook.result","version":1,"command":"fetch","data":{"remote":"origin","status":"completed","tasks":[{"taskId":"task-a","status":"created"},{"taskId":"task-b","status":"created"}]}}`
 	push := `{"format":"workbook.result","version":1,"command":"push","data":{"remote":"origin","status":"completed","tasks":[{"taskId":"task-a","status":"published"},{"taskId":"task-b","status":"up-to-date"}]}}`
 	sync := `{"format":"workbook.result","version":1,"command":"sync","data":{"remote":"origin","fetch":{"remote":"origin","status":"completed","tasks":[{"taskId":"task-a","status":"unchanged"}]},"push":{"remote":"origin","status":"completed","tasks":[{"taskId":"task-a","status":"up-to-date"}]}}}`
@@ -80,6 +81,7 @@ func TestDecodeRemoteScenarioResult(t *testing.T) {
 }
 
 func TestRunRemoteScenariosUsesTopologyCommandsAndVerifiesResults(t *testing.T) {
+	t.Parallel()
 	workbook := buildRemoteScenarioWorkbook(t)
 	tests := []struct {
 		name    string
@@ -138,6 +140,7 @@ func TestRunRemoteScenariosUsesTopologyCommandsAndVerifiesResults(t *testing.T) 
 }
 
 func TestRunRemoteScenariosBuildsOnlySelectedTopology(t *testing.T) {
+	t.Parallel()
 	workbook := buildRemoteScenarioWorkbook(t)
 	var built []RemoteTopology
 	_, err := runRemoteScenarios(context.Background(), RunSpec{
@@ -160,6 +163,7 @@ func TestRunRemoteScenariosBuildsOnlySelectedTopology(t *testing.T) {
 }
 
 func TestRemoteScenarioProcessCountDoesNotScaleWithFixtureSize(t *testing.T) {
+	t.Parallel()
 	workbook := buildRemoteScenarioWorkbook(t)
 	counts := make([]int, 0, 2)
 	for _, fixture := range []FixtureSpec{
@@ -191,6 +195,7 @@ func buildRemoteScenarioWorkbook(t *testing.T) string {
 	binary := filepath.Join(t.TempDir(), "workbook")
 	command := exec.Command("go", "build", "-buildvcs=false", "-o", binary, "./cmd/workbook")
 	command.Dir = filepath.Clean(filepath.Join("..", ".."))
+	command.Env = goToolchainEnvironment(t)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build workbook: %v\n%s", err, output)
 	}
@@ -198,6 +203,7 @@ func buildRemoteScenarioWorkbook(t *testing.T) string {
 }
 
 func TestDecodeRemoteScenarioResultRejectsInvalidEnvelopesAndTaskSets(t *testing.T) {
+	t.Parallel()
 	valid := func(command string, tasks []gitstore.SyncTaskResult) string {
 		document := struct {
 			Format  string              `json:"format"`
@@ -244,6 +250,7 @@ func TestDecodeRemoteScenarioResultRejectsInvalidEnvelopesAndTaskSets(t *testing
 }
 
 func TestDecodeRemoteScenarioResultEnforcesRemotePhasesErrorCategoryAndWarnings(t *testing.T) {
+	t.Parallel()
 	contract := remoteScenarioContract{
 		command:       "sync",
 		fetchStatus:   gitstore.SyncPhaseCompleted,
@@ -276,6 +283,7 @@ func TestDecodeRemoteScenarioResultEnforcesRemotePhasesErrorCategoryAndWarnings(
 }
 
 func TestRunRemoteScenariosUsesIndependentFixturesForEachSample(t *testing.T) {
+	t.Parallel()
 	var roots []string
 	measures := 0
 	results, err := runRemoteScenarios(context.Background(), RunSpec{
@@ -305,6 +313,7 @@ func TestRunRemoteScenariosUsesIndependentFixturesForEachSample(t *testing.T) {
 }
 
 func TestRunRemoteScenariosRejectsZeroSamples(t *testing.T) {
+	t.Parallel()
 	_, err := runRemoteScenarios(context.Background(), RunSpec{
 		WorkbookBinary: "workbook",
 		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
@@ -316,6 +325,7 @@ func TestRunRemoteScenariosRejectsZeroSamples(t *testing.T) {
 }
 
 func TestSmallChangedRefSetKeepsTrackingAtPrePushRemoteTip(t *testing.T) {
+	t.Parallel()
 	workbook := buildRemoteScenarioWorkbook(t)
 	var fixture RemoteFixture
 	_, err := runRemoteScenarios(context.Background(), RunSpec{
@@ -355,6 +365,7 @@ func TestSmallChangedRefSetKeepsTrackingAtPrePushRemoteTip(t *testing.T) {
 }
 
 func TestSmallChangedRefSetExpectedResultsChangeOnlyTenTasks(t *testing.T) {
+	t.Parallel()
 	taskIDs := make([]string, 12)
 	for index := range taskIDs {
 		taskIDs[index] = fmt.Sprintf("WB-%02d", index)
@@ -384,6 +395,7 @@ func TestSmallChangedRefSetExpectedResultsChangeOnlyTenTasks(t *testing.T) {
 }
 
 func TestRemoteScenarioVerificationGitCallsDoNotScaleWithFixture(t *testing.T) {
+	t.Parallel()
 	workbook := buildRemoteScenarioWorkbook(t)
 	fixtureSpecs := []FixtureSpec{
 		{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
@@ -449,6 +461,7 @@ func TestRemoteScenarioVerificationGitCallsDoNotScaleWithFixture(t *testing.T) {
 }
 
 func TestRequireRemoteScenarioRefsPassesCallerCancellationToReader(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	reads := 0

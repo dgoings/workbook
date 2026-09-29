@@ -15,6 +15,7 @@ import (
 )
 
 func TestProjectionRefreshScenarioNamesCoverEveryRequestedChangeCount(t *testing.T) {
+	t.Parallel()
 	want := map[string]int{
 		"projection-refresh-unchanged":            0,
 		"projection-refresh-one-changed":          1,
@@ -55,6 +56,7 @@ func TestProjectionRefreshScenarioNamesCoverEveryRequestedChangeCount(t *testing
 }
 
 func TestRunProjectionRefreshScenariosRejectsFixtureWithTooFewMutableHeads(t *testing.T) {
+	t.Parallel()
 	spec := RunSpec{
 		WorkbookBinary: "workbook",
 		Fixture: FixtureSpec{
@@ -95,6 +97,7 @@ func TestRunProjectionRefreshScenariosRejectsFixtureWithTooFewMutableHeads(t *te
 }
 
 func TestRunProjectionRefreshScenariosRejectsInexactChangedHeadCardinality(t *testing.T) {
+	t.Parallel()
 	fixture, spec := newProjectionRefreshTestFixture(t, "sha1")
 	calls := 0
 	_, _, err := runProjectionRefreshScenarios(
@@ -128,6 +131,7 @@ func TestRunProjectionRefreshScenariosRejectsInexactChangedHeadCardinality(t *te
 }
 
 func TestRunProjectionRefreshScenariosMutatesHeadsBeforeEveryTimedRefresh(t *testing.T) {
+	t.Parallel()
 	fixture, spec := newProjectionRefreshTestFixture(t, "sha1")
 	spec.Samples = 2
 	// The stubbed product never runs, so stand in for the disposable cache the
@@ -199,6 +203,7 @@ func TestRunProjectionRefreshScenariosMutatesHeadsBeforeEveryTimedRefresh(t *tes
 }
 
 func TestRunProjectionRefreshScenariosMeasureOnlyTheRefreshCommand(t *testing.T) {
+	t.Parallel()
 	for _, objectFormat := range []string{"sha1", "sha256"} {
 		t.Run(objectFormat, func(t *testing.T) {
 			if objectFormat == "sha256" && !supportsObjectFormat(t, objectFormat) {
@@ -299,6 +304,7 @@ func TestRunProjectionRefreshScenariosMeasureOnlyTheRefreshCommand(t *testing.T)
 }
 
 func TestProjectionRefreshReportSerializesDeterministically(t *testing.T) {
+	t.Parallel()
 	report := ProjectionRefreshReport{
 		Format:  ProjectionRefreshFormat,
 		Version: ProjectionRefreshVersion,
@@ -347,6 +353,7 @@ func TestProjectionRefreshReportSerializesDeterministically(t *testing.T) {
 }
 
 func TestMeasureRepositoryHonorsRequestedSampleCount(t *testing.T) {
+	t.Parallel()
 	binary := buildWorkbookBinary(t)
 	fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
 		TotalTasks: 10, ActiveTasks: 10,
@@ -443,6 +450,7 @@ func projectionRefreshTestListJSON(rows int) []byte {
 }
 
 func TestRunProjectionRefreshScenariosRetainMeasuredProductFailures(t *testing.T) {
+	t.Parallel()
 	fixture, spec := newProjectionRefreshTestFixture(t, "sha1")
 	failed := Sample{Duration: 3 * time.Millisecond, ExitCode: 2, GitProcesses: 2, Error: "list failed"}
 	results, report, err := runProjectionRefreshScenarios(
@@ -478,6 +486,7 @@ func TestRunProjectionRefreshScenariosRetainMeasuredProductFailures(t *testing.T
 }
 
 func TestRunProjectionRefreshScenariosRejectUntrustworthyProjectionResult(t *testing.T) {
+	t.Parallel()
 	fixture, spec := newProjectionRefreshTestFixture(t, "sha1")
 	writeProjectionRefreshTestCache(t, fixture.Root)
 	_, _, err := runProjectionRefreshScenarios(

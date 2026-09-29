@@ -23,6 +23,7 @@ import (
 )
 
 func TestRunColdCLIIsolatesSelectedScenarioSamplesAndPreparesProjection(t *testing.T) {
+	t.Parallel()
 	var mutex sync.Mutex
 	var fixtureRoots []string
 	var events []string
@@ -116,6 +117,7 @@ func TestRunColdCLIIsolatesSelectedScenarioSamplesAndPreparesProjection(t *testi
 }
 
 func TestRunColdCLICleansFixtureOnSetupAndMeasurementErrors(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		buildErr   error
@@ -190,6 +192,7 @@ func TestRunColdCLICleansFixtureOnSetupAndMeasurementErrors(t *testing.T) {
 }
 
 func TestRunColdCLISelectsOnlyRequestedScenario(t *testing.T) {
+	t.Parallel()
 	var builds, prepares, measures []string
 	dependencies := scenarioDependencies{
 		buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
@@ -222,6 +225,7 @@ func TestRunColdCLISelectsOnlyRequestedScenario(t *testing.T) {
 }
 
 func TestRunColdCLIUsesFixtureTombstoneAndDirectDependency(t *testing.T) {
+	t.Parallel()
 	fixture := testColdCLIFixture()
 	var commands []CommandSpec
 	dependencies := scenarioDependencies{
@@ -288,6 +292,7 @@ func testColdCLIFixture() Fixture {
 }
 
 func TestWarmScenarioTaskAllocationUsesTenTaskFixture(t *testing.T) {
+	t.Parallel()
 	taskIDs := []string{
 		"WB-00", "WB-01", "WB-02", "WB-03", "WB-04",
 		"WB-05", "WB-06", "WB-07", "WB-08", "WB-09",
@@ -303,6 +308,7 @@ func TestWarmScenarioTaskAllocationUsesTenTaskFixture(t *testing.T) {
 }
 
 func TestColdCLISampleFailureAllowsTimeoutsAndRejectsOtherFailures(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		sample Sample
@@ -327,6 +333,7 @@ func coldCLISampleFailed(sample Sample) bool {
 }
 
 func TestRunColdCLI(t *testing.T) {
+	t.Parallel()
 	binary := buildWorkbookBinary(t)
 	spec := RunSpec{
 		WorkbookBinary: binary,
@@ -382,6 +389,7 @@ func TestRunColdCLI(t *testing.T) {
 }
 
 func TestRunWarmHTTP(t *testing.T) {
+	t.Parallel()
 	binary := buildWorkbookBinary(t)
 	spec := RunSpec{
 		WorkbookBinary: binary,
@@ -431,6 +439,7 @@ func TestRunWarmHTTP(t *testing.T) {
 }
 
 func TestRunWarmHTTPIsolatesEveryScenarioSampleAndRetainsMeasuredMisses(t *testing.T) {
+	t.Parallel()
 	fixtureRoot := t.TempDir()
 	fixtureSpec := FixtureSpec{
 		TotalTasks: 10, ActiveTasks: 10,
@@ -544,6 +553,7 @@ func TestRunWarmHTTPIsolatesEveryScenarioSampleAndRetainsMeasuredMisses(t *testi
 // Mutation witness: starting every API scenario and filtering results afterward
 // would create burst fixtures and servers even when only api-update is selected.
 func TestRunWarmHTTPSelectsAndPreparesBeforeEveryMeasurement(t *testing.T) {
+	t.Parallel()
 	fixtureRoot := t.TempDir()
 	spec := RunSpec{
 		WorkbookBinary: "workbook",
@@ -624,6 +634,7 @@ func TestRunWarmHTTPSelectsAndPreparesBeforeEveryMeasurement(t *testing.T) {
 }
 
 func TestRunWarmHTTPCleansFixtureOnErrorPathsWithoutHidingPrimary(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		startErr   error
@@ -718,6 +729,7 @@ func TestRunWarmHTTPCleansFixtureOnErrorPathsWithoutHidingPrimary(t *testing.T) 
 }
 
 func TestRunWarmHTTPClosesServerWhenProjectionPreparationFails(t *testing.T) {
+	t.Parallel()
 	closedServers := 0
 	dependencies := warmHTTPDependencies{
 		buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
@@ -753,6 +765,7 @@ func TestRunWarmHTTPClosesServerWhenProjectionPreparationFails(t *testing.T) {
 }
 
 func TestWarmHTTPServerPrepareProjection(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		statusCode int
@@ -828,6 +841,7 @@ func TestWarmHTTPServerPrepareProjection(t *testing.T) {
 // the run already collected. A slow GET on sample 7 of a 20-sample acceptance
 // run must still leave a report behind.
 func TestWarmTaskListDeadlineReturnsTimedOutSample(t *testing.T) {
+	t.Parallel()
 	release := make(chan struct{})
 	httpServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		<-release
@@ -852,6 +866,7 @@ func TestWarmTaskListDeadlineReturnsTimedOutSample(t *testing.T) {
 // TestWarmTaskListNonOKResponseReturnsMeasuredSample records a server error as a
 // `failed` sample the same way api-update does, rather than aborting the run.
 func TestWarmTaskListNonOKResponseReturnsMeasuredSample(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		status int
@@ -894,6 +909,7 @@ func TestWarmTaskListNonOKResponseReturnsMeasuredSample(t *testing.T) {
 // caller stays fatal too, because it is the harness shutting down and not a
 // command reaching its own timeout.
 func TestWarmTaskListMalformedAnswerAndCallerCancellationRemainFatal(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		body    string
@@ -950,6 +966,7 @@ func TestWarmTaskListMalformedAnswerAndCallerCancellationRemainFatal(t *testing.
 }
 
 func TestWarmStatusDeadlineReturnsTimedOutSample(t *testing.T) {
+	t.Parallel()
 	release := make(chan struct{})
 	httpServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		<-release
@@ -972,6 +989,7 @@ func TestWarmStatusDeadlineReturnsTimedOutSample(t *testing.T) {
 }
 
 func TestWarmStatusNonOKResponseReturnsMeasuredSample(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		status int
@@ -1008,6 +1026,7 @@ func TestWarmStatusNonOKResponseReturnsMeasuredSample(t *testing.T) {
 }
 
 func TestWarmStatusMalformedSuccessAndCallerCancellationRemainFatal(t *testing.T) {
+	t.Parallel()
 	t.Run("malformed HTTP 200", func(t *testing.T) {
 		httpServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 			writer.WriteHeader(http.StatusOK)
@@ -1070,6 +1089,7 @@ func TestWarmStatusMalformedSuccessAndCallerCancellationRemainFatal(t *testing.T
 }
 
 func TestWarmIndependentBurstIssuesTenDistinctRequestsAndCountsTraceOnce(t *testing.T) {
+	t.Parallel()
 	tracePath := emptyTraceFile(t)
 	var mutex sync.Mutex
 	var requests []recordedStatusRequest
@@ -1142,6 +1162,7 @@ func TestWarmIndependentBurstIssuesTenDistinctRequestsAndCountsTraceOnce(t *test
 }
 
 func TestWarmSameTaskBurstStopsAfterAmbiguousOutcome(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		timeout      time.Duration
@@ -1235,6 +1256,7 @@ func TestWarmSameTaskBurstStopsAfterAmbiguousOutcome(t *testing.T) {
 }
 
 func TestWarmSameTaskBurstIssuesTenSequentialAlternatingRequests(t *testing.T) {
+	t.Parallel()
 	tracePath := emptyTraceFile(t)
 	var mutex sync.Mutex
 	var requests []recordedStatusRequest
@@ -1301,6 +1323,7 @@ func TestWarmSameTaskBurstIssuesTenSequentialAlternatingRequests(t *testing.T) {
 }
 
 func TestWarmSameTaskBurstStartsWithLiteralStatusSafeForGeneratedFixtures(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name              string
 		operationsPerTask int
@@ -1460,6 +1483,7 @@ func TestMeasureRepository(t *testing.T) {
 }
 
 func TestMeasureLocalBareSyncAgainstNewOriginPreservesPackedRefs(t *testing.T) {
+	t.Parallel()
 	for _, objectFormat := range []string{"sha1", "sha256"} {
 		t.Run(objectFormat, func(t *testing.T) {
 			if objectFormat == "sha256" && !supportsObjectFormat(t, objectFormat) {
@@ -1516,6 +1540,7 @@ func TestMeasureLocalBareSyncAgainstNewOriginPreservesPackedRefs(t *testing.T) {
 }
 
 func TestMeasureLocalBareSyncPublishesEverySampleToItsOwnOrigin(t *testing.T) {
+	t.Parallel()
 	binary := buildWorkbookBinary(t)
 	fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
 		TotalTasks: 10, ActiveTasks: 10,
@@ -1556,6 +1581,7 @@ func TestMeasureLocalBareSyncPublishesEverySampleToItsOwnOrigin(t *testing.T) {
 }
 
 func TestDeleteTrackingTaskRefsClearsStaleTrackingRefs(t *testing.T) {
+	t.Parallel()
 	fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
 		TotalTasks: 3, ActiveTasks: 3,
 		OperationsPerTask: 2,
@@ -1596,6 +1622,7 @@ func TestDeleteTrackingTaskRefsClearsStaleTrackingRefs(t *testing.T) {
 }
 
 func TestMeasureLocalBareSyncAgainstNewOriginStartsEverySampleWithoutTrackingRefs(t *testing.T) {
+	t.Parallel()
 	binary := buildWorkbookBinary(t)
 	fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
 		TotalTasks: 10, ActiveTasks: 10,
@@ -1661,6 +1688,7 @@ func TestMeasureLocalBareSyncAgainstNewOriginStartsEverySampleWithoutTrackingRef
 }
 
 func TestMeasureProjectionScenariosRetainMeasuredProductMissesForEverySample(t *testing.T) {
+	t.Parallel()
 	repository := t.TempDir()
 	samples := []Sample{
 		{ExitCode: -1, TimedOut: true, Error: "rebuild timed out"},
@@ -1701,6 +1729,7 @@ func TestMeasureProjectionScenariosRetainMeasuredProductMissesForEverySample(t *
 }
 
 func TestMeasureRepositoryRunsUnchangedSyncOnlyAfterInitialCompletes(t *testing.T) {
+	t.Parallel()
 	t.Run("initial timeout", func(t *testing.T) {
 		calls := 0
 		repository := t.TempDir()
@@ -1805,6 +1834,7 @@ func TestMeasureRepositoryRunsUnchangedSyncOnlyAfterInitialCompletes(t *testing.
 }
 
 func TestMeasureRepositoryParsesObjectCountsAndConvertsKiBToBytes(t *testing.T) {
+	t.Parallel()
 	before := []byte("count: 7\nsize: 3\nin-pack: 2\nsize-pack: 1\n")
 	after := []byte("count: 0\nsize: 0\nin-pack: 11\nsize-pack: 5\n")
 
@@ -2014,10 +2044,21 @@ func buildWorkbookBinary(t *testing.T) string {
 	binary := filepath.Join(t.TempDir(), "workbook")
 	command := exec.Command("go", "build", "-buildvcs=false", "-o", binary, "./cmd/workbook")
 	command.Dir = root
+	command.Env = goToolchainEnvironment(t)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build workbook: %v\n%s", err, output)
 	}
 	return binary
+}
+
+// goToolchainEnvironment is the environment a child of the Go toolchain runs
+// with, rather than the isolated home TestMain installs. TestMain says why.
+func goToolchainEnvironment(t *testing.T) []string {
+	t.Helper()
+	if len(toolchainEnvironment) == 0 {
+		t.Fatal("toolchainEnvironment is empty; TestMain must record it before replacing HOME")
+	}
+	return toolchainEnvironment
 }
 
 // TestColdAutoSyncScenarioMeasuresSynchronizedUpdate pins the two properties
@@ -2026,6 +2067,7 @@ func buildWorkbookBinary(t *testing.T) string {
 // published origin, so the sample covers the steady-state fetch and targeted
 // push rather than an initial publication.
 func TestColdAutoSyncScenarioMeasuresSynchronizedUpdate(t *testing.T) {
+	t.Parallel()
 	fixture := testColdCLIFixture()
 	var commands []CommandSpec
 	var originAtMeasure string

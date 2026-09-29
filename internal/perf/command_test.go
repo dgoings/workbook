@@ -12,6 +12,7 @@ import (
 )
 
 func TestMeasureCommandCountsGitProcesses(t *testing.T) {
+	t.Parallel()
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
 		t.Fatal(err)
@@ -26,6 +27,7 @@ func TestMeasureCommandCountsGitProcesses(t *testing.T) {
 }
 
 func TestMeasureCommandRecordsTimeout(t *testing.T) {
+	t.Parallel()
 	sample := MeasureCommand(context.Background(), CommandSpec{
 		Binary: proctest.Shell, Args: []string{"-c", proctest.BusyLoopWhileTestBinaryLives()},
 		Directory: t.TempDir(), Timeout: 20 * time.Millisecond,
@@ -36,6 +38,7 @@ func TestMeasureCommandRecordsTimeout(t *testing.T) {
 }
 
 func TestMeasureCommandRecordsExitCodeAndSingleLineStderr(t *testing.T) {
+	t.Parallel()
 	sample := MeasureCommand(context.Background(), CommandSpec{
 		Binary: "/bin/sh", Args: []string{"-c", "printf 'first failure\\nsecond failure\\n' >&2; exit 7"},
 		Directory: t.TempDir(), Timeout: 5 * time.Second,
@@ -63,6 +66,7 @@ func TestMeasureCommandOutputPreservesStreamsAndCompatibilityWrapper(t *testing.
 }
 
 func TestMeasureCommandPassesCallerEnvironment(t *testing.T) {
+	t.Parallel()
 	sample := MeasureCommand(context.Background(), CommandSpec{
 		Binary: "/bin/sh", Args: []string{"-c", "test \"$WORKBOOK_PERF_TEST_VALUE\" = present"},
 		Directory: t.TempDir(), Environment: []string{"WORKBOOK_PERF_TEST_VALUE=present"}, Timeout: 5 * time.Second,
@@ -91,6 +95,7 @@ func TestMeasureCommandTerminatesTimedOutDescendant(t *testing.T) {
 // background descendant it started keeps burning a core after the measurement
 // reported a clean exit.
 func TestMeasureCommandReapsDescendantOfCommandThatExits(t *testing.T) {
+	t.Parallel()
 	childPIDPath := filepath.Join(t.TempDir(), "child.pid")
 	proctest.ReapRecordedProcessGroup(t, childPIDPath)
 	sample := MeasureCommand(context.Background(), CommandSpec{
@@ -104,6 +109,7 @@ func TestMeasureCommandReapsDescendantOfCommandThatExits(t *testing.T) {
 }
 
 func TestTraceCursorCountsOnlyNewGitProcesses(t *testing.T) {
+	t.Parallel()
 	tracePath := filepath.Join(t.TempDir(), "trace.json")
 	if err := os.WriteFile(tracePath, []byte("{\"event\":\"start\",\"argv\":[\"git\",\"status\"]}\n"), 0o600); err != nil {
 		t.Fatal(err)
