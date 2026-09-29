@@ -153,17 +153,18 @@ func TestRunInvalidInvocationAndEarlyJSONErrors(t *testing.T) {
 }
 
 func TestRunReportsGitProcessFailuresAsOperationalWithoutUsage(t *testing.T) {
+	t.Parallel()
+	// Unsetting the repository's own user.email is the whole of the failure this
+	// test needs. The global config TestMain installs names no identity and
+	// GIT_CONFIG_NOSYSTEM keeps the machine's out of reach, so nothing supplies
+	// one behind the local file; before TestMain did that, this test had to
+	// point GIT_CONFIG_GLOBAL at an empty file itself, and the t.Setenv that
+	// took is what kept it out of the parallel batch.
 	repository := initializedRepository(t)
 	command := exec.Command("git", "-C", repository, "config", "--unset", "user.email")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git config --unset user.email: %v\n%s", err, output)
 	}
-	emptyGlobalConfig := filepath.Join(t.TempDir(), "gitconfig")
-	if err := os.WriteFile(emptyGlobalConfig, nil, 0o600); err != nil {
-		t.Fatalf("WriteFile(empty global Git config) error = %v", err)
-	}
-	t.Setenv("GIT_CONFIG_GLOBAL", emptyGlobalConfig)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 
 	t.Run("JSON", func(t *testing.T) {
 		code, stdout, stderr := run(t, repository, "create", "Needs actor", "--json")
