@@ -2441,6 +2441,113 @@ func localConfiguration(t *testing.T, repository string) []string {
 	return settings
 }
 
+// refsAMintCannotReproduce names the refs whose object IDs a template copy and a
+// fresh mint legitimately disagree on, and says why for each. Every other ref
+// has to match object for object, and a ref that turns up here without an entry
+// fails the comparison rather than being waved through, so a ref `workbook
+// setup` starts writing gets a decision instead of silence.
+var refsAMintCannotReproduce = map[string]string{
+	"refs/workbook/project": "its tree holds project.json, which names the project ID, and every mint invents its own",
+	"refs/workbook/config":  "its genesis operation names the project ID, the history generation ULID minted beside it, and the wall-clock time it was written at",
+}
+
+// The sibling of internal/gitstore's TestTemplateCopyAndMintedWriteRepositoryAgree
+// and internal/projection's TestTemplateCopyAndMintedWorkbookRepositoryAgree, for
+// the package with the most copies: 263 tests ask for initializedRepository and
+// treat the copy it hands back as a project `workbook setup` minted.
+//
+// TestTemplateCopyAndFreshRepositoryShareTheirLocalConfiguration pins one half of
+// that, the git configuration, against a bare testrepo.New. This pins the rest
+// against a real mint of the same fixture: the same refs, the same object IDs
+// wherever a mint can reproduce them, and the same project documents with only
+// the project ID substituted. Keeping freshlyInitializedRepository on the
+// comparing side is also what keeps the minting path itself running on every
+// run, the way the other two packages keep theirs.
+//
+// Substitution, not equality, is the most this can ask of the documents: a mint
+// draws its project ID from core.CryptoULIDSource, so the two projects are
+// different projects by construction. Neither ref's object ID survives that —
+// both carry the project ID — which is why the table above holds both of them
+// and why their documents are compared instead. What the exclusion does not
+// excuse is a ref going missing: a copy that dropped refs/workbook/config would
+// still satisfy every substituted document and fails here on the ref names.
+func TestTemplateCopyAndMintedProjectAgree(t *testing.T) {
+	t.Parallel()
+	minted := freshlyInitializedRepository(t)
+	copied := initializedRepository(t)
+
+	mintedID, copiedID := projectIDOf(t, minted), projectIDOf(t, copied)
+	if mintedID == copiedID {
+		t.Fatalf("mint and template share project ID %q; each mint must name its own project", copiedID)
+	}
+
+	if got, want := localConfiguration(t, copied), localConfiguration(t, minted); !reflect.DeepEqual(got, want) {
+		t.Fatalf("local configuration differs\ntemplate copy: %v\nmint:          %v", got, want)
+	}
+	if got, want := gitOutput(t, copied, "symbolic-ref", "HEAD"), gitOutput(t, minted, "symbolic-ref", "HEAD"); got != want {
+		t.Fatalf("HEAD: template copy %q, mint %q", got, want)
+	}
+
+	copiedRefs, mintedRefs := refObjectIDs(t, copied), refObjectIDs(t, minted)
+	if got, want := refNamesOf(copiedRefs), refNamesOf(mintedRefs); !reflect.DeepEqual(got, want) {
+		t.Fatalf("refs differ\ntemplate copy: %v\nmint:          %v", got, want)
+	}
+	for _, name := range refNamesOf(copiedRefs) {
+		why, excluded := refsAMintCannotReproduce[name]
+		if !excluded {
+			if copiedRefs[name] != mintedRefs[name] {
+				t.Fatalf("%s: template copy %s, mint %s; a ref a mint reproduces has to be identical in the copy, or it belongs in refsAMintCannotReproduce with a reason", name, copiedRefs[name], mintedRefs[name])
+			}
+			continue
+		}
+		if copiedRefs[name] == mintedRefs[name] {
+			t.Fatalf("%s is excluded from the object-ID comparison because %s, and yet the template copy and the mint both name %s; the exclusion is stale and the ref should be compared", name, why, copiedRefs[name])
+		}
+	}
+
+	for _, document := range []struct{ name, copied, minted string }{
+		{".workbook/config.json", readProjectFile(t, copied, ".workbook/config.json"), readProjectFile(t, minted, ".workbook/config.json")},
+		{".git/workbook/project.json", readProjectFile(t, copied, ".git/workbook/project.json"), readProjectFile(t, minted, ".git/workbook/project.json")},
+		{"refs/workbook/project:project.json", gitOutput(t, copied, "cat-file", "blob", "refs/workbook/project:project.json"), gitOutput(t, minted, "cat-file", "blob", "refs/workbook/project:project.json")},
+	} {
+		want := strings.ReplaceAll(document.minted, mintedID, copiedID)
+		if document.copied != want {
+			t.Fatalf("%s\ntemplate copy: %q\nmint, project ID substituted: %q", document.name, document.copied, want)
+		}
+	}
+}
+
+// refObjectIDs maps every ref a repository holds to the object ID it names.
+func refObjectIDs(t *testing.T, repository string) map[string]string {
+	t.Helper()
+	ids := map[string]string{}
+	for _, line := range strings.Split(gitOutput(t, repository, "for-each-ref", "--format=%(refname) %(objectname)"), "\n") {
+		if line == "" {
+			continue
+		}
+		name, objectID, found := strings.Cut(line, " ")
+		if !found {
+			t.Fatalf("for-each-ref line without an object ID: %q", line)
+		}
+		ids[name] = objectID
+	}
+	if len(ids) == 0 {
+		t.Fatalf("%s holds no refs at all; an initialized project holds at least the project identity", repository)
+	}
+	return ids
+}
+
+// refNamesOf is the ref names in a refObjectIDs map, sorted, so a comparison is
+// about which refs exist rather than what they point at.
+func refNamesOf(refs map[string]string) []string {
+	names := make([]string, 0, len(refs))
+	for name := range refs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // preLedgerRepository is an initialized project with its configuration ledger
 // removed, which is the shape of every project created before the ledger
 // existed: task refs, a project identity, and no `refs/workbook/config`.
