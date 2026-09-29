@@ -254,6 +254,296 @@ func TestReconcileIsIdempotentAcrossRepeatedUpdates(t *testing.T) {
 	}
 }
 
+// crlf spells a document the way a Git for Windows checkout with the default
+// core.autocrlf=true spells the file Workbook wrote with LF.
+func crlf(contents string) string {
+	return strings.ReplaceAll(contents, "\n", "\r\n")
+}
+
+// carriesLoneLF reports whether a document mixes conventions, which is what
+// writing an LF block into a CRLF file would leave behind.
+func carriesLoneLF(contents string) bool {
+	return strings.Contains(strings.ReplaceAll(contents, "\r\n", ""), "\n")
+}
+
+// Production mutation: without the optional carriage return in beginPattern the
+// managed block is not found in a CRLF checkout at all, so `workbook docs
+// update` reports StateAbsent and leaves a duplicate block behind in the user's
+// AGENTS.md — one per fresh checkout, since the copy it appends is spelled with
+// LF and the run after that finds that one instead of the block the file
+// started with.
+func TestReconcileFindsAManagedBlockInACRLFCheckout(t *testing.T) {
+	document := testDocument("Guidance.\n")
+	written := document.Reconcile([]byte("# AGENTS.md\n\nMy own rules.\n")).Contents
+	checkout := []byte(crlf(string(written)))
+
+	first := document.Reconcile(checkout)
+	if first.State != StateCurrent {
+		t.Fatalf("Reconcile(CRLF checkout) state = %q, want %q", first.State, StateCurrent)
+	}
+	if first.Changed {
+		t.Fatalf("Reconcile(CRLF checkout) changed = true, want false:\n%q", first.Contents)
+	}
+
+	second := document.Reconcile(first.Contents)
+	if second.State != StateCurrent {
+		t.Fatalf("second Reconcile(CRLF checkout) state = %q, want %q", second.State, StateCurrent)
+	}
+	if got := strings.Count(string(second.Contents), beginPrefix); got != 1 {
+		t.Fatalf("after two updates the CRLF file carries %d begin markers, want 1:\n%s",
+			got, second.Contents)
+	}
+	if got, want := string(second.Contents), string(checkout); got != want {
+		t.Fatalf("Reconcile(CRLF checkout) contents = %q, want %q", got, want)
+	}
+}
+
+// A refreshed block is written in the convention the file already uses, so the
+// file does not come out half CRLF and half LF — and so the marker lines the
+// next run has to find are spelled the way the checkout keeps them.
+func TestReconcileRefreshesACRLFBlockWithCRLF(t *testing.T) {
+	user := "# AGENTS.md\n\nMy own rules.\n"
+	written := testDocument("Guidance.\n").Reconcile([]byte(user)).Contents
+	checkout := crlf(string(written))
+
+	outcome := testDocument("Updated guidance.\n").Reconcile([]byte(checkout))
+
+	if outcome.State != StateStale || !outcome.Changed {
+		t.Fatalf("Reconcile(CRLF, changed body) = %q changed %t, want a stale rewrite",
+			outcome.State, outcome.Changed)
+	}
+	refreshed := string(outcome.Contents)
+	if got := strings.Count(refreshed, beginPrefix); got != 1 {
+		t.Fatalf("the refreshed CRLF file carries %d begin markers, want 1:\n%s", got, refreshed)
+	}
+	if !strings.Contains(refreshed, "Updated guidance.\r\n") {
+		t.Fatalf("the refreshed block is not written with CRLF:\n%q", refreshed)
+	}
+	if carriesLoneLF(refreshed) {
+		t.Fatalf("the refreshed CRLF file mixes line endings:\n%q", refreshed)
+	}
+	if !strings.HasPrefix(refreshed, crlf(user)) {
+		t.Fatalf("Reconcile(CRLF) did not preserve user content:\n%q", refreshed)
+	}
+	if second := testDocument("Updated guidance.\n").Reconcile(outcome.Contents); second.State != StateCurrent {
+		t.Fatalf("Reconcile(refreshed CRLF) state = %q, want %q", second.State, StateCurrent)
+	}
+}
+
+// The document a CRLF checkout used to grow: the block Workbook wrote, a copy
+// appended by a `workbook docs update` that could not find it, once per fresh
+// checkout, and what somebody wrote in between.
+type duplicatedDocument struct {
+	contents   string
+	user       string
+	firstNote  string
+	secondNote string
+}
+
+func withThreeBlocks(document Document, ending string) duplicatedDocument {
+	block := string(document.Reconcile(nil).Contents)
+	parts := duplicatedDocument{
+		user:       "# AGENTS.md\n\nMy own rules.\n",
+		firstNote:  "A note written between the first two blocks.\n",
+		secondNote: "And another, below the second.\n",
+	}
+	parts.contents = parts.user + "\n" + block + "\n" + parts.firstNote +
+		"\n" + block + "\n" + parts.secondNote + "\n" + block
+	if ending == "\r\n" {
+		parts.contents = crlf(parts.contents)
+		parts.user = crlf(parts.user)
+		parts.firstNote = crlf(parts.firstNote)
+		parts.secondNote = crlf(parts.secondNote)
+	}
+	return parts
+}
+
+var lineEndings = []struct{ name, value string }{
+	{"CRLF", "\r\n"},
+	{"LF", "\n"},
+}
+
+// Production mutation: reconciling only the first block would fix the CRLF
+// checkout for the future and leave the duplicates it already collected in the
+// file forever, as text no `workbook docs` command would ever touch again.
+func TestReconcileCollapsesDuplicateBlocksIntoOne(t *testing.T) {
+	for _, ending := range lineEndings {
+		t.Run(ending.name, func(t *testing.T) {
+			document := testDocument("Guidance.\n")
+			parts := withThreeBlocks(document, ending.value)
+			if got := strings.Count(parts.contents, beginPrefix); got != 3 {
+				t.Fatalf("the document under test carries %d begin markers, want 3", got)
+			}
+
+			outcome := document.Reconcile([]byte(parts.contents))
+
+			if outcome.State != StateStale || !outcome.Changed {
+				t.Fatalf("Reconcile(three blocks) = %q changed %t, want a stale rewrite",
+					outcome.State, outcome.Changed)
+			}
+			result := string(outcome.Contents)
+			if got := strings.Count(result, beginPrefix); got != 1 {
+				t.Fatalf("Reconcile(three blocks) left %d begin markers, want 1:\n%s", got, result)
+			}
+			if got := strings.Count(result, endMarker); got != 1 {
+				t.Fatalf("Reconcile(three blocks) left %d end markers, want 1:\n%s", got, result)
+			}
+			if got, want := strings.Index(result, beginPrefix), strings.Index(parts.contents, beginPrefix); got != want {
+				t.Fatalf("the block that stayed begins at %d, want the first block's %d:\n%s",
+					got, want, result)
+			}
+			if !strings.HasPrefix(result, parts.user) {
+				t.Fatalf("Reconcile(three blocks) did not preserve the user's content:\n%q", result)
+			}
+			// The text that sat between the blocks is kept, below the one block
+			// that stayed and in the order it was written.
+			block := strings.Index(result, endMarker)
+			first := strings.Index(result, parts.firstNote)
+			second := strings.Index(result, parts.secondNote)
+			if first < 0 || second < 0 {
+				t.Fatalf("Reconcile(three blocks) dropped what was between them:\n%q", result)
+			}
+			if !(block < first && first < second) {
+				t.Fatalf("Reconcile(three blocks) reordered the document:\n%q", result)
+			}
+			if ending.value == "\r\n" && carriesLoneLF(result) {
+				t.Fatalf("Reconcile(three CRLF blocks) mixed line endings:\n%q", result)
+			}
+			if again := document.Reconcile(outcome.Contents); again.State != StateCurrent {
+				t.Fatalf("Reconcile(collapsed) state = %q, want %q", again.State, StateCurrent)
+			}
+		})
+	}
+}
+
+// The shape a pre-fix build really left behind: a CRLF checkout whose duplicate
+// was appended with LF, because the block was rendered with LF and nothing
+// respelled it. Collapsing that has to leave the file in one convention — this
+// is the input respell exists for, and the one where taking the surviving
+// block's own ending is not the same as taking the file's.
+func TestReconcileCollapsesAnLFDuplicateInACRLFFile(t *testing.T) {
+	document := testDocument("Guidance.\n")
+	block := string(document.Reconcile(nil).Contents)
+	user := "# CLAUDE.md\n\nMy own rules.\n"
+	checkout := crlf(user + "\n" + block)
+	// Exactly what the pre-fix appendBlock did: trim the trailing newlines it
+	// knew about, which on a CRLF file leaves a carriage return, and append an
+	// LF block below a blank line.
+	damaged := strings.TrimRight(checkout, "\n") + "\n\n" + block
+	if got := strings.Count(damaged, beginPrefix); got != 2 {
+		t.Fatalf("the document under test carries %d begin markers, want 2", got)
+	}
+	if !carriesLoneLF(damaged) {
+		t.Fatalf("the document under test is not the mixed file this is about:\n%q", damaged)
+	}
+
+	outcome := document.Reconcile([]byte(damaged))
+
+	if outcome.State != StateStale || !outcome.Changed {
+		t.Fatalf("Reconcile(mixed duplicate) = %q changed %t, want a stale rewrite",
+			outcome.State, outcome.Changed)
+	}
+	result := string(outcome.Contents)
+	if got := strings.Count(result, beginPrefix); got != 1 {
+		t.Fatalf("Reconcile(mixed duplicate) left %d begin markers, want 1:\n%q", got, result)
+	}
+	if carriesLoneLF(result) {
+		t.Fatalf("Reconcile(mixed duplicate) left a lone LF in a CRLF file:\n%q", result)
+	}
+	if !strings.HasPrefix(result, crlf(user)) {
+		t.Fatalf("Reconcile(mixed duplicate) did not preserve the user's content:\n%q", result)
+	}
+	if again := document.Reconcile(outcome.Contents); again.State != StateCurrent {
+		t.Fatalf("Reconcile(collapsed) state = %q, want %q", again.State, StateCurrent)
+	}
+
+	// And taking both out closes the file in its own convention as well.
+	state, stripped := Strip([]byte(damaged))
+	if state != StateCurrent {
+		t.Fatalf("Strip(mixed duplicate) state = %q, want %q", state, StateCurrent)
+	}
+	if got, want := string(stripped), crlf(user); got != want {
+		t.Fatalf("Strip(mixed duplicate) = %q, want %q", got, want)
+	}
+}
+
+// The other half of the mixed file a pre-fix build left behind, and the half
+// where the file's convention and the block's own disagree: a CRLF AGENTS.md
+// whose block was appended with LF, because nothing respelled it on the way in.
+// Refreshing that block writes it the way the file around it is written, and
+// removing it closes the file the same way, rather than leaving the LF the block
+// happened to carry.
+func TestReconcileRewritesAnLFBlockWithTheCRLFFileAroundIt(t *testing.T) {
+	block := string(testDocument("Guidance.\n").Reconcile(nil).Contents)
+	user := crlf("# CLAUDE.md\n\nMy own rules.\n")
+	mixed := user + "\r\n" + block
+	if !carriesLoneLF(mixed) {
+		t.Fatalf("the document under test is not the mixed file this is about:\n%q", mixed)
+	}
+
+	outcome := testDocument("Updated guidance.\n").Reconcile([]byte(mixed))
+
+	if outcome.State != StateStale || !outcome.Changed {
+		t.Fatalf("Reconcile(LF block, CRLF file) = %q changed %t, want a stale rewrite",
+			outcome.State, outcome.Changed)
+	}
+	result := string(outcome.Contents)
+	if carriesLoneLF(result) {
+		t.Fatalf("Reconcile(LF block, CRLF file) left the file mixed:\n%q", result)
+	}
+	if !strings.Contains(result, "Updated guidance.\r\n") {
+		t.Fatalf("the refreshed block is not written with the file's CRLF:\n%q", result)
+	}
+	if !strings.HasPrefix(result, user) {
+		t.Fatalf("Reconcile(LF block, CRLF file) did not preserve the user's content:\n%q", result)
+	}
+
+	// And removing it closes the file with CRLF rather than the block's LF.
+	state, stripped := Strip([]byte(mixed))
+	if state != StateCurrent {
+		t.Fatalf("Strip(LF block, CRLF file) state = %q, want %q", state, StateCurrent)
+	}
+	if got, want := string(stripped), user; got != want {
+		t.Fatalf("Strip(LF block, CRLF file) = %q, want %q", got, want)
+	}
+}
+
+func TestStripRemovesEveryDuplicateBlock(t *testing.T) {
+	for _, ending := range lineEndings {
+		t.Run(ending.name, func(t *testing.T) {
+			parts := withThreeBlocks(testDocument("Guidance.\n"), ending.value)
+
+			state, stripped := Strip([]byte(parts.contents))
+
+			if state != StateCurrent {
+				t.Fatalf("Strip(three blocks) state = %q, want %q", state, StateCurrent)
+			}
+			result := string(stripped)
+			if strings.Contains(result, beginPrefix) || strings.Contains(result, endMarker) {
+				t.Fatalf("Strip(three blocks) left a marker behind:\n%q", result)
+			}
+			want := parts.user + ending.value + parts.firstNote + ending.value + parts.secondNote
+			if result != want {
+				t.Fatalf("Strip(three blocks) = %q, want %q", result, want)
+			}
+		})
+	}
+}
+
+func TestStripRemovesACRLFBlock(t *testing.T) {
+	user := "# AGENTS.md\n\nMy own rules.\n"
+	written := testDocument("Guidance.\n").Reconcile([]byte(user)).Contents
+
+	state, stripped := Strip([]byte(crlf(string(written))))
+
+	if state != StateCurrent {
+		t.Fatalf("Strip(CRLF) state = %q, want %q", state, StateCurrent)
+	}
+	if got, want := string(stripped), crlf(user); got != want {
+		t.Fatalf("Strip(CRLF) = %q, want %q", got, want)
+	}
+}
+
 func TestStripRemovesTheBlockAndPreservesUserContent(t *testing.T) {
 	user := "# AGENTS.md\n\nMy own rules.\n"
 	contents := testDocument("Guidance.\n").Reconcile([]byte(user)).Contents
