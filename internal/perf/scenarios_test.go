@@ -1179,8 +1179,13 @@ func TestWarmSameTaskBurstStopsAfterAmbiguousOutcome(t *testing.T) {
 		wantEvidence string
 	}{
 		{
-			name:         "timeout",
-			timeout:      20 * time.Millisecond,
+			name: "timeout",
+			// The second request blocks until this budget expires, so the
+			// budget is what the subtest costs. It also has to cover the first
+			// request, a real local round trip, on a machine a bare whole-tree
+			// run keeps saturated: at 20 ms that first request timed out under
+			// load and the subtest failed for the wrong reason.
+			timeout:      2 * time.Second,
 			wantExitCode: -1,
 			wantTimedOut: true,
 			wantEvidence: "timed out",
