@@ -63,6 +63,14 @@ contextBridge.exposeInMainWorld('workbench', {
     ipcRenderer.on('project:exited', listener)
     return () => ipcRenderer.removeListener('project:exited', listener)
   },
+  // A menu shortcut that asks for a view or a project. The main process names
+  // what was asked; which project or view that is belongs to the renderer,
+  // which is the one that holds the list and the current view.
+  onShortcut: (handler) => {
+    const listener = (_event, payload) => handler(payload)
+    ipcRenderer.on('shortcut', listener)
+    return () => ipcRenderer.removeListener('shortcut', listener)
+  },
   onProjectStarted: (handler) => {
     const listener = (_event, payload) => handler(payload)
     ipcRenderer.on('project:started', listener)

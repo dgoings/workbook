@@ -123,4 +123,28 @@ async function startEveryProject ({ projects, start, log = () => {} }) {
   return { started, failed }
 }
 
-module.exports = { THEMES, schemeToTheme, releaseClosedWindow, startEveryProject }
+/**
+ * The theme Cmd+Shift+D should land on next, given the theme in force and
+ * whether the system is currently dark.
+ *
+ * A cycle over the three stored values (system, light, dark) has a dead
+ * press built in: whichever of "system" and "light" or "system" and "dark"
+ * currently look the same on screen, stepping between them changes nothing
+ * a reader can see, so one press in three does nothing. The board's own
+ * switch never has this problem because it does not cycle stored values at
+ * all — it flips the scheme that is showing and lets the result be "follow
+ * the system" when that flip lands on what the system already shows. This
+ * does the same: read which scheme `current` puts on screen (light, dark,
+ * or the system's own when `current` is 'system' or anything else), flip
+ * it, and store 'system' if the flipped scheme is what the system shows,
+ * so every press changes the display and following the system is still one
+ * press away.
+ */
+function toggleTheme (current, systemDark) {
+  const visible = current === 'dark' ? true : current === 'light' ? false : systemDark
+  const flipped = !visible
+  if (flipped === systemDark) return 'system'
+  return flipped ? 'dark' : 'light'
+}
+
+module.exports = { THEMES, schemeToTheme, releaseClosedWindow, startEveryProject, toggleTheme }

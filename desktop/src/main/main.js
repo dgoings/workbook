@@ -1,6 +1,6 @@
 'use strict'
 
-const { app, BaseWindow, WebContentsView, ipcMain, dialog, shell, nativeTheme } = require('electron')
+const { app, BaseWindow, WebContentsView, ipcMain, dialog, shell, nativeTheme, Menu } = require('electron')
 const fs = require('node:fs/promises')
 const path = require('node:path')
 
@@ -12,6 +12,7 @@ const repoinfo = require('./repoinfo')
 const workbook = require('./workbook')
 const nextview = require('./nextview')
 const clipath = require('./clipath')
+const { buildMenuTemplate } = require('./menu')
 const { setupUpdater } = require('./updater')
 
 const SIDEBAR_WIDTH = 260
@@ -29,6 +30,11 @@ let chromeView = null
 /** Board views, one per project, kept warm once opened. @type {Map<string, WebContentsView>} */
 const boardViews = new Map()
 let activeProjectId = null
+/**
+ * How many opens have been asked for. Each openProject() call takes the next
+ * number and stands down if a newer one has started; see the comment there.
+ */
+let openGeneration = 0
 /**
  * The PATH install, started at launch and asked about once by `path:notice`.
  * @type {Promise<object>|null}
@@ -102,7 +108,6 @@ function createWindow () {
   })
   window.contentView.addChildView(chromeView)
   chromeView.webContents.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'))
-  watchSidebarShortcut(chromeView.webContents)
 
   window.on('resize', layout)
 
@@ -124,6 +129,10 @@ function createWindow () {
     window = null
     chromeView = null
     activeProjectId = null
+    // No board is showing any more, so the board items go gray — the same call
+    // showChrome() makes for the same reason. On macOS the menu outlives the
+    // window, and without this Cmd+N would stay lit over nothing.
+    installMenu()
     // Said only when there was something to let go of, the way the reaping log
     // speaks only when it reaped: every ordinary quit closes the window too,
     // and on Windows and Linux that makes this the last line of every session.
@@ -237,41 +246,95 @@ function toggleSidebar () {
   return setSidebarCollapsed(!registry.sidebarCollapsed)
 }
 
+// --- menu ------------------------------------------------------------------
+
 /**
- * Watch one view's web contents for the collapse chord.
+ * Install the application menu for the app's current state.
  *
- * Every view needs its own listener, which is why this is a function and not a
- * single hook. It cannot live in the shell page: when a board is showing,
- * keyboard focus is inside that board's native view, and a listener on the
- * shell's page would never hear the chord. An application menu would reach both
- * but would also put a menu on Windows and Linux, which this window does not
- * have.
+ * Rebuilt rather than patched whenever the project list or the active board
+ * changes: the project items carry names, and the board items are enabled
+ * only while a board is showing, so the cheapest correct thing is to build the
+ * whole menu again from the state it describes.
  */
-function watchSidebarShortcut (webContents) {
-  webContents.on('before-input-event', (event, input) => {
-    // `key` is what the layout produces, so on a Cyrillic, Greek, Hebrew or
-    // Arabic layout the physical B key reports another character entirely and
-    // the chord would never match. `code` names the physical key instead. Both
-    // are accepted rather than just the code, so someone on Dvorak who reaches
-    // for the letter still gets it.
-    if (input.type !== 'keyDown') return
-    if (input.code !== 'KeyB' && input.key.toLowerCase() !== 'b') return
-    // A held-down chord would otherwise flap the sidebar open and shut.
-    if (input.isAutoRepeat) return
-    // Cmd+B on macOS, Ctrl+B elsewhere, and nothing near it: any other modifier,
-    // the other platform's modifier included, means a different chord was meant.
-    if (input.shift || input.alt) return
-    const chord = process.platform === 'darwin'
-      ? input.meta && !input.control
-      : input.control && !input.meta
-    if (!chord) return
-    event.preventDefault()
-    // Nothing awaits this listener, so a failed save would otherwise be an
-    // unhandled rejection and the chord would look like it simply did nothing.
-    toggleSidebar().catch((error) => {
-      console.error('workbench: could not toggle the sidebar', error)
-    })
+function installMenu () {
+  const template = buildMenuTemplate({
+    platform: process.platform,
+    projects: registry.projects,
+    activeProjectId,
+    nextAvailable: registry.projects.length >= 2,
+    actions: menuActions
   })
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
+/** When each rate-limited action last ran. @type {Map<string, number>} */
+const lastFired = new Map()
+
+/**
+ * Whether enough time has passed since `key` last fired to let it fire again.
+ *
+ * Holding a menu accelerator down repeats it, and the keystroke listener this
+ * menu replaced refused an auto-repeat outright — `input.isAutoRepeat` told it
+ * so. A menu click carries no such flag, so the two actions that flap when
+ * repeated, the sidebar and the theme, are held to one firing per interval
+ * instead. 250ms is longer than a key repeat (about 30ms once it starts) and
+ * shorter than two deliberate presses.
+ *
+ * Only these two. Opening a project or driving a board is idempotent enough to
+ * repeat harmlessly, and rate-limiting those would make a quick second press
+ * look broken.
+ */
+function notRepeating (key, ms = 250) {
+  const now = Date.now()
+  const previous = lastFired.get(key)
+  if (previous !== undefined && now - previous < ms) return false
+  lastFired.set(key, now)
+  return true
+}
+
+// What each menu item does. A view or a project is the renderer's state to
+// change, so those are named to the shell page and decided there; a board
+// action goes to that board's own preload; and the theme toggle goes through
+// the same path a board's Dark Mode switch uses, so every board follows.
+const menuActions = {
+  selectProject: (index) => toChrome('shortcut', { kind: 'project', index }),
+  stepProject: (delta) => toChrome('shortcut', { kind: 'step', delta }),
+  showNext: () => toChrome('shortcut', { kind: 'view', view: 'next' }),
+  showImport: () => toChrome('shortcut', { kind: 'view', view: 'import' }),
+  toggleTheme: () => {
+    if (!notRepeating('theme')) return
+    // No sender to spare: the toggle is the shell's own choice, so every open
+    // board is aligned to it. nativeTheme.shouldUseDarkColors is the same
+    // system reading resolveDark falls back to for 'system'.
+    adoptBoardScheme(lifecycle.toggleTheme(registry.theme, nativeTheme.shouldUseDarkColors), null).catch((error) => {
+      console.error('workbench: could not toggle the theme', error)
+    })
+  },
+  toggleSidebar: () => {
+    if (!notRepeating('sidebar')) return
+    toggleSidebar().catch((error) => { console.error('workbench: could not toggle the sidebar', error) })
+  },
+  reloadBoard: () => {
+    const view = activeProjectId && boardViews.get(activeProjectId)
+    if (!view) return
+    // The keyboard goes with the board, the way opening one already takes it
+    // there. An accelerator fires wherever focus happens to be, and any click
+    // in the sidebar leaves it in the shell page; a reload that left it behind
+    // would hand the fresh board back to a reader whose next keystroke still
+    // went to the page behind it.
+    view.webContents.focus()
+    view.webContents.reload()
+  },
+  boardCommand: (command) => {
+    const view = activeProjectId && boardViews.get(activeProjectId)
+    if (!view) return
+    // Focus first, for the same reason and more sharply: these commands open
+    // things meant to be typed into. Fired with focus still in the shell page,
+    // Cmd+N would open a New Task form nobody could type into and Cmd+F would
+    // focus a search box the keystrokes never reached.
+    view.webContents.focus()
+    view.webContents.send('board:command', { command })
+  }
 }
 
 /**
@@ -301,7 +364,19 @@ async function openProject (projectId, taskId = null) {
   const project = registry.find(projectId)
   if (!project) throw new Error(`unknown project: ${projectId}`)
 
+  // Two project shortcuts in quick succession race, and the awaits below are
+  // where they overtake each other: Cmd+1 on a cold project spawns a server and
+  // waits seconds for it, Cmd+2 on a warm one is back almost at once, so the
+  // cold open lands last and sets activeProjectId, the layout and the menu to
+  // the project the reader has already moved off. The same nextGeneration
+  // pattern the renderer's Next view uses settles it — each open takes a
+  // number on the way in and, at every await, leaves the state alone if a newer
+  // one has started. The url is still returned: the caller asked for this
+  // project's address and that much is true whoever is showing.
+  const generation = ++openGeneration
+
   const url = await supervisor.start(project)
+  if (generation !== openGeneration) return { url }
   // The board has a route per task, so a row can open the thing it names
   // rather than the board it lives on.
   const target = taskId ? new URL(`/tasks/${encodeURIComponent(taskId)}`, url).href : url
@@ -320,7 +395,13 @@ async function openProject (projectId, taskId = null) {
     view = new WebContentsView({
       webPreferences: {
         // Carries the board's Dark Mode choice to the shell and the other
-        // boards, and nothing else; the board's page never sees it.
+        // boards, and a shortcut back the other way, and nothing else; the
+        // board's page never sees it.
+        //
+        // Deliberately not `sandbox: false`, which the shell's own view does
+        // take: this is the view that renders text out of a repository, so it
+        // is the one that keeps the OS renderer sandbox. board.js is written to
+        // live inside it — see the inlined command handler there.
         preload: path.join(__dirname, '..', 'preload', 'board.js'),
         contextIsolation: true,
         nodeIntegration: false
@@ -332,7 +413,6 @@ async function openProject (projectId, taskId = null) {
       shell.openExternal(target)
       return { action: 'deny' }
     })
-    watchSidebarShortcut(view.webContents)
     // Into the window first and into the map second, so that a failure to
     // attach leaves nothing behind: an entry in boardViews is a promise that
     // the window holds that view, and the next window would inherit and lay
@@ -340,14 +420,22 @@ async function openProject (projectId, taskId = null) {
     window.contentView.addChildView(view)
     boardViews.set(projectId, view)
     await view.webContents.loadURL(target)
+    // Superseded while the page loaded. The view stays in boardViews, parked
+    // off-screen by the next layout() and warm for the next time this project
+    // is asked for; what it must not do is take the window over now.
+    if (generation !== openGeneration) return { url }
   } else if (view.webContents.getURL() !== target) {
     // A warm view showing something else — another task, or the board root, or
     // an address from a server that has since restarted on a new port.
     await view.webContents.loadURL(target)
+    if (generation !== openGeneration) return { url }
   }
 
   activeProjectId = projectId
   layout()
+  // The board items are enabled only while a board is showing, and one is
+  // showing now.
+  installMenu()
   // Keyboard focus follows the board. Clicking a row in the chrome document
   // leaves focus there, so the board arrives in front of a reader whose next
   // keystroke would have gone to the page behind it.
@@ -358,6 +446,8 @@ async function openProject (projectId, taskId = null) {
 function showChrome () {
   activeProjectId = null
   layout()
+  // No board is showing, so the board items go gray.
+  installMenu()
 }
 
 function closeProject (projectId) {
@@ -638,6 +728,8 @@ ipcMain.handle('import:apply', async (_event, { selections }) => {
     }
     toChrome('import:progress', { done: results.length, total: selections.length })
   }
+  // The project list just grew: its menu items carry the names.
+  installMenu()
   return { results }
 })
 
@@ -691,6 +783,8 @@ ipcMain.handle('project:forget', async (_event, { projectId }) => {
   // list is not a reason to destroy its task history.
   closeProject(projectId)
   await registry.remove(projectId)
+  // And shrank: the numbered items move up, and the last one goes away.
+  installMenu()
 })
 
 // --- lifecycle -------------------------------------------------------------
@@ -746,6 +840,9 @@ app.whenReady().then(async () => {
   }
 
   await registry.load()
+  // After the registry, because the menu names the projects in it, and before
+  // the window, so the first frame is drawn under the menu it will keep.
+  installMenu()
 
   // Started here and deliberately not awaited: copying a binary and rewriting
   // shell profiles is filesystem work that has nothing to do with drawing the

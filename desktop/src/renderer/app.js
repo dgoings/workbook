@@ -804,6 +804,32 @@ api.onProjectExited(({ projectId }) => {
 // supervisor's status, so the list is reloaded rather than patched.
 api.onProjectStarted(() => { loadProjects() })
 
+// A menu shortcut asks for a view or a project; the renderer owns that state,
+// so main only names what was asked and this decides what it means.
+api.onShortcut((payload) => {
+  if (!payload) return
+  if (payload.kind === 'project') {
+    const project = state.projects[payload.index]
+    if (project) openProject(project.id)
+    return
+  }
+  if (payload.kind === 'step') {
+    if (state.projects.length === 0) return
+    const at = state.projects.findIndex((project) => project.id === state.activeProjectId)
+    // From a view that is not a project, Down goes to the first project and Up
+    // to the last; from a project the step is clamped at either end.
+    let next
+    if (at < 0) next = payload.delta > 0 ? 0 : state.projects.length - 1
+    else next = Math.min(state.projects.length - 1, Math.max(0, at + payload.delta))
+    if (next !== at) openProject(state.projects[next].id)
+    return
+  }
+  if (payload.kind === 'view') {
+    if (payload.view === 'next' && state.projects.length < 2) return
+    setView(payload.view)
+  }
+})
+
 async function boot () {
   // Drives the one piece of chrome that differs by platform: the space macOS
   // needs above the sidebar for its inset traffic lights.

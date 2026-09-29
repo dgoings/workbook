@@ -24,11 +24,17 @@ version was cut.
 ## Unreleased
 
 Priorities become a per-project vocabulary, the way statuses already are, a
-project may have more than one task-ID key, and `workbook setup` stops assuming
-a project key. Three of the changes below affect scripts; all three are
-described under Changed.
+project may have more than one task-ID key, `workbook setup` stops assuming
+a project key, and the desktop app grows keyboard shortcuts for switching
+projects and driving the board it is showing. Three of the changes below affect
+scripts; all three are described under Changed.
 
 ### Added
+- **The desktop app has keyboard shortcuts**, all in the application menu:
+  Cmd+1–9 and Cmd+Option+Up/Down for projects, Cmd+0 for Next, Cmd+Shift+I
+  for Import, Cmd+Shift+D to toggle dark mode, Cmd+B for the sidebar, and
+  Cmd+N, Cmd+F, Cmd+,, Cmd+[, Cmd+] and Cmd+R on the active board. Ctrl on
+  Windows and Linux.
 - **A project may have more than one task-ID key.** `workbook key` gains
   `list`, `add`, `current`, `retire` and `log`; `workbook create --key` mints
   under another active key and `workbook list --key` shows one key's tasks.

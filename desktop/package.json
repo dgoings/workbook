@@ -16,8 +16,10 @@
     "dist:linux": "npm run stage && electron-builder --linux",
     "check:styles": "node scripts/check-styles.js",
     "check:shell": "node scripts/check-shell.js",
+    "check:inline": "node scripts/check-preload-inline.js",
+    "sync:boardcommand": "node scripts/check-preload-inline.js --write",
     "test": "node --test \"test/**/*.test.js\"",
-    "check": "npm run check:styles && npm run check:shell && npm test"
+    "check": "npm run check:styles && npm run check:shell && npm run check:inline && npm test"
   },
   "license": "MIT",
   "build": {

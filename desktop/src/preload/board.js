@@ -17,6 +17,18 @@
 // that choosing the scheme the system already shows means "follow the system"
 // is preserved untouched, because the click goes through that rule.
 
+// This file is loaded into a *sandboxed* preload, which is why it requires
+// nothing but electron: a sandboxed preload's `require` reaches the electron
+// module and a handful of Node builtins and nothing else, so a sibling file
+// cannot be required — and a preload that fails to load fails entirely,
+// taking the theme handshake with it. The board view keeps the sandbox on
+// purpose: it is the one view that renders text out of a repository.
+//
+// What a command does is therefore inlined below rather than imported.
+// boardcommand.js is still the source of truth and still the tested one;
+// scripts/check-preload-inline.js asserts the copy between the markers is that
+// function verbatim, and `npm run sync:boardcommand` rewrites it.
+
 const { ipcRenderer } = require('electron')
 
 // The board's own key and values, from internal/webui/assets/index.html.
@@ -99,3 +111,48 @@ function align (theme) {
 }
 
 ipcRenderer.on('board:align', (_event, { theme }) => align(theme))
+
+// A shortcut in the shell reaches the board here: find the control that
+// already does the thing and drive it, so the page's own router runs.
+//
+// Everything between the markers is a verbatim copy of runBoardCommand in
+// ./boardcommand.js. Edit that file, then run `npm run sync:boardcommand`;
+// `npm run check` fails if the two ever differ.
+// boardcommand:begin
+function runBoardCommand (command, { document, history }) {
+  switch (command) {
+    case 'new-task': {
+      const link = document.querySelector('a.new-task-link')
+      if (!link) return false
+      link.click()
+      return true
+    }
+    case 'search': {
+      const box = document.querySelector('[data-filter-q]')
+      if (!box) return false
+      // The row is hidden off the board route, and focusing a hidden control
+      // would put the caret nowhere the reader can see.
+      const row = typeof box.closest === 'function' ? box.closest('[data-filter-row]') : null
+      if (row && row.hidden) return false
+      box.focus()
+      return true
+    }
+    case 'config': {
+      const link = document.querySelector('a.header-link[href="/config"]')
+      if (!link) return false
+      link.click()
+      return true
+    }
+    case 'back':
+      history.back()
+      return true
+    case 'forward':
+      history.forward()
+      return true
+    default:
+      return false
+  }
+}
+// boardcommand:end
+
+ipcRenderer.on('board:command', (_event, payload) => { runBoardCommand(payload?.command, { document, history }) })

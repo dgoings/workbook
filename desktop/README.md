@@ -28,10 +28,10 @@ shell's developer tools.
 ## The sidebar
 
 The sidebar collapses to a narrow rail, with the chevron in its header or Cmd+B
-on macOS and Ctrl+B elsewhere; the chord works from a board too, not only from
-the shell. The choice is remembered across launches. The rail keeps every route
-it had: the import glyph, and each project as its key with its status dot, with
-the name and path on the tile's tooltip.
+(see Keyboard shortcuts). The chord works from a board too, not only from the
+shell. The choice is remembered across launches. The rail keeps every route it
+had: the import glyph, and each project as its key with its status dot, with the
+name and path on the tile's tooltip.
 
 With two or more projects imported, a Next entry sits above them. It shows what
 each project would hand out next — the top of its Ready work, unblocked and not
@@ -40,17 +40,46 @@ number for how many per project. The list refreshes every five seconds while it
 is showing, and a row opens that task on its board. It is the view the app
 opens on when there is more than one project.
 
+## Keyboard shortcuts
+
+Every shortcut is an application-menu item, so it works from the shell and
+from any board, and the menu bar shows the chord beside the action. Cmd is
+Ctrl on Windows and Linux.
+
+| Chord | Does |
+| --- | --- |
+| Cmd+1 … Cmd+9 | Open the first to ninth project in sidebar order |
+| Cmd+Option+Up / Down | Previous / next project; from Next or Import, the last / first. On Windows and Linux this is Ctrl+Alt+Up/Down; some European layouts treat this as AltGr. |
+| Cmd+0 | The Next view (with two or more projects) |
+| Cmd+Shift+I on macOS, Ctrl+Shift+O elsewhere | Import repositories. Ctrl+Shift+I is the devtools chord on Windows and Linux, so Import steps aside there. |
+| Cmd+B | Show or hide the sidebar |
+| Cmd+Shift+D | Toggle dark mode; when the result matches the system, the app follows the system |
+| Cmd+N | New task on the active board |
+| Cmd+F | Search the active board |
+| Cmd+, | The active project's configuration page, on a board you can administer |
+| Cmd+[ / Cmd+] | Back / forward in the active board. Windows and Linux match these keys by physical position, so on a layout where `[` and `]` need AltGr the chord lands elsewhere or cannot be typed at all. |
+| Cmd+R | Reload the active board |
+
 ## Checks
 
 ```
 npm run check
 ```
 
-`check-styles.js` verifies every class the renderer applies has a rule, and
+`check-styles.js` verifies every class the renderer applies has a rule,
 `check-shell.js` verifies every source file parses, every export is defined,
 the renderer references only element ids that exist, and the channels the
-preload invokes are the channels the main process handles. They are cheap and
-each catches a mistake this project has actually made.
+preload invokes are the channels the main process handles, and
+`check-preload-inline.js` verifies the board preload's copy of
+`runBoardCommand` is still the one in `src/preload/boardcommand.js`. They are
+cheap and each catches a mistake this project has actually made.
+
+That last one guards a deliberate duplicate. The board view keeps Electron's
+renderer sandbox — it is the one view that renders text out of a repository —
+and a sandboxed preload cannot require a file beside it, so `board.js` carries
+its own copy of `runBoardCommand` between `// boardcommand:begin` and
+`// boardcommand:end`. `boardcommand.js` stays the source of truth and the
+tested one: edit it, then run `npm run sync:boardcommand` to copy it across.
 
 That one command also runs the tests, which is why it is the only one listed:
 CI runs `npm run check` and nothing else for the desktop app, so anything
