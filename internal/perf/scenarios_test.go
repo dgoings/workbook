@@ -271,7 +271,13 @@ func TestPrepareProjectionValidatesRebuildEnvelope(t *testing.T) {
 			if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' '"+test.output+"'\n"), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			err := prepareProjection(context.Background(), CommandSpec{Binary: binary, Directory: t.TempDir(), Timeout: time.Second}, 11)
+			// The subject is the envelope validation, and the timeout is only a
+			// hang guard on a /bin/sh stub that prints one line: nothing here
+			// asserts how long that took. One second was not promisable on a
+			// machine running a whole-tree test suite, and a killed stub arrives
+			// as an error whose text lacks the wanted word, which failed all four
+			// cases without ever reaching the validator.
+			err := prepareProjection(context.Background(), CommandSpec{Binary: binary, Directory: t.TempDir(), Timeout: 30 * time.Second}, 11)
 			if test.wantErr == "" && err != nil {
 				t.Fatalf("prepare projection: %v", err)
 			}

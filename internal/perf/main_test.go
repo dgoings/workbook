@@ -53,13 +53,26 @@ import (
 // daemon makes those counts equal and fails the test. The second gives a
 // shell 100 ms to fork a background descendant and have it record its pid
 // before the reap kills the group, and fails hard if the pid never arrived.
-// The last two allow one second for a /bin/sh stub to start and print a line.
+// The last two allow a /bin/sh stub to start and print a line.
 // The ruling is that they stay serial: Go finishes every serial test before
-// the parallel batch resumes, so they measure on a quiet machine, and a
-// package whose subject is elapsed time should not let its narrowest windows
-// contend with the fixture builds and the eighteen `go build`s the rest of the
-// package runs. The cost of the ruling is about six and a half seconds of
+// the parallel batch resumes, so they do not contend with the fixture builds
+// and the eighteen `go build`s the rest of this package runs, and a package
+// whose subject is elapsed time should not make its narrowest windows compete
+// with its own load. The cost of the ruling is about six and a half seconds of
 // serial time, which is what the four of them take together.
+//
+// What being serial does not buy is a quiet machine, and an earlier version of
+// this comment claimed that it did. The serial-before-parallel ordering is a
+// guarantee inside one test binary; `go test ./...` runs a binary per package
+// at once, so a whole-tree run starves a serial test exactly as it starves a
+// parallel one. Measured: under five other packages running 18-wide,
+// TestPrepareProjectionValidatesRebuildEnvelope failed on all four cases with
+// `signal: killed`, its one-second stub budget never met, and re-running the
+// affected tests with -parallel 1 against the same load left three of them
+// still failing. So a narrow window here has to be wide enough for a loaded
+// machine on its own merits; the serial list is about this package's own load
+// and nothing more. The windows the four of them assert on are the subject and
+// stay as they are; the budgets that are only hang guards were widened.
 //
 // TestResourceHelperProcess is in neither list. It skips unless the resource
 // measurement tests re-execute the test binary with

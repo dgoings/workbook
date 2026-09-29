@@ -105,7 +105,11 @@ func TestRunRemoteScenariosUsesTopologyCommandsAndVerifiesResults(t *testing.T) 
 			results, err := runRemoteScenarios(context.Background(), RunSpec{
 				WorkbookBinary: workbook,
 				Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
-				Samples:        1, CommandTimeout: 20 * time.Second,
+				// A real `workbook` runs under this bound and a timed-out sample
+				// would report the outcome "timeout" instead of the contract
+				// below, so the bound is a hang guard: nothing here asserts how
+				// long anything took.
+				Samples: 1, CommandTimeout: 120 * time.Second,
 			}, filepath.Join(t.TempDir(), "scenarios"), []string{test.name}, remoteScenarioDependencies{
 				buildFixture: buildRemoteFixtureWithinTimeout,
 				measureCommand: func(ctx context.Context, spec CommandSpec) CommandMeasurement {
@@ -332,7 +336,10 @@ func TestSmallChangedRefSetKeepsTrackingAtPrePushRemoteTip(t *testing.T) {
 		WorkbookBinary: workbook,
 		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
 		Samples:        1,
-		CommandTimeout: 20 * time.Second,
+		// A half-pushed set of refs would fail the invariant below for a reason
+		// that has nothing to do with it, so a real `workbook sync` gets room to
+		// finish. Nothing here asserts how long it took.
+		CommandTimeout: 120 * time.Second,
 	}, t.TempDir(), []string{"sync-small-changed-ref-set"}, remoteScenarioDependencies{
 		buildFixture: func(ctx context.Context, root string, spec FixtureSpec, topology RemoteTopology) (RemoteFixture, error) {
 			built, err := buildRemoteFixtureWithinTimeout(ctx, root, spec, topology)
@@ -413,7 +420,11 @@ func TestRemoteScenarioVerificationGitCallsDoNotScaleWithFixture(t *testing.T) {
 			defer waiting.Done()
 			calls := 0
 			results, err := runRemoteScenarios(context.Background(), RunSpec{
-				WorkbookBinary: workbook, Fixture: fixtureSpec, Samples: 1, CommandTimeout: 20 * time.Second,
+				// Same class as the two above: a real `workbook` runs under this
+				// bound, and the verification readers this test counts only run
+				// for a measurement that did not time out. Nothing here asserts
+				// how long anything took.
+				WorkbookBinary: workbook, Fixture: fixtureSpec, Samples: 1, CommandTimeout: 120 * time.Second,
 			}, t.TempDir(), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{
 				buildFixture: buildRemoteFixtureWithinTimeout,
 				measureCommand: func(ctx context.Context, spec CommandSpec) CommandMeasurement {
@@ -574,19 +585,24 @@ func TestRunRemoteScenariosRejectsNegativeFixtureTimeout(t *testing.T) {
 }
 
 // A spec that leaves FixtureTimeout zero — every spec this package's own tests
-// build directly — keeps the behavior it had: the command timeout, exactly, bounds
-// the build.
+// build directly — gets the same bound a production caller sets by hand, because a
+// fixture build is not the thing being measured either way.
 //
-// The equality matters and a behavioral check alone does not prove it: a default
-// of one nanosecond would also kill a build that outran the command timeout, and
-// would silently break every caller that relies on the fallback. So the resolver
-// is checked by value first, and the run below is what shows the resolved value is
-// the one the runner actually uses.
-func TestRunRemoteScenariosDefaultsFixtureTimeoutToTheCommandTimeout(t *testing.T) {
+// The value matters and a behavioral check alone does not prove it: a default of
+// one nanosecond, or of the command timeout, would also kill a build that outran
+// the command timeout, and the command timeout is precisely the default that
+// SIGKILLed five healthy fixture builds under whole-tree load. So the resolver is
+// checked by value first, and the run below is what shows the resolved value is the
+// one the runner actually uses.
+func TestRunRemoteScenariosDefaultsFixtureTimeoutToTheFixtureBound(t *testing.T) {
 	t.Parallel()
 	unset := RunSpec{CommandTimeout: 37 * time.Second}
-	if got := unset.fixtureBuildTimeout(); got != unset.CommandTimeout {
-		t.Fatalf("resolved fixture timeout = %s, want the command timeout %s exactly", got, unset.CommandTimeout)
+	if want, got := FixtureTimeoutFactor*unset.CommandTimeout, unset.fixtureBuildTimeout(); got != want {
+		t.Fatalf("resolved fixture timeout = %s, want %s exactly", got, want)
+	}
+	if unset.fixtureBuildTimeout() <= unset.CommandTimeout {
+		t.Fatalf("resolved fixture timeout = %s, want more than the command timeout %s",
+			unset.fixtureBuildTimeout(), unset.CommandTimeout)
 	}
 	set := unset
 	set.FixtureTimeout = 11 * time.Second
@@ -594,6 +610,8 @@ func TestRunRemoteScenariosDefaultsFixtureTimeoutToTheCommandTimeout(t *testing.
 		t.Fatalf("resolved fixture timeout = %s, want the field's own %s", got, set.FixtureTimeout)
 	}
 
+	// The resolved default still bounds the build: a builder that cannot finish
+	// inside FixtureTimeoutFactor times a 10 ms command timeout still dies of it.
 	_, err := runRemoteScenarios(context.Background(), RunSpec{
 		WorkbookBinary: "workbook",
 		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
@@ -607,7 +625,7 @@ func TestRunRemoteScenariosDefaultsFixtureTimeoutToTheCommandTimeout(t *testing.
 		},
 	})
 	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("runRemoteScenarios error = %v, want the command timeout to bound the build", err)
+		t.Fatalf("runRemoteScenarios error = %v, want the resolved default to bound the build", err)
 	}
 }
 

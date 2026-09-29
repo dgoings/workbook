@@ -49,21 +49,33 @@ type RunSpec struct {
 // command, at a generous multiple of the per-command timeout. Building a fixture
 // costs an init, a synthetic history written through fast-import and, for the
 // remote topologies, two clones and dozens of plumbing calls, so the budget for
-// one measured command is no budget at all for it. Every caller that sets a
-// fixture timeout from a command timeout uses this one number: the scaling matrix
-// here, and workbook-bench for both its scenario and its storage runs.
+// one measured command is no budget at all for it. Every fixture bound in the
+// benchmark comes from this one number: the scaling matrix here and
+// workbook-bench, which both set it explicitly, and fixtureBuildTimeout, which
+// applies it to any run spec that leaves the field unset.
 const FixtureTimeoutFactor = 20
 
-// fixtureBuildTimeout is the bound on fixture construction. Every caller that
-// runs a real benchmark sets FixtureTimeout, to FixtureTimeoutFactor times the
-// command timeout; a caller that leaves it zero — internal/perf's own tests build
-// run specs directly — falls back to the command timeout, which is the behavior
-// those callers already had. Only an unset field defaults; a negative one is a
-// caller's mistake and each runner rejects it as it rejects a non-positive
-// command timeout.
+// fixtureBuildTimeout is the bound on fixture construction. A fixture build is
+// not the thing being measured, so it gets the same generous bound whether or not
+// the caller asked for one: an unset FixtureTimeout resolves to
+// FixtureTimeoutFactor times the command timeout, exactly what every production
+// caller sets by hand. A caller that does set the field gets precisely what it
+// set, and a negative value is a caller's mistake that each runner rejects as it
+// rejects a non-positive command timeout.
+//
+// The default used to be the command timeout itself, on the reasoning that a
+// caller leaving the field unset should keep the behavior it already had. That
+// reasoning was wrong: the behavior it kept was the defect this whole pairing
+// exists to remove, and it was kept for exactly the callers — this package's own
+// tests, which build run specs directly — that run under the heaviest load. A
+// whole-tree run with six packages fanning out at once put a hundred-odd git
+// children on eighteen cores and SIGKILLed five healthy fixture builds, none of
+// which asserts anything about elapsed time. Defaulting here fixes every such
+// caller at once, and the next test written this way inherits a sane bound
+// instead of inheriting the defect.
 func (spec RunSpec) fixtureBuildTimeout() time.Duration {
 	if spec.FixtureTimeout == 0 {
-		return spec.CommandTimeout
+		return FixtureTimeoutFactor * spec.CommandTimeout
 	}
 	return spec.FixtureTimeout
 }
