@@ -165,27 +165,38 @@ go test ./... -json | go run ./scripts/skipreport
 
 ### Running tests locally
 
-`go test ./internal/cli/` needs no flags and no slicing: it runs its tests in
-parallel and finishes in about two minutes on an 18-core dev laptop, well
-inside Go's 600-second default test timeout. `internal/gitstore` is a
-different story: its own suite runs about nine minutes, close to that same
-per-package default, so a whole-tree run still wants a timeout, for example
-`go test -timeout 45m ./...`, which is what `ci.yml` uses.
+A bare `go test ./...` passes with no flags. The slowest package,
+`internal/perf`, takes about 337 seconds — well inside Go's 600-second
+per-package default — and the whole tree finishes in about 5m38s on an
+18-core dev laptop.
 
-A new test in that package starts with `t.Parallel()` as its first statement.
-One that must stay serial — because it calls `t.Setenv` or otherwise touches
-process-wide state — is listed instead, with its reason, in the comment block
-at the top of `internal/cli/main_test.go`.
+`internal/cli`, `internal/gitstore`, `internal/projection`, and
+`internal/webui` run their tests in parallel. `go test ./internal/cli/` needs
+no flags and no slicing: it finishes in about two minutes on an 18-core dev
+laptop. `go test ./internal/gitstore/` now finishes in about a minute, the
+same way. A new test in any of the four packages starts with `t.Parallel()`
+as its first statement. One that must stay serial — because it calls
+`t.Setenv` or otherwise touches process-wide state — is listed instead, with
+its reason, in the comment block at the top of that package's
+`main_test.go`.
 
-Most tests build their repository with `initializedRepository(t)`, a copy of
-a template project the package mints once per run; a copy costs a couple of
-dozen milliseconds where a mint costs closer to a second. Every copy shares
-the template's project ID, so a test whose subject is the minting itself, or
-that needs a second, distinct project, calls `freshlyInitializedRepository(t)`
-to mint its own. `internal/testrepo.InitAt` is the one place the init
-sequence — `git init` and the test identity — lives; `testrepo.New` calls it
-too, so a repository built inside a test and the package's template are
-initialized by the same code.
+`internal/cli`, `internal/gitstore`, and `internal/projection` copy an
+initialized project template minted once, in their `TestMain`, rather than
+minting one per test; every copy shares the template's project ID. A test
+whose subject is the minting itself, or that needs a second, distinct
+project, calls that package's fresh-mint helper instead:
+`freshlyInitializedRepository(t)` in `internal/cli`; in `internal/gitstore`,
+`mintWriteRepository` for the initialized-project fixture (the write
+template's minted counterpart, used by the test that pins the copy against a
+fresh mint) or `mintedSyncRepositories(t)` for the bare-origin-and-two-clones
+fixture; and `mintWorkbookTemplate` in `internal/projection`.
+`internal/testrepo.InitAt` is the one place the init sequence — `git init`
+and the test identity — lives; `testrepo.New` calls it too, so a repository
+built inside a test and any package's template are initialized by the same
+code.
+
+CI still runs the whole tree with `-timeout 45m` as margin, in the `Test`
+step of `.github/workflows/ci.yml`.
 
 ## Releasing
 
