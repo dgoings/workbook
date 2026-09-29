@@ -15,6 +15,7 @@ import (
 // worse than none, because CI then reports success for a suite that skipped
 // the web client and SHA-256 coverage entirely.
 func TestCheckCICapabilitiesAcceptsAFullyProvisionedEnvironment(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("node"); err != nil {
 		testenv.MissingCapability(t, "node is required to prove the capability preflight accepts a full environment")
 	}
@@ -34,6 +35,7 @@ func TestCheckCICapabilitiesAcceptsAFullyProvisionedEnvironment(t *testing.T) {
 // Production mutation: passing without node lets the 36 embedded client
 // behavior tests skip while the job stays green.
 func TestCheckCICapabilitiesFailsWhenNodeIsMissing(t *testing.T) {
+	t.Parallel()
 	_, script := checkCapabilitiesPaths(t)
 	path := capabilityProbePATH(t, nil)
 
@@ -51,6 +53,7 @@ func TestCheckCICapabilitiesFailsWhenNodeIsMissing(t *testing.T) {
 // Production mutation: passing with a Git that cannot create SHA-256
 // repositories lets every cross-object-format test skip unnoticed.
 func TestCheckCICapabilitiesFailsWhenGitCannotCreateSHA256Repositories(t *testing.T) {
+	t.Parallel()
 	_, script := checkCapabilitiesPaths(t)
 	stub := "#!/bin/sh\n" +
 		"case \"$*\" in\n" +
@@ -108,7 +111,11 @@ func capabilityProbePATH(t *testing.T, stubs map[string]string) string {
 
 func runWithPATH(script, path string) (string, error) {
 	command := exec.Command(script)
-	command.Env = []string{"PATH=" + path}
+	// Built from scratch rather than os.Environ(), so the isolated git
+	// configuration TestMain installs has to be threaded in explicitly or the
+	// preflight's real `git init --object-format=sha256` probe would run
+	// against the developer's global config instead.
+	command.Env = append([]string{"PATH=" + path}, isolatedGitConfigValues()...)
 	output, err := command.CombinedOutput()
 	return string(output), err
 }

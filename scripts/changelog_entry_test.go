@@ -24,6 +24,7 @@ const sampleChangelog = `# Changelog
 `
 
 func TestChangelogEntryPrintsTheBodyUpToTheNextHeading(t *testing.T) {
+	t.Parallel()
 	path := writeChangelog(t, sampleChangelog)
 
 	output, err := runChangelogEntry(t, "0.5.0", path)
@@ -40,6 +41,7 @@ func TestChangelogEntryPrintsTheBodyUpToTheNextHeading(t *testing.T) {
 // The newest entry is the common case, but the oldest one has no following
 // heading to stop at, and running past the end would publish nothing.
 func TestChangelogEntryPrintsTheLastEntryInTheFile(t *testing.T) {
+	t.Parallel()
 	path := writeChangelog(t, sampleChangelog)
 
 	output, err := runChangelogEntry(t, "0.4.1", path)
@@ -56,6 +58,7 @@ func TestChangelogEntryPrintsTheLastEntryInTheFile(t *testing.T) {
 // A heading may carry a date, and the release notes should not include it or
 // stop matching because of it.
 func TestChangelogEntryMatchesAHeadingWithOrWithoutADate(t *testing.T) {
+	t.Parallel()
 	path := writeChangelog(t, "# Changelog\n\n## v1.2.3\n\n- undated\n")
 
 	output, err := runChangelogEntry(t, "1.2.3", path)
@@ -70,6 +73,7 @@ func TestChangelogEntryMatchesAHeadingWithOrWithoutADate(t *testing.T) {
 // Production mutation: exiting zero for a version with no entry would publish
 // an empty release body in place of the generated notes.
 func TestChangelogEntryReportsAnAbsentVersion(t *testing.T) {
+	t.Parallel()
 	path := writeChangelog(t, sampleChangelog)
 
 	output, err := runChangelogEntry(t, "9.9.9", path)
@@ -84,6 +88,7 @@ func TestChangelogEntryReportsAnAbsentVersion(t *testing.T) {
 // The version reaches grep as a pattern. Unescaped, 0.5.0 would match a heading
 // reading v0x5y0 and publish the wrong release's notes.
 func TestChangelogEntryTreatsDotsLiterally(t *testing.T) {
+	t.Parallel()
 	path := writeChangelog(t, "# Changelog\n\n## v0x5y0\n\n- decoy\n")
 
 	output, err := runChangelogEntry(t, "0.5.0", path)
@@ -95,6 +100,7 @@ func TestChangelogEntryTreatsDotsLiterally(t *testing.T) {
 // A heading is matched literally and has to end where the version ends, or
 // v0.5.0 would take the body written for v0.5.01.
 func TestChangelogEntryDoesNotMatchALongerVersion(t *testing.T) {
+	t.Parallel()
 	path := writeChangelog(t, "# Changelog\n\n## v0.5.01\n\n- longer version\n\n## v0.5.0\n\n- exact\n")
 
 	output, err := runChangelogEntry(t, "0.5.0", path)
@@ -111,6 +117,7 @@ func TestChangelogEntryDoesNotMatchALongerVersion(t *testing.T) {
 // polluted the extracted body and quietly lost its escaping. Nothing the script
 // hands awk may contain a backslash.
 func TestChangelogEntryEmitsNothingButTheBody(t *testing.T) {
+	t.Parallel()
 	path := writeChangelog(t, sampleChangelog)
 
 	output, err := runChangelogEntry(t, "0.5.0", path)
@@ -123,6 +130,7 @@ func TestChangelogEntryEmitsNothingButTheBody(t *testing.T) {
 }
 
 func TestChangelogEntryRejectsAnEmptyBody(t *testing.T) {
+	t.Parallel()
 	path := writeChangelog(t, "# Changelog\n\n## v0.5.0\n\n## v0.4.1\n\n- old\n")
 
 	output, err := runChangelogEntry(t, "0.5.0", path)
@@ -135,6 +143,7 @@ func TestChangelogEntryRejectsAnEmptyBody(t *testing.T) {
 }
 
 func TestChangelogEntryReportsAMissingChangelog(t *testing.T) {
+	t.Parallel()
 	output, err := runChangelogEntry(t, "0.5.0", filepath.Join(t.TempDir(), "absent.md"))
 	if err == nil {
 		t.Fatalf("changelog entry read a missing file:\n%s", output)
@@ -147,6 +156,7 @@ func TestChangelogEntryReportsAMissingChangelog(t *testing.T) {
 // A pre-release's notes are whatever has landed since the last release, which
 // is exactly the Unreleased section.
 func TestChangelogEntryPrintsTheUnreleasedSection(t *testing.T) {
+	t.Parallel()
 	path := writeChangelog(t, "# Changelog\n\n## Unreleased\n\n### Added\n- a thing in progress\n\n## v0.5.1 — 2026-09-01\n\n- the last release\n")
 
 	output, err := runChangelogEntry(t, "unreleased", path)
@@ -159,6 +169,7 @@ func TestChangelogEntryPrintsTheUnreleasedSection(t *testing.T) {
 }
 
 func TestChangelogEntryReportsAMissingUnreleasedSection(t *testing.T) {
+	t.Parallel()
 	path := writeChangelog(t, "# Changelog\n\n## v0.5.1\n\n- the last release\n")
 
 	output, err := runChangelogEntry(t, "unreleased", path)

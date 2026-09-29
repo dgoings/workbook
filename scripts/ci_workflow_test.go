@@ -90,6 +90,7 @@ func (j ciJob) commands() string {
 // Production mutation: a workflow that only fires on tags, like release.yml,
 // leaves every pull request unverified, which is the gap this workflow closes.
 func TestCIWorkflowRunsOnPushAndPullRequestAgainstMain(t *testing.T) {
+	t.Parallel()
 	workflow := readCIWorkflow(t)
 
 	if got := workflow.On.Push.Branches; len(got) != 1 || got[0] != "main" {
@@ -116,6 +117,7 @@ func TestCIWorkflowRunsOnPushAndPullRequestAgainstMain(t *testing.T) {
 // pushes have to be keyed on the commit rather than merely opting out of
 // cancel-in-progress.
 func TestCIWorkflowNeverCancelsAPushVerification(t *testing.T) {
+	t.Parallel()
 	workflow := readCIWorkflow(t)
 	group := workflow.Concurrency.Group
 
@@ -155,6 +157,7 @@ func TestCIWorkflowNeverCancelsAPushVerification(t *testing.T) {
 // Production mutation: dropping any of these three checks lets unformatted,
 // suspect, or failing code reach main with a green tick.
 func TestCIWorkflowRunsTestsVetAndFormatVerification(t *testing.T) {
+	t.Parallel()
 	job := readCIWorkflow(t).job(t)
 	commands := job.commands()
 
@@ -173,6 +176,7 @@ func TestCIWorkflowRunsTestsVetAndFormatVerification(t *testing.T) {
 // Production mutation: without a provisioned node the 36 embedded client
 // behavior tests skip and the package still reports ok.
 func TestCIWorkflowProvisionsNodeAndFailsWhenCapabilitiesAreMissing(t *testing.T) {
+	t.Parallel()
 	job := readCIWorkflow(t).job(t)
 
 	var setupNode ciStep
@@ -213,6 +217,7 @@ func TestCIWorkflowProvisionsNodeAndFailsWhenCapabilitiesAreMissing(t *testing.T
 // `go test`'s exit status through it, hides exactly the shrinking suite the
 // report exists to expose.
 func TestCIWorkflowReportsSkipsWithoutSwallowingTestFailures(t *testing.T) {
+	t.Parallel()
 	commands := readCIWorkflow(t).job(t).commands()
 
 	for _, want := range []string{"-json", "./scripts/skipreport", "set -o pipefail"} {
@@ -226,6 +231,7 @@ func TestCIWorkflowReportsSkipsWithoutSwallowingTestFailures(t *testing.T) {
 // published platform covered only by whichever machine a developer happens to
 // use, which so far has been darwin/arm64 alone.
 func TestCIWorkflowVerifiesBothPublishedPlatforms(t *testing.T) {
+	t.Parallel()
 	job := readCIWorkflow(t).job(t)
 
 	if job.RunsOn != "${{ matrix.os }}" {
@@ -258,6 +264,7 @@ func TestCIWorkflowVerifiesBothPublishedPlatforms(t *testing.T) {
 // verified. Every runner in the matrix therefore has to be named by the
 // condition of at least one gated step.
 func TestCIWorkflowGivesEveryRunnerSomethingToVerify(t *testing.T) {
+	t.Parallel()
 	job := readCIWorkflow(t).job(t)
 
 	var conditions strings.Builder
@@ -278,6 +285,7 @@ func TestCIWorkflowGivesEveryRunnerSomethingToVerify(t *testing.T) {
 // Production mutation: a floating action reference lets a third party change
 // what runs in CI, and a floating runner label silently moves the platform.
 func TestCIWorkflowPinsActionsAndRunners(t *testing.T) {
+	t.Parallel()
 	workflow := readCIWorkflow(t)
 	job := workflow.job(t)
 	pinned := regexp.MustCompile(`^[^@]+@[0-9a-f]{40}$`)
@@ -353,6 +361,7 @@ var expensiveCIWorkflowSteps = []string{
 // The job has to start and report on every event; only the steps inside it may
 // be skipped.
 func TestCIWorkflowGatesTheExpensiveStepsRatherThanTheJob(t *testing.T) {
+	t.Parallel()
 	workflow := readCIWorkflow(t)
 	job := workflow.job(t)
 	gate, decision := ciWorkflowGate(t, job)
@@ -421,6 +430,7 @@ func TestCIWorkflowGatesTheExpensiveStepsRatherThanTheJob(t *testing.T) {
 // app is exempt only because it has a verification of its own in the same job;
 // see TestCIWorkflowChecksTheDesktopShellWhenItChanges.
 func TestCIWorkflowExemptsOnlyTheSiteAndDesktopFromGoVerification(t *testing.T) {
+	t.Parallel()
 	gate, _ := ciWorkflowGate(t, readCIWorkflow(t).job(t))
 	// Only the executable part is examined: the prose above it explains which
 	// paths are deliberately absent, and naming them there is not exempting
@@ -473,6 +483,7 @@ var desktopCIWorkflowSteps = []string{
 // any pull request had ever caught because the desktop checks had never run
 // on Windows before that release tried to build one.
 func TestCIWorkflowChecksTheDesktopShellWhenItChanges(t *testing.T) {
+	t.Parallel()
 	job := readCIWorkflow(t).job(t)
 	gate, _ := ciWorkflowGate(t, job)
 	desktop := ciWorkflowDesktopDecision(t, job, gate)
@@ -542,6 +553,7 @@ func TestCIWorkflowChecksTheDesktopShellWhenItChanges(t *testing.T) {
 // falls, so the workflow's own script is executed here against a repository
 // built to pose each question.
 func TestCIWorkflowGateFailsOpen(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("bash"); err != nil {
 		testenv.MissingCapability(t, "bash is required to execute the CI workflow's gate script")
 	}

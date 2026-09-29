@@ -14,6 +14,7 @@ import (
 // creates $HOME/.local/bin when it does not exist, and that it says how to put
 // that directory on PATH when it is not already there.
 func TestInstallCreatesTheDefaultDestinationAndReportsThePATHExport(t *testing.T) {
+	t.Parallel()
 	root, script := paths(t)
 	home := t.TempDir()
 	physicalHome, err := filepath.EvalSymlinks(home)
@@ -52,6 +53,7 @@ func TestInstallCreatesTheDefaultDestinationAndReportsThePATHExport(t *testing.T
 // And it has to stay quiet when the hint would be wrong: a destination already
 // on PATH that printed an export line would teach the reader to duplicate it.
 func TestInstallOmitsThePATHExportWhenTheDestinationIsAlreadyOnPATH(t *testing.T) {
+	t.Parallel()
 	root, script := paths(t)
 	destinationRoot := t.TempDir()
 	physicalRoot, err := filepath.EvalSymlinks(destinationRoot)
@@ -112,5 +114,12 @@ func buildEnvironment(t *testing.T, entries ...string) []string {
 	if toolchainDirectoriesErr != nil {
 		t.Fatalf("resolve toolchain directories: %v", toolchainDirectoriesErr)
 	}
-	return append(append([]string(nil), entries...), toolchainDirectories...)
+	environment := append(append([]string(nil), entries...), toolchainDirectories...)
+	// Built from scratch rather than os.Environ(), so the isolated git
+	// configuration TestMain installs has to be threaded in explicitly or
+	// install.sh's own `git describe`/`git rev-parse` would run against the
+	// developer's global config instead. Appended last: neither entries nor
+	// toolchainDirectories ever sets these keys, so there is nothing to
+	// collide with.
+	return append(environment, isolatedGitConfigValues()...)
 }

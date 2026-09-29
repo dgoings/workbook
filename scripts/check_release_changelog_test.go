@@ -22,6 +22,7 @@ const (
 // The label and the heading are two independent expressions of the same intent.
 // Each row is one way they can agree or disagree.
 func TestCheckReleaseChangelogAppliesTheAgreementMatrix(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		name      string
 		bump      string
@@ -67,6 +68,7 @@ func TestCheckReleaseChangelogAppliesTheAgreementMatrix(t *testing.T) {
 // Production mutation: this is the one disagreement the check would otherwise
 // pass over in silence, because every other mismatch fails loudly.
 func TestCheckReleaseChangelogRefusesAnEntryForATagThatNeverPublished(t *testing.T) {
+	t.Parallel()
 	for _, bump := range []string{"patch", "minor", "major"} {
 		t.Run(bump, func(t *testing.T) {
 			// v0.5.0 was tagged, the release failed, and its entry is newest.
@@ -97,6 +99,7 @@ func TestCheckReleaseChangelogRefusesAnEntryForATagThatNeverPublished(t *testing
 // The same shape with a released previous tag is the ordinary steady state and
 // has to keep working, or every patch release after a successful one breaks.
 func TestCheckReleaseChangelogAllowsAPatchAfterAPublishedRelease(t *testing.T) {
+	t.Parallel()
 	path := writeChangelog(t, changelogForMinor)
 
 	output, err := runCheckReleaseChangelog(t,
@@ -111,6 +114,7 @@ func TestCheckReleaseChangelogAllowsAPatchAfterAPublishedRelease(t *testing.T) {
 }
 
 func TestCheckReleaseChangelogRejectsAnUnknownPreviousReleasedValue(t *testing.T) {
+	t.Parallel()
 	path := writeChangelog(t, changelogForPatch)
 
 	output, err := runCheckReleaseChangelog(t,
@@ -124,6 +128,7 @@ func TestCheckReleaseChangelogRejectsAnUnknownPreviousReleasedValue(t *testing.T
 // A missing changelog carries no entries, which is the state the repository is
 // in until the first release entry is written.
 func TestCheckReleaseChangelogTreatsAMissingFileAsNoEntries(t *testing.T) {
+	t.Parallel()
 	absent := filepath.Join(t.TempDir(), "CHANGELOG.md")
 
 	output, err := runCheckReleaseChangelog(t, "--bump", "patch", "--version", "0.4.2", "--previous", "v0.4.1", "--changelog", absent)
@@ -143,6 +148,7 @@ func TestCheckReleaseChangelogTreatsAMissingFileAsNoEntries(t *testing.T) {
 // The message has to name both sides, because the fix differs depending on
 // which one is wrong.
 func TestCheckReleaseChangelogNamesBothSidesOfADisagreement(t *testing.T) {
+	t.Parallel()
 	path := writeChangelog(t, changelogForMinor)
 
 	output, err := runCheckReleaseChangelog(t, "--bump", "patch", "--version", "0.4.2", "--previous", "v0.4.1", "--changelog", path)
@@ -155,6 +161,7 @@ func TestCheckReleaseChangelogNamesBothSidesOfADisagreement(t *testing.T) {
 }
 
 func TestCheckReleaseChangelogRequiresABumpAndAVersion(t *testing.T) {
+	t.Parallel()
 	path := writeChangelog(t, changelogForPatch)
 
 	if output, err := runCheckReleaseChangelog(t, "--version", "0.4.2", "--changelog", path); err == nil {
@@ -177,6 +184,7 @@ func runCheckReleaseChangelog(t *testing.T, args ...string) (string, error) {
 // given. A pre-release tag is not a release, so it must not become the
 // previous one: a patch after v0.5.0-rc1 is 0.4.2, cut with no entry.
 func TestCheckReleaseChangelogDiscoversTheNewestStableRelease(t *testing.T) {
+	t.Parallel()
 	repository := newTaggedRepository(t, "v0.4.1", "v0.5.0-rc1")
 	path := writeChangelog(t, changelogWithoutANewEntry)
 

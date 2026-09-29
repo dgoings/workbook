@@ -12,6 +12,7 @@ import (
 )
 
 func TestSetupInstallsPublishedAndWorkingTreeBuildsSideBySide(t *testing.T) {
+	t.Parallel()
 	// Production mutation: installing both builds under one name or one
 	// directory removes the published fallback the moment the working tree
 	// stops building.
@@ -64,6 +65,7 @@ func TestSetupInstallsPublishedAndWorkingTreeBuildsSideBySide(t *testing.T) {
 }
 
 func TestSetupKeepsTheSkippedBuildOnPath(t *testing.T) {
+	t.Parallel()
 	// Production mutation: rewriting the profile from only the current run drops
 	// the published build from PATH whenever the working tree is rebuilt alone.
 	root, script := setupPaths(t)
@@ -95,6 +97,7 @@ func TestSetupKeepsTheSkippedBuildOnPath(t *testing.T) {
 }
 
 func TestSetupInstallsThePublishedBuildThroughHomebrew(t *testing.T) {
+	t.Parallel()
 	// Production mutation: building the published side from source everywhere
 	// ignores the tap that macOS users actually install and upgrade from.
 	root, script := setupPaths(t)
@@ -126,6 +129,7 @@ func TestSetupInstallsThePublishedBuildThroughHomebrew(t *testing.T) {
 }
 
 func TestSetupUpgradesAnAlreadyInstalledFormula(t *testing.T) {
+	t.Parallel()
 	// Production mutation: unconditionally installing fails on a machine that
 	// already has the formula, so the fallback is never refreshed.
 	root, script := setupPaths(t)
@@ -154,6 +158,7 @@ func TestSetupUpgradesAnAlreadyInstalledFormula(t *testing.T) {
 }
 
 func TestSetupReplacesTheProfileBlockOnRepeatedRuns(t *testing.T) {
+	t.Parallel()
 	// Production mutation: appending a new block every run grows the profile and
 	// stacks duplicate PATH entries.
 	root, script := setupPaths(t)
@@ -197,6 +202,7 @@ func TestSetupReplacesTheProfileBlockOnRepeatedRuns(t *testing.T) {
 }
 
 func TestSetupLeavesTheProfileAloneWhenAsked(t *testing.T) {
+	t.Parallel()
 	root, script := setupPaths(t)
 	brewRoot := t.TempDir()
 	profile := filepath.Join(t.TempDir(), "profile")
@@ -220,6 +226,7 @@ func TestSetupLeavesTheProfileAloneWhenAsked(t *testing.T) {
 }
 
 func TestSetupRejectsUnusableOptions(t *testing.T) {
+	t.Parallel()
 	root, script := setupPaths(t)
 
 	for name, testCase := range map[string]struct {

@@ -13,6 +13,7 @@ import (
 // build, and the rolling one must never move ahead of a versioned release that
 // failed to publish.
 func TestPublishDesktopReleaseCreatesTheVersionedReleaseThenTheRollingOne(t *testing.T) {
+	t.Parallel()
 	clone, remote := newDesktopReleaseRepository(t, "desktop-v0.6.0")
 	distribution := writeDesktopFixture(t, "", desktopAssetNames()...)
 	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
@@ -73,6 +74,7 @@ func TestPublishDesktopReleaseCreatesTheVersionedReleaseThenTheRollingOne(t *tes
 // A candidate has to be flagged as one in all four places it can be stated, or
 // the updater and the releases page hand an rc to everyone as a finished build.
 func TestPublishDesktopReleaseFlagsACandidateEverywhere(t *testing.T) {
+	t.Parallel()
 	clone, _ := newDesktopReleaseRepository(t, "desktop-v0.6.0-rc1")
 	distribution := writeDesktopFixture(t, "", desktopAssetNames()...)
 	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
@@ -127,6 +129,7 @@ func TestPublishDesktopReleaseFlagsACandidateEverywhere(t *testing.T) {
 // A stable release published after a candidate has to clear the flag, or the
 // finished build stays hidden behind "pre-release" forever.
 func TestPublishDesktopReleaseClearsTheCandidateFlagOnTheRollingRelease(t *testing.T) {
+	t.Parallel()
 	clone, _ := newDesktopReleaseRepository(t, "desktop-v0.6.0-rc1")
 	distribution := writeDesktopFixture(t, "", desktopAssetNames()...)
 	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
@@ -163,6 +166,7 @@ func TestPublishDesktopReleaseClearsTheCandidateFlagOnTheRollingRelease(t *testi
 // re-creating the release would fail, and skipping the refresh would leave the
 // rolling release behind after a transient failure part-way through.
 func TestPublishDesktopReleaseRerunsWithIdenticalAssetsWithoutRecreatingTheRelease(t *testing.T) {
+	t.Parallel()
 	clone, remote := newDesktopReleaseRepository(t, "desktop-v0.6.0")
 	distribution := writeDesktopFixture(t, "", desktopAssetNames()...)
 	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
@@ -196,6 +200,7 @@ func TestPublishDesktopReleaseRerunsWithIdenticalAssetsWithoutRecreatingTheRelea
 // build. Uploading them would rewrite a release people have downloaded, so the
 // run stops before touching anything.
 func TestPublishDesktopReleaseRefusesARerunWithChangedAssets(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		name        string
 		tamper      func(t *testing.T, distribution string)
@@ -266,6 +271,7 @@ func TestPublishDesktopReleaseRefusesARerunWithChangedAssets(t *testing.T) {
 // every architecture is named here; and dropping latest-mac.yml would publish
 // a release no installed Mac could update from, so the manifests are named too.
 func TestPublishDesktopReleaseFailsBeforeGitHubWhenAPlatformIsMissing(t *testing.T) {
+	t.Parallel()
 	for _, missing := range []string{
 		"Workbench-arm64.dmg",
 		"Workbench-x64.dmg",
@@ -313,6 +319,7 @@ func TestPublishDesktopReleaseFailsBeforeGitHubWhenAPlatformIsMissing(t *testing
 // It is build output, not something anyone downloads, and uploading it would
 // also leave the rerun check comparing against an asset the next build renames.
 func TestPublishDesktopReleaseDoesNotUploadTheBuilderDebugLog(t *testing.T) {
+	t.Parallel()
 	clone, _ := newDesktopReleaseRepository(t, "desktop-v0.6.0")
 	distribution := writeDesktopFixture(t, "", append(desktopAssetNames(), "builder-debug.yml")...)
 	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
@@ -343,6 +350,7 @@ func TestPublishDesktopReleaseDoesNotUploadTheBuilderDebugLog(t *testing.T) {
 // leave the world that way: a lingering draft blocks the rerun, and a rolling
 // release refreshed from it would announce a release that does not exist.
 func TestPublishDesktopReleaseRollsBackItsDraftWhenPublicationFails(t *testing.T) {
+	t.Parallel()
 	clone, remote := newDesktopReleaseRepository(t, "desktop-v0.6.0")
 	distribution := writeDesktopFixture(t, "", desktopAssetNames()...)
 	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
@@ -379,6 +387,7 @@ func TestPublishDesktopReleaseRollsBackItsDraftWhenPublicationFails(t *testing.T
 // opposite of what happened and sends whoever reads it looking for a draft that
 // is not there.
 func TestPublishDesktopReleaseReportsAPublishedReleaseWhenTheRollingRefreshFails(t *testing.T) {
+	t.Parallel()
 	clone, remote := newDesktopReleaseRepository(t, "desktop-v0.6.0")
 	distribution := writeDesktopFixture(t, "", desktopAssetNames()...)
 	fakeBin, fakeGitHub := newFakeGitHubCLI(t)

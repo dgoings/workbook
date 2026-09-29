@@ -15,6 +15,7 @@ import (
 )
 
 func TestRenderHomebrewFormulaReadsExactChecksums(t *testing.T) {
+	t.Parallel()
 	root, script := renderFormulaPaths(t)
 	checksums := filepath.Join(t.TempDir(), "checksums.txt")
 	output := filepath.Join(t.TempDir(), "workbook.rb")
@@ -64,6 +65,7 @@ func TestRenderHomebrewFormulaReadsExactChecksums(t *testing.T) {
 }
 
 func TestRenderHomebrewFormulaRejectsMissingOrDuplicateChecksums(t *testing.T) {
+	t.Parallel()
 	// Production mutation: rendering from an incomplete checksums file would
 	// publish a formula whose downloads were never built or verified.
 	root, script := renderFormulaPaths(t)
@@ -98,6 +100,7 @@ func TestRenderHomebrewFormulaRejectsMissingOrDuplicateChecksums(t *testing.T) {
 }
 
 func TestRenderHomebrewFormulaRejectsUnsafeVersionsBeforeWritingOutput(t *testing.T) {
+	t.Parallel()
 	root, script := renderFormulaPaths(t)
 	checksums := filepath.Join(t.TempDir(), "checksums.txt")
 	if err := os.WriteFile(checksums, []byte(fixtureChecksums("0.1.0")), 0o600); err != nil {
@@ -123,6 +126,7 @@ func TestRenderHomebrewFormulaRejectsUnsafeVersionsBeforeWritingOutput(t *testin
 // The tap serves brew upgrade to everyone who installed a release, so a
 // pre-release never reaches it, even if a caller asks.
 func TestRenderHomebrewFormulaRefusesAPreRelease(t *testing.T) {
+	t.Parallel()
 	root, script := renderFormulaPaths(t)
 	checksums := filepath.Join(t.TempDir(), "checksums.txt")
 	if err := os.WriteFile(checksums, []byte(fixtureChecksums("0.6.0-rc1")), 0o600); err != nil {
@@ -147,6 +151,7 @@ func TestRenderHomebrewFormulaRefusesAPreRelease(t *testing.T) {
 // The tag grammar is core SemVer plus the one pre-release form the release
 // scripts know, -rcN; every other spelling is still refused.
 func TestValidateReleaseTagAcceptsOnlySafeCoreSemVer(t *testing.T) {
+	t.Parallel()
 	root, _ := renderFormulaPaths(t)
 	script := filepath.Join(root, "scripts", "validate-release-tag.sh")
 
@@ -190,6 +195,7 @@ func TestValidateReleaseTagAcceptsOnlySafeCoreSemVer(t *testing.T) {
 }
 
 func TestReleaseWorkflowIsTagOnlyAndPublishesFormula(t *testing.T) {
+	t.Parallel()
 	root, _ := renderFormulaPaths(t)
 	workflow, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "release.yml"))
 	if err != nil {
@@ -264,6 +270,7 @@ func TestReleaseWorkflowIsTagOnlyAndPublishesFormula(t *testing.T) {
 }
 
 func TestRepositoryDoesNotShipPlaceholderHomebrewFormula(t *testing.T) {
+	t.Parallel()
 	root, _ := renderFormulaPaths(t)
 	_, err := os.Stat(filepath.Join(root, "Formula", "workbook.rb"))
 	if !errors.Is(err, os.ErrNotExist) {

@@ -9,6 +9,7 @@ import (
 )
 
 func TestResolveReleaseVersionAppliesEachBumpKind(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		bump string
 		want string
@@ -33,6 +34,7 @@ func TestResolveReleaseVersionAppliesEachBumpKind(t *testing.T) {
 // pass both through, so the precedence between them has to be decided here
 // rather than repeated in each workflow's YAML.
 func TestResolveReleaseVersionLetsAnExplicitVersionOverrideTheBump(t *testing.T) {
+	t.Parallel()
 	output, err := runResolveReleaseVersion(t, "", "--bump", "patch", "--version", "1.0.0", "--previous", "v0.4.1")
 	if err != nil {
 		t.Fatalf("resolve explicit version: %v\n%s", err, output)
@@ -46,6 +48,7 @@ func TestResolveReleaseVersionLetsAnExplicitVersionOverrideTheBump(t *testing.T)
 // left blank. Treating that as a request for version "" would reject every
 // bump-only release.
 func TestResolveReleaseVersionTreatsAnEmptyVersionAsAbsent(t *testing.T) {
+	t.Parallel()
 	output, err := runResolveReleaseVersion(t, "", "--bump", "minor", "--version", "", "--previous", "v0.4.1")
 	if err != nil {
 		t.Fatalf("resolve empty version: %v\n%s", err, output)
@@ -56,6 +59,7 @@ func TestResolveReleaseVersionTreatsAnEmptyVersionAsAbsent(t *testing.T) {
 }
 
 func TestResolveReleaseVersionBumpsFromZeroWithoutAPreviousRelease(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		bump string
 		want string
@@ -80,6 +84,7 @@ func TestResolveReleaseVersionBumpsFromZeroWithoutAPreviousRelease(t *testing.T)
 // have the cut workflows publish a release that orders below one already
 // shipped, which Homebrew would then serve as an upgrade.
 func TestResolveReleaseVersionRejectsAVersionThatDoesNotMoveForward(t *testing.T) {
+	t.Parallel()
 	for _, version := range []string{"0.4.1", "0.4.0", "0.3.0"} {
 		t.Run(version, func(t *testing.T) {
 			output, err := runResolveReleaseVersion(t, "", "--version", version, "--previous", "v0.4.1")
@@ -96,6 +101,7 @@ func TestResolveReleaseVersionRejectsAVersionThatDoesNotMoveForward(t *testing.T
 // The same rule the release workflow and the formula renderer apply, applied
 // before a tag exists rather than after one has been pushed.
 func TestResolveReleaseVersionRejectsUnsafeVersions(t *testing.T) {
+	t.Parallel()
 	for _, version := range []string{"0.5", "01.2.3", "1.2.03", "1.2.3-alpha", "v1.2.3", "1.2.3/../etc"} {
 		t.Run(version, func(t *testing.T) {
 			output, err := runResolveReleaseVersion(t, "", "--version", version, "--previous", "v0.4.1")
@@ -107,6 +113,7 @@ func TestResolveReleaseVersionRejectsUnsafeVersions(t *testing.T) {
 }
 
 func TestResolveReleaseVersionRequiresABumpOrAVersion(t *testing.T) {
+	t.Parallel()
 	output, err := runResolveReleaseVersion(t, "", "--previous", "v0.4.1")
 	if err == nil {
 		t.Fatalf("resolve accepted neither a bump nor a version:\n%s", output)
@@ -117,6 +124,7 @@ func TestResolveReleaseVersionRequiresABumpOrAVersion(t *testing.T) {
 }
 
 func TestResolveReleaseVersionRejectsAnUnknownBumpKind(t *testing.T) {
+	t.Parallel()
 	output, err := runResolveReleaseVersion(t, "", "--bump", "sideways", "--previous", "v0.4.1")
 	if err == nil {
 		t.Fatalf("resolve accepted an unknown bump kind:\n%s", output)
@@ -129,6 +137,7 @@ func TestResolveReleaseVersionRejectsAnUnknownBumpKind(t *testing.T) {
 // A tag that is not a release version cannot be bumped, and silently treating
 // it as absent would restart numbering from 0.0.0.
 func TestResolveReleaseVersionRejectsAnUnparsablePreviousTag(t *testing.T) {
+	t.Parallel()
 	output, err := runResolveReleaseVersion(t, "", "--bump", "patch", "--previous", "v2026-08-08")
 	if err == nil {
 		t.Fatalf("resolve accepted an unparsable previous tag:\n%s", output)
@@ -141,6 +150,7 @@ func TestResolveReleaseVersionRejectsAnUnparsablePreviousTag(t *testing.T) {
 // Interactive use passes no --previous, so discovery has to find the newest
 // release rather than the most recently created tag.
 func TestResolveReleaseVersionDiscoversTheNewestReleaseTag(t *testing.T) {
+	t.Parallel()
 	repository := t.TempDir()
 	runCommand(t, repository, nil, "git", "init", "--quiet", "--initial-branch=main")
 	runCommand(t, repository, nil, "git", "config", "user.name", "Release Test")
@@ -205,6 +215,7 @@ func releaseScriptPath(t *testing.T, name string) string {
 // A pre-release is named exactly and only ever explicitly: a bump kind has no
 // way to say "rc".
 func TestResolveReleaseVersionAcceptsAnExplicitPreRelease(t *testing.T) {
+	t.Parallel()
 	output, err := runResolveReleaseVersion(t, "", "--version", "0.6.0-rc1", "--previous", "v0.5.1")
 	if err != nil {
 		t.Fatalf("resolve pre-release: %v\n%s", err, output)
@@ -217,6 +228,7 @@ func TestResolveReleaseVersionAcceptsAnExplicitPreRelease(t *testing.T) {
 // One spelling of a pre-release keeps the ordering trivial and the tags
 // readable beside the stable ones.
 func TestResolveReleaseVersionRejectsEveryOtherPreReleaseSpelling(t *testing.T) {
+	t.Parallel()
 	for _, version := range []string{"0.6.0-rc", "0.6.0-rc0", "0.6.0-rc01", "0.6.0-rc.1", "0.6.0-beta1", "0.6.0-RC1", "0.6.0-rc1-rc1", "0.6.0rc1"} {
 		t.Run(version, func(t *testing.T) {
 			output, err := runResolveReleaseVersion(t, "", "--version", version, "--previous", "v0.5.1")
@@ -231,6 +243,7 @@ func TestResolveReleaseVersionRejectsEveryOtherPreReleaseSpelling(t *testing.T) 
 // 0.6.0, so a script that trusted either would let an rc be cut after its
 // stable release, or refuse the stable release after its rc.
 func TestResolveReleaseVersionOrdersPreReleasesBeforeTheirStableVersion(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		name     string
 		version  string
@@ -267,6 +280,7 @@ func TestResolveReleaseVersionOrdersPreReleasesBeforeTheirStableVersion(t *testi
 // Bumps are computed from stable releases only. A caller that hands a bump a
 // pre-release to bump from has looked up the wrong tag.
 func TestResolveReleaseVersionRefusesToBumpFromAPreRelease(t *testing.T) {
+	t.Parallel()
 	output, err := runResolveReleaseVersion(t, "", "--bump", "patch", "--previous", "v0.6.0-rc1")
 	if err == nil {
 		t.Fatalf("resolve bumped from a pre-release:\n%s", output)
@@ -280,6 +294,7 @@ func TestResolveReleaseVersionRefusesToBumpFromAPreRelease(t *testing.T) {
 // v0.6.0 after v0.6.0-rc2 still computes from v0.5.1; an explicit pre-release
 // has to clear every tag there is, so a stale rc number is refused.
 func TestResolveReleaseVersionDiscoversTheRightPreviousTagForEachKind(t *testing.T) {
+	t.Parallel()
 	repository := t.TempDir()
 	runCommand(t, repository, nil, "git", "init", "--quiet", "--initial-branch=main")
 	runCommand(t, repository, nil, "git", "config", "user.name", "Release Test")
@@ -324,6 +339,7 @@ func TestResolveReleaseVersionDiscoversTheRightPreviousTagForEachKind(t *testing
 // version. The two sequences share a repository and must never see each
 // other's tags.
 func TestResolveReleaseVersionIgnoresTheDesktopTagSequence(t *testing.T) {
+	t.Parallel()
 	repository := newTaggedRepository(t, "v0.9.0", "desktop-v0.3.0", "desktop-v1.2.0")
 
 	output, err := runResolveReleaseVersionIn(t, repository, "--bump", "patch")
