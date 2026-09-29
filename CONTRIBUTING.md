@@ -96,8 +96,18 @@ Use help to discover commands and their options:
 against it. The Go verification runs on `ubuntu-24.04` and `macos-15`, because
 Workbook publishes darwin and linux archives: each of those jobs verifies
 formatting with `gofmt -l .`, runs `go vet ./...`, and runs `go test ./...`.
-A third runner, `windows-2025`, is in the matrix for the desktop app alone and
-carries no Go verification; see below.
+`ubuntu-24.04` also cross-compiles the CLI for Windows
+(`GOOS=windows GOARCH=amd64 go build ./cmd/workbook`): the whole tree does not
+compile for Windows -- `internal/perf` uses Unix process control -- but the
+CLI itself does and must keep doing so, since the desktop app's Windows
+installer bundles it, and this step catches a commit that breaks that without
+waiting for the Windows runner below.
+
+A third runner, `windows-2025`, is in the matrix for the desktop app; see
+below. It also runs a native `go build ./cmd/workbook`, which is the only Go
+verification it gets today: `go build ./...`, `go vet ./...` and
+`go test ./...` do not work there until `internal/perf` is behind a build tag
+and the Unix-only tests are guarded, a deliberately separate piece of work.
 
 The one change that does not pay for all of that is a change to the marketing
 site. Nothing builds `site/` or `render.yaml`, no package embeds them, and no
