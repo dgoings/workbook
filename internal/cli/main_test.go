@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // toolchainEnvironment is the environment as it stood before TestMain replaced
@@ -82,6 +83,15 @@ var templateRoot string
 // toolchainEnvironment.
 func TestMain(m *testing.M) {
 	toolchainEnvironment = os.Environ()
+
+	// The product gives a watcher fifty milliseconds to answer before a
+	// command publishes inline. The tests that prove a hand-off happened run
+	// an in-process fake watcher beside hundreds of parallel tests, and on a
+	// saturated CI runner that fake missed the window through scheduling
+	// alone. Two seconds is a hang guard for the test binary, not a change
+	// to what the product does; no test depends on the deadline expiring (a
+	// dead socket is refused at dial time, not by timeout).
+	watcherProbeDeadline = 2 * time.Second
 
 	home, err := os.MkdirTemp("", "workbook-cli-home")
 	if err != nil {
