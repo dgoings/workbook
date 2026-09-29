@@ -2188,7 +2188,7 @@ func TestRunServeFallsBackWhenDefaultAddressTaken(t *testing.T) {
 
 	banner := regexp.MustCompile(`Workbook board: http://(\S+)`)
 	var boundAddr string
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second) // hang guard, not a measurement; see waitForHTTP
 	for boundAddr == "" {
 		select {
 		case err := <-result:
@@ -2266,7 +2266,7 @@ func TestRunServeSaysNothingWhenTheDefaultAddressIsFree(t *testing.T) {
 
 	banner := regexp.MustCompile(`Workbook board: http://(\S+)`)
 	var boundAddr string
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second) // hang guard, not a measurement; see waitForHTTP
 	for boundAddr == "" {
 		select {
 		case err := <-result:
@@ -2300,9 +2300,13 @@ func TestRunServeSaysNothingWhenTheDefaultAddressIsFree(t *testing.T) {
 	}
 }
 
+// waitForHTTP polls until the server answers 200. The budget is a hang guard,
+// not a measurement: a healthy server answers within milliseconds, and a bare
+// whole-tree run keeps this machine's cores saturated by other packages'
+// parallel tests, so a tight budget only turns load into a false failure.
 func waitForHTTP(t *testing.T, url string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
 		response, err := http.Get(url)
