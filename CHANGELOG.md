@@ -261,6 +261,14 @@ described under Changed.
   fixture's own isolation settings now, instead of inheriting the operator's
   global `core.hooksPath`, where a company hooks directory could reject or
   charge for the very push being measured.
+- **`workbook-bench` no longer records a failed sample when the machine is too
+  busy to drain a finished command's output within a tenth of a second.** The
+  harness bounded that drain at 100ms, which on a loaded machine is a stopwatch
+  on the Go scheduler rather than a guard: a command that wrote nothing and
+  exited cleanly came back with no duration, an exit code of -1 and
+  `exec: WaitDelay expired before I/O complete`. The bound is now five seconds,
+  the same number the object-batch streaming already uses, which still catches a
+  command that exits leaving a descendant holding its pipe open.
 
 ## v0.5.1 — 2026-08-23
 

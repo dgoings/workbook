@@ -46,7 +46,27 @@ type TraceCounts struct {
 	Commands     map[string]int
 }
 
-const commandWaitDelay = 100 * time.Millisecond
+// commandWaitDelay bounds how long a finished command's output may still be
+// draining before os/exec abandons it. It is not a bound on the command. Buffers
+// on Cmd.Stdout and Cmd.Stderr make os/exec give the child a pipe and copy it in
+// a goroutine, and Cmd.Wait reaps the child first and only then waits this long
+// for that goroutine to report that it has drained the pipe, returning
+// ErrWaitDelay if it does not. On a healthy run the only thing this has to cover
+// is getting the copying goroutine back onto a core after the child has already
+// exited.
+//
+// It was 100ms, which made it a stopwatch rather than a guard. A command that
+// wrote nothing, spawned nothing and exited cleanly was recorded as ExitCode -1
+// with "exec: WaitDelay expired before I/O complete" whenever the machine was
+// too busy to schedule the copier within a tenth of a second: an operator
+// benchmarking on a loaded machine got a failed sample for a command that had
+// succeeded, and a whole-tree test run hit the same thing. Five seconds is the
+// number objectBatchWaitDelay already uses in internal/gitstore/batchstream.go
+// for the same job. It costs nothing on a healthy run, where the copier has
+// finished before Wait polls it and no timer is armed at all, and it still
+// bounds the one case ReapProcessGroup documents this for: a command that exits
+// leaving a descendant behind that holds the pipe open.
+const commandWaitDelay = 5 * time.Second
 
 // OpenTraceCursor opens a Trace2 event file and starts counting after its
 // existing contents.

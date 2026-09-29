@@ -26,7 +26,11 @@ import (
 const (
 	invocationExitCode = 2
 	failureExitCode    = 1
-	commandWaitDelay   = 100 * time.Millisecond
+	// commandWaitDelay bounds draining a finished command's output, not the
+	// command. See perf.ReapProcessGroup and internal/perf/command.go's constant
+	// of the same name, which this matches: a tenth of a second is a stopwatch on
+	// the scheduler rather than a guard against an abandoned pipe.
+	commandWaitDelay = 5 * time.Second
 )
 
 type options struct {
