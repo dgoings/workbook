@@ -842,6 +842,18 @@ func TestWarmHTTPServerPrepareProjection(t *testing.T) {
 	}
 }
 
+// warmHTTPRequestGuard is the budget the warm-HTTP tests below hand a request
+// they expect to complete. Every one of them talks to an httptest server on the
+// loopback interface that answers immediately, and every one asserts what the
+// sample says rather than how long it took, so the budget is a hang guard: it
+// exists so a request that never answers fails the test instead of wedging it.
+// One second was enough on a quiet machine and not enough on a saturated one,
+// where a real local round trip plus a trace-file append already timed out at
+// 20 ms and failed a subtest for the wrong reason. The budgets that stay narrow
+// in this file are the ones a test requires to expire, and they are the subject
+// rather than a guard.
+const warmHTTPRequestGuard = 30 * time.Second
+
 // TestWarmTaskListDeadlineReturnsTimedOutSample holds the board's read side to
 // the same harness contract every other measured surface obeys: a command that
 // reached its timeout is a `timeout` sample, not a reason to discard the samples
@@ -894,7 +906,7 @@ func TestWarmTaskListNonOKResponseReturnsMeasuredSample(t *testing.T) {
 				tracePath: emptyTraceFile(t),
 				client:    httpServer.Client(),
 			}
-			sample, err := server.measureTaskList(context.Background(), 2, time.Second)
+			sample, err := server.measureTaskList(context.Background(), 2, warmHTTPRequestGuard)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -947,7 +959,7 @@ func TestWarmTaskListMalformedAnswerAndCallerCancellationRemainFatal(t *testing.
 				tracePath: emptyTraceFile(t),
 				client:    httpServer.Client(),
 			}
-			_, err := server.measureTaskList(context.Background(), 2, time.Second)
+			_, err := server.measureTaskList(context.Background(), 2, warmHTTPRequestGuard)
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("error = %v, want a fatal %q", err, test.wantErr)
 			}
@@ -1017,7 +1029,7 @@ func TestWarmStatusNonOKResponseReturnsMeasuredSample(t *testing.T) {
 				tracePath: emptyTraceFile(t),
 				client:    httpServer.Client(),
 			}
-			sample, err := server.measureStatus(context.Background(), "WB-product-miss", "ready", time.Second)
+			sample, err := server.measureStatus(context.Background(), "WB-product-miss", "ready", warmHTTPRequestGuard)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1046,7 +1058,7 @@ func TestWarmStatusMalformedSuccessAndCallerCancellationRemainFatal(t *testing.T
 			tracePath: emptyTraceFile(t),
 			client:    httpServer.Client(),
 		}
-		_, err := server.measureStatus(context.Background(), "WB-malformed", "ready", time.Second)
+		_, err := server.measureStatus(context.Background(), "WB-malformed", "ready", warmHTTPRequestGuard)
 		if err == nil || !strings.Contains(err.Error(), "decode status response") {
 			t.Fatalf("malformed success error = %v, want fatal JSON decode error", err)
 		}
@@ -1071,7 +1083,7 @@ func TestWarmStatusMalformedSuccessAndCallerCancellationRemainFatal(t *testing.T
 			tracePath: emptyTraceFile(t),
 			client:    httpServer.Client(),
 		}
-		_, err := server.measureStatus(context.Background(), "WB-wrong-envelope", "ready", time.Second)
+		_, err := server.measureStatus(context.Background(), "WB-wrong-envelope", "ready", warmHTTPRequestGuard)
 		if err == nil || !strings.Contains(err.Error(), "status response") {
 			t.Fatalf("wrong success envelope error = %v, want fatal protocol error", err)
 		}
@@ -1140,7 +1152,7 @@ func TestWarmIndependentBurstIssuesTenDistinctRequestsAndCountsTraceOnce(t *test
 	for index := range taskIDs {
 		taskIDs[index] = fmt.Sprintf("WB-independent-%02d", index+1)
 	}
-	sample, err := server.measureIndependentBurst(context.Background(), taskIDs, "ready", time.Second)
+	sample, err := server.measureIndependentBurst(context.Background(), taskIDs, "ready", warmHTTPRequestGuard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1192,7 +1204,7 @@ func TestWarmSameTaskBurstStopsAfterAmbiguousOutcome(t *testing.T) {
 		},
 		{
 			name:    "HTTP non-success",
-			timeout: time.Second,
+			timeout: warmHTTPRequestGuard,
 			writeOutcome: func(writer http.ResponseWriter, _ *http.Request) {
 				http.Error(writer, "task head changed", http.StatusConflict)
 			},
@@ -1308,7 +1320,7 @@ func TestWarmSameTaskBurstIssuesTenSequentialAlternatingRequests(t *testing.T) {
 		tracePath: tracePath,
 		client:    httpServer.Client(),
 	}
-	sample, err := server.measureSameTaskBurst(context.Background(), "WB-same", 0, time.Second)
+	sample, err := server.measureSameTaskBurst(context.Background(), "WB-same", 0, warmHTTPRequestGuard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1395,7 +1407,7 @@ func TestWarmSameTaskBurstStartsWithLiteralStatusSafeForGeneratedFixtures(t *tes
 				tracePath: tracePath,
 				client:    httpServer.Client(),
 			}
-			sample, err := server.measureSameTaskBurst(context.Background(), taskID, 0, time.Second)
+			sample, err := server.measureSameTaskBurst(context.Background(), taskID, 0, warmHTTPRequestGuard)
 			if err != nil {
 				t.Fatal(err)
 			}

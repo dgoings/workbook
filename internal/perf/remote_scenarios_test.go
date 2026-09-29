@@ -150,7 +150,11 @@ func TestRunRemoteScenariosBuildsOnlySelectedTopology(t *testing.T) {
 	_, err := runRemoteScenarios(context.Background(), RunSpec{
 		WorkbookBinary: workbook,
 		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
-		Samples:        1, CommandTimeout: 5 * time.Second,
+		// MeasureCommandOutput below runs the real `workbook`, so this is the same
+		// hang guard the topology and verification tests carry: a timed-out sample
+		// fails the run for a reason that has nothing to do with which topology was
+		// built, and nothing here asserts how long anything took.
+		Samples: 1, CommandTimeout: 120 * time.Second,
 	}, filepath.Join(t.TempDir(), "scenarios"), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{
 		buildFixture: func(ctx context.Context, root string, spec FixtureSpec, topology RemoteTopology) (RemoteFixture, error) {
 			built = append(built, topology)
@@ -175,7 +179,10 @@ func TestRemoteScenarioProcessCountDoesNotScaleWithFixtureSize(t *testing.T) {
 		{TotalTasks: 25, ActiveTasks: 25, OperationsPerTask: 7, ObjectFormat: "sha1"},
 	} {
 		results, err := runRemoteScenarios(context.Background(), RunSpec{
-			WorkbookBinary: workbook, Fixture: fixture, Samples: 1, CommandTimeout: 5 * time.Second,
+			// A real `workbook sync` runs under this bound, on the larger of the
+			// two fixtures as well: a hang guard, and the injected process count
+			// below is what the test asserts rather than any elapsed time.
+			WorkbookBinary: workbook, Fixture: fixture, Samples: 1, CommandTimeout: 120 * time.Second,
 		}, filepath.Join(t.TempDir(), "scenarios"), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{
 			buildFixture: buildRemoteFixtureWithinTimeout,
 			measureCommand: func(ctx context.Context, spec CommandSpec) CommandMeasurement {

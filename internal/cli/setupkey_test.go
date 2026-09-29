@@ -133,7 +133,12 @@ func TestPromptProjectKeyStopsWhenTheContextIsCanceled(t *testing.T) {
 	var err error
 	select {
 	case err = <-done:
-	case <-time.After(5 * time.Second):
+	// Hang guard, not a measurement: the prompt's read is blocked on a pipe
+	// nothing writes to, so a healthy return is immediate, and nothing here
+	// asserts how long it took. A bare whole-tree run keeps every core busy
+	// with other packages' parallel tests, which is all a tight budget here
+	// would measure.
+	case <-time.After(30 * time.Second):
 		t.Fatal("promptProjectKey() did not return on a canceled context")
 	}
 	if err == nil {

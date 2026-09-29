@@ -3295,7 +3295,12 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	commandContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Hang guard, not a measurement: this bounds a spawned node process, whose
+	// cold start alone is tens of milliseconds and which a bare whole-tree run
+	// starves alongside every other package's parallel tests. It is here so a
+	// mutation that never settles fails instead of hanging; nothing asserts how
+	// long settling took.
+	commandContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	command := exec.CommandContext(commandContext, node, "-")
 	command.Stdin = strings.NewReader(program)

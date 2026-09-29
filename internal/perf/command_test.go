@@ -19,7 +19,15 @@ func TestMeasureCommandCountsGitProcesses(t *testing.T) {
 	}
 	sample := MeasureCommand(context.Background(), CommandSpec{
 		Binary: gitPath, Args: []string{"--version"}, Directory: t.TempDir(),
-		Timeout: 5 * time.Second,
+		// Hang guard, not a measurement. Every budget in this file that bounds a
+		// command expected to finish is thirty seconds for the same reason: the
+		// command is one process spawn that answers in milliseconds, the test
+		// asserts the sample's contents and never its elapsed time, and a bare
+		// whole-tree run keeps all of this machine's cores saturated, where a
+		// tight budget arrives as a `signal: killed` instead of an assertion.
+		// The two budgets that stay narrow — the ones the tests below require to
+		// expire — are the subject rather than a guard.
+		Timeout: 30 * time.Second,
 	})
 	if sample.ExitCode != 0 || sample.TimedOut || sample.GitProcesses != 1 {
 		t.Fatalf("sample = %#v", sample)
@@ -41,7 +49,7 @@ func TestMeasureCommandRecordsExitCodeAndSingleLineStderr(t *testing.T) {
 	t.Parallel()
 	sample := MeasureCommand(context.Background(), CommandSpec{
 		Binary: "/bin/sh", Args: []string{"-c", "printf 'first failure\\nsecond failure\\n' >&2; exit 7"},
-		Directory: t.TempDir(), Timeout: 5 * time.Second,
+		Directory: t.TempDir(), Timeout: 30 * time.Second, // hang guard, not a measurement
 	})
 	if sample.ExitCode != 7 || sample.TimedOut || sample.Error != "first failure" {
 		t.Fatalf("sample = %#v", sample)
@@ -53,7 +61,7 @@ func TestMeasureCommandOutputPreservesStreamsAndCompatibilityWrapper(t *testing.
 		Binary:    "/bin/sh",
 		Args:      []string{"-c", "printf stdout; printf stderr >&2; exit 7"},
 		Directory: t.TempDir(),
-		Timeout:   time.Second,
+		Timeout:   30 * time.Second, // hang guard, not a measurement
 	})
 
 	if string(got.Stdout) != "stdout" || string(got.Stderr) != "stderr" {
@@ -69,7 +77,7 @@ func TestMeasureCommandPassesCallerEnvironment(t *testing.T) {
 	t.Parallel()
 	sample := MeasureCommand(context.Background(), CommandSpec{
 		Binary: "/bin/sh", Args: []string{"-c", "test \"$WORKBOOK_PERF_TEST_VALUE\" = present"},
-		Directory: t.TempDir(), Environment: []string{"WORKBOOK_PERF_TEST_VALUE=present"}, Timeout: 5 * time.Second,
+		Directory: t.TempDir(), Environment: []string{"WORKBOOK_PERF_TEST_VALUE=present"}, Timeout: 30 * time.Second, // hang guard
 	})
 	if sample.ExitCode != 0 || sample.TimedOut || sample.Error != "" {
 		t.Fatalf("sample = %#v", sample)

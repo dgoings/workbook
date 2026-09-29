@@ -161,7 +161,11 @@ func TestValidationScenarioProcessCountDoesNotScaleWithHistoryDepth(t *testing.T
 		{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 7, ObjectFormat: "sha1"},
 	} {
 		results, err := RunValidationScenarios(context.Background(), RunSpec{
-			WorkbookBinary: workbook, Fixture: fixture, Samples: 1, CommandTimeout: 20 * time.Second,
+			// The same class as the remote scenarios' hundred and twenty: the
+			// measured command is a real `workbook validate`, a timed-out sample
+			// carries no Trace2 process count for the comparison below to read,
+			// and nothing here asserts how long anything took.
+			WorkbookBinary: workbook, Fixture: fixture, Samples: 1, CommandTimeout: 120 * time.Second,
 		}, filepath.Join(t.TempDir(), "validation"), validationScenarioNames())
 		if err != nil {
 			t.Fatal(err)

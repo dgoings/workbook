@@ -68,7 +68,12 @@ func TestServeDoesNotWaitForAConnectionThatSentNothing(t *testing.T) {
 	}
 
 	cancel()
-	awaitShutdown(t, result, time.Second)
+	// This budget is the measurement, so it is not a hang guard: the bug was
+	// shutdown waiting out boardReadHeaderTimeout for a request that never
+	// came, so any budget under that ten seconds still witnesses it. Five
+	// rather than one, because a bare whole-tree run saturates every core and
+	// the healthy path here is milliseconds.
+	awaitShutdown(t, result, 5*time.Second)
 }
 
 // askOnItsOwnConnection makes one request on a connection of its own, so no
@@ -132,7 +137,9 @@ func TestServeLetsAnInFlightRequestFinish(t *testing.T) {
 	case <-entered:
 	case err := <-failure:
 		t.Fatalf("GET board: %v", err)
-	case <-time.After(5 * time.Second):
+	// Hang guard, not a measurement: a local request reaches the handler in
+	// milliseconds and nothing here asserts how long it took.
+	case <-time.After(30 * time.Second):
 		t.Fatal("the request never reached the handler")
 	}
 	cancel()
@@ -144,10 +151,12 @@ func TestServeLetsAnInFlightRequestFinish(t *testing.T) {
 		}
 	case err := <-failure:
 		t.Fatalf("GET board: %v", err)
-	case <-time.After(5 * time.Second):
+	// The handler sleeps 250 ms by design; the rest of this budget is a hang
+	// guard, and nothing here asserts how long the answer took.
+	case <-time.After(30 * time.Second):
 		t.Fatal("the in-flight request never finished")
 	}
-	awaitShutdown(t, result, 5*time.Second)
+	awaitShutdown(t, result, 30*time.Second) // hang guard, not a measurement
 }
 
 // TestServeDoesNotWaitForAHandlerBeyondTheGrace holds the line the whole task is
@@ -179,7 +188,9 @@ func TestServeDoesNotWaitForAHandlerBeyondTheGrace(t *testing.T) {
 
 	select {
 	case <-entered:
-	case <-time.After(5 * time.Second):
+	// Hang guard, not a measurement: a local request reaches the handler in
+	// milliseconds and nothing here asserts how long it took.
+	case <-time.After(30 * time.Second):
 		t.Fatal("the request never reached the handler")
 	}
 	cancel()
