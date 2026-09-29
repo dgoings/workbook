@@ -14,6 +14,7 @@ import (
 )
 
 func TestOpenFromNestedWorkingTree(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	nestedDir := filepath.Join(repoDir, "a", "deep", "directory")
 	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
@@ -45,6 +46,7 @@ func TestOpenFromNestedWorkingTree(t *testing.T) {
 }
 
 func TestOpenPreservesLeadingAndTrailingWhitespaceInRepositoryPath(t *testing.T) {
+	t.Parallel()
 	repoDir := filepath.Join(t.TempDir(), " repository ")
 	if err := os.Mkdir(repoDir, 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
@@ -64,13 +66,83 @@ func TestOpenPreservesLeadingAndTrailingWhitespaceInRepositoryPath(t *testing.T)
 }
 
 func TestOpenOutsideGitIsNotInitialized(t *testing.T) {
+	t.Parallel()
 	_, err := Open(context.Background(), t.TempDir())
 	if got, want := core.CategoryOf(err), core.CategoryNotInitialized; got != want {
 		t.Fatalf("Open() category = %q, want %q; error = %v", got, want, err)
 	}
+	if !strings.Contains(err.Error(), "cannot find Git repository") {
+		t.Fatalf("Open() error = %q, want it to contain %q", err, "cannot find Git repository")
+	}
+}
+
+// gitRevParseArgs is the single combined rev-parse invocation Open and
+// verifyIdentity make to learn both the repository root and the common Git
+// directory in one process.
+var gitRevParseArgs = []string{"rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir"}
+
+// installGitInvocationCounter puts a shim named "git" ahead of the real one
+// on PATH that appends one argument per line to a counter file, followed by a
+// blank line marking the end of the invocation, then execs the real git it
+// resolved before installing itself, so the command still succeeds. One
+// argument per line, rather than a single space-joined line, survives an
+// argument (such as a -C directory) that itself contains a space — a plain
+// space-joined line would let strings.Fields split that argument in two. It
+// returns a function that reads back the recorded invocations.
+func installGitInvocationCounter(t *testing.T) func() [][]string {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("LookPath(git) error = %v", err)
+	}
+	shimDir := t.TempDir()
+	counterFile := filepath.Join(shimDir, "invocations.log")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + shellQuote(counterFile) + "\nprintf '\\n' >> " + shellQuote(counterFile) + "\nexec " + shellQuote(realGit) + " \"$@\"\n"
+	shimPath := filepath.Join(shimDir, "git")
+	if err := os.WriteFile(shimPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile(shim git) error = %v", err)
+	}
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	return func() [][]string {
+		t.Helper()
+		data, err := os.ReadFile(counterFile)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			t.Fatalf("ReadFile(counter) error = %v", err)
+		}
+		if len(data) == 0 {
+			return nil
+		}
+		var invocations [][]string
+		for _, block := range strings.Split(string(data), "\n\n") {
+			if block == "" {
+				continue
+			}
+			invocations = append(invocations, strings.Split(block, "\n"))
+		}
+		return invocations
+	}
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// gitRevParseArgsOf strips the leading "-C <directory>" every invocation
+// carries (runGitWithEnvResult always sets it) so an observed command line
+// can be compared against the git arguments alone.
+func gitRevParseArgsOf(invocation []string) []string {
+	if len(invocation) >= 2 && invocation[0] == "-C" {
+		return invocation[2:]
+	}
+	return invocation
 }
 
 func TestOpenFromLinkedWorktreeUsesReportedPaths(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	gitRun(t, repoDir, "commit", "--allow-empty", "--quiet", "-m", "initial")
 	linkedDir := filepath.Join(t.TempDir(), "linked")
@@ -89,7 +161,68 @@ func TestOpenFromLinkedWorktreeUsesReportedPaths(t *testing.T) {
 	}
 }
 
+func TestOpenSpawnsOneGitProcessForRootAndCommonDir(t *testing.T) {
+	repoDir := testrepo.New(t)
+	wantRoot := gitReportedPath(t, repoDir, "rev-parse", "--show-toplevel")
+	wantCommonDir := gitReportedPath(t, repoDir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+
+	invocations := installGitInvocationCounter(t)
+
+	repo, err := Open(context.Background(), repoDir)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	got := invocations()
+	if len(got) != 1 {
+		t.Fatalf("git invocations = %d, want 1; log = %v", len(got), got)
+	}
+	if !slices.Equal(gitRevParseArgsOf(got[0]), gitRevParseArgs) {
+		t.Fatalf("git invocation args = %q, want %q with a -C prefix", got[0], gitRevParseArgs)
+	}
+	if repo.Root != wantRoot {
+		t.Fatalf("Open().Root = %q, want %q", repo.Root, wantRoot)
+	}
+	if repo.CommonGitDir != wantCommonDir {
+		t.Fatalf("Open().CommonGitDir = %q, want %q", repo.CommonGitDir, wantCommonDir)
+	}
+}
+
+func TestOpenFromLinkedWorktreeSpawnsOneGitProcess(t *testing.T) {
+	repoDir := testrepo.New(t)
+	gitRun(t, repoDir, "commit", "--allow-empty", "--quiet", "-m", "initial")
+	linkedDir := filepath.Join(t.TempDir(), "linked")
+	gitRun(t, repoDir, "worktree", "add", "--detach", "--quiet", linkedDir, "HEAD")
+	t.Cleanup(func() { gitRun(t, repoDir, "worktree", "remove", "--force", linkedDir) })
+
+	wantRoot := gitReportedPath(t, linkedDir, "rev-parse", "--show-toplevel")
+	wantCommonDir := gitReportedPath(t, linkedDir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if got, want := wantCommonDir, gitReportedPath(t, repoDir, "rev-parse", "--path-format=absolute", "--git-common-dir"); got != want {
+		t.Fatalf("linked worktree common dir = %q, want the main repository's .git %q", got, want)
+	}
+
+	invocations := installGitInvocationCounter(t)
+
+	repo, err := Open(context.Background(), linkedDir)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	got := invocations()
+	if len(got) != 1 {
+		t.Fatalf("git invocations = %d, want 1; log = %v", len(got), got)
+	}
+	if !slices.Equal(gitRevParseArgsOf(got[0]), gitRevParseArgs) {
+		t.Fatalf("git invocation args = %q, want %q with a -C prefix", got[0], gitRevParseArgs)
+	}
+	if repo.Root != wantRoot {
+		t.Fatalf("Open().Root = %q, want %q", repo.Root, wantRoot)
+	}
+	if repo.CommonGitDir != wantCommonDir {
+		t.Fatalf("Open().CommonGitDir = %q, want %q", repo.CommonGitDir, wantCommonDir)
+	}
+}
+
 func TestActorReturnsRepositoryEmail(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -105,6 +238,7 @@ func TestActorReturnsRepositoryEmail(t *testing.T) {
 }
 
 func TestRepositoryCachesProcessStableActor(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +268,7 @@ func TestRepositoryCachesProcessStableActor(t *testing.T) {
 }
 
 func TestOpenRepositorySkipsRepeatedIdentityDiscovery(t *testing.T) {
+	t.Parallel()
 	opened, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatal(err)
@@ -146,11 +281,8 @@ func TestOpenRepositorySkipsRepeatedIdentityDiscovery(t *testing.T) {
 	if _, _, err := opened.Init(context.Background(), "WB", fixedIDs()); err != nil {
 		t.Fatal(err)
 	}
-	if got := countCommand(openedCommands, "rev-parse", "--show-toplevel"); got != 0 {
-		t.Fatalf("opened repository root discovery commands = %d, want 0", got)
-	}
-	if got := countCommand(openedCommands, "rev-parse", "--path-format=absolute", "--git-common-dir"); got != 0 {
-		t.Fatalf("opened repository common-directory discovery commands = %d, want 0", got)
+	if got := countCommand(openedCommands, gitRevParseArgs...); got != 0 {
+		t.Fatalf("opened repository root/common-directory discovery commands = %d, want 0", got)
 	}
 
 	constructed := &Repository{
@@ -165,15 +297,13 @@ func TestOpenRepositorySkipsRepeatedIdentityDiscovery(t *testing.T) {
 	if _, _, err := constructed.Init(context.Background(), "WB", fixedIDs()); err != nil {
 		t.Fatal(err)
 	}
-	if got := countCommand(constructedCommands, "rev-parse", "--show-toplevel"); got != 1 {
-		t.Fatalf("constructed repository root discovery commands = %d, want 1", got)
-	}
-	if got := countCommand(constructedCommands, "rev-parse", "--path-format=absolute", "--git-common-dir"); got != 1 {
-		t.Fatalf("constructed repository common-directory discovery commands = %d, want 1", got)
+	if got := countCommand(constructedCommands, gitRevParseArgs...); got != 1 {
+		t.Fatalf("constructed repository root/common-directory discovery commands = %d, want 1", got)
 	}
 }
 
 func TestGitUsesResolvedPathForValidConstructedRepository(t *testing.T) {
+	t.Parallel()
 	opened, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -215,6 +345,7 @@ printf 'warning on stderr\n' >&2
 }
 
 func TestGitFailureReportsStderrWithoutContaminatingItWithStdout(t *testing.T) {
+	t.Parallel()
 	gitPath := filepath.Join(t.TempDir(), "git")
 	script := `#!/bin/sh
 printf 'misleading stdout\n'
@@ -239,6 +370,7 @@ exit 9
 }
 
 func TestGitResultRetainsNonzeroStreamsAndNotifiesObserverOnce(t *testing.T) {
+	t.Parallel()
 	gitPath := filepath.Join(t.TempDir(), "git")
 	script := `#!/bin/sh
 printf 'porcelain stdout\n'

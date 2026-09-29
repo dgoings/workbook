@@ -22,6 +22,7 @@ import "testing"
 // keeps this from regrowing: an option added for a position that already has one
 // fails here rather than reading as a longer list.
 func TestClientStatusAddOffersEachPlacementOnce(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "the placements a new status can take", vocabulary, "head-1", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-1")+`;

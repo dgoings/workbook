@@ -11,6 +11,7 @@ import (
 // would fold projection bootstrap into the reported latency, and measuring any
 // command other than `list --json` would not describe the read surface at all.
 func TestColdListScenarioRebuildsProjectionBeforeTheTimedListCommand(t *testing.T) {
+	t.Parallel()
 	var events []string
 	var prepareArgs, measureArgs []string
 	dependencies := scenarioDependencies{
@@ -65,6 +66,7 @@ func TestColdListScenarioRebuildsProjectionBeforeTheTimedListCommand(t *testing.
 // fetches, so its cost belongs beside `cli-show` and the single-task
 // mutations in every report.
 func TestColdListScenarioIsRegistered(t *testing.T) {
+	t.Parallel()
 	for _, result := range coldCLIResults(1) {
 		if result.Name != "cli-list" {
 			continue

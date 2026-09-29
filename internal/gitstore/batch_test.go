@@ -11,6 +11,7 @@ import (
 )
 
 func TestReadTaskHeadsPartialConsumesAllRecordsAfterMissingMiddleHead(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	first, _, _ := writeRoot(t, repository, config)
 	missingObject := gitOutputWithInput(t, repository, []byte("missing task tip"), "hash-object", "-w", "--stdin")
@@ -54,6 +55,7 @@ func TestReadTaskHeadsPartialConsumesAllRecordsAfterMissingMiddleHead(t *testing
 }
 
 func TestReadTaskHeadsPartialRejectsMalformedBatchFramingForAllHeads(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	snapshot, _, _ := writeRoot(t, repository, config)
 	fakeGit := filepath.Join(t.TempDir(), "git")
@@ -72,6 +74,7 @@ func TestReadTaskHeadsPartialRejectsMalformedBatchFramingForAllHeads(t *testing.
 }
 
 func TestReadTaskHeadsPartialReadsRepeatedTaskHistoryCommitsInOneBatch(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: rejecting repeated task IDs when batching commits from one history.
 	repository, config := writeRepository(t)
 	history := writeHistoryForTask(t, repository, config, 2300, 3)

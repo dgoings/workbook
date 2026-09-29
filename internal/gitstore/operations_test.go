@@ -10,6 +10,7 @@ import (
 )
 
 func TestReadTaskOperationsReturnsChainOrderedFromTheRoot(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: returning commits newest first, or losing a pack's
 	// parent so a caller cannot tell where a chain joins.
 	repository, config := writeRepository(t)
@@ -49,6 +50,7 @@ func TestReadTaskOperationsReturnsChainOrderedFromTheRoot(t *testing.T) {
 }
 
 func TestReadTaskOperationsStopsAtTheProjectedBoundary(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: rereading a whole history on every refresh, or including
 	// the boundary commit a caller already projected.
 	repository, config := writeRepository(t)
@@ -74,6 +76,7 @@ func TestReadTaskOperationsStopsAtTheProjectedBoundary(t *testing.T) {
 }
 
 func TestReadTaskOperationsRestartsAtTheRootWhenTheBoundaryIsUnreachable(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: reporting a reconciled task as an ordinary advance, which
 	// would append onto rows the replay may have orphaned.
 	repository, config := writeRepository(t)
@@ -98,6 +101,7 @@ func TestReadTaskOperationsRestartsAtTheRootWhenTheBoundaryIsUnreachable(t *test
 }
 
 func TestReadTaskOperationsReportsAnAbsentCommitAsNotFound(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: treating a retired pre-replay tip as repository
 	// corruption instead of an ordinary not-found for that argument.
 	repository, config := writeRepository(t)
@@ -122,6 +126,7 @@ func TestReadTaskOperationsReportsAnAbsentCommitAsNotFound(t *testing.T) {
 }
 
 func TestReadTaskOperationsReadsAParkedPreReplayTip(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: gating the read on the canonical task ref, which would
 	// hide exactly the commits a comparison against replaced work needs.
 	repository, config := writeRepository(t)
@@ -147,6 +152,7 @@ func TestReadTaskOperationsReadsAParkedPreReplayTip(t *testing.T) {
 }
 
 func TestReadTaskOperationsTruncatesSoftlyAtAnUnreadableCommit(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: failing a whole read because one commit is unreadable,
 	// when the valid prefix plus a named boundary is what a reader needs.
 	repository, config := writeRepository(t)
@@ -187,6 +193,7 @@ func TestReadTaskOperationsTruncatesSoftlyAtAnUnreadableCommit(t *testing.T) {
 }
 
 func TestReadTaskOperationsDoesNotRevalidateStoredCheckpoints(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: revalidating every commit on an ordinary read, which
 	// makes a read scale with history depth and buys nothing the write path,
 	// setup, sync, and fetch have not already checked.
@@ -222,6 +229,7 @@ func TestReadTaskOperationsDoesNotRevalidateStoredCheckpoints(t *testing.T) {
 }
 
 func TestReadTaskOperationsUsesConstantBatchedGitCommands(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: reading one commit or one task per Git process.
 	repository, config := writeRepository(t)
 	for _, taskCount := range []int{1, 4} {
@@ -261,6 +269,7 @@ func TestReadTaskOperationsUsesConstantBatchedGitCommands(t *testing.T) {
 }
 
 func TestReadTaskOperationsRejectsInvalidRequestsBeforeTransport(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: reporting a caller's mistyped commit as corrupt data, or
 	// transporting an abbreviated ID into a shared Git process.
 	repository, config := writeRepository(t)

@@ -19,6 +19,7 @@ import (
 )
 
 func TestDecodeRemoteScenarioResult(t *testing.T) {
+	t.Parallel()
 	fetch := `{"format":"workbook.result","version":1,"command":"fetch","data":{"remote":"origin","status":"completed","tasks":[{"taskId":"task-a","status":"created"},{"taskId":"task-b","status":"created"}]}}`
 	push := `{"format":"workbook.result","version":1,"command":"push","data":{"remote":"origin","status":"completed","tasks":[{"taskId":"task-a","status":"published"},{"taskId":"task-b","status":"up-to-date"}]}}`
 	sync := `{"format":"workbook.result","version":1,"command":"sync","data":{"remote":"origin","fetch":{"remote":"origin","status":"completed","tasks":[{"taskId":"task-a","status":"unchanged"}]},"push":{"remote":"origin","status":"completed","tasks":[{"taskId":"task-a","status":"up-to-date"}]}}}`
@@ -80,6 +81,7 @@ func TestDecodeRemoteScenarioResult(t *testing.T) {
 }
 
 func TestRunRemoteScenariosUsesTopologyCommandsAndVerifiesResults(t *testing.T) {
+	t.Parallel()
 	workbook := buildRemoteScenarioWorkbook(t)
 	tests := []struct {
 		name    string
@@ -103,7 +105,11 @@ func TestRunRemoteScenariosUsesTopologyCommandsAndVerifiesResults(t *testing.T) 
 			results, err := runRemoteScenarios(context.Background(), RunSpec{
 				WorkbookBinary: workbook,
 				Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
-				Samples:        1, CommandTimeout: 20 * time.Second,
+				// A real `workbook` runs under this bound and a timed-out sample
+				// would report the outcome "timeout" instead of the contract
+				// below, so the bound is a hang guard: nothing here asserts how
+				// long anything took.
+				Samples: 1, CommandTimeout: 120 * time.Second,
 			}, filepath.Join(t.TempDir(), "scenarios"), []string{test.name}, remoteScenarioDependencies{
 				buildFixture: buildRemoteFixtureWithinTimeout,
 				measureCommand: func(ctx context.Context, spec CommandSpec) CommandMeasurement {
@@ -138,12 +144,17 @@ func TestRunRemoteScenariosUsesTopologyCommandsAndVerifiesResults(t *testing.T) 
 }
 
 func TestRunRemoteScenariosBuildsOnlySelectedTopology(t *testing.T) {
+	t.Parallel()
 	workbook := buildRemoteScenarioWorkbook(t)
 	var built []RemoteTopology
 	_, err := runRemoteScenarios(context.Background(), RunSpec{
 		WorkbookBinary: workbook,
 		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
-		Samples:        1, CommandTimeout: 5 * time.Second,
+		// MeasureCommandOutput below runs the real `workbook`, so this is the same
+		// hang guard the topology and verification tests carry: a timed-out sample
+		// fails the run for a reason that has nothing to do with which topology was
+		// built, and nothing here asserts how long anything took.
+		Samples: 1, CommandTimeout: 120 * time.Second,
 	}, filepath.Join(t.TempDir(), "scenarios"), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{
 		buildFixture: func(ctx context.Context, root string, spec FixtureSpec, topology RemoteTopology) (RemoteFixture, error) {
 			built = append(built, topology)
@@ -160,6 +171,7 @@ func TestRunRemoteScenariosBuildsOnlySelectedTopology(t *testing.T) {
 }
 
 func TestRemoteScenarioProcessCountDoesNotScaleWithFixtureSize(t *testing.T) {
+	t.Parallel()
 	workbook := buildRemoteScenarioWorkbook(t)
 	counts := make([]int, 0, 2)
 	for _, fixture := range []FixtureSpec{
@@ -167,7 +179,10 @@ func TestRemoteScenarioProcessCountDoesNotScaleWithFixtureSize(t *testing.T) {
 		{TotalTasks: 25, ActiveTasks: 25, OperationsPerTask: 7, ObjectFormat: "sha1"},
 	} {
 		results, err := runRemoteScenarios(context.Background(), RunSpec{
-			WorkbookBinary: workbook, Fixture: fixture, Samples: 1, CommandTimeout: 5 * time.Second,
+			// A real `workbook sync` runs under this bound, on the larger of the
+			// two fixtures as well: a hang guard, and the injected process count
+			// below is what the test asserts rather than any elapsed time.
+			WorkbookBinary: workbook, Fixture: fixture, Samples: 1, CommandTimeout: 120 * time.Second,
 		}, filepath.Join(t.TempDir(), "scenarios"), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{
 			buildFixture: buildRemoteFixtureWithinTimeout,
 			measureCommand: func(ctx context.Context, spec CommandSpec) CommandMeasurement {
@@ -191,6 +206,7 @@ func buildRemoteScenarioWorkbook(t *testing.T) string {
 	binary := filepath.Join(t.TempDir(), "workbook")
 	command := exec.Command("go", "build", "-buildvcs=false", "-o", binary, "./cmd/workbook")
 	command.Dir = filepath.Clean(filepath.Join("..", ".."))
+	command.Env = goToolchainEnvironment(t)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build workbook: %v\n%s", err, output)
 	}
@@ -198,6 +214,7 @@ func buildRemoteScenarioWorkbook(t *testing.T) string {
 }
 
 func TestDecodeRemoteScenarioResultRejectsInvalidEnvelopesAndTaskSets(t *testing.T) {
+	t.Parallel()
 	valid := func(command string, tasks []gitstore.SyncTaskResult) string {
 		document := struct {
 			Format  string              `json:"format"`
@@ -244,6 +261,7 @@ func TestDecodeRemoteScenarioResultRejectsInvalidEnvelopesAndTaskSets(t *testing
 }
 
 func TestDecodeRemoteScenarioResultEnforcesRemotePhasesErrorCategoryAndWarnings(t *testing.T) {
+	t.Parallel()
 	contract := remoteScenarioContract{
 		command:       "sync",
 		fetchStatus:   gitstore.SyncPhaseCompleted,
@@ -276,6 +294,7 @@ func TestDecodeRemoteScenarioResultEnforcesRemotePhasesErrorCategoryAndWarnings(
 }
 
 func TestRunRemoteScenariosUsesIndependentFixturesForEachSample(t *testing.T) {
+	t.Parallel()
 	var roots []string
 	measures := 0
 	results, err := runRemoteScenarios(context.Background(), RunSpec{
@@ -305,6 +324,7 @@ func TestRunRemoteScenariosUsesIndependentFixturesForEachSample(t *testing.T) {
 }
 
 func TestRunRemoteScenariosRejectsZeroSamples(t *testing.T) {
+	t.Parallel()
 	_, err := runRemoteScenarios(context.Background(), RunSpec{
 		WorkbookBinary: "workbook",
 		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
@@ -316,13 +336,17 @@ func TestRunRemoteScenariosRejectsZeroSamples(t *testing.T) {
 }
 
 func TestSmallChangedRefSetKeepsTrackingAtPrePushRemoteTip(t *testing.T) {
+	t.Parallel()
 	workbook := buildRemoteScenarioWorkbook(t)
 	var fixture RemoteFixture
 	_, err := runRemoteScenarios(context.Background(), RunSpec{
 		WorkbookBinary: workbook,
 		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
 		Samples:        1,
-		CommandTimeout: 20 * time.Second,
+		// A half-pushed set of refs would fail the invariant below for a reason
+		// that has nothing to do with it, so a real `workbook sync` gets room to
+		// finish. Nothing here asserts how long it took.
+		CommandTimeout: 120 * time.Second,
 	}, t.TempDir(), []string{"sync-small-changed-ref-set"}, remoteScenarioDependencies{
 		buildFixture: func(ctx context.Context, root string, spec FixtureSpec, topology RemoteTopology) (RemoteFixture, error) {
 			built, err := buildRemoteFixtureWithinTimeout(ctx, root, spec, topology)
@@ -355,6 +379,7 @@ func TestSmallChangedRefSetKeepsTrackingAtPrePushRemoteTip(t *testing.T) {
 }
 
 func TestSmallChangedRefSetExpectedResultsChangeOnlyTenTasks(t *testing.T) {
+	t.Parallel()
 	taskIDs := make([]string, 12)
 	for index := range taskIDs {
 		taskIDs[index] = fmt.Sprintf("WB-%02d", index)
@@ -384,6 +409,7 @@ func TestSmallChangedRefSetExpectedResultsChangeOnlyTenTasks(t *testing.T) {
 }
 
 func TestRemoteScenarioVerificationGitCallsDoNotScaleWithFixture(t *testing.T) {
+	t.Parallel()
 	workbook := buildRemoteScenarioWorkbook(t)
 	fixtureSpecs := []FixtureSpec{
 		{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
@@ -401,7 +427,11 @@ func TestRemoteScenarioVerificationGitCallsDoNotScaleWithFixture(t *testing.T) {
 			defer waiting.Done()
 			calls := 0
 			results, err := runRemoteScenarios(context.Background(), RunSpec{
-				WorkbookBinary: workbook, Fixture: fixtureSpec, Samples: 1, CommandTimeout: 20 * time.Second,
+				// Same class as the two above: a real `workbook` runs under this
+				// bound, and the verification readers this test counts only run
+				// for a measurement that did not time out. Nothing here asserts
+				// how long anything took.
+				WorkbookBinary: workbook, Fixture: fixtureSpec, Samples: 1, CommandTimeout: 120 * time.Second,
 			}, t.TempDir(), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{
 				buildFixture: buildRemoteFixtureWithinTimeout,
 				measureCommand: func(ctx context.Context, spec CommandSpec) CommandMeasurement {
@@ -449,6 +479,7 @@ func TestRemoteScenarioVerificationGitCallsDoNotScaleWithFixture(t *testing.T) {
 }
 
 func TestRequireRemoteScenarioRefsPassesCallerCancellationToReader(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	reads := 0
@@ -474,5 +505,150 @@ func TestRequireRemoteScenarioRefsPassesCallerCancellationToReader(t *testing.T)
 	}
 	if reads != 1 {
 		t.Fatalf("ref readers called %d times, want canonical reader only", reads)
+	}
+}
+
+// The fixture build is bounded by FixtureTimeout, not by the timeout of the
+// command being measured. The flake this pins: a remote fixture's init, two
+// clones and dozens of plumbing calls all ran inside the measured command's
+// budget, and runFixtureGitInRoot's exec.CommandContext turns that deadline
+// into a SIGKILL, so a healthy fixture push died of CPU contention.
+func TestRunRemoteScenariosBoundsFixtureBuildsWithTheFixtureTimeout(t *testing.T) {
+	t.Parallel()
+	var measuredTimeouts []time.Duration
+	results, err := runRemoteScenarios(context.Background(), RunSpec{
+		WorkbookBinary: "workbook",
+		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		Samples:        1,
+		CommandTimeout: 10 * time.Millisecond,
+		FixtureTimeout: 30 * time.Second,
+	}, t.TempDir(), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{
+		buildFixture: sleepingRemoteFixtureBuilder(80 * time.Millisecond),
+		measureCommand: func(_ context.Context, command CommandSpec) CommandMeasurement {
+			measuredTimeouts = append(measuredTimeouts, command.Timeout)
+			return CommandMeasurement{Sample: Sample{ExitCode: -1, TimedOut: true}}
+		},
+	})
+	if err != nil {
+		t.Fatalf("runRemoteScenarios with a generous fixture budget: %v", err)
+	}
+	if len(results) != 1 || len(results[0].Samples) != 1 {
+		t.Fatalf("results = %#v, want one scenario with one sample", results)
+	}
+	if !results[0].Samples[0].TimedOut {
+		t.Fatalf("sample = %#v, want the measured command reported as timed out", results[0].Samples[0])
+	}
+	// The measured command keeps the operator's timeout exactly: the new field
+	// must not have widened what the report calls a timeout.
+	if !reflect.DeepEqual(measuredTimeouts, []time.Duration{10 * time.Millisecond}) {
+		t.Fatalf("measured command timeouts = %v, want the command timeout unchanged", measuredTimeouts)
+	}
+}
+
+// Mutation witness for the pairing: a FixtureTimeout too small for the build
+// still kills it, so the test above proves the generous value was used rather
+// than that the deadline stopped mattering.
+func TestRunRemoteScenariosFailsWhenFixtureTimeoutCannotCoverTheBuild(t *testing.T) {
+	t.Parallel()
+	measures := 0
+	_, err := runRemoteScenarios(context.Background(), RunSpec{
+		WorkbookBinary: "workbook",
+		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		Samples:        1,
+		CommandTimeout: 10 * time.Millisecond,
+		FixtureTimeout: 10 * time.Millisecond,
+	}, t.TempDir(), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{
+		// Far longer than the deadline, so which of the two the builder
+		// notices first is never a scheduling accident.
+		buildFixture: sleepingRemoteFixtureBuilder(10 * time.Second),
+		measureCommand: func(context.Context, CommandSpec) CommandMeasurement {
+			measures++
+			return CommandMeasurement{}
+		},
+	})
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runRemoteScenarios error = %v, want the fixture build to exceed its deadline", err)
+	}
+	if !strings.Contains(err.Error(), "build sync-fresh-checkout sample 1 fixture") {
+		t.Fatalf("error %q does not name the fixture build that failed", err)
+	}
+	if measures != 0 {
+		t.Fatalf("measured commands = %d, want none after a failed fixture build", measures)
+	}
+}
+
+func TestRunRemoteScenariosRejectsNegativeFixtureTimeout(t *testing.T) {
+	t.Parallel()
+	_, err := runRemoteScenarios(context.Background(), RunSpec{
+		WorkbookBinary: "workbook",
+		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		Samples:        1,
+		CommandTimeout: time.Second,
+		FixtureTimeout: -time.Second,
+	}, t.TempDir(), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{})
+	if err == nil || !strings.Contains(err.Error(), "fixture timeout must be positive") {
+		t.Fatalf("runRemoteScenarios error = %v, want fixture timeout validation", err)
+	}
+}
+
+// A spec that leaves FixtureTimeout zero — every spec this package's own tests
+// build directly — gets the same bound a production caller sets by hand, because a
+// fixture build is not the thing being measured either way.
+//
+// The value matters and a behavioral check alone does not prove it: a default of
+// one nanosecond, or of the command timeout, would also kill a build that outran
+// the command timeout, and the command timeout is precisely the default that
+// SIGKILLed five healthy fixture builds under whole-tree load. So the resolver is
+// checked by value first, and the run below is what shows the resolved value is the
+// one the runner actually uses.
+func TestRunRemoteScenariosDefaultsFixtureTimeoutToTheFixtureBound(t *testing.T) {
+	t.Parallel()
+	unset := RunSpec{CommandTimeout: 37 * time.Second}
+	if want, got := FixtureTimeoutFactor*unset.CommandTimeout, unset.fixtureBuildTimeout(); got != want {
+		t.Fatalf("resolved fixture timeout = %s, want %s exactly", got, want)
+	}
+	if unset.fixtureBuildTimeout() <= unset.CommandTimeout {
+		t.Fatalf("resolved fixture timeout = %s, want more than the command timeout %s",
+			unset.fixtureBuildTimeout(), unset.CommandTimeout)
+	}
+	set := unset
+	set.FixtureTimeout = 11 * time.Second
+	if got := set.fixtureBuildTimeout(); got != set.FixtureTimeout {
+		t.Fatalf("resolved fixture timeout = %s, want the field's own %s", got, set.FixtureTimeout)
+	}
+
+	// The resolved default still bounds the build: a builder that cannot finish
+	// inside FixtureTimeoutFactor times a 10 ms command timeout still dies of it.
+	_, err := runRemoteScenarios(context.Background(), RunSpec{
+		WorkbookBinary: "workbook",
+		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		Samples:        1,
+		CommandTimeout: 10 * time.Millisecond,
+	}, t.TempDir(), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{
+		buildFixture: sleepingRemoteFixtureBuilder(10 * time.Second),
+		measureCommand: func(context.Context, CommandSpec) CommandMeasurement {
+			t.Error("measurement must not run after a fixture build that exceeded its deadline")
+			return CommandMeasurement{}
+		},
+	})
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runRemoteScenarios error = %v, want the resolved default to bound the build", err)
+	}
+}
+
+// sleepingRemoteFixtureBuilder stands in for a fixture build that takes longer
+// than one measured command without doing a real build's work. It honors the
+// context the runner hands it, which is what a real build does through
+// exec.CommandContext.
+func sleepingRemoteFixtureBuilder(work time.Duration) func(context.Context, string, FixtureSpec, RemoteTopology) (RemoteFixture, error) {
+	return func(ctx context.Context, root string, _ FixtureSpec, _ RemoteTopology) (RemoteFixture, error) {
+		timer := time.NewTimer(work)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return RemoteFixture{LocalRoot: root}, nil
+		case <-ctx.Done():
+			return RemoteFixture{}, ctx.Err()
+		}
 	}
 }

@@ -129,6 +129,7 @@ func priorityPairs(priorities core.PriorityVocabulary) [][2]string {
 // client keeps. A form that cannot offer a priority is a priority nobody can
 // assign from the board, which is the shipped defect this fixes.
 func TestHandlerClientBuildsThePrioritySelectFromTheProjectsPriorities(t *testing.T) {
+	t.Parallel()
 	priorities := projectPriorities(t)
 	runPriorityClient(t, "priority select options", "/tasks/new", priorities, []core.Task{}, `
   const control = findElement(main, (element) => element.id === "task-priority");
@@ -145,6 +146,7 @@ func TestHandlerClientBuildsThePrioritySelectFromTheProjectsPriorities(t *testin
 // priority selected. A form that silently displayed a neighbour would turn a
 // reader's unrelated save into a priority change they never made.
 func TestHandlerClientShowsTheTasksOwnPriorityInTheForm(t *testing.T) {
+	t.Parallel()
 	task := clientPlacementTask("WB-01J0000000000000000000C303", "Fire", core.StatusReady, "urgent")
 	task.Head = "head-a"
 	runPriorityClient(t, "a task at a project priority", "/tasks/"+task.ID, projectPriorities(t), []core.Task{task}, `
@@ -161,6 +163,7 @@ func TestHandlerClientShowsTheTasksOwnPriorityInTheForm(t *testing.T) {
 // It used to land on "medium", which is a priority a project need not define at
 // all — and this project does not.
 func TestHandlerClientNewTaskDefaultsToTheDefaultTaggedPriority(t *testing.T) {
+	t.Parallel()
 	priorities := projectPriorities(t)
 	definitions := priorities.EffectiveDocument().Priorities
 	if got := definitions[0].Priority; got == priorities.Default() {
@@ -193,6 +196,7 @@ func TestHandlerClientNewTaskDefaultsToTheDefaultTaggedPriority(t *testing.T) {
 // priority outside those three sorted against nothing and fell to the bottom of
 // the column whatever its rank said.
 func TestHandlerClientPlacesADraggedCardByTheConfiguredPriorityOrder(t *testing.T) {
+	t.Parallel()
 	dragged := clientPlacementTask("WB-01J0000000000000000000D404", "Fire", core.StatusBacklog, "urgent")
 	dragged.Head = "head-a"
 	high := clientPlacementTask("WB-01J0000000000000000000D505", "Important", core.StatusReady, core.PriorityHigh)
@@ -244,6 +248,7 @@ func TestHandlerClientPlacesADraggedCardByTheConfiguredPriorityOrder(t *testing.
 // happen is the two render paths disagreeing — a card drawn by the server and
 // the same card redrawn by a poll would then flip between two names.
 func TestBoardDrawsThePriorityChipAsItsToken(t *testing.T) {
+	t.Parallel()
 	task := clientPlacementTask("WB-01J0000000000000000000E505", "Fire", core.StatusReady, "urgent")
 	task.Head = "head-a"
 	handler := priorityBoardHandler(projectPriorities(t), []core.Task{task})
@@ -277,6 +282,7 @@ func TestBoardDrawsThePriorityChipAsItsToken(t *testing.T) {
 // the server has already answered on the page — and the one place a project
 // that renamed its priorities would find the old three looking back.
 func TestClientScriptNamesNoPriorityOfItsOwn(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	response := request(t, handler, http.MethodGet, "/")
 	script := renderedClientScript(t, response.Body.String())

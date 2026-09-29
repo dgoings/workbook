@@ -16,6 +16,7 @@ import (
 // a transposed pair compiles; every capability here records its own name, and a
 // route that reaches the wrong field names the wrong one.
 func TestNewHandlerRoutesEveryOptionToItsOwnRoute(t *testing.T) {
+	t.Parallel()
 	task := boardTasks()[0]
 	var called []string
 	record := func(name string) core.MutationResult {
@@ -110,6 +111,7 @@ func TestNewHandlerRoutesEveryOptionToItsOwnRoute(t *testing.T) {
 // a torn-down connection and a server stack trace rather than the error
 // document the rest of the surface returns.
 func TestNewHandlerReportsUnconfiguredCapabilities(t *testing.T) {
+	t.Parallel()
 	task := boardTasks()[0]
 	dependencyPath := "/api/tasks/" + task.ID + "/dependencies/" + boardTasks()[1].ID
 	handler := NewHandler(Options{List: func(context.Context) ([]core.Task, error) { return nil, nil }})
@@ -154,6 +156,7 @@ func TestNewHandlerReportsUnconfiguredCapabilities(t *testing.T) {
 // tasks have to report a missing lister the way every other route reports a
 // missing capability, rather than panicking on the first request.
 func TestNewHandlerReportsUnconfiguredLister(t *testing.T) {
+	t.Parallel()
 	handler := NewHandler(Options{})
 	for _, target := range []string{"/", "/api/tasks"} {
 		response := request(t, handler, http.MethodGet, target)

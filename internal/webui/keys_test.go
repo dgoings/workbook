@@ -163,6 +163,7 @@ func keyRoutes(head string) []struct {
 // ran `workbook key` still has a key, and a client handed no member would carry
 // a fallback of its own.
 func TestVocabularyDocumentCarriesTheProjectKeys(t *testing.T) {
+	t.Parallel()
 	handler := keyMutationHandler(t, &recordedKeyMutations{}, keyMutationResult(t), nil)
 	response := requestJSON(t, handler, http.MethodGet, "/api/vocabulary", "")
 	if response.Code != http.StatusOK {
@@ -211,6 +212,7 @@ func TestVocabularyDocumentCarriesTheProjectKeys(t *testing.T) {
 // through the code that rendered the page — the new head included, which is
 // what its next change has to name.
 func TestAddVocabularyKeyRecordsAndAnswersWithTheWholeConfiguration(t *testing.T) {
+	t.Parallel()
 	result := keyMutationResult(t)
 	recorded := &recordedKeyMutations{}
 	handler := keyMutationHandler(t, recorded, result, nil)
@@ -268,6 +270,7 @@ func TestAddVocabularyKeyRecordsAndAnswersWithTheWholeConfiguration(t *testing.T
 // and the refusal names the member that is missing — exactly as a status or
 // priority change is, and for the reason vocabularyHead gives.
 func TestAddVocabularyKeyRequiresExpectedHead(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		method string
@@ -320,6 +323,7 @@ func TestAddVocabularyKeyRequiresExpectedHead(t *testing.T) {
 // The per-key route carries each of the three things that can happen to a key
 // that already exists, and hands the key the path addressed to the capability.
 func TestEditVocabularyKeyMakesCurrentRetiresAndReactivates(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name string
 		body string
@@ -362,6 +366,7 @@ func TestEditVocabularyKeyMakesCurrentRetiresAndReactivates(t *testing.T) {
 // the route refuses the combination rather than picking one, and refuses a body
 // that names none rather than recording nothing.
 func TestEditVocabularyKeyRefusesTwoIntentsInOneRequest(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name string
 		body string
@@ -401,6 +406,7 @@ func TestEditVocabularyKeyRefusesTwoIntentsInOneRequest(t *testing.T) {
 // A board built without the key capabilities says so rather than pretending,
 // the way every route reports a capability it was not given.
 func TestKeyRoutesReportAnUnwiredBoard(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	for _, test := range keyRoutes("head-current") {
 		t.Run(test.name, func(t *testing.T) {
@@ -424,6 +430,7 @@ func TestKeyRoutesReportAnUnwiredBoard(t *testing.T) {
 // project's current key when it names none — which is what every client that
 // predates a project having several keys sends.
 func TestCreateTaskAcceptsAKey(t *testing.T) {
+	t.Parallel()
 	created := core.Task{
 		ID:       "SPARE-01J00000000000000000000009",
 		TaskData: core.TaskData{Title: "Filed under another key"},
@@ -486,6 +493,7 @@ func TestCreateTaskAcceptsAKey(t *testing.T) {
 // already re-renders from. A digest that moved for one would ask every open
 // board to reload for something no card is drawn from.
 func TestVocabularyShapeIgnoresKeys(t *testing.T) {
+	t.Parallel()
 	base := VocabularyState{
 		Vocabulary: handlerVocabulary(t),
 		Head:       "head-1",
@@ -549,6 +557,7 @@ func TestVocabularyShapeIgnoresKeys(t *testing.T) {
 // matches on, and the configuration it should recompose the change against —
 // keys included, which is the whole point of attaching it here.
 func TestKeyMutationsReportStaleWritesWithTheCurrentConfiguration(t *testing.T) {
+	t.Parallel()
 	stale := core.Errorf(core.CategoryStaleWrite,
 		"this project's keys have changed since head-old; reload and try again")
 	for _, test := range keyRoutes("head-old") {
@@ -584,6 +593,7 @@ func TestKeyMutationsReportStaleWritesWithTheCurrentConfiguration(t *testing.T) 
 // planners; this test is about what the route does to them, which must be
 // nothing but choose the status code.
 func TestKeyRefusalsReachTheClientInTheVerbsOwnWords(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name       string
 		method     string
@@ -655,6 +665,7 @@ func TestKeyRefusalsReachTheClientInTheVerbsOwnWords(t *testing.T) {
 // A body carrying a member these routes do not have is refused rather than
 // silently ignored, exactly as every other mutation body is.
 func TestKeyMutationsRefuseUnknownMembers(t *testing.T) {
+	t.Parallel()
 	recorded := &recordedKeyMutations{}
 	handler := keyMutationHandler(t, recorded, keyMutationResult(t), nil)
 	for _, test := range []struct {
@@ -685,6 +696,7 @@ func TestKeyMutationsRefuseUnknownMembers(t *testing.T) {
 // they allow. There is no DELETE on a key: a key that has ever minted a task is
 // a permanent name, and retirement is what the per-key PATCH carries.
 func TestKeyRoutesEnforceTheirMethods(t *testing.T) {
+	t.Parallel()
 	handler := keyMutationHandler(t, &recordedKeyMutations{}, keyMutationResult(t), nil)
 	for _, test := range []struct {
 		method string
@@ -711,6 +723,7 @@ func TestKeyRoutesEnforceTheirMethods(t *testing.T) {
 // the reason it carries the priorities: the client needs both before it has
 // fetched anything, and must not guess.
 func TestPageKeysCarryEveryKeyWithItsState(t *testing.T) {
+	t.Parallel()
 	encoded := pageKeys(projectKeys(t))
 	var published []KeyView
 	if err := json.Unmarshal([]byte(encoded), &published); err != nil {
@@ -735,6 +748,7 @@ func TestPageKeysCarryEveryKeyWithItsState(t *testing.T) {
 // administer keys, and both capabilities are required: a board wired for one of
 // them would draw controls that look alike and fail differently.
 func TestKeysAdministrableRequiresBothCapabilities(t *testing.T) {
+	t.Parallel()
 	adder := func(context.Context, VocabularyKeyAddition) (VocabularyKeyMutation, error) {
 		return VocabularyKeyMutation{}, nil
 	}

@@ -47,6 +47,7 @@ func buildPackedStorageFixture(t *testing.T, objectFormat string, operations int
 // from counts, or reaching an object through more than one class breaks the
 // exact per-class totals and the classified/reachable equality below.
 func TestMeasureGitStorageClassifiesEveryReachableObjectExactlyOnce(t *testing.T) {
+	t.Parallel()
 	const operations = 4
 	root := buildPackedStorageFixture(t, "sha1", operations)
 
@@ -123,6 +124,7 @@ func TestMeasureGitStorageClassifiesEveryReachableObjectExactlyOnce(t *testing.T
 // the reverse) collapses the documented distinction; compressed JSON documents
 // must be strictly smaller on disk than raw.
 func TestMeasureGitStorageSeparatesRawContentBytesFromOnDiskBytes(t *testing.T) {
+	t.Parallel()
 	root := buildPackedStorageFixture(t, "sha1", 4)
 
 	account, err := measureGitStorage(context.Background(), 60*time.Second, root)
@@ -146,6 +148,7 @@ func TestMeasureGitStorageSeparatesRawContentBytesFromOnDiskBytes(t *testing.T) 
 // document contents, different history depth, or a different task population -
 // breaks the cross-format logical equivalence this accounting relies on.
 func TestStorageFixturesCarryEquivalentLogicalDataAcrossObjectFormats(t *testing.T) {
+	t.Parallel()
 	if !supportsObjectFormat(t, "sha256") {
 		testenv.MissingCapability(t, "Git does not support SHA-256 repositories")
 	}
@@ -205,6 +208,7 @@ func TestStorageFixturesCarryEquivalentLogicalDataAcrossObjectFormats(t *testing
 // disposable caches together, or dropping either measured resource command
 // leaves the report unable to answer the story's questions.
 func TestMeasureStorageResourcesReportsEveryComponentForEachDepth(t *testing.T) {
+	t.Parallel()
 	binary := buildWorkbookBinary(t)
 	root := t.TempDir()
 
@@ -303,6 +307,7 @@ func TestMeasureStorageResourcesReportsEveryComponentForEachDepth(t *testing.T) 
 }
 
 func TestMeasureStorageResourcesRejectsIncompleteSpecs(t *testing.T) {
+	t.Parallel()
 	base := StorageResourceSpec{
 		WorkbookBinary:  "workbook",
 		Root:            t.TempDir(),
@@ -331,6 +336,7 @@ func TestMeasureStorageResourcesRejectsIncompleteSpecs(t *testing.T) {
 // Mutation witness: renaming, reordering, or dropping any reported field
 // silently breaks every consumer of the machine-readable report.
 func TestStorageResourceReportJSONFieldsAreStable(t *testing.T) {
+	t.Parallel()
 	report := sampleStorageResourceReport()
 
 	first, err := json.Marshal(report)
@@ -413,6 +419,7 @@ func TestStorageResourceReportJSONFieldsAreStable(t *testing.T) {
 // I/O column from the generated Markdown leaves the human-readable evidence
 // incomplete for a fixture depth.
 func TestStorageResourceMarkdownReportsEveryComponent(t *testing.T) {
+	t.Parallel()
 	var buffer strings.Builder
 	report := Report{
 		Format:           ReportFormat,
@@ -450,6 +457,7 @@ func TestStorageResourceMarkdownReportsEveryComponent(t *testing.T) {
 }
 
 func TestReportOmitsStorageSectionWhenNotMeasured(t *testing.T) {
+	t.Parallel()
 	report := Report{Format: ReportFormat, Version: ReportVersion}
 	var jsonBuffer, markdownBuffer strings.Builder
 	if err := report.WriteJSON(&jsonBuffer); err != nil {
@@ -672,6 +680,7 @@ func storageCommandNamed(t *testing.T, name string) storageResourceCommand {
 // attributed to a command that audited nothing, which is exactly the number the
 // storage evidence exists to report.
 func TestMeasureStorageResourceCommandChecksResultContentNotOnlyTheExitCode(t *testing.T) {
+	t.Parallel()
 	const operations = 4
 	fixture := smallStorageFixtureSpec("sha1", operations)
 	commits := fixture.TotalTasks * operations

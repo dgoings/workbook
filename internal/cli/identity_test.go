@@ -14,6 +14,7 @@ import (
 // origin's default branch — has nothing to find. Setup must still join the
 // project rather than mint a second one.
 func TestSetupJoinsOriginIdentityRefWithNoCommittedConfigAnywhere(t *testing.T) {
+	t.Parallel()
 	_, seed, stale := originAdoptedAfterClone(t)
 
 	// The seed adopts Workbook and shares tasks, but deliberately never commits
@@ -56,6 +57,7 @@ func TestSetupJoinsOriginIdentityRefWithNoCommittedConfigAnywhere(t *testing.T) 
 // refuse to work with: bootstrap and synchronization must complete, skipping
 // what they cannot read, exactly as they already do for the task namespace.
 func TestSetupAndSyncTolerateRefsUnderOriginsIdentityName(t *testing.T) {
+	t.Parallel()
 	bare, seed, stale := originAdoptedAfterClone(t)
 	blob := cliGitOutput(t, seed, "rev-parse", "HEAD")
 	cliGit(t, seed, "push", "--quiet", "origin", blob+":refs/workbook/project/notes")
@@ -107,6 +109,7 @@ func TestSetupAndSyncTolerateRefsUnderOriginsIdentityName(t *testing.T) {
 // too, a fresh clone sitting on the pre-Workbook default branch has nothing to
 // join and hits the very wedge this story removes.
 func TestMutationOnlyFlowPublishesTheIdentityForLaterClones(t *testing.T) {
+	t.Parallel()
 	bare, seed, later := originAdoptedAfterClone(t)
 	// --no-sync bootstraps locally, so nothing but the mutation itself can be
 	// what publishes to origin.
@@ -151,6 +154,7 @@ func TestMutationOnlyFlowPublishesTheIdentityForLaterClones(t *testing.T) {
 // history where it does not belong. Every publication path has to refuse that,
 // not only the one that synchronizes.
 func TestPublicationRefusesAnOriginHoldingAnotherProject(t *testing.T) {
+	t.Parallel()
 	foreignBare, foreignSeed, _ := originAdoptedAfterClone(t)
 	if code, _, stderr := run(t, foreignSeed, "setup"); code != 0 {
 		t.Fatalf("foreign setup code = %d, want 0; stderr = %q", code, stderr)
@@ -189,6 +193,7 @@ func TestPublicationRefusesAnOriginHoldingAnotherProject(t *testing.T) {
 // travel" suggests — and starting fresh means removing what would be adopted.
 // The README states both; this is what makes that statement true.
 func TestForkInheritsUpstreamIdentityUnlessTheAdvisoryCopyIsRemoved(t *testing.T) {
+	t.Parallel()
 	_, upstream, _ := originAdoptedAfterClone(t)
 	if code, _, stderr := run(t, upstream, "setup"); code != 0 {
 		t.Fatalf("upstream setup code = %d, want 0; stderr = %q", code, stderr)
@@ -244,6 +249,7 @@ func TestForkInheritsUpstreamIdentityUnlessTheAdvisoryCopyIsRemoved(t *testing.T
 // what leaves a later bare-branch clone with nothing to join. Every publishing
 // command therefore has to say so, on its own channel, while still succeeding.
 func TestPublicationWarnsWhenOriginRefusesTheIdentityRef(t *testing.T) {
+	t.Parallel()
 	bare, seed, _ := originAdoptedAfterClone(t)
 	hook := "#!/bin/sh\nwhile read old new ref; do\n" +
 		"  if [ \"$ref\" = \"refs/workbook/project\" ]; then\n" +
@@ -334,6 +340,7 @@ func assertIdentityRefusalMember(t *testing.T, command, stdout string) {
 // identity ref says which project it is. The missing advisory copy is worth one
 // line on stderr and nothing more.
 func TestCommandsReportMissingTrackedConfigurationOnceAndKeepWorking(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := cliCreateTask(t, repository, "Recorded before the branch switch")
 	if err := os.Remove(filepath.Join(repository, ".workbook", "config.json")); err != nil {
@@ -365,6 +372,7 @@ func TestCommandsReportMissingTrackedConfigurationOnceAndKeepWorking(t *testing.
 // stage must add a member only when it has something to report, so a
 // steady-state run stays byte-identical to what earlier versions emitted.
 func TestSyncJSONOmitsIdentityWhenNothingChanged(t *testing.T) {
+	t.Parallel()
 	_, seed, _ := originAdoptedAfterClone(t)
 	// --no-sync keeps bootstrap local, so the publication origin needs is left
 	// for the first explicit sync to make.

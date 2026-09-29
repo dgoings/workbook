@@ -21,6 +21,7 @@ func publishConfigRef(t *testing.T, repo *Repository) {
 // in one test, because the states are only meaningful in sequence: what
 // "diverged" means depends on what "fast-forwarded" left behind.
 func TestConfigLedgerLifecycleAcrossTwoClones(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -147,6 +148,7 @@ func TestConfigLedgerLifecycleAcrossTwoClones(t *testing.T) {
 // relies on: fetching before mutating means the second clone sees the first's
 // root and appends to it rather than minting a competing one.
 func TestConfigLedgerLazyGenesisConvergesAfterAFetch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -187,6 +189,7 @@ func TestConfigLedgerLazyGenesisConvergesAfterAFetch(t *testing.T) {
 // other, so the two ledgers are unrelated histories rather than a divergence
 // inside one.
 func TestConfigLedgerAdoptsOriginsRootWhenBothClonesSeeded(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -268,6 +271,7 @@ func mintedLedgerClone(
 // Both publication orders run, because the harm is not symmetric and a fix that
 // caught only the losing direction would leave the other silent.
 func TestConfigLedgerRefusesToAdoptARootWithADifferentVocabulary(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name string
 		// mintedPublishes says which clone won the publication race, which is
@@ -411,6 +415,7 @@ func renamePack(from, to core.Status, label string) []core.ConfigOperation {
 // case replays the same pack after adopting an equal root, which is the other
 // way a pack reaches this path.
 func TestConfigReplayAppliesAMultiOperationRenamePack(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name string
 		// separateRoots seeds the two clones independently, so the replay runs
@@ -516,6 +521,7 @@ func TestConfigReplayAppliesAMultiOperationRenamePack(t *testing.T) {
 // as already applied upstream — so a deliberate change is discarded and the
 // report says it landed. It reads as a conflict now.
 func TestConfigReplayReportsAnEditToAStatusOriginNeverDefined(t *testing.T) {
+	t.Parallel()
 	defaultConfig := core.ConfigData{Vocabulary: core.DefaultVocabulary().Document()}
 	view := newConfigView(defaultConfig, defaultConfig)
 
@@ -573,6 +579,7 @@ func TestConfigReplayReportsAnEditToAStatusOriginNeverDefined(t *testing.T) {
 // configuration name are origin's business, and a clone reads past them and
 // says what it skipped rather than refusing to run.
 func TestSyncReportsRefsItCannotReadUnderOriginsConfigName(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 	seeded := writeConfig(t, first, config, configOperations(renameOperation("ready", "todo"))...)
@@ -597,6 +604,7 @@ func TestSyncReportsRefsItCannotReadUnderOriginsConfigName(t *testing.T) {
 // vocabulary change reaches origin through the same paths a task change does,
 // rather than waiting for a full synchronization.
 func TestConfigLedgerRidesTheTaskPublicationPath(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, _, config := syncRepositories(t)
 
@@ -632,6 +640,7 @@ func TestConfigLedgerRidesTheTaskPublicationPath(t *testing.T) {
 // Every existing publication test creates a task first, which is why none of
 // them saw it.
 func TestPushPublishesTheLedgerForAProjectWithNoTasks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -666,6 +675,7 @@ func TestPushPublishesTheLedgerForAProjectWithNoTasks(t *testing.T) {
 // PushConfig is the publication a status change makes: the ledger alone, with
 // no task ref to name, and the same identity settlement in front of it.
 func TestPushConfigPublishesTheLedgerAlone(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, _, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Kept local")
@@ -701,6 +711,7 @@ func TestPushConfigPublishesTheLedgerAlone(t *testing.T) {
 // tasks into the new column, and the next write to such a task settles the
 // stored token.
 func TestVocabularyPropagatesAndCorrectsOnTouch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -774,6 +785,7 @@ func TestVocabularyPropagatesAndCorrectsOnTouch(t *testing.T) {
 // decision made falsifiable: one disputed status must not stop a team's tasks
 // from moving.
 func TestConfigLedgerFoldFailureDoesNotBlockTaskSynchronization(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -830,6 +842,7 @@ func openSyncCloneAt(t *testing.T, path string) *Repository {
 // configuration test runs SHA-1, so a fixed-width assumption on the parking
 // name, the ref transaction, or the replay would survive all of them.
 func TestConfigLedgerReplaysThroughASHA256Origin(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositoriesWithObjectFormat(t, testrepo.FormatSHA256)
 
@@ -879,6 +892,7 @@ func TestConfigLedgerReplaysThroughASHA256Origin(t *testing.T) {
 // rather than overwriting, and that the survivor is one well formed ledger with
 // exactly one root.
 func TestConcurrentConfigWritesConvergeOnOneLedger(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repo, config := writeRepository(t)
 
@@ -952,6 +966,7 @@ func TestConcurrentConfigWritesConvergeOnOneLedger(t *testing.T) {
 // publication test pushes before any ledger exists, which is exactly why none
 // of them saw it.
 func TestPushSucceedsAgainstAnOriginHoldingTheLedger(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -1000,6 +1015,7 @@ func TestPushSucceedsAgainstAnOriginHoldingTheLedger(t *testing.T) {
 // raise it, it leaves this clone's ledger exactly where it was — no move, no
 // park — and it does not stop the tasks from synchronizing.
 func TestReplayBudgetRefusesAHugeDivergenceWithoutDecidingAnything(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 

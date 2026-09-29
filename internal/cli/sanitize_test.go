@@ -31,6 +31,7 @@ func createForgedTask(t *testing.T, repository, title, description string, label
 }
 
 func TestShowSanitizesControlCharactersInTextMode(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: printing stored title or label bytes verbatim, letting
 	// an ESC sequence redraw the line into a forged row on a real terminal.
 	// The title and the label are asserted separately because each is its own
@@ -57,6 +58,7 @@ func TestShowSanitizesControlCharactersInTextMode(t *testing.T) {
 }
 
 func TestShowIndentsMultiLineDescriptionsSoTheyCannotForgeFields(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: printing description newlines verbatim, letting a
 	// description line parse as a forged top-level field. The description keeps
 	// its line structure, so the protection is the tab every continuation line
@@ -96,6 +98,7 @@ func TestShowIndentsMultiLineDescriptionsSoTheyCannotForgeFields(t *testing.T) {
 }
 
 func TestListAndBoardSanitizeControlCharactersInTextMode(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: list or board rendering stored control bytes verbatim.
 	// Each command is its own subtest so one raw sink cannot hide behind
 	// another's failure. Both layouts truncate the title to the column width,
@@ -126,6 +129,7 @@ func TestListAndBoardSanitizeControlCharactersInTextMode(t *testing.T) {
 }
 
 func TestMutationTextOutputSanitizesTitles(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: the create/update confirmation line echoing raw bytes.
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", forgedTitle, "--no-sync")
@@ -141,6 +145,7 @@ func TestMutationTextOutputSanitizesTitles(t *testing.T) {
 }
 
 func TestShowHistorySanitizesControlCharactersInFieldValues(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: the change log printing an old or new value verbatim.
 	repository := initializedRepository(t)
 	task := createForgedTask(t, repository, "innocuous", "")
@@ -158,6 +163,7 @@ func TestShowHistorySanitizesControlCharactersInFieldValues(t *testing.T) {
 }
 
 func TestJSONOutputPreservesRawTaskText(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: sanitizing stored data instead of its text rendering.
 	// encoding/json escapes control bytes, so JSON consumers get exact data.
 	repository := initializedRepository(t)

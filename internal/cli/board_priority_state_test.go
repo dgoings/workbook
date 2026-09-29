@@ -97,6 +97,7 @@ func pagePriorities(t *testing.T, page []byte) []struct {
 // status added while it is running already does. The board is started first on
 // purpose: this is the refresh path, not the startup read.
 func TestBoardPriorityStateFollowsAPriorityAddedAfterTheProcessStarted(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 
@@ -117,6 +118,7 @@ func TestBoardPriorityStateFollowsAPriorityAddedAfterTheProcessStarted(t *testin
 // A board page load reports the project's own priorities, so the client draws
 // the set the server owns rather than a copy of three names it carried itself.
 func TestBoardPriorityStatePageReportsTheProjectsPriorities(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunStatus(t, repository, "priority", "add", "urgent",
 		"--before", "high", "--label", "Drop everything", "--no-sync")
@@ -146,6 +148,7 @@ func TestBoardPriorityStatePageReportsTheProjectsPriorities(t *testing.T) {
 // built-in three — a configuration nobody touched, replaced by a rename of
 // something else.
 func TestBoardPriorityStateKeepsThePrioritiesThroughAStatusRename(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunStatus(t, repository, "priority", "add", "urgent", "--before", "high", "--no-sync")
 	addr := startServeBoard(t, repository)

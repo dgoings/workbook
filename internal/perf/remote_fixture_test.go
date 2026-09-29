@@ -17,6 +17,7 @@ import (
 )
 
 func TestBuildRemoteFixture(t *testing.T) {
+	t.Parallel()
 	formats := []string{"sha1", "sha256"}
 
 	topologies := []RemoteTopology{
@@ -99,6 +100,7 @@ func TestBuildRemoteFixture(t *testing.T) {
 // Mutation witness: indexing the active-task population without first
 // validating it turns a valid all-tombstoned fixture into a setup panic.
 func TestBuildRemoteFixtureRejectsTopologiesWithoutRequiredActiveTasks(t *testing.T) {
+	t.Parallel()
 	spec := FixtureSpec{TotalTasks: 1, ActiveTasks: 0, TombstonedTasks: 1, OperationsPerTask: 2, ObjectFormat: "sha1"}
 	fixture, err := BuildRemoteFixture(context.Background(), filepath.Join(t.TempDir(), "fresh"), spec, RemoteFreshCheckout)
 	if err != nil {
@@ -129,6 +131,7 @@ func TestBuildRemoteFixtureRejectsTopologiesWithoutRequiredActiveTasks(t *testin
 }
 
 func TestBuildRemoteFixtureUsesDeterministicSyntheticCommitIDs(t *testing.T) {
+	t.Parallel()
 	topologies := []RemoteTopology{
 		RemoteSmallChangedRefSet,
 		RemoteDivergentTips,

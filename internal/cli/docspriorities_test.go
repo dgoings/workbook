@@ -51,6 +51,7 @@ func assertGuidelinesKeepUrgent(t *testing.T, repository, what string) {
 // priority or status verb writes them back — a flip-flop that leaves an agent
 // reading the file between the two told that `urgent` does not exist.
 func TestDocsUpdateKeepsTheProjectsOwnPriorities(t *testing.T) {
+	t.Parallel()
 	repository := configuredPriorityProject(t)
 
 	// The file a priority verb has just written is not stale, so `docs status`
@@ -82,6 +83,7 @@ func TestDocsUpdateKeepsTheProjectsOwnPriorities(t *testing.T) {
 // `workbook docs install` is the same options construction as update, and a
 // project that reinstalls its documentation keeps its priorities.
 func TestDocsInstallKeepsTheProjectsOwnPriorities(t *testing.T) {
+	t.Parallel()
 	repository := configuredPriorityProject(t)
 
 	if code, _, stderr := run(t, repository, "docs", "install"); code != 0 {
@@ -93,6 +95,7 @@ func TestDocsInstallKeepsTheProjectsOwnPriorities(t *testing.T) {
 // Rerunning `workbook setup` on a configured project installs documentation
 // again, and that pass writes the guidelines in full.
 func TestSetupKeepsTheProjectsOwnPriorities(t *testing.T) {
+	t.Parallel()
 	repository := configuredPriorityProject(t)
 
 	if code, _, stderr := run(t, repository, "setup"); code != 0 {
@@ -107,6 +110,7 @@ func TestSetupKeepsTheProjectsOwnPriorities(t *testing.T) {
 // priorities as well as the statuses: this is somebody who did nothing wrong
 // being handed a file that says their project's priorities do not exist.
 func TestSetupWritesThePrioritiesTheFetchDelivered(t *testing.T) {
+	t.Parallel()
 	author, _ := cliSyncRepositories(t)
 	if code, _, stderr := run(t, author, "priority", "add", "urgent", "--before", "high"); code != 0 {
 		t.Fatalf("priority add urgent = code %d; stderr = %q", code, stderr)
@@ -135,6 +139,7 @@ func TestSetupWritesThePrioritiesTheFetchDelivered(t *testing.T) {
 // installs and has to agree with itself afterwards, the same two properties
 // TestSetupWritesThePrioritiesTheFetchDelivered pins for priorities.
 func TestSetupWritesTheKeyTheFetchDelivered(t *testing.T) {
+	t.Parallel()
 	author, _ := cliSyncRepositories(t)
 	founding := cliKeyList(t, author).Current
 	if code, _, stderr := run(t, author, "key", "add", "NEW", "--current"); code != 0 {
@@ -200,6 +205,7 @@ func TestSetupWritesTheKeyTheFetchDelivered(t *testing.T) {
 // records a change, including changes that left the statuses exactly as the
 // installed file describes them.
 func TestBoardDoesNotCallTheProjectsOwnPrioritiesStale(t *testing.T) {
+	t.Parallel()
 	repository := configuredPriorityProject(t)
 	ctx := context.Background()
 	board := openBoardVocabulary(t, ctx, repository)
@@ -221,6 +227,7 @@ func TestBoardDoesNotCallTheProjectsOwnPrioritiesStale(t *testing.T) {
 // every board write, forever, even though the installed file already names
 // the key `key add --current` put there.
 func TestBoardDoesNotCallTheProjectsOwnKeysStale(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	if code, _, stderr := run(t, repository, "key", "add", "NEW", "--current", "--no-sync"); code != 0 {
 		t.Fatalf("key add NEW --current = code %d; stderr = %q", code, stderr)

@@ -30,6 +30,7 @@ import (
 // priority that stores no color of its own, because the color a position
 // derives depends on how many positions there are.
 func TestHandlerPriorityMutationsAnswerWithTheInkTheBoardDraws(t *testing.T) {
+	t.Parallel()
 	result := priorityMutationResult(t)
 	want := string(priorityInk(result.State.Priorities))
 	if want == "" {
@@ -60,6 +61,7 @@ func TestHandlerPriorityMutationsAnswerWithTheInkTheBoardDraws(t *testing.T) {
 // adopts one document: the answer a mutation makes and the answer a fresh read
 // makes are the same shape, so the page has one path that swaps the ink.
 func TestHandlerVocabularyReadAnswersWithTheInkTheBoardDraws(t *testing.T) {
+	t.Parallel()
 	priorities := configuredPriorities(t)
 	handler := prioritiesAdministrableHandler(handlerVocabulary(t), priorities, "head-7", nil)
 	response := request(t, handler, http.MethodGet, "/api/vocabulary")
@@ -81,6 +83,7 @@ func TestHandlerVocabularyReadAnswersWithTheInkTheBoardDraws(t *testing.T) {
 // keeps a stylesheet answerable for every byte in it — the property this whole
 // approach rests on, asserted on the wire rather than on the composer.
 func TestHandlerPriorityInkOnAnAnswerIsComposedRatherThanCarried(t *testing.T) {
+	t.Parallel()
 	result := priorityMutationResult(t)
 	recorded := &recordedPriorityMutations{}
 	handler := priorityMutationHandler(t, recorded, result, nil)
@@ -111,6 +114,7 @@ func TestHandlerPriorityInkOnAnAnswerIsComposedRatherThanCarried(t *testing.T) {
 
 // A save of the board settings carries the theme the same way.
 func TestHandlerDisplayMutationAnswersWithTheThemeTheBoardDraws(t *testing.T) {
+	t.Parallel()
 	recorded := &recordedDisplayChange{}
 	result := displayMutationResult()
 	handler := displayMutationHandler(t, recorded, result, nil)
@@ -142,6 +146,7 @@ func TestHandlerDisplayMutationAnswersWithTheThemeTheBoardDraws(t *testing.T) {
 // with no member at all, because clearing is a change the board has to draw: a
 // client handed nothing would leave the accent it was opened with in place.
 func TestHandlerDisplayMutationCarriesAnEmptyThemeForClearedColors(t *testing.T) {
+	t.Parallel()
 	recorded := &recordedDisplayChange{}
 	handler := displayMutationHandler(t, recorded, DisplayMutation{
 		State: VocabularyState{Head: "head-written", Display: core.DisplaySettings{Name: "Beta"}},
@@ -177,6 +182,7 @@ func TestHandlerDisplayMutationCarriesAnEmptyThemeForClearedColors(t *testing.T)
 // always had — but the element is there, because the alternative is a client
 // that creates a <style> and decides where in the cascade it belongs.
 func TestHandlerServesBothStylesheetElementsForAProjectThatChoseNothing(t *testing.T) {
+	t.Parallel()
 	body := displayBoardPage(t, core.DisplaySettings{}, "atlas-web")
 
 	for _, marker := range []string{"<style data-board-theme>", "<style data-board-priority-ink>"} {
@@ -198,6 +204,7 @@ func TestHandlerServesBothStylesheetElementsForAProjectThatChoseNothing(t *testi
 // composing a stylesheet with none of that behind it, and the value it composed
 // from would have had to travel as text.
 func TestClientComposesNoBoardStylesheetOfItsOwn(t *testing.T) {
+	t.Parallel()
 	script := renderedClientScript(t, displayBoardPage(t, core.DisplaySettings{PrimaryColor: "#1a7f4b"}, "atlas-web"))
 
 	for _, composed := range []string{"--wb-priority-ink-", "--wb-primary", "--wb-text", ".priority--"} {
@@ -228,6 +235,7 @@ func widenedPriorities(t *testing.T) core.PriorityVocabulary {
 // A recolor redraws the board's ink where it stands. Nothing is reloaded, and
 // the stylesheet the page now carries is the one the server composed.
 func TestClientRedrawsThePriorityInkWhenAColorChanges(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	recolored := recoloredPriorities(t, "#7c3aed")
@@ -258,6 +266,7 @@ func TestClientRedrawsThePriorityInkWhenAColorChanges(t *testing.T) {
 // is drawn in depends on how many of them there are. This is the case a client
 // that patched only the priority it was told about would get wrong.
 func TestClientRedrawsThePriorityInkWhenAPriorityIsAdded(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	widened := widenedPriorities(t)
@@ -288,6 +297,7 @@ func TestClientRedrawsThePriorityInkWhenAPriorityIsAdded(t *testing.T) {
 // And a save of the project's accent redraws the theme, so the configuration
 // page behaves one way rather than two.
 func TestClientRedrawsTheThemeWhenTheAccentChanges(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	saved := core.DisplaySettings{Name: "Atlas", PrimaryColor: "#7f1a4b", TextColor: "#3b2a1a"}
 	runConfigClient(t, "redrawing the theme on a save", vocabulary, "head-1", `

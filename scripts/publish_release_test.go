@@ -14,6 +14,7 @@ import (
 // beside prose written for the same version puts two descriptions of one
 // release on the page, and the one nobody wrote wins the reader's attention.
 func TestPublishReleasePublishesTheChangelogEntryAsTheReleaseNotes(t *testing.T) {
+	t.Parallel()
 	root, _ := renderFormulaPaths(t)
 	dist := writeReleaseFixture(t, "0.1.0")
 	tap, _ := newTapRepository(t)
@@ -41,6 +42,7 @@ func TestPublishReleasePublishesTheChangelogEntryAsTheReleaseNotes(t *testing.T)
 
 // A release with no entry has nothing to publish, so the generated notes stay.
 func TestPublishReleaseGeneratesNotesWithoutAChangelogEntry(t *testing.T) {
+	t.Parallel()
 	root, _ := renderFormulaPaths(t)
 	dist := writeReleaseFixture(t, "0.1.0")
 	tap, _ := newTapRepository(t)
@@ -63,6 +65,7 @@ func TestPublishReleaseGeneratesNotesWithoutAChangelogEntry(t *testing.T) {
 }
 
 func TestPublishReleaseCreatesAssetsOnceAndRejectsMismatchedRerun(t *testing.T) {
+	t.Parallel()
 	root, _ := renderFormulaPaths(t)
 	dist := writeReleaseFixture(t, "0.1.0")
 	tap, remote := newTapRepository(t)
@@ -124,6 +127,7 @@ func TestPublishReleaseCreatesAssetsOnceAndRejectsMismatchedRerun(t *testing.T) 
 }
 
 func TestPublishReleaseRollsBackTapAndNewDraftWhenPublicationFails(t *testing.T) {
+	t.Parallel()
 	root, _ := renderFormulaPaths(t)
 	dist := writeReleaseFixture(t, "0.1.0")
 	tap, remote := newTapRepository(t)
@@ -163,6 +167,7 @@ func TestPublishReleaseRollsBackTapAndNewDraftWhenPublicationFails(t *testing.T)
 }
 
 func TestPublishReleaseNeverDeletesPublicReleaseAfterAmbiguousPublishFailure(t *testing.T) {
+	t.Parallel()
 	root, _ := renderFormulaPaths(t)
 	dist := writeReleaseFixture(t, "0.1.0")
 	tap, remote := newTapRepository(t)
@@ -210,6 +215,7 @@ func TestPublishReleaseNeverDeletesPublicReleaseAfterAmbiguousPublishFailure(t *
 // Unreleased section, and leaves the tap alone: brew upgrade must never serve an
 // rc to someone who installed a release.
 func TestPublishReleasePublishesAPreReleaseWithoutTouchingTheTap(t *testing.T) {
+	t.Parallel()
 	root, _ := renderFormulaPaths(t)
 	dist := writeReleaseFixture(t, "0.6.0-rc1")
 	tap, _ := newTapRepository(t)
@@ -254,6 +260,7 @@ func TestPublishReleasePublishesAPreReleaseWithoutTouchingTheTap(t *testing.T) {
 // With nothing under Unreleased there is nothing to publish as notes, so the
 // generated ones stay, as for a stable release with no entry.
 func TestPublishReleaseGeneratesPreReleaseNotesWithoutAnUnreleasedSection(t *testing.T) {
+	t.Parallel()
 	root, _ := renderFormulaPaths(t)
 	dist := writeReleaseFixture(t, "0.6.0-rc1")
 	tap, _ := newTapRepository(t)
@@ -277,6 +284,7 @@ func TestPublishReleaseGeneratesPreReleaseNotesWithoutAnUnreleasedSection(t *tes
 // The workflow checks the tap out only for a stable release, so a pre-release
 // run is handed a tap path that does not exist. It has to publish anyway.
 func TestPublishReleasePublishesAPreReleaseWithoutATapCheckout(t *testing.T) {
+	t.Parallel()
 	root, _ := renderFormulaPaths(t)
 	dist := writeReleaseFixture(t, "0.6.0-rc1")
 	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
@@ -299,6 +307,7 @@ func TestPublishReleasePublishesAPreReleaseWithoutATapCheckout(t *testing.T) {
 // A stable release does need the tap, so a missing checkout is a broken run and
 // has to stop before anything is published rather than after.
 func TestPublishReleaseFailsFastWhenAStableReleaseHasNoTapCheckout(t *testing.T) {
+	t.Parallel()
 	root, _ := renderFormulaPaths(t)
 	dist := writeReleaseFixture(t, "0.1.0")
 	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
@@ -316,6 +325,7 @@ func TestPublishReleaseFailsFastWhenAStableReleaseHasNoTapCheckout(t *testing.T)
 // Production mutation: flagging every release as a pre-release would hide each
 // stable one from brew and from anyone reading the releases page.
 func TestPublishReleaseDoesNotFlagAStableReleaseAsAPreRelease(t *testing.T) {
+	t.Parallel()
 	root, _ := renderFormulaPaths(t)
 	dist := writeReleaseFixture(t, "0.1.0")
 	tap, _ := newTapRepository(t)

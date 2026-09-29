@@ -7,6 +7,7 @@ import (
 )
 
 func TestScenarioNamesReturnsStableDefensiveRegistry(t *testing.T) {
+	t.Parallel()
 	want := []string{
 		"cli-create",
 		"cli-delete",
@@ -58,6 +59,7 @@ func TestScenarioNamesReturnsStableDefensiveRegistry(t *testing.T) {
 }
 
 func TestResolveScenariosUsesRegistryOrderAndRejectsInvalidSelectors(t *testing.T) {
+	t.Parallel()
 	all := ScenarioNames()
 	resolved, err := ResolveScenarios(nil)
 	if err != nil {

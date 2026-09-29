@@ -90,6 +90,7 @@ func createdTaskJSON(t *testing.T) (string, string) {
 // to send them to. The list says what is staged and what it weighs, and a row
 // can be taken back out before the task is ever created.
 func TestHandlerClientStagesAttachmentsOnTheCreateForm(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	program := createAttachmentProgram(t, `
 setTimeout(async () => {
@@ -154,6 +155,7 @@ setTimeout(async () => {
 // long before a task exists to attach it to — which is the whole point of asking
 // now: the server's refusal would arrive after the create.
 func TestHandlerClientRefusesAnOversizedFileAsItIsStaged(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	program := createAttachmentProgram(t, `
 setTimeout(async () => {
@@ -201,6 +203,7 @@ setTimeout(async () => {
 // total ceiling is core's and the form asks it of what is already staged, which
 // is the only place it can be asked at all before the task exists.
 func TestHandlerClientRefusesStagingPastTheTotalCeiling(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	allowed := core.MaxLiveAttachmentBytes / core.MaxAttachmentFileBytes
 	program := createAttachmentProgram(t, `
@@ -254,6 +257,7 @@ setTimeout(async () => {
 // the exact outcome the pre-checks exist to prevent — a task created and an
 // upload refused after it.
 func TestHandlerClientRefusesAFileNameTooLongInBytes(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	// Three bytes a character in UTF-8, so this is well over the ceiling while
 	// being far under it by any count of characters.
@@ -313,6 +317,7 @@ setTimeout(async () => {
 // this to the server deliberately, because there its refusal costs one request;
 // here it would cost a task made and an attachment missing.
 func TestHandlerClientRefusesAStagedLinkThatIsNotHTTP(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	program := createAttachmentProgram(t, `
 setTimeout(async () => {
@@ -343,6 +348,7 @@ setTimeout(async () => {
 // reader — or a naive `length` — would make. Left to the server it is a task
 // created and a link missing, over text somebody pasted.
 func TestHandlerClientRefusesALinkLabelTooLongInBytes(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	overlong := strings.Repeat("あ", core.MaxAttachmentLabelBytes/3+1)
 	program := createAttachmentProgram(t, `
@@ -389,6 +395,7 @@ setTimeout(async () => {
 // scheme is looked at — which is the order core asks in, so a URL that is both
 // too long and not http hears the same first answer here that it would there.
 func TestHandlerClientRefusesALinkURLTooLongInBytes(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	// Multibyte path segment, so the ceiling is passed by bytes while the
 	// character count stays under it.
@@ -450,6 +457,7 @@ setTimeout(async () => {
 // need an ID the server has not assigned yet, and the list that would have to
 // report their failures leaves with the form.
 func TestHandlerClientAttachesStagedAttachmentsAfterTheCreate(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	mutation, refreshed := createdTaskJSON(t)
 	program := createAttachmentProgram(t, `
@@ -533,6 +541,7 @@ setTimeout(async () => {
 // client would not have said one word about it. So the panel is frozen for the
 // whole run, exactly as the relationship sidebar beside it is.
 func TestHandlerClientFreezesTheStagedListWhileTheCreateRunWalksIt(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	mutation, refreshed := createdTaskJSON(t)
 	program := createAttachmentProgram(t, `
@@ -618,6 +627,7 @@ setTimeout(async () => {
 // under the walk. The row would leave the screen and be attached anyway, which
 // is a reader watching this client do the opposite of what they asked.
 func TestHandlerClientRefusesToRemoveAStagedRowMidRun(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	mutation, refreshed := createdTaskJSON(t)
 	program := createAttachmentProgram(t, `
@@ -691,6 +701,7 @@ setTimeout(async () => {
 // under controls that would never work again, beside a message about a refresh.
 // Read straight, that is a create that lost the files it is still showing.
 func TestHandlerClientClearsTheStagedListWhenTheRefreshAfterACreateFails(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	mutation, _ := createdTaskJSON(t)
 	program := createAttachmentProgram(t, `
@@ -762,6 +773,7 @@ setTimeout(async () => {
 // is read, nothing is sent, and everything staged is still staged — including
 // the Save that means "create", because no task was made to retry against.
 func TestHandlerClientRefusedCreateUploadsNothing(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	program := createAttachmentProgram(t, `
 setTimeout(async () => {
@@ -828,6 +840,7 @@ setTimeout(async () => {
 // can. Every staged item is attempted, so a reader gets a reason for each rather
 // than one reason and a queue of untried ones.
 func TestHandlerClientReportsTheAttachmentsACreateCouldNotAttach(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	mutation, refreshed := createdTaskJSON(t)
 	program := createAttachmentProgram(t, `
@@ -923,6 +936,7 @@ setTimeout(async () => {
 // because a File leaves with the node holding it, which is exactly why it has
 // to say so instead.
 func TestHandlerClientAnnouncesAttachmentsAbandonedWithTheForm(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	mutation, refreshed := createdTaskJSON(t)
 	program := createAttachmentProgram(t, `
@@ -987,6 +1001,7 @@ setTimeout(async () => {
 // leaving afterwards announces nothing. The departure report is about a list,
 // and it follows that list rather than the moment the list once had.
 func TestHandlerClientAnnouncesNoLossWhenTheFailedRowsAreRemoved(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	mutation, refreshed := createdTaskJSON(t)
 	program := createAttachmentProgram(t, `
@@ -1041,6 +1056,7 @@ setTimeout(async () => {
 // a second one. That is the reason the form holds an ID rather than re-entering
 // the create path: a reader pressing Save twice must end up with one task.
 func TestHandlerClientRetriesOutstandingAttachmentsAgainstTheSameTask(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	mutation, refreshed := createdTaskJSON(t)
 	program := createAttachmentProgram(t, `

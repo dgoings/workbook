@@ -12,6 +12,7 @@ import (
 // Changing the one changes nothing about the other, which is what makes
 // relabelling the cheapest priority change there is.
 func TestPriorityLabelChangesOnlyTheLabel(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := cliCreateTaskAtPriority(t, repository, "Ship the fix", "high")
 
@@ -90,6 +91,7 @@ func TestPriorityLabelChangesOnlyTheLabel(t *testing.T) {
 // The refusals: a priority this project does not have, and the label it already
 // carries.
 func TestPriorityLabelRefusesUnknownPrioritiesAndTheLabelItAlreadyHas(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, _, stderr := run(t, repository, "priority", "label", "blocker", "Blocker", "--no-sync", "--json")

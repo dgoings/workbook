@@ -13,6 +13,7 @@ import (
 // that a client which never learned about it keeps working. A request with no
 // body at all is the bare verb, and reaches the service with nothing set.
 func TestHandlerRestoresWithoutABody(t *testing.T) {
+	t.Parallel()
 	restored := boardTasks()[1]
 	var gotID string
 	var gotInput core.RestoreInput
@@ -39,6 +40,7 @@ func TestHandlerRestoresWithoutABody(t *testing.T) {
 }
 
 func TestHandlerRestoresIntoAStatus(t *testing.T) {
+	t.Parallel()
 	restored := boardTasks()[1]
 	var gotInput core.RestoreInput
 	handler := NewHandler(Options{
@@ -68,6 +70,7 @@ func TestHandlerRestoresIntoAStatus(t *testing.T) {
 // demand of theirs. Absent and malformed are different requests, and only the
 // first one is the bare verb.
 func TestHandlerRejectsMalformedRestoreBodies(t *testing.T) {
+	t.Parallel()
 	const taskID = "WB-01J00000000000000000000001"
 	tests := map[string]string{
 		"truncated":      `{"status":`,
@@ -109,6 +112,7 @@ func TestHandlerRejectsMalformedRestoreBodies(t *testing.T) {
 // queued the intent can tell "somebody got there first" from "this request was
 // wrong".
 func TestHandlerReportsARefusedRestore(t *testing.T) {
+	t.Parallel()
 	const taskID = "WB-01J00000000000000000000001"
 	handler := NewHandler(Options{
 		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
@@ -139,6 +143,7 @@ func TestHandlerReportsARefusedRestore(t *testing.T) {
 // the deleted column is a queued intent like any other and has to be refusable
 // when the card it names has moved on.
 func TestHandlerDeletesWithAnOptionalExpectedHead(t *testing.T) {
+	t.Parallel()
 	deleted := boardTasks()[0]
 	deleted.Deleted = true
 	var gotInput core.DeleteInput

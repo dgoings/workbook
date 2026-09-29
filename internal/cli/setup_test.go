@@ -33,6 +33,7 @@ func writeProjectFile(t *testing.T, repository, name, contents string) {
 }
 
 func TestSetupInitializesIdentityAndInstallsDocumentation(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 
 	code, stdout, stderr := run(t, repository, "setup")
@@ -58,6 +59,7 @@ func TestSetupInitializesIdentityAndInstallsDocumentation(t *testing.T) {
 // genesis rather than left to a fallback that a later release could change under
 // it. `blocked` is not among them: dependencies say what a task is waiting on.
 func TestSetupMintsTheDefaultVocabularyIntoAGenesis(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 
 	if code, _, stderr := run(t, repository, "setup"); code != 0 {
@@ -104,6 +106,7 @@ func TestSetupMintsTheDefaultVocabularyIntoAGenesis(t *testing.T) {
 // the ledger: six columns before, six columns after, and no genesis written by a
 // command whose job was to install documentation.
 func TestSetupLeavesAnExistingProjectsStatusesAlone(t *testing.T) {
+	t.Parallel()
 	repository := preLedgerRepository(t)
 	task := cliCreateTask(t, repository, "Alpha")
 
@@ -148,6 +151,7 @@ func TestSetupLeavesAnExistingProjectsStatusesAlone(t *testing.T) {
 // task-less, unconfigured project has no board to re-columnize and no recorded
 // decision to overrule, whoever created it and whenever.
 func TestSetupSeedsAProjectThatHasNoLedgerAndNoTasks(t *testing.T) {
+	t.Parallel()
 	repository := preLedgerRepository(t)
 	if document := cliStatusList(t, repository); document.Seeded {
 		t.Fatal("the fixture still has a configuration ledger")
@@ -175,6 +179,7 @@ func TestSetupSeedsAProjectThatHasNoLedgerAndNoTasks(t *testing.T) {
 // project whatever its ledger says, and seeding one under it would drop a column
 // its board is drawing — so it stays on the conservative fallback and says so.
 func TestSetupLeavesAProjectWithTasksOnTheFallback(t *testing.T) {
+	t.Parallel()
 	repository := preLedgerRepository(t)
 	cliCreateTask(t, repository, "Alpha")
 
@@ -206,6 +211,7 @@ func TestSetupLeavesAProjectWithTasksOnTheFallback(t *testing.T) {
 }
 
 func TestSetupReportsSkippedSyncWithoutAnOrigin(t *testing.T) {
+	t.Parallel()
 	// Production mutation: failing when no remote is configured would break the
 	// solo local workflow, which needs no remote at all.
 	repository := testrepo.New(t)
@@ -221,6 +227,7 @@ func TestSetupReportsSkippedSyncWithoutAnOrigin(t *testing.T) {
 }
 
 func TestSetupPreservesUserContentInAgentDocumentation(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	writeProjectFile(t, repository, "AGENTS.md", "# AGENTS.md\n\nMy own rules.\n")
 
@@ -241,6 +248,7 @@ func TestSetupPreservesUserContentInAgentDocumentation(t *testing.T) {
 }
 
 func TestSetupIsIdempotent(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	writeProjectFile(t, repository, "AGENTS.md", "# AGENTS.md\n")
 	if code, _, stderr := run(t, repository, "setup"); code != 0 {
@@ -259,6 +267,7 @@ func TestSetupIsIdempotent(t *testing.T) {
 }
 
 func TestSetupWithNoDocsSkipsDocumentation(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 
 	if code, _, stderr := run(t, repository, "setup", "--no-docs"); code != 0 {
@@ -274,6 +283,7 @@ func TestSetupWithNoDocsSkipsDocumentation(t *testing.T) {
 }
 
 func TestSetupEmitsAJSONEnvelope(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 
 	// --key WB is explicit: this suite's WB- task-ID assertions must not
@@ -304,6 +314,7 @@ func TestSetupEmitsAJSONEnvelope(t *testing.T) {
 }
 
 func TestSetupRefusesToOverwriteModifiedDocumentation(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	if code, _, stderr := run(t, repository, "setup"); code != 0 {
 		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
@@ -325,6 +336,7 @@ func TestSetupRefusesToOverwriteModifiedDocumentation(t *testing.T) {
 }
 
 func TestInitIsReplacedBySetup(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 
 	code, _, stderr := run(t, repository, "init")
@@ -336,7 +348,11 @@ func TestInitIsReplacedBySetup(t *testing.T) {
 }
 
 func TestDocsStatusReportsEachManagedArtifact(t *testing.T) {
-	repository := initializedRepository(t)
+	t.Parallel()
+	// A real mint, not a copy of the package template: the claim here is
+	// about what setup leaves behind, so the artifacts this reads have to be
+	// the ones setup just wrote rather than ones copied from elsewhere.
+	repository := freshlyInitializedRepository(t)
 
 	code, stdout, stderr := run(t, repository, "docs", "status", "--json")
 
@@ -358,6 +374,7 @@ func TestDocsStatusReportsEachManagedArtifact(t *testing.T) {
 }
 
 func TestDocsStatusReportsAbsentBeforeInstall(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	if code, _, stderr := run(t, repository, "setup", "--no-docs"); code != 0 {
 		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
@@ -374,6 +391,7 @@ func TestDocsStatusReportsAbsentBeforeInstall(t *testing.T) {
 }
 
 func TestDocsUpdateRefusesModifiedContentWithoutForce(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	edited := strings.Replace(
 		readProjectFile(t, repository, agentdocs.GuidelinesPath),
@@ -398,6 +416,7 @@ func TestDocsUpdateRefusesModifiedContentWithoutForce(t *testing.T) {
 }
 
 func TestDocsInstallCreatesARequestedTarget(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, _, stderr := run(t, repository, "docs", "install", "--create", "CLAUDE.md")
@@ -411,6 +430,7 @@ func TestDocsInstallCreatesARequestedTarget(t *testing.T) {
 }
 
 func TestDocsRemoveStripsManagedContent(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	writeProjectFile(t, repository, "AGENTS.md", "# AGENTS.md\n\nMy own rules.\n")
 	if code, _, stderr := run(t, repository, "setup"); code != 0 {
@@ -431,6 +451,7 @@ func TestDocsRemoveStripsManagedContent(t *testing.T) {
 }
 
 func TestDocsRejectsAnUnknownSubcommand(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, _, stderr := run(t, repository, "docs", "publish")
@@ -442,6 +463,7 @@ func TestDocsRejectsAnUnknownSubcommand(t *testing.T) {
 }
 
 func TestDocsSubcommandsExposeHelp(t *testing.T) {
+	t.Parallel()
 	// Production mutation: leaving the subcommand help list hardcoded to hooks
 	// would hide every docs subcommand from help output.
 	repository := initializedRepository(t)
@@ -468,6 +490,7 @@ func TestDocsSubcommandsExposeHelp(t *testing.T) {
 }
 
 func TestDocsHelpListsEverySubcommand(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, stdout, stderr := run(t, repository, "docs", "--help")
@@ -483,6 +506,7 @@ func TestDocsHelpListsEverySubcommand(t *testing.T) {
 }
 
 func TestSetupInstallsTheSkillIntoAnOverriddenDirectory(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 
 	code, _, stderr := run(t, repository, "setup", "--skill-dir", "tools/skills")
@@ -499,6 +523,7 @@ func TestSetupInstallsTheSkillIntoAnOverriddenDirectory(t *testing.T) {
 }
 
 func TestSetupWithNoSkillStillInstallsGuidelines(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 
 	code, stdout, stderr := run(t, repository, "setup", "--no-skill")
@@ -518,6 +543,7 @@ func TestSetupWithNoSkillStillInstallsGuidelines(t *testing.T) {
 }
 
 func TestSkillDirectoryAndNoSkillAreMutuallyExclusive(t *testing.T) {
+	t.Parallel()
 	// Production mutation: silently ignoring one of two contradictory flags
 	// leaves the user guessing which one took effect.
 	repository := testrepo.New(t)
@@ -537,6 +563,7 @@ func TestSkillDirectoryAndNoSkillAreMutuallyExclusive(t *testing.T) {
 }
 
 func TestDocsSubcommandsHonourTheSkillDirectoryOverride(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	if code, _, stderr := run(t, repository, "setup", "--skill-dir", "tools/skills"); code != 0 {
 		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
@@ -565,6 +592,7 @@ func TestDocsSubcommandsHonourTheSkillDirectoryOverride(t *testing.T) {
 // Setup bootstraps a clone by synchronizing, so it reaches the same replay the
 // other fetching commands do and must hand back the same contract.
 func TestSetupReportsConflictsAndFinishesBootstrapping(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	code, stdout, stderr := run(t, first, "create", "Described", "--json")
 	if code != 0 {
@@ -615,6 +643,7 @@ func TestSetupReportsConflictsAndFinishesBootstrapping(t *testing.T) {
 // synchronized, reported "completed", and named nothing, while `setup --json`
 // carried the report all along.
 func TestSetupNamesTheRefsItsSynchronizationIgnored(t *testing.T) {
+	t.Parallel()
 	const foreignRef = "refs/workbook/tasks/OPS-01K0M6B8A4FTT8C39MXXYTW7D9"
 	first, second := cliSyncRepositories(t)
 	cliCreateTask(t, first, "Shared task")
@@ -656,6 +685,7 @@ func TestSetupNamesTheRefsItsSynchronizationIgnored(t *testing.T) {
 // send somebody looking for WB- prefixed tasks under the key that stopped
 // minting them.
 func TestSetupReportsTheCurrentKeyAfterKeyCurrent(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	mustRunKey(t, repository, "key", "add", "NEW", "--current", "--no-sync")
 

@@ -34,6 +34,7 @@ const strandedStatus = core.Status("ghost")
 // as "this task is stuck", which is what the copy used to imply back when the
 // cards could not be dragged.
 func TestHandlerUnknownStatusRegionCopyNamesBothCausesAndBothWaysOut(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -68,6 +69,7 @@ func TestHandlerUnknownStatusRegionCopyNamesBothCausesAndBothWaysOut(t *testing.
 // left an unread refusal on, and filing it must not be the one move that throws
 // all three away. So this asserts the node, not just the status.
 func TestHandlerClientDragsACardOutOfTheUnknownStatusRegion(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	stranded := clientPlacementTask("WB-01J0000000000000000000A101", "Written elsewhere", strandedStatus, core.PriorityMedium)
 	stranded.Head = "head-a"
@@ -146,6 +148,7 @@ func TestHandlerClientDragsACardOutOfTheUnknownStatusRegion(t *testing.T) {
 // The control is the same gesture on a card that started in a column, which has
 // always sent nothing.
 func TestHandlerClientDoesNotWriteADropOntoTheColumnACardHasAlreadyReached(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	stranded := clientPlacementTask("WB-01J0000000000000000000A101", "Written elsewhere", strandedStatus, core.PriorityMedium)
 	stranded.Head = "head-a"
@@ -193,6 +196,7 @@ func TestHandlerClientDoesNotWriteADropOntoTheColumnACardHasAlreadyReached(t *te
 // and the page says so by not offering the target at all rather than by sending
 // a write the server would refuse.
 func TestHandlerClientTakesNoDropsIntoTheUnknownStatusRegion(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	tasks := []core.Task{
 		clientPlacementTask("WB-01J0000000000000000000A101", "Written elsewhere", strandedStatus, core.PriorityMedium),
@@ -248,6 +252,7 @@ func TestHandlerClientTakesNoDropsIntoTheUnknownStatusRegion(t *testing.T) {
 // because the clone most apt to be rewriting a task is the clone whose status
 // change stranded it here in the first place.
 func TestHandlerClientSurvivesATaskDeletedMidDrag(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	bystander := clientPlacementTask("WB-01J0000000000000000000B202", "Bystander", core.Status("icebox"), core.PriorityLow)
 	bystander.Head = "head-b"
@@ -313,6 +318,7 @@ func TestHandlerClientSurvivesATaskDeletedMidDrag(t *testing.T) {
 // to stay true: the drag is the quick way, not the only way, and a reader who
 // opened the task rather than dragging it must not find a dead form.
 func TestHandlerClientSavesAStatusChosenForAStrandedTask(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	stranded := clientPlacementTask("WB-01J0000000000000000000A101", "Written elsewhere", strandedStatus, core.PriorityMedium)
 	stranded.Head = "head-a"

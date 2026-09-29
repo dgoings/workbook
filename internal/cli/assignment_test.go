@@ -51,6 +51,7 @@ func warningCodes(warnings []core.Warning) []string {
 // `--assign self` is the shape an agent uses, and the whole record it leaves
 // has to be readable afterwards: who holds it, who recorded it, and when.
 func TestUpdateAssignSelfRecordsTheActingIdentity(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := createReadyTask(t, repository, "Assignable")
 
@@ -78,6 +79,7 @@ func TestUpdateAssignSelfRecordsTheActingIdentity(t *testing.T) {
 // A labelled self-assignment is how one agent of a fleet says which agent it is,
 // and the label is the only part it spells out.
 func TestUpdateAssignSelfWithALabelUsesTheRepositoryIdentity(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := createReadyTask(t, repository, "Assignable")
 
@@ -92,6 +94,7 @@ func TestUpdateAssignSelfWithALabelUsesTheRepositoryIdentity(t *testing.T) {
 // message naming who holds it, and — the promise the code carries — nothing
 // recorded at all.
 func TestUpdateAssignRefusesATaskSomebodyElseHolds(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := createReadyTask(t, repository, "Theirs")
 	if code, _, stderr := run(t, repository, "update", task.ID, "--assign", "sam@example.com/review", "--no-sync"); code != 0 {
@@ -130,6 +133,7 @@ func TestUpdateAssignRefusesATaskSomebodyElseHolds(t *testing.T) {
 // --force is the deliberate pairing, and it never removes anything: both
 // assignments stand, and the command says so rather than reporting a clean win.
 func TestUpdateAssignForceRecordsBesideTheOtherAssignment(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := createReadyTask(t, repository, "Shared")
 	if code, _, stderr := run(t, repository, "update", task.ID, "--assign", "sam@example.com", "--no-sync"); code != 0 {
@@ -154,6 +158,7 @@ func TestUpdateAssignForceRecordsBesideTheOtherAssignment(t *testing.T) {
 // Assigning yourself something you already hold changes nothing, says nothing
 // alarming, and writes no commit.
 func TestUpdateAssignIsQuietWhenYouAlreadyHoldTheTask(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := createReadyTask(t, repository, "Mine")
 	if code, _, stderr := run(t, repository, "update", task.ID, "--assign", "self/impl-1", "--no-sync"); code != 0 {
@@ -178,6 +183,7 @@ func TestUpdateAssignIsQuietWhenYouAlreadyHoldTheTask(t *testing.T) {
 // An assignment and a status given together are one change, which is what makes
 // "take this task up" a single commit that cannot half-succeed.
 func TestUpdateAssignComposesWithAStatusInOnePack(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := createReadyTask(t, repository, "Composed")
 	before := gitOutput(t, repository, "rev-list", "--count", "refs/workbook/tasks/"+task.ID)
@@ -211,6 +217,7 @@ func TestUpdateAssignComposesWithAStatusInOnePack(t *testing.T) {
 // did. This is what both stories promised separately, and it is only true
 // jointly if neither of them reached for a write of its own.
 func TestUpdateComposesAStatusACommentAndAnAssignmentInOnePack(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := createReadyTask(t, repository, "Composed three ways")
 	before := gitOutput(t, repository, "rev-list", "--count", "refs/workbook/tasks/"+task.ID)
@@ -271,6 +278,7 @@ func TestUpdateComposesAStatusACommentAndAnAssignmentInOnePack(t *testing.T) {
 // The removal rule as somebody meets it: a foreign withdrawal is refused before
 // anything is written, and the refusal says who to ask.
 func TestUpdateUnassignSurfacesTheRemovalAuthorityRefusal(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	cliGit(t, first, "config", "user.email", "sam@example.com")
 	cliGit(t, second, "config", "user.email", "dylan@example.com")
@@ -305,6 +313,7 @@ func TestUpdateUnassignSurfacesTheRemovalAuthorityRefusal(t *testing.T) {
 // The flag combinations that have no single meaning are refused before anything
 // is opened, in the invocation category every other argument error uses.
 func TestUpdateAssignmentFlagCombinationsAreRefused(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := createReadyTask(t, repository, "Guarded")
 
@@ -337,6 +346,7 @@ func TestUpdateAssignmentFlagCombinationsAreRefused(t *testing.T) {
 // does not, and a value that would break the grammars it has to survive is
 // refused rather than stored.
 func TestUpdateAssignRefusesValuesTheBoundaryWillNotAuthor(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := createReadyTask(t, repository, "Guarded")
 
@@ -368,6 +378,7 @@ func TestUpdateAssignRefusesValuesTheBoundaryWillNotAuthor(t *testing.T) {
 // whitespace it carries, one assignment is one line, and no line it produces can
 // be read as a field of its own.
 func TestShowRendersAHostileAssignmentOnOneLine(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := createReadyTask(t, repository, "Hostile")
 	// A no-break space and a right-to-left override both pass the fold, which
@@ -411,6 +422,7 @@ func TestShowRendersAHostileAssignmentOnOneLine(t *testing.T) {
 // The default skip: work another principal is responsible for is work that is
 // being done, and offering it again is how a fleet duplicates one task.
 func TestNextSkipsTasksAssignedToOtherPrincipals(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	theirs := createReadyTask(t, repository, "Theirs")
 	mine := createReadyTask(t, repository, "Mine")
@@ -438,6 +450,7 @@ func TestNextSkipsTasksAssignedToOtherPrincipals(t *testing.T) {
 // "There is no work" and "the work is being done" are different answers, and a
 // caller that cannot tell them apart concludes the board is empty.
 func TestNextSaysWhenEveryEligibleTaskIsHeldBySomebodyElse(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	theirs := createReadyTask(t, repository, "Theirs")
 	if code, _, stderr := run(t, repository, "update", theirs.ID, "--assign", "sam@example.com", "--no-sync"); code != 0 {
@@ -505,6 +518,7 @@ func TestNextSaysWhenEveryEligibleTaskIsHeldBySomebodyElse(t *testing.T) {
 // A board with nothing eligible answers the same way whether or not a claim was
 // asked for: nothing to do is not a failure.
 func TestNextClaimReportsAnEmptyBoardWithoutFailing(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, stdout, stderr := run(t, repository, "next", "--claim", "--no-sync", "--json")
@@ -519,6 +533,7 @@ func TestNextClaimReportsAnEmptyBoardWithoutFailing(t *testing.T) {
 // The claim itself: one command picks the task next would pick and records the
 // assignment, so two agents asking at once cannot both walk away with it.
 func TestNextClaimAssignsTheTaskItPicked(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	first := createReadyTask(t, repository, "First")
 	createReadyTask(t, repository, "Second")
@@ -564,6 +579,7 @@ func TestNextClaimAssignsTheTaskItPicked(t *testing.T) {
 }
 
 func TestNextRefusesToClaimAndOfferEverythingAtOnce(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, _, stderr := run(t, repository, "next", "--claim", "--any", "--no-sync")
 	if code != 2 {
@@ -576,6 +592,7 @@ func TestNextRefusesToClaimAndOfferEverythingAtOnce(t *testing.T) {
 // claims, the other meets the refusal that names them, records nothing, and can
 // still choose to pair by forcing — at which point both assignments stand.
 func TestTwoClonesClaimingOneTask(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	cliGit(t, first, "config", "user.email", "one@example.com")
 	cliGit(t, second, "config", "user.email", "two@example.com")
@@ -676,6 +693,7 @@ func TestTwoClonesClaimingOneTask(t *testing.T) {
 // claimed *or* the synchronization that reconciled tells the claimant, and why
 // this repro drives the second one.
 func TestAClaimThatLosesThePushRaceIsReportedBySyncing(t *testing.T) {
+	t.Parallel()
 	_, second, task := stagedClaimRace(t)
 	assertAssignments(t, showTask(t, second, task.ID), "two@example.com")
 
@@ -708,6 +726,7 @@ func TestAClaimThatLosesThePushRaceIsReportedBySyncing(t *testing.T) {
 // one that tells the claimant, so an agent that simply asks for its next task
 // hears it too.
 func TestAReconciledClaimIsReportedByTheNextCommandThatFetches(t *testing.T) {
+	t.Parallel()
 	_, second, task := stagedClaimRace(t)
 
 	code, stdout, stderr := run(t, second, "next", "--json")
@@ -737,6 +756,7 @@ func TestAReconciledClaimIsReportedByTheNextCommandThatFetches(t *testing.T) {
 // role itself instead, on a fresh staged race, rather than layering a second
 // invocation onto the test above.
 func TestAReconciledClaimIsReportedByTheNextLimitCommandThatFetches(t *testing.T) {
+	t.Parallel()
 	_, second, task := stagedClaimRace(t)
 
 	code, stdout, stderr := run(t, second, "next", "--limit", "3", "--json")
@@ -782,6 +802,7 @@ func TestAReconciledClaimIsReportedByTheNextLimitCommandThatFetches(t *testing.T
 // needed either of them, and no later command could pick it up, because by then
 // there was nothing left to reconcile.
 func TestANonAssignmentMutationThatReconcilesAClaimReportsTheSharing(t *testing.T) {
+	t.Parallel()
 	_, second, task := stagedClaimRace(t)
 
 	// The take-it-up step, run on the very task whose claim lost the race.
@@ -803,6 +824,7 @@ func TestANonAssignmentMutationThatReconcilesAClaimReportsTheSharing(t *testing.
 // it once, not once per channel. The result's own report and the reconcile pass
 // would otherwise both name the same task.
 func TestAnAssignmentThatReconcilesItsOwnClaimReportsTheSharingOnce(t *testing.T) {
+	t.Parallel()
 	_, second, task := stagedClaimRace(t)
 
 	// Re-claiming is a no-op on the assignment, so everything this reports comes

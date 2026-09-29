@@ -219,6 +219,7 @@ const keyPanelMarkup = `<div class="admin" data-key-panel`
 // that could add a key but never retire one would draw rows whose controls fail
 // differently from the form above them.
 func TestHandlerConfigCarriesTheKeysSectionOnlyWhenItCanChangeThem(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	keys := projectKeys(t)
 	full := keysAdministrableOptions(vocabulary, keys, "head-1", nil)
@@ -285,6 +286,7 @@ func TestHandlerConfigCarriesTheKeysSectionOnlyWhenItCanChangeThem(t *testing.T)
 // create form's chooser reads them out of the page before anything has been
 // fetched, and a board nobody can administer still mints tasks.
 func TestHandlerBoardPublishesTheProjectsKeys(t *testing.T) {
+	t.Parallel()
 	keys := projectKeys(t)
 	response := request(t, keysAdministrableHandler(t, handlerVocabulary(t), keys, "head-1", nil),
 		http.MethodGet, "/")
@@ -310,6 +312,7 @@ func TestHandlerBoardPublishesTheProjectsKeys(t *testing.T) {
 // permanent name, so a reader looking at this list has to be able to see it
 // saying so and to bring it back.
 func TestClientKeysSectionListsEveryKeyWithItsState(t *testing.T) {
+	t.Parallel()
 	runKeyPanelClient(t, "listing this project's keys", "/", projectKeys(t), nil, `
   vocabularyRead = `+keyPanelVocabularyJSON(t, projectKeys(t), "head-1")+`;
   await openStatuses();
@@ -365,6 +368,7 @@ func TestClientKeysSectionListsEveryKeyWithItsState(t *testing.T) {
 // active, so a row that offers Retire at all is a row on a project that has a
 // second active key.
 func TestClientKeysSectionSaysWhenThereIsOnlyOneKey(t *testing.T) {
+	t.Parallel()
 	runKeyPanelClient(t, "a project with one key", "/", oneKeyProject(), nil, `
   vocabularyRead = `+keyPanelVocabularyJSON(t, oneKeyProject(), "head-1")+`;
   await openStatuses();
@@ -399,6 +403,7 @@ func TestClientKeysSectionSaysWhenThereIsOnlyOneKey(t *testing.T) {
 // through the Reactivate on that row, which is why the sentence asks how many
 // keys there are rather than how many can mint.
 func TestClientKeysSectionSaysNothingOfTheSortWithSeveralKeys(t *testing.T) {
+	t.Parallel()
 	runKeyPanelClient(t, "a project with several keys", "/", projectKeys(t), nil, `
   vocabularyRead = `+keyPanelVocabularyJSON(t, projectKeys(t), "head-1")+`;
   await openStatuses();
@@ -414,6 +419,7 @@ func TestClientKeysSectionSaysNothingOfTheSortWithSeveralKeys(t *testing.T) {
 // exactly the move the sentence says to go and make. One key, not one active
 // key, is the question, and this is the fixture that tells the two apart.
 func TestClientKeysSectionSaysNothingWithOneActiveAndOneRetiredKey(t *testing.T) {
+	t.Parallel()
 	keys := oneActiveOneRetiredProject(t)
 	runKeyPanelClient(t, "a project whose second key is retired", "/", keys, nil, `
   vocabularyRead = `+keyPanelVocabularyJSON(t, keys, "head-1")+`;
@@ -452,6 +458,7 @@ func oneActiveOneRetiredProject(t *testing.T) core.KeySet {
 // And the control the reader pressed is one of the nodes the rebuild drops, so
 // focus is caught on the section itself rather than left on the document body.
 func TestClientKeysSectionMakesAnotherKeyCurrent(t *testing.T) {
+	t.Parallel()
 	runKeyPanelClient(t, "moving the minting to another key", "/", projectKeys(t), nil, `
   vocabularyRead = `+keyPanelVocabularyJSON(t, projectKeys(t), "head-1")+`;
   await openStatuses();
@@ -500,6 +507,7 @@ func TestClientKeysSectionMakesAnotherKeyCurrent(t *testing.T) {
 // Retiring a key and bringing one back are the other two intents the per-key
 // route carries, and each is one request naming one of them.
 func TestClientKeysSectionRetiresAndReactivatesAKey(t *testing.T) {
+	t.Parallel()
 	retired := func(t *testing.T) core.KeySet {
 		t.Helper()
 		keys, err := core.NewKeySet(core.KeyDocument{
@@ -565,6 +573,7 @@ func TestClientKeysSectionRetiresAndReactivatesAKey(t *testing.T) {
 // than a second request: that is what `workbook key add --current` is, and two
 // requests would be two ledger commits for one decision.
 func TestClientKeysSectionAddsAKeyAndCanMakeItCurrent(t *testing.T) {
+	t.Parallel()
 	widened := func(t *testing.T) core.KeySet {
 		t.Helper()
 		keys, err := core.NewKeySet(core.KeyDocument{
@@ -622,6 +631,7 @@ func TestClientKeysSectionAddsAKeyAndCanMakeItCurrent(t *testing.T) {
 // because a fake DOM has no layout engine to read a cursor with, exactly as the
 // form layout rules are.
 func TestHandlerKeyRowsOfferNoDragCursor(t *testing.T) {
+	t.Parallel()
 	response := request(t, keysAdministrableHandler(t, handlerVocabulary(t), projectKeys(t), "head-1", nil),
 		http.MethodGet, "/config")
 	if response.Code != http.StatusOK {
@@ -638,6 +648,7 @@ func TestHandlerKeyRowsOfferNoDragCursor(t *testing.T) {
 // each section has one: a refused key change must not blank a label somebody is
 // typing into a status row.
 func TestClientKeysSectionQuotesARefusalItDidNotMake(t *testing.T) {
+	t.Parallel()
 	const refusal = `project key "SPARE" is this project's only active key, and a project must keep one ` +
 		`to mint new tasks under; add another first: workbook key add <key>`
 	runKeyPanelClient(t, "quoting a refused key change", "/", projectKeys(t), nil, `
@@ -673,6 +684,7 @@ func TestClientKeysSectionQuotesARefusalItDidNotMake(t *testing.T) {
 // is no chooser at all — and the create sends no key, which is what every client
 // predating several keys sends and what the server reads as the current one.
 func TestClientNewTaskFormOffersNoKeyChooserForAProjectWithOneKey(t *testing.T) {
+	t.Parallel()
 	task := clientPlacementTask("WB-01J0000000000000000000FF01", "Neighbor task", core.StatusReady, core.PriorityMedium)
 	runKeyPanelClient(t, "a one-key project's create form", "/tasks/new", oneKeyProject(), []core.Task{task}, `
   await settle();
@@ -702,6 +714,7 @@ func TestClientNewTaskFormOffersNoKeyChooserForAProjectWithOneKey(t *testing.T) 
 // Retired keys are not offered. A retired key mints nothing, so listing it would
 // be offering a choice the service refuses in core's own words.
 func TestClientNewTaskFormChoosesAKeyAndSendsItOnCreate(t *testing.T) {
+	t.Parallel()
 	task := clientPlacementTask("WB-01J0000000000000000000FF01", "Neighbor task", core.StatusReady, core.PriorityMedium)
 	runKeyPanelClient(t, "choosing a key on create", "/tasks/new", projectKeys(t), []core.Task{task}, `
   await settle();
@@ -736,6 +749,7 @@ func TestClientNewTaskFormChoosesAKeyAndSendsItOnCreate(t *testing.T) {
 // The chooser left standing at the current key sends nothing, so a project with
 // several keys still sends the create every older client sends.
 func TestClientNewTaskFormSendsNoKeyWhenTheReaderTookTheDefault(t *testing.T) {
+	t.Parallel()
 	task := clientPlacementTask("WB-01J0000000000000000000FF01", "Neighbor task", core.StatusReady, core.PriorityMedium)
 	runKeyPanelClient(t, "creating under the current key", "/tasks/new", projectKeys(t), []core.Task{task}, `
   await settle();
@@ -761,6 +775,7 @@ func TestClientNewTaskFormSendsNoKeyWhenTheReaderTookTheDefault(t *testing.T) {
 // would have. So every vocabulary this page receives replaces them, and the next
 // form opened offers what the project now has. Nothing polls for it.
 func TestClientNewTaskChooserReadsTheKeysThePageLastHeardAbout(t *testing.T) {
+	t.Parallel()
 	added := func(t *testing.T) core.KeySet {
 		t.Helper()
 		keys, err := core.NewKeySet(core.KeyDocument{
@@ -811,6 +826,7 @@ func TestClientNewTaskChooserReadsTheKeysThePageLastHeardAbout(t *testing.T) {
 // core.ValidateProjectKey's, the route answers a name that is not one in that
 // sentence, and a script that refused first would refuse in words of its own.
 func TestClientScriptNamesNoKeyGrammarOfItsOwn(t *testing.T) {
+	t.Parallel()
 	response := request(t, keysAdministrableHandler(t, handlerVocabulary(t), projectKeys(t), "head-1", nil),
 		http.MethodGet, "/config")
 	if response.Code != http.StatusOK {

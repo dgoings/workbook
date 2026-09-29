@@ -214,6 +214,7 @@ const close = (got, want) => Math.abs(got - want) < 0.0001;
 // against, at a rate the reader sets by how far past the edge they push, and
 // not at all while the cursor is anywhere in the middle.
 func TestHandlerClientScrollsAColumnHeldAgainstItsEdges(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "drag edge scrolling", dragScrollTasks(), dragScrollHarness+`
   const deep = furnishColumn(listFor("in-progress"), 100, 600);
   const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
@@ -300,6 +301,7 @@ func TestHandlerClientScrollsAColumnHeldAgainstItsEdges(t *testing.T) {
 // ramp that does nothing. That strip is what this pins, because it is the one
 // place where the quantization is not a wobble but a stall.
 func TestHandlerClientDoesNotLoseFractionsOfAPixelToARoundingScroller(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "drag scrolling on a rounding scroller", dragScrollTasks(), dragScrollHarness+`
   const deep = furnishColumn(listFor("in-progress"), 100, 600);
   const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
@@ -335,6 +337,7 @@ func TestHandlerClientDoesNotLoseFractionsOfAPixelToARoundingScroller(t *testing
 // — three separate endings, because a drag has three separate ways to end and
 // a frame loop that outlived one of them would run for the life of the page.
 func TestHandlerClientRunsTheDragScrollLoopOnlyWhileTheDragLasts(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "drag scroll loop lifecycle", dragScrollTasks(), dragScrollHarness+`
   const deep = furnishColumn(listFor("in-progress"), 100, 600);
   const ready = listFor("ready");
@@ -441,6 +444,7 @@ func TestHandlerClientRunsTheDragScrollLoopOnlyWhileTheDragLasts(t *testing.T) {
 // property that closes it: for every target either event can land on, the two
 // give the same answer.
 func TestHandlerClientAcceptsADragOnEnterAsWellAsOnOver(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "drag acceptance on enter and over", dragScrollTasks(), dragScrollHarness+`
   const deep = furnishColumn(listFor("in-progress"), 100, 600);
   const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
@@ -515,6 +519,7 @@ func TestHandlerClientAcceptsADragOnEnterAsWellAsOnOver(t *testing.T) {
 // Sideways is the opposite and must still stop, because a cursor beside the
 // column has gone somewhere that answers for itself.
 func TestHandlerClientKeepsScrollingAColumnShovedPast(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "scrolling a column the card is shoved past", dragScrollTasks(), dragScrollHarness+`
   const deep = furnishColumn(listFor("in-progress"), 100, 600);
   const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
@@ -584,6 +589,7 @@ func TestHandlerClientKeepsScrollingAColumnShovedPast(t *testing.T) {
 // not moved — there may never be another dragover to correct it — and the drop
 // has to land where the line was, not where it was drawn one dragover ago.
 func TestHandlerClientKeepsTheDropMarkerOnTheCardsScrollingUnderTheCursor(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "drop marker recomputation under a still cursor", dragScrollTasks(), dragScrollHarness+`
   const deep = furnishColumn(listFor("in-progress"), 100, 600);
   const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
@@ -635,6 +641,7 @@ func TestHandlerClientKeepsTheDropMarkerOnTheCardsScrollingUnderTheCursor(t *tes
 // node it is carrying — the guarantees the board already makes for a drag,
 // extended to the scroll the drag is now driving.
 func TestHandlerClientKeepsScrollingAColumnAcrossAMidDragPoll(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "drag scrolling across a poll", dragScrollTasks(), dragScrollHarness+`
   const deep = furnishColumn(listFor("in-progress"), 100, 600);
   const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
@@ -675,6 +682,7 @@ func TestHandlerClientKeepsScrollingAColumnAcrossAMidDragPoll(t *testing.T) {
 // the column's height, the still middle is at least half of it and sits in the
 // middle of it — and both ends still scroll.
 func TestHandlerClientLeavesAStillMiddleAtEveryColumnHeight(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "edge zone proportions", dragScrollTasks(), dragScrollHarness+`
   const deep = listFor("in-progress");
   const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
@@ -732,6 +740,7 @@ func TestHandlerClientLeavesAStillMiddleAtEveryColumnHeight(t *testing.T) {
 // responding, and a reader looking for what they deleted can only see the top
 // of it.
 func TestHandlerClientScrollsTheDeletedColumnUnderADrag(t *testing.T) {
+	t.Parallel()
 	stamp := time.Date(2026, time.August, 14, 9, 0, 0, 0, time.UTC)
 	live := clientPlacementTask("WB-01J00000000000000000000800", "Live", core.StatusInProgress, core.PriorityMedium)
 	live.CreatedAt = stamp
@@ -814,6 +823,7 @@ setTimeout(async () => {
 // scroller would leave the frame loop scrolling something with nothing to
 // scroll, and every test above would still pass.
 func TestBoardColumnListIsItsOwnScroller(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -830,6 +840,7 @@ func TestBoardColumnListIsItsOwnScroller(t *testing.T) {
 // own scroller would leave the frame loop assigning scrollLeft to an element
 // that has none — silently, with every test below still passing.
 func TestBoardTrackIsItsOwnHorizontalScroller(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -864,6 +875,7 @@ func TestBoardTrackIsItsOwnHorizontalScroller(t *testing.T) {
 // edge off the screen with it, and because the floor is in rem it moves with
 // the reader's default font size rather than sitting at one pixel width.
 func TestBoardPageFloorIsNarrowerThanSomeWindowsAndScalesWithType(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -888,6 +900,7 @@ func TestBoardPageFloorIsNarrowerThanSomeWindowsAndScalesWithType(t *testing.T) 
 // occupy: 712px at a 320px viewport, 92px at 240px, 0px at 220px, and 0px at
 // 390x844 with a 28px root.
 func TestHandlerClientMeasuresTheTracksZoneFromTheWindowItCanReach(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "the track's zone against a window narrower than the page", dragScrollTasks(), dragScrollHarness+`
   const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
   documentEventListeners.dragstart({ target: carried, dataTransfer });
@@ -937,6 +950,7 @@ func TestHandlerClientMeasuresTheTracksZoneFromTheWindowItCanReach(t *testing.T)
 // the same ramp a column scrolls down on, and not at all while the cursor is
 // anywhere in the middle of the track.
 func TestHandlerClientSlidesTheBoardHeldAgainstItsSideEdges(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "board edge scrolling", dragScrollTasks(), dragScrollHarness+`
   // The track spans x 100..580 and y 100..500. 480 wide, so the edge zone is
   // the 72px ceiling rather than the quarter: the left zone is 100..172 and the
@@ -1025,6 +1039,7 @@ func TestHandlerClientSlidesTheBoardHeldAgainstItsSideEdges(t *testing.T) {
 // assigned scrollLeft exactly as it rounds an assigned scrollTop, so the inner
 // end of the horizontal ramp would round to nothing every frame without it.
 func TestHandlerClientDoesNotLoseFractionsOfAPixelToARoundingBoard(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "board sliding on a rounding scroller", dragScrollTasks(), dragScrollHarness+`
   furnishTrack(100, 400);
   const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
@@ -1048,6 +1063,7 @@ func TestHandlerClientDoesNotLoseFractionsOfAPixelToARoundingBoard(t *testing.T)
 // cursor has to drive both — on one frame, from one position, with a remainder
 // kept for each rather than shared between them.
 func TestHandlerClientScrollsBothAxesFromOneHeldCursor(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "both axes from one cursor", dragScrollTasks(), dragScrollHarness+`
   furnishTrack(100, 400);
   const deep = listFor("in-progress");
@@ -1156,6 +1172,7 @@ func TestHandlerClientScrollsBothAxesFromOneHeldCursor(t *testing.T) {
 // way to a column they cannot see, and the track has to keep sliding through
 // every one of them.
 func TestHandlerClientKeepsTheBoardSlidingWhereNoColumnAnswers(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "board sliding with no column under the cursor", dragScrollTasks(), dragScrollHarness+`
   furnishTrack(100, 400);
   const deep = listFor("in-progress");
@@ -1240,6 +1257,7 @@ func TestHandlerClientKeepsTheBoardSlidingWhereNoColumnAnswers(t *testing.T) {
 // the drop hit-tests for itself and lands where the cursor really is, so a line
 // left in the column the slide began over is a promise nothing keeps.
 func TestHandlerClientFollowsTheColumnSlidingUnderTheCursor(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "the column sliding under a held cursor", dragScrollTasks(), dragScrollHarness+`
   furnishTrack(100, 400);
   const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
@@ -1307,6 +1325,7 @@ func TestHandlerClientFollowsTheColumnSlidingUnderTheCursor(t *testing.T) {
 // over a track that cannot move either — and a loop that only re-resolved on
 // frames where the track had actually slid would never notice.
 func TestHandlerClientFindsAColumnArrivingOverAClampedTrack(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "a column arriving over a clamped track", dragScrollTasks(), dragScrollHarness+`
   furnishTrack(100, 400);
   const deep = listFor("in-progress");
@@ -1356,6 +1375,7 @@ func TestHandlerClientFindsAColumnArrivingOverAClampedTrack(t *testing.T) {
 // dragenter/dragleave pair — the pair whose trailing leave withdraws the drop
 // target and loses the release that follows.
 func TestHandlerClientLeavesTheDropLineAloneWhenItHasNotMoved(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "the drop line is not rebuilt for nothing", dragScrollTasks(), dragScrollHarness+`
   furnishTrack(100, 400);
   const deep = listFor("in-progress");
@@ -1399,6 +1419,7 @@ func TestHandlerClientLeavesTheDropLineAloneWhenItHasNotMoved(t *testing.T) {
 // route, or the loop runs for the life of the page and the browser will not
 // start the next gesture at all.
 func TestHandlerClientRetiresADragTheRouteChangeTookAway(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "a drag retired by a route change", dragScrollTasks(), dragScrollHarness+`
   furnishTrack(100, 400);
   const deep = listFor("in-progress");
@@ -1429,6 +1450,7 @@ func TestHandlerClientRetiresADragTheRouteChangeTookAway(t *testing.T) {
 // narrower than the zones at either end of it, where the zone is still the
 // track's business and not theirs.
 func TestHandlerClientLeavesAStillMiddleAtEveryBoardWidth(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "board edge zone proportions", dragScrollTasks(), dragScrollHarness+`
   const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
   documentEventListeners.dragstart({ target: carried, dataTransfer });

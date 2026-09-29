@@ -29,6 +29,7 @@ func downgradeProjectConfig(t *testing.T, repository string) {
 // holds a version 1 configuration, and Init never rewrites one. Every ordinary
 // command has to keep working against it.
 func TestLegacyProjectConfigStillReadsAndWrites(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	if code, _, stderr := run(t, repository, "setup", "--no-docs"); code != 0 {
 		t.Fatalf("setup = code %d, stderr %q", code, stderr)
@@ -69,6 +70,7 @@ func projectConfigVersion(t *testing.T, repository string) int {
 }
 
 func TestSetupUpgradesALegacyProjectConfiguration(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	if code, _, stderr := run(t, repository, "setup", "--no-docs"); code != 0 {
 		t.Fatalf("setup = code %d, stderr %q", code, stderr)
@@ -110,6 +112,7 @@ func TestSetupUpgradesALegacyProjectConfiguration(t *testing.T) {
 }
 
 func TestConfigSetAutoSyncControlsTheProjectPolicy(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	if code, _, stderr := run(t, repository, "setup", "--no-docs"); code != 0 {
 		t.Fatalf("setup = code %d, stderr %q", code, stderr)
@@ -149,6 +152,7 @@ func TestConfigSetAutoSyncControlsTheProjectPolicy(t *testing.T) {
 // here: an agent keying on the command member has to see the command it ran,
 // and a single shared assertion would let the two drift back together.
 func TestConfigWriteResultsReportTheirOwnCommand(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	if code, _, stderr := run(t, repository, "setup", "--no-docs"); code != 0 {
 		t.Fatalf("setup = code %d, stderr %q", code, stderr)
@@ -168,6 +172,7 @@ func TestConfigWriteResultsReportTheirOwnCommand(t *testing.T) {
 }
 
 func TestConfigShowReportsTheResolvedPolicyAndItsSource(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	if code, _, stderr := run(t, repository, "setup", "--no-docs"); code != 0 {
 		t.Fatalf("setup = code %d, stderr %q", code, stderr)

@@ -98,6 +98,7 @@ const idsIn = (list) => cardsIn(list).map((node) => node.dataset.taskId);
 `
 
 func TestHandlerClientKeepsUnchangedCardNodesAcrossAPoll(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "unchanged board reconciliation", reconcileBoardTasks(), `
   const ready = listFor("ready");
   const held = cardsIn(ready);
@@ -146,6 +147,7 @@ taskDocument.presentation = taskDocument.presentation.map((view) => view.taskId 
 // counts every write the card takes, and then changes the task to prove the
 // instruments can see a write at all.
 func TestHandlerClientWritesNothingInsideAnUnchangedCardAcrossAPoll(t *testing.T) {
+	t.Parallel()
 	runBoardClientWithSetup(t, "unchanged card contents", reconcileBoardTasks(), reconcileAlphaDependencies, `
   const ready = listFor("ready");
   const alpha = cardIn(ready, `+strconv.Quote(reconcileAlphaID)+`);
@@ -268,6 +270,7 @@ func TestHandlerClientWritesNothingInsideAnUnchangedCardAcrossAPoll(t *testing.T
 // is the one a poll cannot deliver — it comes from a refused mutation, and
 // board_failure_report_test.go drives it.
 func TestHandlerClientRedrawsACardForEverySignatureFieldThatChanges(t *testing.T) {
+	t.Parallel()
 	runBoardClientWithSetup(t, "changed card signature fields", reconcileBoardTasks(), reconcileAlphaDependencies, `
   const alpha = boardCard(`+strconv.Quote(reconcileAlphaID)+`);
   if (!alpha) throw new Error("board did not render the Alpha card");
@@ -338,6 +341,7 @@ func TestHandlerClientRedrawsACardForEverySignatureFieldThatChanges(t *testing.T
 }
 
 func TestHandlerClientUpdatesAChangedCardInPlace(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "in-place card update", reconcileBoardTasks(), `
   const ready = listFor("ready");
   const alpha = cardIn(ready, `+strconv.Quote(reconcileAlphaID)+`);
@@ -378,6 +382,7 @@ func TestHandlerClientUpdatesAChangedCardInPlace(t *testing.T) {
 }
 
 func TestHandlerClientAddsAndRemovesCardsWithoutDisturbingTheirNeighbours(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "card addition and removal", reconcileBoardTasks(), `
   const ready = listFor("ready");
   const alpha = cardIn(ready, `+strconv.Quote(reconcileAlphaID)+`);
@@ -426,6 +431,7 @@ func TestHandlerClientAddsAndRemovesCardsWithoutDisturbingTheirNeighbours(t *tes
 // status, then by being deleted — and requires that its neighbours cost nothing,
 // while the column that gains the card pays the one move it really needs.
 func TestHandlerClientLeavesNeighboursAloneWhenACardLeavesAColumn(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "departed card sweep", reconcileBoardTasks(), `
   const ready = listFor("ready");
   const done = listFor("done");
@@ -471,6 +477,7 @@ func TestHandlerClientLeavesNeighboursAloneWhenACardLeavesAColumn(t *testing.T) 
 }
 
 func TestHandlerClientReordersAColumnByMovingItsExistingNodes(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "column reordering", reconcileBoardTasks(), `
   const ready = listFor("ready");
   const alpha = cardIn(ready, `+strconv.Quote(reconcileAlphaID)+`);
@@ -498,6 +505,7 @@ func TestHandlerClientReordersAColumnByMovingItsExistingNodes(t *testing.T) {
 }
 
 func TestHandlerClientKeepsCardFocusAcrossAPoll(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "card focus retention", reconcileBoardTasks(), `
   const ready = listFor("ready");
   const alpha = cardIn(ready, `+strconv.Quote(reconcileAlphaID)+`);
@@ -521,6 +529,7 @@ func TestHandlerClientKeepsCardFocusAcrossAPoll(t *testing.T) {
 }
 
 func TestHandlerClientLeavesTheDraggedCardConnectedAcrossAPoll(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "drag survival across a poll", reconcileBoardTasks(), `
   const ready = listFor("ready");
   const alpha = cardIn(ready, `+strconv.Quote(reconcileAlphaID)+`);

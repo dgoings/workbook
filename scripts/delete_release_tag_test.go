@@ -13,6 +13,7 @@ import (
 // everyone the release already reached. Nothing in the recovery path is worth
 // that, which is why it takes an explicit --force.
 func TestDeleteReleaseTagRefusesATagWithAPublishedRelease(t *testing.T) {
+	t.Parallel()
 	clone, remote, fakeBin := newTagDeletionRepository(t)
 
 	output, err := runDeleteReleaseTag(t, clone, environmentWithFakeCLI(fakeBin, "FAKE_PUBLISHED_TAGS=v0.5.0"),
@@ -27,6 +28,7 @@ func TestDeleteReleaseTagRefusesATagWithAPublishedRelease(t *testing.T) {
 }
 
 func TestDeleteReleaseTagRemovesAnOrphanedTagLocallyAndOnTheRemote(t *testing.T) {
+	t.Parallel()
 	clone, remote, fakeBin := newTagDeletionRepository(t)
 
 	output, err := runDeleteReleaseTag(t, clone, environmentWithFakeCLI(fakeBin),
@@ -47,6 +49,7 @@ func TestDeleteReleaseTagRemovesAnOrphanedTagLocallyAndOnTheRemote(t *testing.T)
 
 // The tag form is what a failing workflow logs, so pasting it back has to work.
 func TestDeleteReleaseTagAcceptsTheTagForm(t *testing.T) {
+	t.Parallel()
 	clone, remote, fakeBin := newTagDeletionRepository(t)
 
 	output, err := runDeleteReleaseTag(t, clone, environmentWithFakeCLI(fakeBin),
@@ -62,6 +65,7 @@ func TestDeleteReleaseTagAcceptsTheTagForm(t *testing.T) {
 // A pre-release strands its version exactly as a stable release does, so
 // recovery has to reach an -rcN tag too.
 func TestDeleteReleaseTagAcceptsAPreReleaseTag(t *testing.T) {
+	t.Parallel()
 	clone, remote, fakeBin := newTagDeletionRepository(t)
 	runCommand(t, clone, nil, "git", "tag", "--annotate", "v0.6.0-rc1", "--message", "Workbook v0.6.0-rc1")
 	runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "refs/tags/v0.6.0-rc1")
@@ -81,6 +85,7 @@ func TestDeleteReleaseTagAcceptsAPreReleaseTag(t *testing.T) {
 }
 
 func TestDeleteReleaseTagDryRunChangesNothing(t *testing.T) {
+	t.Parallel()
 	clone, remote, fakeBin := newTagDeletionRepository(t)
 
 	output, err := runDeleteReleaseTag(t, clone, environmentWithFakeCLI(fakeBin),
@@ -94,6 +99,7 @@ func TestDeleteReleaseTagDryRunChangesNothing(t *testing.T) {
 // Production mutation: an unanswerable question treated as "not published"
 // would remove the safety check whenever gh happened to be missing.
 func TestDeleteReleaseTagRefusesWhenReleaseStateCannotBeRead(t *testing.T) {
+	t.Parallel()
 	clone, remote, _ := newTagDeletionRepository(t)
 
 	output, err := runDeleteReleaseTag(t, clone,
@@ -110,6 +116,7 @@ func TestDeleteReleaseTagRefusesWhenReleaseStateCannotBeRead(t *testing.T) {
 
 // Recovering from a run that left a draft behind should not need two tools.
 func TestDeleteReleaseTagDeletesALeftoverDraftOnRequest(t *testing.T) {
+	t.Parallel()
 	clone, _, fakeBin := newTagDeletionRepository(t)
 	deleted := filepath.Join(t.TempDir(), "deleted.log")
 
@@ -132,6 +139,7 @@ func TestDeleteReleaseTagDeletesALeftoverDraftOnRequest(t *testing.T) {
 // A draft is not public, so removing its tag without --delete-draft is allowed;
 // the draft simply stays for the next run to reconcile against.
 func TestDeleteReleaseTagRemovesATagHeldOnlyByADraft(t *testing.T) {
+	t.Parallel()
 	clone, remote, fakeBin := newTagDeletionRepository(t)
 
 	output, err := runDeleteReleaseTag(t, clone, environmentWithFakeCLI(fakeBin, "FAKE_DRAFT_TAGS=v0.5.0"),
@@ -145,6 +153,7 @@ func TestDeleteReleaseTagRemovesATagHeldOnlyByADraft(t *testing.T) {
 }
 
 func TestDeleteReleaseTagReportsATagThatDoesNotExist(t *testing.T) {
+	t.Parallel()
 	clone, _, fakeBin := newTagDeletionRepository(t)
 
 	output, err := runDeleteReleaseTag(t, clone, environmentWithFakeCLI(fakeBin),
@@ -158,6 +167,7 @@ func TestDeleteReleaseTagReportsATagThatDoesNotExist(t *testing.T) {
 }
 
 func TestDeleteReleaseTagRejectsUnsafeVersions(t *testing.T) {
+	t.Parallel()
 	clone, remote, fakeBin := newTagDeletionRepository(t)
 
 	for _, version := range []string{"0.5", "01.2.3", "1.2.3-alpha", "1.2.3/../etc"} {

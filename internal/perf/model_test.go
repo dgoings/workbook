@@ -9,6 +9,7 @@ import (
 )
 
 func TestSummarizeUsesNearestRankP95AndRetainsTimeouts(t *testing.T) {
+	t.Parallel()
 	samples := []Sample{
 		{Duration: 10 * time.Millisecond, GitProcesses: 2},
 		{Duration: 20 * time.Millisecond, GitProcesses: 3},
@@ -26,6 +27,7 @@ func TestSummarizeUsesNearestRankP95AndRetainsTimeouts(t *testing.T) {
 }
 
 func TestSummarizeRetainsGitProcessCountsFromTimedOutAndFailedSamples(t *testing.T) {
+	t.Parallel()
 	samples := []Sample{
 		{Duration: 10 * time.Millisecond, GitProcesses: 2},
 		{Duration: 20 * time.Millisecond, GitProcesses: 3},
@@ -46,6 +48,7 @@ func TestSummarizeRetainsGitProcessCountsFromTimedOutAndFailedSamples(t *testing
 }
 
 func TestReportWritesVersionedJSONAndMarkdown(t *testing.T) {
+	t.Parallel()
 	report := Report{
 		Format: "workbook.performance-report", Version: 3,
 		Environment: Environment{WorkbookBinarySHA256: "abc123"},
@@ -79,6 +82,7 @@ func TestReportWritesVersionedJSONAndMarkdown(t *testing.T) {
 // failed sample, or classifying an empty scenario as completed each change
 // the literal outcomes below.
 func TestReportNormalizesScenarioOutcomes(t *testing.T) {
+	t.Parallel()
 	report := Report{Scenarios: []ScenarioResult{
 		{
 			Name:    "completed",
@@ -147,6 +151,7 @@ func TestReportNormalizesScenarioOutcomes(t *testing.T) {
 }
 
 func TestReportMarkdownShowsScenarioOutcome(t *testing.T) {
+	t.Parallel()
 	report := Report{
 		Format: "workbook.performance-report",
 		Scenarios: []ScenarioResult{{

@@ -13,6 +13,7 @@ import (
 // field to read and none to keep in step, because the destination is the task's
 // status once the command has run.
 func TestRestoreIntoReportsTheDestination(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Deleted then restored", "--no-sync", "--json")
 	if code != 0 || stderr != "" {
@@ -58,6 +59,7 @@ func TestRestoreIntoReportsTheDestination(t *testing.T) {
 // refusal, in the same words `workbook update --status` produces for the same
 // name.
 func TestRestoreIntoRefusesAStatusTheProjectDoesNotDefine(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Stays deleted", "--no-sync", "--json")
 	if code != 0 || stderr != "" {

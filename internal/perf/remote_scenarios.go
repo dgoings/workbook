@@ -104,6 +104,9 @@ func runRemoteScenarios(ctx context.Context, spec RunSpec, fixtureRoot string, s
 	if spec.CommandTimeout <= 0 {
 		return nil, fmt.Errorf("command timeout must be positive")
 	}
+	if err := requireFixtureTimeout(&spec); err != nil {
+		return nil, err
+	}
 	if fixtureRoot == "" {
 		return nil, fmt.Errorf("fixture root is required")
 	}
@@ -135,7 +138,12 @@ func runRemoteScenarios(ctx context.Context, spec RunSpec, fixtureRoot string, s
 			Samples: make([]Sample, spec.Samples),
 		}
 		for sample := range spec.Samples {
-			fixtureContext, cancel := context.WithTimeout(ctx, spec.CommandTimeout)
+			// The remote builder takes a topology as well, so this family
+			// bounds the build here rather than through
+			// buildFixtureWithinTimeout. The bound and the reason are the same:
+			// a remote fixture's clones and plumbing calls can outlast a
+			// per-command budget without anything being wrong.
+			fixtureContext, cancel := context.WithTimeout(ctx, spec.FixtureTimeout)
 			fixture, err := dependencies.buildFixture(fixtureContext, filepath.Join(fixtureRoot, definition.name, fmt.Sprintf("sample-%03d", sample+1)), spec.Fixture, definition.topology)
 			cancel()
 			if err != nil {

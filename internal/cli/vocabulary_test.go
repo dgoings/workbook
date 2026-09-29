@@ -44,6 +44,7 @@ func writeProjectStatusRename(t *testing.T, repository string, from, to core.Sta
 // vocabulary, so a project that renamed a status got the old columns back on
 // every read.
 func TestCommandsReadTheProjectsOwnVocabulary(t *testing.T) {
+	t.Parallel()
 	repository, _ := cliSyncRepositories(t)
 	task := cliCreateTask(t, repository, "Renamed column")
 	if code, _, stderr := run(t, repository, "update", task.ID, "--status", "ready", "--no-sync"); code != 0 {
@@ -106,6 +107,7 @@ func TestCommandsReadTheProjectsOwnVocabulary(t *testing.T) {
 // outside: the settlement is a real appended operation in the task's history,
 // not a projection that would vanish on the next clone.
 func TestUpdateSettlesAStaleStoredStatusInItsOwnPack(t *testing.T) {
+	t.Parallel()
 	repository, _ := cliSyncRepositories(t)
 	task := cliCreateTask(t, repository, "Settled on touch")
 	if code, _, stderr := run(t, repository, "update", task.ID, "--status", "ready", "--no-sync"); code != 0 {
@@ -144,6 +146,7 @@ func TestUpdateSettlesAStaleStoredStatusInItsOwnPack(t *testing.T) {
 // disclosed: every mutation that writes a pack settles the status, not only the
 // ones that were about status.
 func TestMoveAndDependSettleAStaleStoredStatus(t *testing.T) {
+	t.Parallel()
 	repository, _ := cliSyncRepositories(t)
 	anchor := cliCreateTask(t, repository, "Anchor")
 	moved := cliCreateTask(t, repository, "Moved")
@@ -236,6 +239,7 @@ func assertNoSettlement(t *testing.T, output string) {
 // claim: a project with no ledger, and a project whose ledger is settled, emit
 // exactly the envelope they emitted before this stage existed.
 func TestSyncJSONOmitsTheConfigMemberWhenNothingMoved(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	cliCreateTask(t, first, "Task")
 
@@ -289,6 +293,7 @@ func TestSyncJSONOmitsTheConfigMemberWhenNothingMoved(t *testing.T) {
 // TestValidateJSONOmitsTheConfigSectionWithoutALedger keeps the audit's
 // envelope compatible for the projects that never configure a status.
 func TestValidateJSONOmitsTheConfigSectionWithoutALedger(t *testing.T) {
+	t.Parallel()
 	repository, _ := cliSyncRepositories(t)
 	cliCreateTask(t, repository, "Validated task")
 
@@ -358,6 +363,7 @@ func writeTaskInAForeignStatus(t *testing.T, repository, title string, status co
 // A wrong recovery instruction is worse than none: it tells a reader their work
 // is unreachable when a one-line command would file it.
 func TestAnUnresolvableStatusIsShownAndStillEditable(t *testing.T) {
+	t.Parallel()
 	repository, _ := cliSyncRepositories(t)
 	stranded := writeTaskInAForeignStatus(t, repository, "Written by a clone we have not fetched", "ghost")
 
@@ -420,6 +426,7 @@ func TestAnUnresolvableStatusIsShownAndStillEditable(t *testing.T) {
 // status the project does not define — which is that boundary doing its job,
 // not a second bucketing rule. The README says so; this is what it says.
 func TestMoveReordersWithinAnUnresolvableBucket(t *testing.T) {
+	t.Parallel()
 	repository, _ := cliSyncRepositories(t)
 	first := writeTaskInAForeignStatus(t, repository, "First stranded", "ghost")
 	second := writeTaskInAForeignStatus(t, repository, "Second stranded", "ghost")
@@ -450,6 +457,7 @@ func TestMoveReordersWithinAnUnresolvableBucket(t *testing.T) {
 // board a person actually looks at printed a READY column for a project that no
 // longer has one, with the task missing from it.
 func TestBoardRendersTheProjectsOwnColumns(t *testing.T) {
+	t.Parallel()
 	repository, _ := cliSyncRepositories(t)
 	task := cliCreateTask(t, repository, "Renamed column")
 	if code, _, stderr := run(t, repository, "update", task.ID, "--status", "ready", "--no-sync"); code != 0 {
@@ -498,6 +506,7 @@ func TestBoardRendersTheProjectsOwnColumns(t *testing.T) {
 // on one task is what makes "the difference is the data, not the task" a
 // statement rather than two unrelated fixtures.
 func TestUnresolvedStatusRecovery(t *testing.T) {
+	t.Parallel()
 	repository, _ := cliSyncRepositories(t)
 	stranded := writeTaskInAForeignStatus(t, repository, "Written by a clone we have not fetched", "ghost")
 

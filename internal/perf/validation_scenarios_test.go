@@ -17,6 +17,7 @@ import (
 // Mutation witness: sharing a fixture or measuring setup commands would let
 // cache state from one topology change another topology's result.
 func TestValidationScenariosUseIndependentFixturesAndCommands(t *testing.T) {
+	t.Parallel()
 	var roots []string
 	var measured []CommandSpec
 	var setup []CommandSpec
@@ -77,6 +78,7 @@ func TestValidationScenariosUseIndependentFixturesAndCommands(t *testing.T) {
 // Mutation witness: sending setup through MeasureCommandOutput would add it to
 // the measurement callback and contaminate elapsed time and Trace2 counts.
 func TestValidationScenarioSetupIsExcludedFromMeasurement(t *testing.T) {
+	t.Parallel()
 	setupCalls := 0
 	measureCalls := 0
 	_, err := runValidationScenarios(context.Background(), RunSpec{
@@ -106,6 +108,7 @@ func TestValidationScenarioSetupIsExcludedFromMeasurement(t *testing.T) {
 // Mutation witness: accepting any altered literal validation result would
 // record an untrustworthy product measurement as benchmark evidence.
 func TestValidationScenarioOracleRejectsWrongCounts(t *testing.T) {
+	t.Parallel()
 	fixture := FixtureSpec{TotalTasks: 10, ActiveTasks: 8, TombstonedTasks: 2, OperationsPerTask: 4}
 	mutations := []struct {
 		name   string
@@ -150,6 +153,7 @@ func TestValidationScenarioOracleRejectsWrongCounts(t *testing.T) {
 // Mutation witness: switching validation to per-history commands would make
 // the seven-deep fixture use more processes than its four-deep counterpart.
 func TestValidationScenarioProcessCountDoesNotScaleWithHistoryDepth(t *testing.T) {
+	t.Parallel()
 	workbook := buildValidationScenarioWorkbook(t)
 	counts := make(map[string][]int)
 	for _, fixture := range []FixtureSpec{
@@ -157,7 +161,11 @@ func TestValidationScenarioProcessCountDoesNotScaleWithHistoryDepth(t *testing.T
 		{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 7, ObjectFormat: "sha1"},
 	} {
 		results, err := RunValidationScenarios(context.Background(), RunSpec{
-			WorkbookBinary: workbook, Fixture: fixture, Samples: 1, CommandTimeout: 20 * time.Second,
+			// The same class as the remote scenarios' hundred and twenty: the
+			// measured command is a real `workbook validate`, a timed-out sample
+			// carries no Trace2 process count for the comparison below to read,
+			// and nothing here asserts how long anything took.
+			WorkbookBinary: workbook, Fixture: fixture, Samples: 1, CommandTimeout: 120 * time.Second,
 		}, filepath.Join(t.TempDir(), "validation"), validationScenarioNames())
 		if err != nil {
 			t.Fatal(err)
@@ -232,6 +240,7 @@ func buildValidationScenarioWorkbook(t *testing.T) string {
 	binary := filepath.Join(t.TempDir(), "workbook")
 	command := exec.Command("go", "build", "-buildvcs=false", "-o", binary, "./cmd/workbook")
 	command.Dir = filepath.Clean(filepath.Join("..", ".."))
+	command.Env = goToolchainEnvironment(t)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build workbook: %v\n%s", err, output)
 	}
@@ -243,6 +252,7 @@ func buildValidationScenarioWorkbook(t *testing.T) string {
 // exits normally must not leave a background descendant spinning behind it,
 // where nothing cancels the command and so nothing signals its process group.
 func TestRunValidationSetupCommandReapsDescendantOfCommandThatExits(t *testing.T) {
+	t.Parallel()
 	childPIDPath := filepath.Join(t.TempDir(), "child.pid")
 	proctest.ReapRecordedProcessGroup(t, childPIDPath)
 	measurement := runValidationSetupCommand(context.Background(), CommandSpec{

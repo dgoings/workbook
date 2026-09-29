@@ -11,6 +11,7 @@ import (
 )
 
 func TestInstallBuildsRunnableWorkbookInDestination(t *testing.T) {
+	t.Parallel()
 	root, script := paths(t)
 	destinationRoot := t.TempDir()
 	destination := filepath.Join(destinationRoot, "bin")
@@ -54,6 +55,7 @@ func TestInstallBuildsRunnableWorkbookInDestination(t *testing.T) {
 }
 
 func TestInstallResolvesRelativeDestinationFromCallerDirectory(t *testing.T) {
+	t.Parallel()
 	root, script := paths(t)
 	callerDirectory := t.TempDir()
 	relativeDestination := "relative-bin"
@@ -87,6 +89,7 @@ func TestInstallResolvesRelativeDestinationFromCallerDirectory(t *testing.T) {
 }
 
 func TestInstallReportsMissingPrerequisites(t *testing.T) {
+	t.Parallel()
 	root, script := paths(t)
 
 	t.Run("go", func(t *testing.T) {
@@ -136,6 +139,7 @@ func paths(t *testing.T) (string, string) {
 }
 
 func TestInstallStampsVersionAndCommit(t *testing.T) {
+	t.Parallel()
 	// Production mutation: building without ldflags leaves every source install
 	// reporting "dev (unknown)", so a developer cannot tell which build they are
 	// running, and a benchmark report of it cannot name the commit it measured.
@@ -177,6 +181,7 @@ func TestInstallStampsVersionAndCommit(t *testing.T) {
 // tagger date. A cascaded desktop release tags the CLI's released commit
 // second, so the CLI bundled in the app would report the app's own version.
 func TestInstallStampsTheCLITagWhenADesktopTagSharesTheCommit(t *testing.T) {
+	t.Parallel()
 	root, script := paths(t)
 	fixture := filepath.Join(t.TempDir(), "workbook")
 	// A clone rather than the checkout itself: the tags below are the point of
@@ -226,6 +231,7 @@ func TestInstallStampsTheCLITagWhenADesktopTagSharesTheCommit(t *testing.T) {
 }
 
 func TestInstallAcceptsAnAlternateBinaryName(t *testing.T) {
+	t.Parallel()
 	// Production mutation: a fixed binary name forces a source build to shadow a
 	// released install that shares the destination directory.
 	root, script := paths(t)
@@ -256,6 +262,7 @@ func TestInstallAcceptsAnAlternateBinaryName(t *testing.T) {
 }
 
 func TestInstallRejectsUnusableBinaryNames(t *testing.T) {
+	t.Parallel()
 	// Production mutation: interpolating an unchecked name into the output path
 	// lets an argument such as ../workbook escape the destination directory.
 	root, script := paths(t)

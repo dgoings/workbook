@@ -28,11 +28,67 @@ const (
 )
 
 // RunSpec configures one benchmark scenario run.
+//
+// CommandTimeout bounds each measured command and is what the report calls a
+// timeout. FixtureTimeout bounds the fixture construction that precedes it,
+// which is setup rather than measurement and is far heavier than any one
+// command: a remote fixture runs an init, two clones, and dozens of plumbing
+// calls before the measured push. Bounding both with one value made a healthy
+// fixture build die of the command's deadline under CPU contention, which is
+// the flake this field exists to remove. StorageResourceSpec has carried the
+// same pair from the start.
 type RunSpec struct {
 	WorkbookBinary string
 	Fixture        FixtureSpec
 	Samples        int
 	CommandTimeout time.Duration
+	FixtureTimeout time.Duration
+}
+
+// FixtureTimeoutFactor bounds fixture construction, which is not a measured
+// command, at a generous multiple of the per-command timeout. Building a fixture
+// costs an init, a synthetic history written through fast-import and, for the
+// remote topologies, two clones and dozens of plumbing calls, so the budget for
+// one measured command is no budget at all for it. Every fixture bound in the
+// benchmark comes from this one number: the scaling matrix here and
+// workbook-bench, which both set it explicitly, and fixtureBuildTimeout, which
+// applies it to any run spec that leaves the field unset.
+const FixtureTimeoutFactor = 20
+
+// fixtureBuildTimeout is the bound on fixture construction. A fixture build is
+// not the thing being measured, so it gets the same generous bound whether or not
+// the caller asked for one: an unset FixtureTimeout resolves to
+// FixtureTimeoutFactor times the command timeout, exactly what every production
+// caller sets by hand. A caller that does set the field gets precisely what it
+// set, and a negative value is a caller's mistake that each runner rejects as it
+// rejects a non-positive command timeout.
+//
+// The default used to be the command timeout itself, on the reasoning that a
+// caller leaving the field unset should keep the behavior it already had. That
+// reasoning was wrong: the behavior it kept was the defect this whole pairing
+// exists to remove, and it was kept for exactly the callers — this package's own
+// tests, which build run specs directly — that run under the heaviest load. A
+// whole-tree run with six packages fanning out at once put a hundred-odd git
+// children on eighteen cores and SIGKILLed five healthy fixture builds, none of
+// which asserts anything about elapsed time. Defaulting here fixes every such
+// caller at once, and the next test written this way inherits a sane bound
+// instead of inheriting the defect.
+func (spec RunSpec) fixtureBuildTimeout() time.Duration {
+	if spec.FixtureTimeout == 0 {
+		return FixtureTimeoutFactor * spec.CommandTimeout
+	}
+	return spec.FixtureTimeout
+}
+
+// requireFixtureTimeout resolves the spec's fixture bound and rejects a negative
+// one. Every runner calls it beside its command-timeout check, so no runner can
+// reach a build with an unresolved bound.
+func requireFixtureTimeout(spec *RunSpec) error {
+	spec.FixtureTimeout = spec.fixtureBuildTimeout()
+	if spec.FixtureTimeout <= 0 {
+		return fmt.Errorf("fixture timeout must be positive")
+	}
+	return nil
 }
 
 type scenarioDependencies struct {
@@ -82,19 +138,34 @@ type countObjectsMetrics struct {
 // against a representative baseline isolated by scenario and sample.
 func RunColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, selected []string) ([]ScenarioResult, error) {
 	return runColdCLI(ctx, spec, fixtureRoot, selected, scenarioDependencies{
-		buildFixture: func(ctx context.Context, root string, fixture FixtureSpec) (Fixture, error) {
-			return buildFixtureWithinTimeout(ctx, root, fixture, spec.CommandTimeout)
-		},
+		// The builder carries no bound of its own: runColdCLI bounds whatever
+		// builder it is given with the spec's fixture timeout.
+		buildFixture:      BuildFixture,
 		prepareProjection: prepareProjection,
 		measureCommand:    MeasureCommandOutput,
 		cleanupFixture:    os.RemoveAll,
 	})
 }
 
-func buildFixtureWithinTimeout(ctx context.Context, root string, spec FixtureSpec, timeout time.Duration) (Fixture, error) {
+// buildFixtureWithinTimeout bounds one fixture build with the run spec's fixture
+// timeout, which is never the timeout of a measured command. Every runner builds
+// through it, passing the builder it was given rather than BuildFixture, so the
+// bound is on the seam the tests inject at and not on one particular builder.
+//
+// The bound has teeth because a fixture's git children run under
+// exec.CommandContext: the deadline does not ask them to stop, it SIGKILLs them.
+// That is what made a healthy remote fixture push die on a busy machine when this
+// bound was the measured command's.
+func buildFixtureWithinTimeout(
+	ctx context.Context,
+	build func(context.Context, string, FixtureSpec) (Fixture, error),
+	root string,
+	spec FixtureSpec,
+	timeout time.Duration,
+) (Fixture, error) {
 	fixtureContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return BuildFixture(fixtureContext, root, spec)
+	return build(fixtureContext, root, spec)
 }
 
 func runColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, selected []string, dependencies scenarioDependencies) ([]ScenarioResult, error) {
@@ -103,6 +174,9 @@ func runColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, selected 
 	}
 	if spec.CommandTimeout <= 0 {
 		return nil, fmt.Errorf("command timeout must be positive")
+	}
+	if err := requireFixtureTimeout(&spec); err != nil {
+		return nil, err
 	}
 	if fixtureRoot == "" {
 		return nil, fmt.Errorf("fixture root is required")
@@ -130,7 +204,7 @@ func runColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, selected 
 		sampleRoot := filepath.Join(fixtureRoot, fmt.Sprintf("sample-%03d", sample+1))
 		for index, definition := range definitions {
 			root := filepath.Join(sampleRoot, definition.name)
-			fixture, err := dependencies.buildFixture(ctx, root, spec.Fixture)
+			fixture, err := buildFixtureWithinTimeout(ctx, dependencies.buildFixture, root, spec.Fixture, spec.FixtureTimeout)
 			if err != nil {
 				primaryErr := fmt.Errorf("build %s fixture: %w", definition.name, err)
 				return nil, withFixtureCleanupError(primaryErr, cleanupFixture(root), definition.name)
@@ -524,9 +598,7 @@ func publishFixtureToLocalOrigin(ctx context.Context, timeout time.Duration, fix
 	}
 
 	origin := filepath.Join(fixtureRoot, "benchmark-origin.git")
-	if _, _, err := runRepositoryGit(
-		ctx, timeout, "", "init", "--bare", "--quiet", "--object-format="+objectFormat, origin,
-	); err != nil {
+	if err := initBareFixtureOrigin(ctx, timeout, objectFormat, origin); err != nil {
 		return err
 	}
 	if _, _, err := runRepositoryGit(ctx, timeout, fixtureRoot, "remote", "add", "origin", origin); err != nil {
@@ -589,9 +661,9 @@ func containsTaskID(taskIDs []string, taskID string) bool {
 // servers so each scenario sample starts from an exact-size fixture.
 func RunWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string, selected []string) ([]ScenarioResult, error) {
 	return runWarmHTTP(ctx, spec, fixtureRoot, selected, warmHTTPDependencies{
-		buildFixture: func(ctx context.Context, root string, fixture FixtureSpec) (Fixture, error) {
-			return buildFixtureWithinTimeout(ctx, root, fixture, spec.CommandTimeout)
-		},
+		// The builder carries no bound of its own: runWarmHTTP bounds whatever
+		// builder it is given with the spec's fixture timeout.
+		buildFixture: BuildFixture,
 		startServer: func(ctx context.Context, binary, root string, timeout time.Duration) (warmScenarioServer, error) {
 			server, err := startWarmHTTPServer(ctx, binary, root, timeout)
 			return server, err
@@ -606,6 +678,9 @@ func runWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string, selected
 	}
 	if spec.CommandTimeout <= 0 {
 		return nil, fmt.Errorf("command timeout must be positive")
+	}
+	if err := requireFixtureTimeout(&spec); err != nil {
+		return nil, err
 	}
 	if fixtureRoot == "" {
 		return nil, fmt.Errorf("fixture root is required")
@@ -634,7 +709,7 @@ func runWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string, selected
 		for index, definition := range definitions {
 			name := definition.name
 			root := filepath.Join(sampleRoot, name)
-			fixture, err := dependencies.buildFixture(ctx, root, spec.Fixture)
+			fixture, err := buildFixtureWithinTimeout(ctx, dependencies.buildFixture, root, spec.Fixture, spec.FixtureTimeout)
 			if err != nil {
 				primaryErr := fmt.Errorf("build warm %s sample %d fixture: %w", name, sample+1, err)
 				return nil, withFixtureCleanupError(primaryErr, cleanupFixture(root), name)
@@ -905,10 +980,7 @@ func measureLocalBareSyncAgainstNewOrigin(
 	}
 	prepareSample := func(ctx context.Context, sample int) error {
 		origin := filepath.Join(originRoot, fmt.Sprintf("origin-%03d.git", sample+1))
-		if _, _, err := runRepositoryGit(
-			ctx, commandTimeout, "", "init", "--bare", "--quiet",
-			"--object-format="+objectFormat, origin,
-		); err != nil {
+		if err := initBareFixtureOrigin(ctx, commandTimeout, objectFormat, origin); err != nil {
 			return err
 		}
 		remoteCommand := "add"

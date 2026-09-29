@@ -90,6 +90,7 @@ func assertAnsweredDisplay(t *testing.T, document webui.VocabularyDocument) {
 // client redraws the board settings form out of the same document it redraws
 // the priority panel from.
 func TestBoardPriorityChangeAnswersWithTheDisplaySettings(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	saved := configuredBoard(t, addr)
@@ -106,6 +107,7 @@ func TestBoardPriorityChangeAnswersWithTheDisplaySettings(t *testing.T) {
 // statuses reached it first and for longer — and a board settings form blanked
 // by a column rename loses exactly as much as one blanked by a priority move.
 func TestBoardStatusChangeAnswersWithTheDisplaySettings(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	saved := configuredBoard(t, addr)
@@ -125,6 +127,7 @@ func TestBoardStatusChangeAnswersWithTheDisplaySettings(t *testing.T) {
 // records the blanks. The assertion is against the ledger and not against the
 // answer, because a reader who lost their board's name lost it there.
 func TestBoardVocabularyChangeLeavesTheSavedDisplaySettingsStanding(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		method string

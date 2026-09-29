@@ -9,6 +9,7 @@ import (
 )
 
 func TestCutReleaseTagsAndPushesTheReleaseTag(t *testing.T) {
+	t.Parallel()
 	clone, remote := newReleaseRepository(t)
 	head := gitOutput(t, clone, "rev-parse", "HEAD")
 
@@ -33,6 +34,7 @@ func TestCutReleaseTagsAndPushesTheReleaseTag(t *testing.T) {
 }
 
 func TestCutReleaseRejectsUnsafeVersions(t *testing.T) {
+	t.Parallel()
 	// Production mutation: accepting a version the formula renderer and the
 	// release workflow would later reject publishes a tag that can never build.
 	for _, version := range []string{"", "0.1", "01.2.3", "1.2.03", "1.2.3-alpha", "v1.2.3", "1.2.3/../etc"} {
@@ -48,6 +50,7 @@ func TestCutReleaseRejectsUnsafeVersions(t *testing.T) {
 }
 
 func TestCutReleaseRefusesUncommittedChanges(t *testing.T) {
+	t.Parallel()
 	clone, remote := newReleaseRepository(t)
 	if err := os.WriteFile(filepath.Join(clone, "README.md"), []byte("edited\n"), 0o600); err != nil {
 		t.Fatalf("edit working tree: %v", err)
@@ -66,6 +69,7 @@ func TestCutReleaseRefusesUncommittedChanges(t *testing.T) {
 }
 
 func TestCutReleaseRefusesABranchOtherThanTheTrunk(t *testing.T) {
+	t.Parallel()
 	clone, remote := newReleaseRepository(t)
 	runCommand(t, clone, nil, "git", "checkout", "--quiet", "-b", "feature")
 
@@ -82,6 +86,7 @@ func TestCutReleaseRefusesABranchOtherThanTheTrunk(t *testing.T) {
 }
 
 func TestCutReleaseRefusesATagThatAlreadyExists(t *testing.T) {
+	t.Parallel()
 	// Production mutation: reusing a tag rewrites which commit a published
 	// release points at, so installed checksums stop matching their source.
 	for name, publish := range map[string]func(t *testing.T, clone string){
@@ -110,6 +115,7 @@ func TestCutReleaseRefusesATagThatAlreadyExists(t *testing.T) {
 }
 
 func TestCutReleaseRefusesABranchOutOfSyncWithTheRemote(t *testing.T) {
+	t.Parallel()
 	clone, remote := newReleaseRepository(t)
 	// Land a commit on the remote that this clone has not seen, the usual
 	// result of another merge landing while a release is being prepared.
@@ -137,6 +143,7 @@ func TestCutReleaseRefusesABranchOutOfSyncWithTheRemote(t *testing.T) {
 }
 
 func TestCutReleaseRefusesAVersionThatDoesNotMoveForward(t *testing.T) {
+	t.Parallel()
 	// Production mutation: publishing a version at or below the latest release
 	// leaves Homebrew serving the older archives as the newest ones.
 	for _, version := range []string{"0.1.0", "0.0.9"} {
@@ -157,6 +164,7 @@ func TestCutReleaseRefusesAVersionThatDoesNotMoveForward(t *testing.T) {
 }
 
 func TestCutReleaseDryRunPublishesNothing(t *testing.T) {
+	t.Parallel()
 	clone, remote := newReleaseRepository(t)
 
 	output, err := runCutRelease(clone, "0.1.0", "--skip-tests", "--dry-run")
@@ -175,6 +183,7 @@ func TestCutReleaseDryRunPublishesNothing(t *testing.T) {
 // A pre-release is cut the same way as a release, by naming it, and the
 // script says the tap will be left alone so the releaser is not surprised.
 func TestCutReleaseTagsAPreRelease(t *testing.T) {
+	t.Parallel()
 	clone, remote := newReleaseRepository(t)
 	runCommand(t, clone, nil, "git", "tag", "v0.5.1")
 	runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "refs/tags/v0.5.1")
@@ -198,6 +207,7 @@ func TestCutReleaseTagsAPreRelease(t *testing.T) {
 // The stable release after an rc ignores it, so the next patch after v0.5.1
 // is still v0.5.2 while v0.6.0-rc1 exists.
 func TestCutReleaseIgnoresPreReleaseTagsForAStableVersion(t *testing.T) {
+	t.Parallel()
 	clone, _ := newReleaseRepository(t)
 	for _, tag := range []string{"v0.5.1", "v0.6.0-rc1"} {
 		runCommand(t, clone, nil, "git", "tag", tag)
@@ -216,6 +226,7 @@ func TestCutReleaseIgnoresPreReleaseTagsForAStableVersion(t *testing.T) {
 // Production mutation: cutting an rc below the newest tag would publish a
 // pre-release that orders before one already out.
 func TestCutReleaseRefusesAStalePreRelease(t *testing.T) {
+	t.Parallel()
 	clone, remote := newReleaseRepository(t)
 	for _, tag := range []string{"v0.5.1", "v0.6.0-rc2"} {
 		runCommand(t, clone, nil, "git", "tag", tag)

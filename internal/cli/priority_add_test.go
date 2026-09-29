@@ -90,6 +90,7 @@ func priorityTaskCount(t *testing.T, document priorityListDocument, priority str
 // An added priority lands where --before says, takes the label its name
 // implies, and leaves every other priority where it was.
 func TestPriorityAddPlacesThePriorityAndDerivesItsLabel(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	added := cliPriorityNamingMutation(t, repository, "priority add",
@@ -167,6 +168,7 @@ func TestPriorityAddPlacesThePriorityAndDerivesItsLabel(t *testing.T) {
 // backfills the built-in three into the same commit, and this is that guarantee
 // seen from the command line.
 func TestPriorityAddLeavesEveryExistingTaskResolving(t *testing.T) {
+	t.Parallel()
 	repository := preLedgerRepository(t)
 	urgentWork := cliCreateTaskAtPriority(t, repository, "Ship the fix", "high")
 	ordinaryWork := cliCreateTask(t, repository, "Write the notes")
@@ -234,6 +236,7 @@ func TestPriorityAddLeavesEveryExistingTaskResolving(t *testing.T) {
 
 // The refusals, each naming what the caller can do about it.
 func TestPriorityAddRefusesADuplicateAndTwoAnchors(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, _, stderr := run(t, repository, "priority", "add", "high", "--no-sync", "--json")
@@ -283,6 +286,7 @@ func TestPriorityAddRefusesADuplicateAndTwoAnchors(t *testing.T) {
 // first time anybody changes a status — and only this one has to get the
 // backfill right.
 func TestPriorityAddLeavesEveryExistingTaskResolvingOnALegacyLedger(t *testing.T) {
+	t.Parallel()
 	// The ledger setup minted is what writeLegacyPriorityLessLedger rewrites
 	// into a pre-priorities root, so this starts from a configured project
 	// rather than from preLedgerRepository's ledgerless one.

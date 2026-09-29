@@ -6,6 +6,7 @@ import (
 )
 
 func TestReleaseBumpLabelSelectsEachReleaseLabel(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		label string
 		want  string
@@ -30,6 +31,7 @@ func TestReleaseBumpLabelSelectsEachReleaseLabel(t *testing.T) {
 // required. One carrying no release label has to pass it, printing nothing so
 // the caller can tell there is no release to cut.
 func TestReleaseBumpLabelPrintsNothingWithoutAReleaseLabel(t *testing.T) {
+	t.Parallel()
 	output, err := runReleaseBumpLabel(t, "bug\ngood first issue\ndocumentation\n")
 	if err != nil {
 		t.Fatalf("select bump: %v\n%s", err, output)
@@ -40,6 +42,7 @@ func TestReleaseBumpLabelPrintsNothingWithoutAReleaseLabel(t *testing.T) {
 }
 
 func TestReleaseBumpLabelAcceptsNoLabelsAtAll(t *testing.T) {
+	t.Parallel()
 	output, err := runReleaseBumpLabel(t, "")
 	if err != nil {
 		t.Fatalf("select bump: %v\n%s", err, output)
@@ -53,6 +56,7 @@ func TestReleaseBumpLabelAcceptsNoLabelsAtAll(t *testing.T) {
 // size the author did not ask for, and the wrong choice cannot be undone once
 // the tag is published.
 func TestReleaseBumpLabelRefusesTwoReleaseLabels(t *testing.T) {
+	t.Parallel()
 	output, err := runReleaseBumpLabel(t, "release:patch\nrelease:minor\n")
 	if err == nil {
 		t.Fatalf("select bump chose between two release labels:\n%s", output)
@@ -65,6 +69,7 @@ func TestReleaseBumpLabelRefusesTwoReleaseLabels(t *testing.T) {
 // GitHub label names may contain spaces, and reading fields rather than whole
 // lines would split "good first issue" into three labels.
 func TestReleaseBumpLabelReadsWholeLines(t *testing.T) {
+	t.Parallel()
 	output, err := runReleaseBumpLabel(t, "good first issue\nrelease:minor\nhelp wanted\n")
 	if err != nil {
 		t.Fatalf("select bump: %v\n%s", err, output)
@@ -75,6 +80,7 @@ func TestReleaseBumpLabelReadsWholeLines(t *testing.T) {
 }
 
 func TestReleaseBumpLabelReadsALastLineWithoutANewline(t *testing.T) {
+	t.Parallel()
 	output, err := runReleaseBumpLabel(t, "bug\nrelease:major")
 	if err != nil {
 		t.Fatalf("select bump: %v\n%s", err, output)
@@ -86,6 +92,7 @@ func TestReleaseBumpLabelReadsALastLineWithoutANewline(t *testing.T) {
 
 // A label that merely starts with a release prefix is not a release label.
 func TestReleaseBumpLabelIgnoresNearMisses(t *testing.T) {
+	t.Parallel()
 	output, err := runReleaseBumpLabel(t, "release\nrelease:patchy\nreleased:patch\n")
 	if err != nil {
 		t.Fatalf("select bump: %v\n%s", err, output)

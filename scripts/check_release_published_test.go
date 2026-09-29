@@ -8,6 +8,7 @@ import (
 // A tag alone does not mean a release shipped, and the difference is what the
 // changelog check and the tag deletion tool both key on.
 func TestCheckReleasePublishedDistinguishesReleaseStates(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		name          string
 		environment   []string
@@ -51,6 +52,7 @@ func TestCheckReleasePublishedDistinguishesReleaseStates(t *testing.T) {
 // would let delete-release-tag.sh remove the tag of a live release whenever the
 // GitHub CLI is merely absent.
 func TestCheckReleasePublishedSeparatesUnknownFromUnpublished(t *testing.T) {
+	t.Parallel()
 	output, err := runReleaseScriptWithEnvironment(t, "", "check-release-published.sh", "",
 		environmentWithValues(nil, "PATH=/nonexistent", "GITHUB_REPOSITORY=dgoings/workbook"),
 		"v0.5.0")
@@ -66,6 +68,7 @@ func TestCheckReleasePublishedSeparatesUnknownFromUnpublished(t *testing.T) {
 }
 
 func TestCheckReleasePublishedRequiresATagAndRepository(t *testing.T) {
+	t.Parallel()
 	fakeBin := newFakeReleaseCLI(t)
 	if output, err := runReleaseScriptWithEnvironment(t, "", "check-release-published.sh", "",
 		environmentWithFakeCLI(fakeBin), "--repo", "dgoings/workbook"); err == nil {

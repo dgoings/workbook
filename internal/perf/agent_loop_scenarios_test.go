@@ -27,6 +27,7 @@ import (
 // projection re-settle would charge the timed command for refreshing the head
 // the setup moved.
 func TestColdNextScenarioMeasuresTheFetchItPerformsBeforeAnswering(t *testing.T) {
+	t.Parallel()
 	fixture := testColdCLIFixture()
 	var events []string
 	var commands []CommandSpec
@@ -96,6 +97,7 @@ func TestColdNextScenarioMeasuresTheFetchItPerformsBeforeAnswering(t *testing.T)
 // followed would be evidence about an empty search rather than about the agent
 // hot loop.
 func TestColdNextScenarioFailsWhenNoTaskCanBeAcquired(t *testing.T) {
+	t.Parallel()
 	fixture := testColdCLIFixture()
 	measured := 0
 	dependencies := scenarioDependencies{
@@ -137,6 +139,7 @@ func TestColdNextScenarioFailsWhenNoTaskCanBeAcquired(t *testing.T) {
 // stayed 0. That sample is a whole-board scan, and publishing it as the agent's
 // acquire latency is the failure this test forbids.
 func TestColdNextScenarioRefusesASampleThatAcquiredNothing(t *testing.T) {
+	t.Parallel()
 	fixture := testColdCLIFixture()
 	measured := 0
 	dependencies := scenarioDependencies{
@@ -181,6 +184,7 @@ func TestColdNextScenarioRefusesASampleThatAcquiredNothing(t *testing.T) {
 // as `timeout` and `failed` samples rather than aborting a run that has already
 // collected evidence.
 func TestColdNextScenarioReportsAFailedAcquireAsASample(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		sample Sample
@@ -235,6 +239,7 @@ func acquiredNextStdout(taskID string) []byte {
 // though it fetches before answering: the round trip is part of the loop an
 // agent runs continuously, so its cost belongs in every report.
 func TestColdNextScenarioIsRegistered(t *testing.T) {
+	t.Parallel()
 	for _, result := range coldCLIResults(1) {
 		if result.Name != "cli-next" {
 			continue
@@ -252,6 +257,7 @@ func TestColdNextScenarioIsRegistered(t *testing.T) {
 // synchronization: `workbook show` opens a read-only service, so its cost is the
 // local class and nothing about the measurement should suggest otherwise.
 func TestColdShowScenarioMeasuresOneLocalTaskRead(t *testing.T) {
+	t.Parallel()
 	fixture := testColdCLIFixture()
 	var events []string
 	var measured CommandSpec
@@ -303,6 +309,7 @@ func TestColdShowScenarioMeasuresOneLocalTaskRead(t *testing.T) {
 // populated response, so a server that answered with an empty board could not
 // be reported as a fast read.
 func TestWarmTaskListScenarioReadsThePopulatedBoard(t *testing.T) {
+	t.Parallel()
 	fixtureRoot := t.TempDir()
 	fixtureSpec := FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 2, ObjectFormat: "sha1"}
 	spec := RunSpec{
@@ -347,6 +354,7 @@ func TestWarmTaskListScenarioReadsThePopulatedBoard(t *testing.T) {
 // TestWarmTaskListScenarioIsRegistered keeps the warm whole-board read on the
 // warm HTTP surface so its cost appears in every report.
 func TestWarmTaskListScenarioIsRegistered(t *testing.T) {
+	t.Parallel()
 	for _, result := range warmHTTPResults(1) {
 		if result.Name != "api-tasks" {
 			continue

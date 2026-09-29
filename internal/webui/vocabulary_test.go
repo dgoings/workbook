@@ -60,6 +60,7 @@ setTimeout(async () => {
 // status the project does not define is a save that fails after the reader has
 // filled it in.
 func TestHandlerClientBuildsTheStatusSelectFromTheRenderedColumns(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runVocabularyClient(t, "status select options", "/tasks/new", vocabulary, "head-1", []core.Task{}, `
   const control = findElement(main, (element) => element.id === "task-status");
@@ -76,6 +77,7 @@ func TestHandlerClientBuildsTheStatusSelectFromTheRenderedColumns(t *testing.T) 
 // default, which the server rendered into the page. It used to land in
 // "backlog", which is a status a project need not define at all.
 func TestHandlerClientNewTaskDefaultsToTheDefaultTaggedStatus(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	// The default is deliberately not the first column, so a client that
 	// substituted "the first one" would still fail.
@@ -123,6 +125,7 @@ func statusPairs(vocabulary core.Vocabulary) [][2]string {
 // server rendered. Nothing on this path names a status the client was born
 // knowing.
 func TestHandlerClientDropsIntoAColumnTheProjectInvented(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	task := clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium)
 	task.Head = "head-a"
@@ -185,6 +188,7 @@ func vocabularyAddingThawing(t *testing.T) core.Vocabulary {
 // three away to show a column the reader may not care about. So the page says
 // it is out of date and offers a reload, and the reader picks the moment.
 func TestHandlerClientAnnouncesAVocabularyChangeWithoutRebuildingTheBoard(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	tasks := []core.Task{
 		clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium),
@@ -251,6 +255,7 @@ func TestHandlerClientAnnouncesAVocabularyChangeWithoutRebuildingTheBoard(t *tes
 // board rebuilding itself to make room — the card the reader may have open is
 // the same node before and after.
 func TestHandlerClientFilesACardWhoseColumnArrivedWithTheNewVocabulary(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	tasks := []core.Task{
 		clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium),
@@ -321,6 +326,7 @@ func TestHandlerClientFilesACardWhoseColumnArrivedWithTheNewVocabulary(t *testin
 // belong to would sit in the unknown-status region for a poll with nothing
 // saying why.
 func TestHandlerResolvesTheVocabularyOncePerRequest(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	resolutions := 0
 	var listed VocabularyState
@@ -376,6 +382,7 @@ func TestHandlerResolvesTheVocabularyOncePerRequest(t *testing.T) {
 // server has already answered on the page — and the one place a project that
 // customized its statuses would find the old six looking back.
 func TestClientScriptNamesNoStatusOfItsOwn(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	response := request(t, handler, http.MethodGet, "/")
 	script := renderedClientScript(t, response.Body.String())

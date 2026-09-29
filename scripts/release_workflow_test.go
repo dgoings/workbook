@@ -76,6 +76,7 @@ type releaseStep struct {
 // run. Without the workflow_call trigger the two cut workflows would tag a
 // commit and publish nothing, silently.
 func TestReleaseWorkflowIsReachableByTagPushAndByCall(t *testing.T) {
+	t.Parallel()
 	workflow := readReleaseWorkflow(t, "release.yml")
 
 	if !containsString(workflow.On.Push.Tags, "v*") {
@@ -90,6 +91,7 @@ func TestReleaseWorkflowIsReachableByTagPushAndByCall(t *testing.T) {
 // every called release in one group named for main, so a release would queue
 // behind an unrelated one.
 func TestReleaseWorkflowGroupsConcurrencyByTag(t *testing.T) {
+	t.Parallel()
 	workflow := readReleaseWorkflow(t, "release.yml")
 
 	if !strings.Contains(workflow.Concurrency.Group, "inputs.tag") {
@@ -100,6 +102,7 @@ func TestReleaseWorkflowGroupsConcurrencyByTag(t *testing.T) {
 // Production mutation: publishing the caller's branch rather than the tag would
 // build archives from whatever main happened to contain.
 func TestReleaseWorkflowChecksOutTheTagItPublishes(t *testing.T) {
+	t.Parallel()
 	workflow := readReleaseWorkflow(t, "release.yml")
 	job, ok := workflow.Jobs["release"]
 	if !ok {
@@ -125,6 +128,7 @@ func TestReleaseWorkflowChecksOutTheTagItPublishes(t *testing.T) {
 // Relying on their tag push to trigger it is the failure this design exists to
 // avoid, and it fails silently rather than loudly.
 func TestCutWorkflowsCallTheReleaseWorkflow(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"cut-release.yml", "release-pr.yml"} {
 		t.Run(name, func(t *testing.T) {
 			workflow := readReleaseWorkflow(t, name)
@@ -149,6 +153,7 @@ func TestCutWorkflowsCallTheReleaseWorkflow(t *testing.T) {
 // from every pull request someone abandoned, and dropping the repository guard
 // would let a fork's pull request reach a job holding write permission.
 func TestReleasePullRequestCutIsGuarded(t *testing.T) {
+	t.Parallel()
 	workflow := readReleaseWorkflow(t, "release-pr.yml")
 	cut, ok := workflow.Jobs["cut"]
 	if !ok {
@@ -171,6 +176,7 @@ func TestReleasePullRequestCutIsGuarded(t *testing.T) {
 // condition so the job never starts, and again in the step because the condition
 // matches a substring and cannot enforce the exactly-one-label rule.
 func TestReleasePullRequestCutSkipsMergesWithNoReleaseLabel(t *testing.T) {
+	t.Parallel()
 	workflow := readReleaseWorkflow(t, "release-pr.yml")
 	cut, ok := workflow.Jobs["cut"]
 	if !ok {
@@ -198,6 +204,7 @@ func TestReleasePullRequestCutSkipsMergesWithNoReleaseLabel(t *testing.T) {
 // it to labelled ones would leave every ordinary pull request waiting on a check
 // that never reports.
 func TestReleasePullRequestValidationRunsOnEveryPullRequest(t *testing.T) {
+	t.Parallel()
 	workflow := readReleaseWorkflow(t, "release-pr.yml")
 	validate, ok := workflow.Jobs["validate"]
 	if !ok {
@@ -221,6 +228,7 @@ func TestReleasePullRequestValidationRunsOnEveryPullRequest(t *testing.T) {
 // list, which the default shallow checkout does not carry. A shallow clone would
 // find no previous release and restart numbering from zero.
 func TestCutWorkflowsCheckOutTheFullTagHistory(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"cut-release.yml", "release-pr.yml"} {
 		t.Run(name, func(t *testing.T) {
 			workflow := readReleaseWorkflow(t, name)
@@ -242,6 +250,7 @@ func TestCutWorkflowsCheckOutTheFullTagHistory(t *testing.T) {
 // commit that fails its tests burns its version number. Both cut paths have to
 // require that CI already passed before they create one.
 func TestCutWorkflowsGateOnAVerifiedCommit(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		workflow string
 		job      string
@@ -284,6 +293,7 @@ func TestCutWorkflowsGateOnAVerifiedCommit(t *testing.T) {
 // Both paths make the same decision, and making it in one place is what keeps
 // the pull request check and the post-merge cut from drifting apart.
 func TestCutWorkflowsPlanThroughOneScript(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"cut-release.yml", "release-pr.yml"} {
 		t.Run(name, func(t *testing.T) {
 			contents := readReleaseWorkflowFile(t, name)
@@ -304,6 +314,7 @@ func TestCutWorkflowsPlanThroughOneScript(t *testing.T) {
 // Production mutation: a floating action reference lets a third party change
 // what runs in a job holding write permission and the tap credential.
 func TestReleaseWorkflowsPinActionsAndRunners(t *testing.T) {
+	t.Parallel()
 	pinned := regexp.MustCompile(`^[^@]+@[0-9a-f]{40}$`)
 
 	for _, name := range []string{"release.yml", "desktop-release.yml", "cut-release.yml", "release-pr.yml"} {
@@ -332,6 +343,7 @@ func TestReleaseWorkflowsPinActionsAndRunners(t *testing.T) {
 // The scripts the workflows call have to exist and be executable, since a typo
 // in a run step is only discovered when a release is attempted.
 func TestReleaseWorkflowsCallScriptsThatExist(t *testing.T) {
+	t.Parallel()
 	root, _ := renderFormulaPaths(t)
 	referenced := regexp.MustCompile(`scripts/[a-z-]+\.sh`)
 
@@ -369,6 +381,7 @@ func TestReleaseWorkflowsCallScriptsThatExist(t *testing.T) {
 // pull_request trigger would hand a contributor's branch a run ending in a job
 // that holds write permission.
 func TestDesktopReleaseWorkflowIsReachableByTagCallAndDispatch(t *testing.T) {
+	t.Parallel()
 	workflow := readReleaseWorkflow(t, "desktop-release.yml")
 
 	if len(workflow.On.Push.Tags) != 1 || workflow.On.Push.Tags[0] != "desktop-v*" {
@@ -388,6 +401,7 @@ func TestDesktopReleaseWorkflowIsReachableByTagCallAndDispatch(t *testing.T) {
 // Production mutation: publishing the caller's branch rather than the tag would
 // package whatever main happened to contain and publish it under the tag's name.
 func TestDesktopReleaseWorkflowChecksOutTheTagItPublishes(t *testing.T) {
+	t.Parallel()
 	workflow := readReleaseWorkflow(t, "desktop-release.yml")
 
 	var checkouts int
@@ -412,6 +426,7 @@ func TestDesktopReleaseWorkflowChecksOutTheTagItPublishes(t *testing.T) {
 // worse still: a publication interrupted part way can leave desktop-latest
 // serving half of one build and half of another.
 func TestDesktopReleaseWorkflowGroupsConcurrencyByTag(t *testing.T) {
+	t.Parallel()
 	workflow := readReleaseWorkflow(t, "desktop-release.yml")
 
 	if !strings.Contains(workflow.Concurrency.Group, "inputs.tag") {
@@ -444,6 +459,7 @@ func TestDesktopReleaseWorkflowGroupsConcurrencyByTag(t *testing.T) {
 // outright, so all three runners are named, and each is pinned rather than a
 // moving label that could change what a release was built on.
 func TestDesktopReleaseWorkflowBuildsOnPinnedRunnersPerPlatform(t *testing.T) {
+	t.Parallel()
 	workflow := readReleaseWorkflow(t, "desktop-release.yml")
 	build, ok := workflow.Jobs["build"]
 	if !ok {
@@ -467,6 +483,7 @@ func TestDesktopReleaseWorkflowBuildsOnPinnedRunnersPerPlatform(t *testing.T) {
 // release happened to carry. The tag is pushed and the desktop workflow called
 // directly, because a tag pushed with the default token starts no run.
 func TestReleaseWorkflowCascadesIntoADesktopRelease(t *testing.T) {
+	t.Parallel()
 	workflow := readReleaseWorkflow(t, "release.yml")
 
 	var tagJobName string

@@ -15,6 +15,7 @@ func benchmarkScriptPaths(t *testing.T) (string, string) {
 }
 
 func TestBenchmarkRequiresGoInPath(t *testing.T) {
+	t.Parallel()
 	root, script := benchmarkScriptPaths(t)
 	command := exec.Command("/bin/sh", script)
 	command.Dir = root
@@ -32,6 +33,7 @@ func TestBenchmarkRequiresGoInPath(t *testing.T) {
 // destination breaks the documented run-and-compare workflow, and a run that
 // exits zero without both report files has measured nothing.
 func TestBenchmarkWritesDatedReportPairAndPrintsMarkdownPath(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("end-to-end benchmark run is slow")
 	}

@@ -31,6 +31,7 @@ const (
 // survives every poll after it. Only the reader takes it away, and dismissing
 // it leaves the caret on the card rather than on the document body.
 func TestHandlerClientKeepsARefusedChangeReportedOnItsCardAcrossPolls(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask(failureReportTaskID, "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
@@ -145,6 +146,7 @@ setTimeout(async () => {
 // longer carries it. It also takes the caret, because the card that was holding
 // it has just been removed from the document.
 func TestHandlerClientLiftsARefusedChangeReportToTheNoticeWhenItsCardLeavesTheBoard(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask(failureReportLiftedID, "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
@@ -251,6 +253,7 @@ setTimeout(async () => {
 // what takes the task out of the model, so a report that waited until then to
 // look up what it is about would have nothing left to name. It is read first.
 func TestHandlerClientNamesALiftedReportWhoseTaskTheForcedRefreshRemoved(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask(failureReportDeletedID, "Deleted elsewhere", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
@@ -322,6 +325,7 @@ setTimeout(async () => {
 // TestHandlerClientRollsBackAFailedIntentAndLeavesALaterOneStanding still finds
 // the report on a card whose later placement succeeded.
 func TestHandlerClientClearsARefusedChangeReportWhenTheCardIsChangedAgain(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask(failureReportSettledID, "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"

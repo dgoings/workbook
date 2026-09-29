@@ -21,6 +21,7 @@ import (
 const descriptionPreferenceKey = "workbook.board.descriptions"
 
 func TestHandlerHidesCardDescriptionsUntilTheBoardIsAskedForThem(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 
 	response := request(t, handler, http.MethodGet, "/")
@@ -57,6 +58,7 @@ func TestHandlerHidesCardDescriptionsUntilTheBoardIsAskedForThem(t *testing.T) {
 // that degraded page one with no control rather than one with a control that
 // lies.
 func TestHandlerShipsTheDescriptionSettingHiddenUntilItsRouteRevealsIt(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 
 	for _, path := range []string{"/", "/tasks/new"} {
@@ -79,6 +81,7 @@ func TestHandlerShipsTheDescriptionSettingHiddenUntilItsRouteRevealsIt(t *testin
 // one keeps the speaking name, the same choice the publishing control beside it
 // makes.
 func TestHandlerLeavesTheDescriptionSettingStateToItsNameAlone(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 
 	response := request(t, handler, http.MethodGet, "/")
@@ -136,6 +139,7 @@ func cssRule(t *testing.T, body, selector string) string {
 }
 
 func TestHandlerClientTogglesCardDescriptions(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "card description setting", reconcileBoardTasks(), `
   const ready = listFor("ready");
   const alpha = cardIn(ready, `+strconv.Quote(reconcileAlphaID)+`);
@@ -205,6 +209,7 @@ func TestHandlerClientTogglesCardDescriptions(t *testing.T) {
 }
 
 func TestHandlerClientRestoresTheRememberedDescriptionSetting(t *testing.T) {
+	t.Parallel()
 	runBoardClientWithSetup(t, "remembered card description setting", reconcileBoardTasks(), `
 storedPreferences.set(`+strconv.Quote(descriptionPreferenceKey)+`, "shown");
 `, `
@@ -228,6 +233,7 @@ storedPreferences.set(`+strconv.Quote(descriptionPreferenceKey)+`, "shown");
 // carries it only where it means something. The Deleted column's toggle travels
 // with the board for the same reason, so it is asked the same question here.
 func TestHandlerClientOffersTheDescriptionSettingOnlyWhereItDrawsCards(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "description setting on the board", reconcileBoardTasks(), `
   if (descriptionToggle.hidden) throw new Error("the board withheld its own description setting");
   if (filterRow.hidden) throw new Error("the board withheld the filter row the Deleted column's toggle sits in");
@@ -254,6 +260,7 @@ func TestHandlerClientOffersTheDescriptionSettingOnlyWhereItDrawsCards(t *testin
 // A browser can refuse storage entirely — Safari's private windows throw on the
 // first read — and a board that cannot remember the setting must still draw.
 func TestHandlerClientKeepsTheBoardWhenStorageIsUnavailable(t *testing.T) {
+	t.Parallel()
 	runBoardClientWithSetup(t, "board without storage", reconcileBoardTasks(), `
 Object.defineProperty(window, "localStorage", { get() { throw new Error("storage is unavailable"); } });
 `, `

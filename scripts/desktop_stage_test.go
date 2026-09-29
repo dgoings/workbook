@@ -20,6 +20,7 @@ func desktopStagePaths(t *testing.T) (string, string) {
 }
 
 func TestDesktopStageBuildsFromThisCheckout(t *testing.T) {
+	t.Parallel()
 	root, script := desktopStagePaths(t)
 	output := t.TempDir()
 
@@ -62,6 +63,7 @@ func TestDesktopStageBuildsFromThisCheckout(t *testing.T) {
 }
 
 func TestDesktopStageBuildsANamedRefWithoutMovingTheWorkingTree(t *testing.T) {
+	t.Parallel()
 	root, script := desktopStagePaths(t)
 	output := t.TempDir()
 
@@ -92,6 +94,7 @@ func TestDesktopStageBuildsANamedRefWithoutMovingTheWorkingTree(t *testing.T) {
 }
 
 func TestDesktopStageUsesAGivenCheckoutAsItStands(t *testing.T) {
+	t.Parallel()
 	root, script := desktopStagePaths(t)
 	output := t.TempDir()
 
@@ -135,6 +138,7 @@ func goEnv(t *testing.T, root string, name string) string {
 // binary cannot run on the host, so the banner that prints its version has
 // to be skipped rather than crash the stage.
 func TestDesktopStageCrossCompilesAndSkipsTheBanner(t *testing.T) {
+	t.Parallel()
 	root, script := desktopStagePaths(t)
 	output := t.TempDir()
 	hostArch := goEnv(t, root, "GOHOSTARCH")
@@ -164,6 +168,7 @@ func TestDesktopStageCrossCompilesAndSkipsTheBanner(t *testing.T) {
 }
 
 func TestDesktopStageNamesAWindowsBinary(t *testing.T) {
+	t.Parallel()
 	root, script := desktopStagePaths(t)
 	output := t.TempDir()
 	command := exec.Command(script, output)

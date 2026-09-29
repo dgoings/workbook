@@ -73,6 +73,7 @@ func resourceHelperSpec(t *testing.T, environment []string) CommandSpec {
 // platform's unit, or applying the wrong platform's unit, moves the reported
 // peak by a factor of 1024 and fails this range assertion.
 func TestMeasureCommandResourcesReportsPeakResidentMemoryInDocumentedUnits(t *testing.T) {
+	t.Parallel()
 	measurement := MeasureCommandResources(context.Background(), resourceHelperSpec(t, nil))
 
 	if measurement.ExitCode != 0 || measurement.TimedOut || measurement.Error != "" {
@@ -103,6 +104,7 @@ func TestMeasureCommandResourcesReportsPeakResidentMemoryInDocumentedUnits(t *te
 // reporting them as if they were meaningful there, fails this assertion after
 // the helper writes 64 MiB.
 func TestMeasureCommandResourcesDocumentsBlockIOCounterAvailability(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "written.bin")
 	measurement := MeasureCommandResources(context.Background(), resourceHelperSpec(t, []string{
 		resourceHelperWriteEnv + "=" + target,
@@ -130,6 +132,7 @@ func TestMeasureCommandResourcesDocumentsBlockIOCounterAvailability(t *testing.T
 }
 
 func TestMeasureCommandResourcesRetainsFailingExitCode(t *testing.T) {
+	t.Parallel()
 	measurement := MeasureCommandResources(context.Background(), resourceHelperSpec(t, []string{
 		resourceHelperFailEnv + "=1",
 	}))
@@ -146,6 +149,7 @@ func TestMeasureCommandResourcesRetainsFailingExitCode(t *testing.T) {
 }
 
 func TestMaxResidentUnitFollowsPlatformConvention(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		goos string
 		want string
@@ -168,6 +172,7 @@ func TestMaxResidentUnitFollowsPlatformConvention(t *testing.T) {
 }
 
 func TestBlockIOCounterSupportFollowsPlatformConvention(t *testing.T) {
+	t.Parallel()
 	if BlockIOCountersSupportedForOS("darwin") {
 		t.Fatal("darwin does not maintain ru_inblock and ru_oublock")
 	}
@@ -177,6 +182,7 @@ func TestBlockIOCounterSupportFollowsPlatformConvention(t *testing.T) {
 }
 
 func TestDirectoryBytesSumsEveryRegularFile(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "nested", "deeper"), 0o755); err != nil {
 		t.Fatal(err)
@@ -211,6 +217,7 @@ func TestDirectoryBytesSumsEveryRegularFile(t *testing.T) {
 // never runs, and a background descendant it started keeps burning a core after
 // the measurement reported a clean exit.
 func TestMeasureCommandResourcesReapsDescendantOfCommandThatExits(t *testing.T) {
+	t.Parallel()
 	childPIDPath := filepath.Join(t.TempDir(), "child.pid")
 	proctest.ReapRecordedProcessGroup(t, childPIDPath)
 	measurement := MeasureCommandResources(context.Background(), CommandSpec{

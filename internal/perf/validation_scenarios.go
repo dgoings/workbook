@@ -43,9 +43,9 @@ type validationScenarioDependencies struct {
 // validation paths. Each measured sample receives an independent fixture.
 func RunValidationScenarios(ctx context.Context, spec RunSpec, fixtureRoot string, selected []string) ([]ScenarioResult, error) {
 	return runValidationScenarios(ctx, spec, fixtureRoot, selected, validationScenarioDependencies{
-		buildFixture: func(ctx context.Context, root string, fixture FixtureSpec) (Fixture, error) {
-			return buildFixtureWithinTimeout(ctx, root, fixture, spec.CommandTimeout)
-		},
+		// The builder carries no bound of its own: runValidationScenarios bounds
+		// whatever builder it is given with the spec's fixture timeout.
+		buildFixture:   BuildFixture,
 		runSetup:       runValidationSetupCommand,
 		measureCommand: MeasureCommandOutput,
 	})
@@ -60,6 +60,9 @@ func runValidationScenarios(ctx context.Context, spec RunSpec, fixtureRoot strin
 	}
 	if spec.CommandTimeout <= 0 {
 		return nil, fmt.Errorf("command timeout must be positive")
+	}
+	if err := requireFixtureTimeout(&spec); err != nil {
+		return nil, err
 	}
 	if fixtureRoot == "" {
 		return nil, fmt.Errorf("fixture root is required")
@@ -83,9 +86,11 @@ func runValidationScenarios(ctx context.Context, spec RunSpec, fixtureRoot strin
 			Samples: make([]Sample, spec.Samples),
 		}
 		for sample := range spec.Samples {
-			fixtureContext, cancel := context.WithTimeout(ctx, spec.CommandTimeout)
-			fixture, err := dependencies.buildFixture(fixtureContext, filepath.Join(fixtureRoot, definition.name, fmt.Sprintf("sample-%03d", sample+1)), spec.Fixture)
-			cancel()
+			fixture, err := buildFixtureWithinTimeout(
+				ctx, dependencies.buildFixture,
+				filepath.Join(fixtureRoot, definition.name, fmt.Sprintf("sample-%03d", sample+1)),
+				spec.Fixture, spec.FixtureTimeout,
+			)
 			if err != nil {
 				return nil, fmt.Errorf("build %s sample %d fixture: %w", definition.name, sample+1, err)
 			}

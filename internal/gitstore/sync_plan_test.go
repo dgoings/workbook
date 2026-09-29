@@ -13,6 +13,7 @@ import (
 )
 
 func TestClassifyTaskHeadsUsesOneGraphForUnequalPairs(t *testing.T) {
+	t.Parallel()
 	for _, objectFormat := range []string{"sha1", "sha256"} {
 		t.Run(objectFormat, func(t *testing.T) {
 			repository, config := writeRepositoryWithObjectFormat(t, objectFormat)
@@ -101,6 +102,7 @@ func TestClassifyTaskHeadsUsesOneGraphForUnequalPairs(t *testing.T) {
 }
 
 func TestClassifyTaskHeadsSkipsGraphWhenAllPairsAreEqual(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	snapshot, _, _ := writeRoot(t, repository, config)
 	var commands [][]string
@@ -125,6 +127,7 @@ func TestClassifyTaskHeadsSkipsGraphWhenAllPairsAreEqual(t *testing.T) {
 }
 
 func TestClassifyTaskHeadsRejectsInvalidPairsBeforeGraph(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	snapshot, _, _ := writeRoot(t, repository, config)
 
@@ -174,6 +177,7 @@ func TestClassifyTaskHeadsRejectsInvalidPairsBeforeGraph(t *testing.T) {
 }
 
 func TestCompleteParentGraphRejectsMissingReferencedCommit(t *testing.T) {
+	t.Parallel()
 	head := strings.Repeat("a", 40)
 	missingParent := strings.Repeat("b", 40)
 	err := validateCompleteParentGraph(map[string][]string{
@@ -185,6 +189,7 @@ func TestCompleteParentGraphRejectsMissingReferencedCommit(t *testing.T) {
 }
 
 func TestUpdateCanonicalRefsUsesOneCompareAndSwapTransaction(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	current, currentPack, currentState := writeRoot(t, repository, config)
 	updatePack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", string(core.StatusReady))
@@ -237,6 +242,7 @@ func TestUpdateCanonicalRefsUsesOneCompareAndSwapTransaction(t *testing.T) {
 }
 
 func TestUpdateCanonicalRefsAbortsEntireTransactionOnStaleRef(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	current, currentPack, currentState := writeRoot(t, repository, config)
 	advancedPack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", string(core.StatusReady))
@@ -278,6 +284,7 @@ func TestUpdateCanonicalRefsAbortsEntireTransactionOnStaleRef(t *testing.T) {
 }
 
 func TestUpdateCanonicalRefsRejectsExistingSymbolicCanonicalRef(t *testing.T) {
+	t.Parallel()
 	repository, config := writeRepository(t)
 	current, pack, state := writeRoot(t, repository, config)
 	updatePack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", string(core.StatusReady))

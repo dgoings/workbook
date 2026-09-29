@@ -11,10 +11,10 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
-	"github.com/dgoings/workbook/internal/testrepo"
 )
 
 func TestRunPushAndFetchJSONAcrossClones(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	task := cliCreateTask(t, first, "Shared task")
 
@@ -46,6 +46,7 @@ func TestRunPushAndFetchJSONAcrossClones(t *testing.T) {
 }
 
 func TestRunSyncFetchesThenPushesJSONAcrossClones(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	firstTask := cliCreateTask(t, first, "First synced task")
 
@@ -75,6 +76,7 @@ func TestRunSyncFetchesThenPushesJSONAcrossClones(t *testing.T) {
 }
 
 func TestRunSyncReplaysDivergenceAndPublishesIt(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	divergent := cliCreateTask(t, first, "Divergent sync task")
 	if code, _, stderr := run(t, first, "sync"); code != 0 {
@@ -113,6 +115,7 @@ func TestRunSyncReplaysDivergenceAndPublishesIt(t *testing.T) {
 // The conflict list is the whole non-interactive contract: it is on the result
 // envelope, it is a list, and the exit code alone says the caller must act.
 func TestRunSyncReportsConflictListAndExitsEight(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	conflicting := cliCreateTask(t, first, "Conflicting sync task")
 	cliUpdateDescription(t, first, conflicting.ID, "Base text")
@@ -158,6 +161,7 @@ func TestRunSyncReportsConflictListAndExitsEight(t *testing.T) {
 }
 
 func TestRunSyncHumanOutputReportsConflictDetail(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	conflicting := cliCreateTask(t, first, "Human conflicting sync task")
 	cliUpdateDescription(t, first, conflicting.ID, "Base text")
@@ -199,6 +203,7 @@ func TestRunSyncHumanOutputReportsConflictDetail(t *testing.T) {
 // reason while being somebody's real history, so it travels with the flag that
 // keeps removal advice away from it.
 func TestRunSyncToleratesAndReportsUnrecognizedRemoteTaskRef(t *testing.T) {
+	t.Parallel()
 	const foreignRef = "refs/workbook/tasks/OPS-01K0M6B8A4FTT8C39MXXYTW7D9"
 	first, second := cliSyncRepositories(t)
 	shared := cliCreateTask(t, first, "Shared task")
@@ -324,6 +329,7 @@ func assertCLIOffersNoAdoption(t *testing.T, output string) {
 // touched -- the same repository-wide denial a stray ref name caused, reached
 // through the object instead of the name.
 func TestRunMutationPublishesWhenAnotherRemoteTaskTipIsMalformed(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	shared := cliCreateTask(t, first, "Shared task")
 	poisoned := cliCreateTask(t, first, "Poisoned task")
@@ -402,6 +408,7 @@ func decodeMutationSync(t *testing.T, output string) mutationSyncReport {
 }
 
 func TestRunSyncJSONReportsFailedFetchWhenOriginIsMissing(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, stdout, stderr := run(t, repository, "sync", "--json")
@@ -422,6 +429,7 @@ func TestRunSyncJSONReportsFailedFetchWhenOriginIsMissing(t *testing.T) {
 }
 
 func TestRunPushReportsPartialRejectionAndNonzeroJSONError(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	conflicting := cliCreateTask(t, first, "Conflicting task")
 	unrelated := cliCreateTask(t, first, "Unrelated task")
@@ -450,6 +458,7 @@ func TestRunPushReportsPartialRejectionAndNonzeroJSONError(t *testing.T) {
 }
 
 func TestRunHooksInstallIsIdempotentAndRefusesUnmanagedHook(t *testing.T) {
+	t.Parallel()
 	first, _ := cliSyncRepositories(t)
 
 	code, stdout, stderr := run(t, first, "hooks", "install", "--json")
@@ -489,6 +498,7 @@ func TestRunHooksInstallIsIdempotentAndRefusesUnmanagedHook(t *testing.T) {
 }
 
 func TestRunSyncCommandsRejectUnexpectedArguments(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	for _, args := range [][]string{
 		{"fetch", "extra"},
@@ -509,11 +519,11 @@ func cliSyncRepositories(t *testing.T) (string, string) {
 	t.Helper()
 	bare := cliBareOrigin(t)
 
-	seed := testrepo.New(t)
+	// The seed is a copy of the package template, which is a project setup
+	// has already minted; what the sync tests need from it is the tracked
+	// configuration to commit and the refs to push, and those copy.
+	seed := initializedRepository(t)
 	cliGit(t, seed, "branch", "-M", "main")
-	if code, _, stderr := run(t, seed, "setup"); code != 0 {
-		t.Fatalf("setup code = %d; stderr = %q", code, stderr)
-	}
 	cliGit(t, seed, "add", ".workbook/config.json")
 	cliGit(t, seed, "commit", "--quiet", "-m", "Initialize Workbook")
 	cliGit(t, seed, "remote", "add", "origin", bare)

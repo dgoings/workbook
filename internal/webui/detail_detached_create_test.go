@@ -101,6 +101,7 @@ const leaveForTheBoard = `
 // standing there. They learn about it where they are, rather than believing a
 // task was made.
 func TestHandlerClientDetachedCreateReportsItsRefusal(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	prerequisite := clientPlacementTask(detachedCreatePrerequisiteID, "Prerequisite", core.StatusDone, core.PriorityHigh)
 	script := newTaskClientScript(t, "/tasks/new?status=ready")
@@ -162,6 +163,7 @@ setTimeout(async () => {
 // back with them, and the report says so rather than letting the reader save a
 // task that has quietly lost its prerequisite.
 func TestHandlerClientDetachedCreateKeepsTheDraftRecoverable(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	prerequisite := clientPlacementTask(detachedCreatePrerequisiteID, "Prerequisite", core.StatusDone, core.PriorityHigh)
 	script := newTaskClientScript(t, "/tasks/new?status=ready")
@@ -245,6 +247,7 @@ setTimeout(async () => {
 // brace rather than behavior these cases can pin. The second case is kept as the
 // ordinary journey anyone would look for first, not as a pin on it.
 func TestHandlerClientDetachedCreateLeavesTheRouteTheReaderChose(t *testing.T) {
+	t.Parallel()
 	prerequisite := clientPlacementTask(detachedCreatePrerequisiteID, "Prerequisite", core.StatusDone, core.PriorityHigh)
 	created := clientPlacementTask(detachedCreateCreatedID, detachedCreateTitle, core.StatusReady, core.PriorityMedium)
 	created.Description = detachedCreateDescription

@@ -47,6 +47,7 @@ type errorDocument struct {
 }
 
 func TestWriteMutationResultRendersWarning(t *testing.T) {
+	t.Parallel()
 	result := core.MutationResult{
 		Task: core.Task{
 			ID: "WB-01K0M6B8A4FTT8C39MXXYTW7D1",
@@ -98,6 +99,7 @@ func TestWriteMutationResultRendersWarning(t *testing.T) {
 }
 
 func TestRunInvalidInvocationAndEarlyJSONErrors(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 
 	t.Run("no command renders global help", func(t *testing.T) {
@@ -151,17 +153,18 @@ func TestRunInvalidInvocationAndEarlyJSONErrors(t *testing.T) {
 }
 
 func TestRunReportsGitProcessFailuresAsOperationalWithoutUsage(t *testing.T) {
+	t.Parallel()
+	// Unsetting the repository's own user.email is the whole of the failure this
+	// test needs. The global config TestMain installs names no identity and
+	// GIT_CONFIG_NOSYSTEM keeps the machine's out of reach, so nothing supplies
+	// one behind the local file; before TestMain did that, this test had to
+	// point GIT_CONFIG_GLOBAL at an empty file itself, and the t.Setenv that
+	// took is what kept it out of the parallel batch.
 	repository := initializedRepository(t)
 	command := exec.Command("git", "-C", repository, "config", "--unset", "user.email")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git config --unset user.email: %v\n%s", err, output)
 	}
-	emptyGlobalConfig := filepath.Join(t.TempDir(), "gitconfig")
-	if err := os.WriteFile(emptyGlobalConfig, nil, 0o600); err != nil {
-		t.Fatalf("WriteFile(empty global Git config) error = %v", err)
-	}
-	t.Setenv("GIT_CONFIG_GLOBAL", emptyGlobalConfig)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 
 	t.Run("JSON", func(t *testing.T) {
 		code, stdout, stderr := run(t, repository, "create", "Needs actor", "--json")
@@ -203,6 +206,7 @@ func TestRunReportsGitProcessFailuresAsOperationalWithoutUsage(t *testing.T) {
 }
 
 func TestRunReportsConfigurationFilesystemFailureAsOperational(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	blockingPath := filepath.Join(repository, ".workbook")
 	if err := os.WriteFile(blockingPath, []byte("not a directory"), 0o600); err != nil {
@@ -230,6 +234,7 @@ func TestRunReportsConfigurationFilesystemFailureAsOperational(t *testing.T) {
 }
 
 func TestRunJSONIntentAccountsForStringFlagValuesAndParserStops(t *testing.T) {
+	t.Parallel()
 	t.Run("init string value consumes terminator before JSON flag", func(t *testing.T) {
 		repository := testrepo.New(t)
 		code, stdout, stderr := run(t, repository, "setup", "--key", "--", "--json")
@@ -292,6 +297,7 @@ func TestRunJSONIntentAccountsForStringFlagValuesAndParserStops(t *testing.T) {
 }
 
 func TestRunHooksInvocationErrorsRetainJSONIntent(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name string
 		args []string
@@ -315,6 +321,7 @@ func TestRunHooksInvocationErrorsRetainJSONIntent(t *testing.T) {
 }
 
 func TestRunJSONIntentMatchesGoBooleanFlagSyntax(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	for _, spelling := range []string{
@@ -422,6 +429,7 @@ func TestRunJSONIntentMatchesGoBooleanFlagSyntax(t *testing.T) {
 }
 
 func TestRunRequiresInitializationAndSetupIsIdempotent(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 
 	code, stdout, stderr := run(t, repository, "list")
@@ -513,6 +521,7 @@ func projectIdentityLine(t *testing.T, output string) (string, string) {
 }
 
 func TestRunRebuildProducesVersionedResult(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, _, stderr := run(t, repository, "create", "Projected")
 	if code != 0 || stderr != "" {
@@ -537,6 +546,7 @@ func TestRunRebuildProducesVersionedResult(t *testing.T) {
 }
 
 func TestOpenServiceUsesSplitMutationStores(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	service, err := openService(context.Background(), repository, io.Discard)
@@ -560,6 +570,7 @@ func TestOpenServiceUsesSplitMutationStores(t *testing.T) {
 }
 
 func TestRunExactMutationPathAdvancesCanonicalRefOnce(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, stdout, stderr := run(t, repository, "create", "Created", "--json")
@@ -592,6 +603,7 @@ func TestRunExactMutationPathAdvancesCanonicalRefOnce(t *testing.T) {
 }
 
 func TestReadCommandsRefreshCachedProjectionAfterGitTipAdvances(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Before advance", "--status", "ready", "--json")
 	if code != 0 || stderr != "" {
@@ -637,6 +649,7 @@ func TestReadCommandsRefreshCachedProjectionAfterGitTipAdvances(t *testing.T) {
 }
 
 func TestRunCRUDLifecycleAndOutputContracts(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 
 	code, _, stderr := run(t, repository, "setup", "--key", "PROJ")
@@ -811,6 +824,7 @@ func TestRunCRUDLifecycleAndOutputContracts(t *testing.T) {
 }
 
 func TestCLIInReviewStatus(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, stdout, stderr := run(t, repository, "create", "Review from creation", "--status", "in-review", "--json")
@@ -859,6 +873,7 @@ func TestCLIInReviewStatus(t *testing.T) {
 }
 
 func TestRunJSONFailureIsCompactAndUsesStableExitCodes(t *testing.T) {
+	t.Parallel()
 	t.Run("validation", func(t *testing.T) {
 		repository := initializedRepository(t)
 		code, stdout, stderr := run(t, repository, "create", "", "--json")
@@ -927,6 +942,7 @@ func repositoryDoc(t *testing.T, parts ...string) string {
 }
 
 func TestCommandReferenceDocumentsImplementedCommands(t *testing.T) {
+	t.Parallel()
 	reference := repositoryDoc(t, "docs", "reference.md")
 	commandList := firstFencedCodeBlock(t, reference)
 	var lines []string
@@ -1096,6 +1112,7 @@ func assertREADMEDocumentsEveryExitCode(t *testing.T, readme string) {
 }
 
 func TestREADMEDocumentsInstallationPaths(t *testing.T) {
+	t.Parallel()
 	readme := repositoryDoc(t, "README.md")
 
 	for _, required := range []string{
@@ -1118,6 +1135,7 @@ func TestREADMEDocumentsInstallationPaths(t *testing.T) {
 // output: which record decides, what a fork inherits, and what a teammate on the
 // previous version sees. The command reference has to state all of it.
 func TestCommandReferenceDocumentsProjectIdentity(t *testing.T) {
+	t.Parallel()
 	readme := strings.Join(strings.Fields(repositoryDoc(t, "docs", "reference.md")), " ")
 
 	for _, required := range []string{
@@ -1151,6 +1169,7 @@ func TestCommandReferenceDocumentsProjectIdentity(t *testing.T) {
 }
 
 func TestREADMECommandPolicyRejectsUnimplementedCommandOutsideProposedSection(t *testing.T) {
+	t.Parallel()
 	const claim = "## Current workflow\n\nRun `workbook claim` to acquire work.\n"
 	violations := readmeCommandPolicyViolations(claim)
 	if len(violations) != 1 || !strings.Contains(violations[0], `"claim"`) {
@@ -1210,6 +1229,7 @@ func firstFencedCodeBlock(t *testing.T, section string) string {
 }
 
 func TestRunServeRejectsInvalidArguments(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	for _, args := range [][]string{
@@ -1229,6 +1249,7 @@ func TestRunServeRejectsInvalidArguments(t *testing.T) {
 }
 
 func TestRunServeUpdatesTaskStatusThroughWebRoute(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Serve mutation task", "--status", "ready", "--json")
 	if code != 0 {
@@ -1297,6 +1318,7 @@ func TestRunServeUpdatesTaskStatusThroughWebRoute(t *testing.T) {
 }
 
 func TestRunServePositionsTaskThroughWebRoute(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Moved through web position", "--status", "ready", "--priority", "medium", "--json")
 	if code != 0 {
@@ -1405,6 +1427,7 @@ func TestRunServePositionsTaskThroughWebRoute(t *testing.T) {
 }
 
 func TestRunServeMutatesDependenciesThroughWebRoutes(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Dependent through web", "--json")
 	if code != 0 {
@@ -1527,6 +1550,7 @@ func assertDependencyOperation(t *testing.T, repository, head string, operationT
 }
 
 func TestRunServeListsGitTipAdvancedAfterStarting(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Before web advance", "--json")
 	if code != 0 || stderr != "" {
@@ -1578,6 +1602,7 @@ func TestRunServeListsGitTipAdvancedAfterStarting(t *testing.T) {
 }
 
 func TestRunServeCreatesTaskThroughWebRoute(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1641,6 +1666,7 @@ func TestRunServeCreatesTaskThroughWebRoute(t *testing.T) {
 }
 
 func TestRunServeUpdatesAllTaskFieldsThroughWebRoute(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Before web update", "--json")
 	if code != 0 {
@@ -1711,6 +1737,7 @@ func TestRunServeUpdatesAllTaskFieldsThroughWebRoute(t *testing.T) {
 // them may reach the Git-backed service, because a task the board writes
 // publishes to origin and is later read as instructions by coding agents.
 func TestRunServeRefusesCrossSiteRequestsThroughTheRealListener(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Only legitimate task", "--json")
 	if code != 0 {
@@ -1850,6 +1877,7 @@ func TestRunServeRefusesCrossSiteRequestsThroughTheRealListener(t *testing.T) {
 }
 
 func TestRunServeWarnsWhenTheBoardLeavesThisMachine(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1894,6 +1922,7 @@ func TestRunServeWarnsWhenTheBoardLeavesThisMachine(t *testing.T) {
 }
 
 func TestBoardExposureWarning(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		address string
 		warns   bool
@@ -1930,6 +1959,7 @@ func TestBoardExposureWarning(t *testing.T) {
 }
 
 func TestRunServeReportsListenerFailureAsOperational(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1951,6 +1981,7 @@ func TestRunServeReportsListenerFailureAsOperational(t *testing.T) {
 }
 
 func TestOpenBoardListenerKeepsRequestedAddressWhenFree(t *testing.T) {
+	t.Parallel()
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -1974,6 +2005,7 @@ func TestOpenBoardListenerKeepsRequestedAddressWhenFree(t *testing.T) {
 }
 
 func TestOpenBoardListenerFallsBackWhenDefaultAddressTaken(t *testing.T) {
+	t.Parallel()
 	// An OS-assigned port stands in for 7331 so this test never competes with a
 	// board or another test run for the real default; the address serve did not
 	// choose is what drives the fallback, not the number.
@@ -2011,6 +2043,7 @@ func TestOpenBoardListenerFallsBackWhenDefaultAddressTaken(t *testing.T) {
 }
 
 func TestOpenBoardListenerNeverFallsBackForExplicitAddress(t *testing.T) {
+	t.Parallel()
 	blocker, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -2035,6 +2068,7 @@ func TestOpenBoardListenerNeverFallsBackForExplicitAddress(t *testing.T) {
 }
 
 func TestOpenBoardListenerNeverFallsBackOnOtherBindFailures(t *testing.T) {
+	t.Parallel()
 	// Permission denied on a privileged port is the archetypal failure another
 	// port would not cure, and a test process cannot provoke it portably, so
 	// the bind is injected. The recorded attempts prove serve did not quietly
@@ -2066,6 +2100,7 @@ func TestOpenBoardListenerNeverFallsBackOnOtherBindFailures(t *testing.T) {
 }
 
 func TestOpenBoardListenerFallsBackOnlyOnce(t *testing.T) {
+	t.Parallel()
 	// An in-use default earns exactly one retry, and it asks for port 0 on the
 	// same host rather than guessing at 7332.
 	var attempts []string
@@ -2092,6 +2127,7 @@ func TestOpenBoardListenerFallsBackOnlyOnce(t *testing.T) {
 }
 
 func TestBoardFallbackNoticeNamesTheCollision(t *testing.T) {
+	t.Parallel()
 	notice := boardFallbackNotice(defaultServeAddr, "127.0.0.1:53321")
 
 	if !strings.Contains(notice, defaultServeAddr) {
@@ -2128,6 +2164,7 @@ func (w *lockedWriter) String() string {
 }
 
 func TestRunServeFallsBackWhenDefaultAddressTaken(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	// Occupy the default address ourselves. When the bind fails, an unrelated
@@ -2152,7 +2189,7 @@ func TestRunServeFallsBackWhenDefaultAddressTaken(t *testing.T) {
 
 	banner := regexp.MustCompile(`Workbook board: http://(\S+)`)
 	var boundAddr string
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second) // hang guard, not a measurement; see waitForHTTP
 	for boundAddr == "" {
 		select {
 		case err := <-result:
@@ -2200,6 +2237,7 @@ func TestRunServeFallsBackWhenDefaultAddressTaken(t *testing.T) {
 }
 
 func TestRunServeSaysNothingWhenTheDefaultAddressIsFree(t *testing.T) {
+	t.Parallel()
 	// The ordinary start, and the one the notice must stay out of: a notice on
 	// every default-port start would train the reader to ignore it, which is
 	// exactly the reader a squatted default port needs to reach. Nothing here
@@ -2229,7 +2267,7 @@ func TestRunServeSaysNothingWhenTheDefaultAddressIsFree(t *testing.T) {
 
 	banner := regexp.MustCompile(`Workbook board: http://(\S+)`)
 	var boundAddr string
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second) // hang guard, not a measurement; see waitForHTTP
 	for boundAddr == "" {
 		select {
 		case err := <-result:
@@ -2263,9 +2301,13 @@ func TestRunServeSaysNothingWhenTheDefaultAddressIsFree(t *testing.T) {
 	}
 }
 
+// waitForHTTP polls until the server answers 200. The budget is a hang guard,
+// not a measurement: a healthy server answers within milliseconds, and a bare
+// whole-tree run keeps this machine's cores saturated by other packages'
+// parallel tests, so a tight budget only turns load into a false failure.
 func waitForHTTP(t *testing.T, url string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
 		response, err := http.Get(url)
@@ -2283,7 +2325,73 @@ func waitForHTTP(t *testing.T, url string) {
 	t.Fatalf("timed out waiting for %s: %v", url, lastErr)
 }
 
+var (
+	templateOnce sync.Once
+	templateDir  string
+	templateErr  error
+)
+
+// templateProject mints one project for the package — git init, the test
+// identity, and `workbook setup --key WB` — so that every test that wants an
+// initialized repository copies it rather than paying the mint again. setup is
+// exercised by setup_test.go; a fixture is not where it should be tested.
+//
+// TestMain calls this before m.Run, so the mint happens once in a quiet process
+// with the environment TestMain has just arranged, and a mint that fails stops
+// the package with one message instead of failing whichever few hundred
+// parallel tests happen to reach it. The sync.Once and the error every caller
+// still checks are what make that ordering an optimization rather than a
+// requirement.
+//
+// Nothing setup writes records where it was written. The repository's own
+// configuration names only the test identity, and both copies of the project
+// document — .workbook/config.json and .git/workbook/project.json — carry an
+// identifier and a key and no path. setup leaves no projection cache behind
+// either; the first command that reads one builds it beside the copy.
+func templateProject() (string, error) {
+	templateOnce.Do(func() {
+		dir := filepath.Join(templateRoot, "project")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			templateErr = fmt.Errorf("create template project directory: %w", err)
+			return
+		}
+		if err := testrepo.InitAt(dir); err != nil {
+			templateErr = err
+			return
+		}
+		// --key WB is explicit: this suite's WB- task-ID assertions must
+		// not depend on the directory's last path element deriving to WB
+		// by chance.
+		var stdout, stderr bytes.Buffer
+		if code := Run(context.Background(), []string{"setup", "--key", "WB"}, dir, strings.NewReader(""), &stdout, &stderr); code != 0 {
+			templateErr = fmt.Errorf("setup code = %d, want 0; stderr = %q", code, stderr.String())
+			return
+		}
+		templateDir = dir
+	})
+	return templateDir, templateErr
+}
+
+// initializedRepository returns a private copy of the package's template
+// project. A copy costs a couple of dozen milliseconds where a mint costs a
+// second, and it is the same project every time, which is what the tests that
+// ask for one actually want.
 func initializedRepository(t *testing.T) string {
+	t.Helper()
+	template, err := templateProject()
+	if err != nil {
+		t.Fatalf("template project: %v", err)
+	}
+	target := t.TempDir()
+	copyTree(t, template, target)
+	return target
+}
+
+// freshlyInitializedRepository mints a project of its own, for a test whose
+// subject is the minting: the identity setup publishes, what setup writes to
+// the repository it is run in, or a second project that must not share the
+// template's identifier.
+func freshlyInitializedRepository(t *testing.T) string {
 	t.Helper()
 	repository := testrepo.New(t)
 	// --key WB is explicit: this suite's WB- task-ID assertions must not
@@ -2293,6 +2401,151 @@ func initializedRepository(t *testing.T) string {
 		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
 	}
 	return repository
+}
+
+// copyTree copies a directory's contents onto target, which already exists,
+// and fails the test if it cannot. The copying itself is testrepo.CopyTree,
+// which internal/gitstore's templates use too.
+func copyTree(t *testing.T, source, target string) {
+	t.Helper()
+	if err := testrepo.CopyTree(source, target); err != nil {
+		t.Fatalf("copy template project: %v", err)
+	}
+}
+
+// A test that asks for a repository gets one of two things: a fresh
+// testrepo.New, or a copy of the template testrepo.InitAt built. They have to
+// be configured identically, because hundreds of tests treat them as the same
+// fixture. This pins that `workbook setup`, which only the template goes
+// through, writes no local git configuration of its own, so the copied
+// template's .git/config still equals a freshly initialized repository's; and
+// that copyTree, which builds the copy, carries .git/config across intact
+// rather than dropping or rewriting it.
+func TestTemplateCopyAndFreshRepositoryShareTheirLocalConfiguration(t *testing.T) {
+	t.Parallel()
+	fresh := localConfiguration(t, testrepo.New(t))
+	copied := localConfiguration(t, initializedRepository(t))
+
+	if !reflect.DeepEqual(fresh, copied) {
+		t.Fatalf("local configuration differs\ntestrepo.New:   %v\ntemplate copy:  %v", fresh, copied)
+	}
+}
+
+// localConfiguration lists a repository's own settings, sorted, so that the
+// comparison is about which settings are set rather than the order the file
+// happens to hold them in.
+func localConfiguration(t *testing.T, repository string) []string {
+	t.Helper()
+	settings := strings.Split(gitOutput(t, repository, "config", "--list", "--local"), "\n")
+	sort.Strings(settings)
+	return settings
+}
+
+// refsAMintCannotReproduce names the refs whose object IDs a template copy and a
+// fresh mint legitimately disagree on, and says why for each. Every other ref
+// has to match object for object, and a ref that turns up here without an entry
+// fails the comparison rather than being waved through, so a ref `workbook
+// setup` starts writing gets a decision instead of silence.
+var refsAMintCannotReproduce = map[string]string{
+	"refs/workbook/project": "its tree holds project.json, which names the project ID, and every mint invents its own",
+	"refs/workbook/config":  "its genesis operation names the project ID, the history generation ULID minted beside it, and the wall-clock time it was written at",
+}
+
+// The sibling of internal/gitstore's TestTemplateCopyAndMintedWriteRepositoryAgree
+// and internal/projection's TestTemplateCopyAndMintedWorkbookRepositoryAgree, for
+// the package with the most copies: 263 tests ask for initializedRepository and
+// treat the copy it hands back as a project `workbook setup` minted.
+//
+// TestTemplateCopyAndFreshRepositoryShareTheirLocalConfiguration pins one half of
+// that, the git configuration, against a bare testrepo.New. This pins the rest
+// against a real mint of the same fixture: the same refs, the same object IDs
+// wherever a mint can reproduce them, and the same project documents with only
+// the project ID substituted. Keeping freshlyInitializedRepository on the
+// comparing side is also what keeps the minting path itself running on every
+// run, the way the other two packages keep theirs.
+//
+// Substitution, not equality, is the most this can ask of the documents: a mint
+// draws its project ID from core.CryptoULIDSource, so the two projects are
+// different projects by construction. Neither ref's object ID survives that —
+// both carry the project ID — which is why the table above holds both of them
+// and why their documents are compared instead. What the exclusion does not
+// excuse is a ref going missing: a copy that dropped refs/workbook/config would
+// still satisfy every substituted document and fails here on the ref names.
+func TestTemplateCopyAndMintedProjectAgree(t *testing.T) {
+	t.Parallel()
+	minted := freshlyInitializedRepository(t)
+	copied := initializedRepository(t)
+
+	mintedID, copiedID := projectIDOf(t, minted), projectIDOf(t, copied)
+	if mintedID == copiedID {
+		t.Fatalf("mint and template share project ID %q; each mint must name its own project", copiedID)
+	}
+
+	if got, want := localConfiguration(t, copied), localConfiguration(t, minted); !reflect.DeepEqual(got, want) {
+		t.Fatalf("local configuration differs\ntemplate copy: %v\nmint:          %v", got, want)
+	}
+	if got, want := gitOutput(t, copied, "symbolic-ref", "HEAD"), gitOutput(t, minted, "symbolic-ref", "HEAD"); got != want {
+		t.Fatalf("HEAD: template copy %q, mint %q", got, want)
+	}
+
+	copiedRefs, mintedRefs := refObjectIDs(t, copied), refObjectIDs(t, minted)
+	if got, want := refNamesOf(copiedRefs), refNamesOf(mintedRefs); !reflect.DeepEqual(got, want) {
+		t.Fatalf("refs differ\ntemplate copy: %v\nmint:          %v", got, want)
+	}
+	for _, name := range refNamesOf(copiedRefs) {
+		why, excluded := refsAMintCannotReproduce[name]
+		if !excluded {
+			if copiedRefs[name] != mintedRefs[name] {
+				t.Fatalf("%s: template copy %s, mint %s; a ref a mint reproduces has to be identical in the copy, or it belongs in refsAMintCannotReproduce with a reason", name, copiedRefs[name], mintedRefs[name])
+			}
+			continue
+		}
+		if copiedRefs[name] == mintedRefs[name] {
+			t.Fatalf("%s is excluded from the object-ID comparison because %s, and yet the template copy and the mint both name %s; the exclusion is stale and the ref should be compared", name, why, copiedRefs[name])
+		}
+	}
+
+	for _, document := range []struct{ name, copied, minted string }{
+		{".workbook/config.json", readProjectFile(t, copied, ".workbook/config.json"), readProjectFile(t, minted, ".workbook/config.json")},
+		{".git/workbook/project.json", readProjectFile(t, copied, ".git/workbook/project.json"), readProjectFile(t, minted, ".git/workbook/project.json")},
+		{"refs/workbook/project:project.json", gitOutput(t, copied, "cat-file", "blob", "refs/workbook/project:project.json"), gitOutput(t, minted, "cat-file", "blob", "refs/workbook/project:project.json")},
+	} {
+		want := strings.ReplaceAll(document.minted, mintedID, copiedID)
+		if document.copied != want {
+			t.Fatalf("%s\ntemplate copy: %q\nmint, project ID substituted: %q", document.name, document.copied, want)
+		}
+	}
+}
+
+// refObjectIDs maps every ref a repository holds to the object ID it names.
+func refObjectIDs(t *testing.T, repository string) map[string]string {
+	t.Helper()
+	ids := map[string]string{}
+	for _, line := range strings.Split(gitOutput(t, repository, "for-each-ref", "--format=%(refname) %(objectname)"), "\n") {
+		if line == "" {
+			continue
+		}
+		name, objectID, found := strings.Cut(line, " ")
+		if !found {
+			t.Fatalf("for-each-ref line without an object ID: %q", line)
+		}
+		ids[name] = objectID
+	}
+	if len(ids) == 0 {
+		t.Fatalf("%s holds no refs at all; an initialized project holds at least the project identity", repository)
+	}
+	return ids
+}
+
+// refNamesOf is the ref names in a refObjectIDs map, sorted, so a comparison is
+// about which refs exist rather than what they point at.
+func refNamesOf(refs map[string]string) []string {
+	names := make([]string, 0, len(refs))
+	for name := range refs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // preLedgerRepository is an initialized project with its configuration ledger

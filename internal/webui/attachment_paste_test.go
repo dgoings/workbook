@@ -84,6 +84,7 @@ const generatedPasteName = /^pasted-\d{8}-\d{6}(-\d+)?\.[a-z0-9]+$/;
 // the clipboard supplied none — so the page supplies one that says when it
 // arrived rather than leaving a row with nothing to call it.
 func TestHandlerClientStagesAnImagePastedOntoTheCreateForm(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	program := createAttachmentProgram(t, `
 `+pasteHarness+`
@@ -159,6 +160,7 @@ setTimeout(async () => {
 // the chooser's call — and the refusal names the file by the name the list would
 // have shown it under, which for a screenshot is the generated one.
 func TestHandlerClientRefusesAnOversizedPasteBeforeReadingIt(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	program := createAttachmentProgram(t, `
 `+pasteHarness+`
@@ -206,6 +208,7 @@ setTimeout(async () => {
 // would answer Cmd+V in the description by attaching a PNG of the words the
 // reader meant to type — silently, because the field would stay empty.
 func TestHandlerClientLeavesATextAndImagePasteToTheFieldItLandedIn(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	program := createAttachmentProgram(t, `
 `+pasteHarness+`
@@ -251,6 +254,7 @@ setTimeout(async () => {
 // acceptFiles does on that surface. The bytes are the clipboard's; only the name
 // is this page's, and it reaches the server as the attachment's name.
 func TestHandlerClientUploadsAnImagePastedOntoATaskPage(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := threadPageTask()
 	answered := task
@@ -304,6 +308,7 @@ setTimeout(async () => {
 // and no disabled button to have been stopped by, so silence would read as the
 // file having been taken.
 func TestHandlerClientRefusesAPasteWhileTheCreateRunWalksTheList(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	mutation, refreshed := createdTaskJSON(t)
 	program := createAttachmentProgram(t, `
@@ -375,6 +380,7 @@ setTimeout(async () => {
 // at nothing: the panel that would have taken it is gone, and a page that still
 // held it would be attaching files to a form nobody can see.
 func TestHandlerClientTakesNoPasteOnceTheAttachmentPanelIsGone(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	program := createAttachmentProgram(t, `
 `+pasteHarness+`

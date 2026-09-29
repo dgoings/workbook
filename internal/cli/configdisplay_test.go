@@ -44,6 +44,7 @@ func settingView(t *testing.T, result configShowResult, setting string) displayS
 // recorded, reported with its source, undone by the exact command the result
 // printed, and readable in the ledger's own log.
 func TestConfigSetRecordsADisplaySettingAndSaysHowToUndoIt(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, stdout, stderr := run(t, repository, "config", "set", "project-name", "Atlas", "--json")
@@ -166,6 +167,7 @@ const configLedgerRefName = "refs/workbook/config"
 // pinned. What survives is the plain rule: a command that changes nothing
 // writes nothing, whatever the marker is doing.
 func TestConfigRefusesADisplayChangeThatChangesNothing(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	virgin := configLedgerTip(t, repository)
@@ -247,6 +249,7 @@ func TestConfigRefusesADisplayChangeThatChangesNothing(t *testing.T) {
 // A color typed in either case is one stored value, because the checkpoint the
 // ledger compares is compared by bytes.
 func TestConfigSetFoldsAColorToItsCanonicalForm(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	result := decodeDisplayResult(t,
 		mustRun(t, repository, "config", "set", "primary-color", "#1A7F4B", "--json"), "config set")
@@ -264,6 +267,7 @@ func TestConfigSetFoldsAColorToItsCanonicalForm(t *testing.T) {
 // Every refusal a person can provoke at this boundary is a validation failure
 // quoting the rule, not a report that the repository is damaged.
 func TestConfigSetRefusesWhatTheDisplayRulesForbid(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	for _, testCase := range []struct {
 		name    string
@@ -302,6 +306,7 @@ func TestConfigSetRefusesWhatTheDisplayRulesForbid(t *testing.T) {
 // --no-sync means the same thing here it means everywhere: record it locally
 // and do not talk to origin.
 func TestConfigSetHonorsNoSync(t *testing.T) {
+	t.Parallel()
 	writer, _ := cliSyncRepositories(t)
 	if code, stdout, stderr := run(t, writer, "config", "set", "project-name", "Atlas", "--no-sync", "--json"); code != 0 {
 		t.Fatalf("config set --no-sync code = %d; stdout = %q stderr = %q", code, stdout, stderr)
@@ -321,6 +326,7 @@ func TestConfigSetHonorsNoSync(t *testing.T) {
 // The text surface reports what the JSON one does, in the shape the rest of the
 // CLI uses: a column-zero heading and tab-indented fields.
 func TestConfigSetRendersTheChangeAsText(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	stdout := mustRun(t, repository, "config", "set", "project-name", "Atlas")
 	for _, wanted := range []string{"Display:\tset\tproject-name", "\tvalue:\tAtlas", "\tinverse:\tworkbook config unset project-name"} {
@@ -354,6 +360,7 @@ func TestConfigSetRendersTheChangeAsText(t *testing.T) {
 // synchronizing, and is told to upgrade rather than told its repository is
 // broken when it tries to change the configuration.
 func TestAGenerationOneReaderParksOnADisplayConfiguredProject(t *testing.T) {
+	t.Parallel()
 	binary := buildPatchedGenerationBinary(t, 1)
 	writer, older := cliSyncRepositories(t)
 
@@ -493,6 +500,7 @@ func cliSetupPublishedProject(t *testing.T) (string, string) {
 // What it does not cost is everything else: reads still work, synchronization
 // still advances, and tasks are a different ref the older clone still writes.
 func TestAGenerationOneReaderParksOnEveryProjectThisBuildCreates(t *testing.T) {
+	t.Parallel()
 	binary := buildPatchedGenerationBinary(t, 1)
 	writer, older := cliSetupPublishedProject(t)
 
@@ -555,6 +563,7 @@ func TestAGenerationOneReaderParksOnEveryProjectThisBuildCreates(t *testing.T) {
 // commit — and a commit on the configuration ledger is a commit every clone
 // fetches forever.
 func TestARefusedNoOpUnsetDoesNotMoveTheLedger(t *testing.T) {
+	t.Parallel()
 	writer, _ := cliSyncRepositories(t)
 
 	cliCreateTask(t, writer, "Ordinary task")
@@ -596,6 +605,7 @@ func mustRun(t *testing.T, repository string, args ...string) string {
 // different statement from "the settings are unconfigured" and has to be a
 // different line.
 func TestConfigShowLabelsTheConfigurationLedger(t *testing.T) {
+	t.Parallel()
 	pre := preLedgerRepository(t)
 	shown := mustRun(t, pre, "config", "show")
 	if !strings.Contains(shown, "Display:\tno configuration ledger") {
@@ -627,6 +637,7 @@ func TestConfigShowLabelsTheConfigurationLedger(t *testing.T) {
 // when what had been recorded was its removal. The sibling mutations all say
 // "the change", which is true of both verbs.
 func TestADisplayChangeThatCannotReachOriginSaysSo(t *testing.T) {
+	t.Parallel()
 	repository, _ := cliSyncRepositories(t)
 	mustRun(t, repository, "config", "set", "project-name", "Atlas", "--json")
 	cliGit(t, repository, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone.git"))

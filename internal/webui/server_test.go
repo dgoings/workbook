@@ -45,12 +45,16 @@ func TestServeStopsCleanlyWhenContextIsCancelled(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Serve() error = %v, want nil", err)
 		}
-	case <-time.After(2 * time.Second):
+	// Hang guard, not a measurement: a cancelled Serve returns in
+	// milliseconds, nothing here asserts how long it took, and a bare
+	// whole-tree run keeps every core saturated.
+	case <-time.After(30 * time.Second):
 		t.Fatal("Serve() did not stop after context cancellation")
 	}
 }
 
 func TestServeReturnsUnexpectedHTTPFailure(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

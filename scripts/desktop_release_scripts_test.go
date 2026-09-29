@@ -12,6 +12,7 @@ import (
 // the caller. Every rejection below therefore pins the status, not just
 // failure.
 func TestValidateDesktopReleaseTagAcceptsThePrefixedGrammar(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct{ tag, want string }{
 		{tag: "desktop-v0.6.0", want: "0.6.0"},
 		{tag: "desktop-v0.6.0-rc1", want: "0.6.0-rc1"},
@@ -45,6 +46,7 @@ func TestValidateDesktopReleaseTagAcceptsThePrefixedGrammar(t *testing.T) {
 // The companion desktop release takes the CLI's number whenever that number
 // is newer than the last desktop release; it never invents a bump.
 func TestPlanDesktopReleaseTakesTheCLIVersionWhenItIsNewer(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		name, cli, previous, want string
 		wantExit                  int
@@ -108,6 +110,7 @@ func TestPlanDesktopReleaseTakesTheCLIVersionWhenItIsNewer(t *testing.T) {
 // Discovery reads desktop-v* tags only, ignoring the CLI's v* tags that sit
 // on the same commits.
 func TestPlanDesktopReleaseDiscoversTheNewestDesktopTag(t *testing.T) {
+	t.Parallel()
 	repository := newTaggedRepository(t, "v0.5.1", "v0.6.0-rc1", "desktop-v0.6.0-rc1", "desktop-v0.6.0-rc2", "v0.6.0")
 	output, err := runReleaseScript(t, repository, "plan-desktop-release.sh", "", "--cli-version", "0.6.0")
 	if err != nil {
@@ -131,6 +134,7 @@ func TestPlanDesktopReleaseDiscoversTheNewestDesktopTag(t *testing.T) {
 }
 
 func TestPlanDesktopReleaseRequiresACLIVersion(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		name string
 		args []string
@@ -157,6 +161,7 @@ func TestPlanDesktopReleaseRequiresACLIVersion(t *testing.T) {
 // kind from the outside, so the guard is reachable only by sourcing the
 // helpers the way the scripts do.
 func TestNewestReleaseTagRefusesAnUnknownKind(t *testing.T) {
+	t.Parallel()
 	command := exec.Command("sh", "-c", `. "$1"; newest_release_tag sideways`, "sh", releaseScriptPath(t, "release-version.sh"))
 	output, err := command.CombinedOutput()
 	if err == nil {

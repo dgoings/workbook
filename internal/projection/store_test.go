@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
@@ -22,8 +23,9 @@ import (
 )
 
 func TestStoreRefreshUsesSQLiteUntilATaskHeadChanges(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 
 	store, err := Open(ctx, repository, config)
@@ -54,8 +56,9 @@ func TestStoreRefreshUsesSQLiteUntilATaskHeadChanges(t *testing.T) {
 }
 
 func TestStoreBacksMutationReaderWithCanonicalEmptyCollections(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 	store, err := Open(ctx, repository, config)
 	if err != nil {
@@ -87,6 +90,7 @@ func TestStoreBacksMutationReaderWithCanonicalEmptyCollections(t *testing.T) {
 }
 
 func TestStoreRefreshReadsOnlyAdvancedHeads(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	first := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "First")
@@ -140,6 +144,7 @@ func TestStoreRefreshReadsOnlyAdvancedHeads(t *testing.T) {
 }
 
 func TestStoreGetInspectsOnlyExactWarmHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	expected := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Warm")
@@ -169,6 +174,7 @@ func TestStoreGetInspectsOnlyExactWarmHead(t *testing.T) {
 }
 
 func TestStoreGetRefreshesOnlyChangedExactHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
@@ -213,6 +219,7 @@ func TestStoreGetRefreshesOnlyChangedExactHead(t *testing.T) {
 }
 
 func TestStoreGetRejectsDisappearedExactHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	cached := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Cached")
@@ -240,6 +247,7 @@ func TestStoreGetRejectsDisappearedExactHead(t *testing.T) {
 }
 
 func TestStoreGetRetriesWhenConditionalRefreshLosesRace(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
@@ -291,6 +299,7 @@ func TestStoreGetRetriesWhenConditionalRefreshLosesRace(t *testing.T) {
 }
 
 func TestStoreRefreshBatchesChangedHeads(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	first := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "First")
@@ -350,8 +359,9 @@ func TestStoreRefreshBatchesChangedHeads(t *testing.T) {
 }
 
 func TestStoreRefreshPreservesConcurrentCreateAdvancedAfterGitEnumeration(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	store, err := Open(ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -393,8 +403,9 @@ func TestStoreRefreshPreservesConcurrentCreateAdvancedAfterGitEnumeration(t *tes
 }
 
 func TestStoreRefreshRejectsDisappearedCanonicalRefAndPreservesCache(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Disappeared ref")
 	store, err := Open(ctx, repository, config)
 	if err != nil {
@@ -422,6 +433,7 @@ func TestStoreRefreshRejectsDisappearedCanonicalRefAndPreservesCache(t *testing.
 }
 
 func TestStoreRefreshRejectsChangedHistoryGeneration(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
@@ -458,6 +470,7 @@ func TestStoreRefreshRejectsChangedHistoryGeneration(t *testing.T) {
 }
 
 func TestStoreAdvanceConditionallyUpdatesSnapshot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
@@ -490,6 +503,7 @@ func TestStoreAdvanceConditionallyUpdatesSnapshot(t *testing.T) {
 }
 
 func TestStoreAdvanceRejectsChangedHistoryGeneration(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
@@ -523,6 +537,7 @@ func TestStoreAdvanceRejectsChangedHistoryGeneration(t *testing.T) {
 }
 
 func TestStoreAdvanceAcceptsAlreadyAdvancedSnapshot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
@@ -550,6 +565,7 @@ func TestStoreAdvanceAcceptsAlreadyAdvancedSnapshot(t *testing.T) {
 }
 
 func TestStoreAdvanceDoesNotRegressNewerSnapshot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
@@ -578,6 +594,7 @@ func TestStoreAdvanceDoesNotRegressNewerSnapshot(t *testing.T) {
 }
 
 func TestStoreInvalidateOnlyDeletesExpectedOrWrittenHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
@@ -634,6 +651,7 @@ func TestStoreInvalidateOnlyDeletesExpectedOrWrittenHead(t *testing.T) {
 }
 
 func TestQuerySnapshotRemainsConsistentAcrossConcurrentMutation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
@@ -724,6 +742,7 @@ func TestQuerySnapshotRemainsConsistentAcrossConcurrentMutation(t *testing.T) {
 }
 
 func TestConcurrentIndependentTaskAdvancement(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	first := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "First")
@@ -784,6 +803,7 @@ func TestConcurrentIndependentTaskAdvancement(t *testing.T) {
 }
 
 func TestConcurrentRefreshCannotRegressProjectedHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	first := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "First")
@@ -843,6 +863,7 @@ func TestConcurrentRefreshCannotRegressProjectedHead(t *testing.T) {
 }
 
 func TestStoreConcurrentReadsAndRebuilds(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	snapshot := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Concurrent")
@@ -901,6 +922,7 @@ func TestStoreConcurrentReadsAndRebuilds(t *testing.T) {
 const listQueryCeiling = 12
 
 func TestListUsesBoundedSQLQueriesForManyTasks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	taskIDs := []string{
@@ -965,6 +987,7 @@ func TestListUsesBoundedSQLQueriesForManyTasks(t *testing.T) {
 }
 
 func TestProjectionPreservesCanonicalTimestampOffsets(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	offset := time.FixedZone("canonical-offset", -(4*60+30)*60)
@@ -993,6 +1016,7 @@ func TestProjectionPreservesCanonicalTimestampOffsets(t *testing.T) {
 }
 
 func TestProjectionCacheErrorsSuggestRebuildWithoutMaskingGitCorruption(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	snapshot := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Cache error")
@@ -1033,8 +1057,9 @@ func TestProjectionCacheErrorsSuggestRebuildWithoutMaskingGitCorruption(t *testi
 }
 
 func TestStoreRebuildsMalformedOrWrongProjectDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Canonical task")
 	store, err := Open(ctx, repository, config)
 	if err != nil {
@@ -1063,8 +1088,9 @@ func TestStoreRebuildsMalformedOrWrongProjectDatabase(t *testing.T) {
 }
 
 func TestOpenRebuildsMalformedCacheFromCanonicalGit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Canonical task")
 	cachePath := filepath.Join(repository.CommonGitDir, "workbook", cacheFilename)
 	if err := os.WriteFile(cachePath, []byte("not a sqlite database"), 0o600); err != nil {
@@ -1085,8 +1111,9 @@ func TestOpenRebuildsMalformedCacheFromCanonicalGit(t *testing.T) {
 }
 
 func TestStoreRebuildsMetadataMatchingDatabaseMissingRequiredTable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Canonical task")
 	cachePath := filepath.Join(repository.CommonGitDir, "workbook", cacheFilename)
 	if err := writeIncompleteProjectionDatabase(cachePath, config.ProjectID); err != nil {
@@ -1107,6 +1134,7 @@ func TestStoreRebuildsMetadataMatchingDatabaseMissingRequiredTable(t *testing.T)
 }
 
 func TestRebuildLeavesPreviousDatabaseWhenReplacementFails(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
@@ -1139,6 +1167,7 @@ func TestRebuildLeavesPreviousDatabaseWhenReplacementFails(t *testing.T) {
 }
 
 func TestStoreWritesToTheCacheAnotherProcessReplaced(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	first := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "First")
@@ -1195,6 +1224,7 @@ func TestStoreWritesToTheCacheAnotherProcessReplaced(t *testing.T) {
 }
 
 func TestStoreStillRebuildsWhenTheCacheIsDeleted(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	only := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Only")
@@ -1225,6 +1255,7 @@ func TestStoreStillRebuildsWhenTheCacheIsDeleted(t *testing.T) {
 }
 
 func TestRebuildRetriesOnceWhenHeadsChangeDuringBuild(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	first := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "First")
@@ -1273,6 +1304,7 @@ func TestRebuildRetriesOnceWhenHeadsChangeDuringBuild(t *testing.T) {
 }
 
 func TestStoreQueries(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	first := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "First")
@@ -1768,19 +1800,90 @@ func testSnapshot(taskID, head, title string) core.Snapshot {
 	}
 }
 
-func initializeWorkbook(t *testing.T, root string) (*gitstore.Repository, core.ProjectConfig) {
+// initializeWorkbook hands a test its own copy of the package's template: an
+// initialized project with the fixed testConfig().ProjectID, minted once in
+// TestMain and copied here with testrepo.CopyTree rather than reinitialized
+// with Repository.Init. The target is a fresh t.TempDir(), never a directory
+// testrepo.New has already run `git init` on — a copy onto an already-live
+// repository is an overlay whose result depends on which files the fresh
+// init wrote that the template does not also write, and it pays testrepo.New's
+// three git processes for nothing once the copy replaces its content anyway.
+// All 27 call sites in this package build a plain, untouched project this
+// way; none prepares its repository specially (every one was, before this
+// change, exactly initializeWorkbook(t, testrepo.New(t))), so there is no
+// initializeWorkbookAt real-init path to fall back to — this is the only
+// definition.
+func initializeWorkbook(t *testing.T) (*gitstore.Repository, core.ProjectConfig) {
 	t.Helper()
+	root := t.TempDir()
+	if err := testrepo.CopyTree(templateDir, root); err != nil {
+		t.Fatalf("copy workbook template: %v", err)
+	}
 	repository, err := gitstore.Open(context.Background(), root)
 	if err != nil {
 		t.Fatalf("gitstore.Open() error = %v", err)
 	}
-	config, _, err := repository.Init(context.Background(), "WB", core.IDSourceFunc(func() (string, error) {
-		return testConfig().ProjectID, nil
-	}))
+	return repository, templateConfig
+}
+
+// A test that asks for an initialized project gets a copy of the template
+// rather than a mint of its own, and 27 tests treat the two as the same
+// fixture. This pins that they are: the same local git configuration, the
+// same refs at the same object IDs, and the same uncommitted
+// .workbook/config.json, byte for byte.
+//
+// The object IDs are the load-bearing half. testConfig().ProjectID is fixed
+// and the identity commit is a pure function of the document it carries, so a
+// mint is reproducible — this is the test that would fail if something gave
+// that commit a timestamp, an author from the environment, or a signature,
+// or if the copy silently dropped a ref the tests never read directly
+// (internal/projection's own tests never assert on refs/workbook/project by
+// name, which is exactly why this comparison, not a test's own assertions,
+// has to be the drift guard).
+func TestTemplateCopyAndMintedWorkbookRepositoryAgree(t *testing.T) {
+	t.Parallel()
+	minted := testrepo.New(t)
+	mintedConfig, err := mintWorkbookTemplate(minted)
 	if err != nil {
-		t.Fatalf("Init() error = %v", err)
+		t.Fatalf("mint workbook template: %v", err)
 	}
-	return repository, config
+	mintedRepo, err := gitstore.Open(context.Background(), minted)
+	if err != nil {
+		t.Fatalf("Open(minted) error = %v", err)
+	}
+
+	copied, copiedConfig := initializeWorkbook(t)
+
+	if mintedConfig != copiedConfig {
+		t.Fatalf("project config: mint %#v, copy %#v", mintedConfig, copiedConfig)
+	}
+	for _, args := range [][]string{
+		{"config", "--list", "--local"},
+		{"for-each-ref", "--format=%(refname) %(objectname)"},
+	} {
+		got, err := copied.Git(context.Background(), nil, args...)
+		if err != nil {
+			t.Fatalf("Git(copy, %v) error = %v", args, err)
+		}
+		want, err := mintedRepo.Git(context.Background(), nil, args...)
+		if err != nil {
+			t.Fatalf("Git(mint, %v) error = %v", args, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("git %v\ncopy: %q\nmint: %q", args, got, want)
+		}
+	}
+	got, err := os.ReadFile(filepath.Join(copied.Root, ".workbook", "config.json"))
+	if err != nil {
+		t.Fatalf("read .workbook/config.json from the copy: %v", err)
+	}
+	want, err := os.ReadFile(filepath.Join(minted, ".workbook", "config.json"))
+	if err != nil {
+		t.Fatalf("read .workbook/config.json from the mint: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf(".workbook/config.json\ncopy: %q\nmint: %q", got, want)
+	}
 }
 
 func createTask(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig, title string) core.Task {
@@ -1856,8 +1959,9 @@ func writeIncompleteProjectionDatabase(path, projectID string) error {
 // the replacement is a complete, valid projection, and the write never
 // committed anywhere.
 func TestStoreRefreshRedoesItsWriteWhenAnotherProcessReplacesTheCache(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	writer, err := Open(ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open(writer) error = %v", err)
@@ -1913,8 +2017,9 @@ func TestStoreRefreshRedoesItsWriteWhenAnotherProcessReplacesTheCache(t *testing
 // so recovery must trust the verdict over the bookkeeping and reopen
 // unconditionally.
 func TestStoreAdvanceRedoesItsWriteWhenTheRecordedStatDescribesTheReplacement(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	writer, err := Open(ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open(writer) error = %v", err)
@@ -1967,8 +2072,9 @@ func TestStoreAdvanceRedoesItsWriteWhenTheRecordedStatDescribesTheReplacement(t 
 // would wedge the next Rebuild and, behind its waiting writer, every later
 // request — permanently.
 func TestStoreWithActiveDatabaseReleasesTheLockWhenBodyPanics(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	store, err := Open(ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)

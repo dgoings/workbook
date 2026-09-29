@@ -11,6 +11,7 @@ import (
 )
 
 func TestRunHelpAliasesRenderPlainTextWithoutInitializingWorkbook(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		args []string
@@ -30,6 +31,7 @@ func TestRunHelpAliasesRenderPlainTextWithoutInitializingWorkbook(t *testing.T) 
 }
 
 func TestRunHelpAliasesForEveryTopLevelCommand(t *testing.T) {
+	t.Parallel()
 	for _, command := range commandOrder {
 		for _, test := range []struct {
 			name string
@@ -50,6 +52,7 @@ func TestRunHelpAliasesForEveryTopLevelCommand(t *testing.T) {
 }
 
 func TestValidateHelpDocumentsFullAndJSON(t *testing.T) {
+	t.Parallel()
 	// Production mutation: omitting validate from command metadata makes its help
 	// unavailable or hides the cache-bypass flag users need for a full audit.
 	output := assertHelpOutput(t, []string{"help", "validate"}, "Usage: workbook validate [--full] [--json]")
@@ -67,6 +70,7 @@ func TestValidateHelpDocumentsFullAndJSON(t *testing.T) {
 }
 
 func TestServeHelpDocumentsDefaultPortFallback(t *testing.T) {
+	t.Parallel()
 	// Production mutation: describing --addr as a plain listener address leaves
 	// a user who sees an unexpected port with no way to learn it was chosen for
 	// them, or that naming an address opts out of that.
@@ -84,6 +88,7 @@ func TestServeHelpDocumentsDefaultPortFallback(t *testing.T) {
 }
 
 func TestRunHelpHandlesHooksAndInstall(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name string
 		args []string
@@ -104,6 +109,7 @@ func TestRunHelpHandlesHooksAndInstall(t *testing.T) {
 }
 
 func TestRunMalformedLocalHelpAfterJSONIsPlainText(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name string
 		args []string
@@ -134,6 +140,7 @@ func TestRunMalformedLocalHelpAfterJSONIsPlainText(t *testing.T) {
 }
 
 func TestRunLocalHelpRecognitionRespectsStringValuesAndTerminator(t *testing.T) {
+	t.Parallel()
 	t.Run("help-looking string flag value remains normal JSON invocation", func(t *testing.T) {
 		repository := testrepo.New(t)
 		code, stdout, stderr := run(t, repository, "setup", "--json", "--key", "--help")
@@ -162,6 +169,7 @@ func TestRunLocalHelpRecognitionRespectsStringValuesAndTerminator(t *testing.T) 
 }
 
 func TestRunMalformedHelpIsAnInvocationErrorWithoutJSONOrInitialization(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name string
 		args []string
