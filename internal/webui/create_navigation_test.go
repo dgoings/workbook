@@ -10,6 +10,7 @@ import (
 )
 
 func TestHandlerClientNewTaskSaveReturnsToTheBoard(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	created := clientPlacementTask("WB-01J000000000000000000000B1", "Created task", core.StatusReady, core.PriorityMedium)
 	script := newTaskClientScript(t, "/tasks/new?status=ready")
@@ -63,6 +64,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientCreateMoreKeepsACleanNewTaskForm(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	created := clientPlacementTask("WB-01J000000000000000000000B2", "First task", core.StatusReady, core.PriorityMedium)
 	script := newTaskClientScript(t, "/tasks/new?status=ready")
@@ -138,6 +140,7 @@ setTimeout(async () => {
 // nothing reports without moving the user; that rule is covered by
 // TestHandlerClientOptimisticCreateReportsWarningsWhereTheUserStands.
 func TestHandlerClientCreateMoreYieldsToACreateThatNeedsAttention(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	prerequisite := clientPlacementTask("WB-01J000000000000000000000B4", "Prerequisite", core.StatusDone, core.PriorityHigh)
 	created := clientPlacementTask("WB-01J000000000000000000000B3", "Created task", core.StatusReady, core.PriorityMedium)

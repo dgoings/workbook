@@ -16,6 +16,7 @@ import (
 // the meantime is not a task yet: it carries no ID to copy, no detail route to
 // open, and no drag, because none of those exist until the server answers.
 func TestHandlerClientRendersACreatedTaskBeforeItsResponse(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	created := clientPlacementTask("WB-01J000000000000000000000C1", "Instant task", core.StatusReady, core.PriorityMedium)
 	created.Description = "Typed before the server heard about it."
@@ -118,6 +119,7 @@ setTimeout(async () => {
 // what was refused, and everything typed is one click from being back in the
 // form it was typed into.
 func TestHandlerClientRefusedCreateKeepsTheDraftRecoverable(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	script := newTaskClientScript(t, "/tasks/new?status=ready")
 	empty := tasksDocumentJSON(t, nil)
@@ -212,6 +214,7 @@ setTimeout(async () => {
 // A report can be holding the only copy of a task that was refused, so a later
 // create adds its own report rather than replacing the one standing.
 func TestHandlerClientRefusedCreatesEachKeepTheirOwnDraft(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	script := newTaskClientScript(t, "/tasks/new?status=ready")
 	empty := tasksDocumentJSON(t, nil)
@@ -281,6 +284,7 @@ setTimeout(async () => {
 // typing the next task. The warning is reported where it waits for them, with
 // the task one click away.
 func TestHandlerClientOptimisticCreateReportsWarningsWhereTheUserStands(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	created := clientPlacementTask("WB-01J000000000000000000000C2", "Reported task", core.StatusReady, core.PriorityMedium)
 	script := newTaskClientScript(t, "/tasks/new?status=ready")
@@ -329,6 +333,7 @@ setTimeout(async () => {
 // are in the middle of — that would move the loss the report exists to prevent
 // onto the next task instead of preventing it.
 func TestHandlerClientRestoringADraftKeepsTheFormItReplaces(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	script := newTaskClientScript(t, "/tasks/new?status=ready")
 	empty := tasksDocumentJSON(t, nil)
@@ -412,6 +417,7 @@ setTimeout(async () => {
 // the draft: a keyboard user who is dropped on the document body has to tab in
 // from the top to reach the one control that can get their task back.
 func TestHandlerClientRefusedCreateHandsTheCaretToTheReport(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	script := newTaskClientScript(t, "/tasks/new?status=ready")
 	empty := tasksDocumentJSON(t, nil)
@@ -467,6 +473,7 @@ setTimeout(async () => {
 // no ID for it, and drawing the stand-in beside it shows the task twice and
 // counts the column one too high.
 func TestHandlerClientPollThatOutrunsACreateRetiresItsStandIn(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	created := clientPlacementTask("WB-01J000000000000000000000C3", "Outrun task", core.StatusReady, core.PriorityMedium)
 	created.Description = "Committed before the POST answered."
@@ -546,6 +553,7 @@ setTimeout(async () => {
 // itself never scrolls, so there is nothing to scroll back to it with. The cap
 // is style, so it is asserted as style: no script restores it.
 func TestHandlerCreateNoticeCannotCrowdOutTheRoute(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -580,6 +588,7 @@ func styleRule(t *testing.T, body, selector string) string {
 // the copy being written deserves the same card as any other create until the
 // server answers for it.
 func TestHandlerClientStandInSurvivesATaskThatAlreadyMatchedIt(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	existing := clientPlacementTask("WB-01J000000000000000000000D1", "Duplicate", core.StatusReady, core.PriorityMedium)
 	created := clientPlacementTask("WB-01J000000000000000000000D2", "Duplicate", core.StatusReady, core.PriorityMedium)

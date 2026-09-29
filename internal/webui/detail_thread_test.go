@@ -121,6 +121,7 @@ function commentBodyText(row) {
 // The thread is drawn oldest first, each comment carrying who wrote it, when,
 // and whether it has been edited since.
 func TestHandlerClientDrawsTheThreadOldestFirst(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	tasks := []core.Task{threadPageTask()}
 	program := threadPageProgram(t, tasks, `
@@ -156,6 +157,7 @@ setTimeout(() => {
 // A comment body is somebody's text and is drawn as text: no markup in it
 // becomes an element, and nothing on this page has ever parsed HTML.
 func TestHandlerClientDrawsHostileCommentBodiesAsText(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := threadPageTask()
 	hostile := `<img src=x onerror="fetch('/api/tasks',{method:'DELETE'})"><script>alert(1)</script>`
@@ -203,6 +205,7 @@ setTimeout(() => {
 // A stored `javascript:` link drawn with an href would be script on this
 // board's own origin, one click away, so it is drawn as text instead.
 func TestHandlerClientNeverDrawsAnUnsafeLinkAsALink(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := threadPageTask()
 	task.Attachments = []core.Attachment{
@@ -264,6 +267,7 @@ setTimeout(() => {
 // A file's row links to the download route, in a tab of its own so the reader
 // keeps the task they are reading.
 func TestHandlerClientLinksAFileToItsDownloadRoute(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	tasks := []core.Task{threadPageTask()}
 	program := threadPageProgram(t, tasks, `
@@ -293,6 +297,7 @@ setTimeout(() => {
 // Adding a comment sends the body and the head this page read, and the panel
 // draws the thread the server answered with.
 func TestHandlerClientAddsACommentAgainstTheHeadItRead(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := threadPageTask()
 	answered := task
@@ -349,6 +354,7 @@ setTimeout(async () => {
 // made afterwards must not be refused as a conflict with a change the reader
 // made on the same page seconds earlier.
 func TestHandlerClientFormFollowsTheHeadAThreadChangeMoved(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := threadPageTask()
 	answered := task
@@ -388,6 +394,7 @@ setTimeout(async () => {
 // Editing is in place and direct: Edit opens the body in a field, Save sends the
 // edit, and Remove acts immediately — the page's other removals do too.
 func TestHandlerClientEditsAndRemovesAComment(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := threadPageTask()
 	edited := task
@@ -453,6 +460,7 @@ setTimeout(async () => {
 // A poll lands once a second, and the reader may be halfway through an edit when
 // it does. The thread follows the board; the sentence being typed does not move.
 func TestHandlerClientKeepsAnOpenCommentEditAcrossAPoll(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := threadPageTask()
 	arrived := task
@@ -494,6 +502,7 @@ setTimeout(async () => {
 // A comment removed elsewhere while the reader is editing it keeps its row and
 // says so, rather than taking the words away mid-sentence.
 func TestHandlerClientKeepsAnEditWhoseCommentWasRemovedElsewhere(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := threadPageTask()
 	shortened := task
@@ -538,6 +547,7 @@ setTimeout(async () => {
 // A refused change is reported in the panel it was made in, and a stale head is
 // re-based so the retry is made against the version that exists.
 func TestHandlerClientReportsARefusedThreadChangeInPlace(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := threadPageTask()
 	moved := task
@@ -595,6 +605,7 @@ setTimeout(async () => {
 // allowed, so a pair the unit cannot separate is given in bytes — which is what
 // the server's own refusal says. A file that is plainly larger keeps the unit.
 func TestHandlerClientRefusesAnOversizedUploadBeforeSendingIt(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	tasks := []core.Task{threadPageTask()}
 	program := threadPageProgram(t, tasks, `
@@ -642,6 +653,7 @@ setTimeout(async () => {
 // task page could have left it to the server, and did; asking here costs an
 // upload less and says the same thing.
 func TestHandlerClientRefusesAnUploadPastTheTotalCeiling(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := threadPageTask()
 	// One file, as large as the task is allowed to hold in total. Nothing about
@@ -690,6 +702,7 @@ setTimeout(async () => {
 // chosen still sitting there. Each control is its own form now, so Return in
 // either one submits the intent it belongs to.
 func TestHandlerClientAttachesTheFileWhenTheFileFormIsSubmitted(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := threadPageTask()
 	answered := task
@@ -743,6 +756,7 @@ setTimeout(async () => {
 // decides that, through the table core keeps, because a media type is written
 // into shared history and the browser's guess differs from machine to machine.
 func TestHandlerClientUploadsAFileAsBase64JSON(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := threadPageTask()
 	answered := task
@@ -792,6 +806,7 @@ setTimeout(async () => {
 // A link is attached from the same panel, and the fields it was typed into are
 // cleared only once the server has taken it.
 func TestHandlerClientAttachesALink(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := threadPageTask()
 	answered := task
@@ -840,6 +855,7 @@ setTimeout(async () => {
 // up, exactly as a detached save does: the panel it would have reported into is
 // gone, and an outcome nobody is told is a change the reader believes happened.
 func TestHandlerClientReportsAThreadChangeThatOutlivesItsPage(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	tasks := []core.Task{threadPageTask()}
 	program := threadPageProgram(t, tasks, `
@@ -895,6 +911,7 @@ setTimeout(async () => {
 // attachment indicator on a card is not in this design, and a card that grew one
 // would be a card that changes size under a poll.
 func TestHandlerBoardCardsSayNothingAboutTheThread(t *testing.T) {
+	t.Parallel()
 	tasks := []core.Task{threadPageTask()}
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 	response := request(t, handler, http.MethodGet, "/")
@@ -919,6 +936,7 @@ func TestHandlerBoardCardsSayNothingAboutTheThread(t *testing.T) {
 // built as nodes and written through textContent, which is what makes every
 // hostile-content case above a property of the page rather than of one renderer.
 func TestHandlerClientScriptHasNoHTMLSink(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return []core.Task{threadPageTask()}, nil })
 	response := request(t, handler, http.MethodGet, "/tasks/"+threadPageTaskID)
 	script := renderedClientScript(t, response.Body.String())

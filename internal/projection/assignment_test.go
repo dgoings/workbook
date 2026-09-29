@@ -20,6 +20,7 @@ import (
 // everybody's assignments dropped, and that checkpoint would be published: the
 // Git compare-and-swap would see nothing wrong, because the head did not move.
 func TestProjectionRoundTripsAssignments(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	created := time.Date(2026, time.August, 13, 9, 30, 0, 0, time.UTC)
@@ -99,6 +100,7 @@ func TestProjectionRoundTripsAssignments(t *testing.T) {
 // The versions each release moved it for: "4" was assignments, "5" the comment
 // thread, the attachment list, and the operation payload that records them.
 func TestACacheStampedWithThePreviousSchemaVersionIsDiscarded(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	// Belt and braces: the behavioural half below is what actually pins the

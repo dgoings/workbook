@@ -161,6 +161,7 @@ func quotedJSON(value string) string {
 // one configuration — in the shape GET /api/vocabulary serves it, including the
 // head the client's next change must name.
 func TestHandlerPriorityMutationsAnswerWithTheWholeVocabulary(t *testing.T) {
+	t.Parallel()
 	result := priorityMutationResult(t)
 	for _, test := range priorityRoutes("head-current") {
 		t.Run(test.name, func(t *testing.T) {
@@ -207,6 +208,7 @@ func TestHandlerPriorityMutationsAnswerWithTheWholeVocabulary(t *testing.T) {
 // with the member absent is exactly what a struct with the member present
 // decodes into.
 func TestHandlerPriorityMutationPricesOnlyWhatAPriorityChangeCosts(t *testing.T) {
+	t.Parallel()
 	handler := priorityMutationHandler(t, &recordedPriorityMutations{}, priorityMutationResult(t), nil)
 	response := requestJSON(t, handler, http.MethodPatch, "/api/vocabulary/priorities/urgent/color",
 		`{"color":"#b42318","expectedHead":"head-current"}`)
@@ -231,6 +233,7 @@ func TestHandlerPriorityMutationPricesOnlyWhatAPriorityChangeCosts(t *testing.T)
 // Each body reaches its capability as the members the contract names, and an
 // omitted member of a priority change is different from an emptied one.
 func TestHandlerPriorityMutationsCarryTheirBodies(t *testing.T) {
+	t.Parallel()
 	result := priorityMutationResult(t)
 
 	t.Run("addition", func(t *testing.T) {
@@ -368,6 +371,7 @@ func TestHandlerPriorityMutationsCarryTheirBodies(t *testing.T) {
 // clearing. Clearing a priority's ink is a decision somebody makes, and an
 // absent member is a client that did not make it.
 func TestHandlerPriorityRecolorRequiresAColor(t *testing.T) {
+	t.Parallel()
 	recorded := &recordedPriorityMutations{}
 	handler := priorityMutationHandler(t, recorded, priorityMutationResult(t), nil)
 	response := requestJSON(t, handler, http.MethodPatch, "/api/vocabulary/priorities/urgent/color",
@@ -390,6 +394,7 @@ func TestHandlerPriorityRecolorRequiresAColor(t *testing.T) {
 // A change that names no head is refused before anything is asked to apply it,
 // and the refusal names the member that is missing.
 func TestHandlerPriorityMutationsRequireAnExpectedHead(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		method string
@@ -449,6 +454,7 @@ func TestHandlerPriorityMutationsRequireAnExpectedHead(t *testing.T) {
 // on, and the configuration it should recompose the change against — priorities
 // included, which is the whole point of attaching it here.
 func TestHandlerPriorityMutationsReportStaleWritesWithTheCurrentVocabulary(t *testing.T) {
+	t.Parallel()
 	stale := core.Errorf(core.CategoryStaleWrite,
 		"this project's priorities have changed since head-old; reload and try again")
 	for _, test := range priorityRoutes("head-old") {
@@ -496,6 +502,7 @@ func TestHandlerPriorityMutationsReportStaleWritesWithTheCurrentVocabulary(t *te
 // planners; this test is about what the route does to them, which must be
 // nothing but choose the status code.
 func TestHandlerPriorityRefusalsReachTheClientInTheVerbsOwnWords(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name       string
 		method     string
@@ -621,6 +628,7 @@ func TestHandlerPriorityRefusalsReachTheClientInTheVerbsOwnWords(t *testing.T) {
 // where `workbook priority add` refuses it, in one sentence tested once. A
 // second check here would be a second place the sentence could change.
 func TestHandlerPriorityPlacementContradictionIsTheWritersToRefuse(t *testing.T) {
+	t.Parallel()
 	recorded := &recordedPriorityMutations{}
 	handler := priorityMutationHandler(t, recorded, priorityMutationResult(t), nil)
 	response := requestJSON(t, handler, http.MethodPost, "/api/vocabulary/priorities",
@@ -637,6 +645,7 @@ func TestHandlerPriorityPlacementContradictionIsTheWritersToRefuse(t *testing.T)
 // stale write. The client loses the re-render it would have got, not the
 // refusal.
 func TestHandlerPriorityStaleWriteSurvivesAnUnreadableVocabulary(t *testing.T) {
+	t.Parallel()
 	handler := NewHandler(Options{
 		Vocabulary: func(context.Context) (VocabularyState, error) {
 			return VocabularyState{}, core.Errorf(core.CategoryCorruptData, "cannot read this project's configuration")
@@ -666,6 +675,7 @@ func TestHandlerPriorityStaleWriteSurvivesAnUnreadableVocabulary(t *testing.T) {
 // A body carrying a member these routes do not have is refused rather than
 // silently ignored, exactly as every other mutation body is.
 func TestHandlerPriorityMutationsRefuseUnknownMembers(t *testing.T) {
+	t.Parallel()
 	recorded := &recordedPriorityMutations{}
 	handler := priorityMutationHandler(t, recorded, priorityMutationResult(t), nil)
 	for _, test := range []struct {
@@ -700,6 +710,7 @@ func TestHandlerPriorityMutationsRefuseUnknownMembers(t *testing.T) {
 // is a board whose panel would draw controls that look alike and fail
 // differently.
 func TestHandlerWithoutPriorityMutationsReportsThem(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	for _, test := range priorityRoutes("head-current") {
 		t.Run(test.name, func(t *testing.T) {
@@ -723,6 +734,7 @@ func TestHandlerWithoutPriorityMutationsReportsThem(t *testing.T) {
 // allow — including the three per-member addresses, which the method table has
 // to know about separately from the priority they hang off.
 func TestHandlerPriorityRoutesEnforceTheirMethods(t *testing.T) {
+	t.Parallel()
 	handler := priorityMutationHandler(t, &recordedPriorityMutations{}, priorityMutationResult(t), nil)
 	for _, test := range []struct {
 		method string
@@ -750,6 +762,7 @@ func TestHandlerPriorityRoutesEnforceTheirMethods(t *testing.T) {
 // An address these routes do not have is not one of them. A member nobody
 // defined is a 404 rather than a method refusal that claims a route exists.
 func TestHandlerPriorityRoutesAnswerOnlyTheirOwnAddresses(t *testing.T) {
+	t.Parallel()
 	handler := priorityMutationHandler(t, &recordedPriorityMutations{}, priorityMutationResult(t), nil)
 	for _, test := range []struct {
 		method string

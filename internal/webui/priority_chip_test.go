@@ -103,6 +103,7 @@ var chipColorCases = []struct {
 // Every color a project can choose is drawn so that its label can be read: on
 // the card where the card carries it, and on a chip where it does not.
 func TestPriorityChipIsDrawnOnlyForAColorTheCardCannotCarry(t *testing.T) {
+	t.Parallel()
 	for _, test := range chipColorCases {
 		t.Run(test.name, func(t *testing.T) {
 			block := priorityInkBlock(t, priorityInkBoardPage(t, fourPriorityVocabulary(t, test.color), nil))
@@ -141,6 +142,7 @@ func TestPriorityChipIsDrawnOnlyForAColorTheCardCannotCarry(t *testing.T) {
 // ways: a sweep that found dark chips would mean the lift or the threshold had
 // moved.
 func TestPriorityChipDecidesEachHueOnItsOwn(t *testing.T) {
+	t.Parallel()
 	for _, scheme := range []string{"light", "dark"} {
 		card := schemePalette(scheme)["--wb-surface"]
 		bare, chips := 0, 0
@@ -212,6 +214,7 @@ func TestPriorityChipDecidesEachHueOnItsOwn(t *testing.T) {
 // the threshold is what "no chip" means, and clearing AA is a separate and
 // stricter promise this project makes about the colors it ships.
 func TestPriorityChipLeavesADerivedInkOnTheCard(t *testing.T) {
+	t.Parallel()
 	worst := math.Inf(1)
 	var worstCase string
 	for count := 1; count <= core.MaxPriorityCount; count++ {
@@ -263,6 +266,7 @@ func TestPriorityChipLeavesADerivedInkOnTheCard(t *testing.T) {
 //     at every vocabulary size is measured, the way the hue sweep measures every
 //     hue, because a mix between two colors that each clear AA need not.
 func TestShippedPriorityColorsClearAAAgainstTheCard(t *testing.T) {
+	t.Parallel()
 	tightest, tightestCase := math.Inf(1), ""
 	measure := func(t *testing.T, what, block, token, scheme string) {
 		t.Helper()

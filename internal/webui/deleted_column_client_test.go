@@ -78,6 +78,7 @@ function reportTracks(label) {
 // card node is where their work in flight lives, and a toggle that rebuilt the
 // board to add one column would destroy all of it.
 func TestHandlerClientTogglesTheDeletedColumnWithoutTouchingTheBoard(t *testing.T) {
+	t.Parallel()
 	tasks := deletedColumnTasks()
 	active := []core.Task{tasks[0]}
 	script := deletedColumnClientScript(t)
@@ -188,6 +189,7 @@ setTimeout(async () => {
 // A hard load of the address that shows the column shows it, and the first poll
 // the page makes is already the one that asks for the deleted tasks.
 func TestHandlerClientOpensTheDeletedColumnOnAHardLoad(t *testing.T) {
+	t.Parallel()
 	tasks := deletedColumnTasks()
 	script := deletedColumnClientScript(t)
 
@@ -229,6 +231,7 @@ setTimeout(async () => {
 // when the column appears, so the renderer has not run and the empty state is
 // still hidden from construction whatever it would have decided.
 func TestHandlerClientWithholdsTheEmptyStateUntilAPollHasAsked(t *testing.T) {
+	t.Parallel()
 	tasks := deletedColumnTasks()
 	script := deletedColumnClientScript(t)
 
@@ -293,6 +296,7 @@ setTimeout(async () => {
 // the live work, and the next poll — up to a second later — would take them
 // away again.
 func TestHandlerClientDrawsNoTombstoneInAStatusColumnWhileTheColumnIsHidden(t *testing.T) {
+	t.Parallel()
 	tasks := deletedColumnTasks()
 	script := deletedColumnClientScript(t)
 	// Both tombstones are filed under a status this board draws a column for, so
@@ -346,6 +350,7 @@ setTimeout(async () => {
 // card was drawn from, and the request names no destination — a bare restore
 // puts the task back where it was deleted from.
 func TestHandlerClientRestoresADeletedTaskFromItsCard(t *testing.T) {
+	t.Parallel()
 	tasks := deletedColumnTasks()
 	restored := tasks[2]
 	restored.Deleted = false
@@ -447,6 +452,7 @@ func deletedDropTasks() []core.Task {
 // carried on the restore so the return and the placement are one operation pack
 // rather than a task briefly visible in the column it was deleted from.
 func TestHandlerClientRestoresACardIntoTheColumnItIsDroppedOn(t *testing.T) {
+	t.Parallel()
 	tasks := deletedDropTasks()
 	active := []core.Task{tasks[0], tasks[1]}
 	restored := tasks[2]
@@ -508,6 +514,7 @@ setTimeout(async () => {
 // head the card was drawn from so a task another clone has changed since is
 // refused rather than tombstoned out from under them.
 func TestHandlerClientDeletesACardDroppedOnTheDeletedColumn(t *testing.T) {
+	t.Parallel()
 	tasks := deletedDropTasks()
 	active := []core.Task{tasks[0], tasks[1]}
 	removed := tasks[0]
@@ -577,6 +584,7 @@ setTimeout(async () => {
 // forces a refresh, re-bases the queue onto what that refresh read, rolls the
 // card back to what the server holds, and reports on the card it concerns.
 func TestHandlerClientRebasesARefusedRestoreAndReportsItOnTheCard(t *testing.T) {
+	t.Parallel()
 	tasks := deletedColumnTasks()
 	moved := tasks[2]
 	moved.Head = "head-moved"
@@ -638,6 +646,7 @@ setTimeout(async () => {
 // A refused delete rolls the card back into the column it came from and says so
 // where the reader is looking, exactly as a refused placement does.
 func TestHandlerClientRollsBackARefusedDeleteOntoItsColumn(t *testing.T) {
+	t.Parallel()
 	tasks := deletedDropTasks()
 	active := []core.Task{tasks[0], tasks[1]}
 	script := deletedColumnClientScript(t)
@@ -686,6 +695,7 @@ setTimeout(async () => {
 // and dependency progress — before and after a poll that rebuilds every one of
 // them.
 func TestHandlerClientKeepsTheRestoreControlAsTheCardsLastChild(t *testing.T) {
+	t.Parallel()
 	task := clientPlacementTask("WB-01J00000000000000000000401", "Rebuilt", core.StatusReady, core.PriorityMedium)
 	task.Description = "A description, which applyCard rebuilds on every change."
 	task.Labels = []string{"alpha", "beta"}
@@ -749,6 +759,7 @@ setTimeout(async () => {
 // goes through: it is written as text, never as markup, so a title that looks
 // like a tag is a title that looks like a tag.
 func TestHandlerClientDrawsHostileDeletedTaskTextAsText(t *testing.T) {
+	t.Parallel()
 	tasks := deletedColumnTasks()
 	hostile := tasks[2]
 	hostile.Title = `<script>alert("x")</script>`
@@ -787,6 +798,7 @@ setTimeout(async () => {
 // answers the address with a 404, and a client that reaches it anyway calls it
 // what it is.
 func TestHandlerClientAnswersTheRemovedDeletedRouteAsNotFound(t *testing.T) {
+	t.Parallel()
 	script := deletedColumnClientScript(t)
 
 	program := clientDOMHarness("/deleted", tasksDocumentJSON(t, nil)) + script + `
@@ -806,6 +818,7 @@ setTimeout(async () => {
 // the server refuses — which is the answer this address gave before the column
 // existed, whether or not the board is now carrying the card.
 func TestHandlerClientRefusesADetailRouteForADeletedTask(t *testing.T) {
+	t.Parallel()
 	tasks := deletedColumnTasks()
 	script := deletedColumnClientScript(t)
 

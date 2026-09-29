@@ -49,6 +49,7 @@ func displayView(fetched, fork core.DisplaySettings) configView {
 // never configured it": both read as the empty string. The fork is what makes
 // the two directions of a set-against-unset symmetric.
 func TestClassifyConfigDisplaySurfacesOnlyDisagreement(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		name      string
 		fork      core.DisplaySettings
@@ -136,6 +137,7 @@ func TestClassifyConfigDisplaySurfacesOnlyDisagreement(t *testing.T) {
 // other: a clone that renamed a status while origin renamed the board converges
 // on both.
 func TestClassifyConfigDisplayIgnoresStatusChanges(t *testing.T) {
+	t.Parallel()
 	view := displayView(core.DisplaySettings{Name: "Atlas"}, core.DisplaySettings{})
 	if conflict := classifyConfigOperation(view, renameOperation(core.StatusReady, "todo")); conflict != nil {
 		t.Fatalf("a status rename against a configured display = %#v, want no conflict", conflict)
@@ -151,6 +153,7 @@ func TestClassifyConfigDisplayIgnoresStatusChanges(t *testing.T) {
 // one clone, read back resolved, and reported as part of the state the status
 // verbs already read.
 func TestWriteConfigOperationRecordsDisplaySettings(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repo, config := writeRepository(t)
 
@@ -186,6 +189,7 @@ func TestWriteConfigOperationRecordsDisplaySettings(t *testing.T) {
 // settle; the ledger still converges on origin's value so neither clone is
 // wedged.
 func TestConfigSyncReportsDivergentDisplaySettings(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -230,6 +234,7 @@ func TestConfigSyncReportsDivergentDisplaySettings(t *testing.T) {
 // was consulted this converged silently on exit 0 and origin's deliberate
 // clearing was overwritten without anybody being told.
 func TestConfigSyncSurfacesOriginClearingWhatThisCloneSet(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -302,6 +307,7 @@ func TestConfigSyncSurfacesOriginClearingWhatThisCloneSet(t *testing.T) {
 // change reads as a disagreement with origin, is discarded, and the conflict
 // report names origin as holding a value origin never had.
 func TestConfigSyncReplaysASecondDisplayChangeOntoTheFirst(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -359,6 +365,7 @@ func TestConfigSyncReplaysASecondDisplayChangeOntoTheFirst(t *testing.T) {
 // The other clone's display change lands on this one, unconflicted, which is
 // the ordinary case the conflict above is the exception to.
 func TestConfigSyncCarriesADisplaySettingBetweenClones(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 

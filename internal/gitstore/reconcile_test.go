@@ -12,6 +12,7 @@ import (
 // dependency case reconciliation refuses. Recording it would leave both tasks
 // permanently ineligible for selection with nothing to point at.
 func TestFetchReportsDependencyCycleConflictAgainstFetchedGraph(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	blocked := createSyncTask(t, first, config, "Blocked task")
 	blocker := createSyncTask(t, first, config, "Blocker task")
@@ -59,6 +60,7 @@ func TestFetchReportsDependencyCycleConflictAgainstFetchedGraph(t *testing.T) {
 }
 
 func TestFetchReportsTombstoneConflictWithBlockedOperation(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Doomed task")
 	publishTaskRefs(t, first)
@@ -99,6 +101,7 @@ func TestFetchReportsTombstoneConflictWithBlockedOperation(t *testing.T) {
 // A replayed operation whose value the fetched history already holds says
 // nothing new, so it earns no commit rather than an empty edit.
 func TestFetchRecordsNoCommitWhenReplayedValueMatchesUpstream(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Agreed task")
 	publishTaskRefs(t, first)
@@ -129,6 +132,7 @@ func TestFetchRecordsNoCommitWhenReplayedValueMatchesUpstream(t *testing.T) {
 // conflict entry. Making it silently a conflict, or silently keeping the
 // remote value, would both pass every other test in this package.
 func TestFetchResolvesOpposedSameFieldStatusChangesLastSyncerWins(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Contested status")
@@ -192,6 +196,7 @@ func TestFetchResolvesOpposedSameFieldStatusChangesLastSyncerWins(t *testing.T) 
 // that created them: a fetch must not delete recoverable work in the same
 // command that orphaned it.
 func TestMutationPrunesParkedRefsAndFetchDoesNot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Parked task")
@@ -228,6 +233,7 @@ func TestMutationPrunesParkedRefsAndFetchDoesNot(t *testing.T) {
 // mutates. A clone that fetches and reconciles without ever mutating a task
 // again grows its parked namespace forever, so the sweep has to stand alone.
 func TestPruneParkedRefsRetainsTheNewestPerTask(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 	left := createSyncTask(t, first, config, "Left task")
@@ -270,6 +276,7 @@ func TestPruneParkedRefsRetainsTheNewestPerTask(t *testing.T) {
 // just orphaned, so sweeping after a fetch does not delete recoverable work in
 // the same command that created it.
 func TestPruneParkedRefsKeepsTheRefTheFetchJustCreated(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Reconciling task")
@@ -306,6 +313,7 @@ func TestPruneParkedRefsKeepsTheRefTheFetchJustCreated(t *testing.T) {
 }
 
 func TestHasOriginReportsWhetherAnOriginIsConfigured(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, second, _ := syncRepositories(t)
 	if !second.HasOrigin(ctx) {
@@ -321,6 +329,7 @@ func TestHasOriginReportsWhetherAnOriginIsConfigured(t *testing.T) {
 // Parked refs live outside the task namespace, so nothing that enumerates task
 // refs — including the refspec a push builds — can carry them to origin.
 func TestParkedRefsAreNeverPublished(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Unpublished parking")
@@ -351,6 +360,7 @@ func TestParkedRefsAreNeverPublished(t *testing.T) {
 // The projection's descendant guard has to keep rejecting a ref rolled
 // backwards while accepting the one thing that legitimately does so.
 func TestValidateTaskHeadAdvancesAcceptsOnlyParkedNonDescendants(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Advancing task")

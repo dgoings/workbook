@@ -13,6 +13,7 @@ import (
 )
 
 func TestMutatingRoutesRejectAnOversizedRequestBody(t *testing.T) {
+	t.Parallel()
 	// Production mutation: handing request.Body straight to a JSON decoder lets
 	// any client on the loopback interface stream an unbounded value into this
 	// process before a single field is validated.
@@ -71,6 +72,7 @@ func TestMutatingRoutesRejectAnOversizedRequestBody(t *testing.T) {
 }
 
 func TestMutatingRoutesAcceptABodyUnderTheCeiling(t *testing.T) {
+	t.Parallel()
 	// Production mutation: a ceiling set below what the board itself sends would
 	// break saving an ordinary task through the UI.
 	var created core.CreateInput
@@ -99,6 +101,7 @@ func TestMutatingRoutesAcceptABodyUnderTheCeiling(t *testing.T) {
 }
 
 func TestBoardServerBoundsHowLongAConnectionMayIdle(t *testing.T) {
+	t.Parallel()
 	// Production mutation: an http.Server with no timeouts holds a goroutine and
 	// a file descriptor per stalled connection until the process exits.
 	server := newBoardServer(http.NotFoundHandler())

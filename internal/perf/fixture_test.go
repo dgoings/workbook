@@ -18,6 +18,7 @@ import (
 // a tombstone without a preceding active state would make benchmark fixtures
 // describe a population the product cannot represent.
 func TestFixtureSpec(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		spec FixtureSpec
@@ -68,6 +69,7 @@ func TestFixtureSpec(t *testing.T) {
 // cyclic dependency, appending after a tombstone, or deriving IDs/timestamps
 // from the host would produce a fixture that does not model its stated work.
 func TestBuildFixtureCreatesRepresentativeDeterministicHistories(t *testing.T) {
+	t.Parallel()
 	spec := FixtureSpec{
 		TotalTasks: 10, ActiveTasks: 8, TombstonedTasks: 2,
 		OperationsPerTask: 8, ObjectFormat: "sha1",
@@ -206,6 +208,7 @@ func TestBuildFixtureCreatesRepresentativeDeterministicHistories(t *testing.T) {
 // cross-build determinism, or replacing set/rank operations with scalar
 // padding invalidates the exact local acceptance fixture.
 func TestBuildFixtureCreatesExactAcceptancePopulationAcrossObjectFormats(t *testing.T) {
+	t.Parallel()
 	for _, objectFormat := range []string{"sha1", "sha256"} {
 		t.Run(objectFormat, func(t *testing.T) {
 			if objectFormat == "sha256" && !supportsObjectFormat(t, objectFormat) {
@@ -411,6 +414,7 @@ func containsString(values []string, want string) bool {
 }
 
 func TestBuildFixtureCreatesCompleteTipStatesWithoutReplay(t *testing.T) {
+	t.Parallel()
 	for _, objectFormat := range []string{"sha1", "sha256"} {
 		t.Run(objectFormat, func(t *testing.T) {
 			if objectFormat == "sha256" && !supportsObjectFormat(t, objectFormat) {

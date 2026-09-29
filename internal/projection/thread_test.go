@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
-	"github.com/dgoings/workbook/internal/testrepo"
 )
 
 // threadService builds the service every test here mutates through, with the
@@ -42,8 +41,9 @@ type threadWriter interface {
 // truncated parent it was given. The assertion is therefore not only that a
 // read shows the thread but that a later unrelated write preserves it.
 func TestAProjectedTaskKeepsItsCommentsAndAttachments(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Task with a thread")
 
 	store, err := Open(ctx, repository, config)
@@ -98,8 +98,9 @@ func TestAProjectedTaskKeepsItsCommentsAndAttachments(t *testing.T) {
 // The projected operation rows are replayed, not only displayed, so the comment
 // bodies have to survive the cache too.
 func TestAProjectedChainReplaysCommentOperations(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Task with a thread")
 
 	store, err := Open(ctx, repository, config)

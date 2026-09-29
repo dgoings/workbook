@@ -162,6 +162,12 @@ scripts; all three are described under Changed.
   synchronization loop runs for as long as the app does.
 - **Show Deleted moved from the header into the board's new filter row.** Its
   address, `/?deleted=1`, is unchanged, so existing links keep working.
+- **Every command opens its repository with one `git rev-parse` process
+  instead of two.** The root and the common directory were two questions in
+  two processes; rev-parse answers both in one, about twenty-five
+  milliseconds saved per command.
+- `workbook serve` parses the board page once per process instead of per
+  handler.
 
 ### Fixed
 - **Saving the board's settings after changing a status or a priority no longer
@@ -249,6 +255,26 @@ scripts; all three are described under Changed.
   moment, a mode that had been asked for once and denied. A refused write is now
   rolled back, and the failure is reported instead of going unhandled in the
   app's main process.
+- **`workbook-bench` no longer kills a fixture build with the per-command
+  timeout.** Fixture construction gets its own bound, as storage benchmarks
+  already had, so a fixture — an init, a synthetic history, and for the remote
+  topologies two clones and dozens of plumbing calls — is no longer expected to
+  finish inside the budget for one measured command, and a busy machine can no
+  longer make a healthy fixture build die of that deadline. Every benchmark that
+  builds a fixture gets the new bound, the scaling matrix included, and all of
+  them take it from one number. What the benchmark reports as a timeout is
+  unchanged. The bare origins the harness publishes into also carry the
+  fixture's own isolation settings now, instead of inheriting the operator's
+  global `core.hooksPath`, where a company hooks directory could reject or
+  charge for the very push being measured.
+- **`workbook-bench` no longer records a failed sample when the machine is too
+  busy to drain a finished command's output within a tenth of a second.** The
+  harness bounded that drain at 100ms, which on a loaded machine is a stopwatch
+  on the Go scheduler rather than a guard: a command that wrote nothing and
+  exited cleanly came back with no duration, an exit code of -1 and
+  `exec: WaitDelay expired before I/O complete`. The bound is now five seconds,
+  the same number the object-batch streaming already uses, which still catches a
+  command that exits leaving a descendant holding its pipe open.
 
 ## v0.5.1 — 2026-08-23
 

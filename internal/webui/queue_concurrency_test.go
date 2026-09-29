@@ -17,6 +17,7 @@ import (
 //
 // This watches two cards instead: both writes have to be open at once.
 func TestHandlerClientDrainsDifferentTasksConcurrently(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	first := clientPlacementTask("WB-01J00000000000000000000301", "First", core.StatusReady, core.PriorityMedium)
 	first.Head = "head-first"

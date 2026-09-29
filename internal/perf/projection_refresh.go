@@ -155,10 +155,12 @@ func RunProjectionRefreshScenarios(
 	fixtureRoot string,
 	selected []string,
 ) ([]ScenarioResult, ProjectionRefreshReport, error) {
+	// The builder carries no bound of its own: measureProjectionRefreshPoint
+	// bounds it with the spec's FixtureTimeout, the way the remote scenario
+	// runner does, so an injected builder is bounded the same way the real one
+	// is.
 	return runProjectionRefreshScenarios(ctx, spec, fixtureRoot, selected, projectionRefreshDependencies{
-		buildFixture: func(ctx context.Context, root string, fixture FixtureSpec) (Fixture, error) {
-			return buildFixtureWithinTimeout(ctx, root, fixture, spec.CommandTimeout)
-		},
+		buildFixture:   BuildFixture,
 		runSetup:       runValidationSetupCommand,
 		mutateHeads:    mutateProjectionRefreshHeads,
 		measureCommand: MeasureCommandOutput,
@@ -180,6 +182,9 @@ func runProjectionRefreshScenarios(
 	}
 	if spec.CommandTimeout <= 0 {
 		return nil, ProjectionRefreshReport{}, fmt.Errorf("command timeout must be positive")
+	}
+	if err := requireFixtureTimeout(&spec); err != nil {
+		return nil, ProjectionRefreshReport{}, err
 	}
 	if fixtureRoot == "" {
 		return nil, ProjectionRefreshReport{}, fmt.Errorf("fixture root is required")
@@ -239,7 +244,7 @@ func measureProjectionRefreshPoint(
 	enumerationMilliseconds := make([]float64, 0, spec.Samples)
 	for sample := range spec.Samples {
 		root := filepath.Join(fixtureRoot, definition.name, fmt.Sprintf("sample-%03d", sample+1))
-		fixture, err := dependencies.buildFixture(ctx, root, spec.Fixture)
+		fixture, err := buildFixtureWithinTimeout(ctx, dependencies.buildFixture, root, spec.Fixture, spec.FixtureTimeout)
 		if err != nil {
 			return ScenarioResult{}, ProjectionRefreshPoint{}, fmt.Errorf("build %s sample %d fixture: %w", definition.name, sample+1, err)
 		}

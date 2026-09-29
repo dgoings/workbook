@@ -47,6 +47,7 @@ func strandedPriorityTask() core.Task {
 // one place on the board where a priority is read as a name rather than as a
 // token, which is what makes a sentence the right thing to put here.
 func TestHandlerClientNamesAPriorityTheProjectCannotResolve(t *testing.T) {
+	t.Parallel()
 	task := strandedPriorityTask()
 	runPriorityClient(t, "a task at an unresolvable priority", "/tasks/"+task.ID, projectPriorities(t), []core.Task{task}, `
   const control = findElement(main, (element) => element.id === "task-priority");
@@ -82,6 +83,7 @@ func TestHandlerClientNamesAPriorityTheProjectCannotResolve(t *testing.T) {
 // answer it, and the task is read afterwards. An untouched placeholder sends
 // nothing about the priority, so the stored value is the one the teammate wrote.
 func TestHandlerClientSavingAStrandedPriorityDoesNotReassignIt(t *testing.T) {
+	t.Parallel()
 	task := strandedPriorityTask()
 	const renamed = "Renamed, and nothing else"
 	output := runPriorityClientReporting(t, "save a form at an unresolvable priority", "/tasks/"+task.ID,
@@ -140,6 +142,7 @@ func TestHandlerClientSavingAStrandedPriorityDoesNotReassignIt(t *testing.T) {
 // does define. The save afterwards says nothing about the priority either,
 // because the baseline moved with the control.
 func TestHandlerClientDropsThePriorityPlaceholderOnceTheProjectHasTheValue(t *testing.T) {
+	t.Parallel()
 	task := strandedPriorityTask()
 	// What the board holds by the time the refusal lands: the drop never
 	// applied, and the priority the task was stranded at is one the project

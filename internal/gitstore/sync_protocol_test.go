@@ -11,6 +11,7 @@ import (
 )
 
 func TestParseRemoteTaskHeadsAcceptsFullSHA1AndSHA256Records(t *testing.T) {
+	t.Parallel()
 	const (
 		firstTask  = "WB-01K0M6B8A4FTT8C39MXXYTW7D1"
 		secondTask = "WB-01K0M6B8A4FTT8C39MXXYTW7D2"
@@ -37,6 +38,7 @@ func TestParseRemoteTaskHeadsAcceptsFullSHA1AndSHA256Records(t *testing.T) {
 }
 
 func TestParseRemoteTaskHeadsRejectsInvalidRecords(t *testing.T) {
+	t.Parallel()
 	const taskID = "WB-01K0M6B8A4FTT8C39MXXYTW7D1"
 	objectID := strings.Repeat("a", 40)
 	valid := objectID + "\trefs/workbook/tasks/" + taskID + "\n"
@@ -70,6 +72,7 @@ func TestParseRemoteTaskHeadsRejectsInvalidRecords(t *testing.T) {
 // can own from one a newer version or a second project's key would produce,
 // because only the first may ever be offered for deletion.
 func TestParseRemoteTaskHeadsSkipsAndReportsUnrecognizedNames(t *testing.T) {
+	t.Parallel()
 	const taskID = "WB-01K0M6B8A4FTT8C39MXXYTW7D1"
 	objectID := strings.Repeat("a", 40)
 	valid := objectID + "\trefs/workbook/tasks/" + taskID + "\n"
@@ -116,6 +119,7 @@ func TestParseRemoteTaskHeadsSkipsAndReportsUnrecognizedNames(t *testing.T) {
 }
 
 func TestParsePushPorcelainAccountsForEachExpectedDestination(t *testing.T) {
+	t.Parallel()
 	expected := map[string]string{
 		"refs/workbook/tasks/task-create":   "task-create",
 		"refs/workbook/tasks/task-forward":  "task-forward",
@@ -145,6 +149,7 @@ func TestParsePushPorcelainAccountsForEachExpectedDestination(t *testing.T) {
 }
 
 func TestParsePushPorcelainRejectsIncompleteOrUnsafeAccounting(t *testing.T) {
+	t.Parallel()
 	expected := map[string]string{
 		"refs/workbook/tasks/task-a": "task-a",
 		"refs/workbook/tasks/task-b": "task-b",

@@ -57,6 +57,7 @@ func taskAssignments(t *testing.T, repo *Repository, config core.ProjectConfig, 
 // lost: the task ends up assigned to both on both clones, which is a meaningful
 // outcome — two people are spiking it — rather than a fight over one slot.
 func TestConcurrentSelfAssignsFromTwoClonesConvergeToBothAssigned(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Contended task")
 	publishTaskRefs(t, first)
@@ -87,6 +88,7 @@ func TestConcurrentSelfAssignsFromTwoClonesConvergeToBothAssigned(t *testing.T) 
 // A fleet's assignments and their sweep survive a round trip, which is the
 // orchestrator case: several agents of one principal, cleared by that principal.
 func TestAFleetsAssignmentsAndItsSweepReplicate(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Fleet task")
 	assignSyncTask(t, first, config, firstAgent, task.ID, firstAgent+"/impl-1")
@@ -126,6 +128,7 @@ func TestAFleetsAssignmentsAndItsSweepReplicate(t *testing.T) {
 // would prove nothing about the layer that has to hold when the boundary is not
 // in the picture.
 func TestAForeignRemovalCraftedOnOneSideFoldsToANoOpOnTheOther(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Hostile removal")
 	assignSyncTask(t, first, config, firstAgent, task.ID, "")
@@ -165,6 +168,7 @@ func TestAForeignRemovalCraftedOnOneSideFoldsToANoOpOnTheOther(t *testing.T) {
 // rule's evidence, and a replay that reissued them would change who may remove
 // what.
 func TestDivergenceReplayPreservesAssignmentAttribution(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Replayed assignment")
 	publishTaskRefs(t, first)
@@ -211,6 +215,7 @@ func TestDivergenceReplayPreservesAssignmentAttribution(t *testing.T) {
 // synchronization of an already-published assignment would append an empty
 // entry to shared history.
 func TestReplayingAnAssignmentUpstreamAlreadyHasRecordsNoCommit(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Doubly assigned")
 	publishTaskRefs(t, first)
@@ -238,6 +243,7 @@ func TestReplayingAnAssignmentUpstreamAlreadyHasRecordsNoCommit(t *testing.T) {
 // A foreign removal replayed onto a fetched tip is likewise dropped rather than
 // recorded: the fold makes it a no-op, and a no-op earns no commit.
 func TestReplayingAForeignRemovalRecordsNoCommit(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Foreign replay")
 	assignSyncTask(t, first, config, firstAgent, task.ID, "")

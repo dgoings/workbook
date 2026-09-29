@@ -64,6 +64,7 @@ func switchElement(t *testing.T, body, marker string) string {
 // them or beside them. This is the whole of the fix: a control that disappears
 // can only close a gap that is after it.
 func TestHandlerHeaderDrawsTheRouteLinksBeforeEverySettingThatComesAndGoes(t *testing.T) {
+	t.Parallel()
 	header := headerElement(t, administrableBoardPage(t, core.DefaultVocabulary()))
 
 	navStart := strings.Index(header, "<nav")
@@ -110,6 +111,7 @@ func TestHandlerHeaderDrawsTheRouteLinksBeforeEverySettingThatComesAndGoes(t *te
 // the same place on all of them. Stated here so that a later change which starts
 // drawing the header per-route has to come back and say why.
 func TestHandlerServesOneHeaderToEveryRoute(t *testing.T) {
+	t.Parallel()
 	handler := administrableHandler(core.DefaultVocabulary(), "head-1", boardTasks())
 
 	board := ""
@@ -134,6 +136,7 @@ func TestHandlerServesOneHeaderToEveryRoute(t *testing.T) {
 // writing over its text would throw away, and role/aria-checked are on the
 // control itself because that is the half a screen reader reads.
 func TestHandlerHeaderDrawsEverySettingAsASwitch(t *testing.T) {
+	t.Parallel()
 	page := administrableBoardPage(t, core.DefaultVocabulary())
 	header := headerElement(t, page)
 	// The Deleted switch is drawn in the filter row rather than the header now, so
@@ -191,6 +194,7 @@ func TestHandlerHeaderDrawsEverySettingAsASwitch(t *testing.T) {
 // (see TestHandlerServesOneHeaderToEveryRoute) that is what puts it on all of
 // them.
 func TestHandlerHeaderHidesTheBoardSettingsAndNotTheScheme(t *testing.T) {
+	t.Parallel()
 	header := headerElement(t, administrableBoardPage(t, core.DefaultVocabulary()))
 
 	for _, marker := range []string{"data-description-toggle", "data-sync-toggle"} {
@@ -207,6 +211,7 @@ func TestHandlerHeaderHidesTheBoardSettingsAndNotTheScheme(t *testing.T) {
 // has to keep being one a browser can cmd-click, bookmark and walk with Back;
 // what role="switch" changes is what it is called, not where it goes.
 func TestHandlerDeletedSwitchIsStillTheAddressItSets(t *testing.T) {
+	t.Parallel()
 	row := filterRowElement(t, administrableBoardPage(t, core.DefaultVocabulary()))
 
 	element := switchElement(t, row, "data-deleted-toggle")
@@ -220,6 +225,7 @@ func TestHandlerDeletedSwitchIsStillTheAddressItSets(t *testing.T) {
 
 // The knob has to move, or the control is a sentence with a picture beside it.
 func TestHandlerStylesheetMovesTheSwitchKnobWithItsState(t *testing.T) {
+	t.Parallel()
 	body := administrableBoardPage(t, core.DefaultVocabulary())
 
 	off := cssRule(t, body, ".nav-switch__knob")
@@ -244,6 +250,7 @@ func TestHandlerStylesheetMovesTheSwitchKnobWithItsState(t *testing.T) {
 // click were about to move it — so the words dim, the pointer stops offering a
 // click, and the track stops lighting up under the cursor.
 func TestHandlerStylesheetDrawsASwitchWithNothingToSetAsUnavailable(t *testing.T) {
+	t.Parallel()
 	body := administrableBoardPage(t, core.DefaultVocabulary())
 
 	unavailable := cssRule(t, body, `.nav-switch[aria-disabled="true"]`)
@@ -273,6 +280,7 @@ func TestHandlerStylesheetDrawsASwitchWithNothingToSetAsUnavailable(t *testing.T
 // is the rule a phone depends on: this row was 454px wide at a 390px viewport
 // before it was allowed to wrap, and the whole page scrolled sideways with it.
 func TestHandlerStylesheetHoldsTheTwoHeaderGroupsApart(t *testing.T) {
+	t.Parallel()
 	body := administrableBoardPage(t, core.DefaultVocabulary())
 
 	if lead := cssRule(t, body, ".app-header__lead"); !strings.Contains(lead, "display: flex") {
@@ -309,6 +317,7 @@ func TestHandlerStylesheetHoldsTheTwoHeaderGroupsApart(t *testing.T) {
 // raises the click the anchor would have raised, which reaches the same document
 // listener that turns every link on this page into a render.
 func TestHandlerClientActivatesTheDeletedSwitchFromTheSpaceBar(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "the Deleted switch under the space bar", reconcileBoardTasks(), `
   if (filterRow.hidden) throw new Error("the board did not reveal the row the Deleted setting sits in");
   if (!deletedToggle.eventListeners.keydown) throw new Error("the Deleted switch answers no key at all");
@@ -348,6 +357,7 @@ func TestHandlerClientActivatesTheDeletedSwitchFromTheSpaceBar(t *testing.T) {
 // offered while it is on is "Push", which is what taking it back means and what
 // the inline mode's own description calls it.
 func TestHandlerClientDrawsThePublishingSwitchFromTheServersMode(t *testing.T) {
+	t.Parallel()
 	runBoardClientWithSetup(t, "the publishing switch", reconcileBoardTasks(), syncFetchStub, `
   await Promise.resolve();
   await Promise.resolve();
@@ -400,6 +410,7 @@ func TestHandlerClientDrawsThePublishingSwitchFromTheServersMode(t *testing.T) {
 // and refuses to write a setting whose effect nobody can see — and because a
 // watcher can start at any moment, activating it asks the server again instead.
 func TestHandlerClientRefusesThePublishingSwitchWhileNoWatcherAnswers(t *testing.T) {
+	t.Parallel()
 	runBoardClientWithSetup(t, "a deferral no watcher answers", reconcileBoardTasks(), `
 `+syncFetchStub+`
 syncWatcher = false;
@@ -474,6 +485,7 @@ syncDetail = "no watcher is answering, so changes publish inline";
 // to a watcher that is not there either, so a click on it must not quietly
 // leave the server configured to defer to nobody.
 func TestHandlerClientRefusesTheWatcherlessPublishingSwitchInEitherMode(t *testing.T) {
+	t.Parallel()
 	runBoardClientWithSetup(t, "an inline board with no watcher", reconcileBoardTasks(), `
 `+syncFetchStub+`
 syncMode = "inline";
@@ -517,6 +529,7 @@ syncWatcher = false;
 // mode, so it now changes nothing and the switch stays where it was, still
 // stalled, still able to look again.
 func TestHandlerClientKeepsTheStalledPublishingSwitchWhenTheLookAgainFails(t *testing.T) {
+	t.Parallel()
 	runBoardClientWithSetup(t, "a stalled switch whose look-again fails", reconcileBoardTasks(), `
 `+syncFetchStub+`
 syncWatcher = false;
@@ -583,6 +596,7 @@ globalThis.fetch = async (url, options = {}) => {
 // clone while the board is open, and the server probes for one every time it is
 // asked — but it is not offered as waiting for a watcher.
 func TestHandlerClientNamesAMissingOriginRatherThanAMissingWatcher(t *testing.T) {
+	t.Parallel()
 	runBoardClientWithSetup(t, "a board with no origin", reconcileBoardTasks(), `
 `+syncFetchStub+`
 syncWatcher = false;
@@ -643,6 +657,7 @@ syncDetail = "no origin is configured, so nothing is published";
 // flip they were about to make. Each answer now claims a number and drops
 // itself if a later one has already landed.
 func TestHandlerClientIgnoresAStalePublishingReadThatLandsLast(t *testing.T) {
+	t.Parallel()
 	runBoardClientWithSetup(t, "publishing reads answered out of order", reconcileBoardTasks(), `
 `+syncFetchStub+`
 syncWatcher = false;

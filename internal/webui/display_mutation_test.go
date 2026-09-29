@@ -93,6 +93,7 @@ func displaySettingsBoardPage(t *testing.T, tasks []core.Task) string {
 // A save answers with the whole document, including the head its next change
 // has to name.
 func TestHandlerDisplayMutationAnswersWithTheWholeConfiguration(t *testing.T) {
+	t.Parallel()
 	recorded := &recordedDisplayChange{}
 	result := displayMutationResult()
 	handler := displayMutationHandler(t, recorded, result, nil)
@@ -124,6 +125,7 @@ func TestHandlerDisplayMutationAnswersWithTheWholeConfiguration(t *testing.T) {
 // The body reaches the capability as the whole configuration, which is what
 // makes an emptied field a cleared setting rather than a member nobody sent.
 func TestHandlerDisplayMutationCarriesTheWholeConfiguration(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name string
 		body string
@@ -166,6 +168,7 @@ func TestHandlerDisplayMutationCarriesTheWholeConfiguration(t *testing.T) {
 // and an empty head is a head: it is what a project whose configuration ledger
 // has never been seeded reads.
 func TestHandlerDisplayMutationRequiresAnExpectedHead(t *testing.T) {
+	t.Parallel()
 	recorded := &recordedDisplayChange{}
 	handler := displayMutationHandler(t, recorded, displayMutationResult(), nil)
 	response := requestJSON(t, handler, http.MethodPatch, "/api/display", `{"name":"Beta"}`)
@@ -200,6 +203,7 @@ func TestHandlerDisplayMutationRequiresAnExpectedHead(t *testing.T) {
 // A stale write is a 409 carrying the settings the save should be recomposed
 // against, so the client adopts them without a refetch.
 func TestHandlerDisplayMutationReportsStaleWritesWithTheCurrentSettings(t *testing.T) {
+	t.Parallel()
 	stale := core.Errorf(core.CategoryStaleWrite,
 		"this project's configuration has changed since head-old; reload and try again")
 	handler := displayMutationHandler(t, &recordedDisplayChange{}, DisplayMutation{}, stale)
@@ -238,6 +242,7 @@ func TestHandlerDisplayMutationReportsStaleWritesWithTheCurrentSettings(t *testi
 // for the client to re-render, and a body that grew a member for every refusal
 // would train nobody to read it.
 func TestHandlerDisplayMutationMapsRefusalsToStatuses(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name       string
 		err        error
@@ -272,6 +277,7 @@ func TestHandlerDisplayMutationMapsRefusalsToStatuses(t *testing.T) {
 // A stale write from a board whose configuration cannot be read is still a stale
 // write. The client loses the re-render it would have got, not the refusal.
 func TestHandlerDisplayStaleWriteSurvivesAnUnreadableConfiguration(t *testing.T) {
+	t.Parallel()
 	handler := NewHandler(Options{
 		Vocabulary: func(context.Context) (VocabularyState, error) {
 			return VocabularyState{}, core.Errorf(core.CategoryCorruptData, "cannot read this project's configuration")
@@ -299,6 +305,7 @@ func TestHandlerDisplayStaleWriteSurvivesAnUnreadableConfiguration(t *testing.T)
 // A body carrying a member this route does not have is refused rather than
 // silently ignored, exactly as every other mutation body is.
 func TestHandlerDisplayMutationRefusesUnknownMembers(t *testing.T) {
+	t.Parallel()
 	recorded := &recordedDisplayChange{}
 	handler := displayMutationHandler(t, recorded, displayMutationResult(), nil)
 	response := requestJSON(t, handler, http.MethodPatch, "/api/display",
@@ -313,6 +320,7 @@ func TestHandlerDisplayMutationRefusesUnknownMembers(t *testing.T) {
 
 // A board built without the capability says so rather than pretending.
 func TestHandlerWithoutTheDisplayWriterReportsIt(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	response := requestJSON(t, handler, http.MethodPatch, "/api/display", `{"expectedHead":"head-current"}`)
 	if response.Code != http.StatusInternalServerError {
@@ -331,6 +339,7 @@ func TestHandlerWithoutTheDisplayWriterReportsIt(t *testing.T) {
 // The gate is a switch of its own beside the mux, and a route missing from it is
 // a route whose 405 silently becomes a 404 — so it is stated here.
 func TestHandlerDisplayRouteEnforcesItsMethod(t *testing.T) {
+	t.Parallel()
 	handler := displayMutationHandler(t, &recordedDisplayChange{}, displayMutationResult(), nil)
 	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
 		response := requestJSON(t, handler, method, "/api/display", `{}`)
@@ -348,6 +357,7 @@ func TestHandlerDisplayRouteEnforcesItsMethod(t *testing.T) {
 // now. Nothing forwards it: a redirect would be a second name for a page that
 // has one, and the client reads its routes out of the address.
 func TestHandlerNoLongerAnswersTheOldStatusesAddress(t *testing.T) {
+	t.Parallel()
 	handler := administrableHandler(core.DefaultVocabulary(), "head-1", nil)
 	response := request(t, handler, http.MethodGet, "/statuses")
 	if response.Code != http.StatusNotFound {
@@ -363,6 +373,7 @@ func TestHandlerNoLongerAnswersTheOldStatusesAddress(t *testing.T) {
 // all, which is what keeps every answer this route gave before display settings
 // existed the answer it gives now.
 func TestHandlerVocabularyDocumentCarriesTheDisplaySettingsAtTheSameHead(t *testing.T) {
+	t.Parallel()
 	configured := NewHandler(Options{
 		Vocabulary: func(context.Context) (VocabularyState, error) {
 			return VocabularyState{

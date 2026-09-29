@@ -9,6 +9,7 @@ import (
 )
 
 func TestGlobalHelpListsHelpAndTopLevelCommands(t *testing.T) {
+	t.Parallel()
 	var output bytes.Buffer
 	renderGlobalHelp(&output)
 
@@ -27,6 +28,7 @@ func TestGlobalHelpListsHelpAndTopLevelCommands(t *testing.T) {
 }
 
 func TestCommandHelp(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name        string
 		target      []string
@@ -160,6 +162,7 @@ var usageSynopsisExceptions = map[string]struct{ synopsis, line string }{
 // here leaves the one surface a caller sees when they get the command wrong
 // describing a command that no longer exists.
 func TestGlobalUsageAgreesWithEverySynopsis(t *testing.T) {
+	t.Parallel()
 	for _, name := range commandOrder {
 		synopsis := commandSchemas[name].Synopsis
 		want := "  " + strings.TrimPrefix(synopsis, "workbook ")
@@ -183,6 +186,7 @@ func TestGlobalUsageAgreesWithEverySynopsis(t *testing.T) {
 }
 
 func TestHooksInstallUsesChildMetadataForParserFlags(t *testing.T) {
+	t.Parallel()
 	hooks := commandSchemas["hooks"]
 	if len(hooks.Options) != 0 {
 		t.Fatalf("hooks options = %#v, want no top-level options", hooks.Options)
@@ -203,6 +207,7 @@ func TestHooksInstallUsesChildMetadataForParserFlags(t *testing.T) {
 }
 
 func TestHelpMetadataMatchesSchemas(t *testing.T) {
+	t.Parallel()
 	want := map[string]map[string]flagKind{
 		"setup":    {"key": stringFlag, "no-docs": boolFlag, "no-sync": boolFlag, "skill-dir": stringFlag, "no-skill": boolFlag, "force": boolFlag, "json": boolFlag},
 		"config":   {},

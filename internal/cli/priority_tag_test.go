@@ -41,6 +41,7 @@ func cliPriorityTag(t *testing.T, repository string, args ...string) priorityTag
 // in one recorded operation: a priority carries one role, so there is no set to
 // reconcile and the fold transfers the tag inside the single `priority.tag`.
 func TestPriorityTagMovesTheDefaultInOneOperation(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	document := cliPriorityTag(t, repository, "high", "--tag", "default", "--no-sync", "--json")
@@ -98,6 +99,7 @@ func TestPriorityTagMovesTheDefaultInOneOperation(t *testing.T) {
 // Every way of naming a role the command cannot give is refused, and the
 // refusals name what exists rather than sending somebody to the help.
 func TestPriorityTagRefusesARoleItCannotGive(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	before := cliPriorityList(t, repository).Head
 
@@ -166,6 +168,7 @@ func TestPriorityTagRefusesARoleItCannotGive(t *testing.T) {
 // history, from a peer or a later build, which this build must still fold and
 // describe without pretending it can reverse it.
 func TestPriorityTagInverseOffersNoCommandItCannotName(t *testing.T) {
+	t.Parallel()
 	builtIn := core.BuiltInPriorityVocabulary()
 
 	// The transfer, which is the one case with an inverse: the tag came from

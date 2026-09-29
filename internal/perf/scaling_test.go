@@ -14,6 +14,7 @@ import (
 // Mutation witness: dropping a story point, reordering the matrix, or letting a
 // caller mutate the shared slice would change the measured axes.
 func TestDefaultScalingPointsEnumerateStoryMatrixInDeterministicOrder(t *testing.T) {
+	t.Parallel()
 	want := []ScalingPointSpec{
 		{ActiveTasks: 100, OperationsPerTask: 20},
 		{ActiveTasks: 500, OperationsPerTask: 20},
@@ -31,6 +32,7 @@ func TestDefaultScalingPointsEnumerateStoryMatrixInDeterministicOrder(t *testing
 }
 
 func TestScalingPointNamesRecordBothAxes(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		point ScalingPointSpec
 		want  string
@@ -50,6 +52,7 @@ func TestScalingPointNamesRecordBothAxes(t *testing.T) {
 // zero, would change the representative fixture shape between matrix points and
 // break the documented one-per-twenty ratio.
 func TestScalingPointFixtureSpecScalesTombstonesWithActivePopulation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		point        ScalingPointSpec
 		objectFormat string
@@ -96,6 +99,7 @@ func TestScalingPointFixtureSpecScalesTombstonesWithActivePopulation(t *testing.
 }
 
 func TestScalingPointFixtureSpecRejectsUnmeasurablePoints(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		point        ScalingPointSpec
@@ -134,6 +138,7 @@ func TestScalingPointFixtureSpecRejectsUnmeasurablePoints(t *testing.T) {
 // validation path would leave a story-required scenario unmeasured; reordering
 // would break the stable registry order the harness documents.
 func TestScalingScenarioNamesCoverTheStoryMatrixInRegistryOrder(t *testing.T) {
+	t.Parallel()
 	want := []string{
 		"cli-create",
 		"cli-depend",
@@ -198,6 +203,7 @@ func scalingTestPoint(active, depth int, scenario string, milliseconds float64, 
 // five-fold task-count step with a five-fold history-depth step and report a
 // single number the story explicitly asks to keep separate.
 func TestComputeScalingSlopesSeparatesTaskCountFromHistoryDepth(t *testing.T) {
+	t.Parallel()
 	points := []ScalingPoint{
 		scalingTestPoint(1000, 20, "cli-update", 40, 12),
 		scalingTestPoint(500, 100, "cli-update", 40, 6),
@@ -265,6 +271,7 @@ func TestComputeScalingSlopesSeparatesTaskCountFromHistoryDepth(t *testing.T) {
 // dimension, or a scenario missing from one point would publish infinities,
 // NaNs, or a slope for a comparison that was never measured.
 func TestComputeScalingSlopesHandlesDegenerateInputs(t *testing.T) {
+	t.Parallel()
 	t.Run("single point has no segment", func(t *testing.T) {
 		if slopes := ComputeScalingSlopes([]ScalingPoint{scalingTestPoint(100, 20, "cli-update", 10, 3)}); len(slopes) != 0 {
 			t.Fatalf("single-point slopes = %#v, want none", slopes)
@@ -376,6 +383,7 @@ func scalingReportFixture() ScalingReport {
 // scenarios in measurement order, or trusting a caller-supplied slope list would
 // make two identical measurements produce different reports.
 func TestScalingReportSerializesDeterministicallyRegardlessOfInputOrder(t *testing.T) {
+	t.Parallel()
 	report := scalingReportFixture()
 	shuffled := scalingReportFixture()
 	shuffled.Points = []ScalingPoint{shuffled.Points[1], shuffled.Points[0], shuffled.Points[2]}
@@ -491,6 +499,7 @@ func recordingScalingDependencies(calls *[]scalingRunnerCall) scalingDependencie
 // fixture construction, projection seeding, and cache seeding inside the timed
 // commands.
 func TestRunScalingMatrixDelegatesEveryPointToTheExistingScenarioRunners(t *testing.T) {
+	t.Parallel()
 	var calls []scalingRunnerCall
 	spec := ScalingSpec{
 		WorkbookBinary: "workbook",
@@ -558,6 +567,12 @@ func TestRunScalingMatrixDelegatesEveryPointToTheExistingScenarioRunners(t *test
 		if call.spec.WorkbookBinary != "workbook" || call.spec.Samples != 3 || call.spec.CommandTimeout != 7*time.Second {
 			t.Fatalf("call %d run spec = %#v, want the matrix binary, samples, and timeout", index, call.spec)
 		}
+		// The matrix runs the remote family at every point, so it is exposed to
+		// the fixture-build flake and bounds construction from the same factor
+		// workbook-bench uses. The measured command keeps the matrix timeout.
+		if call.spec.FixtureTimeout != FixtureTimeoutFactor*7*time.Second {
+			t.Fatalf("call %d fixture timeout = %s, want %s", index, call.spec.FixtureTimeout, FixtureTimeoutFactor*7*time.Second)
+		}
 		if call.spec.Fixture.ActiveTasks != want.active || call.spec.Fixture.OperationsPerTask != want.depth || call.spec.Fixture.ObjectFormat != "sha256" {
 			t.Fatalf("call %d fixture = %#v, want %d active tasks at depth %d in sha256", index, call.spec.Fixture, want.active, want.depth)
 		}
@@ -574,6 +589,7 @@ func TestRunScalingMatrixDelegatesEveryPointToTheExistingScenarioRunners(t *test
 // Mutation witness: silently dropping a scenario a runner failed to return
 // would publish an incomplete matrix that still looks like complete evidence.
 func TestRunScalingMatrixRejectsIncompleteScenarioCoverage(t *testing.T) {
+	t.Parallel()
 	dependencies := recordingScalingDependencies(&[]scalingRunnerCall{})
 	dependencies.runValidation = func(_ context.Context, _ RunSpec, _ string, selected []string) ([]ScenarioResult, error) {
 		return []ScenarioResult{{Name: selected[0], Surface: "history-validation", Samples: []Sample{scalingSample(1, 1)}}}, nil
@@ -593,6 +609,7 @@ func TestRunScalingMatrixRejectsIncompleteScenarioCoverage(t *testing.T) {
 }
 
 func TestRunScalingMatrixRejectsUnmeasurableSpecs(t *testing.T) {
+	t.Parallel()
 	base := ScalingSpec{
 		WorkbookBinary: "workbook",
 		ObjectFormat:   "sha1",

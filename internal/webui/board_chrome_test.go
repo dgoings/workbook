@@ -33,6 +33,7 @@ func boardPage(t *testing.T) string {
 // reader can act on, and printing six copies of it cost a whole row of every
 // header for no decision anyone makes from the board.
 func TestHandlerBoardColumnsOmitWorkbookRefPaths(t *testing.T) {
+	t.Parallel()
 	body := boardPage(t)
 	for _, definition := range core.LegacyVocabulary().Definitions() {
 		if want := "refs/workbook/status/" + string(definition.Status); strings.Contains(body, want) {
@@ -59,6 +60,7 @@ func TestHandlerBoardColumnsOmitWorkbookRefPaths(t *testing.T) {
 // carrying nothing here — a card is one link and the card itself takes focus —
 // so the title is plain text that turns blue under the pointer.
 func TestHandlerBoardCardTitlesAreNotUnderlined(t *testing.T) {
+	t.Parallel()
 	body := boardPage(t)
 	for _, fragment := range []string{
 		`.task-card h3 a { color: var(--wb-text); text-decoration: none; }`,
@@ -78,6 +80,7 @@ func TestHandlerBoardCardTitlesAreNotUnderlined(t *testing.T) {
 // width instead and the board scrolls sideways when they do not all fit, which
 // is the same behavior the narrow-screen rules already relied on.
 func TestHandlerBoardColumnsHoldAMinimumWidthAndScroll(t *testing.T) {
+	t.Parallel()
 	body := boardPage(t)
 	for _, fragment := range []string{
 		`--board-column-min: 16rem;`,
@@ -129,6 +132,7 @@ func TestHandlerBoardColumnsHoldAMinimumWidthAndScroll(t *testing.T) {
 // so they widen from the moment the window can afford it and stop at a width a
 // card is still readable at.
 func TestHandlerBoardColumnsGrowBetweenAMinimumAndAMaximum(t *testing.T) {
+	t.Parallel()
 	body := boardPage(t)
 	rule := boardRules(t, body)
 	for _, fragment := range []string{
@@ -174,6 +178,7 @@ func TestHandlerBoardColumnsGrowBetweenAMinimumAndAMaximum(t *testing.T) {
 // the columns wanted, silently. So the assertion is what the children are, not
 // how many of them there are.
 func TestHandlerBoardDrawsOneColumnPerConfiguredStatus(t *testing.T) {
+	t.Parallel()
 	for name, vocabulary := range map[string]core.Vocabulary{
 		"default": core.DefaultVocabulary(),
 		"three":   handlerVocabulary(t),
@@ -405,6 +410,7 @@ func statuslessVocabulary(t *testing.T) core.Vocabulary {
 // could not have levelled the headers anyway: min-height raises a short header,
 // it never pulls the other five up to one that wrapped.
 func TestHandlerBoardColumnHeadersCarryNoInertMinimumHeight(t *testing.T) {
+	t.Parallel()
 	body := boardPage(t)
 	if !strings.Contains(body, `.column__header { padding: .7rem .75rem .6rem;`) {
 		t.Error("the column header rule no longer opens with its padding")
@@ -437,6 +443,7 @@ func filterRowElement(t *testing.T, body string) string {
 // and the board's render reveals it, so a page whose script never ran offers no
 // filters rather than dead ones.
 func TestHandlerDrawsTheDeletedSwitchInTheFilterRow(t *testing.T) {
+	t.Parallel()
 	body := boardPage(t)
 	row := filterRowElement(t, body)
 
@@ -626,6 +633,7 @@ func TestHandlerDrawsTheDeletedSwitchInTheFilterRow(t *testing.T) {
 // back on the one condition that says they are not the board — the row being
 // hidden — so nothing of theirs sits flush against the header.
 func TestHandlerFilterRowDrawsNoRuleAndMainPadsNoTop(t *testing.T) {
+	t.Parallel()
 	body := boardPage(t)
 	if rule := cssRules(t, body, ".filter-row {"); strings.Contains(rule, "border-bottom") {
 		t.Errorf("the filter row still draws a rule under itself: %s", rule)
@@ -677,6 +685,7 @@ func TestHandlerFilterRowDrawsNoRuleAndMainPadsNoTop(t *testing.T) {
 // every class on this row the client hides rather than only for the one that was
 // found missing it.
 func TestHandlerEveryHiddenToggledClassHidesWhenHidden(t *testing.T) {
+	t.Parallel()
 	body := boardPage(t)
 	// Each of these the client hides at some point: the row itself off the board,
 	// the Clear link with nothing to clear, the Key chooser on a one-key project,

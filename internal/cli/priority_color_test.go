@@ -55,6 +55,7 @@ func priorityColorOf(t *testing.T, repository string, priority string) string {
 }
 
 func TestPriorityColorSetsAndClearsTheStoredInk(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	set := cliPriorityColorMutation(t, repository, "priority", "color", "high", "#b42318", "--json")
@@ -94,6 +95,7 @@ func TestPriorityColorSetsAndClearsTheStoredInk(t *testing.T) {
 // data) and the identical check on priority.recolor's own Value in
 // internal/core/configop.go.
 func TestPriorityColorNormalizesAnUppercaseValue(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	mutation := cliPriorityColorMutation(t, repository, "priority", "color", "medium", "#B42318", "--json")
@@ -108,6 +110,7 @@ func TestPriorityColorNormalizesAnUppercaseValue(t *testing.T) {
 // A malformed value is refused before anything is written: the ledger has to
 // still read as though the command never ran.
 func TestPriorityColorRefusesAMalformedValueBeforeWritingAnything(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	before := cliPriorityList(t, repository)
 
@@ -133,6 +136,7 @@ func TestPriorityColorRefusesAMalformedValueBeforeWritingAnything(t *testing.T) 
 
 // The same refusal applies to the JSON surface, and still writes nothing.
 func TestPriorityColorRefusesAMalformedValueInJSONMode(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	before := cliPriorityList(t, repository)
 
@@ -159,6 +163,7 @@ func TestPriorityColorRefusesAMalformedValueInJSONMode(t *testing.T) {
 // canonical value first (TestPriorityColorNormalizesAnUppercaseValue), so it
 // refuses too.
 func TestPriorityColorRefusesSettingTheColorItAlreadyHas(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	cliPriorityColorMutation(t, repository, "priority", "color", "high", "#0f62fe", "--json")
 
@@ -194,6 +199,7 @@ func TestPriorityColorRefusesSettingTheColorItAlreadyHas(t *testing.T) {
 // The other direction that counts as nothing to record: clearing a priority
 // that has no color stored already.
 func TestPriorityColorRefusesClearingAPriorityWithNoColor(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	before := cliPriorityList(t, repository)
 
@@ -339,6 +345,7 @@ func writeForgedConfigCommit(
 // the ledger head and the stored minReader are what a corrupted compatibility
 // promise would actually move.
 func TestPriorityColorNoOpRefusalDoesNotBumpAnUnconfiguredProjectsLedger(t *testing.T) {
+	t.Parallel()
 	repository := legacyDisplayConfiguredRepository(t)
 
 	before := cliGitOutput(t, repository, "rev-parse", "refs/workbook/config")

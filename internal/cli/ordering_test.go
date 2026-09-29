@@ -10,6 +10,7 @@ import (
 )
 
 func TestRunMoveDependFreeAndNext(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	first := createOrderingTask(t, repository, "First", "high")
 	second := createOrderingTask(t, repository, "Second", "high")
@@ -121,6 +122,7 @@ func TestRunMoveDependFreeAndNext(t *testing.T) {
 }
 
 func TestRunOrderingCommandsExposeCoreTargetErrors(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	first := createOrderingTask(t, repository, "First", "high")
 	second := createOrderingTask(t, repository, "Second", "high")
@@ -161,6 +163,7 @@ func TestRunOrderingCommandsExposeCoreTargetErrors(t *testing.T) {
 // everywhere, say — so this test drives both halves against the same deleted
 // task in one place to make that regression visible immediately.
 func TestRunFreeToleratesTombstonedDependencyButDependRefusesOne(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	dependency := createOrderingTask(t, repository, "Dependency", "high")
 	byFullID := createOrderingTask(t, repository, "Freed by full ID", "high")
@@ -246,6 +249,7 @@ func createOrderingTask(t *testing.T, repository, title, priority string) core.T
 }
 
 func TestRunOrderingCommandsRequireTwoIDs(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	for _, command := range []string{"depend", "free"} {
 		t.Run(command, func(t *testing.T) {
@@ -259,6 +263,7 @@ func TestRunOrderingCommandsRequireTwoIDs(t *testing.T) {
 }
 
 func TestRunNextNoEligibleHumanMessage(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "next")
 	if code != 0 {
@@ -270,6 +275,7 @@ func TestRunNextNoEligibleHumanMessage(t *testing.T) {
 }
 
 func TestRunNextLimitOffersTheEligibleSetInOrder(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	low := createOrderingTask(t, repository, "Low", "low")
 	high := createOrderingTask(t, repository, "High", "high")
@@ -364,6 +370,7 @@ func TestRunNextLimitOffersTheEligibleSetInOrder(t *testing.T) {
 }
 
 func TestRunNextLimitWithNothingEligible(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "next", "--limit", "3", "--json")
 	if code != 0 {
@@ -380,6 +387,7 @@ func TestRunNextLimitWithNothingEligible(t *testing.T) {
 }
 
 func TestRunNextLimitRefusals(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	for _, tc := range []struct {
 		name string
@@ -403,6 +411,7 @@ func TestRunNextLimitRefusals(t *testing.T) {
 }
 
 func TestRunOrderingCommandsUseInitializedRepository(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	code, stdout, stderr := run(t, repository, "next", "--json")
 	if code != 3 || stdout != "" {

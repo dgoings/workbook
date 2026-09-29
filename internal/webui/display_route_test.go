@@ -126,6 +126,7 @@ func displayStaleWriteJSON(t *testing.T, state VocabularyState, message string) 
 // for separately, because a second read could be answered from either side of a
 // change and would offer a Save composed against a configuration nobody saw.
 func TestClientConfigRouteDrawsBothSectionsFromOneRead(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runConfigClient(t, "opening the configuration page", vocabulary, "head-1", `
   vocabularyRead = `+configuredVocabularyJSON(t, panelRenamedVocabulary(t), "head-9")+`;
@@ -179,6 +180,7 @@ func TestClientConfigRouteDrawsBothSectionsFromOneRead(t *testing.T) {
 // notice before the save was made, and everything below about what the save says
 // to the board would pass whatever the save said.
 func TestClientConfigPageSavesEverySettingAgainstTheHeadItRead(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	renamed := panelRenamedVocabulary(t)
 	runConfigClient(t, "saving the board settings", vocabulary, "head-1", `
@@ -252,6 +254,7 @@ func TestClientConfigPageSavesEverySettingAgainstTheHeadItRead(t *testing.T) {
 // heading — not the name the board was served with, which is the name the reader
 // has just taken away.
 func TestClientConfigPageClearsEverySetting(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runConfigClient(t, "clearing the board settings", vocabulary, "head-1", `
   vocabularyRead = `+configuredVocabularyJSON(t, panelRenamedVocabulary(t), "head-9")+`;
@@ -296,6 +299,7 @@ func TestClientConfigPageClearsEverySetting(t *testing.T) {
 // never say — so the well only ever writes into the field, and follows it when
 // a complete colour is typed.
 func TestClientConfigPageOffersAColorWellBesideEachColorField(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runConfigClient(t, "picking a colour from the well", vocabulary, "head-1", `
   vocabularyRead = `+configuredVocabularyJSON(t, panelRenamedVocabulary(t), "head-9")+`;
@@ -353,6 +357,7 @@ func TestClientConfigPageOffersAColorWellBesideEachColorField(t *testing.T) {
 // embedding that does not render the attribute — titles itself the way it always
 // did rather than titling itself the empty string.
 func TestClientBoardWithoutAServedNameFallsBackToTheGenericOne(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runClientOverHandler(t, configurableHandler(vocabulary, "head-1", nil),
 		"a page served without a name", "/", `
@@ -376,6 +381,7 @@ delete boardView.dataset.titleSuffix;
 // ones and the page adopts them, and the copy names the configuration rather
 // than the statuses — either half of one ledger may be what moved.
 func TestClientConfigPageStopsAtAStaleDisplaySave(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runConfigClient(t, "a stale save of the board settings", vocabulary, "head-1", `
   vocabularyRead = `+configuredVocabularyJSON(t, panelRenamedVocabulary(t), "head-9")+`;
@@ -409,6 +415,7 @@ func TestClientConfigPageStopsAtAStaleDisplaySave(t *testing.T) {
 // moving the tip out from under it would have it refused as a stale write
 // nothing was actually wrong with.
 func TestClientConfigPageWaitsForPendingBoardChanges(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	task := clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium)
 	task.Head = "head-a"
@@ -471,6 +478,7 @@ func TestClientConfigPageWaitsForPendingBoardChanges(t *testing.T) {
 // served no settings section, and the route is the page it always was rather
 // than a script that fails on markup it was not given.
 func TestClientConfigRouteWorksWithoutTheSettingsSection(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runStatusesClient(t, "a configuration page with no board settings", "/", withoutDisplaySettings,
 		vocabulary, "head-1", nil, `

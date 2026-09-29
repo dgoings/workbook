@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -978,4 +979,85 @@ func TestCommandOutputReapsDescendantOfCommandThatExits(t *testing.T) {
 		t.Fatalf("commandOutput() = %q, %v", output, err)
 	}
 	proctest.RequireDescendantTerminated(t, childPIDPath)
+}
+
+// The run spec every scenario family measures against — cold CLI, warm HTTP,
+// history validation, the watcher, remote sync and projection refresh — bounds
+// fixture construction at perf.FixtureTimeoutFactor times the command timeout and
+// leaves the measured command's timeout exactly as the operator asked. Reusing
+// --timeout for both is what killed a healthy remote fixture build under load.
+//
+// The factor is perf's, not this command's: the scaling matrix inside perf sets
+// its own fixture bound from the same constant, and a second copy here would let
+// the two drift.
+func TestBenchmarkRunSpecBoundsFixtureBuildsBeyondTheCommandTimeout(t *testing.T) {
+	spec := benchmarkRunSpec(options{
+		workbookBinary: "workbook",
+		samples:        3,
+		timeout:        5 * time.Second,
+	}, perf.FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"})
+
+	if spec.CommandTimeout != 5*time.Second {
+		t.Fatalf("command timeout = %s, want the operator's --timeout unchanged", spec.CommandTimeout)
+	}
+	if spec.FixtureTimeout != perf.FixtureTimeoutFactor*5*time.Second {
+		t.Fatalf("fixture timeout = %s, want %s", spec.FixtureTimeout, perf.FixtureTimeoutFactor*5*time.Second)
+	}
+	if spec.FixtureTimeout <= spec.CommandTimeout {
+		t.Fatalf("fixture timeout %s does not exceed the command timeout %s", spec.FixtureTimeout, spec.CommandTimeout)
+	}
+	if spec.WorkbookBinary != "workbook" || spec.Samples != 3 {
+		t.Fatalf("run spec = %#v, want the options carried through", spec)
+	}
+}
+
+// The repository family is the one fixture runBenchmark builds itself, so the run
+// spec alone does not prove it is bounded: it was still on --timeout after every
+// perf runner had moved off it, and it is on the default scenario path. The build
+// is stubbed out, so the assertion is on the deadline the builder is handed rather
+// than on how long anything took.
+func TestRunBenchmarkBoundsTheRepositoryFixtureBuildBeyondTheCommandTimeout(t *testing.T) {
+	const timeout = 3 * time.Second
+	stubbed := errors.New("stubbed repository fixture build")
+	var deadline, observedAt time.Time
+	original := buildRepositoryFixture
+	t.Cleanup(func() { buildRepositoryFixture = original })
+	buildRepositoryFixture = func(ctx context.Context, _ string, _ perf.FixtureSpec) (perf.Fixture, error) {
+		observedAt = time.Now()
+		if got, ok := ctx.Deadline(); ok {
+			deadline = got
+		}
+		return perf.Fixture{}, stubbed
+	}
+
+	startedAt := time.Now()
+	_, err := runBenchmark(context.Background(), options{
+		workbookBinary: buildWorkbookBinary(t),
+		tasks:          10,
+		operations:     2,
+		samples:        1,
+		timeout:        timeout,
+		objectFormat:   "sha1",
+		scenarios:      []string{"sync-unchanged-local-bare"},
+	})
+	if !errors.Is(err, stubbed) {
+		t.Fatalf("runBenchmark error = %v, want the stubbed repository fixture build", err)
+	}
+	if deadline.IsZero() {
+		t.Fatal("repository fixture build ran with no deadline at all")
+	}
+
+	// The deadline was set after startedAt, so a correct bound puts it no earlier
+	// than startedAt plus the whole fixture budget; the measured command's timeout
+	// would put it barely past startedAt. The upper bound is the mirror image and
+	// catches a budget larger than the factor asks for.
+	want := perf.FixtureTimeoutFactor * timeout
+	if deadline.Before(startedAt.Add(want)) {
+		t.Fatalf("repository fixture deadline is %s after the run started, want at least %s",
+			deadline.Sub(startedAt), want)
+	}
+	if deadline.After(observedAt.Add(want)) {
+		t.Fatalf("repository fixture deadline is %s after the build began, want at most %s",
+			deadline.Sub(observedAt), want)
+	}
 }

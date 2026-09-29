@@ -102,6 +102,7 @@ func forgedBlobEntry(t *testing.T, repo *Repository, name, contents string) stri
 // from a newer generation whose tree carries an entry this build does not
 // recognize reads as newer-writer, not as corruption.
 func TestATreeEntryFromANewerGenerationReadsAsNewerWriter(t *testing.T) {
+	t.Parallel()
 	repo, _, config := syncRepositories(t)
 	task := createSyncTask(t, repo, config, "Task from the future")
 	preview := forgedBlobEntry(t, repo, "preview-01K0M6B8A4FTT8C39MXXYTWP01", "a rendering nobody here can read")
@@ -135,6 +136,7 @@ func TestATreeEntryFromANewerGenerationReadsAsNewerWriter(t *testing.T) {
 // The same entry without a marker is exactly what it looks like: a commit this
 // build's own generation cannot explain.
 func TestAnUnrecognizedTreeEntryAtThisGenerationIsCorrupt(t *testing.T) {
+	t.Parallel()
 	repo, _, config := syncRepositories(t)
 	task := createSyncTask(t, repo, config, "Task with a strange tree")
 	preview := forgedBlobEntry(t, repo, "preview-01K0M6B8A4FTT8C39MXXYTWP01", "unexplained")
@@ -152,6 +154,7 @@ func TestAnUnrecognizedTreeEntryAtThisGenerationIsCorrupt(t *testing.T) {
 // A subtree is judged by the same rule as a blob, on both sides of the marker:
 // unrecognized at this generation, left alone above it.
 func TestASubtreeEntryFollowsTheSameGenerationRule(t *testing.T) {
+	t.Parallel()
 	repo, _, config := syncRepositories(t)
 	sameGeneration := createSyncTask(t, repo, config, "Task with a subtree")
 	newerGeneration := createSyncTask(t, repo, config, "Future task with a subtree")
@@ -179,6 +182,7 @@ func TestASubtreeEntryFollowsTheSameGenerationRule(t *testing.T) {
 // cannot find the checkpoint cannot serve the task at all — which is the one
 // thing the contract promises an older clone can still do.
 func TestTheTwoDocumentsAreRequiredAtEveryGeneration(t *testing.T) {
+	t.Parallel()
 	repo, _, config := syncRepositories(t)
 	task := createSyncTask(t, repo, config, "Task missing a document")
 
@@ -207,6 +211,7 @@ func TestTheTwoDocumentsAreRequiredAtEveryGeneration(t *testing.T) {
 // corrupt, silently. The name and the mode are one rule and are checked
 // together, inside the marker gate, so a newer generation is still not judged.
 func TestARecognizedAttachmentEntryMustBeARegularBlob(t *testing.T) {
+	t.Parallel()
 	const name = "attachment-01K0M6B8A4FTT8C39MXXYTWA01"
 	for _, mode := range []struct {
 		name   string
@@ -263,6 +268,7 @@ func TestARecognizedAttachmentEntryMustBeARegularBlob(t *testing.T) {
 // back for `<commit>:state.json` is then not a blob at all; a 100755 entry
 // pointing at a real blob passes every other check and reaches this one alone.
 func TestTheTwoDocumentsMustBeRegularBlobsAtEveryGeneration(t *testing.T) {
+	t.Parallel()
 	for _, generation := range []int{0, forgedFutureGeneration} {
 		t.Run(fmt.Sprintf("generation %d", generation), func(t *testing.T) {
 			repo, _, config := syncRepositories(t)
@@ -297,6 +303,7 @@ func TestTheTwoDocumentsMustBeRegularBlobsAtEveryGeneration(t *testing.T) {
 // data this build did not decode. The same pack at this generation is checked,
 // which is the test beside this one.
 func TestTheAttachmentBlobCheckIsSkippedForANewerGeneration(t *testing.T) {
+	t.Parallel()
 	repo, _, config := syncRepositories(t)
 	task := createSyncTask(t, repo, config, "Task with an attachment")
 	attachment := attachFileToTask(t, repo, config, task.ID, "trace.log", "hello world")
@@ -344,6 +351,7 @@ func TestTheAttachmentBlobCheckIsSkippedForANewerGeneration(t *testing.T) {
 // Keeping the parents makes the tree entry the only variable, and the message
 // assertions say which rule answered.
 func TestTheConfigurationLedgerJudgesItsTreeAfterTheMarker(t *testing.T) {
+	t.Parallel()
 	// An entry the ledger has no name for, at this generation, is corruption —
 	// including an attachment entry, which the shared parser used to accept.
 	t.Run("this generation", func(t *testing.T) {

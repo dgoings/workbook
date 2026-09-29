@@ -12,6 +12,7 @@ import (
 	"net/http"
 	pathpkg "path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -47,6 +48,18 @@ var assets embed.FS
 // and the card the first poll redraws hold the same chips. Every other card fact
 // already arrives on presentation.TaskView for exactly that reason.
 var pageFuncs = template.FuncMap{"cardAssignees": assignmentRow}
+
+// pageTemplate is the board's page template, parsed and escaped once for the
+// process rather than once per NewHandler call.
+//
+// html/template performs its contextual escaping lazily, on the template
+// value's first Execute, and guards that first escape with a mutex; once
+// escaped, a *template.Template is documented safe for concurrent Execute.
+// Sharing this value means every handler's first page render pays that escape
+// exactly once for the whole process instead of once per handler.
+var pageTemplate = sync.OnceValue(func() *template.Template {
+	return template.Must(template.New("index.html").Funcs(pageFuncs).ParseFS(assets, "assets/index.html"))
+})
 
 type TaskLister func(context.Context) ([]core.Task, error)
 
@@ -1461,8 +1474,7 @@ func (handler *handler) vocabulary(request *http.Request) (VocabularyState, *htt
 // without renaming every earlier call, and a named field expresses the same
 // tier by being set or left nil.
 func NewHandler(options Options) http.Handler {
-	page := template.Must(template.New("index.html").Funcs(pageFuncs).ParseFS(assets, "assets/index.html"))
-	handler := &handler{Options: options, page: page, mux: http.NewServeMux()}
+	handler := &handler{Options: options, page: pageTemplate(), mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /config", handler.serveConfig)
 	handler.mux.HandleFunc("GET /tasks/new", handler.serveBoard)

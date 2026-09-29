@@ -9,6 +9,7 @@ import (
 )
 
 func TestShowWithoutHistoryFlagsIsUnchanged(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: making the change log part of ordinary show, which
 	// changes what every existing consumer reads.
 	repository := initializedRepository(t)
@@ -40,6 +41,7 @@ func TestShowWithoutHistoryFlagsIsUnchanged(t *testing.T) {
 }
 
 func TestShowHistoryListsChangesAlongTheCommitChain(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: listing one row per operation rather than per pack, or
 	// losing the field-level detail under each row.
 	repository := initializedRepository(t)
@@ -72,6 +74,7 @@ func TestShowHistoryListsChangesAlongTheCommitChain(t *testing.T) {
 }
 
 func TestShowHistoryWindowsAndReportsWhatItOmitted(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: truncating silently, so a reader cannot tell a short
 	// history from a windowed one.
 	repository := initializedRepository(t)
@@ -101,6 +104,7 @@ func TestShowHistoryWindowsAndReportsWhatItOmitted(t *testing.T) {
 }
 
 func TestShowHistoryNestsTheChangeLogInsideTheTask(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: returning the change log beside the task, which would
 	// make the show envelope two shapes depending on a flag.
 	repository := initializedRepository(t)
@@ -131,6 +135,7 @@ func TestShowHistoryNestsTheChangeLogInsideTheTask(t *testing.T) {
 }
 
 func TestShowCompareDiffsTwoCommitsInTheOrderGiven(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: sorting the two arguments, which would make a comparison
 	// meaningless once a reconciliation detached ULID order from chain position.
 	repository := initializedRepository(t)
@@ -158,6 +163,7 @@ func TestShowCompareDiffsTwoCommitsInTheOrderGiven(t *testing.T) {
 }
 
 func TestShowCompareReportsAnAbsentCommitAsNotFound(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: reporting a retired pre-replay tip as corrupt data, which
 	// tells a caller to repair a repository that is fine.
 	repository := initializedRepository(t)
@@ -178,6 +184,7 @@ func TestShowCompareReportsAnAbsentCommitAsNotFound(t *testing.T) {
 }
 
 func TestShowRejectsHistoryOptionsThatWouldDoNothing(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: accepting a window flag without --history, so a caller who
 	// asked for ten changes silently receives a plain task.
 	repository := initializedRepository(t)
@@ -207,6 +214,7 @@ func TestShowRejectsHistoryOptionsThatWouldDoNothing(t *testing.T) {
 }
 
 func TestShowCompareKeepsJSONModeAfterItsTwoValues(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: a pair option that consumes one argument, leaving the
 	// second commit to be mistaken for the end of the flags and the error
 	// envelope rendered as prose to a machine caller.
@@ -219,6 +227,7 @@ func TestShowCompareKeepsJSONModeAfterItsTwoValues(t *testing.T) {
 }
 
 func TestShowRendersTheDescriptionAsItWasWritten(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: reprinting the description as one collapsed line, or
 	// turning its trailing newline into a blank line that reads as the end of
 	// the field. writeShow is called directly because the shape of the block

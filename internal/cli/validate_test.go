@@ -17,6 +17,7 @@ import (
 )
 
 func TestValidateRejectsPositionalsAndUnknownFlags(t *testing.T) {
+	t.Parallel()
 	// Production mutation: accepting parser leftovers lets validate silently audit
 	// a different scope than the caller requested.
 	repository := initializedRepository(t)
@@ -36,6 +37,7 @@ func TestValidateRejectsPositionalsAndUnknownFlags(t *testing.T) {
 }
 
 func TestValidateJSONReportsFreshCachedAndIncrementalCounts(t *testing.T) {
+	t.Parallel()
 	// Production mutation: ignoring cache boundaries or changed heads makes the
 	// audit replay complete histories and report misleading JSON accounting.
 	repository := initializedRepository(t)
@@ -128,6 +130,7 @@ func TestValidateJSONReportsFreshCachedAndIncrementalCounts(t *testing.T) {
 }
 
 func TestValidateFullBypassesWarmCacheAndChecksCompleteHistory(t *testing.T) {
+	t.Parallel()
 	// Production mutation: always passing false to Validator.Validate makes
 	// --full reuse cache hits instead of auditing every complete history.
 	repository := initializedRepository(t)
@@ -171,6 +174,7 @@ func TestValidateFullBypassesWarmCacheAndChecksCompleteHistory(t *testing.T) {
 }
 
 func TestValidateHumanOutputListsEveryFailureInTaskOrder(t *testing.T) {
+	t.Parallel()
 	// Production mutation: dropping cached failures or iterating a map directly
 	// hides corruption or produces unstable human audit output.
 	t.Run("summary and exact failure", func(t *testing.T) {
@@ -221,6 +225,7 @@ func TestValidateHumanOutputListsEveryFailureInTaskOrder(t *testing.T) {
 }
 
 func TestValidateJSONWritesResultAndErrorOnInvalidHistory(t *testing.T) {
+	t.Parallel()
 	// Production mutation: returning before output loses the machine-readable
 	// failure inventory that callers need despite the nonzero corrupt-data exit.
 	repository := initializedRepository(t)

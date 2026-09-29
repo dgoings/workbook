@@ -88,6 +88,7 @@ func vocabularyMutationResult(t *testing.T) VocabularyMutation {
 // Every mutation answers with the whole vocabulary, in the shape GET
 // /api/vocabulary serves, including the head the client's next change must name.
 func TestHandlerVocabularyMutationsAnswerWithTheWholeVocabulary(t *testing.T) {
+	t.Parallel()
 	result := vocabularyMutationResult(t)
 	for _, test := range []struct {
 		name   string
@@ -141,6 +142,7 @@ func TestHandlerVocabularyMutationsAnswerWithTheWholeVocabulary(t *testing.T) {
 // Each body reaches its capability as the members the contract names, and an
 // omitted member of a status change is different from an emptied one.
 func TestHandlerVocabularyMutationsCarryTheirBodies(t *testing.T) {
+	t.Parallel()
 	result := vocabularyMutationResult(t)
 
 	t.Run("addition", func(t *testing.T) {
@@ -229,6 +231,7 @@ func TestHandlerVocabularyMutationsCarryTheirBodies(t *testing.T) {
 // A change that names no head is refused before anything is asked to apply it,
 // and the refusal names the member that is missing.
 func TestHandlerVocabularyMutationsRequireAnExpectedHead(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		method string
@@ -283,6 +286,7 @@ func TestHandlerVocabularyMutationsRequireAnExpectedHead(t *testing.T) {
 // A stale write is a 409 carrying the stale-write category the client's queue
 // matches on, and the statuses it should recompose the change against.
 func TestHandlerVocabularyMutationsReportStaleWritesWithTheCurrentVocabulary(t *testing.T) {
+	t.Parallel()
 	stale := core.Errorf(core.CategoryStaleWrite,
 		"this project's statuses have changed since head-old; reload and try again")
 	for _, test := range []struct {
@@ -334,6 +338,7 @@ func TestHandlerVocabularyMutationsReportStaleWritesWithTheCurrentVocabulary(t *
 // for the client to re-render, and a body that grew a member for every refusal
 // would train nobody to read it.
 func TestHandlerVocabularyMutationsMapRefusalsToStatuses(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name       string
 		err        error
@@ -370,6 +375,7 @@ func TestHandlerVocabularyMutationsMapRefusalsToStatuses(t *testing.T) {
 // A stale write from a board whose vocabulary cannot be read is still a stale
 // write. The client loses the re-render it would have got, not the refusal.
 func TestHandlerVocabularyStaleWriteSurvivesAnUnreadableVocabulary(t *testing.T) {
+	t.Parallel()
 	handler := NewHandler(Options{
 		Vocabulary: func(context.Context) (VocabularyState, error) {
 			return VocabularyState{}, core.Errorf(core.CategoryCorruptData, "cannot read this project's status configuration")
@@ -398,6 +404,7 @@ func TestHandlerVocabularyStaleWriteSurvivesAnUnreadableVocabulary(t *testing.T)
 // A status change that sets nothing is refused rather than recorded as a commit
 // that did nothing.
 func TestHandlerVocabularyEditRequiresSomethingToChange(t *testing.T) {
+	t.Parallel()
 	recorded := &recordedVocabularyMutations{}
 	handler := vocabularyMutationHandler(t, recorded, vocabularyMutationResult(t), nil)
 	response := requestJSON(t, handler, http.MethodPatch, "/api/vocabulary/statuses/queued",
@@ -412,6 +419,7 @@ func TestHandlerVocabularyEditRequiresSomethingToChange(t *testing.T) {
 
 // A placement that names both neighbours is a request nobody could have meant.
 func TestHandlerVocabularyAdditionTakesOneNeighbour(t *testing.T) {
+	t.Parallel()
 	recorded := &recordedVocabularyMutations{}
 	handler := vocabularyMutationHandler(t, recorded, vocabularyMutationResult(t), nil)
 	response := requestJSON(t, handler, http.MethodPost, "/api/vocabulary/statuses",
@@ -427,6 +435,7 @@ func TestHandlerVocabularyAdditionTakesOneNeighbour(t *testing.T) {
 // A body carrying a member these routes do not have is refused rather than
 // silently ignored, exactly as every other mutation body is.
 func TestHandlerVocabularyMutationsRefuseUnknownMembers(t *testing.T) {
+	t.Parallel()
 	recorded := &recordedVocabularyMutations{}
 	handler := vocabularyMutationHandler(t, recorded, vocabularyMutationResult(t), nil)
 	response := requestJSON(t, handler, http.MethodPost, "/api/vocabulary/statuses",
@@ -442,6 +451,7 @@ func TestHandlerVocabularyMutationsRefuseUnknownMembers(t *testing.T) {
 // A board built without these capabilities says so rather than pretending, the
 // way every route reports a capability it was not given.
 func TestHandlerWithoutVocabularyMutationsReportsThem(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	for _, test := range []struct {
 		method string
@@ -471,6 +481,7 @@ func TestHandlerWithoutVocabularyMutationsReportsThem(t *testing.T) {
 // The routes answer their own methods and refuse the rest, naming what they
 // allow.
 func TestHandlerVocabularyRoutesEnforceTheirMethods(t *testing.T) {
+	t.Parallel()
 	handler := vocabularyMutationHandler(t, &recordedVocabularyMutations{}, vocabularyMutationResult(t), nil)
 	for _, test := range []struct {
 		method string
@@ -497,6 +508,7 @@ func TestHandlerVocabularyRoutesEnforceTheirMethods(t *testing.T) {
 // The read route is untouched by any of this: a board with the four
 // capabilities still serves the same document it always did.
 func TestHandlerServesTheVocabularyThroughTheSameDocument(t *testing.T) {
+	t.Parallel()
 	handler := vocabularyMutationHandler(t, &recordedVocabularyMutations{}, vocabularyMutationResult(t), nil)
 	response := request(t, handler, http.MethodGet, "/api/vocabulary")
 	if response.Code != http.StatusOK {

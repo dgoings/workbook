@@ -26,7 +26,11 @@ import (
 const (
 	invocationExitCode = 2
 	failureExitCode    = 1
-	commandWaitDelay   = 100 * time.Millisecond
+	// commandWaitDelay bounds draining a finished command's output, not the
+	// command. See perf.ReapProcessGroup and internal/perf/command.go's constant
+	// of the same name, which this matches: a tenth of a second is a stopwatch on
+	// the scheduler rather than a guard against an abandoned pipe.
+	commandWaitDelay = 5 * time.Second
 )
 
 type options struct {
@@ -336,6 +340,27 @@ func warnUnknownCommit(stderr io.Writer, environment perf.Environment) {
 	}
 }
 
+// buildRepositoryFixture builds the repository family's fixture. It is a
+// variable so that a test can see the bound runBenchmark puts on it: every other
+// family builds inside internal/perf, where the runners' dependency seams make
+// that observable already, and this is the only fixture the command builds by
+// hand.
+var buildRepositoryFixture = perf.BuildFixture
+
+// benchmarkRunSpec is the one run spec every scenario family measures against.
+// The command timeout is the operator's --timeout unchanged, because that value
+// is what the report calls a timeout; fixture construction, which no report
+// line describes, gets the generous multiple instead.
+func benchmarkRunSpec(options options, fixtureSpec perf.FixtureSpec) perf.RunSpec {
+	return perf.RunSpec{
+		WorkbookBinary: options.workbookBinary,
+		Fixture:        fixtureSpec,
+		Samples:        options.samples,
+		CommandTimeout: options.timeout,
+		FixtureTimeout: perf.FixtureTimeoutFactor * options.timeout,
+	}
+}
+
 func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 	environment, err := benchmarkEnvironment(ctx, options.workbookBinary, options.timeout)
 	if err != nil {
@@ -358,12 +383,7 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 		OperationsPerTask: options.operations,
 		ObjectFormat:      options.objectFormat,
 	}
-	runSpec := perf.RunSpec{
-		WorkbookBinary: options.workbookBinary,
-		Fixture:        fixtureSpec,
-		Samples:        options.samples,
-		CommandTimeout: options.timeout,
-	}
+	runSpec := benchmarkRunSpec(options, fixtureSpec)
 
 	var scenarios []perf.ScenarioResult
 	var repositoryMetrics perf.RepositoryMetrics
@@ -385,8 +405,12 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 		scenarios = append(scenarios, warm...)
 	}
 	if hasRepositoryScenario(options.scenarios) {
-		fixtureContext, cancelFixture := context.WithTimeout(ctx, options.timeout)
-		repositoryFixture, err := perf.BuildFixture(fixtureContext, filepath.Join(fixtureRoot, "repository"), fixtureSpec)
+		// The repository family is the one fixture this command builds itself
+		// rather than through a perf runner, so the bound has to be applied here.
+		// It is the same bound every family gets: the run spec's, never the
+		// measured command's.
+		fixtureContext, cancelFixture := context.WithTimeout(ctx, runSpec.FixtureTimeout)
+		repositoryFixture, err := buildRepositoryFixture(fixtureContext, filepath.Join(fixtureRoot, "repository"), fixtureSpec)
 		cancelFixture()
 		if err != nil {
 			return perf.Report{}, fmt.Errorf("build repository fixture: %w", err)
@@ -464,10 +488,6 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 	}, nil
 }
 
-// storageFixtureTimeoutFactor bounds fixture construction, which is not a
-// measured command, at a generous multiple of the per-command timeout.
-const storageFixtureTimeoutFactor = 20
-
 // runStorageResourceBenchmark measures descriptive storage and peak resource
 // growth at each requested fixture depth. It runs no scenarios, so the report
 // carries an empty scenario list.
@@ -491,7 +511,7 @@ func runStorageResourceBenchmark(ctx context.Context, options options, environme
 		Fixture:         fixtureSpec,
 		OperationDepths: options.storageDepths,
 		CommandTimeout:  options.timeout,
-		FixtureTimeout:  storageFixtureTimeoutFactor * options.timeout,
+		FixtureTimeout:  perf.FixtureTimeoutFactor * options.timeout,
 	})
 	if err != nil {
 		return perf.Report{}, fmt.Errorf("measure storage and peak resources: %w", err)

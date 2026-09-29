@@ -9,15 +9,15 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
-	"github.com/dgoings/workbook/internal/testrepo"
 )
 
 func TestStoreProjectsEveryCommitAnAdvanceCrossed(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: reading only the changed tip, which is complete for
 	// current state and blind to the intermediate packs an operation table
 	// needs; an advance of several commits would project one and lose the rest.
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 
 	store, err := Open(ctx, repository, config)
@@ -50,10 +50,11 @@ func TestStoreProjectsEveryCommitAnAdvanceCrossed(t *testing.T) {
 }
 
 func TestStoreRebuildReprojectsFullHistories(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: rebuilding current state alone, leaving a projection that
 	// can answer show but not show --history.
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 	for index, title := range []string{"Second title", "Third title"} {
 		advanceTaskTitle(t, repository, config, created.ID, title, index)
@@ -77,11 +78,12 @@ func TestStoreRebuildReprojectsFullHistories(t *testing.T) {
 }
 
 func TestStoreReplacesOperationRowsForAReconciledTask(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: upserting a reconciled chain, which strands the rows a
 	// replay dropped and breaks the logical-clock chain a replay from the root
 	// depends on.
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 	for index, title := range []string{"Local first", "Local second"} {
 		advanceTaskTitle(t, repository, config, created.ID, title, index)
@@ -124,10 +126,11 @@ func TestStoreReplacesOperationRowsForAReconciledTask(t *testing.T) {
 }
 
 func TestStoreTaskHistoryFallsBackToGitWhenNoOperationsAreProjected(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: answering with an empty history when the projection holds
 	// no operations for a task, instead of reading the bounded chain from Git.
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 
 	store, err := Open(ctx, repository, config)
@@ -151,11 +154,12 @@ func TestStoreTaskHistoryFallsBackToGitWhenNoOperationsAreProjected(t *testing.T
 }
 
 func TestStoreCommitHistoryFallsBackPerCommitForAParkedTip(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: gating the Git fallback per task. The projection is fed
 	// from refs/workbook/tasks/ only, so a parked pre-replay commit has no row
 	// even when its task is fully projected, and a per-task gate never fires.
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 	advanceTaskTitle(t, repository, config, created.ID, "Local only", 0)
 
@@ -191,10 +195,11 @@ func TestStoreCommitHistoryFallsBackPerCommitForAParkedTip(t *testing.T) {
 }
 
 func TestStoreCommitHistoryReportsARetiredTipAsNotFound(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: reporting a commit this clone no longer retains as
 	// corrupt data rather than as a not-found for that argument.
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 
 	store, err := Open(ctx, repository, config)
@@ -209,10 +214,11 @@ func TestStoreCommitHistoryReportsARetiredTipAsNotFound(t *testing.T) {
 }
 
 func TestStoreProjectsOperationsWrittenThroughAMutation(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: recording a mutation's new state without its operation,
 	// which would leave the change log a step behind every local edit.
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 
 	store, err := Open(ctx, repository, config)
@@ -250,11 +256,12 @@ func TestStoreProjectsOperationsWrittenThroughAMutation(t *testing.T) {
 }
 
 func TestStoreProjectsNothingForATruncatedChain(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: storing the valid prefix of a truncated read, which every
 	// later reader would take for a complete chain instead of being sent to Git
 	// and told where the history stopped.
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 	advanceTaskTitle(t, repository, config, created.ID, "Second title", 0)
 
@@ -317,10 +324,11 @@ func (s truncatingSource) ReadTaskOperations(
 }
 
 func TestStoreDropsIncompleteOperationRowsRatherThanLeavingAHole(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: appending onto a chain whose projected tail is not the
 	// parent, which records a chain with a hole a replay cannot cross.
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 
 	store, err := Open(ctx, repository, config)
@@ -358,11 +366,12 @@ func TestStoreDropsIncompleteOperationRowsRatherThanLeavingAHole(t *testing.T) {
 }
 
 func TestStoreReportsADuplicateOperationIDAsCorruptDataNamingTheTask(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: letting the operations table's primary key reject the row
 	// as an operational cache fault, which tells the user to run `workbook
 	// rebuild` — the one command guaranteed to hit the same wall.
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 	advanceTaskTitle(t, repository, config, created.ID, "Second title", 0)
 
@@ -383,12 +392,13 @@ func TestStoreReportsADuplicateOperationIDAsCorruptDataNamingTheTask(t *testing.
 }
 
 func TestStoreNamesTheOtherTaskWhenAnOperationIDIsRepeatedAcrossTasks(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: blaming the task being projected for a ULID the operations
 	// primary key is global over. The row already holding it can belong to a
 	// different task, and telling somebody to repair the history in front of them
 	// points them at a chain that repeats nothing.
 	ctx := context.Background()
-	repository, config := initializeWorkbook(t, testrepo.New(t))
+	repository, config := initializeWorkbook(t)
 	first := createTask(t, repository, config, "First task")
 	second := createTaskWithIDs(t, repository, config, "Second task",
 		"01K0M6B8A4FTT8C39MXXYTW7E1", "01K0M6B8A4FTT8C39MXXYTW7E2", "01K0M6B8A4FTT8C39MXXYTW7E3")

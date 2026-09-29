@@ -10,6 +10,7 @@ import (
 )
 
 func TestTerminalWidthRejectsNonFileWriters(t *testing.T) {
+	t.Parallel()
 	if width, ok := terminalWidth(&bytes.Buffer{}); ok || width != 0 {
 		t.Fatalf("terminalWidth(buffer) = (%d, %t), want (0, false)", width, ok)
 	}
@@ -21,6 +22,7 @@ func TestTerminalWidthRejectsNonFileWriters(t *testing.T) {
 // the budget that moved the six-column answer would silently re-flow every
 // existing project's board.
 func TestWideBoardMinimumIsAPerColumnBudget(t *testing.T) {
+	t.Parallel()
 	if got, want := wideBoardMinimumFor(6), 140; got != want {
 		t.Fatalf("wideBoardMinimumFor(6) = %d, want the historical %d", got, want)
 	}
@@ -45,6 +47,7 @@ func TestWideBoardMinimumIsAPerColumnBudget(t *testing.T) {
 }
 
 func TestRunBoardDefaultsToNarrowForBufferedOutput(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	tasks := createTerminalTasks(t, repository)
 
@@ -59,6 +62,7 @@ func TestRunBoardDefaultsToNarrowForBufferedOutput(t *testing.T) {
 }
 
 func TestRunBoardHonorsWideAndNarrowOverrides(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	tasks := createTerminalTasks(t, repository)
 
@@ -84,6 +88,7 @@ func TestRunBoardHonorsWideAndNarrowOverrides(t *testing.T) {
 }
 
 func TestRunBoardRejectsConflictingLayoutFlags(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 
 	code, stdout, stderr := run(t, repository, "board", "--wide", "--narrow")
@@ -97,6 +102,7 @@ func TestRunBoardRejectsConflictingLayoutFlags(t *testing.T) {
 }
 
 func TestRunBoardJSONIsCompleteAndUntruncated(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	tasks := createTerminalTasks(t, repository)
 
@@ -123,6 +129,7 @@ func TestRunBoardJSONIsCompleteAndUntruncated(t *testing.T) {
 }
 
 func TestRunListUsesResponsiveRendererWithoutChangingJSON(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	tasks := createTerminalTasks(t, repository)
 

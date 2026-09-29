@@ -536,6 +536,10 @@ func runScalingMatrix(ctx context.Context, spec ScalingSpec, fixtureRoot string,
 			Fixture:        fixture,
 			Samples:        spec.Samples,
 			CommandTimeout: spec.CommandTimeout,
+			// The matrix runs the remote family at every point, so it is exposed
+			// to the same flake, and it bounds its fixture builds from the same
+			// factor the bench command uses.
+			FixtureTimeout: FixtureTimeoutFactor * spec.CommandTimeout,
 		}
 		var measured []ScenarioResult
 		for _, family := range scalingFamilies {

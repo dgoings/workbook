@@ -8,6 +8,7 @@ import (
 // The whole cut decision, exercised the way a workflow makes it: ask for a bump
 // and get back a version, or get back a refusal.
 func TestPlanReleaseResolvesAVersionAfterAPublishedRelease(t *testing.T) {
+	t.Parallel()
 	fakeBin := newFakeReleaseCLI(t)
 	path := writeChangelog(t, changelogForMinor)
 
@@ -27,6 +28,7 @@ func TestPlanReleaseResolvesAVersionAfterAPublishedRelease(t *testing.T) {
 // The failure this whole path exists to catch, reached the way a releaser would
 // actually reach it: retrying a release whose tag survived its failure.
 func TestPlanReleaseRefusesARetryThatWouldStrandTheEntry(t *testing.T) {
+	t.Parallel()
 	fakeBin := newFakeReleaseCLI(t)
 	path := writeChangelog(t, changelogForMinor)
 
@@ -45,6 +47,7 @@ func TestPlanReleaseRefusesARetryThatWouldStrandTheEntry(t *testing.T) {
 
 // A draft is the debris of a failed publication, not a release.
 func TestPlanReleaseTreatsASurvivingDraftAsUnpublished(t *testing.T) {
+	t.Parallel()
 	fakeBin := newFakeReleaseCLI(t)
 	path := writeChangelog(t, changelogForMinor)
 
@@ -61,6 +64,7 @@ func TestPlanReleaseTreatsASurvivingDraftAsUnpublished(t *testing.T) {
 // distance actually travelled would let "patch" plus an exact 1.0.0 skip the
 // changelog entry a major release has to carry.
 func TestPlanReleaseHoldsAnExplicitVersionToTheDistanceItTravels(t *testing.T) {
+	t.Parallel()
 	fakeBin := newFakeReleaseCLI(t)
 	// An entry for 0.5.0 only, so a major release has nothing describing it.
 	path := writeChangelog(t, changelogForMinor)
@@ -79,6 +83,7 @@ func TestPlanReleaseHoldsAnExplicitVersionToTheDistanceItTravels(t *testing.T) {
 
 // A bare patch is the escape hatch, and it has to stay open.
 func TestPlanReleaseCutsAPatchWithNoEntry(t *testing.T) {
+	t.Parallel()
 	fakeBin := newFakeReleaseCLI(t)
 	path := writeChangelog(t, changelogWithoutANewEntry)
 
@@ -95,6 +100,7 @@ func TestPlanReleaseCutsAPatchWithNoEntry(t *testing.T) {
 }
 
 func TestPlanReleaseRequiresABumpOrAVersion(t *testing.T) {
+	t.Parallel()
 	fakeBin := newFakeReleaseCLI(t)
 
 	output, err := runReleaseScriptWithEnvironment(t, "", "plan-release.sh", "",
@@ -112,6 +118,7 @@ func lastLine(output string) string {
 // A pre-release is not a release, so the changelog is not consulted: the
 // Unreleased heading stays where it is and the version still resolves.
 func TestPlanReleaseCutsAPreReleaseWithoutAChangelogEntry(t *testing.T) {
+	t.Parallel()
 	fakeBin := newFakeReleaseCLI(t)
 	path := writeChangelog(t, changelogWithoutANewEntry)
 
@@ -134,6 +141,7 @@ func TestPlanReleaseCutsAPreReleaseWithoutAChangelogEntry(t *testing.T) {
 // skipping pre-releases, would make the release after an rc compute from the
 // rc and demand a changelog entry for a version nobody is cutting.
 func TestPlanReleaseIgnoresPreReleaseTagsWhenPlanningAStableRelease(t *testing.T) {
+	t.Parallel()
 	fakeBin := newFakeReleaseCLI(t)
 	repository := newTaggedRepository(t, "v0.4.1", "v0.5.0-rc1", "v0.5.0-rc2")
 	path := writeChangelog(t, changelogForMinor)
@@ -152,6 +160,7 @@ func TestPlanReleaseIgnoresPreReleaseTagsWhenPlanningAStableRelease(t *testing.T
 // The next rc has to clear the last one, which only discovery over every tag
 // can see.
 func TestPlanReleaseDiscoversTheNewestPreReleaseForTheNextOne(t *testing.T) {
+	t.Parallel()
 	fakeBin := newFakeReleaseCLI(t)
 	repository := newTaggedRepository(t, "v0.4.1", "v0.5.0-rc1", "v0.5.0-rc2")
 	path := writeChangelog(t, changelogWithoutANewEntry)

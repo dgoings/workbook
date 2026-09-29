@@ -70,6 +70,7 @@ func assignedBoardTasks() []core.Task {
 // address and the agent label — and it is derived here rather than by the client,
 // so the two boards and `workbook show` cannot drift.
 func TestTasksDocumentCarriesTheAssignmentsACardDraws(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return assignedBoardTasks(), nil })
 	response := request(t, handler, http.MethodGet, "/api/tasks")
 	if response.Code != http.StatusOK {
@@ -131,6 +132,7 @@ func TestTasksDocumentCarriesTheAssignmentsACardDraws(t *testing.T) {
 // A card is one box in one column, and a task may hold fifty assignments. The row
 // is capped and says how many it left out; the task page prints all of them.
 func TestTasksDocumentCapsTheChipRowACardDraws(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return assignedBoardTasks(), nil })
 	response := request(t, handler, http.MethodGet, "/api/tasks")
 	var document TasksDocument
@@ -158,6 +160,7 @@ func TestTasksDocumentCapsTheChipRowACardDraws(t *testing.T) {
 // The cards the server renders into the page carry the same chips the poll will
 // carry a second later, because one function produced both.
 func TestBoardPageRendersAssigneeChipsOnHeldCardsOnly(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return assignedBoardTasks(), nil })
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -186,6 +189,7 @@ func TestBoardPageRendersAssigneeChipsOnHeldCardsOnly(t *testing.T) {
 // page draws whatever it is as text. The server-rendered half is html/template's
 // escaping; the client half is the case below it.
 func TestBoardPageEscapesHostileAssigneeChips(t *testing.T) {
+	t.Parallel()
 	hostile := `<img src=x onerror=alert(1)>@example.com`
 	task := clientPlacementTask(assignedTaskID, "Held task", core.StatusReady, core.PriorityHigh)
 	task.Assignments = []core.Assignment{heldAssignment(hostile, `"><script>alert(1)</script>`)}
@@ -219,6 +223,7 @@ func cardMarkup(t *testing.T, body, taskID string) string {
 // The client draws the chips it was handed, in the row the server rendered, and
 // draws nothing at all on a card nobody holds.
 func TestHandlerClientDrawsAssigneeChipsFromTheServersDerivation(t *testing.T) {
+	t.Parallel()
 	runBoardClient(t, "assignee chips", assignedBoardTasks(), `
   const held = boardCard(`+strconv.Quote(assignedTaskID)+`);
   const row = findElement(held, (element) => hasDataKey(element, "assignees"));
@@ -251,6 +256,7 @@ func TestHandlerClientDrawsAssigneeChipsFromTheServersDerivation(t *testing.T) {
 // the server's chips are html/template's, the client's are text nodes, and a
 // reader who hard-loads the board must not watch the chips change a second later.
 func TestHandlerClientRedrawsTheServersChipsUnchanged(t *testing.T) {
+	t.Parallel()
 	tasks := assignedBoardTasks()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 	response := request(t, handler, http.MethodGet, "/")
@@ -276,6 +282,7 @@ func TestHandlerClientRedrawsTheServersChipsUnchanged(t *testing.T) {
 // and on no other. The card keeps its node — its focus, its drag state and the
 // scroll anchor under it — and a card nobody holds is not written to at all.
 func TestHandlerClientAddsAChipRowWithoutRebuildingTheCard(t *testing.T) {
+	t.Parallel()
 	tasks := assignedBoardTasks()
 	assigned := make([]core.Task, len(tasks))
 	copy(assigned, tasks)
@@ -318,6 +325,7 @@ func TestHandlerClientAddsAChipRowWithoutRebuildingTheCard(t *testing.T) {
 // in the same order, with nothing added and nothing reserved. This is the height
 // invariant stated as the only thing a fake DOM can state it as.
 func TestHandlerClientLeavesUnheldCardsExactlyAsTheyWere(t *testing.T) {
+	t.Parallel()
 	free := clientPlacementTask(unassignedTaskID, "Free task", core.StatusReady, core.PriorityMedium)
 	free.Description = "Nobody holds this one."
 	free.Labels = []string{"web"}
@@ -335,6 +343,7 @@ func TestHandlerClientLeavesUnheldCardsExactlyAsTheyWere(t *testing.T) {
 
 // Chips are text nodes, whatever the principal contains.
 func TestHandlerClientDrawsHostileAssigneeChipsAsText(t *testing.T) {
+	t.Parallel()
 	hostile := `<img src=x onerror=alert(1)>@example.com`
 	task := clientPlacementTask(assignedTaskID, "Held task", core.StatusReady, core.PriorityHigh)
 	task.Assignments = []core.Assignment{heldAssignment(hostile, `"><script>alert(1)</script>`)}
@@ -380,6 +389,7 @@ function assignmentText(row) {
 // The section names who holds the task, which agent of theirs holds it, when that
 // was recorded, and how long ago — the four things `workbook show` prints.
 func TestHandlerClientDrawsTheAssignmentsSection(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	tasks := []core.Task{assignedBoardTasks()[0]}
 	program := assignmentPageProgram(t, tasks, `
@@ -417,6 +427,7 @@ setTimeout(() => {
 // above the attachments, and an unassign takes it away again; through all of it
 // the form above keeps every word the reader has typed into it.
 func TestHandlerClientFollowsAssignmentsThroughThePoll(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	free := clientPlacementTask(assignedTaskID, "Free task", core.StatusReady, core.PriorityMedium)
 	free.Head = "head-1"
@@ -467,6 +478,7 @@ setTimeout(async () => {
 // A poll that changes nothing about who holds the task writes nothing into the
 // section, so a reader's selection inside a row survives the second.
 func TestHandlerClientWritesNothingIntoAnUnchangedAssignmentsSection(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	tasks := []core.Task{assignedBoardTasks()[0]}
 	program := assignmentPageProgram(t, tasks, `
@@ -493,6 +505,7 @@ setTimeout(async () => {
 
 // A principal and a label reach the section as text, exactly as they reach a chip.
 func TestHandlerClientDrawsHostileAssignmentsAsText(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	hostile := `<img src=x onerror=alert(1)>@example.com`
 	task := clientPlacementTask(assignedTaskID, "Held task", core.StatusReady, core.PriorityHigh)
@@ -524,6 +537,7 @@ setTimeout(() => {
 // assignment made here would ride an unrelated field save, and a save is what
 // this endpoint is for. This is that mapping asserted from the outside.
 func TestUpdateEndpointCarriesNoAssignmentIntent(t *testing.T) {
+	t.Parallel()
 	for _, body := range []string{
 		`{"title":"Renamed","assignments":[{"add":"someone@example.com"}]}`,
 		`{"assign":"someone@example.com"}`,

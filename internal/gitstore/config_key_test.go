@@ -11,6 +11,7 @@ import (
 )
 
 func TestInitWithNoRequestedKeyAdoptsTheExistingOne(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	repo, err := Open(context.Background(), repoDir)
 	if err != nil {
@@ -36,6 +37,7 @@ func TestInitWithNoRequestedKeyAdoptsTheExistingOne(t *testing.T) {
 }
 
 func TestInitWithNoRequestedKeyRefusesToMint(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	repo, err := Open(context.Background(), repoDir)
 	if err != nil {
@@ -54,6 +56,7 @@ func TestInitWithNoRequestedKeyRefusesToMint(t *testing.T) {
 }
 
 func TestHasProjectIdentity(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	repo, err := Open(context.Background(), repoDir)
 	if err != nil {
@@ -79,6 +82,7 @@ func TestHasProjectIdentity(t *testing.T) {
 }
 
 func TestHasProjectIdentityIsTrueForTrackedConfigAlone(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	repo, err := Open(context.Background(), repoDir)
 	if err != nil {
@@ -99,6 +103,7 @@ func TestHasProjectIdentityIsTrueForTrackedConfigAlone(t *testing.T) {
 }
 
 func TestHasProjectIdentityIsTrueForTheCommonProjectGuardAlone(t *testing.T) {
+	t.Parallel()
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -126,6 +131,7 @@ func TestHasProjectIdentityIsTrueForTheCommonProjectGuardAlone(t *testing.T) {
 // "with key AB" here would read as a contradiction to the `Key:` line printed
 // by the very command this sentence tells the reader to run.
 func TestAdoptOriginProjectRefusesAnotherKeyAndNamesTheFoundingOne(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	stale, _ := adoptOrigin(t, "AB")
 
@@ -144,6 +150,7 @@ func TestAdoptOriginProjectRefusesAnotherKeyAndNamesTheFoundingOne(t *testing.T)
 }
 
 func TestAdoptOriginProjectWithNoRequestedKeyJoinsWhateverOriginHas(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	stale, config := adoptOrigin(t, "AB")
 

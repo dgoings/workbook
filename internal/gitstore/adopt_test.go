@@ -61,6 +61,7 @@ func adoptOrigin(t *testing.T, key string) (*Repository, core.ProjectConfig) {
 }
 
 func TestAdoptOriginProjectAdoptsCommittedConfigFromStaleCheckout(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	stale, config := adoptOrigin(t, "WB")
 
@@ -99,6 +100,7 @@ func TestAdoptOriginProjectAdoptsCommittedConfigFromStaleCheckout(t *testing.T) 
 }
 
 func TestAdoptOriginProjectWithoutOriginIsNoOp(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	repo, err := Open(context.Background(), repoDir)
 	if err != nil {
@@ -118,6 +120,7 @@ func TestAdoptOriginProjectWithoutOriginIsNoOp(t *testing.T) {
 }
 
 func TestAdoptOriginProjectEmptyOriginIsNoOp(t *testing.T) {
+	t.Parallel()
 	bare := filepath.Join(t.TempDir(), "origin.git")
 	syncGit(t, t.TempDir(), "init", "--bare", "--quiet", bare)
 	repoDir := testrepo.New(t)
@@ -137,6 +140,7 @@ func TestAdoptOriginProjectEmptyOriginIsNoOp(t *testing.T) {
 }
 
 func TestAdoptOriginProjectUnreachableOriginFails(t *testing.T) {
+	t.Parallel()
 	repoDir := testrepo.New(t)
 	syncGit(t, repoDir, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing.git"))
 	repo, err := Open(context.Background(), repoDir)
@@ -154,6 +158,7 @@ func TestAdoptOriginProjectUnreachableOriginFails(t *testing.T) {
 }
 
 func TestAdoptOriginProjectExistingTrackedConfigIsNoOp(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repoDir := testrepo.New(t)
 	syncGit(t, repoDir, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing.git"))
@@ -176,6 +181,7 @@ func TestAdoptOriginProjectExistingTrackedConfigIsNoOp(t *testing.T) {
 }
 
 func TestAdoptOriginProjectKeyMismatchFails(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	stale, config := adoptOrigin(t, "AB")
 
@@ -195,6 +201,7 @@ func TestAdoptOriginProjectKeyMismatchFails(t *testing.T) {
 }
 
 func TestAdoptOriginProjectTaskRefsWithoutCommittedConfigFails(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	bare := filepath.Join(t.TempDir(), "origin.git")
 	syncGit(t, t.TempDir(), "init", "--bare", "--quiet", bare)

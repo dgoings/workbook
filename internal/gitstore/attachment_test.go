@@ -45,6 +45,7 @@ func attachFileToTask(t *testing.T, repo *Repository, config core.ProjectConfig,
 // The blob an attachment names is in the tree of the commit that added it, and
 // the checkpoint names the blob.
 func TestAnAttachedFileLivesInItsOwnCommitTree(t *testing.T) {
+	t.Parallel()
 	repo, _, config := syncRepositories(t)
 	task := createSyncTask(t, repo, config, "Task with a file")
 	attachment := attachFileToTask(t, repo, config, task.ID, "trace.log", "hello world")
@@ -83,6 +84,7 @@ func TestAnAttachedFileLivesInItsOwnCommitTree(t *testing.T) {
 // task reaches it through the other, and dropping either task's refs leaves the
 // other's attachment readable.
 func TestAnAttachmentIsReachableOnlyThroughItsOwnTaskHistory(t *testing.T) {
+	t.Parallel()
 	repo, _, config := syncRepositories(t)
 	first := createSyncTask(t, repo, config, "First task")
 	second := createSyncTask(t, repo, config, "Second task")
@@ -132,6 +134,7 @@ func TestAnAttachmentIsReachableOnlyThroughItsOwnTaskHistory(t *testing.T) {
 // A commit that names a blob it does not carry is corruption, which is the read
 // path's half of the invariant.
 func TestATaskCommitThatDoesNotCarryItsAttachmentIsCorrupt(t *testing.T) {
+	t.Parallel()
 	repo, _, config := syncRepositories(t)
 	task := createSyncTask(t, repo, config, "Task with a file")
 	attachment := attachFileToTask(t, repo, config, task.ID, "trace.log", "hello world")
@@ -159,6 +162,7 @@ func TestATaskCommitThatDoesNotCarryItsAttachmentIsCorrupt(t *testing.T) {
 // Comments and attachments cross a real remote, in both directions, and the
 // bytes arrive with them.
 func TestCommentsAndAttachmentsSynchronizeInBothDirections(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Shared task")
 	commentOnTask(t, first, config, task.ID, "from the first clone")
@@ -208,6 +212,7 @@ func TestCommentsAndAttachmentsSynchronizeInBothDirections(t *testing.T) {
 // A comment written while offline is replayed onto the fetched tip rather than
 // dropped, and the replayed commit carries the attachment blobs its pack names.
 func TestDivergentCommentsAndAttachmentsAreReplayed(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Divergent thread")
 	publishTaskRefs(t, first)
@@ -284,6 +289,7 @@ func TestDivergentCommentsAndAttachmentsAreReplayed(t *testing.T) {
 
 // A replayed comment must not be mistaken for a pack that changed nothing.
 func TestAReplayedCommentIsNotSkippedAsANoOp(t *testing.T) {
+	t.Parallel()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Comment only")
 	publishTaskRefs(t, first)

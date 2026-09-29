@@ -27,6 +27,7 @@ import (
 // planner: it lands where the board asked for it, derives the label the verb
 // derives, and the CLI reads the result out of the same ledger.
 func TestBoardPriorityAddLandsThroughTheSharedLedger(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	ctx := context.Background()
 	board := openBoardPriorities(t, ctx, repository)
@@ -69,6 +70,7 @@ func TestBoardPriorityAddLandsThroughTheSharedLedger(t *testing.T) {
 // A rename through the board records the verb's pack — the rename, then the
 // relabel the derived-label rule asks for — and the old value forwards.
 func TestBoardPriorityEditRenamesAndRederivesTheLabel(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	ctx := context.Background()
 	board := openBoardPriorities(t, ctx, repository)
@@ -107,6 +109,7 @@ func TestBoardPriorityEditRenamesAndRederivesTheLabel(t *testing.T) {
 // An edit that moves only the label is a relabel, and an edit that moves
 // nothing is refused before anything is authored.
 func TestBoardPriorityEditRelabelsAndRefusesAnEmptyChange(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	ctx := context.Background()
 	board := openBoardPriorities(t, ctx, repository)
@@ -146,6 +149,7 @@ func TestBoardPriorityEditRelabelsAndRefusesAnEmptyChange(t *testing.T) {
 // Removing a priority says what it costs and forwards what it moves, priced by
 // the planner against the very vocabulary the change is authored against.
 func TestBoardPriorityRemovalPricesAndForwardsWhatItMoves(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	first := createOrderingTask(t, repository, "Filed under low", "low")
 	createOrderingTask(t, repository, "Also filed under low", "low")
@@ -174,6 +178,7 @@ func TestBoardPriorityRemovalPricesAndForwardsWhatItMoves(t *testing.T) {
 // Where the tasks go is never guessed. The board names this project's
 // priorities so the retry is one edit away, exactly as the verb's refusal does.
 func TestBoardPriorityRemovalRequiresADestination(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	ctx := context.Background()
 	board := openBoardPriorities(t, ctx, repository)
@@ -199,6 +204,7 @@ func TestBoardPriorityRemovalRequiresADestination(t *testing.T) {
 // A move is the verb's move: one rerank, from the planner that knows how two
 // clones inserting between the same pair still order the same way.
 func TestBoardPriorityMoveReordersThroughThePlanner(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	ctx := context.Background()
 	board := openBoardPriorities(t, ctx, repository)
@@ -249,6 +255,7 @@ func TestBoardPriorityMoveReordersThroughThePlanner(t *testing.T) {
 // A priority has exactly one role, and the fold transfers it: naming a new
 // default records one operation rather than a reconciliation of a tag set.
 func TestBoardPriorityDefaultTransfersInOneOperation(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	ctx := context.Background()
 	board := openBoardPriorities(t, ctx, repository)
@@ -287,6 +294,7 @@ func TestBoardPriorityDefaultTransfersInOneOperation(t *testing.T) {
 // A recolor records the one operation a recolor needs, and the color it records
 // is the canonical reading of what the board sent.
 func TestBoardPriorityRecolorRecordsTheColor(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	ctx := context.Background()
 	board := openBoardPriorities(t, ctx, repository)
@@ -330,6 +338,7 @@ func TestBoardPriorityRecolorRecordsTheColor(t *testing.T) {
 // that swallowed the refusal and answered "saved" would spend that on a change
 // nobody asked for.
 func TestBoardPriorityRecolorRefusesAChangeThatRecordsNothing(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	ctx := context.Background()
 	board := openBoardPriorities(t, ctx, repository)
@@ -377,6 +386,7 @@ func TestBoardPriorityRecolorRefusesAChangeThatRecordsNothing(t *testing.T) {
 // read, authored and written over several Git processes, and a teammate's
 // `workbook priority` fits between any two of them.
 func TestBoardPriorityRefusesAChangeTheLedgerMovedUnderneath(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	ctx := context.Background()
 	board := openBoardPriorities(t, ctx, repository)
@@ -434,6 +444,7 @@ func TestBoardPriorityRefusesAChangeTheLedgerMovedUnderneath(t *testing.T) {
 // The board writes the ledger and never the working tree, and says what the
 // generated file now describes instead.
 func TestBoardPriorityChangeLeavesTheGuidelinesAloneAndSaysSo(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	guidelines := filepath.Join(repository, agentdocs.GuidelinesPath)
 	generated, err := os.ReadFile(guidelines)
@@ -486,6 +497,7 @@ func TestBoardPriorityChangeLeavesTheGuidelinesAloneAndSaysSo(t *testing.T) {
 // every other priority write does by the board's own "never rewrites it"
 // design.
 func TestBoardPriorityRecolorDoesNotCallTheGuidelinesStaleAfterTheProjectMovedItsKey(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	if code, _, stderr := run(t, repository, "key", "add", "NEW", "--current", "--no-sync"); code != 0 {
 		t.Fatalf("key add NEW --current = code %d; stderr = %q", code, stderr)
@@ -514,6 +526,7 @@ func TestBoardPriorityRecolorDoesNotCallTheGuidelinesStaleAfterTheProjectMovedIt
 // every board write, forever, even though the installed file already names
 // the key `key add --current` put there.
 func TestBoardDoesNotCallTheProjectsOwnKeysStaleThroughThePriorityBoard(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	if code, _, stderr := run(t, repository, "key", "add", "NEW", "--current", "--no-sync"); code != 0 {
 		t.Fatalf("key add NEW --current = code %d; stderr = %q", code, stderr)

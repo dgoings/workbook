@@ -23,6 +23,7 @@ import (
 // wiring fails. These are those tests for delete, restore, and history; the
 // dependency pair is covered by TestRunServeMutatesDependenciesThroughWebRoutes.
 func TestRunServeDeletesAndRestoresThroughWebRoutes(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Deleted through the board", "--json")
 	if code != 0 || stderr != "" {
@@ -67,6 +68,7 @@ func TestRunServeDeletesAndRestoresThroughWebRoutes(t *testing.T) {
 // view derives a status lane that reaches back to the task's creation. Only a
 // task with more than ten changes can tell the two wirings apart.
 func TestRunServeReadsWholeTaskHistoryThroughWebRoute(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "History through the board", "--json")
 	if code != 0 || stderr != "" {
@@ -121,6 +123,7 @@ func TestRunServeReadsWholeTaskHistoryThroughWebRoute(t *testing.T) {
 // repository memoizes its vocabulary for one-shot commands. `serve` re-reads it
 // for every mutation for exactly that reason.
 func TestRunServeResolvesTheVocabularyPerRequest(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 
@@ -184,6 +187,7 @@ func TestRunServeResolvesTheVocabularyPerRequest(t *testing.T) {
 // test cannot show either: it holds its own fake, so a body decoded into an
 // input nobody threads through would still pass.
 func TestRunServeRestoresIntoAStatusThroughTheWebRoute(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Dragged out of deleted", "--json")
 	if code != 0 || stderr != "" {

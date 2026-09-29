@@ -46,6 +46,7 @@ func remoteTaskRef(t *testing.T, repository, taskID string) string {
 }
 
 func TestCreatePublishesTheNewTaskRefByDefault(t *testing.T) {
+	t.Parallel()
 	repository, _ := cliSyncRepositories(t)
 
 	code, stdout, stderr := run(t, repository, "create", "Automatically published", "--json")
@@ -70,6 +71,7 @@ func TestCreatePublishesTheNewTaskRefByDefault(t *testing.T) {
 }
 
 func TestNoSyncFlagLeavesTheTaskUnpublished(t *testing.T) {
+	t.Parallel()
 	repository, _ := cliSyncRepositories(t)
 
 	code, stdout, stderr := run(t, repository, "create", "Deliberately local", "--no-sync", "--json")
@@ -87,6 +89,7 @@ func TestNoSyncFlagLeavesTheTaskUnpublished(t *testing.T) {
 }
 
 func TestUpdatePublishesOnlyTheMutatedRef(t *testing.T) {
+	t.Parallel()
 	repository, _ := cliSyncRepositories(t)
 	first := cliCreateTask(t, repository, "First")
 	code, _, stderr := run(t, repository, "create", "Second", "--no-sync", "--json")
@@ -105,6 +108,7 @@ func TestUpdatePublishesOnlyTheMutatedRef(t *testing.T) {
 }
 
 func TestMutationWithoutOriginReportsSkippedAndSucceeds(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	if code, _, stderr := run(t, repository, "setup"); code != 0 {
 		t.Fatalf("setup = code %d, stderr %q", code, stderr)
@@ -124,6 +128,7 @@ func TestMutationWithoutOriginReportsSkippedAndSucceeds(t *testing.T) {
 }
 
 func TestMutationWarnsButSucceedsWhenOriginIsUnreachable(t *testing.T) {
+	t.Parallel()
 	repository, _ := cliSyncRepositories(t)
 	cliGit(t, repository, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
 
@@ -146,6 +151,7 @@ func TestMutationWarnsButSucceedsWhenOriginIsUnreachable(t *testing.T) {
 // A divergence the fetch can replay publishes without asking anything: the
 // local title survives as an operation replayed onto origin's tip.
 func TestDivergentTaskIsReplayedAndPublishedByTheNextMutation(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	code, stdout, stderr := run(t, first, "create", "Contested", "--json")
 	if code != 0 {
@@ -186,6 +192,7 @@ func TestDivergentTaskIsReplayedAndPublishedByTheNextMutation(t *testing.T) {
 // The task the caller named is the one a conflict blocks, and it blocks before
 // anything is written so retrying the same command is the whole resolution.
 func TestConflictOnTheTargetTaskStopsTheMutationWithExitEight(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	code, stdout, stderr := run(t, first, "create", "Described", "--json")
 	if code != 0 {
@@ -235,6 +242,7 @@ func TestConflictOnTheTargetTaskStopsTheMutationWithExitEight(t *testing.T) {
 // Reconciliation is per task, so an unrelated conflict is reported without
 // stopping the command that has nothing to do with it.
 func TestConflictOnAnotherTaskDoesNotStopTheMutation(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	code, stdout, stderr := run(t, first, "create", "Contested", "--json")
 	if code != 0 {
@@ -271,6 +279,7 @@ func TestConflictOnAnotherTaskDoesNotStopTheMutation(t *testing.T) {
 }
 
 func TestNextFetchesWithoutPublishing(t *testing.T) {
+	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	task := cliCreateTask(t, first, "Ready for pickup")
 	if code, _, stderr := run(t, first, "update", task.ID, "--status", "ready", "--json"); code != 0 {

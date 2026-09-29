@@ -78,6 +78,7 @@ func configHead(t *testing.T, repository string) string {
 // A save records what the reader changed, and the command line reads back the
 // same values out of the same ledger.
 func TestBoardRecordsDisplaySettingsThroughTheSharedLedger(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	before := boardDisplayDocument(t, addr)
@@ -152,6 +153,7 @@ func TestBoardRecordsDisplaySettingsThroughTheSharedLedger(t *testing.T) {
 // success, because the reader asked for a configuration and that is the
 // configuration they now have.
 func TestBoardSaveThatChangesNothingMovesNoRef(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 
@@ -195,6 +197,7 @@ func TestBoardSaveThatChangesNothingMovesNoRef(t *testing.T) {
 // two are the same values, and re-recording them would be two operations that
 // say nothing and one marker nobody needed.
 func TestBoardSaveRecordsOnlyWhatMoved(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	unseeded := boardDisplayDocument(t, addr)
@@ -227,6 +230,7 @@ func TestBoardSaveRecordsOnlyWhatMoved(t *testing.T) {
 // told the rule, in the words the command line refuses it in, and nothing is
 // recorded — including the settings of the same save that were fine.
 func TestBoardRefusesADisplayValueTheLedgerCannotStore(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	before := boardDisplayDocument(t, addr)
@@ -296,6 +300,7 @@ func TestBoardRefusesADisplayValueTheLedgerCannotStore(t *testing.T) {
 // it without a refetch. The copy names the configuration rather than the
 // statuses, because either half of one ledger may be what moved.
 func TestBoardAnswersAStaleDisplaySaveWithTheCurrentSettings(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	before := boardDisplayDocument(t, addr)
@@ -351,6 +356,7 @@ func TestBoardAnswersAStaleDisplaySaveWithTheCurrentSettings(t *testing.T) {
 // change made in between is exactly as much a reason to refuse a save as another
 // save would be — and a save moves the head the next status change must name.
 func TestBoardDisplayAndStatusChangesShareOneLedgerTip(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	before := boardVocabularyDocument(t, addr)

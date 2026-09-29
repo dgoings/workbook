@@ -15,6 +15,7 @@ import (
 // checks: the message names the task, says a newer Workbook wrote origin's
 // history, and tells the reader where their unpublished work went.
 func TestRefuseNewerWriterReplayNamesTheTaskAndTheLocalWork(t *testing.T) {
+	t.Parallel()
 	const taskID = "WB-01K0M6B8A4FTT8C39MXXYTW7C2"
 	newer := core.Snapshot{State: core.StateDocument{
 		TaskID:    taskID,

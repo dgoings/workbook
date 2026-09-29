@@ -23,6 +23,7 @@ const boardActorEmail = "workbook@example.test"
 // has to be recorded against the same `user.email` a commit from this worktree
 // carries, or it is an assignment nobody can be held to and nobody may withdraw.
 func TestRunServeAssignsAndWithdrawsThroughWebRoutes(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Assigned through the board", "--json")
 	if code != 0 || stderr != "" {
@@ -156,6 +157,7 @@ func decodeServeAssignment(t *testing.T, body []byte, status int) (core.Task, []
 // here, where a change to either surface fails a test rather than quietly making
 // a paragraph wrong.
 func TestBoardAssignmentSkipsTheClaimGateTheCommandLineTakes(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Held by somebody else", "--json")
 	if code != 0 || stderr != "" {
@@ -216,6 +218,7 @@ func TestBoardAssignmentSkipsTheClaimGateTheCommandLineTakes(t *testing.T) {
 // shape every other removal on this board accepts would be an inconsistency the
 // reference has to apologize for.
 func TestBoardWithdrawalTakesTheBareVerb(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Released bare", "--json")
 	if code != 0 || stderr != "" {

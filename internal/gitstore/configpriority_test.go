@@ -69,6 +69,7 @@ func priorityView(document core.PriorityDocument) configView {
 // Each case below exercises one branch of one classifier through that single
 // entry point, because that is what a replay actually calls.
 func TestClassifyConfigPriorityOperations(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		name      string
 		document  core.PriorityDocument
@@ -289,6 +290,7 @@ func TestClassifyConfigPriorityOperations(t *testing.T) {
 // markPackSubjects already enforces for a status add followed by a relabel in
 // one pack.
 func TestClassifyConfigPriorityOperationIgnoresItsOwnPacksAdd(t *testing.T) {
+	t.Parallel()
 	document := core.PriorityDocument{
 		Priorities: []core.PriorityDefinition{{Priority: core.PriorityMedium, Label: "Medium", Rank: "1"}},
 	}
@@ -307,6 +309,7 @@ func TestClassifyConfigPriorityOperationIgnoresItsOwnPacksAdd(t *testing.T) {
 // sections are independent, mirroring TestClassifyConfigDisplayIgnoresStatusChanges's
 // first half.
 func TestClassifyConfigPriorityIgnoresStatusChanges(t *testing.T) {
+	t.Parallel()
 	document := core.PriorityDocument{
 		Priorities: []core.PriorityDefinition{{Priority: core.PriorityHigh, Label: "High", Rank: "1"}},
 	}
@@ -322,6 +325,7 @@ func TestClassifyConfigPriorityIgnoresStatusChanges(t *testing.T) {
 // reads as configured-nothing, and an edit to an undefined priority is a
 // conflict, not a silent no-op. See priorityDocumentOf.
 func TestClassifyConfigPriorityOperationOnAnUnconfiguredProject(t *testing.T) {
+	t.Parallel()
 	statusOnly := core.ConfigData{Vocabulary: core.DefaultVocabulary().Document()}
 	view := newConfigView(statusOnly, statusOnly)
 	conflict := classifyConfigOperation(view, relabelPriorityOperation(core.PriorityHigh, "Critical"))
@@ -333,6 +337,7 @@ func TestClassifyConfigPriorityOperationOnAnUnconfiguredProject(t *testing.T) {
 // classifyConfigPriorityArity reads the default-tag repair out of the fold's
 // own result, mirroring how classifyConfigArity reads a status role repair.
 func TestClassifyConfigPriorityArity(t *testing.T) {
+	t.Parallel()
 	t.Run("repair moved the default tag by position", func(t *testing.T) {
 		before := core.PriorityDocument{Priorities: []core.PriorityDefinition{
 			{Priority: core.PriorityHigh, Rank: "1"},
@@ -390,6 +395,7 @@ func TestClassifyConfigPriorityArity(t *testing.T) {
 // the second clone's sync reports the conflict rather than silently keeping
 // origin's, mirroring TestConfigSyncReportsDivergentDisplaySettings.
 func TestConfigSyncReportsDivergentPriorityRename(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -446,6 +452,7 @@ func TestConfigSyncReportsDivergentPriorityRename(t *testing.T) {
 // the reported case rather than the silent one classifyConfigPriorityArity's
 // own comment describes.
 func TestConfigSyncReportsPriorityArityRepair(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
@@ -508,6 +515,7 @@ func TestConfigSyncReportsPriorityArityRepair(t *testing.T) {
 // marks every project this build creates — the deliberate trade
 // ConfigPackMinReader's comment describes.
 func TestMintConfigLedgerRecordsBuiltInPriorities(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 
@@ -544,6 +552,7 @@ func TestMintConfigLedgerRecordsBuiltInPriorities(t *testing.T) {
 // produces is marked on its own terms because it, too, now carries a
 // priorities section.
 func TestWriteConfigOperationSeedsGenesisWithBuiltInPriorities(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 
 	result := writeConfig(t, repo, config, configOperations(renameOperation("ready", "todo"))...)
@@ -622,6 +631,7 @@ func writeLegacyConfigGenesis(t *testing.T, repo *Repository, config core.Projec
 // the tasks that were always high/medium/low keep resolving under a section
 // that, until this write, did not exist.
 func TestAppendConfigOperationBackfillsBuiltInPrioritiesOnFirstPriorityChange(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	writeLegacyConfigGenesis(t, repo, config)
 
@@ -662,6 +672,7 @@ func TestAppendConfigOperationBackfillsBuiltInPrioritiesOnFirstPriorityChange(t 
 // own — does not get a second helping of the built-in three merely because
 // another priority.* operation is authored against it.
 func TestAppendConfigOperationDoesNotDuplicateBuiltInsWhenPrioritiesAlreadyConfigured(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 
 	seeded, err := repo.MintConfigLedger(context.Background(), config, core.CryptoULIDSource{})
@@ -702,6 +713,7 @@ func TestAppendConfigOperationDoesNotDuplicateBuiltInsWhenPrioritiesAlreadyConfi
 // priorities section at all — the backfill trigger is priority.* operations
 // only, never widened to "any configuration write."
 func TestAppendConfigOperationStatusChangeLeavesPrioritiesSectionAbsent(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	writeLegacyConfigGenesis(t, repo, config)
 
@@ -730,6 +742,7 @@ func TestAppendConfigOperationStatusChangeLeavesPrioritiesSectionAbsent(t *testi
 // the clone that wrote it — so the project's configuration becomes unfoldable
 // forever. Refusing the write costs the caller one error message.
 func TestAppendConfigOperationRefusesAWriteTheBackfillWouldPushOverTheCeiling(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	writeLegacyConfigGenesis(t, repo, config)
 
@@ -760,6 +773,7 @@ func TestAppendConfigOperationRefusesAWriteTheBackfillWouldPushOverTheCeiling(t 
 // A write that fits once the backfill is counted still goes through, so the
 // check above is a ceiling rather than a new, lower one.
 func TestAppendConfigOperationAcceptsAWriteThatFitsWithTheBackfill(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	writeLegacyConfigGenesis(t, repo, config)
 

@@ -76,6 +76,7 @@ func documentTaskIDs(document TasksDocument) []string {
 // one document, because the column is fed by the same poll as every other
 // column and two reads could only disagree about the moment they took.
 func TestHandlerServesActiveAndDeletedTasksTogether(t *testing.T) {
+	t.Parallel()
 	tasks := deletedColumnTasks()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
@@ -111,6 +112,7 @@ func TestHandlerServesActiveAndDeletedTasksTogether(t *testing.T) {
 // The relationship picker still asks `deleted=true` and the board still asks
 // for nothing, so neither answer may move under them.
 func TestHandlerLeavesTheExistingDeletedFilterUnchanged(t *testing.T) {
+	t.Parallel()
 	tasks := deletedColumnTasks()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
@@ -135,6 +137,7 @@ func TestHandlerLeavesTheExistingDeletedFilterUnchanged(t *testing.T) {
 // mutes — so this pins the order they are written in, which is the only thing
 // deciding which of them wins.
 func TestHandlerStylesTheDeletedColumnAfterTheRulesItOverrides(t *testing.T) {
+	t.Parallel()
 	body := boardPage(t)
 
 	for _, selector := range []string{

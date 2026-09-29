@@ -9,6 +9,7 @@ import (
 )
 
 func TestRunListFindNarrowsByText(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	audit := createOrderingTask(t, repository, "Audit card abilities", "high")
 	perf := createOrderingTask(t, repository, "Performance audit", "low")
@@ -58,6 +59,7 @@ func TestRunListFindNarrowsByText(t *testing.T) {
 // from its beginning only, so a word that happens to occur inside one never
 // drags a task into an answer.
 func TestRunListFindNarrowsByTaskIDPrefix(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	first := createOrderingTask(t, repository, "Audit card abilities", "high")
 	createOrderingTask(t, repository, "Performance audit", "low")
@@ -107,6 +109,7 @@ func TestRunListFindNarrowsByTaskIDPrefix(t *testing.T) {
 }
 
 func TestRunListFindRefusesAnEmptyQuery(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	for _, value := range []string{"", "   "} {
 		code, stdout, stderr := run(t, repository, "list", "--find", value, "--json")

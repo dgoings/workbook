@@ -14,6 +14,7 @@ import (
 )
 
 func TestPromptProjectKeyTakesTheSuggestionOnEnter(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	key, err := promptProjectKey(context.Background(), strings.NewReader("\n"), &out, "ACME")
 	if err != nil {
@@ -28,6 +29,7 @@ func TestPromptProjectKeyTakesTheSuggestionOnEnter(t *testing.T) {
 }
 
 func TestPromptProjectKeyAbortsAtEndOfInput(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	key, err := promptProjectKey(context.Background(), strings.NewReader(""), &out, "ACME")
 	if core.CategoryOf(err) != core.CategoryValidation {
@@ -45,6 +47,7 @@ func TestPromptProjectKeyAbortsAtEndOfInput(t *testing.T) {
 }
 
 func TestPromptProjectKeyUppercasesAndTrimsTheAnswer(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	key, err := promptProjectKey(context.Background(), strings.NewReader("  myapp \n"), &out, "ACME")
 	if err != nil {
@@ -56,6 +59,7 @@ func TestPromptProjectKeyUppercasesAndTrimsTheAnswer(t *testing.T) {
 }
 
 func TestPromptProjectKeyExplainsAndAsksAgain(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	key, err := promptProjectKey(context.Background(), strings.NewReader("1bad\nok\n"), &out, "ACME")
 	if err != nil {
@@ -73,6 +77,7 @@ func TestPromptProjectKeyExplainsAndAsksAgain(t *testing.T) {
 }
 
 func TestPromptProjectKeyAbortsAfterABadAnswerWithNoTrailingNewline(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	key, err := promptProjectKey(context.Background(), strings.NewReader("1bad"), &out, "ACME")
 	if core.CategoryOf(err) != core.CategoryValidation {
@@ -90,6 +95,7 @@ func TestPromptProjectKeyAbortsAfterABadAnswerWithNoTrailingNewline(t *testing.T
 }
 
 func TestPromptProjectKeyAbortsAfterABadAnswerWithATrailingNewline(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	key, err := promptProjectKey(context.Background(), strings.NewReader("1bad\n"), &out, "ACME")
 	if core.CategoryOf(err) != core.CategoryValidation {
@@ -109,6 +115,7 @@ func TestPromptProjectKeyAbortsAfterABadAnswerWithATrailingNewline(t *testing.T)
 // TestPromptProjectKeyStopsWhenTheContextIsCanceled is Ctrl-C at the prompt:
 // the read never finishes, and the prompt has to return anyway.
 func TestPromptProjectKeyStopsWhenTheContextIsCanceled(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	reader, writer := io.Pipe()
@@ -126,7 +133,12 @@ func TestPromptProjectKeyStopsWhenTheContextIsCanceled(t *testing.T) {
 	var err error
 	select {
 	case err = <-done:
-	case <-time.After(5 * time.Second):
+	// Hang guard, not a measurement: the prompt's read is blocked on a pipe
+	// nothing writes to, so a healthy return is immediate, and nothing here
+	// asserts how long it took. A bare whole-tree run keeps every core busy
+	// with other packages' parallel tests, which is all a tight budget here
+	// would measure.
+	case <-time.After(30 * time.Second):
 		t.Fatal("promptProjectKey() did not return on a canceled context")
 	}
 	if err == nil {
@@ -144,6 +156,7 @@ func TestPromptProjectKeyStopsWhenTheContextIsCanceled(t *testing.T) {
 }
 
 func TestPromptProjectKeyGivesUpAfterRepeatedBadAnswers(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	_, err := promptProjectKey(context.Background(), strings.NewReader(strings.Repeat("1\n", projectKeyAttempts+3)), &out, "ACME")
 	if core.CategoryOf(err) != core.CategoryValidation {
@@ -158,18 +171,21 @@ func TestPromptProjectKeyGivesUpAfterRepeatedBadAnswers(t *testing.T) {
 }
 
 func TestInteractiveTerminalIsFalseForBuffers(t *testing.T) {
+	t.Parallel()
 	if interactiveTerminal(strings.NewReader(""), &bytes.Buffer{}) {
 		t.Fatal("interactiveTerminal() = true for a reader and a buffer")
 	}
 }
 
 func TestInteractiveTerminalIsFalseForANilReader(t *testing.T) {
+	t.Parallel()
 	if interactiveTerminal(nil, &bytes.Buffer{}) {
 		t.Fatal("interactiveTerminal() = true for a nil reader")
 	}
 }
 
 func TestSetupDerivesTheKeyFromTheDirectoryWhenNothingAsks(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t, testrepo.WithName("acme-site"))
 
 	// The typed answer proves a piped stdin is never read as a prompt answer.
@@ -194,6 +210,7 @@ func TestSetupDerivesTheKeyFromTheDirectoryWhenNothingAsks(t *testing.T) {
 }
 
 func TestSetupJSONTakesTheDerivedKeyWithoutAsking(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t, testrepo.WithName("my_app"))
 
 	code, stdout, stderr := run(t, repository, "setup", "--no-docs", "--json")
@@ -210,6 +227,7 @@ func TestSetupJSONTakesTheDerivedKeyWithoutAsking(t *testing.T) {
 }
 
 func TestSetupFallsBackToTheDefaultKeyForAMeaninglessDirectory(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t, testrepo.WithName("---"))
 
 	code, stdout, stderr := run(t, repository, "setup", "--no-docs")
@@ -222,6 +240,7 @@ func TestSetupFallsBackToTheDefaultKeyForAMeaninglessDirectory(t *testing.T) {
 }
 
 func TestSetupJoinsAnExistingProjectWithoutNamingItsKey(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	if code, _, stderr := run(t, repository, "setup", "--key", "PROJ", "--no-docs"); code != 0 {
 		t.Fatalf("first setup code = %d, want 0; stderr = %q", code, stderr)
@@ -239,6 +258,7 @@ func TestSetupJoinsAnExistingProjectWithoutNamingItsKey(t *testing.T) {
 }
 
 func TestSetupStillRefusesAKeyThatDisagreesWithTheProject(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 	if code, _, stderr := run(t, repository, "setup", "--key", "PROJ", "--no-docs"); code != 0 {
 		t.Fatalf("first setup code = %d, want 0; stderr = %q", code, stderr)
@@ -254,6 +274,7 @@ func TestSetupStillRefusesAKeyThatDisagreesWithTheProject(t *testing.T) {
 }
 
 func TestSetupRejectsAnExplicitlyEmptyKey(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 
 	code, _, stderr := run(t, repository, "setup", "--key", "", "--no-docs")
@@ -269,6 +290,7 @@ func TestSetupRejectsAnExplicitlyEmptyKey(t *testing.T) {
 }
 
 func TestSetupRejectsAMalformedKeyBeforeTouchingAnything(t *testing.T) {
+	t.Parallel()
 	repository := testrepo.New(t)
 
 	code, _, stderr := run(t, repository, "setup", "--key", "bad key", "--no-docs")

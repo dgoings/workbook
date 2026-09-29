@@ -37,6 +37,7 @@ func appendTraceLines(t *testing.T, path string, lines ...string) {
 // interval, would make the reported per-tick cost include startup and shutdown
 // work that no scheduled tick performs.
 func TestRunWatcherSteadyStateObservesAnIdleControlBesideTheRealisticInterval(t *testing.T) {
+	t.Parallel()
 	var observed []watcherWindowSpec
 	var fixtureRoots []string
 	publishedRoots := []string{}
@@ -150,6 +151,7 @@ func TestRunWatcherSteadyStateObservesAnIdleControlBesideTheRealisticInterval(t 
 // steady window observed no more synchronizations than the idle control measured
 // nothing about ticking, and reporting it would invent evidence.
 func TestRunWatcherSteadyStateRejectsAWindowThatScheduledNoTick(t *testing.T) {
+	t.Parallel()
 	dependencies := watcherDependencies{
 		buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
 			return Fixture{Root: root, TaskIDs: []string{"WB-00"}, ActiveTaskIDs: []string{"WB-00"}}, nil
@@ -175,6 +177,7 @@ func TestRunWatcherSteadyStateRejectsAWindowThatScheduledNoTick(t *testing.T) {
 // TestRunWatcherSteadyStatePropagatesObservationFailures keeps a partial
 // observation from becoming a published number.
 func TestRunWatcherSteadyStatePropagatesObservationFailures(t *testing.T) {
+	t.Parallel()
 	dependencies := watcherDependencies{
 		buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
 			return Fixture{Root: root, TaskIDs: []string{"WB-00"}, ActiveTaskIDs: []string{"WB-00"}}, nil
@@ -267,6 +270,7 @@ func TestObserveWatcherWindowMeasuresARunningDaemon(t *testing.T) {
 // than a command's latency, so it deliberately contributes no row to the
 // scenario table and needs its own section instead.
 func TestReportCarriesTheWatcherBlockInBothOutputs(t *testing.T) {
+	t.Parallel()
 	watcher := &WatcherSteadyStateReport{
 		Format:             WatcherReportFormat,
 		Version:            WatcherReportVersion,
@@ -330,6 +334,7 @@ func TestReportCarriesTheWatcherBlockInBothOutputs(t *testing.T) {
 // to price ticks. A synchronization performs exactly one `git fetch`, so the
 // subcommand tally is what turns a stream of Git processes into a tick count.
 func TestTraceCursorCountsGitSubcommands(t *testing.T) {
+	t.Parallel()
 	path := emptyTraceFile(t)
 	appendTraceLines(t, path,
 		`{"event":"start","argv":["git","fetch","--no-tags","origin"]}`,

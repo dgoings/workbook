@@ -138,6 +138,7 @@ func threadRouteHandler(t *testing.T, calls *threadRouteCalls) http.Handler {
 // client that can draw a task from the poll draws the result of its own change
 // with the same code.
 func TestThreadMutationsAnswerWithTheWholeTask(t *testing.T) {
+	t.Parallel()
 	var calls threadRouteCalls
 	handler := threadRouteHandler(t, &calls)
 
@@ -183,6 +184,7 @@ func TestThreadMutationsAnswerWithTheWholeTask(t *testing.T) {
 // The head a change was composed against travels in the body of every one of
 // them, exactly as it does on the task routes these sit beside.
 func TestThreadMutationsCarryTheHeadTheyWereComposedAgainst(t *testing.T) {
+	t.Parallel()
 	var calls threadRouteCalls
 	handler := threadRouteHandler(t, &calls)
 
@@ -218,6 +220,7 @@ func TestThreadMutationsCarryTheHeadTheyWereComposedAgainst(t *testing.T) {
 // member is optional, so the bare verb is a legal request and keeps meaning
 // what it meant.
 func TestThreadRemovalsAcceptABareVerb(t *testing.T) {
+	t.Parallel()
 	var calls threadRouteCalls
 	handler := threadRouteHandler(t, &calls)
 
@@ -241,6 +244,7 @@ func TestThreadRemovalsAcceptABareVerb(t *testing.T) {
 // A board built without a capability says so, the way every unwired route on
 // this board says so, rather than answering an address it cannot serve.
 func TestThreadRoutesReportTheCapabilitiesTheyWereNotGiven(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return []core.Task{threadRouteTask()}, nil })
 
 	for _, test := range []struct {
@@ -270,6 +274,7 @@ func TestThreadRoutesReportTheCapabilitiesTheyWereNotGiven(t *testing.T) {
 // type: the file name decides through core's table, which is the only rule two
 // clones attaching the same file can agree on.
 func TestAttachmentUploadDecodesItsBytes(t *testing.T) {
+	t.Parallel()
 	var calls threadRouteCalls
 	handler := threadRouteHandler(t, &calls)
 	content := []byte("hello world\x00\xff binary")
@@ -292,6 +297,7 @@ func TestAttachmentUploadDecodesItsBytes(t *testing.T) {
 
 // A link stores nothing and carries no file members.
 func TestAttachmentUploadCarriesALink(t *testing.T) {
+	t.Parallel()
 	var calls threadRouteCalls
 	handler := threadRouteHandler(t, &calls)
 
@@ -310,6 +316,7 @@ func TestAttachmentUploadCarriesALink(t *testing.T) {
 // The two kinds are separate requests, and a body that mixes them is refused
 // rather than read as one of them with the rest ignored.
 func TestAttachmentUploadRefusesABodyThatIsNeitherKind(t *testing.T) {
+	t.Parallel()
 	var calls threadRouteCalls
 	handler := threadRouteHandler(t, &calls)
 	sample := base64.StdEncoding.EncodeToString([]byte("bytes"))
@@ -346,6 +353,7 @@ func TestAttachmentUploadRefusesABodyThatIsNeitherKind(t *testing.T) {
 // attachment can leave a staged Git object behind, and it is refused in core's
 // own words and against core's own number.
 func TestAttachmentUploadRefusesAFileOverTheCeilingBeforeStaging(t *testing.T) {
+	t.Parallel()
 	var calls threadRouteCalls
 	handler := threadRouteHandler(t, &calls)
 	oversized := base64.StdEncoding.EncodeToString(make([]byte, core.MaxAttachmentFileBytes+1))
@@ -374,6 +382,7 @@ func TestAttachmentUploadRefusesAFileOverTheCeilingBeforeStaging(t *testing.T) {
 // refuse the largest attachment this build can store — and the enlarged one
 // still refuses a body that means to keep going.
 func TestAttachmentUploadBodyCeilingAdmitsTheLargestAttachment(t *testing.T) {
+	t.Parallel()
 	var calls threadRouteCalls
 	handler := threadRouteHandler(t, &calls)
 
@@ -409,6 +418,7 @@ func TestAttachmentUploadBodyCeilingAdmitsTheLargestAttachment(t *testing.T) {
 // The ordinary routes keep the ordinary ceiling: widening it for one route must
 // not widen it for the board.
 func TestTheEnlargedBodyCeilingIsTheUploadRoutesAlone(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		path string
 		want int64
@@ -432,6 +442,7 @@ func TestTheEnlargedBodyCeilingIsTheUploadRoutesAlone(t *testing.T) {
 // — every other type core's own table can derive, and every type it cannot —
 // is an opaque download.
 func TestAttachmentDownloadServesOnlyAllowListedImagesInline(t *testing.T) {
+	t.Parallel()
 	// Every extension in core's attachment media table, so that a type added
 	// there is a type this test asks about. The four images are the whole
 	// inline list; the rest are documents, archives and text, every one of
@@ -477,6 +488,7 @@ func TestAttachmentDownloadServesOnlyAllowListedImagesInline(t *testing.T) {
 // A prefix test on "image/" passes every one of the SVG spellings; the list
 // does not.
 func TestAttachmentDownloadNeverServesAScriptableTypeInline(t *testing.T) {
+	t.Parallel()
 	for _, media := range []string{
 		"image/svg+xml", "image/svg", "IMAGE/SVG+XML", " image/svg+xml ",
 		"image/svg+xml; charset=utf-8", "text/html", "application/xhtml+xml",
@@ -495,6 +507,7 @@ func TestAttachmentDownloadNeverServesAScriptableTypeInline(t *testing.T) {
 // board has no authentication and its own page permits inline script, so a
 // document served inline from this origin would be script on it.
 func TestAttachmentDownloadServesHostileContentAsADownload(t *testing.T) {
+	t.Parallel()
 	var calls threadRouteCalls
 	page := []byte(`<script>fetch("/api/tasks",{method:"POST"})</script>`)
 	calls.content = page
@@ -525,6 +538,7 @@ func TestAttachmentDownloadServesHostileContentAsADownload(t *testing.T) {
 // An allow-listed image is served as itself, inline, and still under the
 // attachment's own policy and nosniff.
 func TestAttachmentDownloadServesAnImageInline(t *testing.T) {
+	t.Parallel()
 	var calls threadRouteCalls
 	calls.content = []byte("\x89PNG\r\n\x1a\n")
 	handler := attachmentHandler(t, &calls, core.Attachment{ID: threadRouteAttachOne, AttachmentData: core.AttachmentData{
@@ -556,6 +570,7 @@ func TestAttachmentDownloadServesAnImageInline(t *testing.T) {
 // a NUL in it and nothing else. A name carrying a quote, a newline or a header
 // of its own must not become part of the response's headers.
 func TestAttachmentDownloadFormatsAHostileFileName(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{
 		`"; filename="pwned.html`,
 		"report\r\nSet-Cookie: a=b",
@@ -598,6 +613,7 @@ func TestAttachmentDownloadFormatsAHostileFileName(t *testing.T) {
 // A link holds no bytes. The refusal says so and names the URL, so a client
 // that followed this address is told where the thing actually is.
 func TestAttachmentDownloadRefusesALinkAndNamesIt(t *testing.T) {
+	t.Parallel()
 	var calls threadRouteCalls
 	handler := threadRouteHandler(t, &calls)
 
@@ -623,6 +639,7 @@ func TestAttachmentDownloadRefusesALinkAndNamesIt(t *testing.T) {
 // clone does not hold, are both the not-found answer — the second is what a
 // compacted history will produce.
 func TestAttachmentDownloadAnswersMissingAttachmentsAndBlobsAsNotFound(t *testing.T) {
+	t.Parallel()
 	var calls threadRouteCalls
 	handler := threadRouteHandler(t, &calls)
 	response := request(t, handler, http.MethodGet, "/api/tasks/"+threadRouteTaskID+"/attachments/01K0M6B8A4FTT8C39MXXYTWA99")
@@ -649,6 +666,7 @@ func TestAttachmentDownloadAnswersMissingAttachmentsAndBlobsAsNotFound(t *testin
 // Each address answers the methods it has and refuses the rest by name, which
 // is what the board's method table is for.
 func TestThreadRoutesStateTheMethodsTheyAnswer(t *testing.T) {
+	t.Parallel()
 	var calls threadRouteCalls
 	handler := threadRouteHandler(t, &calls)
 
@@ -677,6 +695,7 @@ func TestThreadRoutesStateTheMethodsTheyAnswer(t *testing.T) {
 
 // A path that is neither shape is not one of these routes.
 func TestThreadRoutesDoNotAnswerADeeperPath(t *testing.T) {
+	t.Parallel()
 	var calls threadRouteCalls
 	handler := threadRouteHandler(t, &calls)
 

@@ -72,6 +72,7 @@ func cliPriorityNames(t *testing.T, repository string) []string {
 // and says so. The flag is the whole difference between "this project chose
 // these" and "nobody has chosen anything yet".
 func TestPriorityListReadsTheBuiltInVocabularyOnALedgerlessProject(t *testing.T) {
+	t.Parallel()
 	repository := preLedgerRepository(t)
 	cliCreateTask(t, repository, "Alpha")
 	cliCreateTask(t, repository, "Beta")
@@ -123,6 +124,7 @@ func TestPriorityListReadsTheBuiltInVocabularyOnALedgerlessProject(t *testing.T)
 // A project minted by this build records the built-in three in its genesis
 // rather than leaning on a fallback, so the same three come back seeded.
 func TestPriorityListReportsTheMintedVocabularyOnAFreshProject(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	cliCreateTask(t, repository, "Alpha")
 
@@ -151,6 +153,7 @@ func TestPriorityListReportsTheMintedVocabularyOnAFreshProject(t *testing.T) {
 // A bare `workbook priority` names its verbs rather than failing silently, and
 // the refusal is derived from the help schema so all nine are always listed.
 func TestPriorityWithoutASubcommandNamesEveryVerb(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "priority")
 	if code != 2 {
@@ -180,6 +183,7 @@ func TestPriorityWithoutASubcommandNamesEveryVerb(t *testing.T) {
 // `priority.untag` operation is untouched — a peer or a later build can still
 // author one, and this build still folds, validates and describes it.
 func TestPriorityDoesNotAcceptUntag(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "priority", "untag", "medium", "--tag", "default")
 	if code != 2 {
@@ -213,6 +217,7 @@ func TestPriorityDoesNotAcceptUntag(t *testing.T) {
 // task's priority and finding a verb family. Naming `workbook show` turns a
 // dead end into the command they wanted.
 func TestPriorityWithATaskReferenceNamesShow(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	task := cliCreateTask(t, repository, "Alpha")
 	code, _, stderr := run(t, repository, "priority", task.ID)
@@ -233,6 +238,7 @@ func TestPriorityWithATaskReferenceNamesShow(t *testing.T) {
 // entry survives would still pass the --help half above, and this is what
 // catches it.
 func TestPriorityDispatchesEveryDeclaredVerb(t *testing.T) {
+	t.Parallel()
 	repository := initializedRepository(t)
 	for _, verb := range prioritySubcommands() {
 		code, stdout, stderr := run(t, repository, "priority", verb, "--help")

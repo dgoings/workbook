@@ -18,6 +18,7 @@ import (
 // and replayed onto another answers a question nobody asked, and tells neither
 // author about it.
 func TestWriteConfigOperationOntoRefusesASupersededTip(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 	first := writeConfig(t, repo, config, configOperations(renameOperation("ready", "todo"))...)
@@ -63,6 +64,7 @@ func TestWriteConfigOperationOntoRefusesASupersededTip(t *testing.T) {
 // recorded a status change, which is what such a project's board reports and
 // what its first change has to be composed against.
 func TestWriteConfigOperationOntoExpectsNoLedgerAsAHead(t *testing.T) {
+	t.Parallel()
 	repo, config := writeRepository(t)
 	ctx := context.Background()
 	if refExists(t, repo, configRef) {

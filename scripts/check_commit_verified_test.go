@@ -16,6 +16,7 @@ func checkRuns(rows ...[3]string) string {
 }
 
 func TestCheckCommitVerifiedAcceptsOnlyACompletelyGreenCommit(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		name         string
 		runs         string
@@ -84,6 +85,7 @@ func TestCheckCommitVerifiedAcceptsOnlyACompletelyGreenCommit(t *testing.T) {
 // platform added to the CI matrix is required here without anyone remembering
 // to update this.
 func TestCheckCommitVerifiedRequiresPlatformsAddedToTheMatrix(t *testing.T) {
+	t.Parallel()
 	fakeBin := newFakeReleaseCLI(t)
 	runs := checkRuns(
 		[3]string{"Verify on ubuntu-24.04", "completed", "success"},
@@ -104,6 +106,7 @@ func TestCheckCommitVerifiedRequiresPlatformsAddedToTheMatrix(t *testing.T) {
 // Production mutation: an unreachable API reported as "not verified" is a
 // nuisance, but reported as "verified" it silently removes the gate.
 func TestCheckCommitVerifiedTreatsAnUnreadableAPIAsAnError(t *testing.T) {
+	t.Parallel()
 	fakeBin := newFakeReleaseCLI(t)
 
 	output, err := runReleaseScriptWithEnvironment(t, "", "check-commit-verified.sh", "",
@@ -120,6 +123,7 @@ func TestCheckCommitVerifiedTreatsAnUnreadableAPIAsAnError(t *testing.T) {
 // Check run names carry spaces, so splitting on whitespace rather than tabs
 // would truncate every name to "Verify" and match nothing.
 func TestCheckCommitVerifiedReadsNamesContainingSpaces(t *testing.T) {
+	t.Parallel()
 	fakeBin := newFakeReleaseCLI(t)
 	runs := checkRuns([3]string{"Verify on ubuntu-24.04", "completed", "success"})
 

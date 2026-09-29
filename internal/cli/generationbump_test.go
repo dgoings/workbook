@@ -189,6 +189,7 @@ func commentThroughTheService(t *testing.T, repository, taskID, body string) cor
 // message rather than with a corruption report, keeps synchronizing everything
 // else, and loses nothing.
 func TestAGenerationZeroReaderRefusesACommentedHistoryAsNewerWriter(t *testing.T) {
+	t.Parallel()
 	binary := buildPatchedGenerationZeroBinary(t)
 	writer, older := cliSyncRepositories(t)
 
@@ -312,6 +313,7 @@ func TestAGenerationZeroReaderRefusesACommentedHistoryAsNewerWriter(t *testing.T
 // type: a generation-zero reader keeps folding everything this build writes
 // that does not use the new semantics.
 func TestAGenerationZeroReaderStillFoldsOrdinaryHistory(t *testing.T) {
+	t.Parallel()
 	binary := buildPatchedGenerationZeroBinary(t)
 	writer, older := cliSyncRepositories(t)
 

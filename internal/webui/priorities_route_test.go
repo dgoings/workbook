@@ -287,6 +287,7 @@ const priorityPanelMarkup = `<div class="admin" data-priority-panel`
 // carries no markup for it at all, so the client has nothing to draw and draws
 // nothing, rather than a heading over a section that could only be refused.
 func TestHandlerConfigCarriesThePrioritiesSectionOnlyWhenItCanChangeThem(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 
@@ -315,6 +316,7 @@ func TestHandlerConfigCarriesThePrioritiesSectionOnlyWhenItCanChangeThem(t *test
 // spelling a status tag as well. The roles come from the section's own
 // attribute, which the server writes from core's list.
 func TestClientScriptNamesNoPriorityRoleOfItsOwn(t *testing.T) {
+	t.Parallel()
 	response := request(t,
 		prioritiesAdministrableHandler(handlerVocabulary(t), configuredPriorities(t), "head-1", nil),
 		http.MethodGet, "/")
@@ -337,6 +339,7 @@ func TestClientScriptNamesNoPriorityRoleOfItsOwn(t *testing.T) {
 // read the statuses come out of, because the two are sections of one ledger and
 // a second read could be answered from either side of a change.
 func TestClientPrioritiesSectionReadsTheProjectsPrioritiesOnEntry(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPriorityPanelClient(t, "opening the priorities section", vocabulary, configuredPriorities(t), "head-1", nil, `
   vocabularyRead = `+priorityVocabularyJSON(t, vocabulary, configuredPriorities(t), "head-9")+`;
@@ -384,6 +387,7 @@ func TestClientPrioritiesSectionReadsTheProjectsPrioritiesOnEntry(t *testing.T) 
 // never made and stamps the marker that parks every teammate on an older build,
 // in exchange for changing nothing.
 func TestClientPrioritiesSectionWritesNothingForAProjectThatConfiguredNone(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	unconfigured := core.PriorityVocabulary{}
 	runPriorityPanelClient(t, "opening the priorities section on an unconfigured project", vocabulary, unconfigured, "head-1", nil, `
@@ -432,6 +436,7 @@ func TestClientPrioritiesSectionWritesNothingForAProjectThatConfiguredNone(t *te
 // Adding a priority names one placement, against the head the section read, and
 // the section redraws itself from the answer wholesale.
 func TestClientPrioritiesSectionAddsAPriorityAgainstTheHeadItRead(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	added, err := core.NewPriorityVocabulary([]core.PriorityDefinition{
@@ -492,6 +497,7 @@ func TestClientPrioritiesSectionAddsAPriorityAgainstTheHeadItRead(t *testing.T) 
 // order: the edit, then the role, addressed at the NEW name and composed against
 // the head the edit answered with.
 func TestClientPrioritiesSectionChainsARenameAndTheDefault(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	runPriorityPanelClient(t, "renaming a priority and taking the default", vocabulary, priorities, "head-7", nil, `
@@ -552,6 +558,7 @@ func TestClientPrioritiesSectionChainsARenameAndTheDefault(t *testing.T) {
 // more; the row it was made on has already been redrawn, so reopening its form
 // offers the operation that did not land and not the one that did.
 func TestClientPrioritiesSectionReportsARenameThatKeptTheDefaultWhereItWas(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	runPriorityPanelClient(t, "half-landing a rename and a default", vocabulary, priorities, "head-7", nil, `
@@ -618,6 +625,7 @@ func TestClientPrioritiesSectionReportsARenameThatKeptTheDefaultWhereItWas(t *te
 // there is no whole-order counterpart for priorities. Up places the priority
 // before the one above it; Down places it after the one below.
 func TestClientPrioritiesSectionReordersByNamingANeighbor(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	moved, err := core.NewPriorityVocabulary([]core.PriorityDefinition{
@@ -679,6 +687,7 @@ func TestClientPrioritiesSectionReordersByNamingANeighbor(t *testing.T) {
 // absence of a whole-order counterpart costs this section nothing: a drag sends
 // the same one PATCH Up and Down send.
 func TestClientPrioritiesSectionReordersByDraggingARow(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	// Dropped on the last row from above, the priority lands after it.
@@ -769,6 +778,7 @@ func TestClientPrioritiesSectionReordersByDraggingARow(t *testing.T) {
 // touched. The statuses' rows are asked the same question by their own rule, so
 // neither list answers for the other's gesture.
 func TestClientPrioritiesSectionLeavesARefusedDropAlone(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	runPriorityPanelClient(t, "a drop the priorities refuse", vocabulary, priorities, "head-7", nil, `
@@ -860,6 +870,7 @@ func TestClientPrioritiesSectionLeavesARefusedDropAlone(t *testing.T) {
 // the priority is the address and the role is the route. The priority that holds
 // it has nothing to offer, because there is no operation that clears the role.
 func TestClientPrioritiesSectionMovesTheDefaultOnItsOwn(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	moved, err := core.NewPriorityVocabulary([]core.PriorityDefinition{
@@ -908,6 +919,7 @@ func TestClientPrioritiesSectionMovesTheDefaultOnItsOwn(t *testing.T) {
 // that moved. Not in claimability — that is a status property, and the number
 // would be zero forever.
 func TestClientPrioritiesSectionRemovesAPriorityIntoAnother(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	shorter, err := core.NewPriorityVocabulary([]core.PriorityDefinition{
@@ -954,6 +966,7 @@ func TestClientPrioritiesSectionRemovesAPriorityIntoAnother(t *testing.T) {
 // exactly as the command would have printed it — including the one this section
 // is built to produce: a Save with nothing in it that reached the server anyway.
 func TestClientPrioritiesSectionQuotesARefusalItDidNotMake(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	runPriorityPanelClient(t, "quoting a refused priority change", vocabulary, priorities, "head-7", nil, `
@@ -986,6 +999,7 @@ func TestClientPrioritiesSectionQuotesARefusalItDidNotMake(t *testing.T) {
 // write nothing was actually wrong with. While it waits, both other sections'
 // controls are disabled too — one ledger, one tip.
 func TestClientPrioritiesSectionWaitsForPendingBoardChanges(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	tasks := []core.Task{
@@ -1061,6 +1075,7 @@ func recoloredPriorities(t *testing.T, color string) core.PriorityVocabulary {
 // serve a form with a field on it that could only ever answer "this board has no
 // such capability", which is the thing the gate exists to prevent.
 func TestHandlerConfigWithholdsThePrioritiesSectionFromABoardThatCannotRecolor(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	options := prioritiesAdministrableOptions(vocabulary, configuredPriorities(t), "head-1", nil)
 	options.RecolorPriority = nil
@@ -1082,6 +1097,7 @@ func TestHandlerConfigWithholdsThePrioritiesSectionFromABoardThatCannotRecolor(t
 // Save reads the field. The color is its own route against its own head, so a
 // Save that only recolors is one request.
 func TestClientPrioritiesSectionSetsThePriorityColor(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	runPriorityPanelClient(t, "recoloring a priority", vocabulary, priorities, "head-7", nil, `
@@ -1147,6 +1163,7 @@ func TestClientPrioritiesSectionSetsThePriorityColor(t *testing.T) {
 // field is sent rather than withheld — a Save that dropped the member would be
 // refused for naming no color at all.
 func TestClientPrioritiesSectionClearsAColorBackToTheOneItsPositionDerives(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	runPriorityPanelClient(t, "clearing a priority's color", vocabulary, priorities, "head-7", nil, `
@@ -1199,6 +1216,7 @@ func TestClientPrioritiesSectionClearsAColorBackToTheOneItsPositionDerives(t *te
 // decides that on the trimmed value — so spaces typed into the empty field of a
 // priority that has no color are not a clearing of nothing, and send nothing.
 func TestClientPrioritiesSectionTreatsABlankColorFieldAsTheClearTheWriterMakesOfIt(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	runPriorityPanelClient(t, "blanking a priority's color", vocabulary, priorities, "head-7", nil, `
@@ -1254,6 +1272,7 @@ func TestClientPrioritiesSectionTreatsABlankColorFieldAsTheClearTheWriterMakesOf
 // sends, and so a differently-cased spelling of the stored color is a change to
 // the form and no change to the ledger.
 func TestClientPrioritiesSectionQuotesTheRefusalOfAColorAPriorityAlreadyHas(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	runPriorityPanelClient(t, "re-sending the color a priority has", vocabulary, priorities, "head-7", nil, `
@@ -1296,6 +1315,7 @@ func TestClientPrioritiesSectionQuotesTheRefusalOfAColorAPriorityAlreadyHas(t *t
 //
 // The sentence is the writer's, because nothing here knows what a color is.
 func TestClientPrioritiesSectionWritesNothingWhenTheColorIsMalformed(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	runPriorityPanelClient(t, "a malformed color beside a rename", vocabulary, priorities, "head-7", nil, `

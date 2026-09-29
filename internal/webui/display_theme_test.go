@@ -53,6 +53,7 @@ func channelDistance(t *testing.T, got, want string) int {
 // lands on that palette. Six units per channel is under a fortieth of the range
 // and below what a reader can pick out of two swatches side by side.
 func TestBoardThemeDerivesTheLegacyFamilyFromItsOwnPrimary(t *testing.T) {
+	t.Parallel()
 	const tolerance = 6
 	color, parsed := parseThemeColor("#2457d6")
 	if !parsed {
@@ -82,6 +83,7 @@ func TestBoardThemeDerivesTheLegacyFamilyFromItsOwnPrimary(t *testing.T) {
 // keeps its board byte-identical to the one it was served before any of this
 // existed.
 func TestBoardThemeIsEmptyForAnUnconfiguredProject(t *testing.T) {
+	t.Parallel()
 	for name, settings := range map[string]core.DisplaySettings{
 		"nothing configured": {},
 		"a name alone":       {Name: "Atlas"},
@@ -95,6 +97,7 @@ func TestBoardThemeIsEmptyForAnUnconfiguredProject(t *testing.T) {
 // Each family is overridden on its own. A project that chose an ink and no
 // accent keeps every blue the stylesheet declares.
 func TestBoardThemeOverridesOnlyTheFamiliesAProjectChose(t *testing.T) {
+	t.Parallel()
 	primary := string(boardTheme(core.DisplaySettings{PrimaryColor: "#1a7f4b"}))
 	if !strings.Contains(primary, "--wb-primary: #1a7f4b;") {
 		t.Errorf("a chosen accent is not the accent: %s", primary)
@@ -115,6 +118,7 @@ func TestBoardThemeOverridesOnlyTheFamiliesAProjectChose(t *testing.T) {
 // overrides, so a property this build derives but the stylesheet no longer reads
 // — or the other way round — is visible rather than silently inert.
 func TestBoardThemeStatesEveryPropertyOfAChosenFamily(t *testing.T) {
+	t.Parallel()
 	theme := string(boardTheme(core.DisplaySettings{PrimaryColor: "#1a7f4b", TextColor: "#3b2a1a"}))
 	if !strings.HasPrefix(theme, ":root { ") || !strings.HasSuffix(theme, " }") {
 		t.Fatalf("the theme is not one :root rule: %s", theme)
@@ -131,6 +135,7 @@ func TestBoardThemeStatesEveryPropertyOfAChosenFamily(t *testing.T) {
 // and re-checked before it is recorded — which is exactly why the fallback is
 // the legacy palette rather than a panic.
 func TestBoardThemeIgnoresAColorItCannotRead(t *testing.T) {
+	t.Parallel()
 	for _, value := range []string{"red", "#abc", "#12345g", "", "#1a7f4b "} {
 		if theme := boardTheme(core.DisplaySettings{PrimaryColor: value}); theme != "" {
 			t.Errorf("%q produced a theme: %s", value, theme)
@@ -172,6 +177,7 @@ var hexColor = regexp.MustCompile(`^#[0-9a-f]{6}$`)
 // lightness, and a lightness has only so much room for chroma. Nothing but the
 // bound stops the conversion putting one channel below zero.
 func TestBoardThemeDerivesAWellFormedColorForEveryAccent(t *testing.T) {
+	t.Parallel()
 	for _, accent := range []string{
 		"#ff0000", "#00ff00", "#0000ff", "#ffff00", "#00ffff", "#ff00ff",
 		"#ffffff", "#000000", "#fffffe", "#010100", "#808080",
@@ -198,6 +204,7 @@ func TestBoardThemeDerivesAWellFormedColorForEveryAccent(t *testing.T) {
 // are declarations a browser drops in silence rather than colours anybody can
 // see are wrong.
 func TestBoardThemeRendersAColorAtAnyLightness(t *testing.T) {
+	t.Parallel()
 	for _, hue := range []float64{0, 60, 123.4, 180, 222.8, 300, 334.7, 359.9} {
 		for _, chroma := range []float64{0, .05, .5, 1, 1.4} {
 			for _, light := range []float64{-0.4, 0, .001, .25, .5, .75, .999, 1, 1.02, 1.5} {
@@ -219,6 +226,7 @@ func TestBoardThemeRendersAColorAtAnyLightness(t *testing.T) {
 // hue produces is not an error — it is a different, plausible-looking family
 // with the wrong colour in it.
 func TestBoardThemeDerivesTheFamilyOfARoseAccent(t *testing.T) {
+	t.Parallel()
 	family := derivedFamily(t, "#d6246f")
 	for property, want := range map[string]string{
 		"--wb-primary":        "#d6246f",
@@ -248,6 +256,7 @@ func TestBoardThemeDerivesTheFamilyOfARoseAccent(t *testing.T) {
 // from white, while white itself derived greys. Chroma is the span, so it goes
 // to zero with the colour and the two families meet.
 func TestBoardThemeApproachesTheGreyFamilyContinuously(t *testing.T) {
+	t.Parallel()
 	for _, pair := range []struct{ near, plain string }{
 		{near: "#fffffe", plain: "#ffffff"},
 		{near: "#010100", plain: "#000000"},
@@ -301,6 +310,7 @@ func channelSpread(t *testing.T, value string) int {
 // A grey has no hue to preserve, and every step of the family is still a grey
 // rather than an accident of the sector arithmetic.
 func TestBoardThemeDerivesAGreyWithoutInventingAHue(t *testing.T) {
+	t.Parallel()
 	theme := string(boardTheme(core.DisplaySettings{PrimaryColor: "#808080"}))
 	color, _ := parseThemeColor("#808080")
 	for _, token := range primaryThemeTokens {

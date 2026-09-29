@@ -12,6 +12,7 @@ import (
 )
 
 func TestReadTaskHistoriesReturnsOnlyUnseenDescendantsInRequestOrder(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: sorting by task ID or including the boundary commit.
 	repository, config := writeRepository(t)
 	first := writeHistoryForTask(t, repository, config, 100, 3)
@@ -60,6 +61,7 @@ func TestReadTaskHistoriesReturnsOnlyUnseenDescendantsInRequestOrder(t *testing.
 }
 
 func TestReadTaskHistoriesRestartsAtRootWhenBoundaryIsUnreachable(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: treating any supplied boundary as reached without proving ancestry.
 	repository, config := writeRepository(t)
 	first := writeHistoryForTask(t, repository, config, 300, 3)
@@ -102,6 +104,7 @@ func TestReadTaskHistoriesRestartsAtRootWhenBoundaryIsUnreachable(t *testing.T) 
 }
 
 func TestReadTaskHistoriesAttributesMalformedCheckpointAndContinuesOtherTasks(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: returning one buried document failure as a shared batch error.
 	repository, config := writeRepository(t)
 	malformedHistory := writeHistoryForTask(t, repository, config, 500, 3)
@@ -194,6 +197,7 @@ func TestReadTaskHistoriesAttributesMalformedCheckpointAndContinuesOtherTasks(t 
 }
 
 func TestReadTaskHistoriesUsesConstantBatchedGitCommands(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: inspecting commits or task histories with per-object Git processes.
 	for _, operationCount := range []int{4, 7} {
 		t.Run(fmt.Sprintf("%d_operations", operationCount), func(t *testing.T) {
@@ -254,6 +258,7 @@ func TestReadTaskHistoriesUsesConstantBatchedGitCommands(t *testing.T) {
 }
 
 func TestReadTaskHistoriesUsesFixedTransportWhenAllTipsFail(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: returning before the empty graph and candidate batch when every tip is invalid.
 	repository, config := writeRepository(t)
 	first := writeHistoryForTask(t, repository, config, 1800, 1)
@@ -286,6 +291,7 @@ func TestReadTaskHistoriesUsesFixedTransportWhenAllTipsFail(t *testing.T) {
 }
 
 func TestReadTaskHistoriesUsesFixedTransportWhenBoundariesEqualHeads(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: skipping the empty candidate batch when every boundary equals its head.
 	repository, config := writeRepository(t)
 	first := writeHistoryForTask(t, repository, config, 2400, 2)
@@ -321,6 +327,7 @@ func TestReadTaskHistoriesUsesFixedTransportWhenBoundariesEqualHeads(t *testing.
 }
 
 func TestReadTaskHistoriesSupportsSHA256ObjectIDs(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: assuming every full Git object ID is exactly 40 hexadecimal characters.
 	repository, config := writeRepositoryWithObjectFormat(t, "sha256")
 	first := writeHistoryForTask(t, repository, config, 2000, 3)
@@ -360,6 +367,7 @@ func TestReadTaskHistoriesSupportsSHA256ObjectIDs(t *testing.T) {
 }
 
 func TestReadTaskHistoriesRejectsInvalidRequestsBeforeTransport(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: allowing duplicate tasks or abbreviated IDs into shared Git transport.
 	repository, config := writeRepository(t)
 	history := writeHistoryForTask(t, repository, config, 2200, 1)
@@ -405,6 +413,7 @@ func TestReadTaskHistoriesRejectsInvalidRequestsBeforeTransport(t *testing.T) {
 }
 
 func TestReadTaskHistoriesStreamDeliversEachTaskContiguouslyOldestFirst(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: buffering every task before delivering any of them, or
 	// repeating the delivered commits in the end record, both of which restore
 	// the whole-corpus residency streaming exists to remove.
@@ -465,6 +474,7 @@ func TestReadTaskHistoriesStreamDeliversEachTaskContiguouslyOldestFirst(t *testi
 }
 
 func TestReadTaskHistoriesStreamReturnsHandlerErrorsUnchangedAndReleasesItsBatch(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: swallowing or rewrapping a handler's error loses the
 	// caller's category, and abandoning the batch process leaks a running Git
 	// child that later reads inherit.
@@ -504,6 +514,7 @@ func TestReadTaskHistoriesStreamReturnsHandlerErrorsUnchangedAndReleasesItsBatch
 }
 
 func TestReadTaskHistoriesStreamHoldsOneCommitNotTheWholeCorpus(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: reading every candidate's objects into a buffer before
 	// the delivery loop and replaying it. Delivery order and handler errors are
 	// identical either way, so only residency separates the two, and buffering
@@ -627,6 +638,7 @@ func TestReadTaskHistoriesStreamHoldsOneCommitNotTheWholeCorpus(t *testing.T) {
 }
 
 func TestWalkCommitChainSizesItsCycleGuardToTheChainNotTheGraph(t *testing.T) {
+	t.Parallel()
 	// Mutation caught: pre-sizing the visited set to the shared parent graph,
 	// which zeroes one slot per corpus commit for every task walked and turns a
 	// linear read into quadratic allocation.

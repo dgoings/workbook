@@ -36,6 +36,7 @@ func ignoredRefLine(ignored gitstore.IgnoredRef) string {
 // a per-line verdict the reader would have to guess which name the deletion
 // command meant, and guessing wrong destroys shared history.
 func TestWriteIgnoredRefsOffersRemovalOnlyForNamesNoProjectCanOwn(t *testing.T) {
+	t.Parallel()
 	junk := gitstore.IgnoredRef{
 		Ref:    "refs/workbook/tasks/EVIL",
 		Reason: "the ref does not name one task",
@@ -113,6 +114,7 @@ func TestWriteIgnoredRefsOffersRemovalOnlyForNamesNoProjectCanOwn(t *testing.T) 
 // and said so only in the JSON envelope. The names travel rather than a count,
 // because a reader can act on a report only if it says which ref it is about.
 func TestWriteSyncReportNamesTheRefsItsFetchIgnored(t *testing.T) {
+	t.Parallel()
 	ignored := gitstore.IgnoredRef{
 		Ref:    "refs/workbook/tasks/EVIL",
 		Reason: "the ref does not name one task",
@@ -139,6 +141,7 @@ func TestWriteSyncReportNamesTheRefsItsFetchIgnored(t *testing.T) {
 // The report is additive: a fetch that skipped nothing must print exactly what
 // it printed before, because a line saying so on every mutation is noise.
 func TestWriteSyncReportStaysOneLineWithoutIgnoredRefs(t *testing.T) {
+	t.Parallel()
 	var output bytes.Buffer
 	writeSyncReport(&output, &syncReport{
 		Enabled: true,
@@ -159,6 +162,7 @@ func TestWriteSyncReportStaysOneLineWithoutIgnoredRefs(t *testing.T) {
 // is a disagreement about where the whole ledger started rather than about
 // one column.
 func TestWriteConfigConflictsNamesTheSubjectItIsAbout(t *testing.T) {
+	t.Parallel()
 	statusConflict := core.ConfigConflict{
 		Type:   core.ConfigConflictStatusRename,
 		Status: core.Status("blocked"),
@@ -212,6 +216,7 @@ func TestWriteConfigConflictsNamesTheSubjectItIsAbout(t *testing.T) {
 // The command names a placeholder, never the ref itself: a ref name is not
 // shell-quoted here, and the reader has to choose which ref they mean anyway.
 func TestWriteIgnoredRefsNeverInterpolatesARefIntoTheCommand(t *testing.T) {
+	t.Parallel()
 	var output bytes.Buffer
 	writeIgnoredRefs(&output, "origin", []gitstore.IgnoredRef{{
 		Ref:    "refs/workbook/tasks/$(rm -rf ~)",

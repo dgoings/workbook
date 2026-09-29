@@ -69,6 +69,7 @@ func runBoardFiltersClient(t *testing.T, purpose, program string) string {
 // the row can hold is read back out of the query, every control in the row states
 // it, and the columns draw only what passes.
 func TestHandlerClientReadsFiltersFromTheAddress(t *testing.T) {
+	t.Parallel()
 	tasks := boardFilterTasks()
 	script := boardFiltersClientScript(t)
 
@@ -102,6 +103,7 @@ setTimeout(async () => {
 // board a link. It replaces the entry rather than pushing one, so Back reaches
 // where the reader came from rather than walking their keystrokes backwards.
 func TestHandlerClientSearchWritesTheAddressWithReplace(t *testing.T) {
+	t.Parallel()
 	tasks := boardFilterTasks()
 	script := boardFiltersClientScript(t)
 
@@ -137,6 +139,7 @@ setTimeout(async () => {
 // carries the search across, and Clear carries the Deleted column across. Each
 // control changes the one thing it is about and states the rest of the address.
 func TestHandlerClientFiltersKeepTheDeletedSwitchAndClearKeepsDeleted(t *testing.T) {
+	t.Parallel()
 	tasks := boardFilterTasks()
 	script := boardFiltersClientScript(t)
 
@@ -168,6 +171,7 @@ setTimeout(async () => {
 // emptied says so rather than looking like a column with nothing in it. Neither
 // reading appears over a board nobody has filtered.
 func TestHandlerClientCountsShowVisibleOverTotalAndNoMatches(t *testing.T) {
+	t.Parallel()
 	audit := clientPlacementTask(filterAuditID, "Audit the ledger", core.StatusReady, core.PriorityHigh)
 	perf := clientPlacementTask(filterPerfID, "Perf sweep", core.StatusReady, core.PriorityMedium)
 	perf.Rank = "2/1"
@@ -230,6 +234,7 @@ setTimeout(async () => {
 // tombstone the search does not match is not drawn, and the column says how many
 // it is holding back.
 func TestHandlerClientDeletedCardsAreFilteredToo(t *testing.T) {
+	t.Parallel()
 	tasks := deletedColumnTasks()
 	script := boardFiltersClientScript(t)
 
@@ -262,6 +267,7 @@ setTimeout(async () => {
 // is the only thing drawing that task, and a search typed over it must not take
 // it off the board under them.
 func TestHandlerClientPendingCreationIsNeverFiltered(t *testing.T) {
+	t.Parallel()
 	script := newTaskClientScript(t, "/tasks/new?status=ready")
 	empty := tasksDocumentJSON(t, nil)
 
@@ -305,6 +311,7 @@ setTimeout(async () => {
 // the board the way the Descriptions setting does, and it is the row that goes
 // rather than each control in it.
 func TestHandlerClientHidesTheFilterRowOffTheBoard(t *testing.T) {
+	t.Parallel()
 	tasks := boardFilterTasks()
 	script := boardFiltersClientScript(t)
 
@@ -447,6 +454,7 @@ function clickOutsideChoosers(element) {
 // filtered board is a link the way a searched one is — and the tick survives the
 // poll a second later, because the menus are drawn in place rather than rebuilt.
 func TestHandlerClientPriorityChooserListsEveryPriorityWithCounts(t *testing.T) {
+	t.Parallel()
 	audit := clientPlacementTask(filterAuditID, "Audit the ledger", core.StatusReady, core.PriorityHigh)
 	perf := clientPlacementTask(filterPerfID, "Perf sweep", core.StatusReady, core.PriorityHigh)
 	perf.Rank = "2/1"
@@ -527,6 +535,7 @@ setTimeout(async () => {
 // reading a reader can act on. A label only a filtered-out card carries says zero
 // and is drawn as the option it is.
 func TestHandlerClientLabelChooserCountsAgainstTheOtherFilters(t *testing.T) {
+	t.Parallel()
 	audit := clientPlacementTask(filterAuditID, "Audit the ledger", core.StatusReady, core.PriorityHigh)
 	audit.Labels = []string{"ledger"}
 	queue := clientPlacementTask(filterQueueID, "Audit the queue", core.StatusReady, core.PriorityHigh)
@@ -584,6 +593,7 @@ setTimeout(async () => {
 // retired keys included and said to be retired — their tasks exist and the chooser
 // is how a reader reaches them.
 func TestHandlerClientKeyChooserHidesWithOneKey(t *testing.T) {
+	t.Parallel()
 	first := clientPlacementTask("AB-01J0000000000000000000FF11", "Audit the ledger", core.StatusReady, core.PriorityHigh)
 	second := clientPlacementTask("CD-01J0000000000000000000FF12", "Rebuild the queue", core.StatusReady, core.PriorityLow)
 	second.Rank = "2/1"
@@ -676,6 +686,7 @@ boardView.dataset.currentKey = ` + strconv.Quote(keys.Current()) + `;
 // Escape with the caret handed back to the button that opened it. A reader who
 // opened one and changed their mind is never left with a list they cannot dismiss.
 func TestHandlerClientOnlyOneChooserIsOpenAndOutsideClickCloses(t *testing.T) {
+	t.Parallel()
 	tasks := boardFilterTasks()
 	script := boardFiltersClientScript(t)
 
@@ -717,6 +728,7 @@ setTimeout(async () => {
 // working down an open list must not have it rebuilt under their finger: the tick
 // they are on keeps the caret, and the menu stays open.
 func TestHandlerClientChooserOptionsSurviveAPollWithFocus(t *testing.T) {
+	t.Parallel()
 	tasks := boardFilterTasks()
 	script := boardFiltersClientScript(t)
 
@@ -747,6 +759,7 @@ setTimeout(async () => {
 // a list standing over it that the reader never opened, and until then the page
 // would be claiming Escape on a route where the relationship combobox wants it.
 func TestHandlerClientClosesAnOpenChooserWhenTheRouteLeavesTheBoard(t *testing.T) {
+	t.Parallel()
 	tasks := boardFilterTasks()
 	script := boardFiltersClientScript(t)
 
@@ -792,6 +805,7 @@ setTimeout(async () => {
 // cards carry none has an empty Labels menu — and an empty menu reads as a menu
 // that failed to draw, which is the one thing it must not be mistaken for.
 func TestHandlerClientLabelChooserSaysSoWhenNothingIsLabelled(t *testing.T) {
+	t.Parallel()
 	audit := clientPlacementTask(filterAuditID, "Audit the ledger", core.StatusReady, core.PriorityHigh)
 	queue := clientPlacementTask(filterQueueID, "Rebuild the queue", core.StatusReady, core.PriorityLow)
 	queue.Rank = "2/1"
@@ -837,6 +851,7 @@ setTimeout(async () => {
 // it assigned — and every other render writes it, which is what keeps the box from
 // standing over a board it is no longer narrowing.
 func TestHandlerClientBackFromASearchEmptiesTheSearchBox(t *testing.T) {
+	t.Parallel()
 	tasks := boardFilterTasks()
 	script := boardFiltersClientScript(t)
 
@@ -870,6 +885,7 @@ setTimeout(async () => {
 // search, so the board draws it where it was put: shownTasks filters what the
 // server has answered for, and a card that still passes is still drawn.
 func TestHandlerClientDropsACardIntoAFilterEmptiedColumn(t *testing.T) {
+	t.Parallel()
 	keeper := clientPlacementTask(filterAuditID, "Keep the audit", core.StatusReady, core.PriorityHigh)
 	keeper.Head = "head-keeper"
 	sweep := clientPlacementTask(filterPerfID, "Sweep the floor", core.StatusInProgress, core.PriorityHigh)
@@ -947,6 +963,7 @@ setTimeout(async () => {
 // still counted by the badge, and still emptying every column, with no row left to
 // untick and nothing on the page saying what was narrowing it.
 func TestHandlerClientKeepsATickedLabelTheBoardStoppedDrawing(t *testing.T) {
+	t.Parallel()
 	active := clientPlacementTask(filterAuditID, "Audit the ledger", core.StatusReady, core.PriorityHigh)
 	active.Labels = []string{"ledger"}
 	doomed := clientPlacementTask(filterQueueID, "Rebuild the queue", core.StatusReady, core.PriorityHigh)
@@ -1019,6 +1036,7 @@ setTimeout(async () => {
 // renamed since the link was sent — and an empty board with an empty menu tells
 // the reader nothing about which word emptied it.
 func TestHandlerClientNamesAnUnknownPriorityInItsChooser(t *testing.T) {
+	t.Parallel()
 	tasks := boardFilterTasks()
 	script := boardFiltersClientScript(t)
 
@@ -1064,6 +1082,7 @@ setTimeout(async () => {
 // reader had the board narrowed down to, so filing a task from a searched board
 // cost them the search.
 func TestHandlerClientSavingATaskLandsOnTheFilteredBoard(t *testing.T) {
+	t.Parallel()
 	existing := clientPlacementTask(filterPerfID, "Perf sweep", core.StatusReady, core.PriorityHigh)
 	existing.Head = "head-1"
 	saved := existing
@@ -1180,6 +1199,7 @@ setTimeout(async () => {
 // asked for — the same rule Save now follows, applied to the control that means
 // "never mind".
 func TestHandlerClientBackFromAPageReturnsToTheFilteredBoard(t *testing.T) {
+	t.Parallel()
 	existing := clientPlacementTask(filterPerfID, "Perf sweep", core.StatusReady, core.PriorityHigh)
 	script := boardFiltersClientScript(t)
 	const backLinkHelper = `
@@ -1265,6 +1285,7 @@ setTimeout(async () => {
 // emptying the board: the union in chooserOptions built the row and the hidden
 // chooser then made it unreachable.
 func TestHandlerClientKeyChooserStaysVisibleWhileAKeyIsTicked(t *testing.T) {
+	t.Parallel()
 	only := clientPlacementTask("WB-01J0000000000000000000FF21", "Audit the ledger", core.StatusReady, core.PriorityHigh)
 	script := boardFiltersClientScript(t)
 
@@ -1336,6 +1357,7 @@ const boardLabelMenuWholeList = "Audit, author, gauge, perf, queue, release"
 // and nothing about it reaches the address — a filtered board is a link, and what
 // somebody typed to find a label in a menu is no part of the board they found.
 func TestHandlerClientLabelMenuNarrowsItsRowsAsTheReaderTypes(t *testing.T) {
+	t.Parallel()
 	script := boardFiltersClientScript(t)
 
 	program := clientDOMHarness("/", tasksDocumentJSON(t, boardLabelMenuTasks())) + script + boardFilterChooserHelpers + `
@@ -1406,6 +1428,7 @@ setTimeout(async () => {
 // row to untick — which is the same defect the union in chooserOptions exists to
 // prevent, arriving by another road.
 func TestHandlerClientLabelMenuAlwaysShowsATickedRow(t *testing.T) {
+	t.Parallel()
 	script := boardFiltersClientScript(t)
 
 	program := clientDOMHarness("/?label=perf", tasksDocumentJSON(t, boardLabelMenuTasks())) + script + boardFilterChooserHelpers + `
@@ -1433,6 +1456,7 @@ setTimeout(async () => {
 // by. Reopening the Labels menu offers the labels the board has rather than the
 // three that a search the reader has since forgotten left standing.
 func TestHandlerClientLabelMenuSearchClearsWhenTheMenuCloses(t *testing.T) {
+	t.Parallel()
 	script := boardFiltersClientScript(t)
 
 	program := clientDOMHarness("/", tasksDocumentJSON(t, boardLabelMenuTasks())) + script + boardFilterChooserHelpers + `
@@ -1496,6 +1520,7 @@ setTimeout(async () => {
 // finds an empty box, is let through, and reaches the handler that closes the menu
 // and hands the caret back to the button.
 func TestHandlerClientEscapeInTheLabelSearchClearsThenCloses(t *testing.T) {
+	t.Parallel()
 	script := boardFiltersClientScript(t)
 
 	program := clientDOMHarness("/", tasksDocumentJSON(t, boardLabelMenuTasks())) + script + boardFilterChooserHelpers + `
@@ -1541,6 +1566,7 @@ setTimeout(async () => {
 // every row, and rows built a moment ago know nothing about what was typed before
 // they existed. So this walks both, and says which is which.
 func TestHandlerClientLabelMenuKeepsItsNarrowingAcrossAPoll(t *testing.T) {
+	t.Parallel()
 	arrival := clientPlacementTask(filterBacklogA, "Gate the tokens", core.StatusReady, core.PriorityHigh)
 	arrival.Rank = "4/1"
 	arrival.Labels = []string{"auth", "stale"}
@@ -1606,6 +1632,7 @@ const (
 // from being a search which matches too much: a fragment out of the middle of a
 // ULID finds nothing, and the key on its own is a word like any other.
 func TestHandlerClientSearchFindsATaskByIDPrefix(t *testing.T) {
+	t.Parallel()
 	notarize := clientPlacementTask(filterNotarizeID, "Notarize macOS builds", core.StatusReady, core.PriorityHigh)
 	notarize.Description = "Staple the ticket."
 	drain := clientPlacementTask(filterDrainID, "Drain the queue", core.StatusReady, core.PriorityLow)
@@ -1676,6 +1703,7 @@ setTimeout(async () => {
 // finds its card. The keys the search reads are every key the project has, which
 // is the same list the Key chooser draws its rows from.
 func TestHandlerClientSearchFindsATaskUnderARetiredKeyByIDPrefix(t *testing.T) {
+	t.Parallel()
 	notarize := clientPlacementTask(filterNotarizeID, "Notarize macOS builds", core.StatusReady, core.PriorityHigh)
 	retired := clientPlacementTask(filterRetiredID, "Drain the queue", core.StatusReady, core.PriorityLow)
 	retired.Rank = "2/1"
