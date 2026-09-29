@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -15,12 +16,12 @@ import (
 // so each gets the process to itself while it calls t.Setenv, which panics
 // if the calling test or an ancestor has called t.Parallel.
 //
-//	TestManagedPrePushHookPublishesOnlyOriginAndHonorsRecursionGuard — hooks_test.go:91
-//	TestManagedPrePushHookBlocksPushWhenWorkbookPushFails — hooks_test.go:130
-//	TestOpenSpawnsOneGitProcessForRootAndCommonDir — repository_test.go:164
-//	TestOpenFromLinkedWorktreeSpawnsOneGitProcess — repository_test.go:190
-//	TestGitSeparatesStdoutAndStderrAndSetsReplaceProtection — repository_test.go:326
-//	TestPushBypassesManagedHookRecursion — sync_test.go:974
+//	TestManagedPrePushHookPublishesOnlyOriginAndHonorsRecursionGuard — hooks_test.go
+//	TestManagedPrePushHookBlocksPushWhenWorkbookPushFails — hooks_test.go
+//	TestOpenSpawnsOneGitProcessForRootAndCommonDir — repository_test.go
+//	TestOpenFromLinkedWorktreeSpawnsOneGitProcess — repository_test.go
+//	TestGitSeparatesStdoutAndStderrAndSetsReplaceProtection — repository_test.go
+//	TestPushBypassesManagedHookRecursion — sync_test.go
 //
 // The first two and the last set PATH and WORKBOOK_TEST_LOG to put a fake
 // workbook ahead of the real one for the managed pre-push hook to resolve.
@@ -97,7 +98,13 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
-	os.RemoveAll(home)
+	// Report rather than discard: a directory under this home that a child
+	// process left read-only does not come away with os.RemoveAll, and a
+	// discarded error there is a leak nobody sees. scripts/main_test.go carries
+	// the occurrence that made the case.
+	if err := os.RemoveAll(home); err != nil {
+		fmt.Fprintf(os.Stderr, "remove isolated home %s: %v\n", home, err)
+	}
 	os.Exit(code)
 }
 

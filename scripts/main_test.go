@@ -76,7 +76,17 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
-	os.RemoveAll(home)
+	// Report rather than discard. This removal can fail: the Go module cache
+	// creates its directories read-only, which is the whole reason
+	// `go clean -modcache` exists, so a home that ever held one does not come
+	// away with os.RemoveAll. That happened on this package before
+	// pinGoToolchainPaths landed, and because the error went nowhere the suite
+	// reported success and left a quarter of a gigabyte behind each run — 4.2 GB
+	// in total before anybody noticed. One line on stderr is what turns the next
+	// occurrence into something a reader sees.
+	if err := os.RemoveAll(home); err != nil {
+		fmt.Fprintf(os.Stderr, "remove isolated home %s: %v\n", home, err)
+	}
 	os.Exit(code)
 }
 
@@ -139,11 +149,18 @@ func goToolchainValues() []string {
 // invocation honor the isolated configuration TestMain installs above. Every
 // exec.Cmd in this package either leaves Env nil or builds it from
 // os.Environ(), so it inherits GIT_CONFIG_GLOBAL and GIT_CONFIG_NOSYSTEM
-// automatically, except the two call sites that construct an environment
-// from scratch (runWithPATH in check_ci_capabilities_test.go and
-// buildEnvironment in install_default_test.go); they append this slice so
-// the scripts they run still see the isolated git configuration rather than
-// the developer's real one.
+// automatically. Four call sites build an environment from scratch instead.
+// Two of them append this slice, so the scripts they run still see the
+// isolated git configuration rather than the developer's real one: runWithPATH
+// in check_ci_capabilities_test.go and buildEnvironment in
+// install_default_test.go.
+//
+// The other two are a deliberate exception, and a new site should not copy
+// them: both subtests of TestInstallReportsMissingPrerequisites
+// (install_test.go) hand the installer nothing but a PATH, because what they
+// prove is that it refuses when go or git is missing from PATH. Threading
+// anything else in would not defeat them, but the emptiness is the fixture, so
+// they are left alone.
 func isolatedGitConfigValues() []string {
 	return []string{
 		"GIT_CONFIG_GLOBAL=" + os.Getenv("GIT_CONFIG_GLOBAL"),

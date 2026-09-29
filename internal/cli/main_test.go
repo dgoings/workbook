@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -113,6 +114,12 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
-	os.RemoveAll(home)
+	// Report rather than discard: a directory under this home that a child
+	// process left read-only does not come away with os.RemoveAll, and a
+	// discarded error there is a leak nobody sees. scripts/main_test.go carries
+	// the occurrence that made the case.
+	if err := os.RemoveAll(home); err != nil {
+		fmt.Fprintf(os.Stderr, "remove isolated home %s: %v\n", home, err)
+	}
 	os.Exit(code)
 }

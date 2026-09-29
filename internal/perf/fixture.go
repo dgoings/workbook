@@ -694,9 +694,18 @@ func configureFixtureRepository(ctx context.Context, root string) error {
 // that nothing it configures adds work to the push being measured. See
 // fixtureRepositorySettings for the one setting that difference leaves out.
 //
-// The timeout bounds this setup work, which is not a measured command; it is the
-// caller's own fixture or setup bound, never the bound on the command whose
-// duration is reported.
+// The timeout bounds this setup work, which is not itself a measured command,
+// and every caller passes spec.CommandTimeout — the bound the measured command
+// gets: publishFixtureToLocalOrigin at its three call sites in scenarios.go,
+// measureLocalBareSyncAgainstNewOrigin, and the watch runner's publishOrigin
+// dependency. Each of the seven runRepositoryGit calls below gets the whole
+// bound rather than a share of it, so setup does not eat into the measurement's
+// budget; what the number does mean is that a machine slow enough to push one
+// `git init --bare` or `git config` past the measured command's budget fails the
+// fixture instead of reporting a slow command. spec.FixtureTimeout, which
+// requireFixtureTimeout has already resolved at all five of those call sites,
+// is the argument these callers should be passing; changing them is a behavior
+// change this comment does not make.
 func initBareFixtureOrigin(ctx context.Context, timeout time.Duration, objectFormat, origin string) error {
 	if _, _, err := runRepositoryGit(
 		ctx, timeout, "", "init", "--bare", "--quiet", "--object-format="+objectFormat, origin,

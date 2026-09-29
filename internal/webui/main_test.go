@@ -5,8 +5,8 @@ package webui
 // process-global environment — there is no TestMain in this file for that
 // reason.
 //
-//	TestServeStopsCleanlyWhenContextIsCancelled — server_test.go:14
-//	TestServeLetsAnInFlightRequestFinish — shutdown_test.go:106
+//	TestServeStopsCleanlyWhenContextIsCancelled — server_test.go
+//	TestServeLetsAnInFlightRequestFinish — shutdown_test.go
 //
 // Both call http.Get, which goes through http.DefaultClient and its
 // process-global keep-alive connection pool (http.DefaultTransport). Neither
@@ -24,9 +24,9 @@ package webui
 // Four t.Run groups keep their subtests serial rather than parallel, because
 // each shares a mutable counter or observer across the subtests in its
 // closure with cumulative or exact-contents assertions:
-// TestHandlerDependencyMutationsRequireEmptyRequestBodies (handler_test.go
-// ~325), TestHandlerRejectsEncodedDependencyPathAliases (handler_test.go
-// ~482), TestNewHandlerRoutesEveryOptionToItsOwnRoute (options_test.go ~18),
-// and TestShippedPriorityColorsClearAAAgainstTheCard (priority_chip_test.go
-// ~265). Their parent tests still run in parallel against the rest of the
-// package; only their subtests are left without it.
+// TestHandlerDependencyMutationsRequireEmptyRequestBodies (handler_test.go),
+// TestHandlerRejectsEncodedDependencyPathAliases (handler_test.go),
+// TestNewHandlerRoutesEveryOptionToItsOwnRoute (options_test.go), and
+// TestShippedPriorityColorsClearAAAgainstTheCard (priority_chip_test.go).
+// Their parent tests still run in parallel against the rest of the package;
+// only their subtests are left without it.
