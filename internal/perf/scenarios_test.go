@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -1931,15 +1932,18 @@ func writeRecordedStatusResponse(writer http.ResponseWriter, request recordedSta
 }
 
 type recordingWarmScenarioServer struct {
-	t           *testing.T
-	role        string
-	sample      string
-	ambiguous   bool
-	events      *[]string
-	prepareErr  error
-	measureErr  error
-	closeErr    error
-	closedCount *int
+	t         *testing.T
+	role      string
+	sample    string
+	ambiguous bool
+	events    *[]string
+	// timedOutStatus makes the measured status request report a timeout, the way
+	// a real one does when it outlasts the command timeout.
+	timedOutStatus bool
+	prepareErr     error
+	measureErr     error
+	closeErr       error
+	closedCount    *int
 }
 
 func (server *recordingWarmScenarioServer) prepareProjection(_ context.Context, activeTasks int, _ time.Duration) error {
@@ -1978,6 +1982,9 @@ func (server *recordingWarmScenarioServer) measureStatus(
 	}
 	if server.measureErr != nil {
 		return Sample{}, server.measureErr
+	}
+	if server.timedOutStatus {
+		return Sample{ExitCode: -1, TimedOut: true, Error: "request timed out"}, nil
 	}
 	return Sample{ExitCode: 0, GitProcesses: 1}, nil
 }
@@ -2148,4 +2155,327 @@ func TestRunRepositoryGitReapsDescendantOfGitThatExits(t *testing.T) {
 		t.Fatal(err)
 	}
 	proctest.RequireDescendantTerminated(t, childPIDPath)
+}
+
+// The two bare origins the scenario runners create are repositories the
+// measured `workbook` pushes into, so they must carry the fixture's own local
+// configuration rather than inherit the operator's global one. Both used to be
+// created by a plain `git init --bare`, which on any machine with a global
+// core.hooksPath — a company hooks directory, Husky — let a pre-receive hook
+// reject or charge for the very push being measured.
+func TestBareFixtureOriginsCarryTheFixtureLocalConfiguration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const timeout = 30 * time.Second
+
+	reference := filepath.Join(t.TempDir(), "reference")
+	if _, _, err := runRepositoryGit(ctx, timeout, "", "init", "--quiet", reference); err != nil {
+		t.Fatal(err)
+	}
+	if err := configureFixtureRepository(ctx, reference); err != nil {
+		t.Fatal(err)
+	}
+
+	published := filepath.Join(t.TempDir(), "published")
+	if _, _, err := runRepositoryGit(ctx, timeout, "", "init", "--quiet", published); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishFixtureToLocalOrigin(ctx, timeout, published); err != nil {
+		t.Fatal(err)
+	}
+
+	perSample := filepath.Join(t.TempDir(), "per-sample")
+	if _, _, err := runRepositoryGit(ctx, timeout, "", "init", "--quiet", perSample); err != nil {
+		t.Fatal(err)
+	}
+	originRoot := t.TempDir()
+	if _, err := measureLocalBareSyncAgainstNewOrigin(
+		ctx, "workbook", perSample, originRoot, 1, timeout,
+		func(context.Context, CommandSpec) Sample { return Sample{ExitCode: 0, Duration: time.Millisecond} },
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	want := localGitConfig(t, reference)
+	// One exclusion, and the reason it is the only one. core.logAllRefUpdates is
+	// on the fixture worktree so its own ref updates get a reflog; reflogs are off
+	// by default in a bare repository, and turning them on in an origin would make
+	// the receiving side of the measured push write a reflog entry per ref. That is
+	// a cost charged to the measurement, and the point of configuring these origins
+	// is isolation from the operator's machine, not reflogs. Everything else in the
+	// fixture configuration is isolation and reaches the origins: the fixed
+	// identity, the three signing switches, and core.hooksPath.
+	//
+	// Two keys are compared by presence and not by value. core.bare is written by
+	// `git init` itself — true on a bare origin, false in a worktree — and
+	// core.hooksPath is per repository by design, checked against
+	// fixtureDisabledHooksPath below.
+	const reflogKey = "core.logallrefupdates"
+	if _, configured := want[reflogKey]; !configured {
+		t.Fatalf("configured fixture is missing %s, so the exclusion below proves nothing", reflogKey)
+	}
+	wantOriginKeys := make([]string, 0, len(want))
+	for _, key := range sortedKeys(want) {
+		if key != reflogKey {
+			wantOriginKeys = append(wantOriginKeys, key)
+		}
+	}
+	perRepository := map[string]bool{"core.bare": true, "core.hookspath": true}
+	for name, origin := range map[string]string{
+		"publishFixtureToLocalOrigin":          filepath.Join(published, "benchmark-origin.git"),
+		"measureLocalBareSyncAgainstNewOrigin": filepath.Join(originRoot, "origin-001.git"),
+	} {
+		got := localGitConfig(t, origin)
+		if !reflect.DeepEqual(sortedKeys(got), wantOriginKeys) {
+			t.Fatalf("%s local config keys = %v, want the configured fixture's keys without %s: %v",
+				name, sortedKeys(got), reflogKey, wantOriginKeys)
+		}
+		if value, present := got[reflogKey]; present {
+			t.Fatalf("%s local %s = %q, want it unset so the measured push writes no reflog", name, reflogKey, value)
+		}
+		for key, wantValue := range want {
+			if perRepository[key] || key == reflogKey {
+				continue
+			}
+			if got[key] != wantValue {
+				t.Fatalf("%s local %s = %q, want %q", name, key, got[key], wantValue)
+			}
+		}
+		if got["core.bare"] != "true" {
+			t.Fatalf("%s local core.bare = %q, want true", name, got["core.bare"])
+		}
+		hooksPath := got["core.hookspath"]
+		if hooksPath != fixtureDisabledHooksPath(origin) {
+			t.Fatalf("%s local core.hooksPath = %q, want %q", name, hooksPath, fixtureDisabledHooksPath(origin))
+		}
+		if _, err := os.Stat(hooksPath); !os.IsNotExist(err) {
+			t.Fatalf("%s local core.hooksPath = %q must not exist: %v", name, hooksPath, err)
+		}
+	}
+}
+
+// localGitConfig reads a repository's own configuration file, ignoring every
+// other scope, so the comparison is of what the harness wrote plus what git init
+// wrote and nothing the machine contributed.
+func localGitConfig(t *testing.T, root string) map[string]string {
+	t.Helper()
+	settings := make(map[string]string)
+	for _, line := range strings.Split(runGit(t, root, "config", "--list", "--local"), "\n") {
+		if line == "" {
+			continue
+		}
+		key, value, found := strings.Cut(line, "=")
+		if !found {
+			t.Fatalf("%s config line %q has no value", root, line)
+		}
+		settings[key] = value
+	}
+	if len(settings) == 0 {
+		t.Fatalf("%s has no local configuration", root)
+	}
+	return settings
+}
+
+func sortedKeys(settings map[string]string) []string {
+	keys := make([]string, 0, len(settings))
+	for key := range settings {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// fixtureFamilyRun drives one scenario family with a supplied builder and reports
+// the timeouts the family's measured side was given, the samples it recorded, and
+// whatever the runner returned.
+type fixtureFamilyRun func(t *testing.T, spec RunSpec, build func(context.Context, string, FixtureSpec) (Fixture, error)) ([]time.Duration, []Sample, error)
+
+// Every family that builds a Fixture bounds construction with FixtureTimeout and
+// leaves the measured side on CommandTimeout. These four used to hand the build
+// the measured command's budget, which is the reuse that killed a healthy remote
+// fixture build under load; the remote and projection-refresh families have their
+// own tests for the same property.
+func TestEveryFixtureBuildingFamilyBoundsBuildsWithTheFixtureTimeout(t *testing.T) {
+	t.Parallel()
+	// The measured sides are all stubbed, so nothing real has to survive this.
+	const commandTimeout = 10 * time.Millisecond
+	// Longer than the command timeout, so a build that completes proves the
+	// fixture bound was used; far shorter than the generous bound.
+	const buildWork = 80 * time.Millisecond
+	// Used where the build is expected to die: so much longer than the deadline
+	// that which one the builder notices first is never a scheduling accident.
+	const unfinishableWork = 10 * time.Second
+
+	families := []struct {
+		name    string
+		fixture Fixture
+		spec    FixtureSpec
+		run     fixtureFamilyRun
+	}{
+		{
+			name:    "cold-cli",
+			fixture: testColdCLIFixture(),
+			spec:    FixtureSpec{TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: "sha1"},
+			run: func(t *testing.T, spec RunSpec, build func(context.Context, string, FixtureSpec) (Fixture, error)) ([]time.Duration, []Sample, error) {
+				var timeouts []time.Duration
+				var samples []Sample
+				results, err := runColdCLI(context.Background(), spec, t.TempDir(), []string{"cli-update"}, scenarioDependencies{
+					buildFixture:      build,
+					prepareProjection: func(context.Context, CommandSpec, int) error { return nil },
+					measureCommand: func(_ context.Context, command CommandSpec) CommandMeasurement {
+						timeouts = append(timeouts, command.Timeout)
+						return CommandMeasurement{Sample: Sample{ExitCode: -1, TimedOut: true}}
+					},
+				})
+				for _, result := range results {
+					samples = append(samples, result.Samples...)
+				}
+				return timeouts, samples, err
+			},
+		},
+		{
+			name:    "warm-http",
+			fixture: Fixture{ActiveTaskIDs: testColdCLIFixture().ActiveTaskIDs},
+			spec:    FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 2, ObjectFormat: "sha1"},
+			run: func(t *testing.T, spec RunSpec, build func(context.Context, string, FixtureSpec) (Fixture, error)) ([]time.Duration, []Sample, error) {
+				var timeouts []time.Duration
+				var samples []Sample
+				closed := 0
+				results, err := runWarmHTTP(context.Background(), spec, t.TempDir(), []string{"api-update"}, warmHTTPDependencies{
+					buildFixture: build,
+					startServer: func(_ context.Context, _ string, root string, timeout time.Duration) (warmScenarioServer, error) {
+						timeouts = append(timeouts, timeout)
+						return &recordingWarmScenarioServer{
+							t: t, role: filepath.Base(root), sample: filepath.Base(filepath.Dir(root)),
+							timedOutStatus: true, closedCount: &closed,
+						}, nil
+					},
+				})
+				for _, result := range results {
+					samples = append(samples, result.Samples...)
+				}
+				return timeouts, samples, err
+			},
+		},
+		{
+			name:    "history-validation",
+			fixture: Fixture{TaskIDs: testColdCLIFixture().ActiveTaskIDs, ActiveTaskIDs: testColdCLIFixture().ActiveTaskIDs},
+			spec:    FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+			run: func(t *testing.T, spec RunSpec, build func(context.Context, string, FixtureSpec) (Fixture, error)) ([]time.Duration, []Sample, error) {
+				var timeouts []time.Duration
+				var samples []Sample
+				// validate-full-history is the one member that needs no setup
+				// command, so the build is the only thing between the spec and
+				// the measurement.
+				results, err := runValidationScenarios(context.Background(), spec, t.TempDir(), []string{"validate-full-history"}, validationScenarioDependencies{
+					buildFixture: build,
+					runSetup: func(context.Context, CommandSpec) CommandMeasurement {
+						t.Error("validate-full-history must not run a setup command")
+						return CommandMeasurement{}
+					},
+					measureCommand: func(_ context.Context, command CommandSpec) CommandMeasurement {
+						timeouts = append(timeouts, command.Timeout)
+						return CommandMeasurement{Sample: Sample{ExitCode: -1, TimedOut: true}}
+					},
+				})
+				for _, result := range results {
+					samples = append(samples, result.Samples...)
+				}
+				return timeouts, samples, err
+			},
+		},
+		{
+			name: "watcher-steady-state",
+			// This family observes windows rather than measuring a command, so the
+			// timeout it is asked to honor is the window's and it records no
+			// Samples. The window timeouts are the evidence that the build
+			// completed and that the measured side kept the command timeout.
+			fixture: Fixture{TaskIDs: []string{"WB-00"}, ActiveTaskIDs: []string{"WB-00"}},
+			spec:    FixtureSpec{TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: "sha1"},
+			run: func(t *testing.T, spec RunSpec, build func(context.Context, string, FixtureSpec) (Fixture, error)) ([]time.Duration, []Sample, error) {
+				var timeouts []time.Duration
+				_, err := runWatcherSteadyState(context.Background(), spec, t.TempDir(), watcherDependencies{
+					buildFixture:  build,
+					publishOrigin: func(context.Context, time.Duration, string) error { return nil },
+					observeWindow: func(_ context.Context, window watcherWindowSpec) (WatcherWindow, error) {
+						timeouts = append(timeouts, window.Timeout)
+						observed := WatcherWindow{
+							Name:                 window.Name,
+							IntervalMilliseconds: window.Interval.Milliseconds(),
+							ObservedMilliseconds: durationAsMilliseconds(window.Window),
+							Synchronizations:     1,
+						}
+						// The runner requires the steady window to beat its idle
+						// control, so give it a plausible count rather than a
+						// number that fails an unrelated check.
+						if window.Name == watcherSteadyWindow {
+							observed.Synchronizations = 13
+						}
+						return observed, nil
+					},
+				})
+				return timeouts, nil, err
+			},
+		},
+	}
+
+	for _, family := range families {
+		t.Run(family.name, func(t *testing.T) {
+			t.Parallel()
+			spec := RunSpec{
+				WorkbookBinary: "workbook",
+				Fixture:        family.spec,
+				Samples:        1,
+				CommandTimeout: commandTimeout,
+				FixtureTimeout: 30 * time.Second,
+			}
+
+			timeouts, samples, err := family.run(t, spec, sleepingFixtureBuilderAtRoot(family.fixture, buildWork))
+			if err != nil {
+				t.Fatalf("%s with a generous fixture budget: %v", family.name, err)
+			}
+			// Something measured, which is only reachable once the build that
+			// outlasts the command timeout has completed.
+			if len(timeouts) == 0 {
+				t.Fatalf("%s measured nothing, so the build cannot have completed", family.name)
+			}
+			for index, sample := range samples {
+				if !sample.TimedOut {
+					t.Fatalf("%s sample %d = %#v, want the measured side reported as timed out", family.name, index+1, sample)
+				}
+			}
+			// The new field must not have widened what the report calls a timeout.
+			for index, timeout := range timeouts {
+				if timeout != commandTimeout {
+					t.Fatalf("%s measured timeout %d = %s, want the command timeout %s unchanged",
+						family.name, index+1, timeout, commandTimeout)
+				}
+			}
+
+			// Mutation witness for the pairing: a fixture budget too small for
+			// the build still kills it, so the run above proves the generous
+			// value was used and not that the deadline stopped mattering.
+			tiny := spec
+			tiny.FixtureTimeout = commandTimeout
+			if _, _, err := family.run(t, tiny, sleepingFixtureBuilderAtRoot(family.fixture, unfinishableWork)); err == nil ||
+				!errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("%s with a tiny fixture budget: error = %v, want the build to exceed its deadline", family.name, err)
+			}
+		})
+	}
+}
+
+// sleepingFixtureBuilderAtRoot is sleepingFixtureBuilder for the families whose
+// measured side reads the fixture's root: it reports the root the runner asked
+// for, which those runners pass on as a command directory.
+func sleepingFixtureBuilderAtRoot(fixture Fixture, work time.Duration) func(context.Context, string, FixtureSpec) (Fixture, error) {
+	build := sleepingFixtureBuilder(fixture, work)
+	return func(ctx context.Context, root string, spec FixtureSpec) (Fixture, error) {
+		built, err := build(ctx, root, spec)
+		if err != nil {
+			return Fixture{}, err
+		}
+		built.Root = root
+		return built, nil
+	}
 }

@@ -249,6 +249,18 @@ described under Changed.
   moment, a mode that had been asked for once and denied. A refused write is now
   rolled back, and the failure is reported instead of going unhandled in the
   app's main process.
+- **`workbook-bench` no longer kills a fixture build with the per-command
+  timeout.** Fixture construction gets its own bound, as storage benchmarks
+  already had, so a fixture — an init, a synthetic history, and for the remote
+  topologies two clones and dozens of plumbing calls — is no longer expected to
+  finish inside the budget for one measured command, and a busy machine can no
+  longer make a healthy fixture build die of that deadline. Every benchmark that
+  builds a fixture gets the new bound, the scaling matrix included, and all of
+  them take it from one number. What the benchmark reports as a timeout is
+  unchanged. The bare origins the harness publishes into also carry the
+  fixture's own isolation settings now, instead of inheriting the operator's
+  global `core.hooksPath`, where a company hooks directory could reject or
+  charge for the very push being measured.
 
 ## v0.5.1 — 2026-08-23
 

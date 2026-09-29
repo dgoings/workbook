@@ -3,6 +3,7 @@ package perf
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -512,5 +513,140 @@ func TestRunProjectionRefreshScenariosRejectUntrustworthyProjectionResult(t *tes
 	)
 	if err == nil || !strings.Contains(err.Error(), "returned 9 task rows, want 10") {
 		t.Fatalf("projection oracle error = %v, want fatal row-count rejection", err)
+	}
+}
+
+// The fixture build gets FixtureTimeout; the measured refresh keeps
+// CommandTimeout. This family used to hand the build the measured command's
+// budget, which is the same reuse that killed healthy remote fixture builds.
+func TestRunProjectionRefreshScenariosBoundsFixtureBuildsWithTheFixtureTimeout(t *testing.T) {
+	t.Parallel()
+	fixture, spec := newProjectionRefreshTestFixture(t, "sha1")
+	// This budget is spent on real work as well as on the stubbed measurement —
+	// two `git for-each-ref` calls over ten refs and the real head mutation — and
+	// this test runs in the parallel batch, where a narrow window would be a
+	// flake waiting to happen. Two seconds is generous for that work and still
+	// well under the stubbed build, so a build that completes can only have been
+	// covered by the fixture bound.
+	spec.CommandTimeout = 2 * time.Second
+	spec.FixtureTimeout = 60 * time.Second
+	build := sleepingFixtureBuilder(fixture, 2500*time.Millisecond)
+	var measuredTimeouts []time.Duration
+	results, _, err := runProjectionRefreshScenarios(
+		context.Background(),
+		spec,
+		t.TempDir(),
+		[]string{"projection-refresh-five-changed"},
+		projectionRefreshDependencies{
+			buildFixture: build,
+			runSetup: func(context.Context, CommandSpec) CommandMeasurement {
+				return CommandMeasurement{Sample: Sample{ExitCode: 0}}
+			},
+			mutateHeads: mutateProjectionRefreshHeads,
+			measureCommand: func(_ context.Context, command CommandSpec) CommandMeasurement {
+				measuredTimeouts = append(measuredTimeouts, command.Timeout)
+				return CommandMeasurement{Sample: Sample{ExitCode: -1, TimedOut: true}}
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("runProjectionRefreshScenarios with a generous fixture budget: %v", err)
+	}
+	if len(results) != 1 || len(results[0].Samples) != 1 {
+		t.Fatalf("results = %#v, want one scenario with one sample", results)
+	}
+	if !results[0].Samples[0].TimedOut {
+		t.Fatalf("sample = %#v, want the measured refresh reported as timed out", results[0].Samples[0])
+	}
+	if !reflect.DeepEqual(measuredTimeouts, []time.Duration{spec.CommandTimeout}) {
+		t.Fatalf("measured refresh timeouts = %v, want the command timeout unchanged", measuredTimeouts)
+	}
+}
+
+// Mutation witness for the pairing, as in the remote runner: too small a
+// FixtureTimeout still kills the build.
+func TestRunProjectionRefreshScenariosFailsWhenFixtureTimeoutCannotCoverTheBuild(t *testing.T) {
+	t.Parallel()
+	spec := RunSpec{
+		WorkbookBinary: "workbook",
+		Fixture: FixtureSpec{
+			TotalTasks: 12, ActiveTasks: 10, TombstonedTasks: 2,
+			OperationsPerTask: 3, ObjectFormat: "sha1",
+		},
+		Samples:        1,
+		CommandTimeout: 10 * time.Millisecond,
+		FixtureTimeout: 10 * time.Millisecond,
+	}
+	_, _, err := runProjectionRefreshScenarios(
+		context.Background(),
+		spec,
+		t.TempDir(),
+		[]string{"projection-refresh-five-changed"},
+		projectionRefreshDependencies{
+			buildFixture: sleepingFixtureBuilder(Fixture{}, 10*time.Second),
+			runSetup: func(context.Context, CommandSpec) CommandMeasurement {
+				t.Error("setup must not run after a failed fixture build")
+				return CommandMeasurement{}
+			},
+			mutateHeads: func(context.Context, string, core.ProjectConfig, []string, int) error {
+				t.Error("head mutation must not run after a failed fixture build")
+				return nil
+			},
+			measureCommand: func(context.Context, CommandSpec) CommandMeasurement {
+				t.Error("measurement must not run after a failed fixture build")
+				return CommandMeasurement{}
+			},
+		},
+	)
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runProjectionRefreshScenarios error = %v, want the fixture build to exceed its deadline", err)
+	}
+	if !strings.Contains(err.Error(), "build projection-refresh-five-changed sample 1 fixture") {
+		t.Fatalf("error %q does not name the fixture build that failed", err)
+	}
+}
+
+func TestRunProjectionRefreshScenariosRejectsNegativeFixtureTimeout(t *testing.T) {
+	t.Parallel()
+	spec := RunSpec{
+		WorkbookBinary: "workbook",
+		Fixture: FixtureSpec{
+			TotalTasks: 12, ActiveTasks: 10, TombstonedTasks: 2,
+			OperationsPerTask: 3, ObjectFormat: "sha1",
+		},
+		Samples:        1,
+		CommandTimeout: time.Minute,
+		FixtureTimeout: -time.Second,
+	}
+	_, _, err := runProjectionRefreshScenarios(
+		context.Background(),
+		spec,
+		t.TempDir(),
+		[]string{"projection-refresh-five-changed"},
+		projectionRefreshDependencies{
+			buildFixture:   func(context.Context, string, FixtureSpec) (Fixture, error) { return Fixture{}, nil },
+			runSetup:       func(context.Context, CommandSpec) CommandMeasurement { return CommandMeasurement{} },
+			mutateHeads:    func(context.Context, string, core.ProjectConfig, []string, int) error { return nil },
+			measureCommand: func(context.Context, CommandSpec) CommandMeasurement { return CommandMeasurement{} },
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "fixture timeout must be positive") {
+		t.Fatalf("runProjectionRefreshScenarios error = %v, want fixture timeout validation", err)
+	}
+}
+
+// sleepingFixtureBuilder returns the given fixture after work elapses, or the
+// context's error if the runner's bound expires first — a real build's behavior
+// under exec.CommandContext, without a real build's cost.
+func sleepingFixtureBuilder(fixture Fixture, work time.Duration) func(context.Context, string, FixtureSpec) (Fixture, error) {
+	return func(ctx context.Context, _ string, _ FixtureSpec) (Fixture, error) {
+		timer := time.NewTimer(work)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return fixture, nil
+		case <-ctx.Done():
+			return Fixture{}, ctx.Err()
+		}
 	}
 }

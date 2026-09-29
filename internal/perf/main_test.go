@@ -80,21 +80,28 @@ import (
 // So every measured `workbook` and every fixture `git` reads the configuration
 // installed here.
 //
-// Two things the package did not already defend. The first is the repositories
+// Two things the package did not already defend. The first was the repositories
 // nobody configures. fixtureGitConfig puts commit.gpgSign, tag.gpgSign,
 // push.gpgSign and core.hooksPath overrides on every fixture git invocation and
 // configureFixtureRepository writes them into every repository it creates, so a
 // hostile global configuration cannot reach a fixture or a remote fixture's
-// origin. But publishFixtureToLocalOrigin and measureLocalBareSyncAgainstNewOrigin
-// in scenarios.go create their bare origins through runRepositoryGit, which
-// carries no overrides and writes no local settings, and the measured `workbook`
-// then pushes into them. Measured with the isolation removed and a
+// origin, but publishFixtureToLocalOrigin and measureLocalBareSyncAgainstNewOrigin
+// in scenarios.go created their bare origins through a plain `git init --bare`
+// that carried no overrides and wrote no local settings, and the measured
+// `workbook` then pushed into them. Measured with the isolation removed and a
 // core.hooksPath in the ambient global configuration pointing at hooks that
-// exit 1: six tests fail, every one of them on a push rejected by the
-// pre-receive hook of an origin created that way.
+// exit 1: six tests failed, every one of them on a push rejected by the
+// pre-receive hook of an origin created that way. That was a defect in the
+// product and not only in the tests — a real benchmark run on an operator's
+// machine took the operator's hooks — so both call sites now go through
+// initBareFixtureOrigin, which writes the fixture's isolation settings into the
+// origin and deliberately nothing that would change what the measured push
+// costs; TestBareFixtureOriginsCarryTheFixtureLocalConfiguration pins both
+// halves of that. The isolation installed here stays, because it covers what no
+// per-repository setting can.
 //
 // The second is automatic garbage collection, which nothing in this package
-// disabled anywhere — no gc.auto, no maintenance.auto, no receive.autogc —
+// disables anywhere — no gc.auto, no maintenance.auto, no receive.autogc —
 // while BuildFixture writes a whole synthetic history through fast-import and
 // the fixtures push into bare origins, which is the loose-object volume that
 // triggers a gc. A gc that outlives its test races t.TempDir's cleanup and

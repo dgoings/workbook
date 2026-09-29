@@ -640,17 +640,73 @@ func fixtureDisabledHooksPath(root string) string {
 	return filepath.Join(absRoot, "workbook-fixture-hooks-disabled")
 }
 
-func configureFixtureRepository(ctx context.Context, root string) error {
-	for _, setting := range [][2]string{
+// fixtureIsolationSettings is the part of a fixture repository's local
+// configuration that exists to keep the operator's machine out of the
+// measurement: a fixed identity, signing off, and a core.hooksPath naming a
+// directory that is never created. Every repository the harness makes gets
+// these, bare origins included — an origin whose core.hooksPath came from a
+// company hooks directory or from Husky would let a pre-receive hook reject, or
+// charge for, the very push being measured.
+//
+// Nothing here changes what a measured command costs. That is the line the bare
+// origins hold to: they receive exactly this list and nothing else, so a
+// benchmark run is comparable across machines without the origins doing any work
+// a plain bare repository would not do.
+func fixtureIsolationSettings(root string) [][2]string {
+	return [][2]string{
 		{"user.name", "Workbook Benchmark"},
 		{"user.email", benchmarkActorID},
 		{"commit.gpgSign", "false"},
 		{"tag.gpgSign", "false"},
 		{"push.gpgSign", "false"},
 		{"core.hooksPath", fixtureDisabledHooksPath(root)},
-		{"core.logAllRefUpdates", "always"},
-	} {
+	}
+}
+
+// fixtureRepositorySettings is what a fixture worktree carries: the isolation
+// settings plus core.logAllRefUpdates, which gives a fixture's own ref updates a
+// reflog. That last one is deliberately not given to the bare origins. Reflogs
+// are off by default in a bare repository, and turning them on there would make
+// the receiving side of the push the benchmark measures write a reflog entry per
+// ref — a cost charged to the measurement, which is the opposite of what
+// configuring the origins is for.
+func fixtureRepositorySettings(root string) [][2]string {
+	return append(fixtureIsolationSettings(root), [2]string{"core.logAllRefUpdates", "always"})
+}
+
+func configureFixtureRepository(ctx context.Context, root string) error {
+	for _, setting := range fixtureRepositorySettings(root) {
 		if err := runFixtureGitInRoot(ctx, root, "-C", root, "config", "--local", setting[0], setting[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// initBareFixtureOrigin creates a bare origin and gives it the isolation
+// settings every other fixture repository carries. The origins the scenario
+// runners publish into used to be created by a bare `git init --bare` with no
+// overrides and no local settings, so on any machine with a global
+// core.hooksPath they took the operator's hooks and the measured push landed on
+// them.
+//
+// It writes fixtureIsolationSettings rather than fixtureRepositorySettings, so
+// that nothing it configures adds work to the push being measured. See
+// fixtureRepositorySettings for the one setting that difference leaves out.
+//
+// The timeout bounds this setup work, which is not a measured command; it is the
+// caller's own fixture or setup bound, never the bound on the command whose
+// duration is reported.
+func initBareFixtureOrigin(ctx context.Context, timeout time.Duration, objectFormat, origin string) error {
+	if _, _, err := runRepositoryGit(
+		ctx, timeout, "", "init", "--bare", "--quiet", "--object-format="+objectFormat, origin,
+	); err != nil {
+		return err
+	}
+	for _, setting := range fixtureIsolationSettings(origin) {
+		if _, _, err := runRepositoryGit(
+			ctx, timeout, origin, "config", "--local", setting[0], setting[1],
+		); err != nil {
 			return err
 		}
 	}

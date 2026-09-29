@@ -567,6 +567,12 @@ func TestRunScalingMatrixDelegatesEveryPointToTheExistingScenarioRunners(t *test
 		if call.spec.WorkbookBinary != "workbook" || call.spec.Samples != 3 || call.spec.CommandTimeout != 7*time.Second {
 			t.Fatalf("call %d run spec = %#v, want the matrix binary, samples, and timeout", index, call.spec)
 		}
+		// The matrix runs the remote family at every point, so it is exposed to
+		// the fixture-build flake and bounds construction from the same factor
+		// workbook-bench uses. The measured command keeps the matrix timeout.
+		if call.spec.FixtureTimeout != FixtureTimeoutFactor*7*time.Second {
+			t.Fatalf("call %d fixture timeout = %s, want %s", index, call.spec.FixtureTimeout, FixtureTimeoutFactor*7*time.Second)
+		}
 		if call.spec.Fixture.ActiveTasks != want.active || call.spec.Fixture.OperationsPerTask != want.depth || call.spec.Fixture.ObjectFormat != "sha256" {
 			t.Fatalf("call %d fixture = %#v, want %d active tasks at depth %d in sha256", index, call.spec.Fixture, want.active, want.depth)
 		}

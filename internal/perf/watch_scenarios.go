@@ -149,9 +149,9 @@ type watcherDependencies struct {
 // user's watcher spends nearly all of its life in.
 func RunWatcherSteadyState(ctx context.Context, spec RunSpec, root string) (WatcherSteadyStateReport, error) {
 	return runWatcherSteadyState(ctx, spec, root, watcherDependencies{
-		buildFixture: func(ctx context.Context, root string, fixture FixtureSpec) (Fixture, error) {
-			return buildFixtureWithinTimeout(ctx, root, fixture, spec.CommandTimeout)
-		},
+		// The builder carries no bound of its own: runWatcherSteadyState bounds
+		// whatever builder it is given with the spec's fixture timeout.
+		buildFixture:  BuildFixture,
 		publishOrigin: publishFixtureToLocalOrigin,
 		observeWindow: observeWatcherWindow,
 	})
@@ -171,6 +171,9 @@ func runWatcherSteadyState(ctx context.Context, spec RunSpec, root string, depen
 	if spec.CommandTimeout <= 0 {
 		return WatcherSteadyStateReport{}, fmt.Errorf("command timeout must be positive")
 	}
+	if err := requireFixtureTimeout(&spec); err != nil {
+		return WatcherSteadyStateReport{}, err
+	}
 	if root == "" {
 		return WatcherSteadyStateReport{}, fmt.Errorf("fixture root is required")
 	}
@@ -181,7 +184,9 @@ func runWatcherSteadyState(ctx context.Context, spec RunSpec, root string, depen
 		return WatcherSteadyStateReport{}, fmt.Errorf("create watcher fixture root: %w", err)
 	}
 
-	fixture, err := dependencies.buildFixture(ctx, filepath.Join(root, "watcher"), spec.Fixture)
+	fixture, err := buildFixtureWithinTimeout(
+		ctx, dependencies.buildFixture, filepath.Join(root, "watcher"), spec.Fixture, spec.FixtureTimeout,
+	)
 	if err != nil {
 		return WatcherSteadyStateReport{}, fmt.Errorf("build watcher fixture: %w", err)
 	}
