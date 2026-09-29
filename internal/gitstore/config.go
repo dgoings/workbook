@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -492,6 +493,10 @@ func readConfigFile(path, description string) (core.ProjectConfig, bool, error) 
 	if err != nil {
 		return core.ProjectConfig{}, false, core.Wrap(core.CategoryOperational, "cannot read "+description, err)
 	}
+	// A Windows checkout with core.autocrlf=true (Git for Windows' default)
+	// writes the tracked file with CRLF. Canonical JSON never carries a raw
+	// carriage return, so folding CRLF back to LF only undoes that conversion.
+	contents = bytes.ReplaceAll(contents, []byte("\r\n"), []byte("\n"))
 	config, err := decodeConfig(contents)
 	if err != nil {
 		return core.ProjectConfig{}, false, err
@@ -586,6 +591,11 @@ func (r *Repository) repairProjectGuard(config core.ProjectConfig) error {
 }
 
 func syncDirectory(path string) error {
+	// Windows cannot flush a directory handle (FlushFileBuffers returns
+	// ERROR_ACCESS_DENIED), and NTFS journals the rename itself.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	directory, err := os.Open(path)
 	if err != nil {
 		return core.Wrap(core.CategoryOperational, "cannot open Workbook private cache for sync", err)

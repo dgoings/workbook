@@ -26,8 +26,10 @@ version was cut.
 Priorities become a per-project vocabulary, the way statuses already are, a
 project may have more than one task-ID key, `workbook setup` stops assuming
 a project key, and the desktop app grows keyboard shortcuts for switching
-projects and driving the board it is showing. Three of the changes below affect
-scripts; all three are described under Changed.
+projects and driving the board it is showing. Workbook and Workbench also run on
+Windows now, where until this release nothing could be imported and no board
+would start. Three of the changes below affect scripts; all three are described
+under Changed.
 
 ### Added
 - **The desktop app has keyboard shortcuts**, all in the application menu:
@@ -115,6 +117,19 @@ scripts; all three are described under Changed.
   dash and more characters — and never from the middle.
   `workbook list --find <text>` applies the same search rule, title,
   description or a task-ID prefix alike, from the CLI.
+- **The desktop app asks for whatever Git cannot supply before opening a board
+  that needs it.** A checkout with no `user.email` has nobody to record changes
+  as, and what the app showed was Git's own `git config --get user.email
+  failed: exit status 1`. In place of the board it now shows a form, writes
+  what you give it with `git config` — for every repository (`--global`) or
+  only this one (`--local`) — so it is the identity your own commits carry, and
+  then opens the board you asked for. Usually it asks for the address alone,
+  because Git makes a name up from your computer account when none is
+  configured. On a machine where that gives nothing — a Linux account with no
+  full name, for instance — the form asks for the name too, since Git refuses
+  to commit without one. It asks for exactly what Git reports it cannot supply,
+  and marks the rest optional. A fresh install of Git has no identity at all,
+  which is why this was the first thing a new user met.
 
 ### Changed
 - **`workbook setup` asks for the project key only when it creates a
@@ -255,6 +270,40 @@ scripts; all three are described under Changed.
   moment, a mode that had been asked for once and denied. A refused write is now
   rolled back, and the failure is reported instead of going unhandled in the
   app's main process.
+- **A Workbook built from a Windows clone can set up a project.** Git for
+  Windows installs with `core.autocrlf=true`, so a default clone of this
+  repository carried CRLF copies of the skill and the board page that are
+  compiled into the binary, and a binary built there refused every project with
+  "embedded skill is missing YAML frontmatter". A `.gitattributes` now checks
+  text out with LF whatever a clone's own setting says.
+- **Importing a project on Windows no longer fails with "Access is denied".**
+  Workbook flushes the directory holding its private cache, so that the rename
+  publishing the project guard survives a crash, and Windows cannot flush a
+  directory handle at all. NTFS journals that rename itself, so the flush is
+  skipped there.
+- **A Windows clone of a Workbook project is no longer refused as not
+  canonical.** The tracked `.workbook/config.json` is compared byte for byte
+  with its canonical encoding, and a Windows checkout writes it with CRLF, so
+  every clone was turned away. Those line endings are folded back before the
+  comparison, which undoes Git's conversion and nothing else: any other
+  difference is still refused.
+- **A board on Windows can open its cache.** The cache is opened through a
+  `file:` URI built from its path, and a path beginning `C:\` produced a URI
+  whose host was the drive letter — "invalid uri authority". A drive is now
+  spelled the way SQLite reads it.
+- **`workbook docs update` no longer leaves a duplicate managed block behind on
+  a Windows clone.** Workbook finds the block it manages in `AGENTS.md`,
+  `CLAUDE.md` and the skill by its marker lines, and a CRLF checkout spells
+  those lines differently, so the block went unrecognized and another was
+  appended below it — once per fresh checkout, since the copy was written with
+  LF and the next run found that one instead, which is also the one `workbook
+  docs remove` took out rather than the block the file started with. The markers
+  are recognized either way now, and a block written into a file that uses CRLF
+  is written with CRLF, whichever convention the block being replaced happened
+  to carry. A file that already collected a duplicate is cleaned up by the next
+  `workbook docs update`, which leaves one block where the first one was and
+  keeps whatever was written between them; `workbook docs remove` takes them all
+  out at once.
 - **`workbook-bench` no longer kills a fixture build with the per-command
   timeout.** Fixture construction gets its own bound, as storage benchmarks
   already had, so a fixture — an init, a synthetic history, and for the remote
