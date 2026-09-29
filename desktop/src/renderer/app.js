@@ -149,8 +149,9 @@ async function openProject (projectId) {
  * `workbook serve` will not start in a checkout with no user.email, and all it
  * says is that `git config --get user.email` failed. So before a board that is
  * not already running is started, the shell asks Git what it would use, and if
- * the answer is incomplete it shows a form in place of the board. `retry` is
- * the open that was interrupted, run again once the identity is saved.
+ * there is no email it shows a form in place of the board. `retry` is the open
+ * that was interrupted, run again once the identity is saved. An email is the
+ * whole requirement; the form's name field is offered, not demanded.
  *
  * Resolves true when the form was shown (or the open went stale while Git was
  * asked), false when the board should go ahead and start. A running board
@@ -185,9 +186,9 @@ async function askForIdentity (projectId, retry) {
   el('identity-status').textContent = ''
   el('identity-save').disabled = false
   el('identity-form').hidden = false
-  // Straight to the half that is missing, which is usually the email: a name is
-  // the one Git can sometimes make up for itself.
-  el(identity.name ? 'identity-email' : 'identity-name').focus()
+  // Straight to the email, which is the half that is missing and the only half
+  // a board needs; a name Git can sometimes make up for itself.
+  el('identity-email').focus()
   return true
 }
 
@@ -219,12 +220,14 @@ async function saveIdentity (event) {
   const email = el('identity-email').value.trim()
   const scope = document.querySelector('input[name="identity-scope"]:checked')?.value ?? 'global'
 
-  // The obvious mistakes are caught here so they can sit beside their field.
-  // The main process checks again, properly, and anything it refuses lands in
-  // the status line below.
-  showIdentityError('name', name ? '' : 'Enter a name.')
-  showIdentityError('email', /^[^\s@]+@[^\s@]+$/.test(email) ? '' : 'Enter an address like you@example.com.')
-  if (!name || !/^[^\s@]+@[^\s@]+$/.test(email)) return
+  // The obvious mistake is caught here so it can sit beside its field. The main
+  // process checks again, properly, and anything it refuses lands in the status
+  // line below. The address is all that is checked because it is all that is
+  // required: a blank name is saved as no name at all.
+  const addressLooksRight = /^[^\s@]+@[^\s@]+$/.test(email)
+  showIdentityError('name', '')
+  showIdentityError('email', addressLooksRight ? '' : 'Enter an address like you@example.com.')
+  if (!addressLooksRight) return
 
   el('identity-save').disabled = true
   el('identity-status').textContent = 'Saving…'

@@ -1,11 +1,13 @@
 'use strict'
 
 // gitidentity.js reads and writes the Git identity a board needs before
-// `workbook serve` will start. The runner is injected so most of these cases
-// never spawn Git: what is under test is how an unset key is told from a real
-// failure, what the form's values are held to, and which `git config` calls a
-// save makes. One case at the end does run Git, in a scratch repository with
-// its own empty global config, to prove the calls do what they say.
+// `workbook serve` will start, which is an email address and nothing more. The
+// runner is injected so most of these cases never spawn Git: what is under test
+// is how an unset key is told from a real failure, that the email alone decides
+// whether an identity is complete, what the form's values are held to, and
+// which `git config` calls a save makes. The cases at the end do run Git, in a
+// scratch repository with its own empty global config, to prove the calls do
+// what they say.
 
 const { describe, test } = require('node:test')
 const assert = require('node:assert/strict')
@@ -57,9 +59,17 @@ describe('read', () => {
       { name: null, email: null, complete: false })
   })
 
-  test('a blank value counts as unset', async () => {
-    const { run } = fakeGit({ 'user.name': '  ', 'user.email': 'ada@example.com' })
+  test('a blank address counts as unset', async () => {
+    const { run } = fakeGit({ 'user.name': 'Ada', 'user.email': '  ' })
     assert.equal((await gitidentity.read('/repo', { run })).complete, false)
+  })
+
+  // Production mutation: requiring a name here is what stopped a board that
+  // `workbook serve` would have opened. The email is the whole requirement.
+  test('an email with no name is complete', async () => {
+    const { run } = fakeGit({ 'user.email': 'ada@example.com' })
+    assert.deepEqual(await gitidentity.read('/repo', { run }),
+      { name: null, email: 'ada@example.com', complete: true })
   })
 
   test('any other Git failure is thrown rather than read as no identity', async () => {
@@ -74,11 +84,14 @@ describe('validate', () => {
       { ok: true, name: 'Ada Lovelace', email: 'ada@example.com', errors: {} })
   })
 
-  test('both halves are required', () => {
-    const result = gitidentity.validate({ name: ' ', email: '' })
-    assert.equal(result.ok, false)
-    assert.ok(result.errors.name)
-    assert.ok(result.errors.email)
+  test('the address is required and the name is not', () => {
+    const missing = gitidentity.validate({ name: ' ', email: '' })
+    assert.equal(missing.ok, false)
+    assert.ok(missing.errors.email)
+    assert.equal(missing.errors.name, undefined)
+
+    assert.deepEqual(gitidentity.validate({ name: '  ', email: 'ada@example.com' }),
+      { ok: true, name: '', email: 'ada@example.com', errors: {} })
   })
 
   test('an address needs one @ with something either side', () => {
@@ -94,7 +107,7 @@ describe('validate', () => {
     assert.ok(gitidentity.validate({ name: 'Ada', email: '-x@example.com' }).errors.email)
   })
 
-  test('holds both halves to a length', () => {
+  test('holds a name that was given, and the address, to a length', () => {
     const long = 'a'.repeat(gitidentity.MAX_NAME + 1)
     assert.ok(gitidentity.validate({ name: long, email: 'ada@example.com' }).errors.name)
     const address = `${'a'.repeat(gitidentity.MAX_EMAIL)}@example.com`
@@ -116,6 +129,19 @@ describe('write', () => {
       ['config', '--global', 'user.email', 'ada@example.com']
     ])
     assert.deepEqual(result, { name: 'Ada', email: 'ada@example.com', complete: true })
+  })
+
+  // Production mutation: writing an empty user.name would leave the checkout
+  // worse than it started — Git refuses to commit with an empty ident name —
+  // and the form no longer asks for one.
+  test('a save with no name writes the address alone', async () => {
+    const git = fakeGit()
+    const result = await gitidentity.write('/repo',
+      { name: '  ', email: 'ada@example.com', scope: 'global' }, { run: git.run })
+    assert.deepEqual(git.calls.slice(0, 1), [
+      ['config', '--global', 'user.email', 'ada@example.com']
+    ])
+    assert.deepEqual(result, { name: null, email: 'ada@example.com', complete: true })
   })
 
   test('a local save uses --local', async () => {
@@ -141,30 +167,54 @@ describe('write', () => {
   })
 })
 
+// A repository Git can read and nothing else can answer for: an empty global
+// config and no system one, so whatever the machine running the tests has
+// configured cannot stand in for what the test sets.
+function scratchRepository (t) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-identity-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const saved = { global: process.env.GIT_CONFIG_GLOBAL, nosystem: process.env.GIT_CONFIG_NOSYSTEM }
+  process.env.GIT_CONFIG_GLOBAL = path.join(directory, 'empty.gitconfig')
+  process.env.GIT_CONFIG_NOSYSTEM = '1'
+  fs.writeFileSync(process.env.GIT_CONFIG_GLOBAL, '')
+  t.after(() => {
+    for (const [key, name] of [['global', 'GIT_CONFIG_GLOBAL'], ['nosystem', 'GIT_CONFIG_NOSYSTEM']]) {
+      if (saved[key] === undefined) delete process.env[name]
+      else process.env[name] = saved[key]
+    }
+  })
+
+  const repo = path.join(directory, 'repo')
+  execFileSync('git', ['init', '--quiet', repo])
+  return { repo, globalConfig: process.env.GIT_CONFIG_GLOBAL }
+}
+
 describe('against real Git', () => {
   test('a local save in a repository with no identity makes it complete', async (t) => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-identity-'))
-    t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
-    // An empty global config and no system one, so whatever the machine running
-    // the tests has configured cannot answer for the repository.
-    const saved = { global: process.env.GIT_CONFIG_GLOBAL, nosystem: process.env.GIT_CONFIG_NOSYSTEM }
-    process.env.GIT_CONFIG_GLOBAL = path.join(directory, 'empty.gitconfig')
-    process.env.GIT_CONFIG_NOSYSTEM = '1'
-    fs.writeFileSync(process.env.GIT_CONFIG_GLOBAL, '')
-    t.after(() => {
-      for (const [key, name] of [['global', 'GIT_CONFIG_GLOBAL'], ['nosystem', 'GIT_CONFIG_NOSYSTEM']]) {
-        if (saved[key] === undefined) delete process.env[name]
-        else process.env[name] = saved[key]
-      }
-    })
-
-    const repo = path.join(directory, 'repo')
-    execFileSync('git', ['init', '--quiet', repo])
+    const { repo } = scratchRepository(t)
 
     assert.deepEqual(await gitidentity.read(repo), { name: null, email: null, complete: false })
     const result = await gitidentity.write(repo, { name: 'Ada', email: 'ada@example.com', scope: 'local' })
     assert.deepEqual(result, { name: 'Ada', email: 'ada@example.com', complete: true })
     // And only in the repository: the global file is still empty.
     assert.equal(fs.readFileSync(process.env.GIT_CONFIG_GLOBAL, 'utf8'), '')
+  })
+
+  // The email alone is the whole requirement, and this is Git agreeing: with
+  // user.email set and user.name unset it still writes a commit, taking the
+  // name from the account. That is what `workbook serve` needs and why the form
+  // does not ask for a name.
+  test('an address with no name is complete, and Git still commits', async (t) => {
+    const { repo } = scratchRepository(t)
+
+    const result = await gitidentity.write(repo, { email: 'ada@example.com', scope: 'local' })
+
+    assert.deepEqual(result, { name: null, email: 'ada@example.com', complete: true })
+    assert.deepEqual(await gitidentity.read(repo), { name: null, email: 'ada@example.com', complete: true })
+    const empty = execFileSync('git', ['-C', repo, 'hash-object', '-t', 'tree', '--stdin'], { input: '' })
+      .toString().trim()
+    const commit = execFileSync('git', ['-C', repo, 'commit-tree', '-m', 'no name here', empty])
+      .toString().trim()
+    assert.match(commit, /^[0-9a-f]{40,64}$/)
   })
 })
