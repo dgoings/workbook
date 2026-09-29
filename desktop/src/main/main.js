@@ -778,11 +778,14 @@ ipcMain.handle('project:open', async (_event, { projectId, taskId }) =>
 ipcMain.handle('project:showChrome', async () => { showChrome() })
 
 /**
- * The Git identity a project's board would record changes against.
+ * The Git identity a project's board would record changes against, and which
+ * half of it Git cannot supply here.
  *
  * Asked by the shell before it starts a board that is not already running:
  * `workbook serve` refuses to start without a user.email, and the shell would
- * rather ask for one than show Git's exit status.
+ * rather ask for one than show Git's exit status. Whether a name is wanted too
+ * depends on the machine, so the answer carries `needs` and the form asks for
+ * exactly that.
  */
 ipcMain.handle('identity:get', async (_event, { projectId }) => {
   const project = registry.find(projectId)

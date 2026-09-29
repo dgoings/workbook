@@ -16,7 +16,8 @@ const state = {
   selected: new Set(),
   keys: new Map(),
   // The open waiting on a Git identity, while the form asking for one is up:
-  // { projectId, retry }. Null otherwise.
+  // { projectId, retry, needs } — `needs` being what Git could not supply, which
+  // is what the save is held to. Null otherwise.
   identity: null,
   // The Next view: how many per project, the last payload read, the payload
   // the DOM currently shows, the poll timer while it is showing, the timer that
@@ -148,10 +149,14 @@ async function openProject (projectId) {
  *
  * `workbook serve` will not start in a checkout with no user.email, and all it
  * says is that `git config --get user.email` failed. So before a board that is
- * not already running is started, the shell asks Git what it would use, and if
- * there is no email it shows a form in place of the board. `retry` is the open
- * that was interrupted, run again once the identity is saved. An email is the
- * whole requirement; the form's name field is offered, not demanded.
+ * not already running is started, the shell asks the main process what Git can
+ * supply here, and if anything is missing it shows a form in place of the board.
+ * `retry` is the open that was interrupted, run again once the identity is saved.
+ *
+ * What is missing is a fact about the machine rather than a fixed rule: the
+ * address is always needed when it is unset, while a name is needed only where
+ * Git cannot derive one from the operating-system account. So the form is drawn
+ * from `needs` — each field required or optional as Git reported it.
  *
  * Resolves true when the form was shown (or the open went stale while Git was
  * asked), false when the board should go ahead and start. A running board
@@ -173,23 +178,58 @@ async function askForIdentity (projectId, retry) {
   // Another project was picked while Git answered; that open owns the view now.
   if (state.view !== 'project' || state.activeProjectId !== projectId) return true
 
-  state.identity = { projectId, retry }
+  const needs = identity.needs
+  state.identity = { projectId, retry, needs }
   // A board opened before this one may still be showing, and it is a native
   // view drawn over this document: the form would be underneath it.
   api.showChrome()
   el('board-state').textContent = ''
   el('identity-repo').textContent = project.path
+  el('identity-missing').textContent = missingSentence(needs)
   el('identity-name').value = identity.name ?? ''
   el('identity-email').value = identity.email ?? ''
+  markIdentityField('name', needs.name, identity.name)
+  markIdentityField('email', needs.email, identity.email)
   showIdentityError('name', '')
   showIdentityError('email', '')
   el('identity-status').textContent = ''
   el('identity-save').disabled = false
   el('identity-form').hidden = false
-  // Straight to the email, which is the half that is missing and the only half
-  // a board needs; a name Git can sometimes make up for itself.
-  el('identity-email').focus()
+  // Straight to the first field that has to be filled in, which is the address
+  // whenever that is one of them.
+  el(needs.email ? 'identity-email' : 'identity-name').focus()
   return true
+}
+
+// What Git cannot supply, as a noun phrase: "no email address", "no name", or
+// both. Used in the form's own sentence and in the refusal if a save leaves
+// something still missing, so the two always name the same thing.
+function missingIdentity (needs) {
+  const parts = []
+  if (needs.name) parts.push('no name')
+  if (needs.email) parts.push('no email address')
+  return parts.join(' and ')
+}
+
+// The sentence under the heading. A missing name is worth an extra clause: Git
+// usually invents one from the computer account, so a reader on a machine where
+// it cannot would otherwise wonder why they are being asked at all.
+function missingSentence (needs) {
+  const tail = needs.name ? ', and no account name to fall back on' : ''
+  return `There is ${missingIdentity(needs)} set${tail}.`
+}
+
+const IDENTITY_LABELS = { name: 'Name', email: 'Email' }
+
+// Label a field required or optional, and show the hint only where it is true:
+// a blank name falls back to the account only on a machine where that works,
+// and only when there is no configured name to keep.
+function markIdentityField (field, required, configured) {
+  el(`identity-${field}-label`).textContent = required
+    ? IDENTITY_LABELS[field]
+    : `${IDENTITY_LABELS[field]} (optional)`
+  const hint = el(`identity-${field}-hint`)
+  if (hint) hint.hidden = required || Boolean(configured)
 }
 
 function hideIdentityForm () {
@@ -222,12 +262,15 @@ async function saveIdentity (event) {
 
   // The obvious mistake is caught here so it can sit beside its field. The main
   // process checks again, properly, and anything it refuses lands in the status
-  // line below. The address is all that is checked because it is all that is
-  // required: a blank name is saved as no name at all.
-  const addressLooksRight = /^[^\s@]+@[^\s@]+$/.test(email)
-  showIdentityError('name', '')
+  // line below. Only what Git cannot supply is demanded; a field that was filled
+  // in anyway is still checked, because a bad address written over a good one
+  // would break a checkout that worked.
+  const nameMissing = pending.needs.name && !name
+  const addressWanted = pending.needs.email || Boolean(email)
+  const addressLooksRight = !addressWanted || /^[^\s@]+@[^\s@]+$/.test(email)
+  showIdentityError('name', nameMissing ? 'Enter a name.' : '')
   showIdentityError('email', addressLooksRight ? '' : 'Enter an address like you@example.com.')
-  if (!addressLooksRight) return
+  if (nameMissing || !addressLooksRight) return
 
   el('identity-save').disabled = true
   el('identity-status').textContent = 'Saving…'
@@ -242,7 +285,11 @@ async function saveIdentity (event) {
   // The reader moved on while Git wrote; the identity is saved all the same.
   if (state.identity !== pending) return
   if (!identity.complete) {
-    el('identity-status').textContent = 'Git still reports no identity for this repository.'
+    // Names what is still missing rather than repeating the heading: whatever was
+    // written, Git resolves the identity its own way, and a local value the
+    // checkout already carried can shadow a global save.
+    el('identity-status').textContent =
+      `Git still has ${missingIdentity(identity.needs)} for this repository.`
     el('identity-save').disabled = false
     return
   }

@@ -938,6 +938,11 @@ button.ghost:hover { background: var(--wb-primary-tint-1); }
 
 .identity-field input.invalid { border-color: var(--wb-danger); }
 
+/* Under an optional field, saying what Git will do with a blank one. Quieter
+   than the label above it and than the error that takes the same position when
+   there is one to show. */
+.identity-field__hint { color: var(--wb-muted); font-size: .74rem; }
+
 .identity-field__error { color: var(--wb-danger); font-size: .74rem; }
 
 .identity-scope {

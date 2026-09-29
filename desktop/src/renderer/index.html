@@ -179,32 +179,36 @@
     <section id="view-project" class="view" hidden>
       <div class="board-state" id="board-state"></div>
 
-      <!-- Asked for in place of the board when the checkout has no Git email
-           address: `workbook serve` will not start without a user.email, and
-           Git's own complaint about it names no fix. A name is not needed —
-           Git takes one from the account — so the field is offered rather than
-           required. Written with git config, so it is the identity the user's
-           commits carry too. -->
+      <!-- Asked for in place of the board when Git cannot supply the identity a
+           board records changes against. Which half is missing is a fact about
+           the machine — Git derives a name from the account, but that derivation
+           is empty on some systems — so app.js marks each field required or
+           optional from what the main process reports, and the two sentences it
+           fills in name what is missing. Written with git config, so it is the
+           identity the user's commits carry too. -->
       <form id="identity-form" class="identity-form" hidden novalidate>
         <header class="view-head">
           <h1>Who should changes be recorded as?</h1>
           <p class="subtitle">
-            Workbook records every change on a board against your Git email
-            address, and Git has none set for <code id="identity-repo"></code>.
-            This sets <code>user.email</code> — and <code>user.name</code> if
-            you give one — with <code>git config</code>, so it is the same
-            identity your commits carry.
+            Workbook records every change on a board against your Git identity,
+            and Git cannot supply all of it for
+            <code id="identity-repo"></code>. <span id="identity-missing"></span>
+            Saving writes it with <code>git config</code>, so it is the same
+            identity your own commits carry.
           </p>
         </header>
 
         <label class="identity-field">
-          <span class="identity-field__label">Name (optional)</span>
+          <span class="identity-field__label" id="identity-name-label">Name</span>
           <input id="identity-name" type="text" autocomplete="name" maxlength="200" spellcheck="false">
+          <span class="identity-field__hint" id="identity-name-hint" hidden>
+            Leave this blank and Git uses the name on your computer account.
+          </span>
           <span class="identity-field__error" id="identity-name-error" hidden></span>
         </label>
 
         <label class="identity-field">
-          <span class="identity-field__label">Email</span>
+          <span class="identity-field__label" id="identity-email-label">Email</span>
           <input id="identity-email" type="email" autocomplete="email" maxlength="254" spellcheck="false">
           <span class="identity-field__error" id="identity-email-error" hidden></span>
         </label>

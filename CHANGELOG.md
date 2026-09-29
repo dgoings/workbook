@@ -117,15 +117,19 @@ under Changed.
   dash and more characters — and never from the middle.
   `workbook list --find <text>` applies the same search rule, title,
   description or a task-ID prefix alike, from the CLI.
-- **The desktop app asks for your Git email address before opening a board
-  that needs one.** A checkout with no `user.email` has nobody to record
-  changes as, and what the app showed was Git's own `git config --get
-  user.email failed: exit status 1`. In place of the board it now shows a
-  form — the address, a name if you want one recorded, and whether to save
-  them for every repository (`--global`) or only this one (`--local`) — writes
-  them with `git config`, so they are the identity your own commits carry, and
-  then opens the board you asked for. A fresh install of Git has no identity
-  at all, which is why this was the first thing a new user met.
+- **The desktop app asks for whatever Git cannot supply before opening a board
+  that needs it.** A checkout with no `user.email` has nobody to record changes
+  as, and what the app showed was Git's own `git config --get user.email
+  failed: exit status 1`. In place of the board it now shows a form, writes
+  what you give it with `git config` — for every repository (`--global`) or
+  only this one (`--local`) — so it is the identity your own commits carry, and
+  then opens the board you asked for. Usually it asks for the address alone,
+  because Git makes a name up from your computer account when none is
+  configured. On a machine where that gives nothing — a Linux account with no
+  full name, for instance — the form asks for the name too, since Git refuses
+  to commit without one. It asks for exactly what Git reports it cannot supply,
+  and marks the rest optional. A fresh install of Git has no identity at all,
+  which is why this was the first thing a new user met.
 
 ### Changed
 - **`workbook setup` asks for the project key only when it creates a
