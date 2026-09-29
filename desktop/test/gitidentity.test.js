@@ -12,12 +12,14 @@
 // say.
 //
 // Those cases never read the test machine's own account. Git's name fallback is
-// the account's full name on macOS and empty on a Linux account with no GECOS
-// field — which is what the ubuntu-24.04 runner has, and what made an earlier
-// version of this suite pass here and fail there. GIT_AUTHOR_NAME stands in for
-// that fallback instead: set to a name it is derivable everywhere, set and empty
-// it is empty everywhere. scratchRepository always assigns it, so the suite
-// answers the same whatever the machine or the ambient environment holds.
+// the account's full name on macOS, the display name on Windows, and empty on a
+// Linux account with no GECOS field — which is what the ubuntu-24.04 runner has,
+// and what made an earlier version of this suite pass here and fail there. So
+// scratchRepository pins the fallback in both directions rather than asking the
+// machine: GIT_AUTHOR_NAME where a name should be derivable, and
+// `user.useConfigOnly` where none should be. See its comment for why that setting
+// and not an empty GIT_AUTHOR_NAME, which the Windows leg would have read as
+// unset.
 
 const { describe, test } = require('node:test')
 const assert = require('node:assert/strict')
@@ -241,6 +243,22 @@ describe('write', () => {
     assert.equal(result.complete, true)
   })
 
+  // Production mutation: writing every non-empty field is what copied the global
+  // address into .git/config on a name-only save.
+  test('a value that was not changed is left alone', async () => {
+    const git = fakeGit({ 'user.email': 'ada@example.com' }, null)
+    await gitidentity.write('/repo',
+      { name: 'Ada', email: 'ada@example.com', scope: 'local' }, { run: git.run })
+    assert.deepEqual(git.writes, [['config', '--local', 'user.name', 'Ada']])
+  })
+
+  test('a value that was changed is written even when Git did not need it', async () => {
+    const git = fakeGit({ 'user.name': 'Ada', 'user.email': 'ada@example.com' })
+    await gitidentity.write('/repo',
+      { name: 'Ada Lovelace', email: 'ada@example.com', scope: 'global' }, { run: git.run })
+    assert.deepEqual(git.writes, [['config', '--global', 'user.name', 'Ada Lovelace']])
+  })
+
   test('a name Git cannot supply is refused rather than written as nothing', async () => {
     const git = fakeGit({ 'user.email': 'ada@example.com' }, null)
     await assert.rejects(
@@ -286,34 +304,42 @@ describe('write', () => {
  * config and no system one, so whatever the machine running the tests has
  * configured cannot stand in for what the case sets.
  *
- * GIT_AUTHOR_NAME and GIT_COMMITTER_NAME stand in for the name Git derives from
- * the operating-system account, which is the one input that differs by machine:
- * macOS hands over the account's full name, and a Linux account with no GECOS
- * field — the ubuntu-24.04 runner's — hands over nothing. `accountName` set to a
- * name means Git can name an author on any system; set and empty it can on none,
- * and `git var` and `git commit-tree` both fail with "empty ident name"
- * everywhere. Both are always assigned, so an ambient value in the environment
- * that invoked the suite cannot change an answer either.
+ * `derivable` is the one input that differs by machine: whether Git can produce a
+ * name for an account with no `user.name`. macOS hands over the account's full
+ * name, Windows the account's display name, and a Linux account with no GECOS
+ * field — the ubuntu-24.04 runner's — hands over nothing. Neither branch is left
+ * to the machine:
  *
- * The stand-in is faithful only where `user.name` is unset, which is every case
- * that turns on the fallback: Git prefers GIT_AUTHOR_NAME over a configured
- * `user.name`, where the real derivation is consulted only in its absence. A case
- * that configures a name therefore uses a derivable `accountName`, and what a
- * configured name does on a machine with no derivation is checked against the
- * fake runner instead, where the two inputs can be set independently.
+ *  - derivable: GIT_AUTHOR_NAME and GIT_COMMITTER_NAME are set to a name, which
+ *    Git prefers over both the configuration and the account. Non-empty, so it
+ *    survives into the child on every platform.
+ *  - not derivable: `user.useConfigOnly` is set in the repository, which turns the
+ *    account derivation off outright — Git then fails with "no name was given and
+ *    auto-detection is disabled" — and the two variables are removed from the
+ *    environment so an ambient value cannot supply a name behind it.
+ *
+ * Deliberately not an empty GIT_AUTHOR_NAME, which is what this suite used first.
+ * Windows has no empty-valued environment variables — the C runtime reports one as
+ * unset — so on the windows-2025 leg Git would have fallen back to the account
+ * name and every case expecting no derivation would have failed there and nowhere
+ * else. `user.useConfigOnly` is configuration rather than an environment trick, so
+ * it behaves the same everywhere, and it is a setting real teams use to keep Git
+ * from authoring commits as an account name nobody chose, so these cases cover
+ * that configuration as well as standing in for a bare account.
  */
-function scratchRepository (t, { accountName = 'Runner' } = {}) {
+function scratchRepository (t, { derivable = true } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-identity-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
 
   const globalConfig = path.join(directory, 'empty.gitconfig')
   fs.writeFileSync(globalConfig, '')
-  const env = {
-    ...process.env,
-    GIT_CONFIG_GLOBAL: globalConfig,
-    GIT_CONFIG_NOSYSTEM: '1',
-    GIT_AUTHOR_NAME: accountName,
-    GIT_COMMITTER_NAME: accountName
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: '1' }
+  if (derivable) {
+    env.GIT_AUTHOR_NAME = 'Runner'
+    env.GIT_COMMITTER_NAME = 'Runner'
+  } else {
+    delete env.GIT_AUTHOR_NAME
+    delete env.GIT_COMMITTER_NAME
   }
 
   const repo = path.join(directory, 'repo')
@@ -321,7 +347,46 @@ function scratchRepository (t, { accountName = 'Runner' } = {}) {
   // Every direct Git call in a case goes through this, so it sees the same
   // environment the module under test is given.
   const git = (...args) => execFileSync('git', ['-C', repo, ...args], { env }).toString().trim()
+  if (!derivable) {
+    git('config', '--local', 'user.useConfigOnly', 'true')
+    assertNoDerivableName(repo, env)
+  }
   return { repo, env, git, globalConfig }
+}
+
+/**
+ * Check the premise of every "Git cannot name an author" case, once per repository.
+ *
+ * If the setup above ever stops taking — a Git that reads `user.useConfigOnly`
+ * differently, an environment that supplies a name another way — the cases would
+ * otherwise fail as a handful of confusing `needs` mismatches. This says what
+ * actually went wrong instead.
+ */
+function assertNoDerivableName (repo, env) {
+  // The same probe the module makes, address and all, so a failure here is about
+  // the name for the same reason a failure there is.
+  const probe = { ...env, GIT_AUTHOR_EMAIL: 'probe@workbench.invalid' }
+  let answered
+  try {
+    answered = execFileSync('git', ['-C', repo, 'var', 'GIT_AUTHOR_IDENT'],
+      { env: probe, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim()
+  } catch {
+    return
+  }
+  assert.fail('this repository is set up so that Git cannot derive a name, but ' +
+    `\`git var GIT_AUTHOR_IDENT\` answered "${answered}". The cases below test what ` +
+    'the form asks for when Git has no name to offer, and they cannot on this machine.')
+}
+
+// One key as .git/config alone holds it, ignoring the global file, or null when
+// that file does not set it. `--local --get` exits 1 for a key that is not there.
+function localValue (repo, env, key) {
+  try {
+    return execFileSync('git', ['-C', repo, 'config', '--local', '--get', key],
+      { env, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim()
+  } catch {
+    return null
+  }
 }
 
 // `git commit-tree` against the empty tree: either the hash it wrote, or the
@@ -342,7 +407,7 @@ function commitEmptyTree (repo, env) {
 describe('against real Git', () => {
   // (a) Both halves configured: nothing to ask, and Git signs a commit.
   test('both halves configured is complete and needs nothing', async (t) => {
-    const { repo, env, git } = scratchRepository(t, { accountName: 'Runner' })
+    const { repo, env, git } = scratchRepository(t)
     git('config', 'user.name', 'Ada')
     git('config', 'user.email', 'ada@example.com')
 
@@ -356,7 +421,7 @@ describe('against real Git', () => {
   // machine that derives a name, the address alone is the whole requirement, and
   // Git agrees by signing a commit with a name that is nowhere in the config.
   test('an address with no name is complete where Git derives one, and Git commits', async (t) => {
-    const { repo, env, git } = scratchRepository(t, { accountName: 'Runner' })
+    const { repo, env, git } = scratchRepository(t)
     git('config', 'user.email', 'ada@example.com')
 
     assert.deepEqual(await gitidentity.read(repo, { env }),
@@ -372,7 +437,7 @@ describe('against real Git', () => {
   // here either — it has no address to use — which is why the name probe supplies
   // one, so that a missing address is never read as a missing name.
   test('a fresh checkout that can derive a name is asked only for the address', async (t) => {
-    const { repo, env } = scratchRepository(t, { accountName: 'Runner' })
+    const { repo, env } = scratchRepository(t)
 
     assert.deepEqual((await gitidentity.read(repo, { env })).needs, { email: true, name: false })
 
@@ -387,7 +452,7 @@ describe('against real Git', () => {
   // the ubuntu-24.04 runner. Git refuses the commit, so the form has to ask, and
   // the name is the only thing it asks for.
   test('an address with no name needs the name where the fallback is empty', async (t) => {
-    const { repo, env, git } = scratchRepository(t, { accountName: '' })
+    const { repo, env, git } = scratchRepository(t, { derivable: false })
     git('config', 'user.email', 'ada@example.com')
 
     assert.deepEqual(await gitidentity.read(repo, { env }),
@@ -395,13 +460,13 @@ describe('against real Git', () => {
 
     const committed = commitEmptyTree(repo, env)
     assert.equal(committed.ok, false)
-    assert.match(committed.stderr, /empty ident name/)
+    assert.match(committed.stderr, /auto-detection is disabled/)
   })
 
   // (d) A fresh install of Git on such a machine: neither half, and Git can
   // supply neither.
   test('nothing configured and an empty fallback needs both', async (t) => {
-    const { repo, env } = scratchRepository(t, { accountName: '' })
+    const { repo, env } = scratchRepository(t, { derivable: false })
 
     assert.deepEqual(await gitidentity.read(repo, { env }),
       { name: null, email: null, complete: false, needs: { email: true, name: true } })
@@ -410,20 +475,39 @@ describe('against real Git', () => {
   // (e) And saving what was asked for is what makes the check pass — once with
   // the name alone, once with both.
   test('saving only what was needed makes the check pass', async (t) => {
-    const { repo, env, git } = scratchRepository(t, { accountName: '' })
+    const { repo, env, git } = scratchRepository(t, { derivable: false })
     git('config', 'user.email', 'ada@example.com')
 
     const result = await gitidentity.write(repo, { name: 'Ada', email: '', scope: 'local' }, { env })
     assert.deepEqual(result,
       { name: 'Ada', email: 'ada@example.com', complete: true, needs: { email: false, name: false } })
-    // Git still refuses to commit, because GIT_AUTHOR_NAME shadows the name that
-    // was just written; that the check passes is what this case is about, and
-    // case (a) is where a real commit is signed.
-    assert.equal((await gitidentity.read(repo, { env })).complete, true)
+    // And Git agrees: the name that was just written is the one thing it was
+    // missing, so the commit it refused in case (c) now goes through.
+    const committed = commitEmptyTree(repo, env)
+    assert.ok(committed.ok, committed.stderr)
+  })
+
+  // The form prefills from what Git resolves, so a name-only save arrives carrying
+  // the global address in the email box. Writing that back would copy the address
+  // into .git/config, where it would outlive a later change to the global one —
+  // this repository would go on recording an address the user had moved off.
+  test('a local save of the name alone leaves the global address where it is', async (t) => {
+    const { repo, env, git, globalConfig } = scratchRepository(t, { derivable: false })
+    git('config', '--global', 'user.email', 'ada@example.com')
+
+    assert.deepEqual((await gitidentity.read(repo, { env })).needs, { email: false, name: true })
+    // The name is what was asked for; the address is what the form prefilled.
+    const result = await gitidentity.write(repo,
+      { name: 'Ada', email: 'ada@example.com', scope: 'local' }, { env })
+    assert.equal(result.complete, true)
+
+    assert.equal(git('config', '--local', '--get', 'user.name'), 'Ada')
+    assert.equal(localValue(repo, env, 'user.email'), null)
+    assert.match(fs.readFileSync(globalConfig, 'utf8'), /ada@example\.com/)
   })
 
   test('a local save in a repository with no identity makes it complete', async (t) => {
-    const { repo, env, globalConfig } = scratchRepository(t, { accountName: '' })
+    const { repo, env, globalConfig } = scratchRepository(t, { derivable: false })
 
     assert.deepEqual((await gitidentity.read(repo, { env })).needs, { email: true, name: true })
     const result = await gitidentity.write(repo,

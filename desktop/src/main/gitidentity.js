@@ -5,16 +5,25 @@
 //
 // Git requires both a name and an address to write a commit. Neither has to be
 // configured: with `user.name` unset Git derives a name from the operating-system
-// account — the full name on macOS, the account description on Windows — and
-// commits happily. But that derivation is empty on some systems; a Linux account
-// with no GECOS full name is one, and the ubuntu-24.04 CI runner is exactly that.
-// There `git commit-tree` with `user.email` set and `user.name` unset fails with
+// account — the full name on macOS, the account's display name on Windows, and
+// the literal "unknown" where Windows has no display name to give — and commits
+// happily. But that derivation is empty on some systems; a Linux account with no
+// GECOS full name is one, and the ubuntu-24.04 CI runner is exactly that. There
+// `git commit-tree` with `user.email` set and `user.name` unset fails with
 // "fatal: empty ident name (for <you@example.com>) not allowed". So whether a
 // name is needed is a fact about the machine, not about Git, and this module
 // asks rather than assumes: `git var GIT_AUTHOR_IDENT` is Git resolving the very
 // identity it would sign a commit with, configuration and derivation together,
 // and it fails when it cannot. It is run with an address supplied, so that what
 // it answers is about the name alone.
+//
+// The derivation succeeding is not the same as it being any good. On a Windows
+// machine that is not domain-joined it essentially always succeeds, sometimes as
+// "unknown", so this form will not ask for a name and commits can be authored by
+// nobody in particular. That is Git's own default and not something a board should
+// refuse to start over; a team that cares sets `user.useConfigOnly = true`, which
+// turns the derivation off, and then Git reports it cannot name an author and this
+// form asks for the name like anywhere else.
 //
 // The address is not symmetrical with the name. `workbook serve` reads it with
 // `git config --get user.email` — that is the actor it records a change against —
@@ -181,10 +190,22 @@ function validate ({ name, email } = {}, needs = DEFAULT_NEEDS) {
  *
  * Validated again here rather than trusted from the page: the renderer is the
  * side that can be wrong, and it is checked against what Git says is missing now
- * rather than against what was missing when the form was drawn. Only a field the
- * user filled is written — a blank one is left to Git, because an empty
- * `user.name` is not the same as an unset one (Git refuses to commit with one)
- * and writing it would break the checkout this form exists to make usable.
+ * rather than against what was missing when the form was drawn.
+ *
+ * A field is written when Git needs it or when its value differs from the one Git
+ * already resolves, and otherwise left alone. A blank field must never be written,
+ * because an empty `user.name` is not the same as an unset one — Git refuses to
+ * commit with one — and writing it would break the checkout this form exists to
+ * make usable. A field the user did not change must not be written either: the
+ * form prefills from what Git resolves, so a `--local` save of a name would
+ * otherwise copy the global address into .git/config, and that repository would
+ * then go on recording an address the user had since moved off globally. What is
+ * left is a value typed over the one that was there, which is a deliberate edit.
+ *
+ * Testing `needed` as well as the difference is belt-and-braces: a field Git needs
+ * is one it has no value for, so a filled-in answer always differs from it. It is
+ * there so that the rule still writes what is required if `needs` ever comes to
+ * mean something a comparison alone would miss.
  *
  * Returns the identity as Git now resolves it rather than what was written,
  * because a global value is still shadowed by a local one the checkout already
@@ -198,8 +219,12 @@ async function write (repoPath, { name, email, scope } = {}, { run = defaultRunn
   if (!checked.ok) throw new Error(Object.values(checked.errors).join(' '))
 
   const where = scope === 'global' ? '--global' : '--local'
-  if (checked.name) await run(repoPath, ['config', where, 'user.name', checked.name], env)
-  if (checked.email) await run(repoPath, ['config', where, 'user.email', checked.email], env)
+  for (const [key, value, was, needed] of [
+    ['user.name', checked.name, before.name, before.needs.name],
+    ['user.email', checked.email, before.email, before.needs.email]
+  ]) {
+    if (value && (needed || value !== was)) await run(repoPath, ['config', where, key, value], env)
+  }
   return read(repoPath, { run, env })
 }
 
