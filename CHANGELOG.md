@@ -160,6 +160,8 @@ described under Changed.
   instead of two.** The root and the common directory were two questions in
   two processes; rev-parse answers both in one, about twenty-five
   milliseconds saved per command.
+- `workbook serve` parses the board page once per process instead of per
+  handler.
 
 ### Fixed
 - **Saving the board's settings after changing a status or a priority no longer

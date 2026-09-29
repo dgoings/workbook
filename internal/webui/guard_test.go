@@ -74,6 +74,7 @@ func assertGuardRejection(t *testing.T, response *httptest.ResponseRecorder, wan
 }
 
 func TestGuardRejectsForeignHosts(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		host string
@@ -98,6 +99,7 @@ func TestGuardRejectsForeignHosts(t *testing.T) {
 }
 
 func TestGuardAllowsTheBoundLoopbackHostAndItsAliases(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		boundAddr string
@@ -125,6 +127,7 @@ func TestGuardAllowsTheBoundLoopbackHostAndItsAliases(t *testing.T) {
 }
 
 func TestGuardRejectsForeignOrigins(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		method string
@@ -151,6 +154,7 @@ func TestGuardRejectsForeignOrigins(t *testing.T) {
 }
 
 func TestGuardAllowsTheBoardsOwnOrigin(t *testing.T) {
+	t.Parallel()
 	for _, origin := range []string{"http://127.0.0.1:7331", "http://localhost:7331"} {
 		t.Run(origin, func(t *testing.T) {
 			handler, _, creates := guardedHandler(t, "127.0.0.1:7331")
@@ -166,6 +170,7 @@ func TestGuardAllowsTheBoardsOwnOrigin(t *testing.T) {
 }
 
 func TestGuardRequiresJSONMediaTypeOnMutations(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		contentType string
@@ -190,6 +195,7 @@ func TestGuardRequiresJSONMediaTypeOnMutations(t *testing.T) {
 }
 
 func TestGuardAcceptsJSONMediaTypeVariantsAndSparesReads(t *testing.T) {
+	t.Parallel()
 	handler, lists, creates := guardedHandler(t, "127.0.0.1:7331")
 
 	response := guardedRequest(t, handler, http.MethodPost, "/api/tasks", "127.0.0.1:7331", "", "application/json; charset=utf-8", `{"title":"charset"}`)
@@ -210,6 +216,7 @@ func TestGuardAcceptsJSONMediaTypeVariantsAndSparesReads(t *testing.T) {
 }
 
 func TestGuardRequiresJSONMediaTypeOnBodyLessMutations(t *testing.T) {
+	t.Parallel()
 	dependent := boardTasks()[0]
 	prerequisite := boardTasks()[1]
 	dependencyCalls := 0
@@ -247,6 +254,7 @@ func TestGuardRequiresJSONMediaTypeOnBodyLessMutations(t *testing.T) {
 }
 
 func TestGuardPinsHostOnExplicitNonLoopbackBind(t *testing.T) {
+	t.Parallel()
 	// A bind to one address knows exactly which address reaches it, so a Host
 	// that is not that address is refused the same way a foreign Host on a
 	// loopback bind is. A rebound name that resolves to the board is the attack
@@ -284,6 +292,7 @@ func TestGuardPinsHostOnExplicitNonLoopbackBind(t *testing.T) {
 }
 
 func TestGuardAllowsTheBoundExplicitAddress(t *testing.T) {
+	t.Parallel()
 	// The bound address is compared as an address, so the spellings a browser
 	// or a listener may choose for the same one are the same host.
 	tests := []struct {
@@ -315,6 +324,7 @@ func TestGuardAllowsTheBoundExplicitAddress(t *testing.T) {
 }
 
 func TestGuardRejectsForeignOriginsOnExplicitNonLoopbackBind(t *testing.T) {
+	t.Parallel()
 	// A foreign Origin is refused whether the Origin is compared with the bound
 	// address or with the Host the browser sent; the case that separates those
 	// two rules is in TestGuardComparesOriginWithTheBoundAddress below.
@@ -331,6 +341,7 @@ func TestGuardRejectsForeignOriginsOnExplicitNonLoopbackBind(t *testing.T) {
 }
 
 func TestGuardComparesOriginWithTheBoundAddress(t *testing.T) {
+	t.Parallel()
 	// On an explicit bind the Origin is measured against the address the
 	// listener bound, not against the authority the browser happened to send.
 	// The two rules differ only when one address is spelled two ways, so that is
@@ -352,6 +363,7 @@ func TestGuardComparesOriginWithTheBoundAddress(t *testing.T) {
 }
 
 func TestGuardOnWildcardBindPinsOnlyThePort(t *testing.T) {
+	t.Parallel()
 	// A wildcard bind answers every address this machine has, under every name
 	// that resolves to one of them, so there is no host to pin: the Host check
 	// falls back to the port and the Origin check to repeating the authority the

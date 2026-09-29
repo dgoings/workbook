@@ -103,6 +103,7 @@ function cancelShapedLeave(zone, transfer) {
 // whichever event happened to land last, and a file released at the wrong moment
 // would be handed to the browser, which navigates the window to it.
 func TestHandlerClientAcceptsAFileDragOnBothDragEnterAndDragOver(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	program := createAttachmentProgram(t, `
 `+dropHarness+`
@@ -150,6 +151,7 @@ setTimeout(async () => {
 // it entirely alone — no highlight, no preventDefault, nothing swallowed. The
 // board's machinery has to see exactly what it saw before this zone existed.
 func TestHandlerClientLeavesACardDragAloneOverTheAttachmentZone(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	program := createAttachmentProgram(t, `
 `+dropHarness+`
@@ -188,6 +190,7 @@ setTimeout(async () => {
 // drag is asked what it is carrying, and this pins the answer against exactly
 // that state: a live activeDrag with a file drag on top of it.
 func TestHandlerClientLeavesAFileDragAloneOverTheBoard(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := clientPlacementTask("WB-01J0000000000000000000DR01", "A card", core.StatusReady, core.PriorityMedium)
 	tasks := []core.Task{task}
@@ -248,6 +251,7 @@ setTimeout(async () => {
 // a chosen file is asked — because it is the same call. The refusal names the
 // file that caused it and keeps everything staged before it.
 func TestHandlerClientStagesFilesDroppedOnTheCreateForm(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	program := createAttachmentProgram(t, `
 `+dropHarness+`
@@ -305,6 +309,7 @@ setTimeout(async () => {
 // acceptFiles does on that surface. One write per file, in the order they were
 // dropped, to the task the page is showing.
 func TestHandlerClientUploadsFilesDroppedOnATaskPage(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := threadPageTask()
 	answered := task
@@ -360,6 +365,7 @@ setTimeout(async () => {
 // drop to the browser, and the browser navigates the window to the file. Over a
 // form holding staged files that is the worst outcome available.
 func TestHandlerClientRefusesADropWhileTheCreateRunWalksTheList(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	mutation, refreshed := createdTaskJSON(t)
 	program := createAttachmentProgram(t, `
@@ -488,6 +494,7 @@ setTimeout(async () => {
 // from a row to the chooser leaves a child without leaving the zone, and the
 // rows underneath are replaced whenever the list changes.
 func TestHandlerClientKeepsTheDropHighlightThroughChildChurn(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	program := createAttachmentProgram(t, `
 `+dropHarness+`
@@ -554,6 +561,7 @@ setTimeout(async () => {
 // drag event calls that off. Churn always has a further event — the dragenter
 // for whatever the cursor moved onto — and a drag that has ended never does.
 func TestHandlerClientClearsTheDropHighlightWhenADragIsAbandoned(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	program := createAttachmentProgram(t, `
 `+dropHarness+`
@@ -621,6 +629,7 @@ setTimeout(async () => {
 // A folder is not a file whatever the drop calls it, and a drop carrying
 // nothing attachable must say so rather than wedge. Neither leaves the zone lit.
 func TestHandlerClientRefusesFolderAndEmptyDropsWithoutWedging(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	program := createAttachmentProgram(t, `
 `+dropHarness+`

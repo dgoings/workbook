@@ -32,6 +32,7 @@ const (
 // board. The save is refused while they are standing there. They learn about it
 // on the board, and the task's form says the same thing when they open it.
 func TestHandlerClientDetachedDetailSaveReportsItsRefusal(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := clientPlacementTask(detachedSaveRefusedTaskID, "Slow to save", core.StatusReady, core.PriorityMedium)
 	task.Description = "Original."
@@ -152,6 +153,7 @@ setTimeout(async () => {
 // about. The report names the conflict rather than the raw server sentence about
 // heads, and the re-base it would have done has no form left to do it to.
 func TestHandlerClientDetachedDetailSaveReportsAConflictAsOne(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := clientPlacementTask(detachedSaveStaleTaskID, "Edited twice", core.StatusReady, core.PriorityMedium)
 	task.Head = "head-1"
@@ -239,6 +241,7 @@ setTimeout(async () => {
 // went to is theirs, and returning them to the board would take it away from
 // them a second or two after they chose it.
 func TestHandlerClientDetachedDetailSaveLeavesTheRouteTheReaderChose(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	saving := clientPlacementTask(detachedSaveLandedTaskID, "Slow to save", core.StatusReady, core.PriorityMedium)
 	saving.Head = "head-1"
@@ -321,6 +324,7 @@ setTimeout(async () => {
 // The reader leaves while the forced refresh is still open, because that is the
 // only path on which a detached report knows what a refresh found.
 func TestHandlerClientDetachedDetailSaveDoesNotOfferADeletedTask(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := clientPlacementTask(detachedSaveDeletedTaskID, "Deleted while saving", core.StatusReady, core.PriorityMedium)
 	task.Head = "head-1"

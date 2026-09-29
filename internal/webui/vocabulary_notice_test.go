@@ -40,6 +40,7 @@ func coloredBuiltInPriorities(t *testing.T, color string) core.PriorityVocabular
 // nothing else, which is the whole of the narrowing: a recolor leaves it where
 // it was, and every change that moves a column or a priority moves it.
 func TestVocabularyShapeFollowsTheColumnsAndThePrioritiesAndNotTheColors(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	base := VocabularyState{Vocabulary: vocabulary, Head: "head-1", Priorities: configuredPriorities(t)}
 	shape := vocabularyShape(base)
@@ -124,6 +125,7 @@ boardView.dataset.vocabularyShape = ` + strconv.Quote(vocabularyShape(state)) + 
 // Setting a color says nothing to the board, because the board has already
 // drawn it: the answer carries the stylesheet and the page swaps it in place.
 func TestClientRaisesNoNoticeForAColorTheBoardHasAlreadyDrawn(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	runNoticeClient(t, "a color the board is already drawing", vocabulary, priorities, "head-7", `
@@ -151,6 +153,7 @@ func TestClientRaisesNoNoticeForAColorTheBoardHasAlreadyDrawn(t *testing.T) {
 // Renaming a priority still says so: the cards are drawn under the name the page
 // was served with, and the label in every form and message is that name too.
 func TestClientStillRaisesANoticeWhenAPriorityIsRenamed(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	runNoticeClient(t, "a priority renamed under the board", vocabulary, priorities, "head-7", `
@@ -173,6 +176,7 @@ func TestClientStillRaisesANoticeWhenAPriorityIsRenamed(t *testing.T) {
 // the columns on screen were built from the old vocabulary and only a reload
 // rebuilds them.
 func TestClientStillRaisesANoticeWhenAStatusIsRenamed(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "a status renamed under the board", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
@@ -196,6 +200,7 @@ func TestClientStillRaisesANoticeWhenAStatusIsRenamed(t *testing.T) {
 // nothing at all. This is the same narrowing seen from the other side: the page
 // is current, so the head is recorded and the reader is left alone.
 func TestClientRaisesNoNoticeForAHeadThatMovedWithoutTheConfiguration(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "a head that moved past an unchanged configuration", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-9")+`;
@@ -214,6 +219,7 @@ func TestClientRaisesNoNoticeForAHeadThatMovedWithoutTheConfiguration(t *testing
 // older than the server holds, and the decision is still to stay quiet: a color
 // is not what a reload is for. Their rename is, and it says so.
 func TestClientPollAnnouncesATeammatesRenameAndNotTheirRecolor(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	tasks := []core.Task{
 		clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium),
@@ -251,6 +257,7 @@ func TestClientPollAnnouncesATeammatesRenameAndNotTheirRecolor(t *testing.T) {
 // keeps the behavior it had: the head moved, and nothing here can say whether
 // what moved is on screen, so the notice goes up.
 func TestClientAnnouncesAMovedHeadItCannotCompare(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	tasks := []core.Task{
 		clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium),
@@ -271,6 +278,7 @@ func TestClientAnnouncesAMovedHeadItCannotCompare(t *testing.T) {
 // The board page states the shape it was rendered from, which is the reading the
 // client compares everything against.
 func TestHandlerBoardPageStatesTheShapeItWasDrawnFrom(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	handler := prioritiesAdministrableHandler(vocabulary, priorities, "head-7", nil)

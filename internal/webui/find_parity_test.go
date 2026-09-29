@@ -31,6 +31,7 @@ var findParityKeys = []string{"WB", "ZZ"}
 // string statements rather than comments for exactly that reason: html/template
 // strips the comments out of the script it serves.
 func TestBoardFindMatchesCoreMatcher(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	source := boardPage(t)
 	const begin = `"find:begin";`

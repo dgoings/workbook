@@ -166,6 +166,7 @@ func markdownCaseProgram(t *testing.T, cases []markdownCase, body string) string
 
 // What the subset claims to support, and the elements each piece of it makes.
 func TestHandlerClientRendersTheMarkdownSubset(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	cases := []markdownCase{
 		{
@@ -272,6 +273,7 @@ setTimeout(() => { checkCases(); }, 0);
 // it does not understand is drawn as the characters somebody typed — never
 // guessed at, never half-parsed, and never turned into markup.
 func TestHandlerClientDrawsUnsupportedMarkdownAsText(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	cases := []markdownCase{
 		{
@@ -408,6 +410,7 @@ setTimeout(() => { checkCases(); }, 0);
 // rendering somebody could be shown; the assertion is on the caption, because
 // the caption is what a reader decides from.
 func TestHandlerClientNeverForgesALinksCaption(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	evil := "https://evil.test/phish"
 	cases := []markdownCase{
@@ -472,6 +475,7 @@ setTimeout(() => {
 // A markdown link is an anchor only for the two schemes this page follows, and
 // it carries the same relationship the attachment list's links carry.
 func TestHandlerClientLinksOnlyHTTPMarkdownTargets(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	cases := []markdownCase{
 		{Name: "https", body: "[a](https://example.test/x)"},
@@ -518,6 +522,7 @@ setTimeout(() => {
 // images named in task text would report every reader of every card to whoever
 // wrote the task.
 func TestHandlerClientDrawsImagesOnlyAsAttachmentsOfTheTask(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	cases := []markdownCase{
 		{Name: "a raster attachment", body: "![the diagram](attachment:" + markdownPNGID + ")"},
@@ -591,6 +596,7 @@ setTimeout(() => {
 // reader would meet it in rather than in a microbenchmark. The memo stays
 // because it is correct and cheap, not because this number proves it.
 func TestHandlerClientBoundsHostileMarkdown(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	hostile := []struct {
 		name   string
@@ -676,6 +682,7 @@ setTimeout(() => {
 // same value, a save still sends only what this reader changed, and it still
 // names the tip the page rendered.
 func TestHandlerClientTaskDescriptionReadsAndEdits(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := clientPlacementTask(markdownTaskID, "Formatted task", core.StatusReady, core.PriorityMedium)
 	task.Head = "head-1"
@@ -742,6 +749,7 @@ setTimeout(async () => {
 // The text itself does not follow the poll and must not: no field on this form
 // does, which is what keeps a reader's edits under their caret.
 func TestHandlerClientDescriptionFollowsThePollAndItsAttachments(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := clientPlacementTask(markdownTaskID, "Formatted task", core.StatusReady, core.PriorityMedium)
 	task.Head = "head-1"
@@ -776,6 +784,7 @@ setTimeout(async () => {
 // The clamp on a card description measures lines of one box: a heading or a
 // list inside it would make a card's height depend on what somebody typed.
 func TestHandlerClientCardsRenderOnlyInlineMarkdown(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := clientPlacementTask(markdownTaskID, "Formatted task", core.StatusReady, core.PriorityMedium)
 	task.Description = "# Heading\n- item **bold** `code` [docs](https://example.test/x)\n> quote\n\n```\ncode\n```"
@@ -830,6 +839,7 @@ setTimeout(() => {
 // drawn as an image on a page that the route would only ever hand back as a
 // download.
 func TestHandlerPublishesTheInlineAttachmentMediaTypes(t *testing.T) {
+	t.Parallel()
 	body := boardPage(t)
 	want := `data-inline-media="` + strings.Join(InlineAttachmentMediaTypes(), " ") + `"`
 	if !strings.Contains(body, want) {
@@ -861,6 +871,7 @@ func TestHandlerPublishesTheInlineAttachmentMediaTypes(t *testing.T) {
 // and this policy is the second lock on the same door — one that named a host,
 // a scheme, or `data:` would be how a bug in the first lock reaches the wire.
 func TestHandlerServesAPolicyThatPermitsItsOwnAttachmentImages(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -891,6 +902,7 @@ func TestHandlerServesAPolicyThatPermitsItsOwnAttachmentImages(t *testing.T) {
 // the way the board's own chrome is: a fake DOM with no layout engine could not
 // read a rule out of it.
 func TestHandlerPinsMarkdownBlockRules(t *testing.T) {
+	t.Parallel()
 	body := boardPage(t)
 	for _, fragment := range []string{
 		// A code block keeps its own line breaks and scrolls inside its own box.
@@ -964,6 +976,7 @@ func TestHandlerPinsMarkdownBlockRules(t *testing.T) {
 // NUL — drew an eight pixel target without it, and this is the control that
 // downloads the file.
 func TestHandlerPinsAttachmentLinkTargetSize(t *testing.T) {
+	t.Parallel()
 	if body := boardPage(t); !strings.Contains(body, `.attachment__name a { display: inline-block; min-width: 1.5rem; padding: .2rem 0;`) {
 		t.Error("the attachment link no longer pins a minimum target size")
 	}

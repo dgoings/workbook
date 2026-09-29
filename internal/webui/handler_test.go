@@ -21,6 +21,7 @@ import (
 const contentSecurityPolicy = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
 
 func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
+	t.Parallel()
 	tasks := boardTasks()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
@@ -100,6 +101,7 @@ func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 }
 
 func TestHandlerReturnsMutationWarningAfterDurableWrite(t *testing.T) {
+	t.Parallel()
 	result := core.MutationResult{
 		Task: core.Task{
 			ID: "WB-01K0M6B8A4FTT8C39MXXYTW7D1",
@@ -148,6 +150,7 @@ func TestHandlerReturnsMutationWarningAfterDurableWrite(t *testing.T) {
 }
 
 func TestHandlerRendersInReviewTasks(t *testing.T) {
+	t.Parallel()
 	tasks := boardTasks()
 	tasks = append(tasks, core.Task{
 		ID: "WB-01J00000000000000000000007",
@@ -171,6 +174,7 @@ func TestHandlerRendersInReviewTasks(t *testing.T) {
 }
 
 func TestHandlerDeletesRestoresAndListsTombstonedTasks(t *testing.T) {
+	t.Parallel()
 	active := boardTasks()[0]
 	deleted := boardTasks()[1]
 	deleted.Deleted = true
@@ -215,6 +219,7 @@ func TestHandlerDeletesRestoresAndListsTombstonedTasks(t *testing.T) {
 }
 
 func TestHandlerClientNamesJSONMediaTypeOnEveryMutation(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	deleted := clientPlacementTask("WB-01J00000000000000000000070", "Body-less restore", core.StatusReady, core.PriorityMedium)
 	deleted.Deleted = true
@@ -276,6 +281,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerAddsAndRemovesTaskDependencies(t *testing.T) {
+	t.Parallel()
 	dependent := boardTasks()[0]
 	prerequisite := boardTasks()[1]
 	var calls []string
@@ -323,6 +329,7 @@ func TestHandlerAddsAndRemovesTaskDependencies(t *testing.T) {
 }
 
 func TestHandlerDependencyMutationsRequireEmptyRequestBodies(t *testing.T) {
+	t.Parallel()
 	dependent := boardTasks()[0]
 	prerequisite := boardTasks()[1]
 	dependencyCalls := 0
@@ -402,6 +409,7 @@ func TestHandlerDependencyMutationsRequireEmptyRequestBodies(t *testing.T) {
 }
 
 func TestHandlerReturnsDependencyMutationErrors(t *testing.T) {
+	t.Parallel()
 	dependent := boardTasks()[0]
 	prerequisite := boardTasks()[1]
 	handler := NewHandler(Options{
@@ -429,6 +437,7 @@ func TestHandlerReturnsDependencyMutationErrors(t *testing.T) {
 }
 
 func TestHandlerRejectsWrongDependencyMethodsAndMalformedPaths(t *testing.T) {
+	t.Parallel()
 	dependent := boardTasks()[0]
 	prerequisite := boardTasks()[1]
 	dependencyCalls := 0
@@ -480,6 +489,7 @@ func TestHandlerRejectsWrongDependencyMethodsAndMalformedPaths(t *testing.T) {
 }
 
 func TestHandlerRejectsEncodedDependencyPathAliases(t *testing.T) {
+	t.Parallel()
 	dependent := boardTasks()[0]
 	prerequisite := boardTasks()[1]
 	dependencyCalls := 0
@@ -542,6 +552,7 @@ func TestHandlerRejectsEncodedDependencyPathAliases(t *testing.T) {
 }
 
 func TestHandlerServesTaskRouteShell(t *testing.T) {
+	t.Parallel()
 	tasks := boardTasks()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
@@ -576,6 +587,7 @@ func TestHandlerServesTaskRouteShell(t *testing.T) {
 // they used to have is gone outright: the address is not a route, it is not a
 // method question either, and nothing on the board still links to it.
 func TestHandlerRemovesTheDeletedTasksRoute(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 
 	for _, method := range []string{http.MethodGet, http.MethodPost} {
@@ -601,6 +613,7 @@ func TestHandlerRemovesTheDeletedTasksRoute(t *testing.T) {
 // element the board's render reveals — the switch itself is not hidden, because
 // everything in that row appears and goes together.
 func TestHandlerServesTheDeletedColumnToggleAndBoardNavigation(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 
 	for _, path := range []string{"/", "/tasks/new"} {
@@ -629,6 +642,7 @@ func TestHandlerServesTheDeletedColumnToggleAndBoardNavigation(t *testing.T) {
 }
 
 func TestHandlerRendersTaskAndNewTaskLinks(t *testing.T) {
+	t.Parallel()
 	tasks := boardTasks()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
@@ -652,6 +666,7 @@ func TestHandlerRendersTaskAndNewTaskLinks(t *testing.T) {
 }
 
 func TestHandlerRendersTextLikeCopyableTaskIDControls(t *testing.T) {
+	t.Parallel()
 	tasks := boardTasks()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
@@ -701,6 +716,7 @@ func TestHandlerRendersTextLikeCopyableTaskIDControls(t *testing.T) {
 }
 
 func TestHandlerRequiresCanonicalStatusChoiceForUnknownTask(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	tasks := boardTasks()
 	unknown := tasks[2]
@@ -743,6 +759,7 @@ setTimeout(() => {
 }
 
 func TestHandlerClientMarksDescriptionAsFlexibleField(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := boardTasks()[0]
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil })
@@ -779,6 +796,7 @@ setTimeout(() => {
 }
 
 func TestHandlerClientUsesSharedTaskSidebarLayout(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := boardTasks()[0]
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil })
@@ -873,6 +891,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientSidebarAccessibilityAndMobileOrder(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000072", "Current task", core.StatusReady, core.PriorityMedium)
 	candidate := clientPlacementTask("WB-01J00000000000000000000073", "Candidate task", core.StatusDone, core.PriorityHigh)
@@ -982,6 +1001,7 @@ setTimeout(() => {
 }
 
 func TestHandlerClientClampsRelationshipListboxPlacement(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	response := request(t, handler, http.MethodGet, "/tasks/new")
@@ -1032,6 +1052,7 @@ for (const testCase of cases) {
 }
 
 func TestHandlerClientStagesNewTaskRelationshipsWithoutMutating(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	dependsCandidate := clientPlacementTask("WB-01J00000000000000000000072", "Depends on candidate", core.StatusDone, core.PriorityHigh)
 	blocksCandidate := clientPlacementTask("WB-01J00000000000000000000073", "Blocks candidate", core.StatusBacklog, core.PriorityLow)
@@ -1161,6 +1182,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientRefreshesMountedNewTaskRelationshipCandidates(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	becomesDeleted := clientPlacementTask("WB-01J00000000000000000000081", "Becomes deleted", core.StatusReady, core.PriorityHigh)
 	becomesRestored := clientPlacementTask("WB-01J00000000000000000000082", "Becomes restored", core.StatusBacklog, core.PriorityLow)
@@ -1336,6 +1358,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientCreatesTaskWithBothRelationshipDirections(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	prerequisite := clientPlacementTask("WB-01J00000000000000000000074", "Prerequisite", core.StatusDone, core.PriorityHigh)
 	blockedTask := clientPlacementTask("WB-01J00000000000000000000075", "Blocked task", core.StatusBacklog, core.PriorityLow)
@@ -1550,6 +1573,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientPreservesNewTaskRelationshipDraftsWhenCreateFails(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	prerequisite := clientPlacementTask("WB-01J00000000000000000000077", "Prerequisite", core.StatusDone, core.PriorityHigh)
 	blockedTask := clientPlacementTask("WB-01J00000000000000000000078", "Blocked task", core.StatusBacklog, core.PriorityLow)
@@ -1709,6 +1733,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientRetainsFailedRelationshipDraftsAfterCreate(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	prerequisite := clientPlacementTask("WB-01J00000000000000000000079", "Prerequisite", core.StatusDone, core.PriorityHigh)
 	blockedTask := clientPlacementTask("WB-01J0000000000000000000007A", "Blocked task", core.StatusBacklog, core.PriorityLow)
@@ -1952,6 +1977,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDoesNotDuplicateCreatedTaskWhenRefreshFails(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	prerequisite := clientPlacementTask("WB-01J0000000000000000000007C", "Prerequisite", core.StatusDone, core.PriorityHigh)
 	blockedTask := clientPlacementTask("WB-01J0000000000000000000007D", "Blocked task", core.StatusBacklog, core.PriorityLow)
@@ -2085,6 +2111,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientCreatedTaskRefreshDoesNotNavigateDetachedRoute(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	blockedTask := clientPlacementTask("WB-01J00000000000000000000085", "Blocked task", core.StatusBacklog, core.PriorityLow)
 	otherTask := clientPlacementTask("WB-01J00000000000000000000086", "Other task", core.StatusInProgress, core.PriorityMedium)
@@ -2242,6 +2269,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerShowsRecoverableErrorWhenInitialTaskLoadFails(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := boardTasks()[0]
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil })
@@ -2289,6 +2317,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientRendersDependencyRelationships(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000031", "Current task", core.StatusReady, core.PriorityMedium)
 	activeDependency := clientPlacementTask("WB-01J00000000000000000000032", "Active prerequisite", core.StatusDone, core.PriorityHigh)
@@ -2407,6 +2436,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientMountsCompactRelationshipsInSidebar(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000037", "Current task", core.StatusReady, core.PriorityMedium)
 	activeDependency := clientPlacementTask("WB-01J00000000000000000000038", "Active prerequisite", core.StatusDone, core.PriorityHigh)
@@ -2491,6 +2521,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientFiltersDependencyComboboxCandidates(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000041", "Current task", core.StatusReady, core.PriorityMedium)
 	existingDependency := clientPlacementTask("WB-01J00000000000000000000042", "Existing prerequisite", core.StatusDone, core.PriorityHigh)
@@ -2571,6 +2602,7 @@ setTimeout(() => {
 }
 
 func TestHandlerClientDependencySnapshotPrefersTombstones(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000047", "Current task", core.StatusReady, core.PriorityMedium)
 	activeDependency := clientPlacementTask("WB-01J00000000000000000000048", "Active prerequisite copy", core.StatusDone, core.PriorityHigh)
@@ -2641,6 +2673,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDependencyComboboxSelectionCollapseIsCoherent(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J0000000000000000000004B", "Current task", core.StatusReady, core.PriorityMedium)
 	pointerCandidate := clientPlacementTask("WB-01J0000000000000000000004C", "Pointer candidate", core.StatusDone, core.PriorityHigh)
@@ -2703,6 +2736,7 @@ setTimeout(() => {
 }
 
 func TestHandlerClientDependencyComboboxScrollsKeyboardOptionIntoView(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J0000000000000000000004E", "Current task", core.StatusReady, core.PriorityMedium)
 	first := clientPlacementTask("WB-01J0000000000000000000004F", "First candidate", core.StatusDone, core.PriorityHigh)
@@ -2747,6 +2781,7 @@ setTimeout(() => {
 }
 
 func TestHandlerClientDependencyComboboxDismissesOnLostFocus(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000090", "Current task", core.StatusReady, core.PriorityMedium)
 	first := clientPlacementTask("WB-01J00000000000000000000091", "First candidate", core.StatusDone, core.PriorityHigh)
@@ -2889,6 +2924,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDependencyMutationOrientationAndRefresh(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000051", "Current task", core.StatusReady, core.PriorityMedium)
 	existingDependency := clientPlacementTask("WB-01J00000000000000000000052", "Existing prerequisite", core.StatusDone, core.PriorityHigh)
@@ -3045,6 +3081,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDependencyMutationFollowsSupersedingRefresh(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000056", "Current task", core.StatusReady, core.PriorityMedium)
 	candidate := clientPlacementTask("WB-01J00000000000000000000057", "Candidate task", core.StatusDone, core.PriorityHigh)
@@ -3140,6 +3177,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDependencyMutationSettlesAfterControllerSupersession(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J0000000000000000000005A", "Current task", core.StatusReady, core.PriorityMedium)
 	candidate := clientPlacementTask("WB-01J0000000000000000000005B", "Candidate task", core.StatusDone, core.PriorityHigh)
@@ -3270,6 +3308,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDependencyMutationDoesNotWriteDetachedGroupAfterNewerPoll(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J0000000000000000000005C", "Current task", core.StatusReady, core.PriorityMedium)
 	candidate := clientPlacementTask("WB-01J0000000000000000000005D", "Candidate task", core.StatusDone, core.PriorityHigh)
@@ -3398,6 +3437,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDependencyMutationErrorDoesNotWriteDetachedGroup(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J0000000000000000000005E", "Current task", core.StatusReady, core.PriorityMedium)
 	candidate := clientPlacementTask("WB-01J0000000000000000000005F", "Candidate task", core.StatusDone, core.PriorityHigh)
@@ -3486,6 +3526,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDependencyMutationReportsDeletedContextFailure(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000058", "Current task", core.StatusReady, core.PriorityMedium)
 	candidate := clientPlacementTask("WB-01J00000000000000000000059", "Candidate task", core.StatusDone, core.PriorityHigh)
@@ -3573,6 +3614,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDependencyFailureRecoveryAndKeyboard(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000061", "Current task", core.StatusReady, core.PriorityMedium)
 	alpha := clientPlacementTask("WB-01J00000000000000000000062", "Alpha prerequisite", core.StatusDone, core.PriorityHigh)
@@ -3735,6 +3777,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerInterceptsOrdinarySameOriginNavigation(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := boardTasks()[0]
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil })
@@ -3806,6 +3849,7 @@ setTimeout(() => {
 }
 
 func TestHandlerClientCopiesFullTaskIDsAndSeparatesDrag(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	tasks := boardTasks()[:1]
 	task := tasks[0]
@@ -3929,6 +3973,7 @@ setTimeout(async () => {
 // cards do not drag, and a status the board does know pulls the card back into
 // the column that owns it.
 func TestHandlerClientBoardSurfacesUnknownStatuses(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	tasks := boardTasks()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
@@ -4040,6 +4085,7 @@ setTimeout(async () => {
 // Every card drags, including this one. Only the label distinguishes them, so
 // the label is what this asserts.
 func TestHandlerClientDragsOnlyOutOfRenderedColumns(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	tasks := boardTasks()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
@@ -4105,6 +4151,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientPollsEverySecond(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	tasks := boardTasks()[:1]
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
@@ -4134,6 +4181,7 @@ if (intervalDelay !== 1000) throw new Error("polling interval = " + intervalDela
 }
 
 func TestHandlerClientPlacementClampsSameColumnPointerGapsToSamePriorityPeers(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	high := clientPlacementTask("WB-01J00000000000000000000011", "High", core.StatusReady, core.PriorityHigh)
 	moved := clientPlacementTask("WB-01J00000000000000000000012", "Moved medium", core.StatusReady, core.PriorityMedium)
@@ -4222,6 +4270,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientSendsAtomicClampedPlacementRequests(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask("WB-01J00000000000000000000021", "Moved medium", core.StatusReady, core.PriorityMedium)
 	destinationHigh := clientPlacementTask("WB-01J00000000000000000000022", "In progress high", core.StatusInProgress, core.PriorityHigh)
@@ -4327,6 +4376,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
+	t.Parallel()
 	first := boardTasks()
 	second := append([]core.Task(nil), first...)
 	second[0].Title = "Updated without restarting"
@@ -5392,6 +5442,7 @@ function chooseOption(control, value) {
 }
 
 func TestHandlerUpdatesTaskStatus(t *testing.T) {
+	t.Parallel()
 	var gotID string
 	var gotStatus core.Status
 	updated := boardTasks()[0]
@@ -5424,6 +5475,7 @@ func TestHandlerUpdatesTaskStatus(t *testing.T) {
 }
 
 func TestHandlerCreatesTask(t *testing.T) {
+	t.Parallel()
 	created := boardTasks()[0]
 	created.ID = "WB-01J00000000000000000000009"
 	created.Title = "Create a detail view"
@@ -5458,6 +5510,7 @@ func TestHandlerCreatesTask(t *testing.T) {
 }
 
 func TestHandlerUpdatesAllTaskFields(t *testing.T) {
+	t.Parallel()
 	updated := boardTasks()[0]
 	updated.Title = "Edit every task field"
 	updated.Description = "Explicit empty values must remain possible."
@@ -5494,6 +5547,7 @@ func TestHandlerUpdatesAllTaskFields(t *testing.T) {
 }
 
 func TestHandlerPositionsTask(t *testing.T) {
+	t.Parallel()
 	want := boardTasks()[0]
 	want.Status = core.StatusInProgress
 	want.Rank = "3/1"
@@ -5545,6 +5599,7 @@ func TestHandlerPositionsTask(t *testing.T) {
 }
 
 func TestHandlerValidatesPositionRequests(t *testing.T) {
+	t.Parallel()
 	const taskID = "WB-01J00000000000000000000001"
 	handler := NewHandler(Options{
 		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
@@ -5590,6 +5645,7 @@ func TestHandlerValidatesPositionRequests(t *testing.T) {
 }
 
 func TestHandlerRejectsInvalidTaskMutationRequests(t *testing.T) {
+	t.Parallel()
 	handler := NewHandler(Options{
 		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		Create:       unexpectedTaskCreate(t),
@@ -5626,6 +5682,7 @@ func TestHandlerRejectsInvalidTaskMutationRequests(t *testing.T) {
 }
 
 func TestHandlerPreservesStatusMutationRoute(t *testing.T) {
+	t.Parallel()
 	called := false
 	handler := NewHandler(Options{
 		List:   func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
@@ -5647,6 +5704,7 @@ func TestHandlerPreservesStatusMutationRoute(t *testing.T) {
 }
 
 func TestHandlerRejectsWrongMethods(t *testing.T) {
+	t.Parallel()
 	handler := NewHandler(Options{
 		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		Create:       unexpectedTaskCreate(t),
@@ -5673,6 +5731,7 @@ func TestHandlerRejectsWrongMethods(t *testing.T) {
 }
 
 func TestHandlerMapsStatusUpdateErrorsToVersionedErrorDocuments(t *testing.T) {
+	t.Parallel()
 	handler := NewHandler(Options{
 		List:   func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		Create: unexpectedTaskCreate(t),
@@ -5696,6 +5755,7 @@ func TestHandlerMapsStatusUpdateErrorsToVersionedErrorDocuments(t *testing.T) {
 }
 
 func TestHandlerProvidesActionablePrefixesForRefresh(t *testing.T) {
+	t.Parallel()
 	tasks := boardTasks()
 	tasks[0].ID = "WB-01J0000A1111111111111111111"
 	tasks[1].ID = "WB-01J0000B2222222222222222222"
@@ -5745,6 +5805,7 @@ func TestHandlerProvidesActionablePrefixesForRefresh(t *testing.T) {
 }
 
 func TestHandlerInitialCardPrefixesMatchRefreshPresentation(t *testing.T) {
+	t.Parallel()
 	tasks := boardTasks()
 	tasks[0].ID = "WB-01J0000A1111111111111111111"
 	tasks[1].ID = "WB-01J0000B2222222222222222222"
@@ -5784,6 +5845,7 @@ func TestHandlerInitialCardPrefixesMatchRefreshPresentation(t *testing.T) {
 }
 
 func TestHandlerServesDragAndDropBoardControls(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 
 	response := request(t, handler, http.MethodGet, "/")
@@ -5840,6 +5902,7 @@ func assertBoardStatusMarkersMatchColumns(t *testing.T, body string) {
 // instead is one labelled attribute per rendered column, which the script reads
 // back: there is exactly one answer, and the server wrote it.
 func TestHandlerRendersEachColumnWithItsProjectLabel(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	handler := NewHandler(Options{
 		Vocabulary: staticVocabulary(vocabulary, "9f1c2b"),
@@ -5911,6 +5974,7 @@ func staticVocabulary(vocabulary core.Vocabulary, head string) VocabularyResolve
 // put every card in a column that does not exist and invite drops the server
 // would refuse.
 func TestHandlerReportsAVocabularyItCannotRead(t *testing.T) {
+	t.Parallel()
 	handler := NewHandler(Options{
 		Vocabulary: func(context.Context) (VocabularyState, error) {
 			return VocabularyState{}, core.Errorf(core.CategoryCorruptData, "cannot read this project's status configuration")
@@ -5930,6 +5994,7 @@ func TestHandlerReportsAVocabularyItCannotRead(t *testing.T) {
 // their labels, their tags, the forwarding chains and the ledger head — enough
 // for a client to explain a status it is shown without deriving any of it.
 func TestHandlerServesTheProjectVocabulary(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	handler := NewHandler(Options{
 		Vocabulary: staticVocabulary(vocabulary, "9f1c2b"),
@@ -5978,6 +6043,7 @@ func TestHandlerServesTheProjectVocabulary(t *testing.T) {
 // The tasks document carries the head its columns were built from, so the poll
 // can tell that the vocabulary moved without fetching it every second.
 func TestHandlerTasksDocumentCarriesTheVocabularyHead(t *testing.T) {
+	t.Parallel()
 	handler := NewHandler(Options{
 		Vocabulary: staticVocabulary(handlerVocabulary(t), "9f1c2b"),
 		List:       func(context.Context) ([]core.Task, error) { return nil, nil },
@@ -6002,6 +6068,7 @@ func TestHandlerTasksDocumentCarriesTheVocabularyHead(t *testing.T) {
 // the label names the unrecognized token instead — both cards drag, and the
 // difference is which move the label describes.
 func TestHandlerDrawsAStaleStatusInItsLiveColumn(t *testing.T) {
+	t.Parallel()
 	tasks := []core.Task{
 		clientPlacementTask("WB-01J00000000000000000000001", "Renamed away", core.StatusDone, core.PriorityHigh),
 		clientPlacementTask("WB-01J00000000000000000000002", "Nothing forwards this", core.Status("archived"), core.PriorityLow),
@@ -6045,6 +6112,7 @@ func initialCardPrefixes(body string) map[string]string {
 }
 
 func TestHandlerRejectsUnknownRoutesAndMutationMethods(t *testing.T) {
+	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 
 	unknown := request(t, handler, http.MethodGet, "/missing")
@@ -6082,6 +6150,7 @@ func TestHandlerRejectsUnknownRoutesAndMutationMethods(t *testing.T) {
 // that fires while the request is still open must not drag it back. Reverting
 // for the length of every round trip is the flicker this queue removes.
 func TestHandlerClientRendersAPlacementBeforeItsResponseAndSurvivesAPoll(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask("WB-01J00000000000000000000031", "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
@@ -6160,6 +6229,7 @@ setTimeout(async () => {
 // the first returned. Without that serialization there is no single head the
 // client could name while its own writes are in flight.
 func TestHandlerClientSendsOneTasksIntentsSeriallyThreadingTheHead(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask("WB-01J00000000000000000000041", "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
@@ -6231,6 +6301,7 @@ setTimeout(async () => {
 // were separate decisions, and discarding a later change because an earlier
 // one was refused is the clobbering the queue exists to avoid.
 func TestHandlerClientRollsBackAFailedIntentAndLeavesALaterOneStanding(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask("WB-01J00000000000000000000051", "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
@@ -6311,6 +6382,7 @@ setTimeout(async () => {
 // queue's head from that refresh so the intents behind it retry against
 // current truth instead of failing identically.
 func TestHandlerClientStaleWriteRollsBackRefreshesAndRebasesTheQueue(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask("WB-01J00000000000000000000052", "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
@@ -6412,6 +6484,7 @@ setTimeout(async () => {
 // typed into the form since it opened. detail_withdrawal_test.go covers what
 // the correction keeps; this covers the path from the board drag to the form.
 func TestHandlerClientReflectsAFailedPendingIntentInAnOpenDetailForm(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask("WB-01J00000000000000000000053", "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
@@ -6494,6 +6567,7 @@ setTimeout(async () => {
 // overwritten nor re-asserted away. A save that changes nothing is not sent
 // at all, because the server refuses an empty update.
 func TestHandlerClientDetailFormSendsOnlyChangedFieldsWithTheObservedHead(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := clientPlacementTask("WB-01J00000000000000000000054", "Detail task", core.StatusReady, core.PriorityMedium)
 	task.Head = "head-1"
@@ -6616,6 +6690,7 @@ setTimeout(async () => {
 // and comma commit it, every chiclet carries its own remove control, and the
 // payload the server sees is the same array of strings it always was.
 func TestHandlerClientTaskFormEditsLabelsAsRemovableChiclets(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := clientPlacementTask("WB-01J0000000000000000000005A", "Detail task", core.StatusReady, core.PriorityMedium)
 	task.Head = "head-1"
@@ -6776,6 +6851,7 @@ setTimeout(async () => {
 // and a deliberate re-save applies only the changed fields to the latest
 // version — the teammate's concurrent edit to an untouched field survives.
 func TestHandlerClientDetailFormRefusesAStaleSaveAndRetriesAgainstTheRefreshedHead(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := clientPlacementTask("WB-01J00000000000000000000055", "Detail task", core.StatusReady, core.PriorityMedium)
 	task.Head = "head-1"
@@ -6870,6 +6946,7 @@ setTimeout(async () => {
 // reason of its own, so the final save's body cannot tell a held guard from a
 // broken one.
 func TestHandlerClientDetailFormAdoptsTheHeadItsOwnDependencyEditMoved(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000056", "Detail task", core.StatusReady, core.PriorityMedium)
 	current.Head = "head-1"
@@ -7021,6 +7098,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerReportsAndShiftsThePublicationMode(t *testing.T) {
+	t.Parallel()
 	state := SyncState{Mode: SyncModeDeferred, Watcher: true}
 	handler := NewHandler(Options{
 		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
@@ -7069,6 +7147,7 @@ func TestHandlerReportsAndShiftsThePublicationMode(t *testing.T) {
 // A board with no sync control configured must still serve, because leaving
 // those two options nil is what most callers do.
 func TestHandlerReportsSyncControlIsNotConfigured(t *testing.T) {
+	t.Parallel()
 	handler := NewHandler(Options{
 		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		Create:       unexpectedTaskCreate(t),
@@ -7081,6 +7160,7 @@ func TestHandlerReportsSyncControlIsNotConfigured(t *testing.T) {
 }
 
 func TestHandlerForwardsTheExpectedHeadOnEveryRequestThatCarriesIt(t *testing.T) {
+	t.Parallel()
 	updated := boardTasks()[0]
 
 	t.Run("status", func(t *testing.T) {
@@ -7161,6 +7241,7 @@ func TestHandlerForwardsTheExpectedHeadOnEveryRequestThatCarriesIt(t *testing.T)
 }
 
 func TestHandlerMapsTaskErrorsToVersionedErrorDocuments(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name       string
 		err        error
@@ -7198,6 +7279,7 @@ func TestHandlerMapsTaskErrorsToVersionedErrorDocuments(t *testing.T) {
 }
 
 func TestHandlerEscapesHostileTaskContent(t *testing.T) {
+	t.Parallel()
 	tasks := boardTasks()
 	tasks[0].Title = `<img src=x onerror=alert(1)>`
 	tasks[0].Description = `<script>alert("pwned")</script>`
@@ -7219,6 +7301,7 @@ func TestHandlerEscapesHostileTaskContent(t *testing.T) {
 }
 
 func TestHandlerClientRendersTaskHistoryLaneRowsAndComparisons(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	detail := historyDetail()
 	task := detail.Task
@@ -7349,6 +7432,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerServesTaskHistoryWithItsLifecycleLane(t *testing.T) {
+	t.Parallel()
 	detail := historyDetail()
 	var gotID string
 	handler := historyHandler(t, func(_ context.Context, id string) (core.TaskDetail, error) {
@@ -7399,6 +7483,7 @@ func TestHandlerServesTaskHistoryWithItsLifecycleLane(t *testing.T) {
 }
 
 func TestHandlerRejectsUnconfiguredAndMistypedTaskHistoryRequests(t *testing.T) {
+	t.Parallel()
 	unconfigured := NewHandler(Options{
 		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		Create:       unexpectedTaskCreate(t),

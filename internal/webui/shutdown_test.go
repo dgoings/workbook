@@ -48,6 +48,7 @@ func awaitShutdown(t *testing.T, result <-chan error, within time.Duration) {
 // request on, and shutdown used to wait out the read-header timeout for a
 // request that was never coming.
 func TestServeDoesNotWaitForAConnectionThatSentNothing(t *testing.T) {
+	t.Parallel()
 	address, cancel, result := serveInBackground(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(writer, "answered")
 	}))
@@ -153,6 +154,7 @@ func TestServeLetsAnInFlightRequestFinish(t *testing.T) {
 // about: a handler that keeps working past the grace stops being shutdown's
 // problem, and giving up on it is a normal exit rather than an error.
 func TestServeDoesNotWaitForAHandlerBeyondTheGrace(t *testing.T) {
+	t.Parallel()
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	defer close(release)

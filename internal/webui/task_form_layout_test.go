@@ -65,6 +65,7 @@ setTimeout(async () => {
 // centred against all of that names nothing, so the field carries a hook that
 // puts it on the input's line.
 func TestHandlerClientTopAlignsTheLabelsCaption(t *testing.T) {
+	t.Parallel()
 	runTaskFormClient(t, "Labels caption alignment", `
   const labelsInput = findElement(form, (element) => element.id === "task-labels");
   if (!labelsInput) throw new Error("the form has no Labels input");
@@ -99,6 +100,7 @@ func TestHandlerClientTopAlignsTheLabelsCaption(t *testing.T) {
 // path to that button rather than in the opposite corner of the footer, level
 // with a Delete it has nothing to do with.
 func TestHandlerClientPlacesCreateMoreAboveTheSaveButton(t *testing.T) {
+	t.Parallel()
 	runTaskFormClient(t, "Create more placement", `
   const footer = findElement(form, (element) => classTokens(element).includes("task-actions"));
   const actionBar = footer && findElement(footer, (element) => classTokens(element).includes("form-actions"));
@@ -166,6 +168,7 @@ func TestHandlerClientPlacesCreateMoreAboveTheSaveButton(t *testing.T) {
 // there. What each group still owes the reader is unchanged — a name for its
 // combobox, and live regions that exist before they have anything to announce.
 func TestHandlerClientCompactsTheRelationshipGroups(t *testing.T) {
+	t.Parallel()
 	runTaskFormClient(t, "relationship group compaction", `
   const sidebar = findElement(form, (element) => classTokens(element).includes("task-sidebar"));
   const groups = findElements(sidebar, (element) => classTokens(element).includes("relationship-group"));

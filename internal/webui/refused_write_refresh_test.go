@@ -51,6 +51,7 @@ const (
 // they stand, the report says the board could not be read, and the queue is
 // working again as soon as a poll gets through.
 func TestHandlerClientStaleWriteDoesNotRebaseTheQueueOntoAFailedRefresh(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask(refusedRefreshBoardTaskID, "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
@@ -194,6 +195,7 @@ setTimeout(async () => {
 // has moved on to head-3, so a form that answered from the model rather than
 // from the refresh sends a head of its own invention.
 func TestHandlerClientDetailFormDoesNotRebaseARefusedSaveOntoAFailedRefresh(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := clientPlacementTask(refusedRefreshDetailTaskID, "Detail task", core.StatusReady, core.PriorityMedium)
 	task.Head = "head-1"
@@ -328,6 +330,7 @@ setTimeout(async () => {
 // The route change is driven where the reviewer found it: while the relationship
 // half of the forced refresh is waiting on its deleted-task read.
 func TestHandlerClientStaleWriteRebasesWhenOnlyTheRelationshipContextIsSuperseded(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask(refusedRefreshSupersededID, "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
@@ -480,6 +483,7 @@ setTimeout(async () => {
 // is refused identically. The form says what is true instead of asking for a
 // retry it cannot honor, and the edits stay where the reader typed them.
 func TestHandlerClientDetailFormDoesNotInviteARetryOntoADeletedTask(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	task := clientPlacementTask(refusedRefreshDeletedID, "Deleted while edited", core.StatusReady, core.PriorityMedium)
 	task.Head = "head-1"
@@ -582,6 +586,7 @@ setTimeout(async () => {
 // The correction still happens and the reader's text still stays: what changes
 // is only what the form claims about the fields it moved.
 func TestHandlerClientWithdrawalDoesNotClaimFreshFieldsAfterAFailedRefresh(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask(refusedRefreshWithdrawnID, "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Description = "Original."

@@ -87,6 +87,7 @@ func assignmentsPath(taskID string) string {
 // The route hands core the assignment somebody typed, with the tip the page was
 // looking at, and answers with the task it produced.
 func TestAssignRouteRecordsTheAssignmentTheBodyNames(t *testing.T) {
+	t.Parallel()
 	board := &assignableBoard{task: heldTask()}
 	handler := NewHandler(board.options(t, []core.Task{heldTask()}))
 	response := requestJSON(t, handler, http.MethodPost, assignmentsPath(assignableTaskID),
@@ -135,6 +136,7 @@ func TestAssignRouteRecordsTheAssignmentTheBodyNames(t *testing.T) {
 // every mutation that is not about assignments sends, and a page that could not
 // tell the two apart would redraw the row it had just removed.
 func TestAssignmentRoutesDistinguishNoAssignmentsFromNotAboutAssignments(t *testing.T) {
+	t.Parallel()
 	free := clientPlacementTask(assignableTaskID, "Free task", core.StatusReady, core.PriorityMedium)
 	free.Head = "head-2"
 	board := &assignableBoard{task: free}
@@ -172,6 +174,7 @@ func TestAssignmentRoutesDistinguishNoAssignmentsFromNotAboutAssignments(t *test
 // placeholder offers and what `--assign self` means on the command line. It is
 // left empty rather than filled in here, so core resolves the actor once.
 func TestAssignRouteLeavesTheAssigneeToCoreWhenTheBodyNamesNobody(t *testing.T) {
+	t.Parallel()
 	board := &assignableBoard{task: heldTask()}
 	handler := NewHandler(board.options(t, []core.Task{heldTask()}))
 	response := requestJSON(t, handler, http.MethodPost, assignmentsPath(assignableTaskID), `{"to":""}`)
@@ -186,6 +189,7 @@ func TestAssignRouteLeavesTheAssigneeToCoreWhenTheBodyNamesNobody(t *testing.T) 
 // Withdrawal names the assignment, because a task may carry several of this
 // identity's agents and withdrawing one must not withdraw the rest.
 func TestUnassignRouteWithdrawsTheAssignmentTheBodyNames(t *testing.T) {
+	t.Parallel()
 	board := &assignableBoard{task: heldTask()}
 	handler := NewHandler(board.options(t, []core.Task{heldTask()}))
 	response := requestJSON(t, handler, http.MethodDelete, assignmentsPath(assignableTaskID),
@@ -208,6 +212,7 @@ func TestUnassignRouteWithdrawsTheAssignmentTheBodyNames(t *testing.T) {
 // understand is refused rather than half-read — the rule every other mutation
 // on this board is held to.
 func TestAssignmentRouteRefusesWhatItDoesNotAccept(t *testing.T) {
+	t.Parallel()
 	board := &assignableBoard{task: heldTask()}
 	handler := NewHandler(board.options(t, []core.Task{heldTask()}))
 	response := request(t, handler, http.MethodGet, assignmentsPath(assignableTaskID))
@@ -243,6 +248,7 @@ func TestAssignmentRouteRefusesWhatItDoesNotAccept(t *testing.T) {
 // nothing to record a creator as, and the route must not stage a write nobody
 // could withdraw.
 func TestAssignmentRoutesReportABoardThatCannotAssign(t *testing.T) {
+	t.Parallel()
 	tasks := []core.Task{heldTask()}
 	list := func(context.Context) ([]core.Task, error) { return tasks, nil }
 	board := &assignableBoard{task: heldTask()}
@@ -284,6 +290,7 @@ func TestAssignmentRoutesReportABoardThatCannotAssign(t *testing.T) {
 // The withdrawal accepts no body at all, which is the bare verb the two comment
 // removals accept and which core reads as "whatever the acting identity holds".
 func TestUnassignRouteTakesTheBareVerb(t *testing.T) {
+	t.Parallel()
 	board := &assignableBoard{task: heldTask()}
 	handler := NewHandler(board.options(t, []core.Task{heldTask()}))
 	response := requestJSON(t, handler, http.MethodDelete, assignmentsPath(assignableTaskID), "")
@@ -302,6 +309,7 @@ func TestUnassignRouteTakesTheBareVerb(t *testing.T) {
 // carried in the view, so the button the page draws and the refusal the service
 // would give cannot disagree.
 func TestAssignmentPresentationSaysWhichAssignmentsThisBoardMayWithdraw(t *testing.T) {
+	t.Parallel()
 	board := &assignableBoard{task: heldTask()}
 	handler := NewHandler(board.options(t, []core.Task{heldTask()}))
 	response := request(t, handler, http.MethodGet, "/api/tasks")
@@ -354,6 +362,7 @@ func TestAssignmentPresentationSaysWhichAssignmentsThisBoardMayWithdraw(t *testi
 // nothing where there is no identity, which is what keeps the control off a
 // board that could only ever be refused.
 func TestBoardPageCarriesTheIdentityItAssignsAs(t *testing.T) {
+	t.Parallel()
 	board := &assignableBoard{task: heldTask()}
 	handler := NewHandler(board.options(t, []core.Task{heldTask()}))
 	body := request(t, handler, http.MethodGet, "/").Body.String()
@@ -429,6 +438,7 @@ function assignmentAnswer(assignments) {
 // The form sends the value somebody typed to the assignment route, and the
 // section redraws from what came back rather than from a guess.
 func TestHandlerClientAssignsFromTheTaskPage(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	board := &assignableBoard{task: heldTask()}
 	program := assignablePageProgram(t, board, []core.Task{heldTask()}, `
@@ -467,6 +477,7 @@ setTimeout(async () => {
 // and what the empty value means to core. The client sends the empty value
 // rather than filling the address in, so one place resolves it.
 func TestHandlerClientAssignsTheBoardsIdentityFromAnEmptyField(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	board := &assignableBoard{task: heldTask()}
 	program := assignablePageProgram(t, board, []core.Task{heldTask()}, `
@@ -497,6 +508,7 @@ setTimeout(async () => {
 // and the withdrawal names the whole value — principal and agent label — because
 // that is the assignment core is asked to remove.
 func TestHandlerClientWithdrawsOnlyTheAssignmentsItMay(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	board := &assignableBoard{task: heldTask()}
 	program := assignablePageProgram(t, board, []core.Task{heldTask()}, `
@@ -530,6 +542,7 @@ setTimeout(async () => {
 // is the whole difference this story makes: the read-only board draws nothing
 // there, because there is nothing to read and nothing to do.
 func TestHandlerClientOffersTheFormOnATaskNobodyHolds(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	free := clientPlacementTask(assignableTaskID, "Free task", core.StatusReady, core.PriorityMedium)
 	free.Head = "head-1"
@@ -552,6 +565,7 @@ setTimeout(() => {
 // A refusal is said in the panel the change was made in, and the value the
 // reader typed is kept so they can correct it rather than retype it.
 func TestHandlerClientReportsARefusedAssignmentInThePanel(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	board := &assignableBoard{task: heldTask()}
 	program := assignablePageProgram(t, board, []core.Task{heldTask()}, `
@@ -585,6 +599,7 @@ setTimeout(async () => {
 // lands beside somebody else's is recorded — and said out loud, in the panel it
 // was made in, with the warning the command line prints for the same outcome.
 func TestHandlerClientReportsASharedAssignment(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	board := &assignableBoard{task: heldTask()}
 	program := assignablePageProgram(t, board, []core.Task{heldTask()}, `
@@ -616,6 +631,7 @@ setTimeout(async () => {
 // made from the CLI arrives here within a tick, and it does not take the value
 // somebody is halfway through typing into the form above it.
 func TestHandlerClientFollowsThePollWhileTheFormIsOpen(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	free := clientPlacementTask(assignableTaskID, "Free task", core.StatusReady, core.PriorityMedium)
 	free.Head = "head-1"
@@ -659,6 +675,7 @@ setTimeout(async () => {
 // mid-tab and cancels a click in progress. So the signature ignores the phrase
 // and the existing meta line is written in place instead.
 func TestHandlerClientKeepsAssignmentRowsWhenOnlyTheAgeChanged(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	tasks := []core.Task{heldTask()}
 	board := &assignableBoard{task: heldTask()}
@@ -700,6 +717,7 @@ setTimeout(async () => {
 // A poll that changed the assignments themselves still redraws, which is the
 // half the signature must not lose in ignoring the staleness phrasing.
 func TestHandlerClientRedrawsAssignmentsWhenTheyActuallyChange(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	tasks := []core.Task{heldTask()}
 	board := &assignableBoard{task: heldTask()}

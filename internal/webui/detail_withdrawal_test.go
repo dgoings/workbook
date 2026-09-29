@@ -35,6 +35,7 @@ const (
 // carries the two fields this reader actually changed, against the head that
 // now exists, and says nothing about the status the server refused.
 func TestHandlerClientWithdrawalKeepsUnsavedDetailEditsAndCorrectsTheRest(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask(withdrawalEditsTaskID, "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Description = "Original."
@@ -205,6 +206,7 @@ setTimeout(async () => {
 // returns without a word, and the reader is told their board change failed and
 // nothing at all about the save they were waiting on.
 func TestHandlerClientWithdrawalLeavesAnInFlightDetailSaveAttached(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask(withdrawalInFlightTaskID, "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Description = "Original."
@@ -299,6 +301,7 @@ setTimeout(async () => {
 // theirs, and is the last copy of it anywhere. The form stays, says the board no
 // longer carries the task, and survives the polls that follow.
 func TestHandlerClientWithdrawalKeepsTheFormWhenTheTaskLeavesTheBoard(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask(withdrawalDepartedTaskID, "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
@@ -388,6 +391,7 @@ setTimeout(async () => {
 // the field grows the same disabled placeholder a first render gives it and
 // names the status instead. An untouched placeholder still sends nothing.
 func TestHandlerClientWithdrawalNamesAStatusItCannotDisplay(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask(withdrawalStatusTaskID, "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Description = "Original."
@@ -512,6 +516,7 @@ setTimeout(async () => {
 // the next save would delete a label another clone had added and this reader was
 // never shown.
 func TestHandlerClientWithdrawalCorrectsALabelSetTheReaderIsStillTypingInto(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	moved := clientPlacementTask(withdrawalLabelsTaskID, "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Labels = []string{"docs"}

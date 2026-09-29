@@ -23,6 +23,7 @@ import "testing"
 // keeps this from regrowing: an option added for a position that already has one
 // fails here rather than reading as a longer list.
 func TestClientPriorityAddOffersEachPlacementOnce(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	priorities := configuredPriorities(t)
 	runPriorityPanelClient(t, "the placements a new priority can take", vocabulary, priorities, "head-7", nil, `

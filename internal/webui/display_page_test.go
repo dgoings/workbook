@@ -59,6 +59,7 @@ func themeBlock(t *testing.T, body string) string {
 // the eyebrow says which checkout this is — which is what distinguishes two
 // boards a reader has open at once.
 func TestHandlerDrawsTheProjectsOwnNameAndItsCheckout(t *testing.T) {
+	t.Parallel()
 	body := displayBoardPage(t, core.DisplaySettings{Name: "Atlas"}, "atlas-web")
 
 	for _, want := range []string{
@@ -80,6 +81,7 @@ func TestHandlerDrawsTheProjectsOwnNameAndItsCheckout(t *testing.T) {
 // two names it carries are different words on purpose: "New task · Workbook
 // board" would read as a board called "New task".
 func TestHandlerDrawsTheGenericNameForAnUnnamedProject(t *testing.T) {
+	t.Parallel()
 	body := displayBoardPage(t, core.DisplaySettings{}, "workbook")
 
 	for _, want := range []string{
@@ -98,6 +100,7 @@ func TestHandlerDrawsTheGenericNameForAnUnnamedProject(t *testing.T) {
 // A board built without a repository name keeps the words it had. A colon with
 // nothing after it is worse than the generic sentence it replaced.
 func TestHandlerKeepsTheGenericEyebrowWithoutARepositoryName(t *testing.T) {
+	t.Parallel()
 	body := displayBoardPage(t, core.DisplaySettings{}, "")
 
 	if !strings.Contains(body, `<p class="eyebrow">Repository workbench</p>`) {
@@ -113,6 +116,7 @@ func TestHandlerKeepsTheGenericEyebrowWithoutARepositoryName(t *testing.T) {
 // TestHandlerServesOneHeaderToEveryRoute makes, restated for a named project so
 // that a change which starts drawing the name per-route fails here too.
 func TestHandlerServesOneNamedHeaderToEveryRoute(t *testing.T) {
+	t.Parallel()
 	handler := NewHandler(Options{
 		Vocabulary: func(context.Context) (VocabularyState, error) {
 			return VocabularyState{
@@ -164,6 +168,7 @@ func TestHandlerServesOneNamedHeaderToEveryRoute(t *testing.T) {
 // It is asserted against the same table the generator reads, so a property
 // added to one and not the other is caught here rather than in a browser.
 func TestHandlerStylesheetDeclaresTheLegacyPaletteAsItsDefaults(t *testing.T) {
+	t.Parallel()
 	body := pageWithoutStyleComments(t, displayBoardPage(t, core.DisplaySettings{}, "workbook"))
 	declared := declaredLiteralCounts()
 
@@ -199,6 +204,7 @@ func TestHandlerStylesheetDeclaresTheLegacyPaletteAsItsDefaults(t *testing.T) {
 // more than once on purpose: see schemeTokens for why #fff carries three
 // properties and #8496b0 and #2457d6 two each.
 func TestHandlerStylesheetDeclaresTheSchemePaletteAsItsDefaults(t *testing.T) {
+	t.Parallel()
 	body := pageWithoutStyleComments(t, displayBoardPage(t, core.DisplaySettings{}, "workbook"))
 	declared := declaredLiteralCounts()
 
@@ -249,6 +255,7 @@ func declaredLiteralCounts() map[string]int {
 // step — a rule that wants a colour has to name a property, and a colour that
 // has no property has to become one before it can be used.
 func TestHandlerStylesheetWritesNoColourOutsideTheRootBlocks(t *testing.T) {
+	t.Parallel()
 	body := pageWithoutStyleComments(t, displayBoardPage(t, core.DisplaySettings{}, "workbook"))
 
 	rules := rootBlocks.ReplaceAllString(styleSheet(t, body), "")
@@ -269,6 +276,7 @@ func TestHandlerStylesheetWritesNoColourOutsideTheRootBlocks(t *testing.T) {
 // two together close the loop: a colour cannot enter the stylesheet without
 // entering a table, and cannot enter a table without stating what it becomes.
 func TestHandlerStylesheetDeclaresNoPalettePropertyOutsideItsTables(t *testing.T) {
+	t.Parallel()
 	body := pageWithoutStyleComments(t, displayBoardPage(t, core.DisplaySettings{}, "workbook"))
 
 	stray := map[string]bool{}
@@ -372,6 +380,7 @@ func countColorLiteral(body, literal string) int {
 // test failure, and the check is a set comparison rather than a reading of the
 // board, so it cannot miss a route the way an eye can.
 func TestHandlerStylesheetGivesEveryPalettePropertyADarkReading(t *testing.T) {
+	t.Parallel()
 	dark := darkSchemeBlock(t, displayBoardPage(t, core.DisplaySettings{}, "workbook"))
 
 	if !strings.Contains(dark, "color-scheme: dark;") {
@@ -401,6 +410,7 @@ func TestHandlerStylesheetGivesEveryPalettePropertyADarkReading(t *testing.T) {
 // Both are generated from the same tables, and this is what makes that a fact
 // rather than an intention.
 func TestHandlerStylesheetStatesBothDarkSchemesIdentically(t *testing.T) {
+	t.Parallel()
 	body := displayBoardPage(t, core.DisplaySettings{}, "workbook")
 
 	system := declarationsIn(t, darkSchemeBlock(t, body), `:root:not([data-scheme="light"])`)
@@ -482,6 +492,7 @@ func darkSchemeBlock(t *testing.T, body string) string {
 // a light accent declared there would win in dark mode over a dark accent
 // declared in the stylesheet. The override has to carry its own dark half.
 func TestBoardThemeServesADarkReadingOfAChosenColor(t *testing.T) {
+	t.Parallel()
 	theme := string(boardTheme(core.DisplaySettings{PrimaryColor: "#2457d6"}))
 
 	if !strings.Contains(theme, "@media (prefers-color-scheme: dark)") {
@@ -525,6 +536,7 @@ func TestBoardThemeServesADarkReadingOfAChosenColor(t *testing.T) {
 // near-black panel in the middle of it. Nothing failed; it just looked wrong,
 // which is exactly the kind of defect a selector this easy to write invites.
 func TestBoardThemeAnswersTheSchemeTheReaderChose(t *testing.T) {
+	t.Parallel()
 	theme := string(boardTheme(core.DisplaySettings{PrimaryColor: "#2457d6"}))
 
 	// Held off a reader who asked for light, whatever their system says.
@@ -557,6 +569,7 @@ func TestBoardThemeAnswersTheSchemeTheReaderChose(t *testing.T) {
 // And a project that chose nothing is still served nothing at all, in either
 // scheme — the stylesheet's own defaults are the whole answer.
 func TestBoardThemeServesNoDarkReadingForAnUnconfiguredProject(t *testing.T) {
+	t.Parallel()
 	if theme := boardTheme(core.DisplaySettings{}); theme != "" {
 		t.Errorf("an unconfigured project is served %q", theme)
 	}
@@ -591,6 +604,7 @@ const priorityLowBlue = "#2457d6"
 // halves are asserted below, against a project whose accent is the very red the
 // high priority is drawn in.
 func TestHandlerStylesheetKeepsThePriorityTriadOffTheProjectsAccent(t *testing.T) {
+	t.Parallel()
 	body := displayBoardPage(t, core.DisplaySettings{PrimaryColor: "#b42318"}, "workbook")
 
 	for _, rule := range []string{
@@ -625,6 +639,7 @@ func TestHandlerStylesheetKeepsThePriorityTriadOffTheProjectsAccent(t *testing.T
 
 // A project that has chosen nothing is served no override at all.
 func TestHandlerServesNoThemeForAnUnconfiguredProject(t *testing.T) {
+	t.Parallel()
 	for name, settings := range map[string]core.DisplaySettings{
 		"nothing configured": {},
 		"a name alone":       {Name: "Atlas"},
@@ -642,6 +657,7 @@ func TestHandlerServesNoThemeForAnUnconfiguredProject(t *testing.T) {
 // the board unstyled and every test that only checked pageData passing. So the
 // assertion is against the bytes that reach the browser.
 func TestHandlerServesAChosenColorAsCSSRatherThanZgotmplZ(t *testing.T) {
+	t.Parallel()
 	body := displayBoardPage(t, core.DisplaySettings{PrimaryColor: "#1a7f4b", TextColor: "#3b2a1a"}, "atlas-web")
 	theme := themeBlock(t, body)
 
@@ -678,6 +694,7 @@ func TestHandlerServesAChosenColorAsCSSRatherThanZgotmplZ(t *testing.T) {
 // change those. A board with statuses to administer and no display writer would
 // otherwise draw a Save that could only ever be refused.
 func TestHandlerServesTheBoardSettingsSectionOnlyWhenItCanBeWritten(t *testing.T) {
+	t.Parallel()
 	markers := []string{"data-display-panel", "data-display-panel-body", "data-display-panel-status"}
 
 	without := boardMarkup(t, administrableBoardPage(t, core.DefaultVocabulary()))
@@ -779,6 +796,7 @@ func fourPriorityVocabulary(t *testing.T, highColor string) core.PriorityVocabul
 // Every priority a project configured is drawn in a color of its own, and the
 // card the board renders carries the class that reads it.
 func TestPriorityInkDrawsEveryPriorityInTheVocabulary(t *testing.T) {
+	t.Parallel()
 	body := priorityInkBoardPage(t, fourPriorityVocabulary(t, ""), []core.Task{{
 		ID: "WB-01J00000000000000000000009",
 		TaskData: core.TaskData{
@@ -818,6 +836,7 @@ func TestPriorityInkDrawsEveryPriorityInTheVocabulary(t *testing.T) {
 // clearing a color returns a priority to a derived one because nothing stores a
 // default to go back to.
 func TestPriorityInkPrefersAStoredColorOverThePositionItDerives(t *testing.T) {
+	t.Parallel()
 	body := priorityInkBoardPage(t, fourPriorityVocabulary(t, "#1a7f4b"), nil)
 	block := priorityInkBlock(t, body)
 
@@ -859,6 +878,7 @@ func TestPriorityInkPrefersAStoredColorOverThePositionItDerives(t *testing.T) {
 // priority` verb, which writes those same three into the ledger, would silently
 // recolor a board nobody asked to change.
 func TestPriorityInkKeepsTheBuiltInThreeOnTheirTriad(t *testing.T) {
+	t.Parallel()
 	block := priorityInkBlock(t, priorityInkBoardPage(t, core.PriorityVocabulary{}, nil))
 
 	for _, want := range []string{
@@ -881,6 +901,7 @@ func TestPriorityInkKeepsTheBuiltInThreeOnTheirTriad(t *testing.T) {
 // why a derived ink is correct in dark without being stated twice — it resolves
 // through the triad, which the scheme already moves.
 func TestPriorityInkWritesNoLiteralForAPriorityWithNoStoredColor(t *testing.T) {
+	t.Parallel()
 	block := priorityInkBlock(t, priorityInkBoardPage(t, fourPriorityVocabulary(t, ""), nil))
 
 	for _, literal := range colorLiteral.FindAllString(block, -1) {
@@ -923,6 +944,7 @@ func forwardedPriorityVocabulary(t *testing.T) core.PriorityVocabulary {
 // a retired name is drawn in the ink of the priority it now means, rather than
 // matching no rule at all and dropping to the meta row's dim ink.
 func TestPriorityInkKeepsACardColoredThroughARenameOrARemoval(t *testing.T) {
+	t.Parallel()
 	block := priorityInkBlock(t, priorityInkBoardPage(t, forwardedPriorityVocabulary(t), nil))
 
 	if block == "" {
@@ -953,6 +975,7 @@ func TestPriorityInkKeepsACardColoredThroughARenameOrARemoval(t *testing.T) {
 // declared would leave the card exactly as dim while putting a dangling
 // reference on every board that carries it.
 func TestPriorityInkPointsNoRuleAtAPropertyItNeverDeclared(t *testing.T) {
+	t.Parallel()
 	block := priorityInkBlock(t, priorityInkBoardPage(t, forwardedPriorityVocabulary(t), nil))
 
 	if strings.Contains(block, ".priority--ancient") {

@@ -340,6 +340,7 @@ func panelRenamedQueuedVocabulary(t *testing.T) core.Vocabulary {
 // intercepts the click and renders the route, and a reader without the script —
 // or with a middle-click — gets the same page from the server.
 func TestHandlerBoardLinksToTheStatusesRoute(t *testing.T) {
+	t.Parallel()
 	for name, vocabulary := range map[string]core.Vocabulary{
 		"default": core.DefaultVocabulary(),
 		"custom":  handlerVocabulary(t),
@@ -397,6 +398,7 @@ func TestHandlerBoardLinksToTheStatusesRoute(t *testing.T) {
 // All four rather than any, because the page is one surface: a board carrying
 // three of them would draw controls that look alike and fail differently.
 func TestHandlerBoardWithoutVocabularyMutationsOffersNoStatusesRoute(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	for name, options := range map[string]Options{
 		"no mutations": {
@@ -456,6 +458,7 @@ func TestHandlerBoardWithoutVocabularyMutationsOffersNoStatusesRoute(t *testing.
 // against what the page remembers is the stale write it would rather not have to
 // report, so it asks — on every entry to the route, not once.
 func TestClientStatusesRouteReadsTheProjectsStatusesOnEntry(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "opening the statuses page", vocabulary, "head-1", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, panelRenamedVocabulary(t), "head-9")+`;
@@ -529,6 +532,7 @@ func TestClientStatusesRouteReadsTheProjectsStatusesOnEntry(t *testing.T) {
 // somebody's work in flight, so the standing notice offers the reload and the
 // reader picks the moment.
 func TestClientStatusesPageAddsAStatusAgainstTheHeadItRead(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	tasks := []core.Task{
 		clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium),
@@ -621,6 +625,7 @@ func TestClientStatusesPageAddsAStatusAgainstTheHeadItRead(t *testing.T) {
 // and the empty head it reads is a head: it is sent, as the empty string, rather
 // than withheld as if the panel had not looked.
 func TestClientStatusesPageSendsTheEmptyHeadOfAnUnseededProject(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "administering an unseeded project", vocabulary, "", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "")+`;
@@ -650,6 +655,7 @@ func TestClientStatusesPageSendsTheEmptyHeadOfAnUnseededProject(t *testing.T) {
 // it is waiting rather than appearing to have ignored the press, and sends once
 // the queue is empty.
 func TestClientStatusesPageWaitsForPendingBoardChanges(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	task := clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium)
 	task.Head = "head-a"
@@ -739,6 +745,7 @@ func TestClientStatusesPageWaitsForPendingBoardChanges(t *testing.T) {
 // different things, and a client that applied one over the other would invent a
 // third that neither of them chose.
 func TestClientStatusesPageStopsAtAStaleWrite(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "a status change refused as stale", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
@@ -800,6 +807,7 @@ func TestClientStatusesPageStopsAtAStaleWrite(t *testing.T) {
 // A removal names where the tasks go and reports what it moved, in the terms
 // `workbook status delete` reports them.
 func TestClientStatusesPagePricesARemoval(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "removing a status", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
@@ -841,6 +849,7 @@ func TestClientStatusesPagePricesARemoval(t *testing.T) {
 // worse copy of a rule that lives in one place — and would refuse a change the
 // server would have accepted the moment either of them drifted.
 func TestClientStatusesPageQuotesARefusalItDidNotMake(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "a refused status change", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
@@ -881,6 +890,7 @@ func TestClientStatusesPageQuotesARefusalItDidNotMake(t *testing.T) {
 // be refused on its own. Both ways of making the gesture — the drag and the
 // controls a keyboard can reach — send exactly the same one request.
 func TestClientStatusesPageReordersInOneRequestPerGesture(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "reordering the columns", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
@@ -954,6 +964,7 @@ func TestClientStatusesPageReordersInOneRequestPerGesture(t *testing.T) {
 // is pinned is the property that keeps it closed — for every target either
 // event can land on, the two give the same answer, through one rule.
 func TestClientStatusesPageAcceptsAReorderOnEnterAsWellAsOnOver(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "reorder acceptance on enter and over", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
@@ -1024,6 +1035,7 @@ func TestClientStatusesPageAcceptsAReorderOnEnterAsWellAsOnOver(t *testing.T) {
 // is a dragenter. That is what a browser sends once the thing under the cursor
 // churns, and a panel that answered only dragover would take the drop nowhere.
 func TestClientStatusesPageTakesAReorderReportedOnlyByDragenter(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "a reorder reported only by dragenter", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
@@ -1069,6 +1081,7 @@ func TestClientStatusesPageTakesAReorderReportedOnlyByDragenter(t *testing.T) {
 // Chrome; Firefox and Safari send none on a dragleave, and there the cursor's
 // own coordinates have to.
 func TestClientStatusesPageKeepsTheDropMarkThroughTheLeaveThatFollowsEachEnter(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "the leave that follows each enter", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
@@ -1145,6 +1158,7 @@ func TestClientStatusesPageKeepsTheDropMarkThroughTheLeaveThatFollowsEachEnter(t
 // change, and mutations under a drag cursor are what make a browser re-run its
 // hit test and dispatch more of the churn this whole change is about.
 func TestClientStatusesPageWritesTheDropMarkOnlyWhenItMoves(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "the drop mark is written only when it moves", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
@@ -1191,6 +1205,7 @@ func TestClientStatusesPageWritesTheDropMarkOnlyWhenItMoves(t *testing.T) {
 // same flag that stops the drop reaching anything else on the page, so a panel
 // that accepted a file drag would take a reader's file and do nothing with it.
 func TestClientStatusesPageRefusesAFileDraggedOverTheList(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "a file dragged over the status list", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
@@ -1273,6 +1288,7 @@ func elementTag(t *testing.T, body, attribute string) string {
 // status. The tags come from the panel's own attribute, which the server writes
 // from core's list.
 func TestClientScriptNamesNoStatusTagOfItsOwn(t *testing.T) {
+	t.Parallel()
 	response := request(t, administrableHandler(handlerVocabulary(t), "head-1", nil), http.MethodGet, "/")
 	if response.Code != http.StatusOK {
 		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
@@ -1305,6 +1321,7 @@ func TestClientScriptNamesNoStatusTagOfItsOwn(t *testing.T) {
 // is drawn in — which is a page that renders wrongly while every assertion about
 // its declarations passes.
 func TestHandlerStatusesPageIsStyledAsARoute(t *testing.T) {
+	t.Parallel()
 	body := administrableBoardPage(t, handlerVocabulary(t))
 	shell := declarationBlock(t, body, ".task-route--admin {")
 	for _, fragment := range []string{"height: auto", "min-height: 100%"} {
@@ -1341,6 +1358,7 @@ func TestHandlerStatusesPageIsStyledAsARoute(t *testing.T) {
 // than a number: the heading's horizontal inset is asserted to be the inset the
 // panel's padding declares, so the two can only move together.
 func TestHandlerConfigHeadingsShareThePanelsInset(t *testing.T) {
+	t.Parallel()
 	body := administrableBoardPage(t, handlerVocabulary(t))
 	const inset = "1.15rem"
 	panel := declarationBlock(t, body, ".admin {")
@@ -1372,6 +1390,7 @@ func declarationBlock(t *testing.T, body, selector string) string {
 // A mutation answer that is not the document these routes promise is a failure,
 // not a change: the panel says so and keeps drawing what it had.
 func TestClientStatusesPageRefusesAnAnswerItCannotRead(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "an unreadable mutation answer", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
@@ -1401,6 +1420,7 @@ func TestClientStatusesPageRefusesAnAnswerItCannotRead(t *testing.T) {
 // nothing in it, correctly, but an untouched form is finished rather than
 // broken, so it says so instead of collecting that refusal.
 func TestClientStatusesPageEditsOnlyWhatChanged(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "editing one member of a status", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
@@ -1451,6 +1471,7 @@ func TestClientStatusesPageEditsOnlyWhatChanged(t *testing.T) {
 // A panel opened for a project whose statuses cannot be read says so, and offers
 // no controls that would compose a change against nothing.
 func TestClientStatusesPageReportsAVocabularyItCannotRead(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "an unreadable vocabulary", vocabulary, "head-7", nil, `
   vocabularyRead = { format: "workbook.error", version: 1,
@@ -1474,6 +1495,7 @@ func TestClientStatusesPageReportsAVocabularyItCannotRead(t *testing.T) {
 // the reader is on it, and it goes when they walk anywhere else — a task's own
 // page as readily as the board.
 func TestClientStatusesRouteIsOneRouteAmongTheOthers(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	task := clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium)
 	runPanelClient(t, "leaving the statuses page for a task", vocabulary, "head-7", []core.Task{task}, `
@@ -1498,6 +1520,7 @@ func TestClientStatusesRouteIsOneRouteAmongTheOthers(t *testing.T) {
 // every page route with it — so a bookmark, a reload and a middle-click all land
 // on the statuses page rather than on the board.
 func TestClientStatusesRouteRendersOnADirectLoad(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	task := clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium)
 	// The answer is prepared before the client script runs, because a hard load
@@ -1533,6 +1556,7 @@ func TestClientStatusesRouteRendersOnADirectLoad(t *testing.T) {
 // drawing the route from the address alone would put a shell in front of a
 // reader with nothing the client could fill it from.
 func TestClientStatusesRouteIsNotARouteWithoutTheMarkup(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	runStatusesClient(t, "a statuses address on a board that cannot administer them",
 		"/config", withoutStatusAdministration, vocabulary, "head-7", nil, `
@@ -1557,6 +1581,7 @@ func TestClientStatusesRouteIsNotARouteWithoutTheMarkup(t *testing.T) {
 // while the reader is still on the statuses page and still up when they return.
 // Reloading is the reader's to choose, as it is for a change another clone made.
 func TestClientBoardKeepsItsColumnsAcrossAStatusChange(t *testing.T) {
+	t.Parallel()
 	vocabulary := handlerVocabulary(t)
 	tasks := []core.Task{
 		clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium),

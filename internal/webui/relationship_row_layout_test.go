@@ -81,6 +81,7 @@ setTimeout(() => {
 // why it cannot be changed here. That is the shape the screenshot was of, so it
 // is the shape asserted hardest — one grid item, holding all four parts.
 func TestHandlerClientKeepsAReadOnlyRelationshipRowInOneColumn(t *testing.T) {
+	t.Parallel()
 	runRelationshipRowClient(t, "read-only relationship row layout", `
   const readOnly = relationshipRow({ id: deletedTask.id, task: deletedTask, removable: false }, () => {});
   if (readOnly.children.length !== 1) {
@@ -162,6 +163,7 @@ func TestHandlerClientKeepsAReadOnlyRelationshipRowInOneColumn(t *testing.T) {
 // failed draft has a badge, the failure text and a Retry button alongside
 // Remove. All three are held to the same two items.
 func TestHandlerClientKeepsRelationshipControlsOutOfTheTextColumn(t *testing.T) {
+	t.Parallel()
 	runRelationshipRowClient(t, "removable relationship row layout", `
   const shapes = [
     ["a plain removable row", relationshipRow({ id: liveTask.id, task: liveTask, removable: true }, () => {}), false],
@@ -233,6 +235,7 @@ func TestHandlerClientKeepsRelationshipControlsOutOfTheTextColumn(t *testing.T) 
 // heading is not a link and its detail route is refused, so the only Restore
 // they can reach is the one on its card in the board's Deleted column.
 func TestHandlerClientSaysWhoOwnsAReadOnlyRelationship(t *testing.T) {
+	t.Parallel()
 	runRelationshipRowClient(t, "read-only relationship wording", `
   const readOnly = relationshipRow({ id: deletedTask.id, task: deletedTask, removable: false }, () => {});
   const note = item(readOnly, "relationship-row__note");
