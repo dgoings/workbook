@@ -1,8 +1,11 @@
 package scripts_test
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -49,7 +52,12 @@ import (
 // test creates, not just the one that was guarded per-fixture.
 // newTapRepository's own three lines stay in place; they are redundant with
 // the global file but harmless.
+//
+// Replacing HOME costs the Go build cache unless the cache is pinned first,
+// which is what pinGoToolchainPaths is for.
 func TestMain(m *testing.M) {
+	pinGoToolchainPaths()
+
 	home, err := os.MkdirTemp("", "workbook-scripts-home")
 	if err != nil {
 		panic("create isolated home: " + err.Error())
@@ -70,6 +78,61 @@ func TestMain(m *testing.M) {
 
 	os.RemoveAll(home)
 	os.Exit(code)
+}
+
+// pinGoToolchainPaths puts the Go toolchain's real cache paths into the
+// environment before TestMain replaces HOME.
+//
+// GOCACHE, GOMODCACHE, GOPATH and GOENV are all derived from HOME when they are
+// not set explicitly, and the shell scripts these tests run build the product
+// six ways. With HOME replaced and nothing else done, every one of those builds
+// resolves its cache inside the temporary home TestMain deletes on the way out,
+// so each one compiles the world from nothing; on a machine with a populated
+// real cache but no reachable module proxy they would fail outright. GOENV is
+// the fourth for a different reason: it names the file `go env -w` writes, so
+// leaving it HOME-derived silently drops whatever the developer configured there
+// — GOFLAGS, GOPROXY, GOPRIVATE, or a GOTOOLCHAIN that decides which toolchain
+// builds at all.
+//
+// Setting these on an exec.Cmd.Env, the way internal/perf's tests do for their
+// own `go build` helpers, cannot work here: the builds happen several processes
+// down, inside shell scripts that inherit whatever environment they are given,
+// so the values have to be in this process's environment. One `go env` resolves
+// all four while HOME is still the real one — read back afterwards it would
+// report the temporary paths.
+func pinGoToolchainPaths() {
+	names := []string{"GOCACHE", "GOMODCACHE", "GOPATH", "GOENV"}
+	output, err := exec.Command("go", append([]string{"env"}, names...)...).Output()
+	if err != nil {
+		panic("resolve the Go toolchain paths: " + err.Error())
+	}
+	lines := strings.Split(strings.TrimRight(string(output), "\r\n"), "\n")
+	if len(lines) != len(names) {
+		panic(fmt.Sprintf("go env returned %d lines, want %d", len(lines), len(names)))
+	}
+	for index, name := range names {
+		value := strings.TrimSpace(lines[index])
+		if value == "" {
+			panic("go env reported no value for " + name)
+		}
+		os.Setenv(name, value)
+	}
+}
+
+// goToolchainValues names the environment entries that point the Go toolchain at
+// the developer's real caches and configuration rather than at the isolated home.
+// pinGoToolchainPaths has already put them in this process's environment, so a
+// child that inherits it needs nothing; this is for the call sites that build an
+// environment from scratch and would otherwise hand a build a HOME-derived
+// cache. Reading them back here rather than resolving them again is the point:
+// `go env` run after the swap reports the temporary paths.
+func goToolchainValues() []string {
+	names := []string{"GOCACHE", "GOMODCACHE", "GOPATH", "GOENV"}
+	values := make([]string, 0, len(names))
+	for _, name := range names {
+		values = append(values, name+"="+os.Getenv(name))
+	}
+	return values
 }
 
 // isolatedGitConfigValues names the two environment entries that make a git
