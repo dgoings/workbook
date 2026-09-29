@@ -514,7 +514,9 @@ func TestReadTaskHistoriesStreamReturnsHandlerErrorsUnchangedAndReleasesItsBatch
 }
 
 func TestReadTaskHistoriesStreamHoldsOneCommitNotTheWholeCorpus(t *testing.T) {
-	t.Parallel()
+	// Serial on purpose: this test measures the live heap of the whole test
+	// binary against a fixed ceiling, and the heap is shared by every test
+	// running at the same time. See the serial list in main_test.go.
 	// Mutation caught: reading every candidate's objects into a buffer before
 	// the delivery loop and replaying it. Delivery order and handler errors are
 	// identical either way, so only residency separates the two, and buffering

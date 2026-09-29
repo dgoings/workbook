@@ -29,10 +29,12 @@ jobs:
       fail-fast: false
       matrix:
         # Workbook publishes darwin and linux archives, so ubuntu-24.04 and
-        # macos-15 carry the Go verification. windows-2025 is in the matrix
-        # for the desktop shell alone: the desktop app ships a Windows
-        # installer, and its tests had never run on Windows before a release
-        # tried to build one.
+        # macos-15 carry the full Go verification (format, vet, test).
+        # windows-2025 is in the matrix for the desktop shell's checks: the
+        # desktop app ships a Windows installer, and its tests had never run
+        # on Windows before a release tried to build one. It also carries a
+        # narrow CLI build tripwire (see "Build the CLI" below); it still
+        # runs none of the full Go verification the other two runners do.
         os: [ubuntu-24.04, macos-15, windows-2025]
     steps:
       # Release tags must be present: scripts/setup_dev_env_test.go builds the
@@ -164,6 +166,23 @@ jobs:
         with:
           go-version: "1.26.5"
 
+      - name: Set up Go for Windows
+        if: steps.scope.outputs.code_changed == 'true' && matrix.os == 'windows-2025'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+
+      # This is the only Go verification Windows gets today: `go build ./...`,
+      # `go vet ./...` and `go test ./...` do not work there until
+      # internal/perf is behind a build tag and the Unix-only tests are
+      # guarded, which is deliberately out of scope here. The binary is built
+      # to the runner's temp directory rather than the working tree, since the
+      # desktop checks below run in the same job.
+      - name: Build the CLI
+        if: steps.scope.outputs.code_changed == 'true' && matrix.os == 'windows-2025'
+        shell: bash
+        run: go build -o "${{ runner.temp }}/workbook.exe" ./cmd/workbook
+
       # The embedded web client behavior tests execute the rendered script with
       # node. Without one they skip, and a skipped suite reports "ok".
       - name: Set up Node
@@ -192,6 +211,15 @@ jobs:
       - name: Vet
         if: steps.scope.outputs.code_changed == 'true' && (matrix.os == 'ubuntu-24.04' || matrix.os == 'macos-15')
         run: go vet ./...
+
+      # The whole tree does not compile for Windows -- internal/perf uses
+      # Unix process control -- but the CLI itself does and must keep doing
+      # so, since the desktop app's Windows installer bundles it. This catches
+      # a commit that breaks that on the fast, native runner rather than
+      # waiting for the Windows runner below.
+      - name: Cross-compile the CLI for Windows
+        if: steps.scope.outputs.code_changed == 'true' && matrix.os == 'ubuntu-24.04'
+        run: GOOS=windows GOARCH=amd64 go build -o /dev/null ./cmd/workbook
 
       # WORKBOOK_TEST_REQUIRE_CAPABILITIES turns a missing-capability skip into
       # a failure, and skipreport writes every skip to the job summary, so a

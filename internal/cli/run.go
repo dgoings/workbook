@@ -27,7 +27,13 @@ import (
 // watcherProbeDeadline bounds every exchange with a watcher. It is short on
 // purpose: a command consults one to save roughly half a second, so a slow
 // answer is worth abandoning for the inline path rather than waiting on.
-const watcherProbeDeadline = 50 * time.Millisecond
+//
+// It is a variable only so the package's tests can widen it: the tests that
+// prove a hand-off happened run an in-process fake watcher beside hundreds of
+// parallel tests, and on a saturated CI runner that fake missed fifty
+// milliseconds through scheduling alone, which turned a hand-off test into
+// an inline publish. Nothing outside TestMain assigns it.
+var watcherProbeDeadline = 50 * time.Millisecond
 
 type rebuildResult struct {
 	TaskCount int    `json:"taskCount"`

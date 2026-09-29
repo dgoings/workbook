@@ -242,14 +242,17 @@ func TestCIWorkflowVerifiesBothPublishedPlatforms(t *testing.T) {
 			t.Errorf("matrix os = %v, want an entry for %q", job.Strategy.Matrix.OS, want)
 		}
 	}
-	// windows-2025 carries the desktop shell's checks but no Go verification;
-	// see TestCIWorkflowGatesTheExpensiveStepsRatherThanTheJob for the
-	// condition that keeps it out of the Go steps.
+	// windows-2025 carries the desktop shell's checks and, separately, a
+	// narrow `go build ./cmd/workbook` tripwire (see "Build the CLI"); it
+	// still runs none of the shared format/vet/test verification named here.
+	// See TestCIWorkflowGatesTheExpensiveStepsRatherThanTheJob for the
+	// condition that keeps it out of those steps.
 	for _, name := range expensiveCIWorkflowSteps {
 		_, step := ciWorkflowStep(t, job, name)
 		if strings.Contains(step.If, "windows-2025") {
 			t.Errorf("Go step %q names windows-2025 (%q), but Workbook publishes no "+
-				"Windows archive, so Windows must carry no Go verification", name, step.If)
+				"Windows archive, so Windows must carry none of the shared "+
+				"format/vet/test verification", name, step.If)
 		}
 	}
 }
