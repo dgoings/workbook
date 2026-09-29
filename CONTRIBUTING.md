@@ -165,20 +165,30 @@ go test ./... -json | go run ./scripts/skipreport
 
 ### Running tests locally
 
-A bare `go test ./...` passes with no flags. The slowest package,
-`internal/perf`, takes about 337 seconds — well inside Go's 600-second
-per-package default — and the whole tree finishes in about 5m38s on an
-18-core dev laptop.
+A bare `go test ./...` passes with no flags. The slowest package under
+whole-tree contention is `internal/cli`, at about 227 seconds — well inside
+Go's 600-second per-package default — though it finishes in about 130
+seconds run alone; the difference is the rest of the tree, which keeps every
+core saturated for most of the run. The whole tree finishes in about 3m48s
+on an 18-core dev laptop. Because the machine stays saturated, size a new
+test's timeout as a hang guard in the tens of seconds rather than a
+stopwatch tuned against a quiet machine, and do not expect a package's own
+serial list to buy a quiet machine across packages — it orders only that
+package's tests against each other, not against the other five packages
+running at the same time.
 
-`internal/cli`, `internal/gitstore`, `internal/projection`, and
-`internal/webui` run their tests in parallel. `go test ./internal/cli/` needs
-no flags and no slicing: it finishes in about two minutes on an 18-core dev
-laptop. `go test ./internal/gitstore/` now finishes in about a minute, the
-same way. A new test in any of the four packages starts with `t.Parallel()`
-as its first statement. One that must stay serial — because it calls
-`t.Setenv` or otherwise touches process-wide state — is listed instead, with
-its reason, in the comment block at the top of that package's
-`main_test.go`.
+`internal/cli`, `internal/gitstore`, `internal/projection`, `internal/webui`,
+`scripts`, and `internal/perf` run their tests in parallel. `go test
+./internal/cli/` needs no flags and no slicing: it finishes in about two
+minutes on an 18-core dev laptop when run alone. `go test
+./internal/gitstore/` finishes in about a minute, the same way. A new test in
+any of the six packages starts with `t.Parallel()` as its first statement.
+One that must stay serial — because it calls `t.Setenv` or otherwise touches
+process-wide state — is listed instead, with its reason, in the comment block
+at the top of that package's `main_test.go`. `internal/perf`'s list also
+holds tests that measure narrow timing windows and are kept serial on
+purpose, so that at least their own package's fixture builds are not running
+beside them.
 
 `internal/cli`, `internal/gitstore`, and `internal/projection` copy an
 initialized project template minted once, in their `TestMain`, rather than
