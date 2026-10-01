@@ -1813,6 +1813,19 @@ func testSnapshot(taskID, head, title string) core.Snapshot {
 // change, exactly initializeWorkbook(t, testrepo.New(t))), so there is no
 // initializeWorkbookAt real-init path to fall back to — this is the only
 // definition.
+func initializeWorkbook(t *testing.T) (*gitstore.Repository, core.ProjectConfig) {
+	t.Helper()
+	root := t.TempDir()
+	if err := testrepo.CopyTree(templateDir, root); err != nil {
+		t.Fatalf("copy workbook template: %v", err)
+	}
+	repository, err := gitstore.Open(context.Background(), root)
+	if err != nil {
+		t.Fatalf("gitstore.Open() error = %v", err)
+	}
+	return repository, templateConfig
+}
+
 // openStoreForTest opens a store exactly as openStore does and closes it when
 // the test ends.
 //
@@ -1824,10 +1837,11 @@ func testSnapshot(taskID, head, title string) core.Snapshot {
 // — the same leak the command path had, in the tests of the package that owns
 // it.
 //
-// It returns openStore's error untouched, so the tests that assert an open
-// fails read as they did. Closing is registered rather than deferred because
-// the store outlives this call; a test that closes its own store as part of
-// what it is testing is unharmed, since Close is idempotent.
+// It returns openStore's error untouched, so a future test that asserts an
+// open fails reads the same way through here as it would directly. Closing is
+// registered rather than deferred because the store outlives this call; a test
+// that closes its own store as part of what it is testing is unharmed, since
+// Close is idempotent.
 func openStoreForTest(
 	t *testing.T,
 	ctx context.Context,
@@ -1858,19 +1872,6 @@ func openForTest(
 		t.Cleanup(func() { _ = store.Close() })
 	}
 	return store, err
-}
-
-func initializeWorkbook(t *testing.T) (*gitstore.Repository, core.ProjectConfig) {
-	t.Helper()
-	root := t.TempDir()
-	if err := testrepo.CopyTree(templateDir, root); err != nil {
-		t.Fatalf("copy workbook template: %v", err)
-	}
-	repository, err := gitstore.Open(context.Background(), root)
-	if err != nil {
-		t.Fatalf("gitstore.Open() error = %v", err)
-	}
-	return repository, templateConfig
 }
 
 // A test that asks for an initialized project gets a copy of the template

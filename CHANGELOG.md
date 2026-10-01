@@ -328,10 +328,11 @@ under Changed.
   was opened per command and never closed, and `database/sql` keeps a
   connection-opener goroutine alive for each open database, so a process that
   runs command after command collected one goroutine per command: a long-lived
-  `workbook serve`, `workbook sync --watch` or the desktop app's watcher grew
-  for as long as it ran, and one run of the command-line test suite left roughly
-  thirteen hundred goroutines behind. A one-shot command is unaffected, because
-  it was already giving the handle back by exiting.
+  `workbook serve` or `workbook sync --watch` grew for as long as it ran, the
+  desktop app with it, since it runs one `workbook serve` per imported project,
+  and one run of the command-line test suite left roughly thirteen hundred
+  goroutines behind. A one-shot command is unaffected, because it was already
+  giving the handle back by exiting.
 
 ## v0.5.1 — 2026-08-23
 
