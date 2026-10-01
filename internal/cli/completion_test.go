@@ -293,12 +293,50 @@ func TestCompletionHelpNamesEveryShellAndHowToInstallIt(t *testing.T) {
 	for _, want := range []string{
 		"bash, zsh or fish",
 		"~/.bashrc",
+		`eval "$(workbook completion`,
 		"fpath",
 		"~/.config/fish/completions/workbook.fish",
 		"Homebrew formula installs all three",
 	} {
 		if !strings.Contains(output, want) {
 			t.Errorf("completion help = %q, want %q", output, want)
+		}
+	}
+}
+
+// The bash instruction is load-bearing and its wrong form fails silently, so
+// both places that give it are held to the working one.
+func TestBashCompletionIsInstalledWithEvalNotProcessSubstitution(t *testing.T) {
+	t.Parallel()
+	// Production mutation: `source <(workbook completion bash)` defines nothing
+	// in bash 3.2, which is still /bin/bash on macOS. It reports no error, so a
+	// reader who follows the instruction gets file-name completion and no sign
+	// that the line did nothing.
+	for name, document := range map[string]string{
+		"completion help": commandSchemas["completion"].Description,
+		"README.md":       repositoryDoc(t, "README.md"),
+	} {
+		// Help descriptions are wrapped prose, so the instruction is matched
+		// against the text with its line breaks collapsed.
+		document = strings.Join(strings.Fields(document), " ")
+		if !strings.Contains(document, `eval "$(workbook completion bash)"`) {
+			t.Errorf("%s does not install the bash completion with eval", name)
+		}
+		if strings.Contains(document, "source <(workbook completion bash)") {
+			t.Errorf("%s tells bash users to source a process substitution", name)
+		}
+	}
+
+	// The zsh instruction has to name a directory the reader owns: a stock
+	// macOS zsh resolves fpath[1] to /usr/local/share/zsh/site-functions, which
+	// does not exist and could not be written if it did.
+	readme := repositoryDoc(t, "README.md")
+	if strings.Contains(readme, "${fpath[1]}") {
+		t.Error("README installs the zsh completion into fpath[1], which a source install cannot write")
+	}
+	for _, want := range []string{"~/.zfunc/_workbook", "fpath=(~/.zfunc $fpath)"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README is missing the zsh instruction %q", want)
 		}
 	}
 }

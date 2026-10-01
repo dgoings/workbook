@@ -835,10 +835,11 @@ var commandSchemas = map[string]commandMetadata{
 		Name:     "completion",
 		Synopsis: "workbook completion <shell>",
 		Description: "Print a shell completion script for bash, zsh or fish.\n\n" +
-			"Have the shell read the output. For bash, add `source <(workbook completion\n" +
-			"bash)` to ~/.bashrc; for zsh, write `workbook completion zsh` to a `_workbook`\n" +
-			"file on your fpath, or source it from ~/.zshrc after compinit; for fish, write\n" +
-			"`workbook completion fish` to ~/.config/fish/completions/workbook.fish.\n\n" +
+			"Have the shell read the output. For bash, add `eval \"$(workbook completion\n" +
+			"bash)\"` to ~/.bashrc — bash 3.2 reads nothing from a sourced process\n" +
+			"substitution; for zsh, write `workbook completion zsh` to a `_workbook` file in\n" +
+			"a directory on your fpath, or source it from ~/.zshrc after compinit; for fish,\n" +
+			"write `workbook completion fish` to ~/.config/fish/completions/workbook.fish.\n\n" +
 			"The Homebrew formula installs all three already.",
 		Positionals: []string{"<shell>"},
 	},

@@ -65,14 +65,23 @@ the line for your shell:
 
 ```sh
 # bash, in ~/.bashrc
-source <(workbook completion bash)
+eval "$(workbook completion bash)"
 
-# zsh, on your fpath, with compinit already enabled
-workbook completion zsh > "${fpath[1]}/_workbook"
+# zsh, into a directory you own
+mkdir -p ~/.zfunc && workbook completion zsh > ~/.zfunc/_workbook
 
 # fish
 workbook completion fish > ~/.config/fish/completions/workbook.fish
 ```
+
+The bash line is `eval` rather than `source <(…)` because bash 3.2 — still
+`/bin/bash` on macOS — reads nothing from a process substitution it is told to
+source, and leaves no completion behind without reporting anything.
+
+`~/.zfunc` has to be on `fpath` before `compinit` runs, so `~/.zshrc` needs
+`fpath=(~/.zfunc $fpath)` above the line that calls it. Sourcing works on zsh if
+you would rather not keep a file: `source <(workbook completion zsh)`, after
+`compinit`.
 
 The scripts are generated from the same command schema `workbook help` is
 rendered from, so they complete every command, subcommand and option the
