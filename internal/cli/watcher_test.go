@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"os/exec"
 	"path/filepath"
@@ -373,8 +372,7 @@ func TestRunServeSurfacesAnOriginAdvanceWithoutACommand(t *testing.T) {
 		t.Fatalf("push = code %d, stderr %q", code, stderr)
 	}
 
-	address := reserveAddress(t)
-	stopServe := startServe(t, second, address)
+	address, stopServe := startServe(t, second)
 	defer stopServe()
 
 	deadline := time.Now().Add(20 * time.Second)
@@ -392,8 +390,7 @@ func TestRunServeDefersToAnExternalWatcher(t *testing.T) {
 	_, second := cliSyncRepositories(t)
 	startCLIWatcher(t, second, "1h")
 
-	address := reserveAddress(t)
-	output, stopServe := startServeCapturing(t, second, address)
+	address, output, stopServe := startServeCapturing(t, second)
 	defer stopServe()
 
 	deadline := time.Now().Add(10 * time.Second)
@@ -418,8 +415,7 @@ func TestWebMutationPublishesWithoutWaitingForATick(t *testing.T) {
 	_, second := cliSyncRepositories(t)
 	startCLIWatcher(t, second, "1h")
 
-	address := reserveAddress(t)
-	_, stopServe := startServeCapturing(t, second, address)
+	address, _, stopServe := startServeCapturing(t, second)
 	defer stopServe()
 
 	created := createTaskThroughBoard(t, address, "Nudged from the board")
@@ -442,8 +438,7 @@ func TestBoardInlineModePublishesBeforeResponding(t *testing.T) {
 	_, second := cliSyncRepositories(t)
 	startCLIWatcher(t, second, "1h")
 
-	address := reserveAddress(t)
-	_, stopServe := startServeCapturing(t, second, address)
+	address, _, stopServe := startServeCapturing(t, second)
 	defer stopServe()
 
 	if mode := boardSyncMode(t, address); mode != "deferred" {
@@ -464,8 +459,7 @@ func TestBoardInlineModePublishesBeforeResponding(t *testing.T) {
 func TestWebMutationSucceedsWithoutAnOrigin(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	address := reserveAddress(t)
-	_, stopServe := startServeCapturing(t, repository, address)
+	address, _, stopServe := startServeCapturing(t, repository)
 	defer stopServe()
 
 	created := createTaskThroughBoard(t, address, "No origin here")
@@ -512,14 +506,19 @@ func TestWatcherPublishesUnsyncedWorkOnShutdown(t *testing.T) {
 func TestServeShutdownStaysWithinBudget(t *testing.T) {
 	t.Parallel()
 	_, second := cliSyncRepositories(t)
-	address := reserveAddress(t)
 
+	// This one test still reaches serve through Run, so the dispatcher's own
+	// wiring stays covered, and Run takes no bind a reservation could be handed
+	// to. It asks for port zero instead: serve binds it itself, no address is
+	// ever released for another parallel test to take, and the banner says where
+	// the board landed.
 	ctx, cancel := context.WithCancel(context.Background())
 	output := &watcherOutput{}
 	finished := make(chan int, 1)
 	go func() {
-		finished <- Run(ctx, []string{"serve", "--addr", address}, second, nil, output, output)
+		finished <- Run(ctx, []string{"serve", "--addr", "127.0.0.1:0"}, second, nil, output, output)
 	}()
+	address := waitForBoardAddress(t, output)
 	waitForHTTP(t, "http://"+address+"/healthz")
 
 	cancel()
@@ -539,43 +538,42 @@ func TestServeShutdownStaysWithinBudget(t *testing.T) {
 
 // --- helpers ---
 
-func reserveAddress(t *testing.T) string {
+func startServe(t *testing.T, repository string) (string, func()) {
 	t.Helper()
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve address: %v", err)
-	}
-	address := probe.Addr().String()
-	if err := probe.Close(); err != nil {
-		t.Fatalf("release address: %v", err)
-	}
-	return address
+	address, _, stop := startServeCapturing(t, repository)
+	return address, stop
 }
 
-func startServe(t *testing.T, repository, address string) func() {
+// startServeCapturing runs serve on a reserved loopback port and returns the
+// address it answers on, everything it wrote, and the stop it needs.
+//
+// The reservation is handed to serve still open rather than closed and rebound,
+// so no other test in this parallel package can be given the port in between;
+// see reservedListener. That is why this goes through runServeWith instead of
+// Run — Run takes no bind — and so the serve error is checked directly here
+// rather than through an exit code.
+func startServeCapturing(t *testing.T, repository string) (string, *watcherOutput, func()) {
 	t.Helper()
-	_, stop := startServeCapturing(t, repository, address)
-	return stop
-}
-
-func startServeCapturing(t *testing.T, repository, address string) (*watcherOutput, func()) {
-	t.Helper()
+	reserved := reserveListener(t)
 	output := &watcherOutput{}
 	ctx, cancel := context.WithCancel(context.Background())
-	finished := make(chan int, 1)
+	finished := make(chan error, 1)
 	go func() {
-		finished <- Run(ctx, []string{"serve", "--addr", address}, repository, nil, output, output)
+		finished <- runServeWith(ctx, reserved.listen, []string{"--addr", reserved.addr}, repository, output, output)
 	}()
-	waitForHTTP(t, "http://"+address+"/healthz")
+	waitForHTTP(t, "http://"+reserved.addr+"/healthz")
 	stopped := false
-	return output, func() {
+	return reserved.addr, output, func() {
 		if stopped {
 			return
 		}
 		stopped = true
 		cancel()
 		select {
-		case <-finished:
+		case err := <-finished:
+			if err != nil {
+				t.Errorf("runServeWith() error = %v; wrote %q", err, output.String())
+			}
 		case <-time.After(20 * time.Second):
 			t.Error("serve did not stop")
 		}
