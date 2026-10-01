@@ -1260,21 +1260,15 @@ func TestRunServeUpdatesTaskStatusThroughWebRoute(t *testing.T) {
 		t.Fatalf("decode created task: %v", err)
 	}
 
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := probe.Addr().String()
-	if err := probe.Close(); err != nil {
-		t.Fatal(err)
-	}
+	reserved := reserveListener(t)
+	addr := reserved.addr
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)
 	var serveStdout, serveStderr bytes.Buffer
 	go func() {
-		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
+		result <- runServeWith(ctx, reserved.listen, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
 	}()
 	waitForHTTP(t, "http://"+addr+"/healthz")
 
@@ -1298,7 +1292,7 @@ func TestRunServeUpdatesTaskStatusThroughWebRoute(t *testing.T) {
 
 	cancel()
 	if err := <-result; err != nil {
-		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+		t.Fatalf("runServeWith() error = %v; stderr = %q", err, serveStderr.String())
 	}
 
 	code, stdout, stderr = run(t, repository, "show", task.ID, "--json")
@@ -1335,21 +1329,15 @@ func TestRunServePositionsTaskThroughWebRoute(t *testing.T) {
 	movedHeadBefore := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+moved.ID)
 	anchorHeadBefore := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+anchor.ID)
 
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := probe.Addr().String()
-	if err := probe.Close(); err != nil {
-		t.Fatal(err)
-	}
+	reserved := reserveListener(t)
+	addr := reserved.addr
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)
 	var serveStdout, serveStderr bytes.Buffer
 	go func() {
-		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
+		result <- runServeWith(ctx, reserved.listen, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
 	}()
 	waitForHTTP(t, "http://"+addr+"/healthz")
 
@@ -1397,7 +1385,7 @@ func TestRunServePositionsTaskThroughWebRoute(t *testing.T) {
 
 	cancel()
 	if err := <-result; err != nil {
-		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+		t.Fatalf("runServeWith() error = %v; stderr = %q", err, serveStderr.String())
 	}
 
 	movedHeadAfter := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+moved.ID)
@@ -1442,20 +1430,14 @@ func TestRunServeMutatesDependenciesThroughWebRoutes(t *testing.T) {
 
 	dependentHeadBefore := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+dependent.ID)
 	prerequisiteHeadBefore := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+prerequisite.ID)
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := probe.Addr().String()
-	if err := probe.Close(); err != nil {
-		t.Fatal(err)
-	}
+	reserved := reserveListener(t)
+	addr := reserved.addr
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)
 	var serveStdout, serveStderr bytes.Buffer
 	go func() {
-		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
+		result <- runServeWith(ctx, reserved.listen, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
 	}()
 	waitForHTTP(t, "http://"+addr+"/healthz")
 
@@ -1528,7 +1510,7 @@ func TestRunServeMutatesDependenciesThroughWebRoutes(t *testing.T) {
 
 	cancel()
 	if err := <-result; err != nil {
-		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+		t.Fatalf("runServeWith() error = %v; stderr = %q", err, serveStderr.String())
 	}
 	if serveStdout.Len() != 0 {
 		t.Fatalf("serve stdout = %q, want empty", serveStdout.String())
@@ -1561,20 +1543,14 @@ func TestRunServeListsGitTipAdvancedAfterStarting(t *testing.T) {
 		t.Fatalf("decode created task: %v", err)
 	}
 
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := probe.Addr().String()
-	if err := probe.Close(); err != nil {
-		t.Fatal(err)
-	}
+	reserved := reserveListener(t)
+	addr := reserved.addr
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)
 	var serveStdout, serveStderr bytes.Buffer
 	go func() {
-		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
+		result <- runServeWith(ctx, reserved.listen, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
 	}()
 	waitForHTTP(t, "http://"+addr+"/healthz")
 
@@ -1597,28 +1573,22 @@ func TestRunServeListsGitTipAdvancedAfterStarting(t *testing.T) {
 
 	cancel()
 	if err := <-result; err != nil {
-		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+		t.Fatalf("runServeWith() error = %v; stderr = %q", err, serveStderr.String())
 	}
 }
 
 func TestRunServeCreatesTaskThroughWebRoute(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := probe.Addr().String()
-	if err := probe.Close(); err != nil {
-		t.Fatal(err)
-	}
+	reserved := reserveListener(t)
+	addr := reserved.addr
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)
 	var serveStdout, serveStderr bytes.Buffer
 	go func() {
-		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
+		result <- runServeWith(ctx, reserved.listen, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
 	}()
 	waitForHTTP(t, "http://"+addr+"/healthz")
 
@@ -1643,7 +1613,7 @@ func TestRunServeCreatesTaskThroughWebRoute(t *testing.T) {
 
 	cancel()
 	if err := <-result; err != nil {
-		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+		t.Fatalf("runServeWith() error = %v; stderr = %q", err, serveStderr.String())
 	}
 
 	code, stdout, stderr := run(t, repository, "list", "--json")
@@ -1677,20 +1647,14 @@ func TestRunServeUpdatesAllTaskFieldsThroughWebRoute(t *testing.T) {
 		t.Fatalf("decode created task: %v", err)
 	}
 
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := probe.Addr().String()
-	if err := probe.Close(); err != nil {
-		t.Fatal(err)
-	}
+	reserved := reserveListener(t)
+	addr := reserved.addr
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)
 	var serveStdout, serveStderr bytes.Buffer
 	go func() {
-		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
+		result <- runServeWith(ctx, reserved.listen, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
 	}()
 	waitForHTTP(t, "http://"+addr+"/healthz")
 
@@ -1714,7 +1678,7 @@ func TestRunServeUpdatesAllTaskFieldsThroughWebRoute(t *testing.T) {
 
 	cancel()
 	if err := <-result; err != nil {
-		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+		t.Fatalf("runServeWith() error = %v; stderr = %q", err, serveStderr.String())
 	}
 
 	code, stdout, stderr = run(t, repository, "show", created.ID, "--json")
@@ -1745,21 +1709,15 @@ func TestRunServeRefusesCrossSiteRequestsThroughTheRealListener(t *testing.T) {
 	}
 	seed := decodeMutationTask(t, stdout, "create")
 
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := probe.Addr().String()
-	if err := probe.Close(); err != nil {
-		t.Fatal(err)
-	}
+	reserved := reserveListener(t)
+	addr := reserved.addr
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)
 	var serveStdout, serveStderr bytes.Buffer
 	go func() {
-		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
+		result <- runServeWith(ctx, reserved.listen, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
 	}()
 	waitForHTTP(t, "http://"+addr+"/healthz")
 
@@ -1857,7 +1815,7 @@ func TestRunServeRefusesCrossSiteRequestsThroughTheRealListener(t *testing.T) {
 
 	cancel()
 	if err := <-result; err != nil {
-		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+		t.Fatalf("runServeWith() error = %v; stderr = %q", err, serveStderr.String())
 	}
 	if strings.Contains(serveStderr.String(), "no authentication") {
 		t.Fatalf("serve warned about exposure on a loopback bind: %q", serveStderr.String())
@@ -1879,15 +1837,12 @@ func TestRunServeRefusesCrossSiteRequestsThroughTheRealListener(t *testing.T) {
 func TestRunServeWarnsWhenTheBoardLeavesThisMachine(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	// The wildcard is reserved directly: serve reads both the banner and this
+	// warning off the address its listener reports, so a loopback reservation
+	// renamed to 0.0.0.0 would not reach the warning at all.
+	reserved := reserveListenerOn(t, "0.0.0.0")
+	_, port, err := net.SplitHostPort(reserved.addr)
 	if err != nil {
-		t.Fatal(err)
-	}
-	_, port, err := net.SplitHostPort(probe.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := probe.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1896,13 +1851,13 @@ func TestRunServeWarnsWhenTheBoardLeavesThisMachine(t *testing.T) {
 	result := make(chan error, 1)
 	var serveStdout, serveStderr bytes.Buffer
 	go func() {
-		result <- runServe(ctx, []string{"--addr", net.JoinHostPort("0.0.0.0", port)}, repository, &serveStdout, &serveStderr)
+		result <- runServeWith(ctx, reserved.listen, []string{"--addr", reserved.addr}, repository, &serveStdout, &serveStderr)
 	}()
 	waitForHTTP(t, "http://127.0.0.1:"+port+"/healthz")
 
 	cancel()
 	if err := <-result; err != nil {
-		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+		t.Fatalf("runServeWith() error = %v; stderr = %q", err, serveStderr.String())
 	}
 	// The listener reports the wildcard address it actually bound, which is
 	// IPv4 or dual-stack depending on the host, so the warning is matched by
@@ -1982,25 +1937,23 @@ func TestRunServeReportsListenerFailureAsOperational(t *testing.T) {
 
 func TestOpenBoardListenerKeepsRequestedAddressWhenFree(t *testing.T) {
 	t.Parallel()
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := probe.Addr().String()
-	if err := probe.Close(); err != nil {
-		t.Fatal(err)
-	}
+	// Free means free for this bind to take, which is what the reservation
+	// hands over: the decision under test is that a bind which succeeded is
+	// returned as-is and reported as no fallback, and that is the same decision
+	// whichever bind made it.
+	reserved := reserveListener(t)
+	addr := reserved.addr
 
-	listener, fellBack, err := openBoardListenerWith(net.Listen, addr, false)
+	listener, fellBack, err := openBoardListenerWith(reserved.listen, addr, false)
 	if err != nil {
-		t.Fatalf("openBoardListenerWith(net.Listen, %q, false) error = %v, want nil", addr, err)
+		t.Fatalf("openBoardListenerWith(%q, false) error = %v, want nil", addr, err)
 	}
 	defer listener.Close()
 	if got := listener.Addr().String(); got != addr {
-		t.Fatalf("openBoardListenerWith(net.Listen, %q, false) bound %q, want the requested address", addr, got)
+		t.Fatalf("openBoardListenerWith(%q, false) bound %q, want the requested address", addr, got)
 	}
 	if fellBack {
-		t.Fatalf("openBoardListenerWith(net.Listen, %q, false) reported a fallback, want none for an address it bound", addr)
+		t.Fatalf("openBoardListenerWith(%q, false) reported a fallback, want none for an address it bound", addr)
 	}
 }
 
@@ -2187,7 +2140,6 @@ func TestRunServeFallsBackWhenDefaultAddressTaken(t *testing.T) {
 		result <- runServe(ctx, nil, repository, &serveStdout, serveStderr)
 	}()
 
-	banner := regexp.MustCompile(`Workbook board: http://(\S+)`)
 	var boundAddr string
 	deadline := time.Now().Add(30 * time.Second) // hang guard, not a measurement; see waitForHTTP
 	for boundAddr == "" {
@@ -2196,7 +2148,7 @@ func TestRunServeFallsBackWhenDefaultAddressTaken(t *testing.T) {
 			t.Fatalf("runServe() exited early: %v; stderr = %q", err, serveStderr.String())
 		default:
 		}
-		if match := banner.FindStringSubmatch(serveStderr.String()); match != nil {
+		if match := boardBanner.FindStringSubmatch(serveStderr.String()); match != nil {
 			boundAddr = match[1]
 			break
 		}
@@ -2265,7 +2217,6 @@ func TestRunServeSaysNothingWhenTheDefaultAddressIsFree(t *testing.T) {
 		result <- runServeWith(ctx, listen, nil, repository, &serveStdout, serveStderr)
 	}()
 
-	banner := regexp.MustCompile(`Workbook board: http://(\S+)`)
 	var boundAddr string
 	deadline := time.Now().Add(30 * time.Second) // hang guard, not a measurement; see waitForHTTP
 	for boundAddr == "" {
@@ -2274,7 +2225,7 @@ func TestRunServeSaysNothingWhenTheDefaultAddressIsFree(t *testing.T) {
 			t.Fatalf("runServeWith() exited early: %v; stderr = %q", err, serveStderr.String())
 		default:
 		}
-		if match := banner.FindStringSubmatch(serveStderr.String()); match != nil {
+		if match := boardBanner.FindStringSubmatch(serveStderr.String()); match != nil {
 			boundAddr = match[1]
 			break
 		}

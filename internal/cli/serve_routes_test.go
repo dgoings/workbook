@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -260,36 +259,31 @@ func statusNames(definitions []core.StatusDefinition) string {
 }
 
 // startServeBoard runs the real serve command on an ephemeral loopback port and
-// stops it when the test ends. Port zero matters: another suite may be running
-// on this machine, and a fixed port would make the two collide.
+// stops it when the test ends. An OS-assigned port matters: another suite may
+// be running on this machine, and a fixed port would make the two collide. The
+// reservation is handed to serve still open, so the port is never free for
+// another parallel test to claim; see reservedListener.
 func startServeBoard(t *testing.T, repository string) string {
 	t.Helper()
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := probe.Addr().String()
-	if err := probe.Close(); err != nil {
-		t.Fatal(err)
-	}
+	reserved := reserveListener(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	var serveStdout, serveStderr bytes.Buffer
 	go func() {
-		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
+		result <- runServeWith(ctx, reserved.listen, []string{"--addr", reserved.addr}, repository, &serveStdout, &serveStderr)
 	}()
 	t.Cleanup(func() {
 		cancel()
 		if err := <-result; err != nil {
-			t.Errorf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+			t.Errorf("runServeWith() error = %v; stderr = %q", err, serveStderr.String())
 		}
 		if serveStdout.Len() != 0 {
 			t.Errorf("serve stdout = %q, want empty", serveStdout.String())
 		}
 	})
-	waitForHTTP(t, "http://"+addr+"/healthz")
-	return addr
+	waitForHTTP(t, "http://"+reserved.addr+"/healthz")
+	return reserved.addr
 }
 
 // boardRequest speaks to the board the way its own page does: every mutation
