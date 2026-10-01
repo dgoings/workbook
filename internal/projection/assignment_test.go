@@ -42,7 +42,7 @@ func TestProjectionRoundTripsAssignments(t *testing.T) {
 			unassigned.Head: unassigned,
 		},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -117,7 +117,7 @@ func TestACacheStampedWithThePreviousSchemaVersionIsDiscarded(t *testing.T) {
 		snapshots: map[string]core.Snapshot{snapshot.Head: snapshot},
 	}
 	cachePath := filepath.Join(t.TempDir(), "cache.sqlite")
-	store, err := openStore(ctx, source, config, cachePath)
+	store, err := openStoreForTest(t, ctx, source, config, cachePath)
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -137,7 +137,7 @@ func TestACacheStampedWithThePreviousSchemaVersionIsDiscarded(t *testing.T) {
 		t.Fatalf("dirty the cached row: %v", err)
 	}
 
-	reopened, err := openStore(ctx, source, config, cachePath)
+	reopened, err := openStoreForTest(t, ctx, source, config, cachePath)
 	if err != nil {
 		t.Fatalf("openStore(reopened) error = %v", err)
 	}

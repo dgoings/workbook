@@ -32,10 +32,11 @@ func runPriorityList(ctx context.Context, args []string, cwd string, stdout, std
 	if err != nil {
 		return err
 	}
-	service, err := priorityReadService(ctx, repository, config, state.Vocabulary, state.Priorities)
+	service, releaseProjection, err := priorityReadService(ctx, repository, config, state.Vocabulary, state.Priorities)
 	if err != nil {
 		return err
 	}
+	defer releaseProjection()
 	tasks, err := service.List(ctx, core.ListFilter{})
 	if err != nil {
 		return err

@@ -552,10 +552,7 @@ func TestBoardDoesNotCallTheProjectsOwnKeysStaleThroughThePriorityBoard(t *testi
 // repository, the way runServe does.
 func openBoardPriorities(t *testing.T, ctx context.Context, repository string) *boardPriorities {
 	t.Helper()
-	service, store, err := openBoardServiceParts(ctx, repository)
-	if err != nil {
-		t.Fatalf("open the board's service: %v", err)
-	}
+	service, store := openBoardServiceParts(t, ctx, repository)
 	return &boardPriorities{
 		repository: store,
 		config:     service.Config,

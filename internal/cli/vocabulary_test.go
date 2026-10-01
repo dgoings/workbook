@@ -329,10 +329,11 @@ func TestValidateJSONOmitsTheConfigSectionWithoutALedger(t *testing.T) {
 func writeTaskInAForeignStatus(t *testing.T, repository, title string, status core.Status) core.Task {
 	t.Helper()
 	ctx := context.Background()
-	service, _, _, err := openServiceParts(ctx, repository, io.Discard)
+	service, _, _, releaseProjection, err := openServiceParts(ctx, repository, io.Discard)
 	if err != nil {
 		t.Fatalf("openServiceParts() error = %v", err)
 	}
+	defer releaseProjection()
 	foreign, err := core.NewVocabulary(
 		[]core.StatusDefinition{{
 			Status: status, Label: "Foreign", Rank: "1/1",

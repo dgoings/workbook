@@ -13,7 +13,6 @@ import (
 	"github.com/dgoings/workbook/internal/agentdocs"
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
-	"github.com/dgoings/workbook/internal/projection"
 )
 
 // keyChange is what one key command did, in the shape every mutating key
@@ -192,10 +191,11 @@ func runKeyList(ctx context.Context, args []string, cwd string, stdout, stderr i
 	if err != nil {
 		return err
 	}
-	service, err := keyReadService(ctx, repository, config, state)
+	service, releaseProjection, err := keyReadService(ctx, repository, config, state)
 	if err != nil {
 		return err
 	}
+	defer releaseProjection()
 	tasks, err := service.List(ctx, core.ListFilter{})
 	if err != nil {
 		return err
@@ -215,7 +215,8 @@ func runKeyList(ctx context.Context, args []string, cwd string, stdout, stderr i
 }
 
 // keyReadService builds a read-only service on a repository that is already
-// open, so a key command holds one projection handle rather than two.
+// open, so a key command holds one projection handle rather than two. It also
+// returns the release that closes that handle; see openProjection.
 //
 // It is handed the whole vocabulary state rather than the keys alone. The
 // listing resolves every task's stored status and priority through this
@@ -226,10 +227,10 @@ func keyReadService(
 	repository *gitstore.Repository,
 	config core.ProjectConfig,
 	state gitstore.VocabularyState,
-) (core.Service, error) {
-	store, err := projection.Open(ctx, repository, config)
+) (core.Service, func(), error) {
+	store, release, err := openProjection(ctx, repository, config)
 	if err != nil {
-		return core.Service{}, err
+		return core.Service{}, nil, err
 	}
 	return core.Service{
 		Config:     config,
@@ -240,7 +241,7 @@ func keyReadService(
 		History:    store,
 		IDs:        core.CryptoULIDSource{},
 		Now:        time.Now,
-	}, nil
+	}, release, nil
 }
 
 // keysRecorded reports a project whose configuration ledger carries a key
@@ -521,6 +522,7 @@ func runKeyMutation(
 	if err != nil {
 		return err
 	}
+	defer session.Close()
 	session.fetchBefore(ctx)
 	if err := session.refreshConfiguration(ctx); err != nil {
 		return err

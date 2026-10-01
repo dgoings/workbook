@@ -440,10 +440,11 @@ func runShowAttachment(
 	output attachmentOutput,
 	stdout, stderr io.Writer,
 ) error {
-	service, err := openReadService(ctx, cwd, stderr)
+	service, releaseProjection, err := openReadService(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
+	defer releaseProjection()
 	task, err := service.Show(ctx, idOrPrefix)
 	if err != nil {
 		return err

@@ -545,14 +545,15 @@ func TestRunRebuildProducesVersionedResult(t *testing.T) {
 	}
 }
 
-func TestOpenServiceUsesSplitMutationStores(t *testing.T) {
+func TestOpenServicePartsUsesSplitMutationStores(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
 
-	service, err := openService(context.Background(), repository, io.Discard)
+	service, _, _, releaseProjection, err := openServiceParts(context.Background(), repository, io.Discard)
 	if err != nil {
-		t.Fatalf("openService() error = %v", err)
+		t.Fatalf("openServiceParts() error = %v", err)
 	}
+	defer releaseProjection()
 	reader, ok := service.Reader.(*projection.Store)
 	if !ok {
 		t.Fatalf("Reader = %T, want *projection.Store", service.Reader)
@@ -618,10 +619,11 @@ func TestReadCommandsRefreshCachedProjectionAfterGitTipAdvances(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("rebuild = (%d, %q, %q)", code, stdout, stderr)
 	}
-	readService, err := openReadService(context.Background(), repository, io.Discard)
+	readService, releaseProjection, err := openReadService(context.Background(), repository, io.Discard)
 	if err != nil {
 		t.Fatalf("openReadService() error = %v", err)
 	}
+	defer releaseProjection()
 	if _, ok := readService.Reader.(*projection.Store); !ok {
 		t.Fatalf("openReadService() reader = %T, want *projection.Store", readService.Reader)
 	}

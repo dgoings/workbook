@@ -38,6 +38,13 @@ var templateRoot string
 // whole test binary runs through it, so a concurrently running test's Git would
 // land in the same log.
 //
+//	TestCommandLeavesNoProjectionGoroutineBehind — goroutine census
+//
+// It reads the whole process's goroutines and attributes every connection
+// opener that appears while it runs to the one command it ran, so a
+// concurrently running test's projection would be counted as that command's
+// leak.
+//
 // Nothing else in the package needs to be serial. Every other test builds its
 // own repository under t.TempDir and drives the CLI in process, and the one
 // piece of state they share — the user-global configuration under the home

@@ -100,10 +100,11 @@ func runBoard(ctx context.Context, args []string, cwd string, stdout, stderr io.
 		return core.Errorf(core.CategoryInvocation, "cannot use --wide with --narrow")
 	}
 
-	service, err := openReadService(ctx, cwd, stderr)
+	service, releaseProjection, err := openReadService(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
+	defer releaseProjection()
 	tasks, err := service.List(ctx, core.ListFilter{})
 	if err != nil {
 		return err

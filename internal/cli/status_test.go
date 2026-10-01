@@ -18,7 +18,6 @@ import (
 	"github.com/dgoings/workbook/internal/agentdocs"
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
-	"github.com/dgoings/workbook/internal/projection"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
 
@@ -2520,10 +2519,11 @@ func writeTaskInAnUndefinedStatus(t *testing.T, repository, status, title string
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := projection.Open(ctx, repo, config)
+	store, releaseProjection, err := openProjection(ctx, repo, config)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer releaseProjection()
 	actor, err := repo.Actor(ctx)
 	if err != nil {
 		t.Fatal(err)

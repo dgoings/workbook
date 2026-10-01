@@ -79,6 +79,11 @@ type Store struct {
 	// turns that into a reopen. It is nil until the cache file exists, because
 	// sql.Open is lazy and creates it on first use.
 	dbInfo os.FileInfo
+	// closed records that Close has released db, so a later read or write
+	// reports a closed cache instead of taking the recovery path a missing
+	// database would take and quietly rebuilding one this handle no longer
+	// owns. It is guarded by rebuildMu, like db and dbInfo.
+	closed bool
 	rename func(string, string) error
 }
 
@@ -119,6 +124,31 @@ func (s *Store) CachePath() string {
 	return s.cachePath
 }
 
+// Close releases the SQLite handle this store holds.
+//
+// It exists because database/sql starts a connectionOpener goroutine per
+// *sql.DB and only db.Close stops it, so a process that opens a store per
+// command and walks away — `workbook serve`, the sync watcher, this module's
+// own test binaries — accumulates one goroutine per store for as long as it
+// runs. Closing twice is harmless, and a closed store refuses further reads
+// and writes with an error rather than panicking or rebuilding a cache it no
+// longer holds open.
+func (s *Store) Close() error {
+	s.rebuildMu.Lock()
+	defer s.rebuildMu.Unlock()
+	s.closed = true
+	db := s.db
+	s.db = nil
+	s.dbInfo = nil
+	if db == nil {
+		return nil
+	}
+	if err := db.Close(); err != nil {
+		return s.databaseError("close projection cache", err)
+	}
+	return nil
+}
+
 // Refresh validates task-ref tips, applying only changed tip checkpoints to
 // the cache. Git remains the canonical source for every changed task.
 func (s *Store) Refresh(ctx context.Context) error {
@@ -148,6 +178,9 @@ func (s *Store) refreshActive(ctx context.Context) error {
 func (s *Store) Rebuild(ctx context.Context) (int, error) {
 	s.rebuildMu.Lock()
 	defer s.rebuildMu.Unlock()
+	if s.closed {
+		return 0, errStoreClosed()
+	}
 	return s.rebuildLocked(ctx)
 }
 
@@ -375,12 +408,23 @@ func (s *Store) validateConfig(config core.ProjectConfig) error {
 // the exclusive rebuild lock and rechecks the cache there.
 func (s *Store) lockActiveDatabase(ctx context.Context) error {
 	s.rebuildMu.RLock()
+	if s.closed {
+		s.rebuildMu.RUnlock()
+		return errStoreClosed()
+	}
 	if s.cacheUsable(ctx) {
 		return nil
 	}
 	s.rebuildMu.RUnlock()
 
 	s.rebuildMu.Lock()
+	// Rechecked under the exclusive lock: a Close that landed in the window
+	// above must not be followed by a rebuild, which would reopen the cache
+	// behind the caller that closed it.
+	if s.closed {
+		s.rebuildMu.Unlock()
+		return errStoreClosed()
+	}
 	if !s.cacheUsable(ctx) {
 		if err := s.recoverLocked(ctx); err != nil {
 			s.rebuildMu.Unlock()
@@ -390,11 +434,22 @@ func (s *Store) lockActiveDatabase(ctx context.Context) error {
 	s.rebuildMu.Unlock()
 
 	s.rebuildMu.RLock()
+	if s.closed {
+		s.rebuildMu.RUnlock()
+		return errStoreClosed()
+	}
 	if s.cacheUsable(ctx) {
 		return nil
 	}
 	s.rebuildMu.RUnlock()
 	return cacheError("activate projection cache after rebuild", errors.New("projection cache is unavailable"))
+}
+
+// errStoreClosed names the refusal a closed store answers with. It is built
+// per call rather than kept in a package variable because core errors carry a
+// category and a message a caller may wrap further.
+func errStoreClosed() error {
+	return core.Errorf(core.CategoryOperational, "projection cache is closed")
 }
 
 // recoverLocked restores a usable cache with rebuildMu held exclusively.
@@ -454,6 +509,13 @@ func (s *Store) withActiveDatabase(ctx context.Context, body func(context.Contex
 		if recoverErr := func() error {
 			s.rebuildMu.Lock()
 			defer s.rebuildMu.Unlock()
+			// Rechecked here as in lockActiveDatabase: a Close that landed
+			// between the refused write and this retry must not be followed by
+			// a reopen, which would hand this store a fresh *sql.DB nobody
+			// holds a closer for.
+			if s.closed {
+				return errStoreClosed()
+			}
 			return s.reopenReplacedLocked(ctx)
 		}(); recoverErr != nil {
 			return recoverErr

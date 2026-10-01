@@ -46,7 +46,7 @@ func TestAProjectedTaskKeepsItsCommentsAndAttachments(t *testing.T) {
 	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Task with a thread")
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -103,7 +103,7 @@ func TestAProjectedChainReplaysCommentOperations(t *testing.T) {
 	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Task with a thread")
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
