@@ -42,6 +42,7 @@ Commands:
   docs <command> [options]
   hooks install [--json]
   serve [--addr 127.0.0.1:7331]
+  completion <shell>
 `
 
 func renderGlobalHelp(output io.Writer) {

@@ -245,6 +245,9 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"rebuild":  {"json": boolFlag},
 		"validate": {"full": boolFlag, "json": boolFlag},
 		"version":  {"json": boolFlag},
+		// completion prints a static script, so it takes no options at all:
+		// not even --json, which has nothing to describe here.
+		"completion": {},
 	}
 
 	install := commandSchemas["hooks"].Subcommands["install"]

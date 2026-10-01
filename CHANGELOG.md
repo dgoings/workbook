@@ -32,6 +32,15 @@ would start. Three of the changes below affect scripts; all three are described
 under Changed.
 
 ### Added
+- **Shell completions for bash, zsh and fish**, printed by `workbook
+  completion <shell>`. The scripts are generated from the same command schema
+  `workbook help` is rendered from, so they complete every command, subcommand
+  and option the version that printed them accepts, and no hand-written list
+  can fall behind the CLI. They complete names only: a task ID, a status or a
+  title is left alone rather than guessed at, and none of the three shells
+  falls back to offering file names. The Homebrew formula generates and
+  installs all three during `brew install`; a source build writes the one line
+  for its shell, which the README's Installation section gives.
 - **The desktop app has keyboard shortcuts**, all in the application menu:
   Cmd+1–9 and Cmd+Option+Up/Down for projects, Cmd+0 for Next, Cmd+Shift+I
   for Import, Cmd+Shift+D to toggle dark mode, Cmd+B for the sidebar, and

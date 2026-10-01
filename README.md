@@ -57,6 +57,27 @@ To modify Workbook itself, see [CONTRIBUTING.md](CONTRIBUTING.md) — it covers
 the two-build development environment, the test suite, and how releases are
 cut.
 
+### Shell completions
+
+`workbook completion <shell>` prints a completion script for bash, zsh or fish.
+The Homebrew formula installs all three, so this is for a source build. Pick
+the line for your shell:
+
+```sh
+# bash, in ~/.bashrc
+source <(workbook completion bash)
+
+# zsh, on your fpath, with compinit already enabled
+workbook completion zsh > "${fpath[1]}/_workbook"
+
+# fish
+workbook completion fish > ~/.config/fish/completions/workbook.fish
+```
+
+The scripts are generated from the same command schema `workbook help` is
+rendered from, so they complete every command, subcommand and option the
+version that printed them accepts. Regenerate them after upgrading.
+
 ### The desktop app
 
 Workbench, under [`desktop/`](desktop/README.md), is a desktop shell for

@@ -118,6 +118,8 @@ func Run(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout
 		err = runHooks(ctx, commandArgs, cwd, stdout, stderr)
 	case "serve":
 		err = runServe(ctx, commandArgs, cwd, stdout, stderr)
+	case "completion":
+		err = runCompletion(commandArgs, stdout)
 	default:
 		err = core.Errorf(core.CategoryInvocation, "unknown command %q", command)
 	}

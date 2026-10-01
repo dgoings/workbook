@@ -95,6 +95,10 @@ class Workbook < Formula
 
   def install
     bin.install "workbook"
+    # The scripts are generated from the command schema, so they are built from
+    # the binary being installed rather than shipped in the archive and left to
+    # drift from the version they complete.
+    generate_completions_from_executable(bin/"workbook", "completion")
   end
 
   def caveats

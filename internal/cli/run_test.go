@@ -985,7 +985,10 @@ func TestCommandReferenceDocumentsImplementedCommands(t *testing.T) {
 			wantOptions = append(wantOptions, "--"+option.Name)
 		}
 		sort.Strings(wantOptions)
-		gotOptions := append([]string(nil), options[path]...)
+		// Seeded empty rather than nil: a command with no options at all, as
+		// `completion` has, documents none and matches none, and a nil slice
+		// would not compare equal to the empty one derived from the schema.
+		gotOptions := append([]string{}, options[path]...)
 		sort.Strings(gotOptions)
 		if !reflect.DeepEqual(gotOptions, wantOptions) {
 			t.Errorf("reference documents %q with options %q, want exactly the schema's %q", path, gotOptions, wantOptions)

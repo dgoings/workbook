@@ -831,10 +831,21 @@ var commandSchemas = map[string]commandMetadata{
 		Description: "Show Workbook build metadata.",
 		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
 	},
+	"completion": {
+		Name:     "completion",
+		Synopsis: "workbook completion <shell>",
+		Description: "Print a shell completion script for bash, zsh or fish.\n\n" +
+			"Have the shell read the output. For bash, add `source <(workbook completion\n" +
+			"bash)` to ~/.bashrc; for zsh, write `workbook completion zsh` to a `_workbook`\n" +
+			"file on your fpath, or source it from ~/.zshrc after compinit; for fish, write\n" +
+			"`workbook completion fish` to ~/.config/fish/completions/workbook.fish.\n\n" +
+			"The Homebrew formula installs all three already.",
+		Positionals: []string{"<shell>"},
+	},
 }
 
 var commandOrder = []string{
-	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "version", "fetch", "push", "sync", "status", "priority", "key", "config", "docs", "hooks", "serve",
+	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "version", "fetch", "push", "sync", "status", "priority", "key", "config", "docs", "hooks", "serve", "completion",
 }
 
 type commandFlagSet struct {
