@@ -82,7 +82,15 @@ type taskSession struct {
 // front of: this runs as a command returns, after the command has written its
 // result, and there is nothing a caller could do about a cache that would not
 // close.
+//
+// A session with no release is closed silently rather than by panicking. Only
+// openTaskSession builds one today and it always sets the field, but Close runs
+// from a defer on every path out of a command, which is the worst possible
+// place to discover that a future constructor left it unset.
 func (session *taskSession) Close() {
+	if session.releaseProjection == nil {
+		return
+	}
 	session.releaseProjection()
 }
 

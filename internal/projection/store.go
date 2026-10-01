@@ -509,6 +509,13 @@ func (s *Store) withActiveDatabase(ctx context.Context, body func(context.Contex
 		if recoverErr := func() error {
 			s.rebuildMu.Lock()
 			defer s.rebuildMu.Unlock()
+			// Rechecked here as in lockActiveDatabase: a Close that landed
+			// between the refused write and this retry must not be followed by
+			// a reopen, which would hand this store a fresh *sql.DB nobody
+			// holds a closer for.
+			if s.closed {
+				return errStoreClosed()
+			}
 			return s.reopenReplacedLocked(ctx)
 		}(); recoverErr != nil {
 			return recoverErr

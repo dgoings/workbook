@@ -545,13 +545,13 @@ func TestRunRebuildProducesVersionedResult(t *testing.T) {
 	}
 }
 
-func TestOpenServiceUsesSplitMutationStores(t *testing.T) {
+func TestOpenServicePartsUsesSplitMutationStores(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
 
-	service, releaseProjection, err := openService(context.Background(), repository, io.Discard)
+	service, _, _, releaseProjection, err := openServiceParts(context.Background(), repository, io.Discard)
 	if err != nil {
-		t.Fatalf("openService() error = %v", err)
+		t.Fatalf("openServiceParts() error = %v", err)
 	}
 	defer releaseProjection()
 	reader, ok := service.Reader.(*projection.Store)

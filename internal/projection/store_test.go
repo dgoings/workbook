@@ -28,7 +28,7 @@ func TestStoreRefreshUsesSQLiteUntilATaskHeadChanges(t *testing.T) {
 	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -60,7 +60,7 @@ func TestStoreBacksMutationReaderWithCanonicalEmptyCollections(t *testing.T) {
 	ctx := context.Background()
 	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -99,7 +99,7 @@ func TestStoreRefreshReadsOnlyAdvancedHeads(t *testing.T) {
 		first.Head:  first,
 		second.Head: second,
 	}}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -152,7 +152,7 @@ func TestStoreGetInspectsOnlyExactWarmHead(t *testing.T) {
 		heads:     []gitstore.TaskHead{{TaskID: expected.State.TaskID, ObjectID: expected.Head}},
 		snapshots: map[string]core.Snapshot{expected.Head: expected},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -183,7 +183,7 @@ func TestStoreGetRefreshesOnlyChangedExactHead(t *testing.T) {
 		heads:     []gitstore.TaskHead{{TaskID: previous.State.TaskID, ObjectID: previous.Head}},
 		snapshots: map[string]core.Snapshot{previous.Head: previous, expected.Head: expected},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -227,7 +227,7 @@ func TestStoreGetRejectsDisappearedExactHead(t *testing.T) {
 		heads:     []gitstore.TaskHead{{TaskID: cached.State.TaskID, ObjectID: cached.Head}},
 		snapshots: map[string]core.Snapshot{cached.Head: cached},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -257,7 +257,7 @@ func TestStoreGetRetriesWhenConditionalRefreshLosesRace(t *testing.T) {
 		heads:     []gitstore.TaskHead{{TaskID: previous.State.TaskID, ObjectID: previous.Head}},
 		snapshots: map[string]core.Snapshot{previous.Head: previous},
 	}
-	store, err := openStore(ctx, initialSource, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, initialSource, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -313,7 +313,7 @@ func TestStoreRefreshBatchesChangedHeads(t *testing.T) {
 		},
 		snapshots: map[string]core.Snapshot{first.Head: first, second.Head: second, third.Head: third},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -362,7 +362,7 @@ func TestStoreRefreshPreservesConcurrentCreateAdvancedAfterGitEnumeration(t *tes
 	t.Parallel()
 	ctx := context.Background()
 	repository, config := initializeWorkbook(t)
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -407,7 +407,7 @@ func TestStoreRefreshRejectsDisappearedCanonicalRefAndPreservesCache(t *testing.
 	ctx := context.Background()
 	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Disappeared ref")
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -443,7 +443,7 @@ func TestStoreRefreshRejectsChangedHistoryGeneration(t *testing.T) {
 		heads:     []gitstore.TaskHead{{TaskID: previous.State.TaskID, ObjectID: previous.Head}},
 		snapshots: map[string]core.Snapshot{previous.Head: previous, changed.Head: changed},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -479,7 +479,7 @@ func TestStoreAdvanceConditionallyUpdatesSnapshot(t *testing.T) {
 		heads:     []gitstore.TaskHead{{TaskID: previous.State.TaskID, ObjectID: previous.Head}},
 		snapshots: map[string]core.Snapshot{previous.Head: previous, expected.Head: expected},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -513,7 +513,7 @@ func TestStoreAdvanceRejectsChangedHistoryGeneration(t *testing.T) {
 		heads:     []gitstore.TaskHead{{TaskID: previous.State.TaskID, ObjectID: previous.Head}},
 		snapshots: map[string]core.Snapshot{previous.Head: previous},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -546,7 +546,7 @@ func TestStoreAdvanceAcceptsAlreadyAdvancedSnapshot(t *testing.T) {
 		heads:     []gitstore.TaskHead{{TaskID: expected.State.TaskID, ObjectID: expected.Head}},
 		snapshots: map[string]core.Snapshot{expected.Head: expected},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -575,7 +575,7 @@ func TestStoreAdvanceDoesNotRegressNewerSnapshot(t *testing.T) {
 		heads:     []gitstore.TaskHead{{TaskID: newer.State.TaskID, ObjectID: newer.Head}},
 		snapshots: map[string]core.Snapshot{newer.Head: newer},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -617,7 +617,7 @@ func TestStoreInvalidateOnlyDeletesExpectedOrWrittenHead(t *testing.T) {
 				heads:     []gitstore.TaskHead{{TaskID: test.cached.State.TaskID, ObjectID: test.cached.Head}},
 				snapshots: map[string]core.Snapshot{test.cached.Head: test.cached},
 			}
-			store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+			store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 			if err != nil {
 				t.Fatalf("openStore() error = %v", err)
 			}
@@ -695,7 +695,7 @@ func TestQuerySnapshotRemainsConsistentAcrossConcurrentMutation(t *testing.T) {
 				heads:     []gitstore.TaskHead{{TaskID: previous.State.TaskID, ObjectID: previous.Head}},
 				snapshots: map[string]core.Snapshot{previous.Head: previous},
 			}
-			store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+			store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 			if err != nil {
 				t.Fatalf("openStore() error = %v", err)
 			}
@@ -756,7 +756,7 @@ func TestConcurrentIndependentTaskAdvancement(t *testing.T) {
 		},
 		snapshots: map[string]core.Snapshot{first.Head: first, second.Head: second},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -813,7 +813,7 @@ func TestConcurrentRefreshCannotRegressProjectedHead(t *testing.T) {
 		heads:     []gitstore.TaskHead{{TaskID: first.State.TaskID, ObjectID: first.Head}},
 		snapshots: map[string]core.Snapshot{first.Head: first},
 	}
-	store, err := openStore(ctx, initialSource, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, initialSource, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -871,7 +871,7 @@ func TestStoreConcurrentReadsAndRebuilds(t *testing.T) {
 		heads:     []gitstore.TaskHead{{TaskID: snapshot.State.TaskID, ObjectID: snapshot.Head}},
 		snapshots: map[string]core.Snapshot{snapshot.Head: snapshot},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -948,7 +948,7 @@ func TestListUsesBoundedSQLQueriesForManyTasks(t *testing.T) {
 		source.heads = append(source.heads, gitstore.TaskHead{TaskID: taskID, ObjectID: head})
 		source.snapshots[head] = snapshot
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -998,7 +998,7 @@ func TestProjectionPreservesCanonicalTimestampOffsets(t *testing.T) {
 		heads:     []gitstore.TaskHead{{TaskID: snapshot.State.TaskID, ObjectID: snapshot.Head}},
 		snapshots: map[string]core.Snapshot{snapshot.Head: snapshot},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -1024,7 +1024,7 @@ func TestProjectionCacheErrorsSuggestRebuildWithoutMaskingGitCorruption(t *testi
 		heads:     []gitstore.TaskHead{{TaskID: snapshot.State.TaskID, ObjectID: snapshot.Head}},
 		snapshots: map[string]core.Snapshot{snapshot.Head: snapshot},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -1043,7 +1043,7 @@ func TestProjectionCacheErrorsSuggestRebuildWithoutMaskingGitCorruption(t *testi
 		heads:   []gitstore.TaskHead{{TaskID: snapshot.State.TaskID, ObjectID: snapshot.Head}},
 		readErr: canonicalError,
 	}
-	corruptStore, err := openStore(ctx, corruptSource, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	corruptStore, err := openStoreForTest(t, ctx, corruptSource, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore(corrupt source) error = %v", err)
 	}
@@ -1061,7 +1061,7 @@ func TestStoreRebuildsMalformedOrWrongProjectDatabase(t *testing.T) {
 	ctx := context.Background()
 	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Canonical task")
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -1097,7 +1097,7 @@ func TestOpenRebuildsMalformedCacheFromCanonicalGit(t *testing.T) {
 		t.Fatalf("WriteFile(cache) error = %v", err)
 	}
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -1120,7 +1120,7 @@ func TestStoreRebuildsMetadataMatchingDatabaseMissingRequiredTable(t *testing.T)
 		t.Fatalf("writeIncompleteProjectionDatabase() error = %v", err)
 	}
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -1143,7 +1143,7 @@ func TestRebuildLeavesPreviousDatabaseWhenReplacementFails(t *testing.T) {
 		heads:     []gitstore.TaskHead{{TaskID: previous.State.TaskID, ObjectID: previous.Head}},
 		snapshots: map[string]core.Snapshot{previous.Head: previous, replacement.Head: replacement},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -1181,7 +1181,7 @@ func TestStoreWritesToTheCacheAnotherProcessReplaced(t *testing.T) {
 	}
 
 	source := newSource()
-	store, err := openStore(ctx, source, config, cachePath)
+	store, err := openStoreForTest(t, ctx, source, config, cachePath)
 	if err != nil {
 		t.Fatalf("openStore(long lived) error = %v", err)
 	}
@@ -1197,7 +1197,7 @@ func TestStoreWritesToTheCacheAnotherProcessReplaced(t *testing.T) {
 
 	// Another process rebuilds the same cache, renaming a new database over the
 	// file this store holds open. The long-lived store must notice and rebind.
-	replacement, err := openStore(ctx, newSource(), config, cachePath)
+	replacement, err := openStoreForTest(t, ctx, newSource(), config, cachePath)
 	if err != nil {
 		t.Fatalf("openStore(replacement) error = %v", err)
 	}
@@ -1210,7 +1210,7 @@ func TestStoreWritesToTheCacheAnotherProcessReplaced(t *testing.T) {
 		t.Fatalf("List(after replacement) error = %v", err)
 	}
 
-	reader, err := openStore(ctx, newSource(), config, cachePath)
+	reader, err := openStoreForTest(t, ctx, newSource(), config, cachePath)
 	if err != nil {
 		t.Fatalf("openStore(reader) error = %v", err)
 	}
@@ -1233,7 +1233,7 @@ func TestStoreStillRebuildsWhenTheCacheIsDeleted(t *testing.T) {
 		heads:     []gitstore.TaskHead{{TaskID: only.State.TaskID, ObjectID: only.Head}},
 		snapshots: map[string]core.Snapshot{only.Head: only},
 	}
-	store, err := openStore(ctx, source, config, cachePath)
+	store, err := openStoreForTest(t, ctx, source, config, cachePath)
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -1269,7 +1269,7 @@ func TestRebuildRetriesOnceWhenHeadsChangeDuringBuild(t *testing.T) {
 		},
 		snapshots: map[string]core.Snapshot{first.Head: first, second.Head: second},
 	}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -1312,7 +1312,7 @@ func TestStoreQueries(t *testing.T) {
 	first.State.Task.Dependencies = []string{"WB-01K0M6B8A4FTT8C39MXXYTW7D2"}
 	second := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", "head-2", "Second")
 	source := &countingHeadSource{heads: []gitstore.TaskHead{{TaskID: first.State.TaskID, ObjectID: first.Head}, {TaskID: second.State.TaskID, ObjectID: second.Head}}, snapshots: map[string]core.Snapshot{first.Head: first, second.Head: second}}
-	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	store, err := openStoreForTest(t, ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -1813,6 +1813,53 @@ func testSnapshot(taskID, head, title string) core.Snapshot {
 // change, exactly initializeWorkbook(t, testrepo.New(t))), so there is no
 // initializeWorkbookAt real-init path to fall back to — this is the only
 // definition.
+// openStoreForTest opens a store exactly as openStore does and closes it when
+// the test ends.
+//
+// Every test in this package opens its store through here rather than calling
+// openStore directly, because a Store holds a *sql.DB and database/sql keeps a
+// connection-opener goroutine alive per database until Close. This package's
+// tests open more than thirty of them, and before Store.Close existed every
+// one outlived the test that opened it for the rest of the test binary's life
+// — the same leak the command path had, in the tests of the package that owns
+// it.
+//
+// It returns openStore's error untouched, so the tests that assert an open
+// fails read as they did. Closing is registered rather than deferred because
+// the store outlives this call; a test that closes its own store as part of
+// what it is testing is unharmed, since Close is idempotent.
+func openStoreForTest(
+	t *testing.T,
+	ctx context.Context,
+	source taskHeadSource,
+	config core.ProjectConfig,
+	cachePath string,
+) (*Store, error) {
+	t.Helper()
+	store, err := openStore(ctx, source, config, cachePath)
+	if store != nil {
+		t.Cleanup(func() { _ = store.Close() })
+	}
+	return store, err
+}
+
+// openForTest is Open with the closing guarantee openStoreForTest gives, for
+// the tests that go in through the package's own door rather than past it. See
+// openStoreForTest for why every test in this package needs one.
+func openForTest(
+	t *testing.T,
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+) (*Store, error) {
+	t.Helper()
+	store, err := Open(ctx, repository, config)
+	if store != nil {
+		t.Cleanup(func() { _ = store.Close() })
+	}
+	return store, err
+}
+
 func initializeWorkbook(t *testing.T) (*gitstore.Repository, core.ProjectConfig) {
 	t.Helper()
 	root := t.TempDir()
@@ -1962,14 +2009,14 @@ func TestStoreRefreshRedoesItsWriteWhenAnotherProcessReplacesTheCache(t *testing
 	t.Parallel()
 	ctx := context.Background()
 	repository, config := initializeWorkbook(t)
-	writer, err := Open(ctx, repository, config)
+	writer, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open(writer) error = %v", err)
 	}
 	if _, err := writer.Rebuild(ctx); err != nil {
 		t.Fatalf("Rebuild(writer) error = %v", err)
 	}
-	replacer, err := Open(ctx, repository, config)
+	replacer, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open(replacer) error = %v", err)
 	}
@@ -2020,14 +2067,14 @@ func TestStoreAdvanceRedoesItsWriteWhenTheRecordedStatDescribesTheReplacement(t 
 	t.Parallel()
 	ctx := context.Background()
 	repository, config := initializeWorkbook(t)
-	writer, err := Open(ctx, repository, config)
+	writer, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open(writer) error = %v", err)
 	}
 	if _, err := writer.Rebuild(ctx); err != nil {
 		t.Fatalf("Rebuild(writer) error = %v", err)
 	}
-	replacer, err := Open(ctx, repository, config)
+	replacer, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open(replacer) error = %v", err)
 	}
@@ -2075,7 +2122,7 @@ func TestStoreWithActiveDatabaseReleasesTheLockWhenBodyPanics(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	repository, config := initializeWorkbook(t)
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}

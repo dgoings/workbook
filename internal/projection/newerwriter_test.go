@@ -94,7 +94,7 @@ func TestTheProjectionCarriesTheWatermarkThroughSQLite(t *testing.T) {
 	created := createTask(t, repository, config, "Ordinary title")
 	writeFutureTaskCommit(t, repository, created.ID)
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -131,7 +131,7 @@ func TestTheProjectionCarriesTheWatermarkThroughSQLite(t *testing.T) {
 
 	// A second store handle reads the same rows without Git having moved,
 	// which is the cold-start shape a later command takes.
-	reopened, err := Open(ctx, repository, config)
+	reopened, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open(reopened) error = %v", err)
 	}
@@ -156,7 +156,7 @@ func TestAMutationThroughTheProjectionIsRefusedOnANewerHistory(t *testing.T) {
 	created := createTask(t, repository, config, "Ordinary title")
 	writeFutureTaskCommit(t, repository, created.ID)
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -204,7 +204,7 @@ func TestACacheWrittenBeforeTheMarkerIsDiscarded(t *testing.T) {
 	created := createTask(t, repository, config, "Ordinary title")
 	writeFutureTaskCommit(t, repository, created.ID)
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -216,7 +216,7 @@ func TestACacheWrittenBeforeTheMarkerIsDiscarded(t *testing.T) {
 	// wrote.
 	writePreMarkerCache(t, store.CachePath(), config.ProjectID)
 
-	reopened, err := Open(ctx, repository, config)
+	reopened, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open(stale cache) error = %v", err)
 	}
@@ -289,7 +289,7 @@ func TestAProjectedPackKeepsItsDeclaredGeneration(t *testing.T) {
 	created := createTask(t, repository, config, "Ordinary title")
 	writeFutureTaskCommit(t, repository, created.ID)
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}

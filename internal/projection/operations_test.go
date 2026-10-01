@@ -20,7 +20,7 @@ func TestStoreProjectsEveryCommitAnAdvanceCrossed(t *testing.T) {
 	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -60,7 +60,7 @@ func TestStoreRebuildReprojectsFullHistories(t *testing.T) {
 		advanceTaskTitle(t, repository, config, created.ID, title, index)
 	}
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -89,7 +89,7 @@ func TestStoreReplacesOperationRowsForAReconciledTask(t *testing.T) {
 		advanceTaskTitle(t, repository, config, created.ID, title, index)
 	}
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -133,7 +133,7 @@ func TestStoreTaskHistoryFallsBackToGitWhenNoOperationsAreProjected(t *testing.T
 	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -163,7 +163,7 @@ func TestStoreCommitHistoryFallsBackPerCommitForAParkedTip(t *testing.T) {
 	created := createTask(t, repository, config, "Initial title")
 	advanceTaskTitle(t, repository, config, created.ID, "Local only", 0)
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -202,7 +202,7 @@ func TestStoreCommitHistoryReportsARetiredTipAsNotFound(t *testing.T) {
 	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -221,7 +221,7 @@ func TestStoreProjectsOperationsWrittenThroughAMutation(t *testing.T) {
 	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -265,7 +265,7 @@ func TestStoreProjectsNothingForATruncatedChain(t *testing.T) {
 	created := createTask(t, repository, config, "Initial title")
 	advanceTaskTitle(t, repository, config, created.ID, "Second title", 0)
 
-	store, err := openStore(ctx, truncatingSource{repository: repository}, config, t.TempDir()+"/cache.sqlite")
+	store, err := openStoreForTest(t, ctx, truncatingSource{repository: repository}, config, t.TempDir()+"/cache.sqlite")
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -331,7 +331,7 @@ func TestStoreDropsIncompleteOperationRowsRatherThanLeavingAHole(t *testing.T) {
 	repository, config := initializeWorkbook(t)
 	created := createTask(t, repository, config, "Initial title")
 
-	store, err := Open(ctx, repository, config)
+	store, err := openForTest(t, ctx, repository, config)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -375,7 +375,7 @@ func TestStoreReportsADuplicateOperationIDAsCorruptDataNamingTheTask(t *testing.
 	created := createTask(t, repository, config, "Initial title")
 	advanceTaskTitle(t, repository, config, created.ID, "Second title", 0)
 
-	store, err := openStore(ctx, duplicatingSource{repository: repository}, config, t.TempDir()+"/cache.sqlite")
+	store, err := openStoreForTest(t, ctx, duplicatingSource{repository: repository}, config, t.TempDir()+"/cache.sqlite")
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -403,7 +403,7 @@ func TestStoreNamesTheOtherTaskWhenAnOperationIDIsRepeatedAcrossTasks(t *testing
 	second := createTaskWithIDs(t, repository, config, "Second task",
 		"01K0M6B8A4FTT8C39MXXYTW7E1", "01K0M6B8A4FTT8C39MXXYTW7E2", "01K0M6B8A4FTT8C39MXXYTW7E3")
 
-	store, err := openStore(ctx, &crossTaskDuplicatingSource{repository: repository}, config, t.TempDir()+"/cache.sqlite")
+	store, err := openStoreForTest(t, ctx, &crossTaskDuplicatingSource{repository: repository}, config, t.TempDir()+"/cache.sqlite")
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}

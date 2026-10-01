@@ -459,7 +459,7 @@ func runSyncWatch(
 	}
 	// Closed when the watcher returns, not when it starts: syncloop.Run reads
 	// and writes this projection for the life of the process.
-	store, releaseProjection, err := openProjection(ctx, repository, config)
+	store, releaseProjection, err := openLongLivedProjection(ctx, repository, config, stderr)
 	if err != nil {
 		return err
 	}
@@ -2436,18 +2436,50 @@ func openProjection(
 	if err != nil {
 		return nil, nil, err
 	}
+	// The close is discarded rather than reported: a command has already
+	// written its result by the time this runs and is about to exit, so a cache
+	// that will not close is neither actionable nor visible to anybody. The two
+	// paths that hold a store for the life of a process say so instead; see
+	// openLongLivedProjection.
 	return store, func() { _ = store.Close() }, nil
 }
 
-func openService(ctx context.Context, cwd string, stderr io.Writer) (core.Service, func(), error) {
-	service, _, _, release, err := openServiceParts(ctx, cwd, stderr)
-	return service, release, err
+// openLongLivedProjection is openProjection for the two paths that keep one
+// store for the whole life of a process — `workbook serve` and the sync
+// watcher.
+//
+// It differs in one thing: its release reports a close it could not do. Those
+// two close as a long-running process shuts down rather than as a command
+// returns, so there is a reader still there to tell, and a projection cache
+// that refuses to close is worth one line to them.
+func openLongLivedProjection(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	stderr io.Writer,
+) (*projection.Store, func(), error) {
+	// The release openProjection hands back is the silent one, replaced here
+	// rather than wrapped, so there is still exactly one projection.Open in
+	// this package.
+	store, _, err := openProjection(ctx, repository, config)
+	if err != nil {
+		return nil, nil, err
+	}
+	return store, func() {
+		if closeErr := store.Close(); closeErr != nil {
+			fmt.Fprintf(stderr, "workbook: could not close the projection cache: %s\n", closeErr)
+		}
+	}, nil
 }
 
 // openServiceParts also returns the repository and projection the service was
 // built on, so a long-running command can share them with a sync loop instead
 // of opening a second projection handle on the same cache file, and the release
-// that closes that projection; see openProjection.
+// that closes that projection.
+//
+// Its one caller outside the tests is `workbook serve`, which holds that
+// projection for the life of the server, so the release is the reporting one;
+// see openLongLivedProjection.
 func openServiceParts(
 	ctx context.Context,
 	cwd string,
@@ -2478,7 +2510,7 @@ func openServiceParts(
 	// Opened last, after everything else that can fail, so no error path
 	// between here and the return leaves a projection nobody holds the release
 	// for.
-	store, release, err := openProjection(ctx, repository, config)
+	store, release, err := openLongLivedProjection(ctx, repository, config, stderr)
 	if err != nil {
 		return core.Service{}, nil, nil, nil, err
 	}
