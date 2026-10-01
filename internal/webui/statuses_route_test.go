@@ -1345,9 +1345,11 @@ func TestHandlerStatusesPageIsStyledAsARoute(t *testing.T) {
 			t.Errorf("the statuses page's rule %q still carries %q, which is what starved it in the board's chrome", rule, fragment)
 		}
 	}
-	if !strings.Contains(body, ".admin[hidden] { display: none; }") {
-		t.Error("the statuses page's display rule does not defeat the hidden attribute it ships with")
-	}
+	// The panel ships hidden and its own rule declares a display, so something has
+	// to beat that display. It is the stylesheet's global `[hidden]` rule, which
+	// TestHandlerHiddenAttributeOutranksEveryDisplayRule asserts for every class at
+	// once; the `.admin[hidden]` companion this used to pin is gone with the rest
+	// of them.
 }
 
 // The heading over each configuration section is the route's rather than the

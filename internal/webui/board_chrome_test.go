@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -669,39 +670,194 @@ func TestHandlerFilterRowDrawsNoRuleAndMainPadsNoTop(t *testing.T) {
 	}
 }
 
-// Every class the filter row toggles `hidden` on hides when it is hidden.
+// The hidden attribute wins over every `display` the board is drawn with.
 //
-// The hidden attribute hides a thing by the user agent's own `display: none`,
-// which any display in this stylesheet outranks: a rule as ordinary as
-// `display: flex` on the class leaves the attribute doing nothing but flipping a
-// property, and the element keeps its place on screen. That is what happened to
-// the Labels menu's rows — the box narrowed them by setting hidden on each one,
-// every row stayed drawn, and the search read as a control that did nothing at
-// all.
+// The attribute hides a thing by the user agent's own `display: none`, which any
+// author `display` outranks: a rule as ordinary as `display: flex` on the class
+// leaves the attribute doing nothing but flipping a property, and the element
+// keeps its place on screen. That is what happened to the Labels menu's rows —
+// the box narrowed them by setting hidden on each one, every row stayed drawn,
+// and the search read as a control that did nothing at all.
 //
 // The client tests cannot catch it. Their DOM has no layout and no stylesheet,
 // so a row that sets hidden is a row they see hidden, which is why they passed
-// while the page did not. The rule is the thing to pin, and it is pinned here for
-// every class on this row the client hides rather than only for the one that was
-// found missing it.
-func TestHandlerEveryHiddenToggledClassHidesWhenHidden(t *testing.T) {
+// while the page did not. Nor can a hand-written list of classes catch it: the
+// stylesheet used to carry sixteen `.x[hidden]` companions and the sixteenth was
+// written only after the Labels menu's rows were found still on screen, so a
+// list of them is a guard that covers the bugs already found and nothing else.
+// One `[hidden] { display: none !important; }` above the first class rule covers
+// every class there will ever be. What is asserted here is the four things that
+// could take it back:
+//
+//   - the global rule is written exactly once, and outside every media query,
+//     since inside one it would govern only the viewports that query names;
+//   - it hides with an !important display, because a plain `display: none` of
+//     equal specificity loses to any later `display` on order alone;
+//   - no other selector beginning `[hidden` declares a display, which is what a
+//     per-class companion or a `.x[hidden] { display: flex }` override would
+//     have to do;
+//   - no other selector anywhere declares an !important display. This is the
+//     only declaration that can still beat the global rule: two important
+//     declarations of equal specificity are settled by source order, so one
+//     `.filter-option { display: flex !important; }` written below reopens
+//     exactly the Labels-menu bug, and the sheet's one !important has to stay
+//     the only one.
+//
+// It is written before the first class rule that declares a display as well.
+// With !important that is not what makes the rule win — it is so a reader meets
+// the sheet's one !important before the rules it governs.
+//
+// The sibling rule `.filter-row[hidden] ~ main` is a padding and not a display,
+// so it reads the attribute without contesting it and is left alone. The
+// `[hidden` check matches that text anywhere in a selector and knows nothing
+// about where in one the attribute sits, so a wrapper idiom that reads the
+// attribute on descendants rather than contesting it — the desktop sheet's
+// `.x:not(:has(> :not([hidden]))) { display: none; }`, say — would fail here by
+// design, until someone has reason to make the check selector-aware.
+func TestHandlerHiddenAttributeOutranksEveryDisplayRule(t *testing.T) {
 	t.Parallel()
-	body := boardPage(t)
-	// Each of these the client hides at some point: the row itself off the board,
-	// the Clear link with nothing to clear, the Key chooser on a one-key project,
-	// a count badge with nothing counted, a menu that is closed, and an option row
-	// the menu's own search box has narrowed away.
-	for _, class := range []string{
-		".filter-row",
-		".filter-row__clear",
-		".filter-chooser",
-		".filter-chooser__badge",
-		".filter-chooser__menu",
-		".filter-option",
-	} {
-		rule := class + "[hidden] { display: none; }"
-		if !strings.Contains(body, rule) {
-			t.Errorf("the stylesheet carries no %q, so setting hidden on a %s leaves it drawn", rule, class)
+	rules := styleRules(t, boardPage(t))
+
+	globals := 0
+	global := -1
+	firstClassDisplay := -1
+	firstClassSelector := ""
+	for index, rule := range rules {
+		if rule.selector == "[hidden]" {
+			globals++
+			if global < 0 {
+				global = index
+			}
+			if !strings.Contains(rule.declarations, "display: none !important") {
+				t.Errorf("the global hidden rule declares %q, which does not hide with an !important display", strings.TrimSpace(rule.declarations))
+			}
+			if rule.condition != "" {
+				t.Errorf("the global hidden rule is written inside %q, so it governs only the viewports that query names", rule.condition)
+			}
+			continue
+		}
+		if !cssDisplayDeclaration.MatchString(rule.declarations) {
+			continue
+		}
+		if strings.Contains(rule.selector, "[hidden") {
+			t.Errorf("the selector %q declares a display of its own (%q); the hidden attribute is what decides whether an element is drawn, and the global [hidden] rule is the only place a display may be written against it",
+				rule.selector, strings.TrimSpace(rule.declarations))
+		}
+		if cssImportantDisplay.MatchString(rule.declarations) {
+			t.Errorf("the selector %q declares an !important display (%q), which outranks the global [hidden] rule wherever it is written below it; the global rule is the sheet's only !important",
+				rule.selector, strings.TrimSpace(rule.declarations))
+		}
+		if firstClassDisplay < 0 && strings.Contains(rule.selector, ".") {
+			firstClassDisplay, firstClassSelector = index, rule.selector
 		}
 	}
+
+	switch {
+	case globals == 0:
+		t.Fatal("the stylesheet carries no `[hidden] { display: none !important; }` rule, so every class that declares a display leaves its element drawn after the renderer hides it")
+	case globals > 1:
+		t.Errorf("the stylesheet carries %d global [hidden] rules, want the one", globals)
+	}
+	if firstClassDisplay < 0 {
+		t.Fatal("the stylesheet declares no display on any class, which it cannot be doing")
+	}
+	if global > firstClassDisplay {
+		t.Errorf("the global [hidden] rule is written after %q, the first class rule that declares a display; it belongs above every rule it governs",
+			firstClassSelector)
+	}
+}
+
+// cssStyleRule is one style rule of the board's own stylesheet: the selector it
+// is written with, the declarations between its braces, and the at-rule it is
+// written inside if it is written inside one — empty for a rule at the top level,
+// which is the only place a rule that is meant to hold everywhere can be.
+type cssStyleRule struct {
+	selector     string
+	declarations string
+	condition    string
+}
+
+// cssDisplayDeclaration matches a `display` property, and not a property or a
+// value that merely contains the word — `overflow: hidden` and
+// `grid-auto-flow: column` are not displays.
+var cssDisplayDeclaration = regexp.MustCompile(`(?:^|[;{\s])display\s*:`)
+
+// cssImportantDisplay matches a `display` the author marked important, which is
+// the one declaration that can still outrank the global [hidden] rule: between
+// two important declarations of equal specificity the later one wins.
+var cssImportantDisplay = regexp.MustCompile(`(?:^|[;{\s])display\s*:[^;]*!important`)
+
+// styleRules returns every style rule in the board's own stylesheet, in the
+// order a browser reads them, comments taken out, with the rules inside a media
+// query flattened into the sequence at the point the query is written — which is
+// where they take effect, so it is the order a claim about cascade order has to
+// be made in.
+//
+// It parses rather than searching for a string because the claims above are
+// about rules the stylesheet does not have: a substring match can say that a
+// text is present and cannot say that no selector anywhere declares a display,
+// which is the half of this guard that keeps a per-class rule from coming back.
+// Only the first <style> element is read, for the reason styleSheet gives: the
+// two Go-composed blocks after it declare colors and are guarded where they are
+// composed.
+func styleRules(t *testing.T, body string) []cssStyleRule {
+	t.Helper()
+	var rules []cssStyleRule
+	var parse func(css, condition string)
+	parse = func(css, condition string) {
+		for rest := css; ; {
+			open := strings.IndexByte(rest, '{')
+			if open < 0 {
+				if trailing := strings.TrimSpace(rest); trailing != "" {
+					t.Fatalf("the stylesheet ends with %q, which opens no rule", trailing)
+				}
+				return
+			}
+			prelude := strings.Join(strings.Fields(rest[:open]), " ")
+			block, after := cssBlock(t, rest[open:], prelude)
+			rest = after
+			if !strings.HasPrefix(prelude, "@") {
+				rules = append(rules, cssStyleRule{selector: prelude, declarations: block, condition: condition})
+				continue
+			}
+			// A conditional group rule holds rules of its own. Anything else holds
+			// something this parser would read as a selector and a declaration and
+			// would be wrong about, so it says so rather than passing over a block a
+			// `display` could hide in.
+			if !strings.HasPrefix(prelude, "@media") && !strings.HasPrefix(prelude, "@supports") {
+				t.Fatalf("the stylesheet carries the at-rule %q, which this guard cannot read; teach it what the rule holds before writing one", prelude)
+			}
+			nested := prelude
+			if condition != "" {
+				nested = condition + " " + prelude
+			}
+			parse(block, nested)
+		}
+	}
+	parse(cssComment.ReplaceAllString(styleSheet(t, body), ""), "")
+	if len(rules) == 0 {
+		t.Fatal("the board's stylesheet holds no rules")
+	}
+	return rules
+}
+
+// cssBlock takes the brace-delimited block off the front of css, which opens
+// with `{`, and returns what is inside it and what follows it. Nesting is
+// counted, so a media query comes back whole.
+func cssBlock(t *testing.T, css, prelude string) (block, rest string) {
+	t.Helper()
+	depth := 0
+	for index := 0; index < len(css); index++ {
+		switch css[index] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return css[1:index], css[index+1:]
+			}
+		}
+	}
+	t.Fatalf("the %q rule is unterminated", prelude)
+	return "", ""
 }
