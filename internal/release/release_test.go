@@ -104,6 +104,7 @@ func TestRenderFormulaUsesImmutablePlatformArchives(t *testing.T) {
 		"https://github.com/dgoings/workbook/releases/download/v0.1.0/workbook_0.1.0_linux_amd64.tar.gz",
 		"sha256 \"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"",
 		"bin.install \"workbook\"",
+		"generate_completions_from_executable(bin/\"workbook\", \"completion\")",
 		"test do",
 		"workbook version",
 	} {
@@ -493,6 +494,27 @@ func releasePaths(t *testing.T) (string, string) {
 	}
 	root := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", ".."))
 	return root, filepath.Join(root, "scripts", "release.sh")
+}
+
+func TestRenderFormulaInstallsShellCompletionsFromTheInstalledBinary(t *testing.T) {
+	// Production mutation: generating the completions outside `def install`, or
+	// before the binary is in place, leaves a Homebrew install with no
+	// completions and nothing saying so — `brew install` would still succeed.
+	formula, err := release.RenderFormula("0.2.0", "dgoings/workbook", fixtureArchives())
+	if err != nil {
+		t.Fatalf("render formula: %v", err)
+	}
+
+	install := strings.Index(formula, "  def install")
+	completions := strings.Index(formula, "generate_completions_from_executable")
+	binary := strings.Index(formula, "bin.install \"workbook\"")
+	caveats := strings.Index(formula, "def caveats")
+	if install < 0 || completions < 0 || binary < 0 || caveats < 0 {
+		t.Fatalf("formula is missing the install block, the binary or the completions:\n%s", formula)
+	}
+	if !(install < binary && binary < completions && completions < caveats) {
+		t.Fatalf("completions are not generated inside install after the binary:\n%s", formula)
+	}
 }
 
 func TestRenderFormulaDirectsUpgradersToRerunSetup(t *testing.T) {

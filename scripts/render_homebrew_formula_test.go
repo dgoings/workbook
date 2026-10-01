@@ -62,6 +62,15 @@ func TestRenderHomebrewFormulaReadsExactChecksums(t *testing.T) {
 	if strings.Contains(linux, "_darwin_") {
 		t.Errorf("Linux block serves a darwin archive:\n%s", linux)
 	}
+
+	// The rendered formula installs the completion scripts the CLI generates,
+	// so a Homebrew install carries them without a second step.
+	install := formulaSection(t, contents, "  def install", "\n  def caveats")
+	for _, want := range []string{`bin.install "workbook"`, `generate_completions_from_executable(bin/"workbook", "completion")`} {
+		if !strings.Contains(install, want) {
+			t.Errorf("rendered install block missing %q:\n%s", want, install)
+		}
+	}
 }
 
 func TestRenderHomebrewFormulaRejectsMissingOrDuplicateChecksums(t *testing.T) {
