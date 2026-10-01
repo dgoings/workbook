@@ -137,6 +137,24 @@
     * { box-sizing: border-box; }
     html, body { height: 100%; }
     body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; margin: 0; min-width: 20rem; background: var(--wb-ground); }
+    /* The hidden attribute hides by the user agent's own `display: none`, which
+       any `display` written below outranks, so it is restated here as
+       !important — the one declaration in this sheet that is. The attribute then
+       wins wherever the renderer sets it, and no rule under this one needs a
+       `.x[hidden]` companion of its own. Sixteen of them did, written one at a
+       time, and the sixteenth was only written after the Labels menu narrowed
+       itself and every row stayed on screen: a sheet where every class has to
+       remember the attribute is a sheet where one of them will not. Written
+       here, above the first class rule, so a reader meets it before the rules it
+       governs.
+
+       The trade this makes is `hidden="until-found"`, whose point is that the
+       browser can find text inside it and reveal it: the user agent styles that
+       state with `content-visibility` rather than `display: none`, and an author
+       `display: none` kills it. Nothing here uses it, and the desktop renderer's
+       stylesheet made the same trade; a page that wants it has to say so with a
+       rule of its own. */
+    [hidden] { display: none !important; }
     .skip-link { position: fixed; left: 1rem; top: -4rem; z-index: 2; background: var(--wb-text); color: var(--wb-on-text); padding: .55rem .75rem; border-radius: 4px; }
     .skip-link:focus { top: 1rem; }
     .app-header { display: flex; flex: 0 0 auto; align-items: end; justify-content: space-between; gap: 1.25rem; padding: 1.25rem; border-bottom: 1px solid var(--wb-border); background: var(--wb-surface); }
@@ -189,11 +207,9 @@
        hairline a few pixels under the first one read as a thickened header
        border rather than as an edge of anything. */
     .filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .95rem; padding: .5rem 1.25rem; }
-    .filter-row[hidden] { display: none; }
     .filter-row__search { flex: 1 1 14rem; min-width: 10rem; max-width: 26rem; border: 1px solid var(--wb-border-soft); border-radius: 4px; background: var(--wb-surface-1); color: var(--wb-ink); font: inherit; font-size: .84rem; padding: .35rem .55rem; }
     .filter-row__choosers { display: flex; flex-wrap: wrap; gap: .45rem; }
     .filter-row__clear { font-size: .8rem; color: var(--wb-ink-soft); }
-    .filter-row__clear[hidden] { display: none; }
     .column__count--filtered { color: var(--wb-ink-soft); }
     /* A word that is there for a screen reader and not for the page: the badge
        reads "2" to the eye and "2 selected" to a reader who cannot see which
@@ -210,13 +226,10 @@
        relationship listbox above uses, so the menu is as legible over a dark
        board as over a light one. */
     .filter-chooser { position: relative; }
-    .filter-chooser[hidden] { display: none; }
     .filter-chooser__button { display: inline-flex; align-items: center; gap: .35rem; border: 1px solid var(--wb-border-soft); border-radius: 4px; background: var(--wb-surface-1); color: var(--wb-ink); font: inherit; font-size: .8rem; padding: .3rem .55rem; cursor: pointer; }
     .filter-chooser__button[aria-expanded="true"], .filter-chooser--active .filter-chooser__button { border-color: var(--wb-primary); color: var(--wb-primary); }
     .filter-chooser__badge { min-width: 1.1rem; padding: 0 .3rem; border-radius: 999px; background: var(--wb-primary); color: var(--wb-surface-1); font-size: .68rem; text-align: center; }
-    .filter-chooser__badge[hidden] { display: none; }
     .filter-chooser__menu { position: absolute; top: calc(100% + .3rem); left: 0; z-index: 5; min-width: 12rem; padding: .4rem; border: 1px solid var(--wb-border-soft); border-radius: 4px; background: var(--wb-surface-1); box-shadow: 0 6px 20px var(--wb-text-shadow); }
-    .filter-chooser__menu[hidden] { display: none; }
     /* The box at the top of the Labels menu. A project carries as many labels as
        its cards do, and a list that long is a scroll rather than a choice, so
        that one menu narrows itself. It is drawn quieter and smaller than the
@@ -234,8 +247,6 @@
        that the list is what needs. */
     .filter-chooser__options { max-height: 18rem; overflow-y: auto; }
     .filter-option { display: flex; align-items: center; gap: .45rem; padding: .25rem .3rem; font-size: .82rem; cursor: pointer; }
-    /* The row's own display outranks the one the hidden attribute hides by, so the search box narrows nothing without this — the reason every other [hidden] rule here exists. */
-    .filter-option[hidden] { display: none; }
     .filter-option .count { margin-left: auto; color: var(--wb-ink-soft); font-size: .72rem; }
     .filter-option--none { color: var(--wb-ink-soft); }
     /* A setting reads as its state before it reads as anything else, so it is
@@ -244,7 +255,6 @@
        — while the knob and aria-checked say what is true now, so the two halves
        never state the same thing in opposite directions. */
     .nav-switch { display: inline-flex; align-items: center; gap: .45rem; border: 0; padding: 0; background: none; color: var(--wb-ink); cursor: pointer; font: inherit; font-size: .82rem; font-weight: 750; text-decoration: none; }
-    .nav-switch[hidden] { display: none; }
     .nav-switch__track { position: relative; flex: 0 0 auto; width: 2.25rem; height: 1.2rem; border: 1px solid var(--wb-border-strong); border-radius: 999px; background: var(--wb-ground); transition: background-color .12s ease, border-color .12s ease; }
     .nav-switch__knob { position: absolute; top: 50%; left: .13rem; width: .9rem; height: .9rem; border-radius: 50%; background: var(--wb-surface); box-shadow: 0 1px 2px var(--wb-text-shadow-strong); transform: translateY(-50%); transition: left .12s ease; }
     .nav-switch[aria-checked="true"] .nav-switch__track { border-color: var(--wb-primary); background: var(--wb-primary); }
@@ -328,7 +338,6 @@
        discovering that the box scrolls. 40vh is the real ceiling, and past it
        the notice does scroll. */
     .notice { display: grid; flex: 0 0 auto; gap: .4rem; max-height: 40vh; overflow: auto; padding: .6rem 1.25rem; border-bottom: 1px solid var(--wb-hairline); background: var(--wb-surface); font-size: .85rem; }
-    .notice[hidden] { display: none; }
     .notice__report { display: flex; align-items: baseline; gap: .75rem; padding: .35rem .6rem; border-left: 3px solid currentcolor; background: var(--wb-warning-surface); color: var(--wb-warning-ink); }
     .notice__report[data-kind="error"] { background: var(--wb-danger-surface); color: var(--wb-danger-ink); }
     .notice p { flex: 1 1 auto; margin: 0; }
@@ -346,7 +355,6 @@
        .task-route--admin, which is with the other .task-route rules below,
        because it only wins where it is written after the one it overrides. */
     .admin { display: grid; gap: .6rem; padding: 1.15rem; }
-    .admin[hidden] { display: none; }
     /* The heading over each section of the configuration route. It belongs to
        the route rather than to the panel underneath it, which is what lets a
        panel be moved in and out of the document without taking its own name
@@ -606,17 +614,15 @@
        coloured here because the rule that greys it is the muted column's, not
        the card's. */
     .column--deleted .task-card h3 a { color: var(--wb-ink-soft); }
-    /* The empty state, and the only rule that decides whether it is seen. It
-       carries no display of its own, so the hidden attribute the renderer sets
-       is what draws it or does not; the explicit declaration is here because a
-       display added to this rule later would silently outrank the attribute. */
+    /* The empty state carries no display of its own, so the hidden attribute
+       the renderer sets is the only thing that decides whether it is seen — and
+       the global [hidden] rule keeps that true even if a display is written here
+       later. */
     .column__empty { margin: 0; color: var(--wb-ink-muted); font-size: .78rem; line-height: 1.4; }
-    .column__empty[hidden] { display: none; }
     .restore-button { margin-top: .65rem; border: 1px solid var(--wb-border-strong); border-radius: 3px; background: var(--wb-surface); color: var(--wb-ink); cursor: pointer; font: inherit; font-size: .72rem; font-weight: 800; padding: .22rem .5rem; }
     .restore-button:hover { border-color: var(--wb-primary); color: var(--wb-primary); }
     .restore-button:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
     .restore-button:disabled { cursor: default; opacity: .55; }
-    .restore-button[hidden] { display: none; }
     .task-route { display: flex; flex-direction: column; height: 100%; min-height: 0; width: min(100%, 84rem); margin: 0 auto; border: 1px solid var(--wb-border); background: var(--wb-surface); box-shadow: 0 12px 32px var(--wb-text-shadow-soft); }
     .task-route__header { padding: 1rem 1.15rem; border-top: 3px solid var(--wb-primary); border-bottom: 1px solid var(--wb-hairline); background: var(--wb-primary-tint-4); }
     .task-route__header h2 { margin: .15rem 0 0; font-size: clamp(1.15rem, 3vw, 1.55rem); letter-spacing: -.025em; }
@@ -654,13 +660,6 @@
     .description-read { min-height: 0; overflow-y: auto; padding: .62rem .68rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface-1); font-size: .84rem; line-height: 1.5; }
     .description-read:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: -1px; }
     .description-read__empty { margin: 0; color: var(--wb-ink-muted); font-size: .82rem; }
-    /* Whichever of the two is not in use is hidden by the attribute, and these
-       two rules are what that attribute means here. They are written after the
-       rules that size both elements, which is the only place they win: a
-       `display` in either of those would otherwise outrank the attribute and
-       draw the pane and the textarea at the same time. */
-    .description-read[hidden] { display: none; }
-    .field--description textarea[hidden] { display: none; }
     .label-editor { display: grid; gap: .35rem; }
     .label-chips { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; padding: 0; list-style: none; }
     .label-chips:empty { display: none; }
@@ -751,7 +750,6 @@
     .relationship-editor button { border: 1px solid var(--wb-primary-edge); border-radius: 4px; background: var(--wb-primary); color: var(--wb-on-accent); cursor: pointer; font: inherit; font-size: .78rem; font-weight: 750; padding: .58rem .75rem; }
     .relationship-editor button:disabled { cursor: default; opacity: .52; }
     .relationship-listbox { position: fixed; z-index: 20; max-height: 18rem; overflow-y: auto; border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); box-shadow: 0 8px 20px var(--wb-text-shadow); }
-    .relationship-listbox[hidden] { display: none; }
     .relationship-row--compact { grid-template-columns: minmax(0, 1fr) auto; gap: .16rem .45rem; padding: .38rem 0; border: 0; border-top: 1px solid var(--wb-border-muted); border-radius: 0; }
     .relationship-row--compact .relationship-row__text { gap: .16rem; }
     .relationship-option { display: grid; gap: .18rem; padding: .55rem .62rem; border-bottom: 1px solid var(--wb-border-muted); cursor: pointer; }
@@ -831,13 +829,10 @@
     .task-panel__header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .3rem .75rem; }
     .task-panel__header h3 { margin: 0; font-size: .88rem; }
     .task-panel__count { margin: 0; color: var(--wb-ink-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .7rem; }
-    /* The empty state, and the only rule that decides whether it is seen. It
-       carries no display of its own, so the hidden attribute the renderer sets
-       is what draws it or does not; the explicit declaration is here for the
-       reason .column__empty carries one, because a display added to this rule
-       later would silently outrank the attribute. */
+    /* The empty state carries no display of its own, so the hidden attribute
+       the renderer sets is the only thing that decides whether it is seen, for
+       the reason .column__empty above says. */
     .task-panel__empty { margin: 0; color: var(--wb-ink-muted); font-size: .78rem; }
-    .task-panel__empty[hidden] { display: none; }
     .task-panel__list { display: grid; gap: .4rem; margin: 0; padding: 0; list-style: none; }
     /* One line of feedback per panel, and it is the same live region the form
        uses so a refusal reads the same wherever it happens on this page. */
@@ -999,7 +994,6 @@
     .change-row__when, .change-row__who { color: var(--wb-ink-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .67rem; }
     .change-row__what { font-size: .8rem; overflow-wrap: anywhere; }
     .change-comparison { display: grid; gap: .45rem; padding: .6rem; border-top: 1px solid var(--wb-border-muted); }
-    .change-comparison[hidden] { display: none; }
     .change-comparison__commit { color: var(--wb-primary-ink); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .66rem; overflow-wrap: anywhere; }
     .field-change { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: .1rem .5rem; font-size: .78rem; }
     .field-change__label { color: var(--wb-ink); font-weight: 750; }

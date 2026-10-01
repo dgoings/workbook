@@ -169,12 +169,14 @@ func TestHandlerStylesTheDeletedColumnAfterTheRulesItOverrides(t *testing.T) {
 		}
 	}
 	// The empty state is drawn or not drawn by the hidden attribute alone, so a
-	// display in its own rule would silently outrank it.
+	// display in its own rule would be one more thing deciding the same question.
+	// That the attribute wins even if one is added is the stylesheet's global
+	// `[hidden]` rule, asserted once in
+	// TestHandlerHiddenAttributeOutranksEveryDisplayRule rather than restated for
+	// this class — the per-class companion this used to pin is gone with the rest
+	// of them.
 	if empty := cssRule(t, body, ".column__empty"); strings.Contains(empty, "display:") {
 		t.Errorf("the empty state declares a display, which would outrank the hidden attribute: %s", empty)
-	}
-	if hidden := cssRule(t, body, ".column__empty[hidden]"); !strings.Contains(hidden, "display: none") {
-		t.Errorf("the empty state is not hidden by its attribute: %s", hidden)
 	}
 	// The stylesheet the deleted-tasks page used is gone with the page.
 	for _, stale := range []string{".deleted-list", ".deleted-card"} {
