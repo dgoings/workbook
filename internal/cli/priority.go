@@ -13,7 +13,6 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/historyvalidation"
-	"github.com/dgoings/workbook/internal/projection"
 )
 
 // priorityChange is what one priority command did, in the shape every mutating
@@ -333,6 +332,7 @@ func runPriorityMutation(
 	if err != nil {
 		return err
 	}
+	defer session.Close()
 	session.fetchBefore(ctx)
 	if err := session.refreshConfiguration(ctx); err != nil {
 		return err
@@ -379,17 +379,18 @@ func runPriorityMutation(
 // priorityReadService builds a read-only service on a repository that is
 // already open, with both vocabularies, so a priority command holds one
 // projection handle rather than two and every task it lists has had its stored
-// priority resolved through this project's own chains.
+// priority resolved through this project's own chains. It also returns the
+// release that closes that handle; see openProjection.
 func priorityReadService(
 	ctx context.Context,
 	repository *gitstore.Repository,
 	config core.ProjectConfig,
 	vocabulary core.Vocabulary,
 	priorities core.PriorityVocabulary,
-) (core.Service, error) {
-	store, err := projection.Open(ctx, repository, config)
+) (core.Service, func(), error) {
+	store, release, err := openProjection(ctx, repository, config)
 	if err != nil {
-		return core.Service{}, err
+		return core.Service{}, nil, err
 	}
 	return core.Service{
 		Config:     config,
@@ -399,7 +400,7 @@ func priorityReadService(
 		History:    store,
 		IDs:        core.CryptoULIDSource{},
 		Now:        time.Now,
-	}, nil
+	}, release, nil
 }
 
 // priorityTaskCensus counts the active tasks each priority holds, and collects

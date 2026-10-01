@@ -15,7 +15,6 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
-	"github.com/dgoings/workbook/internal/projection"
 )
 
 // buildPatchedGenerationZeroBinary builds this source tree with
@@ -157,10 +156,11 @@ func commentThroughTheService(t *testing.T, repository, taskID, body string) cor
 	if err != nil {
 		t.Fatalf("load configuration: %v", err)
 	}
-	store, err := projection.Open(ctx, repo, config)
+	store, releaseProjection, err := openProjection(ctx, repo, config)
 	if err != nil {
 		t.Fatalf("open projection: %v", err)
 	}
+	defer releaseProjection()
 	actor, err := repo.Actor(ctx)
 	if err != nil {
 		t.Fatalf("read actor: %v", err)

@@ -38,10 +38,7 @@ func TestBoardPublicationStateNamesWhyNoWatcherAnswers(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	repository := initializedRepository(t)
-	service, store, err := openBoardServiceParts(ctx, repository)
-	if err != nil {
-		t.Fatalf("open the board's service: %v", err)
-	}
+	service, store := openBoardServiceParts(t, ctx, repository)
 	publisher := &boardPublisher{repository: store, config: service.Config}
 
 	state := publisher.state(ctx)

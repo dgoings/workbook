@@ -1030,10 +1030,7 @@ func TestBoardWarnsWhenOriginRefusesTheConfigurationLedger(t *testing.T) {
 // repository, the way runServe does.
 func openBoardVocabulary(t *testing.T, ctx context.Context, repository string) *boardVocabulary {
 	t.Helper()
-	service, store, err := openBoardServiceParts(ctx, repository)
-	if err != nil {
-		t.Fatalf("open the board's service: %v", err)
-	}
+	service, store := openBoardServiceParts(t, ctx, repository)
 	return &boardVocabulary{
 		repository: store,
 		config:     service.Config,
@@ -1046,12 +1043,16 @@ func openBoardVocabulary(t *testing.T, ctx context.Context, repository string) *
 	}
 }
 
-func openBoardServiceParts(ctx context.Context, repository string) (core.Service, *gitstore.Repository, error) {
-	service, store, _, err := openServiceParts(ctx, repository, io.Discard)
+// openBoardServiceParts opens the board's service and closes its projection
+// when the test ends, the way runServe closes it when the server stops.
+func openBoardServiceParts(t *testing.T, ctx context.Context, repository string) (core.Service, *gitstore.Repository) {
+	t.Helper()
+	service, store, _, releaseProjection, err := openServiceParts(ctx, repository, io.Discard)
 	if err != nil {
-		return core.Service{}, nil, err
+		t.Fatalf("open the board's service: %v", err)
 	}
-	return service, store, nil
+	t.Cleanup(releaseProjection)
+	return service, store
 }
 
 // boardVocabularyMutation performs one vocabulary change and returns the

@@ -12,8 +12,17 @@ import (
 	"github.com/dgoings/workbook/internal/testrepo"
 )
 
-// No test in this package must stay serial: there is no t.Setenv, os.Setenv,
-// Chdir, PATH shim, port or cross-test global for one to protect.
+// Tests that stay serial, and why. Go runs these before the parallel batch,
+// so each gets a quiet process environment.
+//
+//	TestOpenAndCloseLeaveNoConnectionOpenerGoroutine — goroutine census
+//
+// It reads the whole process's goroutines and attributes the ones that appear
+// while it runs to the store it opened, so a concurrently opened store would
+// be counted as its leak.
+//
+// Nothing else in this package needs to be serial: there is no other t.Setenv,
+// os.Setenv, Chdir, PATH shim, port or cross-test global for one to protect.
 //
 // TestMain isolates the user-global and system git configuration that every
 // one of this package's 27 test repositories would otherwise read. A

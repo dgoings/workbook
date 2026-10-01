@@ -285,10 +285,11 @@ func fetchSharingWarnings(
 	if err != nil || strings.TrimSpace(actor) == "" {
 		return nil
 	}
-	store, err := projection.Open(ctx, repository, config)
+	store, releaseProjection, err := openProjection(ctx, repository, config)
 	if err != nil {
 		return nil
 	}
+	defer releaseProjection()
 	// All three configured sections, from one read, exactly as the service
 	// constructors above open on them. Reading the statuses alone left this
 	// service deciding which task IDs are this project's from the founding key
@@ -456,10 +457,13 @@ func runSyncWatch(
 		}
 		every = parsed
 	}
-	store, err := projection.Open(ctx, repository, config)
+	// Closed when the watcher returns, not when it starts: syncloop.Run reads
+	// and writes this projection for the life of the process.
+	store, releaseProjection, err := openProjection(ctx, repository, config)
 	if err != nil {
 		return err
 	}
+	defer releaseProjection()
 
 	// The watcher reports to stderr, leaving stdout free for the terminating
 	// result. --json changes only that final document, not the running report.
@@ -543,6 +547,7 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	if err != nil {
 		return err
 	}
+	defer session.Close()
 	result, err := session.mutate(ctx, "", func(ctx context.Context) (core.MutationResult, error) {
 		return session.service.CreateMutation(ctx, core.CreateInput{
 			Title:       title,
@@ -583,10 +588,11 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		return core.Errorf(core.CategoryInvocation, "list --find needs at least one word")
 	}
 
-	service, err := openReadService(ctx, cwd, stderr)
+	service, releaseProjection, err := openReadService(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
+	defer releaseProjection()
 	filter := core.ListFilter{Label: *label, Find: *find, All: *all, Key: namedProjectKey(*key)}
 	if *status != "" {
 		value := core.Status(*status)
@@ -729,10 +735,11 @@ func runShow(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		return err
 	}
 
-	service, err := openReadService(ctx, cwd, stderr)
+	service, releaseProjection, err := openReadService(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
+	defer releaseProjection()
 	detail, err := service.ShowDetail(ctx, id, options)
 	if err != nil {
 		return err
@@ -828,6 +835,7 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	if err != nil {
 		return err
 	}
+	defer session.Close()
 	// The assignment is resolved out here, because `self` is a question about
 	// this repository's identity rather than about the task: the session knows
 	// the answer as soon as it is open, and nothing the fetch brings down can
@@ -1110,6 +1118,7 @@ func runDelete(ctx context.Context, args []string, cwd string, stdout, stderr io
 	if err != nil {
 		return err
 	}
+	defer session.Close()
 	result, err := session.mutate(ctx, id, func(ctx context.Context) (core.MutationResult, error) {
 		return session.service.DeleteMutation(ctx, id, core.DeleteInput{})
 	})
@@ -1137,6 +1146,7 @@ func runRestore(ctx context.Context, args []string, cwd string, stdout, stderr i
 	if err != nil {
 		return err
 	}
+	defer session.Close()
 	result, err := session.mutate(ctx, id, func(ctx context.Context) (core.MutationResult, error) {
 		return session.service.RestoreMutation(ctx, id, core.RestoreInput{Into: destination})
 	})
@@ -1178,6 +1188,7 @@ func runMove(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
+	defer session.Close()
 	result, err := session.mutate(ctx, id, func(ctx context.Context) (core.MutationResult, error) {
 		return session.service.MoveMutation(ctx, id, core.MoveInput{Before: *before, After: *after})
 	})
@@ -1207,6 +1218,7 @@ func runDependencyMutation(ctx context.Context, command string, args []string, c
 	if err != nil {
 		return err
 	}
+	defer session.Close()
 	result, err := session.mutate(ctx, ids[0], func(ctx context.Context) (core.MutationResult, error) {
 		if command == "depend" {
 			return session.service.DependMutation(ctx, ids[0], ids[1])
@@ -1264,6 +1276,7 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
+	defer session.Close()
 	if !*claim {
 		session.service.Actor, _ = session.repository.Actor(ctx)
 	}
@@ -1489,10 +1502,11 @@ func runRebuild(ctx context.Context, args []string, cwd string, stdout, stderr i
 	if err != nil {
 		return err
 	}
-	store, err := projection.Open(ctx, repository, config)
+	store, releaseProjection, err := openProjection(ctx, repository, config)
 	if err != nil {
 		return err
 	}
+	defer releaseProjection()
 	count, err := store.Rebuild(ctx)
 	if err != nil {
 		return err
@@ -1643,10 +1657,15 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		}
 	})
 
-	service, repository, store, err := openServiceParts(ctx, cwd, stderr)
+	service, repository, store, releaseProjection, err := openServiceParts(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
+	// Deferred first, so it runs last: the board's sync loop below reads this
+	// projection until watcher.stop returns, and the server's handlers read it
+	// until webui.Serve returns. The store outlives everything it is handed to
+	// and is closed once the server is down.
+	defer releaseProjection()
 	publisher := &boardPublisher{repository: repository, config: service.Config}
 	// Every request reads the project's statuses again rather than reusing the
 	// ones this process opened with.
@@ -2394,26 +2413,53 @@ func (w *boardWatcher) stop() {
 	}
 }
 
-func openService(ctx context.Context, cwd string, stderr io.Writer) (core.Service, error) {
-	service, _, _, err := openServiceParts(ctx, cwd, stderr)
-	return service, err
+// openProjection opens this repository's projection cache together with the
+// release that closes it.
+//
+// Every site in this package opens the cache through here rather than calling
+// projection.Open itself, because the handle has to be given back: database/sql
+// starts a connectionOpener goroutine per *sql.DB and only Close stops it, so a
+// process that runs command after command in itself — `workbook serve`, the
+// sync watcher, this package's own test binary — accumulates one goroutine per
+// command otherwise. A one-shot command leaks it only until it exits, which is
+// why this went unnoticed; the long-lived callers are the ones it costs.
+//
+// The release is returned rather than deferred here because the caller decides
+// when the store stops being used: a command closes it as it returns, and
+// `serve` holds one open for the life of the server.
+func openProjection(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+) (*projection.Store, func(), error) {
+	store, err := projection.Open(ctx, repository, config)
+	if err != nil {
+		return nil, nil, err
+	}
+	return store, func() { _ = store.Close() }, nil
+}
+
+func openService(ctx context.Context, cwd string, stderr io.Writer) (core.Service, func(), error) {
+	service, _, _, release, err := openServiceParts(ctx, cwd, stderr)
+	return service, release, err
 }
 
 // openServiceParts also returns the repository and projection the service was
 // built on, so a long-running command can share them with a sync loop instead
-// of opening a second projection handle on the same cache file.
-func openServiceParts(ctx context.Context, cwd string, stderr io.Writer) (core.Service, *gitstore.Repository, *projection.Store, error) {
+// of opening a second projection handle on the same cache file, and the release
+// that closes that projection; see openProjection.
+func openServiceParts(
+	ctx context.Context,
+	cwd string,
+	stderr io.Writer,
+) (core.Service, *gitstore.Repository, *projection.Store, func(), error) {
 	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
-		return core.Service{}, nil, nil, err
+		return core.Service{}, nil, nil, nil, err
 	}
 	actor, err := repository.Actor(ctx)
 	if err != nil {
-		return core.Service{}, nil, nil, err
-	}
-	store, err := projection.Open(ctx, repository, config)
-	if err != nil {
-		return core.Service{}, nil, nil, err
+		return core.Service{}, nil, nil, nil, err
 	}
 	// The project's own statuses and priorities, not the built-in defaults.
 	// This is what turns the per-project vocabularies on for real: every
@@ -2427,7 +2473,14 @@ func openServiceParts(ctx context.Context, cwd string, stderr io.Writer) (core.S
 	// two configurations.
 	state, err := repository.LoadVocabularyState(ctx, config)
 	if err != nil {
-		return core.Service{}, nil, nil, err
+		return core.Service{}, nil, nil, nil, err
+	}
+	// Opened last, after everything else that can fail, so no error path
+	// between here and the return leaves a projection nobody holds the release
+	// for.
+	store, release, err := openProjection(ctx, repository, config)
+	if err != nil {
+		return core.Service{}, nil, nil, nil, err
 	}
 	return core.Service{
 		Config:     config,
@@ -2455,17 +2508,15 @@ func openServiceParts(ctx context.Context, cwd string, stderr io.Writer) (core.S
 		IDs:        core.CryptoULIDSource{},
 		Now:        time.Now,
 		Actor:      actor,
-	}, repository, store, nil
+	}, repository, store, release, nil
 }
 
-func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Service, error) {
+// openReadService also returns the release that closes the projection the
+// service reads through; see openProjection.
+func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Service, func(), error) {
 	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
-		return core.Service{}, err
-	}
-	store, err := projection.Open(ctx, repository, config)
-	if err != nil {
-		return core.Service{}, err
+		return core.Service{}, nil, err
 	}
 	// Both configured vocabularies, from one read, exactly as the write
 	// service above opens on both. A read service that loaded only the statuses
@@ -2474,7 +2525,13 @@ func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Se
 	// use.
 	state, err := repository.LoadVocabularyState(ctx, config)
 	if err != nil {
-		return core.Service{}, err
+		return core.Service{}, nil, err
+	}
+	// Opened last, after the read above that can fail, for the reason
+	// openServiceParts opens it last.
+	store, release, err := openProjection(ctx, repository, config)
+	if err != nil {
+		return core.Service{}, nil, err
 	}
 	return core.Service{
 		Config:     config,
@@ -2492,7 +2549,7 @@ func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Se
 		BlobReads: repository,
 		IDs:       core.CryptoULIDSource{},
 		Now:       time.Now,
-	}, nil
+	}, release, nil
 }
 
 // openRepository opens the repository a command runs against and loads its

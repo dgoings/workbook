@@ -16,7 +16,6 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/historyvalidation"
-	"github.com/dgoings/workbook/internal/projection"
 	"github.com/dgoings/workbook/internal/release"
 	"github.com/dgoings/workbook/internal/terminalui"
 )
@@ -475,10 +474,11 @@ func runStatusList(ctx context.Context, args []string, cwd string, stdout, stder
 	if err != nil {
 		return err
 	}
-	service, err := statusReadService(ctx, repository, config, state.Vocabulary)
+	service, releaseProjection, err := statusReadService(ctx, repository, config, state.Vocabulary)
 	if err != nil {
 		return err
 	}
+	defer releaseProjection()
 	tasks, err := service.List(ctx, core.ListFilter{})
 	if err != nil {
 		return err
@@ -536,16 +536,17 @@ func runStatusList(ctx context.Context, args []string, cwd string, stdout, stder
 const maxDatedConfigCommits = 64
 
 // statusReadService builds a read-only service on a repository that is already
-// open, so a status command holds one projection handle rather than two.
+// open, so a status command holds one projection handle rather than two. It
+// also returns the release that closes that handle; see openProjection.
 func statusReadService(
 	ctx context.Context,
 	repository *gitstore.Repository,
 	config core.ProjectConfig,
 	vocabulary core.Vocabulary,
-) (core.Service, error) {
-	store, err := projection.Open(ctx, repository, config)
+) (core.Service, func(), error) {
+	store, release, err := openProjection(ctx, repository, config)
 	if err != nil {
-		return core.Service{}, err
+		return core.Service{}, nil, err
 	}
 	return core.Service{
 		Config:     config,
@@ -554,7 +555,7 @@ func statusReadService(
 		History:    store,
 		IDs:        core.CryptoULIDSource{},
 		Now:        time.Now,
-	}, nil
+	}, release, nil
 }
 
 // statusTaskCensus counts the active tasks each status holds, and collects the
@@ -1736,6 +1737,7 @@ func runStatusMutation(
 	if err != nil {
 		return err
 	}
+	defer session.Close()
 	session.fetchBefore(ctx)
 	// The configuration the fetch settled on is the one this change is authored
 	// against, which is what makes `status rename` land on a teammate's newer

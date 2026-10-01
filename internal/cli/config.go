@@ -359,6 +359,7 @@ func runDisplayMutation(ctx context.Context, cwd string, mutation displayMutatio
 	if err != nil {
 		return err
 	}
+	defer session.Close()
 	session.fetchBefore(ctx)
 	// Read after the fetch, exactly as the status verbs refresh the vocabulary
 	// after theirs: the previous value this reports and inverts is the one the

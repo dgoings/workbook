@@ -9,7 +9,6 @@ import (
 	"github.com/dgoings/workbook/internal/autosync"
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
-	"github.com/dgoings/workbook/internal/projection"
 	"github.com/dgoings/workbook/internal/syncloop"
 	"github.com/dgoings/workbook/internal/userconfig"
 )
@@ -71,6 +70,20 @@ type taskSession struct {
 	// writes locally and hands publication to it.
 	deferred bool
 	watcher  syncloop.Status
+	// releaseProjection closes the projection the session reads and writes
+	// through; see openProjection for why it has to be given back.
+	releaseProjection func()
+}
+
+// Close releases what the session opened. Every command that opens a session
+// defers it, so the projection handle lives exactly as long as the command.
+//
+// It answers nothing rather than an error, unlike the Close it stands in
+// front of: this runs as a command returns, after the command has written its
+// result, and there is nothing a caller could do about a cache that would not
+// close.
+func (session *taskSession) Close() {
+	session.releaseProjection()
 }
 
 func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, stderr io.Writer) (*taskSession, error) {
@@ -87,10 +100,6 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 		return nil, err
 	}
 
-	store, err := projection.Open(ctx, repository, config)
-	if err != nil {
-		return nil, err
-	}
 	// The session opens on the configuration this clone currently holds, and
 	// refreshes it after the fetch; see refreshConfiguration.
 	//
@@ -103,6 +112,20 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 	// change would regenerate guidelines that document priorities this project
 	// does not use.
 	state, err := repository.LoadVocabularyState(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	var actor string
+	if withWriter {
+		actor, err = repository.Actor(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// Opened last, after everything else that can fail, so no error path
+	// between here and the returned session leaves a projection nobody holds
+	// the release for. Nothing above it needs the cache.
+	store, releaseProjection, err := openProjection(ctx, repository, config)
 	if err != nil {
 		return nil, err
 	}
@@ -120,10 +143,6 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 		Now:    time.Now,
 	}
 	if withWriter {
-		actor, err := repository.Actor(ctx)
-		if err != nil {
-			return nil, err
-		}
 		service.Writer = repository
 		service.Blobs = repository
 		service.Projection = store
@@ -131,10 +150,11 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 	}
 
 	session := &taskSession{
-		repository: repository,
-		config:     config,
-		service:    service,
-		report:     syncReport{Enabled: policy.Enabled, Source: policy.Source, Status: syncStatusSkipped},
+		repository:        repository,
+		config:            config,
+		service:           service,
+		report:            syncReport{Enabled: policy.Enabled, Source: policy.Source, Status: syncStatusSkipped},
+		releaseProjection: releaseProjection,
 	}
 	if !policy.Enabled {
 		session.report.Detail = "automatic synchronization is disabled"
