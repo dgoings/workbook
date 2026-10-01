@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"net"
 	"regexp"
 	"sync"
@@ -26,6 +27,10 @@ type reservedListener struct {
 	mu       sync.Mutex
 	probe    net.Listener
 	handedOn bool
+	// dead records that the cleanup closed an untaken reservation. A bind asked
+	// for after that point must be refused rather than answered, which is what
+	// the field is for; see listen.
+	dead bool
 }
 
 // reserveListener reserves an OS-assigned loopback port.
@@ -55,23 +60,93 @@ func reserveListenerOn(t *testing.T, host string) *reservedListener {
 			return
 		}
 		_ = reserved.probe.Close()
+		reserved.dead = true
 	})
 	return reserved
 }
 
 // listen is the bind to hand runServeWith or openBoardListenerWith. It answers
-// the one address it reserved with the open probe, once, and delegates
+// the one tcp address it reserved with the open probe, once, and delegates
 // everything else — serve's port-zero fallback among them — to the real
 // net.Listen. A second request for the reserved address therefore fails the way
 // any occupied port does instead of handing two servers the same listener.
 func (r *reservedListener) listen(network, address string) (net.Listener, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.handedOn && address == r.addr {
+	// Once the cleanup has closed an untaken reservation the test is over, and
+	// a bind arriving now is a straggler goroutine, not a server anybody will
+	// use. Handing back the closed probe would give it a listener whose every
+	// Accept fails, and binding the address afresh would reopen the very window
+	// this helper closes, so the only safe answer is to refuse.
+	if r.dead {
+		return nil, net.ErrClosed
+	}
+	if !r.handedOn && network == "tcp" && address == r.addr {
 		r.handedOn = true
 		return r.probe, nil
 	}
 	return net.Listen(network, address)
+}
+
+// The whole point of the reservation is identity: serve has to end up holding
+// the listener the test already bound. Every converted test would stay green if
+// listen quietly closed the probe and rebound the same port — the address would
+// still match and the board would still answer — while the close-then-rebind
+// window it exists to close was back. So the identity is asserted here, where
+// nothing else can stand in for it.
+func TestReservedListenerHandsOverItsOwnListenerOnce(t *testing.T) {
+	t.Parallel()
+	reserved := reserveListener(t)
+
+	// A different network is not this reservation, whatever the address says,
+	// and asking must not consume it either. "udp" is the probe because
+	// net.Listen refuses it outright, so the delegation below leaves nothing
+	// behind — asking for "unix" here would create a socket file named after
+	// the address in the package directory.
+	if other, err := reserved.listen("udp", reserved.addr); err == nil {
+		other.Close()
+		t.Fatalf("listen(udp, %q) handed over a tcp reservation", reserved.addr)
+	}
+
+	got, err := reserved.listen("tcp", reserved.addr)
+	if err != nil {
+		t.Fatalf("listen(tcp, %q) error = %v, want the reservation", reserved.addr, err)
+	}
+	// Handed on, so the helper's cleanup steps aside and this test owns it.
+	defer got.Close()
+	if got != reserved.probe {
+		t.Fatalf("listen(tcp, %q) returned a different listener (%v), want the reserved one (%v)", reserved.addr, got.Addr(), reserved.probe.Addr())
+	}
+
+	// And only once: the reservation is still open, so the second ask falls
+	// through to net.Listen and fails the way any occupied port does, rather
+	// than handing a second server the same listener.
+	second, err := reserved.listen("tcp", reserved.addr)
+	if err == nil {
+		second.Close()
+		t.Fatalf("listen(tcp, %q) handed the reservation out twice", reserved.addr)
+	}
+}
+
+// A reservation nobody took is closed by its cleanup, and a straggler bind
+// after that must be refused rather than handed a listener that cannot accept
+// or quietly given the released port back.
+func TestReservedListenerRefusesAReservationItsCleanupClosed(t *testing.T) {
+	t.Parallel()
+	var reserved *reservedListener
+	// The cleanup fires when the subtest ends, which is the only way to reach
+	// the closed state from inside a test.
+	t.Run("reserve", func(t *testing.T) {
+		reserved = reserveListener(t)
+	})
+
+	got, err := reserved.listen("tcp", reserved.addr)
+	if got != nil {
+		got.Close()
+	}
+	if !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("listen(tcp, %q) after the cleanup closed it = (%v, %v), want net.ErrClosed", reserved.addr, got, err)
+	}
 }
 
 // boardBanner matches the line serve prints to say where the board is.
