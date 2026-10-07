@@ -59,13 +59,16 @@ type releaseJob struct {
 	With struct {
 		Tag string `yaml:"tag"`
 	} `yaml:"with"`
-	Steps []releaseStep `yaml:"steps"`
+	// Secrets is what a calling job passes to the workflow it calls.
+	Secrets map[string]string `yaml:"secrets"`
+	Steps   []releaseStep     `yaml:"steps"`
 }
 
 type releaseStep struct {
-	Name string `yaml:"name"`
-	Uses string `yaml:"uses"`
-	Run  string `yaml:"run"`
+	Name string            `yaml:"name"`
+	Uses string            `yaml:"uses"`
+	Run  string            `yaml:"run"`
+	Env  map[string]string `yaml:"env"`
 	With struct {
 		FetchDepth any    `yaml:"fetch-depth"`
 		Ref        string `yaml:"ref"`
@@ -539,6 +542,91 @@ func TestReleaseWorkflowCascadesIntoADesktopRelease(t *testing.T) {
 	if publish.Environment != nil {
 		t.Errorf("job %q environment = %v, want none; the release job's approval covers this run", publishName, publish.Environment)
 	}
+}
+
+// The secrets electron-builder signs and notarizes the Mac build with, under
+// the names it reads them by.
+var macSigningSecrets = []string{"CSC_LINK", "CSC_KEY_PASSWORD", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"}
+
+// A missing secret does not fail a release: the Mac build quietly degrades to
+// ad-hoc signed and unnotarized, which is exactly what this guards against. A
+// called workflow sees only the secrets its caller passes, so every hop from
+// the cut workflows through release.yml to the desktop build has to hand them
+// on, and the desktop workflow has to give them to the Package step.
+func TestMacSigningSecretsReachTheDesktopPackageStep(t *testing.T) {
+	t.Parallel()
+
+	desktop := readReleaseWorkflow(t, "desktop-release.yml")
+	var packageStep *releaseStep
+	for index, step := range desktop.Jobs["build"].Steps {
+		if step.Name == "Package" {
+			packageStep = &desktop.Jobs["build"].Steps[index]
+		}
+	}
+	if packageStep == nil {
+		t.Fatal("desktop-release build job has no Package step")
+	}
+	for _, name := range macSigningSecrets {
+		value := packageStep.Env[name]
+		if !strings.Contains(value, "secrets."+name) {
+			t.Errorf("Package step env %s = %q, want it read from secrets.%s", name, value, name)
+		}
+		// Production mutation: the Windows build reads CSC_LINK too and would
+		// sign its installer with the Apple certificate.
+		if !strings.Contains(value, "startsWith(matrix.os, 'macos-')") {
+			t.Errorf("Package step env %s = %q, want it limited to the macOS runner", name, value)
+		}
+	}
+
+	for _, name := range []string{"desktop-release.yml", "release.yml"} {
+		declared := workflowCallSecrets(t, name)
+		for _, secret := range macSigningSecrets {
+			if _, ok := declared[secret]; !ok {
+				t.Errorf("%s workflow_call does not declare secret %s, so a caller cannot pass it", name, secret)
+			}
+		}
+	}
+
+	callers := map[string]string{
+		"release.yml":     "./.github/workflows/desktop-release.yml",
+		"cut-release.yml": "./.github/workflows/release.yml",
+		"release-pr.yml":  "./.github/workflows/release.yml",
+	}
+	for name, callee := range callers {
+		workflow := readReleaseWorkflow(t, name)
+		var calls int
+		for jobName, job := range workflow.Jobs {
+			if job.Uses != callee {
+				continue
+			}
+			calls++
+			for _, secret := range macSigningSecrets {
+				if got := job.Secrets[secret]; got != "${{ secrets."+secret+" }}" {
+					t.Errorf("%s job %q passes %s = %q, want ${{ secrets.%s }}", name, jobName, secret, got, secret)
+				}
+			}
+		}
+		if calls == 0 {
+			t.Errorf("%s has no job calling %s", name, callee)
+		}
+	}
+}
+
+// workflowCallSecrets is the set of secrets a workflow's workflow_call trigger
+// declares.
+func workflowCallSecrets(t *testing.T, name string) map[string]any {
+	t.Helper()
+	var document struct {
+		On struct {
+			WorkflowCall struct {
+				Secrets map[string]any `yaml:"secrets"`
+			} `yaml:"workflow_call"`
+		} `yaml:"on"`
+	}
+	if err := yaml.Unmarshal([]byte(readReleaseWorkflowFile(t, name)), &document); err != nil {
+		t.Fatalf("parse %s: %v", name, err)
+	}
+	return document.On.WorkflowCall.Secrets
 }
 
 func readReleaseWorkflow(t *testing.T, name string) releaseWorkflow {

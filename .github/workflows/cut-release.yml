@@ -93,5 +93,11 @@ jobs:
       tag: ${{ needs.tag.outputs.tag }}
     # Passed explicitly rather than inherited, so a secret added to the
     # repository later is not silently exposed to the release job.
+    # The Apple ones reach only the desktop release it cascades into.
     secrets:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}

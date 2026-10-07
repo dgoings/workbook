@@ -13,6 +13,20 @@ on:
         description: Desktop release tag to publish, such as desktop-v0.6.0
         required: true
         type: string
+    # A called workflow sees only the secrets its caller passes. Each is
+    # optional: without them the Mac build is ad-hoc signed and unnotarized
+    # rather than failing, the same as a local build with no identity.
+    secrets:
+      CSC_LINK:
+        required: false
+      CSC_KEY_PASSWORD:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_APP_SPECIFIC_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
   workflow_dispatch:
     inputs:
       tag:
@@ -117,10 +131,29 @@ jobs:
         working-directory: desktop
         run: npm version "${VERSION}" --no-git-tag-version
 
+      # electron-builder reads these by name: CSC_LINK and CSC_KEY_PASSWORD are
+      # the Developer ID certificate it imports into a temporary keychain and
+      # signs the Mac app with, and the three APPLE_ values are the notarization
+      # credentials. They reach the macOS runner only, because the Windows
+      # build reads CSC_LINK too and would sign its installer with the Apple
+      # certificate. With none set, the Mac build is ad-hoc signed and skips
+      # notarization.
       - name: Package
         shell: bash
         working-directory: desktop
+        env:
+          CSC_LINK: ${{ startsWith(matrix.os, 'macos-') && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ startsWith(matrix.os, 'macos-') && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ startsWith(matrix.os, 'macos-') && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ startsWith(matrix.os, 'macos-') && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ startsWith(matrix.os, 'macos-') && secrets.APPLE_TEAM_ID || '' }}
         run: |
+          # A secret that is not set arrives as an empty string, and
+          # electron-builder on macOS takes an empty CSC_LINK as a certificate
+          # to import rather than as none, so an empty one is no value at all.
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then unset "${name}"; fi
+          done
           case "${{ matrix.os }}" in
             macos-*) npx electron-builder --mac --arm64 --x64 --publish never ;;
             ubuntu-*) npx electron-builder --linux --x64 --arm64 --publish never ;;

@@ -17,6 +17,18 @@ on:
     secrets:
       HOMEBREW_TAP_TOKEN:
         required: true
+      # Handed on to the desktop release this run cascades into, which signs
+      # and notarizes its Mac build with them. Optional, as they are there.
+      CSC_LINK:
+        required: false
+      CSC_KEY_PASSWORD:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_APP_SPECIFIC_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
 
 # A called run's github.ref is the caller's branch, so keying on it would group
 # every called release together and let one wait on an unrelated one.
@@ -121,3 +133,11 @@ jobs:
     uses: ./.github/workflows/desktop-release.yml
     with:
       tag: ${{ needs.desktop-tag.outputs.tag }}
+    # A called workflow sees no secrets its caller does not pass, and without
+    # these the cascaded Mac build would quietly ship ad-hoc signed.
+    secrets:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the Workbench bundle when electron-builder signs it with a
+  Developer ID. Notarization requires the hardened runtime, and the hardened
+  runtime forbids what V8 does unless these two say otherwise: compile
+  JavaScript to machine code at run time, and map that memory executable.
+
+  Library validation stays on. electron-builder signs Electron's frameworks
+  and helpers with the same identity as the app, so nothing the app loads is
+  signed by another team, and turning validation off would only weaken the
+  runtime.
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+  </dict>
+</plist>

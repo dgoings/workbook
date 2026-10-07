@@ -130,12 +130,26 @@ Each build:
    electron-builder's `extraResources`, which copies one named file into every
    bundle and so gave both architectures of a Mac build the host's binary.
 
-   The hook then ad-hoc signs the macOS bundle, after the copy, since the
-   resources are part of what gets signed. Signing has to happen *during*
-   packaging too: signing the leftover `.app` afterwards fixes nothing, because
-   the DMG and ZIP were already built from the unsigned bundle. macOS on Apple
-   Silicon refuses to launch an arm64 bundle whose signature repackaging
-   invalidated.
+   On macOS the hook then settles how the bundle is signed, after the copy,
+   since the resources are part of what gets signed. electron-builder signs
+   after the hook returns, and does so itself whenever it finds a Developer ID
+   Application identity: the one the release workflow imports from `CSC_LINK`,
+   or one in your login keychain. It signs every binary in the bundle,
+   the bundled CLI included, with the hardened runtime and the entitlements in
+   `assets/entitlements.mac.plist` and `assets/entitlements.mac.inherit.plist`,
+   and when the `APPLE_*` credentials under Releasing are set it notarizes the app and
+   staples the ticket before the DMG and ZIP are built. In that case the hook
+   only writes a `SIGNED` marker into `Resources/`, which the app reads to know
+   it can update in place.
+
+   With no identity (none in the keychain, or
+   `CSC_IDENTITY_AUTO_DISCOVERY=false`) electron-builder signs nothing, and the
+   hook ad-hoc signs the bundle instead and writes no marker. That has to
+   happen *during* packaging too: signing the leftover `.app` afterwards fixes
+   nothing, because the DMG and ZIP were already built from the unsigned
+   bundle, and macOS on Apple Silicon refuses to launch an arm64 bundle whose
+   signature repackaging invalidated. The hook decides which case it is in the
+   way electron-builder will, with electron-builder's own identity lookup.
 
    `npm run dist:linux` and `npm run dist:win` expect to run on a host of that
    platform, which is how the release workflow runs them. Building one from a
@@ -179,6 +193,25 @@ Every CLI release cascades into a desktop one, and a desktop-only release is
 cut by pushing a `desktop-vX.Y.Z` tag on `main` yourself. CONTRIBUTING's
 "Desktop releases" has both paths, and what the two releases each hold.
 
+The macOS build signs and notarizes with five repository secrets, which the
+workflow hands to electron-builder under the names it reads, on the macOS
+runner only:
+
+| Secret | What it is |
+| --- | --- |
+| `CSC_LINK` | The Developer ID Application certificate and its private key, as a base64-encoded `.p12`. |
+| `CSC_KEY_PASSWORD` | The password that `.p12` was exported with. |
+| `APPLE_ID` | The Apple Account of the developer team, for notarization. |
+| `APPLE_APP_SPECIFIC_PASSWORD` | An app-specific password generated for that account. |
+| `APPLE_TEAM_ID` | The team's ten-character ID. |
+
+The cut workflows and `release.yml` pass all five down the cascade explicitly,
+since a called workflow sees no secret its caller does not hand it. None is
+required: without them the Mac build is ad-hoc signed and unnotarized, and
+installs its updates by DMG, as a local build does. That is a degrade, not a
+failure, so a release whose Mac build log says `ad-hoc signing` shipped without
+them.
+
 ## Updating
 
 Every release publishes on the `latest` channel, pre-release or not. JSON has
@@ -189,23 +222,30 @@ The site link and the update check both follow the newest desktop release,
 which is whatever `desktop-latest` currently holds, so they would find nothing
 there.
 
-**Windows** uses electron-updater's native flow: download in the background,
-install on restart.
+**Windows and macOS releases** use electron-updater's native flow: download in
+the background, install on restart. On macOS that is Squirrel.Mac installing
+the release's ZIP over the running app, which it does only when both carry the
+same Developer ID signature, and every release does.
 
-**macOS does not.** These builds carry an ad-hoc signature rather than a
-Developer ID one, and Squirrel.Mac silently refuses to install over a bundle it
-cannot verify: `quitAndInstall` returns having done nothing, and the user
-believes they upgraded. So the Mac path never calls it. It downloads the DMG
-itself and opens it in Finder for a drag into Applications, which is what the
-user did to install in the first place.
+**A Mac build without an identity does not.** One packaged locally with no
+Developer ID, or by the workflow with the signing secrets missing, carries an
+ad-hoc signature instead, and Squirrel.Mac silently refuses to install over a
+bundle it cannot verify: `quitAndInstall` returns having done nothing, and the
+user believes they upgraded. So such a build never calls it. It downloads the
+DMG itself and opens it in Finder for a drag into Applications, which is what
+the user did to install in the first place. The app tells the two kinds apart
+by the `SIGNED` marker the packaging hook leaves in `Resources/` only for an
+identity-signed build.
 
 Checks run once on launch and log what they find. There is no update action in
 the shell yet: when one returns it will live in the native application menu
 rather than on the shell page. The menu also reaches a user who is looking at a
 board rather than at the sidebar.
 
-The app is unsigned by any identity and unnotarized, so Gatekeeper will need
-it opened once from the Finder context menu.
+A release is signed with a Developer ID and notarized, so Gatekeeper opens it
+like any other downloaded app. A local build without an identity is only
+ad-hoc signed and unnotarized, and a copy of it moved to another Mac needs
+opening once from the Finder context menu.
 
 ## Finding the workbook binary
 
@@ -365,7 +405,7 @@ The wizard suggests one per repository, validates it against Workbook's own
 
 | | Status |
 | --- | --- |
-| macOS (arm64, x64) | Builds. Ad-hoc signed, not notarized. |
+| macOS (arm64, x64) | Builds. Signed with Developer ID and notarized in releases; ad-hoc when no identity is available. |
 | Linux (x64, arm64) | Builds as AppImage and deb. |
 | Windows (x64, arm64) | Builds one NSIS installer per architecture, and no combined one; unsigned until the publish workflow adds Azure Trusted Signing. |
 

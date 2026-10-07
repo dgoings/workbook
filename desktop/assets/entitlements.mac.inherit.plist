@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for everything inside the bundle that is signed on its own:
+  Electron's helper apps and frameworks, and the bundled Workbook CLI.
+
+  Without this file electron-builder falls back to its own template for these,
+  which also turns library validation off, so the helpers would run with a
+  weaker runtime than the app that starts them. The renderer and GPU helpers
+  run V8 too, so they need the same two entitlements as the app.
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+  </dict>
+</plist>
