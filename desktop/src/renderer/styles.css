@@ -187,21 +187,30 @@ body {
   border-right: 1px solid var(--wb-rule);
 }
 
+/* The head is the window's grab handle on every platform. macOS and Windows
+   both hide the native title bar, and with it gone nothing moves the window
+   but an element marked as a drag region; the board beside the sidebar is a
+   separate view the shell does not style, so this is the one place to take
+   hold of. Linux keeps its native decorations, so there the mark is harmless
+   and the title bar moves the window as usual. The collapsed rail reshapes the
+   head but leaves this alone, and test/drag-region.test.js holds both to it. */
 .sidebar-head {
   display: flex;
   align-items: flex-start;
   gap: .5rem;
+  -webkit-app-region: drag;
   /* Clears the traffic lights, which titleBarStyle 'hiddenInset' floats over
-     the top-left of this pane. Windows draws its overlay controls at the top
-     *right*, over the main area rather than the sidebar, and Linux gets
-     ordinary decorations — neither needs the inset, and on both it would read
-     as a stray gap. The platform class is set by the renderer at boot. */
+     the top-left of this pane: they sit in the head's top strip, beside the
+     part of it that is free to grab, rather than over the wordmark. Windows
+     draws its overlay controls at the top *right*, over the main area rather
+     than the sidebar, and Linux gets ordinary decorations — neither needs the
+     inset, and on both it would read as a stray gap. The platform class is set
+     by the renderer at boot. */
   padding: 34px 1rem .75rem;
 }
 
 :root:not(.is-mac) .sidebar-head {
   padding-top: .85rem;
-  -webkit-app-region: drag;
 }
 
 .sidebar-identity { flex: 1; min-width: 0; }
@@ -241,6 +250,9 @@ body {
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
   font-size: .75rem;
   cursor: default;
+  /* Out of the head's drag region, which swallows hover: the tooltip below
+     would never show. */
+  -webkit-app-region: no-drag;
   /* One line always: a wrapped version pushes the rail down. So a long version
      is ellipsized here, and this line's own tooltip carries the whole of it —
      which build it is, the full version string, and the path — since the
@@ -377,7 +389,9 @@ body {
 /* The chevron takes the whole head to itself, centered, where it sat beside
    the wordmark before. Only the side padding goes: the top inset is the head's
    own, so macOS keeps its 34px under the traffic lights and the
-   :root:not(.is-mac) override keeps answering for everyone else. */
+   :root:not(.is-mac) override keeps answering for everyone else. The drag
+   region is the head's own as well, so the rail is still a grab handle around
+   a chevron that still clicks. */
 :root.sidebar-collapsed .sidebar-head {
   flex-direction: column;
   align-items: center;
