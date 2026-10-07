@@ -59,7 +59,7 @@
       "category": "public.app-category.developer-tools",
       "icon": "assets/icon.icns",
       "darkModeSupport": true,
-      "identity": null,
+      "notarize": true,
       "artifactName": "${productName}-${arch}.${ext}",
       "extendInfo": {
         "LSMinimumSystemVersion": "11.0",

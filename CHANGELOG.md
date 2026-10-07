@@ -184,6 +184,15 @@ under Changed.
 - **The desktop app starts every imported project's board server at launch**
   and on import, rather than when a board is first opened, so each project's
   synchronization loop runs for as long as the app does.
+- **The desktop app's macOS releases are signed with a Developer ID and
+  notarized**, so they open like any other downloaded app, without the trip to
+  the Finder context menu, and they update in place: the update downloads in
+  the background and installs on restart, as it does on Windows, rather than
+  arriving as a disk image to drag into Applications. A build made without a
+  signing identity is still ad-hoc signed, and still updates by disk image,
+  because macOS will not install an update over a bundle it cannot verify. The
+  first signed release still updates the old way, since it is installed by the
+  unsigned copy before it.
 - **Show Deleted moved from the header into the board's new filter row.** Its
   address, `/?deleted=1`, is unchanged, so existing links keep working.
 - **Every command opens its repository with one `git rev-parse` process

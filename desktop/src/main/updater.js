@@ -2,23 +2,31 @@
 
 // Checking GitHub Releases for a newer Workbench, and installing it.
 //
-// Two platforms, two mechanisms, for one reason: signing.
+// Two mechanisms, chosen by one thing: whether a Mac build was signed with a
+// Developer ID.
 //
-// Windows installers are signed in CI when the Azure Trusted Signing secrets
-// are present, so Squirrel's native flow works — download in the background,
-// install on restart.
+// electron-updater's native flow downloads in the background and installs on
+// restart. Windows takes it although its installer is not signed by any
+// identity: package.json turns off verifyUpdateCodeSignature, so nothing there
+// waits on a signature. A Mac release is signed with the project's Developer
+// ID and notarized, and Squirrel.Mac installs over it in place, so it takes
+// the same flow.
 //
-// macOS builds carry an ad-hoc signature, not a Developer ID one, and
-// Squirrel.Mac silently refuses to install an update over a bundle it cannot
-// verify: `quitAndInstall` returns without doing anything and the user is left
-// believing they upgraded. So the Mac path never calls it. It downloads the DMG
-// itself and opens it in Finder for a drag into Applications, which is the same
-// thing the user did to install in the first place.
+// A Mac build packaged without an identity carries an ad-hoc signature
+// instead, and Squirrel.Mac silently refuses to install an update over a bundle
+// it cannot verify: `quitAndInstall` returns without doing anything and the
+// user is left believing they upgraded. So that build never calls it. It
+// downloads the DMG itself and opens it in Finder for a drag into
+// Applications, which is the same thing the user did to install in the first
+// place. desktop/scripts/after-pack.js leaves a marker in the bundle's
+// Resources only when an identity signs it, and updateflow.js reads the
+// choice from that.
 
 const { app, dialog, shell, net } = require('electron')
 const fs = require('node:fs')
 const path = require('node:path')
 const { autoUpdater } = require('electron-updater')
+const { SIGNED_MARKER, updateFlow } = require('./updateflow')
 
 // Desktop releases live in this repository beside the CLI's, under their own
 // desktop-v* tags, and a rolling desktop-latest release carries the current
@@ -31,7 +39,12 @@ const RELEASES_PAGE = 'https://github.com/dgoings/workbook/releases/tag/desktop-
 // are already starting; an update prompt is never the point of launching.
 const FIRST_CHECK_DELAY_MS = 6000
 
-const useManualMacFlow = process.platform === 'darwin'
+// process.resourcesPath is the bundle's Contents/Resources in a packaged app,
+// which is the only kind that ever checks for updates.
+const installsByDmg = updateFlow({
+  platform: process.platform,
+  signed: fs.existsSync(path.join(process.resourcesPath, SIGNED_MARKER))
+}) === 'manual'
 
 let checking = false
 
@@ -122,7 +135,7 @@ function setupUpdater (hooks = {}) {
       return
     }
 
-    if (useManualMacFlow) {
+    if (installsByDmg) {
       const { response } = await dialog.showMessageBox({
         type: 'info',
         title: 'Update available',
@@ -172,7 +185,8 @@ function setupUpdater (hooks = {}) {
 
   autoUpdater.on('download-progress', (progress) => hooks.onProgress?.(progress.percent / 100))
 
-  // Windows only: the Mac path never calls downloadUpdate, so it never lands here.
+  // Never reached by a build that installs by DMG: that path never calls
+  // downloadUpdate.
   autoUpdater.on('update-downloaded', async () => {
     const { response } = await dialog.showMessageBox({
       type: 'info',
@@ -242,7 +256,7 @@ function setupUpdater (hooks = {}) {
     const version = result?.updateInfo?.version
     if (!version || version === app.getVersion()) return { upToDate: true }
 
-    if (useManualMacFlow) {
+    if (installsByDmg) {
       try {
         await downloadAndOpenMacDmg(version, hooks.onProgress)
         await dialog.showMessageBox({
