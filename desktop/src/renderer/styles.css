@@ -503,7 +503,9 @@ body {
      is told where they are not: titlebar-area-x and -width describe the free
      part of the top row, so whatever lies right of it in the viewport is the
      controls. Padding that much keeps the name out from under them. Where the
-     overlay is absent the fallbacks make it zero. */
+     overlay is absent the fallbacks make it zero. The math holds because the
+     chrome view spans the window from x=0 and this page never shows a vertical
+     scrollbar, so 100vw is the window's width. */
   padding-right: calc(1rem + 100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
   background: var(--wb-surface);
   color: var(--wb-muted);
