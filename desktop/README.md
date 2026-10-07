@@ -134,13 +134,13 @@ Each build:
    since the resources are part of what gets signed. electron-builder signs
    after the hook returns, and does so itself whenever it finds a Developer ID
    Application identity: the one the release workflow imports from `CSC_LINK`,
-   or one in your login keychain. It signs every binary in the bundle,
-   the bundled CLI included, with the hardened runtime and the entitlements in
+   or one in your login keychain. It signs every binary in the bundle, the
+   bundled CLI included, with the hardened runtime and the entitlements in
    `assets/entitlements.mac.plist` and `assets/entitlements.mac.inherit.plist`,
-   and when the `APPLE_*` credentials under Releasing are set it notarizes the app and
-   staples the ticket before the DMG and ZIP are built. In that case the hook
-   only writes a `SIGNED` marker into `Resources/`, which the app reads to know
-   it can update in place.
+   and when the `APPLE_*` credentials under Releasing are set it notarizes the
+   app and staples the ticket before the DMG and ZIP are built. In that case
+   the hook only writes a `SIGNED` marker into `Resources/`, which the app
+   reads to know it can update in place.
 
    With no identity (none in the keychain, or
    `CSC_IDENTITY_AUTO_DISCOVERY=false`) electron-builder signs nothing, and the
@@ -206,11 +206,18 @@ runner only:
 | `APPLE_TEAM_ID` | The team's ten-character ID. |
 
 The cut workflows and `release.yml` pass all five down the cascade explicitly,
-since a called workflow sees no secret its caller does not hand it. None is
-required: without them the Mac build is ad-hoc signed and unnotarized, and
-installs its updates by DMG, as a local build does. That is a degrade, not a
-failure, so a release whose Mac build log says `ad-hoc signing` shipped without
-them.
+since a called workflow sees no secret its caller does not hand it. The
+Package step also sets `CSC_FOR_PULL_REQUEST`: a release cut by merging a
+release pull request reaches it with that pull request's event, which
+electron-builder would otherwise take for an untrusted build and leave
+unsigned. The job only ever builds a release tag, so signing there is safe.
+
+None of the five is required: without them the Mac build is ad-hoc signed and
+unnotarized, and installs its updates by DMG, as a local build does. That is a
+degrade, not a failure, so a release whose Mac build log says `ad-hoc signing`
+shipped without them. Half of them is a failure: `CSC_LINK` without `APPLE_ID`
+stops the Package step, because the result would be signed but unnotarized,
+and Gatekeeper would refuse it on every other Mac.
 
 ## Updating
 
@@ -225,7 +232,7 @@ there.
 **Windows and macOS releases** use electron-updater's native flow: download in
 the background, install on restart. On macOS that is Squirrel.Mac installing
 the release's ZIP over the running app, which it does only when both carry the
-same Developer ID signature, and every release does.
+same Developer ID signature, and every release does, whichever way it was cut.
 
 **A Mac build without an identity does not.** One packaged locally with no
 Developer ID, or by the workflow with the signing secrets missing, carries an

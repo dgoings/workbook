@@ -8,9 +8,9 @@
 // electron-updater's native flow downloads in the background and installs on
 // restart. Windows takes it although its installer is not signed by any
 // identity: package.json turns off verifyUpdateCodeSignature, so nothing there
-// waits on a signature. A Mac release is signed with the project's Developer ID and
-// notarized, and Squirrel.Mac installs over it in place, so it takes the same
-// flow.
+// waits on a signature. A Mac release is signed with the project's Developer
+// ID and notarized, and Squirrel.Mac installs over it in place, so it takes
+// the same flow.
 //
 // A Mac build packaged without an identity carries an ad-hoc signature
 // instead, and Squirrel.Mac silently refuses to install an update over a bundle

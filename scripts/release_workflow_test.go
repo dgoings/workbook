@@ -578,6 +578,43 @@ func TestMacSigningSecretsReachTheDesktopPackageStep(t *testing.T) {
 		}
 	}
 
+	// Production mutation: a release cut by merging a release pull request
+	// reaches this job through the cascade with the caller's event, so
+	// GITHUB_BASE_REF is set and electron-builder's isPullRequest() is true.
+	// Without CSC_FOR_PULL_REQUEST its isSignAllowed() skips signing and that
+	// release ships ad-hoc, silently.
+	if value := packageStep.Env["CSC_FOR_PULL_REQUEST"]; value != "${{ startsWith(matrix.os, 'macos-') && 'true' || '' }}" {
+		t.Errorf("Package step env CSC_FOR_PULL_REQUEST = %q, want 'true' on the macOS runner", value)
+	}
+
+	// Production mutation: a missing secret arrives as an empty string, which
+	// electron-builder on macOS tries to import as a certificate, and an empty
+	// CSC_FOR_PULL_REQUEST counts as true. Each empty value has to be unset.
+	unsetLoop := `for name in ` + strings.Join(append(append([]string{}, macSigningSecrets...), "CSC_FOR_PULL_REQUEST"), " ") + `; do
+  if [ -z "${!name}" ]; then unset "${name}"; fi
+done`
+	unsetIndex := strings.Index(packageStep.Run, unsetLoop)
+	if unsetIndex < 0 {
+		t.Errorf("Package step does not unset empty signing variables with:\n%s\nrun:\n%s", unsetLoop, packageStep.Run)
+	}
+
+	// Production mutation: a certificate without notarization credentials
+	// would ship a signed, unnotarized app that Gatekeeper refuses elsewhere;
+	// electron-builder only warns, so the step has to refuse it, after the
+	// empty values are gone.
+	partial := `if [ -n "${CSC_LINK:-}" ] && [ -z "${APPLE_ID:-}" ]; then`
+	partialIndex := strings.Index(packageStep.Run, partial)
+	if partialIndex < 0 {
+		t.Errorf("Package step does not refuse CSC_LINK without APPLE_ID; want %q in run:\n%s", partial, packageStep.Run)
+	} else {
+		if !strings.Contains(packageStep.Run[partialIndex:], "exit 1") {
+			t.Errorf("Package step's CSC_LINK without APPLE_ID check does not exit 1:\n%s", packageStep.Run)
+		}
+		if unsetIndex >= 0 && partialIndex < unsetIndex {
+			t.Errorf("Package step checks CSC_LINK without APPLE_ID before unsetting empty values:\n%s", packageStep.Run)
+		}
+	}
+
 	for _, name := range []string{"desktop-release.yml", "release.yml"} {
 		declared := workflowCallSecrets(t, name)
 		for _, secret := range macSigningSecrets {

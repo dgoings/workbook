@@ -73,6 +73,12 @@ function placeWorkbook (context) {
 //
 // CSC_LINK decides which keychain is searched, not whether there is a search:
 // electron-builder imports it into a temporary keychain and looks there.
+//
+// Three configurations take electron-builder down paths this does not follow,
+// and none is set in package.json: `identity: "-"` (electron-builder signs
+// ad-hoc itself, with the hardened runtime), `type: "development"` (it looks
+// for development certificates instead), and a custom `mac.sign` function
+// (it hands signing to that). Setting any of them means revisiting this.
 
 // builder-util's isPullRequest: each CI's variable, set to anything but "false".
 const PULL_REQUEST_VARIABLES = ['TRAVIS_PULL_REQUEST', 'CIRCLE_PULL_REQUEST', 'BITRISE_PULL_REQUEST', 'APPVEYOR_PULL_REQUEST_NUMBER', 'GITHUB_BASE_REF']
