@@ -151,6 +151,10 @@ Each build:
    signature repackaging invalidated. The hook decides which case it is in the
    way electron-builder will, with electron-builder's own identity lookup.
 
+   A certificate in `CSC_LINK` that yields no identity electron-builder will
+   sign with (expired, revoked, or exported without its private key) stops the
+   build instead: that is a release meant to be signed, not the degrade.
+
    `npm run dist:linux` and `npm run dist:win` expect to run on a host of that
    platform, which is how the release workflow runs them. Building one from a
    Mac needs its targets staged into `build/<goos>-<goarch>/` first: otherwise
@@ -232,7 +236,12 @@ there.
 **Windows and macOS releases** use electron-updater's native flow: download in
 the background, install on restart. On macOS that is Squirrel.Mac installing
 the release's ZIP over the running app, which it does only when both carry the
-same Developer ID signature, and every release does, whichever way it was cut.
+same Developer ID signature, and every release built with the signing secrets
+does, whichever way it was cut. A release that shipped ad-hoc would strand
+every signed install: its updater would download the release and offer a
+restart, and the restart would do nothing. That is why the workflow refuses a
+certificate it finds no usable identity in, or one without notarization
+credentials, rather than shipping such a release.
 
 **A Mac build without an identity does not.** One packaged locally with no
 Developer ID, or by the workflow with the signing secrets missing, carries an
@@ -243,6 +252,11 @@ DMG itself and opens it in Finder for a drag into Applications, which is what
 the user did to install in the first place. The app tells the two kinds apart
 by the `SIGNED` marker the packaging hook leaves in `Resources/` only for an
 identity-signed build.
+
+A local build signed with a Mac Developer certificate, or with another team's
+Developer ID, gets the marker too and takes the in-place path, but it will not
+update from this project's releases: they carry a different signature, and
+Squirrel.Mac refuses them.
 
 Checks run once on launch and log what they find. There is no update action in
 the shell yet: when one returns it will live in the native application menu

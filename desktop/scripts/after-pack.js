@@ -19,6 +19,9 @@
 // `electron-builder` finishes: by then the DMG and ZIP have already been built
 // from the unsigned bundle, and signing the leftover .app in dist/ fixes
 // nothing that was shipped.
+//
+// The one case with no identity that is not a degrade is a certificate in
+// CSC_LINK that yields none: that build stops (see planMacSigning).
 
 const { execFileSync } = require('node:child_process')
 const fs = require('node:fs')
@@ -113,7 +116,15 @@ function identitySearch ({ platform, env, configIdentity }) {
 
 /**
  * How the packed macOS app gets signed: by electron-builder with `identity`,
- * leaving this hook to write the marker, or ad-hoc by this hook.
+ * leaving this hook to write the marker; ad-hoc by this hook; or not at all,
+ * because the build was handed a certificate it cannot sign with.
+ *
+ * The third outcome is a refusal rather than the ad-hoc degrade because a
+ * certificate in CSC_LINK means a release meant to be signed. Shipping it
+ * ad-hoc would strand every signed install on the previous release: its
+ * updater downloads the ad-hoc build, offers a restart, and Squirrel.Mac then
+ * refuses to install it without a word. A build with no CSC_LINK and no
+ * identity, a plain local one, still degrades to ad-hoc.
  *
  * Pure, so it can be tested without a keychain: `identity` is what
  * electron-builder's own lookup found for identitySearch's answer, or null.
@@ -121,11 +132,21 @@ function identitySearch ({ platform, env, configIdentity }) {
  * @param {{ platform: string, env: Record<string, string|undefined>,
  *           configIdentity: string|null|undefined,
  *           identity: { name: string }|null }} options
- * @returns {{ adHoc: boolean, marker: string|null }}
+ * @returns {{ adHoc: boolean, marker: string|null, refusal: string|null }}
+ *   refusal, when set, says why the build has to stop.
  */
 function planMacSigning ({ platform, env, configIdentity, identity }) {
-  if (!identitySearch({ platform, env, configIdentity }) || !identity) return { adHoc: true, marker: null }
-  return { adHoc: false, marker: identity.name }
+  const search = identitySearch({ platform, env, configIdentity })
+  if (search && identity) return { adHoc: false, marker: identity.name, refusal: null }
+  if (!(env.CSC_LINK || '').trim()) return { adHoc: true, marker: null, refusal: null }
+  const refusal = search
+    ? 'CSC_LINK supplies a certificate, but no signing identity was found for it. ' +
+      'Check that the certificate has not expired or been revoked, and that the .p12 ' +
+      'was exported with its private key.'
+    : 'CSC_LINK supplies a certificate, but electron-builder will not sign with it: ' +
+      'the mac identity is null, CSC_IDENTITY_AUTO_DISCOVERY is false with no CSC_NAME, ' +
+      'this is a pull-request build without CSC_FOR_PULL_REQUEST, or the host is not macOS.'
+  return { adHoc: false, marker: null, refusal }
 }
 
 // The identity electron-builder will sign with, found the way it finds it: the
@@ -153,6 +174,8 @@ async function signMac (context) {
   const search = identitySearch(options)
   const identity = search ? await findSigningIdentity(context.packager, search) : null
   const plan = planMacSigning({ ...options, identity })
+
+  if (plan.refusal) throw new Error(plan.refusal)
 
   if (!plan.adHoc) {
     // The app updates in place only when this file is in its Resources. Its
