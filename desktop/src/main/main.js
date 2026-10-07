@@ -13,6 +13,7 @@ const gitidentity = require('./gitidentity')
 const workbook = require('./workbook')
 const nextview = require('./nextview')
 const clipath = require('./clipath')
+const { titleStripHeight, boardBounds } = require('./layout')
 const { buildMenuTemplate } = require('./menu')
 const { setupUpdater } = require('./updater')
 
@@ -49,17 +50,15 @@ function sidebarWidth () {
   return registry.sidebarCollapsed ? RAIL_WIDTH : SIDEBAR_WIDTH
 }
 
-function boardBounds () {
-  const { width, height } = window.getContentBounds()
-  const sidebar = sidebarWidth()
-  return { x: sidebar, y: 0, width: Math.max(0, width - sidebar), height }
-}
-
 function layout () {
   if (!window) return
-  const { width, height } = window.getContentBounds()
-  chromeView?.setBounds({ x: 0, y: 0, width, height })
-  const bounds = boardBounds()
+  const content = window.getContentBounds()
+  // The shell's view covers the whole window: it draws the sidebar and, across
+  // the top of the main area, the title strip the window is dragged by. The
+  // board goes beside the one and under the other, so the strip stays visible
+  // above whichever board is showing.
+  chromeView?.setBounds({ x: 0, y: 0, width: content.width, height: content.height })
+  const bounds = boardBounds(content, sidebarWidth(), titleStripHeight(process.platform))
   for (const [projectId, view] of boardViews) {
     // Views for projects that are not showing are parked off-screen rather than
     // detached, so switching back does not reload the board or lose its state.
@@ -91,7 +90,8 @@ function createWindow () {
       titleBarOverlay: {
         color: '#00000000',
         symbolColor: dark ? '#e4e9f2' : '#34425a',
-        height: 36
+        // The controls sit in the shell's title strip, so they are its height.
+        height: titleStripHeight(process.platform)
       }
     }),
     // macOS reads its icon from the bundle; the other two need to be told.
@@ -195,7 +195,7 @@ async function applyTheme () {
     window.setTitleBarOverlay({
       color: '#00000000',
       symbolColor: dark ? '#e4e9f2' : '#34425a',
-      height: 36
+      height: titleStripHeight(process.platform)
     })
   }
   toChrome('theme:changed', { theme: registry.theme, dark })
