@@ -480,6 +480,51 @@ body {
   overflow: hidden;
 }
 
+/* The window's title bar on macOS and Windows, which both hide the native
+   one: the whole top edge of the main area moves the window, as it does in
+   every other app there, and together with the sidebar head beside it reads as
+   one bar. The board views are separate views the main process lays out below
+   this, so the shell has to draw it; their offset and this height are the same
+   number, which app.js copies into --title-strip-height from the main
+   process's src/main/layout.js. Linux keeps its native decorations, and there
+   app.js hides the strip rather than leave a zero-height drag region.
+
+   The sidebar's surface rather than the canvas, so the strip continues the
+   head instead of looking like part of the view under it. No bottom rule: the
+   board under it draws its own header edge. */
+.title-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--title-strip-height, 0px);
+  padding: 0 1rem;
+  /* Windows draws its overlay controls over the strip's right end. The page
+     is told where they are not: titlebar-area-x and -width describe the free
+     part of the top row, so whatever lies right of it in the viewport is the
+     controls. Padding that much keeps the name out from under them. Where the
+     overlay is absent the fallbacks make it zero. The math holds because the
+     chrome view spans the window from x=0 and this page never shows a vertical
+     scrollbar, so 100vw is the window's width. */
+  padding-right: calc(1rem + 100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+  background: var(--wb-surface);
+  color: var(--wb-muted);
+  font-size: .78rem;
+  font-weight: 600;
+  -webkit-app-region: drag;
+  user-select: none;
+  cursor: default;
+}
+
+/* One line: a long project name is ellipsized rather than wrapping out of a
+   strip whose height is fixed. */
+.title-strip__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .view {
   flex: 1;
   min-height: 0;

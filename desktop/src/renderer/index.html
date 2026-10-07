@@ -52,6 +52,14 @@
   </aside>
 
   <main id="main">
+    <!-- Stands in for the title bar the window hides: the window is dragged by
+         this and the sidebar head, which line up as one bar across the top.
+         The board views are laid out below it, so it shows above every view.
+         Text only, so nothing in it has to opt out of the drag region. app.js
+         sizes it, hides it where the native title bar remains, and names it. -->
+    <header class="title-strip" id="title-strip">
+      <span class="title-strip__name" id="title-strip-name">Workbench</span>
+    </header>
     <!-- The discovery + selection wizard. Controls are anchored at the top and
          the import action at the bottom; only the repository list scrolls, so
          neither the search nor the button is ever scrolled out of reach. -->

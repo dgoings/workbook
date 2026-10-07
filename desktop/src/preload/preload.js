@@ -5,12 +5,21 @@
 // decides whether it is allowed and how it is performed.
 
 const { contextBridge, ipcRenderer } = require('electron')
+// This preload is not sandboxed (see the shell view's webPreferences in
+// main.js), so it can reach a sibling module, and the title strip's height is
+// read from the same function the main process lays the boards out with.
+const { titleStripHeight } = require('../main/layout')
 
 contextBridge.exposeInMainWorld('workbench', {
   // 'darwin' | 'win32' | 'linux' — the renderer only uses it for chrome that
   // genuinely differs, not for behaviour.
   platform: process.platform === 'darwin' ? 'mac'
     : process.platform === 'win32' ? 'windows' : 'linux',
+
+  // How tall the title strip across the top of the main area is, in CSS
+  // pixels, and 0 where the window keeps its native title bar. The board views
+  // start this far down, so the strip has to be exactly this tall.
+  titleStripHeight: titleStripHeight(process.platform),
 
   version: () => ipcRenderer.invoke('workbook:version'),
 
