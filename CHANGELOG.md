@@ -351,6 +351,14 @@ under Changed.
   and one run of the command-line test suite left roughly thirteen hundred
   goroutines behind. A one-shot command is unaffected, because it was already
   giving the handle back by exiting.
+- **The desktop app's window can be moved on macOS.** Workbench hides the
+  native title bar there, which leaves the window movable only by a region the
+  app marks as draggable, and since the shell's first build the sidebar head
+  was marked that way on every platform but macOS. The head is now the window's
+  grab handle everywhere, in the expanded sidebar and the collapsed rail alike;
+  the chevron inside it still clicks rather than drags, and the version line
+  keeps its tooltip, which on Windows, where the head was already draggable,
+  never showed until now.
 
 ## v0.5.1 — 2026-08-23
 
