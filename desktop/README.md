@@ -46,7 +46,7 @@ Projects can be dragged into any order, and grouped under categories: named
 groups, one level deep, that fold to hide their projects. The `+` beside
 Projects adds a category at the bottom and opens its name for typing; a
 double-click on the name, or the pencil that shows on hover, renames it, with
-Enter or clicking away to save and Escape to cancel. Drag a project into a
+Enter or clicking elsewhere in the sidebar to save and Escape to cancel. Drag a project into a
 category, out of it, or between categories, and drag a category by its header
 to move it among the top-level rows; a project dropped on a folded category
 goes in at its end. Removing a category asks once, then puts its projects back

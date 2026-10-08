@@ -194,6 +194,8 @@ function projectRow (project) {
   item.dataset.projectId = project.id
   item.draggable = true
   if (project.id === state.activeProjectId) item.classList.add('active')
+  // Redrawn mid-drag (the drop's broadcast, a board starting): still dimmed.
+  if (drag.current?.kind === 'project' && drag.current.id === project.id) item.classList.add('dragging')
   // In the rail the tile is the key and nothing else, so the whole of what
   // the row says when expanded has to be reachable by hovering it. The status
   // is part of that and goes on the tile too: a title of its own on the dot
@@ -233,6 +235,7 @@ function categoryGroup (category, byId) {
   group.className = 'category'
   group.dataset.categoryId = category.id
   if (category.collapsed) group.classList.add('collapsed')
+  if (drag.current?.kind === 'category' && drag.current.id === category.id) group.classList.add('dragging')
 
   const head = document.createElement('div')
   head.className = 'category-head'
@@ -505,10 +508,15 @@ function wireDragAndDrop () {
     event.dataTransfer.effectAllowed = 'move'
     event.dataTransfer.setData(DRAG_TYPE, `${drag.current.kind}:${drag.current.id}`)
     event.dataTransfer.setData('text/plain', `${drag.current.kind}:${drag.current.id}`)
-    // A drag under way is no time to hold redraws for a click.
-    releaseRedraw()
     const dimmed = drag.current.kind === 'category' ? source.closest('.category') : source
     dimmed.classList.add('dragging')
+    // A drag sends no mouseup, so the redraw its press held is let go here —
+    // but on the next task, not now. The press can itself have asked for a
+    // redraw (an open name field's blur, the remove question going away), and
+    // running it now would replace the row being dragged while Chromium is
+    // still starting the drag from it, which cancels the drag. The redrawn row
+    // comes back dimmed: projectRow and categoryGroup read drag.current.
+    setTimeout(releaseRedraw, 0)
   })
 
   list.addEventListener('dragover', (event) => {

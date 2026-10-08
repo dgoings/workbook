@@ -105,3 +105,14 @@ test('the page loads the drop arithmetic before app.js', () => {
   assert.notEqual(model, -1)
   assert.ok(model < html.indexOf('<script src="app.js"></script>'))
 })
+
+test('a drag lets go of held redraws only after it has started, and a redrawn source stays dimmed', () => {
+  const wiring = fn('wireDragAndDrop')
+  const start = wiring.slice(wiring.indexOf("'dragstart'"), wiring.indexOf("'dragover'"))
+  // Synchronously, the owed redraw would replace the row Chromium is starting
+  // the drag from, and the drag would be cancelled.
+  assert.doesNotMatch(start, /(?<!setTimeout\()releaseRedraw\(\)/)
+  assert.match(start, /setTimeout\(releaseRedraw, 0\)/)
+  assert.match(fn('projectRow'), /drag\.current\?\.kind === 'project' && drag\.current\.id === project\.id\) item\.classList\.add\('dragging'\)/)
+  assert.match(fn('categoryGroup'), /drag\.current\?\.kind === 'category' && drag\.current\.id === category\.id\) group\.classList\.add\('dragging'\)/)
+})
