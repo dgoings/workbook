@@ -21,7 +21,7 @@ reads the topmost `## vX.Y.Z` heading and refuses a label that disagrees with
 it, so an early version heading would block every patch release until that
 version was cut.
 
-## Unreleased
+## v0.6.0 — 2026-10-08
 
 Priorities become a per-project vocabulary, the way statuses already are, a
 project may have more than one task-ID key, `workbook setup` stops assuming
