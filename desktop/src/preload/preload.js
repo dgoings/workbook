@@ -6,9 +6,9 @@
 
 const { contextBridge, ipcRenderer } = require('electron')
 // This preload is not sandboxed (see the shell view's webPreferences in
-// main.js), so it can reach a sibling module, and the title strip's height is
-// read from the same function the main process lays the boards out with.
-const { titleStripHeight } = require('../main/layout')
+// main.js), so it can reach a sibling module, and the title row's height is
+// read from the same constant the main process places the window controls by.
+const { TITLE_ROW_HEIGHT, RAIL_WIDTH } = require('../main/layout')
 
 contextBridge.exposeInMainWorld('workbench', {
   // 'darwin' | 'win32' | 'linux' — the renderer only uses it for chrome that
@@ -16,10 +16,14 @@ contextBridge.exposeInMainWorld('workbench', {
   platform: process.platform === 'darwin' ? 'mac'
     : process.platform === 'win32' ? 'windows' : 'linux',
 
-  // How tall the title strip across the top of the main area is, in CSS
-  // pixels, and 0 where the window keeps its native title bar. The board views
-  // start this far down, so the strip has to be exactly this tall.
-  titleStripHeight: titleStripHeight(process.platform),
+  // How tall the window's title row is, in CSS pixels: the row the traffic
+  // lights or the overlay controls sit in, which the sidebar head's wordmark
+  // and chevron are centered on.
+  titleRowHeight: TITLE_ROW_HEIGHT,
+
+  // How wide the collapsed sidebar is, in CSS pixels: the width the main
+  // process lays the boards out beside when the sidebar is a rail.
+  railWidth: RAIL_WIDTH,
 
   version: () => ipcRenderer.invoke('workbook:version'),
 
@@ -53,6 +57,24 @@ contextBridge.exposeInMainWorld('workbench', {
   getSidebar: () => ipcRenderer.invoke('sidebar:get'),
   toggleSidebar: () => ipcRenderer.invoke('sidebar:toggle'),
 
+  // The sidebar's order and categories, owned by the main process because the
+  // menu numbers projects in the same order. Each edit resolves with
+  // { layout, projects } (createCategory adds the new categoryId) and rejects
+  // with a message naming a bad argument or a failed save. `target` is
+  // { kind: 'top', index } or { kind: 'category', id, index }; an index is the
+  // gap to drop into, counted before the move.
+  getSidebarLayout: () => ipcRenderer.invoke('sidebar:layout'),
+  moveProject: (projectId, target) =>
+    ipcRenderer.invoke('sidebar:moveProject', { projectId, target }),
+  moveCategory: (categoryId, index) =>
+    ipcRenderer.invoke('sidebar:moveCategory', { categoryId, index }),
+  createCategory: (name) => ipcRenderer.invoke('sidebar:createCategory', { name }),
+  renameCategory: (categoryId, name) =>
+    ipcRenderer.invoke('sidebar:renameCategory', { categoryId, name }),
+  setCategoryCollapsed: (categoryId, collapsed) =>
+    ipcRenderer.invoke('sidebar:setCategoryCollapsed', { categoryId, collapsed }),
+  deleteCategory: (categoryId) => ipcRenderer.invoke('sidebar:deleteCategory', { categoryId }),
+
   onImportProgress: (handler) => {
     const listener = (_event, payload) => handler(payload)
     ipcRenderer.on('import:progress', listener)
@@ -67,6 +89,13 @@ contextBridge.exposeInMainWorld('workbench', {
     const listener = (_event, payload) => handler(payload)
     ipcRenderer.on('theme:changed', listener)
     return () => ipcRenderer.removeListener('theme:changed', listener)
+  },
+  // { layout, projects } after every saved layout edit, projects in sidebar
+  // order with their server status, the same shape listProjects gives.
+  onSidebarLayoutChanged: (handler) => {
+    const listener = (_event, payload) => handler(payload)
+    ipcRenderer.on('sidebar:layoutChanged', listener)
+    return () => ipcRenderer.removeListener('sidebar:layoutChanged', listener)
   },
   onSidebarChanged: (handler) => {
     const listener = (_event, payload) => handler(payload)

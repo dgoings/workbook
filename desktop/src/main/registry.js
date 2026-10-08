@@ -11,6 +11,8 @@
 const fs = require('node:fs/promises')
 const path = require('node:path')
 
+const { normalize, flatten } = require('./sidebarlayout')
+
 const EMPTY = {
   version: 1,
   scanRoots: [],
@@ -91,8 +93,64 @@ class Registry {
     await fs.rename(temporary, this.file) // Atomic: never leave a half-written registry.
   }
 
+  /**
+   * Every project in storage order: the order they were imported in. This is
+   * the raw list, for finding and rewriting entries. Anything that shows or
+   * numbers projects to the user reads orderedProjects instead.
+   */
   get projects () {
     return this.state.projects
+  }
+
+  /**
+   * Every project in sidebar order, top to bottom, including the ones inside a
+   * collapsed category: the order the sidebar draws, Cmd+1 to Cmd+9 and
+   * Previous/Next Project count, and the Next view lists.
+   */
+  get orderedProjects () {
+    const byId = new Map()
+    for (const project of this.state.projects) {
+      if (!byId.has(project.id)) byId.set(project.id, project)
+    }
+    return flatten(this.sidebarLayout).map((id) => byId.get(id))
+  }
+
+  /**
+   * The sidebar's order and categories (see sidebarlayout.js).
+   *
+   * Read strictly, like sidebarCollapsed: a registry written by a build from
+   * before categories has no layout at all, and that reads as every project at
+   * the top level in its stored order. A stored value of the wrong shape reads
+   * the same way, and one of the right shape is read against the projects the
+   * registry actually holds, so a layout can never name a project that is not
+   * there or leave out one that is.
+   */
+  get sidebarLayout () {
+    return normalize(this.state.sidebarLayout, this.#projectIds())
+  }
+
+  /**
+   * Store a new sidebar layout, or leave it exactly as it was.
+   *
+   * Normalized on the way in, so what is saved is what the getter would read.
+   * Rolled back on a failed save, like setTheme: save() writes the whole state,
+   * and a layout left in memory at the value the file refused would be
+   * committed by the next unrelated save while the caller reported the drag as
+   * failed.
+   */
+  async setSidebarLayout (layout) {
+    const previous = this.state.sidebarLayout
+    this.state.sidebarLayout = normalize(layout, this.#projectIds())
+    try {
+      await this.save()
+    } catch (error) {
+      this.state.sidebarLayout = previous
+      throw error
+    }
+  }
+
+  #projectIds () {
+    return this.state.projects.map((project) => project.id)
   }
 
   get scanRoots () {
@@ -244,6 +302,9 @@ class Registry {
     const index = this.state.projects.findIndex((existing) => existing.id === project.id)
     if (index === -1) {
       this.state.projects.push(project)
+      // A new project joins the stored layout at the bottom of the top level,
+      // so the file never holds a layout that leaves out a project it lists.
+      this.state.sidebarLayout = normalize(this.state.sidebarLayout, this.#projectIds())
     } else {
       this.state.projects[index] = { ...this.state.projects[index], ...project }
     }
@@ -253,6 +314,9 @@ class Registry {
 
   async remove (projectId) {
     this.state.projects = this.state.projects.filter((project) => project.id !== projectId)
+    // A forgotten project leaves the layout too, from a category or the top
+    // level, so a later import of the same repository starts at the bottom.
+    this.state.sidebarLayout = normalize(this.state.sidebarLayout, this.#projectIds())
     await this.save()
   }
 }

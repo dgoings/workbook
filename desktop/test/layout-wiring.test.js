@@ -1,13 +1,13 @@
 'use strict'
 
-// layout.js holds the title strip's height and the board's bounds, and
-// test/layout.test.js holds those to their numbers. That says nothing about
-// whether anything uses them: main.js, the preload and the renderer can each
-// fall back to a literal, or stop calling in, and every number in layout.js
-// would still be right while the board covered the strip or left a gap above
-// it. None of the three files can be loaded without Electron or a DOM, so these
-// read their source, comments removed, the way drag-region.test.js reads the
-// stylesheet.
+// layout.js holds the title row's height, where the traffic lights sit and the
+// board's bounds, and test/layout.test.js holds those to their numbers. That
+// says nothing about whether anything uses them: main.js, the preload and the
+// renderer can each fall back to a literal, or stop calling in, and every
+// number in layout.js would still be right while the lights drifted off the
+// wordmark's line or the overlay grew taller than the row. None of the three
+// files can be loaded without Electron or a DOM, so these read their source,
+// comments removed, the way drag-region.test.js reads the stylesheet.
 
 const fs = require('node:fs')
 const path = require('node:path')
@@ -34,54 +34,96 @@ function fn (text, name) {
   return match[0]
 }
 
-function css () {
-  return fs.readFileSync(path.join(src, 'renderer', 'styles.css'), 'utf8')
-    .replace(/\r\n/g, '\n')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-}
+describe('the title row comes from layout.js everywhere', () => {
+  const main = code('main', 'main.js')
 
-describe('the title strip height reaches every user', () => {
-  test('main.js lays the boards out under the strip for this platform', () => {
-    const layout = fn(code('main', 'main.js'), 'layout')
-    assert.match(layout, /boardBounds\([^;]*?,\s*titleStripHeight\(process\.platform\)\s*\)/,
-      'layout() must pass titleStripHeight(process.platform) to boardBounds as the strip height')
+  test('main.js lays the boards out from the top edge', () => {
+    assert.match(fn(main, 'layout'), /boardBounds\(content,\s*sidebarWidth\(\)\)/,
+      'layout() must call boardBounds(content, sidebarWidth()) with no strip height')
   })
 
-  test('the preload hands the renderer the same function\'s answer, not a number of its own', () => {
-    assert.match(code('preload', 'preload.js'), /titleStripHeight:\s*titleStripHeight\(process\.platform\)/,
-      'preload.js must expose titleStripHeight: titleStripHeight(process.platform)')
+  // Electron unions every view's drag regions and skips only a hidden view; a
+  // parked 0x0 board would otherwise lay its header's region over the window.
+  test('a parked board is hidden, and the active one shown before it is placed', () => {
+    const body = fn(main, 'layout')
+    const visible = body.match(/view\.setVisible\((\w+)\)/)
+    assert.ok(visible, 'layout() must call view.setVisible for every board view')
+    assert.match(body, new RegExp(`const ${visible[1]} = projectId === activeProjectId\\b`),
+      'layout() must make a board visible exactly when it is the active project')
+    assert.match(body, /view\.setVisible\([\s\S]*view\.setBounds\(/,
+      'layout() must set visibility before bounds, so the active board is never shown parked')
   })
 
-  test('the renderer hides the strip exactly where there is none', () => {
-    assert.match(code('renderer', 'app.js'), /el\('title-strip'\)\.hidden\s*=\s*api\.titleStripHeight\s*===\s*0\b/,
-      "app.js must set el('title-strip').hidden from api.titleStripHeight === 0")
+  test('a new board view starts hidden until layout() shows it', () => {
+    assert.match(fn(main, 'openProject'), /view\.setVisible\(false\)\n\s*window\.contentView\.addChildView\(view\)/,
+      'openProject must hide a new board view before it adds it to the window')
+  })
+
+  test('macOS pins the traffic lights at the shared position', () => {
+    assert.match(fn(main, 'createWindow'), /trafficLightPosition:\s*TRAFFIC_LIGHT_POSITION\b/,
+      'createWindow must pass trafficLightPosition: TRAFFIC_LIGHT_POSITION')
+    assert.equal([...main.matchAll(/trafficLightPosition/g)].length, 1,
+      'trafficLightPosition must be set in one place, from layout.js')
+  })
+
+  test('the Windows overlay is the row\'s height when created and when repainted', () => {
+    const overlays = [
+      ['createWindow', fn(main, 'createWindow').match(/titleBarOverlay:\s*\{([^}]*)\}/)],
+      ['applyTheme', fn(main, 'applyTheme').match(/setTitleBarOverlay\(\{([^}]*)\}\)/)]
+    ]
+    for (const [name, overlay] of overlays) {
+      assert.ok(overlay, `${name} must set the Windows overlay`)
+      assert.match(overlay[1], /(?:^|[\s,])height:\s*TITLE_ROW_HEIGHT\s*(?:,|$)/,
+        `${name} must give the overlay height: TITLE_ROW_HEIGHT`)
+    }
+  })
+
+  test('the rail is one width in main.js and the stylesheet', () => {
+    assert.match(main, /const \{[^}]*\bRAIL_WIDTH\b[^}]*\} = require\('\.\/layout'\)/,
+      'main.js must require RAIL_WIDTH from ./layout')
+    assert.doesNotMatch(main, /const RAIL_WIDTH\s*=/, 'main.js must not define a rail width of its own')
+    assert.match(fn(main, 'sidebarWidth'), /registry\.sidebarCollapsed \? RAIL_WIDTH : SIDEBAR_WIDTH/,
+      'sidebarWidth() must answer RAIL_WIDTH for the rail')
+    const preload = code('preload', 'preload.js')
+    assert.match(preload, /railWidth:\s*RAIL_WIDTH\b/, 'preload.js must expose railWidth: RAIL_WIDTH')
+    assert.match(fn(code('renderer', 'app.js'), 'boot'), /setProperty\('--rail-width', `\$\{api\.railWidth\}px`\)/,
+      'boot() must set --rail-width from api.railWidth')
+    const css = fs.readFileSync(path.join(src, 'renderer', 'styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const rail = css.match(/:root\.sidebar-collapsed #sidebar\s*\{([^{}]*)\}/)
+    assert.ok(rail, 'no :root.sidebar-collapsed #sidebar rule')
+    const { RAIL_WIDTH } = require('../src/main/layout')
+    assert.match(rail[1], new RegExp(`(?:^|[;\\s])width\\s*:\\s*var\\(--rail-width, ${RAIL_WIDTH}px\\)\\s*;`),
+      `the rail's width must be var(--rail-width, ${RAIL_WIDTH}px)`)
+    assert.match(rail[1], new RegExp(`(?:^|[;\\s])flex\\s*:\\s*0 0 var\\(--rail-width, ${RAIL_WIDTH}px\\)\\s*;`),
+      `the rail's flex basis must be var(--rail-width, ${RAIL_WIDTH}px)`)
+  })
+
+  test('main.js takes both from layout.js', () => {
+    assert.match(main, /const \{[^}]*\bTITLE_ROW_HEIGHT\b[^}]*\bTRAFFIC_LIGHT_POSITION\b[^}]*\} = require\('\.\/layout'\)/,
+      'main.js must require TITLE_ROW_HEIGHT and TRAFFIC_LIGHT_POSITION from ./layout')
+  })
+
+  test('the preload hands the renderer the same constant, not a number of its own', () => {
+    const preload = code('preload', 'preload.js')
+    assert.match(preload, /titleRowHeight:\s*TITLE_ROW_HEIGHT\b/,
+      'preload.js must expose titleRowHeight: TITLE_ROW_HEIGHT')
+    assert.match(preload, /const \{[^}]*\bTITLE_ROW_HEIGHT\b[^}]*\bRAIL_WIDTH\b[^}]*\} = require\('\.\.\/main\/layout'\)/,
+      'preload.js must require TITLE_ROW_HEIGHT and RAIL_WIDTH from ../main/layout')
+  })
+
+  test('the renderer sets --title-row-height from it at boot', () => {
+    assert.match(fn(code('renderer', 'app.js'), 'boot'),
+      /setProperty\('--title-row-height', `\$\{api\.titleRowHeight\}px`\)/,
+      'boot() must set --title-row-height from api.titleRowHeight')
   })
 })
 
-describe('the title strip names what is showing', () => {
-  const app = code('renderer', 'app.js')
-
-  test('switching views renames it', () => {
-    assert.match(fn(app, 'setView'), /\bpaintTitle\(\)/, 'setView must call paintTitle()')
-  })
-
-  test('reloading the project list renames it', () => {
-    assert.match(fn(app, 'renderProjects'), /\bpaintTitle\(\)/, 'renderProjects must call paintTitle()')
-  })
-})
-
-describe('the title strip on Windows', () => {
-  // The strip starts at the sidebar's edge, not the window's, so the controls'
-  // width is the viewport's width less the free area's right edge; a
-  // percentage would be of #main and come out short by the sidebar.
-  test('the name is kept clear of the overlay controls by viewport arithmetic', () => {
-    const block = css().match(/(?:^|\})\s*\.title-strip\s*\{([^{}]*)\}/)
-    assert.ok(block, 'no .title-strip rule')
-    const padding = block[1].match(/padding-right\s*:\s*([^;]*);/)
-    assert.ok(padding, '.title-strip must set padding-right')
-    assert.match(padding[1], /100vw/, 'the padding must be measured against 100vw')
-    assert.match(padding[1], /env\(titlebar-area-x\b/, 'the padding must read env(titlebar-area-x)')
-    assert.match(padding[1], /env\(titlebar-area-width\b/, 'the padding must read env(titlebar-area-width)')
-    assert.doesNotMatch(padding[1], /100%/, 'a percentage is of #main, not the window')
+describe('the board view on Windows', () => {
+  // The overlay controls sit over the board's header, and only the board can
+  // pad its header, so the board's preload tells it the platform.
+  test('the board preload marks a Windows page, and only a Windows one', () => {
+    assert.match(code('preload', 'board.js'),
+      /if \(process\.platform === 'win32'\) document\.documentElement\.classList\.add\('in-workbench-win32'\)/,
+      "board.js must add in-workbench-win32 when process.platform === 'win32'")
   })
 })

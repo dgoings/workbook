@@ -41,6 +41,14 @@ under Changed.
   falls back to offering file names. The Homebrew formula generates and
   installs all three during `brew install`; a source build writes the one line
   for its shell, which the README's Installation section gives.
+- **The desktop app's sidebar can be reordered and grouped.** Drag a project
+  to move it, and group projects under named categories that fold away: the
+  `+` beside Projects makes one and opens its name for typing, a double-click
+  renames it, and removing one puts its projects back at the top level where it
+  stood. Cmd+1–9, Previous/Next Project and the Next view all follow the
+  sidebar's order top to bottom, counting projects in a folded category, so
+  folding one never renumbers anything. The order is kept with the project
+  list; a list from an older build opens in the order it was imported.
 - **The desktop app has keyboard shortcuts**, all in the application menu:
   Cmd+1–9 and Cmd+Option+Up/Down for projects, Cmd+0 for Next, Cmd+Shift+I
   for Import, Cmd+Shift+D to toggle dark mode, Cmd+B for the sidebar, and
@@ -351,22 +359,23 @@ under Changed.
   and one run of the command-line test suite left roughly thirteen hundred
   goroutines behind. A one-shot command is unaffected, because it was already
   giving the handle back by exiting.
-- **The desktop app's window moves by its whole top edge.** Workbench hides
+- **The desktop app's window moves by its whole top row.** Workbench hides
   the native title bar on macOS and Windows, which leaves the window movable
   only by a region the app marks as draggable, and since the shell's first
-  build that was the sidebar head alone, and on macOS not even that. A title
-  strip now runs across the top of the main area, the height of the window
-  controls' row and naming the project that is showing, and together with the
-  sidebar head it forms one bar that moves the window from anywhere along it,
-  in the expanded sidebar and the collapsed rail alike; the board is laid out
-  beneath it. The line between the sidebar and the board stops at the bottom
-  of the board's header rather than running up through the strip, so the
-  strip, the sidebar head and the board's header read as one band; beside the
-  import and Next views it starts under the strip. A board opened in a browser
-  draws no such line. On Windows the project's name stays clear of the window
-  controls. The chevron in the head still clicks rather than drags, and the
-  version line keeps its tooltip, which on Windows never showed until now.
-  Linux keeps its native title bar and draws no strip.
+  build that was the sidebar head alone, and on macOS not even that. Now the
+  top row of the window is one bar, as in Slack: the sidebar head, with the
+  Workbench wordmark and the collapse chevron in the same row as the window
+  controls, and beside it the board's own header, laid out from the window's
+  top edge with its repository eyebrow on the wordmark's line. The window
+  drags from anywhere along that row, in the expanded sidebar and the
+  collapsed rail alike; the chevron, the version line and the header's links
+  and switches still click rather than drag. On macOS the traffic lights are
+  pinned to the row and the wordmark starts to their right; in the rail they
+  take the row, and the chevron sits under them. On Windows the header keeps
+  its switches clear of the window controls. The line between the sidebar and
+  the board stops at the bottom of the board's header, so the head and the
+  header read as one band. A board opened in a browser draws no such line and
+  is no drag region. Linux keeps its native title bar.
 
 ## v0.5.1 — 2026-08-23
 

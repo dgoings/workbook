@@ -1,14 +1,15 @@
 'use strict'
 
 // The window hides its native title bar on macOS and Windows, and with it gone
-// nothing moves the window but an element the stylesheet marks as a drag
-// region. Two elements are: the sidebar head, and the title strip across the
-// top of the main area, which together make the window's whole top edge a
-// handle. From the shell's first build the head's mark sat on a
-// :root:not(.is-mac) rule, so the Windows build dragged and the Mac build had
-// nothing to take hold of; these pin the mark to the head itself, in both
-// layouts, and keep every control inside it clickable, and they pin the strip
-// to the same rule and to the theme.
+// nothing moves the window but an element a page marks as a drag region. The
+// shell's is the sidebar head; beside it the board's own header is the other
+// half of the window's title row (internal/webui holds that half). From the
+// shell's first build the head's mark sat on a :root:not(.is-mac) rule, so the
+// Windows build dragged and the Mac build had nothing to take hold of; these
+// pin the mark to the head itself, in both layouts, keep every control inside
+// it clickable, hold its first line to the title row the window controls sit
+// in, and keep the title strip that once stood over the board from coming
+// back.
 
 const fs = require('node:fs')
 const path = require('node:path')
@@ -107,66 +108,64 @@ describe('the window drag region', () => {
   })
 })
 
-describe('the title strip', () => {
-  test('the strip itself is a drag region, and nothing narrower takes it back', () => {
-    const own = css.filter((rule) => rule.selectors.includes('.title-strip') && rule.region !== null)
-    assert.deepEqual(own.map((rule) => rule.region), ['drag'],
-      'a rule whose selector is exactly .title-strip must declare -webkit-app-region: drag')
-    for (const rule of css) {
-      for (const selector of rule.selectors) {
-        if (!/\.title-strip$/.test(selector) || selector === '.title-strip') continue
-        if (rule.region === null) continue
-        assert.equal(rule.region, 'drag', `${selector} sets -webkit-app-region: ${rule.region} on the strip`)
+// Where the traffic lights end: three 14px buttons on 23px spacing from the
+// pinned x, as layout.js derives it.
+const MAC_INSET_MIN = require('../src/main/layout').TRAFFIC_LIGHTS_END
+
+describe('the sidebar head is the shell\'s half of the title row', () => {
+  test('its first line is the title row, from the shared height', () => {
+    const blocks = bodies(read('styles.css'), '.sidebar-head')
+    assert.equal(blocks.length, 1, 'expected exactly one rule whose selector is .sidebar-head')
+    assert.match(blocks[0], /(?:^|[;\s])display\s*:\s*grid\s*;/, 'the head must be a grid')
+    assert.match(blocks[0], /grid-template-rows\s*:\s*var\(--title-row-height\b[^;]*\)\s+auto\s*;/,
+      'the head\'s first row must be var(--title-row-height), the second the version line')
+    assert.match(blocks[0], /(?:^|[;\s])align-items\s*:\s*center\s*;/,
+      'the wordmark and the chevron must be centered on the row')
+    assert.match(blocks[0], /(?:^|[;\s])padding\s*:\s*0\b/, 'the head must keep no top padding above the row')
+  })
+
+  test('the wordmark and the chevron share the first line, the version the second', () => {
+    const place = (selector) => {
+      const block = bodies(read('styles.css'), selector).join(';')
+      return {
+        column: (block.match(/grid-column\s*:\s*(\d+)/) || [])[1],
+        row: (block.match(/grid-row\s*:\s*(\d+)/) || [])[1]
       }
     }
+    assert.deepEqual(place('.wordmark'), { column: '1', row: '1' })
+    assert.deepEqual(place('.sidebar-toggle'), { column: '2', row: '1' })
+    assert.match(bodies(read('styles.css'), '.version').join(';'), /grid-column\s*:\s*1\s*\/\s*-1\s*;/,
+      'the version line must span both columns, under the chevron as well')
+    assert.equal(place('.version').row, '2')
+    assert.match(bodies(read('styles.css'), '.sidebar-identity').join(';'), /display\s*:\s*contents/,
+      'the identity block must be display: contents, or the wordmark and version are not grid items')
   })
 
-  // A drag region swallows clicks and hovers, so the strip is text only. A
-  // control added to it later has to opt out the way the head's do, and has
-  // to be thought about: this fails until it is.
-  test('the strip holds nothing that needs the pointer', () => {
-    const strip = read('index.html').match(/<header class="title-strip"[^>]*>([\s\S]*?)<\/header>/)
-    assert.ok(strip, 'index.html has no <header class="title-strip">')
-    const titled = new Set([...read('app.js').matchAll(/el\('([\w-]+)'\)\.title\s*=/g)].map((m) => m[1]))
-    for (const tag of strip[1].matchAll(/<([a-z][\w-]*)\b([^>]*)>/g)) {
-      assert.doesNotMatch(tag[1], /^(button|a|input|select|textarea)$/,
-        `<${tag[1]}> in the title strip would be dragged, not clicked`)
-      const id = tag[2].match(/\bid="([^"]*)"/)
-      assert.ok(!(id && titled.has(id[1])),
-        `#${id && id[1]} in the title strip has a tooltip the drag region would hide`)
+  test('on macOS the wordmark starts clear of the traffic lights', () => {
+    const blocks = bodies(read('styles.css'), ':root.is-mac .sidebar-head')
+    assert.equal(blocks.length, 1, 'expected one rule for :root.is-mac .sidebar-head')
+    const inset = blocks[0].match(/padding-left\s*:\s*(\d+)px\s*;/)
+    assert.ok(inset, ':root.is-mac .sidebar-head must set padding-left in px')
+    assert.ok(Number(inset[1]) >= MAC_INSET_MIN + 8,
+      `padding-left ${inset[1]}px must clear the lights, which end at ${MAC_INSET_MIN}px, by 8px`)
+  })
+
+  // The lights fill the rail's title row on macOS, so there the chevron goes on
+  // the line below; everywhere else it is centered on the row.
+  test('the rail centers the chevron alone, under the lights on macOS', () => {
+    const rail = bodies(read('styles.css'), ':root.sidebar-collapsed .sidebar-head').join(';')
+    assert.match(rail, /justify-items\s*:\s*center/, 'the rail must center the chevron')
+    assert.match(bodies(read('styles.css'), ':root.sidebar-collapsed .sidebar-toggle').join(';'), /grid-column\s*:\s*1\b/)
+    assert.match(bodies(read('styles.css'), ':root.is-mac.sidebar-collapsed .sidebar-toggle').join(';'), /grid-row\s*:\s*2\b/)
+  })
+})
+
+describe('the title strip is gone', () => {
+  test('no markup, style, script or custom property names it', () => {
+    for (const name of ['index.html', 'styles.css', 'app.js']) {
+      assert.doesNotMatch(read(name), /title-strip|titleStrip|paintTitle/, `${name} still names the title strip`)
     }
-  })
-
-  // Above every view, so it is there over the import and Next views as well as
-  // over a board, and #main's flex column pushes each view down by its height.
-  test('the strip is the first thing in the main area', () => {
-    const main = read('index.html').match(/<main id="main">\s*(?:<!--[\s\S]*?-->\s*)*<([a-z]+)[^>]*class="([^"]*)"/)
-    assert.ok(main, 'index.html has no <main id="main"> with an element in it')
-    assert.equal(main[2], 'title-strip', 'the first element in #main must be the title strip')
-  })
-
-  // The strip continues the sidebar head across the window, so it follows the
-  // theme the way the head does: through the tokens the dark blocks move, never
-  // a color of its own that only one mode suits.
-  test('the strip takes its colors from the theme tokens', () => {
-    const blocks = bodies(read('styles.css'), '.title-strip')
-    assert.equal(blocks.length, 1, 'expected exactly one rule whose selector is .title-strip')
-    const block = blocks[0]
-    assert.match(block, /(?:^|[;\s])background\s*:\s*var\(--wb-[\w-]+\)\s*;/,
-      'the strip background must be a --wb-* token')
-    assert.match(block, /(?:^|[;\s])color\s*:\s*var\(--wb-[\w-]+\)\s*;/,
-      'the strip color must be a --wb-* token')
-    assert.doesNotMatch(block, /#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/,
-      'the strip rule must not hold a literal color')
-  })
-
-  // The main process starts the boards titleStripHeight() down; a strip of any
-  // other height is a gap above the board or a board over the strip.
-  test('its height is the one the renderer copies from the main process', () => {
-    const block = bodies(read('styles.css'), '.title-strip')[0]
-    assert.match(block, /(?:^|[;\s])height\s*:\s*var\(--title-strip-height\b/,
-      'the strip height must come from --title-strip-height')
-    assert.match(read('app.js'), /setProperty\('--title-strip-height', `\$\{api\.titleStripHeight\}px`\)/,
-      'app.js must set --title-strip-height from the preload\'s titleStripHeight')
+    const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload', 'preload.js'), 'utf8')
+    assert.doesNotMatch(preload, /titleStrip/, 'preload.js still exposes the strip height')
   })
 })

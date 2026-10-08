@@ -1,6 +1,7 @@
 'use strict'
 
 const { app, BaseWindow, WebContentsView, ipcMain, dialog, shell, nativeTheme, Menu } = require('electron')
+const crypto = require('node:crypto')
 const fs = require('node:fs/promises')
 const path = require('node:path')
 
@@ -13,15 +14,15 @@ const gitidentity = require('./gitidentity')
 const workbook = require('./workbook')
 const nextview = require('./nextview')
 const clipath = require('./clipath')
-const { titleStripHeight, boardBounds } = require('./layout')
+const { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_POSITION, RAIL_WIDTH, boardBounds } = require('./layout')
 const { buildMenuTemplate } = require('./menu')
+const { createSidebarCommands } = require('./sidebarcommands')
 const { setupUpdater } = require('./updater')
 
 const SIDEBAR_WIDTH = 260
-// The collapsed sidebar is a rail rather than nothing at all, and 76 is the
-// narrowest it can be while the macOS inset traffic lights still sit over shell
-// chrome instead of over the board.
-const RAIL_WIDTH = 76
+// The collapsed sidebar's width, RAIL_WIDTH, comes from layout.js: it is
+// derived from where the traffic lights end, and the renderer draws the rail
+// from the same number.
 const MIN_WIDTH = 1000
 const MIN_HEIGHT = 680
 
@@ -53,16 +54,23 @@ function sidebarWidth () {
 function layout () {
   if (!window) return
   const content = window.getContentBounds()
-  // The shell's view covers the whole window: it draws the sidebar and, across
-  // the top of the main area, the title strip the window is dragged by. The
-  // board goes beside the one and under the other, so the strip stays visible
-  // above whichever board is showing.
+  // The shell's view covers the whole window and draws the sidebar; the board
+  // goes beside it, from the window's top edge, where its own header is the
+  // part of the window's title row the window is dragged by.
   chromeView?.setBounds({ x: 0, y: 0, width: content.width, height: content.height })
-  const bounds = boardBounds(content, sidebarWidth(), titleStripHeight(process.platform))
+  const bounds = boardBounds(content, sidebarWidth())
   for (const [projectId, view] of boardViews) {
     // Views for projects that are not showing are parked off-screen rather than
     // detached, so switching back does not reload the board or lose its state.
-    view.setBounds(projectId === activeProjectId ? bounds : { x: 0, y: 0, width: 0, height: 0 })
+    // Parked views are hidden as well as shrunk: a board's header is a drag
+    // region, and Electron's hit test unions every view's drag regions, skipping
+    // a view only when it is not visible. A 0x0 view keeps its page laid out at
+    // the window's origin, so its header would turn the top of the showing
+    // board and of the sidebar into a handle. Visible first, then placed, so the
+    // active one is never shown at the parked bounds.
+    const active = projectId === activeProjectId
+    view.setVisible(active)
+    view.setBounds(active ? bounds : { x: 0, y: 0, width: 0, height: 0 })
   }
 }
 
@@ -86,12 +94,17 @@ function createWindow () {
     // keeps Snap Layouts working; anything else loses them. Linux takes the
     // ordinary decorations its desktop draws.
     titleBarStyle: isMac ? 'hiddenInset' : isWindows ? 'hidden' : 'default',
+    // Pinned rather than left to the default, so the lights are centered on
+    // the title row the sidebar head's wordmark and chevron share, and the
+    // head knows where they end.
+    ...(isMac && { trafficLightPosition: TRAFFIC_LIGHT_POSITION }),
     ...(isWindows && {
       titleBarOverlay: {
         color: '#00000000',
         symbolColor: dark ? '#e4e9f2' : '#34425a',
-        // The controls sit in the shell's title strip, so they are its height.
-        height: titleStripHeight(process.platform)
+        // The controls sit at the right end of the title row, over the
+        // board's header, so they are the row's height.
+        height: TITLE_ROW_HEIGHT
       }
     }),
     // macOS reads its icon from the bundle; the other two need to be told.
@@ -195,7 +208,7 @@ async function applyTheme () {
     window.setTitleBarOverlay({
       color: '#00000000',
       symbolColor: dark ? '#e4e9f2' : '#34425a',
-      height: titleStripHeight(process.platform)
+      height: TITLE_ROW_HEIGHT
     })
   }
   toChrome('theme:changed', { theme: registry.theme, dark })
@@ -260,9 +273,10 @@ function toggleSidebar () {
 function installMenu () {
   const template = buildMenuTemplate({
     platform: process.platform,
-    projects: registry.projects,
+    // Numbered in sidebar order, so Cmd+1 is whatever the sidebar shows first.
+    projects: registry.orderedProjects,
     activeProjectId,
-    nextAvailable: registry.projects.length >= 2,
+    nextAvailable: registry.orderedProjects.length >= 2,
     actions: menuActions
   })
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
@@ -419,6 +433,10 @@ async function openProject (projectId, taskId = null) {
     // attach leaves nothing behind: an entry in boardViews is a promise that
     // the window holds that view, and the next window would inherit and lay
     // out anything that broke the promise.
+    // Hidden until layout() shows it as the active board: a view that is
+    // loading or that a later open supersedes must never contribute its
+    // header's drag region while parked (see layout()).
+    view.setVisible(false)
     window.contentView.addChildView(view)
     boardViews.set(projectId, view)
     await view.webContents.loadURL(target)
@@ -619,11 +637,24 @@ ipcMain.handle('path:notice', async () => {
   return { directory }
 })
 
-ipcMain.handle('registry:list', async () => ({
-  projects: registry.projects.map((project) => ({
+/**
+ * Every project in sidebar order, each with its board server's status: the
+ * list the shell draws and numbers. Sidebar order, not storage order, because
+ * the menu numbers projects from the same list and the renderer resolves a
+ * Cmd+N or a Previous/Next step against this one: the two have to agree.
+ */
+function listedProjects () {
+  return registry.orderedProjects.map((project) => ({
     ...project,
     ...supervisor.status(project.id)
-  })),
+  }))
+}
+
+// The layout travels with the list so the sidebar can draw both from one
+// answer, after an import or a forget as much as at boot.
+ipcMain.handle('registry:list', async () => ({
+  projects: listedProjects(),
+  layout: registry.sidebarLayout,
   scanRoots: registry.scanRoots
 }))
 
@@ -633,10 +664,7 @@ ipcMain.handle('next:load', async (_event, { limit } = {}) =>
     // registry:list sends it: what this view shows is only as fresh as the
     // server keeping that project synchronized, so the view has to be able to
     // say which projects have one running.
-    projects: registry.projects.map((project) => ({
-      ...project,
-      ...supervisor.status(project.id)
-    })),
+    projects: listedProjects(),
     limit
   }))
 
@@ -752,6 +780,24 @@ ipcMain.handle('sidebar:toggle', async () => {
   await toggleSidebar()
   return { collapsed: registry.sidebarCollapsed }
 })
+
+// The sidebar's order and categories. Each edit is validated, applied, saved
+// and announced by sidebarcommands.js, one at a time; the menu is rebuilt after
+// every one because its Cmd+N items follow the sidebar's order.
+const sidebarCommands = createSidebarCommands({
+  registry,
+  mintId: () => crypto.randomUUID(),
+  listProjects: listedProjects,
+  rebuildMenu: () => installMenu(),
+  broadcast: (payload) => toChrome('sidebar:layoutChanged', payload)
+})
+ipcMain.handle('sidebar:layout', async () => sidebarCommands.layout())
+ipcMain.handle('sidebar:moveProject', (_event, args) => sidebarCommands.moveProject(args))
+ipcMain.handle('sidebar:moveCategory', (_event, args) => sidebarCommands.moveCategory(args))
+ipcMain.handle('sidebar:createCategory', (_event, args) => sidebarCommands.createCategory(args))
+ipcMain.handle('sidebar:renameCategory', (_event, args) => sidebarCommands.renameCategory(args))
+ipcMain.handle('sidebar:setCategoryCollapsed', (_event, args) => sidebarCommands.setCategoryCollapsed(args))
+ipcMain.handle('sidebar:deleteCategory', (_event, args) => sidebarCommands.deleteCategory(args))
 
 // A board's preload asks this before the board's own script runs, so a board
 // opened after a choice was made starts in that mode. Synchronous on purpose:

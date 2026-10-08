@@ -215,3 +215,179 @@ test('arming the same directory twice does not rewrite the registry', async () =
     assert.equal(registry.pendingPathNotice, INSTALLED)
   })
 })
+
+// The sidebar layout: order and categories, persisted beside the projects.
+
+const project = (id) => ({ id, name: id.toUpperCase(), path: `/tmp/not-a-real-place/${id}` })
+
+/** Write a registry file holding `projects` and, if given, a stored layout. */
+async function writeRegistry (directory, projects, extra = {}) {
+  await fs.writeFile(
+    path.join(directory, 'registry.json'),
+    JSON.stringify({ version: 1, scanRoots: [], projects, ...extra })
+  )
+}
+
+const ids = (projects) => projects.map((entry) => entry.id)
+
+test('a registry from before categories reads as every project at the top level in stored order', async () => {
+  await withUserData(async (directory) => {
+    await writeRegistry(directory, [project('c'), project('a'), project('b')])
+    const registry = new Registry(directory)
+    await registry.load()
+    assert.deepEqual(registry.sidebarLayout, {
+      items: [{ kind: 'project', id: 'c' }, { kind: 'project', id: 'a' }, { kind: 'project', id: 'b' }]
+    })
+    assert.deepEqual(ids(registry.orderedProjects), ['c', 'a', 'b'])
+  })
+})
+
+test('a stored layout of the wrong shape reads as the default', async () => {
+  await withUserData(async (directory) => {
+    await writeRegistry(directory, [project('a'), project('b')], { sidebarLayout: ['b', 'a'] })
+    const registry = new Registry(directory)
+    await registry.load()
+    assert.deepEqual(registry.sidebarLayout, {
+      items: [{ kind: 'project', id: 'a' }, { kind: 'project', id: 'b' }]
+    })
+    assert.deepEqual(ids(registry.orderedProjects), ['a', 'b'])
+  })
+})
+
+test('orderedProjects follows the layout, while projects keeps storage order', async () => {
+  await withUserData(async (directory) => {
+    await writeRegistry(directory, [project('a'), project('b'), project('c')], {
+      sidebarLayout: {
+        items: [
+          { kind: 'project', id: 'c' },
+          { kind: 'category', id: 'k', name: 'Work', collapsed: true, projects: ['b', 'a'] }
+        ]
+      }
+    })
+    const registry = new Registry(directory)
+    await registry.load()
+    // The collapsed category's projects still count, in their place.
+    assert.deepEqual(ids(registry.orderedProjects), ['c', 'b', 'a'])
+    assert.deepEqual(ids(registry.projects), ['a', 'b', 'c'])
+    // The entries are the registry's own project objects, not copies.
+    assert.equal(registry.orderedProjects[0], registry.find('c'))
+  })
+})
+
+test('setSidebarLayout saves, survives a reload, and is normalized on the way in', async () => {
+  await withUserData(async (directory) => {
+    await writeRegistry(directory, [project('a'), project('b'), project('c')])
+    const first = new Registry(directory)
+    await first.load()
+    await first.setSidebarLayout({
+      items: [
+        { kind: 'category', id: 'k', name: ' Work ', collapsed: false, projects: ['c', 'gone'] },
+        { kind: 'project', id: 'a' }
+      ]
+    })
+    const expected = {
+      items: [
+        { kind: 'category', id: 'k', name: 'Work', collapsed: false, projects: ['c'] },
+        { kind: 'project', id: 'a' },
+        { kind: 'project', id: 'b' }
+      ]
+    }
+    assert.deepEqual(first.state.sidebarLayout, expected)
+
+    const second = new Registry(directory)
+    await second.load()
+    assert.deepEqual(second.sidebarLayout, expected)
+    assert.deepEqual(ids(second.orderedProjects), ['c', 'a', 'b'])
+  })
+})
+
+test('a setSidebarLayout whose save fails leaves the layout where it was', async () => {
+  await withUserData(async (directory) => {
+    // The same unwritable registry as the setTheme case above.
+    const blocked = path.join(directory, 'not-a-directory')
+    await fs.writeFile(blocked, '')
+    const registry = new Registry(path.join(blocked, 'userData'))
+    await registry.load()
+    registry.state.projects.push(project('a'), project('b'))
+
+    await assert.rejects(registry.setSidebarLayout({
+      items: [{ kind: 'project', id: 'b' }, { kind: 'project', id: 'a' }]
+    }))
+    assert.equal(registry.state.sidebarLayout, undefined)
+    assert.deepEqual(ids(registry.orderedProjects), ['a', 'b'])
+  })
+})
+
+test('an imported project appends at the top level, after every category', async () => {
+  await withUserData(async (directory) => {
+    await writeRegistry(directory, [project('a'), project('b')], {
+      sidebarLayout: {
+        items: [
+          { kind: 'category', id: 'k', name: 'Work', collapsed: false, projects: ['b'] },
+          { kind: 'project', id: 'a' },
+          { kind: 'category', id: 'm', name: 'Home', collapsed: true, projects: [] }
+        ]
+      }
+    })
+    const registry = new Registry(directory)
+    await registry.load()
+    await registry.upsert(project('n'))
+
+    const expected = [
+      { kind: 'category', id: 'k', name: 'Work', collapsed: false, projects: ['b'] },
+      { kind: 'project', id: 'a' },
+      { kind: 'category', id: 'm', name: 'Home', collapsed: true, projects: [] },
+      { kind: 'project', id: 'n' }
+    ]
+    // Stored that way, not only read that way.
+    assert.deepEqual(registry.state.sidebarLayout.items, expected)
+    const reloaded = new Registry(directory)
+    await reloaded.load()
+    assert.deepEqual(reloaded.sidebarLayout.items, expected)
+    assert.deepEqual(ids(reloaded.orderedProjects), ['b', 'a', 'n'])
+  })
+})
+
+test('updating an existing project keeps its place in the layout', async () => {
+  await withUserData(async (directory) => {
+    await writeRegistry(directory, [project('a'), project('b')], {
+      sidebarLayout: { items: [{ kind: 'project', id: 'b' }, { kind: 'project', id: 'a' }] }
+    })
+    const registry = new Registry(directory)
+    await registry.load()
+    await registry.upsert({ id: 'b', path: '/tmp/not-a-real-place/moved' })
+    assert.deepEqual(ids(registry.orderedProjects), ['b', 'a'])
+    assert.equal(registry.orderedProjects[0].path, '/tmp/not-a-real-place/moved')
+  })
+})
+
+test('a forgotten project leaves its category, and the stored layout', async () => {
+  await withUserData(async (directory) => {
+    await writeRegistry(directory, [project('a'), project('b'), project('c')], {
+      sidebarLayout: {
+        items: [
+          { kind: 'project', id: 'a' },
+          { kind: 'category', id: 'k', name: 'Work', collapsed: false, projects: ['b', 'c'] }
+        ]
+      }
+    })
+    const registry = new Registry(directory)
+    await registry.load()
+    await registry.remove('b')
+
+    const expected = [
+      { kind: 'project', id: 'a' },
+      { kind: 'category', id: 'k', name: 'Work', collapsed: false, projects: ['c'] }
+    ]
+    // Stored that way, not only read that way.
+    assert.deepEqual(registry.state.sidebarLayout.items, expected)
+    const reloaded = new Registry(directory)
+    await reloaded.load()
+    assert.deepEqual(reloaded.sidebarLayout.items, expected)
+    assert.deepEqual(ids(reloaded.orderedProjects), ['a', 'c'])
+
+    // Imported again, it comes back at the bottom, not in its old category.
+    await reloaded.upsert(project('b'))
+    assert.deepEqual(ids(reloaded.orderedProjects), ['a', 'c', 'b'])
+  })
+})

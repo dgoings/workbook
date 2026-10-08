@@ -179,18 +179,17 @@ body {
 /* White against the canvas, the way .app-header separates itself from the
    board it sits above: the same surface, and a hairline at its right edge.
 
-   The hairline is not the sidebar's border, because it must not run through
-   the window's top band. The title strip, the sidebar head and the board's
-   header read as one layer, and the line only separates the sidebar from what
-   lies below that layer. Beside a board, that layer ends at the bottom of the
+   The hairline is not the sidebar's border, because beside a board it must
+   not run through the window's title row. The sidebar head and the board's
+   header read as one layer there, and the line only separates the sidebar
+   from what lies below that layer. That layer ends at the bottom of the
    board's header, whose height only the board knows, so the board draws the
    line itself below its header (src/preload/board.js marks its page
    in-workbench) and the shell draws none while one shows: app.js sets
    board-active on the root while the main process says a board view is laid
    in. Everywhere else, the shell's own views and the project view while no
-   board is in it, the line starts under the title strip, so the strip stays
-   one bar; on Linux, where there is no strip, the height is 0 and it runs the
-   full height.
+   board is in it, there is no header beside the head, and the line runs the
+   sidebar's full height from the window's top edge.
    test/divider.test.js holds both halves to this. */
 #sidebar {
   position: relative;
@@ -204,7 +203,7 @@ body {
 #sidebar::after {
   content: "";
   position: absolute;
-  top: var(--title-strip-height, 0px);
+  top: 0;
   right: 0;
   bottom: 0;
   width: 1px;
@@ -217,36 +216,49 @@ body {
 /* The head is the window's grab handle on every platform. macOS and Windows
    both hide the native title bar, and with it gone nothing moves the window
    but an element marked as a drag region; the board beside the sidebar is a
-   separate view the shell does not style, so this is the one place to take
-   hold of. Linux keeps its native decorations, so there the mark is harmless
-   and the title bar moves the window as usual. The collapsed rail reshapes the
-   head but leaves this alone, and test/drag-region.test.js holds both to it. */
+   separate view whose own header is the other half of the window's title
+   row (src/preload/board.js marks it, and the board's stylesheet makes it a
+   drag region), so this is the shell's half. Linux keeps its native
+   decorations, so there the mark is harmless and the title bar moves the
+   window as usual. The collapsed rail reshapes the head but leaves this alone,
+   and test/drag-region.test.js holds both to it.
+
+   Two lines. The first is the window's title row, as tall as the row the
+   window controls sit in (--title-row-height, which app.js copies from
+   src/main/layout.js, where the main process pins the traffic lights and sizes
+   the Windows overlay by the same number): the wordmark on the left and the
+   chevron on the right, both centered on it, so on macOS they are level with
+   the traffic lights and the wordmark sits on the line the board's eyebrow
+   does. The second is the version line, under the wordmark. The identity
+   block is display: contents so its two lines are the grid's own items. */
 .sidebar-head {
-  display: flex;
-  align-items: flex-start;
-  gap: .5rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: var(--title-row-height, 36px) auto;
+  align-items: center;
+  column-gap: .5rem;
   -webkit-app-region: drag;
-  /* Clears the traffic lights, which titleBarStyle 'hiddenInset' floats over
-     the top-left of this pane: they sit in the head's top strip, beside the
-     part of it that is free to grab, rather than over the wordmark. Windows
-     draws its overlay controls at the top *right*, over the main area rather
-     than the sidebar, and Linux gets ordinary decorations — neither needs the
-     inset, and on both it would read as a stray gap. The platform class is set
-     by the renderer at boot. */
-  padding: 34px 1rem .75rem;
+  padding: 0 .6rem .75rem 1rem;
 }
 
-:root:not(.is-mac) .sidebar-head {
-  padding-top: .85rem;
+/* The traffic lights sit at the left of the title row, over this pane, pinned
+   at x 14: three 14px buttons on 23px spacing on macOS 27, so they end at 74
+   (TRAFFIC_LIGHTS_END in src/main/layout.js; the sizes vary by macOS release).
+   The wordmark starts 12px clear of them; the version line under it keeps the
+   same edge. Windows draws its overlay controls at the top *right*, over the
+   board's header rather than the sidebar, and Linux gets ordinary decorations,
+   so neither needs the inset. The platform class is set by the renderer at
+   boot. */
+:root.is-mac .sidebar-head {
+  padding-left: 86px;
 }
 
-.sidebar-identity { flex: 1; min-width: 0; }
+.sidebar-identity { display: contents; }
 
 /* The chevron opts out of the drag region: a control inside one is dragged
    rather than clicked. */
 .icon-button {
   -webkit-app-region: no-drag;
-  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -263,7 +275,10 @@ body {
 .icon-button:hover { background: var(--wb-primary-tint-1); color: var(--wb-primary); }
 
 .wordmark {
-  margin: 0 0 .2rem;
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  margin: 0;
   color: var(--wb-primary);
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
   font-size: .7rem;
@@ -273,6 +288,14 @@ body {
 }
 
 .version {
+  /* Both columns: the chevron is in the first line only, so the version line
+     can run under it, and only a version longer than the whole head is
+     ellipsized. */
+  grid-column: 1 / -1;
+  grid-row: 2;
+  /* Up under the wordmark, the way the board's title sits under its eyebrow,
+     rather than a whole half row below it. */
+  margin-top: -.55rem;
   color: var(--wb-muted);
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
   font-size: .75rem;
@@ -387,6 +410,145 @@ body {
 .dot.running { background: var(--wb-ok); }
 .dot.failed, .dot.exited { background: var(--wb-danger); }
 
+/* --- categories and drag ------------------------------------------------ */
+
+/* The "Projects" label carries the New category control at its right end. The
+   label keeps its own padding; the button is a small .icon-button pulled up
+   into the label's line so the list below does not move down for it. */
+.projects-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: .55rem;
+}
+
+.new-category {
+  width: 1.35rem;
+  height: 1.35rem;
+  margin: -.3rem 0;
+  font-size: .95rem;
+  line-height: 1;
+}
+
+/* A category is a group in the list: its header row, then its projects
+   indented under it. Folded, the nested list is hidden by the [hidden]
+   attribute app.js sets, through the one global [hidden] rule. */
+.category { list-style: none; }
+
+.category-head {
+  display: flex;
+  align-items: center;
+  gap: .3rem;
+  min-height: 1.9rem;
+  padding: .15rem .3rem .15rem .1rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--wb-text-2);
+  font-size: .78rem;
+  font-weight: 700;
+  cursor: grab;
+}
+
+.category-head:hover { background: var(--wb-primary-tint-4); }
+
+.category-toggle {
+  flex: 0 0 auto;
+  width: 1.2rem;
+  height: 1.2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--wb-text-3);
+  font-size: .72rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform .12s ease;
+}
+
+.category-toggle:hover { color: var(--wb-primary); background: var(--wb-primary-tint-1); }
+
+/* Folded, the triangle points at the name rather than down at the projects. */
+.category.collapsed .category-toggle { transform: rotate(-90deg); }
+
+.category-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The initials are the rail's label; expanded, the full name says it. */
+.category-initials { display: none; }
+
+/* Rename and remove show on hover or keyboard focus, so a list of categories
+   does not read as a column of buttons. The confirm step's buttons share the
+   class and are always shown, because nothing else is in that row. */
+.category-action {
+  flex: 0 0 auto;
+  padding: .05rem .3rem;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--wb-text-3);
+  font-size: .74rem;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.category-head:hover .category-action,
+.category-head:focus-within .category-action,
+.category-confirm ~ .category-action {
+  opacity: 1;
+}
+
+.category-action:hover { color: var(--wb-primary); background: var(--wb-primary-tint-1); }
+
+.category-confirm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wb-text-2);
+  font-weight: 400;
+}
+
+.category-confirm-yes { color: var(--wb-danger); }
+.category-confirm-yes:hover { color: var(--wb-danger); background: var(--wb-danger-surface); }
+
+.category-name-input {
+  flex: 1;
+  min-width: 0;
+  padding: .1rem .3rem;
+  border: 1px solid var(--wb-primary);
+  border-radius: 3px;
+  font: inherit;
+}
+
+.category-name-input.invalid { border-color: var(--wb-danger); }
+
+.category-projects {
+  list-style: none;
+  margin: 0 0 .2rem;
+  padding: 0 0 0 .9rem;
+}
+
+/* The drop indicator: a 2px primary line along the edge a drop would land
+   beside, drawn as a shadow so the row does not move, and the header of a
+   category a drop would go into lit as a target. */
+.drop-before { box-shadow: 0 -2px 0 0 var(--wb-primary); }
+.drop-after { box-shadow: 0 2px 0 0 var(--wb-primary); }
+
+.drop-into {
+  border-color: var(--wb-primary);
+  background: var(--wb-primary-tint-1);
+}
+
+/* What is being dragged dims where it stands until the main process answers. */
+.dragging { opacity: .45; }
+
 /* The words of a rail item, in an element of their own so the rail can hide
    them and keep the glyph. Expanded, it is the whole of the item's label, and
    it shrinks rather than widening the item a longer one could not fit in. */
@@ -394,37 +556,43 @@ body {
 
 /* The toggle is an .icon-button and wants nothing beyond one, in either state.
    It is named here because the markup applies the class, and a class the
-   renderer applies with no rule of its own is what check-styles is for. */
-.sidebar-toggle { flex: 0 0 auto; }
+   renderer applies with no rule of its own is what check-styles is for. It
+   takes the title row's right end. */
+.sidebar-toggle { grid-column: 2; grid-row: 1; }
 
 /* --- sidebar rail ------------------------------------------------------- */
 
-/* Collapsed, the sidebar is a 76px rail: the same controls and the same list,
+/* Collapsed, the sidebar is a rail (88px, --rail-width, which app.js copies
+   from src/main/layout.js): the same controls and the same list,
    kept to the parts that still read at that width. Everything below hangs off
    the one class the renderer sets on the root element, and nothing outside
    this block touches the expanded layout.
 
    Nothing here may be wider than the rail. The main process positions each
-   board's native view at this same 76 — the two numbers are one measurement in
-   two files — so a rail item that overflowed would not spill onto the canvas,
-   it would slide under a board and be invisible. */
+   board's native view at this same width — one constant, read here through the
+   custom property — so a rail item that overflowed would not spill onto the
+   canvas, it would slide under a board and be invisible. */
 :root.sidebar-collapsed #sidebar {
-  width: 76px;
-  flex: 0 0 76px;
+  width: var(--rail-width, 88px);
+  flex: 0 0 var(--rail-width, 88px);
 }
 
-/* The chevron takes the whole head to itself, centered, where it sat beside
-   the wordmark before. Only the side padding goes: the top inset is the head's
-   own, so macOS keeps its 34px under the traffic lights and the
-   :root:not(.is-mac) override keeps answering for everyone else. The drag
-   region is the head's own as well, so the rail is still a grab handle around
-   a chevron that still clicks. */
+/* The chevron takes the whole head to itself, centered on the title row,
+   where it sat beside the wordmark before. The drag region is the head's own,
+   so the rail is still a grab handle around a chevron that still clicks. */
 :root.sidebar-collapsed .sidebar-head {
-  flex-direction: column;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
   padding-left: 0;
   padding-right: 0;
 }
+
+:root.sidebar-collapsed .sidebar-toggle { grid-column: 1; }
+
+/* Except on macOS, where the traffic lights fill the rail's title row from
+   x 14 to 74 of its 88: the chevron goes on the line under them, which
+   is where the version line would be, centered as everywhere else. */
+:root.is-mac.sidebar-collapsed .sidebar-toggle { grid-row: 2; }
 
 /* The chevron is one glyph pointing at the edge the click moves the sidebar
    towards, so expanding mirrors it rather than swapping in a second path. */
@@ -493,6 +661,46 @@ body {
   white-space: nowrap;
 }
 
+/* A category in the rail is a divider: a hairline either side of its initials,
+   the full name on the header's tooltip. Folded, its tiles stay hidden, as in
+   the sidebar. Nothing in it is a control here — no fold, rename or drag. */
+:root.sidebar-collapsed .category-head {
+  gap: .25rem;
+  min-height: 0;
+  margin: .3rem 0 .25rem;
+  padding: 0;
+  cursor: default;
+}
+
+:root.sidebar-collapsed .category-head:hover { background: transparent; }
+
+:root.sidebar-collapsed .category-head::before,
+:root.sidebar-collapsed .category-head::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--wb-rule);
+}
+
+:root.sidebar-collapsed .category-toggle,
+:root.sidebar-collapsed .category-name,
+:root.sidebar-collapsed .category-action,
+:root.sidebar-collapsed .category-confirm,
+:root.sidebar-collapsed .category-name-input {
+  display: none;
+}
+
+:root.sidebar-collapsed .category-initials {
+  display: block;
+  flex: 0 0 auto;
+  color: var(--wb-text-3);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .62rem;
+  letter-spacing: .04em;
+}
+
+:root.sidebar-collapsed .category-projects { padding-left: 0; }
+
 /* --- main --------------------------------------------------------------- */
 
 /* #main no longer scrolls: each view is a column whose middle section does, so
@@ -505,51 +713,6 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-/* The window's title bar on macOS and Windows, which both hide the native
-   one: the whole top edge of the main area moves the window, as it does in
-   every other app there, and together with the sidebar head beside it reads as
-   one bar. The board views are separate views the main process lays out below
-   this, so the shell has to draw it; their offset and this height are the same
-   number, which app.js copies into --title-strip-height from the main
-   process's src/main/layout.js. Linux keeps its native decorations, and there
-   app.js hides the strip rather than leave a zero-height drag region.
-
-   The sidebar's surface rather than the canvas, so the strip continues the
-   head instead of looking like part of the view under it. No bottom rule: the
-   board under it draws its own header edge. */
-.title-strip {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: var(--title-strip-height, 0px);
-  padding: 0 1rem;
-  /* Windows draws its overlay controls over the strip's right end. The page
-     is told where they are not: titlebar-area-x and -width describe the free
-     part of the top row, so whatever lies right of it in the viewport is the
-     controls. Padding that much keeps the name out from under them. Where the
-     overlay is absent the fallbacks make it zero. The math holds because the
-     chrome view spans the window from x=0 and this page never shows a vertical
-     scrollbar, so 100vw is the window's width. */
-  padding-right: calc(1rem + 100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
-  background: var(--wb-surface);
-  color: var(--wb-muted);
-  font-size: .78rem;
-  font-weight: 600;
-  -webkit-app-region: drag;
-  user-select: none;
-  cursor: default;
-}
-
-/* One line: a long project name is ellipsized rather than wrapping out of a
-   strip whose height is fixed. */
-.title-strip__name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .view {

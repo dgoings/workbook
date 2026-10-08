@@ -1,12 +1,12 @@
 'use strict'
 
-// The hairline between the sidebar and what lies beside it stops at the
-// window's top band, so the title strip, the sidebar head and a board's header
-// read as one layer. Two documents share the job. Beside a board the line has
-// to stop at the bottom of the board's header, which only the board can
-// measure, so the board draws it (internal/webui holds that half) once
-// board.js has marked its page, and the shell draws none. Beside the shell's
-// own views the shell draws it, starting under the title strip. These read the
+// The hairline between the sidebar and what lies beside it stops, beside a
+// board, at the bottom of the board's header, so the sidebar head and the
+// header read as one layer across the window's title row. Two documents share
+// the job. That edge is one only the board can measure, so the board draws the
+// line (internal/webui holds that half) once board.js has marked its page, and
+// the shell draws none. Beside the shell's own views there is no header to
+// stop at, and the shell draws it from the window's top edge. These read the
 // source, comments removed, the way layout-wiring.test.js does, because none
 // of the three files loads without Electron or a DOM.
 
@@ -41,7 +41,8 @@ function fn (text, name) {
 }
 
 describe('the sidebar divider in the shell', () => {
-  // A border runs the sidebar's full height, through the title band.
+  // A border runs the sidebar's full height beside a board too, through the
+  // title row.
   test('the sidebar draws no border of its own', () => {
     for (const match of code('renderer', 'styles.css').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
       if (!/#sidebar\b(?!::)/.test(match[1])) continue
@@ -50,12 +51,16 @@ describe('the sidebar divider in the shell', () => {
     }
   })
 
-  test('the divider starts under the title strip and takes the theme\'s rule color', () => {
+  test('the divider starts at the top edge and takes the theme\'s rule color', () => {
     const blocks = bodies('#sidebar::after')
     assert.equal(blocks.length, 1, 'expected exactly one rule whose selector is #sidebar::after')
     const block = blocks[0]
-    assert.match(block, /(?:^|[;\s])top\s*:\s*var\(--title-strip-height\b/,
-      'the divider must start at var(--title-strip-height)')
+    assert.match(block, /(?:^|[;\s])top\s*:\s*0\s*;/,
+      'the divider must start at top: 0, with no strip to clear')
+    for (const match of code('renderer', 'styles.css').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (!match[1].includes('#sidebar::after') || match[1].trim() === '#sidebar::after') continue
+      assert.doesNotMatch(match[2], /(?:^|[;\s])top\s*:/, `${match[1].trim()} moves the divider's top`)
+    }
     assert.match(block, /(?:^|[;\s])bottom\s*:\s*0\b/, 'the divider must run to the bottom')
     assert.match(block, /(?:^|[;\s])background\s*:\s*var\(--wb-rule\)\s*;/,
       'the divider must be drawn in var(--wb-rule)')

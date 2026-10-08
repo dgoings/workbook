@@ -33,12 +33,43 @@ shell. The choice is remembered across launches. The rail keeps every route it
 had: the import glyph, and each project as its key with its status dot, with the
 name and path on the tile's tooltip.
 
+On macOS and Windows the window has no separate title bar: its top row is the
+sidebar's head, which holds the wordmark and the chevron level with the window
+controls, and the showing board's own header. Drag the window by either, from
+anywhere that is not a control. On macOS the traffic lights sit at the left of
+that row; on Windows the window controls sit at its right end, over the board's
+header, which keeps its switches clear of them. Linux keeps its native title
+bar.
+
 With two or more projects imported, a Next entry sits above them. It shows what
 each project would hand out next — the top of its Ready work, unblocked and not
 already somebody else's, exactly as `workbook next` decides it — with one
 number for how many per project. The list refreshes every five seconds while it
 is showing, and a row opens that task on its board. It is the view the app
 opens on when there is more than one project.
+
+### Order and categories
+
+Projects can be dragged into any order, and grouped under categories: named
+groups, one level deep, that fold to hide their projects. The `+` beside
+Projects adds a category at the bottom and opens its name for typing; a
+double-click on the name, or the pencil that shows on hover, renames it, with
+Enter or clicking elsewhere in the sidebar to save and Escape to cancel. Drag a project into a
+category, out of it, or between categories, and drag a category by its header
+to move it among the top-level rows; a project dropped on a folded category
+goes in at its end. Removing a category asks once, then puts its projects back
+at the top level where the category stood, so nothing is lost.
+
+The sidebar's order is the one every numbered or listed thing follows: Cmd+1
+to Cmd+9 and Previous/Next Project count down the sidebar, including projects
+in a folded category, so folding never renumbers anything, and the Next view
+lists projects in the same order. A drag asks the main process, which saves the
+new order in `registry.json` and announces it; the sidebar and the menu redraw
+from that answer together, so what is drawn and what the shortcuts count never
+disagree. A registry from a build before categories opens with every project at
+the top level in import order, a forgotten project leaves its category, and a
+newly imported one lands at the bottom. In the rail a category is a thin
+divider labeled with its initials (its name is the tooltip), and nothing drags.
 
 ## Keyboard shortcuts
 
