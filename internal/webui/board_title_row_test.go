@@ -127,6 +127,17 @@ func TestHandlerOptsEveryHeaderControlOutOfTheDragRegion(t *testing.T) {
 		}
 	}
 
+	skip := false
+	for _, rule := range styleRules(t, body) {
+		region := cssAppRegion.FindStringSubmatch(rule.declarations)
+		if region != nil && region[1] == "no-drag" && rule.condition == "" && strings.TrimSpace(rule.selector) == ":root.in-workbench .skip-link" {
+			skip = true
+		}
+	}
+	if !skip {
+		t.Error("no `:root.in-workbench .skip-link { -webkit-app-region: no-drag }` rule, so the skip link, fixed over the header when focused, drags the window instead of following")
+	}
+
 	controls := headerControls(t, headerMarkup(t, body))
 	if len(controls) < 3 {
 		t.Fatalf("found %d controls in the header, want at least the Board link and the Dark Mode and Show Descriptions switches; is the extractor reading the right element?", len(controls))

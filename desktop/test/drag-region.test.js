@@ -108,11 +108,9 @@ describe('the window drag region', () => {
   })
 })
 
-const MAC_INSET_MIN = (() => {
-  // The traffic lights: three 12px circles 20px apart from the pinned x.
-  const { TRAFFIC_LIGHT_POSITION } = require('../src/main/layout')
-  return TRAFFIC_LIGHT_POSITION.x + 2 * 20 + 12
-})()
+// Where the traffic lights end: three 14px buttons on 23px spacing from the
+// pinned x, as layout.js derives it.
+const MAC_INSET_MIN = require('../src/main/layout').TRAFFIC_LIGHTS_END
 
 describe('the sidebar head is the shell\'s half of the title row', () => {
   test('its first line is the title row, from the shared height', () => {
@@ -136,7 +134,9 @@ describe('the sidebar head is the shell\'s half of the title row', () => {
     }
     assert.deepEqual(place('.wordmark'), { column: '1', row: '1' })
     assert.deepEqual(place('.sidebar-toggle'), { column: '2', row: '1' })
-    assert.deepEqual(place('.version'), { column: '1', row: '2' })
+    assert.match(bodies(read('styles.css'), '.version').join(';'), /grid-column\s*:\s*1\s*\/\s*-1\s*;/,
+      'the version line must span both columns, under the chevron as well')
+    assert.equal(place('.version').row, '2')
     assert.match(bodies(read('styles.css'), '.sidebar-identity').join(';'), /display\s*:\s*contents/,
       'the identity block must be display: contents, or the wordmark and version are not grid items')
   })

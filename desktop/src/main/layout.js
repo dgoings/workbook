@@ -12,9 +12,8 @@
  * controls sit in, which the sidebar head's first line (the wordmark and the
  * chevron) and the board's own header share.
  *
- * macOS: the traffic lights are pinned at TRAFFIC_LIGHT_POSITION, 12px down,
- * and are 12px across, so a row with the same 12px below them is 36 tall and
- * its vertical center, 18, is the lights' center. Windows: the
+ * macOS: the traffic lights are pinned at TRAFFIC_LIGHT_POSITION, centered on
+ * the row, so its vertical center, 18, is the lights' center. Windows: the
  * titleBarOverlay's height, so the overlay controls fill the same row. Linux
  * keeps its native decorations and has no controls in the page at all; the
  * head still draws its first line this tall so the sidebar looks the same.
@@ -22,11 +21,25 @@
 const TITLE_ROW_HEIGHT = 36
 
 /**
- * Where macOS puts the traffic lights, from the window's top-left corner, in
- * points. y is TITLE_ROW_HEIGHT less the lights' 12px diameter, halved, so the
- * lights are centered on the row; x is the inset macOS uses itself.
+ * How big one traffic-light button is, and how far apart their left edges are,
+ * in points. Electron places the top of the button frame at
+ * trafficLightPosition.y, so the frame, not the drawn circle, is what centers.
+ * Measured with AppKit on macOS 27 (NSWindow.standardWindowButton: 14x14
+ * frames at x 9, 32, 55); the sizes vary between macOS releases, so these are
+ * this release's numbers and the eye is the final judge.
  */
-const TRAFFIC_LIGHT_POSITION = Object.freeze({ x: 14, y: (TITLE_ROW_HEIGHT - 12) / 2 })
+const TRAFFIC_LIGHT_SIZE = 14
+const TRAFFIC_LIGHT_SPACING = 23
+
+/**
+ * Where macOS puts the traffic lights, from the window's top-left corner, in
+ * points. y is TITLE_ROW_HEIGHT less one button's height, halved, so the
+ * buttons are centered on the row; x is close to the inset macOS uses itself.
+ */
+const TRAFFIC_LIGHT_POSITION = Object.freeze({ x: 14, y: (TITLE_ROW_HEIGHT - TRAFFIC_LIGHT_SIZE) / 2 })
+
+/** Where the last traffic light ends, from the window's left edge. */
+const TRAFFIC_LIGHTS_END = TRAFFIC_LIGHT_POSITION.x + 2 * TRAFFIC_LIGHT_SPACING + TRAFFIC_LIGHT_SIZE
 
 /**
  * The rectangle the showing board view fills: right of the sidebar, from the
@@ -50,4 +63,4 @@ function boardBounds ({ width, height }, sidebarWidth) {
   }
 }
 
-module.exports = { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_POSITION, boardBounds }
+module.exports = { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_SIZE, TRAFFIC_LIGHT_POSITION, TRAFFIC_LIGHTS_END, boardBounds }

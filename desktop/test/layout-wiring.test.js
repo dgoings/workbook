@@ -42,6 +42,23 @@ describe('the title row comes from layout.js everywhere', () => {
       'layout() must call boardBounds(content, sidebarWidth()) with no strip height')
   })
 
+  // Electron unions every view's drag regions and skips only a hidden view; a
+  // parked 0x0 board would otherwise lay its header's region over the window.
+  test('a parked board is hidden, and the active one shown before it is placed', () => {
+    const body = fn(main, 'layout')
+    const visible = body.match(/view\.setVisible\((\w+)\)/)
+    assert.ok(visible, 'layout() must call view.setVisible for every board view')
+    assert.match(body, new RegExp(`const ${visible[1]} = projectId === activeProjectId\\b`),
+      'layout() must make a board visible exactly when it is the active project')
+    assert.match(body, /view\.setVisible\([\s\S]*view\.setBounds\(/,
+      'layout() must set visibility before bounds, so the active board is never shown parked')
+  })
+
+  test('a new board view starts hidden until layout() shows it', () => {
+    assert.match(fn(main, 'openProject'), /view\.setVisible\(false\)\n\s*window\.contentView\.addChildView\(view\)/,
+      'openProject must hide a new board view before it adds it to the window')
+  })
+
   test('macOS pins the traffic lights at the shared position', () => {
     assert.match(fn(main, 'createWindow'), /trafficLightPosition:\s*TRAFFIC_LIGHT_POSITION\b/,
       'createWindow must pass trafficLightPosition: TRAFFIC_LIGHT_POSITION')

@@ -9,17 +9,22 @@
 const { describe, test } = require('node:test')
 const assert = require('node:assert/strict')
 
-const { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_POSITION, boardBounds } = require('../src/main/layout')
+const { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_SIZE, TRAFFIC_LIGHT_POSITION, TRAFFIC_LIGHTS_END, boardBounds } = require('../src/main/layout')
 
 describe('the title row', () => {
-  test('is 36 pixels, the 12px traffic lights with 12px above and below', () => {
+  test('is 36 pixels', () => {
     assert.equal(TITLE_ROW_HEIGHT, 36)
   })
 
-  test('the traffic lights are pinned centered on it, at the inset macOS uses', () => {
-    assert.deepEqual({ ...TRAFFIC_LIGHT_POSITION }, { x: 14, y: 12 })
-    assert.equal(TRAFFIC_LIGHT_POSITION.y + 12 / 2, TITLE_ROW_HEIGHT / 2,
+  test('the traffic lights are pinned centered on it, by their 14px button frames', () => {
+    assert.equal(TRAFFIC_LIGHT_SIZE, 14)
+    assert.deepEqual({ ...TRAFFIC_LIGHT_POSITION }, { x: 14, y: 11 })
+    assert.equal(TRAFFIC_LIGHT_POSITION.y + TRAFFIC_LIGHT_SIZE / 2, TITLE_ROW_HEIGHT / 2,
       'the lights\' center must be the row\'s center')
+  })
+
+  test('the lights end at 74: three 14px buttons on 23px spacing from x 14', () => {
+    assert.equal(TRAFFIC_LIGHTS_END, 74)
   })
 
   test('the position cannot be changed by a caller that was handed it', () => {

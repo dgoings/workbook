@@ -242,14 +242,15 @@ body {
 }
 
 /* The traffic lights sit at the left of the title row, over this pane, pinned
-   at x 14 and 12px across with 20px between centers, so they end at about 66.
-   The wordmark starts clear of them; the version line under it keeps the same
-   edge. Windows draws its overlay controls at the top *right*, over the
+   at x 14: three 14px buttons on 23px spacing on macOS 27, so they end at 74
+   (TRAFFIC_LIGHTS_END in src/main/layout.js; the sizes vary by macOS release).
+   The wordmark starts 12px clear of them; the version line under it keeps the
+   same edge. Windows draws its overlay controls at the top *right*, over the
    board's header rather than the sidebar, and Linux gets ordinary decorations,
    so neither needs the inset. The platform class is set by the renderer at
    boot. */
 :root.is-mac .sidebar-head {
-  padding-left: 78px;
+  padding-left: 86px;
 }
 
 .sidebar-identity { display: contents; }
@@ -258,7 +259,6 @@ body {
    rather than clicked. */
 .icon-button {
   -webkit-app-region: no-drag;
-  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -288,7 +288,10 @@ body {
 }
 
 .version {
-  grid-column: 1;
+  /* Both columns: the chevron is in the first line only, so the version line
+     can run under it, and only a version longer than the whole head is
+     ellipsized. */
+  grid-column: 1 / -1;
   grid-row: 2;
   /* Up under the wordmark, the way the board's title sits under its eyebrow,
      rather than a whole half row below it. */
@@ -416,7 +419,7 @@ body {
    It is named here because the markup applies the class, and a class the
    renderer applies with no rule of its own is what check-styles is for. It
    takes the title row's right end. */
-.sidebar-toggle { flex: 0 0 auto; grid-column: 2; grid-row: 1; }
+.sidebar-toggle { grid-column: 2; grid-row: 1; }
 
 /* --- sidebar rail ------------------------------------------------------- */
 
@@ -447,7 +450,7 @@ body {
 :root.sidebar-collapsed .sidebar-toggle { grid-column: 1; }
 
 /* Except on macOS, where the traffic lights fill the rail's title row from
-   x 14 to about 66 of its 76: the chevron goes on the line under them, which
+   x 14 to 74 of its 76: the chevron goes on the line under them, which
    is where the version line would be, centered as everywhere else. */
 :root.is-mac.sidebar-collapsed .sidebar-toggle { grid-row: 2; }
 

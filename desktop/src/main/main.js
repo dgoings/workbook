@@ -61,7 +61,15 @@ function layout () {
   for (const [projectId, view] of boardViews) {
     // Views for projects that are not showing are parked off-screen rather than
     // detached, so switching back does not reload the board or lose its state.
-    view.setBounds(projectId === activeProjectId ? bounds : { x: 0, y: 0, width: 0, height: 0 })
+    // Parked views are hidden as well as shrunk: a board's header is a drag
+    // region, and Electron's hit test unions every view's drag regions, skipping
+    // a view only when it is not visible. A 0x0 view keeps its page laid out at
+    // the window's origin, so its header would turn the top of the showing
+    // board and of the sidebar into a handle. Visible first, then placed, so the
+    // active one is never shown at the parked bounds.
+    const active = projectId === activeProjectId
+    view.setVisible(active)
+    view.setBounds(active ? bounds : { x: 0, y: 0, width: 0, height: 0 })
   }
 }
 
@@ -423,6 +431,10 @@ async function openProject (projectId, taskId = null) {
     // attach leaves nothing behind: an entry in boardViews is a promise that
     // the window holds that view, and the next window would inherit and lay
     // out anything that broke the promise.
+    // Hidden until layout() shows it as the active board: a view that is
+    // loading or that a later open supersedes must never contribute its
+    // header's drag region while parked (see layout()).
+    view.setVisible(false)
     window.contentView.addChildView(view)
     boardViews.set(projectId, view)
     await view.webContents.loadURL(target)
