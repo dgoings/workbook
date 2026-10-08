@@ -21,10 +21,19 @@ import (
 var cssLeftBorder = regexp.MustCompile(`(?:^|[;{\s])border(?:-left|-inline-start|-inline)?(?:-width|-style|-color)?\s*:`)
 
 // cssBelowHeader matches the last compound of a selector that can land on an
-// element of body's column below the header: the filter row, either notice,
-// main, or a universal selector, which is what a sibling combinator after the
-// header is written with.
-var cssBelowHeader = regexp.MustCompile(`^(?:main|\.filter-row|\.notice|\*)(?:[\[:.].*)?$`)
+// element of body's column below the header, by any of the names the markup
+// gives it: the filter row (`.filter-row`, `[data-filter-row]`), the two
+// notices (`.notice`, `[data-notice]`, `[data-vocabulary-notice]`), main
+// (`main`, `#board`), or a universal selector, which is what a sibling
+// combinator after the header is written with. A name only counts when it ends
+// there, so `.notice__report`, whose left rule is a warning bar inside the
+// notice, is not one of them. A false match fails safe: the guard asks for a
+// look rather than letting a line through.
+var cssBelowHeader = regexp.MustCompile(`^(?:main|\*)(?:[\[:.#]|$)|(?:#board|\.filter-row|\.notice|\[data-(?:filter-row|notice|vocabulary-notice))(?:[^\w-]|$)`)
+
+// cssBodyChild matches a selector that picks a child of body directly, which
+// reaches every element below the header whatever the rest of it names.
+var cssBodyChild = regexp.MustCompile(`(?:^|[\s>+~])body\s*>`)
 
 // cssInWorkbench matches a selector whose first compound is the root carrying
 // the class and nothing else, so the rule applies only where the class is set.
@@ -75,7 +84,7 @@ func TestHandlerDrawsNoLeftLineBelowTheHeaderInABrowser(t *testing.T) {
 			}
 			fields := strings.Fields(selector)
 			last := fields[len(fields)-1]
-			if cssBelowHeader.MatchString(last) || strings.Contains(selector, ".app-header ~") || strings.Contains(selector, ".app-header +") {
+			if cssBelowHeader.MatchString(last) || cssBodyChild.MatchString(selector) || strings.Contains(selector, ".app-header ~") || strings.Contains(selector, ".app-header +") {
 				t.Errorf("%s declares %q outside .in-workbench, so a browser opening the board draws a line at its left edge", selector, strings.TrimSpace(rule.declarations))
 			}
 		}
