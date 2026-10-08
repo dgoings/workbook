@@ -977,6 +977,15 @@ api.onImportProgress(({ done, total }) => {
   el('import-status').textContent = `Importing ${done}/${total}…`
 })
 
+// Beside a board, the board draws the sidebar's divider under its own header,
+// so the shell's must go; see #sidebar::after in styles.css. The main process
+// says when a board is actually laid in, which the project view alone does not:
+// that view also holds the wait for a board, a failed start and the Git
+// identity form, and each of those needs the shell's divider.
+api.onBoardShowing((showing) => {
+  document.documentElement.classList.toggle('board-active', showing === true)
+})
+
 api.onProjectExited(({ projectId }) => {
   loadProjects()
   if (state.activeProjectId === projectId) {

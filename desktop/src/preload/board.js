@@ -31,6 +31,21 @@
 
 const { ipcRenderer } = require('electron')
 
+// One more job, and the only one that is not about the theme or a command: a
+// class on the root that tells the board's stylesheet it is drawn inside
+// Workbench. The sidebar's divider has to stop under the board's header, whose
+// height only the board knows, so the board draws that line itself below its
+// header and the shell draws none beside a board. A browser opening the same
+// board never runs this file, so it never sees the class or the line. Nothing
+// else is marked or exposed: the page learns one fact, through its own markup.
+// If the root does not exist yet when this runs, the class lands on
+// DOMContentLoaded instead, and the line may paint a frame late; cosmetic.
+function markEmbedded () {
+  document.documentElement.classList.add('in-workbench')
+}
+if (document.documentElement) markEmbedded()
+else document.addEventListener('DOMContentLoaded', markEmbedded, { once: true })
+
 // The board's own key and values, from internal/webui/assets/index.html.
 const PREFERENCE_KEY = 'workbook.board.scheme'
 const SCHEMES = ['', 'light', 'dark']

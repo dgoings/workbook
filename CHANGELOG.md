@@ -359,7 +359,11 @@ under Changed.
   controls' row and naming the project that is showing, and together with the
   sidebar head it forms one bar that moves the window from anywhere along it,
   in the expanded sidebar and the collapsed rail alike; the board is laid out
-  beneath it. On Windows the project's name stays clear of the window
+  beneath it. The line between the sidebar and the board stops at the bottom
+  of the board's header rather than running up through the strip, so the
+  strip, the sidebar head and the board's header read as one band; beside the
+  import and Next views it starts under the strip. A board opened in a browser
+  draws no such line. On Windows the project's name stays clear of the window
   controls. The chevron in the head still clicks rather than drags, and the
   version line keeps its tooltip, which on Windows never showed until now.
   Linux keeps its native title bar and draws no strip.
