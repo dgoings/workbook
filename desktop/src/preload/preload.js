@@ -73,6 +73,13 @@ contextBridge.exposeInMainWorld('workbench', {
     ipcRenderer.on('sidebar:changed', listener)
     return () => ipcRenderer.removeListener('sidebar:changed', listener)
   },
+  // Whether a board view is laid in beside the sidebar: true once one is, false
+  // whenever the shell takes the window back.
+  onBoardShowing: (handler) => {
+    const listener = (_event, showing) => handler(showing)
+    ipcRenderer.on('board:showing', listener)
+    return () => ipcRenderer.removeListener('board:showing', listener)
+  },
   onProjectExited: (handler) => {
     const listener = (_event, payload) => handler(payload)
     ipcRenderer.on('project:exited', listener)

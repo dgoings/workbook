@@ -327,6 +327,22 @@
        its history open, a phone, a short window — would have gained. Padding comes
        off the height those percentages resolve against instead, so they still fit. */
     .filter-row[hidden] ~ main { padding-top: 1.25rem; }
+    /* Inside the Workbench desktop app the board sits beside the app's sidebar,
+       and the line between them is drawn here rather than by the app: it has to
+       stop at the header's bottom edge so the header reads as one band with the
+       sidebar's head, and only this page knows how tall the header is. The app's
+       board preload sets `in-workbench` on the root; a browser never does, so a
+       board opened in one draws no line at its left edge.
+
+       Everything after the header in body's column takes it: the filter row,
+       the two notices and main, which are the elements that draw below the
+       header. The admin panels after main are hidden until a route moves them
+       into main, and the script draws nothing, so neither shows a line of its
+       own. The header's own border-bottom is the same token, so the two meet in
+       a clean corner in either scheme. main's side padding takes the pixel, and
+       the border sits outside its scrolling area, so the columns scroll as
+       before. */
+    :root.in-workbench .app-header ~ * { border-left: 1px solid var(--wb-border); }
     /* Reports leave only by being dismissed, so the notice has to be able to run
        out of room rather than out of page: it shares a viewport-height flex
        column with main, and the body never scrolls. The cap keeps the route

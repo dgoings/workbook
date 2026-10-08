@@ -177,15 +177,42 @@ body {
 /* --- sidebar ------------------------------------------------------------ */
 
 /* White against the canvas, the way .app-header separates itself from the
-   board it sits above — same surface, same hairline, turned ninety degrees. */
+   board it sits above: the same surface, and a hairline at its right edge.
+
+   The hairline is not the sidebar's border, because it must not run through
+   the window's top band. The title strip, the sidebar head and the board's
+   header read as one layer, and the line only separates the sidebar from what
+   lies below that layer. Beside a board, that layer ends at the bottom of the
+   board's header, whose height only the board knows, so the board draws the
+   line itself below its header (src/preload/board.js marks its page
+   in-workbench) and the shell draws none while one shows: app.js sets
+   board-active on the root while the main process says a board view is laid
+   in. Everywhere else, the shell's own views and the project view while no
+   board is in it, the line starts under the title strip, so the strip stays
+   one bar; on Linux, where there is no strip, the height is 0 and it runs the
+   full height.
+   test/divider.test.js holds both halves to this. */
 #sidebar {
+  position: relative;
   width: 260px;
   flex: 0 0 260px;
   display: flex;
   flex-direction: column;
   background: var(--wb-surface);
-  border-right: 1px solid var(--wb-rule);
 }
+
+#sidebar::after {
+  content: "";
+  position: absolute;
+  top: var(--title-strip-height, 0px);
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--wb-rule);
+  pointer-events: none;
+}
+
+:root.board-active #sidebar::after { content: none; }
 
 /* The head is the window's grab handle on every platform. macOS and Windows
    both hide the native title bar, and with it gone nothing moves the window

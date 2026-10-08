@@ -396,8 +396,9 @@ async function openProject (projectId, taskId = null) {
     view = new WebContentsView({
       webPreferences: {
         // Carries the board's Dark Mode choice to the shell and the other
-        // boards, and a shortcut back the other way, and nothing else; the
-        // board's page never sees it.
+        // boards, and a shortcut back the other way, and marks the page's root
+        // `in-workbench` so the board draws the sidebar's divider under its
+        // header; nothing else. The board's page never sees the preload itself.
         //
         // Deliberately not `sandbox: false`, which the shell's own view does
         // take: this is the view that renders text out of a repository, so it
@@ -434,6 +435,11 @@ async function openProject (projectId, taskId = null) {
 
   activeProjectId = projectId
   layout()
+  // A board is laid in now, and it draws the sidebar's divider below its own
+  // header, so the shell stops drawing its own. Only once the view is in: a
+  // switch from one board to another keeps the old one drawn until this point,
+  // and nothing in between says false, so the divider never flickers.
+  toChrome('board:showing', true)
   // The board items are enabled only while a board is showing, and one is
   // showing now.
   installMenu()
@@ -447,6 +453,10 @@ async function openProject (projectId, taskId = null) {
 function showChrome () {
   activeProjectId = null
   layout()
+  // Whatever the shell shows now (a view of its own, the Git identity form,
+  // a board that failed to start) has no board beside it to draw the
+  // sidebar's divider, so the shell draws it again.
+  toChrome('board:showing', false)
   // No board is showing, so the board items go gray.
   installMenu()
 }
