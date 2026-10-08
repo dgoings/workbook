@@ -113,7 +113,34 @@ function adoptProjects ({ projects, layout }) {
   renderProjects()
 }
 
+// A redraw between a press and its release replaces the row being pressed,
+// and the release then lands on a new element, so the click never happens:
+// clicking a project while a category name is open (its blur saves and
+// redraws), or while a board starting reloads the list, took two clicks. So
+// a redraw asked for while a button is down waits until the click has been
+// handled, with a cap so a press that never releases cannot freeze the list.
+const redraw = { held: false, owed: false, timer: null }
+
+function holdRedraw () {
+  redraw.held = true
+  clearTimeout(redraw.timer)
+  redraw.timer = setTimeout(releaseRedraw, 1000)
+}
+
+function releaseRedraw () {
+  clearTimeout(redraw.timer)
+  redraw.held = false
+  if (redraw.owed) {
+    redraw.owed = false
+    renderProjects()
+  }
+}
+
 function renderProjects () {
+  if (redraw.held) {
+    redraw.owed = true
+    return
+  }
   const list = el('project-list')
   // A category name being typed survives the redraw — the list is redrawn
   // whenever a board starts or stops, which can be mid-word — with its text and
@@ -325,8 +352,10 @@ function nameEditor (category) {
     if (event.key === 'Escape') { event.preventDefault(); finish(false) }
   })
   input.addEventListener('blur', () => {
-    // Taken out of the page by a redraw is not the user leaving the field.
-    if (!input.isConnected) return
+    // Taken out of the page by a redraw is not the user leaving the field,
+    // and nor is the window losing focus to another app: the field is still
+    // open, and still focused, when they come back.
+    if (!input.isConnected || !document.hasFocus()) return
     finish(input.value.trim() !== '')
   })
   // Focused once it is in the document: renderProjects appends it first. Opened
@@ -388,8 +417,34 @@ async function createCategory () {
 // one ended, so the click that can follow a drop does not open a project.
 const drag = { current: null, endedAt: 0 }
 
+// The type dragstart puts on a drag of ours. Anything dragged over the list
+// without it — a file from Finder, text from another app — is not a sidebar
+// move, whatever drag.current says.
+const DRAG_TYPE = 'application/x-workbench-sidebar'
+
 function justDragged () {
   return drag.current !== null || performance.now() - drag.endedAt < 300
+}
+
+/**
+ * Close the drag: forget what was dragged, note when, and undim it.
+ *
+ * Called from drop as well as dragend, because dragend goes to the element
+ * the drag started on, and the drop's own broadcast — or a board starting —
+ * can redraw the list and take that element out before dragend arrives. A
+ * dragend on a detached element never reaches the list, so a drag closed only
+ * there would stay open, and every click on a project would be taken for the
+ * end of it.
+ */
+function endDrag ({ justEnded = true } = {}) {
+  if (drag.current === null) return
+  drag.current = null
+  // Stamped only when the drag really ended now, so the click a drop can
+  // produce is ignored; the stale-drag backstop below must not swallow the
+  // very click whose press found it.
+  if (justEnded) drag.endedAt = performance.now()
+  clearDropIndicator()
+  for (const node of el('project-list').querySelectorAll('.dragging')) node.classList.remove('dragging')
 }
 
 function clearDropIndicator () {
@@ -410,19 +465,26 @@ function rowForKey (key, into) {
     : `.category[data-category-id="${id}"]`)
 }
 
-/** What letting go here would do, in sidebarModel.dropTarget's terms. */
+/**
+ * What letting go here would do, in sidebarModel.dropTarget's terms. The row
+ * is found by the pointer's height against every visible row, not by the
+ * element under it: beside an indented category child, or in the list's side
+ * padding, the element is a list, and the drop still means the row level with
+ * the pointer.
+ */
 function dropAt (event) {
   if (!drag.current) return null
-  const row = event.target.closest?.('.project-item[data-project-id], .category-head')
-  let over = { kind: 'end' }
-  let fraction = 1
-  if (row) {
+  if (!event.dataTransfer?.types?.includes(DRAG_TYPE)) return null
+  const rows = []
+  for (const row of el('project-list').querySelectorAll('.project-item[data-project-id], .category-head')) {
+    // A folded category's projects take no room and cannot be dropped beside.
+    if (row.offsetParent === null) continue
     const box = row.getBoundingClientRect()
-    fraction = box.height > 0 ? (event.clientY - box.top) / box.height : 0.5
-    over = row.classList.contains('category-head')
-      ? { kind: 'category', id: row.dataset.categoryId }
-      : { kind: 'project', id: row.dataset.projectId }
+    rows.push(row.classList.contains('category-head')
+      ? { kind: 'category', id: row.dataset.categoryId, top: box.top, bottom: box.bottom }
+      : { kind: 'project', id: row.dataset.projectId, top: box.top, bottom: box.bottom })
   }
+  const { over, fraction } = sidebarModel.rowAt(rows, event.clientY)
   return sidebarModel.dropTarget(state.layout, drag.current, over, fraction)
 }
 
@@ -441,7 +503,10 @@ function wireDragAndDrop () {
       ? { kind: 'category', id: source.dataset.categoryId }
       : { kind: 'project', id: source.dataset.projectId }
     event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData(DRAG_TYPE, `${drag.current.kind}:${drag.current.id}`)
     event.dataTransfer.setData('text/plain', `${drag.current.kind}:${drag.current.id}`)
+    // A drag under way is no time to hold redraws for a click.
+    releaseRedraw()
     const dimmed = drag.current.kind === 'category' ? source.closest('.category') : source
     dimmed.classList.add('dragging')
   })
@@ -472,17 +537,20 @@ function wireDragAndDrop () {
     const request = drop.action === 'moveCategory'
       ? api.moveCategory(drag.current.id, drop.index)
       : api.moveProject(drag.current.id, drop.target)
+    // Closed here, not left to dragend: see endDrag.
+    endDrag()
     request.catch((error) => {
       console.error('workbench: could not move that', error)
     })
   })
 
-  list.addEventListener('dragend', () => {
-    drag.current = null
-    drag.endedAt = performance.now()
-    clearDropIndicator()
-    for (const node of list.querySelectorAll('.dragging')) node.classList.remove('dragging')
-  })
+  list.addEventListener('dragend', () => { endDrag() })
+
+  // A backstop for a drag that no drop or dragend closed — its source was
+  // redrawn away and the pointer let go outside the list. No mousedown can
+  // happen during a drag, so one arriving means any drag still on record is
+  // over.
+  document.addEventListener('mousedown', () => { endDrag({ justEnded: false }) }, true)
 }
 
 async function openProject (projectId) {
@@ -1275,6 +1343,18 @@ api.onSidebarLayoutChanged((payload) => {
 })
 el('new-category').addEventListener('click', () => { createCategory() })
 wireDragAndDrop()
+document.addEventListener('mousedown', (event) => {
+  holdRedraw()
+  // The remove question goes away when the user clicks anywhere but its row.
+  if (state.removingCategoryId !== null &&
+      event.target.closest?.('.category-head')?.dataset.categoryId !== state.removingCategoryId) {
+    state.removingCategoryId = null
+    renderProjects()
+  }
+}, true)
+// After the click: a timer queued from mouseup runs once the click it
+// produces has been dispatched.
+document.addEventListener('mouseup', () => { setTimeout(releaseRedraw, 0) }, true)
 
 for (const button of document.querySelectorAll('.rail-item')) {
   button.addEventListener('click', () => setView(button.dataset.view))

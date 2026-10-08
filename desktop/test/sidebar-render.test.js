@@ -40,7 +40,34 @@ test('a project row does not open its project on the click that ends a drag', ()
   const guard = fn('justDragged')
   assert.match(guard, /drag\.current !== null/)
   assert.match(guard, /performance\.now\(\) - drag\.endedAt < \d+/)
-  assert.match(fn('wireDragAndDrop'), /'dragend'[\s\S]*drag\.endedAt = performance\.now\(\)/)
+  assert.match(fn('endDrag'), /drag\.current = null[\s\S]*if \(justEnded\) drag\.endedAt = performance\.now\(\)/)
+})
+
+test('a drag is closed by its drop, not only by a dragend its redrawn source may never send', () => {
+  const wiring = fn('wireDragAndDrop')
+  const drop = wiring.slice(wiring.indexOf("'drop'"), wiring.indexOf("'dragend'"))
+  assert.match(drop, /endDrag\(\)/)
+  assert.match(wiring, /'dragend', \(\) => \{ endDrag\(\) \}/)
+  // The backstop: a press means no drag is on, and it must not eat its own click.
+  assert.match(wiring, /document\.addEventListener\('mousedown', \(\) => \{ endDrag\(\{ justEnded: false \}\) \}, true\)/)
+})
+
+test('only a drag this list started is taken for a sidebar move', () => {
+  assert.match(fn('wireDragAndDrop'), /setData\(DRAG_TYPE,/)
+  assert.match(fn('dropAt'), /if \(!event\.dataTransfer\?\.types\?\.includes\(DRAG_TYPE\)\) return null/)
+})
+
+test('the drop row is found by height, not by the element under the pointer', () => {
+  const body = fn('dropAt')
+  assert.match(body, /sidebarModel\.rowAt\(rows, event\.clientY\)/)
+  assert.doesNotMatch(body, /event\.target/)
+})
+
+test('a redraw asked for while a button is down waits for the click', () => {
+  assert.match(fn('renderProjects'), /^\s*\n?function renderProjects \(\) \{\s*if \(redraw\.held\) \{\s*redraw\.owed = true\s*return/)
+  assert.match(app, /document\.addEventListener\('mousedown', \(event\) => \{\s*holdRedraw\(\)/)
+  assert.match(app, /document\.addEventListener\('mouseup', \(\) => \{ setTimeout\(releaseRedraw, 0\) \}, true\)/)
+  assert.match(fn('holdRedraw'), /setTimeout\(releaseRedraw, \d+\)/)
 })
 
 test('the project list and layout change only from what the main process sends', () => {

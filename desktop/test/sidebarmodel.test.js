@@ -8,7 +8,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 
-const { dropTarget, initials } = require('../src/renderer/sidebarmodel')
+const { dropTarget, rowAt, initials } = require('../src/renderer/sidebarmodel')
 const { moveProject, moveCategory, flatten } = require('../src/main/sidebarlayout')
 
 const top = (id) => ({ kind: 'project', id })
@@ -130,4 +130,30 @@ test('initials take the first letter of the first two words', () => {
   assert.equal(initials('élan vital'), 'ÉV')
   assert.equal(initials('😀 fun'), '😀F')
   assert.equal(initials('   '), '·')
+})
+
+// Rows as the page measures them: a at 0-30, Work's header 30-60, b 60-90
+// (indented, but height is all that counts), d 100-130 after a 10px gap.
+const rows = [
+  { kind: 'project', id: 'a', top: 0, bottom: 30 },
+  { kind: 'category', id: 'work', top: 30, bottom: 60 },
+  { kind: 'project', id: 'b', top: 60, bottom: 90 },
+  { kind: 'project', id: 'd', top: 100, bottom: 130 }
+]
+
+test('rowAt finds the row level with the pointer, whatever is under it sideways', () => {
+  // Beside b, in its category's indent: still b, upper half.
+  assert.deepEqual(rowAt(rows, 66), { over: { kind: 'project', id: 'b' }, fraction: 0.2 })
+  assert.deepEqual(rowAt(rows, 45), { over: { kind: 'category', id: 'work' }, fraction: 0.5 })
+  // And so a project dropped in that gutter lands between Work's children,
+  // not at the end of the list.
+  const { over, fraction } = rowAt(rows, 66)
+  assert.deepEqual(dropTarget(layout, project('d'), over, fraction).target, { kind: 'category', id: 'work', index: 0 })
+})
+
+test('rowAt puts a pointer in a gap before the row below it, above the first row before it, and below the last at the end', () => {
+  assert.deepEqual(rowAt(rows, 95), { over: { kind: 'project', id: 'd' }, fraction: 0 })
+  assert.deepEqual(rowAt(rows, -4), { over: { kind: 'project', id: 'a' }, fraction: 0 })
+  assert.deepEqual(rowAt(rows, 130), { over: { kind: 'end' }, fraction: 1 })
+  assert.deepEqual(rowAt([], 10), { over: { kind: 'end' }, fraction: 1 })
 })

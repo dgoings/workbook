@@ -103,5 +103,30 @@
     return letters.join('') || '·'
   }
 
-  return { dropTarget, initials, ABOVE_CATEGORY }
+  /**
+   * Which row the pointer is over, by height alone.
+   *
+   * The list has side padding and a category's projects are indented, so the
+   * element under the pointer is often a list rather than a row; asking which
+   * row's band holds the pointer's Y is what a reader means by "here". A
+   * pointer in the gap between two rows is before the lower one, and one below
+   * the last row is the end of the list.
+   *
+   * @param {Array<{ kind: 'project'|'category', id: string, top: number, bottom: number }>} rows
+   *   the visible project rows and category headers, top to bottom
+   * @param {number} y the pointer's Y, in the same coordinates as the rows
+   * @returns {{ over: object, fraction: number }} arguments for dropTarget
+   */
+  function rowAt (rows, y) {
+    for (const row of rows) {
+      if (y < row.top) return { over: { kind: row.kind, id: row.id }, fraction: 0 }
+      if (y < row.bottom) {
+        const height = row.bottom - row.top
+        return { over: { kind: row.kind, id: row.id }, fraction: height > 0 ? (y - row.top) / height : 0.5 }
+      }
+    }
+    return { over: { kind: 'end' }, fraction: 1 }
+  }
+
+  return { dropTarget, rowAt, initials, ABOVE_CATEGORY }
 })
