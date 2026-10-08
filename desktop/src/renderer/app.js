@@ -5,6 +5,16 @@ const api = window.workbench
 const state = {
   view: 'import',
   projects: [],
+  // The sidebar's order and categories, as the main process last announced
+  // them; state.projects is in the same order. See adoptProjects.
+  layout: { items: [] },
+  // The category whose name is being typed, and the one whose removal is
+  // being asked about, so a redraw in the middle keeps either open.
+  editingCategoryId: null,
+  editingDraft: null,
+  editingSelection: null,
+  editingRefused: false,
+  removingCategoryId: null,
   activeProjectId: null,
   scan: { root: null, repositories: [] },
   // Search text and the New/Imported filter are view state, not scan state:
@@ -68,13 +78,63 @@ function setView (view, projectId = null) {
 // --- projects --------------------------------------------------------------
 
 async function loadProjects () {
-  const { projects } = await api.listProjects()
+  const { projects, layout } = await api.listProjects()
+  adoptProjects({ projects, layout })
+}
+
+/**
+ * Take a project list and layout from the main process and draw them.
+ *
+ * The only way either changes here. A drag, a fold or a rename asks the main
+ * process and waits for its sidebar:layoutChanged answer rather than moving
+ * rows itself: the menu numbers Cmd+1 to Cmd+9 from the main process's order,
+ * and a sidebar redrawn ahead of it would show one order while the shortcuts
+ * and Previous/Next walked another.
+ */
+function adoptProjects ({ projects, layout }) {
   state.projects = projects
+  state.layout = layout ?? { items: projects.map((project) => ({ kind: 'project', id: project.id })) }
   renderProjects()
 }
 
+// A redraw between a press and its release replaces the row being pressed,
+// and the release then lands on a new element, so the click never happens:
+// clicking a project while a category name is open (its blur saves and
+// redraws), or while a board starting reloads the list, took two clicks. So
+// a redraw asked for while a button is down waits until the click has been
+// handled, with a cap so a press that never releases cannot freeze the list.
+const redraw = { held: false, owed: false, timer: null }
+
+function holdRedraw () {
+  redraw.held = true
+  clearTimeout(redraw.timer)
+  redraw.timer = setTimeout(releaseRedraw, 1000)
+}
+
+function releaseRedraw () {
+  clearTimeout(redraw.timer)
+  redraw.held = false
+  if (redraw.owed) {
+    redraw.owed = false
+    renderProjects()
+  }
+}
+
 function renderProjects () {
+  if (redraw.held) {
+    redraw.owed = true
+    return
+  }
   const list = el('project-list')
+  // A category name being typed survives the redraw — the list is redrawn
+  // whenever a board starts or stops, which can be mid-word — with its text and
+  // its caret, so the rebuilt field carries on where the old one was.
+  const typing = list.querySelector('.category-name-input')
+  if (typing && state.editingCategoryId !== null) {
+    state.editingDraft = typing.value
+    state.editingSelection = [typing.selectionStart, typing.selectionEnd]
+    state.editingRefused = typing.classList.contains('invalid')
+  }
   list.innerHTML = ''
 
   // Two or more: with one project its board already answers "what is next".
@@ -87,44 +147,399 @@ function renderProjects () {
   // cannot come back around.
   if (hideNext && state.view === 'next') setView('import')
 
-  if (state.projects.length === 0) {
+  // Drawn from the layout, which holds categories as well as projects, in the
+  // order state.projects already has. An empty category is still drawn, so it
+  // can be dropped into.
+  const byId = new Map(state.projects.map((project) => [project.id, project]))
+  for (const item of state.layout.items) {
+    if (item.kind === 'project') {
+      const project = byId.get(item.id)
+      if (project) list.append(projectRow(project))
+    } else if (item.kind === 'category') {
+      list.append(categoryGroup(item, byId))
+    }
+  }
+
+  if (list.children.length === 0) {
     const empty = document.createElement('li')
     empty.className = 'empty'
     empty.style.padding = '4px 9px'
     empty.textContent = 'None yet.'
     list.append(empty)
-    return
   }
+}
 
-  for (const project of state.projects) {
-    const item = document.createElement('li')
-    item.className = 'project-item'
-    item.dataset.projectId = project.id
-    if (project.id === state.activeProjectId) item.classList.add('active')
-    // In the rail the tile is the key and nothing else, so the whole of what
-    // the row says when expanded has to be reachable by hovering it. The status
-    // is part of that and goes on the tile too: a title of its own on the dot
-    // would win the hover over the dot and show the status alone, hiding the
-    // name and path exactly where the pointer is most likely to land.
-    const status = project.status ?? 'stopped'
-    const health = project.error ? `${status} — ${project.error}` : status
-    item.title = `${project.name}\n${project.path}\n${health}`
+function projectRow (project) {
+  const item = document.createElement('li')
+  item.className = 'project-item'
+  item.dataset.projectId = project.id
+  item.draggable = true
+  if (project.id === state.activeProjectId) item.classList.add('active')
+  // Redrawn mid-drag (the drop's broadcast, a board starting): still dimmed.
+  if (drag.current?.kind === 'project' && drag.current.id === project.id) item.classList.add('dragging')
+  // In the rail the tile is the key and nothing else, so the whole of what
+  // the row says when expanded has to be reachable by hovering it. The status
+  // is part of that and goes on the tile too: a title of its own on the dot
+  // would win the hover over the dot and show the status alone, hiding the
+  // name and path exactly where the pointer is most likely to land.
+  const status = project.status ?? 'stopped'
+  const health = project.error ? `${status} — ${project.error}` : status
+  item.title = `${project.name}\n${project.path}\n${health}`
 
-    const dot = document.createElement('span')
-    dot.className = `dot ${status}`
+  const dot = document.createElement('span')
+  dot.className = `dot ${status}`
 
-    const key = document.createElement('span')
-    key.className = 'project-key'
-    key.textContent = project.key
+  const key = document.createElement('span')
+  key.className = 'project-key'
+  key.textContent = project.key
 
+  const name = document.createElement('span')
+  name.className = 'project-name'
+  name.textContent = project.name
+
+  item.append(dot, key, name)
+  item.addEventListener('click', () => {
+    // Letting go of a drag is not a click on the row it was dragged from.
+    if (justDragged()) return
+    openProject(project.id)
+  })
+  return item
+}
+
+/**
+ * A category: a header (disclosure, name, and rename and remove controls that
+ * show on hover) over a nested list of its projects, hidden while folded. In
+ * the rail the header is a thin divider labeled with the name's initials.
+ */
+function categoryGroup (category, byId) {
+  const group = document.createElement('li')
+  group.className = 'category'
+  group.dataset.categoryId = category.id
+  if (category.collapsed) group.classList.add('collapsed')
+  if (drag.current?.kind === 'category' && drag.current.id === category.id) group.classList.add('dragging')
+
+  const head = document.createElement('div')
+  head.className = 'category-head'
+  head.dataset.categoryId = category.id
+  head.draggable = true
+  head.title = category.name
+
+  const toggle = document.createElement('button')
+  toggle.type = 'button'
+  toggle.className = 'category-toggle'
+  toggle.textContent = '▾'
+  toggle.setAttribute('aria-expanded', String(!category.collapsed))
+  toggle.setAttribute('aria-label', `${category.collapsed ? 'Expand' : 'Collapse'} ${category.name}`)
+  toggle.addEventListener('click', () => {
+    if (justDragged()) return
+    api.setCategoryCollapsed(category.id, !category.collapsed).catch((error) => {
+      console.error('workbench: could not fold the category', error)
+    })
+  })
+
+  const initials = document.createElement('span')
+  initials.className = 'category-initials'
+  initials.textContent = sidebarModel.initials(category.name)
+
+  head.append(toggle, initials)
+  if (state.editingCategoryId === category.id) {
+    head.draggable = false
+    head.append(nameEditor(category))
+  } else if (state.removingCategoryId === category.id) {
+    head.append(...removeConfirmation(category))
+  } else {
     const name = document.createElement('span')
-    name.className = 'project-name'
-    name.textContent = project.name
+    name.className = 'category-name'
+    name.textContent = category.name
+    name.addEventListener('dblclick', () => startRename(category.id))
 
-    item.append(dot, key, name)
-    item.addEventListener('click', () => openProject(project.id))
-    list.append(item)
+    const rename = document.createElement('button')
+    rename.type = 'button'
+    rename.className = 'category-action'
+    rename.textContent = '✎'
+    rename.title = 'Rename category'
+    rename.setAttribute('aria-label', `Rename ${category.name}`)
+    rename.addEventListener('click', () => startRename(category.id))
+
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'category-action'
+    remove.textContent = '×'
+    remove.title = 'Remove category'
+    remove.setAttribute('aria-label', `Remove ${category.name}`)
+    remove.addEventListener('click', () => {
+      state.removingCategoryId = category.id
+      renderProjects()
+    })
+    head.append(name, rename, remove)
   }
+
+  const children = document.createElement('ul')
+  children.className = 'category-projects'
+  children.hidden = category.collapsed
+  for (const id of category.projects) {
+    const project = byId.get(id)
+    if (project) children.append(projectRow(project))
+  }
+
+  group.append(head, children)
+  return group
+}
+
+function startRename (categoryId) {
+  state.removingCategoryId = null
+  state.editingCategoryId = categoryId
+  state.editingDraft = null
+  state.editingSelection = null
+  renderProjects()
+}
+
+/**
+ * The inline name field: Enter or leaving it saves, Escape puts the old name
+ * back, and an empty name is refused — Enter keeps the field open and marks it,
+ * leaving it cancels.
+ */
+function nameEditor (category) {
+  const input = document.createElement('input')
+  input.className = 'category-name-input'
+  input.type = 'text'
+  // A redraw while the field is open (a board starting reloads the list)
+  // rebuilds it; what was typed so far comes back with it.
+  input.value = state.editingDraft ?? category.name
+  input.setAttribute('aria-label', 'Category name')
+  if (state.editingRefused) input.classList.add('invalid')
+  let settled = false
+  const finish = (commit) => {
+    if (settled) return
+    const name = input.value.trim()
+    if (commit && name === '') {
+      input.classList.add('invalid')
+      return
+    }
+    settled = true
+    state.editingCategoryId = null
+    state.editingDraft = null
+    state.editingSelection = null
+    state.editingRefused = false
+    if (commit && name !== category.name) {
+      api.renameCategory(category.id, name).catch((error) => {
+        console.error('workbench: could not rename the category', error)
+        renderProjects()
+      })
+    }
+    // Drawn back with the name it had; a rename redraws again when its
+    // broadcast lands.
+    renderProjects()
+  }
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); finish(true) }
+    if (event.key === 'Escape') { event.preventDefault(); finish(false) }
+  })
+  input.addEventListener('blur', () => {
+    // Taken out of the page by a redraw is not the user leaving the field,
+    // and nor is the window losing focus to another app: the field is still
+    // open, and still focused, when they come back.
+    if (!input.isConnected || !document.hasFocus()) return
+    finish(input.value.trim() !== '')
+  })
+  // Focused once it is in the document: renderProjects appends it first. Opened
+  // fresh, the whole name is selected to be typed over; rebuilt by a redraw,
+  // the caret goes back where it was.
+  const selection = state.editingSelection
+  queueMicrotask(() => {
+    input.focus()
+    if (selection) input.setSelectionRange(selection[0], selection[1])
+    else input.select()
+  })
+  return input
+}
+
+/** The second step of removing a category: say what happens, and ask. */
+function removeConfirmation (category) {
+  const question = document.createElement('span')
+  question.className = 'category-confirm'
+  question.textContent = 'Remove category?'
+
+  const confirm = document.createElement('button')
+  confirm.type = 'button'
+  confirm.className = 'category-action category-confirm-yes'
+  confirm.textContent = 'Yes'
+  confirm.title = 'Its projects move to the top level'
+  confirm.addEventListener('click', () => {
+    state.removingCategoryId = null
+    api.deleteCategory(category.id).catch((error) => {
+      console.error('workbench: could not remove the category', error)
+      renderProjects()
+    })
+  })
+
+  const cancel = document.createElement('button')
+  cancel.type = 'button'
+  cancel.className = 'category-action'
+  cancel.textContent = 'No'
+  cancel.title = 'Keep the category'
+  cancel.addEventListener('click', () => {
+    state.removingCategoryId = null
+    renderProjects()
+  })
+  return [question, confirm, cancel]
+}
+
+async function createCategory () {
+  try {
+    const { categoryId } = await api.createCategory('New category')
+    // Its broadcast has drawn it already; open its name for typing.
+    startRename(categoryId)
+  } catch (error) {
+    console.error('workbench: could not create a category', error)
+  }
+}
+
+// --- sidebar drag and drop ---------------------------------------------------
+
+// What is being dragged ({ kind, id }) while a drag is on, and when the last
+// one ended, so the click that can follow a drop does not open a project.
+const drag = { current: null, endedAt: 0 }
+
+// The type dragstart puts on a drag of ours. Anything dragged over the list
+// without it — a file from Finder, text from another app — is not a sidebar
+// move, whatever drag.current says.
+const DRAG_TYPE = 'application/x-workbench-sidebar'
+
+function justDragged () {
+  return drag.current !== null || performance.now() - drag.endedAt < 300
+}
+
+/**
+ * Close the drag: forget what was dragged, note when, and undim it.
+ *
+ * Called from drop as well as dragend, because dragend goes to the element
+ * the drag started on, and the drop's own broadcast — or a board starting —
+ * can redraw the list and take that element out before dragend arrives. A
+ * dragend on a detached element never reaches the list, so a drag closed only
+ * there would stay open, and every click on a project would be taken for the
+ * end of it.
+ */
+function endDrag ({ justEnded = true } = {}) {
+  if (drag.current === null) return
+  drag.current = null
+  // Stamped only when the drag really ended now, so the click a drop can
+  // produce is ignored; the stale-drag backstop below must not swallow the
+  // very click whose press found it.
+  if (justEnded) drag.endedAt = performance.now()
+  clearDropIndicator()
+  for (const node of el('project-list').querySelectorAll('.dragging')) node.classList.remove('dragging')
+}
+
+function clearDropIndicator () {
+  for (const node of el('project-list').querySelectorAll('.drop-before, .drop-after, .drop-into')) {
+    node.classList.remove('drop-before', 'drop-after', 'drop-into')
+  }
+}
+
+/** The element a key from sidebarModel.dropTarget names. */
+function rowForKey (key, into) {
+  if (key === null) return null
+  const separator = key.indexOf(':')
+  const kind = key.slice(0, separator)
+  const id = CSS.escape(key.slice(separator + 1))
+  if (kind === 'project') return el('project-list').querySelector(`.project-item[data-project-id="${id}"]`)
+  return el('project-list').querySelector(into
+    ? `.category-head[data-category-id="${id}"]`
+    : `.category[data-category-id="${id}"]`)
+}
+
+/**
+ * What letting go here would do, in sidebarModel.dropTarget's terms. The row
+ * is found by the pointer's height against every visible row, not by the
+ * element under it: beside an indented category child, or in the list's side
+ * padding, the element is a list, and the drop still means the row level with
+ * the pointer.
+ */
+function dropAt (event) {
+  if (!drag.current) return null
+  if (!event.dataTransfer?.types?.includes(DRAG_TYPE)) return null
+  const rows = []
+  for (const row of el('project-list').querySelectorAll('.project-item[data-project-id], .category-head')) {
+    // A folded category's projects take no room and cannot be dropped beside.
+    if (row.offsetParent === null) continue
+    const box = row.getBoundingClientRect()
+    rows.push(row.classList.contains('category-head')
+      ? { kind: 'category', id: row.dataset.categoryId, top: box.top, bottom: box.bottom }
+      : { kind: 'project', id: row.dataset.projectId, top: box.top, bottom: box.bottom })
+  }
+  const { over, fraction } = sidebarModel.rowAt(rows, event.clientY)
+  return sidebarModel.dropTarget(state.layout, drag.current, over, fraction)
+}
+
+function wireDragAndDrop () {
+  const list = el('project-list')
+
+  list.addEventListener('dragstart', (event) => {
+    // No drag in the rail: its tiles are too small to aim between.
+    if (document.documentElement.classList.contains('sidebar-collapsed')) {
+      event.preventDefault()
+      return
+    }
+    const source = event.target.closest?.('.project-item[data-project-id], .category-head')
+    if (!source) return
+    drag.current = source.classList.contains('category-head')
+      ? { kind: 'category', id: source.dataset.categoryId }
+      : { kind: 'project', id: source.dataset.projectId }
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData(DRAG_TYPE, `${drag.current.kind}:${drag.current.id}`)
+    event.dataTransfer.setData('text/plain', `${drag.current.kind}:${drag.current.id}`)
+    const dimmed = drag.current.kind === 'category' ? source.closest('.category') : source
+    dimmed.classList.add('dragging')
+    // A drag sends no mouseup, so the redraw its press held is let go here —
+    // but on the next task, not now. The press can itself have asked for a
+    // redraw (an open name field's blur, the remove question going away), and
+    // running it now would replace the row being dragged while Chromium is
+    // still starting the drag from it, which cancels the drag. The redrawn row
+    // comes back dimmed: projectRow and categoryGroup read drag.current.
+    setTimeout(releaseRedraw, 0)
+  })
+
+  list.addEventListener('dragover', (event) => {
+    const drop = dropAt(event)
+    clearDropIndicator()
+    // Not prevented, so the pointer says the drop is refused.
+    if (!drop) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    const { indicator } = drop
+    const row = rowForKey(indicator.key, indicator.type === 'into')
+    if (row) row.classList.add(indicator.type === 'into' ? 'drop-into' : `drop-${indicator.edge}`)
+  })
+
+  list.addEventListener('dragleave', (event) => {
+    if (!list.contains(event.relatedTarget)) clearDropIndicator()
+  })
+
+  list.addEventListener('drop', (event) => {
+    const drop = dropAt(event)
+    clearDropIndicator()
+    if (!drop) return
+    event.preventDefault()
+    // Asked, not done: the rows move when the main process announces the
+    // saved layout, so what is drawn is always what Cmd+N counts.
+    const request = drop.action === 'moveCategory'
+      ? api.moveCategory(drag.current.id, drop.index)
+      : api.moveProject(drag.current.id, drop.target)
+    // Closed here, not left to dragend: see endDrag.
+    endDrag()
+    request.catch((error) => {
+      console.error('workbench: could not move that', error)
+    })
+  })
+
+  list.addEventListener('dragend', () => { endDrag() })
+
+  // A backstop for a drag that no drop or dragend closed — its source was
+  // redrawn away and the pointer let go outside the list. No mousedown can
+  // happen during a drag, so one arriving means any drag still on record is
+  // over.
+  document.addEventListener('mousedown', () => { endDrag({ justEnded: false }) }, true)
 }
 
 async function openProject (projectId) {
@@ -907,6 +1322,28 @@ el('sidebar-toggle').addEventListener('click', () => {
 
 api.onThemeChanged(paintTheme)
 api.onSidebarChanged(paintSidebar)
+// Every saved layout edit, from this page or not: the order shortcuts count in
+// changes with it, so the list is replaced whole. The Next view lists projects
+// in that order too, and it otherwise waits for its next tick to find out, so
+// an open one is read again now.
+api.onSidebarLayoutChanged((payload) => {
+  adoptProjects(payload)
+  if (state.view === 'next') loadNext(true)
+})
+el('new-category').addEventListener('click', () => { createCategory() })
+wireDragAndDrop()
+document.addEventListener('mousedown', (event) => {
+  holdRedraw()
+  // The remove question goes away when the user clicks anywhere but its row.
+  if (state.removingCategoryId !== null &&
+      event.target.closest?.('.category-head')?.dataset.categoryId !== state.removingCategoryId) {
+    state.removingCategoryId = null
+    renderProjects()
+  }
+}, true)
+// After the click: a timer queued from mouseup runs once the click it
+// produces has been dispatched.
+document.addEventListener('mouseup', () => { setTimeout(releaseRedraw, 0) }, true)
 
 for (const button of document.querySelectorAll('.rail-item')) {
   button.addEventListener('click', () => setView(button.dataset.view))

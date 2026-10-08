@@ -1,6 +1,7 @@
 'use strict'
 
 const { app, BaseWindow, WebContentsView, ipcMain, dialog, shell, nativeTheme, Menu } = require('electron')
+const crypto = require('node:crypto')
 const fs = require('node:fs/promises')
 const path = require('node:path')
 
@@ -15,6 +16,7 @@ const nextview = require('./nextview')
 const clipath = require('./clipath')
 const { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_POSITION, RAIL_WIDTH, boardBounds } = require('./layout')
 const { buildMenuTemplate } = require('./menu')
+const { createSidebarCommands } = require('./sidebarcommands')
 const { setupUpdater } = require('./updater')
 
 const SIDEBAR_WIDTH = 260
@@ -271,9 +273,10 @@ function toggleSidebar () {
 function installMenu () {
   const template = buildMenuTemplate({
     platform: process.platform,
-    projects: registry.projects,
+    // Numbered in sidebar order, so Cmd+1 is whatever the sidebar shows first.
+    projects: registry.orderedProjects,
     activeProjectId,
-    nextAvailable: registry.projects.length >= 2,
+    nextAvailable: registry.orderedProjects.length >= 2,
     actions: menuActions
   })
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
@@ -634,11 +637,24 @@ ipcMain.handle('path:notice', async () => {
   return { directory }
 })
 
-ipcMain.handle('registry:list', async () => ({
-  projects: registry.projects.map((project) => ({
+/**
+ * Every project in sidebar order, each with its board server's status: the
+ * list the shell draws and numbers. Sidebar order, not storage order, because
+ * the menu numbers projects from the same list and the renderer resolves a
+ * Cmd+N or a Previous/Next step against this one: the two have to agree.
+ */
+function listedProjects () {
+  return registry.orderedProjects.map((project) => ({
     ...project,
     ...supervisor.status(project.id)
-  })),
+  }))
+}
+
+// The layout travels with the list so the sidebar can draw both from one
+// answer, after an import or a forget as much as at boot.
+ipcMain.handle('registry:list', async () => ({
+  projects: listedProjects(),
+  layout: registry.sidebarLayout,
   scanRoots: registry.scanRoots
 }))
 
@@ -648,10 +664,7 @@ ipcMain.handle('next:load', async (_event, { limit } = {}) =>
     // registry:list sends it: what this view shows is only as fresh as the
     // server keeping that project synchronized, so the view has to be able to
     // say which projects have one running.
-    projects: registry.projects.map((project) => ({
-      ...project,
-      ...supervisor.status(project.id)
-    })),
+    projects: listedProjects(),
     limit
   }))
 
@@ -767,6 +780,24 @@ ipcMain.handle('sidebar:toggle', async () => {
   await toggleSidebar()
   return { collapsed: registry.sidebarCollapsed }
 })
+
+// The sidebar's order and categories. Each edit is validated, applied, saved
+// and announced by sidebarcommands.js, one at a time; the menu is rebuilt after
+// every one because its Cmd+N items follow the sidebar's order.
+const sidebarCommands = createSidebarCommands({
+  registry,
+  mintId: () => crypto.randomUUID(),
+  listProjects: listedProjects,
+  rebuildMenu: () => installMenu(),
+  broadcast: (payload) => toChrome('sidebar:layoutChanged', payload)
+})
+ipcMain.handle('sidebar:layout', async () => sidebarCommands.layout())
+ipcMain.handle('sidebar:moveProject', (_event, args) => sidebarCommands.moveProject(args))
+ipcMain.handle('sidebar:moveCategory', (_event, args) => sidebarCommands.moveCategory(args))
+ipcMain.handle('sidebar:createCategory', (_event, args) => sidebarCommands.createCategory(args))
+ipcMain.handle('sidebar:renameCategory', (_event, args) => sidebarCommands.renameCategory(args))
+ipcMain.handle('sidebar:setCategoryCollapsed', (_event, args) => sidebarCommands.setCategoryCollapsed(args))
+ipcMain.handle('sidebar:deleteCategory', (_event, args) => sidebarCommands.deleteCategory(args))
 
 // A board's preload asks this before the board's own script runs, so a board
 // opened after a choice was made starts in that mode. Synchronous on purpose:

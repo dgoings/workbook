@@ -57,6 +57,24 @@ contextBridge.exposeInMainWorld('workbench', {
   getSidebar: () => ipcRenderer.invoke('sidebar:get'),
   toggleSidebar: () => ipcRenderer.invoke('sidebar:toggle'),
 
+  // The sidebar's order and categories, owned by the main process because the
+  // menu numbers projects in the same order. Each edit resolves with
+  // { layout, projects } (createCategory adds the new categoryId) and rejects
+  // with a message naming a bad argument or a failed save. `target` is
+  // { kind: 'top', index } or { kind: 'category', id, index }; an index is the
+  // gap to drop into, counted before the move.
+  getSidebarLayout: () => ipcRenderer.invoke('sidebar:layout'),
+  moveProject: (projectId, target) =>
+    ipcRenderer.invoke('sidebar:moveProject', { projectId, target }),
+  moveCategory: (categoryId, index) =>
+    ipcRenderer.invoke('sidebar:moveCategory', { categoryId, index }),
+  createCategory: (name) => ipcRenderer.invoke('sidebar:createCategory', { name }),
+  renameCategory: (categoryId, name) =>
+    ipcRenderer.invoke('sidebar:renameCategory', { categoryId, name }),
+  setCategoryCollapsed: (categoryId, collapsed) =>
+    ipcRenderer.invoke('sidebar:setCategoryCollapsed', { categoryId, collapsed }),
+  deleteCategory: (categoryId) => ipcRenderer.invoke('sidebar:deleteCategory', { categoryId }),
+
   onImportProgress: (handler) => {
     const listener = (_event, payload) => handler(payload)
     ipcRenderer.on('import:progress', listener)
@@ -71,6 +89,13 @@ contextBridge.exposeInMainWorld('workbench', {
     const listener = (_event, payload) => handler(payload)
     ipcRenderer.on('theme:changed', listener)
     return () => ipcRenderer.removeListener('theme:changed', listener)
+  },
+  // { layout, projects } after every saved layout edit, projects in sidebar
+  // order with their server status, the same shape listProjects gives.
+  onSidebarLayoutChanged: (handler) => {
+    const listener = (_event, payload) => handler(payload)
+    ipcRenderer.on('sidebar:layoutChanged', listener)
+    return () => ipcRenderer.removeListener('sidebar:layoutChanged', listener)
   },
   onSidebarChanged: (handler) => {
     const listener = (_event, payload) => handler(payload)

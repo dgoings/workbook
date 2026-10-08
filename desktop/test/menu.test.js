@@ -8,6 +8,7 @@ const { describe, test } = require('node:test')
 const assert = require('node:assert/strict')
 
 const { buildMenuTemplate } = require('../src/main/menu')
+const { Registry } = require('../src/main/registry')
 
 function actionsSpy () {
   const calls = []
@@ -54,6 +55,30 @@ describe('buildMenuTemplate', () => {
     assert.match(second.label, /Beta/)
     assert.match(second.label, /BB/)
     second.click()
+    assert.deepEqual(calls, [['selectProject', 1]])
+  })
+
+  test('the registry\'s sidebar order drives the numbered items, counting a collapsed category', () => {
+    // Stored in import order a, b, c; drawn as c, then a folded category
+    // holding b, then a. Never loaded or saved: orderedProjects reads state.
+    const registry = new Registry('/tmp/not-a-real-place/userData')
+    registry.state.projects = projects.map((project) => ({ ...project }))
+    registry.state.sidebarLayout = {
+      items: [
+        { kind: 'project', id: 'c' },
+        { kind: 'category', id: 'k', name: 'Folded', collapsed: true, projects: ['b'] },
+        { kind: 'project', id: 'a' }
+      ]
+    }
+    const { spy, calls } = actionsSpy()
+    const template = buildMenuTemplate({
+      platform: 'darwin', projects: registry.orderedProjects, activeProjectId: null, nextAvailable: true, actions: spy
+    })
+    assert.match(byAccelerator(template, 'CmdOrCtrl+1').label, /^Gamma \(CC\)$/)
+    // The project inside the folded category keeps its number.
+    assert.match(byAccelerator(template, 'CmdOrCtrl+2').label, /^Beta \(BB\)$/)
+    assert.match(byAccelerator(template, 'CmdOrCtrl+3').label, /^Alpha \(AA\)$/)
+    byAccelerator(template, 'CmdOrCtrl+2').click()
     assert.deepEqual(calls, [['selectProject', 1]])
   })
 
