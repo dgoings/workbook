@@ -37,7 +37,11 @@
       </button>
     </nav>
 
-    <div class="rail-label">Projects</div>
+    <div class="rail-label projects-label">
+      <span>Projects</span>
+      <button id="new-category" class="icon-button new-category" type="button"
+              title="New category" aria-label="New category">+</button>
+    </div>
     <!-- Above the projects rather than among the rail items: it is a view of
          the projects, and it is only there when there are enough of them for
          "what is next across these" to be a different question from one
@@ -241,6 +245,7 @@
     </section>
   </main>
 
+  <script src="sidebarmodel.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

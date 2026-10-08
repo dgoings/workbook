@@ -387,6 +387,145 @@ body {
 .dot.running { background: var(--wb-ok); }
 .dot.failed, .dot.exited { background: var(--wb-danger); }
 
+/* --- categories and drag ------------------------------------------------ */
+
+/* The "Projects" label carries the New category control at its right end. The
+   label keeps its own padding; the button is a small .icon-button pulled up
+   into the label's line so the list below does not move down for it. */
+.projects-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: .55rem;
+}
+
+.new-category {
+  width: 1.35rem;
+  height: 1.35rem;
+  margin: -.3rem 0;
+  font-size: .95rem;
+  line-height: 1;
+}
+
+/* A category is a group in the list: its header row, then its projects
+   indented under it. Folded, the nested list is hidden by the [hidden]
+   attribute app.js sets, through the one global [hidden] rule. */
+.category { list-style: none; }
+
+.category-head {
+  display: flex;
+  align-items: center;
+  gap: .3rem;
+  min-height: 1.9rem;
+  padding: .15rem .3rem .15rem .1rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--wb-text-2);
+  font-size: .78rem;
+  font-weight: 700;
+  cursor: grab;
+}
+
+.category-head:hover { background: var(--wb-primary-tint-4); }
+
+.category-toggle {
+  flex: 0 0 auto;
+  width: 1.2rem;
+  height: 1.2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--wb-text-3);
+  font-size: .72rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform .12s ease;
+}
+
+.category-toggle:hover { color: var(--wb-primary); background: var(--wb-primary-tint-1); }
+
+/* Folded, the triangle points at the name rather than down at the projects. */
+.category.collapsed .category-toggle { transform: rotate(-90deg); }
+
+.category-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The initials are the rail's label; expanded, the full name says it. */
+.category-initials { display: none; }
+
+/* Rename and remove show on hover or keyboard focus, so a list of categories
+   does not read as a column of buttons. The confirm step's buttons share the
+   class and are always shown, because nothing else is in that row. */
+.category-action {
+  flex: 0 0 auto;
+  padding: .05rem .3rem;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--wb-text-3);
+  font-size: .74rem;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.category-head:hover .category-action,
+.category-head:focus-within .category-action,
+.category-confirm ~ .category-action {
+  opacity: 1;
+}
+
+.category-action:hover { color: var(--wb-primary); background: var(--wb-primary-tint-1); }
+
+.category-confirm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wb-text-2);
+  font-weight: 400;
+}
+
+.category-confirm-yes { color: var(--wb-danger); }
+.category-confirm-yes:hover { color: var(--wb-danger); background: var(--wb-danger-surface); }
+
+.category-name-input {
+  flex: 1;
+  min-width: 0;
+  padding: .1rem .3rem;
+  border: 1px solid var(--wb-primary);
+  border-radius: 3px;
+  font: inherit;
+}
+
+.category-name-input.invalid { border-color: var(--wb-danger); }
+
+.category-projects {
+  list-style: none;
+  margin: 0 0 .2rem;
+  padding: 0 0 0 .9rem;
+}
+
+/* The drop indicator: a 2px primary line along the edge a drop would land
+   beside, drawn as a shadow so the row does not move, and the header of a
+   category a drop would go into lit as a target. */
+.drop-before { box-shadow: 0 -2px 0 0 var(--wb-primary); }
+.drop-after { box-shadow: 0 2px 0 0 var(--wb-primary); }
+
+.drop-into {
+  border-color: var(--wb-primary);
+  background: var(--wb-primary-tint-1);
+}
+
+/* What is being dragged dims where it stands until the main process answers. */
+.dragging { opacity: .45; }
+
 /* The words of a rail item, in an element of their own so the rail can hide
    them and keep the glyph. Expanded, it is the whole of the item's label, and
    it shrinks rather than widening the item a longer one could not fit in. */
@@ -492,6 +631,46 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* A category in the rail is a divider: a hairline either side of its initials,
+   the full name on the header's tooltip. Folded, its tiles stay hidden, as in
+   the sidebar. Nothing in it is a control here — no fold, rename or drag. */
+:root.sidebar-collapsed .category-head {
+  gap: .25rem;
+  min-height: 0;
+  margin: .3rem 0 .25rem;
+  padding: 0;
+  cursor: default;
+}
+
+:root.sidebar-collapsed .category-head:hover { background: transparent; }
+
+:root.sidebar-collapsed .category-head::before,
+:root.sidebar-collapsed .category-head::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--wb-rule);
+}
+
+:root.sidebar-collapsed .category-toggle,
+:root.sidebar-collapsed .category-name,
+:root.sidebar-collapsed .category-action,
+:root.sidebar-collapsed .category-confirm,
+:root.sidebar-collapsed .category-name-input {
+  display: none;
+}
+
+:root.sidebar-collapsed .category-initials {
+  display: block;
+  flex: 0 0 auto;
+  color: var(--wb-text-3);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .62rem;
+  letter-spacing: .04em;
+}
+
+:root.sidebar-collapsed .category-projects { padding-left: 0; }
 
 /* --- main --------------------------------------------------------------- */
 

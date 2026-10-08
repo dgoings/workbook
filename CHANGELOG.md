@@ -41,6 +41,14 @@ under Changed.
   falls back to offering file names. The Homebrew formula generates and
   installs all three during `brew install`; a source build writes the one line
   for its shell, which the README's Installation section gives.
+- **The desktop app's sidebar can be reordered and grouped.** Drag a project
+  to move it, and group projects under named categories that fold away: the
+  `+` beside Projects makes one and opens its name for typing, a double-click
+  renames it, and removing one puts its projects back at the top level where it
+  stood. Cmd+1–9, Previous/Next Project and the Next view all follow the
+  sidebar's order top to bottom, counting projects in a folded category, so
+  folding one never renumbers anything. The order is kept with the project
+  list; a list from an older build opens in the order it was imported.
 - **The desktop app has keyboard shortcuts**, all in the application menu:
   Cmd+1–9 and Cmd+Option+Up/Down for projects, Cmd+0 for Next, Cmd+Shift+I
   for Import, Cmd+Shift+D to toggle dark mode, Cmd+B for the sidebar, and
