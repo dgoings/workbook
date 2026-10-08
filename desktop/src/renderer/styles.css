@@ -179,18 +179,17 @@ body {
 /* White against the canvas, the way .app-header separates itself from the
    board it sits above: the same surface, and a hairline at its right edge.
 
-   The hairline is not the sidebar's border, because it must not run through
-   the window's top band. The title strip, the sidebar head and the board's
-   header read as one layer, and the line only separates the sidebar from what
-   lies below that layer. Beside a board, that layer ends at the bottom of the
+   The hairline is not the sidebar's border, because beside a board it must
+   not run through the window's title row. The sidebar head and the board's
+   header read as one layer there, and the line only separates the sidebar
+   from what lies below that layer. That layer ends at the bottom of the
    board's header, whose height only the board knows, so the board draws the
    line itself below its header (src/preload/board.js marks its page
    in-workbench) and the shell draws none while one shows: app.js sets
    board-active on the root while the main process says a board view is laid
    in. Everywhere else, the shell's own views and the project view while no
-   board is in it, the line starts under the title strip, so the strip stays
-   one bar; on Linux, where there is no strip, the height is 0 and it runs the
-   full height.
+   board is in it, there is no header beside the head, and the line runs the
+   sidebar's full height from the window's top edge.
    test/divider.test.js holds both halves to this. */
 #sidebar {
   position: relative;
@@ -204,7 +203,7 @@ body {
 #sidebar::after {
   content: "";
   position: absolute;
-  top: var(--title-strip-height, 0px);
+  top: 0;
   right: 0;
   bottom: 0;
   width: 1px;
@@ -217,30 +216,43 @@ body {
 /* The head is the window's grab handle on every platform. macOS and Windows
    both hide the native title bar, and with it gone nothing moves the window
    but an element marked as a drag region; the board beside the sidebar is a
-   separate view the shell does not style, so this is the one place to take
-   hold of. Linux keeps its native decorations, so there the mark is harmless
-   and the title bar moves the window as usual. The collapsed rail reshapes the
-   head but leaves this alone, and test/drag-region.test.js holds both to it. */
+   separate view whose own header is the other half of the window's title
+   row (src/preload/board.js marks it, and the board's stylesheet makes it a
+   drag region), so this is the shell's half. Linux keeps its native
+   decorations, so there the mark is harmless and the title bar moves the
+   window as usual. The collapsed rail reshapes the head but leaves this alone,
+   and test/drag-region.test.js holds both to it.
+
+   Two lines. The first is the window's title row, as tall as the row the
+   window controls sit in (--title-row-height, which app.js copies from
+   src/main/layout.js, where the main process pins the traffic lights and sizes
+   the Windows overlay by the same number): the wordmark on the left and the
+   chevron on the right, both centered on it, so on macOS they are level with
+   the traffic lights and the wordmark sits on the line the board's eyebrow
+   does. The second is the version line, under the wordmark. The identity
+   block is display: contents so its two lines are the grid's own items. */
 .sidebar-head {
-  display: flex;
-  align-items: flex-start;
-  gap: .5rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: var(--title-row-height, 36px) auto;
+  align-items: center;
+  column-gap: .5rem;
   -webkit-app-region: drag;
-  /* Clears the traffic lights, which titleBarStyle 'hiddenInset' floats over
-     the top-left of this pane: they sit in the head's top strip, beside the
-     part of it that is free to grab, rather than over the wordmark. Windows
-     draws its overlay controls at the top *right*, over the main area rather
-     than the sidebar, and Linux gets ordinary decorations — neither needs the
-     inset, and on both it would read as a stray gap. The platform class is set
-     by the renderer at boot. */
-  padding: 34px 1rem .75rem;
+  padding: 0 .6rem .75rem 1rem;
 }
 
-:root:not(.is-mac) .sidebar-head {
-  padding-top: .85rem;
+/* The traffic lights sit at the left of the title row, over this pane, pinned
+   at x 14 and 12px across with 20px between centers, so they end at about 66.
+   The wordmark starts clear of them; the version line under it keeps the same
+   edge. Windows draws its overlay controls at the top *right*, over the
+   board's header rather than the sidebar, and Linux gets ordinary decorations,
+   so neither needs the inset. The platform class is set by the renderer at
+   boot. */
+:root.is-mac .sidebar-head {
+  padding-left: 78px;
 }
 
-.sidebar-identity { flex: 1; min-width: 0; }
+.sidebar-identity { display: contents; }
 
 /* The chevron opts out of the drag region: a control inside one is dragged
    rather than clicked. */
@@ -263,7 +275,10 @@ body {
 .icon-button:hover { background: var(--wb-primary-tint-1); color: var(--wb-primary); }
 
 .wordmark {
-  margin: 0 0 .2rem;
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  margin: 0;
   color: var(--wb-primary);
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
   font-size: .7rem;
@@ -273,6 +288,11 @@ body {
 }
 
 .version {
+  grid-column: 1;
+  grid-row: 2;
+  /* Up under the wordmark, the way the board's title sits under its eyebrow,
+     rather than a whole half row below it. */
+  margin-top: -.55rem;
   color: var(--wb-muted);
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
   font-size: .75rem;
@@ -394,8 +414,9 @@ body {
 
 /* The toggle is an .icon-button and wants nothing beyond one, in either state.
    It is named here because the markup applies the class, and a class the
-   renderer applies with no rule of its own is what check-styles is for. */
-.sidebar-toggle { flex: 0 0 auto; }
+   renderer applies with no rule of its own is what check-styles is for. It
+   takes the title row's right end. */
+.sidebar-toggle { flex: 0 0 auto; grid-column: 2; grid-row: 1; }
 
 /* --- sidebar rail ------------------------------------------------------- */
 
@@ -413,18 +434,22 @@ body {
   flex: 0 0 76px;
 }
 
-/* The chevron takes the whole head to itself, centered, where it sat beside
-   the wordmark before. Only the side padding goes: the top inset is the head's
-   own, so macOS keeps its 34px under the traffic lights and the
-   :root:not(.is-mac) override keeps answering for everyone else. The drag
-   region is the head's own as well, so the rail is still a grab handle around
-   a chevron that still clicks. */
+/* The chevron takes the whole head to itself, centered on the title row,
+   where it sat beside the wordmark before. The drag region is the head's own,
+   so the rail is still a grab handle around a chevron that still clicks. */
 :root.sidebar-collapsed .sidebar-head {
-  flex-direction: column;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
   padding-left: 0;
   padding-right: 0;
 }
+
+:root.sidebar-collapsed .sidebar-toggle { grid-column: 1; }
+
+/* Except on macOS, where the traffic lights fill the rail's title row from
+   x 14 to about 66 of its 76: the chevron goes on the line under them, which
+   is where the version line would be, centered as everywhere else. */
+:root.is-mac.sidebar-collapsed .sidebar-toggle { grid-row: 2; }
 
 /* The chevron is one glyph pointing at the edge the click moves the sidebar
    towards, so expanding mirrors it rather than swapping in a second path. */
@@ -505,51 +530,6 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-/* The window's title bar on macOS and Windows, which both hide the native
-   one: the whole top edge of the main area moves the window, as it does in
-   every other app there, and together with the sidebar head beside it reads as
-   one bar. The board views are separate views the main process lays out below
-   this, so the shell has to draw it; their offset and this height are the same
-   number, which app.js copies into --title-strip-height from the main
-   process's src/main/layout.js. Linux keeps its native decorations, and there
-   app.js hides the strip rather than leave a zero-height drag region.
-
-   The sidebar's surface rather than the canvas, so the strip continues the
-   head instead of looking like part of the view under it. No bottom rule: the
-   board under it draws its own header edge. */
-.title-strip {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: var(--title-strip-height, 0px);
-  padding: 0 1rem;
-  /* Windows draws its overlay controls over the strip's right end. The page
-     is told where they are not: titlebar-area-x and -width describe the free
-     part of the top row, so whatever lies right of it in the viewport is the
-     controls. Padding that much keeps the name out from under them. Where the
-     overlay is absent the fallbacks make it zero. The math holds because the
-     chrome view spans the window from x=0 and this page never shows a vertical
-     scrollbar, so 100vw is the window's width. */
-  padding-right: calc(1rem + 100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
-  background: var(--wb-surface);
-  color: var(--wb-muted);
-  font-size: .78rem;
-  font-weight: 600;
-  -webkit-app-region: drag;
-  user-select: none;
-  cursor: default;
-}
-
-/* One line: a long project name is ellipsized rather than wrapping out of a
-   strip whose height is fixed. */
-.title-strip__name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .view {

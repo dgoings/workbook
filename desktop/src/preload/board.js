@@ -33,15 +33,21 @@ const { ipcRenderer } = require('electron')
 
 // One more job, and the only one that is not about the theme or a command: a
 // class on the root that tells the board's stylesheet it is drawn inside
-// Workbench. The sidebar's divider has to stop under the board's header, whose
-// height only the board knows, so the board draws that line itself below its
-// header and the shell draws none beside a board. A browser opening the same
-// board never runs this file, so it never sees the class or the line. Nothing
-// else is marked or exposed: the page learns one fact, through its own markup.
-// If the root does not exist yet when this runs, the class lands on
-// DOMContentLoaded instead, and the line may paint a frame late; cosmetic.
+// Workbench. Two things hang off it. The sidebar's divider has to stop under
+// the board's header, whose height only the board knows, so the board draws
+// that line itself below its header and the shell draws none beside a board.
+// And the board's header is the top of the window beside the sidebar, so it
+// becomes the window's drag handle, with its links and switches opted out.
+// On Windows a second class says the overlay controls sit over the header's
+// right end, so the header keeps its settings clear of them. A browser opening
+// the same board never runs this file, so it never sees either class: no line,
+// no drag region, no padding. Nothing else is marked or exposed: the page
+// learns these facts through its own markup. If the root does not exist yet
+// when this runs, the classes land on DOMContentLoaded instead, and the page
+// may paint a frame without them; cosmetic.
 function markEmbedded () {
   document.documentElement.classList.add('in-workbench')
+  if (process.platform === 'win32') document.documentElement.classList.add('in-workbench-win32')
 }
 if (document.documentElement) markEmbedded()
 else document.addEventListener('DOMContentLoaded', markEmbedded, { once: true })

@@ -33,6 +33,14 @@ shell. The choice is remembered across launches. The rail keeps every route it
 had: the import glyph, and each project as its key with its status dot, with the
 name and path on the tile's tooltip.
 
+On macOS and Windows the window has no separate title bar: its top row is the
+sidebar's head, which holds the wordmark and the chevron level with the window
+controls, and the showing board's own header. Drag the window by either, from
+anywhere that is not a control. On macOS the traffic lights sit at the left of
+that row; on Windows the window controls sit at its right end, over the board's
+header, which keeps its switches clear of them. Linux keeps its native title
+bar.
+
 With two or more projects imported, a Next entry sits above them. It shows what
 each project would hand out next — the top of its Ready work, unblocked and not
 already somebody else's, exactly as `workbook next` decides it — with one

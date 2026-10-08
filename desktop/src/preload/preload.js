@@ -6,9 +6,9 @@
 
 const { contextBridge, ipcRenderer } = require('electron')
 // This preload is not sandboxed (see the shell view's webPreferences in
-// main.js), so it can reach a sibling module, and the title strip's height is
-// read from the same function the main process lays the boards out with.
-const { titleStripHeight } = require('../main/layout')
+// main.js), so it can reach a sibling module, and the title row's height is
+// read from the same constant the main process places the window controls by.
+const { TITLE_ROW_HEIGHT } = require('../main/layout')
 
 contextBridge.exposeInMainWorld('workbench', {
   // 'darwin' | 'win32' | 'linux' — the renderer only uses it for chrome that
@@ -16,10 +16,10 @@ contextBridge.exposeInMainWorld('workbench', {
   platform: process.platform === 'darwin' ? 'mac'
     : process.platform === 'win32' ? 'windows' : 'linux',
 
-  // How tall the title strip across the top of the main area is, in CSS
-  // pixels, and 0 where the window keeps its native title bar. The board views
-  // start this far down, so the strip has to be exactly this tall.
-  titleStripHeight: titleStripHeight(process.platform),
+  // How tall the window's title row is, in CSS pixels: the row the traffic
+  // lights or the overlay controls sit in, which the sidebar head's wordmark
+  // and chevron are centered on.
+  titleRowHeight: TITLE_ROW_HEIGHT,
 
   version: () => ipcRenderer.invoke('workbook:version'),
 

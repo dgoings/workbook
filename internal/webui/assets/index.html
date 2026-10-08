@@ -343,6 +343,34 @@
        the border sits outside its scrolling area, so the columns scroll as
        before. */
     :root.in-workbench .app-header ~ * { border-left: 1px solid var(--wb-border); }
+    /* Inside Workbench the header is also the top of the window beside the app's
+       sidebar: the app hides the native title bar, so the window is moved by
+       whatever its pages mark as a drag region, and this header shares the
+       window's title row with the sidebar's head. It moves the window from
+       anywhere a reader is not pointing at a control. A drag region swallows
+       clicks and hovers, so every control the header holds opts back out: the
+       route links, the switches (buttons, and an anchor with role="switch" when
+       a route puts one here), and any form control or label a later header
+       grows. The top padding puts the eyebrow on the line the sidebar's
+       wordmark sits on: both are the same 13px line of the same type, centered
+       on the 18px midline of the 36px row the window controls occupy.
+       Only under the class the app's board preload sets: a browser never has it,
+       so a board opened in one is never a drag region, and
+       board_title_row_test.go holds every -webkit-app-region rule to that. */
+    :root.in-workbench .app-header { padding-top: 11.5px; -webkit-app-region: drag; }
+    :root.in-workbench .app-header a, :root.in-workbench .app-header button, :root.in-workbench .app-header input, :root.in-workbench .app-header select, :root.in-workbench .app-header textarea, :root.in-workbench .app-header label, :root.in-workbench .app-header summary, :root.in-workbench .app-header [role="switch"], :root.in-workbench .app-header [tabindex] { -webkit-app-region: no-drag; }
+    /* On Windows the app draws its window controls over the right end of the
+       title row, which beside the sidebar is this header's right end, so the
+       settings keep clear of them. Window Controls Overlay reports the free part
+       of the row as env(titlebar-area-x) and env(titlebar-area-width); Electron
+       translates that rect into each view's own coordinates (its
+       WebContentsViewHost::SendWindowControlsOverlay), so here they are relative
+       to this page's viewport and the controls are what lies right of
+       x + width. Electron 44, which Workbench ships today, sends the rect only to
+       a BrowserWindow's own page and never to a view like this one, so the
+       variables are unset here and the width fallback takes over: 138px, three
+       46px caption buttons, which is unverified on a Windows machine. */
+    :root.in-workbench-win32 .app-header { padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 138px)) + 1.25rem); }
     /* Reports leave only by being dismissed, so the notice has to be able to run
        out of room rather than out of page: it shares a viewport-height flex
        column with main, and the body never scrolls. The cap keeps the route

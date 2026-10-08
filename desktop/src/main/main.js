@@ -13,7 +13,7 @@ const gitidentity = require('./gitidentity')
 const workbook = require('./workbook')
 const nextview = require('./nextview')
 const clipath = require('./clipath')
-const { titleStripHeight, boardBounds } = require('./layout')
+const { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_POSITION, boardBounds } = require('./layout')
 const { buildMenuTemplate } = require('./menu')
 const { setupUpdater } = require('./updater')
 
@@ -53,12 +53,11 @@ function sidebarWidth () {
 function layout () {
   if (!window) return
   const content = window.getContentBounds()
-  // The shell's view covers the whole window: it draws the sidebar and, across
-  // the top of the main area, the title strip the window is dragged by. The
-  // board goes beside the one and under the other, so the strip stays visible
-  // above whichever board is showing.
+  // The shell's view covers the whole window and draws the sidebar; the board
+  // goes beside it, from the window's top edge, where its own header is the
+  // part of the window's title row the window is dragged by.
   chromeView?.setBounds({ x: 0, y: 0, width: content.width, height: content.height })
-  const bounds = boardBounds(content, sidebarWidth(), titleStripHeight(process.platform))
+  const bounds = boardBounds(content, sidebarWidth())
   for (const [projectId, view] of boardViews) {
     // Views for projects that are not showing are parked off-screen rather than
     // detached, so switching back does not reload the board or lose its state.
@@ -86,12 +85,17 @@ function createWindow () {
     // keeps Snap Layouts working; anything else loses them. Linux takes the
     // ordinary decorations its desktop draws.
     titleBarStyle: isMac ? 'hiddenInset' : isWindows ? 'hidden' : 'default',
+    // Pinned rather than left to the default, so the lights are centered on
+    // the title row the sidebar head's wordmark and chevron share, and the
+    // head knows where they end.
+    ...(isMac && { trafficLightPosition: TRAFFIC_LIGHT_POSITION }),
     ...(isWindows && {
       titleBarOverlay: {
         color: '#00000000',
         symbolColor: dark ? '#e4e9f2' : '#34425a',
-        // The controls sit in the shell's title strip, so they are its height.
-        height: titleStripHeight(process.platform)
+        // The controls sit at the right end of the title row, over the
+        // board's header, so they are the row's height.
+        height: TITLE_ROW_HEIGHT
       }
     }),
     // macOS reads its icon from the bundle; the other two need to be told.
@@ -195,7 +199,7 @@ async function applyTheme () {
     window.setTitleBarOverlay({
       color: '#00000000',
       symbolColor: dark ? '#e4e9f2' : '#34425a',
-      height: titleStripHeight(process.platform)
+      height: TITLE_ROW_HEIGHT
     })
   }
   toChrome('theme:changed', { theme: registry.theme, dark })

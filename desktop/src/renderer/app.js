@@ -57,28 +57,12 @@ function setView (view, projectId = null) {
   // After that loop, not before it: the Next entry carries .project-item and
   // has no data-project-id, so the loop above has just cleared it.
   el('next-item').classList.toggle('active', view === 'next')
-  paintTitle()
   if (view === 'next') startNextPolling()
   else stopNextPolling()
 
   // The board is a separate top-level view owned by the main process. Any view
   // that is not a project must hide it, or it would cover this document.
   if (view !== 'project') api.showChrome()
-}
-
-/**
- * Name what the window is showing in the title strip, the way a title bar
- * would: the open project, or Next, or the app itself on the import view and
- * whenever the open project is not in the list.
- */
-function paintTitle () {
-  let title = 'Workbench'
-  if (state.view === 'next') title = 'Next'
-  if (state.view === 'project') {
-    const project = state.projects.find((candidate) => candidate.id === state.activeProjectId)
-    if (project) title = project.name
-  }
-  el('title-strip-name').textContent = title
 }
 
 // --- projects --------------------------------------------------------------
@@ -92,9 +76,6 @@ async function loadProjects () {
 function renderProjects () {
   const list = el('project-list')
   list.innerHTML = ''
-  // The list is reloaded whenever a board starts or stops, which is also when
-  // the open project's name could have arrived or changed.
-  paintTitle()
 
   // Two or more: with one project its board already answers "what is next".
   const hideNext = state.projects.length < 2
@@ -1024,14 +1005,14 @@ api.onShortcut((payload) => {
 })
 
 async function boot () {
-  // Drives the one piece of chrome that differs by platform: the space macOS
-  // needs above the sidebar for its inset traffic lights.
+  // Drives the chrome that differs by platform: the inset macOS needs at the
+  // left of the sidebar head's first line for its traffic lights, and where
+  // the chevron goes in the rail, which the lights fill on macOS.
   document.documentElement.classList.add(`is-${api.platform}`)
-  // First and synchronous, so no view is ever drawn under a strip of the
-  // wrong height. The main process starts the boards this far down; a strip
-  // of zero is a platform with its own title bar, where none is drawn.
-  document.documentElement.style.setProperty('--title-strip-height', `${api.titleStripHeight}px`)
-  el('title-strip').hidden = api.titleStripHeight === 0
+  // First and synchronous, so the head is never drawn against a title row of
+  // the wrong height: the main process centers the traffic lights, or sizes the
+  // overlay controls, on this same number from src/main/layout.js.
+  document.documentElement.style.setProperty('--title-row-height', `${api.titleRowHeight}px`)
   paintTheme(await api.getTheme())
   paintSidebar(await api.getSidebar())
   try {
