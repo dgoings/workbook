@@ -138,7 +138,13 @@ const widths = [
   ['RAIL_WIDTH', ':root.sidebar-collapsed #sidebar']
 ]
 for (const [name, selector] of widths) {
-  const declared = mainSource.match(new RegExp(`const ${name} = (\\d+)`))
+  // A width main.js takes from layout.js is that module's number: the rail's is
+  // derived there from the traffic lights, and the stylesheet's fallback for
+  // --rail-width still has to say the same thing.
+  const imported = new RegExp(`const \\{[^}]*\\b${name}\\b[^}]*\\} = require\\('\\./layout'\\)`).test(mainSource)
+  const declared = imported
+    ? [null, String(require(path.join(__dirname, '..', 'src', 'main', 'layout.js'))[name])]
+    : mainSource.match(new RegExp(`const ${name} = (\\d+)`))
   const rule = stylesheet.match(new RegExp(`^${selector.replace(/[.:#]/g, '\\$&')}\\s*\\{([^}]*)\\}`, 'm'))
   if (!declared) {
     fail(`src/main/main.js no longer declares ${name}`)
@@ -159,7 +165,7 @@ for (const [name, selector] of widths) {
     for (const length of value.matchAll(/(\d+)px/g)) lengths.push(length[1])
   }
   if (lengths.length === 0 || lengths.some((value) => value !== declared[1])) {
-    fail(`${name} is ${declared[1]} in src/main/main.js but the ${selector} rule in ` +
+    fail(`${name} is ${declared[1]} in src/main/${imported ? 'layout' : 'main'}.js but the ${selector} rule in ` +
       `src/renderer/styles.css is ${lengths.length === 0 ? 'set in no px at all' : lengths.map((value) => `${value}px`).join(', ')}`)
   }
 }
