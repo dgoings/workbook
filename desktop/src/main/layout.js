@@ -42,6 +42,17 @@ const TRAFFIC_LIGHT_POSITION = Object.freeze({ x: 14, y: (TITLE_ROW_HEIGHT - TRA
 const TRAFFIC_LIGHTS_END = TRAFFIC_LIGHT_POSITION.x + 2 * TRAFFIC_LIGHT_SPACING + TRAFFIC_LIGHT_SIZE
 
 /**
+ * How wide the collapsed sidebar is, in CSS pixels. A rail rather than nothing
+ * at all, and on macOS the traffic lights sit over it, so it is as wide as the
+ * lights plus the same clearance on their right as on their left: 74 + 14 =
+ * 88. Any narrower and the line at the rail's right edge, or the board beside
+ * it, runs into the zoom button. The main process lays the boards out beside
+ * this width and the shell's preload hands the same number to the stylesheet,
+ * so the two cannot drift apart.
+ */
+const RAIL_WIDTH = TRAFFIC_LIGHTS_END + TRAFFIC_LIGHT_POSITION.x
+
+/**
  * The rectangle the showing board view fills: right of the sidebar, from the
  * window's top edge to its right and bottom edges. The board's own header is
  * the top of the window there, and the window is dragged by it.
@@ -63,4 +74,4 @@ function boardBounds ({ width, height }, sidebarWidth) {
   }
 }
 
-module.exports = { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_SIZE, TRAFFIC_LIGHT_POSITION, TRAFFIC_LIGHTS_END, boardBounds }
+module.exports = { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_SIZE, TRAFFIC_LIGHT_POSITION, TRAFFIC_LIGHTS_END, RAIL_WIDTH, boardBounds }

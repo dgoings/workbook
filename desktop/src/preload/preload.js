@@ -8,7 +8,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 // This preload is not sandboxed (see the shell view's webPreferences in
 // main.js), so it can reach a sibling module, and the title row's height is
 // read from the same constant the main process places the window controls by.
-const { TITLE_ROW_HEIGHT } = require('../main/layout')
+const { TITLE_ROW_HEIGHT, RAIL_WIDTH } = require('../main/layout')
 
 contextBridge.exposeInMainWorld('workbench', {
   // 'darwin' | 'win32' | 'linux' — the renderer only uses it for chrome that
@@ -20,6 +20,10 @@ contextBridge.exposeInMainWorld('workbench', {
   // lights or the overlay controls sit in, which the sidebar head's wordmark
   // and chevron are centered on.
   titleRowHeight: TITLE_ROW_HEIGHT,
+
+  // How wide the collapsed sidebar is, in CSS pixels: the width the main
+  // process lays the boards out beside when the sidebar is a rail.
+  railWidth: RAIL_WIDTH,
 
   version: () => ipcRenderer.invoke('workbook:version'),
 

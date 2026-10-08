@@ -13,15 +13,14 @@ const gitidentity = require('./gitidentity')
 const workbook = require('./workbook')
 const nextview = require('./nextview')
 const clipath = require('./clipath')
-const { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_POSITION, boardBounds } = require('./layout')
+const { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_POSITION, RAIL_WIDTH, boardBounds } = require('./layout')
 const { buildMenuTemplate } = require('./menu')
 const { setupUpdater } = require('./updater')
 
 const SIDEBAR_WIDTH = 260
-// The collapsed sidebar is a rail rather than nothing at all, and 76 is the
-// narrowest it can be while the macOS inset traffic lights still sit over shell
-// chrome instead of over the board.
-const RAIL_WIDTH = 76
+// The collapsed sidebar's width, RAIL_WIDTH, comes from layout.js: it is
+// derived from where the traffic lights end, and the renderer draws the rail
+// from the same number.
 const MIN_WIDTH = 1000
 const MIN_HEIGHT = 680
 

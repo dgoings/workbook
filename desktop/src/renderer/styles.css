@@ -423,18 +423,19 @@ body {
 
 /* --- sidebar rail ------------------------------------------------------- */
 
-/* Collapsed, the sidebar is a 76px rail: the same controls and the same list,
+/* Collapsed, the sidebar is a rail (88px, --rail-width, which app.js copies
+   from src/main/layout.js): the same controls and the same list,
    kept to the parts that still read at that width. Everything below hangs off
    the one class the renderer sets on the root element, and nothing outside
    this block touches the expanded layout.
 
    Nothing here may be wider than the rail. The main process positions each
-   board's native view at this same 76 — the two numbers are one measurement in
-   two files — so a rail item that overflowed would not spill onto the canvas,
-   it would slide under a board and be invisible. */
+   board's native view at this same width — one constant, read here through the
+   custom property — so a rail item that overflowed would not spill onto the
+   canvas, it would slide under a board and be invisible. */
 :root.sidebar-collapsed #sidebar {
-  width: 76px;
-  flex: 0 0 76px;
+  width: var(--rail-width, 88px);
+  flex: 0 0 var(--rail-width, 88px);
 }
 
 /* The chevron takes the whole head to itself, centered on the title row,
@@ -450,7 +451,7 @@ body {
 :root.sidebar-collapsed .sidebar-toggle { grid-column: 1; }
 
 /* Except on macOS, where the traffic lights fill the rail's title row from
-   x 14 to 74 of its 76: the chevron goes on the line under them, which
+   x 14 to 74 of its 88: the chevron goes on the line under them, which
    is where the version line would be, centered as everywhere else. */
 :root.is-mac.sidebar-collapsed .sidebar-toggle { grid-row: 2; }
 

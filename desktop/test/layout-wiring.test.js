@@ -78,6 +78,26 @@ describe('the title row comes from layout.js everywhere', () => {
     }
   })
 
+  test('the rail is one width in main.js and the stylesheet', () => {
+    assert.match(main, /const \{[^}]*\bRAIL_WIDTH\b[^}]*\} = require\('\.\/layout'\)/,
+      'main.js must require RAIL_WIDTH from ./layout')
+    assert.doesNotMatch(main, /const RAIL_WIDTH\s*=/, 'main.js must not define a rail width of its own')
+    assert.match(fn(main, 'sidebarWidth'), /registry\.sidebarCollapsed \? RAIL_WIDTH : SIDEBAR_WIDTH/,
+      'sidebarWidth() must answer RAIL_WIDTH for the rail')
+    const preload = code('preload', 'preload.js')
+    assert.match(preload, /railWidth:\s*RAIL_WIDTH\b/, 'preload.js must expose railWidth: RAIL_WIDTH')
+    assert.match(fn(code('renderer', 'app.js'), 'boot'), /setProperty\('--rail-width', `\$\{api\.railWidth\}px`\)/,
+      'boot() must set --rail-width from api.railWidth')
+    const css = fs.readFileSync(path.join(src, 'renderer', 'styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const rail = css.match(/:root\.sidebar-collapsed #sidebar\s*\{([^{}]*)\}/)
+    assert.ok(rail, 'no :root.sidebar-collapsed #sidebar rule')
+    const { RAIL_WIDTH } = require('../src/main/layout')
+    assert.match(rail[1], new RegExp(`(?:^|[;\\s])width\\s*:\\s*var\\(--rail-width, ${RAIL_WIDTH}px\\)\\s*;`),
+      `the rail's width must be var(--rail-width, ${RAIL_WIDTH}px)`)
+    assert.match(rail[1], new RegExp(`(?:^|[;\\s])flex\\s*:\\s*0 0 var\\(--rail-width, ${RAIL_WIDTH}px\\)\\s*;`),
+      `the rail's flex basis must be var(--rail-width, ${RAIL_WIDTH}px)`)
+  })
+
   test('main.js takes both from layout.js', () => {
     assert.match(main, /const \{[^}]*\bTITLE_ROW_HEIGHT\b[^}]*\bTRAFFIC_LIGHT_POSITION\b[^}]*\} = require\('\.\/layout'\)/,
       'main.js must require TITLE_ROW_HEIGHT and TRAFFIC_LIGHT_POSITION from ./layout')
@@ -87,8 +107,8 @@ describe('the title row comes from layout.js everywhere', () => {
     const preload = code('preload', 'preload.js')
     assert.match(preload, /titleRowHeight:\s*TITLE_ROW_HEIGHT\b/,
       'preload.js must expose titleRowHeight: TITLE_ROW_HEIGHT')
-    assert.match(preload, /const \{ TITLE_ROW_HEIGHT \} = require\('\.\.\/main\/layout'\)/,
-      'preload.js must require TITLE_ROW_HEIGHT from ../main/layout')
+    assert.match(preload, /const \{[^}]*\bTITLE_ROW_HEIGHT\b[^}]*\bRAIL_WIDTH\b[^}]*\} = require\('\.\.\/main\/layout'\)/,
+      'preload.js must require TITLE_ROW_HEIGHT and RAIL_WIDTH from ../main/layout')
   })
 
   test('the renderer sets --title-row-height from it at boot', () => {

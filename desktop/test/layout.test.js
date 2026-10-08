@@ -9,7 +9,7 @@
 const { describe, test } = require('node:test')
 const assert = require('node:assert/strict')
 
-const { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_SIZE, TRAFFIC_LIGHT_POSITION, TRAFFIC_LIGHTS_END, boardBounds } = require('../src/main/layout')
+const { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_SIZE, TRAFFIC_LIGHT_POSITION, TRAFFIC_LIGHTS_END, RAIL_WIDTH, boardBounds } = require('../src/main/layout')
 
 describe('the title row', () => {
   test('is 36 pixels', () => {
@@ -27,6 +27,11 @@ describe('the title row', () => {
     assert.equal(TRAFFIC_LIGHTS_END, 74)
   })
 
+  test('the rail is the lights plus the same clearance on their right as on their left', () => {
+    assert.equal(RAIL_WIDTH, 88)
+    assert.equal(RAIL_WIDTH - TRAFFIC_LIGHTS_END, TRAFFIC_LIGHT_POSITION.x)
+  })
+
   test('the position cannot be changed by a caller that was handed it', () => {
     assert.ok(Object.isFrozen(TRAFFIC_LIGHT_POSITION))
   })
@@ -40,7 +45,7 @@ describe('boardBounds', () => {
   })
 
   test('beside the collapsed rail, from the window\'s top edge', () => {
-    assert.deepEqual(boardBounds(content, 76), { x: 76, y: 0, width: 1204, height: 820 })
+    assert.deepEqual(boardBounds(content, RAIL_WIDTH), { x: 88, y: 0, width: 1192, height: 820 })
   })
 
   test('a window narrower than the sidebar leaves an empty board, never a negative one', () => {

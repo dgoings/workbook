@@ -1013,6 +1013,8 @@ async function boot () {
   // the wrong height: the main process centers the traffic lights, or sizes the
   // overlay controls, on this same number from src/main/layout.js.
   document.documentElement.style.setProperty('--title-row-height', `${api.titleRowHeight}px`)
+  // The rail's width likewise: the board beside it starts exactly here.
+  document.documentElement.style.setProperty('--rail-width', `${api.railWidth}px`)
   paintTheme(await api.getTheme())
   paintSidebar(await api.getSidebar())
   try {
