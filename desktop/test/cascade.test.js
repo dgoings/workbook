@@ -156,6 +156,47 @@ describe('the cascade', () => {
     assert.match(cascade.unreachable(hiding, button), /ul#list\.list is display: none \(\[hidden\]\)/)
   })
 
+  test('the last declaration of a property in one rule wins', () => {
+    const { button } = page()
+    const twice = cascade.parseStylesheet('.go { min-height: 3px; min-height: 8px; display: none; display: block; }')
+    assert.equal(cascade.px(twice, button, 'min-height'), 8)
+    assert.equal(cascade.computed(twice, button, 'display'), 'block')
+  })
+
+  test('opacity 0 on the element or any ancestor hides it', () => {
+    const { list, button } = page()
+    const fade = cascade.parseStylesheet('.list { opacity: 0; }')
+    assert.match(cascade.unreachable(fade, button), /ul#list\.list is opacity: 0 \(\.list\)/)
+    const clear = cascade.parseStylesheet('.go { opacity: 0%; }')
+    assert.match(cascade.unreachable(clear, button), /button\.go is opacity: 0/)
+    const half = cascade.parseStylesheet('.list { opacity: .5; }')
+    assert.equal(cascade.unreachable(half, button), null)
+    assert.equal(cascade.unreachable(fade, list.parent), null)
+  })
+
+  test('visibility other than visible hides the element, and a child can show itself again', () => {
+    const { button, tag } = page()
+    const hidden = cascade.parseStylesheet('.go { visibility: hidden; }')
+    assert.match(cascade.unreachable(hidden, button), /button\.go is visibility: hidden/)
+    const collapsed = cascade.parseStylesheet('.row { visibility: collapse; }')
+    assert.match(cascade.unreachable(collapsed, button), /visibility: collapse/)
+    const above = cascade.parseStylesheet('.list { visibility: hidden; } .go { visibility: visible; }')
+    assert.equal(cascade.unreachable(above, button), null)
+    assert.match(cascade.unreachable(above, tag), /span\.tag is visibility: hidden/)
+  })
+
+  test('the least size is the larger of the minimum and a fixed length', () => {
+    const { button } = page()
+    const read = (css, axis) => cascade.leastSize(cascade.parseStylesheet(css), button, axis)
+    assert.equal(read('.go { }', 'height'), 0)
+    assert.equal(read('.go { min-height: 20px; }', 'height'), 20)
+    assert.equal(read('.go { height: 24px; }', 'height'), 24)
+    assert.equal(read('.go { height: 10px; min-height: 24px; }', 'height'), 24)
+    assert.equal(read('.go { height: 30px; min-height: 24px; }', 'height'), 30)
+    assert.equal(read('.go { width: 1.5rem; }', 'width'), 24)
+    assert.throws(() => read('.go { height: 50%; }', 'height'), /cannot resolve height/)
+  })
+
   test('refuses a length it cannot resolve', () => {
     const { button } = page()
     const calc = cascade.parseStylesheet('.go { min-height: calc(1rem + 2px); }')

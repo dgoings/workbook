@@ -414,6 +414,8 @@ function matchSimple (part, element, state, selector) {
 
 // Longhands a test may ask for, under every name that can set them.
 const ALIASES = {
+  height: ['height', 'block-size'],
+  width: ['width', 'inline-size'],
   'min-height': ['min-height', 'min-block-size'],
   'min-width': ['min-width', 'min-inline-size'],
   'font-size': ['font-size', 'font']
@@ -472,6 +474,8 @@ function initial (element, property, rules, options) {
     case 'opacity': return '1'
     case 'pointer-events': return 'auto'
     case 'cursor': return 'auto'
+    case 'height':
+    case 'width':
     case 'min-height':
     case 'min-width': return 'auto'
     case 'font-size':
@@ -508,6 +512,15 @@ function px (rules, element, property, options = {}) {
   if (length[2] === 'px') return n
   if (length[2] === 'rem') return n * computed(rules, rootOf(element), 'font-size', options)
   return n * computed(rules, element, 'font-size', options)
+}
+
+// The least `axis` ('height' or 'width') the element's box can have, in px: the
+// larger of its minimum and its fixed size when that is a length. An auto size
+// claims nothing, and a percentage is refused like any length the cascade
+// cannot resolve. Padding and box-sizing only add to this; a max-height or
+// max-width that caps the fixed size is not read.
+function leastSize (rules, element, axis, options = {}) {
+  return Math.max(px(rules, element, `min-${axis}`, options), px(rules, element, axis, options))
 }
 
 // Why the pointer cannot reach `element`, or null if nothing in the stylesheet
@@ -549,6 +562,7 @@ module.exports = {
   cascaded,
   computed,
   px,
+  leastSize,
   unreachable,
   describe
 }

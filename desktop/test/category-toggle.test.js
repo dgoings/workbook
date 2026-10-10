@@ -264,9 +264,13 @@ describe('the rail draws the toggle as a group header', () => {
 
 describe('the rail toggle is there to be hit', () => {
   // The real stylesheet's cascade, run on the real page collapsed to the rail
-  // with categoryGroup's own markup in the project list: a rule that hides the
-  // toggle there fails this whatever its selector, and so does one that leaves
-  // it under the 24px WCAG 2.5.8 asks of a pointer target.
+  // with categoryGroup's own markup in the project list. A rule that sets
+  // display none, visibility, opacity 0 or pointer-events none on the toggle or
+  // an ancestor fails this whatever its selector, and so does one that leaves
+  // the declared minimum under the 24px WCAG 2.5.8 asks of a pointer target.
+  // It reads declarations, not layout: a rule that clips the toggle (a zero
+  // height with overflow hidden on its header), scales it away, or moves it
+  // off screen passes, and only a measurement in the running app catches that.
   const stylesheet = cascade.parseStylesheet(fs.readFileSync(path.join(src, 'renderer', 'styles.css'), 'utf8'))
   const page = fs.readFileSync(path.join(src, 'renderer', 'index.html'), 'utf8')
   const TARGET = 24
@@ -337,14 +341,15 @@ describe('the rail toggle is there to be hit', () => {
   })
 
   test('the rail toggle is at least 24px tall and wide', () => {
-    // A minimum holds whatever the glyphs measure: box-sizing aside, the border
-    // box is never smaller than min-height and min-width.
+    // A minimum or a fixed size holds whatever the glyphs measure: box-sizing
+    // aside, the border box is never smaller than min-height or height, or than
+    // min-width or width. Either way of asking for 24px passes.
     for (const scenario of scenarios()) {
       check(scenario, (toggle, options, where) => {
-        const height = cascade.px(stylesheet, toggle, 'min-height', options)
-        const width = cascade.px(stylesheet, toggle, 'min-width', options)
-        assert.ok(height >= TARGET, `min-height resolves to ${height}px: ${where}`)
-        assert.ok(width >= TARGET, `min-width resolves to ${width}px: ${where}`)
+        const height = cascade.leastSize(stylesheet, toggle, 'height', options)
+        const width = cascade.leastSize(stylesheet, toggle, 'width', options)
+        assert.ok(height >= TARGET, `neither min-height nor height asks for ${TARGET}px, only ${height}px: ${where}`)
+        assert.ok(width >= TARGET, `neither min-width nor width asks for ${TARGET}px, only ${width}px: ${where}`)
       })
     }
   })

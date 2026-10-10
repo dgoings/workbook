@@ -70,10 +70,9 @@ disagree. A registry from a build before categories opens with every project at
 the top level in import order, a forgotten project leaves its category, and a
 newly imported one lands at the bottom. In the rail a category is a thin
 divider labeled with a fold chevron and its initials (its name is the tooltip);
-clicking the label, a target at least 24px square, or Enter or Space on it,
-folds and unfolds the category
-just as the sidebar's chevron does, so a folded category's projects are
-reachable without expanding the sidebar. Nothing drags in the rail, and
+clicking the label (a target at least 24px square), or pressing Enter or Space
+on it, folds and unfolds the category just as the sidebar's chevron does, so a
+folded category's projects are reachable without expanding the sidebar. Nothing drags in the rail, and
 renaming or removing a category waits for the expanded sidebar.
 
 ## Keyboard shortcuts
@@ -132,12 +131,14 @@ the PATH install's copy, block writer, profile targets and Windows registry
 edit. Every case runs against a temporary directory, so no test reads or writes
 your real HOME, your profiles, or the app's userData, and nothing in the suite
 launches Electron. A test that needs to know how the stylesheet treats an
-element, such as whether the rail's category toggle is shown and at least 24px
-square, runs `styles.css` against `index.html` through
-`test/support/cascade.js`: a small cascade, not a browser, that resolves
-selectors, specificity, `!important`, inheritance and each `@media` condition
-on and off, and throws on any selector or length it cannot evaluate rather than
-treating it as no match.
+element, such as whether the rail's category toggle is displayed, visible,
+takes the pointer, and asks for at least 24px square, runs `styles.css` against
+`index.html` through `test/support/cascade.js`: a small cascade, not a browser,
+that resolves selectors, specificity, `!important`, inheritance and each
+`@media` condition on and off, and throws on any selector or length it cannot
+evaluate rather than treating it as no match. It reads declarations, not
+layout: a rule that clips, scales or moves the toggle off screen is not seen,
+so that is checked by measuring the running app.
 
 ## Building
 
