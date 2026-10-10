@@ -2634,20 +2634,21 @@
         // nothing to judge a chip against, and marks none.
         const priorityStranded = priorities.size > 0 && !priorities.has(task.priority);
         article.draggable = !view.pending;
+        // The label is where a screen reader hears that the priority is not one
+        // of this project's, as it is for the status: the card names itself, so
+        // nothing inside it is read on focus. A tombstone's label says it too,
+        // because its chip is marked for the readers who can see it.
+        const priorityNote = priorityStranded ? ", at the unrecognized priority " + task.priority : "";
         article.setAttribute("aria-label", view.pending
           ? "Task " + task.title + ", saving"
           : task.deleted
             // A deleted card drags too, and the only place it can go is a
             // column — which restores it there. That is what the label says,
             // because the status it is filed under is not where it is drawn.
-            ? "Restore task " + task.title + " by moving it to a column"
+            ? "Restore task " + task.title + " by moving it to a column" + priorityNote
             : (stranded
               ? "Move task " + task.title + " out of the unrecognized status " + task.status
-              : "Move task " + task.title + " from " + task.status) +
-              // And the label is where a screen reader hears that the priority
-              // is not one of this project's, as it is for the status: the card
-              // names itself, so nothing inside it is read on focus.
-              (priorityStranded ? ", at the unrecognized priority " + task.priority : ""));
+              : "Move task " + task.title + " from " + task.status) + priorityNote);
         // A tombstone has no detail page: the route answers for the tasks the
         // board holds, and a deleted task cannot be edited. The heading keeps
         // the same node either way — an anchor with no href is text, to the
