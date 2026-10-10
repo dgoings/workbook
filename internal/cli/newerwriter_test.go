@@ -148,13 +148,40 @@ func hashObject(t *testing.T, repository, contents string) string {
 
 func gitWithInput(t *testing.T, repository, input string, args ...string) string {
 	t.Helper()
+	output, err := runGitWithInput(repository, input, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return output
+}
+
+// runGitWithInput keeps stderr apart from the object ID on stdout, and hands it
+// back in the error so a refusal names its cause.
+func runGitWithInput(repository, input string, args ...string) (string, error) {
 	command := exec.Command("git", append([]string{"-C", repository}, args...)...)
 	command.Stdin = strings.NewReader(input)
+	var stderr strings.Builder
+	command.Stderr = &stderr
 	output, err := command.Output()
 	if err != nil {
-		t.Fatalf("git %v: %v", args, err)
+		return "", fmt.Errorf("git %v: %v\n%s", args, err, strings.TrimSpace(stderr.String()))
 	}
-	return strings.TrimSpace(string(output))
+	return strings.TrimSpace(string(output)), nil
+}
+
+// The configuration forgeries all run through gitWithInput, so a refused
+// object has to say why in git's own words rather than as a bare exit status.
+func TestGitWithInputReportsGitsOwnReason(t *testing.T) {
+	t.Parallel()
+	repository := t.TempDir()
+	cliGit(t, repository, "init", "--quiet")
+	_, err := runGitWithInput(repository, "", "commit-tree", "no-such-tree", "-m", "forged")
+	if err == nil {
+		t.Fatal("commit-tree accepted a tree that does not exist")
+	}
+	if !strings.Contains(err.Error(), "fatal:") {
+		t.Fatalf("error = %q, want git's own reason for the refusal", err)
+	}
 }
 
 // The whole contract, over a real bare remote and two real clones.
