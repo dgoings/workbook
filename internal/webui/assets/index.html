@@ -1,6 +1,6 @@
 {{ define "task" }}
-<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-priority="{{ .Task.Priority }}" data-id-prefix="{{ .IDPrefix }}" draggable="true" aria-label="{{ if .StatusUnresolved }}Move task {{ .Task.Title }} out of the unrecognized status {{ .ResolvedStatus }}{{ else }}Move task {{ .Task.Title }} from {{ .ResolvedStatus }}{{ end }}">
-  <div class="task-card__meta"><span class="task-id-copy-group"><button type="button" class="task-id-copy" data-copy-task-id="{{ .Task.ID }}" aria-label="Copy full task ID {{ .Task.ID }}"><code>{{ .IDPrefix }}</code></button><span class="copy-status" data-copy-status role="status" aria-live="polite" aria-atomic="true"></span></span><span class="priority priority--{{ .Task.Priority }}">{{ .Task.Priority }}</span></div>
+<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-priority="{{ .Task.Priority }}" data-id-prefix="{{ .IDPrefix }}" draggable="true" aria-label="{{ if .StatusUnresolved }}Move task {{ .Task.Title }} out of the unrecognized status {{ .ResolvedStatus }}{{ else }}Move task {{ .Task.Title }} from {{ .ResolvedStatus }}{{ end }}{{ if .PriorityUnresolved }}, at the unrecognized priority {{ .Task.Priority }}{{ end }}">
+  <div class="task-card__meta"><span class="task-id-copy-group"><button type="button" class="task-id-copy" data-copy-task-id="{{ .Task.ID }}" aria-label="Copy full task ID {{ .Task.ID }}"><code>{{ .IDPrefix }}</code></button><span class="copy-status" data-copy-status role="status" aria-live="polite" aria-atomic="true"></span></span><span class="priority priority--{{ .Task.Priority }}"{{ if .PriorityUnresolved }} data-priority-unresolved title="Priority {{ .Task.Priority }} is not one of this project's"{{ end }}>{{ .Task.Priority }}</span></div>
   <h3><a href="/tasks/{{ .Task.ID }}">{{ .Task.Title }}</a></h3>
   {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
   {{ if .Task.Labels }}<div class="labels">{{ range .Task.Labels }}<span class="label">{{ . }}</span>{{ end }}</div>{{ end }}
@@ -570,6 +570,18 @@
        built-in three cannot produce — so a board is never served with its
        priorities drawn in body text. */
     .priority--high { color: var(--wb-priority-high); } .priority--medium { color: var(--wb-priority-medium); } .priority--low { color: var(--wb-priority-low); }
+    /* A priority this project does not define: the token, drawn in the warning
+       family the unknown-status region is drawn in rather than in anything a
+       priority is. No priority has a border, so the dashed one is what tells
+       this chip apart from a live one — including from the amber a medium
+       priority shares with --wb-warning — and the question mark reads as the
+       "unknown" the region's heading says. The mark is empty alt text, because
+       the card's label already says it in words. Two selectors' worth of
+       specificity outrank the served ink block's single class either way, and
+       the padding gives back the border's pixel so the meta row keeps its
+       height whichever chip it holds. */
+    .priority[data-priority-unresolved] { color: var(--wb-warning-ink); background: var(--wb-warning-surface); border: 1px dashed var(--wb-warning); padding: calc(.1rem - 1px) calc(.34rem - 1px); cursor: help; }
+    .priority[data-priority-unresolved]::before { content: "?" / ""; margin-right: .2em; }
     .task-card h3 { margin: .55rem 0 .3rem; font-size: .9rem; line-height: 1.24; overflow-wrap: anywhere; }
     /* A card title is a heading, not a link inside a sentence: every card is one
        link and the whole card is focusable, so nothing here depends on an
@@ -2615,17 +2627,28 @@
         // The status decides, which is also why a card carries the right answer
         // with it when a poll moves it between the region and a column.
         const stranded = !lists.has(task.status);
+        // The priority half asks `priorities`, the set the form's select is
+        // built from, for the reason the status half asks `lists`: the chip and
+        // the select must not disagree about whether a value is this project's.
+        // A page that published no priorities at all — an older server — has
+        // nothing to judge a chip against, and marks none.
+        const priorityStranded = priorities.size > 0 && !priorities.has(task.priority);
         article.draggable = !view.pending;
+        // The label is where a screen reader hears that the priority is not one
+        // of this project's, as it is for the status: the card names itself, so
+        // nothing inside it is read on focus. A tombstone's label says it too,
+        // because its chip is marked for the readers who can see it.
+        const priorityNote = priorityStranded ? ", at the unrecognized priority " + task.priority : "";
         article.setAttribute("aria-label", view.pending
           ? "Task " + task.title + ", saving"
           : task.deleted
             // A deleted card drags too, and the only place it can go is a
             // column — which restores it there. That is what the label says,
             // because the status it is filed under is not where it is drawn.
-            ? "Restore task " + task.title + " by moving it to a column"
-            : stranded
+            ? "Restore task " + task.title + " by moving it to a column" + priorityNote
+            : (stranded
               ? "Move task " + task.title + " out of the unrecognized status " + task.status
-              : "Move task " + task.title + " from " + task.status);
+              : "Move task " + task.title + " from " + task.status) + priorityNote);
         // A tombstone has no detail page: the route answers for the tasks the
         // board holds, and a deleted task cannot be edited. The heading keeps
         // the same node either way — an anchor with no href is text, to the
@@ -2646,6 +2669,25 @@
         // prose would not fit. A project reads its own label in the form's
         // select and on the configuration page, where a name is what is wanted.
         parts.priority.className = "priority priority--" + task.priority; text(parts.priority, task.priority);
+        // A token this project does not define is still drawn as itself, and
+        // marked: the stylesheet draws a marked chip in the warning family the
+        // unknown-status region uses, which no priority is drawn in, and the
+        // tooltip says why. A status has a region to be shown in; a priority
+        // has no column to be moved out of, so the chip is the place. It is an
+        // attribute rather than a class because `priority--` belongs to the
+        // project's tokens, and a project may name a priority anything.
+        //
+        // The judgment is the page's vocabulary, which is the board's rule for
+        // statuses too: a poll that moves the task onto a live priority clears
+        // the mark on this node, and a vocabulary change raises the reload
+        // notice rather than redrawing the board under the reader.
+        if (priorityStranded) {
+          parts.priority.dataset.priorityUnresolved = "";
+          parts.priority.setAttribute("title", "Priority " + task.priority + " is not one of this project's");
+        } else {
+          delete parts.priority.dataset.priorityUnresolved;
+          parts.priority.removeAttribute("title");
+        }
         text(parts.link, task.title);
         text(parts.failure.message, report);
         parts.failure.region.dataset.visible = report ? "true" : "false";
@@ -3221,6 +3263,20 @@
         wanted.selected = true;
         return true;
       }
+      // What a select says about a value this project's vocabulary cannot
+      // resolve, status and priority alike: the value, and then why it is not
+      // one of the options.
+      //
+      // The value leads because a collapsed select clips the end. The properties
+      // column gives one about 200px, and the sentence this replaced — "Choose
+      // one of this project's statuses (current: ready)" — spent all of it on
+      // an instruction the field's own label already gives, and cut off the one
+      // fact nothing else on the page carries. The explanation is the half the
+      // clip may take. The two vocabularies are deliberately symmetric, so one
+      // sentence serves both and the two selects cannot drift apart.
+      function strandedPlaceholderText(value) {
+        return "Current: " + value + " (not in this project)";
+      }
       // The status a task carries can be one this client has no option for —
       // written by a newer Workbook, or by a project that added a status —
       // which is exactly the value showSelected cannot show. The list grows a
@@ -3240,10 +3296,8 @@
       // The placeholder is added and removed as the status needs it, because
       // one naming a status the task has since left is a worse label than none.
       //
-      // The placeholder asks for one of this project's statuses rather than a
-      // "canonical" one. There is no canonical set any more: the statuses are
-      // the project's, and the ones this select offers are the columns the
-      // server rendered.
+      // What the placeholder says is strandedPlaceholderText's, shared with the
+      // priority select below.
       function showStatus(control, status) {
         const first = control.firstElementChild;
         let placeholder = first && first.value === "" ? first : null;
@@ -3256,7 +3310,7 @@
           placeholder = statusPlaceholder();
           control.insertBefore(placeholder, control.firstElementChild);
         }
-        text(placeholder, "Choose one of this project's statuses (current: " + status + ")");
+        text(placeholder, strandedPlaceholderText(status));
         showSelected(control, "");
       }
       // The priority half of the same problem. A task's priority can be one this
@@ -3282,10 +3336,8 @@
       // reason showStatus's is: one naming a priority the task has since left is
       // a worse label than none.
       //
-      // It asks for one of this project's priorities. There is no canonical set
-      // — the priorities are the project's — and the select is the place a
-      // person reads a priority as a name rather than as the token the card's
-      // chip carries, so the current value is named in a sentence.
+      // It says what showStatus's says, in the same words, through the same
+      // function.
       function showPriority(control, priority) {
         const first = control.firstElementChild;
         let placeholder = first && first.value === "" ? first : null;
@@ -3298,7 +3350,7 @@
           placeholder = priorityPlaceholder();
           control.insertBefore(placeholder, control.firstElementChild);
         }
-        text(placeholder, "Choose one of this project's priorities (current: " + priority + ")");
+        text(placeholder, strandedPlaceholderText(priority));
         showSelected(control, "");
       }
       function select(name, options, value) {

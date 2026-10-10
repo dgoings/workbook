@@ -26,7 +26,13 @@ type TaskView struct {
 	// defines — not that it is merely stale. A stale token is drawn in a real
 	// column; only a token no rename and no removal leads out of has no column
 	// to be drawn in.
-	StatusUnresolved      bool
+	StatusUnresolved bool
+	// PriorityUnresolved is StatusUnresolved's twin for the priority: the task's
+	// priority resolves to nothing this project defines. It is false until
+	// MarkUnresolvedPriorities is asked, because the statuses a board is split by
+	// do not carry the priorities, and a renderer that draws no priority mark has
+	// no reason to resolve them.
+	PriorityUnresolved    bool
 	DependenciesComplete  int
 	DependenciesTotal     int
 	WaitingOnDependencies bool
@@ -156,6 +162,28 @@ func NewBoard(tasks []core.Task, vocabulary core.Vocabulary) Board {
 			board.UnknownTasks = append(board.UnknownTasks, task)
 		}
 	}
+	return board
+}
+
+// MarkUnresolvedPriorities records, on every task the board holds, whether its
+// priority resolves to anything this project defines.
+//
+// A priority has no region of its own the way a status does — there is no
+// column a priority is drawn in — so the board's split does not depend on it,
+// and the answer is a mark on the task for a renderer that draws one. It is
+// asked through the same rename and removal chains a status is, so a stored
+// token a rename forwards is not marked.
+func MarkUnresolvedPriorities(board Board, priorities core.PriorityVocabulary) Board {
+	mark := func(views []TaskView) {
+		for index := range views {
+			_, live := priorities.Resolve(views[index].Task.Priority)
+			views[index].PriorityUnresolved = !live
+		}
+	}
+	for index := range board.Columns {
+		mark(board.Columns[index].Tasks)
+	}
+	mark(board.UnknownTasks)
 	return board
 }
 
