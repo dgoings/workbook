@@ -174,3 +174,25 @@ func TestNewestReleaseTagRefusesAnUnknownKind(t *testing.T) {
 		t.Errorf("output = %q, want the kind reported", output)
 	}
 }
+
+// A malformed BEFORE would order nonsense against every tag and could read as
+// "no earlier release", so it is refused like a malformed LINE.
+func TestNewestReleaseTagRefusesAMalformedBefore(t *testing.T) {
+	t.Parallel()
+	for _, before := range []string{"v0.5.2", "0.5", "0.05.1", "0.5.2-beta"} {
+		t.Run(before, func(t *testing.T) {
+			t.Parallel()
+			command := exec.Command("sh", "-c", `. "$1"; newest_release_tag stable "" v "" "$2"`, "sh", releaseScriptPath(t, "release-version.sh"), before)
+			output, err := command.CombinedOutput()
+			if err == nil {
+				t.Fatalf("newest_release_tag accepted BEFORE %q:\n%s", before, output)
+			}
+			if got := exitCode(t, err); got != 2 {
+				t.Errorf("newest_release_tag exited %d, want 2\n%s", got, output)
+			}
+			if !strings.Contains(string(output), "BEFORE must be a release version") {
+				t.Errorf("output = %q, want BEFORE reported", output)
+			}
+		})
+	}
+}

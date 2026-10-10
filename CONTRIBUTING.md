@@ -375,7 +375,13 @@ publication reverts the tap update a stable release made and removes only a
 draft created by that run.
 
 The release notes are the `CHANGELOG.md` entry when the version has one, and
-generated from the commit log when it does not.
+generated from the commit log when it does not. GitHub does not document which
+earlier tag generated notes start from when it is told none, so a stable
+release names it with `--notes-start-tag`: the newest stable release before it
+on its own line, or, for the first release of a line, the newest stable release
+before it of all. `v0.5.2` cut after `v0.6.0` starts at `v0.5.1`, and `v0.6.0`
+starts at the newest 0.5 release, never at its own candidate. The first release
+of all, and every pre-release, leaves the start to GitHub.
 
 Before building anything, the workflow checks that the tag sits on a branch
 releases are published from, with `scripts/validate-release-branch.sh`: the

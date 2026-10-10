@@ -343,7 +343,9 @@ func TestPublishReleaseDoesNotFlagAStableReleaseAsAPreRelease(t *testing.T) {
 // The newest release publishes exactly as it always has: the same gh calls,
 // in the same order, with the same flags, and a tap commit. GitHub marks a
 // newly published release Latest unless told otherwise, so nothing here says
-// --latest, and the rule for older releases must not leak into this path.
+// --latest, and the rule for older releases must not leak into this path. The
+// one flag it gained names where its generated notes start: the first 0.6
+// release starts at the newest 0.5 one, never at its own candidate.
 func TestPublishReleaseMakesTheSameCallsForTheNewestRelease(t *testing.T) {
 	t.Parallel()
 	root, _ := renderFormulaPaths(t)
@@ -361,7 +363,7 @@ func TestPublishReleaseMakesTheSameCallsForTheNewestRelease(t *testing.T) {
 	assets := releaseAssetArguments(t, dist, "0.6.0")
 	want := strings.Join([]string{
 		"release view v0.6.0 --repo dgoings/workbook --json isDraft --jq .isDraft",
-		"release create v0.6.0 " + assets + " --generate-notes --repo dgoings/workbook --verify-tag --draft --title Workbook v0.6.0",
+		"release create v0.6.0 " + assets + " --generate-notes --notes-start-tag v0.5.1 --repo dgoings/workbook --verify-tag --draft --title Workbook v0.6.0",
 		"release edit v0.6.0 --repo dgoings/workbook --draft=false",
 	}, "\n") + "\n"
 	if got := readFakeGitHubLog(t, fakeGitHub); got != want {
@@ -415,6 +417,122 @@ func TestPublishReleaseMakesTheSameCallsForAPreReleaseWhateverTheTags(t *testing
 				t.Errorf("tap head moved from %s to %s for a pre-release", tapHeadBefore, got)
 			}
 		})
+	}
+}
+
+// Generated notes run from a start tag to the release. GitHub does not document
+// the tag it starts from when told nothing, so a stable release names it: the
+// previous stable release on its own line, or for the first release of a line
+// the previous stable release of all. A patch to an older line then lists the
+// fixes backported since that line's last release, not the commits between it
+// and a newer minor. Candidates never start notes, and a pre-release still
+// leaves the choice to GitHub, as it always has.
+func TestPublishReleaseStartsGeneratedNotesAtThePreviousReleaseOnTheLine(t *testing.T) {
+	t.Parallel()
+	root, _ := renderFormulaPaths(t)
+	for _, testCase := range []struct {
+		name      string
+		tag       string
+		tags      []string
+		startFlag string
+		editFlags string
+	}{
+		{
+			name:      "newest ordinary patch",
+			tag:       "v0.6.1",
+			tags:      []string{"v0.5.1", "v0.6.0", "v0.6.1-rc1", "v0.6.1", "v0.7.0-rc1", "desktop-v0.6.2"},
+			startFlag: " --notes-start-tag v0.6.0",
+		},
+		{
+			name:      "new minor",
+			tag:       "v0.6.0",
+			tags:      []string{"v0.5.0", "v0.5.1", "v0.6.0-rc1", "v0.6.0"},
+			startFlag: " --notes-start-tag v0.5.1",
+		},
+		{
+			name:      "new major",
+			tag:       "v1.0.0",
+			tags:      []string{"v0.9.3", "v1.0.0-rc2", "v1.0.0"},
+			startFlag: " --notes-start-tag v0.9.3",
+		},
+		{
+			name:      "older-line patch",
+			tag:       "v0.5.2",
+			tags:      []string{"v0.5.0", "v0.5.1", "v0.6.0", "v0.6.1", "v0.5.2"},
+			startFlag: " --notes-start-tag v0.5.1",
+			editFlags: " --latest=false",
+		},
+		{
+			name:      "rerun of a superseded patch",
+			tag:       "v0.5.2",
+			tags:      []string{"v0.5.1", "v0.5.2", "v0.5.3", "v0.6.0"},
+			startFlag: " --notes-start-tag v0.5.1",
+			editFlags: " --latest=false",
+		},
+		{
+			name: "first release",
+			tag:  "v0.1.0",
+			tags: []string{"v0.1.0-rc1", "v0.1.0"},
+		},
+		{
+			name:      "pre-release",
+			tag:       "v0.7.0-rc2",
+			tags:      []string{"v0.6.0", "v0.6.1", "v0.7.0-rc1", "v0.7.0-rc2"},
+			editFlags: " --prerelease",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			version := strings.TrimPrefix(testCase.tag, "v")
+			dist := writeReleaseFixture(t, version)
+			tap, _ := newTapRepository(t)
+			fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+			source := newTaggedRepository(t, testCase.tags...)
+
+			output, err := runPublishReleaseFrom(source, root, fakeBin, fakeGitHub, tap, dist, testCase.tag, absentChangelog(root), nil)
+			if err != nil {
+				t.Fatalf("publish %s: %v\n%s", testCase.tag, err, output)
+			}
+
+			createFlags := " --generate-notes" + testCase.startFlag
+			if strings.Contains(version, "-rc") {
+				createFlags += " --prerelease"
+			}
+			assets := releaseAssetArguments(t, dist, version)
+			want := strings.Join([]string{
+				"release view " + testCase.tag + " --repo dgoings/workbook --json isDraft --jq .isDraft",
+				"release create " + testCase.tag + " " + assets + createFlags + " --repo dgoings/workbook --verify-tag --draft --title Workbook " + testCase.tag,
+				"release edit " + testCase.tag + " --repo dgoings/workbook --draft=false" + testCase.editFlags,
+			}, "\n") + "\n"
+			if got := readFakeGitHubLog(t, fakeGitHub); got != want {
+				t.Errorf("gh calls =\n%s\nwant\n%s", got, want)
+			}
+		})
+	}
+}
+
+// A written entry is the whole body, so there is nothing for a start tag to
+// bound and the call names none.
+func TestPublishReleaseNamesNoNotesStartTagBesideAChangelogEntry(t *testing.T) {
+	t.Parallel()
+	root, _ := renderFormulaPaths(t)
+	dist := writeReleaseFixture(t, "0.5.2")
+	tap, _ := newTapRepository(t)
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+	source := newTaggedRepository(t, "v0.5.1", "v0.6.0", "v0.5.2")
+	changelog := writeChangelog(t, "# Changelog\n\n## v0.6.0\n\n- a minor\n\n## v0.5.2\n\n- a backport\n")
+
+	output, err := runPublishReleaseFrom(source, root, fakeBin, fakeGitHub, tap, dist, "v0.5.2", changelog, nil)
+	if err != nil {
+		t.Fatalf("publish v0.5.2: %v\n%s", err, output)
+	}
+
+	createLine := fakeGitHubLine(t, readFakeGitHubLog(t, fakeGitHub), "release create v0.5.2")
+	if !strings.Contains(createLine, "--notes-file") {
+		t.Errorf("create line = %q, want the changelog entry supplied as notes", createLine)
+	}
+	if strings.Contains(createLine, "--notes-start-tag") {
+		t.Errorf("create line = %q, want no start tag beside a written entry", createLine)
 	}
 }
 

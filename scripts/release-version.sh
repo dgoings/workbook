@@ -185,12 +185,15 @@ require_line_release_version() {
 # error. DIRECTORY names the repository; it defaults to the current directory.
 # PREFIX is the tag prefix, "v" for the CLI and "desktop-v" for the desktop
 # app, so the two sequences never see each other's tags. LINE, when given, is
-# a MAJOR.MINOR line, and only tags on it are considered.
+# a MAJOR.MINOR line, and only tags on it are considered. BEFORE, when given,
+# is a release version, and only tags ordering strictly before it are
+# considered, which finds the release that preceded it.
 newest_release_tag() {
 	rv_kind=$1
 	rv_directory=${2:-}
 	rv_prefix=${3:-v}
 	rv_wanted_line=${4:-}
+	rv_before=${5:-}
 	# A mistyped kind would otherwise fall through to "any", handing a caller
 	# that asked for stable releases the pre-releases as well.
 	case ${rv_kind} in
@@ -205,6 +208,10 @@ newest_release_tag() {
 		echo "release-version: newest_release_tag LINE must be MAJOR.MINOR" >&2
 		return 2
 	fi
+	if [ -n "${rv_before}" ] && ! is_safe_release_version "${rv_before}"; then
+		echo "release-version: newest_release_tag BEFORE must be a release version" >&2
+		return 2
+	fi
 	if [ -n "${rv_directory}" ]; then
 		set -- git -C "${rv_directory}" tag --list "${rv_prefix}[0-9]*"
 	else
@@ -217,6 +224,9 @@ newest_release_tag() {
 			continue
 		fi
 		if [ -n "${rv_wanted_line}" ] && [ "$(release_version_line "${rv_number}")" != "${rv_wanted_line}" ]; then
+			continue
+		fi
+		if [ -n "${rv_before}" ] && ! release_version_before "${rv_number}" "${rv_before}"; then
 			continue
 		fi
 		printf '%s %s\n' "$(release_version_key "${rv_number}")" "${rv_tag}"
