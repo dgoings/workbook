@@ -175,6 +175,19 @@ version=$("${script_directory}/resolve-release-version.sh" \
 	--version "${requested_version}" \
 	--previous "${previous_tag}")
 
+# Once a line has its own branch, main has moved past it: the line cuts that
+# minor's patches, candidates included, and main cutting one as well would
+# interleave two histories under one number, so the line's next patch would
+# become the newest release without what main's had shipped. The branch is read
+# from origin's remote-tracking refs, which both cut workflows' full-depth
+# checkouts carry.
+if [ -z "${line}" ]; then
+	version_line=$(release_version_line "${version}")
+	if git rev-parse --verify --quiet "refs/remotes/origin/maint/v${version_line}^{commit}" >/dev/null 2>&1; then
+		fail "main has moved past ${version_line}, which maint/v${version_line} now patches; cut a minor or major release from main, or cut v${version} on maint/v${version_line}"
+	fi
+fi
+
 # A pre-release is not a release. The changelog keeps its Unreleased heading
 # until the stable version is cut, so there is no entry to agree with and the
 # check is not run.

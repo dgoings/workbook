@@ -283,3 +283,66 @@ func TestPlanReleaseOnALineBranchRefusesAnythingButAPatchToThatLine(t *testing.T
 		})
 	}
 }
+
+// Once a line has its own branch, main has moved past it: maint/v0.6 cuts the
+// 0.6 patches, and main cutting one too would interleave two histories under
+// one line, so a later line patch would become the newest release and take
+// Latest and the tap back to a build without what main's patch shipped.
+// Production mutation: dropping the check plans 0.6.2 on main.
+func TestPlanReleaseOnMainRefusesALineWithItsOwnBranch(t *testing.T) {
+	t.Parallel()
+	fakeBin := newFakeReleaseCLI(t)
+	repository := newTaggedRepository(t, "v0.6.0", "v0.6.1")
+	runCommand(t, repository, nil, "git", "update-ref", "refs/remotes/origin/maint/v0.6", "HEAD")
+	environment := environmentWithFakeCLI(fakeBin, "FAKE_PUBLISHED_TAGS=v0.6.0 v0.6.1")
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{name: "a patch bump", args: []string{"--bump", "patch"}},
+		{name: "an explicit patch", args: []string{"--bump", "minor", "--version", "0.6.2"}},
+		{name: "a candidate on the line", args: []string{"--bump", "patch", "--version", "0.6.2-rc1"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeChangelog(t, "# Changelog\n\n## v0.6.2\n\n- a fix\n\n## v0.6.1\n\n- older\n")
+			args := append([]string{"--branch", "main", "--repo", "dgoings/workbook", "--changelog", path}, testCase.args...)
+			output, err := runReleaseScriptWithEnvironment(t, repository, "plan-release.sh", "", environment, args...)
+			if err == nil {
+				t.Fatalf("plan release on main accepted %v beside maint/v0.6:\n%s", testCase.args, output)
+			}
+			if !strings.Contains(output, "main has moved past 0.6") {
+				t.Errorf("output = %q, want the line named as moved past", output)
+			}
+		})
+	}
+
+	// The next minor is what main cuts now.
+	t.Run("a minor bump", func(t *testing.T) {
+		t.Parallel()
+		path := writeChangelog(t, "# Changelog\n\n## v0.7.0\n\n- the next minor\n\n## v0.6.1\n\n- older\n")
+		output, err := runReleaseScriptWithEnvironment(t, repository, "plan-release.sh", "", environment,
+			"--branch", "main", "--bump", "minor", "--repo", "dgoings/workbook", "--changelog", path)
+		if err != nil {
+			t.Fatalf("plan a minor on main: %v\n%s", err, output)
+		}
+		if got := lastLine(output); got != "0.7.0" {
+			t.Errorf("planned version %q, want 0.7.0", got)
+		}
+	})
+
+	// The line plans its own patch as before.
+	t.Run("the line itself", func(t *testing.T) {
+		t.Parallel()
+		path := writeChangelog(t, "# Changelog\n\n## v0.6.1\n\n- older\n")
+		output, err := runReleaseScriptWithEnvironment(t, repository, "plan-release.sh", "", environment,
+			"--branch", "maint/v0.6", "--bump", "patch", "--repo", "dgoings/workbook", "--changelog", path)
+		if err != nil {
+			t.Fatalf("plan a patch on maint/v0.6: %v\n%s", err, output)
+		}
+		if got := lastLine(output); got != "0.6.2" {
+			t.Errorf("planned version %q, want 0.6.2", got)
+		}
+	})
+}

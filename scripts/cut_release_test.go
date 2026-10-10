@@ -397,6 +397,35 @@ func TestCutReleaseRefusesAVersionOutsideTheLine(t *testing.T) {
 	}
 }
 
+// main stops releasing on a line once the line has its own branch, so the two
+// never interleave patches under one minor. Production mutation: dropping the
+// check tags v0.6.1 on main beside maint/v0.6.
+func TestCutReleaseOnMainRefusesALineWithItsOwnBranch(t *testing.T) {
+	t.Parallel()
+	clone, remote := newReleaseRepository(t)
+	runCommand(t, clone, nil, "git", "tag", "--annotate", "v0.6.0", "-m", "Workbook v0.6.0")
+	runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "refs/tags/v0.6.0", "v0.6.0^{commit}:refs/heads/maint/v0.6")
+	commitAndPush(t, clone, "next.txt")
+	tagsBefore := gitOutput(t, remote, "tag", "--list")
+
+	output, err := runCutRelease(clone, "0.6.1", "--skip-tests")
+	if err == nil {
+		t.Fatalf("cut accepted 0.6.1 on main beside maint/v0.6:\n%s", output)
+	}
+	if !strings.Contains(output, "main has moved past 0.6") {
+		t.Errorf("output = %q, want the line named as moved past", output)
+	}
+	if got := gitOutput(t, remote, "tag", "--list"); got != tagsBefore {
+		t.Errorf("remote tags changed from %q to %q", tagsBefore, got)
+	}
+
+	// The next minor is still main's to cut.
+	output, err = runCutRelease(clone, "0.7.0", "--skip-tests", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run 0.7.0 on main: %v\n%s", err, output)
+	}
+}
+
 func commitAndPush(t *testing.T, clone, name string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(clone, name), []byte(name+"\n"), 0o600); err != nil {

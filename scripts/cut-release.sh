@@ -170,6 +170,20 @@ if git_command ls-remote --exit-code --tags "${remote}" "refs/tags/${tag}" >/dev
 	fail "tag ${tag} already exists on ${remote}"
 fi
 
+# Once a line has its own branch, main has moved past it and the line cuts its
+# patches: two histories under one minor would let the line's next patch become
+# the newest release without what main's had shipped.
+if [ -z "${line}" ]; then
+	version_line=$(release_version_line "${version}")
+	line_status=0
+	git_command ls-remote --exit-code --heads "${remote}" "refs/heads/maint/v${version_line}" >/dev/null 2>&1 || line_status=$?
+	case ${line_status} in
+		0) fail "main has moved past ${version_line}, which maint/v${version_line} now patches; cut a minor or major release from main, or cut ${tag} with --branch maint/v${version_line}" ;;
+		2) ;;
+		*) fail "could not ask ${remote} whether maint/v${version_line} exists" ;;
+	esac
+fi
+
 local_head=$(git_command rev-parse HEAD)
 remote_head=$(git_command rev-parse "refs/remotes/${remote}/${branch}")
 if [ "${local_head}" != "${remote_head}" ]; then

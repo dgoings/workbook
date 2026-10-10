@@ -5,7 +5,8 @@ set -eu
 # published from. The tag has to be reachable from a supported branch on the
 # remote, main or its own line's maint/vMAJOR.MINOR, and no higher stable
 # release may already be part of its history: an older version tagged on newer
-# code would publish the newer code under the older number.
+# code would publish the newer code under the older number. Nor may main
+# release on a line that has its own maint branch, which patches it instead.
 #
 # The remote's branches are read from the current directory's repository, so
 # the checkout has to carry them along with every tag; the release workflow's
@@ -101,6 +102,28 @@ done | sort -k1,1n -k2,2n -k3,3n -k4,4n -k5,5n | tail -n 1 | awk '{ print $6 }')
 if [ -n "${higher_tag}" ]; then
 	echo "workbook release: ${tag} is on a commit that already contains ${higher_tag}; an older version cannot be released from newer code" >&2
 	exit 1
+fi
+
+# Once a line has its own branch, main has moved past it: the line cuts that
+# minor's patches, candidates included. A tag on main the line does not
+# contain would interleave with the line's patches, and the line's next one
+# would become the newest release without what this one shipped. What the line
+# started from is on both, so a re-run of its release is not refused.
+if [ "${branch}" = main ]; then
+	line=$(release_version_line "${version}")
+	line_ref="refs/remotes/${remote}/maint/v${line}"
+	if git rev-parse --verify --quiet "${line_ref}^{commit}" >/dev/null 2>&1; then
+		line_status=0
+		git merge-base --is-ancestor "${commit}" "${line_ref}" || line_status=$?
+		case ${line_status} in
+			0) ;;
+			1)
+				echo "workbook release: ${tag} is on main, but main has moved past ${line}, which ${remote}/maint/v${line} now patches; release a minor or major from main, or cut the patch on maint/v${line}" >&2
+				exit 1
+				;;
+			*) exit 2 ;;
+		esac
+	fi
 fi
 
 printf '%s\n' "${branch}"
