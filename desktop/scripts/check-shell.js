@@ -7,11 +7,13 @@
 // Each catches a mistake this project actually made: an edit that removed a
 // function while leaving it in module.exports, which throws only when something
 // first calls it; a renderer that reaches for an element id the markup no longer
-// has; and a preload that invokes a channel the main process stopped handling.
+// has; a preload that invokes a channel the main process stopped handling; and
+// a board preload that parsed but could not load inside the view's sandbox.
 
 const fs = require('node:fs')
 const path = require('node:path')
 const { execFileSync } = require('node:child_process')
+const { preloadsOf, sentToBoards, loadPreload } = require('./load-preload')
 
 const root = path.join(__dirname, '..')
 const main = path.join(root, 'src', 'main')
@@ -93,7 +95,7 @@ if (silent.length > 0) fail(`listened for but never sent: ${silent.join(', ')}`)
 // shell page has to be listened for in the preload, and a listener with nothing
 // sending it is a feature that quietly never arrives. Only the chrome view's
 // channels are counted here — a board view is a separate page with its own
-// preload, so `board:align` is not this file's business.
+// preload, paired with it below.
 const pushed = new Set([
   ...mainSource.matchAll(/toChrome\('([^']+)'/g),
   ...mainSource.matchAll(/chromeView\??\.webContents\.send\('([^']+)'/g)
@@ -103,6 +105,39 @@ const ignored = [...pushed].filter((channel) => !awaited.has(channel))
 if (ignored.length > 0) fail(`sent to the shell but not listened for: ${ignored.join(', ')}`)
 const expected = [...awaited].filter((channel) => !pushed.has(channel))
 if (expected.length > 0) fail(`listened for in the shell but never sent: ${expected.join(', ')}`)
+
+// And the same for the board views: what main.js pushes at a board, which is
+// every webContents.send that is not the shell's, against what board.js
+// listens for.
+const boardPushed = sentToBoards(mainSource)
+const boardAwaited = new Set([...boardSource.matchAll(/ipcRenderer\.on\('([^']+)'/g)].map((m) => m[1]))
+const unseen = [...boardPushed].filter((channel) => !boardAwaited.has(channel))
+if (unseen.length > 0) fail(`sent to a board but not listened for: ${unseen.join(', ')}`)
+const neverPushed = [...boardAwaited].filter((channel) => !boardPushed.has(channel))
+if (neverPushed.length > 0) fail(`listened for in the board but never sent: ${neverPushed.join(', ')}`)
+
+// Every preload main.js gives a view loads, under the sandbox that view has.
+// Parsing is not loading: a relative require in board.js parses, resolves in
+// Node, and fails the sandboxed board view's preload outright — taking the
+// theme handshake with it while every check above stayed green.
+const preloads = preloadsOf(mainSource)
+if (preloads.length === 0) fail('src/main/main.js gives no view a preload this check can find')
+for (const { name, sandboxed } of preloads) {
+  let loaded
+  try {
+    const file = path.join(root, 'src', 'preload', name)
+    loaded = loadPreload(file, { sandboxed, label: path.relative(root, file) })
+  } catch (error) {
+    fail(error.message)
+    continue
+  }
+  // The pairing above reads board.js's listeners from its text; one it cannot
+  // read, a channel held in a variable say, would go unpaired without this.
+  if (name === 'board.js') {
+    const unread = [...loaded.listened].filter((channel) => !boardAwaited.has(channel))
+    if (unread.length > 0) fail(`board.js listens for channels not written as ipcRenderer.on('…'): ${unread.join(', ')}`)
+  }
+}
 
 // A closed window lets go of its views. Nothing else can catch this going
 // missing: every check above and every test still passes without it, because
@@ -175,6 +210,7 @@ if (failures > 0) {
   process.exit(1)
 }
 console.log(`${sources.length} files parse, ${used.size} element ids exist, ` +
-  `${invoked.size + sent.size + pushed.size} channels line up, ` +
+  `${invoked.size + sent.size + pushed.size + boardPushed.size} channels line up, ` +
+  `${preloads.length} preloads load, ` +
   `${listened.size} fire-and-forget listeners are synchronous, ` +
   `${widths.length} sidebar widths match the stylesheet`)

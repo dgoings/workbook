@@ -99,8 +99,11 @@ npm run check
 
 `check-styles.js` verifies every class the renderer applies has a rule,
 `check-shell.js` verifies every source file parses, every export is defined,
-the renderer references only element ids that exist, and the channels the
-preload invokes are the channels the main process handles, and
+the renderer references only element ids that exist, the channels each
+preload invokes, sends and listens for are the channels the main process
+handles and sends, and each preload `main.js` names actually loads — under
+the sandbox its view has, so a sandboxed preload that requires anything but
+`electron`, `events`, `timers` or `url` fails here rather than in the app — and
 `check-preload-inline.js` verifies the board preload's copy of
 `runBoardCommand` is still the one in `src/preload/boardcommand.js`. They are
 cheap and each catches a mistake this project has actually made.
