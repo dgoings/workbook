@@ -22,10 +22,17 @@ const { createRequire } = require('node:module')
 
 const SANDBOXED_BUILTINS = new Set(['events', 'timers', 'url'])
 
-// What require('electron') has in a renderer: the sandbox docs' list. An
-// unsandboxed preload's electron also carries clipboard and shell.
-const SANDBOXED_ELECTRON = ['contextBridge', 'crashReporter', 'ipcRenderer', 'nativeImage', 'webFrame', 'webUtils']
-const UNSANDBOXED_ELECTRON = [...SANDBOXED_ELECTRON, 'clipboard', 'shell']
+// What require('electron') has in a preload, as Electron 44.2 enumerates it in
+// a real one: sandboxed, the renderer's own modules and the shared ones but
+// shell; unsandboxed, shell as well. clipboard is main-process only by now.
+const SANDBOXED_ELECTRON = ['contextBridge', 'crashReporter', 'ipcRenderer', 'nativeImage', 'sharedTexture', 'webFrame', 'webUtils']
+const UNSANDBOXED_ELECTRON = [...SANDBOXED_ELECTRON, 'shell']
+
+// The names a preload's wrapper hands it. Electron's sandboxed wrapper has no
+// __filename or __dirname, so a sandboxed preload that reaches for either
+// throws a ReferenceError at load like any other undeclared name.
+const SANDBOXED_PARAMETERS = ['exports', 'require', 'module', 'process', 'Buffer', 'global', 'setImmediate', 'clearImmediate']
+const UNSANDBOXED_PARAMETERS = [...SANDBOXED_PARAMETERS, '__filename', '__dirname']
 
 function toLf (text) {
   return text.replace(/\r\n/g, '\n')
@@ -33,10 +40,15 @@ function toLf (text) {
 
 /**
  * Every preload main.js gives a view, in order, and whether that view keeps
- * Electron's sandbox — the default, so only an explicit `sandbox: false` turns
- * it off. Each `webPreferences: {` block is read up to its closing brace with
- * comment lines left out, since the board view's comment explains, in so many
- * words, that it is not `sandbox: false`.
+ * Electron's sandbox. It does by default; an explicit `sandbox:` says which,
+ * and without one `nodeIntegration: true` turns it off. Each
+ * `webPreferences: {` block is read up to its closing brace with comments left
+ * out, since the board view's comment explains, in so many words, that it is
+ * not `sandbox: false`.
+ *
+ * A preload is read only when written as `path.join(…, 'name.js')`. One
+ * written any other way comes back with no name and the expression it has
+ * instead, so the caller can fail on it rather than quietly not check it.
  */
 function preloadsOf (mainSource) {
   const lines = toLf(mainSource).split('\n')
@@ -46,7 +58,9 @@ function preloadsOf (mainSource) {
     let depth = 0
     const body = []
     for (let at = index; at < lines.length; at++) {
-      const line = lines[at].replace(/^\s*\/\/.*$/, '')
+      // A `//` at the start of a line or after a space opens a comment; one in
+      // a URL follows a colon.
+      const line = lines[at].replace(/(^|\s)\/\/.*$/, '$1')
       body.push(line)
       for (const char of line) {
         if (char === '{') depth++
@@ -55,9 +69,15 @@ function preloadsOf (mainSource) {
       if (depth <= 0) break
     }
     const text = body.join('\n')
-    const preload = text.match(/\bpreload:\s*path\.join\([^)]*'([^'/]+\.js)'\s*\)/)
-    if (!preload) continue
-    preloads.push({ name: preload[1], sandboxed: !/\bsandbox:\s*false\b/.test(text) })
+    const key = text.match(/\bpreload:\s*(.*?),?\s*$/m)
+    if (!key) continue
+    const sandbox = text.match(/\bsandbox:\s*(true|false)\b/)
+    const sandboxed = sandbox
+      ? sandbox[1] === 'true'
+      : !/\bnodeIntegration(?:InWorker)?:\s*true\b/.test(text)
+    const preload = key[1].match(/^path\.join\([^)]*'([^'/]+\.js)'\s*\)/)
+    if (preload) preloads.push({ name: preload[1], sandboxed })
+    else preloads.push({ name: null, sandboxed, expression: key[1] })
   }
   return preloads
 }
@@ -165,19 +185,43 @@ function loadPreload (file, { sandboxed, label = file }) {
   const context = vm.createContext(pageGlobals())
   const window = vm.runInContext('globalThis', context)
   window.window = window
-  // A sandboxed preload's process is a polyfill with little but the platform
-  // on it; an unsandboxed one has Node's.
+  // A sandboxed preload's process is Electron's polyfill: the platform, the
+  // arguments, the versions and a few more, but not Node's module machinery;
+  // an unsandboxed one has Node's.
   const preloadProcess = sandboxed
-    ? { platform: process.platform, arch: process.arch, type: 'renderer', versions: { ...process.versions }, env: {} }
+    ? {
+        platform: process.platform,
+        arch: process.arch,
+        type: 'renderer',
+        argv: [process.execPath],
+        execPath: process.execPath,
+        pid: process.pid,
+        version: process.version,
+        versions: { ...process.versions },
+        env: {},
+        sandboxed: true,
+        contextIsolated: true
+      }
     : process
 
   const source = fs.readFileSync(file, 'utf8')
   const module = { exports: {} }
+  const parameters = sandboxed ? SANDBOXED_PARAMETERS : UNSANDBOXED_PARAMETERS
+  const values = {
+    exports: module.exports,
+    require: preloadRequire,
+    module,
+    process: preloadProcess,
+    Buffer,
+    global: window,
+    setImmediate,
+    clearImmediate,
+    __filename: file,
+    __dirname: path.dirname(file)
+  }
   try {
-    const run = vm.compileFunction(source,
-      ['exports', 'require', 'module', '__filename', '__dirname', 'process', 'Buffer', 'global', 'setImmediate', 'clearImmediate'],
-      { filename: file, parsingContext: context })
-    run(module.exports, preloadRequire, module, file, path.dirname(file), preloadProcess, Buffer, window, setImmediate, clearImmediate)
+    const run = vm.compileFunction(source, parameters, { filename: file, parsingContext: context })
+    run(...parameters.map((name) => values[name]))
   } catch (error) {
     throw new Error(`${label} does not load as a${sandboxed ? ' sandboxed' : 'n unsandboxed'} preload: ${error.message}`)
   }

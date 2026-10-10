@@ -7,7 +7,7 @@
 // require in board.js, which Node resolves happily and a sandboxed preload
 // refuses — has to fail here even though the file it names exists.
 
-const { describe, test } = require('node:test')
+const { after, describe, test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
@@ -24,9 +24,15 @@ function readLf (file) {
   return fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n')
 }
 
+const fixtures = []
+after(() => {
+  for (const directory of fixtures) fs.rmSync(directory, { recursive: true, force: true })
+})
+
 /** A directory holding `files`, so a relative require in one has something to find. */
 function fixture (files) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'load-preload-'))
+  fixtures.push(directory)
   for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(directory, name), text)
   return directory
 }
@@ -55,6 +61,30 @@ describe('preloadsOf', () => {
       '})'
     ].join('\n')
     assert.deepEqual(preloadsOf(source), [{ name: 'board.js', sandboxed: true }])
+  })
+
+  /** A view whose webPreferences hold `lines`. */
+  function view (...lines) {
+    return ['new WebContentsView({', '  webPreferences: {', ...lines.map((line) => `    ${line}`), '  }', '})'].join('\n')
+  }
+  const boardJoin = "preload: path.join(__dirname, '..', 'preload', 'board.js'),"
+
+  test('a trailing comment that says sandbox: false does not turn the sandbox off', () => {
+    assert.deepEqual(preloadsOf(view(boardJoin, 'contextIsolation: true // not sandbox: false')),
+      [{ name: 'board.js', sandboxed: true }])
+  })
+
+  test('nodeIntegration turns the sandbox off unless sandbox says otherwise', () => {
+    assert.deepEqual(preloadsOf(view(boardJoin, 'nodeIntegration: true')), [{ name: 'board.js', sandboxed: false }])
+    assert.deepEqual(preloadsOf(view(boardJoin, 'nodeIntegration: true,', 'sandbox: true')),
+      [{ name: 'board.js', sandboxed: true }])
+  })
+
+  test('a preload it cannot read comes back unnamed, with what it says instead', () => {
+    assert.deepEqual(preloadsOf(view("preload: path.resolve(__dirname, '../preload/board.js'),", 'contextIsolation: true')),
+      [{ name: null, sandboxed: true, expression: "path.resolve(__dirname, '../preload/board.js')" }])
+    assert.deepEqual(preloadsOf(view('preload: BOARD_PRELOAD')),
+      [{ name: null, sandboxed: true, expression: 'BOARD_PRELOAD' }])
   })
 })
 
@@ -102,6 +132,32 @@ describe('loadPreload', () => {
     assert.throws(() => loadPreload(file, { sandboxed: true }), /ipcMain/)
   })
 
+  // Electron 44.2's require('electron') in a real preload: clipboard is in
+  // neither, sharedTexture is in both, and shell only outside the sandbox.
+  test("electron's modules are the ones Electron gives each kind of preload", () => {
+    const using = (name) => path.join(fixture({ 'p.js': `const { ${name} } = require('electron')\n` }), 'p.js')
+    assert.throws(() => loadPreload(using('clipboard'), { sandboxed: false }), /clipboard/)
+    assert.throws(() => loadPreload(using('clipboard'), { sandboxed: true }), /clipboard/)
+    assert.doesNotThrow(() => loadPreload(using('sharedTexture'), { sandboxed: true }))
+    assert.doesNotThrow(() => loadPreload(using('shell'), { sandboxed: false }))
+    assert.throws(() => loadPreload(using('shell'), { sandboxed: true }), /shell/)
+  })
+
+  test('__dirname and __filename are not defined in the sandbox', () => {
+    for (const name of ['__dirname', '__filename']) {
+      const file = path.join(fixture({ 'p.js': `const here = ${name}\n` }), 'p.js')
+      assert.throws(() => loadPreload(file, { sandboxed: true }), new RegExp(`${name} is not defined`), name)
+      assert.doesNotThrow(() => loadPreload(file, { sandboxed: false }), name)
+    }
+  })
+
+  test("the sandbox's process carries the arguments and what it is", () => {
+    const file = path.join(fixture({
+      'p.js': "if (process.argv.includes('--x') || !process.sandboxed || !process.contextIsolated) throw new Error('wrong process')\n"
+    }), 'p.js')
+    assert.doesNotThrow(() => loadPreload(file, { sandboxed: true }))
+  })
+
   test('a preload that throws while it loads is reported with its file', () => {
     const file = path.join(fixture({ 'p.js': 'undefinedHelper()\n' }), 'p.js')
     assert.throws(() => loadPreload(file, { sandboxed: true }), /p\.js.*undefinedHelper/s)
@@ -118,6 +174,14 @@ describe('loadPreload', () => {
 describe('sentToBoards', () => {
   test("names the channels main.js pushes at board views and not the shell's", () => {
     assert.deepEqual([...sentToBoards(readLf(mainPath))].sort(), ['board:align', 'board:command'])
+    // main.js sends to the shell through toChrome today, so the shell's own
+    // sends are spelled out here for the filter to have something to leave out.
+    const source = [
+      "chromeView.webContents.send('shell:only', payload)",
+      "chromeView?.webContents.send('shell:maybe', payload)",
+      "view.webContents.send('board:only', payload)"
+    ].join('\n')
+    assert.deepEqual([...sentToBoards(source)], ['board:only'])
   })
 
   test('a channel renamed on the sending side shows up as a different name', () => {

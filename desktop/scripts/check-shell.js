@@ -121,8 +121,22 @@ if (neverPushed.length > 0) fail(`listened for in the board but never sent: ${ne
 // Node, and fails the sandboxed board view's preload outright — taking the
 // theme handshake with it while every check above stayed green.
 const preloads = preloadsOf(mainSource)
-if (preloads.length === 0) fail('src/main/main.js gives no view a preload this check can find')
+// A preload this check cannot read would otherwise drop out of it unnoticed,
+// and with it the one thing standing between board.js and the original bug.
+for (const { name, expression } of preloads) {
+  if (name === null) {
+    fail(`src/main/main.js gives a view the preload \`${expression}\`, which this check cannot read: ` +
+      "write it as path.join(__dirname, '..', 'preload', '<name>.js')")
+  }
+}
+for (const file of [preload, boardPreload]) {
+  const name = path.basename(file)
+  if (!preloads.some((found) => found.name === name)) {
+    fail(`src/main/main.js gives no view ${path.relative(root, file)} as a preload this check can find, so it is not loaded`)
+  }
+}
 for (const { name, sandboxed } of preloads) {
+  if (name === null) continue
   let loaded
   try {
     const file = path.join(root, 'src', 'preload', name)

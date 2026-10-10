@@ -103,7 +103,10 @@ the renderer references only element ids that exist, the channels each
 preload invokes, sends and listens for are the channels the main process
 handles and sends, and each preload `main.js` names actually loads — under
 the sandbox its view has, so a sandboxed preload that requires anything but
-`electron`, `events`, `timers` or `url` fails here rather than in the app — and
+`electron`, `events`, `timers` or `url`, or uses `__dirname`, fails here rather
+than in the app. A view's preload has to be written as
+`path.join(__dirname, '..', 'preload', '<name>.js')` for the check to read it,
+and one written any other way fails it rather than going unchecked — and
 `check-preload-inline.js` verifies the board preload's copy of
 `runBoardCommand` is still the one in `src/preload/boardcommand.js`. They are
 cheap and each catches a mistake this project has actually made.
