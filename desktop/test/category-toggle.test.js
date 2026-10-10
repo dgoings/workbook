@@ -169,20 +169,77 @@ describe('the fold toggle is the rail\'s category divider', () => {
 
 describe('a keyboard fold keeps its focus', () => {
   // The fold's broadcast redraws the list, which takes the focused toggle out
-  // of the page; without this, a second Enter would land on nothing.
+  // of the page; without this, a second Enter would land on nothing. Run
+  // against a list that swaps its toggles on every redraw, the way the real one
+  // does, with the focus on one of the old toggles.
+  function redraw ({ focusedId, rebuiltIds = ['cw', 'p'], focusOutsideList = false }) {
+    const focusCalls = []
+    const toggleFor = (id) => ({
+      dataset: { categoryId: id },
+      classList: { contains: (name) => name === 'category-toggle' },
+      focus () { focusCalls.push(id) }
+    })
+    const old = focusedId === null ? null : toggleFor(focusedId)
+    let current = old ? [old] : []
+    const list = {
+      children: [],
+      contains: (node) => !focusOutsideList && current.includes(node),
+      querySelector: () => null,
+      querySelectorAll: (selector) => selector === '.category-toggle' ? current : [],
+      append (node) { this.children.push(node) },
+      set innerHTML (value) { current = []; this.children = [] }
+    }
+    const context = vm.createContext({
+      redraw: { held: false, owed: false },
+      state: { editingCategoryId: null, projects: [], view: 'board', layout: { items: rebuiltIds.map((id) => ({ kind: 'category', id })) } },
+      document: { activeElement: old, createElement: () => ({ style: {} }) },
+      el: (id) => id === 'project-list' ? list : {},
+      setView: () => {},
+      projectRow: () => { throw new Error('no projects here') },
+      categoryGroup: (item) => {
+        current.push(toggleFor(item.id))
+        return { id: item.id }
+      }
+    })
+    vm.runInContext(`${fn('renderProjects')}
+renderProjects()`, context)
+    return focusCalls
+  }
+
   test('renderProjects gives the focus back to the toggle it rebuilt', () => {
-    const body = fn('renderProjects')
-    const before = body.indexOf("list.innerHTML = ''")
-    const remembered = body.search(/document\.activeElement[\s\S]*?category-toggle/)
-    assert.ok(remembered !== -1 && remembered < before,
-      'renderProjects must note a focused .category-toggle before it empties the list')
-    assert.match(body.slice(before), /\.category-toggle[\s\S]*?dataset\.categoryId === [\s\S]*?\.focus\(\)/,
-      'renderProjects must focus the rebuilt toggle for the same category')
+    assert.deepEqual(redraw({ focusedId: 'p' }), ['p'])
+  })
+
+  test('it follows the category by id, wherever the redraw puts it', () => {
+    assert.deepEqual(redraw({ focusedId: 'p', rebuiltIds: ['p', 'cw'] }), ['p'])
+  })
+
+  test('it takes nothing when no toggle was focused, or the category is gone', () => {
+    assert.deepEqual(redraw({ focusedId: null }), [])
+    assert.deepEqual(redraw({ focusedId: 'p', focusOutsideList: true }), [])
+    assert.deepEqual(redraw({ focusedId: 'gone' }), [])
+  })
+
+  test('categoryGroup stamps each toggle with its category id', () => {
     assert.match(fn('categoryGroup'), /toggle\.dataset\.categoryId = category\.id/)
   })
 })
 
 describe('the rail draws the toggle as a group header', () => {
+  test('the rail shows the initials the base rule hides', () => {
+    // .category-initials is display: none everywhere else, so without a rail
+    // rule the divider is a bare chevron with no label.
+    const base = rules.filter(([list]) => selectorsOf(list).includes('.category-initials'))
+    assert.ok(base.some(([, body]) => /display\s*:\s*none/.test(body)),
+      'the base .category-initials rule no longer hides them in the sidebar')
+    const shown = rules.filter(([list]) => selectorsOf(list).includes(':root.sidebar-collapsed .category-initials'))
+    assert.ok(shown.length > 0, 'no rule for :root.sidebar-collapsed .category-initials')
+    const body = shown.map(([, declarations]) => declarations).join(';')
+    assert.match(body, /display\s*:\s*(?:block|inline|inline-block|flex)\b/,
+      'the rail must show the initials')
+    assert.doesNotMatch(body, /display\s*:\s*none/, 'the rail hides the initials')
+  })
+
   test('the rail does not hide the toggle', () => {
     for (const [list, body] of rules) {
       if (!/display\s*:\s*none/.test(body)) continue
