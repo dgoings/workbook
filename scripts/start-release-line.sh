@@ -20,12 +20,16 @@ Creates the maint/vMAJOR.MINOR branch at the newest stable vMAJOR.MINOR.* tag.
 
 Options:
   --push           push the new branch to the remote as well
+  --bootstrap      start a line from a release that predates release lines;
+                   its first pull request then brings main's tooling onto it
   --remote NAME    remote to read and push to (default origin)
   -h, --help       show this message
 
 It refuses when the branch already exists here or on the remote, when the line
 has no stable release, and when main has nothing since that release, in which
-case a patch is cut from main itself and a line would add nothing.
+case a patch is cut from main itself and a line would add nothing. It also
+refuses, unless --bootstrap is given, a release cut before release lines
+existed, whose workflows cannot release from the branch.
 USAGE
 }
 
@@ -36,12 +40,16 @@ fail() {
 
 line=
 push=no
+bootstrap=no
 remote=origin
 
 while [ "$#" -gt 0 ]; do
 	case $1 in
 		--push)
 			push=yes
+			;;
+		--bootstrap)
+			bootstrap=yes
 			;;
 		--remote)
 			[ "$#" -ge 2 ] || fail "--remote requires a value" 2
@@ -129,6 +137,21 @@ if [ "$(git_command rev-list --count "${release_commit}..${main_commit}")" -eq 0
 	fail "main has nothing since ${release_tag}, so there is nothing to branch; cut the patch from main"
 fi
 
+# A branch takes its workflows and release scripts from the release it starts
+# at, and GitHub runs a line's pushes, dispatches and tags from that tree. A
+# release cut before lines existed has none of the line support: CI does not
+# run on the branch, neither cut workflow accepts it, and its release workflow
+# publishes any tag as the newest, so a patch tagged there would move Latest
+# and the Homebrew tap backward. start-release-line.sh arrived with that
+# support, so its presence in the release's tree is the marker.
+predates_lines=no
+if ! git_command cat-file -e "${release_commit}:scripts/start-release-line.sh" 2>/dev/null; then
+	predates_lines=yes
+	if [ "${bootstrap}" = no ]; then
+		fail "${release_tag} predates release lines, so ${branch} would carry workflows that cannot verify, cut or safely publish a patch, and a tag pushed onto it would move Latest and the Homebrew tap backward; pass --bootstrap to start it anyway, then bring main's tooling onto it first, as \"Patch releases to an older line\" in CONTRIBUTING.md describes"
+	fi
+fi
+
 git_command branch --no-track "${branch}" "${release_commit}"
 echo "Created ${branch} at ${release_tag} (${release_commit})"
 
@@ -141,9 +164,20 @@ if [ "${push}" = yes ]; then
 	fi
 	echo "Pushed ${branch} to ${remote}."
 else
-	echo "It is local only. Push it when the first fix is ready to go onto it:"
+	echo "It is local only. Push it when its first pull request is ready:"
 	echo "  git push ${remote} refs/heads/${branch}"
 fi
 echo
-echo "Next: land the fix on main, cherry-pick it onto ${branch} in a pull request"
-echo "labeled release:patch, and merge that pull request to cut the release."
+if [ "${predates_lines}" = yes ]; then
+	echo "${release_tag} predates release lines. Make the first pull request into ${branch}"
+	echo "bring main's .github/workflows/ and scripts/ onto it, with whatever their tests"
+	echo "need from main, carrying no release label; its own workflows verify it."
+	echo "Do not push a tag on ${branch}, and merge no release pull request into it,"
+	echo "until that has merged: the release workflow it carries now publishes any tag"
+	echo "as the newest release. Once it has merged, land the fix on main, cherry-pick"
+	echo "it onto ${branch} in a pull request labeled release:patch, and merge that one"
+	echo "to cut the release."
+else
+	echo "Next: land the fix on main, cherry-pick it onto ${branch} in a pull request"
+	echo "labeled release:patch, and merge that pull request to cut the release."
+fi

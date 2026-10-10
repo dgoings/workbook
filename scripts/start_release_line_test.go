@@ -45,6 +45,10 @@ func TestStartReleaseLineBranchesFromTheLinesNewestRelease(t *testing.T) {
 	if !strings.Contains(output, "git push origin refs/heads/maint/v0.5") {
 		t.Errorf("output = %q, want the push named for when it is wanted", output)
 	}
+	// v0.5.1 carries the line tooling, so there is nothing to bootstrap.
+	if strings.Contains(output, "predates release lines") {
+		t.Errorf("output = %q, want no bootstrap step for a release with the tooling", output)
+	}
 	// It creates a branch and nothing else: a tag is a release.
 	if got := gitOutput(t, remote, "tag", "--list"); got != tagsBefore {
 		t.Errorf("remote tags changed from %q to %q", tagsBefore, got)
@@ -83,6 +87,76 @@ func TestStartReleaseLineStartsTheNewestLineOnceMainHasMovedOn(t *testing.T) {
 	}
 	if got := gitOutput(t, clone, "rev-parse", "refs/heads/maint/v0.6"); got != released {
 		t.Errorf("maint/v0.6 = %s, want v0.6.0's commit %s", got, released)
+	}
+}
+
+// newPreLineRepository is newReleasedRepository's shape with v0.5.0 tagged
+// before the line tooling existed: its tree carries no start-release-line.sh,
+// as every tag cut before release lines does not.
+func newPreLineRepository(t *testing.T) (string, string) {
+	t.Helper()
+	clone, remote := newReleaseRepository(t)
+	runCommand(t, clone, nil, "git", "rm", "--quiet", "--cached", "scripts/start-release-line.sh")
+	runCommand(t, clone, nil, "git", "commit", "--quiet", "-m", "before release lines")
+	runCommand(t, clone, nil, "git", "tag", "--annotate", "v0.5.0", "-m", "Workbook v0.5.0")
+	runCommand(t, clone, nil, "git", "add", "scripts/start-release-line.sh")
+	runCommand(t, clone, nil, "git", "commit", "--quiet", "-m", "release lines")
+	runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "main", "refs/tags/v0.5.0")
+	return clone, remote
+}
+
+// A line takes its workflows and release scripts from the release it starts
+// at. One that predates release lines cannot verify, cut or safely publish a
+// patch, and a tag pushed onto it would run a release workflow that moves
+// Latest and the Homebrew tap backward. Production mutation: starting it
+// silently leaves that hazard for the first backport to find.
+func TestStartReleaseLineRefusesAReleaseThatPredatesLines(t *testing.T) {
+	t.Parallel()
+	clone, remote := newPreLineRepository(t)
+
+	output, err := runStartReleaseLine(clone, "0.5", "--push")
+	if err == nil {
+		t.Fatalf("start-release-line started a line from a release without the tooling:\n%s", output)
+	}
+	for _, want := range []string{"v0.5.0 predates release lines", "--bootstrap"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output = %q, want %q", output, want)
+		}
+	}
+	if got := gitOutput(t, clone, "branch", "--list", "maint/v0.5"); got != "" {
+		t.Errorf("clone carries %q after a refusal", got)
+	}
+	if got := gitOutput(t, remote, "branch", "--list", "maint/v0.5"); got != "" {
+		t.Errorf("remote carries %q after a refusal", got)
+	}
+}
+
+// --bootstrap starts it anyway, and says that the line's first pull request
+// has to bring main's tooling onto it before anything is released there.
+func TestStartReleaseLineBootstrapsAReleaseThatPredatesLines(t *testing.T) {
+	t.Parallel()
+	clone, remote := newPreLineRepository(t)
+	released := gitOutput(t, clone, "rev-parse", "v0.5.0^{commit}")
+
+	output, err := runStartReleaseLine(clone, "0.5", "--bootstrap", "--push")
+	if err != nil {
+		t.Fatalf("bootstrap the 0.5 line: %v\n%s", err, output)
+	}
+	if got := gitOutput(t, remote, "rev-parse", "refs/heads/maint/v0.5"); got != released {
+		t.Errorf("remote maint/v0.5 = %s, want v0.5.0's commit %s", got, released)
+	}
+	for _, want := range []string{
+		"first pull request into maint/v0.5",
+		"main's .github/workflows/ and scripts/",
+		"Do not push a tag on maint/v0.5",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output = %q, want %q", output, want)
+		}
+	}
+	// The ordinary next step would release from tooling that cannot do it.
+	if strings.Contains(output, "merge that pull request to cut the release") {
+		t.Errorf("output = %q, want the bootstrap step instead of the release step", output)
 	}
 }
 
