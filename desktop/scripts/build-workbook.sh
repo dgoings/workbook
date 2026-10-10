@@ -74,11 +74,23 @@ elif [ -n "${WORKBOOK_REF:-}" ]; then
 		git clone --quiet "${repository_root}" "${repo}"
 	fi
 	echo "build-workbook: checking out ${WORKBOOK_REF}"
-	# A ref may be a tag, a branch, or a commit the clone already has. Fetching
-	# by name covers a tag or branch created since the clone was made; the
-	# checkout that follows covers a commit no ref points at.
-	git -C "${repo}" fetch --quiet --tags origin || true
-	git -C "${repo}" fetch --quiet origin "${WORKBOOK_REF}" 2>/dev/null || true
+	# A ref may be a tag, a branch, or a commit the clone already has. Fetch the
+	# branches and only the v* release tags, never every tag: the desktop
+	# publisher moves desktop-latest on every desktop release, so fetching all
+	# tags fails for any cached clone holding an older copy. --no-tags keeps a
+	# remote.origin.tagOpt of --tags from fetching every tag anyway, and the
+	# release tags are fetched without force. A failure must not stop the
+	# build, because the checkout can still succeed from what the clone has.
+	if ! git -C "${repo}" fetch --quiet --no-tags origin \
+		'+refs/heads/*:refs/remotes/origin/*' 'refs/tags/v*:refs/tags/v*' 2>/dev/null; then
+		echo "build-workbook: could not fetch release tags from origin; using the clone as it stands" >&2
+	fi
+	# Anything else is fetched by name: a tag outside v* (a desktop-v* tag is
+	# a valid ref), or a name the fetch above did not see. A name that is not a
+	# tag fails the first of these harmlessly, and the checkout that follows
+	# covers a commit no ref points at.
+	git -C "${repo}" fetch --quiet --no-tags origin "refs/tags/${WORKBOOK_REF}:refs/tags/${WORKBOOK_REF}" 2>/dev/null || true
+	git -C "${repo}" fetch --quiet --no-tags origin "${WORKBOOK_REF}" 2>/dev/null || true
 	git -C "${repo}" checkout --quiet --detach "${WORKBOOK_REF}"
 else
 	repo=${repository_root}
