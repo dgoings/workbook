@@ -508,6 +508,13 @@ func TestPublishDesktopReleaseLeavesTheRollingReleaseAloneForAnOlderTag(t *testi
 	if count := strings.Count(log, "release create desktop-v0.5.2 "); count != 1 {
 		t.Errorf("versioned release create count = %d, want one; log:\n%s", count, log)
 	}
+	// GitHub marks a release Latest when it is published, and the CLI's and the
+	// app's releases share one repository, so publishing the older draft through
+	// a bare edit would take Latest off the newest release.
+	publishEdit := "release edit desktop-v0.5.2 --repo dgoings/workbook --draft=false --latest=false"
+	if count := strings.Count(log, publishEdit+"\n"); count != 1 {
+		t.Errorf("publishing the older draft = %d calls of %q, want exactly one; log:\n%s", count, publishEdit, log)
+	}
 	if state, readErr := os.ReadFile(fakeReleaseStatePath(fakeGitHub, "desktop-v0.5.2")); readErr != nil || strings.TrimSpace(string(state)) != "published" {
 		t.Errorf("older versioned release state = %q (%v), want published", state, readErr)
 	}

@@ -2,6 +2,7 @@ package scripts_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -576,14 +577,68 @@ func TestReleaseWorkflowCascadesOnlyTheNewestRelease(t *testing.T) {
 	if !strings.Contains(decision.Run, "RELEASE_TAG") {
 		t.Errorf("step %q runs %q, want it to ask about the release tag", decision.Name, decision.Run)
 	}
-	// Exit 1 is the answer "older"; anything else is a question that could not
-	// be answered, and has to fail the run rather than read as either answer.
-	if !strings.Contains(decision.Run, "newest=true") || !strings.Contains(decision.Run, "newest=false") {
-		t.Errorf("step %q does not record both answers:\n%s", decision.Name, decision.Run)
-	}
-	// The skip is visible on the run's summary, not only in a job nobody opens.
-	if !strings.Contains(decision.Run, "::notice") {
-		t.Errorf("step %q skips the cascade without a notice:\n%s", decision.Name, decision.Run)
+	// The step is run, not read: exit 1 is the answer "older", and anything else
+	// is a question that could not be answered, which has to fail the run rather
+	// than read as either answer. GitHub runs a step under bash -e -o pipefail.
+	for _, test := range []struct {
+		name       string
+		stubStatus string
+		wantFail   bool
+		wantOutput string
+		wantNotice bool
+	}{
+		{name: "newest", stubStatus: "0", wantOutput: "newest=true\n"},
+		{name: "older", stubStatus: "1", wantOutput: "newest=false\n", wantNotice: true},
+		{name: "unanswerable", stubStatus: "2", wantFail: true},
+		{name: "unexpected", stubStatus: "127", wantFail: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			scriptsDirectory := filepath.Join(root, "scripts")
+			if err := os.MkdirAll(scriptsDirectory, 0o755); err != nil {
+				t.Fatalf("create scripts directory: %v", err)
+			}
+			stub := "#!/bin/sh\nif [ \"$1\" != v0.5.2 ]; then echo \"unexpected tag $1\" >&2; exit 64; fi\n" +
+				"if [ " + test.stubStatus + " -eq 1 ]; then echo v0.9.0; fi\nexit " + test.stubStatus + "\n"
+			if err := os.WriteFile(filepath.Join(scriptsDirectory, "release-is-newest.sh"), []byte(stub), 0o755); err != nil {
+				t.Fatalf("write release-is-newest stub: %v", err)
+			}
+			outputPath := filepath.Join(root, "github-output")
+			if err := os.WriteFile(outputPath, nil, 0o644); err != nil {
+				t.Fatalf("create GITHUB_OUTPUT: %v", err)
+			}
+			command := exec.Command("bash", "-e", "-o", "pipefail", "-c", decision.Run)
+			command.Dir = root
+			command.Env = append(os.Environ(), "RELEASE_TAG=v0.5.2", "GITHUB_OUTPUT="+outputPath)
+			stdout, runErr := command.CombinedOutput()
+			recorded, err := os.ReadFile(outputPath)
+			if err != nil {
+				t.Fatalf("read GITHUB_OUTPUT: %v", err)
+			}
+			if test.wantFail {
+				if runErr == nil {
+					t.Errorf("step succeeded when the question was unanswerable; output %q, recorded %q", stdout, recorded)
+				}
+				if len(recorded) != 0 {
+					t.Errorf("step recorded %q for a question it could not answer", recorded)
+				}
+				return
+			}
+			if runErr != nil {
+				t.Fatalf("step failed: %v\n%s", runErr, stdout)
+			}
+			if string(recorded) != test.wantOutput {
+				t.Errorf("recorded outputs = %q, want %q", recorded, test.wantOutput)
+			}
+			// The skip is visible on the run's summary, not only in a job nobody
+			// opens.
+			if hasNotice := strings.Contains(string(stdout), "::notice"); hasNotice != test.wantNotice {
+				t.Errorf("notice present = %v, want %v; output %q", hasNotice, test.wantNotice, stdout)
+			}
+			if test.wantNotice && !strings.Contains(string(stdout), "v0.9.0") {
+				t.Errorf("notice %q does not name the newer release", stdout)
+			}
+		})
 	}
 	if got, want := release.Outputs["newest"], "${{ steps."+decision.ID+".outputs.newest }}"; got != want {
 		t.Errorf("release job output newest = %q, want %q", got, want)

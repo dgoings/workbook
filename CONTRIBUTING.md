@@ -349,10 +349,10 @@ SemVer tag, publishes the four archives and checksums to GitHub Releases, and,
 for the newest stable release, updates the `dgoings/homebrew-tap` formula from
 those generated checksums; a pre-release leaves the tap alone, as Pre-releases
 above describes, and so does an older release, as Only the newest release
-moves below describes. The protected release environment exposes a credential scoped only to
-that tap repository after validation. New assets are staged in a draft, the tap
-update is pushed first, and the draft is published last. A rerun verifies
-existing assets byte-for-byte and never overwrites them; a failed final
+moves below describes. The protected release environment exposes a credential
+scoped only to that tap repository after validation. New assets are staged in a
+draft, the tap update is pushed first, and the draft is published last. A rerun
+verifies existing assets byte-for-byte and never overwrites them; a failed final
 publication reverts the tap update a stable release made and removes only a
 draft created by that run.
 
@@ -380,7 +380,8 @@ An older stable release — a rerun of a superseded one, or a patch to a line
 `main` has moved past — is a quiet release. It is published to GitHub Releases
 with its archives and notes, but with `--latest=false`; it leaves the Homebrew
 tap alone; and it cascades into no desktop release, which the run's summary
-says in a notice. The tap is also never moved below the version its formula
+says in a notice. An older desktop tag, cut by hand or rerun, is published the
+same way: with `--latest=false`, leaving `desktop-latest` where it is. The tap is also never moved below the version its formula
 already serves, whatever the tags say. The newest release publishes exactly as
 it always did, and GitHub marks it Latest by default. A pre-release keeps its
 own rules either way: never Latest, never the tap.
@@ -445,8 +446,9 @@ rolling `desktop-latest` is the fixed address the download links and the app's
 updater point at, so it is moved to the new commit and its assets replaced on
 every release whose tag is the newest desktop tag, including a rerun that
 created nothing. An older desktop tag — a dispatched rerun of a superseded
-release, say — publishes its versioned release and leaves `desktop-latest` on
-the newest one. Both carry the macOS
+release, say — publishes its versioned release with `--latest=false`, so it
+does not take Latest from the newest release either, and leaves `desktop-latest`
+on the newest one. Both carry the macOS
 disk images and zips, the Linux AppImage and deb, the Windows installer, and
 electron-builder's update manifests and blockmaps, which the updater reads.
 

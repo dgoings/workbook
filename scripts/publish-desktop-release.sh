@@ -23,9 +23,9 @@ usage: scripts/publish-desktop-release.sh <tag> <dist-dir> <repository> [--bundl
 
 Publishes the desktop release for <tag> from the artifacts in <dist-dir>, then
 refreshes the rolling desktop-latest tag and release to match it when <tag> is
-the newest desktop tag. Git commands
-run against the current directory's repository, which the workflow has checked
-out at <tag>.
+the newest desktop tag. An older tag is published with --latest=false and leaves
+desktop-latest alone. Git commands run against the current directory's
+repository, which the workflow has checked out at <tag>.
 
 Options:
   --bundles CLI_TAG  the Workbook CLI release this build bundles, named in the notes
@@ -288,6 +288,13 @@ if [ "${release_is_draft}" = true ]; then
 	# rather than trust that publishing the draft leaves it alone.
 	if [ "${prerelease}" = yes ]; then
 		set -- "$@" --prerelease
+	fi
+	# GitHub marks a release Latest when it is published, and the CLI's and the
+	# app's releases share one repository, so an older tag has to say it is not.
+	# Otherwise a rerun of a superseded desktop release would take Latest off the
+	# newest release, which is the backward move this script exists to prevent.
+	if [ "${newest_status}" -eq 1 ]; then
+		set -- "$@" --latest=false
 	fi
 	gh release edit "${tag}" --repo "${repository}" "$@"
 fi
