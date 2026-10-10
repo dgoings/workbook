@@ -64,6 +64,78 @@ func TestSetupInstallsPublishedAndWorkingTreeBuildsSideBySide(t *testing.T) {
 	}
 }
 
+// A clone that fetched desktop-latest once holds a stale copy after the next
+// desktop release force-moves it. Choosing the newest release to build only
+// needs the v* tags, so the stale rolling tag must not turn the refresh into a
+// failure that falls back to local tags.
+func TestSetupFetchesReleaseTagsPastAMovedRollingTag(t *testing.T) {
+	t.Parallel()
+	root, _ := setupPaths(t)
+	remote := filepath.Join(t.TempDir(), "workbook.git")
+	runCommand(t, "", nil, "git", "init", "--quiet", "--bare", "--initial-branch=main", remote)
+	clone := filepath.Join(t.TempDir(), "workbook")
+	runCommand(t, "", nil, "git", "clone", "--quiet", remote, clone)
+	runCommand(t, clone, nil, "git", "config", "user.name", "Setup Test")
+	runCommand(t, clone, nil, "git", "config", "user.email", "setup-test@example.com")
+	if err := os.Mkdir(filepath.Join(clone, "scripts"), 0o755); err != nil {
+		t.Fatalf("create scripts directory: %v", err)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, "scripts", "setup-dev-env.sh"))
+	if err != nil {
+		t.Fatalf("read setup-dev-env.sh: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(clone, "scripts", "setup-dev-env.sh"), contents, 0o755); err != nil {
+		t.Fatalf("write setup-dev-env.sh: %v", err)
+	}
+	// Stands in for the real installer so the test builds nothing: the
+	// "published build" just reports which release tag it came from.
+	installer := "#!/bin/sh\nset -eu\n" +
+		"root=$(CDPATH='' cd -- \"${0%/*}/..\" && pwd -P)\n" +
+		"mkdir -p \"$1\"\n" +
+		"printf '#!/bin/sh\\necho \"workbook %s\"\\n' \"$(cat \"${root}/VERSION\")\" > \"$1/workbook\"\n" +
+		"chmod +x \"$1/workbook\"\n"
+	if err := os.WriteFile(filepath.Join(clone, "scripts", "install.sh"), []byte(installer), 0o755); err != nil {
+		t.Fatalf("write install.sh: %v", err)
+	}
+	release := func(version string) {
+		if err := os.WriteFile(filepath.Join(clone, "VERSION"), []byte(version+"\n"), 0o600); err != nil {
+			t.Fatalf("write VERSION: %v", err)
+		}
+		runCommand(t, clone, nil, "git", "add", ".")
+		runCommand(t, clone, nil, "git", "commit", "--quiet", "-m", "release "+version)
+		runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "main")
+	}
+	release("v0.1.0")
+	for _, tag := range []string{"v0.1.0", "desktop-latest"} {
+		runCommand(t, clone, nil, "git", "tag", tag)
+		runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "refs/tags/"+tag)
+	}
+	// Publish v0.2.0 only on the remote and move desktop-latest past this
+	// clone's copy, as the desktop publisher does.
+	release("v0.2.0")
+	runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "HEAD:refs/tags/v0.2.0")
+	runCommand(t, clone, nil, "git", "push", "--quiet", "--force", "origin", "HEAD:refs/tags/desktop-latest")
+
+	stablePrefix := filepath.Join(t.TempDir(), "stable")
+	command := exec.Command(filepath.Join(clone, "scripts", "setup-dev-env.sh"),
+		"--stable-only", "--stable-method", "source", "--no-profile")
+	command.Dir = clone
+	command.Env = append(os.Environ(), "WORKBOOK_STABLE_PREFIX="+stablePrefix)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("setup: %v\n%s", err, output)
+	}
+
+	// Production mutation: fetching every tag fails on the stale rolling tag,
+	// so setup warns that it could not refresh and trusts possibly stale tags.
+	if strings.Contains(string(output), "could not fetch") {
+		t.Errorf("setup output = %q, want the release tags fetched without a warning", output)
+	}
+	if reported := reportedVersion(t, filepath.Join(stablePrefix, "bin", "workbook")); reported != "workbook v0.2.0" {
+		t.Errorf("published build reports %q, want the newest release v0.2.0", reported)
+	}
+}
+
 func TestSetupKeepsTheSkippedBuildOnPath(t *testing.T) {
 	t.Parallel()
 	// Production mutation: rewriting the profile from only the current run drops

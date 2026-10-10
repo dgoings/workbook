@@ -177,8 +177,11 @@ install_stable_from_source() {
 
 	version=${stable_version}
 	if [ -z "${version}" ]; then
-		if ! git -C "${repository_root}" fetch --tags --quiet origin 2>/dev/null; then
-			echo "workbook setup: could not fetch tags from origin; using local tags" >&2
+		# Fetch only the v* release tags. Fetching every tag would fail for any
+		# clone holding an older copy of desktop-latest, which the desktop
+		# publisher moves on every desktop release.
+		if ! git -C "${repository_root}" fetch --quiet --no-tags origin 'refs/tags/v*:refs/tags/v*' 2>/dev/null; then
+			echo "workbook setup: could not fetch release tags from origin; using local tags" >&2
 		fi
 		version=$(git -C "${repository_root}" tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)
 	fi

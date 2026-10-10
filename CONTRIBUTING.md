@@ -309,6 +309,11 @@ nothing uncommitted, `main` matches the remote, and the tag is unused both
 locally and on the remote. It then runs `go test ./...`, creates the annotated
 tag, and pushes only that tag.
 
+It fetches only `main` and the `v*` release tags, so a stale copy of the
+rolling `desktop-latest` tag does not get in the way. A release tag that moved
+on the remote is refused by name rather than overwritten, since a published
+release tag never moves.
+
 Check a release without publishing it with `--dry-run`, which runs every check
 and stops before tagging:
 

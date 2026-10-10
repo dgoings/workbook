@@ -243,6 +243,87 @@ func TestCutReleaseRefusesAStalePreRelease(t *testing.T) {
 	}
 }
 
+// desktop-latest is a rolling tag the desktop publisher force-moves on every
+// desktop release, so a clone that fetched it once holds a stale copy as soon
+// as the next desktop release ships. That copy has nothing to do with the
+// release being cut.
+func TestCutReleaseToleratesAMovedRollingTag(t *testing.T) {
+	t.Parallel()
+	clone, remote := newReleaseRepository(t)
+	first := gitOutput(t, clone, "rev-parse", "HEAD")
+	runCommand(t, clone, nil, "git", "tag", "desktop-latest")
+	runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "refs/tags/desktop-latest")
+	commitAndPush(t, clone, "later.md")
+	head := gitOutput(t, clone, "rev-parse", "HEAD")
+	// Move the remote's desktop-latest the way the publisher does, leaving
+	// this clone's copy behind.
+	runCommand(t, clone, nil, "git", "push", "--quiet", "--force", "origin", "HEAD:refs/tags/desktop-latest")
+
+	// Production mutation: fetching every tag fails on the stale rolling tag
+	// and stops the cut before anything is tagged.
+	output, err := runCutRelease(clone, "0.1.0", "--skip-tests")
+	if err != nil {
+		t.Fatalf("cut release with a moved desktop-latest: %v\n%s", err, output)
+	}
+	if got := gitOutput(t, remote, "rev-parse", "v0.1.0^{commit}"); got != head {
+		t.Errorf("remote tag points at %s, want the released commit %s", got, head)
+	}
+	// Leaving the rolling tag alone is the point: the cut neither needs nor
+	// owns it, so it must not rewrite the clone's copy or push it back.
+	if got := gitOutput(t, clone, "rev-parse", "desktop-latest"); got != first {
+		t.Errorf("local desktop-latest = %s, want it left at %s", got, first)
+	}
+	if got := gitOutput(t, remote, "rev-parse", "desktop-latest"); got != head {
+		t.Errorf("remote desktop-latest = %s, want it left at %s", got, head)
+	}
+}
+
+// A release tag, unlike a rolling one, never moves once published, so a
+// remote copy that disagrees with the clone's is refused by name rather than
+// overwritten or reported as a failed fetch.
+func TestCutReleaseRefusesAMovedReleaseTagByName(t *testing.T) {
+	t.Parallel()
+	clone, remote := newReleaseRepository(t)
+	first := gitOutput(t, clone, "rev-parse", "HEAD")
+	for _, tag := range []string{"v0.1.0", "desktop-latest"} {
+		runCommand(t, clone, nil, "git", "tag", tag)
+		runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "refs/tags/"+tag)
+	}
+	commitAndPush(t, clone, "later.md")
+	for _, tag := range []string{"v0.1.0", "desktop-latest"} {
+		runCommand(t, clone, nil, "git", "push", "--quiet", "--force", "origin", "HEAD:refs/tags/"+tag)
+	}
+
+	// Production mutation: force-fetching release tags would silently repoint
+	// v0.1.0 at a different commit than the one this clone released.
+	output, err := runCutRelease(clone, "0.2.0", "--skip-tests")
+	if err == nil {
+		t.Fatalf("cut release accepted a moved release tag:\n%s", output)
+	}
+	if !strings.Contains(output, "v0.1.0") {
+		t.Errorf("output = %q, want the moved release tag named", output)
+	}
+	if strings.Contains(output, "desktop-latest") {
+		t.Errorf("output = %q, want the rolling tag left out of the refusal", output)
+	}
+	if got := gitOutput(t, clone, "rev-parse", "v0.1.0"); got != first {
+		t.Errorf("local v0.1.0 = %s, want it left at %s", got, first)
+	}
+	if got := gitOutput(t, remote, "tag", "--list", "v0.2.0"); got != "" {
+		t.Errorf("remote carries %q, want v0.2.0 left unpublished", got)
+	}
+}
+
+func commitAndPush(t *testing.T, clone, name string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(clone, name), []byte(name+"\n"), 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	runCommand(t, clone, nil, "git", "add", name)
+	runCommand(t, clone, nil, "git", "commit", "--quiet", "-m", "add "+name)
+	runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "main")
+}
+
 func assertNoTagsPublished(t *testing.T, clone, remote string) {
 	t.Helper()
 	if got := gitOutput(t, clone, "tag", "--list"); got != "" {
