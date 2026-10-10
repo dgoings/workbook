@@ -458,7 +458,9 @@ body {
    content box rounds by what is left after the padding. Its negative margins
    hand the difference back, so the header keeps its height and the name keeps
    its place: the box reaches into the header's padding and the gap beside it
-   rather than pushing either. */
+   rather than pushing either. The rounded corners are not hit, so a pointer a
+   pixel or two in from a corner of the square misses; its edges and center
+   are the target. */
 .category-toggle {
   flex: 0 0 auto;
   display: inline-flex;
