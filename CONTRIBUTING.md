@@ -332,7 +332,9 @@ and stops before tagging:
 `--skip-tests` skips the test run, and `--remote` and `--branch` override the
 `origin` and `main` defaults. With `--branch maint/vX.Y` it cuts a patch to that
 line, refusing any version off the line or a pre-release, and follows the
-line's newest release rather than the newest there is. This path does not
+line's newest release rather than the newest there is. On `main` it refuses a
+version on a line that has its own `maint/vX.Y` branch on the remote. This path
+does not
 consult the changelog: it takes an exact version and trusts the person typing
 it.
 
@@ -380,8 +382,8 @@ releases are published from, with `scripts/validate-release-branch.sh`: the
 tag's commit has to be reachable from `main` on the remote, or, for a stable
 `vX.Y.Z`, from that line's `maint/vX.Y` branch on the remote, and must not
 already contain a higher stable release. A tag on an unmerged branch, a tag on
-another line's branch, or an older version tagged on newer code, publishes
-nothing.
+another line's branch, an older version tagged on newer code, or a tag on
+`main` for a line that has its own `maint/vX.Y` branch publishes nothing.
 
 ### Only the newest release moves
 
@@ -535,6 +537,30 @@ one is needed, and it never merges back into `main`.
    release (a candidate does not start one), and when `main` has nothing since
    that release, since then the patch is cut from `main` as usual.
 
+   From then on `main` releases nothing on the line's minor: the line cuts its
+   patches, and `plan-release.sh`, `cut-release.sh` and the release workflow's
+   branch check all refuse a version or tag on it from `main`. This matters
+   for a line started for the newest minor, `maint/v0.6` while `main` holds 0.7
+   work: a `release:patch` merged into `main` would otherwise cut `v0.6.2` with
+   the 0.7 work in it, and the line's `v0.6.3` would then become the newest
+   release without that work and take Latest and the tap back to it. `main`'s
+   next release is a minor or major.
+
+   A branch takes its workflows and release scripts from the release it starts
+   at, and GitHub runs the branch's pushes, **Cut Release** runs and tags from
+   that tree. A release cut before release lines existed, any tag without
+   `scripts/start-release-line.sh` in it (`v0.6.0` and every release before
+   it), cannot release from a line: its CI does not run on the branch, neither
+   cut workflow accepts it, and its release workflow publishes any tag as the
+   newest, so a patch tagged there would take Latest and the Homebrew tap
+   backward and start a desktop release. The script refuses such a release
+   unless given `--bootstrap`. With it, the line's first pull request has to
+   bring `main`'s `.github/workflows/` and `scripts/` onto the line, with
+   whatever their tests need from `main`, carrying no release label; GitHub
+   runs a pull request's workflows from its own merge result, so Verify and the
+   label check run on it. Push no tag on the line, by hand or otherwise, until
+   that pull request has merged.
+
 2. Land the fix on `main` first, in an ordinary pull request, so the next
    release from `main` carries it too.
 
@@ -545,12 +571,17 @@ one is needed, and it never merges back into `main`.
    git cherry-pick -x <commit>
    ```
 
+   Pick the fix's own commits; a pull request merged into `main` with a merge
+   commit is picked with `git cherry-pick -x -m 1 <merge>`. Drop any hunk that
+   adds to `main`'s `## Unreleased` changelog section: that prose describes
+   `main`'s next release, not the line's.
+
    If the fix deserves prose, add its entry to the line's `CHANGELOG.md` as
    `## v0.5.2 — 2026-10-12`. Label the pull request `release:patch`: a line
    cuts patches only, so `release:minor` and `release:major` are refused on it.
-   CI verifies it as it would a pull request into `main`, and the label check
-   plans it on the line, following the newest `v0.5.*` release and refusing any
-   version off the line.
+   Once the line carries the tooling, CI verifies it as it would a pull request
+   into `main`, and the label check plans it on the line, following the newest
+   `v0.5.*` release and refusing any version off the line.
 
 4. Merge it. That cuts `v0.5.2` from the merge commit on `maint/v0.5`, the way
    merging a release pull request into `main` cuts main's release. The other
@@ -589,12 +620,16 @@ administrator, which no workflow can assert:
   so a line branch gets what `main` gets: no deletion, no force push, a pull
   request for every change, and the required checks `Validate release label
   and changelog` and the `Verify on` matrix.
-- If that ruleset restricts creating a matching branch, whoever runs
-  `start-release-line.sh --push` needs its bypass, or creates the branch from
-  the GitHub interface with it.
-- The **Release Tags** ruleset on `refs/tags/v*` needs no change: a line's tags
-  are `v*` tags, and the GitHub Actions app is already on its bypass list for
-  the cut workflows' tag push.
+- That ruleset enforces its required checks when a matching branch is created,
+  and a release commit never carries `Validate release label and changelog`,
+  which runs on pull requests only. So pushing a new `maint/vX.Y` takes the
+  ruleset's bypass, which only repository administrators have:
+  `start-release-line.sh --push` is run by an administrator, or the branch is
+  created from the GitHub interface by one. Turning on "Do not enforce on
+  create" for its required checks would lift that for every branch it covers.
+- The **Release Tags** ruleset on `refs/tags/v*` needs no change. It restricts
+  deleting, updating and force-pushing `v*` tags, not creating them, so the cut
+  workflows can push a line's new tag as they push `main`'s.
 
 ### When a release fails
 

@@ -90,7 +90,7 @@ func (j ciJob) commands() string {
 
 // Production mutation: a workflow that only fires on tags, like release.yml,
 // leaves every pull request unverified, which is the gap this workflow closes.
-func TestCIWorkflowRunsOnPushAndPullRequestAgainstMain(t *testing.T) {
+func TestCIWorkflowRunsOnMainAndLineBranches(t *testing.T) {
 	t.Parallel()
 	workflow := readCIWorkflow(t)
 
