@@ -1930,7 +1930,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 	}
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := handler.page.Execute(writer, pageData{
-		Board:                 presentation.NewBoard(activeTasks(tasks), vocabulary.Vocabulary),
+		Board:                 presentation.MarkUnresolvedPriorities(presentation.NewBoard(activeTasks(tasks), vocabulary.Vocabulary), vocabulary.Priorities),
 		ProjectName:           projectName(vocabulary.Display),
 		TitleSuffix:           boardTitleSuffix(vocabulary.Display),
 		DefaultProjectName:    core.DefaultProjectName,

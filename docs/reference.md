@@ -582,7 +582,7 @@ rename or removal retired it, on what date, and which live status it resolves
 to now — rather than with a bare "not found". A task holding a status no chain
 leads out of is still fully editable;
 only supplying that status again is refused. See
-[Statuses a project does not define](#statuses-a-project-does-not-define) for
+[Statuses and priorities a project does not define](#statuses-and-priorities-a-project-does-not-define) for
 how to file such a task, and
 [Which exit code a status produces](#which-exit-code-a-status-produces) for why
 membership is exit `5` while a malformed stored token is exit `7`.
@@ -1444,7 +1444,7 @@ page shares one ledger and one tip, so none of them can be changed while another
 is changing, and a save of the board's settings, or of a priority, is as much a
 reason for a status change to be refused as another status change would be.
 
-## Statuses a project does not define
+## Statuses and priorities a project does not define
 
 A task can hold a status that resolves to nothing this project defines: not a
 live status, and not one any recorded rename or removal forwards to a live one.
@@ -1473,6 +1473,23 @@ define is refused. So the ways to file one of these tasks are to give it a
 status that exists — `workbook update <id> --status <one of yours>`, or a drag
 out of the web board's region — or to fetch the configuration the clone that
 wrote the status was using, after which it resolves on its own.
+
+A priority can resolve to nothing in the same way, and `workbook priority list`
+reports such tasks under `Unresolved`. A priority has no column to be left out
+of, so the web board marks the card instead: its priority chip still shows the
+token, drawn with a question mark and a dashed outline in the same warning
+colors as the "Unknown status" region, which no priority is drawn in. Hovering
+it says the priority is not one of this project's, and the card's accessible
+name says so too. The mark follows the task on every poll, so filing the task
+under a priority that exists clears it without a reload. It is judged against
+the priorities the page was loaded with, as the columns are: a configuration
+change raises the reload notice rather than redrawing the board.
+
+In the task's form, a status or priority select holding a value this project
+does not define shows a disabled placeholder rather than one of the project's
+values, so an unrelated save never changes it. Both selects word it the same
+way and lead with the value, as in `Current: critical (not in this project)`,
+so a narrow field cuts off the explanation rather than the value.
 
 ### Which exit code a status produces
 

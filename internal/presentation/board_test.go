@@ -340,3 +340,45 @@ func assertUniquePrefix(t *testing.T, tasks []core.Task, prefix string) {
 		t.Errorf("prefix %q matches %d task IDs, want 1", prefix, matches)
 	}
 }
+
+// A priority is marked only where nothing resolves it — a live token and one a
+// rename forwards are both this project's — and the mark reaches every task the
+// board holds, the unknown-status region's included.
+func TestMarkUnresolvedPrioritiesMarksOnlyWhatNothingResolves(t *testing.T) {
+	priorities, err := core.NewPriorityVocabulary(
+		[]core.PriorityDefinition{
+			{Priority: "urgent", Label: "Urgent", Rank: "1/1", Tags: []core.PriorityTag{core.PriorityTagDefault}},
+			{Priority: core.PriorityLow, Label: "Low", Rank: "2/1", Tags: []core.PriorityTag{}},
+		},
+		[]core.PriorityAlias{{From: core.PriorityHigh, To: "urgent"}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewPriorityVocabulary() error = %v", err)
+	}
+	tasks := []core.Task{
+		{ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FA1", TaskData: core.TaskData{Status: core.StatusReady, Priority: "urgent"}},
+		{ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FA2", TaskData: core.TaskData{Status: core.StatusReady, Priority: core.PriorityHigh}},
+		{ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FA3", TaskData: core.TaskData{Status: core.StatusReady, Priority: "critical"}},
+		{ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FA4", TaskData: core.TaskData{Status: "ghost", Priority: "critical"}},
+	}
+	board := MarkUnresolvedPriorities(NewBoard(tasks, core.LegacyVocabulary()), priorities)
+	got := map[string]bool{}
+	for _, column := range board.Columns {
+		for _, view := range column.Tasks {
+			got[view.Task.ID] = view.PriorityUnresolved
+		}
+	}
+	for _, view := range board.UnknownTasks {
+		got[view.Task.ID] = view.PriorityUnresolved
+	}
+	want := map[string]bool{
+		"WB-01ARZ3NDEKTSV4RRFFQ69G5FA1": false,
+		"WB-01ARZ3NDEKTSV4RRFFQ69G5FA2": false,
+		"WB-01ARZ3NDEKTSV4RRFFQ69G5FA3": true,
+		"WB-01ARZ3NDEKTSV4RRFFQ69G5FA4": true,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("PriorityUnresolved = %v, want %v", got, want)
+	}
+}

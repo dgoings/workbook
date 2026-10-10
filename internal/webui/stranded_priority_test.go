@@ -41,11 +41,12 @@ func strandedPriorityTask() core.Task {
 // The form names the priority the server holds instead of showing one the
 // reader did not choose.
 //
-// The placeholder asks for one of this project's priorities, because there is
-// no canonical set: the priorities are the project's, and the ones this select
-// offers are the ones the server published on the page. The select is also the
-// one place on the board where a priority is read as a name rather than as a
-// token, which is what makes a sentence the right thing to put here.
+// The value leads. A collapsed select is about 200px of the properties column,
+// and what it clips is the end of the text: a placeholder that opened with the
+// instruction — "Choose one of this project's priorities (current: critical)" —
+// showed the instruction and lost the value, which is the one fact the reader
+// cannot recover from anywhere else on the page. The explanation is the half
+// the clip may take.
 func TestHandlerClientNamesAPriorityTheProjectCannotResolve(t *testing.T) {
 	t.Parallel()
 	task := strandedPriorityTask()
@@ -60,11 +61,8 @@ func TestHandlerClientNamesAPriorityTheProjectCannotResolve(t *testing.T) {
   if (!placeholder || !placeholder.disabled) {
     throw new Error("the select offers no placeholder, so it falls to " + JSON.stringify(control.children[0].value));
   }
-  if (!placeholder.textContent.includes(`+strconv.Quote(string(strandedPriority))+`)) {
-    throw new Error("the placeholder does not name the priority the server holds: " + JSON.stringify(placeholder.textContent));
-  }
-  if (!placeholder.textContent.includes("this project's priorities")) {
-    throw new Error("the placeholder does not ask for one of this project's priorities: " + JSON.stringify(placeholder.textContent));
+  if (placeholder.textContent !== `+strconv.Quote(strandedPlaceholder(string(strandedPriority)))+`) {
+    throw new Error("the placeholder does not lead with the priority the server holds: " + JSON.stringify(placeholder.textContent));
   }
   const offered = control.children.filter((option) => option.value !== "").map((option) => option.value);
   const want = ["urgent", "high", "soon", "low"];
@@ -233,6 +231,193 @@ func TestHandlerClientDropsThePriorityPlaceholderOnceTheProjectHasTheValue(t *te
     throw new Error("the save re-asserted a priority the reader never touched: " + JSON.stringify(bodies[0]));
   }
 `)
+}
+
+// strandedPlaceholder is what a select says about a value this project's
+// vocabulary cannot resolve, status and priority alike.
+func strandedPlaceholder(value string) string {
+	return "Current: " + value + " (not in this project)"
+}
+
+// The status and priority placeholders say it the same way.
+//
+// The two vocabularies are deliberately symmetric, and the two placeholders
+// are one sentence in two places. Fixing the clip in one and not the other
+// left the board describing the same condition two different ways, so both are
+// asserted from one form holding a task stranded on both.
+func TestHandlerClientWordsBothStrandedPlaceholdersAlike(t *testing.T) {
+	t.Parallel()
+	task := strandedPriorityTask()
+	task.Status = strandedStatus
+	runPriorityClient(t, "a task stranded on both vocabularies", "/tasks/"+task.ID, projectPriorities(t), []core.Task{task}, `
+  const said = {};
+  for (const name of ["status", "priority"]) {
+    const control = findElement(main, (element) => element.id === "task-" + name);
+    if (!control) throw new Error("the task form has no " + name + " select");
+    const placeholder = control.firstElementChild;
+    if (!placeholder || !placeholder.disabled || control.value !== "") {
+      throw new Error("the " + name + " select did not open on a placeholder");
+    }
+    said[name] = placeholder.textContent;
+  }
+  const want = { status: `+strconv.Quote(strandedPlaceholder(string(strandedStatus)))+`, priority: `+strconv.Quote(strandedPlaceholder(string(strandedPriority)))+` };
+  if (JSON.stringify(said) !== JSON.stringify(want)) {
+    throw new Error("the placeholders read " + JSON.stringify(said) + ", want " + JSON.stringify(want));
+  }
+`)
+}
+
+// A card says when its priority is not one of this project's.
+//
+// The chip draws the token, and before this it drew a stranded token exactly
+// as it drew a live one: CRITICAL read as a priority this project has. Statuses
+// have a whole region for the same condition; a priority has no column to be
+// moved out of, so the chip itself is marked — a data attribute the stylesheet
+// draws in the warning family, a tooltip, and the card's own label, which is
+// where a screen reader is told about the status case too.
+//
+// It follows the task rather than the first paint: a poll that settles the
+// priority clears the mark on the same node, and one that strands it again
+// puts it back.
+func TestHandlerClientMarksAPriorityChipTheProjectCannotResolve(t *testing.T) {
+	t.Parallel()
+	task := strandedPriorityTask()
+	live := clientPlacementTask("WB-01J0000000000000000000F708", "Filed here", core.StatusReady, "urgent")
+	live.Head = "head-a"
+	settled := task
+	settled.Priority = core.Priority("urgent")
+	settled.Head = "head-b"
+	settledDocument := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, VocabularyHead: "head-1",
+		Tasks: []core.Task{settled, live}, Presentation: presentationForTasks([]core.Task{settled, live}),
+	})
+	strandedDocument := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, VocabularyHead: "head-1",
+		Tasks: []core.Task{task, live}, Presentation: presentationForTasks([]core.Task{task, live}),
+	})
+	runPriorityClient(t, "a card at an unresolvable priority", "/", projectPriorities(t), []core.Task{task, live}, `
+  const chipOf = (card) => findElement(card, (element) => hasClassToken(element, "priority"));
+  const expectMarked = (card, label) => {
+    const chip = chipOf(card);
+    if (!chip) throw new Error("the card carries no priority chip");
+    if (chip.textContent !== `+strconv.Quote(string(strandedPriority))+`) {
+      throw new Error("the stranded chip stopped drawing its token: " + JSON.stringify(chip.textContent));
+    }
+    if (!("priorityUnresolved" in chip.dataset)) {
+      throw new Error("the chip of a priority this project does not define is drawn like a live one: " + JSON.stringify(chip.dataset));
+    }
+    if (chip.getAttribute("title") !== "Priority critical is not one of this project's") {
+      throw new Error("the stranded chip explains nothing on hover: " + JSON.stringify(chip.getAttribute("title")));
+    }
+    if (card.getAttribute("aria-label") !== label) {
+      throw new Error("the card's label = " + JSON.stringify(card.getAttribute("aria-label")) + ", want " + JSON.stringify(label));
+    }
+  };
+  const expectLive = (card, label) => {
+    const chip = chipOf(card);
+    if (!chip) throw new Error("the card carries no priority chip");
+    if ("priorityUnresolved" in chip.dataset || chip.getAttribute("title") !== null) {
+      throw new Error("a live priority's chip is marked as stranded: " + JSON.stringify([chip.dataset, chip.getAttribute("title")]));
+    }
+    if (card.getAttribute("aria-label") !== label) {
+      throw new Error("the card's label = " + JSON.stringify(card.getAttribute("aria-label")) + ", want " + JSON.stringify(label));
+    }
+  };
+
+  const card = boardCard(`+strconv.Quote(task.ID)+`);
+  const neighbor = boardCard(`+strconv.Quote(live.ID)+`);
+  if (!card || !neighbor) throw new Error("the board did not draw both cards");
+  expectMarked(card, "Move task Filed by a teammate from ready, at the unrecognized priority critical");
+  expectLive(neighbor, "Move task Filed here from ready");
+
+  card.__witness = "stranded";
+  taskResponse = `+string(settledDocument)+`;
+  await intervalCallback();
+  const settledCard = boardCard(`+strconv.Quote(task.ID)+`);
+  if (settledCard !== card || settledCard.__witness !== "stranded") throw new Error("settling the priority rebuilt the card");
+  expectLive(settledCard, "Move task Filed by a teammate from ready");
+
+  taskResponse = `+string(strandedDocument)+`;
+  await intervalCallback();
+  expectMarked(boardCard(`+strconv.Quote(task.ID)+`), "Move task Filed by a teammate from ready, at the unrecognized priority critical");
+`)
+}
+
+// The server's first paint marks the same chip the client would.
+//
+// The client rebuilds every server-drawn card once, so a card that disagreed
+// would flip from live to stranded under the reader on the first poll. A live
+// priority's chip is left exactly as it was drawn before any of this.
+func TestBoardMarksAStrandedPriorityChipOnTheServerToo(t *testing.T) {
+	t.Parallel()
+	task := strandedPriorityTask()
+	live := clientPlacementTask("WB-01J0000000000000000000F708", "Filed here", core.StatusReady, "urgent")
+	response := request(t, priorityBoardHandler(projectPriorities(t), []core.Task{task, live}), http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	for _, want := range []string{
+		`<span class="priority priority--critical" data-priority-unresolved title="Priority critical is not one of this project's">critical</span>`,
+		`aria-label="Move task Filed by a teammate from ready, at the unrecognized priority critical"`,
+		`<span class="priority priority--urgent">urgent</span>`,
+		`aria-label="Move task Filed here from ready"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the served board does not contain %s", want)
+		}
+	}
+}
+
+// What the mark looks like: the board's warning family, the same one the
+// unknown-status region is drawn in, and nothing a priority is drawn in.
+//
+// A priority is a colored word or a filled chip, and no priority has a border,
+// so the dashed one is what says this chip is not one of them. The ink is
+// measured against the surface it sits on in both schemes rather than trusted,
+// because the warning ink is the one these readings move most between them.
+func TestStrandedPriorityChipIsDrawnInTheWarningFamily(t *testing.T) {
+	t.Parallel()
+	body := priorityInkBoardPage(t, fourPriorityVocabulary(t, ""), nil)
+	const selector = ".priority[data-priority-unresolved] {"
+	at := strings.Index(body, selector)
+	if at < 0 {
+		t.Fatalf("the stylesheet draws no stranded priority chip (%s)", selector)
+	}
+	rule := body[at+len(selector):]
+	rule = rule[:strings.Index(rule, "}")]
+	declarations := map[string]string{}
+	for _, declaration := range strings.Split(rule, ";") {
+		if property, value, found := strings.Cut(declaration, ":"); found {
+			declarations[strings.TrimSpace(property)] = strings.TrimSpace(value)
+		}
+	}
+	want := map[string]string{
+		"color":      "var(--wb-warning-ink)",
+		"background": "var(--wb-warning-surface)",
+		"border":     "1px dashed var(--wb-warning)",
+	}
+	for property, value := range want {
+		if declarations[property] != value {
+			t.Errorf("the stranded chip sets %s: %q, want %q", property, declarations[property], value)
+		}
+	}
+	if strings.Contains(rule, "--wb-priority") {
+		t.Errorf("the stranded chip borrows a priority's ink: %s", rule)
+	}
+	for _, scheme := range []string{"light", "dark"} {
+		palette := schemePalette(scheme)
+		ink := resolveColor(t, "var(--wb-warning-ink)", palette)
+		surface := resolveColor(t, "var(--wb-warning-surface)", palette)
+		if ratio := contrastRatio(t, ink, surface); ratio < chipContrastBar {
+			t.Errorf("the stranded chip draws %s on %s at %.2f:1 in %s, under %.1f:1", ink, surface, ratio, scheme, chipContrastBar)
+		}
+		edge := resolveColor(t, "var(--wb-warning)", palette)
+		card := palette["--wb-surface"]
+		if ratio := contrastRatio(t, edge, card); ratio < chipSeparation {
+			t.Errorf("the stranded chip's border %s sits on the %s card %s at %.2f:1, under %.1f:1", edge, scheme, card, ratio, chipSeparation)
+		}
+	}
 }
 
 // reportedLine pulls the one line the client script printed with this prefix,
