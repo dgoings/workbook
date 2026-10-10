@@ -262,9 +262,10 @@ describe('the rail draws the toggle as a group header', () => {
   })
 })
 
-describe('the rail toggle is there to be hit', () => {
-  // The real stylesheet's cascade, run on the real page collapsed to the rail
-  // with categoryGroup's own markup in the project list. A rule that sets
+describe('the fold toggle is there to be hit, in the rail and the sidebar', () => {
+  // The real stylesheet's cascade, run on the real page, collapsed to the rail
+  // and expanded, with categoryGroup's own markup in the project list: the same
+  // button is the fold control in both. A rule that sets
   // display none, visibility, opacity 0 or pointer-events none on the toggle or
   // an ancestor fails this whatever its selector, and so does one that leaves
   // the declared minimum under the 24px WCAG 2.5.8 asks of a pointer target.
@@ -289,7 +290,7 @@ describe('the rail toggle is there to be hit', () => {
     return cascade.append(element, ...fake.children.map(adopt))
   }
 
-  function railPage ({ collapsed = true, platform, theme = null, board = false }) {
+  function sidebarPage ({ collapsed = true, platform, theme = null, board = false }) {
     const root = cascade.parseHTML(page)
     if (collapsed) root.classes.add('sidebar-collapsed')
     root.classes.add(`is-${platform}`)
@@ -304,16 +305,19 @@ describe('the rail toggle is there to be hit', () => {
     return { groups, toggles }
   }
 
-  // Every way the page can stand: each media condition on and off, each
-  // explicit theme and none, each platform, with and without a board showing,
-  // and the toggle at rest, hovered and focused.
+  // Every way the page can stand: the sidebar collapsed to the rail and
+  // expanded, each media condition on and off, each explicit theme and none,
+  // each platform, with and without a board showing, and the toggle at rest,
+  // hovered and focused.
   function * scenarios () {
-    for (const env of cascade.combinations(cascade.conditions(stylesheet))) {
-      for (const theme of [null, 'light', 'dark']) {
-        for (const platform of ['mac', 'windows', 'linux']) {
-          for (const board of [false, true]) {
-            for (const interaction of ['rest', 'hover', 'focus']) {
-              yield { env, theme, platform, board, interaction }
+    for (const collapsed of [true, false]) {
+      for (const env of cascade.combinations(cascade.conditions(stylesheet))) {
+        for (const theme of [null, 'light', 'dark']) {
+          for (const platform of ['mac', 'windows', 'linux']) {
+            for (const board of [false, true]) {
+              for (const interaction of ['rest', 'hover', 'focus']) {
+                yield { collapsed, env, theme, platform, board, interaction }
+              }
             }
           }
         }
@@ -322,16 +326,17 @@ describe('the rail toggle is there to be hit', () => {
   }
 
   function check (scenario, inspect) {
-    for (const toggle of railPage(scenario).toggles) {
+    for (const toggle of sidebarPage(scenario).toggles) {
       const state = scenario.interaction === 'rest'
         ? cascade.interaction()
         : cascade.interaction({ [scenario.interaction]: toggle })
-      const where = `${cascade.describe(toggle)} in the rail, ${JSON.stringify(scenario)}`
+      const mode = scenario.collapsed ? 'the rail' : 'the expanded sidebar'
+      const where = `${cascade.describe(toggle)} in ${mode}, ${JSON.stringify(scenario)}`
       inspect(toggle, { env: scenario.env, state }, where)
     }
   }
 
-  test('the rail shows the toggle and lets the pointer reach it', () => {
+  test('the rail and the sidebar show the toggle and let the pointer reach it', () => {
     for (const scenario of scenarios()) {
       check(scenario, (toggle, options, where) => {
         assert.equal(cascade.unreachable(stylesheet, toggle, options), null,
@@ -340,7 +345,7 @@ describe('the rail toggle is there to be hit', () => {
     }
   })
 
-  test('the rail toggle is at least 24px tall and wide', () => {
+  test('the toggle is at least 24px tall and wide in the rail and the sidebar', () => {
     // A minimum or a fixed size holds whatever the glyphs measure: box-sizing
     // aside, the border box is never smaller than min-height or height, or than
     // min-width or width. Either way of asking for 24px passes.
@@ -355,9 +360,10 @@ describe('the rail toggle is there to be hit', () => {
   })
 
   test('the guard sees what the rail does hide', () => {
-    // Without this, a cascade that matched nothing would pass both tests above.
+    // Without this, a cascade that matched nothing would pass both tests above,
+    // and so would one that never took the page out of the rail.
     const options = { env: {}, state: cascade.interaction() }
-    const rail = railPage({ platform: 'mac' })
+    const rail = sidebarPage({ platform: 'mac' })
     const name = rail.groups[0].children[0].children[1]
     assert.ok(name.classes.has('category-name'))
     assert.match(cascade.unreachable(stylesheet, name, options), /display: none/)
@@ -365,7 +371,7 @@ describe('the rail toggle is there to be hit', () => {
     assert.ok(tiles.classes.has('category-projects'))
     assert.match(cascade.unreachable(stylesheet, tiles, options), /display: none \(\[hidden\]\)/)
 
-    const sidebar = railPage({ collapsed: false, platform: 'mac' })
+    const sidebar = sidebarPage({ collapsed: false, platform: 'mac' })
     assert.equal(cascade.unreachable(stylesheet, sidebar.groups[0].children[0].children[1], options), null)
     const initials = sidebar.toggles[0].children[1]
     assert.ok(initials.classes.has('category-initials'))

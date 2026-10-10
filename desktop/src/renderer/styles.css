@@ -451,24 +451,36 @@ body {
 
 .category-head:hover { background: var(--wb-primary-tint-4); }
 
+/* The chevron draws a 1.2rem square, but the button is the 24px square WCAG
+   2.5.8 asks of a pointer target. The padding is the difference, and the hover
+   tint stays inside it, so only the pointer finds the larger box. The radius
+   is the padding more than the tint's own 3px, because a tint clipped to the
+   content box rounds by what is left after the padding. Its negative margins
+   hand the difference back, so the header keeps its height and the name keeps
+   its place: the box reaches into the header's padding and the gap beside it
+   rather than pushing either. The rounded corners are not hit, so a pointer a
+   pixel or two in from a corner of the square misses; its edges and center
+   are the target. */
 .category-toggle {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.2rem;
-  height: 1.2rem;
-  padding: 0;
+  width: 24px;
+  height: 24px;
+  margin: -.15rem;
+  padding: .15rem;
   border: 0;
-  border-radius: 3px;
+  border-radius: calc(3px + .15rem);
   background: transparent;
+  background-clip: content-box;
   color: var(--wb-text-3);
   font-size: .72rem;
   line-height: 1;
   cursor: pointer;
 }
 
-.category-toggle:hover { color: var(--wb-primary); background: var(--wb-primary-tint-1); }
+.category-toggle:hover { color: var(--wb-primary); background-color: var(--wb-primary-tint-1); }
 
 /* The triangle turns on its own, not the toggle: in the rail the toggle also
    holds the initials, which stay upright. */
@@ -711,7 +723,8 @@ body {
    margins are the header's own, so the box reaches into the empty space the
    divider keeps above and below its label instead of pushing the tiles down,
    and a header after an open category still shares that category's bottom
-   margin, as it did before. */
+   margin, as it did before. The hover tint fills the whole box here, with
+   its own 3px corners, where the base rule keeps it to the chevron's square. */
 :root.sidebar-collapsed .category-toggle {
   width: auto;
   height: auto;
@@ -720,6 +733,8 @@ body {
   margin: -.3rem 0 -.25rem;
   gap: .2rem;
   padding: .1rem .25rem;
+  border-radius: 3px;
+  background-clip: border-box;
   color: var(--wb-primary-ink);
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
   font-size: .62rem;
