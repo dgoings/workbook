@@ -703,11 +703,21 @@ body {
 /* A key tile is a bordered box in the text color; the toggle is neither. It
    takes the voice of the Projects label the rail hides (monospace, heavy,
    tracked, in the glyphs' blue) with no border, so a single-letter category
-   such as P does not read as one more key beside a tile like P1. */
+   such as P does not read as one more key beside a tile like P1.
+
+   It is the only way to a folded category's projects from here, so it is never
+   smaller than the 24px square WCAG 2.5.8 asks of a pointer target, however
+   small the label; with no border, the larger box does not show. Its negative
+   margins are the header's own, so the box reaches into the empty space the
+   divider keeps above and below its label instead of pushing the tiles down,
+   and a header after an open category still shares that category's bottom
+   margin, as it did before. */
 :root.sidebar-collapsed .category-toggle {
   width: auto;
   height: auto;
-  min-width: 0;
+  min-width: 24px;
+  min-height: 24px;
+  margin: -.3rem 0 -.25rem;
   gap: .2rem;
   padding: .1rem .25rem;
   color: var(--wb-primary-ink);
