@@ -21,7 +21,7 @@ func TestPublishReleasePublishesTheChangelogEntryAsTheReleaseNotes(t *testing.T)
 	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
 	changelog := writeChangelog(t, "# Changelog\n\n## v0.1.0 — 2026-08-08\n\n### Added\n- the first release\n")
 
-	output, err := runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, "v0.1.0", changelog, nil)
+	output, err := runPublishReleaseWithChangelog(t, root, fakeBin, fakeGitHub, tap, dist, "v0.1.0", changelog, nil)
 	if err != nil {
 		t.Fatalf("publish release: %v\n%s", err, output)
 	}
@@ -50,7 +50,7 @@ func TestPublishReleaseGeneratesNotesWithoutAChangelogEntry(t *testing.T) {
 	// An entry for a different release, which this one must not borrow.
 	changelog := writeChangelog(t, "# Changelog\n\n## v0.2.0\n\n- a later release\n")
 
-	output, err := runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, "v0.1.0", changelog, nil)
+	output, err := runPublishReleaseWithChangelog(t, root, fakeBin, fakeGitHub, tap, dist, "v0.1.0", changelog, nil)
 	if err != nil {
 		t.Fatalf("publish release: %v\n%s", err, output)
 	}
@@ -91,7 +91,7 @@ func TestPublishReleaseCreatesAssetsOnceAndRejectsMismatchedRerun(t *testing.T) 
 		t.Fatalf("tamper local asset: %v", err)
 	}
 	writeFixtureChecksums(t, dist, "0.1.0")
-	output, err := runPublishReleaseCommand(root, fakeBin, fakeGitHub, tap, dist, nil)
+	output, err := runPublishReleaseCommand(t, root, fakeBin, fakeGitHub, tap, dist, nil)
 	if err == nil {
 		t.Fatalf("mismatched rerun succeeded; output = %q", output)
 	}
@@ -135,6 +135,7 @@ func TestPublishReleaseRollsBackTapAndNewDraftWhenPublicationFails(t *testing.T)
 	initialRemoteHead := gitOutput(t, tap, "rev-parse", "origin/main")
 
 	output, err := runPublishReleaseCommand(
+		t,
 		root,
 		fakeBin,
 		fakeGitHub,
@@ -174,6 +175,7 @@ func TestPublishReleaseNeverDeletesPublicReleaseAfterAmbiguousPublishFailure(t *
 	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
 
 	output, err := runPublishReleaseCommand(
+		t,
 		root,
 		fakeBin,
 		fakeGitHub,
@@ -223,7 +225,7 @@ func TestPublishReleasePublishesAPreReleaseWithoutTouchingTheTap(t *testing.T) {
 	changelog := writeChangelog(t, "# Changelog\n\n## Unreleased\n\n- a candidate\n\n## v0.5.1\n\n- the last release\n")
 	tapHeadBefore := gitOutput(t, tap, "rev-parse", "origin/main")
 
-	output, err := runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, "v0.6.0-rc1", changelog, nil)
+	output, err := runPublishReleaseWithChangelog(t, root, fakeBin, fakeGitHub, tap, dist, "v0.6.0-rc1", changelog, nil)
 	if err != nil {
 		t.Fatalf("publish pre-release: %v\n%s", err, output)
 	}
@@ -267,7 +269,7 @@ func TestPublishReleaseGeneratesPreReleaseNotesWithoutAnUnreleasedSection(t *tes
 	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
 	changelog := writeChangelog(t, "# Changelog\n\n## v0.5.1\n\n- the last release\n")
 
-	output, err := runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, "v0.6.0-rc1", changelog, nil)
+	output, err := runPublishReleaseWithChangelog(t, root, fakeBin, fakeGitHub, tap, dist, "v0.6.0-rc1", changelog, nil)
 	if err != nil {
 		t.Fatalf("publish pre-release: %v\n%s", err, output)
 	}
@@ -291,7 +293,7 @@ func TestPublishReleasePublishesAPreReleaseWithoutATapCheckout(t *testing.T) {
 	changelog := writeChangelog(t, "# Changelog\n\n## Unreleased\n\n- a candidate\n\n## v0.5.1\n\n- the last release\n")
 	absentTap := filepath.Join(t.TempDir(), "homebrew-tap")
 
-	output, err := runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, absentTap, dist, "v0.6.0-rc1", changelog, nil)
+	output, err := runPublishReleaseWithChangelog(t, root, fakeBin, fakeGitHub, absentTap, dist, "v0.6.0-rc1", changelog, nil)
 	if err != nil {
 		t.Fatalf("publish pre-release without a tap checkout: %v\n%s", err, output)
 	}
@@ -313,7 +315,7 @@ func TestPublishReleaseFailsFastWhenAStableReleaseHasNoTapCheckout(t *testing.T)
 	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
 	absentTap := filepath.Join(t.TempDir(), "homebrew-tap")
 
-	output, err := runPublishReleaseCommand(root, fakeBin, fakeGitHub, absentTap, dist, nil)
+	output, err := runPublishReleaseCommand(t, root, fakeBin, fakeGitHub, absentTap, dist, nil)
 	if err == nil {
 		t.Fatalf("stable release published without a tap checkout; output = %q", output)
 	}
@@ -336,6 +338,239 @@ func TestPublishReleaseDoesNotFlagAStableReleaseAsAPreRelease(t *testing.T) {
 	if logContents := readFakeGitHubLog(t, fakeGitHub); strings.Contains(logContents, "--prerelease") {
 		t.Errorf("gh log = %q, want no pre-release flag on a stable release", logContents)
 	}
+}
+
+// The newest release publishes exactly as it always has: the same gh calls,
+// in the same order, with the same flags, and a tap commit. GitHub marks a
+// newly published release Latest unless told otherwise, so nothing here says
+// --latest, and the rule for older releases must not leak into this path.
+func TestPublishReleaseMakesTheSameCallsForTheNewestRelease(t *testing.T) {
+	t.Parallel()
+	root, _ := renderFormulaPaths(t)
+	dist := writeReleaseFixture(t, "0.6.0")
+	tap, remote := newTapRepository(t)
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+	source := newTaggedRepository(t, "v0.5.1", "v0.6.0-rc1", "v0.6.0", "desktop-v0.9.0")
+	tapHeadBefore := gitOutput(t, tap, "rev-parse", "origin/main")
+
+	output, err := runPublishReleaseFrom(source, root, fakeBin, fakeGitHub, tap, dist, "v0.6.0", absentChangelog(root), nil)
+	if err != nil {
+		t.Fatalf("publish newest release: %v\n%s", err, output)
+	}
+
+	assets := releaseAssetArguments(t, dist, "0.6.0")
+	want := strings.Join([]string{
+		"release view v0.6.0 --repo dgoings/workbook --json isDraft --jq .isDraft",
+		"release create v0.6.0 " + assets + " --generate-notes --repo dgoings/workbook --verify-tag --draft --title Workbook v0.6.0",
+		"release edit v0.6.0 --repo dgoings/workbook --draft=false",
+	}, "\n") + "\n"
+	if got := readFakeGitHubLog(t, fakeGitHub); got != want {
+		t.Errorf("gh calls =\n%s\nwant\n%s", got, want)
+	}
+	if got := gitOutput(t, tap, "rev-parse", "origin/main"); got == tapHeadBefore {
+		t.Error("the newest release made no tap commit")
+	}
+	if formula := gitOutput(t, remote, "show", "main:Formula/workbook.rb"); !strings.Contains(formula, "/releases/download/v0.6.0/workbook_0.6.0_") {
+		t.Errorf("tap formula does not serve v0.6.0:\n%s", formula)
+	}
+}
+
+// A pre-release keeps its own rules whatever the tags around it say: it is
+// flagged as one, GitHub never makes one Latest, and it never touches the tap.
+// One cut below a newer stable release makes exactly the calls one cut above it
+// does, so the newest-release rule never reaches it.
+func TestPublishReleaseMakesTheSameCallsForAPreReleaseWhateverTheTags(t *testing.T) {
+	t.Parallel()
+	root, _ := renderFormulaPaths(t)
+	for _, testCase := range []struct {
+		name string
+		tags []string
+	}{
+		{name: "above every release", tags: []string{"v0.5.1", "v0.6.0-rc1"}},
+		{name: "below a newer release", tags: []string{"v0.6.1", "v0.6.0-rc1"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			dist := writeReleaseFixture(t, "0.6.0-rc1")
+			tap, _ := newTapRepository(t)
+			fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+			source := newTaggedRepository(t, testCase.tags...)
+			tapHeadBefore := gitOutput(t, tap, "rev-parse", "origin/main")
+
+			output, err := runPublishReleaseFrom(source, root, fakeBin, fakeGitHub, tap, dist, "v0.6.0-rc1", absentChangelog(root), nil)
+			if err != nil {
+				t.Fatalf("publish pre-release: %v\n%s", err, output)
+			}
+
+			assets := releaseAssetArguments(t, dist, "0.6.0-rc1")
+			want := strings.Join([]string{
+				"release view v0.6.0-rc1 --repo dgoings/workbook --json isDraft --jq .isDraft",
+				"release create v0.6.0-rc1 " + assets + " --generate-notes --prerelease --repo dgoings/workbook --verify-tag --draft --title Workbook v0.6.0-rc1",
+				"release edit v0.6.0-rc1 --repo dgoings/workbook --draft=false --prerelease",
+			}, "\n") + "\n"
+			if got := readFakeGitHubLog(t, fakeGitHub); got != want {
+				t.Errorf("gh calls =\n%s\nwant\n%s", got, want)
+			}
+			if got := gitOutput(t, tap, "rev-parse", "origin/main"); got != tapHeadBefore {
+				t.Errorf("tap head moved from %s to %s for a pre-release", tapHeadBefore, got)
+			}
+		})
+	}
+}
+
+// A patch to a line main has moved past is a quiet release: it is on the
+// Releases page, but Latest and brew stay on the newest release. GitHub makes a
+// newly published release Latest by default, so the older one has to say
+// otherwise when its draft is published.
+func TestPublishReleasePublishesAnOlderReleaseQuietly(t *testing.T) {
+	t.Parallel()
+	root, _ := renderFormulaPaths(t)
+	dist := writeReleaseFixture(t, "0.5.2")
+	tap, remote := newTapRepository(t)
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+	source := newTaggedRepository(t, "v0.5.1", "v0.6.0", "v0.5.2")
+	tapHeadBefore := gitOutput(t, tap, "rev-parse", "origin/main")
+
+	output, err := runPublishReleaseFrom(source, root, fakeBin, fakeGitHub, tap, dist, "v0.5.2", absentChangelog(root), nil)
+	if err != nil {
+		t.Fatalf("publish older release: %v\n%s", err, output)
+	}
+
+	log := readFakeGitHubLog(t, fakeGitHub)
+	if got, want := fakeGitHubLine(t, log, "release edit v0.5.2"), "release edit v0.5.2 --repo dgoings/workbook --draft=false --latest=false"; got != want {
+		t.Errorf("edit line = %q, want %q", got, want)
+	}
+	// The versioned release itself is published as usual.
+	if state, readErr := os.ReadFile(fakeReleaseStatePath(fakeGitHub, "v0.5.2")); readErr != nil || strings.TrimSpace(string(state)) != "published" {
+		t.Errorf("release state = %q (%v), want published", state, readErr)
+	}
+	// Production mutation: refreshing the tap regardless would hand brew
+	// upgrade a downgrade.
+	if got := gitOutput(t, tap, "rev-parse", "origin/main"); got != tapHeadBefore {
+		t.Errorf("tap head moved from %s to %s for an older release", tapHeadBefore, got)
+	}
+	if got := gitOutput(t, tap, "rev-parse", "HEAD"); got != tapHeadBefore {
+		t.Errorf("tap checkout moved from %s to %s for an older release", tapHeadBefore, got)
+	}
+	if _, showErr := exec.Command("git", "-C", remote, "show", "main:Formula/workbook.rb").CombinedOutput(); showErr == nil {
+		t.Error("an older release wrote a formula to the tap")
+	}
+	if !strings.Contains(string(output), "v0.5.2 is older than v0.6.0") {
+		t.Errorf("output = %q, want it to say why Latest and the tap were left alone", output)
+	}
+}
+
+// The tap is checked too, because it can be ahead of the tags this run sees: a
+// formula already serving a higher version stays as it is, while one serving
+// the same or a lower version is refreshed as it always was.
+func TestPublishReleaseNeverMovesTheTapFormulaBackward(t *testing.T) {
+	t.Parallel()
+	root, _ := renderFormulaPaths(t)
+	for _, testCase := range []struct {
+		formulaVersion string
+		wantRefresh    bool
+	}{
+		{formulaVersion: "0.7.0", wantRefresh: false},
+		{formulaVersion: "0.6.10", wantRefresh: false},
+		{formulaVersion: "0.6.0", wantRefresh: true},
+		{formulaVersion: "0.6.1", wantRefresh: true},
+	} {
+		t.Run(testCase.formulaVersion, func(t *testing.T) {
+			t.Parallel()
+			dist := writeReleaseFixture(t, "0.6.1")
+			tap, remote := newTapRepository(t)
+			writeTapFormula(t, tap, testCase.formulaVersion)
+			fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+			source := newTaggedRepository(t, "v0.6.0", "v0.6.1")
+			tapHeadBefore := gitOutput(t, tap, "rev-parse", "origin/main")
+
+			output, err := runPublishReleaseFrom(source, root, fakeBin, fakeGitHub, tap, dist, "v0.6.1", absentChangelog(root), nil)
+			if err != nil {
+				t.Fatalf("publish release: %v\n%s", err, output)
+			}
+
+			formula := gitOutput(t, remote, "show", "main:Formula/workbook.rb")
+			// The fixture formula carries no checksums, so a rendered one is told
+			// apart from it even when both name the same version.
+			refreshed := strings.Contains(formula, "/releases/download/v0.6.1/workbook_0.6.1_") && strings.Contains(formula, "sha256 ")
+			if refreshed != testCase.wantRefresh {
+				t.Errorf("tap formula refreshed = %t, want %t; formula:\n%s", refreshed, testCase.wantRefresh, formula)
+			}
+			if !testCase.wantRefresh {
+				if got := gitOutput(t, tap, "rev-parse", "origin/main"); got != tapHeadBefore {
+					t.Errorf("tap head moved from %s to %s past a newer formula", tapHeadBefore, got)
+				}
+				if !strings.Contains(string(output), "already serves "+testCase.formulaVersion) {
+					t.Errorf("output = %q, want it to say the tap is ahead", output)
+				}
+			}
+			// The tags say this is the newest release, so it is still Latest:
+			// the publish call is the one it always was.
+			if got, want := fakeGitHubLine(t, readFakeGitHubLog(t, fakeGitHub), "release edit v0.6.1"), "release edit v0.6.1 --repo dgoings/workbook --draft=false"; got != want {
+				t.Errorf("edit line = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// A run that cannot tell whether its release is the newest must not guess, and
+// must find that out before anything reaches GitHub or the tap.
+func TestPublishReleaseStopsBeforePublishingWhenTheTagIsNotInTheCheckout(t *testing.T) {
+	t.Parallel()
+	root, _ := renderFormulaPaths(t)
+	dist := writeReleaseFixture(t, "0.6.0")
+	tap, _ := newTapRepository(t)
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+	source := newTaggedRepository(t, "v0.5.1")
+	tapHeadBefore := gitOutput(t, tap, "rev-parse", "origin/main")
+
+	output, err := runPublishReleaseFrom(source, root, fakeBin, fakeGitHub, tap, dist, "v0.6.0", absentChangelog(root), nil)
+	if err == nil {
+		t.Fatalf("published a release whose tag the checkout does not carry:\n%s", output)
+	}
+	if !strings.Contains(string(output), "is not a tag in this repository") {
+		t.Errorf("output = %q, want the missing tag named", output)
+	}
+	if _, statErr := os.Stat(filepath.Join(fakeGitHub, "commands.log")); !os.IsNotExist(statErr) {
+		t.Errorf("publisher reached gh before failing: %v", statErr)
+	}
+	if got := gitOutput(t, tap, "rev-parse", "origin/main"); got != tapHeadBefore {
+		t.Errorf("tap head moved from %s to %s", tapHeadBefore, got)
+	}
+}
+
+// releaseAssetArguments is the asset list publish-release.sh hands gh release
+// create, in its order, under the resolved path it uses.
+func releaseAssetArguments(t *testing.T, dist, version string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(dist)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", dist, err)
+	}
+	arguments := make([]string, 0, 5)
+	for _, name := range append(releaseArchiveNames(version), "checksums.txt") {
+		arguments = append(arguments, filepath.Join(resolved, name))
+	}
+	return strings.Join(arguments, " ")
+}
+
+// writeTapFormula commits a formula serving version to the tap and its remote.
+// Only the download URLs matter: they are where the version lives.
+func writeTapFormula(t *testing.T, tap, version string) {
+	t.Helper()
+	formula := "class Workbook < Formula\n" +
+		"  url \"https://github.com/dgoings/workbook/releases/download/v" + version + "/workbook_" + version + "_darwin_arm64.tar.gz\"\n" +
+		"  url \"https://github.com/dgoings/workbook/releases/download/v" + version + "/workbook_" + version + "_linux_amd64.tar.gz\"\n" +
+		"end\n"
+	if err := os.MkdirAll(filepath.Join(tap, "Formula"), 0o755); err != nil {
+		t.Fatalf("create Formula directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tap, "Formula", "workbook.rb"), []byte(formula), 0o600); err != nil {
+		t.Fatalf("write formula: %v", err)
+	}
+	runCommand(t, tap, nil, "git", "add", "Formula/workbook.rb")
+	runCommand(t, tap, nil, "git", "commit", "--quiet", "-m", "workbook "+version)
+	runCommand(t, tap, nil, "git", "push", "--quiet", "origin", "main")
 }
 
 func writeReleaseFixture(t *testing.T, version string) string {
@@ -528,24 +763,40 @@ func readFakeGitHubLog(t *testing.T, fakeGitHub string) string {
 
 func runPublishRelease(t *testing.T, root, fakeBin, fakeGitHub, tap, dist string, extraEnvironment []string) {
 	t.Helper()
-	if output, err := runPublishReleaseCommand(root, fakeBin, fakeGitHub, tap, dist, extraEnvironment); err != nil {
+	if output, err := runPublishReleaseCommand(t, root, fakeBin, fakeGitHub, tap, dist, extraEnvironment); err != nil {
 		t.Fatalf("publish release: %v\n%s", err, output)
 	}
 }
 
-func runPublishReleaseCommand(root, fakeBin, fakeGitHub, tap, dist string, extraEnvironment []string) ([]byte, error) {
+func runPublishReleaseCommand(t *testing.T, root, fakeBin, fakeGitHub, tap, dist string, extraEnvironment []string) ([]byte, error) {
+	t.Helper()
 	// Pointing at a changelog that does not exist keeps these cases on the
 	// generated-notes path regardless of what the repository's own CHANGELOG.md
 	// happens to contain. Notes selection is covered on its own below.
 	return runPublishReleaseWithChangelog(
-		root, fakeBin, fakeGitHub, tap, dist, "v0.1.0",
-		filepath.Join(root, "scripts", "testdata-absent-changelog.md"),
+		t, root, fakeBin, fakeGitHub, tap, dist, "v0.1.0",
+		absentChangelog(root),
 		extraEnvironment,
 	)
 }
 
 // The tag carries the version, so it has to match the fixture the caller built.
-func runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, tag, changelog string, extraEnvironment []string) ([]byte, error) {
+// The release is published from a repository holding that tag alone, so it is
+// the newest release there, whatever tags this checkout happens to carry.
+func runPublishReleaseWithChangelog(t *testing.T, root, fakeBin, fakeGitHub, tap, dist, tag, changelog string, extraEnvironment []string) ([]byte, error) {
+	t.Helper()
+	source := newTaggedRepository(t, tag)
+	return runPublishReleaseFrom(source, root, fakeBin, fakeGitHub, tap, dist, tag, changelog, extraEnvironment)
+}
+
+func absentChangelog(root string) string {
+	return filepath.Join(root, "scripts", "testdata-absent-changelog.md")
+}
+
+// runPublishReleaseFrom runs the publisher in source, standing in for the
+// workflow's checkout of the tag, whose tag list decides whether this is the
+// newest release.
+func runPublishReleaseFrom(source, root, fakeBin, fakeGitHub, tap, dist, tag, changelog string, extraEnvironment []string) ([]byte, error) {
 	command := exec.Command(
 		filepath.Join(root, "scripts", "publish-release.sh"),
 		tag,
@@ -554,7 +805,7 @@ func runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, tag, c
 		"dgoings/workbook",
 		changelog,
 	)
-	command.Dir = root
+	command.Dir = source
 	command.Env = environmentWithValues(
 		os.Environ(),
 		append([]string{

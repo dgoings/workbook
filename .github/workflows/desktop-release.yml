@@ -222,7 +222,10 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
           # publish-desktop-release.sh moves desktop-latest through this
-          # checkout, and names the CLI release the build bundles.
+          # checkout, reads every desktop tag from it to decide whether it may,
+          # and names the CLI release the build bundles. The checkout happens
+          # inside the desktop-latest group, so it sees every tag a publication
+          # ahead of it pushed.
           fetch-depth: 0
 
       - name: Download every platform's installers

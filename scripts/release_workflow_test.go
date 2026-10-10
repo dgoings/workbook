@@ -61,10 +61,13 @@ type releaseJob struct {
 	} `yaml:"with"`
 	// Secrets is what a calling job passes to the workflow it calls.
 	Secrets map[string]string `yaml:"secrets"`
+	// Outputs is what a job hands the jobs that need it.
+	Outputs map[string]string `yaml:"outputs"`
 	Steps   []releaseStep     `yaml:"steps"`
 }
 
 type releaseStep struct {
+	ID   string            `yaml:"id"`
 	Name string            `yaml:"name"`
 	Uses string            `yaml:"uses"`
 	Run  string            `yaml:"run"`
@@ -541,6 +544,135 @@ func TestReleaseWorkflowCascadesIntoADesktopRelease(t *testing.T) {
 	}
 	if publish.Environment != nil {
 		t.Errorf("job %q environment = %v, want none; the release job's approval covers this run", publishName, publish.Environment)
+	}
+}
+
+// Only the newest release cascades into a desktop one. An older patch is a
+// quiet release, and a desktop build for it would either be refused by the
+// planner, failing the run after the CLI release published, or move
+// desktop-latest backward. The decision is made once, in the release job, and
+// the desktop-tag job is skipped on it, which skips the desktop publication
+// that needs it too.
+func TestReleaseWorkflowCascadesOnlyTheNewestRelease(t *testing.T) {
+	t.Parallel()
+	workflow := readReleaseWorkflow(t, "release.yml")
+	release, ok := workflow.Jobs["release"]
+	if !ok {
+		t.Fatalf("release workflow jobs = %v, want a release job", keysOf(workflow.Jobs))
+	}
+
+	var decision releaseStep
+	for _, step := range release.Steps {
+		if strings.Contains(step.Run, "release-is-newest.sh") {
+			decision = step
+		}
+	}
+	if decision.Run == "" {
+		t.Fatal("release job never asks whether its release is the newest")
+	}
+	if decision.ID == "" {
+		t.Fatalf("step %q has no id, so its answer cannot leave the job", decision.Name)
+	}
+	if !strings.Contains(decision.Run, "RELEASE_TAG") {
+		t.Errorf("step %q runs %q, want it to ask about the release tag", decision.Name, decision.Run)
+	}
+	// Exit 1 is the answer "older"; anything else is a question that could not
+	// be answered, and has to fail the run rather than read as either answer.
+	if !strings.Contains(decision.Run, "newest=true") || !strings.Contains(decision.Run, "newest=false") {
+		t.Errorf("step %q does not record both answers:\n%s", decision.Name, decision.Run)
+	}
+	// The skip is visible on the run's summary, not only in a job nobody opens.
+	if !strings.Contains(decision.Run, "::notice") {
+		t.Errorf("step %q skips the cascade without a notice:\n%s", decision.Name, decision.Run)
+	}
+	if got, want := release.Outputs["newest"], "${{ steps."+decision.ID+".outputs.newest }}"; got != want {
+		t.Errorf("release job output newest = %q, want %q", got, want)
+	}
+
+	tag, ok := workflow.Jobs["desktop-tag"]
+	if !ok {
+		t.Fatalf("release workflow jobs = %v, want a desktop-tag job", keysOf(workflow.Jobs))
+	}
+	// Production mutation: dropping the gate cascades an older patch into the
+	// desktop planner, which refuses it and fails the run.
+	for _, guard := range []string{
+		"needs.release.outputs.newest == 'true'",
+	} {
+		if !strings.Contains(tag.If, guard) {
+			t.Errorf("desktop-tag condition %q is missing the guard %q", tag.If, guard)
+		}
+	}
+	// A status function in the condition would replace the implicit success()
+	// and let the cascade run after a failed release job.
+	for _, override := range []string{"always()", "failure()", "cancelled()"} {
+		if strings.Contains(tag.If, override) {
+			t.Errorf("desktop-tag condition %q contains %s, so it no longer waits for a successful release", tag.If, override)
+		}
+	}
+}
+
+// A tag that is not on a branch releases are published from is refused before
+// anything is built, and the check needs the remote's branches and every tag,
+// which only a full-depth checkout carries.
+func TestReleaseWorkflowValidatesTheTagIsOnASupportedBranch(t *testing.T) {
+	t.Parallel()
+	workflow := readReleaseWorkflow(t, "release.yml")
+	release, ok := workflow.Jobs["release"]
+	if !ok {
+		t.Fatalf("release workflow jobs = %v, want a release job", keysOf(workflow.Jobs))
+	}
+
+	branchCheck, build, publish := -1, -1, -1
+	for index, step := range release.Steps {
+		switch {
+		case strings.Contains(step.Run, "validate-release-branch.sh"):
+			branchCheck = index
+			if !strings.Contains(step.Run, "RELEASE_TAG") {
+				t.Errorf("step %q runs %q, want it to check the release tag", step.Name, step.Run)
+			}
+		case strings.Contains(step.Run, "scripts/release.sh"):
+			build = index
+		case strings.Contains(step.Run, "publish-release.sh"):
+			publish = index
+		}
+		if strings.HasPrefix(step.Uses, "actions/checkout@") && strings.Contains(step.With.Ref, "inputs.tag") {
+			if depth, ok := step.With.FetchDepth.(int); !ok || depth != 0 {
+				t.Errorf("release checkout fetch-depth = %v, want 0 for the remote's branches and every tag", step.With.FetchDepth)
+			}
+		}
+	}
+	if branchCheck < 0 {
+		t.Fatal("release job never checks the tag is on a supported branch")
+	}
+	if build < 0 || publish < 0 {
+		t.Fatalf("release job steps build at %d and publish at %d, want both", build, publish)
+	}
+	if branchCheck > build || branchCheck > publish {
+		t.Errorf("branch check is step %d, after the build (%d) or the publication (%d)", branchCheck, build, publish)
+	}
+}
+
+// publish-desktop-release.sh reads every desktop tag to decide whether it may
+// move desktop-latest, and a shallow checkout would show it none newer.
+func TestDesktopReleaseWorkflowPublishesFromAFullTagList(t *testing.T) {
+	t.Parallel()
+	workflow := readReleaseWorkflow(t, "desktop-release.yml")
+	publish, ok := workflow.Jobs["publish"]
+	if !ok {
+		t.Fatalf("desktop-release jobs = %v, want a publish job", keysOf(workflow.Jobs))
+	}
+	var checkouts int
+	for _, step := range publish.Steps {
+		if !strings.HasPrefix(step.Uses, "actions/checkout@") {
+			continue
+		}
+		checkouts++
+		if depth, ok := step.With.FetchDepth.(int); !ok || depth != 0 {
+			t.Errorf("publish checkout fetch-depth = %v, want 0 for every desktop tag", step.With.FetchDepth)
+		}
+	}
+	if checkouts == 0 {
+		t.Fatal("desktop publish job never checks out the tag")
 	}
 }
 
