@@ -403,6 +403,10 @@ func mintedLedgerRepository(t *testing.T) *Repository {
 // forgeConfigTree rewrites the ledger tip's tree in place, keeping its parents
 // — none, for the genesis this fixture mints — so that the entries are the only
 // thing the reader can be answering about.
+//
+// It hand-builds the commit writeConfigObjects would write, as do internal/cli's
+// forgeries in configforge_test.go; a change to the configuration commit's
+// shape has to reach both.
 func forgeConfigTree(t *testing.T, repo *Repository, generation int, extraEntries ...string) string {
 	t.Helper()
 	head := refValue(t, repo, configRef)
