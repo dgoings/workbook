@@ -2,7 +2,6 @@ package cli
 
 import (
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -167,9 +166,8 @@ func TestPriorityLogOffersNoInverseForARoleThisBuildCannotName(t *testing.T) {
 // against it is recorded together with the built-in three. Writing that root by
 // hand is the only way to drive the command line over one.
 //
-// The objects are the two blobs, one tree and one commit every configuration
-// commit is made of; see gitstore's writeConfigObjects for the shape being
-// reproduced.
+// The new root keeps the minted genesis's project, actor and wall time; the
+// objects themselves are written by configforge_test.go's shared construction.
 func writeLegacyPriorityLessLedger(t *testing.T, repository string) {
 	t.Helper()
 	root := gitOutput(t, repository, "rev-list", "--max-parents=0", configLedgerRefName)
@@ -179,47 +177,9 @@ func writeLegacyPriorityLessLedger(t *testing.T, repository string) {
 		t.Fatalf("decode the minted genesis: %v", err)
 	}
 
-	ids := core.CryptoULIDSource{}
-	generation, err := ids.New()
-	if err != nil {
-		t.Fatalf("generation ID: %v", err)
-	}
-	genesisID, err := ids.New()
-	if err != nil {
-		t.Fatalf("genesis operation ID: %v", err)
-	}
-	pack, err := core.NewConfigOperationPack(
-		existing.ProjectID, generation, existing.Actor.ID, 1, existing.WallTime,
-		[]core.ConfigOperation{{
-			ID:     genesisID,
-			Type:   core.ConfigGenesis,
-			Config: &core.ConfigData{Vocabulary: core.LegacyVocabulary().Document()},
-		}})
-	if err != nil {
-		t.Fatalf("NewConfigOperationPack() error = %v", err)
-	}
-	state, err := core.ApplyConfig(nil, pack)
-	if err != nil {
-		t.Fatalf("ApplyConfig() error = %v", err)
-	}
-	if state.Config.Priorities != nil {
-		t.Fatalf("legacy genesis state carries a priorities section: %#v", state.Config.Priorities)
-	}
-	packBytes, err := core.EncodeDocument(pack)
-	if err != nil {
-		t.Fatalf("encode the legacy genesis pack: %v", err)
-	}
-	stateBytes, err := core.EncodeDocument(state)
-	if err != nil {
-		t.Fatalf("encode the legacy genesis state: %v", err)
-	}
-
-	operationBlob := gitWithInput(t, repository, string(packBytes), "hash-object", "-w", "-t", "blob", "--stdin")
-	stateBlob := gitWithInput(t, repository, string(stateBytes), "hash-object", "-w", "-t", "blob", "--stdin")
-	tree := gitWithInput(t, repository, fmt.Sprintf(
-		"100644 blob %s\toperation.json\n100644 blob %s\tstate.json\n", operationBlob, stateBlob), "mktree")
-	commit := gitOutput(t, repository, "commit-tree", tree, "-m", "Record the Workbook configuration genesis")
-	gitOutput(t, repository, "update-ref", configLedgerRefName, commit)
+	commit, _ := writeLegacyConfigGenesis(t, repository, existing.ProjectID, existing.Actor.ID, existing.WallTime,
+		"Record the Workbook configuration genesis")
+	moveConfigLedger(t, repository, commit, "")
 }
 
 // The log names the change somebody authored, not the backfill recorded beside

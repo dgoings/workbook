@@ -2,7 +2,6 @@ package cli
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -253,36 +252,15 @@ func legacyDisplayConfiguredRepository(t *testing.T) string {
 	}
 
 	const actor = "legacy@example.test"
-	ids := core.CryptoULIDSource{}
-	generation, err := ids.New()
-	if err != nil {
-		t.Fatalf("history generation id: %v", err)
-	}
-	genesisID, err := ids.New()
-	if err != nil {
-		t.Fatalf("genesis operation id: %v", err)
-	}
+	genesisCommit, genesisState := writeLegacyConfigGenesis(
+		t, repository, taskState.ProjectID, actor, time.Now().UTC(), "workbook: legacy genesis")
 
-	genesisPack, err := core.NewConfigOperationPack(taskState.ProjectID, generation, actor, 1, time.Now().UTC(),
-		[]core.ConfigOperation{{
-			ID:     genesisID,
-			Type:   core.ConfigGenesis,
-			Config: &core.ConfigData{Vocabulary: core.LegacyVocabulary().Document()},
-		}})
-	if err != nil {
-		t.Fatalf("legacy genesis pack: %v", err)
-	}
-	genesisState, err := core.ApplyConfig(nil, genesisPack)
-	if err != nil {
-		t.Fatalf("apply legacy genesis: %v", err)
-	}
-	genesisCommit := writeForgedConfigCommit(t, repository, "", genesisPack, genesisState, "workbook: legacy genesis")
-
-	displayID, err := ids.New()
+	displayID, err := core.CryptoULIDSource{}.New()
 	if err != nil {
 		t.Fatalf("display operation id: %v", err)
 	}
-	displayPack, err := core.NewConfigOperationPack(taskState.ProjectID, generation, actor, 2, time.Now().UTC(),
+	displayPack, err := core.NewConfigOperationPack(
+		taskState.ProjectID, genesisState.History.Generation, actor, 2, time.Now().UTC(),
 		[]core.ConfigOperation{{
 			ID:      displayID,
 			Type:    core.ConfigDisplaySet,
@@ -292,47 +270,11 @@ func legacyDisplayConfiguredRepository(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("display pack: %v", err)
 	}
-	displayState, err := core.ApplyConfig(&genesisState, displayPack)
-	if err != nil {
-		t.Fatalf("apply display change: %v", err)
-	}
-	displayCommit := writeForgedConfigCommit(
-		t, repository, genesisCommit, displayPack, displayState, "workbook: set project-name to Atlas")
+	displayCommit, _ := writeConfigLedgerPack(
+		t, repository, genesisCommit, &genesisState, displayPack, "workbook: set project-name to Atlas")
 
-	cliGit(t, repository, "update-ref", "refs/workbook/config", displayCommit)
+	moveConfigLedger(t, repository, displayCommit, "")
 	return repository
-}
-
-// writeForgedConfigCommit writes one configuration ledger commit with raw git
-// plumbing, the same technique internal/cli/newerwriter_test.go's
-// writeFutureConfigCommit uses, generalized to a parent that may be empty (a
-// genesis has none) and to a pack and state this build produced normally
-// rather than forged into a shape it does not recognize.
-func writeForgedConfigCommit(
-	t *testing.T,
-	repository, parent string,
-	pack core.ConfigOperationPack,
-	state core.ConfigStateDocument,
-	subject string,
-) string {
-	t.Helper()
-	packBytes, err := core.EncodeDocument(pack)
-	if err != nil {
-		t.Fatalf("encode configuration operation pack: %v", err)
-	}
-	stateBytes, err := core.EncodeDocument(state)
-	if err != nil {
-		t.Fatalf("encode configuration state document: %v", err)
-	}
-	operationBlob := hashObject(t, repository, string(packBytes))
-	stateBlob := hashObject(t, repository, string(stateBytes))
-	tree := gitWithInput(t, repository, fmt.Sprintf("100644 blob %s\toperation.json\n100644 blob %s\tstate.json\n",
-		operationBlob, stateBlob), "mktree")
-	args := []string{"commit-tree", tree}
-	if parent != "" {
-		args = append(args, "-p", parent)
-	}
-	return gitWithInput(t, repository, subject, args...)
 }
 
 // The test this fix exists for: a project that behaves exactly like a real

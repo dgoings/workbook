@@ -108,8 +108,7 @@ func writeFutureTaskCommit(t *testing.T, repository, taskID string) string {
 // writeFutureConfigCommit does the same to the configuration ledger.
 func writeFutureConfigCommit(t *testing.T, repository string) string {
 	t.Helper()
-	const ref = "refs/workbook/config"
-	head := cliGitOutput(t, repository, "rev-parse", ref)
+	head := cliGitOutput(t, repository, "rev-parse", configLedgerRefName)
 	state, err := core.DecodeConfigStateDocument([]byte(cliGitOutput(t, repository, "show", head+":state.json") + "\n"))
 	if err != nil {
 		t.Fatalf("DecodeConfigStateDocument() error = %v", err)
@@ -133,12 +132,8 @@ func writeFutureConfigCommit(t *testing.T, repository string) string {
 	}
 	assertOneMarker(t, "the forged configuration checkpoint", marked)
 
-	operationBlob := hashObject(t, repository, operation)
-	stateBlob := hashObject(t, repository, marked+"\n")
-	tree := gitWithInput(t, repository, fmt.Sprintf("100644 blob %s\toperation.json\n100644 blob %s\tstate.json\n",
-		operationBlob, stateBlob), "mktree")
-	commit := gitWithInput(t, repository, "workbook: add a template", "commit-tree", tree, "-p", head)
-	cliGit(t, repository, "update-ref", ref, commit, head)
+	commit := writeConfigLedgerCommit(t, repository, head, operation, marked+"\n", "workbook: add a template")
+	moveConfigLedger(t, repository, commit, head)
 	return commit
 }
 
