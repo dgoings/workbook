@@ -79,10 +79,10 @@ fi
 # release rather than comparing against the newer minor. The same rule gives
 # the first release of a line the newest release of the lines before it, and
 # never skips a release on the same line: one, when there is one, orders after
-# every release of an earlier line. Candidates never start notes: the first 0.6 release covers
-# everything since 0.5, not since its last candidate. The first release of all
-# names nothing and covers the whole history. A pre-release leaves the choice
-# to GitHub, as it always has.
+# every release of an earlier line. Candidates never start notes: the first
+# 0.6 release covers everything since 0.5, not since its last candidate. The
+# first release of all names nothing and covers the whole history. A
+# pre-release leaves the choice to GitHub, as it always has.
 notes_start_tag=
 if [ "${prerelease}" = no ]; then
 	notes_start_tag=$(newest_release_tag stable "" v "" "${version}")
