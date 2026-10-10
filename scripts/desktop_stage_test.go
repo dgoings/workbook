@@ -93,6 +93,71 @@ func TestDesktopStageBuildsANamedRefWithoutMovingTheWorkingTree(t *testing.T) {
 	}
 }
 
+// The release build reuses a cached clone, and the desktop publisher moves the
+// rolling desktop-latest tag on every desktop release. Fetching every tag is
+// refused for that tag in any clone holding an older copy; the fetch then
+// exits non-zero even though the tags it was after arrived, so the build must
+// fetch only release tags. The script says so when a fetch fails.
+func TestDesktopStageFetchesReleaseTagsDespiteAMovedDesktopLatest(t *testing.T) {
+	t.Parallel()
+	root, script := desktopStagePaths(t)
+	output := t.TempDir()
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	gitOutput(t, root, "clone", "--quiet", "--bare", root, remote)
+	gitOutput(t, remote, "tag", "-f", "desktop-latest", "HEAD")
+
+	// The cached clone from an earlier release job: it holds the old
+	// desktop-latest and knows nothing of the release tag made since.
+	clone := filepath.Join(output, "workbook-src")
+	gitOutput(t, root, "clone", "--quiet", remote, clone)
+
+	want := gitOutput(t, root, "rev-parse", "HEAD~1")
+	gitOutput(t, remote, "tag", "-f", "desktop-latest", "HEAD~2")
+	gitOutput(t, remote, "tag", "v9.9.9", want)
+
+	command := exec.Command(script, output)
+	command.Dir = root
+	command.Env = append(os.Environ(), "WORKBOOK_REPO=", "WORKBOOK_REF=v9.9.9")
+	combined, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage: %v\n%s", err, combined)
+	}
+	if strings.Contains(string(combined), "could not fetch") {
+		t.Fatalf("stage output = %q, want the fetch to succeed with the moved desktop-latest left out", combined)
+	}
+	if got := gitOutput(t, clone, "rev-parse", "HEAD"); got != want {
+		t.Fatalf("clone HEAD = %s, want the new release tag's commit %s", got, want)
+	}
+}
+
+// A ref outside the v* release tags is still a valid ref, so a desktop-v* tag
+// made since the cached clone was taken must keep resolving.
+func TestDesktopStageResolvesADesktopTagMadeSinceTheClone(t *testing.T) {
+	t.Parallel()
+	root, script := desktopStagePaths(t)
+	output := t.TempDir()
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	gitOutput(t, root, "clone", "--quiet", "--bare", root, remote)
+	clone := filepath.Join(output, "workbook-src")
+	gitOutput(t, root, "clone", "--quiet", remote, clone)
+
+	want := gitOutput(t, root, "rev-parse", "HEAD~1")
+	gitOutput(t, remote, "tag", "desktop-v9.9.9", want)
+
+	command := exec.Command(script, output)
+	command.Dir = root
+	command.Env = append(os.Environ(), "WORKBOOK_REPO=", "WORKBOOK_REF=desktop-v9.9.9")
+	combined, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage: %v\n%s", err, combined)
+	}
+	if got := gitOutput(t, clone, "rev-parse", "HEAD"); got != want {
+		t.Fatalf("clone HEAD = %s, want the desktop tag's commit %s", got, want)
+	}
+}
+
 func TestDesktopStageUsesAGivenCheckoutAsItStands(t *testing.T) {
 	t.Parallel()
 	root, script := desktopStagePaths(t)

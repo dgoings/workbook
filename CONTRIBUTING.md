@@ -351,17 +351,57 @@ and a `release:patch` still cuts `v0.5.2`.
 
 A version tag such as `v0.1.0` runs the release workflow. It revalidates the
 SemVer tag, publishes the four archives and checksums to GitHub Releases, and,
-for a stable release, updates the `dgoings/homebrew-tap` formula from those
-generated checksums; a pre-release leaves the tap alone, as Pre-releases above
-describes. The protected release environment exposes a credential scoped only to
-that tap repository after validation. New assets are staged in a draft, the tap
-update is pushed first, and the draft is published last. A rerun verifies
-existing assets byte-for-byte and never overwrites them; a failed final
+for the newest stable release, updates the `dgoings/homebrew-tap` formula from
+those generated checksums; a pre-release leaves the tap alone, as Pre-releases
+above describes, and so does an older release, as Only the newest release
+moves below describes. The protected release environment exposes a credential
+scoped only to that tap repository after validation. New assets are staged in a
+draft, the tap update is pushed first, and the draft is published last. A rerun
+verifies existing assets byte-for-byte and never overwrites them; a failed final
 publication reverts the tap update a stable release made and removes only a
 draft created by that run.
 
 The release notes are the `CHANGELOG.md` entry when the version has one, and
 generated from the commit log when it does not.
+
+Before building anything, the workflow checks that the tag sits on a branch
+releases are published from, with `scripts/validate-release-branch.sh`: the
+tag's commit has to be reachable from `main` on the remote, and must not
+already contain a higher stable release. A tag on an unmerged branch, or an
+older version tagged on newer code, publishes nothing.
+
+### Only the newest release moves
+
+Latest on the Releases page, the Homebrew tap, the desktop download links and
+the desktop app's updater all point at one release, and only the newest release
+moves them. `scripts/release-is-newest.sh` decides, comparing the tag with the
+other tags of its own sequence (`v*` for the CLI, `desktop-v*` for the app). A
+stable release is the newest when no stable tag orders after it; a candidate
+that is out does not count against it, so `v0.6.1` cut while `v0.7.0-rc1` is
+out is still the newest. A pre-release is the newest when no tag at all orders
+after it.
+
+An older stable release — a rerun of a superseded one, or a patch to a line
+`main` has moved past — is a quiet release. It is published to GitHub Releases
+with its archives and notes, but with `--latest=false`; it leaves the Homebrew
+tap alone; and it cascades into no desktop release, which the run's summary
+says in a notice. An older desktop tag, cut by hand or rerun, is published the
+same way: with `--latest=false`, leaving `desktop-latest` where it is. The tap is also never moved below the version its formula
+already serves, whatever the tags say. The newest release publishes exactly as
+it always did, and GitHub marks it Latest by default. A pre-release keeps its
+own rules either way: never Latest, never the tap.
+
+What is guaranteed, and what is not: the comparison reads the tags in the run's
+own checkout, taken at full depth when the job starts. Against every tag pushed
+before that, an older release never moves Latest, the tap, the cascade or
+`desktop-latest` backward, and a checkout that does not carry the release's own
+tag stops the run before anything is published rather than guess. Two CLI
+releases publishing at the same moment are not ordered against each other, so
+a tag pushed while another release is mid-run is best-effort; the tap push
+still refuses to land over a formula it did not start from. The desktop
+publication is not exposed to that: its publish job checks out inside the
+global `desktop-latest` concurrency group, so it sees every desktop tag pushed
+before it began publishing.
 
 A tag pushed by a workflow using the default `GITHUB_TOKEN` does not start
 another workflow run, so the two automated paths push their tag and then call
@@ -376,8 +416,10 @@ CLI's `vX.Y.Z`. They are separate because the app can ship a fix of its own
 without a CLI release behind it, and one sequence would make every such fix
 claim a CLI version that published nothing.
 
-Every CLI release still cascades into a desktop one. After the release job
-publishes, `desktop-tag` plans the companion tag with
+Every newest CLI release still cascades into a desktop one; an older one does
+not, as Only the newest release moves above describes, and the `desktop-tag`
+and `desktop-publish` jobs are skipped. After the release job publishes,
+`desktop-tag` plans the companion tag with
 `scripts/plan-desktop-release.sh` and pushes it, and `desktop-publish` calls
 the desktop workflow with it. The two jobs sit inside the release run, so the
 one environment approval already given covers them; and the tag is pushed and
@@ -407,7 +449,11 @@ It publishes two releases from that one build. The versioned one, such as
 verifies the existing assets byte-for-byte and refuses to replace them. The
 rolling `desktop-latest` is the fixed address the download links and the app's
 updater point at, so it is moved to the new commit and its assets replaced on
-every release, including a rerun that created nothing. Both carry the macOS
+every release whose tag is the newest desktop tag, including a rerun that
+created nothing. An older desktop tag — a dispatched rerun of a superseded
+release, say — publishes its versioned release with `--latest=false`, so it
+does not take Latest from the newest release either, and leaves `desktop-latest`
+on the newest one. Both carry the macOS
 disk images and zips, the Linux AppImage and deb, the Windows installer, and
 electron-builder's update manifests and blockmaps, which the updater reads.
 
@@ -435,8 +481,9 @@ newer.
 
 A desktop pre-release is a `desktop-vX.Y.Z-rcN` tag. A CLI pre-release cascades
 into one, and one can be cut by hand the same way a stable desktop release is.
-Its versioned release is flagged as a pre-release, and it still refreshes
-`desktop-latest`, which is flagged alongside it: the rolling release is an
+Its versioned release is flagged as a pre-release, and when it is the newest
+desktop tag it still refreshes `desktop-latest`, which is flagged alongside it:
+the rolling release is an
 address, and an address that skips a release stops being one. The next stable
 release clears the flag again. This is where the desktop app differs from the
 CLI, whose pre-release deliberately leaves the Homebrew tap alone so

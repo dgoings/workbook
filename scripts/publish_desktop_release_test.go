@@ -3,6 +3,7 @@ package scripts_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -451,6 +452,165 @@ func TestPublishDesktopReleaseReportsAPublishedReleaseWhenTheRollingRefreshFails
 	if got := gitOutput(t, remote, "rev-parse", "desktop-latest^{commit}"); got != releasedCommit {
 		t.Errorf("remote desktop-latest points at %s, want the released commit %s", got, releasedCommit)
 	}
+}
+
+// desktop-latest is what the site's download links and every installed app's
+// updater read, so an older desktop tag publishes its own versioned release
+// and nothing else. A dispatched rerun of an older tag used to move it
+// backward; so would a patch to an older line.
+func TestPublishDesktopReleaseLeavesTheRollingReleaseAloneForAnOlderTag(t *testing.T) {
+	t.Parallel()
+	clone, remote := newReleaseRepository(t)
+	runCommand(t, clone, nil, "git", "tag", "--annotate", "desktop-v0.5.2", "--message", "Workbench desktop-v0.5.2")
+	commitFile(t, clone, "newer.txt", "newer work\n")
+	runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "main")
+	runCommand(t, clone, nil, "git", "tag", "--annotate", "desktop-v0.6.0", "--message", "Workbench desktop-v0.6.0")
+	runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "refs/tags/desktop-v0.5.2", "refs/tags/desktop-v0.6.0")
+	newestCommit := gitOutput(t, clone, "rev-parse", "desktop-v0.6.0^{commit}")
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+
+	if output, err := runPublishDesktopRelease(
+		t, clone, fakeBin, fakeGitHub, nil,
+		"desktop-v0.6.0", writeDesktopFixture(t, "", desktopAssetNames()...), "dgoings/workbook",
+	); err != nil {
+		t.Fatalf("publish newest desktop release: %v\n%s", err, output)
+	}
+	rollingAssetBefore, err := os.ReadFile(filepath.Join(fakeReleaseAssetsPath(fakeGitHub, "desktop-latest"), "latest-mac.yml"))
+	if err != nil {
+		t.Fatalf("read rolling asset: %v", err)
+	}
+	logBefore := readFakeGitHubLog(t, fakeGitHub)
+
+	// The older build differs byte for byte, so an upload would show.
+	older := t.TempDir()
+	for _, name := range desktopAssetNames() {
+		writeDesktopFile(t, older, name, name+" from desktop-v0.5.2\n")
+	}
+	// Twice: the first run creates the versioned release, and the second is
+	// the dispatched rerun that found it already published.
+	for run := 1; run <= 2; run++ {
+		output, err := runPublishDesktopRelease(
+			t, clone, fakeBin, fakeGitHub, nil,
+			"desktop-v0.5.2", older, "dgoings/workbook",
+		)
+		if err != nil {
+			t.Fatalf("publish older desktop release run %d: %v\n%s", run, err, output)
+		}
+		if !strings.Contains(output, "desktop-v0.5.2 is older than desktop-v0.6.0") {
+			t.Errorf("run %d output = %q, want it to say why desktop-latest was left alone", run, output)
+		}
+	}
+
+	log := strings.TrimPrefix(readFakeGitHubLog(t, fakeGitHub), logBefore)
+	if strings.Contains(log, "desktop-latest") {
+		t.Errorf("an older desktop tag touched desktop-latest:\n%s", log)
+	}
+	if count := strings.Count(log, "release create desktop-v0.5.2 "); count != 1 {
+		t.Errorf("versioned release create count = %d, want one; log:\n%s", count, log)
+	}
+	// GitHub marks a release Latest when it is published, and the CLI's and the
+	// app's releases share one repository, so publishing the older draft through
+	// a bare edit would take Latest off the newest release.
+	publishEdit := "release edit desktop-v0.5.2 --repo dgoings/workbook --draft=false --latest=false"
+	if count := strings.Count(log, publishEdit+"\n"); count != 1 {
+		t.Errorf("publishing the older draft = %d calls of %q, want exactly one; log:\n%s", count, publishEdit, log)
+	}
+	if state, readErr := os.ReadFile(fakeReleaseStatePath(fakeGitHub, "desktop-v0.5.2")); readErr != nil || strings.TrimSpace(string(state)) != "published" {
+		t.Errorf("older versioned release state = %q (%v), want published", state, readErr)
+	}
+	if got := gitOutput(t, remote, "rev-parse", "desktop-latest^{commit}"); got != newestCommit {
+		t.Errorf("remote desktop-latest points at %s, want the newest release's commit %s", got, newestCommit)
+	}
+	rollingAssetAfter, err := os.ReadFile(filepath.Join(fakeReleaseAssetsPath(fakeGitHub, "desktop-latest"), "latest-mac.yml"))
+	if err != nil {
+		t.Fatalf("read rolling asset: %v", err)
+	}
+	if string(rollingAssetAfter) != string(rollingAssetBefore) {
+		t.Errorf("desktop-latest asset changed from %q to %q", rollingAssetBefore, rollingAssetAfter)
+	}
+}
+
+// The newest desktop tag publishes exactly as it always has. A newer CLI tag in
+// the same repository belongs to the other sequence and must not hold the app's
+// release off desktop-latest.
+func TestPublishDesktopReleaseMakesTheSameCallsForTheNewestTag(t *testing.T) {
+	t.Parallel()
+	clone, remote := newReleaseRepository(t)
+	runCommand(t, clone, nil, "git", "tag", "desktop-v0.5.2")
+	runCommand(t, clone, nil, "git", "tag", "v0.9.0")
+	commitFile(t, clone, "newer.txt", "newer work\n")
+	runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "main")
+	runCommand(t, clone, nil, "git", "tag", "--annotate", "desktop-v0.6.0", "--message", "Workbench desktop-v0.6.0")
+	runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "refs/tags/desktop-v0.6.0")
+	releasedCommit := gitOutput(t, clone, "rev-parse", "HEAD")
+	distribution := writeDesktopFixture(t, "", desktopAssetNames()...)
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+
+	// Twice, so both the create and the refresh of desktop-latest are seen.
+	for run := 1; run <= 2; run++ {
+		if output, err := runPublishDesktopRelease(
+			t, clone, fakeBin, fakeGitHub, nil,
+			"desktop-v0.6.0", distribution, "dgoings/workbook", "--bundles", "v0.6.0",
+		); err != nil {
+			t.Fatalf("publish newest desktop release run %d: %v\n%s", run, err, output)
+		}
+	}
+
+	// The asset arguments come from a glob whose order follows the shell's
+	// collation, so they are checked as a set and stripped from each line; the
+	// rest of every call is compared exactly.
+	resolved, err := filepath.EvalSymlinks(distribution)
+	if err != nil {
+		t.Fatalf("resolve distribution: %v", err)
+	}
+	want := []string{
+		"release view desktop-v0.6.0 --repo dgoings/workbook --json isDraft --jq .isDraft",
+		"release create desktop-v0.6.0 <assets> --repo dgoings/workbook --verify-tag --draft --title Workbench desktop-v0.6.0 --notes Workbench desktop-v0.6.0, bundling Workbook v0.6.0.",
+		"release edit desktop-v0.6.0 --repo dgoings/workbook --draft=false",
+		"release view desktop-latest --repo dgoings/workbook",
+		"release create desktop-latest <assets> --repo dgoings/workbook --verify-tag --title Workbench (latest) --notes Rolling release; currently desktop-v0.6.0.",
+		"release view desktop-v0.6.0 --repo dgoings/workbook --json isDraft --jq .isDraft",
+		"release download desktop-v0.6.0 --repo dgoings/workbook --dir <existing>",
+		"release view desktop-latest --repo dgoings/workbook",
+		"release upload desktop-latest <assets> --repo dgoings/workbook --clobber",
+		"release edit desktop-latest --repo dgoings/workbook --notes Rolling release; currently desktop-v0.6.0. --prerelease=false",
+	}
+	lines := strings.Split(strings.TrimSpace(readFakeGitHubLog(t, fakeGitHub)), "\n")
+	if len(lines) != len(want) {
+		t.Fatalf("gh calls =\n%s\nwant\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
+	}
+	for index, line := range lines {
+		got, assets := stripDesktopAssets(line, resolved)
+		got = existingDirectory.ReplaceAllString(got, "--dir <existing>")
+		if got != want[index] {
+			t.Errorf("gh call %d = %q, want %q", index+1, got, want[index])
+		}
+		if strings.Contains(want[index], "<assets>") && len(assets) != len(desktopAssetNames()) {
+			t.Errorf("gh call %d uploads %d assets, want %d: %v", index+1, len(assets), len(desktopAssetNames()), assets)
+		}
+	}
+	if got := gitOutput(t, remote, "rev-parse", "desktop-latest^{commit}"); got != releasedCommit {
+		t.Errorf("remote desktop-latest points at %s, want the released commit %s", got, releasedCommit)
+	}
+}
+
+var existingDirectory = regexp.MustCompile(`--dir \S+`)
+
+// stripDesktopAssets replaces the run of asset paths under distribution in a
+// logged gh call with <assets>, returning the line and the names it removed.
+func stripDesktopAssets(line, distribution string) (string, []string) {
+	var kept, assets []string
+	for _, field := range strings.Split(line, " ") {
+		if strings.HasPrefix(field, distribution+string(filepath.Separator)) {
+			if len(assets) == 0 {
+				kept = append(kept, "<assets>")
+			}
+			assets = append(assets, filepath.Base(field))
+			continue
+		}
+		kept = append(kept, field)
+	}
+	return strings.Join(kept, " "), assets
 }
 
 // desktopAssetNames lists dist/ as electron-builder 26 really leaves it for a

@@ -1,15 +1,17 @@
 #!/bin/sh
 set -eu
 
-# Publishes the desktop app's release for a desktop-vX.Y.Z tag, then points the
-# rolling desktop-latest tag and release at it.
+# Publishes the desktop app's release for a desktop-vX.Y.Z tag, then, when it
+# is the newest desktop tag, points the rolling desktop-latest tag and release
+# at it.
 #
 # Two releases carry one build because they answer two questions. The versioned
 # release is the record of what shipped and is written once: someone who has
 # downloaded desktop-v0.6.0 must always get the same bytes back. The rolling one
 # is the address the download links and the app's updater are pinned to, so it
-# is rewritten on every release and has to be refreshed even on a rerun that
-# creates nothing.
+# is rewritten on every release that is the newest, and has to be refreshed
+# even on a rerun that creates nothing. An older tag never touches it, so it
+# never moves backward.
 #
 # The rolling release is touched only after the versioned one is published, and
 # never before: desktop-latest naming a release that failed to publish sends
@@ -20,9 +22,10 @@ usage() {
 usage: scripts/publish-desktop-release.sh <tag> <dist-dir> <repository> [--bundles CLI_TAG]
 
 Publishes the desktop release for <tag> from the artifacts in <dist-dir>, then
-refreshes the rolling desktop-latest tag and release to match it. Git commands
-run against the current directory's repository, which the workflow has checked
-out at <tag>.
+refreshes the rolling desktop-latest tag and release to match it when <tag> is
+the newest desktop tag. An older tag is published with --latest=false and leaves
+desktop-latest alone. Git commands run against the current directory's
+repository, which the workflow has checked out at <tag>.
 
 Options:
   --bundles CLI_TAG  the Workbook CLI release this build bundles, named in the notes
@@ -94,6 +97,18 @@ prerelease=no
 if is_prerelease_version "${version}"; then
 	prerelease=yes
 fi
+
+# Only the newest desktop tag moves desktop-latest. An older one, a dispatched
+# rerun of a superseded release or a patch to an older line, publishes its
+# versioned release and leaves the rolling one serving the newest build. This
+# is settled before anything reaches GitHub, so a question that cannot be
+# answered stops the run with nothing to undo.
+newest_status=0
+newer_tag=$("${script_directory}/release-is-newest.sh" "${tag}") || newest_status=$?
+case ${newest_status} in
+	0 | 1) ;;
+	*) exit "${newest_status}" ;;
+esac
 
 distribution_directory=$(CDPATH='' cd -- "${distribution_directory}" && pwd -P)
 
@@ -274,7 +289,20 @@ if [ "${release_is_draft}" = true ]; then
 	if [ "${prerelease}" = yes ]; then
 		set -- "$@" --prerelease
 	fi
+	# GitHub marks a release Latest when it is published, and the CLI's and the
+	# app's releases share one repository, so an older tag has to say it is not.
+	# Otherwise a rerun of a superseded desktop release would take Latest off the
+	# newest release, which is the backward move this script exists to prevent.
+	if [ "${newest_status}" -eq 1 ]; then
+		set -- "$@" --latest=false
+	fi
 	gh release edit "${tag}" --repo "${repository}" "$@"
+fi
+
+if [ "${newest_status}" -eq 1 ]; then
+	echo "workbench release: ${tag} is older than ${newer_tag}; leaving desktop-latest on the newest release" >&2
+	completed=1
+	exit 0
 fi
 
 # Past this point the versioned release exists and is published, so the rolling

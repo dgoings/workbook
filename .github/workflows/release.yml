@@ -52,17 +52,45 @@ jobs:
       contents: write
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    outputs:
+      newest: ${{ steps.standing.outputs.newest }}
     steps:
+      # The full depth carries every tag and the remote's branches, which the
+      # branch check and the newest-release question below both read.
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
+      # A tag off main publishes code nobody merged, and an older version on
+      # newer code publishes that code under the older number.
       - name: Validate release tag
         run: |
           VERSION=$(scripts/validate-release-tag.sh "${RELEASE_TAG}")
+          scripts/validate-release-branch.sh "${RELEASE_TAG}"
           printf 'VERSION=%s\n' "${VERSION}" >> "${GITHUB_ENV}"
+
+      # Only the newest release moves what users are pointed at. An older one,
+      # a patch to a line main has moved past, publishes quietly: it is on the
+      # Releases page, but Latest, brew and the desktop app stay on the newest
+      # release, and it cascades into no desktop build. publish-release.sh asks
+      # the same question of the same checkout for Latest and the tap.
+      - name: Decide whether this is the newest release
+        id: standing
+        run: |
+          if newer=$(scripts/release-is-newest.sh "${RELEASE_TAG}"); then
+            printf 'newest=true\n' >> "${GITHUB_OUTPUT}"
+          else
+            status=$?
+            # Anything but 1 is a question that could not be answered, and
+            # reading it as either answer would be a guess.
+            if [ "${status}" -ne 1 ]; then
+              exit "${status}"
+            fi
+            printf '::notice title=Quiet release::%s is older than %s, so Latest, the Homebrew tap and the desktop app stay on %s, and no desktop release is cut for it.\n' "${RELEASE_TAG}" "${newer}" "${newer}"
+            printf 'newest=false\n' >> "${GITHUB_OUTPUT}"
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -89,13 +117,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: scripts/publish-release.sh "${RELEASE_TAG}" dist homebrew-tap "${REPOSITORY}"
 
-  # Every CLI release reaches desktop users: the companion desktop release is
-  # cut from the same commit, bundling the CLI just published. The one
-  # environment approval above covers this run; the desktop tag is pushed and
-  # the desktop workflow called directly, since a tag pushed with the default
-  # token starts no run of its own.
+  # Every newest CLI release reaches desktop users: the companion desktop
+  # release is cut from the same commit, bundling the CLI just published. The
+  # one environment approval above covers this run; the desktop tag is pushed
+  # and the desktop workflow called directly, since a tag pushed with the
+  # default token starts no run of its own. An older release skips this job,
+  # and with it desktop-publish, rather than reaching a planner that would
+  # refuse it; the release job's notice says so.
   desktop-tag:
     needs: release
+    if: needs.release.outputs.newest == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

@@ -36,6 +36,48 @@ if [ "${prerelease}" = no ]; then
 	tap_directory=$(CDPATH='' cd -- "${tap_directory}" && pwd -P)
 fi
 
+# Prints the highest release version the formula's download URLs name, or
+# nothing. The formula has no version stanza; Homebrew reads the version from
+# the release tag in each URL, and so does this.
+formula_version() {
+	sed -n 's|.*/releases/download/v\([^/"]*\)/.*|\1|p' "$1" | while IFS= read -r formula_url_version; do
+		if is_safe_release_version "${formula_url_version}"; then
+			printf '%s %s\n' "$(release_version_key "${formula_url_version}")" "${formula_url_version}"
+		fi
+	done | sort -k1,1n -k2,2n -k3,3n -k4,4n -k5,5n | tail -n 1 | awk '{ print $6 }'
+}
+
+# Only the newest stable release moves what users are pointed at: GitHub's
+# Latest badge and the tap that brew upgrade reads. An older one, a patch to a
+# line main has moved past, is published quietly beside them. Both questions
+# are settled here, before anything reaches GitHub, so one that cannot be
+# answered stops the run with nothing to undo. A pre-release has rules of its
+# own and asks neither.
+newest=yes
+newer_tag=
+tap_version=
+if [ "${prerelease}" = no ]; then
+	newest_status=0
+	newer_tag=$("${script_directory}/release-is-newest.sh" "${tag}") || newest_status=$?
+	case ${newest_status} in
+		0) ;;
+		1) newest=no ;;
+		*) exit "${newest_status}" ;;
+	esac
+	if [ -f "${tap_directory}/Formula/workbook.rb" ]; then
+		tap_version=$(formula_version "${tap_directory}/Formula/workbook.rb")
+	fi
+fi
+update_tap=no
+if [ "${prerelease}" = no ] && [ "${newest}" = yes ]; then
+	# The tap can be ahead of the tags this run sees, so it is never moved
+	# below what it already serves. The same version is refreshed as it always
+	# was; a rerun renders identical bytes and commits nothing.
+	if [ -z "${tap_version}" ] || ! release_version_before "${version}" "${tap_version}"; then
+		update_tap=yes
+	fi
+fi
+
 # Must match the platforms scripts/release.sh builds and the formula serves.
 archive_names=
 for platform in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
@@ -174,7 +216,7 @@ else
 	release_is_draft=true
 fi
 
-if [ "${prerelease}" = no ]; then
+if [ "${update_tap}" = yes ]; then
 	"${script_directory}/render-homebrew-formula.sh" \
 		"${version}" \
 		"${distribution_directory}/checksums.txt" \
@@ -190,8 +232,12 @@ if [ "${prerelease}" = no ]; then
 		git -C "${tap_directory}" push origin HEAD
 		tap_pushed=1
 	fi
-else
+elif [ "${prerelease}" = yes ]; then
 	echo "workbook release: pre-release ${tag}; leaving the Homebrew tap alone" >&2
+elif [ "${newest}" = no ]; then
+	echo "workbook release: ${tag} is older than ${newer_tag}; leaving Latest and the Homebrew tap on the newest release" >&2
+else
+	echo "workbook release: the Homebrew tap already serves ${tap_version}, newer than ${version}; leaving it alone" >&2
 fi
 
 if [ "${release_is_draft}" = true ]; then
@@ -200,6 +246,11 @@ if [ "${release_is_draft}" = true ]; then
 	# rather than trust that publishing the draft leaves it alone.
 	if [ "${prerelease}" = yes ]; then
 		set -- "$@" --prerelease
+	fi
+	# GitHub makes a newly published release Latest unless told otherwise, so
+	# the newest release says nothing and an older one says otherwise.
+	if [ "${newest}" = no ]; then
+		set -- "$@" --latest=false
 	fi
 	gh release edit "${tag}" --repo "${repository}" "$@"
 fi
