@@ -68,6 +68,25 @@ if [ "${prerelease}" = no ]; then
 		tap_version=$(formula_version "${tap_directory}/Formula/workbook.rb")
 	fi
 fi
+
+# Generated notes cover the commits from a start tag to this one. GitHub's API
+# documents previous_tag_name only as "the name of the previous tag to use as
+# the starting point for the release notes" and says nothing of the tag it
+# picks when given none, so a stable release names its own: the newest stable
+# release that orders before it. Ordering by version, not by date, is what
+# keeps a patch to a line main has moved past on its own line: v0.5.2 cut after
+# v0.6.0 starts at v0.5.1, listing what was backported since that line's last
+# release rather than comparing against the newer minor. The same rule gives
+# the first release of a line the newest release of the lines before it, and
+# never skips a release on the same line: one, when there is one, orders after
+# every release of an earlier line. Candidates never start notes: the first 0.6 release covers
+# everything since 0.5, not since its last candidate. The first release of all
+# names nothing and covers the whole history. A pre-release leaves the choice
+# to GitHub, as it always has.
+notes_start_tag=
+if [ "${prerelease}" = no ]; then
+	notes_start_tag=$(newest_release_tag stable "" v "" "${version}")
+fi
 update_tap=no
 if [ "${prerelease}" = no ] && [ "${newest}" = yes ]; then
 	# The tap can be ahead of the tags this run sees, so it is never moved
@@ -202,6 +221,9 @@ else
 		set -- "$@" --notes-file "${notes_file}"
 	else
 		set -- "$@" --generate-notes
+		if [ -n "${notes_start_tag}" ]; then
+			set -- "$@" --notes-start-tag "${notes_start_tag}"
+		fi
 	fi
 	if [ "${prerelease}" = yes ]; then
 		set -- "$@" --prerelease
