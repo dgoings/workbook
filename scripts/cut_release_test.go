@@ -258,6 +258,9 @@ func TestCutReleaseToleratesAMovedRollingTag(t *testing.T) {
 	// Move the remote's desktop-latest the way the publisher does, leaving
 	// this clone's copy behind.
 	runCommand(t, clone, nil, "git", "push", "--quiet", "--force", "origin", "HEAD:refs/tags/desktop-latest")
+	// A clone configured to fetch every tag from origin must still leave the
+	// rolling tag out; dropping --no-tags lets this setting pull it back in.
+	runCommand(t, clone, nil, "git", "config", "remote.origin.tagOpt", "--tags")
 
 	// Production mutation: fetching every tag fails on the stale rolling tag
 	// and stops the cut before anything is tagged.
@@ -311,6 +314,35 @@ func TestCutReleaseRefusesAMovedReleaseTagByName(t *testing.T) {
 	}
 	if got := gitOutput(t, remote, "tag", "--list", "v0.2.0"); got != "" {
 		t.Errorf("remote carries %q, want v0.2.0 left unpublished", got)
+	}
+}
+
+// The refusal compares the two copies of a release tag and cannot tell which
+// one moved, so when only this clone's copy was re-created it must not send
+// the developer looking for a problem on the remote.
+func TestCutReleaseRefusesALocallyMovedReleaseTagWithoutBlamingTheRemote(t *testing.T) {
+	t.Parallel()
+	clone, remote := newReleaseRepository(t)
+	first := gitOutput(t, clone, "rev-parse", "HEAD")
+	runCommand(t, clone, nil, "git", "tag", "v0.1.0")
+	runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "refs/tags/v0.1.0")
+	commitAndPush(t, clone, "later.md")
+	runCommand(t, clone, nil, "git", "tag", "--force", "v0.1.0", "HEAD")
+
+	// Production mutation: wording the refusal as a tag that "moved on origin"
+	// blames the remote, which here still holds the published commit.
+	output, err := runCutRelease(clone, "0.2.0", "--skip-tests")
+	if err == nil {
+		t.Fatalf("cut release accepted a moved release tag:\n%s", output)
+	}
+	if !strings.Contains(output, "differ between origin and this clone: v0.1.0") {
+		t.Errorf("output = %q, want v0.1.0 named as differing between the copies", output)
+	}
+	if strings.Contains(output, "moved on origin") {
+		t.Errorf("output = %q, want the remote not blamed for a local change", output)
+	}
+	if got := gitOutput(t, remote, "rev-parse", "v0.1.0^{commit}"); got != first {
+		t.Errorf("remote v0.1.0 = %s, want it left at %s", got, first)
 	}
 }
 

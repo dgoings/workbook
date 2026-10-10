@@ -115,6 +115,9 @@ func TestSetupFetchesReleaseTagsPastAMovedRollingTag(t *testing.T) {
 	release("v0.2.0")
 	runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "HEAD:refs/tags/v0.2.0")
 	runCommand(t, clone, nil, "git", "push", "--quiet", "--force", "origin", "HEAD:refs/tags/desktop-latest")
+	// A clone configured to fetch every tag from origin must still leave the
+	// rolling tag out; dropping --no-tags lets this setting pull it back in.
+	runCommand(t, clone, nil, "git", "config", "remote.origin.tagOpt", "--tags")
 
 	stablePrefix := filepath.Join(t.TempDir(), "stable")
 	command := exec.Command(filepath.Join(clone, "scripts", "setup-dev-env.sh"),

@@ -124,13 +124,16 @@ fi
 # Fetch only what the checks below read: the branch and the v* release tags.
 # Other tags are left out on purpose. desktop-latest is moved by the desktop
 # publisher on every desktop release, so fetching it would fail for any clone
-# holding an older copy. Release tags are fetched without force: one that moved
-# on the remote is refused by name rather than silently repointed here.
+# holding an older copy. --no-tags keeps a remote.<name>.tagOpt of --tags from
+# fetching every tag anyway. Release tags are fetched without force: one whose
+# remote and local copies differ is refused by name rather than silently
+# repointed here.
 if ! git_command fetch --quiet --no-tags "${remote}" \
 	"+refs/heads/${branch}:refs/remotes/${remote}/${branch}" \
 	'refs/tags/v*:refs/tags/v*'; then
 	# Fetch reports nothing under --quiet, so find the rejected tags by
-	# comparing each remote release tag with this clone's copy.
+	# comparing each remote release tag with this clone's copy. Either copy
+	# may be the one that moved, so the message blames neither side.
 	moved_tags=
 	if remote_tags=$(git_command ls-remote --refs --tags "${remote}" 'refs/tags/v*' 2>/dev/null); then
 		while read -r remote_object remote_ref; do
@@ -144,7 +147,7 @@ ${remote_tags}
 EOF
 	fi
 	if [ -n "${moved_tags}" ]; then
-		fail "refused to fetch release tags that moved on ${remote} and no longer match this clone: ${moved_tags}; a published release tag never moves, so find out why before releasing"
+		fail "refused to fetch release tags that differ between ${remote} and this clone: ${moved_tags}; a published release tag never moves, so find out why before releasing"
 	fi
 	fail "could not fetch ${branch} and release tags from ${remote}"
 fi

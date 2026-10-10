@@ -179,7 +179,8 @@ install_stable_from_source() {
 	if [ -z "${version}" ]; then
 		# Fetch only the v* release tags. Fetching every tag would fail for any
 		# clone holding an older copy of desktop-latest, which the desktop
-		# publisher moves on every desktop release.
+		# publisher moves on every desktop release. --no-tags keeps a
+		# remote.origin.tagOpt of --tags from fetching every tag anyway.
 		if ! git -C "${repository_root}" fetch --quiet --no-tags origin 'refs/tags/v*:refs/tags/v*' 2>/dev/null; then
 			echo "workbook setup: could not fetch release tags from origin; using local tags" >&2
 		fi
