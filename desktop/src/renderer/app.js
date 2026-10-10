@@ -135,6 +135,13 @@ function renderProjects () {
     state.editingSelection = [typing.selectionStart, typing.selectionEnd]
     state.editingRefused = typing.classList.contains('invalid')
   }
+  // So does a focused fold toggle: folding from the keyboard redraws the list
+  // when the main process answers, and the rebuilt toggle takes the focus
+  // back, so Enter or Space can fold it again without a trip through Tab.
+  const focused = document.activeElement
+  const refocus = list.contains(focused) && focused.classList.contains('category-toggle')
+    ? focused.dataset.categoryId
+    : null
   list.innerHTML = ''
 
   // Two or more: with one project its board already answers "what is next".
@@ -158,6 +165,13 @@ function renderProjects () {
     } else if (item.kind === 'category') {
       list.append(categoryGroup(item, byId))
     }
+  }
+  // Compared in JavaScript rather than matched by a selector, as renderNext
+  // finds its focused row: the id is the registry's, not ours.
+  if (refocus !== null) {
+    [...list.querySelectorAll('.category-toggle')]
+      .find((toggle) => toggle.dataset.categoryId === refocus)
+      ?.focus()
   }
 
   if (list.children.length === 0) {
@@ -209,7 +223,9 @@ function projectRow (project) {
 /**
  * A category: a header (disclosure, name, and rename and remove controls that
  * show on hover) over a nested list of its projects, hidden while folded. In
- * the rail the header is a thin divider labeled with the name's initials.
+ * the rail the header is a thin divider whose middle is the disclosure itself,
+ * its chevron beside the name's initials, so a folded category unfolds there
+ * too.
  */
 function categoryGroup (category, byId) {
   const group = document.createElement('li')
@@ -224,10 +240,14 @@ function categoryGroup (category, byId) {
   head.draggable = true
   head.title = category.name
 
+  // One button in both modes: expanded it shows only the chevron, and the
+  // rail shows the initials inside it as well. Its own title, because in the
+  // rail it is all of the header there is to hover.
   const toggle = document.createElement('button')
   toggle.type = 'button'
   toggle.className = 'category-toggle'
-  toggle.textContent = '▾'
+  toggle.dataset.categoryId = category.id
+  toggle.title = category.name
   toggle.setAttribute('aria-expanded', String(!category.collapsed))
   toggle.setAttribute('aria-label', `${category.collapsed ? 'Expand' : 'Collapse'} ${category.name}`)
   toggle.addEventListener('click', () => {
@@ -237,11 +257,16 @@ function categoryGroup (category, byId) {
     })
   })
 
+  const chevron = document.createElement('span')
+  chevron.className = 'category-chevron'
+  chevron.textContent = '▾'
+
   const initials = document.createElement('span')
   initials.className = 'category-initials'
   initials.textContent = sidebarModel.initials(category.name)
 
-  head.append(toggle, initials)
+  toggle.append(chevron, initials)
+  head.append(toggle)
   if (state.editingCategoryId === category.id) {
     head.draggable = false
     head.append(nameEditor(category))

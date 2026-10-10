@@ -453,6 +453,9 @@ body {
 
 .category-toggle {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 1.2rem;
   height: 1.2rem;
   padding: 0;
@@ -463,13 +466,19 @@ body {
   font-size: .72rem;
   line-height: 1;
   cursor: pointer;
-  transition: transform .12s ease;
 }
 
 .category-toggle:hover { color: var(--wb-primary); background: var(--wb-primary-tint-1); }
 
+/* The triangle turns on its own, not the toggle: in the rail the toggle also
+   holds the initials, which stay upright. */
+.category-chevron {
+  display: inline-block;
+  transition: transform .12s ease;
+}
+
 /* Folded, the triangle points at the name rather than down at the projects. */
-.category.collapsed .category-toggle { transform: rotate(-90deg); }
+.category.collapsed .category-chevron { transform: rotate(-90deg); }
 
 .category-name {
   flex: 1;
@@ -649,9 +658,9 @@ body {
   padding-left: calc(.25rem - 2px);
 }
 
-/* A key runs to ten characters, which a 76px tile cannot hold. It truncates:
-   the dot beside it keeps its size, the tile keeps the rail's width, and the
-   whole name and path are on the tile's own tooltip. */
+/* A key runs to ten characters, which a tile the rail's width cannot hold. It
+   truncates: the dot beside it keeps its size, the tile keeps the rail's
+   width, and the whole name and path are on the tile's own tooltip. */
 :root.sidebar-collapsed .project-key {
   flex: 0 1 auto;
   min-width: 0;
@@ -661,9 +670,11 @@ body {
   white-space: nowrap;
 }
 
-/* A category in the rail is a divider: a hairline either side of its initials,
-   the full name on the header's tooltip. Folded, its tiles stay hidden, as in
-   the sidebar. Nothing in it is a control here — no fold, rename or drag. */
+/* A category in the rail is a divider: a hairline either side of its fold
+   toggle, which shows the chevron and the name's initials and carries the full
+   name on its tooltip. Folded, its tiles stay hidden, as in the sidebar, and a
+   click on the toggle unfolds it there and then. Rename, remove and drag stay
+   with the expanded sidebar. */
 :root.sidebar-collapsed .category-head {
   gap: .25rem;
   min-height: 0;
@@ -682,7 +693,6 @@ body {
   background: var(--wb-rule);
 }
 
-:root.sidebar-collapsed .category-toggle,
 :root.sidebar-collapsed .category-name,
 :root.sidebar-collapsed .category-action,
 :root.sidebar-collapsed .category-confirm,
@@ -690,14 +700,29 @@ body {
   display: none;
 }
 
-:root.sidebar-collapsed .category-initials {
-  display: block;
-  flex: 0 0 auto;
-  color: var(--wb-text-3);
+/* A key tile is a bordered box in the text color; the toggle is neither. It
+   takes the voice of the Projects label the rail hides (monospace, heavy,
+   tracked, in the glyphs' blue) with no border, so a single-letter category
+   such as P does not read as one more key beside a tile like P1. */
+:root.sidebar-collapsed .category-toggle {
+  width: auto;
+  height: auto;
+  min-width: 0;
+  gap: .2rem;
+  padding: .1rem .25rem;
+  color: var(--wb-primary-ink);
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
   font-size: .62rem;
-  letter-spacing: .04em;
+  font-weight: 800;
+  letter-spacing: .06em;
+  cursor: pointer;
 }
+
+/* The chevron keeps the size it has in the sidebar; at the initials' size it
+   is too small to read as the thing to click. */
+:root.sidebar-collapsed .category-chevron { font-size: .72rem; }
+
+:root.sidebar-collapsed .category-initials { display: block; }
 
 :root.sidebar-collapsed .category-projects { padding-left: 0; }
 

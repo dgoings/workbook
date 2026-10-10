@@ -94,8 +94,8 @@
 
   /**
    * The rail's label for a category: the first letter of each of its first two
-   * words, upper-cased ("Client work" is "CW", "Personal" is "P"). The rail is
-   * 76px wide and the full name is on the divider's tooltip.
+   * words, upper-cased ("Client work" is "CW", "Personal" is "P"). The rail has
+   * no room for more, and the full name is on the divider's tooltip.
    */
   function initials (name) {
     const words = String(name).trim().split(/[\s\-_/.]+/).filter(Boolean)

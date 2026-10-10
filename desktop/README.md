@@ -69,7 +69,11 @@ from that answer together, so what is drawn and what the shortcuts count never
 disagree. A registry from a build before categories opens with every project at
 the top level in import order, a forgotten project leaves its category, and a
 newly imported one lands at the bottom. In the rail a category is a thin
-divider labeled with its initials (its name is the tooltip), and nothing drags.
+divider labeled with a fold chevron and its initials (its name is the tooltip);
+clicking the divider, or Enter or Space on it, folds and unfolds the category
+just as the sidebar's chevron does, so a folded category's projects are
+reachable without expanding the sidebar. Nothing drags in the rail, and
+renaming or removing a category waits for the expanded sidebar.
 
 ## Keyboard shortcuts
 
