@@ -197,3 +197,87 @@ func TestCheckReleaseChangelogDiscoversTheNewestStableRelease(t *testing.T) {
 		t.Errorf("output = %q, want the patch cut against v0.4.1", output)
 	}
 }
+
+// A backport's entry is written on its line and forward-ported to main's
+// changelog afterwards, in version order. The check reads the highest-versioned
+// heading wherever it sits, and treats one that does not clear the previous
+// release as no entry at all, so an older entry can never stand in for the
+// next release or block it.
+func TestCheckReleaseChangelogReadsTheHighestVersionedHeading(t *testing.T) {
+	t.Parallel()
+	const (
+		// The forward-ported v0.5.2 entry, in version order below v0.6.0.
+		forwardPorted = "# Changelog\n\n## v0.6.0 — 2026-10-08\n\n- the minor\n\n## v0.5.2 — 2026-10-12\n\n- the backport\n\n## v0.5.1\n\n- older\n"
+		// The same entry pasted at the top by mistake. Production mutation:
+		// reading the topmost heading would call v0.5.2 the entry being cut.
+		forwardPortedOnTop = "# Changelog\n\n## v0.5.2 — 2026-10-12\n\n- the backport\n\n## v0.6.0 — 2026-10-08\n\n- the minor\n\n## v0.5.1\n\n- older\n"
+		// The next minor's entry sits below a forward-ported one.
+		nextMinorBelowABackport = "# Changelog\n\n## v0.5.2 — 2026-10-12\n\n- the backport\n\n## v0.7.0 — 2026-11-01\n\n- the next minor\n\n## v0.6.0\n\n- the minor\n"
+		// v0.6.1 was cut as a patch with no entry, so the newest heading is
+		// older than the previous release.
+		patchedWithoutAnEntry = "# Changelog\n\n## v0.6.0 — 2026-10-08\n\n- the minor\n"
+	)
+	for _, testCase := range []struct {
+		name      string
+		bump      string
+		version   string
+		previous  string
+		changelog string
+		wantCut   bool
+		wantText  string
+	}{
+		{name: "a forward-ported entry does not block a patch", bump: "patch", version: "0.6.1", previous: "v0.6.0", changelog: forwardPorted, wantCut: true, wantText: "with no changelog entry"},
+		{name: "a forward-ported entry on top does not block a patch", bump: "patch", version: "0.6.1", previous: "v0.6.0", changelog: forwardPortedOnTop, wantCut: true, wantText: "with no changelog entry"},
+		{name: "a forward-ported entry is not a minor's entry", bump: "minor", version: "0.7.0", previous: "v0.6.0", changelog: forwardPortedOnTop, wantCut: false, wantText: "newest entry is still the previous release v0.6.0"},
+		{name: "the highest heading is the entry", bump: "minor", version: "0.7.0", previous: "v0.6.0", changelog: nextMinorBelowABackport, wantCut: true, wantText: "matching the newest CHANGELOG entry"},
+		{name: "a heading below the previous release is no entry", bump: "patch", version: "0.6.2", previous: "v0.6.1", changelog: patchedWithoutAnEntry, wantCut: true, wantText: "with no changelog entry"},
+		{name: "a minor after an entry-less patch still needs one", bump: "minor", version: "0.7.0", previous: "v0.6.1", changelog: patchedWithoutAnEntry, wantCut: false, wantText: "is older than the previous release v0.6.1"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeChangelog(t, testCase.changelog)
+			output, err := runCheckReleaseChangelog(t,
+				"--bump", testCase.bump,
+				"--version", testCase.version,
+				"--previous", testCase.previous,
+				"--changelog", path)
+			if testCase.wantCut && err != nil {
+				t.Fatalf("check refused a release it should cut: %v\n%s", err, output)
+			}
+			if !testCase.wantCut && err == nil {
+				t.Fatalf("check accepted a release it should refuse:\n%s", output)
+			}
+			if !strings.Contains(output, testCase.wantText) {
+				t.Errorf("output = %q, want %q", output, testCase.wantText)
+			}
+		})
+	}
+}
+
+// On a maintenance line the baseline is that line's previous release. An
+// entry for v0.5.2 on maint/v0.5 is the entry being cut there, not an older
+// one, so it has to match the version; measured against main's v0.6.0 it would
+// read as absent and let v0.5.3 ship with v0.5.2's prose unpublished.
+func TestCheckReleaseChangelogOnALineComparesAgainstThatLine(t *testing.T) {
+	t.Parallel()
+	repository := newTaggedRepository(t, "v0.5.1", "v0.6.0")
+	path := writeChangelog(t, "# Changelog\n\n## v0.5.2 — 2026-10-12\n\n- the backport\n\n## v0.5.1\n\n- the line's previous release\n")
+
+	output, err := runReleaseScript(t, repository, "check-release-changelog.sh", "",
+		"--branch", "maint/v0.5", "--bump", "patch", "--version", "0.5.2", "--changelog", path)
+	if err != nil {
+		t.Fatalf("check on maint/v0.5: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "matching the newest CHANGELOG entry") {
+		t.Errorf("output = %q, want the v0.5.2 entry matched", output)
+	}
+
+	output, err = runReleaseScript(t, repository, "check-release-changelog.sh", "",
+		"--branch", "maint/v0.5", "--bump", "patch", "--version", "0.5.3", "--changelog", path)
+	if err == nil {
+		t.Fatalf("check on maint/v0.5 cut v0.5.3 past the v0.5.2 entry:\n%s", output)
+	}
+	if !strings.Contains(output, "newest CHANGELOG entry is v0.5.2") {
+		t.Errorf("output = %q, want the disagreement named", output)
+	}
+}

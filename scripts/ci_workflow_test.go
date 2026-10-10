@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -93,14 +94,19 @@ func TestCIWorkflowRunsOnPushAndPullRequestAgainstMain(t *testing.T) {
 	t.Parallel()
 	workflow := readCIWorkflow(t)
 
-	if got := workflow.On.Push.Branches; len(got) != 1 || got[0] != "main" {
-		t.Errorf("push branches = %v, want [main]", got)
+	// A maintenance line is released from its own branch, and a release is cut
+	// only from a commit Verify passed on, so pull requests into a line and
+	// pushes to one have to run it too. Production mutation: leaving maint/v*
+	// out makes check-commit-verified.sh refuse every backport.
+	want := []string{"main", "maint/v*"}
+	if got := workflow.On.Push.Branches; !slices.Equal(got, want) {
+		t.Errorf("push branches = %v, want %v", got, want)
 	}
 	if got := workflow.On.Push.Tags; len(got) != 0 {
 		t.Errorf("push tags = %v, want none; releases are the release workflow's job", got)
 	}
-	if got := workflow.On.PullRequest.Branches; len(got) != 1 || got[0] != "main" {
-		t.Errorf("pull_request branches = %v, want [main]", got)
+	if got := workflow.On.PullRequest.Branches; !slices.Equal(got, want) {
+		t.Errorf("pull_request branches = %v, want %v", got, want)
 	}
 }
 

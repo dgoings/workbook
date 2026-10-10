@@ -3,9 +3,9 @@ set -eu
 
 # Refuses a CLI release tag that does not sit on a branch releases are
 # published from. The tag has to be reachable from a supported branch on the
-# remote, and no higher stable release may already be part of its history: an
-# older version tagged on newer code would publish the newer code under the
-# older number.
+# remote, main or its own line's maint/vMAJOR.MINOR, and no higher stable
+# release may already be part of its history: an older version tagged on newer
+# code would publish the newer code under the older number.
 #
 # The remote's branches are read from the current directory's repository, so
 # the checkout has to carry them along with every tag; the release workflow's
@@ -35,29 +35,42 @@ if ! commit=$(git rev-parse --verify --quiet "refs/tags/${tag}^{commit}" 2>/dev/
 	exit 2
 fi
 
-# Prints the supported branch COMMIT is on, or fails when it is on none. Only
-# main is supported today. A maintenance line for an older minor version is a
-# second branch this would answer with, chosen from VERSION, so the rest of
-# this script holds for one unchanged.
+# Prints the supported branch COMMIT is on, or fails when it is on none. main
+# is supported for every version. A stable VERSION is also supported on its
+# own line's maint/vMAJOR.MINOR branch, where patches to an older line are
+# cut; that branch never merges back into main, so main alone would refuse
+# them. A candidate has no line branch: it is cut from main.
 supported_branch_for() {
 	sb_commit=$1
-	# The version is unused until a branch other than main is supported.
-	# shellcheck disable=SC2034
 	sb_version=$2
 	sb_main="refs/remotes/${remote}/main"
 	if ! git rev-parse --verify --quiet "${sb_main}^{commit}" >/dev/null 2>&1; then
 		echo "workbook release: ${sb_main} is missing; fetch the remote's branches before validating a release" >&2
 		return 2
 	fi
-	# --is-ancestor answers no with 1 and reports an error with anything else,
-	# which must not read as either answer.
-	sb_status=0
-	git merge-base --is-ancestor "${sb_commit}" "${sb_main}" || sb_status=$?
-	case ${sb_status} in
-		0) printf '%s\n' main ;;
-		1) return 1 ;;
-		*) return 2 ;;
-	esac
+	set -- main
+	if ! is_prerelease_version "${sb_version}"; then
+		sb_line=$(release_version_line "${sb_version}")
+		# A line branch the remote does not have is not one this tag is on.
+		if git rev-parse --verify --quiet "refs/remotes/${remote}/maint/v${sb_line}^{commit}" >/dev/null 2>&1; then
+			set -- "$@" "maint/v${sb_line}"
+		fi
+	fi
+	for sb_branch in "$@"; do
+		# --is-ancestor answers no with 1 and reports an error with anything
+		# else, which must not read as either answer.
+		sb_status=0
+		git merge-base --is-ancestor "${sb_commit}" "refs/remotes/${remote}/${sb_branch}" || sb_status=$?
+		case ${sb_status} in
+			0)
+				printf '%s\n' "${sb_branch}"
+				return 0
+				;;
+			1) ;;
+			*) return 2 ;;
+		esac
+	done
+	return 1
 }
 
 branch_status=0
@@ -65,7 +78,7 @@ branch=$(supported_branch_for "${commit}" "${version}") || branch_status=$?
 case ${branch_status} in
 	0) ;;
 	1)
-		echo "workbook release: ${tag} is not on a branch releases are published from; tag a commit on ${remote}/main" >&2
+		echo "workbook release: ${tag} is not on a branch releases are published from; tag a commit on ${remote}/main, or a stable patch on its line's ${remote}/maint/vMAJOR.MINOR" >&2
 		exit 1
 		;;
 	*) exit 2 ;;

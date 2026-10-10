@@ -1,13 +1,15 @@
 #!/bin/sh
 set -eu
 
-# Cuts a Workbook release by tagging a commit on the default branch.
+# Cuts a Workbook release by tagging a commit on the default branch, or a
+# patch to an older line by tagging its maint/vMAJOR.MINOR branch.
 #
 # Releases are periodic version bumps over trunk-based development: features
 # merge to main continuously, and a release gathers whatever has landed since
-# the last tag. This script only creates and pushes the tag. Pushing it starts
-# .github/workflows/release.yml, which builds the archives, publishes them to
-# GitHub Releases, and updates the Homebrew tap.
+# the last tag. A line branch exists only to patch a minor version main has
+# moved past; see start-release-line.sh. This script only creates and pushes
+# the tag. Pushing it starts .github/workflows/release.yml, which builds the
+# archives, publishes them to GitHub Releases, and updates the Homebrew tap.
 
 usage() {
 	cat <<'USAGE'
@@ -21,7 +23,8 @@ Options:
   --dry-run        report every check and stop before tagging or pushing
   --skip-tests     do not run "go test ./..." before tagging
   --remote NAME    remote to publish to (default origin)
-  --branch NAME    branch releases must be cut from (default main)
+  --branch NAME    branch releases must be cut from (default main); a
+                   maint/vMAJOR.MINOR line cuts stable patches to that line only
   -h, --help       show this message
 
 The release workflow builds and publishes the archives and the Homebrew
@@ -97,6 +100,12 @@ esac
 # Reject the version before anything reaches the remote, using the same rule
 # the workflow and the formula renderer apply.
 require_safe_release_version "${version}" "workbook release"
+# A maint/vMAJOR.MINOR branch ships stable patches to that line only, and its
+# previous release is the line's newest rather than the newest there is.
+line=$(release_line_of_branch "${branch}") || exit 2
+if [ -n "${line}" ]; then
+	require_line_release_version "${version}" "${line}" "workbook release" || exit 1
+fi
 
 tag=v${version}
 repository_root=$(CDPATH='' cd -- "${script_directory}/.." && pwd -P)
@@ -112,7 +121,7 @@ if [ "${skip_tests}" = no ] && ! command -v go >/dev/null 2>&1; then
 fi
 
 # A release must describe a commit that reviewers can see, so refuse to tag
-# uncommitted work or a branch other than the trunk.
+# uncommitted work or a branch other than the one being released.
 current_branch=$(git_command symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
 if [ "${current_branch}" != "${branch}" ]; then
 	fail "releases are cut from ${branch}, but HEAD is ${current_branch:-detached}"
@@ -173,8 +182,14 @@ fi
 # workflows from disagreeing about which version follows which. It reports its
 # own refusal, so there is nothing to add to it.
 # A stable version follows the newest stable release and never sees a
-# pre-release tag; a pre-release has to clear every tag there is.
-if is_prerelease_version "${version}"; then
+# pre-release tag; a pre-release has to clear every tag there is. On a line,
+# the newest stable release is the line's.
+if [ -n "${line}" ]; then
+	previous_tag=$(newest_release_tag stable "${repository_root}" v "${line}")
+	if [ -z "${previous_tag}" ]; then
+		fail "${branch} has no v${line}.* release to patch; a line starts from a stable release of it"
+	fi
+elif is_prerelease_version "${version}"; then
 	previous_tag=$(newest_release_tag any "${repository_root}")
 else
 	previous_tag=$(newest_release_tag stable "${repository_root}")
@@ -227,6 +242,11 @@ echo "Pushed ${tag}. The release workflow now builds and publishes:"
 echo "  - the four platform archives and checksums.txt on the GitHub release"
 if is_prerelease_version "${version}"; then
 	echo "  - nothing in the Homebrew tap: this is a pre-release"
+elif [ -n "${line}" ]; then
+	# Only the newest release moves Latest, the tap and the desktop app, and
+	# the workflow decides that from every tag, not from the branch.
+	echo "  - the Homebrew formula in the tap, if ${tag} is the newest release;"
+	echo "    a patch older than the newest release is published quietly"
 else
 	echo "  - the Homebrew formula in the tap"
 fi

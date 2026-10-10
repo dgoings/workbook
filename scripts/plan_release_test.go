@@ -190,3 +190,96 @@ func newTaggedRepository(t *testing.T, tags ...string) string {
 	}
 	return repository
 }
+
+// A maintenance line's changelog, as maint/v0.5 carries it: the branch starts
+// from v0.5.1, so nothing after that release is in it.
+const changelogOnTheLine = "# Changelog\n\n## v0.5.1 — 2026-08-23\n\n- the line's previous release\n"
+
+// A patch to an older line follows that line's newest release, not the newest
+// release there is. Production mutation: discovering the previous release
+// across every line would compute 0.6.1 on maint/v0.5 and publish code from
+// the 0.5 line under a 0.6 number.
+func TestPlanReleaseOnALineBranchPatchesThatLine(t *testing.T) {
+	t.Parallel()
+	fakeBin := newFakeReleaseCLI(t)
+	repository := newTaggedRepository(t, "v0.5.0", "v0.5.1", "v0.6.0")
+	environment := environmentWithFakeCLI(fakeBin, "FAKE_PUBLISHED_TAGS=v0.5.0 v0.5.1 v0.6.0")
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "a patch bump", args: []string{"--bump", "patch"}, want: "0.5.2"},
+		{name: "an explicit version on the line", args: []string{"--bump", "patch", "--version", "0.5.2"}, want: "0.5.2"},
+		// The Actions button's bump defaults to patch, but a typed version
+		// overrides it, so the version is what has to be on the line.
+		{name: "an explicit version beside another bump", args: []string{"--bump", "minor", "--version", "0.5.2"}, want: "0.5.2"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeChangelog(t, changelogOnTheLine)
+			args := append([]string{"--branch", "maint/v0.5", "--repo", "dgoings/workbook", "--changelog", path}, testCase.args...)
+			output, err := runReleaseScriptWithEnvironment(t, repository, "plan-release.sh", "", environment, args...)
+			if err != nil {
+				t.Fatalf("plan release on maint/v0.5: %v\n%s", err, output)
+			}
+			if got := lastLine(output); got != testCase.want {
+				t.Errorf("planned version %q, want %s", got, testCase.want)
+			}
+		})
+	}
+
+	// The trunk is unaffected by the line: main still patches the newest release.
+	t.Run("main", func(t *testing.T) {
+		t.Parallel()
+		path := writeChangelog(t, "# Changelog\n\n## v0.6.0\n\n- the newest release\n\n## v0.5.1\n\n- older\n")
+		output, err := runReleaseScriptWithEnvironment(t, repository, "plan-release.sh", "", environment,
+			"--branch", "main", "--bump", "patch", "--repo", "dgoings/workbook", "--changelog", path)
+		if err != nil {
+			t.Fatalf("plan release on main: %v\n%s", err, output)
+		}
+		if got := lastLine(output); got != "0.6.1" {
+			t.Errorf("planned version %q, want 0.6.1", got)
+		}
+	})
+}
+
+// A line exists to ship fixes to people who cannot take the next minor, so
+// only a stable patch to that line may be cut on it. Each refusal says what to
+// do instead rather than computing something nobody asked for.
+func TestPlanReleaseOnALineBranchRefusesAnythingButAPatchToThatLine(t *testing.T) {
+	t.Parallel()
+	fakeBin := newFakeReleaseCLI(t)
+	repository := newTaggedRepository(t, "v0.5.1", "v0.6.0")
+	environment := environmentWithFakeCLI(fakeBin, "FAKE_PUBLISHED_TAGS=v0.5.1 v0.6.0")
+
+	for _, testCase := range []struct {
+		name        string
+		branch      string
+		args        []string
+		wantMessage string
+	}{
+		{name: "a minor bump", branch: "maint/v0.5", args: []string{"--bump", "minor"}, wantMessage: "patch releases only"},
+		{name: "a major bump", branch: "maint/v0.5", args: []string{"--bump", "major"}, wantMessage: "patch releases only"},
+		{name: "a version on another line", branch: "maint/v0.5", args: []string{"--bump", "patch", "--version", "0.6.1"}, wantMessage: "is not on the 0.5 line"},
+		{name: "a minor version", branch: "maint/v0.5", args: []string{"--bump", "patch", "--version", "0.7.0"}, wantMessage: "is not on the 0.5 line"},
+		{name: "a candidate", branch: "maint/v0.5", args: []string{"--bump", "patch", "--version", "0.5.2-rc1"}, wantMessage: "patch releases only"},
+		{name: "a line with no release", branch: "maint/v0.4", args: []string{"--bump", "patch"}, wantMessage: "no v0.4.* release"},
+		{name: "a malformed line", branch: "maint/v0.5.1", args: []string{"--bump", "patch"}, wantMessage: "maint/vMAJOR.MINOR"},
+		{name: "a feature branch", branch: "feature", args: []string{"--bump", "patch"}, wantMessage: "cut from main or a maint/vMAJOR.MINOR line"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeChangelog(t, changelogOnTheLine)
+			args := append([]string{"--branch", testCase.branch, "--repo", "dgoings/workbook", "--changelog", path}, testCase.args...)
+			output, err := runReleaseScriptWithEnvironment(t, repository, "plan-release.sh", "", environment, args...)
+			if err == nil {
+				t.Fatalf("plan release on %s accepted %v:\n%s", testCase.branch, testCase.args, output)
+			}
+			if !strings.Contains(output, testCase.wantMessage) {
+				t.Errorf("output = %q, want %q", output, testCase.wantMessage)
+			}
+		})
+	}
+}

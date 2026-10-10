@@ -14,6 +14,13 @@ set -eu
 # the rule plan-desktop-release.sh already applies, so a rerun of rc1 after rc2
 # is an older one.
 #
+# --with-candidates counts pre-release tags against a stable one too, the
+# question the desktop cascade asks. A CLI candidate cascades into a desktop
+# candidate, so v0.6.1 cut while v0.7.0-rc1 is out is the newest release for
+# Latest and the tap, but its desktop tag would order behind
+# desktop-v0.7.0-rc1, which plan-desktop-release.sh refuses. A pre-release
+# answers the same either way.
+#
 # The CLI's v* tags and the desktop app's desktop-v* tags are separate
 # sequences and never compared with each other. Tags are read from the current
 # directory's repository, which has to carry every release tag: a shallow
@@ -24,10 +31,22 @@ set -eu
 # Exits 0 when the tag is the newest, 1 when a newer one exists, printing that
 # tag, and 2 when the question cannot be answered.
 
-if [ "$#" -ne 1 ]; then
-	echo "usage: scripts/release-is-newest.sh <tag>" >&2
+usage() {
+	echo "usage: scripts/release-is-newest.sh [--with-candidates] <tag>" >&2
 	exit 2
+}
+
+with_candidates=no
+if [ "$#" -eq 2 ] && [ "$1" = --with-candidates ]; then
+	with_candidates=yes
+	shift
 fi
+if [ "$#" -ne 1 ]; then
+	usage
+fi
+case $1 in
+	-*) usage ;;
+esac
 
 case $0 in
 	*/*) script_directory=${0%/*} ;;
@@ -55,7 +74,7 @@ if ! git rev-parse --verify --quiet "refs/tags/${tag}^{commit}" >/dev/null 2>&1;
 fi
 
 kind=stable
-if is_prerelease_version "${version}"; then
+if [ "${with_candidates}" = yes ] || is_prerelease_version "${version}"; then
 	kind=any
 fi
 newest_tag=$(newest_release_tag "${kind}" "" "${prefix}")

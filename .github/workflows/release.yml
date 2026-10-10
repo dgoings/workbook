@@ -54,9 +54,11 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     outputs:
       newest: ${{ steps.standing.outputs.newest }}
+      desktop: ${{ steps.standing.outputs.desktop }}
     steps:
       # The full depth carries every tag and the remote's branches, which the
-      # branch check and the newest-release question below both read.
+      # branch check and the newest-release question below both read. It
+      # fetches every branch, maint/vX.Y lines included, as origin/<branch>.
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -75,22 +77,47 @@ jobs:
       # a patch to a line main has moved past, publishes quietly: it is on the
       # Releases page, but Latest, brew and the desktop app stay on the newest
       # release, and it cascades into no desktop build. publish-release.sh asks
-      # the same question of the same checkout for Latest and the tap.
+      # the same question of the same checkout for Latest and the tap. The
+      # answer comes from the version, never the branch: a patch on maint/v0.6
+      # while main has only unreleased 0.7 work is the newest release.
+      #
+      # The cascade asks a second, stricter question. A newer candidate has
+      # already cascaded into a desktop candidate, so the newest stable release
+      # behind it (v0.6.1 while v0.7.0-rc1 is out) still moves Latest and the
+      # tap but cuts no desktop release: plan-desktop-release.sh would refuse a
+      # desktop tag ordering behind desktop-v0.7.0-rc1, after the CLI release
+      # had published. Both answers are settled before either is recorded.
       - name: Decide whether this is the newest release
         id: standing
         run: |
-          if newer=$(scripts/release-is-newest.sh "${RELEASE_TAG}"); then
-            printf 'newest=true\n' >> "${GITHUB_OUTPUT}"
-          else
-            status=$?
-            # Anything but 1 is a question that could not be answered, and
-            # reading it as either answer would be a guess.
-            if [ "${status}" -ne 1 ]; then
-              exit "${status}"
-            fi
+          # Exit 1 is the answer "a newer tag exists". Anything else is a
+          # question that could not be answered, and reading it as either
+          # answer would be a guess.
+          newest=true
+          status=0
+          newer=$(scripts/release-is-newest.sh "${RELEASE_TAG}") || status=$?
+          case "${status}" in
+            0) ;;
+            1) newest=false ;;
+            *) exit "${status}" ;;
+          esac
+          desktop=true
+          status=0
+          candidate=$(scripts/release-is-newest.sh --with-candidates "${RELEASE_TAG}") || status=$?
+          case "${status}" in
+            0) ;;
+            1) desktop=false ;;
+            *) exit "${status}" ;;
+          esac
+          if [ "${newest}" = false ]; then
+            # Every stable tag is also a tag, so this follows already; it is
+            # stated so the cascade never rests on that.
+            desktop=false
             printf '::notice title=Quiet release::%s is older than %s, so Latest, the Homebrew tap and the desktop app stay on %s, and no desktop release is cut for it.\n' "${RELEASE_TAG}" "${newer}" "${newer}"
-            printf 'newest=false\n' >> "${GITHUB_OUTPUT}"
+          elif [ "${desktop}" = false ]; then
+            printf '::notice title=No desktop release::%s is the newest release, but the candidate %s is already out and cascaded into the desktop app, so no desktop release is cut for %s.\n' "${RELEASE_TAG}" "${candidate}" "${RELEASE_TAG}"
           fi
+          printf 'newest=%s\ndesktop=%s\n' "${newest}" "${desktop}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -123,10 +150,11 @@ jobs:
   # and the desktop workflow called directly, since a tag pushed with the
   # default token starts no run of its own. An older release skips this job,
   # and with it desktop-publish, rather than reaching a planner that would
-  # refuse it; the release job's notice says so.
+  # refuse it, and so does the newest release behind a newer candidate; the
+  # release job's notice says which.
   desktop-tag:
     needs: release
-    if: needs.release.outputs.newest == 'true'
+    if: needs.release.outputs.desktop == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

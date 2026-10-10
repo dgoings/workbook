@@ -346,6 +346,57 @@ func TestCutReleaseRefusesALocallyMovedReleaseTagWithoutBlamingTheRemote(t *test
 	}
 }
 
+// A patch to an older line is cut from its maint branch the same way main's
+// releases are cut from main, and follows that line's newest release.
+func TestCutReleaseTagsAPatchOnALineBranch(t *testing.T) {
+	t.Parallel()
+	clone, remote := newLineRepository(t)
+	head := gitOutput(t, clone, "rev-parse", "HEAD")
+
+	output, err := runCutRelease(clone, "0.5.2", "--skip-tests", "--branch", "maint/v0.5")
+	if err != nil {
+		t.Fatalf("cut v0.5.2 from maint/v0.5: %v\n%s", err, output)
+	}
+	if got := gitOutput(t, remote, "rev-parse", "v0.5.2^{commit}"); got != head {
+		t.Errorf("remote tag points at %s, want the line's tip %s", got, head)
+	}
+	// Production mutation: discovering the previous release across every line
+	// would name v0.6.0 and refuse 0.5.2 as a step backward.
+	if !strings.Contains(output, "previous release  v0.5.1") {
+		t.Errorf("output = %q, want the line's previous release named", output)
+	}
+	if !strings.Contains(output, "from maint/v0.5") {
+		t.Errorf("output = %q, want the line branch named", output)
+	}
+}
+
+func TestCutReleaseRefusesAVersionOutsideTheLine(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct{ version, wantMessage string }{
+		{version: "0.6.1", wantMessage: "is not on the 0.5 line"},
+		{version: "0.7.0", wantMessage: "is not on the 0.5 line"},
+		{version: "0.5.2-rc1", wantMessage: "patch releases only"},
+		{version: "0.5.0", wantMessage: "does not come after"},
+	} {
+		t.Run(testCase.version, func(t *testing.T) {
+			t.Parallel()
+			clone, remote := newLineRepository(t)
+			tagsBefore := gitOutput(t, remote, "tag", "--list")
+
+			output, err := runCutRelease(clone, testCase.version, "--skip-tests", "--branch", "maint/v0.5")
+			if err == nil {
+				t.Fatalf("cut accepted %s on maint/v0.5:\n%s", testCase.version, output)
+			}
+			if !strings.Contains(output, testCase.wantMessage) {
+				t.Errorf("output = %q, want %q", output, testCase.wantMessage)
+			}
+			if got := gitOutput(t, remote, "tag", "--list"); got != tagsBefore {
+				t.Errorf("remote tags changed from %q to %q", tagsBefore, got)
+			}
+		})
+	}
+}
+
 func commitAndPush(t *testing.T, clone, name string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(clone, name), []byte(name+"\n"), 0o600); err != nil {
@@ -382,7 +433,7 @@ func newReleaseRepository(t *testing.T) (string, string) {
 	if err := os.Mkdir(filepath.Join(clone, "scripts"), 0o755); err != nil {
 		t.Fatalf("create scripts directory: %v", err)
 	}
-	for _, name := range []string{"cut-release.sh", "release-version.sh", "resolve-release-version.sh"} {
+	for _, name := range []string{"cut-release.sh", "release-version.sh", "resolve-release-version.sh", "start-release-line.sh"} {
 		contents, err := os.ReadFile(filepath.Join(root, "scripts", name))
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)

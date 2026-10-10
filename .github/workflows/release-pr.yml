@@ -39,10 +39,16 @@ jobs:
       # which releases published, and a fork pull request's token is read-only
       # with no secrets present, so the exposure is accepted deliberately;
       # revisit if the collaborator set grows.
+      #
+      # A pull request into a maint/vX.Y line is planned on that line: its
+      # previous release is the line's newest, and only a patch is cut there.
+      # One into anything else is planned as main's, as it always was, though
+      # merging it into a base other than main cuts nothing.
       - name: Check the label and the changelog agree
         env:
           GH_TOKEN: ${{ github.token }}
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -eu
           bump=$(printf '%s' "${LABELS}" | jq -r '.[]' | scripts/release-bump-label.sh)
@@ -50,7 +56,11 @@ jobs:
             echo "No release label; this pull request cuts no release."
             exit 0
           fi
-          version=$(scripts/plan-release.sh --bump "${bump}" --repo "${GITHUB_REPOSITORY}")
+          branch=main
+          case "${BASE_REF}" in
+            maint/v*) branch=${BASE_REF} ;;
+          esac
+          version=$(scripts/plan-release.sh --bump "${bump}" --branch "${branch}" --repo "${GITHUB_REPOSITORY}")
           echo "Merging this pull request would cut v${version}."
 
   # The pre-merge result can go stale: another release merging in between changes
@@ -63,12 +73,16 @@ jobs:
   # containing "release:" starts the job, and release-bump-label.sh then rejects
   # anything that is not exactly one of the three. Being too permissive here
   # costs one short job, while being too strict would silently skip a release.
+  #
+  # A pull request into a maint/vX.Y line branch cuts a patch to that line, the
+  # way one into main cuts main's next release; see "Patch releases to an older
+  # line" in CONTRIBUTING.md.
   cut:
     if: >-
       github.event.action == 'closed' &&
       github.event.pull_request.merged == true &&
       contains(join(github.event.pull_request.labels.*.name, ' '), 'release:') &&
-      github.event.pull_request.base.ref == 'main' &&
+      (github.event.pull_request.base.ref == 'main' || startsWith(github.event.pull_request.base.ref, 'maint/v')) &&
       github.event.pull_request.head.repo.full_name == github.repository
     name: Cut the release
     runs-on: ubuntu-24.04
@@ -95,6 +109,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           REVIEWED_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -eu
           bump=$(printf '%s' "${LABELS}" | jq -r '.[]' | scripts/release-bump-label.sh)
@@ -107,7 +122,7 @@ jobs:
           # ago and waiting out a full suite here would hold the release open
           # for as long as CI takes.
           scripts/check-commit-verified.sh "${REVIEWED_SHA}" --repo "${GITHUB_REPOSITORY}"
-          version=$(scripts/plan-release.sh --bump "${bump}" --repo "${GITHUB_REPOSITORY}")
+          version=$(scripts/plan-release.sh --bump "${bump}" --branch "${BASE_REF}" --repo "${GITHUB_REPOSITORY}")
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag --annotate "v${version}" --message "Workbook v${version}"

@@ -93,8 +93,10 @@ Use help to discover commands and their options:
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push to `main` and every pull request
-against it. The Go verification runs on `ubuntu-24.04` and `macos-15`, because
-Workbook publishes darwin and linux archives: each of those jobs verifies
+against it, and the same for a `maint/vX.Y` line branch, since a patch to an
+older line is released only from a commit this workflow verified. The Go
+verification runs on `ubuntu-24.04` and `macos-15`, because Workbook publishes
+darwin and linux archives: each of those jobs verifies
 formatting with `gofmt -l .`, runs `go vet ./...`, and runs `go test ./...`.
 `ubuntu-24.04` also cross-compiles the CLI for Windows
 (`GOOS=windows GOARCH=amd64 go build ./cmd/workbook`): the whole tree does not
@@ -225,7 +227,9 @@ release is a periodic version bump that gathers whatever has landed since the
 last tag. Merging does not publish anything, so work can accumulate on `main`
 until a group of it is worth releasing.
 
-Every release is a version tag on `main`. Three things can create one, and all
+Every release is a version tag on `main`, except a patch to a minor version
+`main` has moved past, which is a tag on that line's `maint/vX.Y` branch; see
+Patch releases to an older line below. Three things can create one, and all
 three end in the same publication.
 
 ### A release pull request
@@ -238,9 +242,12 @@ Work that needs prose may write it as it lands, under an `## Unreleased`
 heading, rather than reconstructing it later from a pile of merged pull
 requests. The release pull request then retitles that heading to the version
 being cut. Leave it as `## Unreleased` until then: the check below reads the
-topmost `## vX.Y.Z` heading and refuses a label that disagrees with it, so an
-early version heading would block every patch release until that version was
-cut.
+highest-versioned `## vX.Y.Z` heading, wherever it sits in the file, and
+refuses a label that disagrees with it, so an early version heading would block
+every patch release until that version was cut. A heading for a version no
+newer than the previous release counts as no entry at all, which is what lets a
+patch to an older line forward-port its entry into this file without blocking
+the next release.
 
 ```markdown
 ## v0.5.0 — 2026-08-08
@@ -293,8 +300,9 @@ Pick `patch`, `minor`, or `major` and the version is computed from the newest
 tag; fill in the optional exact version to override it. A pre-release is cut
 here too, by giving the exact version in the form `0.6.0-rc1`; see Pre-releases
 below. The same changelog rule applies, so a `minor` or `major` cut this way
-still needs an entry. Releases are cut from `main`, and a run on any other
-branch is refused.
+still needs an entry. Releases are cut from `main`, or from a `maint/vX.Y` line
+branch where only a patch to that line is cut, and a run on any other branch is
+refused.
 
 ### From a checkout
 
@@ -322,8 +330,11 @@ and stops before tagging:
 ```
 
 `--skip-tests` skips the test run, and `--remote` and `--branch` override the
-`origin` and `main` defaults. This path does not consult the changelog: it takes
-an exact version and trusts the person typing it.
+`origin` and `main` defaults. With `--branch maint/vX.Y` it cuts a patch to that
+line, refusing any version off the line or a pre-release, and follows the
+line's newest release rather than the newest there is. This path does not
+consult the changelog: it takes an exact version and trusts the person typing
+it.
 
 ### Pre-releases
 
@@ -366,9 +377,11 @@ generated from the commit log when it does not.
 
 Before building anything, the workflow checks that the tag sits on a branch
 releases are published from, with `scripts/validate-release-branch.sh`: the
-tag's commit has to be reachable from `main` on the remote, and must not
-already contain a higher stable release. A tag on an unmerged branch, or an
-older version tagged on newer code, publishes nothing.
+tag's commit has to be reachable from `main` on the remote, or, for a stable
+`vX.Y.Z`, from that line's `maint/vX.Y` branch on the remote, and must not
+already contain a higher stable release. A tag on an unmerged branch, a tag on
+another line's branch, or an older version tagged on newer code, publishes
+nothing.
 
 ### Only the newest release moves
 
@@ -379,7 +392,17 @@ other tags of its own sequence (`v*` for the CLI, `desktop-v*` for the app). A
 stable release is the newest when no stable tag orders after it; a candidate
 that is out does not count against it, so `v0.6.1` cut while `v0.7.0-rc1` is
 out is still the newest. A pre-release is the newest when no tag at all orders
-after it.
+after it. The answer comes from the version, never from the branch a tag is
+on: a patch cut from `maint/v0.6` while `main` holds only unreleased 0.7 work is
+the newest release and publishes like any other.
+
+The desktop cascade asks one question more. A candidate cascades into a desktop
+candidate, so the newest stable release behind a newer candidate — `v0.6.1`
+while `v0.7.0-rc1` is out — still moves Latest and the tap but cuts no desktop
+release: its desktop tag would order behind `desktop-v0.7.0-rc1`, which the
+planner refuses. `scripts/release-is-newest.sh --with-candidates` counts the
+candidates too, and the run's summary says in a notice why the cascade was
+skipped.
 
 An older stable release — a rerun of a superseded one, or a patch to a line
 `main` has moved past — is a quiet release. It is published to GitHub Releases
@@ -417,8 +440,9 @@ without a CLI release behind it, and one sequence would make every such fix
 claim a CLI version that published nothing.
 
 Every newest CLI release still cascades into a desktop one; an older one does
-not, as Only the newest release moves above describes, and the `desktop-tag`
-and `desktop-publish` jobs are skipped. After the release job publishes,
+not, and neither does the newest one behind a newer candidate, as Only the
+newest release moves above describes, and the `desktop-tag` and
+`desktop-publish` jobs are skipped. After the release job publishes,
 `desktop-tag` plans the companion tag with
 `scripts/plan-desktop-release.sh` and pushes it, and `desktop-publish` calls
 the desktop workflow with it. The two jobs sit inside the release run, so the
@@ -488,6 +512,89 @@ address, and an address that skips a release stops being one. The next stable
 release clears the flag again. This is where the desktop app differs from the
 CLI, whose pre-release deliberately leaves the Homebrew tap alone so
 `brew upgrade` never serves one.
+
+### Patch releases to an older line
+
+A fix normally ships in the next release from `main`. When someone on an older
+release needs one without taking the next minor version — `main` already holds
+0.6 work, say, and a 0.5 user needs a fix — it ships as a patch to that line
+instead, cut from a `maint/vX.Y` branch. The trunk stays the trunk: a line
+branch is created on demand from the release being patched, the first time
+one is needed, and it never merges back into `main`.
+
+1. Start the line, once:
+
+   ```sh
+   ./scripts/start-release-line.sh 0.5 --push
+   ```
+
+   It creates `maint/v0.5` at the newest stable `v0.5.*` tag and, with
+   `--push`, pushes it; without `--push` the branch stays local and the push
+   command is printed. It never creates a tag. It refuses when the branch
+   already exists in the clone or on the remote, when the line has no stable
+   release (a candidate does not start one), and when `main` has nothing since
+   that release, since then the patch is cut from `main` as usual.
+
+2. Land the fix on `main` first, in an ordinary pull request, so the next
+   release from `main` carries it too.
+
+3. Cherry-pick it onto the line in a pull request whose base is `maint/v0.5`:
+
+   ```sh
+   git switch --create backport/the-fix origin/maint/v0.5
+   git cherry-pick -x <commit>
+   ```
+
+   If the fix deserves prose, add its entry to the line's `CHANGELOG.md` as
+   `## v0.5.2 — 2026-10-12`. Label the pull request `release:patch`: a line
+   cuts patches only, so `release:minor` and `release:major` are refused on it.
+   CI verifies it as it would a pull request into `main`, and the label check
+   plans it on the line, following the newest `v0.5.*` release and refusing any
+   version off the line.
+
+4. Merge it. That cuts `v0.5.2` from the merge commit on `maint/v0.5`, the way
+   merging a release pull request into `main` cuts main's release. The other
+   two paths work on a line as well: **Cut Release** run on the line's branch,
+
+   ```sh
+   gh workflow run cut-release.yml --ref maint/v0.5 -f bump=patch
+   ```
+
+   or `./scripts/cut-release.sh 0.5.2 --branch maint/v0.5` from a checkout of
+   it. A line cuts no pre-releases on any path.
+
+5. Forward-port the changelog entry, if there was one, in a follow-up pull
+   request into `main` carrying no release label. Copy the `## v0.5.2` entry
+   into `main`'s `CHANGELOG.md` in version order — below `## v0.6.0`, above
+   `## v0.5.1` — so the file records every release, and leave `main`'s
+   `## Unreleased` section alone. The release check reads the highest-versioned
+   heading and treats one no newer than the previous release as no entry, so
+   the forward-ported entry never stands in for main's next release or blocks
+   it.
+
+What users see depends only on the version. A patch to a line with a newer
+release above it, `v0.5.2` after `v0.6.0`, is a quiet release, as Only the
+newest release moves describes: it is on the Releases page with its archives
+and notes, but Latest, the Homebrew tap, `desktop-latest`, the site's download
+links and the desktop app's updater all stay on the newest release, and no
+desktop release is built for it. Someone staying on 0.5 takes the patch from
+its release page, or builds the tag from source. A patch on a line that is
+still the newest release — `maint/v0.6` while `main` holds only unreleased 0.7
+work — is the newest release and publishes like any other.
+
+The branch protection a line needs is a repository setting, set once by an
+administrator, which no workflow can assert:
+
+- Add `refs/heads/maint/v*` to the targets of the **Validate all PRs** ruleset,
+  so a line branch gets what `main` gets: no deletion, no force push, a pull
+  request for every change, and the required checks `Validate release label
+  and changelog` and the `Verify on` matrix.
+- If that ruleset restricts creating a matching branch, whoever runs
+  `start-release-line.sh --push` needs its bypass, or creates the branch from
+  the GitHub interface with it.
+- The **Release Tags** ruleset on `refs/tags/v*` needs no change: a line's tags
+  are `v*` tags, and the GitHub Actions app is already on its bypass list for
+  the cut workflows' tag push.
 
 ### When a release fails
 

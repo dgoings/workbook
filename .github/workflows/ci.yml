@@ -1,10 +1,13 @@
 name: CI
 
+# A maint/vX.Y line branch carries patch releases to an older minor version,
+# and a release is cut only from a commit Verify passed on, so pull requests
+# into a line and pushes to one are verified the same way main's are.
 on:
   push:
-    branches: [main]
+    branches: [main, "maint/v*"]
   pull_request:
-    branches: [main]
+    branches: [main, "maint/v*"]
 
 # Pull request runs supersede each other: only a branch's newest commit needs
 # verifying, so they share a per-ref group and cancel the run they replace.

@@ -234,8 +234,9 @@ hand — for every architecture its bundles cover, and stamps the package's
 version from the tag. The version checked in here stays `0.0.0`: the tag says
 what shipped, so nothing has to be bumped in git.
 
-Every CLI release cascades into a desktop one, and a desktop-only release is
-cut by pushing a `desktop-vX.Y.Z` tag on `main` yourself. CONTRIBUTING's
+Every newest CLI release cascades into a desktop one; a patch to an older line,
+or a release behind a newer candidate, does not. A desktop-only release is cut
+by pushing a `desktop-vX.Y.Z` tag on `main` yourself. CONTRIBUTING's
 "Desktop releases" has both paths, and what the two releases each hold.
 
 The macOS build signs and notarizes with five repository secrets, which the
