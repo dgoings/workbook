@@ -40,16 +40,22 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
     steps:
       # workflow_dispatch lets the runner pick any branch. Releases come from
-      # the trunk, the same rule scripts/cut-release.sh enforces locally.
-      - name: Refuse a branch other than main
-        if: github.ref != 'refs/heads/main'
+      # the trunk, or from a maint/vX.Y line branch for a patch to a minor
+      # version main has moved past; plan-release.sh holds the line's name and
+      # its patch-only rule. Nothing else is released.
+      - name: Refuse a branch releases are not cut from
         run: |
-          echo "workbook release: releases are cut from main, but this run is on ${GITHUB_REF}" >&2
-          exit 1
+          case "${GITHUB_REF}" in
+            refs/heads/main | refs/heads/maint/v*) ;;
+            *)
+              echo "workbook release: releases are cut from main or a maint/vX.Y line branch, but this run is on ${GITHUB_REF}" >&2
+              exit 1
+              ;;
+          esac
 
       # Resolving the next version and reading the changelog both need the full
       # tag list, which a shallow checkout does not carry.
-      - name: Check out main
+      - name: Check out the branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -71,7 +77,7 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           set -eu
-          version=$(scripts/plan-release.sh --bump "${BUMP}" --version "${VERSION}" --repo "${GITHUB_REPOSITORY}")
+          version=$(scripts/plan-release.sh --bump "${BUMP}" --version "${VERSION}" --branch "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}")
           printf 'tag=v%s\n' "${version}" >> "${GITHUB_OUTPUT}"
 
       - name: Tag the release

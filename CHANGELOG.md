@@ -17,9 +17,13 @@ work that needs prose can write it while the reasoning is fresh rather than
 reconstruct it in the release pull request. Retitle that heading to the version
 being cut — `## v0.6.0 — 2026-09-30` — in the pull request that carries the
 bump label. The heading is deliberately not a version until then: the release check
-reads the topmost `## vX.Y.Z` heading and refuses a label that disagrees with
-it, so an early version heading would block every patch release until that
-version was cut.
+reads the highest-versioned `## vX.Y.Z` heading, wherever it sits, and refuses a
+label that disagrees with it, so an early version heading would block every
+patch release until that version was cut. A patch to an older line is written
+here on its `maint/vX.Y` branch and forward-ported to `main` afterwards, in
+version order rather than at the top; a heading no newer than the previous
+release counts as no entry, so it never blocks the next release. See
+[Patch releases to an older line](CONTRIBUTING.md#patch-releases-to-an-older-line).
 
 ## v0.6.0 — 2026-10-08
 

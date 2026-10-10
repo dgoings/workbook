@@ -69,6 +69,7 @@ type releaseJob struct {
 
 type releaseStep struct {
 	ID   string            `yaml:"id"`
+	If   string            `yaml:"if"`
 	Name string            `yaml:"name"`
 	Uses string            `yaml:"uses"`
 	Run  string            `yaml:"run"`
@@ -169,12 +170,162 @@ func TestReleasePullRequestCutIsGuarded(t *testing.T) {
 
 	for _, guard := range []string{
 		"github.event.pull_request.merged == true",
-		"github.event.pull_request.base.ref == 'main'",
+		"(github.event.pull_request.base.ref == 'main' || startsWith(github.event.pull_request.base.ref, 'maint/v'))",
 		"github.event.pull_request.head.repo.full_name == github.repository",
 	} {
 		if !strings.Contains(cut.If, guard) {
 			t.Errorf("cut job condition %q is missing the guard %q", cut.If, guard)
 		}
+	}
+}
+
+// Releases are cut from main or from a maint/vX.Y line branch, and from
+// nothing else. The dispatch path refuses any other branch before it checks
+// anything out, and the step is run here rather than read.
+func TestCutReleaseWorkflowRefusesABranchReleasesAreNotCutFrom(t *testing.T) {
+	t.Parallel()
+	workflow := readReleaseWorkflow(t, "cut-release.yml")
+	tag, ok := workflow.Jobs["tag"]
+	if !ok {
+		t.Fatalf("cut-release jobs = %v, want a tag job", keysOf(workflow.Jobs))
+	}
+	if len(tag.Steps) == 0 || !strings.Contains(tag.Steps[0].Run, "GITHUB_REF") {
+		t.Fatal("the tag job's first step does not check the branch it was run on")
+	}
+	refusal := tag.Steps[0]
+	if refusal.If != "" {
+		t.Errorf("branch refusal is conditional on %q; it has to run on every branch", refusal.If)
+	}
+	for _, testCase := range []struct {
+		ref      string
+		wantFail bool
+	}{
+		{ref: "refs/heads/main"},
+		{ref: "refs/heads/maint/v0.5"},
+		// plan-release.sh holds the line's name to its grammar; this step only
+		// keeps every other branch out.
+		{ref: "refs/heads/feature", wantFail: true},
+		{ref: "refs/heads/release/v0.6.1", wantFail: true},
+		{ref: "refs/heads/mainline", wantFail: true},
+		{ref: "refs/tags/v0.6.0", wantFail: true},
+	} {
+		t.Run(testCase.ref, func(t *testing.T) {
+			command := exec.Command("bash", "-e", "-o", "pipefail", "-c", refusal.Run)
+			command.Env = append(os.Environ(), "GITHUB_REF="+testCase.ref)
+			output, err := command.CombinedOutput()
+			if testCase.wantFail && err == nil {
+				t.Errorf("step accepted %s:\n%s", testCase.ref, output)
+			}
+			if !testCase.wantFail && err != nil {
+				t.Errorf("step refused %s: %v\n%s", testCase.ref, err, output)
+			}
+		})
+	}
+}
+
+// The planner is what knows a line's rules: its previous release is the line's
+// newest, and only a patch to the line is cut there. Every call from a cut
+// workflow therefore names the branch the release is being cut on.
+func TestCutWorkflowsPlanOnTheBranchBeingCut(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		workflow, job, branch string
+	}{
+		{workflow: "cut-release.yml", job: "tag", branch: "GITHUB_REF_NAME"},
+		{workflow: "release-pr.yml", job: "validate", branch: "branch"},
+		{workflow: "release-pr.yml", job: "cut", branch: "BASE_REF"},
+	} {
+		t.Run(testCase.workflow+"/"+testCase.job, func(t *testing.T) {
+			workflow := readReleaseWorkflow(t, testCase.workflow)
+			job, ok := workflow.Jobs[testCase.job]
+			if !ok {
+				t.Fatalf("%s jobs = %v, want a %s job", testCase.workflow, keysOf(workflow.Jobs), testCase.job)
+			}
+			var planned bool
+			for _, step := range job.Steps {
+				if !strings.Contains(step.Run, "plan-release.sh") {
+					continue
+				}
+				planned = true
+				if !strings.Contains(step.Run, `--branch "${`+testCase.branch+`}"`) {
+					t.Errorf("step %q plans without --branch \"${%s}\":\n%s", step.Name, testCase.branch, step.Run)
+				}
+			}
+			if !planned {
+				t.Errorf("%s job %q never plans the release", testCase.workflow, testCase.job)
+			}
+		})
+	}
+
+	// A release label on a pull request into anything other than a line is
+	// validated as main's, as it always was; merging one cuts nothing.
+	workflow := readReleaseWorkflow(t, "release-pr.yml")
+	validate := workflow.Jobs["validate"]
+	for _, step := range validate.Steps {
+		if !strings.Contains(step.Run, "plan-release.sh") {
+			continue
+		}
+		if got := step.Env["BASE_REF"]; got != "${{ github.event.pull_request.base.ref }}" {
+			t.Errorf("validate step BASE_REF = %q, want the pull request's base", got)
+		}
+	}
+	cut := workflow.Jobs["cut"]
+	for _, step := range cut.Steps {
+		if strings.Contains(step.Run, "plan-release.sh") {
+			if got := step.Env["BASE_REF"]; got != "${{ github.event.pull_request.base.ref }}" {
+				t.Errorf("cut step BASE_REF = %q, want the pull request's base", got)
+			}
+		}
+	}
+}
+
+// The validate job's choice of branch is a few lines of shell, run here for
+// each base a pull request can have.
+func TestReleasePullRequestValidationPlansOnTheBaseLine(t *testing.T) {
+	t.Parallel()
+	workflow := readReleaseWorkflow(t, "release-pr.yml")
+	var run string
+	for _, step := range workflow.Jobs["validate"].Steps {
+		if strings.Contains(step.Run, "plan-release.sh") {
+			run = step.Run
+		}
+	}
+	if run == "" {
+		t.Fatal("validate job never plans the release")
+	}
+	for _, testCase := range []struct{ base, want string }{
+		{base: "main", want: "main"},
+		{base: "maint/v0.5", want: "maint/v0.5"},
+		{base: "feature/stacked", want: "main"},
+	} {
+		t.Run(testCase.base, func(t *testing.T) {
+			root := t.TempDir()
+			scriptsDirectory := filepath.Join(root, "scripts")
+			if err := os.MkdirAll(scriptsDirectory, 0o755); err != nil {
+				t.Fatalf("create scripts directory: %v", err)
+			}
+			// The bump label script answers patch, and the planner stub reports
+			// the branch it was given as the version it planned.
+			stubs := map[string]string{
+				"release-bump-label.sh": "#!/bin/sh\ncat >/dev/null\necho patch\n",
+				"plan-release.sh":       "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do if [ \"$1\" = --branch ]; then echo \"$2\"; exit 0; fi; shift; done\necho none\n",
+			}
+			for name, contents := range stubs {
+				if err := os.WriteFile(filepath.Join(scriptsDirectory, name), []byte(contents), 0o755); err != nil {
+					t.Fatalf("write %s: %v", name, err)
+				}
+			}
+			command := exec.Command("bash", "-e", "-o", "pipefail", "-c", run)
+			command.Dir = root
+			command.Env = append(os.Environ(), "BASE_REF="+testCase.base, `LABELS=["release:patch"]`, "GITHUB_REPOSITORY=dgoings/workbook")
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("validate step: %v\n%s", err, output)
+			}
+			if !strings.Contains(string(output), "would cut v"+testCase.want+".") {
+				t.Errorf("output = %q, want the plan made on %s", output, testCase.want)
+			}
+		})
 	}
 }
 
@@ -580,17 +731,27 @@ func TestReleaseWorkflowCascadesOnlyTheNewestRelease(t *testing.T) {
 	// The step is run, not read: exit 1 is the answer "older", and anything else
 	// is a question that could not be answered, which has to fail the run rather
 	// than read as either answer. GitHub runs a step under bash -e -o pipefail.
+	//
+	// It asks twice. The plain question decides Latest and the tap; the one
+	// --with-candidates also counts a newer candidate, which already cascaded
+	// into a desktop candidate the planner would refuse to follow.
 	for _, test := range []struct {
-		name       string
-		stubStatus string
-		wantFail   bool
-		wantOutput string
-		wantNotice bool
+		name string
+		// The stub's exit status for the plain question and for the one asked
+		// --with-candidates.
+		stubStatus, candidateStatus string
+		wantFail                    bool
+		wantOutput                  string
+		wantNotice                  bool
+		// wantNamed is the newer tag the notice has to name.
+		wantNamed string
 	}{
-		{name: "newest", stubStatus: "0", wantOutput: "newest=true\n"},
-		{name: "older", stubStatus: "1", wantOutput: "newest=false\n", wantNotice: true},
-		{name: "unanswerable", stubStatus: "2", wantFail: true},
-		{name: "unexpected", stubStatus: "127", wantFail: true},
+		{name: "newest", stubStatus: "0", candidateStatus: "0", wantOutput: "newest=true\ndesktop=true\n"},
+		{name: "newest behind a candidate", stubStatus: "0", candidateStatus: "1", wantOutput: "newest=true\ndesktop=false\n", wantNotice: true, wantNamed: "v0.9.0-rc1"},
+		{name: "older", stubStatus: "1", candidateStatus: "1", wantOutput: "newest=false\ndesktop=false\n", wantNotice: true, wantNamed: "v0.9.0"},
+		{name: "unanswerable", stubStatus: "2", candidateStatus: "0", wantFail: true},
+		{name: "unexpected", stubStatus: "127", candidateStatus: "0", wantFail: true},
+		{name: "candidates unanswerable", stubStatus: "0", candidateStatus: "2", wantFail: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -598,8 +759,10 @@ func TestReleaseWorkflowCascadesOnlyTheNewestRelease(t *testing.T) {
 			if err := os.MkdirAll(scriptsDirectory, 0o755); err != nil {
 				t.Fatalf("create scripts directory: %v", err)
 			}
-			stub := "#!/bin/sh\nif [ \"$1\" != v0.5.2 ]; then echo \"unexpected tag $1\" >&2; exit 64; fi\n" +
-				"if [ " + test.stubStatus + " -eq 1 ]; then echo v0.9.0; fi\nexit " + test.stubStatus + "\n"
+			stub := "#!/bin/sh\nstatus=" + test.stubStatus + "\nnewer=v0.9.0\n" +
+				"if [ \"$1\" = --with-candidates ]; then status=" + test.candidateStatus + "; newer=v0.9.0-rc1; shift; fi\n" +
+				"if [ \"$#\" -ne 1 ] || [ \"$1\" != v0.5.2 ]; then echo \"unexpected arguments $*\" >&2; exit 64; fi\n" +
+				"if [ \"${status}\" -eq 1 ]; then echo \"${newer}\"; fi\nexit \"${status}\"\n"
 			if err := os.WriteFile(filepath.Join(scriptsDirectory, "release-is-newest.sh"), []byte(stub), 0o755); err != nil {
 				t.Fatalf("write release-is-newest stub: %v", err)
 			}
@@ -635,23 +798,26 @@ func TestReleaseWorkflowCascadesOnlyTheNewestRelease(t *testing.T) {
 			if hasNotice := strings.Contains(string(stdout), "::notice"); hasNotice != test.wantNotice {
 				t.Errorf("notice present = %v, want %v; output %q", hasNotice, test.wantNotice, stdout)
 			}
-			if test.wantNotice && !strings.Contains(string(stdout), "v0.9.0") {
-				t.Errorf("notice %q does not name the newer release", stdout)
+			if test.wantNotice && !strings.Contains(string(stdout), test.wantNamed) {
+				t.Errorf("notice %q does not name the newer tag %s", stdout, test.wantNamed)
 			}
 		})
 	}
-	if got, want := release.Outputs["newest"], "${{ steps."+decision.ID+".outputs.newest }}"; got != want {
-		t.Errorf("release job output newest = %q, want %q", got, want)
+	for _, output := range []string{"newest", "desktop"} {
+		if got, want := release.Outputs[output], "${{ steps."+decision.ID+".outputs."+output+" }}"; got != want {
+			t.Errorf("release job output %s = %q, want %q", output, got, want)
+		}
 	}
 
 	tag, ok := workflow.Jobs["desktop-tag"]
 	if !ok {
 		t.Fatalf("release workflow jobs = %v, want a desktop-tag job", keysOf(workflow.Jobs))
 	}
-	// Production mutation: dropping the gate cascades an older patch into the
-	// desktop planner, which refuses it and fails the run.
+	// Production mutation: dropping the gate cascades an older patch, or a
+	// patch behind a newer candidate, into the desktop planner, which refuses
+	// it and fails the run.
 	for _, guard := range []string{
-		"needs.release.outputs.newest == 'true'",
+		"needs.release.outputs.desktop == 'true'",
 	} {
 		if !strings.Contains(tag.If, guard) {
 			t.Errorf("desktop-tag condition %q is missing the guard %q", tag.If, guard)

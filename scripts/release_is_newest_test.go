@@ -67,6 +67,55 @@ func TestReleaseIsNewestOrdersATagAgainstItsOwnSequence(t *testing.T) {
 	}
 }
 
+// The desktop cascade asks a stricter question than Latest and the tap. A CLI
+// candidate cascades into a desktop candidate, so v0.6.1 cut on maint/v0.6
+// while v0.7.0-rc1 is out would plan desktop-v0.6.1 behind desktop-v0.7.0-rc1,
+// which the planner refuses after the CLI release has already published.
+// --with-candidates counts every tag of the sequence against a stable one.
+func TestReleaseIsNewestWithCandidatesCountsEveryTag(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name      string
+		tags      []string
+		tag       string
+		wantExit  int
+		wantNewer string
+	}{
+		{name: "the only release", tags: []string{"v0.6.0"}, tag: "v0.6.0"},
+		{name: "stable after its own candidates", tags: []string{"v0.6.0-rc1", "v0.6.0-rc2", "v0.6.0"}, tag: "v0.6.0"},
+		// Production mutation: answering this the way the plain question does
+		// cascades v0.6.1 into a desktop planner that refuses it.
+		{name: "stable while a later candidate is out", tags: []string{"v0.6.0", "v0.7.0-rc1", "v0.6.1"}, tag: "v0.6.1", wantExit: 1, wantNewer: "v0.7.0-rc1"},
+		{name: "an older stable release", tags: []string{"v0.5.1", "v0.6.0", "v0.7.0-rc1", "v0.5.2"}, tag: "v0.5.2", wantExit: 1, wantNewer: "v0.7.0-rc1"},
+		{name: "a candidate answers as it always does", tags: []string{"v0.6.0", "v0.7.0-rc1"}, tag: "v0.7.0-rc1"},
+		{name: "desktop tags stay out of it", tags: []string{"desktop-v0.7.0-rc1", "v0.6.1"}, tag: "v0.6.1"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			repository := newTaggedRepository(t, testCase.tags...)
+			output, err := runReleaseScript(t, repository, "release-is-newest.sh", "", "--with-candidates", testCase.tag)
+			if testCase.wantExit == 0 {
+				if err != nil {
+					t.Fatalf("release-is-newest --with-candidates %s: %v\n%s", testCase.tag, err, output)
+				}
+				if strings.TrimSpace(output) != "" {
+					t.Errorf("output = %q, want nothing for the newest tag", output)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("release-is-newest --with-candidates called %s the newest among %v:\n%s", testCase.tag, testCase.tags, output)
+			}
+			if got := exitCode(t, err); got != testCase.wantExit {
+				t.Errorf("release-is-newest exited %d, want %d\n%s", got, testCase.wantExit, output)
+			}
+			if got := strings.TrimSpace(output); got != testCase.wantNewer {
+				t.Errorf("printed %q, want the newer tag %q", got, testCase.wantNewer)
+			}
+		})
+	}
+}
+
 // A question it cannot answer must never read as "newest": that is the answer
 // that moves Latest, the tap and desktop-latest. A checkout without the tag in
 // it is the shape a shallow or tagless checkout takes, where no newer tag would
@@ -80,6 +129,8 @@ func TestReleaseIsNewestRefusesWhatItCannotOrder(t *testing.T) {
 		wantMessage string
 	}{
 		{name: "no tag", args: nil, wantMessage: "usage"},
+		{name: "only the option", args: []string{"--with-candidates"}, wantMessage: "usage"},
+		{name: "an unknown option", tags: []string{"v0.6.0"}, args: []string{"--sideways", "v0.6.0"}, wantMessage: "usage"},
 		{name: "malformed tag", tags: []string{"v0.6.0"}, args: []string{"v0.6"}, wantMessage: "MAJOR.MINOR.PATCH"},
 		{name: "malformed desktop tag", tags: []string{"desktop-v0.6.0"}, args: []string{"desktop-latest"}, wantMessage: "desktop-vMAJOR.MINOR.PATCH"},
 		{name: "a tag the checkout does not carry", tags: []string{"v0.5.1"}, args: []string{"v0.6.0"}, wantMessage: "is not a tag in this repository"},
