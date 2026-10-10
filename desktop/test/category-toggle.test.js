@@ -14,6 +14,7 @@ const { describe, test } = require('node:test')
 const assert = require('node:assert/strict')
 
 const { initials } = require('../src/renderer/sidebarmodel')
+const cascade = require('./support/cascade')
 
 const src = path.join(__dirname, '..', 'src')
 
@@ -240,16 +241,6 @@ describe('the rail draws the toggle as a group header', () => {
     assert.doesNotMatch(body, /display\s*:\s*none/, 'the rail hides the initials')
   })
 
-  test('the rail does not hide the toggle', () => {
-    for (const [list, body] of rules) {
-      if (!/display\s*:\s*none/.test(body)) continue
-      for (const selector of selectorsOf(list)) {
-        assert.notEqual(selector, ':root.sidebar-collapsed .category-toggle',
-          'the rail hides .category-toggle, leaving a folded category unreachable')
-      }
-    }
-  })
-
   test('the rail styles the toggle as a clickable header of its own', () => {
     const blocks = rules.filter(([list]) => selectorsOf(list).includes(':root.sidebar-collapsed .category-toggle'))
     assert.ok(blocks.length > 0, 'no rule for :root.sidebar-collapsed .category-toggle')
@@ -268,5 +259,116 @@ describe('the rail draws the toggle as a group header', () => {
         assert.doesNotMatch(selector, /\.category-toggle$/, `${selector} rotates the initials with the chevron`)
       }
     }
+  })
+})
+
+describe('the rail toggle is there to be hit', () => {
+  // The real stylesheet's cascade, run on the real page collapsed to the rail
+  // with categoryGroup's own markup in the project list. A rule that sets
+  // display none, visibility, opacity 0 or pointer-events none on the toggle or
+  // an ancestor fails this whatever its selector, and so does one that leaves
+  // the declared minimum under the 24px WCAG 2.5.8 asks of a pointer target.
+  // It reads declarations, not layout: a rule that clips the toggle (a zero
+  // height with overflow hidden on its header), scales it away, or moves it
+  // off screen passes, and only a measurement in the running app catches that.
+  const stylesheet = cascade.parseStylesheet(fs.readFileSync(path.join(src, 'renderer', 'styles.css'), 'utf8'))
+  const page = fs.readFileSync(path.join(src, 'renderer', 'index.html'), 'utf8')
+  const TARGET = 24
+
+  function adopt (fake) {
+    const attributes = Object.fromEntries(fake.attributes)
+    if (fake.type) attributes.type = fake.type
+    if (fake.title) attributes.title = fake.title
+    if (fake.hidden) attributes.hidden = ''
+    if (fake.draggable) attributes.draggable = 'true'
+    const element = cascade.node(fake.tagName, {
+      classes: fake.className.split(/\s+/).filter(Boolean),
+      attributes,
+      text: fake.textContent
+    })
+    return cascade.append(element, ...fake.children.map(adopt))
+  }
+
+  function railPage ({ collapsed = true, platform, theme = null, board = false }) {
+    const root = cascade.parseHTML(page)
+    if (collapsed) root.classes.add('sidebar-collapsed')
+    root.classes.add(`is-${platform}`)
+    if (board) root.classes.add('board-active')
+    if (theme) root.attributes.set('data-theme', theme)
+    const list = cascade.byId(root, 'project-list')
+    assert.ok(list, 'index.html has no #project-list')
+    const groups = [open, folded].map((category) => adopt(render(category).group))
+    cascade.append(list, ...groups)
+    const toggles = groups.map((group) => group.children[0].children[0])
+    for (const toggle of toggles) assert.ok(toggle.classes.has('category-toggle'))
+    return { groups, toggles }
+  }
+
+  // Every way the page can stand: each media condition on and off, each
+  // explicit theme and none, each platform, with and without a board showing,
+  // and the toggle at rest, hovered and focused.
+  function * scenarios () {
+    for (const env of cascade.combinations(cascade.conditions(stylesheet))) {
+      for (const theme of [null, 'light', 'dark']) {
+        for (const platform of ['mac', 'windows', 'linux']) {
+          for (const board of [false, true]) {
+            for (const interaction of ['rest', 'hover', 'focus']) {
+              yield { env, theme, platform, board, interaction }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  function check (scenario, inspect) {
+    for (const toggle of railPage(scenario).toggles) {
+      const state = scenario.interaction === 'rest'
+        ? cascade.interaction()
+        : cascade.interaction({ [scenario.interaction]: toggle })
+      const where = `${cascade.describe(toggle)} in the rail, ${JSON.stringify(scenario)}`
+      inspect(toggle, { env: scenario.env, state }, where)
+    }
+  }
+
+  test('the rail shows the toggle and lets the pointer reach it', () => {
+    for (const scenario of scenarios()) {
+      check(scenario, (toggle, options, where) => {
+        assert.equal(cascade.unreachable(stylesheet, toggle, options), null,
+          `a folded category is out of reach: ${where}`)
+      })
+    }
+  })
+
+  test('the rail toggle is at least 24px tall and wide', () => {
+    // A minimum or a fixed size holds whatever the glyphs measure: box-sizing
+    // aside, the border box is never smaller than min-height or height, or than
+    // min-width or width. Either way of asking for 24px passes.
+    for (const scenario of scenarios()) {
+      check(scenario, (toggle, options, where) => {
+        const height = cascade.leastSize(stylesheet, toggle, 'height', options)
+        const width = cascade.leastSize(stylesheet, toggle, 'width', options)
+        assert.ok(height >= TARGET, `neither min-height nor height asks for ${TARGET}px, only ${height}px: ${where}`)
+        assert.ok(width >= TARGET, `neither min-width nor width asks for ${TARGET}px, only ${width}px: ${where}`)
+      })
+    }
+  })
+
+  test('the guard sees what the rail does hide', () => {
+    // Without this, a cascade that matched nothing would pass both tests above.
+    const options = { env: {}, state: cascade.interaction() }
+    const rail = railPage({ platform: 'mac' })
+    const name = rail.groups[0].children[0].children[1]
+    assert.ok(name.classes.has('category-name'))
+    assert.match(cascade.unreachable(stylesheet, name, options), /display: none/)
+    const tiles = rail.groups[1].children[1]
+    assert.ok(tiles.classes.has('category-projects'))
+    assert.match(cascade.unreachable(stylesheet, tiles, options), /display: none \(\[hidden\]\)/)
+
+    const sidebar = railPage({ collapsed: false, platform: 'mac' })
+    assert.equal(cascade.unreachable(stylesheet, sidebar.groups[0].children[0].children[1], options), null)
+    const initials = sidebar.toggles[0].children[1]
+    assert.ok(initials.classes.has('category-initials'))
+    assert.match(cascade.unreachable(stylesheet, initials, options), /display: none/)
   })
 })
