@@ -238,7 +238,7 @@ func TestPriorityColorRefusesClearingAPriorityWithNoColor(t *testing.T) {
 // internal/cli/newerwriter_test.go forges a project ahead of this build (its
 // writeFutureConfigCommit) — real git objects, built from the same core
 // encoding functions gitstore itself calls, pointed at a project behind this
-// build instead of ahead of it.
+// build instead of ahead of it. Both forgeries are built by configforge_test.go.
 func legacyDisplayConfiguredRepository(t *testing.T) string {
 	t.Helper()
 	repository := preLedgerRepository(t)

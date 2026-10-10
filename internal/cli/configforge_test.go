@@ -16,9 +16,12 @@ import (
 // the tree holding them side by side, the commit naming that tree), then
 // refs/workbook/config pointed at the result.
 //
-// That construction lives here, once. Each call site keeps only what it
-// records and why no ordinary write path reaches it, so when the shape of a
-// configuration commit changes, this file is the one edit that follows it.
+// internal/cli's forgeries share that construction here, once. Each call site
+// keeps only what it records and why no ordinary write path reaches it. When
+// the shape of a configuration commit changes, this file is one of two edits
+// that follow it: the other is forgeConfigTree in internal/gitstore's
+// treeshape_test.go, which rewrites a ledger tip in place, keeping its parents
+// and adding stray entries, and lives in a package this helper cannot reach.
 
 // writeConfigLedgerCommit writes one configuration-ledger commit carrying the
 // two stored documents exactly as given and returns its object ID, moving no
