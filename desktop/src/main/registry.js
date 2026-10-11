@@ -4,10 +4,10 @@
 //
 // This holds only what Workbench needs to find a repository again: paths and
 // display names, and the last current key read from each. Task data is never
-// copied here — it lives in each repository's
-// refs/workbook/*, which is the whole point of the storage model. A registry
-// entry going stale is recoverable by rescanning; a registry entry is never
-// the source of truth for anything.
+// copied here — it lives in each repository's refs/workbook/*, which is the
+// whole point of the storage model. A registry entry going stale is
+// recoverable by rescanning; a registry entry is never the source of truth for
+// anything.
 
 const fs = require('node:fs/promises')
 const path = require('node:path')

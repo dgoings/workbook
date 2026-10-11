@@ -70,6 +70,9 @@ test('a board changing a key reads that project\'s current key', () => {
   const watcher = main.slice(main.indexOf('webRequest.onCompleted('))
   assert.match(watcher.slice(0, 400), /projectkeys\.isKeyChange\(details\)/)
   assert.match(watcher.slice(0, 400), /boardProjectId\(details\.webContentsId\)/)
+  // The project that made the request is the one re-read; an unknown board
+  // re-reads everyone (undefined), never nobody.
+  assert.match(watcher.slice(0, 400), /refreshKeys\(projectId \? \[projectId\] : undefined\)/)
   assert.match(fn('boardProjectId'), /for \(const \[projectId, view\] of boardViews\)/)
 })
 
