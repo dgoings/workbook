@@ -1,6 +1,6 @@
 'use strict'
 
-const { app, BaseWindow, WebContentsView, ipcMain, dialog, shell, nativeTheme, Menu } = require('electron')
+const { app, BaseWindow, WebContentsView, ipcMain, dialog, shell, nativeTheme, Menu, session } = require('electron')
 const crypto = require('node:crypto')
 const fs = require('node:fs/promises')
 const path = require('node:path')
@@ -13,6 +13,7 @@ const repoinfo = require('./repoinfo')
 const gitidentity = require('./gitidentity')
 const workbook = require('./workbook')
 const nextview = require('./nextview')
+const projectkeys = require('./projectkeys')
 const clipath = require('./clipath')
 const { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_POSITION, RAIL_WIDTH, boardBounds } = require('./layout')
 const { buildMenuTemplate } = require('./menu')
@@ -124,6 +125,9 @@ function createWindow () {
   chromeView.webContents.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'))
 
   window.on('resize', layout)
+  // `workbook key current` is run from a terminal, so a project's key moving
+  // there is noticed when the reader comes back to the window.
+  window.on('focus', () => { refreshKeys() })
 
   // The window's views and the project showing in it are module state that
   // outlives the window it describes, and on macOS a closed window is not a
@@ -364,6 +368,13 @@ async function startProjectServer (project) {
     return await supervisor.start(project)
   } finally {
     toChrome('project:started', { projectId: project.id, ...supervisor.status(project.id) })
+    // Every board starts at launch and after an import, which makes this the
+    // moment each project's label is first checked against its current key:
+    // an adopted project is registered under the founding key in its
+    // config.json, whatever key it has made current since. Asked whether the
+    // start worked or not, since the key is read from the repository and not
+    // from the server.
+    refreshKeys([project.id])
   }
 }
 
@@ -378,6 +389,8 @@ async function startProjectServer (project) {
 async function openProject (projectId, taskId = null) {
   const project = registry.find(projectId)
   if (!project) throw new Error(`unknown project: ${projectId}`)
+  // Its board's sync loop may have brought in a key a teammate made current.
+  refreshKeys([projectId])
 
   // Two project shortcuts in quick succession race, and the awaits below are
   // where they overtake each other: Cmd+1 on a cold project spawns a server and
@@ -722,9 +735,9 @@ ipcMain.handle('discovery:scan', async (_event, { root, maxDepth }) => {
  * is the key `setup` reports, which is the project's current key — the one a
  * new task is minted under. For an adopted repository it is the key in
  * `.workbook/config.json`, which is the project's founding key and stays that
- * whatever the configuration ledger later makes current. A project with
- * several keys therefore shows one of them in the sidebar; refreshing it from
- * the project's configuration is a follow-up, and nothing here depends on it.
+ * whatever the configuration ledger later makes current. Either is only the
+ * first label: the board start below reads the key the project has made
+ * current and relabels it (see projectkeys.js), and nothing here depends on it.
  */
 ipcMain.handle('import:apply', async (_event, { selections }) => {
   const results = []
@@ -791,6 +804,41 @@ const sidebarCommands = createSidebarCommands({
   rebuildMenu: () => installMenu(),
   broadcast: (payload) => toChrome('sidebar:layoutChanged', payload)
 })
+// Each project's label is its current key, which `workbook key current` or the
+// board's Keys section can move after import; see projectkeys.js. A change is
+// stored as the label to show from then on and announced on the layout
+// channel, so the sidebar, the rail and an open Next view redraw from one
+// answer; the menu carries the keys too.
+const keyRefresher = projectkeys.createKeyRefresher({
+  projects: () => registry.projects,
+  apply: (changes) => registry.setKeys(changes),
+  onChanged: () => {
+    installMenu()
+    toChrome('sidebar:layoutChanged', sidebarCommands.layout())
+  },
+  log: (line) => console.error(line)
+})
+
+/**
+ * Re-read the named projects' current keys, or every project's. Fire and
+ * forget: a project that cannot be read keeps the key it last showed.
+ *
+ * @param {string[]} [ids]
+ */
+function refreshKeys (ids) {
+  keyRefresher.refresh(ids).catch((error) => {
+    console.error('workbench: could not refresh project keys', error)
+  })
+}
+
+/** The project whose board view `webContentsId` is, or null. */
+function boardProjectId (webContentsId) {
+  for (const [projectId, view] of boardViews) {
+    if (!view.webContents.isDestroyed() && view.webContents.id === webContentsId) return projectId
+  }
+  return null
+}
+
 ipcMain.handle('sidebar:layout', async () => sidebarCommands.layout())
 ipcMain.handle('sidebar:moveProject', (_event, args) => sidebarCommands.moveProject(args))
 ipcMain.handle('sidebar:moveCategory', (_event, args) => sidebarCommands.moveCategory(args))
@@ -940,6 +988,16 @@ app.whenReady().then(async () => {
   })
 
   createWindow()
+  // A board's Keys section changes keys through its own server, so the
+  // request it makes is the signal: the views share the default session, and
+  // the one that made it names the project. Only one onCompleted listener can
+  // be set per session, and this is it. A request from no known board (a
+  // board view already let go of) re-reads every project rather than none.
+  session.defaultSession.webRequest.onCompleted((details) => {
+    if (!projectkeys.isKeyChange(details)) return
+    const projectId = boardProjectId(details.webContentsId)
+    refreshKeys(projectId ? [projectId] : undefined)
+  })
   // Every imported project's server starts now, not on first click: using the
   // app is meant to replace running `workbook serve` in each repository by
   // hand, and each server carries the sync loop that keeps its project

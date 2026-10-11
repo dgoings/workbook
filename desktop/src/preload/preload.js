@@ -90,8 +90,9 @@ contextBridge.exposeInMainWorld('workbench', {
     ipcRenderer.on('theme:changed', listener)
     return () => ipcRenderer.removeListener('theme:changed', listener)
   },
-  // { layout, projects } after every saved layout edit, projects in sidebar
-  // order with their server status, the same shape listProjects gives.
+  // { layout, projects } after every saved layout edit and every project key
+  // that moved, projects in sidebar order with their server status, the same
+  // shape listProjects gives.
   onSidebarLayoutChanged: (handler) => {
     const listener = (_event, payload) => handler(payload)
     ipcRenderer.on('sidebar:layoutChanged', listener)

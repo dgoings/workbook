@@ -3,10 +3,11 @@
 // The list of imported projects, persisted between runs.
 //
 // This holds only what Workbench needs to find a repository again: paths and
-// display names. Task data is never copied here — it lives in each repository's
-// refs/workbook/*, which is the whole point of the storage model. A registry
-// entry going stale is recoverable by rescanning; a registry entry is never
-// the source of truth for anything.
+// display names, and the last current key read from each. Task data is never
+// copied here — it lives in each repository's refs/workbook/*, which is the
+// whole point of the storage model. A registry entry going stale is
+// recoverable by rescanning; a registry entry is never the source of truth for
+// anything.
 
 const fs = require('node:fs/promises')
 const path = require('node:path')
@@ -310,6 +311,41 @@ class Registry {
     }
     await this.save()
     return project
+  }
+
+  /**
+   * Relabel projects with the keys they are minting under now.
+   *
+   * `key` is a label, the last current key read from the project's own
+   * configuration (see projectkeys.js), kept so the sidebar has something to
+   * show before that read answers and after a repository goes missing. Only a
+   * project still listed is touched, so one forgotten while its key was being
+   * read does not come back as an entry holding nothing but a key; and a call
+   * that would change nothing writes nothing. Rolled back on a failed save like
+   * setTheme, because save() writes the whole state and a key left in memory
+   * would be committed by the next unrelated save.
+   *
+   * @param {Array<{ id: string, key: string }>} changes
+   * @returns {Promise<Array<{ id: string, key: string }>>} the changes made
+   */
+  async setKeys (changes) {
+    const previous = []
+    const applied = []
+    for (const { id, key } of changes) {
+      const project = this.find(id)
+      if (!project || project.key === key) continue
+      previous.push([project, project.key])
+      project.key = key
+      applied.push({ id, key })
+    }
+    if (applied.length === 0) return applied
+    try {
+      await this.save()
+    } catch (error) {
+      for (const [project, key] of previous) project.key = key
+      throw error
+    }
+    return applied
   }
 
   async remove (projectId) {
