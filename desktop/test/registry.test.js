@@ -391,3 +391,59 @@ test('a forgotten project leaves its category, and the stored layout', async () 
     assert.deepEqual(ids(reloaded.orderedProjects), ['a', 'c', 'b'])
   })
 })
+
+// A project's key: the label the sidebar, the rail and the menu show, kept as
+// the last one read from the project itself (see projectkeys.js).
+
+test('setKeys stores each project\'s current key, and it survives a reload', async () => {
+  await withUserData(async (directory) => {
+    await writeRegistry(directory, [
+      { ...project('a'), key: 'OLD' },
+      { ...project('b'), key: 'BEE' }
+    ])
+    const registry = new Registry(directory)
+    await registry.load()
+
+    const applied = await registry.setKeys([{ id: 'a', key: 'NEW' }])
+    assert.deepEqual(applied, [{ id: 'a', key: 'NEW' }])
+    assert.deepEqual(registry.projects.map((entry) => entry.key), ['NEW', 'BEE'])
+
+    const reloaded = new Registry(directory)
+    await reloaded.load()
+    assert.deepEqual(reloaded.projects.map((entry) => entry.key), ['NEW', 'BEE'])
+    // Only the key moved: the rest of the entry is as it was.
+    assert.equal(reloaded.find('a').path, '/tmp/not-a-real-place/a')
+  })
+})
+
+test('setKeys skips a forgotten project and an unchanged key, and then writes nothing', async () => {
+  await withUserData(async (directory) => {
+    await writeRegistry(directory, [{ ...project('a'), key: 'AYE' }])
+    const registry = new Registry(directory)
+    await registry.load()
+    const file = path.join(directory, 'registry.json')
+    const before = (await fs.stat(file)).mtimeMs
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    // A project forgotten while its key was being read must not come back as
+    // a stub entry holding only a key.
+    const applied = await registry.setKeys([{ id: 'a', key: 'AYE' }, { id: 'forgotten', key: 'NEW' }])
+    assert.deepEqual(applied, [])
+    assert.deepEqual(ids(registry.projects), ['a'])
+    assert.equal((await fs.stat(file)).mtimeMs, before)
+  })
+})
+
+test('a setKeys whose save fails leaves every key where it was', async () => {
+  await withUserData(async (directory) => {
+    // The same unwritable registry as the setTheme case above.
+    const blocked = path.join(directory, 'not-a-directory')
+    await fs.writeFile(blocked, '')
+    const registry = new Registry(path.join(blocked, 'userData'))
+    await registry.load()
+    registry.state.projects.push({ ...project('a'), key: 'OLD' })
+
+    await assert.rejects(registry.setKeys([{ id: 'a', key: 'NEW' }]))
+    assert.equal(registry.find('a').key, 'OLD')
+  })
+})
