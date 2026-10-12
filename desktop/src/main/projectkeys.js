@@ -18,18 +18,29 @@ const workbook = require('./workbook')
 const { isValidKey } = require('./discovery')
 
 /**
- * The key a project mints new tasks under, from `workbook key list --json`.
+ * How many projects' keys are read at once. Each read is its own `workbook`
+ * process, and the window taking focus asks for every project, so without a cap
+ * a long sidebar would start one process per project on every alt-tab.
+ */
+const KEY_READ_LIMIT = 4
+
+/**
+ * The key a project mints new tasks under, from
+ * `workbook key list --no-counts --json`.
  *
  * A read: `key list` never fetches, so this costs one local process and
- * changes nothing. An answer that is not a key at all — a binary from before
- * project keys could move, say — rejects rather than labeling a project with it.
+ * changes nothing. --no-counts leaves out how many tasks each key minted, the
+ * one part of the listing that reads every task, so the answer comes from the
+ * project's configuration alone. An answer that is not a key at all rejects
+ * rather than labeling a project with it, and so does a binary too old to know
+ * --no-counts; either way the project keeps the last key it was known by.
  *
  * @param {string} repoPath
  * @param {{ runJSON?: typeof workbook.runJSON }} [options]
  * @returns {Promise<string>}
  */
 async function currentKey (repoPath, { runJSON = workbook.runJSON } = {}) {
-  const data = await runJSON(repoPath, ['key', 'list'])
+  const data = await runJSON(repoPath, ['key', 'list', '--no-counts'])
   const key = data?.current
   if (typeof key !== 'string' || !isValidKey(key)) {
     throw new Error(`workbook key list in ${repoPath} reported no current key`)
@@ -38,18 +49,47 @@ async function currentKey (repoPath, { runJSON = workbook.runJSON } = {}) {
 }
 
 /**
- * Read every project's current key at once and return the ones that differ
- * from the key it is labeled with.
+ * Promise.allSettled over `items`, with at most `limit` calls of `fn` running
+ * at once. The outcomes are in the order of `items`, whatever order they
+ * finished in.
+ *
+ * @template T, R
+ * @param {T[]} items
+ * @param {number} limit
+ * @param {(item: T) => Promise<R>} fn
+ * @returns {Promise<PromiseSettledResult<R>[]>}
+ */
+async function settleLimited (items, limit, fn) {
+  const outcomes = new Array(items.length)
+  let next = 0
+  async function worker () {
+    while (next < items.length) {
+      const index = next++
+      try {
+        outcomes[index] = { status: 'fulfilled', value: await fn(items[index]) }
+      } catch (reason) {
+        outcomes[index] = { status: 'rejected', reason }
+      }
+    }
+  }
+  const workers = Math.max(1, Math.min(limit, items.length))
+  await Promise.all(Array.from({ length: workers }, worker))
+  return outcomes
+}
+
+/**
+ * Read every project's current key, a few at a time, and return the ones that
+ * differ from the key it is labeled with.
  *
  * A project that cannot be read — its repository moved or deleted, a binary
  * too old to answer — is left out, so it keeps the last key it was known by,
  * and the others are still read.
  *
- * @param {{ projects: Array<{ id: string, key: string, path: string }>, read?: (repoPath: string) => Promise<string> }} input
+ * @param {{ projects: Array<{ id: string, key: string, path: string }>, read?: (repoPath: string) => Promise<string>, limit?: number }} input
  * @returns {Promise<Array<{ id: string, key: string }>>}
  */
-async function staleKeys ({ projects, read = currentKey }) {
-  const outcomes = await Promise.allSettled(projects.map((project) => read(project.path)))
+async function staleKeys ({ projects, read = currentKey, limit = KEY_READ_LIMIT }) {
+  const outcomes = await settleLimited(projects, limit, (project) => read(project.path))
   const changes = []
   projects.forEach((project, index) => {
     const outcome = outcomes[index]
@@ -158,4 +198,4 @@ function isKeyChange ({ method, url, statusCode } = {}) {
   return pathname === '/api/vocabulary/keys' || pathname.startsWith('/api/vocabulary/keys/')
 }
 
-module.exports = { currentKey, staleKeys, createKeyRefresher, isKeyChange }
+module.exports = { KEY_READ_LIMIT, currentKey, staleKeys, createKeyRefresher, isKeyChange }

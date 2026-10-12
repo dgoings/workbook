@@ -3,6 +3,8 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -177,6 +179,97 @@ func TestKeyListReportsTheFoundingKeyAsCurrent(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("key list text = %q, want %q", stdout, want)
 		}
+	}
+}
+
+// `key list --no-counts` is the listing without the one column that costs a
+// task read: every key, its state, which one is current, the ledger tip and
+// whether it is recorded, exactly as the counted listing has them, and no
+// `tasks` member at all — absent, as the mutating verbs leave it, rather than a
+// zero a reader would take for "no tasks".
+func TestKeyListNoCountsLeavesOutTheTaskCounts(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	cliCreateTask(t, repository, "Alpha")
+	mustRunKey(t, repository, "key", "add", "NEW", "--current", "--no-sync", "--no-docs")
+
+	counted := cliKeyList(t, repository)
+	code, stdout, stderr := run(t, repository, "key", "list", "--no-counts", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("key list --no-counts = code %d, stderr %q", code, stderr)
+	}
+	data := assertJSONResult(t, stdout, "key list").Data
+	var uncounted keySetDocument
+	if err := json.Unmarshal(data, &uncounted); err != nil {
+		t.Fatalf("decode key list --no-counts: %v; output = %s", err, stdout)
+	}
+	if uncounted.Head != counted.Head || uncounted.Seeded != counted.Seeded || uncounted.Current != counted.Current {
+		t.Fatalf("--no-counts = %#v, want the counted listing's head, seeded and current %#v", uncounted, counted)
+	}
+	if len(uncounted.Keys) != len(counted.Keys) {
+		t.Fatalf("--no-counts keys = %#v, want %#v", uncounted.Keys, counted.Keys)
+	}
+	for index, row := range uncounted.Keys {
+		want := counted.Keys[index]
+		if row.Key != want.Key || row.State != want.State || row.Current != want.Current {
+			t.Errorf("--no-counts key %d = %#v, want %#v without its count", index, row, want)
+		}
+	}
+	var raw struct {
+		Keys []map[string]json.RawMessage `json:"keys"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range raw.Keys {
+		if _, present := row["tasks"]; present {
+			t.Errorf("--no-counts key = %s, want no tasks member", row["key"])
+		}
+	}
+
+	code, stdout, stderr = run(t, repository, "key", "list", "--no-counts")
+	if code != 0 || stderr != "" {
+		t.Fatalf("key list --no-counts = code %d, stderr %q", code, stderr)
+	}
+	if want := "KEY  STATE\nWB   active\nNEW  current\n"; stdout != want {
+		t.Fatalf("key list --no-counts text = %q, want %q", stdout, want)
+	}
+}
+
+// The reason --no-counts exists: the current key is read from the
+// configuration ledger alone, so the listing that leaves the counts out must not
+// open the task projection at all. Nothing short of opening it fails here — the
+// cache path is a directory SQLite cannot open — so the counted listing is the
+// control that proves the cache really is unusable.
+func TestKeyListNoCountsNeverOpensTheProjection(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	cliCreateTask(t, repository, "Alpha")
+
+	cache := filepath.Join(gitOutput(t, repository, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+		"workbook", "cache.sqlite")
+	for _, path := range []string{cache, cache + "-wal", cache + "-shm"} {
+		if err := os.RemoveAll(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(cache, "not-a-database"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, _, _ := run(t, repository, "key", "list", "--json"); code == 0 {
+		t.Fatal("key list with an unopenable projection succeeded; the control does not break the projection")
+	}
+	code, stdout, stderr := run(t, repository, "key", "list", "--no-counts", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("key list --no-counts = code %d, stderr %q; it must not need the projection", code, stderr)
+	}
+	var document keySetDocument
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "key list").Data, &document); err != nil {
+		t.Fatalf("decode key list --no-counts: %v; output = %s", err, stdout)
+	}
+	if document.Current != "WB" {
+		t.Fatalf("current = %q, want WB", document.Current)
 	}
 }
 

@@ -46,7 +46,7 @@ workbook priority tag <priority> --tag <tag> [--no-sync] [--no-docs] [--json]
 workbook priority delete <priority> --into <priority> [--no-sync] [--no-docs] [--json]
 workbook priority color <priority> [<color>] [--no-sync] [--no-docs] [--json]
 workbook priority log [--limit <n>] [--all] [--json]
-workbook key list [--json]
+workbook key list [--no-counts] [--json]
 workbook key add <key> [--current] [--no-sync] [--no-docs] [--json]
 workbook key current <key> [--no-sync] [--no-docs] [--json]
 workbook key retire <key> [--no-sync] [--no-docs] [--json]
@@ -755,6 +755,15 @@ live in. `workbook key list` shows them in the order they were added, with each
 one's state and the tasks under it; `add`, `current` and `retire` change them;
 and `workbook key log` lists what has been changed, oldest first, with the
 command that reverses each entry, exactly as `workbook status log` does.
+
+Counting the tasks under each key is the one part of `workbook key list` that
+reads every task, through the local projection, so it grows with the project.
+`workbook key list --no-counts` leaves the counts out and never opens the
+projection: the keys, their states and the current key come from the
+configuration ledger alone. Its JSON is the same document with each key's
+`tasks` member omitted, as the mutating key commands omit it, and its table has
+no TASKS column. It is for a caller that asks often and needs only the current
+key; the desktop app reads every project's key this way.
 
 A key is **active** or **retired**, and exactly one active key is **current**.
 The current key is where a new task is minted; any active key is one a create
