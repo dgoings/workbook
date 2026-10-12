@@ -22,15 +22,19 @@ function keyList (current, keys = [current]) {
 }
 
 describe('currentKey', () => {
-  test('reads the current key from `workbook key list`', async () => {
+  test('reads the current key from `workbook key list`, without the task counts', async () => {
     const calls = []
     const runJSON = async (cwd, args) => {
       calls.push([cwd, args])
-      return keyList('NEW', ['OLD', 'NEW'])
+      const data = keyList('NEW', ['OLD', 'NEW'])
+      for (const key of data.keys) delete key.tasks
+      return data
     }
     assert.equal(await projectkeys.currentKey('/repo', { runJSON }), 'NEW')
-    // A read: no sync flag is needed because `key list` never fetches.
-    assert.deepEqual(calls, [['/repo', ['key', 'list']]])
+    // A read: no sync flag is needed because `key list` never fetches. The
+    // counts are left out because they are the one part that reads every task,
+    // and only the current key is wanted.
+    assert.deepEqual(calls, [['/repo', ['key', 'list', '--no-counts']]])
   })
 
   test('refuses an answer that is not a key, rather than labeling a project with it', async () => {
@@ -63,6 +67,54 @@ describe('staleKeys', () => {
     }
     assert.deepEqual(await projectkeys.staleKeys({ projects, read }), [{ id: 'p2', key: 'NEW' }])
   })
+
+  /**
+   * Ten projects, every one stale, and a read that counts how many are running
+   * at once. Each read yields a turn before it answers, so reads started
+   * together really do overlap.
+   */
+  function tenProjects () {
+    const projects = Array.from({ length: 10 }, (_, index) => ({ id: `p${index}`, key: 'OLD', path: `/repo${index}` }))
+    const probe = { running: 0, most: 0, read: [] }
+    probe.fn = async (repoPath) => {
+      probe.running += 1
+      probe.most = Math.max(probe.most, probe.running)
+      probe.read.push(repoPath)
+      await new Promise((resolve) => setImmediate(resolve))
+      probe.running -= 1
+      if (repoPath === '/repo3') throw new Error('spawn workbook ENOENT')
+      return `NEW${repoPath.slice('/repo'.length)}`
+    }
+    return { projects, probe }
+  }
+
+  test(`never runs more than ${projectkeys.KEY_READ_LIMIT} reads at once, and still reads every project`, async () => {
+    const { projects, probe } = tenProjects()
+    const changes = await projectkeys.staleKeys({ projects, read: probe.fn })
+    assert.equal(probe.most, projectkeys.KEY_READ_LIMIT)
+    assert.deepEqual([...probe.read].sort(), projects.map((project) => project.path).sort())
+    // In the registry's order, and the one that could not be read left out.
+    assert.deepEqual(changes, projects
+      .filter((project) => project.id !== 'p3')
+      .map((project) => ({ id: project.id, key: `NEW${project.id.slice(1)}` })))
+  })
+
+  test('the cap can be set', async () => {
+    const { projects, probe } = tenProjects()
+    await projectkeys.staleKeys({ projects, read: probe.fn, limit: 2 })
+    assert.equal(probe.most, 2)
+    assert.equal(probe.read.length, projects.length)
+  })
+
+  for (const limit of [NaN, 0, -3, 'many']) {
+    test(`a cap of ${String(limit)} still reads every project, one at a time`, async () => {
+      const { projects, probe } = tenProjects()
+      const changes = await projectkeys.staleKeys({ projects, read: probe.fn, limit })
+      assert.equal(probe.most, 1)
+      assert.equal(probe.read.length, projects.length)
+      assert.equal(changes.length, projects.length - 1)
+    })
+  }
 })
 
 describe('createKeyRefresher', () => {
@@ -169,6 +221,29 @@ describe('createKeyRefresher', () => {
     // can never land after a newer one.
     assert.deepEqual(read, ['/one', '/one', '/two'])
     assert.equal(most, 1)
+  })
+
+  test('a pass over many projects reads them a few at a time', async () => {
+    // The window taking focus asks for every project, which is the one
+    // request whose size grows with the registry.
+    const registry = memoryRegistry(Array.from({ length: 9 }, (_, index) => ({ id: `p${index}`, key: 'OLD', path: `/repo${index}` })))
+    let running = 0
+    let most = 0
+    const refresher = projectkeys.createKeyRefresher({
+      projects: () => registry.projects,
+      read: async () => {
+        running += 1
+        most = Math.max(most, running)
+        await new Promise((resolve) => setImmediate(resolve))
+        running -= 1
+        return 'NEW'
+      },
+      apply: (changes) => registry.setKeys(changes),
+      onChanged: () => {}
+    })
+    await refresher.refresh()
+    assert.equal(most, projectkeys.KEY_READ_LIMIT)
+    assert.ok(registry.projects.every((project) => project.key === 'NEW'))
   })
 
   test('a project forgotten before its turn is not read', async () => {

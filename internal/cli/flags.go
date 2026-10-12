@@ -471,10 +471,15 @@ var commandSchemas = map[string]commandMetadata{
 		SubcommandOrder: []string{"list", "add", "current", "retire", "log"},
 		Subcommands: map[string]commandMetadata{
 			"list": {
-				Name:        "list",
-				Synopsis:    "workbook key list [--json]",
-				Description: "List this project's keys, in the order they were added, with the tasks under each.",
-				Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+				Name:     "list",
+				Synopsis: "workbook key list [--no-counts] [--json]",
+				Description: "List this project's keys, in the order they were added, with the tasks under each.\n\n" +
+					"--no-counts leaves the task counts out, which spares reading every task when\n" +
+					"only the keys and the current one are wanted.",
+				Options: []optionMetadata{
+					{Name: "no-counts", Kind: boolFlag, Description: "leave out the tasks under each key"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
 			},
 			"add": {
 				Name:     "add",

@@ -177,8 +177,16 @@ func keyCommandList() string {
 // do not: listing keys is a read, and a read that synchronized would make it
 // slower and less predictable than `workbook list` for no gain — the ledger this
 // clone holds is what every other command in this shell is already using.
+//
+// --no-counts leaves the task counts out, and with them the projection: the
+// keys and which one is current come from the configuration ledger alone, and
+// the counts are the only part that reads every task. It is there for a caller
+// that asks often and wants the current key only — the desktop re-reads every
+// project's key each time its window takes focus — and would otherwise pay a
+// task read that grows with the project for a number it throws away.
 func runKeyList(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("key", "list")
+	noCounts := flags.Bool("no-counts", false, "leave out the tasks under each key")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -191,26 +199,30 @@ func runKeyList(ctx context.Context, args []string, cwd string, stdout, stderr i
 	if err != nil {
 		return err
 	}
-	service, releaseProjection, err := keyReadService(ctx, repository, config, state)
-	if err != nil {
-		return err
-	}
-	defer releaseProjection()
-	tasks, err := service.List(ctx, core.ListFilter{})
-	if err != nil {
-		return err
+	var counts map[string]int
+	if !*noCounts {
+		service, releaseProjection, err := keyReadService(ctx, repository, config, state)
+		if err != nil {
+			return err
+		}
+		defer releaseProjection()
+		tasks, err := service.List(ctx, core.ListFilter{})
+		if err != nil {
+			return err
+		}
+		counts = keyTaskCensus(state.Keys, tasks)
 	}
 	result := keySetView{
 		Head:    state.Head,
 		Seeded:  keysRecorded(config.Key, state.Keys),
 		Current: state.Keys.Current(),
-		Keys:    keyViews(state.Keys, keyTaskCensus(state.Keys, tasks)),
+		Keys:    keyViews(state.Keys, counts),
 	}
 	if *jsonMode {
 		writeResult(stdout, "key list", result)
 		return nil
 	}
-	writeKeyList(stdout, result)
+	writeKeyList(stdout, result, !*noCounts)
 	return nil
 }
 
@@ -1048,19 +1060,29 @@ func keyStateWord(key keyView) string {
 // anything into. It is built here rather than in terminalui because a key row
 // has no column a status row has, and sharing the renderer would mean a heading
 // that lies about one of the two tables.
-func writeKeyList(output io.Writer, result keySetView) {
+//
+// counted false drops the TASKS column, heading and all, rather than leaving it
+// blank: a blank under TASKS reads as a count somebody forgot to fill in.
+func writeKeyList(output io.Writer, result keySetView, counted bool) {
 	keyWidth, stateWidth := len("KEY"), len("STATE")
 	for _, key := range result.Keys {
 		keyWidth = max(keyWidth, len(key.Key))
 		stateWidth = max(stateWidth, len(keyStateWord(key)))
 	}
-	fmt.Fprintf(output, "%-*s  %-*s  %s\n", keyWidth, "KEY", stateWidth, "STATE", "TASKS")
-	for _, key := range result.Keys {
-		tasks := ""
-		if key.Tasks != nil {
-			tasks = strconv.Itoa(*key.Tasks)
+	if counted {
+		fmt.Fprintf(output, "%-*s  %-*s  %s\n", keyWidth, "KEY", stateWidth, "STATE", "TASKS")
+		for _, key := range result.Keys {
+			tasks := ""
+			if key.Tasks != nil {
+				tasks = strconv.Itoa(*key.Tasks)
+			}
+			fmt.Fprintf(output, "%-*s  %-*s  %s\n", keyWidth, key.Key, stateWidth, keyStateWord(key), tasks)
 		}
-		fmt.Fprintf(output, "%-*s  %-*s  %s\n", keyWidth, key.Key, stateWidth, keyStateWord(key), tasks)
+	} else {
+		fmt.Fprintf(output, "%-*s  %s\n", keyWidth, "KEY", "STATE")
+		for _, key := range result.Keys {
+			fmt.Fprintf(output, "%-*s  %s\n", keyWidth, key.Key, keyStateWord(key))
+		}
 	}
 	if !result.Seeded {
 		// Not "the key this project started with": a project can reach the

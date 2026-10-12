@@ -36,10 +36,12 @@ name and path on the tile's tooltip.
 A project's key, in the sidebar, the rail, the menu and the Next view, is the
 one it mints new tasks under now. A project can add keys and move the current
 one (`workbook key current`, or the board's Keys section), so the app reads the
-current key from each repository with `workbook key list` rather than keeping
-the key it was imported under: when a board starts, when a project is opened,
-when the window comes back into focus, and after a board changes a key. A
-repository that cannot be read keeps the last key it showed.
+current key from each repository with `workbook key list --no-counts` rather
+than keeping the key it was imported under: when a board starts, when a project
+is opened, when the window comes back into focus, and after a board changes a
+key. That read skips counting the project's tasks, and at most four
+repositories are read at once. A repository that cannot be read keeps the last
+key it showed.
 
 On macOS and Windows the window has no separate title bar: its top row is the
 sidebar's head, which holds the wordmark and the chevron level with the window
