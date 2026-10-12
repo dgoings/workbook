@@ -105,6 +105,16 @@ describe('staleKeys', () => {
     assert.equal(probe.most, 2)
     assert.equal(probe.read.length, projects.length)
   })
+
+  for (const limit of [NaN, 0, -3, 'many']) {
+    test(`a cap of ${String(limit)} still reads every project, one at a time`, async () => {
+      const { projects, probe } = tenProjects()
+      const changes = await projectkeys.staleKeys({ projects, read: probe.fn, limit })
+      assert.equal(probe.most, 1)
+      assert.equal(probe.read.length, projects.length)
+      assert.equal(changes.length, projects.length - 1)
+    })
+  }
 })
 
 describe('createKeyRefresher', () => {

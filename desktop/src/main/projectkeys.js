@@ -72,7 +72,10 @@ async function settleLimited (items, limit, fn) {
       }
     }
   }
-  const workers = Math.max(1, Math.min(limit, items.length))
+  // A limit that is not a number of at least 1 (NaN included) reads one at a
+  // time rather than starting no workers and leaving every outcome unset.
+  const cap = limit >= 1 ? Math.floor(limit) : 1
+  const workers = Math.min(cap, items.length)
   await Promise.all(Array.from({ length: workers }, worker))
   return outcomes
 }
