@@ -729,9 +729,9 @@ body {
 
 /* A category in the rail is a divider: a hairline either side of its fold
    toggle, which shows the chevron and the name's initials and carries the full
-   name on its tooltip, after Expand or Collapse. Folded, its tiles stay hidden, as in the sidebar, and a
-   click on the toggle unfolds it there and then. Rename, remove and drag stay
-   with the expanded sidebar. */
+   name on its tooltip, after Expand or Collapse. Folded, its tiles stay
+   hidden, as in the sidebar, and a click on the toggle unfolds it there and
+   then. Rename, remove and drag stay with the expanded sidebar. */
 :root.sidebar-collapsed .category-head {
   gap: .25rem;
   min-height: 0;

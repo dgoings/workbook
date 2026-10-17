@@ -348,6 +348,76 @@ describe('every tooltip in the sidebar is one node under the pointer', () => {
   })
 })
 
+describe('the version line boot writes is one node under the pointer', () => {
+  // The page above stands in for boot's version line with a title alone. This
+  // runs boot itself against index.html, through an el() whose textContent
+  // replaces an element's children the way the DOM's does, so writing the
+  // words onto the line rather than its span leaves a bare text node under the
+  // line's tooltip, and the guard sees it.
+  function live (node) {
+    return {
+      set textContent (value) {
+        node.children = []
+        node.text = String(value)
+      },
+      set title (value) { node.attributes.set('title', String(value)) },
+      set value (value) { node.attributes.set('value', String(value)) },
+      classList: { add: (...names) => { for (const name of names) node.classes.add(name) } }
+    }
+  }
+
+  async function booted (version) {
+    const root = cascade.parseHTML(page)
+    const context = vm.createContext({
+      document: {
+        documentElement: { classList: { add () {} }, style: { setProperty () {} } }
+      },
+      api: {
+        platform: 'mac',
+        titleRowHeight: 36,
+        railWidth: 88,
+        getTheme: async () => ({ theme: 'system' }),
+        getSidebar: async () => ({ collapsed: false }),
+        version
+      },
+      el: (id) => {
+        const node = cascade.byId(root, id)
+        assert.ok(node, `boot asked for #${id}, which index.html does not have`)
+        return live(node)
+      },
+      state: { projects: [] },
+      paintTheme () {},
+      paintSidebar () {},
+      showPathNotice () {},
+      readStoredLimit: () => 1,
+      loadProjects: async () => {},
+      setView () {}
+    })
+    await vm.runInContext(`${fn('boot')}\nboot()`, context)
+    return root
+  }
+
+  const found = async () => ({ version: '1.2.3', bundled: true, path: '/Applications/Workbench.app/workbook' })
+  const missing = async () => { throw new Error('workbook is not on PATH') }
+
+  for (const [outcome, version, words] of [['found', found, 'workbook 1.2.3'], ['not found', missing, 'workbook not found']]) {
+    test(`with the CLI ${outcome}, the words go in the span and the line keeps no text of its own`, async () => {
+      const root = await booted(version)
+      const line = cascade.byId(root, 'version')
+      assert.ok(title(line), 'boot gave the version line no tooltip')
+      assert.equal(line.text, '', 'boot wrote text straight onto the version line')
+      const span = cascade.byId(line, 'version-text')
+      assert.ok(span, 'the version line lost its span')
+      assert.equal(span.text, words)
+      for (const collapsed of [false, true]) {
+        if (collapsed) root.classes.add('sidebar-collapsed')
+        const options = { env: {}, state: cascade.interaction(), memo: new Map() }
+        assert.deepEqual(crossings(stylesheet, cascade.byId(root, 'sidebar'), options), [], `collapsed: ${collapsed}`)
+      }
+    })
+  }
+})
+
 describe('the guard sees a regression', () => {
   // A memo of its own for every page and stylesheet: each test below changes
   // one or the other.
