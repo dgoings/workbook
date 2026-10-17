@@ -12,7 +12,10 @@
     <header class="sidebar-head">
       <div class="sidebar-identity">
         <div class="wordmark">Workbench</div>
-        <div class="version" id="version">—</div>
+        <!-- The words are in a span of their own so the line can be one node
+             under the pointer for its tooltip; see "One node under the
+             pointer" in styles.css. app.js writes the span, never the line. -->
+        <div class="version" id="version"><span class="version-text" id="version-text">—</span></div>
       </div>
       <!-- The chevron points at the edge the sidebar is headed for: left to
            collapse, and the stylesheet mirrors it in the rail. The label names
@@ -40,7 +43,7 @@
     <div class="rail-label projects-label">
       <span>Projects</span>
       <button id="new-category" class="icon-button new-category" type="button"
-              title="New category" aria-label="New category">+</button>
+              title="New category" aria-label="New category"><span>+</span></button>
     </div>
     <!-- Above the projects rather than among the rail items: it is a view of
          the projects, and it is only there when there are enough of them for

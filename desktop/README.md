@@ -31,7 +31,7 @@ The sidebar collapses to a narrow rail, with the chevron in its header or Cmd+B
 (see Keyboard shortcuts). The chord works from a board too, not only from the
 shell. The choice is remembered across launches. The rail keeps every route it
 had: the import glyph, and each project as its key with its status dot, with the
-name and path on the tile's tooltip.
+name, path and status on the tile's tooltip.
 
 A project's key, in the sidebar, the rail, the menu and the Next view, is the
 one it mints new tasks under now. A project can add keys and move the current
@@ -63,12 +63,13 @@ opens on when there is more than one project.
 Projects can be dragged into any order, and grouped under categories: named
 groups, one level deep, that fold to hide their projects. The `+` beside
 Projects adds a category at the bottom and opens its name for typing; a
-double-click on the name, or the pencil that shows on hover, renames it, with
-Enter or clicking elsewhere in the sidebar to save and Escape to cancel. Drag a project into a
-category, out of it, or between categories, and drag a category by its header
-to move it among the top-level rows; a project dropped on a folded category
-goes in at its end. Removing a category asks once, then puts its projects back
-at the top level where the category stood, so nothing is lost.
+double-click anywhere on its header (other than its buttons), or the pencil
+that shows on hover, renames it, with Enter or clicking elsewhere in the
+sidebar to save and Escape to cancel. Drag a project into a category, out of
+it, or between categories, and drag a category by its header to move it among
+the top-level rows; a project dropped on a folded category goes in at its end.
+Removing a category asks once, then puts its projects back at the top level
+where the category stood, so nothing is lost.
 
 The sidebar's order is the one every numbered or listed thing follows: Cmd+1
 to Cmd+9 and Previous/Next Project count down the sidebar, including projects
@@ -79,12 +80,13 @@ from that answer together, so what is drawn and what the shortcuts count never
 disagree. A registry from a build before categories opens with every project at
 the top level in import order, a forgotten project leaves its category, and a
 newly imported one lands at the bottom. In the rail a category is a thin divider
-labeled with a fold chevron and its initials (its name is the tooltip); clicking
-the label (a target at least 24px square), or pressing Enter or Space on it,
-folds and unfolds the category just as the sidebar's chevron (also a 24px
-target, around the smaller glyph) does, so a folded category's projects are
-reachable without expanding the sidebar. Nothing drags in the rail, and renaming
-or removing a category waits for the expanded sidebar.
+labeled with a fold chevron and its initials (its tooltip is Expand or Collapse
+and the name); clicking the label (a target at least 24px square), or pressing
+Enter or Space on it, folds and unfolds the category just as the sidebar's
+chevron (also a 24px target, around the smaller glyph) does, so a folded
+category's projects are reachable without expanding the sidebar. Nothing drags
+in the rail, and renaming or removing a category waits for the expanded
+sidebar.
 
 ## Keyboard shortcuts
 

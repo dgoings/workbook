@@ -192,7 +192,17 @@ function ancestors (element) {
 
 // A complex selector as compounds and the combinators between them:
 // [{ simple: [...], combinator: null | ' ' | '>' | '~' | '+' }, ...].
+// Read once per selector text and kept: a test that runs the cascade over a
+// whole page asks for the same few hundred selectors many thousands of times,
+// and nothing here changes what it reads.
+const parsedSelectors = new Map()
+
 function parseSelector (selector) {
+  if (!parsedSelectors.has(selector)) parsedSelectors.set(selector, readSelector(selector))
+  return parsedSelectors.get(selector)
+}
+
+function readSelector (selector) {
   const compounds = []
   let simple = []
   let combinator = null
@@ -446,7 +456,21 @@ function cascaded (rules, element, property, { env = {}, state = REST } = {}) {
 // The computed value of `property`, as the stylesheet leaves it: keywords
 // resolved against the parent, lengths left as written except font-size,
 // which comes back in px because other lengths are relative to it.
+//
+// options.memo, when given, is a Map the caller makes for one stylesheet, one
+// page as it stands and one env and state, and drops when any of those
+// change: every value worked out is kept in it, parents' included, so a test
+// that asks about every node of a page asks the stylesheet once per node.
 function computed (rules, element, property, options = {}) {
+  const memo = options.memo
+  if (!memo) return compute(rules, element, property, options)
+  if (!memo.has(element)) memo.set(element, new Map())
+  const known = memo.get(element)
+  if (!known.has(property)) known.set(property, compute(rules, element, property, options))
+  return known.get(property)
+}
+
+function compute (rules, element, property, options) {
   const win = cascaded(rules, element, property, options)
   let value = win ? win.declaration.value : null
   if (win && win.declaration.property === 'font') {
@@ -474,6 +498,7 @@ function initial (element, property, rules, options) {
     case 'opacity': return '1'
     case 'pointer-events': return 'auto'
     case 'cursor': return 'auto'
+    case 'text-overflow': return 'clip'
     case 'height':
     case 'width':
     case 'min-height':

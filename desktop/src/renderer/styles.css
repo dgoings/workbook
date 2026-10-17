@@ -304,12 +304,24 @@ body {
      would never show. */
   -webkit-app-region: no-drag;
   /* One line always: a wrapped version pushes the rail down. So a long version
-     is ellipsized here, and this line's own tooltip carries the whole of it —
-     which build it is, the full version string, and the path — since the
-     tooltip is the one place with room for all three. */
+     is ellipsized (by .version-text, below), and this line's own tooltip
+     carries the whole of it — which build it is, the full version string, and
+     the path — since the tooltip is the one place with room for all three. */
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* The words of the version line, which ellipsize themselves rather than
+   leaving it to the line. Chromium hit-tests an ellipsis as part of the last
+   element it cuts short, and does so even when that element ignores the
+   pointer: with the line ellipsizing its span, the pointer over the "…" found
+   the span, a second node with the line's tooltip (see "One node under the
+   pointer" below). Ellipsized by the span itself, the ellipsis ignores the
+   pointer with the rest of it. */
+.version-text {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .version.missing { color: var(--wb-danger); }
@@ -581,6 +593,39 @@ body {
    takes the title row's right end. */
 .sidebar-toggle { grid-column: 2; grid-row: 1; }
 
+/* One node under the pointer for every tooltip in the sidebar.
+
+   On macOS, Electron 38 and later lose native tooltips that span more than one
+   node (electron/electron#49843). When the pointer moves onto a different node
+   that has the same tooltip, Chromium clears the tooltip and sets the same text
+   again, macOS takes that for the pointer leaving and coming back, and after
+   the first hover the tooltip rarely shows at all. A project row is a dot, a
+   key and a name inside one titled row, so every pass across it was several of
+   those moves, and the rail's tiles and the category headers showed nothing.
+
+   So inside every titled element here, whatever only shows text or decoration
+   ignores the pointer, and the titled element is the only node it can land on.
+   Text sits in an element of its own wherever there is a tooltip, because a
+   bare text node is a node of its own to the hit test and cannot be told to
+   ignore anything. Buttons inside a titled element keep the pointer, since
+   they are there to be pressed, and each carries a title that differs from
+   the one around it: a change of text is an ordinary new tooltip, not the
+   clear and set again that loses it. That is why the fold toggle says
+   "Collapse" and the name rather than repeating the header's bare name, and
+   why a category's name is renamed by double-clicking its whole header.
+   test/sidebar-tooltips.test.js runs this stylesheet over the sidebar's
+   markup and fails on any node that breaks the rule. */
+.version > *,
+.rail-item > *,
+.icon-button > *,
+.project-item > *,
+.category-toggle > *,
+.category-action > *,
+.category-name,
+.category-confirm {
+  pointer-events: none;
+}
+
 /* --- sidebar rail ------------------------------------------------------- */
 
 /* Collapsed, the sidebar is a rail (88px, --rail-width, which app.js copies
@@ -684,9 +729,9 @@ body {
 
 /* A category in the rail is a divider: a hairline either side of its fold
    toggle, which shows the chevron and the name's initials and carries the full
-   name on its tooltip. Folded, its tiles stay hidden, as in the sidebar, and a
-   click on the toggle unfolds it there and then. Rename, remove and drag stay
-   with the expanded sidebar. */
+   name on its tooltip, after Expand or Collapse. Folded, its tiles stay
+   hidden, as in the sidebar, and a click on the toggle unfolds it there and
+   then. Rename, remove and drag stay with the expanded sidebar. */
 :root.sidebar-collapsed .category-head {
   gap: .25rem;
   min-height: 0;
