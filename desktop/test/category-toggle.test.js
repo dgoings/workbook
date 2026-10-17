@@ -117,7 +117,7 @@ function render (category, { dragging = false } = {}) {
     renderProjects: () => {},
     console
   })
-  const categoryGroup = vm.runInContext(`${fn('categoryGroup')}\ncategoryGroup`, context)
+  const categoryGroup = vm.runInContext(`${fn('categoryGroup')}\n${fn('buttonText')}\ncategoryGroup`, context)
   const group = categoryGroup(category, new Map())
   const [toggle, ...others] = group.find('category-toggle')
   assert.ok(toggle, 'the category header has no .category-toggle')
@@ -140,15 +140,20 @@ describe('the fold toggle is the rail\'s category divider', () => {
   })
 
   test('it names the whole category, says whether it is open, and shows the name on hover', () => {
-    const shown = render(open).toggle
-    assert.equal(shown.getAttribute('aria-expanded'), 'true')
-    assert.equal(shown.getAttribute('aria-label'), 'Collapse Client work')
-    assert.equal(shown.title, 'Client work')
+    // The tooltip is the accessible name, not the header's bare name: a
+    // toggle sharing its header's tooltip text is what loses tooltips on
+    // macOS (see test/sidebar-tooltips.test.js).
+    const shown = render(open)
+    assert.equal(shown.toggle.getAttribute('aria-expanded'), 'true')
+    assert.equal(shown.toggle.getAttribute('aria-label'), 'Collapse Client work')
+    assert.equal(shown.toggle.title, 'Collapse Client work')
+    assert.equal(shown.group.find('category-head')[0].title, 'Client work')
 
-    const hidden = render(folded).toggle
-    assert.equal(hidden.getAttribute('aria-expanded'), 'false')
-    assert.equal(hidden.getAttribute('aria-label'), 'Expand Personal')
-    assert.equal(hidden.title, 'Personal')
+    const hidden = render(folded)
+    assert.equal(hidden.toggle.getAttribute('aria-expanded'), 'false')
+    assert.equal(hidden.toggle.getAttribute('aria-label'), 'Expand Personal')
+    assert.equal(hidden.toggle.title, 'Expand Personal')
+    assert.equal(hidden.group.find('category-head')[0].title, 'Personal')
   })
 
   test('a click asks the main process to flip the fold, and opens nothing', () => {
@@ -372,7 +377,12 @@ describe('the fold toggle is there to be hit, in the rail and the sidebar', () =
     assert.match(cascade.unreachable(stylesheet, tiles, options), /display: none \(\[hidden\]\)/)
 
     const sidebar = sidebarPage({ collapsed: false, platform: 'mac' })
-    assert.equal(cascade.unreachable(stylesheet, sidebar.groups[0].children[0].children[1], options), null)
+    // The header is what the pointer finds, expanded; its name is shown but
+    // leaves the pointer to the header (test/sidebar-tooltips.test.js).
+    const head = sidebar.groups[0].children[0]
+    assert.ok(head.classes.has('category-head'))
+    assert.equal(cascade.unreachable(stylesheet, head, options), null)
+    assert.match(cascade.unreachable(stylesheet, head.children[1], options), /category-name is pointer-events: none/)
     const initials = sidebar.toggles[0].children[1]
     assert.ok(initials.classes.has('category-initials'))
     assert.match(cascade.unreachable(stylesheet, initials, options), /display: none/)

@@ -195,7 +195,9 @@ function projectRow (project) {
   // the row says when expanded has to be reachable by hovering it. The status
   // is part of that and goes on the tile too: a title of its own on the dot
   // would win the hover over the dot and show the status alone, hiding the
-  // name and path exactly where the pointer is most likely to land.
+  // name and path exactly where the pointer is most likely to land. The dot,
+  // key and name ignore the pointer, so the row is the one node under it; see
+  // "One node under the pointer" in styles.css.
   const status = project.status ?? 'stopped'
   const health = project.error ? `${status} — ${project.error}` : status
   item.title = `${project.name}\n${project.path}\n${health}`
@@ -238,18 +240,29 @@ function categoryGroup (category, byId) {
   head.className = 'category-head'
   head.dataset.categoryId = category.id
   head.draggable = true
-  head.title = category.name
+  // Not while the name is being typed: the field would show the old name on
+  // its hover, and it would share the header's tooltip, which is what loses
+  // tooltips on macOS (see "One node under the pointer" in styles.css).
+  if (state.editingCategoryId !== category.id) head.title = category.name
 
   // One button in both modes: expanded it shows only the chevron, and the
   // rail shows the initials inside it as well. Its own title, because in the
-  // rail it is all of the header there is to hover.
+  // rail it is all of the header there is to hover, and the same words as its
+  // accessible name rather than the bare name the header carries. Without a
+  // title of its own the toggle would inherit the header's, and with the
+  // header's text it would be no better: either way the pointer crossing from
+  // the header onto the chevron lands on a new node with the same tooltip,
+  // which Chromium clears and sets again, and macOS then rarely shows it. A
+  // different text is an ordinary change of tooltip, and still names the
+  // category in the rail.
+  const action = `${category.collapsed ? 'Expand' : 'Collapse'} ${category.name}`
   const toggle = document.createElement('button')
   toggle.type = 'button'
   toggle.className = 'category-toggle'
   toggle.dataset.categoryId = category.id
-  toggle.title = category.name
+  toggle.title = action
   toggle.setAttribute('aria-expanded', String(!category.collapsed))
-  toggle.setAttribute('aria-label', `${category.collapsed ? 'Expand' : 'Collapse'} ${category.name}`)
+  toggle.setAttribute('aria-label', action)
   toggle.addEventListener('click', () => {
     if (justDragged()) return
     api.setCategoryCollapsed(category.id, !category.collapsed).catch((error) => {
@@ -273,15 +286,26 @@ function categoryGroup (category, byId) {
   } else if (state.removingCategoryId === category.id) {
     head.append(...removeConfirmation(category))
   } else {
+    // The name ignores the pointer so the header is one node under it for its
+    // tooltip, so a double-click renames from anywhere on the header rather
+    // than on the name alone. Not from its buttons: a double-click on the
+    // chevron is two folds, and on the pencil or the cross it is that button
+    // pressed twice. Nor in the rail, where the name and the pencil are
+    // hidden and renaming waits for the expanded sidebar.
+    head.addEventListener('dblclick', (event) => {
+      if (event.target.closest('button')) return
+      if (document.documentElement.classList.contains('sidebar-collapsed')) return
+      startRename(category.id)
+    })
+
     const name = document.createElement('span')
     name.className = 'category-name'
     name.textContent = category.name
-    name.addEventListener('dblclick', () => startRename(category.id))
 
     const rename = document.createElement('button')
     rename.type = 'button'
     rename.className = 'category-action'
-    rename.textContent = '✎'
+    rename.append(buttonText('✎'))
     rename.title = 'Rename category'
     rename.setAttribute('aria-label', `Rename ${category.name}`)
     rename.addEventListener('click', () => startRename(category.id))
@@ -289,7 +313,7 @@ function categoryGroup (category, byId) {
     const remove = document.createElement('button')
     remove.type = 'button'
     remove.className = 'category-action'
-    remove.textContent = '×'
+    remove.append(buttonText('×'))
     remove.title = 'Remove category'
     remove.setAttribute('aria-label', `Remove ${category.name}`)
     remove.addEventListener('click', () => {
@@ -309,6 +333,18 @@ function categoryGroup (category, byId) {
 
   group.append(head, children)
   return group
+}
+
+/**
+ * A button's words, in an element of their own rather than as a bare text
+ * node: the stylesheet can take the pointer off an element and not off text,
+ * and a button with a tooltip has to be one node under the pointer. See "One
+ * node under the pointer" in styles.css.
+ */
+function buttonText (text) {
+  const label = document.createElement('span')
+  label.textContent = text
+  return label
 }
 
 function startRename (categoryId) {
@@ -388,7 +424,7 @@ function removeConfirmation (category) {
   const confirm = document.createElement('button')
   confirm.type = 'button'
   confirm.className = 'category-action category-confirm-yes'
-  confirm.textContent = 'Yes'
+  confirm.append(buttonText('Yes'))
   confirm.title = 'Its projects move to the top level'
   confirm.addEventListener('click', () => {
     state.removingCategoryId = null
@@ -401,7 +437,7 @@ function removeConfirmation (category) {
   const cancel = document.createElement('button')
   cancel.type = 'button'
   cancel.className = 'category-action'
-  cancel.textContent = 'No'
+  cancel.append(buttonText('No'))
   cancel.title = 'Keep the category'
   cancel.addEventListener('click', () => {
     state.removingCategoryId = null
@@ -1481,7 +1517,11 @@ async function boot () {
   paintSidebar(await api.getSidebar())
   try {
     const version = await api.version()
-    el('version').textContent = `workbook ${version.version ?? ''}`.trim()
+    // The words go in the line's own span, not on the line: the span ignores
+    // the pointer so the line is one node under it for its tooltip (see "One
+    // node under the pointer" in styles.css), and textContent on the line
+    // would replace it with a bare text node.
+    el('version-text').textContent = `workbook ${version.version ?? ''}`.trim()
     // Which binary is driving these repositories is the first thing worth
     // knowing when the app and a terminal disagree about a project, and the
     // version line is the only place left that can say so: the build on one
@@ -1494,7 +1534,7 @@ async function boot () {
     el('version').title = [build, `workbook ${version.version ?? '(no version reported)'}`, version.path]
       .join('\n')
   } catch (error) {
-    el('version').textContent = 'workbook not found'
+    el('version-text').textContent = 'workbook not found'
     el('version').title = error.message
     el('version').classList.add('missing')
   }
