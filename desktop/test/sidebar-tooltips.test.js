@@ -254,6 +254,15 @@ function crossings (rules, sidebar, options) {
       if (node.text !== '' && boxed(rules, node, options) && takesPointer(rules, node, options)) {
         found.push(`the text "${node.text}" directly inside ${where} takes the pointer, a second node with the tooltip "${tooltip}"`)
       }
+      // Chromium hit-tests an ellipsis as part of the last element it cuts
+      // short, even one that ignores the pointer (measured in the app: the
+      // "…" of the version line found its span). So an element that takes the
+      // pointer must not ellipsize elements of its own under a tooltip; the
+      // element that ignores the pointer has to do its own ellipsizing.
+      if (node.children.length > 0 && hittable(rules, node, options) &&
+          cascade.computed(rules, node, 'text-overflow', options) === 'ellipsis') {
+        found.push(`${where} takes the pointer and ellipsizes its children, and its ellipsis is a second node with the tooltip "${tooltip}"`)
+      }
     }
     const next = own === null ? around : { node, title: own }
     for (const child of node.children) visit(child, next)
@@ -381,6 +390,14 @@ describe('the guard sees a regression', () => {
     version.children = []
     version.text = 'workbook 1.2.3'
     assert.match(crossings(stylesheet, sidebar, rest()).join('\n'), /^the text "workbook 1\.2\.3" directly inside div#version\.version takes the pointer/m)
+  })
+
+  test('it fails a titled element that ellipsizes the span that ignores the pointer', () => {
+    // The version line as it was: the line, not its span, cut the text short.
+    const before = stylesheet.concat(cascade.parseStylesheet('.version { text-overflow: ellipsis; }')
+      .map((rule) => ({ ...rule, order: stylesheet.length })))
+    const { sidebar } = sidebarPage({ collapsed: false, platform: 'mac' })
+    assert.match(crossings(before, sidebar, rest()).join('\n'), /^div#version\.version takes the pointer and ellipsizes its children/m)
   })
 
   test('it fails a titled element that stops taking the pointer itself', () => {

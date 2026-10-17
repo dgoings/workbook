@@ -304,12 +304,24 @@ body {
      would never show. */
   -webkit-app-region: no-drag;
   /* One line always: a wrapped version pushes the rail down. So a long version
-     is ellipsized here, and this line's own tooltip carries the whole of it —
-     which build it is, the full version string, and the path — since the
-     tooltip is the one place with room for all three. */
+     is ellipsized (by .version-text, below), and this line's own tooltip
+     carries the whole of it — which build it is, the full version string, and
+     the path — since the tooltip is the one place with room for all three. */
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* The words of the version line, which ellipsize themselves rather than
+   leaving it to the line. Chromium hit-tests an ellipsis as part of the last
+   element it cuts short, and does so even when that element ignores the
+   pointer: with the line ellipsizing its span, the pointer over the "…" found
+   the span, a second node with the line's tooltip (see "One node under the
+   pointer" below). Ellipsized by the span itself, the ellipsis ignores the
+   pointer with the rest of it. */
+.version-text {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .version.missing { color: var(--wb-danger); }

@@ -498,6 +498,7 @@ function initial (element, property, rules, options) {
     case 'opacity': return '1'
     case 'pointer-events': return 'auto'
     case 'cursor': return 'auto'
+    case 'text-overflow': return 'clip'
     case 'height':
     case 'width':
     case 'min-height':
