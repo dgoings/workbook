@@ -2835,6 +2835,13 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 	// vocabulary's head and shape, the presentation, the assignee, the deleted
 	// variant — reaches it only through what was encoded, so no bookkeeping can
 	// fall out of step with what a client would have read.
+	//
+	// That includes wording derived from the clock. An assignment's row says
+	// how long ago it was recorded (presentation.AssignedAgo, by way of
+	// taskPresentation), so the tag also moves when that phrase crosses a
+	// minute, hour or day, and an idle board holding recent assignments reads
+	// the whole document again on those ticks. That is correct — the client
+	// is shown the phrase `workbook show` would print — just not free.
 	err = writeTaggedJSON(writer, request, TasksDocument{
 		Format:          "workbook.tasks",
 		Version:         1,

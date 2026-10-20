@@ -403,3 +403,128 @@ func TestClientConditionalPollRetiresAStandInTheBoardAlreadyCarries(t *testing.T
 `)
 	runConditionalPollClient(t, "a stand-in the board already carries", program)
 }
+
+// conditionalPollDragTasks is a board of two, so the board still has a card to
+// draw after the dragged one's task is deleted elsewhere.
+func conditionalPollDragTasks() (core.Task, core.Task) {
+	dragged := clientPlacementTask("WB-01J0000000000000000000CP04", "Dragged", core.StatusReady, core.PriorityMedium)
+	dragged.Head = "head-a"
+	kept := clientPlacementTask("WB-01J0000000000000000000CP05", "Kept", core.StatusReady, core.PriorityMedium)
+	kept.Head = "head-b"
+	return dragged, kept
+}
+
+// The renderer leaves a dragged card where it is for as long as the gesture
+// lasts, even when a poll during it drops the card's task. Something has to
+// collect it when the gesture ends, and it cannot be the next poll: the poll
+// that dropped the task already brought the board up to date, so every poll
+// after it is a 304 that redraws nothing. A drag cancelled with Escape — a
+// dragend and no drop — must not leave the card behind.
+func TestClientConditionalPollCollectsADraggedCardWhoseTaskWasDeleted(t *testing.T) {
+	t.Parallel()
+	dragged, kept := conditionalPollDragTasks()
+	program := conditionalPollProgram(t, "/", []core.Task{dragged, kept}, "", `
+  const id = `+strconv.Quote(dragged.ID)+`;
+  const card = boardCard(id);
+  if (!card) throw new Error("the board never drew the card to drag");
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  documentEventListeners.dragstart({ target: card, dataTransfer });
+
+  // Another clone deletes the task while it is under the cursor.
+  taskResponse = `+tasksDocumentJSON(t, []core.Task{kept})+`;
+  taskTag = "\"b\"";
+  await intervalCallback();
+  if (answers[answers.length - 1].status !== 200) throw new Error("the poll during the drag was not a 200, so this test proves nothing");
+  if (!card.parentElement) throw new Error("the poll detached the card mid-drag, so this test proves nothing");
+
+  documentEventListeners.dragend({ target: card });
+  await intervalCallback();
+  await intervalCallback();
+  const statuses = answers.slice(-2).map((answer) => answer.status);
+  if (statuses.some((status) => status !== 304)) throw new Error("the polls after the drag were " + JSON.stringify(statuses) + ", want 304s");
+  if (card.parentElement || boardCard(id)) {
+    throw new Error("the dragged card outlived its drag and its task");
+  }
+  if (!boardCard(`+strconv.Quote(kept.ID)+`)) throw new Error("collecting the dragged card took another one with it");
+`)
+	runConditionalPollClient(t, "a cancelled drag over a deleted task", program)
+}
+
+// A route change retires a drag no dragend will end, and the board it leaves
+// behind is re-attached on the way back without being redrawn. So the card the
+// gesture was holding has to be collected when the gesture is retired, or the
+// board the reader returns to still draws a task the server deleted.
+func TestClientConditionalPollCollectsADraggedCardWhenARouteChangeEndsTheDrag(t *testing.T) {
+	t.Parallel()
+	dragged, kept := conditionalPollDragTasks()
+	program := conditionalPollProgram(t, "/", []core.Task{dragged, kept}, "", `
+  const id = `+strconv.Quote(dragged.ID)+`;
+  const card = boardCard(id);
+  if (!card) throw new Error("the board never drew the card to drag");
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  documentEventListeners.dragstart({ target: card, dataTransfer });
+
+  taskResponse = `+tasksDocumentJSON(t, []core.Task{kept})+`;
+  taskTag = "\"b\"";
+  await intervalCallback();
+  if (!card.parentElement) throw new Error("the poll detached the card mid-drag, so this test proves nothing");
+
+  // Away to the other task's page with the gesture still open, and back.
+  const link = new TestElement("a");
+  link.href = "/tasks/" + encodeURIComponent(`+strconv.Quote(kept.ID)+`);
+  await documentEventListeners.click({
+    target: link, button: 0, defaultPrevented: false,
+    metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+    preventDefault() {}
+  });
+  await settle();
+  await intervalCallback();
+  returnTo("/");
+  await intervalCallback();
+  if (answers.filter((answer) => answer.status === 304).length === 0) {
+    throw new Error("no poll after the route change was a 304, so this test proves nothing");
+  }
+  if (main.firstElementChild !== boardView) throw new Error("the board was not re-attached");
+  if (card.parentElement || boardCard(id)) {
+    throw new Error("the board the reader returned to still draws the dragged card of a deleted task");
+  }
+`)
+	runConditionalPollClient(t, "a route change during a drag over a deleted task", program)
+}
+
+// A 304 vouches only for a document the read named. Answering one to a read
+// that named nothing — here, a loaded board whose last answer carried no tag —
+// is a broken answer, and the board says so rather than counting it a sync.
+func TestClientConditionalPollTreatsAnUnrequestedNotModifiedAsAFailure(t *testing.T) {
+	t.Parallel()
+	program := conditionalPollProgram(t, "/", conditionalPollTasks(), `
+serve = (url) => ({ ok: true, json: async () => taskResponse });
+`, `
+  if (!boardCard(`+strconv.Quote(conditionalPollTaskID)+`)) throw new Error("the board never loaded");
+  serve = () => notModifiedAnswer("\"z\"");
+  clock += 20000;
+  await intervalCallback();
+  if (lastRead("/api/tasks").tag !== null) throw new Error("the read named a tag, so this test proves nothing");
+  if (stale.dataset.visible !== "true") throw new Error("a 304 nobody asked for was taken as the board");
+  if (updatedTextElement.textContent === "in sync") throw new Error("a 304 nobody asked for was counted as a sync");
+  if (!boardCard(`+strconv.Quote(conditionalPollTaskID)+`)) throw new Error("the failure took the last board away");
+`)
+	runConditionalPollClient(t, "an unrequested board 304", program)
+}
+
+// The same for the relationship sidebar's read of the deleted tasks: a 304 to
+// its first read, which named nothing, is a failure to load them.
+func TestClientConditionalPollTreatsAnUnrequestedDeletedNotModifiedAsAFailure(t *testing.T) {
+	t.Parallel()
+	program := conditionalPollProgram(t, "/tasks/"+conditionalPollTaskID, conditionalPollTasks(), `
+serve = (url, tag) => url === "/api/tasks?deleted=true" ? notModifiedAnswer("\"z\"") : honestAnswer(url, tag);
+`, `
+  await settle();
+  const read = lastRead("/api/tasks?deleted=true");
+  if (!read || read.tag !== null) throw new Error("the sidebar's read named a tag, so this test proves nothing: " + JSON.stringify(read));
+  if (!findElement(main, (element) => element.textContent === "Deleted task data could not be loaded.")) {
+    throw new Error("a 304 nobody asked for was taken as the deleted tasks");
+  }
+`)
+	runConditionalPollClient(t, "an unrequested deleted-tasks 304", program)
+}

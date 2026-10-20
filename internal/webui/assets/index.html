@@ -10687,6 +10687,11 @@
         if (activeDrag) {
           activeDrag = null;
           clearPlacement();
+          // Redrawn for the reason dragend redraws: the node the gesture was
+          // holding may name a task the model has since dropped, and no dragend
+          // is coming to collect it. The board kept here is the one a return
+          // re-attaches without redrawing, so it has to be right before it goes.
+          rerender();
         }
         stopDragScroll();
         // The description setting draws cards, and only the board draws cards.
@@ -11415,7 +11420,8 @@
           // The node the browser is dragging is left exactly where it is, because
           // detaching it mid-drag is the defect this renderer exists to remove.
           // Reconciliation still moves it to a column the model has moved it to,
-          // and the render after dragend collects one the model has dropped.
+          // and the render dragend makes — or the route change that retires a
+          // gesture no dragend will end — collects one the model has dropped.
           if (activeDrag && activeDrag.taskId === taskID) return;
           if (destinations.get(taskID) === node.parentElement) return;
           node.remove();
@@ -11479,8 +11485,9 @@
           // A dragged node is still on the board even though the model stopped
           // naming it, exactly as the sweep above decided. Lifting its report
           // would print the same sentence twice — once on the card under the
-          // cursor and once in the notice — and the render after dragend does
-          // this properly.
+          // cursor and once in the notice — and the render dragend makes, or
+          // the one a route change makes when it retires the gesture, does this
+          // properly.
           if (activeDrag && activeDrag.taskId === taskID) return;
           taskFailureReports.delete(taskID);
           const lifted = showNotice("warning", report.notice);
@@ -11793,6 +11800,13 @@
         if (item) item.classList.remove("is-dragging");
         activeDrag = null;
         clearPlacement();
+        // The renderer left the dragged node where it was for as long as the
+        // gesture lasted, even when a poll during it dropped the node's task,
+        // and it held back the refusal report on it for the same reason. Both
+        // are settled here rather than left to the next poll, because the next
+        // poll may well be a 304: the poll that dropped the task already brought
+        // the board up to date, and nothing after it would redraw.
+        rerender();
         // dragend arrives however the gesture ended — dropped, cancelled with
         // Escape, or released over another window — so this is the stop that
         // cannot be missed, and the one that guarantees no frame loop outlives
