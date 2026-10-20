@@ -344,3 +344,62 @@ deletedTaskResponse = `+deleted+`;
 `)
 	runConditionalPollClient(t, "a 304 for the deleted tasks", program)
 }
+
+// A create's stand-in is retired by value when a poll outruns the POST, and by
+// the ID the POST answers with otherwise. When the poll that carried the task
+// could not match it by value — the server stored something other than what was
+// typed — the ID is the only way left, and it arrives when nothing about the
+// board has changed: every refresh from then on is a 304 and redraws nothing.
+// So the ID has to be drawn the moment it is known, or the task is shown twice
+// for as long as the board stays idle.
+func TestClientConditionalPollRetiresAStandInTheBoardAlreadyCarries(t *testing.T) {
+	t.Parallel()
+	created := clientPlacementTask("WB-01J0000000000000000000CP03", "Stored otherwise", core.StatusReady, core.PriorityMedium)
+	created.Head = "head-1"
+	refreshed := tasksDocumentJSON(t, []core.Task{created})
+
+	program := conditionalPollProgram(t, "/tasks/new?status=ready", nil, "", `
+  const id = `+strconv.Quote(created.ID)+`;
+  const conditionalFetch = globalThis.fetch;
+  let releasePost = null;
+  globalThis.fetch = async (url, options = {}) => {
+    if (url === "/api/tasks" && options.method === "POST") {
+      fetchCalls.push({ url, options });
+      return { ok: true, json: async () => new Promise((resolve) => {
+        releasePost = () => resolve(`+taskMutationJSON(refreshed, "")+`);
+      }) };
+    }
+    return conditionalFetch(url, options);
+  };
+
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  if (!form) throw new Error("the create form did not render");
+  findElement(form, (element) => element.id === "task-title").value = "Typed one way";
+  const settled = form.eventListeners.submit({ preventDefault() {} });
+  const ready = boardLists.find((list) => list.dataset.status === "ready");
+  const cards = () => ready.querySelectorAll(".task-card");
+
+  // The task is committed and readable, under a title other than the one
+  // typed, while the POST is still open. The poll draws it and cannot retire
+  // the stand-in, because nothing ties the two together yet.
+  taskResponse = `+refreshed+`;
+  taskTag = "\"b\"";
+  await intervalCallback();
+  if (cards().length !== 2 || !cards().some((card) => card.dataset.taskId === id)) {
+    throw new Error("the setup did not draw the task beside its stand-in, so this test proves nothing: " +
+      cards().map((card) => card.dataset.taskId).join(", "));
+  }
+
+  releasePost();
+  await settled;
+  const refresh = answers[answers.length - 1];
+  if (!refresh || refresh.status !== 304) throw new Error("the refresh after the create was not a 304, so this test proves nothing");
+  await intervalCallback();
+  if (answers[answers.length - 1].status !== 304) throw new Error("the idle poll was not a 304");
+  const drawn = cards();
+  if (drawn.length !== 1 || drawn[0].dataset.taskId !== id) {
+    throw new Error("the board drew " + drawn.map((card) => card.dataset.taskId).join(", ") + ", want only " + id);
+  }
+`)
+	runConditionalPollClient(t, "a stand-in the board already carries", program)
+}

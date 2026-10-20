@@ -3590,10 +3590,18 @@
           const document = await mutateTask("POST", "/api/tasks", creation.values);
           creation.taskID = document.task.id;
           const warnings = mutationWarnings(document);
-          // Read before the refresh, because the refresh is what retires the
+          // Read before anything redraws, because a redraw is what retires the
           // stand-in card, and a card that leaves the document takes the
           // caret with it.
           const heldCaret = focusedCardID() === creation.key;
+          // Drawn now, from the model already held, because the ID is the last
+          // way to tie the stand-in to its task and the board may already carry
+          // it: a poll that outran this POST and could not match it by value.
+          // The refresh below cannot be relied on to finish that job — a board
+          // the server has nothing new for is answered 304 and redraws nothing.
+          // Where the model does not carry the task yet, this changes nothing
+          // and the refresh, which then has a new document to read, retires it.
+          rerender();
           await currentRefreshResult(refresh());
           if (heldCaret) restoreCardFocus(creation.taskID);
           if (warnings.length) reportCreatedTaskWarnings(creation.taskID, warnings);
@@ -7491,7 +7499,11 @@
       // POST returning is not enough: the model is replaced wholesale by every
       // poll, and one that left before the create landed would take the card
       // away again. Retiring on arrival rather than on confirmation is also what
-      // makes a failed refresh harmless — the next poll finishes the job.
+      // makes a failed refresh harmless — the next poll finishes the job. It
+      // still does when polls are answered 304: a poll is a 304 only when the
+      // model already holds what the server does, and a model that already
+      // carries the task was drawn either when it was read or, if the stand-in
+      // could only be matched by ID, when settleCreation learned the ID.
       function pendingCreationTasks(tasks) {
         const landed = new Set(tasks.map((task) => task.id));
         // One task retires at most one stand-in, so two identical creates in
