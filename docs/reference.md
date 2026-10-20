@@ -1646,7 +1646,10 @@ GET /tasks/new                new-task shell; client-rendered form
 GET /tasks/<id>               linkable task-detail shell; client-rendered form
 GET /api/tasks                versioned task JSON: the active tasks, or
                               `?deleted=true` for the deleted ones alone, or
-                              `?deleted=include` for both in one document
+                              `?deleted=include` for both in one document;
+                              each answer carries an `ETag`, and a request whose
+                              `If-None-Match` names it is answered
+                              `304 Not Modified` with no body
 GET /api/vocabulary           versioned status vocabulary JSON: the project's
                               statuses in order, their labels and tags, the
                               forwarding chains, the configuration ledger head

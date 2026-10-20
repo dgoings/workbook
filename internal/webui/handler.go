@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"embed"
@@ -2826,7 +2827,15 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 	default:
 		tasks = activeTasks(tasks)
 	}
-	writeJSON(writer, http.StatusOK, TasksDocument{
+	// The page polls this every second, and between changes the answer is the
+	// same few hundred kilobytes each time. It is tagged by the digest of the
+	// bytes it would send, so a poll that names the tag it already holds is told
+	// nothing changed instead of being sent them again. The tag is the body and
+	// nothing else: every input that shapes the document — the tasks, the
+	// vocabulary's head and shape, the presentation, the assignee, the deleted
+	// variant — reaches it only through what was encoded, so no bookkeeping can
+	// fall out of step with what a client would have read.
+	err = writeTaggedJSON(writer, request, TasksDocument{
 		Format:          "workbook.tasks",
 		Version:         1,
 		VocabularyHead:  vocabulary.Head,
@@ -2834,6 +2843,9 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 		Tasks:           tasks,
 		Presentation:    taskPresentation(tasks, vocabulary.Vocabulary, handler.assignIdentity()),
 	})
+	if err != nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "encode the tasks document: %v", err))
+	}
 }
 
 func (handler *handler) serveTaskHistory(writer http.ResponseWriter, request *http.Request) {
@@ -3296,4 +3308,53 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
+}
+
+// writeTaggedJSON answers a read with a strong entity tag: the quoted sha256 of
+// exactly the bytes writeJSON would have sent. A request whose If-None-Match
+// names that tag is answered 304 with no body; any other is sent the document.
+// Cache-Control: no-cache rides on both answers so that anything between the
+// page and the server stores the document only to revalidate it, never to serve
+// it unasked.
+//
+// It encodes before it writes anything, unlike writeJSON, because the tag has to
+// be in the headers and the headers go first. That also means an encoding
+// failure is returned while the response can still report it, rather than
+// leaving a 200 with a truncated body.
+func writeTaggedJSON(writer http.ResponseWriter, request *http.Request, value any) error {
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(value); err != nil {
+		return err
+	}
+	digest := sha256.Sum256(body.Bytes())
+	tag := `"` + hex.EncodeToString(digest[:]) + `"`
+	header := writer.Header()
+	header.Set("ETag", tag)
+	header.Set("Cache-Control", "no-cache")
+	if ifNoneMatchNames(request.Header.Values("If-None-Match"), tag) {
+		writer.WriteHeader(http.StatusNotModified)
+		return nil
+	}
+	header.Set("Content-Type", "application/json; charset=utf-8")
+	writer.WriteHeader(http.StatusOK)
+	_, _ = writer.Write(body.Bytes())
+	return nil
+}
+
+// ifNoneMatchNames reports whether an If-None-Match header names the current
+// tag, read the way RFC 9110 §13.1.2 reads it: a comma-separated list, possibly
+// spread over several header lines, compared weakly so a W/ prefix still
+// matches, and `*` matching whatever representation exists. Splitting on commas
+// is safe for the tags this server issues, which are hex inside quotes; a
+// foreign tag containing one can only fail to match and cost a full answer.
+func ifNoneMatchNames(values []string, tag string) bool {
+	for _, value := range values {
+		for _, candidate := range strings.Split(value, ",") {
+			candidate = strings.TrimSpace(candidate)
+			if candidate == "*" || strings.TrimPrefix(candidate, "W/") == tag {
+				return true
+			}
+		}
+	}
+	return false
 }
