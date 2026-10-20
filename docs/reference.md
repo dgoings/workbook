@@ -1646,7 +1646,10 @@ GET /tasks/new                new-task shell; client-rendered form
 GET /tasks/<id>               linkable task-detail shell; client-rendered form
 GET /api/tasks                versioned task JSON: the active tasks, or
                               `?deleted=true` for the deleted ones alone, or
-                              `?deleted=include` for both in one document
+                              `?deleted=include` for both in one document;
+                              each answer carries an `ETag`, and a request whose
+                              `If-None-Match` names it is answered
+                              `304 Not Modified` with no body
 GET /api/vocabulary           versioned status vocabulary JSON: the project's
                               statuses in order, their labels and tags, the
                               forwarding chains, the configuration ledger head
@@ -1978,7 +1981,10 @@ memory for the life of the server, not a project setting, which is why it is
 separate from `workbook config set auto-sync`.
 
 The executable embeds its HTML, CSS, and JavaScript, and the page polls
-`/api/tasks` every second. Each poll reconciles the board by task ID instead of
+`/api/tasks` every second. Each answer carries an `ETag`, and the page sends it
+back as `If-None-Match`; a poll that finds nothing changed is answered
+`304 Not Modified` with no body, counts as a sync, and redraws nothing. Each
+poll that does bring a new document reconciles the board by task ID instead of
 rebuilding it: a card whose data did not change keeps its element, a changed one
 is updated in place, and only added, removed, and reordered cards are touched.
 Keyboard focus therefore stays on the card that had it, a drag that outlasts a

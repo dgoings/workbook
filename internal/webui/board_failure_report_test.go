@@ -208,11 +208,12 @@ setTimeout(async () => {
   if (!notice.hidden) {
     throw new Error("the report was stated twice, on the dragged card and in the notice: " + JSON.stringify(notice.textContent));
   }
+  // The caret is on the card when the drag ends, and the end of the drag is
+  // what finally takes it: the render dragend makes collects a card the model
+  // has dropped rather than waiting for a poll, which may be a 304 that redraws
+  // nothing. So everything below is asserted before any poll runs.
+  held.focus();
   documentEventListeners.dragend({ target: again });
-
-  // The caret is on the card when the poll after the drag finally takes it.
-  boardCard(` + strconv.Quote(moved.ID) + `).focus();
-  await intervalCallback();
 
   if (boardCard(` + strconv.Quote(moved.ID) + `)) throw new Error("the deleted task is still on the board");
   const reports = findElements(notice, (element) => hasClassToken(element, "notice__report"));
@@ -235,7 +236,8 @@ setTimeout(async () => {
   if (document.activeElement !== dismiss) {
     throw new Error("the removed card dropped the caret instead of handing it to the report that outlived it");
   }
-  // Lifted, not copied: further polls must not restate it.
+  // Lifted, not copied: the polls after it must not restate it.
+  await intervalCallback();
   await intervalCallback();
   await intervalCallback();
   if (findElements(notice, (element) => hasClassToken(element, "notice__report")).length !== 1) {

@@ -2130,6 +2130,21 @@
       let tasksLoaded = false;
       let taskLoadFailed = false;
       let latestDeletedTasks = [];
+      // What the board may tell the server it already holds, so an unchanged
+      // poll is answered 304 with no body instead of the whole document again.
+      //
+      // One for each model rather than one for each address. The board model is
+      // read from two addresses — with and without the deleted tasks — and a
+      // 304 says "you hold what you asked about", so a tag remembered for the
+      // other address would vouch for a model that was not read from it. So the
+      // board's validator holds the address its document was read from beside
+      // the tag, and the tag is sent only to that address.
+      //
+      // A tag is recorded only where its document becomes the model, and
+      // dropped wherever the model is changed by anything else: from then on the
+      // model is not the document the tag names, and the next read is a full one.
+      let boardValidator = null;
+      let deletedTasksTag = null;
       let activeDependencyController = null;
       let taskRefreshGeneration = 0;
       let relationshipRefreshGeneration = 0;
@@ -3360,21 +3375,42 @@
         });
         return control;
       }
+      // The tag an answer carries, or null. Read defensively because an answer
+      // with no headers at all is one that names no document, not a broken one.
+      function responseTag(response) {
+        const tag = response.headers && typeof response.headers.get === "function" ? response.headers.get("ETag") : null;
+        return tag || null;
+      }
+      function conditionalRead(tag) {
+        return tag ? { cache: "no-store", headers: { "If-None-Match": tag } } : { cache: "no-store" };
+      }
+      // The deleted tasks and the tag naming them, for the caller to adopt
+      // together once it knows it has not been superseded. A 304 hands back the
+      // tasks that were held when the tag was sent, because those are the
+      // document the server has just vouched for.
       async function refreshDeletedTasks() {
-        const response = await fetch("/api/tasks?deleted=true", { cache: "no-store" });
+        const sentTag = deletedTasksTag;
+        const sentTasks = latestDeletedTasks;
+        const response = await fetch("/api/tasks?deleted=true", conditionalRead(sentTag));
+        if (response.status === 304) {
+          // A 304 to a read that named nothing vouches for nothing.
+          if (!sentTag) throw new Error("Deleted task data could not be loaded.");
+          return { tasks: sentTasks, tag: sentTag };
+        }
         const document = await response.json();
         if (!response.ok || document.format !== "workbook.tasks" || document.version !== 1 || !Array.isArray(document.tasks)) {
           throw new Error(document.error && document.error.message || "Deleted task data could not be loaded.");
         }
-        return document.tasks;
+        return { tasks: document.tasks, tag: responseTag(response) };
       }
       async function refreshRelationshipContext(controller, generation) {
         try {
-          const deletedTasks = await refreshDeletedTasks();
+          const deleted = await refreshDeletedTasks();
           if (generation !== relationshipRefreshGeneration || activeDependencyController !== controller) {
             return { status: "superseded" };
           }
-          latestDeletedTasks = deletedTasks;
+          latestDeletedTasks = deleted.tasks;
+          deletedTasksTag = deleted.tag;
           text(controller.status, "");
           controller.update();
           return { status: "applied" };
@@ -3554,10 +3590,18 @@
           const document = await mutateTask("POST", "/api/tasks", creation.values);
           creation.taskID = document.task.id;
           const warnings = mutationWarnings(document);
-          // Read before the refresh, because the refresh is what retires the
+          // Read before anything redraws, because a redraw is what retires the
           // stand-in card, and a card that leaves the document takes the
           // caret with it.
           const heldCaret = focusedCardID() === creation.key;
+          // Drawn now, from the model already held, because the ID is the last
+          // way to tie the stand-in to its task and the board may already carry
+          // it: a poll that outran this POST and could not match it by value.
+          // The refresh below cannot be relied on to finish that job — a board
+          // the server has nothing new for is answered 304 and redraws nothing.
+          // Where the model does not carry the task yet, this changes nothing
+          // and the refresh, which then has a new document to read, retires it.
+          rerender();
           await currentRefreshResult(refresh());
           if (heldCaret) restoreCardFocus(creation.taskID);
           if (warnings.length) reportCreatedTaskWarnings(creation.taskID, warnings);
@@ -7455,7 +7499,11 @@
       // POST returning is not enough: the model is replaced wholesale by every
       // poll, and one that left before the create landed would take the card
       // away again. Retiring on arrival rather than on confirmation is also what
-      // makes a failed refresh harmless — the next poll finishes the job.
+      // makes a failed refresh harmless — the next poll finishes the job. It
+      // still does when polls are answered 304: a poll is a 304 only when the
+      // model already holds what the server does, and a model that already
+      // carries the task was drawn either when it was read or, if the stand-in
+      // could only be matched by ID, when settleCreation learned the ID.
       function pendingCreationTasks(tasks) {
         const landed = new Set(tasks.map((task) => task.id));
         // One task retires at most one stand-in, so two identical creates in
@@ -7601,6 +7649,9 @@
         render(shown, projectPresentation(latestPresentation, tasks), tasks, search);
       }
       function replaceProjectedTask(task) {
+        // The model stops being the document the board's tag names, so the next
+        // poll has to read it in full rather than be told it already holds it.
+        boardValidator = null;
         const index = latestTasks.findIndex((candidate) => candidate.id === task.id);
         if (index < 0) latestTasks = latestTasks.concat([task]);
         else latestTasks = latestTasks.map((candidate, at) => (at === index ? task : candidate));
@@ -10329,6 +10380,11 @@
         // What is known about the deleted tasks was read under the other
         // setting, so it is not an answer to this one until a poll asks again.
         deletedRead = false;
+        // And that poll asks in full. Switching back before any poll lands
+        // would otherwise find the tag for this address still held, and a 304
+        // redraws nothing, so the column would go on withholding what it has
+        // to say about a model that was in fact read for it.
+        boardValidator = null;
         if (shown) {
           const built = buildDeletedColumn();
           deletedSection = built.section;
@@ -10631,6 +10687,11 @@
         if (activeDrag) {
           activeDrag = null;
           clearPlacement();
+          // Redrawn for the reason dragend redraws: the node the gesture was
+          // holding may name a task the model has since dropped, and no dragend
+          // is coming to collect it. The board kept here is the one a return
+          // re-attaches without redrawing, so it has to be right before it goes.
+          rerender();
         }
         stopDragScroll();
         // The description setting draws cards, and only the board draws cards.
@@ -11359,7 +11420,8 @@
           // The node the browser is dragging is left exactly where it is, because
           // detaching it mid-drag is the defect this renderer exists to remove.
           // Reconciliation still moves it to a column the model has moved it to,
-          // and the render after dragend collects one the model has dropped.
+          // and the render dragend makes — or the route change that retires a
+          // gesture no dragend will end — collects one the model has dropped.
           if (activeDrag && activeDrag.taskId === taskID) return;
           if (destinations.get(taskID) === node.parentElement) return;
           node.remove();
@@ -11423,8 +11485,9 @@
           // A dragged node is still on the board even though the model stopped
           // naming it, exactly as the sweep above decided. Lifting its report
           // would print the same sentence twice — once on the card under the
-          // cursor and once in the notice — and the render after dragend does
-          // this properly.
+          // cursor and once in the notice — and the render dragend makes, or
+          // the one a route change makes when it retires the gesture, does this
+          // properly.
           if (activeDrag && activeDrag.taskId === taskID) return;
           taskFailureReports.delete(taskID);
           const lifted = showNotice("warning", report.notice);
@@ -11536,11 +11599,47 @@
           // what the server holds. So the read reports for itself, and every
           // consumer of the status keeps reading the status.
           let boardRead = false;
+          // What a read that reached the model goes on to do, whether it
+          // replaced the model or was told the model already is the server's:
+          // draw the route a first read was waiting on, or bring the open task
+          // page's relationship sidebar up to date. Shared so a 304 answers
+          // every caller exactly as an applied read of the same document would.
+          const followBoardRead = async () => {
+            let relationshipContext = { status: "not-applicable" };
+            if (!wasLoaded) renderRoute();
+            else if (activeDependencyController) {
+              const controller = activeDependencyController;
+              controller.update();
+              relationshipContext = await refreshRelationshipContext(controller, ++relationshipRefreshGeneration);
+              if (relationshipContext.status === "superseded") return { status: "superseded", boardRead };
+            }
+            return { status: "applied", boardRead, relationshipContext };
+          };
           try {
             // One poll for the whole board. The Deleted column is fed by the
             // same document as every other column, so it is exactly as fresh
             // as they are and there is no second read to disagree with.
-            const response = await fetch(includingDeleted ? "/api/tasks?deleted=include" : "/api/tasks", { cache: "no-store" });
+            const url = includingDeleted ? "/api/tasks?deleted=include" : "/api/tasks";
+            const sentTag = boardValidator && boardValidator.url === url ? boardValidator.etag : null;
+            const response = await fetch(url, conditionalRead(sentTag));
+            if (response.status === 304) {
+              // The server still holds the document the model was read from, so
+              // this tick is a sync that changed nothing: no body to parse, no
+              // model to replace, nothing to redraw. It still counts as one —
+              // the banner comes down and the age starts over — and the read is
+              // reported as having reached the model, because the model already
+              // is what this read would have put there.
+              //
+              // A 304 to a read that named no tag vouches for nothing, and one
+              // cannot arrive before the first applied read, which is the only
+              // place a tag comes from. Either is a broken answer, and is
+              // treated as the failed read it is rather than as a board.
+              if (!sentTag || !wasLoaded) throw new Error("unrequested 304");
+              if (generation !== taskRefreshGeneration) return { status: "superseded", boardRead };
+              boardRead = true;
+              stale.dataset.visible = "false"; markSynchronized();
+              return await followBoardRead();
+            }
             const document = await response.json();
             if (!response.ok || document.format !== "workbook.tasks" || document.version !== 1 || !Array.isArray(document.tasks) || !Array.isArray(document.presentation)) throw new Error("invalid task document");
             const presentation = new Map(document.presentation.map((view) => [view.taskId, view]));
@@ -11548,6 +11647,11 @@
             if (generation !== taskRefreshGeneration) return { status: "superseded", boardRead };
             latestTasks = document.tasks;
             latestPresentation = presentation;
+            // Recorded with the model it names, and only here: a read that lost
+            // the race above never became the model, so its tag names nothing
+            // this page holds.
+            const tag = responseTag(response);
+            boardValidator = tag ? { url, etag: tag } : null;
             tasksLoaded = true;
             taskLoadFailed = false;
             // Set with the model it describes: what the Deleted column may say
@@ -11583,15 +11687,7 @@
             // about that form moves on a poll: a field is corrected only by a
             // refusal, which is what reviseAgainstTask is for.
             followOpenThreadPanels(projected, projectedPresentation);
-            let relationshipContext = { status: "not-applicable" };
-            if (!wasLoaded) renderRoute();
-            else if (activeDependencyController) {
-              const controller = activeDependencyController;
-              controller.update();
-              relationshipContext = await refreshRelationshipContext(controller, ++relationshipRefreshGeneration);
-              if (relationshipContext.status === "superseded") return { status: "superseded", boardRead };
-            }
-            return { status: "applied", boardRead, relationshipContext };
+            return await followBoardRead();
           } catch (_) {
             if (generation !== taskRefreshGeneration) return { status: "superseded", boardRead };
             text(stale, "Task refresh failed. Showing the last successful board."); stale.dataset.visible = "true";
@@ -11704,6 +11800,13 @@
         if (item) item.classList.remove("is-dragging");
         activeDrag = null;
         clearPlacement();
+        // The renderer left the dragged node where it was for as long as the
+        // gesture lasted, even when a poll during it dropped the node's task,
+        // and it held back the refusal report on it for the same reason. Both
+        // are settled here rather than left to the next poll, because the next
+        // poll may well be a 304: the poll that dropped the task already brought
+        // the board up to date, and nothing after it would redraw.
+        rerender();
         // dragend arrives however the gesture ended — dropped, cancelled with
         // Escape, or released over another window — so this is the stop that
         // cannot be missed, and the one that guarantees no frame loop outlives
