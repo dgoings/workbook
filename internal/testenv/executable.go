@@ -23,12 +23,16 @@ import (
 // renamed into place is the same one the child is still holding open.
 //
 // What does help is syscall.ForkLock. Every fork in the Go runtime --
-// os/exec, os.StartProcess, syscall.ForkExec -- takes it for writing, and its
-// documented contract is that code creating descriptors holds it for reading.
-// WriteFile holds it for reading from the open to the close, so no child can
-// be forked while the write descriptor exists: a child forked before the open
-// never had it, and one forked after the close never sees it. Only a fork in
-// this process can inherit the descriptor, and the lock covers every one.
+// os/exec, os.StartProcess, syscall.ForkExec -- holds it for writing
+// (syscall.acquireForkLock; concurrent forks may share that hold, but a reader
+// never gets in while any of them is in progress), so holding it for reading
+// keeps every fork out. The standard library does not do this for os.Open,
+// which relies on O_CLOEXEC and, as the ForkLock doc puts it, lives with the
+// race. WriteFile holds it for reading from the open to the close, so no
+// child can be forked while the write descriptor exists: a child forked before
+// the open never had it, and one forked after the close never sees it. Only a
+// fork in this process can inherit the descriptor, and the lock covers every
+// one.
 //
 // The rename is still worth having for a different reason: replacing a helper
 // that some process may be running writes a new file beside it instead of
