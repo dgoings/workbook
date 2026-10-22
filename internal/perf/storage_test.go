@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -659,9 +658,7 @@ func gitWithInput(t *testing.T, root string, input []byte, args ...string) strin
 func writeStorageStubBinary(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "workbook")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testenv.WriteExecutable(t, path, []byte("#!/bin/sh\n"+body+"\n"))
 	return path
 }
 

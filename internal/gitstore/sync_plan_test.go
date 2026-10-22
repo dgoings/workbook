@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 func TestClassifyTaskHeadsUsesOneGraphForUnequalPairs(t *testing.T) {
@@ -323,9 +324,7 @@ func captureNextGitStdin(t *testing.T, repository *Repository) string {
 	t.Helper()
 	capturePath := filepath.Join(t.TempDir(), "update-ref.stdin")
 	fakeGit := filepath.Join(t.TempDir(), "git")
-	if err := os.WriteFile(fakeGit, []byte(fmt.Sprintf("#!/bin/sh\ncat > %q\nexec %q \"$@\" < %q\n", capturePath, repository.gitPath, capturePath)), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testenv.WriteExecutable(t, fakeGit, []byte(fmt.Sprintf("#!/bin/sh\ncat > %q\nexec %q \"$@\" < %q\n", capturePath, repository.gitPath, capturePath)))
 	repository.gitPath = fakeGit
 	return capturePath
 }

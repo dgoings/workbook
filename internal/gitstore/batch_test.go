@@ -2,12 +2,12 @@ package gitstore
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 func TestReadTaskHeadsPartialConsumesAllRecordsAfterMissingMiddleHead(t *testing.T) {
@@ -59,9 +59,7 @@ func TestReadTaskHeadsPartialRejectsMalformedBatchFramingForAllHeads(t *testing.
 	repository, config := writeRepository(t)
 	snapshot, _, _ := writeRoot(t, repository, config)
 	fakeGit := filepath.Join(t.TempDir(), "git")
-	if err := os.WriteFile(fakeGit, []byte("#!/bin/sh\nprintf 'not a Git batch header\\n'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testenv.WriteExecutable(t, fakeGit, []byte("#!/bin/sh\nprintf 'not a Git batch header\\n'\n"))
 	repository.gitPath = fakeGit
 
 	_, err := repository.readTaskHeadsPartial(context.Background(), config, []TaskHead{{

@@ -166,9 +166,7 @@ func TestBuildRemoteFixtureIgnoresHostileGlobalSigningAndHooks(t *testing.T) {
 	marker := filepath.Join(hostileRoot, "hook-ran")
 	hook := []byte("#!/bin/sh\nprintf hook-ran > '" + marker + "'\nexit 1\n")
 	for _, name := range []string{"post-checkout", "pre-commit", "pre-push", "pre-receive"} {
-		if err := os.WriteFile(filepath.Join(hooksRoot, name), hook, 0o755); err != nil {
-			t.Fatal(err)
-		}
+		testenv.WriteExecutable(t, filepath.Join(hooksRoot, name), hook)
 	}
 	globalConfig := filepath.Join(hostileRoot, "gitconfig")
 	if err := os.WriteFile(globalConfig, []byte(fmt.Sprintf("[commit]\n\tgpgSign = true\n[tag]\n\tgpgSign = true\n[push]\n\tgpgSign = true\n[core]\n\thooksPath = %s\n", hooksRoot)), 0o600); err != nil {

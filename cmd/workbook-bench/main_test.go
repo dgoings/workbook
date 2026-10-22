@@ -19,6 +19,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/perf"
 	"github.com/dgoings/workbook/internal/perf/proctest"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 func TestRunResolvesRelativeWorkbookBinaryAndWritesCompletePerformanceReport(t *testing.T) {
@@ -703,9 +704,7 @@ func buildWorkbookBinaryWithCommit(t *testing.T, binary, commit string) {
 
 func writeExecutableScript(t *testing.T, path, body string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testenv.WriteExecutable(t, path, []byte("#!/bin/sh\n"+body+"\n"))
 }
 
 func removeFlag(args []string, name string) []string {

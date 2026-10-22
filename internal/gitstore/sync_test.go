@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testenv"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
 
@@ -982,9 +983,7 @@ func TestPushBypassesManagedHookRecursion(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "unexpected-hook-call")
 	fakeWorkbook := filepath.Join(bin, "workbook")
 	script := "#!/bin/sh\nprintf called > \"$WORKBOOK_TEST_LOG\"\nexit 19\n"
-	if err := os.WriteFile(fakeWorkbook, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testenv.WriteExecutable(t, fakeWorkbook, []byte(script))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("WORKBOOK_TEST_LOG", logPath)
 

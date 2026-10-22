@@ -24,6 +24,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 // Shell names the interpreter these helpers' scripts are written for.
@@ -87,9 +89,7 @@ func ExitingLeaderShimPATH(t *testing.T, program, pidPath string) string {
 	t.Helper()
 	directory := t.TempDir()
 	shim := "#!/bin/sh\nset -- \"" + pidPath + "\"\n" + startDescendant(" >/dev/null 2>&1") + "\n"
-	if err := os.WriteFile(filepath.Join(directory, program), []byte(shim), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	testenv.WriteExecutable(t, filepath.Join(directory, program), []byte(shim))
 	return directory + string(os.PathListSeparator) + os.Getenv("PATH")
 }
 

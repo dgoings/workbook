@@ -570,9 +570,7 @@ func TestCIWorkflowGateFailsOpen(t *testing.T) {
 	gate, decision := ciWorkflowGate(t, job)
 	desktop := ciWorkflowDesktopDecision(t, job, gate)
 	script := filepath.Join(t.TempDir(), "gate.sh")
-	if err := os.WriteFile(script, []byte(gate.Run), 0o700); err != nil {
-		t.Fatalf("write the gate script: %v", err)
-	}
+	testenv.WriteExecutable(t, script, []byte(gate.Run))
 	repository, commits := ciWorkflowGateRepository(t)
 	// Well-formed but absent, which is what a base commit looks like after the
 	// branch carrying it was force-pushed away.

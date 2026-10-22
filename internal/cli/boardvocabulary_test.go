@@ -14,6 +14,7 @@ import (
 	"github.com/dgoings/workbook/internal/agentdocs"
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/testenv"
 	"github.com/dgoings/workbook/internal/webui"
 )
 
@@ -975,9 +976,7 @@ func TestBoardWarnsWhenOriginRefusesTheConfigurationLedger(t *testing.T) {
 	hook := "#!/bin/sh\nwhile read old new ref; do\n" +
 		"  if [ \"$ref\" = \"refs/workbook/config\" ]; then\n" +
 		"    echo 'configuration refs are not accepted here' >&2\n    exit 1\n  fi\ndone\nexit 0\n"
-	if err := os.WriteFile(filepath.Join(bare, "hooks", "pre-receive"), []byte(hook), 0o755); err != nil {
-		t.Fatalf("write pre-receive hook: %v", err)
-	}
+	testenv.WriteExecutable(t, filepath.Join(bare, "hooks", "pre-receive"), []byte(hook))
 	publishedBefore := cliGitOutput(t, bare, "rev-parse", "refs/workbook/config")
 
 	ctx := context.Background()
