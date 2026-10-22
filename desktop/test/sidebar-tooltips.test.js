@@ -1,114 +1,19 @@
 'use strict'
 
-// Native tooltips in the sidebar have to survive electron/electron#49843: on
-// macOS, when the pointer moves onto a different node that has the same
-// tooltip, Chromium clears the tooltip and sets the same text again, and macOS
-// then rarely shows it after the first hover. So every titled element in the
-// sidebar is the only node under the pointer for its own tooltip: whatever
-// inside it only shows text or decoration ignores the pointer, and a button
-// inside it carries a title of its own with different words. "One node under
-// the pointer" in styles.css says why.
-//
-// The guard runs the real stylesheet's cascade over the real page and the
-// rows projectRow and categoryGroup build, in every state a header can be in,
-// in the rail and expanded. It is the cascade from test/support/cascade.js,
-// not a browser, so it reads declarations rather than layout; a full-size
-// overlay would be invisible to it, and so would a child moved outside its
-// parent's box. app.js runs only in a page, so its functions are taken out of
-// its source the way category-toggle.test.js takes them, and run against a
-// small fake DOM.
+// Native tooltips in the sidebar have to survive electron/electron#49843, so
+// every titled element in the sidebar is the only node under the pointer for
+// its own tooltip; test/support/tooltips.js has the guard and says why, and
+// "One node under the pointer" in styles.css has the rule. This runs the guard
+// over the real page and the rows projectRow and categoryGroup build, in every
+// state a header can be in, in the rail and expanded.
 
-const fs = require('node:fs')
-const path = require('node:path')
 const vm = require('node:vm')
 const { describe, test } = require('node:test')
 const assert = require('node:assert/strict')
 
 const { initials } = require('../src/renderer/sidebarmodel')
 const cascade = require('./support/cascade')
-
-const src = path.join(__dirname, '..', 'src')
-
-function read (...parts) {
-  return fs.readFileSync(path.join(src, ...parts), 'utf8').replace(/\r\n/g, '\n')
-}
-
-function code (...parts) {
-  return read(...parts)
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:'"`])\/\/.*$/gm, '$1')
-}
-
-const app = code('renderer', 'app.js')
-const page = read('renderer', 'index.html')
-const stylesheet = cascade.parseStylesheet(read('renderer', 'styles.css'))
-
-function fn (name) {
-  const match = app.match(new RegExp(`\\n(?:async )?function ${name} \\([\\s\\S]*?\\n\\}\\n`))
-  assert.ok(match, `no top-level function ${name} in app.js`)
-  return match[0]
-}
-
-// --- the fake DOM -------------------------------------------------------------
-
-class FakeElement {
-  constructor (tagName) {
-    this.tagName = tagName.toUpperCase()
-    this.className = ''
-    this.dataset = {}
-    this.children = []
-    this.parentNode = null
-    this.attributes = new Map()
-    this.listeners = new Map()
-    this.textContent = ''
-    this.title = ''
-    this.hidden = false
-    this.draggable = false
-    this.type = ''
-    this.value = ''
-    const self = this
-    this.classList = {
-      add (...names) { self.className = [...new Set([...self.className.split(/\s+/).filter(Boolean), ...names])].join(' ') },
-      contains (name) { return self.className.split(/\s+/).includes(name) }
-    }
-  }
-
-  append (...nodes) {
-    for (const node of nodes) {
-      node.parentNode = this
-      this.children.push(node)
-    }
-  }
-
-  setAttribute (name, value) { this.attributes.set(name, String(value)) }
-  getAttribute (name) { return this.attributes.has(name) ? this.attributes.get(name) : null }
-  addEventListener (type, listener) {
-    if (!this.listeners.has(type)) this.listeners.set(type, [])
-    this.listeners.get(type).push(listener)
-  }
-
-  // A tag name or a class, or a list of them: all the handlers here ask.
-  closest (selector) {
-    const tests = selector.split(',').map((part) => part.trim())
-    for (const part of tests) {
-      if (!/^\.?[\w-]+$/.test(part)) throw new Error(`the fake DOM cannot match ${part}`)
-    }
-    for (let at = this; at; at = at.parentNode) {
-      if (tests.some((part) => part.startsWith('.') ? at.classList.contains(part.slice(1)) : at.tagName === part.toUpperCase())) return at
-    }
-    return null
-  }
-
-  // Descendants, depth first, that carry `name` among their classes.
-  find (name) {
-    const found = []
-    for (const child of this.children) {
-      if (child.classList.contains(name)) found.push(child)
-      found.push(...child.find(name))
-    }
-    return found
-  }
-}
+const { page, stylesheet, fn, FakeElement, adopt, walk, title, crossings, stranded, rest } = require('./support/tooltips')
 
 // An event that bubbles from `target` up through its ancestors, as a real
 // double-click does.
@@ -166,25 +71,6 @@ function renderer ({ rail = false } = {}) {
 
 // --- the page, as the cascade reads it ---------------------------------------
 
-function adopt (fake) {
-  const attributes = Object.fromEntries(fake.attributes)
-  if (fake.type) attributes.type = fake.type
-  if (fake.title) attributes.title = fake.title
-  if (fake.hidden) attributes.hidden = ''
-  if (fake.draggable) attributes.draggable = 'true'
-  const element = cascade.node(fake.tagName, {
-    classes: fake.className.split(/\s+/).filter(Boolean),
-    attributes,
-    text: fake.textContent
-  })
-  return cascade.append(element, ...fake.children.map(adopt))
-}
-
-function walk (node, visit) {
-  visit(node)
-  for (const child of node.children) walk(child, visit)
-}
-
 // The sidebar as boot leaves it: the version line titled, the Next entry shown
 // (it is, from two projects up), and the list holding a top-level project and
 // a category in each state its header has.
@@ -206,82 +92,6 @@ function sidebarPage ({ collapsed, platform }) {
   const sidebar = cascade.byId(root, 'sidebar')
   assert.ok(sidebar, 'index.html has no #sidebar')
   return { root, sidebar }
-}
-
-const CONTROLS = new Set(['button', 'input', 'select', 'textarea', 'a'])
-
-function title (node) {
-  return node.attributes.get('title') || null
-}
-
-// Whether the element has a box and takes the pointer: no ancestor is display
-// none, it is not display: contents itself, and it is neither hidden nor
-// ignoring the pointer. Opacity does not count: a transparent element still
-// takes the pointer, and so still sits between the pointer and its tooltip.
-function boxed (rules, node, options) {
-  return cascade.ancestors(node).every((at) => cascade.computed(rules, at, 'display', options) !== 'none')
-}
-
-function takesPointer (rules, node, options) {
-  return cascade.computed(rules, node, 'visibility', options) === 'visible' &&
-    cascade.computed(rules, node, 'pointer-events', options) !== 'none'
-}
-
-function hittable (rules, node, options) {
-  return boxed(rules, node, options) &&
-    cascade.computed(rules, node, 'display', options) !== 'contents' &&
-    takesPointer(rules, node, options)
-}
-
-// Every place in `sidebar` where the pointer could move onto a different node
-// with the same tooltip, as sentences. Text counts: a text node is a node of
-// its own to the hit test, so text directly inside a titled element, or inside
-// an element that shares its tooltip, is a second node with that tooltip.
-function crossings (rules, sidebar, options) {
-  const found = []
-  function visit (node, around) {
-    const own = title(node)
-    const tooltip = own ?? around?.title ?? null
-    if (tooltip !== null) {
-      const where = cascade.describe(node)
-      if (around && hittable(rules, node, options)) {
-        if (own === null) {
-          found.push(`${where} takes the pointer inside ${cascade.describe(around.node)} with no title of its own, so it shares the tooltip "${around.title}"`)
-        } else if (own === around.title) {
-          found.push(`${where} takes the pointer inside ${cascade.describe(around.node)} and repeats its tooltip "${own}"`)
-        }
-      }
-      if (node.text !== '' && boxed(rules, node, options) && takesPointer(rules, node, options)) {
-        found.push(`the text "${node.text}" directly inside ${where} takes the pointer, a second node with the tooltip "${tooltip}"`)
-      }
-      // Chromium hit-tests an ellipsis as part of the last element it cuts
-      // short, even one that ignores the pointer (measured in the app: the
-      // "…" of the version line found its span). So an element that takes the
-      // pointer must not ellipsize elements of its own under a tooltip; the
-      // element that ignores the pointer has to do its own ellipsizing.
-      if (node.children.length > 0 && hittable(rules, node, options) &&
-          cascade.computed(rules, node, 'text-overflow', options) === 'ellipsis') {
-        found.push(`${where} takes the pointer and ellipsizes its children, and its ellipsis is a second node with the tooltip "${tooltip}"`)
-      }
-    }
-    const next = own === null ? around : { node, title: own }
-    for (const child of node.children) visit(child, next)
-  }
-  visit(sidebar, null)
-  return found
-}
-
-// Every titled element and every control in the sidebar that is drawn but
-// would not take the pointer: a tooltip nobody can hover, or a control nobody
-// can press, is the over-correction this fix must not make.
-function stranded (rules, sidebar, options) {
-  const found = []
-  walk(sidebar, (node) => {
-    if (title(node) === null && !CONTROLS.has(node.tag)) return
-    if (!boxed(rules, node, options)) return
-    if (!hittable(rules, node, options)) found.push(`${cascade.describe(node)} is drawn but does not take the pointer`)
-  })
-  return found
 }
 
 // Every way the sidebar can stand that the cascade can tell apart: in the
@@ -419,10 +229,6 @@ describe('the version line boot writes is one node under the pointer', () => {
 })
 
 describe('the guard sees a regression', () => {
-  // A memo of its own for every page and stylesheet: each test below changes
-  // one or the other.
-  const rest = () => ({ env: {}, state: cascade.interaction(), memo: new Map() })
-
   test('it fails the stylesheet without the rule that takes children off the pointer', () => {
     const without = stylesheet.filter((rule) => !rule.selectors.includes('.project-item > *'))
     assert.ok(without.length < stylesheet.length, 'no rule has the selector .project-item > *')
