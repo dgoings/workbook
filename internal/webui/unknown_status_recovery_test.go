@@ -255,10 +255,12 @@ func TestHandlerClientTakesNoDropsIntoTheUnknownStatusRegion(t *testing.T) {
 // The card drawn in the one poll between the confirmation and the next read is
 // pinned too, because what it leaves out is deliberate and nothing else would
 // notice it changing. The doomed task depends on another and is held by
-// somebody, and the board first draws it from a derived view that says so
-// under a short prefix — so a fallback that guessed a prefix, counted
-// prerequisites it cannot judge, or invented chips draws something the derived
-// card did not.
+// somebody, so a fallback that counted prerequisites it cannot judge or drew
+// chips from the raw assignments has the data to do it, and is caught by the
+// card having no such row at all. The board first draws the task from a
+// derived view under a prefix shorter than its ID, so a card read after the
+// confirmation that shows the whole ID can only have been redrawn from the
+// fallback view, and is not the derived card left standing.
 func TestHandlerClientSurvivesATaskDeletedMidDrag(t *testing.T) {
 	t.Parallel()
 	vocabulary := handlerVocabulary(t)

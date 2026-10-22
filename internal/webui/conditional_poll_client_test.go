@@ -460,10 +460,25 @@ func TestClientConditionalPollCollectsADraggedCardWhoseTaskWasDeleted(t *testing
 func TestClientConditionalPollEndsTheFallbackCardOfATaskDeletedMidDrag(t *testing.T) {
 	t.Parallel()
 	dragged, kept := conditionalPollDragTasks()
+	// The server's view of the dragged task before the delete, under a prefix
+	// shorter than the ID the fallback shows, so the card read after the
+	// confirmation can only be the fallback's and not this one left standing.
+	derivedPresentation := presentationForTasks([]core.Task{dragged, kept})
+	derivedPresentation[0].IDPrefix = "WB-01J0000000000000000000C"
+	derived := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1,
+		Tasks: []core.Task{dragged, kept}, Presentation: derivedPresentation,
+	})
 	program := conditionalPollProgram(t, "/", []core.Task{dragged, kept}, "", `
   const id = `+strconv.Quote(dragged.ID)+`;
+  taskResponse = `+string(derived)+`;
+  taskTag = "\"a2\"";
+  await intervalCallback();
   const card = boardCard(id);
   if (!card) throw new Error("the board never drew the card to drag");
+  if (card.dataset.idPrefix !== "WB-01J0000000000000000000C") {
+    throw new Error("the card to drag shows the prefix " + JSON.stringify(card.dataset.idPrefix) + ", not the derived one, so this test proves nothing");
+  }
   const inProgress = boardLists.find((list) => list.dataset.status === "in-progress");
   const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
   card.rect = { top: 0, bottom: 80 };
