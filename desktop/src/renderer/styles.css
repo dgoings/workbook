@@ -614,7 +614,8 @@ body {
    "Collapse" and the name rather than repeating the header's bare name, and
    why a category's name is renamed by double-clicking its whole header.
    test/sidebar-tooltips.test.js runs this stylesheet over the sidebar's
-   markup and fails on any node that breaks the rule. */
+   markup and fails on any node that breaks the rule. The Next view keeps the
+   same rule, in its own section below. */
 .version > *,
 .rail-item > *,
 .icon-button > *,
@@ -1154,14 +1155,12 @@ button.ghost.inline { width: auto; }
 .next-group { margin-bottom: 1.1rem; }
 .next-group__name { display: flex; align-items: center; gap: .5rem; margin: 0 0 .4rem; font-size: .86rem; font-weight: 600; }
 /* One line, whatever the message is: the renderer already cuts an error down to
-   its first line, and this keeps a long one from widening the group. */
+   its first line, and the footer's span (below, with the row's) keeps a long
+   one from widening the group. */
 .next-group__foot {
   margin: .3rem 0 0;
-  overflow: hidden;
   color: var(--wb-muted);
   font-size: .78rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .next-group__foot--error { color: var(--wb-danger); }
 
@@ -1185,9 +1184,47 @@ button.ghost.inline { width: auto; }
 .next-row:hover { background: var(--wb-primary-tint-4); }
 .next-row__priority { text-align: center; }
 .next-row__priority--high { color: var(--wb-danger); border-color: var(--wb-danger); }
-.next-row__title { font-size: .86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.next-row__title { font-size: .86rem; overflow: hidden; }
 .next-row__meta { display: flex; align-items: center; flex-wrap: wrap; gap: .25rem .4rem; justify-content: flex-end; }
-.next-row__assignee { color: var(--wb-primary); }
+/* A flex box, so the span inside sets its height rather than a line of the
+   row's larger text. */
+.next-row__age { display: flex; }
+/* .label ellipsizes; here the span inside does, below. */
+.next-row__assignee { color: var(--wb-primary); text-overflow: clip; }
+
+/* The sidebar's rule, "One node under the pointer", for the Next view's
+   tooltips: the heading's status, a failed footer's whole error, and each
+   row's task id. Inside them, whatever only shows ignores the pointer. A row's
+   title, assignees and age carry tooltips of their own, so they take the
+   pointer back, and their words sit in spans that ignore it. Those spans cut
+   their own text short: Chromium hit-tests an ellipsis as part of the element
+   it cuts short even when that element ignores the pointer, so an ellipsis
+   the titled element drew around its span would be a second node.
+   test/next-tooltips.test.js runs this stylesheet over what renderNext
+   draws. */
+.next-group__name > *,
+.next-group__foot > *,
+.next-row > *,
+.next-row__title > *,
+.next-row__assignee > *,
+.next-row__age > * {
+  pointer-events: none;
+}
+
+.next-row__title,
+.next-row__assignee,
+.next-row__age {
+  pointer-events: auto;
+}
+
+.next-group__foot > span,
+.next-row__title > span,
+.next-row__assignee > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* --- shared ------------------------------------------------------------- */
 

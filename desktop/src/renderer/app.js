@@ -918,13 +918,22 @@ function renderNext () {
     const key = document.createElement('span')
     key.className = 'project-key'
     key.textContent = project.key
-    heading.append(dot, key, document.createTextNode(` ${project.name}`))
+
+    // In a span rather than bare text: under the heading's tooltip, a bare
+    // text node is a second node the pointer can land on ("One node under
+    // the pointer" in styles.css).
+    const name = document.createElement('span')
+    name.textContent = project.name
+    heading.append(dot, key, name)
     group.append(heading)
 
     for (const task of project.tasks) group.append(renderNextRow(project, task))
 
     const foot = document.createElement('p')
     foot.className = 'next-group__foot'
+    // The words sit in a span that does its own ellipsizing, so an error's
+    // tooltip on the footer has the footer as its only node.
+    const words = document.createElement('span')
     if (project.error) {
       foot.classList.add('next-group__foot--error')
       // A CLI too old for --limit answers with its entire usage block, and the
@@ -932,16 +941,17 @@ function renderNext () {
       // the problem, and the whole of it is on the hover rather than pushing
       // every other project off the view.
       const first = project.error.split('\n')[0]
-      foot.textContent = first.length > 140 ? `${first.slice(0, 139)}…` : first
+      words.textContent = first.length > 140 ? `${first.slice(0, 139)}…` : first
       foot.title = project.error
     } else if (project.tasks.length === 0) {
-      foot.textContent = 'Nothing eligible.'
+      words.textContent = 'Nothing eligible.'
     } else if (project.eligible > project.tasks.length) {
       const more = project.eligible - project.tasks.length
-      foot.textContent = `${more} more eligible`
+      words.textContent = `${more} more eligible`
     } else {
       foot.hidden = true
     }
+    foot.append(words)
     group.append(foot)
     container.append(group)
   }
@@ -975,9 +985,12 @@ function renderNextRow (project, task) {
   if (task.priority === 'high') priority.classList.add('next-row__priority--high')
   priority.textContent = task.priority
 
+  // The row's spans keep the pointer only where they carry a tooltip of their
+  // own, and their words sit in a span inside that ignores it ("One node
+  // under the pointer" in styles.css).
   const title = document.createElement('span')
   title.className = 'next-row__title'
-  title.textContent = task.title
+  title.append(buttonText(task.title))
   // The row is one line and ellipsizes; the row's own tooltip is the task id,
   // so the whole title has to be readable from the title itself.
   title.title = task.title
@@ -993,13 +1006,18 @@ function renderNextRow (project, task) {
   for (const email of task.assignees) {
     const chip = document.createElement('span')
     chip.className = 'label next-row__assignee'
-    chip.textContent = email
+    chip.append(buttonText(email))
     chip.title = 'Assigned'
     meta.append(chip)
   }
+  // The "· " before the age is drawn by .repo-fact itself, so that class goes
+  // on the inner span that ignores the pointer, not on the titled one.
   const age = document.createElement('span')
-  age.className = 'repo-fact'
-  age.textContent = relativeDate(task.updatedAt)
+  age.className = 'next-row__age'
+  const fact = document.createElement('span')
+  fact.className = 'repo-fact'
+  fact.textContent = relativeDate(task.updatedAt)
+  age.append(fact)
   age.title = task.updatedAt
   meta.append(age)
 
