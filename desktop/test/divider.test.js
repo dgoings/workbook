@@ -80,21 +80,28 @@ describe('the sidebar divider in the shell', () => {
   // The project view also holds the wait for a board, a failed start and the
   // Git identity form, none of which has a board beside the sidebar, so the
   // class follows the main process, which knows when a view is laid in.
+  // board-park.test.js runs main.js to hold the same promise in behavior.
   test('the main process says when a board is laid in, and when it is not', () => {
     const main = code('main', 'main.js')
-    const open = fn(main, 'openProject')
-    const laidIn = open.match(/\n {2}activeProjectId = projectId\n {2}layout\(\)\n([\s\S]*)$/)
-    assert.ok(laidIn, 'openProject must set activeProjectId and call layout() at its top level')
+    const layIn = fn(main, 'layInBoard')
+    const laidIn = layIn.match(/\n {2}activeProjectId = projectId\n {2}layout\(\)\n([\s\S]*)$/)
+    assert.ok(laidIn, 'layInBoard must set activeProjectId and call layout() at its top level')
     assert.match(laidIn[1], /toChrome\('board:showing',\s*true\)/,
-      "openProject must send board:showing true after it lays the view in")
-    assert.doesNotMatch(laidIn.input.slice(0, laidIn.index), /board:showing/,
-      'openProject must not say anything about board:showing before the view is laid in, or a switch between boards flickers')
-    assert.doesNotMatch(open, /toChrome\('board:showing',\s*false\)/,
-      'openProject must never send false: the old board stays drawn until the new one is in')
-    assert.match(fn(main, 'showChrome'), /activeProjectId = null\n {2}layout\(\)\n[\s\S]*toChrome\('board:showing',\s*false\)/,
-      'showChrome must send board:showing false after it parks the board')
+      "layInBoard must send board:showing true after it lays the view in")
+    assert.doesNotMatch(laidIn.input.slice(0, laidIn.index), /board:showing|parkBoard\(/,
+      'layInBoard must not say anything about board:showing before the view is laid in, or a switch between boards flickers')
+    const open = fn(main, 'openProject')
+    assert.match(open, /return await layInBoard\(/, 'openProject must lay the board in through layInBoard')
+    assert.match(open, /\} catch \(error\) \{\n\s*if \(generation === openGeneration\) parkBoard\(\)\n\s*throw error\n/,
+      'openProject must park the board only when the open still wanted fails: the old board stays drawn until the new one is in or cannot be')
+    assert.doesNotMatch(open, /board:showing|showChrome\(/,
+      'openProject must leave board:showing to layInBoard and parkBoard')
+    assert.match(fn(main, 'parkBoard'), /activeProjectId = null\n {2}layout\(\)\n[\s\S]*toChrome\('board:showing',\s*false\)/,
+      'parkBoard must send board:showing false after it parks the board')
+    assert.match(fn(main, 'showChrome'), /openGeneration\+\+\n\s*parkBoard\(\)/,
+      'showChrome must stand down any open in flight and park the board')
     assert.equal([...main.matchAll(/board:showing/g)].length, 2,
-      'board:showing must be sent from exactly openProject and showChrome')
+      'board:showing must be sent from exactly layInBoard and parkBoard')
   })
 
   test('the renderer follows that message, and no longer the view', () => {

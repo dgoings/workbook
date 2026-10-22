@@ -55,8 +55,8 @@ describe('the title row comes from layout.js everywhere', () => {
   })
 
   test('a new board view starts hidden until layout() shows it', () => {
-    assert.match(fn(main, 'openProject'), /view\.setVisible\(false\)\n\s*window\.contentView\.addChildView\(view\)/,
-      'openProject must hide a new board view before it adds it to the window')
+    assert.match(fn(main, 'layInBoard'), /view\.setVisible\(false\)\n\s*window\.contentView\.addChildView\(view\)/,
+      'layInBoard must hide a new board view before it adds it to the window')
   })
 
   test('macOS pins the traffic lights at the shared position', () => {

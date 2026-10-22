@@ -403,6 +403,27 @@ async function openProject (projectId, taskId = null) {
   // project's address and that much is true whoever is showing.
   const generation = ++openGeneration
 
+  try {
+    return await layInBoard(project, taskId, generation)
+  } catch (error) {
+    // The board that was showing is the one the reader just asked to leave,
+    // and the shell is about to say why the new one is not there: "Could not
+    // start this board" sits under the board views, so whichever is laid in
+    // has to go or the reader sees the old board with no explanation. Only for
+    // the open still wanted; one a newer open has overtaken leaves the window
+    // to that one.
+    if (generation === openGeneration) parkBoard()
+    throw error
+  }
+}
+
+/**
+ * The part of openProject that waits: start the server, load the page, lay
+ * the view in. Every await is followed by the same question, whether a newer
+ * open or a view of the shell's own has taken over since.
+ */
+async function layInBoard (project, taskId, generation) {
+  const projectId = project.id
   const url = await supervisor.start(project)
   if (generation !== openGeneration) return { url }
   // The board has a route per task, so a row can open the thing it names
@@ -481,12 +502,30 @@ async function openProject (projectId, taskId = null) {
   return { url }
 }
 
+/**
+ * Hand the window to the shell's own views: Next, Import, the Git identity
+ * form.
+ *
+ * Counts as an open, so one still waiting on a slow start stands down when it
+ * lands rather than laying its board over the view the reader moved to.
+ */
 function showChrome () {
+  openGeneration++
+  parkBoard()
+}
+
+/**
+ * Take the showing board out of the window, leaving it warm and parked.
+ *
+ * For whenever the shell's own project-view content is what the reader should
+ * see — a view of its own, the Git identity form, a board that failed to start
+ * or has stopped — since that content sits beneath the board views.
+ */
+function parkBoard () {
   activeProjectId = null
   layout()
-  // Whatever the shell shows now (a view of its own, the Git identity form,
-  // a board that failed to start) has no board beside it to draw the
-  // sidebar's divider, so the shell draws it again.
+  // Whatever the shell shows now has no board beside it to draw the sidebar's
+  // divider, so the shell draws it again.
   toChrome('board:showing', false)
   // No board is showing, so the board items go gray.
   installMenu()
@@ -505,7 +544,9 @@ function closeProject (projectId) {
     boardViews.delete(projectId)
   }
   supervisor.stop(projectId)
-  if (activeProjectId === projectId) showChrome()
+  // Parked rather than handed to showChrome(), for the reason a board that
+  // stops is: an open of another board may be on its way.
+  if (activeProjectId === projectId) parkBoard()
 }
 
 // --- the CLI on PATH -------------------------------------------------------
@@ -919,7 +960,12 @@ ipcMain.handle('project:forget', async (_event, { projectId }) => {
 // --- lifecycle -------------------------------------------------------------
 
 supervisor.on('exited', ({ projectId, wasRunning }) => {
-  if (wasRunning) toChrome('project:exited', { projectId, ...supervisor.status(projectId) })
+  if (!wasRunning) return
+  // A stopped board's page stays drawn, dead, over "This board stopped", so
+  // it is parked. Not through showChrome(): the reader may already have asked
+  // for another board, and that open must still arrive.
+  if (projectId === activeProjectId) parkBoard()
+  toChrome('project:exited', { projectId, ...supervisor.status(projectId) })
 })
 
 nativeTheme.on('updated', () => {
