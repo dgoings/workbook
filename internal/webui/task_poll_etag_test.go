@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -252,5 +253,44 @@ func TestTasksPollErrorCarriesNoTag(t *testing.T) {
 		if document.Format != "workbook.error" || document.Error.Category != core.CategoryCorruptData {
 			t.Errorf("failed listing document = %#v, want a workbook.error of category %s", document, core.CategoryCorruptData)
 		}
+	}
+}
+
+// The document carries nothing that changes on the clock. An assignment's row
+// says how long ago it was recorded, and that phrase moves on its own — from
+// "just now" to "1 minute ago" here — but the page words it from the recorded
+// time and a rule that does not move, so an idle board holding a fresh
+// assignment is told nothing changed on every poll, either side of the
+// boundary.
+//
+// It waits for the real clock rather than injecting one, because what is being
+// proven is that no clock reaches the document: a route that read one anywhere
+// would be the route this test catches.
+func TestTasksPollTagHoldsStillAcrossAnAssignmentAgeBoundary(t *testing.T) {
+	t.Parallel()
+	recorded := time.Now().Add(-time.Minute + 4*time.Second)
+	task := boardTasks()[0]
+	task.Assignments = []core.Assignment{
+		{Principal: "agent@example.com", Label: "impl-1", Creator: "agent@example.com", CreatedAt: recorded},
+	}
+	tasks := []core.Task{task}
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
+
+	_, tag := firstPoll(t, handler, "/api/tasks")
+	if time.Since(recorded) >= time.Minute {
+		t.Fatal("the first poll landed after the boundary it was meant to precede, so this run proves nothing")
+	}
+	if repeat := requestIfNoneMatch(t, handler, "/api/tasks", tag); repeat.Code != http.StatusNotModified {
+		t.Fatalf("an idle poll before the boundary status = %d, want %d", repeat.Code, http.StatusNotModified)
+	}
+
+	time.Sleep(time.Until(recorded.Add(time.Minute + 100*time.Millisecond)))
+	response := requestIfNoneMatch(t, handler, "/api/tasks", tag)
+	if response.Code != http.StatusNotModified {
+		t.Fatalf("an idle poll after \"assigned just now\" became \"assigned 1 minute ago\" status = %d, want %d; tag %q became %q",
+			response.Code, http.StatusNotModified, tag, response.Header().Get("ETag"))
+	}
+	if got := response.Header().Get("ETag"); got != tag {
+		t.Fatalf("ETag across the boundary = %q, want %q", got, tag)
 	}
 }

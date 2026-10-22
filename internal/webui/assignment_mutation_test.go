@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -121,13 +120,17 @@ func TestAssignRouteRecordsTheAssignmentTheBodyNames(t *testing.T) {
 		t.Fatalf("the answer named task %q", document.Task.ID)
 	}
 	// The section the page draws is the server's derivation, on this answer as
-	// on the poll: the panel redraws from what came back rather than composing a
-	// staleness hint of its own.
+	// on the poll: the panel redraws from what came back rather than composing
+	// a row of its own. It carries the recorded time the page words the
+	// staleness hint from, as the poll does, and not the phrase.
 	if document.Assignments == nil || len(*document.Assignments) != 3 {
 		t.Fatalf("the answer carried %v assignment views, want 3", document.Assignments)
 	}
-	if (*document.Assignments)[0].Ago == "" {
-		t.Fatal("the answer's assignment view carries no staleness hint")
+	if !(*document.Assignments)[0].CreatedAt.Equal(assignmentStamp) {
+		t.Fatalf("the answer's assignment view was recorded at %v, want %v", (*document.Assignments)[0].CreatedAt, assignmentStamp)
+	}
+	if strings.Contains(response.Body.String(), `"ago"`) {
+		t.Fatalf("the answer carries a clock-derived phrase: %s", response.Body.String())
 	}
 }
 
@@ -448,7 +451,7 @@ setTimeout(async () => {
     if ((options.method || "GET") === "GET") return { ok: true, json: async () => taskDocument };
     sent.push({ url, options });
     return { ok: true, json: async () => assignmentAnswer([
-      { principal: "someone@example.com", createdAt: new Date().toISOString(), ago: "assigned just now", removable: true }
+      { principal: "someone@example.com", createdAt: new Date().toISOString(), removable: true }
     ]) };
   };
   assignmentField().value = "someone@example.com";
@@ -665,42 +668,40 @@ setTimeout(async () => {
 	}
 }
 
-// A poll that changed only the staleness phrasing keeps the rows it drew.
+// A tick that changed only the staleness phrasing keeps the rows it drew.
 //
-// `ago` is recomputed from the server's clock on every poll, so a recent
+// The phrase is worded from the page's own clock on every tick, so a recent
 // assignment rewords itself about once a minute with nothing about the
 // assignment having changed. While the section was read-only that cost nothing:
 // rebuilding a paragraph is invisible. A row now holds a focusable Unassign
 // button, and replacing it takes a keyboard reader's focus to the document body
-// mid-tab and cancels a click in progress. So the signature ignores the phrase
-// and the existing meta line is written in place instead.
+// mid-tab and cancels a click in progress. So the phrase is written into the
+// existing meta line instead, and the row is never rebuilt for it.
 func TestHandlerClientKeepsAssignmentRowsWhenOnlyTheAgeChanged(t *testing.T) {
 	t.Parallel()
 	node := requireNode(t)
 	tasks := []core.Task{heldTask()}
 	board := &assignableBoard{task: heldTask()}
-	aged := presentationForTasksAs(tasks, boardIdentity)
-	for index := range aged[0].Assignments {
-		aged[0].Assignments[index].Ago = "assigned 4 days ago"
-	}
 	program := assignablePageProgram(t, board, tasks, `
-const aged = `+string(mustJSON(t, TasksDocument{
-		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: aged,
-	}))+`;
 setTimeout(async () => {
   const before = Array.from(assignmentRows());
   if (before.length !== 3) throw new Error("assignment rows = " + before.length);
   const control = withdrawControl(before[0]);
   if (!control) throw new Error("the first row drew no withdrawal to lose");
+  if (!before[0].textContent.includes("assigned 3 days ago")) {
+    throw new Error("the row did not start three days old: " + before[0].textContent);
+  }
 
-  taskResponse = aged;
+  // A day later, by the page's clock, and the same document from the server.
+  const realNow = Date.now;
+  Date.now = () => realNow() + 24 * 60 * 60 * 1000;
   await intervalCallback();
 
   const after = assignmentRows();
   if (after.length !== before.length) throw new Error("the section redrew a different number of rows");
   for (let index = 0; index < after.length; index += 1) {
     if (after[index] !== before[index]) {
-      throw new Error("row " + index + " was rebuilt by a poll that only changed its age");
+      throw new Error("row " + index + " was rebuilt by a tick that only changed its age");
     }
   }
   if (withdrawControl(after[0]) !== control) throw new Error("the withdrawal button was replaced under the reader");
@@ -710,7 +711,7 @@ setTimeout(async () => {
 }, 0);
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
-		t.Fatalf("execute the ageing poll: %v\n%s", err, output)
+		t.Fatalf("execute the aging poll: %v\n%s", err, output)
 	}
 }
 
@@ -749,7 +750,6 @@ setTimeout(async () => {
 // have derived rather than one it invented.
 func presentationForTasksAs(tasks []core.Task, actor string) []TaskPresentation {
 	views := make([]TaskPresentation, len(tasks))
-	now := time.Now()
 	for i, task := range tasks {
 		row := assignmentRow(task.Assignments)
 		views[i] = TaskPresentation{
@@ -757,7 +757,7 @@ func presentationForTasksAs(tasks []core.Task, actor string) []TaskPresentation 
 			IDPrefix:        task.ID,
 			AssignmentChips: row.Chips,
 			MoreAssignments: row.More,
-			Assignments:     assignmentPresentation(task.Assignments, now, actor),
+			Assignments:     assignmentPresentation(task.Assignments, actor),
 		}
 	}
 	return views

@@ -4542,6 +4542,11 @@ const boardAttachmentURLLimit = ` + strconv.Itoa(core.MaxAttachmentURLBytes) + `
 // image only for one of these, so a harness that invented the list would be
 // testing a rule the server does not have.
 const boardInlineMedia = ` + strconv.Quote(strings.Join(InlineAttachmentMediaTypes(), " ")) + `;
+// How long an assignment has stood is worded by presentation.AssignedAgo's rule,
+// which the server renders into the page as a table. It is written by the
+// encoder the page itself uses, so a harness cannot word an age by a rule the
+// server does not have.
+const boardAssignedAgo = ` + strconv.Quote(pageAssignedAgo()) + `;
 const scrollIntoViewCalls = [];
 function classTokens(element) {
   return (element.className || "").split(/\s+/).filter(Boolean);
@@ -4840,6 +4845,7 @@ boardView.dataset.attachmentNameLimit = String(boardAttachmentNameLimit);
 boardView.dataset.attachmentLabelLimit = String(boardAttachmentLabelLimit);
 boardView.dataset.attachmentUrlLimit = String(boardAttachmentURLLimit);
 boardView.dataset.inlineMedia = boardInlineMedia;
+boardView.dataset.assignedAgo = boardAssignedAgo;
 // The region that holds tasks whose status matches no column. It is always in
 // the document and hidden while empty, because the status that strands a task
 // arrives on a poll rather than on the first paint, and a region the server
@@ -7784,7 +7790,6 @@ func boardTasks() []core.Task {
 // that hands a poll an assigned task gets the chips the server would have sent.
 func presentationForTasks(tasks []core.Task) []TaskPresentation {
 	presentation := make([]TaskPresentation, len(tasks))
-	now := time.Now()
 	for i, task := range tasks {
 		row := assignmentRow(task.Assignments)
 		presentation[i] = TaskPresentation{
@@ -7792,7 +7797,7 @@ func presentationForTasks(tasks []core.Task) []TaskPresentation {
 			IDPrefix:        task.ID,
 			AssignmentChips: row.Chips,
 			MoreAssignments: row.More,
-			Assignments:     assignmentPresentation(task.Assignments, now, ""),
+			Assignments:     assignmentPresentation(task.Assignments, ""),
 		}
 	}
 	return presentation

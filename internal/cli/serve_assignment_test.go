@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -53,7 +54,7 @@ func TestRunServeAssignsAndWithdrawsThroughWebRoutes(t *testing.T) {
 	}
 	// The section the page draws travels with the answer, so the panel redraws
 	// from the server's derivation rather than composing one.
-	if len(views) != 1 || views[0].Ago == "" || !views[0].Removable {
+	if len(views) != 1 || views[0].CreatedAt.IsZero() || !views[0].Removable {
 		t.Fatalf("the answer's assignment views = %#v, want one this board may withdraw", views)
 	}
 
@@ -125,10 +126,10 @@ func TestRunServeAssignsAndWithdrawsThroughWebRoutes(t *testing.T) {
 // decoded here rather than imported so that this test reads the wire the page
 // reads rather than the struct the server encodes from.
 type servedAssignment struct {
-	Principal string `json:"principal"`
-	Label     string `json:"label"`
-	Ago       string `json:"ago"`
-	Removable bool   `json:"removable"`
+	Principal string    `json:"principal"`
+	Label     string    `json:"label"`
+	CreatedAt time.Time `json:"createdAt"`
+	Removable bool      `json:"removable"`
 }
 
 // decodeServeAssignment reads the task and the assignment section one of the two

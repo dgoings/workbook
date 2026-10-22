@@ -1,6 +1,7 @@
 package presentation
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -246,6 +247,52 @@ func AssignmentChips(assignments []core.Assignment) []string {
 	return chips
 }
 
+// AgeStep is one band of AssignedAgo's wording: the ages it covers, the unit
+// it counts them in, and the phrases it reads as.
+//
+// The rule is data rather than a switch so that it can be handed to a reader
+// that is not Go. The web board words an open page's rows itself, on its own
+// clock, so that the document it polls carries nothing that moves with time —
+// and it does so from this table, served to it as data, rather than from a
+// JavaScript copy of the rule that would go on saying the old thing the day this
+// one changed.
+type AgeStep struct {
+	// Below is the exclusive upper bound of the ages this band covers. Zero is
+	// no bound, which only the last band has, so every age reads as something.
+	// A band covers what the bands before it did not, so a negative age — a
+	// creation time ahead of this clock — reads as the first band.
+	Below time.Duration
+	// Unit is what the band counts in, in whole units rounded down. Zero is a
+	// band that counts nothing and always reads as One.
+	Unit time.Duration
+	// One is the phrase for a count of one, or the band's only phrase when it
+	// counts nothing.
+	One string
+	// Many is the phrase for any other count, with AgeCountPlaceholder where
+	// the number goes.
+	Many string
+}
+
+// AgeCountPlaceholder marks where a counted AgeStep puts its number.
+const AgeCountPlaceholder = "{count}"
+
+// assignedAgoSteps is the whole of AssignedAgo's rule. See AssignedAgo for why
+// it reads the way it does.
+var assignedAgoSteps = []AgeStep{
+	{Below: time.Minute, One: "assigned just now"},
+	{Below: time.Hour, Unit: time.Minute, One: "assigned 1 minute ago", Many: "assigned {count} minutes ago"},
+	{Below: 24 * time.Hour, Unit: time.Hour, One: "assigned 1 hour ago", Many: "assigned {count} hours ago"},
+	{Unit: 24 * time.Hour, One: "assigned 1 day ago", Many: "assigned {count} days ago"},
+}
+
+// AssignedAgoSteps returns AssignedAgo's rule as the table it is, for a reader
+// that words an assignment's age somewhere this package cannot run. It is a copy:
+// the rule is this package's, and a caller that edited what it was handed would
+// otherwise be editing what `workbook show` prints.
+func AssignedAgoSteps() []AgeStep {
+	return slices.Clone(assignedAgoSteps)
+}
+
 // AssignedAgo says how long an assignment has stood, which is the whole of what
 // this design means by staleness.
 //
@@ -260,22 +307,24 @@ func AssignmentChips(assignments []core.Assignment) []string {
 // timestamp is the recording pack's wall time, written wherever the assignment
 // was made — and this is not the place to raise it.
 func AssignedAgo(assignment core.Assignment, now time.Time) string {
-	elapsed := now.Sub(assignment.CreatedAt)
-	switch {
-	case elapsed < time.Minute:
-		return "assigned just now"
-	case elapsed < time.Hour:
-		return "assigned " + plural(int(elapsed.Minutes()), "minute") + " ago"
-	case elapsed < 24*time.Hour:
-		return "assigned " + plural(int(elapsed.Hours()), "hour") + " ago"
-	default:
-		return "assigned " + plural(int(elapsed.Hours()/24), "day") + " ago"
-	}
+	return wordAge(assignedAgoSteps, now.Sub(assignment.CreatedAt))
 }
 
-func plural(count int, noun string) string {
-	if count == 1 {
-		return "1 " + noun
+// wordAge reads an age through a table of bands. The web board's page reads the
+// served table the same way; a change to one reading is a change to the other.
+func wordAge(steps []AgeStep, elapsed time.Duration) string {
+	for _, step := range steps {
+		if step.Below != 0 && elapsed >= step.Below {
+			continue
+		}
+		if step.Unit == 0 {
+			return step.One
+		}
+		count := int64(elapsed / step.Unit)
+		if count == 1 {
+			return step.One
+		}
+		return strings.ReplaceAll(step.Many, AgeCountPlaceholder, strconv.FormatInt(count, 10))
 	}
-	return strconv.Itoa(count) + " " + noun + "s"
+	return ""
 }
