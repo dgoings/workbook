@@ -1918,7 +1918,10 @@
       // clocks already disagree by, which a phrase in whole minutes absorbs. A
       // time ahead of this clock reads as the first band, "just now", exactly as
       // it does in Go. A table that cannot be read words nothing, and a row then
-      // shows when it was recorded and stops there.
+      // shows when it was recorded and stops there. `{count}` is the table's
+      // own marker for where a number goes (presentation.AgeCountPlaceholder),
+      // part of its format rather than of the rule; assignment_age_test.go
+      // words every boundary here and in Go and fails if the two part ways.
       const assignedAgoSteps = (() => {
         try {
           const steps = JSON.parse(boardView.dataset.assignedAgo || "[]");
