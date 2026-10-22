@@ -497,6 +497,34 @@ func scanRepositoryForBareSkips(t *testing.T) repositoryScan {
 func scanTree(root string) (repositoryScan, error) {
 	fileSet := token.NewFileSet()
 	var scan repositoryScan
+	files, err := walkGoSources(root, func(relative string, source []byte) error {
+		skips, err := scanBareCapabilitySkips(fileSet, relative, source)
+		if err != nil {
+			return err
+		}
+		scan.Found = append(scan.Found, skips...)
+		return nil
+	})
+	if err != nil {
+		return repositoryScan{}, err
+	}
+	scan.Files = files
+	sort.Slice(scan.Found, func(i, j int) bool {
+		if scan.Found[i].File != scan.Found[j].File {
+			return scan.Found[i].File < scan.Found[j].File
+		}
+		return scan.Found[i].Line < scan.Found[j].Line
+	})
+	return scan, nil
+}
+
+// walkGoSources hands visit every Go source under root, by repository-relative
+// slash path, and returns the paths it visited in sorted order. Hidden
+// directories hold no module source, and a nested module -- including a
+// sibling worktree checked out beneath the root -- is somebody else's tree to
+// police, so both are pruned.
+func walkGoSources(root string, visit func(relative string, source []byte) error) ([]string, error) {
+	var files []string
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -505,9 +533,6 @@ func scanTree(root string) (repositoryScan, error) {
 			if path == root {
 				return nil
 			}
-			// Hidden directories hold no module source, and a nested module --
-			// including a sibling worktree checked out beneath the root -- is
-			// somebody else's tree to police.
 			if strings.HasPrefix(entry.Name(), ".") || containsModule(path) {
 				return fs.SkipDir
 			}
@@ -525,25 +550,17 @@ func scanTree(root string) (repositoryScan, error) {
 		if err != nil {
 			return err
 		}
-		skips, err := scanBareCapabilitySkips(fileSet, relative, source)
-		if err != nil {
+		if err := visit(relative, source); err != nil {
 			return err
 		}
-		scan.Files = append(scan.Files, relative)
-		scan.Found = append(scan.Found, skips...)
+		files = append(files, relative)
 		return nil
 	})
 	if err != nil {
-		return repositoryScan{}, err
+		return nil, err
 	}
-	sort.Strings(scan.Files)
-	sort.Slice(scan.Found, func(i, j int) bool {
-		if scan.Found[i].File != scan.Found[j].File {
-			return scan.Found[i].File < scan.Found[j].File
-		}
-		return scan.Found[i].Line < scan.Found[j].Line
-	})
-	return scan, nil
+	sort.Strings(files)
+	return files, nil
 }
 
 // scanBareCapabilitySkips reports every skip call in a function that also

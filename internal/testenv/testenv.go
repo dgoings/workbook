@@ -8,6 +8,11 @@
 // module's Go sources -- test files and the helper packages that take a
 // *testing.T -- and fail when a function probes for a tool with exec.LookPath
 // and disposes of the result with a bare t.Skip.
+//
+// It also writes the scripts and fake binaries tests run, through
+// WriteExecutable, so that a parallel test's fork cannot leave one "text file
+// busy" on Linux; a scan of the same sources rejects writing one with
+// os.WriteFile instead.
 package testenv
 
 import (
