@@ -251,6 +251,14 @@ func TestHandlerClientTakesNoDropsIntoTheUnknownStatusRegion(t *testing.T) {
 // stranded card is the one this change opens, and it is the likelier of the two,
 // because the clone most apt to be rewriting a task is the clone whose status
 // change stranded it here in the first place.
+//
+// The card drawn in the one poll between the confirmation and the next read is
+// pinned too, because what it leaves out is deliberate and nothing else would
+// notice it changing. The doomed task depends on another and is held by
+// somebody, and the board first draws it from a derived view that says so
+// under a short prefix — so a fallback that guessed a prefix, counted
+// prerequisites it cannot judge, or invented chips draws something the derived
+// card did not.
 func TestHandlerClientSurvivesATaskDeletedMidDrag(t *testing.T) {
 	t.Parallel()
 	vocabulary := handlerVocabulary(t)
@@ -273,11 +281,37 @@ func TestHandlerClientSurvivesATaskDeletedMidDrag(t *testing.T) {
 		t.Run(dragged.name, func(t *testing.T) {
 			doomed := clientPlacementTask("WB-01J0000000000000000000A101", "Doomed", dragged.status, core.PriorityMedium)
 			doomed.Head = "head-a"
+			doomed.Dependencies = []string{bystander.ID}
+			doomed.Assignments = []core.Assignment{heldAssignment("dylan@example.com", "impl-1")}
+			// What the server derives for the doomed task before the delete:
+			// everything the fallback must not claim, under a prefix shorter
+			// than the ID it falls back to.
+			derivedPresentation := presentationForTasks([]core.Task{doomed, bystander})
+			derivedPresentation[0].IDPrefix = "WB-01J0000000000000000000A"
+			derivedPresentation[0].DependenciesTotal = 1
+			derivedPresentation[0].WaitingOnDependencies = true
+			derived := mustJSON(t, TasksDocument{
+				Format: "workbook.tasks", Version: 1, VocabularyHead: "head-1",
+				Tasks: []core.Task{doomed, bystander}, Presentation: derivedPresentation,
+			})
 			runVocabularyClient(t, "delete during a drag "+dragged.name, "/", vocabulary, "head-1",
 				[]core.Task{doomed, bystander}, `
+  const doomedID = `+strconv.Quote(doomed.ID)+`;
+  const shownPrefix = (node) => {
+    const code = findElement(node, (element) => element.tagName === "CODE");
+    return code ? code.textContent : null;
+  };
+  const dependencyRow = (node) => findElement(node, (element) => hasDataKey(element, "dependencyProgress"));
+  const chipRow = (node) => findElement(node, (element) => hasDataKey(element, "assignees"));
+
+  taskResponse = `+string(derived)+`;
+  await intervalCallback();
   const shipped = boardLists.find((list) => list.dataset.status === "shipped");
-  const card = boardCard(`+strconv.Quote(doomed.ID)+`);
+  const card = boardCard(doomedID);
   if (!card) throw new Error("the board drew no card for the doomed task");
+  if (shownPrefix(card) !== "WB-01J0000000000000000000A" || !dependencyRow(card) || !chipRow(card)) {
+    throw new Error("the derived card does not show its prefix, prerequisites and chips, so this test proves nothing");
+  }
   const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
   card.rect = { top: 0, bottom: 80 };
   documentEventListeners.dragstart({ target: card, dataTransfer });
@@ -290,6 +324,22 @@ func TestHandlerClientSurvivesATaskDeletedMidDrag(t *testing.T) {
   // where the renderer used to throw.
   await documentEventListeners.drop({ target: shipped, clientY: 1, dataTransfer, preventDefault() {} });
   documentEventListeners.dragend({ target: card });
+
+  // The one poll's worth of fallback card. The prefix is the whole ID, which
+  // is always right; there is no prerequisite row, because the client cannot
+  // tell which prerequisites are done and "0 of 1" over a finished one would be
+  // a lie; and there are no chips, because their short form is the server's.
+  const fallback = boardCard(doomedID);
+  if (!fallback) throw new Error("the confirmation drew no card, so the fallback view was never rendered");
+  if (shownPrefix(fallback) !== doomedID || fallback.dataset.idPrefix !== doomedID) {
+    throw new Error("the fallback card shows the prefix " + JSON.stringify(shownPrefix(fallback)) +
+      " (data " + JSON.stringify(fallback.dataset.idPrefix) + "), want the full ID " + doomedID);
+  }
+  if (dependencyRow(fallback)) {
+    throw new Error("the fallback card draws a prerequisite row it cannot know: " + JSON.stringify(dependencyRow(fallback).textContent));
+  }
+  if (fallback.textContent.includes("Waiting on dependencies")) throw new Error("the fallback card claims the task is waiting");
+  if (chipRow(fallback)) throw new Error("the fallback card draws assignment chips: " + JSON.stringify(chipRow(fallback).textContent));
 
   // The board is still rendering, which is the whole claim: the poll that
   // follows draws, and it takes the deleted card away.
