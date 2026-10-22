@@ -318,6 +318,17 @@ func TestAssignedAgoReadsInWholeUnits(t *testing.T) {
 		"days":        {now.Add(-72 * time.Hour), "assigned 3 days ago"},
 		"clock skew":  {now.Add(time.Minute), "assigned just now"},
 		"same moment": {now, "assigned just now"},
+		// Each boundary belongs to the band above it, to the nanosecond. The
+		// page words the same rule from the same table, so where a band starts
+		// is part of the rule rather than an accident of its arithmetic.
+		"a nanosecond short of a minute": {now.Add(-time.Minute + time.Nanosecond), "assigned just now"},
+		"exactly a minute":               {now.Add(-time.Minute), "assigned 1 minute ago"},
+		"a nanosecond short of an hour":  {now.Add(-time.Hour + time.Nanosecond), "assigned 59 minutes ago"},
+		"exactly an hour":                {now.Add(-time.Hour), "assigned 1 hour ago"},
+		"a nanosecond short of a day":    {now.Add(-24*time.Hour + time.Nanosecond), "assigned 23 hours ago"},
+		"exactly a day":                  {now.Add(-24 * time.Hour), "assigned 1 day ago"},
+		"exactly two days":               {now.Add(-48 * time.Hour), "assigned 2 days ago"},
+		"a year":                         {now.Add(-365 * 24 * time.Hour), "assigned 365 days ago"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := AssignedAgo(core.Assignment{CreatedAt: test.created}, now)
@@ -325,6 +336,42 @@ func TestAssignedAgoReadsInWholeUnits(t *testing.T) {
 				t.Fatalf("AssignedAgo() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+// The rule is a table so that it can travel: the web board words an open page's
+// rows from this same table, served to it as data, rather than from a copy of
+// the rule. What the table must be for that is a ladder: ascending bounds, one
+// unbounded last band so every age has a phrase, and a count's phrase wherever
+// a band counts. It is handed out as a copy, so a caller that edits what it was
+// given cannot change what AssignedAgo says.
+func TestAssignedAgoStepsAreTheRule(t *testing.T) {
+	steps := AssignedAgoSteps()
+	if len(steps) == 0 {
+		t.Fatal("AssignedAgoSteps() is empty")
+	}
+	for index, step := range steps {
+		last := index == len(steps)-1
+		if last != (step.Below == 0) {
+			t.Fatalf("step %d Below = %v; only the last step is unbounded, and it must be", index, step.Below)
+		}
+		if index > 0 && !last && step.Below <= steps[index-1].Below {
+			t.Fatalf("step %d Below = %v does not rise above step %d's %v", index, step.Below, index-1, steps[index-1].Below)
+		}
+		if step.One == "" {
+			t.Fatalf("step %d has no phrase", index)
+		}
+		if step.Unit != 0 && !strings.Contains(step.Many, AgeCountPlaceholder) {
+			t.Fatalf("step %d counts in %v but its Many phrase %q has no %s", index, step.Unit, step.Many, AgeCountPlaceholder)
+		}
+	}
+
+	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	stood := core.Assignment{CreatedAt: now.Add(-5 * time.Minute)}
+	before := AssignedAgo(stood, now)
+	steps[1].Many = "edited by a caller"
+	if after := AssignedAgo(stood, now); after != before {
+		t.Fatalf("editing the returned table changed AssignedAgo from %q to %q", before, after)
 	}
 }
 
