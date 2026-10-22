@@ -12,7 +12,7 @@
 // It also writes the scripts and fake binaries tests run, through
 // WriteExecutable, so that a parallel test's fork cannot leave one "text file
 // busy" on Linux; a scan of the same sources rejects writing one with
-// os.WriteFile instead.
+// os.WriteFile or os.OpenFile and a constant executable mode it can fold.
 package testenv
 
 import (
