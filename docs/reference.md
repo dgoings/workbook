@@ -422,7 +422,13 @@ and never widens it. The task's own page carries the whole list under
 "assigned 3 days ago" phrasing `workbook show` prints — above the attachments.
 It follows the poll, so an assignment made from the CLI in another terminal
 appears on an open page within a second without disturbing anything being typed
-into it.
+into it. The phrasing is worded by the page from the recorded time, by the same
+rule `workbook show` uses, which the server renders into the page as data; it
+advances from "just now" through minutes, hours and days on the page's own
+one-second tick, so an open page's rows keep ageing while the poll reports
+nothing changed. The page's clock is the browser's: on the machine running
+`serve` that is the server's clock, and a browser elsewhere whose clock
+disagrees by a few seconds can read a phrase that much early or late.
 
 The section also makes assignments. Type an identity into **Assign someone** and
 press Assign; leave the field blank and the assignment is `serve`'s own
@@ -1741,9 +1747,10 @@ The two assignment mutations are `workbook update --assign` and `--unassign`
 reached over HTTP, through the same planners and the same refusals. Both take an
 optional `expectedHead` and answer with the whole task; the answer also carries
 an `assignments` array — the section as the page draws it, with each row's
-staleness phrasing, the `value` a withdrawal names it by, and whether this
-checkout may withdraw it — because none of them is a field of the task and none
-of them is a client's to compose. Neither takes the claim
+recording time, the `value` a withdrawal names it by, and whether this checkout
+may withdraw it — because the last two are not fields of the task and neither is
+a client's to compose. The rows carry no staleness phrasing; the page words it
+from the recording time, exactly as it does for a polled row. Neither takes the claim
 gate, and that is the one place the two surfaces diverge: plain `workbook update
 --assign` refuses a task somebody else holds with the `assigned` category, and
 `--force` is what clears that gate, while assigning from a board is always
@@ -1983,7 +1990,10 @@ separate from `workbook config set auto-sync`.
 The executable embeds its HTML, CSS, and JavaScript, and the page polls
 `/api/tasks` every second. Each answer carries an `ETag`, and the page sends it
 back as `If-None-Match`; a poll that finds nothing changed is answered
-`304 Not Modified` with no body, counts as a sync, and redraws nothing. Each
+`304 Not Modified` with no body, counts as a sync, and redraws nothing. The
+document carries nothing derived from the clock — an assignment's "assigned 5
+minutes ago" is worded by the page, as described above — so a board nobody is
+changing is answered 304 on every poll, however recent its assignments. Each
 poll that does bring a new document reconciles the board by task ID instead of
 rebuilding it: a card whose data did not change keeps its element, a changed one
 is updated in place, and only added, removed, and reordered cards are touched.
