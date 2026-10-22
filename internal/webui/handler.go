@@ -686,10 +686,12 @@ type TaskMutationDocument struct {
 	// so the answer they send is the one they have always sent.
 	//
 	// It is here rather than derived by the client for the reason the poll's
-	// presentation is: a row's staleness hint is presentation.AssignedAgo's
-	// wording and its withdrawal is core's removal rule, and neither is a member
-	// of core.Task. A panel that composed them from the task it was handed would
-	// be the second copy of two rules the server owns.
+	// presentation is: a row's value and its withdrawal are core's composition
+	// and core's removal rule, and neither is a member of core.Task. A panel
+	// that composed them from the task it was handed would be the second copy of
+	// two rules the server owns. The row's staleness hint is not among them: it
+	// is worded on the page, from CreatedAt and the rule the page is served (see
+	// AssignmentPresentation).
 	//
 	// A pointer, because the member has three states and a slice has two. Absent
 	// is "this answer says nothing about assignments", which is every other
@@ -712,28 +714,33 @@ type TaskPresentation struct {
 	// card drawing exactly the nodes it drew before assignments existed.
 	//
 	// They are derived here rather than in the client for the reason IDPrefix is:
-	// the short form of an assignment, the number a capped row hides, and the
-	// words a staleness hint is phrased in are all rules, and a second copy of a
-	// rule in JavaScript is a copy that goes on saying the old thing the day the
-	// rule changes. presentation.AssignmentChip and presentation.AssignedAgo are
-	// the same functions `workbook board` and `workbook show` print through, so
-	// the three surfaces cannot drift.
+	// the short form of an assignment and the number a capped row hides are
+	// rules, and a second copy of a rule in JavaScript is a copy that goes on
+	// saying the old thing the day the rule changes. presentation.AssignmentChip
+	// is the same function `workbook board` prints through, so the surfaces
+	// cannot drift. The words a staleness hint is phrased in are a rule too, and
+	// they reach the page as one — see AssignmentPresentation for why they are
+	// not phrased here.
 	AssignmentChips []string                 `json:"assignmentChips,omitempty"`
 	MoreAssignments int                      `json:"moreAssignments,omitempty"`
 	Assignments     []AssignmentPresentation `json:"assignments,omitempty"`
 }
 
 // AssignmentPresentation is one assignment as the task page draws it: who holds
-// the task, which of their agents holds it, when that was recorded, and how long
-// ago that was.
+// the task, which of their agents holds it, and when that was recorded.
 //
-// Ago is a server-derived string rather than a client computation over CreatedAt
-// because it is `workbook show`'s own wording, from presentation.AssignedAgo. It
-// is recomputed on every poll, so an open page's "assigned 59 minutes ago"
-// becomes "assigned 1 hour ago" a minute later without a reload. CreatedAt rides
-// along beside it because the exact time is what a reader settling a stale
-// assignment between themselves actually needs, and a phrase in whole days
-// cannot carry it.
+// How long ago that was is not here, though the page shows it. The phrase is
+// `workbook show`'s own wording, from presentation.AssignedAgo, and it moves on
+// the clock — "assigned 59 minutes ago" becomes "assigned 1 hour ago" with
+// nothing about the assignment having changed. A document that carried it would
+// change on those ticks too, and the board's conditional poll would send every
+// open page the whole task list again each time a fresh assignment's phrase
+// crossed a minute. So the document carries CreatedAt, which never moves, and
+// the page words it on its own tick from presentation.AssignedAgoSteps, which
+// the server renders into the page as data (see pageAssignedAgo). The rule
+// stays one rule in one place; only where it is applied moved. CreatedAt is
+// also what a reader settling a stale assignment between themselves actually
+// needs, since a phrase in whole days cannot carry the exact time.
 // Removable is whether the identity this board writes as may withdraw this
 // assignment. It is core.Assignment.RemovableBy, asked on the server, because
 // the rule is decided from the assignment's own principal and creator and the
@@ -754,7 +761,6 @@ type AssignmentPresentation struct {
 	Label     string    `json:"label,omitempty"`
 	Value     string    `json:"value,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
-	Ago       string    `json:"ago"`
 	Removable bool      `json:"removable,omitempty"`
 }
 
@@ -802,7 +808,7 @@ func assignmentRow(assignments []core.Assignment) AssignmentRow {
 // route takes and whether the row may be withdrawn from here — and an empty one
 // leaves both off every row, which is what keeps a read-only board's document
 // byte-for-byte what it was.
-func assignmentPresentation(assignments []core.Assignment, now time.Time, actor string) []AssignmentPresentation {
+func assignmentPresentation(assignments []core.Assignment, actor string) []AssignmentPresentation {
 	if len(assignments) == 0 {
 		return nil
 	}
@@ -817,7 +823,6 @@ func assignmentPresentation(assignments []core.Assignment, now time.Time, actor 
 			Label:     assignment.Label,
 			Value:     value,
 			CreatedAt: assignment.CreatedAt,
-			Ago:       presentation.AssignedAgo(assignment, now),
 			Removable: actor != "" && assignment.RemovableBy(actor),
 		})
 	}
@@ -1097,6 +1102,11 @@ type pageData struct {
 	// the name could offer to assign somebody it could not name. See
 	// handler.assignIdentity for what makes it empty.
 	AssignIdentity string
+	// AssignedAgo is presentation.AssignedAgo's wording rule, as the JSON table
+	// pageAssignedAgo encodes, rendered into the page so that the page can word
+	// an assignment's age on its own clock. See AssignmentPresentation for why
+	// the polled document does not carry the phrase itself.
+	AssignedAgo string
 	// StatusTags are the three roles a status may carry, rendered into the
 	// configuration page's forms for the reason the columns are rendered into
 	// the board: the client must not carry a second copy of a set the server
@@ -1950,6 +1960,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		AttachmentURLLimit:    core.MaxAttachmentURLBytes,
 		InlineImageMediaTypes: strings.Join(InlineAttachmentMediaTypes(), " "),
 		AssignIdentity:        handler.assignIdentity(),
+		AssignedAgo:           pageAssignedAgo(),
 		StatusTags:            core.StatusTags(),
 		PriorityTags:          core.PriorityTags(),
 		Administrable:         handler.administrable(),
@@ -2158,6 +2169,47 @@ func keyViews(keys core.KeySet) []KeyView {
 		})
 	}
 	return views
+}
+
+// pageAgeStep is one band of presentation.AssignedAgoSteps as the page carries
+// it. The bounds are in milliseconds, which is what a browser's clock counts in;
+// a zero bound is left out, which the page reads as no bound, the way Go does.
+type pageAgeStep struct {
+	Below int64  `json:"below,omitempty"`
+	Unit  int64  `json:"unit,omitempty"`
+	One   string `json:"one"`
+	Many  string `json:"many,omitempty"`
+}
+
+// pageAssignedAgo encodes presentation.AssignedAgo's rule for the attribute the
+// page carries it in.
+//
+// It is the table itself rather than anything derived from it, so the page
+// applies the one rule `workbook show` prints through and holds no copy of its
+// own: a change to the thresholds or the phrases is a change to
+// presentation.AssignedAgoSteps, and the page says the new thing on its next
+// load. Nothing in it depends on the clock, so it is rendered once with the
+// page rather than sent on every poll.
+func pageAssignedAgo() string {
+	steps := presentation.AssignedAgoSteps()
+	views := make([]pageAgeStep, 0, len(steps))
+	for _, step := range steps {
+		views = append(views, pageAgeStep{
+			Below: step.Below.Milliseconds(),
+			Unit:  step.Unit.Milliseconds(),
+			One:   step.One,
+			Many:  step.Many,
+		})
+	}
+	encoded, err := json.Marshal(views)
+	if err != nil {
+		// Two integers and two strings per step: nothing encoding/json can
+		// refuse. An empty table is a better answer to the impossible case than
+		// a page that will not load — a row then shows when it was recorded and
+		// no phrase beside it.
+		return "[]"
+	}
+	return string(encoded)
 }
 
 // pageKeys encodes a project's keys for the attribute the page carries them in.
@@ -2836,12 +2888,14 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 	// variant — reaches it only through what was encoded, so no bookkeeping can
 	// fall out of step with what a client would have read.
 	//
-	// That includes wording derived from the clock. An assignment's row says
-	// how long ago it was recorded (presentation.AssignedAgo, by way of
-	// taskPresentation), so the tag also moves when that phrase crosses a
-	// minute, hour or day, and an idle board holding recent assignments reads
-	// the whole document again on those ticks. That is correct — the client
-	// is shown the phrase `workbook show` would print — just not free.
+	// Nothing in the document is derived from the clock, which is what lets an
+	// idle board be answered 304 on every poll. The one thing on the page that
+	// does move with time — an assignment row's "assigned 5 minutes ago" — is
+	// worded by the page from the assignment's CreatedAt, on its own tick, by
+	// the rule presentation.AssignedAgo applies, served to it as data with the
+	// page. Were the phrase in here, the tag would move each time a fresh
+	// assignment's age crossed a minute, hour or day, and every open board would
+	// read the whole document again with no task having changed.
 	err = writeTaggedJSON(writer, request, TasksDocument{
 		Format:          "workbook.tasks",
 		Version:         1,
@@ -3210,10 +3264,6 @@ func (handler *handler) writeTaskMutation(writer http.ResponseWriter, result cor
 
 func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary, actor string) []TaskPresentation {
 	views := presentation.TaskViews(tasks, vocabulary)
-	// One clock for the whole document, read once. A staleness hint computed per
-	// task could cross a minute boundary halfway down the board and report two
-	// ages for two assignments recorded in the same second.
-	now := time.Now()
 	result := make([]TaskPresentation, len(views))
 	for index, view := range views {
 		row := assignmentRow(view.Task.Assignments)
@@ -3225,7 +3275,7 @@ func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary, actor strin
 			WaitingOnDependencies: view.WaitingOnDependencies,
 			AssignmentChips:       row.Chips,
 			MoreAssignments:       row.More,
-			Assignments:           assignmentPresentation(view.Task.Assignments, now, actor),
+			Assignments:           assignmentPresentation(view.Task.Assignments, actor),
 		}
 	}
 	return result

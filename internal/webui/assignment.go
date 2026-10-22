@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -150,17 +149,18 @@ func (handler *handler) removeTaskAssignment(writer http.ResponseWriter, request
 // draws from it.
 //
 // The section rides along because it is derived rather than read: an assignment
-// row's staleness hint is presentation.AssignedAgo's wording and its withdrawal
-// is core's removal rule, and neither is anywhere in core.Task. Without it the
-// page would either wait a poll tick to show a reader their own assignment or
-// compose those two answers itself — which is the second copy of a rule the
-// whole presentation contract exists to prevent.
+// row's value is core's composition and its withdrawal is core's removal rule,
+// and neither is anywhere in core.Task. Without it the page would either wait a
+// poll tick to show a reader their own assignment or compose those two answers
+// itself — which is the second copy of a rule the whole presentation contract
+// exists to prevent. The row's staleness hint is worded by the page, from the
+// recorded time and the rule it was served with, exactly as a polled row's is.
 // A withdrawal that leaves nobody holding the task answers `[]` rather than
 // leaving the member out: see TaskMutationDocument.Assignments for why the
 // difference between "no assignments" and "not about assignments" has to survive
 // the wire.
 func (handler *handler) writeAssignmentMutation(writer http.ResponseWriter, result core.MutationResult) {
-	section := assignmentPresentation(result.Task.Assignments, time.Now(), handler.assignIdentity())
+	section := assignmentPresentation(result.Task.Assignments, handler.assignIdentity())
 	if section == nil {
 		section = []AssignmentPresentation{}
 	}

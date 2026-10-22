@@ -1444,7 +1444,7 @@
          reason: which key that is belongs to the server, and a client
          re-deriving it from the list could disagree about where the task it
          just created went. -->
-    <div class="board-view" data-board-view data-priorities="{{ .Priorities }}" data-default-priority="{{ .DefaultPriority }}" data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-vocabulary-shape="{{ .VocabularyShape }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}" data-keys="{{ .Keys }}" data-current-key="{{ .CurrentKey }}">
+    <div class="board-view" data-board-view data-priorities="{{ .Priorities }}" data-default-priority="{{ .DefaultPriority }}" data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-vocabulary-shape="{{ .VocabularyShape }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}" data-assigned-ago="{{ .AssignedAgo }}" data-keys="{{ .Keys }}" data-current-key="{{ .CurrentKey }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built
@@ -1898,6 +1898,47 @@
       // which the shared scaffolding always appends: on this path it is hidden,
       // never given text, and never unhidden.
       const assignIdentity = boardView.dataset.assignIdentity || "";
+      // How long an assignment has stood, in the words `workbook show` prints:
+      // "assigned just now", then minutes, hours and days. The rule is
+      // presentation.AssignedAgo's, and it arrives here as the table that
+      // function reads — each band's exclusive upper bound and unit in
+      // milliseconds, and its phrases — rather than as a copy written into this
+      // script, so the day the rule changes this page says the new thing.
+      //
+      // It is applied here rather than on the server because the phrase moves
+      // with the clock and nothing else. Carried in the polled document, it
+      // changed that document each time a fresh assignment's age crossed a
+      // minute, and every open board read the whole task list again for a
+      // phrase. The document carries the recorded time instead, which never
+      // moves, and this page words it on its own tick.
+      //
+      // The clock is this page's, where it was the server's. For the board
+      // `workbook serve` opens on this machine they are the same clock; for a
+      // browser elsewhere the two can disagree by the few seconds clones'
+      // clocks already disagree by, which a phrase in whole minutes absorbs. A
+      // time ahead of this clock reads as the first band, "just now", exactly as
+      // it does in Go. A table that cannot be read words nothing, and a row then
+      // shows when it was recorded and stops there.
+      const assignedAgoSteps = (() => {
+        try {
+          const steps = JSON.parse(boardView.dataset.assignedAgo || "[]");
+          return Array.isArray(steps) ? steps : [];
+        } catch (_) {
+          return [];
+        }
+      })();
+      function assignedAgo(createdAt, now) {
+        const recorded = Date.parse(createdAt);
+        if (Number.isNaN(recorded)) return "";
+        const elapsed = now - recorded;
+        for (const step of assignedAgoSteps) {
+          if (step.below && elapsed >= step.below) continue;
+          if (!step.unit) return step.one || "";
+          const count = Math.floor(elapsed / step.unit);
+          return count === 1 ? step.one || "" : String(step.many || "").split("{count}").join(String(count));
+        }
+        return "";
+      }
       let vocabularyChanged = false;
       const syncToggle = document.querySelector("[data-sync-toggle]");
       const descriptionToggle = document.querySelector("[data-description-toggle]");
@@ -4987,9 +5028,9 @@
           rerender();
           if (!panel.owns()) return answer;
           // The answer travels beside the task because one panel is not drawn
-          // from the task: an assignment row's staleness hint and its withdrawal
-          // are the server's derivations, and the assignments route carries them
-          // in the answer. Every other panel takes the task and ignores the
+          // from the task: an assignment row's value and its withdrawal are the
+          // server's derivations, and the assignments route carries them in the
+          // answer. Every other panel takes the task and ignores the
           // second argument, exactly as it did before there was one.
           panel.follow(answer.task, answer);
           const warnings = mutationWarnings(answer);
@@ -5118,18 +5159,18 @@
         // the rows from being rebuilt under a reader's caret once a second — the
         // same contract a card holds through cardSignature.
         //
-        // The signature deliberately leaves out each row's `ago` phrase. That
-        // phrase is recomputed from the server's clock on every poll, so a
-        // recent assignment rewords itself about once a minute with nothing
-        // about the assignment having changed; counting it would rebuild every
-        // row on that tick. That was invisible while the rows held only text,
-        // but a row now holds a focusable Unassign button, and destroying it
-        // takes a keyboard reader's focus to <body> mid-tab. So an `ago` that
-        // moved alone is written into the existing meta lines instead.
+        // Each row's "assigned 5 minutes ago" is not part of it. That phrase is
+        // worded from this page's clock (assignedAgo) and moves about once a
+        // minute for a recent assignment with nothing about the assignment
+        // having changed; redrawing the rows for it would rebuild every row on
+        // that tick. That was invisible while the rows held only text, but a row
+        // now holds a focusable Unassign button, and destroying it takes a
+        // keyboard reader's focus to <body> mid-tab. So the phrase is written
+        // into the existing meta lines instead, by age() below.
         let signature = null;
-        // The meta line of each row currently drawn, in the order the rows are
-        // in, so an ago-only change can be written in place without walking the
-        // list back out of the document.
+        // The meta line of each row currently drawn and the time it was
+        // recorded, in the order the rows are in, so the phrase can be
+        // re-worded in place without walking the list back out of the document.
         let ages = [];
         function assignmentSignature(held) {
           return JSON.stringify(held.map((assignment) => [
@@ -5137,14 +5178,20 @@
             assignment.createdAt, assignment.removable === true
           ]));
         }
-        function assignmentMetaText(assignment) {
-          return recordedAt(assignment.createdAt) + " · " + assignment.ago;
+        function assignmentMetaText(createdAt, now) {
+          const phrase = assignedAgo(createdAt, now);
+          return phrase ? recordedAt(createdAt) + " · " + phrase : recordedAt(createdAt);
         }
-        function refreshAges(held) {
-          held.forEach((assignment, index) => {
-            const meta = ages[index];
-            if (meta) text(meta, assignmentMetaText(assignment));
-          });
+        // Re-words every drawn row against one reading of the clock, so two
+        // assignments recorded in the same second never read as two ages. It
+        // writes only a line whose words changed: the tick that calls it comes
+        // once a second, and nearly every one of them changes nothing.
+        function age() {
+          const now = Date.now();
+          for (const row of ages) {
+            const next = assignmentMetaText(row.createdAt, now);
+            if (row.meta.textContent !== next) text(row.meta, next);
+          }
         }
         // Where the section belongs when there is something to draw: this parent,
         // immediately before this sibling. Held rather than looked up so that a
@@ -5156,7 +5203,7 @@
           const held = Array.isArray(assignments) ? assignments : [];
           const next = assignmentSignature(held);
           if (next === signature) {
-            refreshAges(held);
+            age();
             return;
           }
           signature = next;
@@ -5174,7 +5221,8 @@
           panel.resetControls();
           panel.setCount(held.length === 1 ? "1 assignment" : held.length + " assignments");
           ages = [];
-          panel.list.replaceChildren(...held.map(assignmentRow));
+          const now = Date.now();
+          panel.list.replaceChildren(...held.map((assignment) => assignmentRow(assignment, now)));
           if (assignable) {
             panel.claim(submit);
             text(panel.empty, "Nobody is assigned to this task yet.");
@@ -5182,7 +5230,7 @@
           }
           if (parent && !parent.contains(panel.section)) parent.insertBefore(panel.section, anchor);
         }
-        function assignmentRow(assignment) {
+        function assignmentRow(assignment, now) {
           const item = document.createElement("li");
           item.className = "assignment";
           // The principal and the label, drawn as the one value somebody types
@@ -5207,15 +5255,16 @@
             who.append(label);
           }
           // The exact time it was recorded and how long ago that was. The
-          // phrase is the server's — presentation.AssignedAgo, the same words
-          // `workbook show` prints — and it is recomputed on every poll, so an
-          // open page's hint ages without a reload. Nothing expires and this is
-          // not a warning: an assignment three weeks old is a fact for people
-          // to settle between themselves.
+          // phrase is presentation.AssignedAgo's — the same words `workbook
+          // show` prints, by the rule the server rendered into this page — and
+          // it is re-worded on every tick, so an open page's hint ages without
+          // a reload and without a poll having to bring anything. Nothing
+          // expires and this is not a warning: an assignment three weeks old is
+          // a fact for people to settle between themselves.
           const meta = document.createElement("p");
           meta.className = "assignment__meta";
-          text(meta, assignmentMetaText(assignment));
-          ages.push(meta);
+          text(meta, assignmentMetaText(assignment.createdAt, now));
+          ages.push({ meta, createdAt: assignment.createdAt });
           item.append(who, meta);
           // Withdrawal is offered only where the server said this board may make
           // one. The rule is core's — the assignee may release what they hold,
@@ -5241,8 +5290,8 @@
           return item;
         }
         // How a write redraws this section. It takes the answer rather than the
-        // task because the task does not carry what a row draws: the staleness
-        // hint is the server's wording and the withdrawal is the server's rule,
+        // task because the task does not carry what a row draws: the value and
+        // the withdrawal are the server's composition and the server's rule,
         // and the assignment routes send both back beside the task they changed.
         // A refusal has no answer to draw from and falls back to the last poll's
         // view, which is the truth about the task the write did not change.
@@ -5260,7 +5309,8 @@
           // section is in the document at all is this controller's answer and it
           // changes with every poll.
           mountBefore(into, before) { parent = into; anchor = before; },
-          follow(view) { draw(view && view.assignments); }
+          follow(view) { draw(view && view.assignments); },
+          age
         };
       }
       function commentAttribution(comment) {
@@ -7347,14 +7397,18 @@
             // follow the poll — no field on this form does, which is what keeps
             // a reader's edits under their caret.
             // The assignments section follows the same read, and follows it
-            // through the presentation rather than the task: the chip's short
-            // form and the staleness hint's wording are derived on the server,
-            // so what a poll brings this section is the view beside the task
-            // rather than the task itself. A CLI assign or unassign made
+            // through the presentation rather than the task: a row's value and
+            // its withdrawal are derived on the server, so what a poll brings
+            // this section is the view beside the task rather than the task
+            // itself. A CLI assign or unassign made
             // elsewhere therefore appears here within a poll tick — and, like
             // every other panel on this page, it moves nothing the form above it
             // is holding, because no field on that form follows the poll at all.
-            follow: (held, view) => { attachments.follow(held); comments.follow(held); adoptDescriptionAttachments(held); assignments.follow(view); }
+            follow: (held, view) => { attachments.follow(held); comments.follow(held); adoptDescriptionAttachments(held); assignments.follow(view); },
+            // How long each assignment has stood, re-worded on the page's own
+            // tick whatever the poll answered: a board left idle is answered
+            // 304 and brings this section nothing, and its rows still age.
+            age: () => assignments.age()
           };
           // Attachments before comments, and the change log after both: the
           // attachment list is bounded at fifty rows while a thread has no
@@ -7600,9 +7654,9 @@
           dependenciesComplete: 0,
           waitingOnDependencies: false,
           // No chips for the poll this gap lasts, on the dependency counts'
-          // reasoning: the short form of a principal and the wording of a
-          // staleness hint are the server's, and a row this client invented from
-          // the raw values would disagree with the row beside it. The next poll
+          // reasoning: the short form of a principal and a row's withdrawal are
+          // the server's, and a row this client invented from the raw values
+          // would disagree with the row beside it. The next poll
           // derives the real view or takes the card away.
           assignmentChips: [],
           moreAssignments: 0,
@@ -11572,12 +11626,17 @@
       // to follow.
       // The presentation travels with the tasks because one of the panels is
       // drawn from it rather than from the task: an assignment's chip and its
-      // staleness hint are derived on the server, and the page must not compose
+      // withdrawal are derived on the server, and the page must not compose
       // either from the raw values it happens to be holding.
       function followOpenThreadPanels(tasks, presentation) {
         if (!openThreadPanels) return;
         const held = tasks.find((candidate) => candidate.id === openThreadPanels.taskID);
         if (held) openThreadPanels.follow(held, presentation ? presentation.get(held.id) : null);
+      }
+      // The open task page's assignment ages, brought up to this page's clock.
+      // A page showing no task has none.
+      function renderAssignmentAges() {
+        if (openThreadPanels && openThreadPanels.age) openThreadPanels.age();
       }
       function refresh() {
         const wasLoaded = tasksLoaded;
@@ -12038,12 +12097,14 @@
       refresh();
       refreshSyncState();
       renderSyncAge();
-      // One timer, not two. The age is redrawn on the poll's own tick rather
-      // than on a second interval of its own: a board left alone still ages
-      // visibly, and there is only ever one scheduled callback to reason about.
-      // The poll's promise is returned, not swallowed: callers await this tick
-      // to know the refresh has finished.
-      window.setInterval(() => { renderSyncAge(); return refresh(); }, 1000);
+      // One timer, not two. The ages are redrawn on the poll's own tick rather
+      // than on a second interval of their own — the sync age and an open task
+      // page's assignment ages alike — so a board left alone still ages
+      // visibly, whatever the poll answers, and there is only ever one
+      // scheduled callback to reason about. The poll's promise is returned,
+      // not swallowed: callers await this tick to know the refresh has
+      // finished.
+      window.setInterval(() => { renderSyncAge(); renderAssignmentAges(); return refresh(); }, 1000);
     })();
   </script>
 </body>

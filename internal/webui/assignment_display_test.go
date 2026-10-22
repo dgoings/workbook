@@ -106,10 +106,13 @@ func TestTasksDocumentCarriesTheAssignmentsACardDraws(t *testing.T) {
 	if !held.Assignments[0].CreatedAt.Equal(assignmentStamp) {
 		t.Fatalf("the recorded time = %v, want %v", held.Assignments[0].CreatedAt, assignmentStamp)
 	}
-	// The CLI's own wording, from presentation.AssignedAgo, computed against the
-	// clock the route read rather than against anything this client holds.
-	if held.Assignments[0].Ago != "assigned 3 days ago" {
-		t.Fatalf("the staleness hint = %q, want %q", held.Assignments[0].Ago, "assigned 3 days ago")
+	// No staleness phrase: it moves with the clock, and a document that carried
+	// one would change while nothing about the task did. The page words it from
+	// CreatedAt by presentation.AssignedAgo's own rule (assignment_age_test.go).
+	if encoded, err := json.Marshal(held.Assignments[0]); err != nil {
+		t.Fatal(err)
+	} else if strings.Contains(string(encoded), `"ago"`) {
+		t.Fatalf("an assignment view carries a clock-derived phrase: %s", encoded)
 	}
 
 	// A task nobody holds carries none of the three members, so the document a
