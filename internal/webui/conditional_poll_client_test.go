@@ -450,6 +450,63 @@ func TestClientConditionalPollCollectsADraggedCardWhoseTaskWasDeleted(t *testing
 	runConditionalPollClient(t, "a cancelled drag over a deleted task", program)
 }
 
+// A drop confirmed against a task the delete already took away puts the task
+// back into the model, and the board draws it from the fallback view for one
+// poll (TestHandlerClientSurvivesATaskDeletedMidDrag pins what that card shows).
+// That window ends only because the confirmation also forgets the board's tag:
+// the server's document has not changed since the poll that dropped the task,
+// so a poll naming that tag would be a 304, every poll after it would be too,
+// and the card would stay on the board for as long as the board stayed idle.
+func TestClientConditionalPollEndsTheFallbackCardOfATaskDeletedMidDrag(t *testing.T) {
+	t.Parallel()
+	dragged, kept := conditionalPollDragTasks()
+	program := conditionalPollProgram(t, "/", []core.Task{dragged, kept}, "", `
+  const id = `+strconv.Quote(dragged.ID)+`;
+  const card = boardCard(id);
+  if (!card) throw new Error("the board never drew the card to drag");
+  const inProgress = boardLists.find((list) => list.dataset.status === "in-progress");
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  card.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: card, dataTransfer });
+
+  // Another clone deletes the task while it is under the cursor.
+  taskResponse = `+tasksDocumentJSON(t, []core.Task{kept})+`;
+  taskTag = "\"b\"";
+  await intervalCallback();
+  if (answers[answers.length - 1].status !== 200) throw new Error("the poll during the drag was not a 200, so this test proves nothing");
+
+  // The drop is confirmed — the harness answers every write with the dragged
+  // task — and the card is drawn from the fallback view.
+  await documentEventListeners.drop({ target: inProgress, clientY: 1, dataTransfer, preventDefault() {} });
+  documentEventListeners.dragend({ target: card });
+  if (!fetchCalls.some((call) => (call.options.method || "GET") !== "GET")) {
+    throw new Error("the drop sent no write, so nothing put the task back");
+  }
+  const fallback = boardCard(id);
+  if (!fallback || fallback.dataset.idPrefix !== id) {
+    throw new Error("the confirmation drew no fallback card, so there is no window to end");
+  }
+
+  // The next poll asks in full, is answered in full, and takes the card away.
+  await intervalCallback();
+  const read = lastRead("/api/tasks");
+  if (read.tag !== null) {
+    throw new Error("the poll after the confirmation named " + JSON.stringify(read.tag) + " for a model the confirmation had changed");
+  }
+  if (answers[answers.length - 1].status !== 200) throw new Error("the poll after the confirmation was not answered in full");
+  if (boardCard(id) || fallback.parentElement) throw new Error("the fallback card outlived the poll after the confirmation");
+  if (!boardCard(`+strconv.Quote(kept.ID)+`)) throw new Error("ending the window took another card with it");
+
+  // And the board is back to naming the document it holds.
+  await intervalCallback();
+  if (lastRead("/api/tasks").tag !== taskTag || answers[answers.length - 1].status !== 304) {
+    throw new Error("the board did not go back to conditional polls once the window closed");
+  }
+  if (boardCard(id)) throw new Error("the fallback card came back");
+`)
+	runConditionalPollClient(t, "the fallback card's window under conditional polls", program)
+}
+
 // A route change retires a drag no dragend will end, and the board it leaves
 // behind is re-attached on the way back without being redrawn. So the card the
 // gesture was holding has to be collected when the gesture is retired, or the
