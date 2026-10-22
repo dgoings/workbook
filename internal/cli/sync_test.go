@@ -2,7 +2,6 @@ package cli
 
 import (
 	"encoding/json"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 func TestRunPushAndFetchJSONAcrossClones(t *testing.T) {
@@ -484,9 +484,7 @@ func TestRunHooksInstallIsIdempotentAndRefusesUnmanagedHook(t *testing.T) {
 		t.Fatalf("second hook status = %q, want unchanged", installed.Status)
 	}
 
-	if err := os.WriteFile(installed.Path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testenv.WriteExecutable(t, installed.Path, []byte("#!/bin/sh\nexit 0\n"))
 	code, stdout, stderr = run(t, first, "hooks", "install", "--json")
 	if code != 1 || stdout != "" {
 		t.Fatalf("unmanaged hook install = code %d, stdout %q, stderr %q", code, stdout, stderr)

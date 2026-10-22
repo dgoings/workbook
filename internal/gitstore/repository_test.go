@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testenv"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
 
@@ -99,9 +100,7 @@ func installGitInvocationCounter(t *testing.T) func() [][]string {
 	counterFile := filepath.Join(shimDir, "invocations.log")
 	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + shellQuote(counterFile) + "\nprintf '\\n' >> " + shellQuote(counterFile) + "\nexec " + shellQuote(realGit) + " \"$@\"\n"
 	shimPath := filepath.Join(shimDir, "git")
-	if err := os.WriteFile(shimPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("WriteFile(shim git) error = %v", err)
-	}
+	testenv.WriteExecutable(t, shimPath, []byte(script))
 	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	return func() [][]string {
@@ -330,9 +329,7 @@ func TestGitSeparatesStdoutAndStderrAndSetsReplaceProtection(t *testing.T) {
 printf '%s:%s\n' "$GIT_NO_REPLACE_OBJECTS" "$WORKBOOK_ENV_SENTINEL"
 printf 'warning on stderr\n' >&2
 `
-	if err := os.WriteFile(gitPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("WriteFile(fake git) error = %v", err)
-	}
+	testenv.WriteExecutable(t, gitPath, []byte(script))
 	repo := &Repository{Root: t.TempDir(), gitPath: gitPath}
 
 	output, err := repo.Git(context.Background(), nil, "status")
@@ -352,9 +349,7 @@ printf 'misleading stdout\n'
 printf 'fatal stderr detail\n' >&2
 exit 9
 `
-	if err := os.WriteFile(gitPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("WriteFile(fake git) error = %v", err)
-	}
+	testenv.WriteExecutable(t, gitPath, []byte(script))
 	repo := &Repository{Root: t.TempDir(), gitPath: gitPath}
 
 	_, err := repo.Git(context.Background(), nil, "status")
@@ -377,9 +372,7 @@ printf 'porcelain stdout\n'
 printf 'transport stderr\n' >&2
 exit 9
 `
-	if err := os.WriteFile(gitPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("WriteFile(fake git) error = %v", err)
-	}
+	testenv.WriteExecutable(t, gitPath, []byte(script))
 	repo := &Repository{Root: t.TempDir(), gitPath: gitPath}
 	commands := 0
 	repo.commandObserver = func(args []string) {

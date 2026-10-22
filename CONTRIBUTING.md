@@ -217,6 +217,22 @@ and the test identity — lives; `testrepo.New` calls it too, so a repository
 built inside a test and any package's template are initialized by the same
 code.
 
+A test that writes a script or fake binary and then runs it — a fake `git`,
+a stub `gh`, a hook — writes it with `testenv.WriteExecutable(t, path,
+contents)`, or `testenv.WriteFile` in a helper with no `*testing.T`, never
+`os.WriteFile`. On Linux, a parallel test that forks while the file is still
+open for writing hands the descriptor to its child, and running the file
+then fails with `text file busy` until that child execs; macOS never shows
+it. The helper holds `syscall.ForkLock` while the file is open, which no
+fork can run alongside. A guard test in `internal/testenv` fails on an
+`os.WriteFile` or `os.OpenFile` in any source that imports `testing` when
+the mode is a constant expression with an execute bit that it can fold: a
+literal such as `0o755`, `os.ModePerm` or `fs.ModePerm`, a constant
+declared in the same file, a conversion such as `fs.FileMode(...)`, or
+these combined with bitwise operators. It does not follow a mode held in a
+variable, a constant declared in another file, or a `Chmod` after the
+write; review still has to catch those.
+
 CI still runs the whole tree with `-timeout 45m` as margin, in the `Test`
 step of `.github/workflows/ci.yml`.
 

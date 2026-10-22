@@ -6,13 +6,13 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 func TestReadBatchObjectRefusesAnObjectOverTheCeilingWithoutKeepingIt(t *testing.T) {
@@ -191,9 +191,7 @@ func TestReadTaskHeadsPartialReportsGitStderrWhenTheBatchProcessDies(t *testing.
 	snapshot, _, _ := writeRoot(t, repository, config)
 	fakeGit := filepath.Join(t.TempDir(), "git")
 	script := "#!/bin/sh\nprintf 'fatal: loose object is corrupt\\n' >&2\nexit 128\n"
-	if err := os.WriteFile(fakeGit, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testenv.WriteExecutable(t, fakeGit, []byte(script))
 	repository.gitPath = fakeGit
 
 	_, err := repository.readTaskHeadsPartial(context.Background(), config, []TaskHead{{

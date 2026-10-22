@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 // A release someone wrote notes for publishes those notes. Generating notes
@@ -854,9 +856,7 @@ case "${command}" in
 esac
 `
 	path := filepath.Join(fakeBin, "gh")
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
-		t.Fatalf("write fake gh: %v", err)
-	}
+	testenv.WriteExecutable(t, path, []byte(script))
 	return fakeBin, stateRoot
 }
 

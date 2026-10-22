@@ -20,6 +20,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/cli"
 	"github.com/dgoings/workbook/internal/release"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 func TestVersionCommandReportsInjectedBuildMetadataAsJSON(t *testing.T) {
@@ -376,9 +377,7 @@ func TestReleaseScriptProducesDeterministicArtifacts(t *testing.T) {
 	hostileToolDirectory := t.TempDir()
 	for _, name := range []string{"gzip", "tar", "touch"} {
 		path := filepath.Join(hostileToolDirectory, name)
-		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 91\n"), 0o700); err != nil {
-			t.Fatalf("write hostile %s: %v", name, err)
-		}
+		testenv.WriteExecutable(t, path, []byte("#!/bin/sh\nexit 91\n"))
 	}
 	// The disjoint empty GOCACHEs are the point of this test: a shared or warm
 	// cache would let the second build return byte-identical artifacts through

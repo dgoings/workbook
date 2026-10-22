@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 // newFakeReleaseCLI writes a gh stub whose answers come from the environment,
@@ -56,9 +58,7 @@ fi
 echo "unsupported gh invocation: $*" >&2
 exit 2
 `
-	if err := os.WriteFile(filepath.Join(directory, "gh"), []byte(script), 0o700); err != nil {
-		t.Fatalf("write fake gh: %v", err)
-	}
+	testenv.WriteExecutable(t, filepath.Join(directory, "gh"), []byte(script))
 	return directory
 }
 

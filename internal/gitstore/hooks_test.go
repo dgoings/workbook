@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dgoings/workbook/internal/testenv"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
 
@@ -101,9 +102,7 @@ func TestManagedPrePushHookPublishesOnlyOriginAndHonorsRecursionGuard(t *testing
 	logPath := filepath.Join(t.TempDir(), "calls")
 	fakeWorkbook := filepath.Join(bin, "workbook")
 	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$WORKBOOK_TEST_LOG\"\nexit \"${WORKBOOK_TEST_EXIT:-0}\"\n"
-	if err := os.WriteFile(fakeWorkbook, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testenv.WriteExecutable(t, fakeWorkbook, []byte(script))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("WORKBOOK_TEST_LOG", logPath)
 
@@ -138,9 +137,7 @@ func TestManagedPrePushHookBlocksPushWhenWorkbookPushFails(t *testing.T) {
 	}
 	bin := t.TempDir()
 	fakeWorkbook := filepath.Join(bin, "workbook")
-	if err := os.WriteFile(fakeWorkbook, []byte("#!/bin/sh\nexit 9\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testenv.WriteExecutable(t, fakeWorkbook, []byte("#!/bin/sh\nexit 9\n"))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	command := exec.Command(installed.Path, "origin", "unused")
@@ -160,9 +157,7 @@ func TestInstallHooksPreservesUnmanagedHookAndGivesChainingGuidance(t *testing.T
 	}
 	hookPath := filepath.Join(repo.CommonGitDir, "hooks", "pre-push")
 	original := []byte("#!/bin/sh\nprintf existing\n")
-	if err := os.WriteFile(hookPath, original, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testenv.WriteExecutable(t, hookPath, original)
 
 	result, err := repo.InstallHooks(context.Background())
 	if err == nil {

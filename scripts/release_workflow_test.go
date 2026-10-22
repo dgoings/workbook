@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 type releaseWorkflow struct {
@@ -311,9 +313,7 @@ func TestReleasePullRequestValidationPlansOnTheBaseLine(t *testing.T) {
 				"plan-release.sh":       "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do if [ \"$1\" = --branch ]; then echo \"$2\"; exit 0; fi; shift; done\necho none\n",
 			}
 			for name, contents := range stubs {
-				if err := os.WriteFile(filepath.Join(scriptsDirectory, name), []byte(contents), 0o755); err != nil {
-					t.Fatalf("write %s: %v", name, err)
-				}
+				testenv.WriteExecutable(t, filepath.Join(scriptsDirectory, name), []byte(contents))
 			}
 			command := exec.Command("bash", "-e", "-o", "pipefail", "-c", run)
 			command.Dir = root
@@ -763,9 +763,7 @@ func TestReleaseWorkflowCascadesOnlyTheNewestRelease(t *testing.T) {
 				"if [ \"$1\" = --with-candidates ]; then status=" + test.candidateStatus + "; newer=v0.9.0-rc1; shift; fi\n" +
 				"if [ \"$#\" -ne 1 ] || [ \"$1\" != v0.5.2 ]; then echo \"unexpected arguments $*\" >&2; exit 64; fi\n" +
 				"if [ \"${status}\" -eq 1 ]; then echo \"${newer}\"; fi\nexit \"${status}\"\n"
-			if err := os.WriteFile(filepath.Join(scriptsDirectory, "release-is-newest.sh"), []byte(stub), 0o755); err != nil {
-				t.Fatalf("write release-is-newest stub: %v", err)
-			}
+			testenv.WriteExecutable(t, filepath.Join(scriptsDirectory, "release-is-newest.sh"), []byte(stub))
 			outputPath := filepath.Join(root, "github-output")
 			if err := os.WriteFile(outputPath, nil, 0o644); err != nil {
 				t.Fatalf("create GITHUB_OUTPUT: %v", err)

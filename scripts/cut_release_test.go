@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 func TestCutReleaseTagsAndPushesTheReleaseTag(t *testing.T) {
@@ -467,9 +469,7 @@ func newReleaseRepository(t *testing.T) (string, string) {
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
-		if err := os.WriteFile(filepath.Join(clone, "scripts", name), contents, 0o755); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
+		testenv.WriteExecutable(t, filepath.Join(clone, "scripts", name), contents)
 	}
 	if err := os.WriteFile(filepath.Join(clone, "README.md"), []byte("# Release fixture\n"), 0o600); err != nil {
 		t.Fatalf("write README: %v", err)

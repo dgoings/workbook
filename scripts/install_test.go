@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 func TestInstallBuildsRunnableWorkbookInDestination(t *testing.T) {
@@ -194,9 +196,7 @@ func TestInstallStampsTheCLITagWhenADesktopTagSharesTheCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read installer: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(fixture, "scripts", "install.sh"), installer, 0o700); err != nil {
-		t.Fatalf("write fixture installer: %v", err)
-	}
+	testenv.WriteExecutable(t, filepath.Join(fixture, "scripts", "install.sh"), installer)
 	runCommand(t, fixture, nil, "git", "config", "user.name", "Release Test")
 	runCommand(t, fixture, nil, "git", "config", "user.email", "release-test@example.com")
 	// Committed before the tags, so the fixture tree is clean and the stamp is

@@ -5,6 +5,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 // CopyTree copies a directory's contents onto target, which already exists.
@@ -46,6 +48,14 @@ func CopyTree(source, target string) error {
 			contents, err := os.ReadFile(path)
 			if err != nil {
 				return err
+			}
+			if info.Mode().Perm()&0o111 != 0 {
+				// An executable in a template, such as a hook, may run as
+				// soon as a test uses its copy, so it is written the way a
+				// test writes any executable it is about to run. That also
+				// sets the template's mode exactly, where os.WriteFile below
+				// lets the umask narrow it.
+				return testenv.WriteFile(destination, contents, info.Mode().Perm())
 			}
 			return os.WriteFile(destination, contents, info.Mode().Perm())
 		default:

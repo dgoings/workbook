@@ -14,6 +14,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/historyvalidation"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 func TestValidateRejectsPositionalsAndUnknownFlags(t *testing.T) {
@@ -274,9 +275,7 @@ func TestValidateCachedInvalidHeadStillExitsNonzeroWithoutHistoryBatch(t *testin
 	logPath := filepath.Join(wrapperDir, "git.log")
 	wrapperPath := filepath.Join(wrapperDir, "git")
 	wrapper := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$WORKBOOK_VALIDATE_GIT_LOG\"\nexec \"" + realGit + "\" \"$@\"\n"
-	if err := os.WriteFile(wrapperPath, []byte(wrapper), 0o755); err != nil {
-		t.Fatalf("write Git wrapper: %v", err)
-	}
+	testenv.WriteExecutable(t, wrapperPath, []byte(wrapper))
 	t.Setenv("WORKBOOK_VALIDATE_GIT_LOG", logPath)
 	t.Setenv("PATH", wrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 

@@ -88,9 +88,7 @@ func capabilityProbePATH(t *testing.T, stubs map[string]string) string {
 	for _, tool := range []string{"git", "mktemp", "rm", "node"} {
 		target := filepath.Join(directory, tool)
 		if stub, ok := stubs[tool]; ok {
-			if err := os.WriteFile(target, []byte(stub), 0o755); err != nil {
-				t.Fatalf("write %s stub: %v", tool, err)
-			}
+			testenv.WriteExecutable(t, target, []byte(stub))
 			continue
 		}
 		if tool == "node" {

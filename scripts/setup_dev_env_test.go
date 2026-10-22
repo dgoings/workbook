@@ -84,9 +84,7 @@ func TestSetupFetchesReleaseTagsPastAMovedRollingTag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read setup-dev-env.sh: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(clone, "scripts", "setup-dev-env.sh"), contents, 0o755); err != nil {
-		t.Fatalf("write setup-dev-env.sh: %v", err)
-	}
+	testenv.WriteExecutable(t, filepath.Join(clone, "scripts", "setup-dev-env.sh"), contents)
 	// Stands in for the real installer so the test builds nothing: the
 	// "published build" just reports which release tag it came from.
 	installer := "#!/bin/sh\nset -eu\n" +
@@ -94,9 +92,7 @@ func TestSetupFetchesReleaseTagsPastAMovedRollingTag(t *testing.T) {
 		"mkdir -p \"$1\"\n" +
 		"printf '#!/bin/sh\\necho \"workbook %s\"\\n' \"$(cat \"${root}/VERSION\")\" > \"$1/workbook\"\n" +
 		"chmod +x \"$1/workbook\"\n"
-	if err := os.WriteFile(filepath.Join(clone, "scripts", "install.sh"), []byte(installer), 0o755); err != nil {
-		t.Fatalf("write install.sh: %v", err)
-	}
+	testenv.WriteExecutable(t, filepath.Join(clone, "scripts", "install.sh"), []byte(installer))
 	release := func(version string) {
 		if err := os.WriteFile(filepath.Join(clone, "VERSION"), []byte(version+"\n"), 0o600); err != nil {
 			t.Fatalf("write VERSION: %v", err)
@@ -355,9 +351,7 @@ func fakeBrewDirectory(t *testing.T, brewRoot string) string {
 		"		;;\n" +
 		"	--prefix) echo \"" + brewRoot + "/prefix\" ;;\n" +
 		"esac\n"
-	if err := os.WriteFile(filepath.Join(directory, "brew"), []byte(brew), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testenv.WriteExecutable(t, filepath.Join(directory, "brew"), []byte(brew))
 	return directory
 }
 

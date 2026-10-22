@@ -21,6 +21,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/perf/proctest"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 func TestRunColdCLIIsolatesSelectedScenarioSamplesAndPreparesProjection(t *testing.T) {
@@ -268,9 +269,7 @@ func TestPrepareProjectionValidatesRebuildEnvelope(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			binary := filepath.Join(t.TempDir(), "workbook")
-			if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' '"+test.output+"'\n"), 0o755); err != nil {
-				t.Fatal(err)
-			}
+			testenv.WriteExecutable(t, binary, []byte("#!/bin/sh\nprintf '%s\\n' '"+test.output+"'\n"))
 			// The subject is the envelope validation, and the timeout is only a
 			// hang guard on a /bin/sh stub that prints one line: nothing here
 			// asserts how long that took. One second was not promisable on a
@@ -1882,9 +1881,7 @@ func TestMeasureRepositoryParsesObjectCountsAndConvertsKiBToBytes(t *testing.T) 
 func TestRunRepositoryGitBoundsCommandAndDescendants(t *testing.T) {
 	binaryDirectory := t.TempDir()
 	gitPath := filepath.Join(binaryDirectory, "git")
-	if err := os.WriteFile(gitPath, []byte("#!/bin/sh\n/bin/sleep 5\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testenv.WriteExecutable(t, gitPath, []byte("#!/bin/sh\n/bin/sleep 5\n"))
 	t.Setenv("PATH", binaryDirectory)
 
 	startedAt := time.Now()
