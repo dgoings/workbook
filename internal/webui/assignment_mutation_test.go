@@ -701,7 +701,7 @@ setTimeout(async () => {
   if (after.length !== before.length) throw new Error("the section redrew a different number of rows");
   for (let index = 0; index < after.length; index += 1) {
     if (after[index] !== before[index]) {
-      throw new Error("row " + index + " was rebuilt by a poll that only changed its age");
+      throw new Error("row " + index + " was rebuilt by a tick that only changed its age");
     }
   }
   if (withdrawControl(after[0]) !== control) throw new Error("the withdrawal button was replaced under the reader");
@@ -711,7 +711,7 @@ setTimeout(async () => {
 }, 0);
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
-		t.Fatalf("execute the ageing poll: %v\n%s", err, output)
+		t.Fatalf("execute the aging poll: %v\n%s", err, output)
 	}
 }
 

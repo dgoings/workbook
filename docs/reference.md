@@ -425,7 +425,7 @@ appears on an open page within a second without disturbing anything being typed
 into it. The phrasing is worded by the page from the recorded time, by the same
 rule `workbook show` uses, which the server renders into the page as data; it
 advances from "just now" through minutes, hours and days on the page's own
-one-second tick, so an open page's rows keep ageing while the poll reports
+one-second tick, so an open page's rows keep aging while the poll reports
 nothing changed. The page's clock is the browser's: on the machine running
 `serve` that is the server's clock, and a browser elsewhere whose clock
 disagrees by a few seconds can read a phrase that much early or late.

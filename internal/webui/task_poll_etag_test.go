@@ -268,7 +268,7 @@ func TestTasksPollErrorCarriesNoTag(t *testing.T) {
 // would be the route this test catches.
 func TestTasksPollTagHoldsStillAcrossAnAssignmentAgeBoundary(t *testing.T) {
 	t.Parallel()
-	recorded := time.Now().Add(-time.Minute + 1500*time.Millisecond)
+	recorded := time.Now().Add(-time.Minute + 4*time.Second)
 	task := boardTasks()[0]
 	task.Assignments = []core.Assignment{
 		{Principal: "agent@example.com", Label: "impl-1", Creator: "agent@example.com", CreatedAt: recorded},

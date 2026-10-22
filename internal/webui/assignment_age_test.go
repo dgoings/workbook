@@ -132,7 +132,7 @@ setTimeout(() => {
 	}
 }
 
-// An open page's rows go on ageing while the board is idle. Every poll is
+// An open page's rows go on aging while the board is idle. Every poll is
 // answered 304 — nothing about the task changed, so nothing is sent — and the
 // phrase still moves from "just now" through minutes, hours and days, on the
 // page's own tick, in the rows already drawn.
@@ -182,5 +182,5 @@ func TestClientAssignmentWordingAdvancesWhilePollsAnswerNotModified(t *testing.T
     }
   }
 `)
-	runConditionalPollClient(t, "ageing behind 304s", program)
+	runConditionalPollClient(t, "aging behind 304s", program)
 }
