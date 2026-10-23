@@ -133,6 +133,68 @@ type statusMutationResult struct {
 	// the same distinction setup draws between "nothing was managed" and "these
 	// files were".
 	Docs *agentdocs.Report `json:"docs,omitempty"`
+	// Reresolved is present only for a rename onto a name a rename or a removal
+	// had retired somewhere other than the renamed status, and says what that
+	// did to the tasks still stored under it. A `status-rename-reresolves`
+	// warning carries the same account as a sentence.
+	Reresolved *statusReresolution `json:"reresolved,omitempty"`
+}
+
+// statusReresolution is what a rename onto a retired name did to history.
+//
+// A retired name is not a free name. Every task stored under it, and every task
+// stored under a name that forwards through it, resolved to wherever the
+// retirement sent it; a rename that makes the name live again stops that walk
+// at the renamed status instead. That is allowed — the forwarding decays as
+// tasks are written to, and taking back an old column name is a reasonable
+// thing to want — but nothing in the rename's own arguments shows it, so the
+// result does.
+type statusReresolution struct {
+	// Status is the retired name the rename took, which is also the name the
+	// renamed status now has.
+	Status core.Status `json:"status"`
+	// RetiredBy and Via are the one hop the retirement recorded: renamed to, or
+	// removed into, that status.
+	RetiredBy core.ConfigOperationType `json:"retiredBy"`
+	Via       core.Status              `json:"via"`
+	// Previously is the live status the name's history resolved to before the
+	// rename, at the end of the whole chain rather than its first hop. It is
+	// empty when the chain led to no live status at all.
+	Previously core.Status `json:"previously,omitempty"`
+	// Now is the status that history resolves to after the rename: the renamed
+	// status, under the name it took.
+	Now core.Status `json:"now"`
+	// Tasks counts the active tasks this clone holds whose stored status
+	// resolved through the name and now resolves to Now. It is exact for what
+	// this clone has fetched, and it is a count of stored values, so a task a
+	// later write already settled elsewhere is rightly not in it.
+	Tasks int `json:"tasks"`
+}
+
+// message is the warning's sentence: the retired name, where its history used
+// to resolve, where it resolves now, and how many tasks that moved.
+func (reresolution statusReresolution) message(from core.Status) string {
+	history := fmt.Sprintf("%q was %s %q", reresolution.Status, forwardingVerb(reresolution.RetiredBy), reresolution.Via)
+	previously := "no status"
+	if reresolution.Previously != "" {
+		previously = strconv.Quote(string(reresolution.Previously))
+	}
+	if reresolution.Previously != reresolution.Via {
+		history += ", which resolved to " + previously
+	}
+	stored := fmt.Sprintf("stored under %q or under a name that forwards through it", reresolution.Status)
+	now := fmt.Sprintf("%q (formerly %q) instead of %s", reresolution.Now, from, previously)
+	var moved string
+	switch reresolution.Tasks {
+	case 0:
+		moved = fmt.Sprintf("no active task here is %s, but any such value elsewhere now resolves to %s", stored, now)
+	case 1:
+		moved = fmt.Sprintf("1 active task %s now resolves to %s", stored, now)
+	default:
+		moved = fmt.Sprintf("%d active tasks %s now resolve to %s", reresolution.Tasks, stored, now)
+	}
+	return fmt.Sprintf("renaming %q onto %q re-points a retired name: %s; %s",
+		from, reresolution.Status, history, moved)
 }
 
 // statusListResult is `workbook status list`.
@@ -1181,6 +1243,9 @@ type statusPlan struct {
 	operations []core.ConfigOperation
 	change     statusChange
 	tasks      statusTaskCounts
+	// reresolved is set by a rename onto a retired name; see
+	// renameReresolution.
+	reresolved *statusReresolution
 }
 
 // statusScope is what authoring a status change needs from the project besides
@@ -1326,6 +1391,11 @@ func planStatusRename(
 		return statusPlan{}, err
 	}
 
+	reresolved, err := renameReresolution(ctx, scope, vocabulary, subject, to)
+	if err != nil {
+		return statusPlan{}, err
+	}
+
 	rename := core.ConfigOperation{Type: core.ConfigStatusRename, From: subject, To: to}
 	operations := []core.ConfigOperation{rename}
 	if display != current {
@@ -1335,6 +1405,7 @@ func planStatusRename(
 	}
 	labelDerived := derived
 	return statusPlan{
+		reresolved: reresolved,
 		operations: operations,
 		change: statusChange{
 			Operation:    "rename",
@@ -1345,6 +1416,94 @@ func planStatusRename(
 			Tags:         statusTags(vocabulary, subject),
 		},
 	}, nil
+}
+
+// renameReresolution reports what renaming subject onto to does to the history
+// a retirement left under to, or nothing when to is not retired or its history
+// already resolves to subject.
+//
+// The second case is the everyday one: renaming back is the inverse every
+// rename prints, and a removal into this status followed by taking the removed
+// name leaves every task in the column it was already in. Warning there would
+// teach people to skip the warning.
+//
+// The count reads the stored value of every active task, which is the value the
+// forwarding chain starts from, and walks the chain as it stands before the
+// rename. It is what a removal pays to price itself, and only a rename onto a
+// retired name pays it.
+func renameReresolution(
+	ctx context.Context,
+	scope statusScope,
+	vocabulary core.Vocabulary,
+	subject, to core.Status,
+) (*statusReresolution, error) {
+	via, operation, forwarded := vocabulary.Forwarding(to)
+	if !forwarded {
+		return nil, nil
+	}
+	previously, live := vocabulary.Resolve(to)
+	if !live {
+		previously = ""
+	} else if previously == subject {
+		return nil, nil
+	}
+	tasks, err := scope.service.List(ctx, core.ListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	count := 0
+	for _, task := range tasks {
+		stored := task.Status
+		if task.StoredStatus != "" {
+			stored = task.StoredStatus
+		}
+		if forwardsThrough(vocabulary, stored, to) {
+			count++
+		}
+	}
+	return &statusReresolution{
+		Status:     to,
+		RetiredBy:  operation,
+		Via:        via,
+		Previously: previously,
+		Now:        to,
+		Tasks:      count,
+	}, nil
+}
+
+// forwardsThrough reports whether a stored status reaches via on its way along
+// the forwarding chain, via itself included. The walk stops at a live status,
+// at a value nothing forwards, and at a value it has already visited, so a
+// cycle read from a ref ends it rather than hanging it.
+func forwardsThrough(vocabulary core.Vocabulary, status, via core.Status) bool {
+	visited := make(map[core.Status]bool)
+	for current := status; !visited[current]; {
+		if current == via {
+			return true
+		}
+		if vocabulary.Has(current) {
+			return false
+		}
+		visited[current] = true
+		next, _, forwarded := vocabulary.Forwarding(current)
+		if !forwarded {
+			return false
+		}
+		current = next
+	}
+	return false
+}
+
+// reresolutionWarnings is the warning a rename onto a retired name raises,
+// in the one sentence the verb and the board both print.
+func reresolutionWarnings(change statusChange, reresolved *statusReresolution) []core.Warning {
+	if reresolved == nil {
+		return nil
+	}
+	return []core.Warning{{
+		Code:    core.WarningStatusRenameReresolves,
+		Message: reresolved.message(change.From),
+	}}
 }
 
 // planStatusRelabel changes what a column is called without touching the value
@@ -1770,8 +1929,9 @@ func runStatusMutation(
 			Default:  after.Default(),
 			Statuses: statusViews(after, nil),
 		},
-		Tasks:   plan.tasks,
-		Inverse: statusChangeInverse(before, plan.operations),
+		Tasks:      plan.tasks,
+		Inverse:    statusChangeInverse(before, plan.operations),
+		Reresolved: plan.reresolved,
 	}
 	if position := result.Change.Position; position != nil {
 		position.Order = after.Order(plan.change.Status) + 1
@@ -2150,21 +2310,48 @@ func renameInverse(before core.Vocabulary, operation core.ConfigOperation, pack 
 		}
 		command += " --label " + quoteStatusArgument(definition.Label)
 	}
+	// A rename onto a retired name stopped that name's forwarding, and renaming
+	// back cannot restart it: the name it gives up forwards to the renamed
+	// status, not to wherever the retirement had sent it.
+	var notes []string
+	if note := retiredNameInverseNote(before, operation); note != "" {
+		notes = append(notes, note)
+	}
 	// The board's status form can rename and retag in one commit, which no verb
 	// does. Renaming back does not give the tags back, so the inverse says so
 	// rather than claiming to restore a state it leaves half changed.
 	if tagged := taggedIn(pack); tagged != "" {
 		definition, live := statusDefinition(before, operation.From)
 		if !live {
-			return &statusInverse{Command: command}
+			return &statusInverse{Command: command, Note: strings.Join(notes, "; ")}
 		}
-		return &statusInverse{
-			Command: command,
-			Note: fmt.Sprintf("this commit also changed %q's tags; %s restores them",
-				operation.From, tagCommand(operation.From, definition.Tags)),
-		}
+		notes = append(notes, fmt.Sprintf("this commit also changed %q's tags; %s restores them",
+			operation.From, tagCommand(operation.From, definition.Tags)))
+	}
+	if len(notes) > 0 {
+		return &statusInverse{Command: command, Note: strings.Join(notes, "; ")}
 	}
 	return &statusInverse{Command: command, Exact: true}
+}
+
+// retiredNameInverseNote says what renaming back leaves behind after a rename
+// onto a retired name, or nothing when the rename took no such name. It asks the
+// question renameReresolution asks, against the same vocabulary, so the verb's
+// warning and its inverse cannot disagree about whether history moved.
+func retiredNameInverseNote(before core.Vocabulary, operation core.ConfigOperation) string {
+	if _, _, forwarded := before.Forwarding(operation.To); !forwarded {
+		return ""
+	}
+	previously, live := before.Resolve(operation.To)
+	if live && previously == operation.From {
+		return ""
+	}
+	destination := "no status"
+	if live {
+		destination = strconv.Quote(string(previously))
+	}
+	return fmt.Sprintf("renaming back leaves %q forwarding to %q, so the tasks this rename re-pointed "+
+		"stay there rather than returning to %s", operation.To, operation.From, destination)
 }
 
 // taggedIn names the status a pack tagged or untagged beside whatever else it
@@ -2522,6 +2709,9 @@ func writeStatusMutation(
 			Message: "the status change was recorded locally, but " + session.report.Detail,
 		})
 	}
+	// The rename's own warning goes first: it is about the change, where the
+	// others are about the repository around it.
+	warnings = append(reresolutionWarnings(result.Change, result.Reresolved), warnings...)
 	warnings = append(warnings, docsWarning(result.Docs, docsErr)...)
 	if jsonMode {
 		writeStatusEnvelope(stdout, command, result, session, warnings)

@@ -201,7 +201,10 @@ func (board *boardVocabulary) apply(
 			Affected:       plan.tasks.Affected,
 			ClaimableAfter: plan.tasks.ClaimableAfter,
 		},
-		Warnings: append(board.publisher.publishConfig(ctx),
+		// The rename's own warning leads, as it does in the verb's output: it
+		// is about the change, and the others are about the repository.
+		Warnings: append(append(reresolutionWarnings(plan.change, plan.reresolved),
+			board.publisher.publishConfig(ctx)...),
 			staleGuidelinesWarnings(board, after, priorities, keys)...),
 	}, nil
 }
