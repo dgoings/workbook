@@ -2066,7 +2066,7 @@ Cards with prerequisites show completed versus total dependency progress.
 Ready cards whose prerequisites are not all active and Done also say
 `Waiting on dependencies`. Task detail pages derive two views from the same
 directed edge: **Depends On** lists the current task's prerequisites, while
-**Blocks** lists tasks that depend on the current task. Each group searches
+**Blocks** lists live tasks that depend on the current task. Each group searches
 eligible active tasks through an integrated combobox and uses the nested
 Git-durable mutation routes above.
 
@@ -2117,9 +2117,13 @@ half-typed is still sent when the form is saved, and the payload the API sees
 is the same array of strings it always was.
 
 Missing prerequisite IDs remain visible and removable. Tombstoned
-prerequisites are also removable because the active dependent owns that edge;
-a deleted blocked task's row is read-only, because that edge is stored on the
-deleted task's own record and restoring it is what makes it editable.
+prerequisites are also removable because the active dependent owns that edge.
+A deleted task that depends on the current one is not listed in Blocks. Its
+edge is stored on the deleted task's own record, which a tombstone does not let
+anyone change, and it has no effect while that task is deleted, because
+readiness never reads a deleted task's dependencies. Restoring the task lists it
+again, and from there its Remove control drops the edge as it would for any
+other.
 Dependency warnings and failures stay beside the initiating group, and
 dependency refreshes leave unsaved task-form fields mounted.
 

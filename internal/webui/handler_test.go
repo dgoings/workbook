@@ -2352,7 +2352,12 @@ func TestHandlerClientRendersDependencyRelationships(t *testing.T) {
 	}
 	refreshedCurrent := current
 	refreshedCurrent.Dependencies = []string{activeDependency.ID}
-	refreshedDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{refreshedCurrent, activeDependency}, Presentation: presentationForTasks([]core.Task{refreshedCurrent, activeDependency})})
+	// The board's read still carries the blocked task live while the deleted
+	// read already has its tombstone, the race the two reads can always lose.
+	// The tombstone wins, so the task leaves Blocks; and if the stale deleted
+	// response below were adopted, the live copy would draw the row back.
+	refreshedTasks := []core.Task{refreshedCurrent, activeDependency, activeBlocked}
+	refreshedDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: refreshedTasks, Presentation: presentationForTasks(refreshedTasks)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2405,16 +2410,20 @@ setTimeout(async () => {
       findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(missingDependencyID) + `)) {
     throw new Error("relationship rows did not follow refreshed canonical state");
   }
-  const deletedBlock = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
-  if (!deletedBlock || !deletedBlock.textContent.includes("Deleted") ||
-      findElement(deletedBlock, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
-    throw new Error("poll did not keep a later tombstoned blocked task read-only");
+  // A blocked task deleted after the page loaded leaves Blocks. Its edge to
+  // this task is inert while it is deleted and is stored on its own record,
+  // so there is nothing here to show or to remove.
+  const blocksGroup = blocksHeading.parentElement;
+  const blocksAfterDelete = () => findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
+  if (blocksAfterDelete()) {
+    throw new Error("poll kept a later tombstoned blocked task in Blocks");
+  }
+  if (!findElement(blocksGroup, (element) => element.textContent === "No tasks are blocked by this task.")) {
+    throw new Error("Blocks did not say it was empty once its only task was deleted");
   }
   resolveStaleDeleted(` + string(deletedDocument) + `);
   await stalePoll;
-  const blockAfterStaleResponse = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
-  if (!blockAfterStaleResponse || !blockAfterStaleResponse.textContent.includes("Deleted") ||
-      findElement(blockAfterStaleResponse, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+  if (blocksAfterDelete()) {
     throw new Error("stale deleted response regressed the latest blocked-task state");
   }
 
@@ -2502,8 +2511,8 @@ setTimeout(async () => {
   if (!activeBlock || !hasRemove(activeBlock)) {
     throw new Error("active Blocks rows were not removable");
   }
-  if (!deletedBlock || hasRemove(deletedBlock)) {
-    throw new Error("tombstoned Blocks rows were not read-only");
+  if (deletedBlock) {
+    throw new Error("a deleted task that depends on this one is still listed in Blocks");
   }
 
   const mountedForm = findElement(main, (element) => element.tagName === "FORM");
@@ -2658,11 +2667,12 @@ setTimeout(async () => {
     throw new Error("tombstoned Depends On ID was not rendered once and removable");
   }
 
+  // The same race on the other side of the edge: the tombstone wins here too,
+  // and a deleted dependent is not listed in Blocks at all.
   const blocksRows = blocksGroup.querySelectorAll("[data-relationship-row]")
     .filter((row) => row.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
-  if (blocksRows.length !== 1 || !blocksRows[0].textContent.includes("Deleted") ||
-      findElement(blocksRows[0], (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
-    throw new Error("tombstoned Blocks ID was not rendered once and read-only");
+  if (blocksRows.length !== 0) {
+    throw new Error("tombstoned Blocks ID was listed despite its live copy losing to the tombstone");
   }
 }, 0);
 `
