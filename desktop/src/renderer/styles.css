@@ -811,12 +811,25 @@ body {
   overflow: hidden;
 }
 
+/* The main column's half of the window's title row, beside the sidebar head's
+   first line and as tall (--title-row-height). A board view is laid in over
+   the column and its own header drags the window there; over the shell's own
+   views (import, Next, and a project whose board is starting, failed or
+   waiting on a Git identity) this band does, so the whole top row drags on
+   every view. Nothing is drawn in it, and on Windows the overlay controls sit
+   over its right end, so the views below start clear of them. */
+.main-title-row {
+  flex: 0 0 var(--title-row-height, 36px);
+  -webkit-app-region: drag;
+}
+
+/* No top padding: the band above is the room the window controls take. */
 .view {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 2.1rem 2rem 0;
+  padding: 0 2rem;
 }
 
 /* min-height:0 is what lets a flex child scroll rather than grow past the
@@ -829,6 +842,12 @@ body {
 }
 
 .view-head { flex: 0 0 auto; margin-bottom: 1.25rem; }
+
+/* A view's own head, the first thing under the band, carries the drag on to
+   the end of the heading, as the board's header beside a board is a drag
+   region all the way down. The identity form's head is not a view's own and
+   stays selectable. Its notices opt out below. */
+.view > .view-head { -webkit-app-region: drag; }
 
 /* Heading on the left, the key caution on the right. */
 .view-head--split {
@@ -966,6 +985,9 @@ h1 {
    at the same time, and sharing the row would squeeze both of them and the
    title. The column carries the width each note used to carry alone. */
 .view-head__notes {
+  /* Out of the head's drag region, which would swallow the dismiss buttons'
+     clicks and leave the PATH notice's directory impossible to select. */
+  -webkit-app-region: no-drag;
   display: flex;
   flex-direction: column;
   gap: .5rem;

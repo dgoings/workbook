@@ -16,6 +16,8 @@ const path = require('node:path')
 const { describe, test } = require('node:test')
 const assert = require('node:assert/strict')
 
+const cascade = require('./support/cascade')
+
 const renderer = path.join(__dirname, '..', 'src', 'renderer')
 
 function read (name) {
@@ -167,5 +169,111 @@ describe('the title strip is gone', () => {
     }
     const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload', 'preload.js'), 'utf8')
     assert.doesNotMatch(preload, /titleStrip/, 'preload.js still exposes the strip height')
+  })
+})
+
+// The shell's own views, import and Next, and the project view while no board
+// is laid in, fill the main column from the window's top edge, and with the
+// title strip gone nothing there was marked: only the sidebar head moved the
+// window. A band as tall as the title row now opens the column, under the
+// board when one shows, and the heads of import and Next carry the drag on
+// from it to the end of their headings, as the board's own header does beside
+// a board. These read the real page through the cascade, so a rule anywhere
+// that reaches one of these elements counts.
+describe('the shell\'s own views drag by their top row', () => {
+  // Only the rules that mark a region: the cascade throws on selectors it
+  // cannot evaluate, such as the notes column's :has(), and none of those
+  // rules can change the answer.
+  const sheet = cascade.parseStylesheet(read('styles.css'))
+    .filter((rule) => rule.declarations.some((declaration) => declaration.property === '-webkit-app-region'))
+  const envs = cascade.combinations(cascade.conditions(cascade.parseStylesheet(read('styles.css'))))
+
+  function page () {
+    const root = cascade.parseHTML(read('index.html'))
+    for (const view of ['view-import', 'view-next', 'view-project']) {
+      cascade.byId(root, view).attributes.delete('hidden')
+    }
+    return root
+  }
+
+  // The region a point over `element` falls in. Electron applies the marked
+  // boxes in document order, adding a drag box and cutting out a no-drag one,
+  // so what decides is the nearest box around the element that is marked.
+  function region (element, env) {
+    for (let at = element; at; at = at.parent) {
+      const win = cascade.cascaded(sheet, at, '-webkit-app-region', { env })
+      if (win) return { value: win.declaration.value, from: cascade.describe(at), selector: win.selector }
+    }
+    return { value: 'none', from: null, selector: null }
+  }
+
+  function * elements (root) {
+    yield root
+    for (const child of root.children) yield * elements(child)
+  }
+
+  const heads = (root) => ['view-import', 'view-next'].map((id) => {
+    const head = cascade.byId(root, id).children[0]
+    assert.ok(head && head.classes.has('view-head'),
+      `#${id} must open with its .view-head, so the head starts where the band ends`)
+    return head
+  })
+
+  test('a band as tall as the title row opens the main column and drags', () => {
+    const main = cascade.byId(page(), 'main')
+    const band = main.children[0]
+    assert.ok(band && band.classes.has('main-title-row'),
+      '<main id="main"> must open with the .main-title-row band, above every view')
+    assert.equal(band.attributes.get('aria-hidden'), 'true', 'the band is chrome, not content')
+    assert.ok(main.children.slice(1).every((child) => child.classes.has('view')),
+      'every view must sit under the band, inside #main')
+    for (const env of envs) {
+      assert.equal(region(band, env).value, 'drag', `the band must drag under ${JSON.stringify(env)}`)
+    }
+    assert.match(bodies(read('styles.css'), '.main-title-row').join(';'),
+      /(?:^|[;\s])flex\s*:\s*0\s+0\s+var\(--title-row-height\b[^;]*\)\s*;/,
+      'the band must be exactly the title row\'s height, from the shared --title-row-height')
+  })
+
+  test('each view starts under the band rather than beside it', () => {
+    const block = bodies(read('styles.css'), '.view').join(';')
+    const padding = block.match(/(?:^|[;\s])padding\s*:\s*([^;]+);/)
+    assert.ok(padding, '.view must set its padding')
+    assert.equal(padding[1].trim().split(/\s+/)[0], '0',
+      'a view keeps no top padding: the band above it is the room the window controls take')
+    assert.doesNotMatch(block, /padding-top/, '.view must not add top padding back')
+  })
+
+  test('the heads of import and Next carry the drag on from the band', () => {
+    for (const head of heads(page())) {
+      for (const env of envs) {
+        const { value, from, selector } = region(head, env)
+        assert.equal(value, 'drag',
+          `the head of #${head.parent.id} resolves to ${value} from ${from} (${selector}) under ${JSON.stringify(env)}`)
+      }
+    }
+  })
+
+  test('every control, tooltip and path in the band and those heads still takes the pointer', () => {
+    const root = page()
+    const titled = new Set([...read('app.js').matchAll(/el\('([\w-]+)'\)\.title\s*=/g)].map((m) => m[1]))
+    const needs = (element) => /^(button|a|input|select|textarea|code)$/.test(element.tag) ||
+      element.attributes.has('title') || (element.id !== '' && titled.has(element.id))
+    const checked = []
+    for (const top of [cascade.byId(root, 'main').children[0], ...heads(root)]) {
+      for (const element of elements(top)) {
+        if (element === top || !needs(element)) continue
+        checked.push(element.id)
+        for (const env of envs) {
+          const { value, from, selector } = region(element, env)
+          assert.equal(value, 'no-drag',
+            `${cascade.describe(element)} in ${cascade.describe(top)} resolves to ${value} from ${from} (${selector}) under ${JSON.stringify(env)}`)
+        }
+      }
+    }
+    assert.ok(checked.includes('dismiss-path-note'), 'expected the import head to hold the PATH notice\'s dismiss button')
+    assert.ok(checked.includes('dismiss-key-note'), 'expected the import head to hold the key caution\'s dismiss button')
+    assert.ok(checked.includes('path-note-directory'),
+      'expected the import head to hold the PATH notice\'s directory, which must stay selectable')
   })
 })
