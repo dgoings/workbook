@@ -812,16 +812,27 @@ body {
 }
 
 /* The main column's half of the window's title row, beside the sidebar head's
-   first line and as tall (--title-row-height). A board view is laid in over
-   the column and its own header drags the window there; over the shell's own
-   views (import, Next, and a project whose board is starting, failed or
-   waiting on a Git identity) this band does, so the whole top row drags on
+   first line and as tall (--title-row-height). Over the shell's own views
+   (import, Next, and a project whose board is starting, failed or waiting on
+   a Git identity) this band drags the window, so the whole top row drags on
    every view. Nothing is drawn in it, and on Windows the overlay controls sit
-   over its right end, so the views below start clear of them. */
+   over its right end, so the views below start clear of them.
+
+   A board view is laid in over the column, and its own header drags the
+   window there; the band stands down while it does. Electron 44 unions the
+   drag regions of every visible view (see layout() in src/main/main.js), so a
+   control the board opts out of its header's drag region would still move
+   the window wherever the band lay beneath it. app.js sets board-active on
+   the root exactly while a board is laid in. Electron reads each view's
+   regions on their own, so this no-drag takes the band out of the shell's
+   region without cutting into the board's header above it (Chromium computes
+   an explicit none as no-drag anyway). */
 .main-title-row {
   flex: 0 0 var(--title-row-height, 36px);
   -webkit-app-region: drag;
 }
+
+:root.board-active .main-title-row { -webkit-app-region: no-drag; }
 
 /* No top padding: the band above is the room the window controls take. */
 .view {

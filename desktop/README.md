@@ -51,8 +51,8 @@ main column in the header's place, and the view's heading below it drags too.
 Drag the window by any of them, from anywhere that is not a control or a
 notice. On macOS the traffic lights sit at the left of
 that row; on Windows the window controls sit at its right end, over the board's
-header, which keeps its switches clear of them. Linux keeps its native title
-bar.
+header, which keeps its switches clear of them, or over the empty band when no
+board shows. Linux keeps its native title bar.
 
 With two or more projects imported, a Next entry sits above them. It shows what
 each project would hand out next — the top of its Ready work, unblocked and not

@@ -188,13 +188,22 @@ describe('the shell\'s own views drag by their top row', () => {
     .filter((rule) => rule.declarations.some((declaration) => declaration.property === '-webkit-app-region'))
   const envs = cascade.combinations(cascade.conditions(cascade.parseStylesheet(read('styles.css'))))
 
-  function page () {
+  function page ({ board = false, collapsed = false, platform = 'mac' } = {}) {
     const root = cascade.parseHTML(read('index.html'))
     for (const view of ['view-import', 'view-next', 'view-project']) {
       cascade.byId(root, view).attributes.delete('hidden')
     }
+    root.classes.add(`is-${platform}`)
+    if (collapsed) root.classes.add('sidebar-collapsed')
+    if (board) root.classes.add('board-active')
     return root
   }
+
+  // Every way app.js marks the root: each platform preload.js names, the
+  // sidebar expanded and collapsed to the rail, with and without a board.
+  const states = ['mac', 'windows', 'linux'].flatMap((platform) =>
+    [false, true].flatMap((collapsed) =>
+      [false, true].map((board) => ({ platform, collapsed, board }))))
 
   // The region a point over `element` falls in. Electron applies the marked
   // boxes in document order, adding a drag box and cutting out a no-drag one,
@@ -227,12 +236,48 @@ describe('the shell\'s own views drag by their top row', () => {
     assert.equal(band.attributes.get('aria-hidden'), 'true', 'the band is chrome, not content')
     assert.ok(main.children.slice(1).every((child) => child.classes.has('view')),
       'every view must sit under the band, inside #main')
-    for (const env of envs) {
-      assert.equal(region(band, env).value, 'drag', `the band must drag under ${JSON.stringify(env)}`)
+    for (const state of states.filter((s) => !s.board)) {
+      const unboarded = cascade.byId(page(state), 'main').children[0]
+      for (const env of envs) {
+        assert.equal(region(unboarded, env).value, 'drag',
+          `with no board showing the band must drag under ${JSON.stringify({ ...state, ...env })}`)
+      }
     }
     assert.match(bodies(read('styles.css'), '.main-title-row').join(';'),
       /(?:^|[;\s])flex\s*:\s*0\s+0\s+var\(--title-row-height\b[^;]*\)\s*;/,
       'the band must be exactly the title row\'s height, from the shared --title-row-height')
+    // Only that block sizes or shows the band; any other rule that reaches it
+    // may mark its region and nothing else.
+    const bare = read('styles.css').replace(/\/\*[\s\S]*?\*\//g, '')
+    for (const match of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const selectors = match[1].split(',').map((s) => s.trim().replace(/\s+/g, ' '))
+      if (!selectors.some((s) => /\.main-title-row\b/.test(s) && s !== '.main-title-row')) continue
+      const properties = match[2].split(';').map((d) => d.split(':')[0].trim()).filter(Boolean)
+      assert.deepEqual(properties.filter((p) => p !== '-webkit-app-region'), [],
+        `${match[1].trim()} may set only -webkit-app-region on the band`)
+    }
+  })
+
+  // The shell's view covers the whole window, the board's view lies over it,
+  // and Electron 44 unions the drag regions of every visible view: a no-drag in
+  // the board does not cut a hole in a drag region of the shell beneath it
+  // (main.js layout()). So while a board shows, nothing in the shell's main
+  // column may drag, or the board's skip link and any header control in the
+  // top row would move the window instead of clicking.
+  test('beside a board the main column adds no drag region under the board', () => {
+    for (const state of states.filter((s) => s.board)) {
+      const root = page(state)
+      const main = cascade.byId(root, 'main')
+      for (const top of [main.children[0], cascade.byId(root, 'view-project')]) {
+        for (const element of elements(top)) {
+          for (const env of envs) {
+            const { value, from, selector } = region(element, env)
+            assert.notEqual(value, 'drag',
+              `${cascade.describe(element)} resolves to drag from ${from} (${selector}) beside a board under ${JSON.stringify({ ...state, ...env })}`)
+          }
+        }
+      }
+    }
   })
 
   test('each view starts under the band rather than beside it', () => {
