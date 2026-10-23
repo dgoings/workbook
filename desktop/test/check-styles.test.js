@@ -44,9 +44,16 @@ describe('check-styles', () => {
 
   test('a prefix with no matching rule is missing', () => {
     const js = 'chip.className = `chip chip--${task.priority}`'
-    // .chip alone starts with "chip" but not with "chip--", and a rule for a
-    // different block's modifier does not count either.
-    assert.deepEqual(missing('.chip { } .other--high { }', js), ['chip--'])
+    // .chip and .chip-wide start with "chip" but not with "chip--", and a rule
+    // for a different block's modifier does not count either.
+    assert.deepEqual(missing('.chip { } .chip-wide { } .other--high { }', js), ['chip--'])
+  })
+
+  test('a rule for the bare prefix does not satisfy it', () => {
+    const js = 'chip.className = `chip chip--${task.priority}`'
+    // .chip-- styles no modifier any value could produce, so the prefix is
+    // still missing until a rule names a modifier after it.
+    assert.deepEqual(missing('.chip { } .chip-- { }', js), ['chip--'])
   })
 
   test('a prefix in a comment does not satisfy it', () => {

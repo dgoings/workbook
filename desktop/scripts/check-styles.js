@@ -62,8 +62,9 @@ function danglingSelectors (css) {
 //
 // A name ending in -- is the static part of a modifier built from data, such
 // as `next-row__priority--${task.priority}`. Which values arrive is the data's
-// business, so it is a prefix: any rule whose class starts with it satisfies
-// it, and only a prefix no rule starts with is missing.
+// business, so it is a prefix: a rule for any longer class that starts with it
+// satisfies it, and a prefix with no such rule is missing. A rule for the bare
+// prefix does not count, since no value names it.
 function missingClasses (used, defined) {
   const styled = (name) => name.endsWith('--')
     ? [...defined].some((rule) => rule.length > name.length && rule.startsWith(name))
