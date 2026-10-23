@@ -777,15 +777,15 @@
     .relationship-row__metadata, .relationship-row__note { color: var(--wb-ink-muted); font-size: .75rem; overflow-wrap: anywhere; }
     /* A row has these two items and no others, because it used to have as many
        as the branch that built it happened to append. Only the Remove button
-       named a column, so the rest were dealt in row-major: a read-only row
-       appends four parts and no button, which put the heading and the badge in
-       column one and the metadata and the note in column two. Column two is an
-       auto track, and an auto track is maximized to its max-content before the
-       1fr column is given anything, so sizing it to two sentences left the
-       title column at 0px — and overflow-wrap: anywhere took the title down to
-       one character per line rather than letting it overflow. Naming the two
-       columns is the whole of the fix: a read-only row now has no item in
-       column two at all, so that track resolves to 0 and the text gets the row.
+       named a column, so the rest were dealt in row-major: a row with no
+       button — a deleted task in Blocks, which is no longer listed — put the
+       heading and the badge in column one and the metadata and the note in
+       column two. Column two is an auto track, and an auto track is maximized
+       to its max-content before the 1fr column is given anything, so sizing it
+       to two sentences left the title column at 0px — and overflow-wrap:
+       anywhere took the title down to one character per line rather than
+       letting it overflow. A badge or a draft's error spilled the same way
+       beside a button. Naming the two columns is the whole of the fix.
        min-width: 0 is belt and braces. It cannot widen anything — the title
        column's min sizing function is already a fixed 0, so no item's automatic
        minimum ever reaches that track's base size — it only keeps this stack
@@ -3482,10 +3482,15 @@
         const current = snapshot.active.find((task) => task.id === taskID);
         if (!current) return null;
         const known = new Map([...snapshot.active, ...snapshot.deleted].map((task) => [task.id, task]));
-        const dependsOn = (current.dependencies || []).map((id) => ({ id, task: known.get(id) || null, removable: true }));
-        const blocks = [...snapshot.active, ...snapshot.deleted]
+        const dependsOn = (current.dependencies || []).map((id) => ({ id, task: known.get(id) || null }));
+        // Blocks lists live tasks only. A deleted task that depended on this one
+        // still carries the edge, but on its own record, which a tombstone does
+        // not let anyone change; and the edge is inert, because readiness skips
+        // a deleted task before it reads its dependencies. Listing it offered a
+        // row nobody could act on, so it comes back when the task is restored.
+        const blocks = snapshot.active
           .filter((task) => task.id !== taskID && (task.dependencies || []).includes(taskID))
-          .map((task) => ({ id: task.id, task, removable: !task.deleted }));
+          .map((task) => ({ id: task.id, task }));
         return { current, dependsOn, blocks };
       }
       function newRelationshipDraftState() {
@@ -4249,9 +4254,10 @@
         // there is to press goes in the other. The row is a two-column grid,
         // and it used to hand each part to that grid loose: only the Remove
         // button named a column, so which part landed where came out of how
-        // many parts this branch appended. A read-only row appends four and no
-        // button, so half of them auto-placed into the controls column and
-        // crushed the title into a vertical line of single characters.
+        // many parts this branch appended. A row with a badge or a note beside
+        // its title auto-placed the extras into the controls column, and the
+        // one with no button at all crushed its title into a vertical line of
+        // single characters.
         const textColumn = document.createElement("div");
         textColumn.className = "relationship-row__text";
         textColumn.append(heading, metadata);
@@ -4283,32 +4289,14 @@
           controls.append(retry);
           row.retryButton = retry;
         }
-        if (isDraft || relationship.removable) {
-          const remove = document.createElement("button");
-          remove.type = "button";
-          remove.className = "relationship-remove";
-          text(remove, "Remove");
-          remove.addEventListener("click", () => onRemove(relationship));
-          controls.append(remove);
-          row.removeButton = remove;
-        } else {
-          // A Blocks row is an edge recorded on the other task, so a tombstoned
-          // one is not this task's to drop. Saying only that it is read-only
-          // read as a Remove button that had stopped working, so the note names
-          // the record the edge lives on and where to go to reopen it. It has
-          // to name the place as well as the move: a deleted task's heading is
-          // plain text rather than a link and its detail route is refused, so
-          // the only Restore the reader can reach is the one on its card in the
-          // Deleted column — which is itself behind a switch they may have off.
-          const explanation = document.createElement("p");
-          explanation.className = "relationship-row__note";
-          text(explanation, "This dependency is stored on the deleted task. Restore that task from the board's Deleted column to change it.");
-          textColumn.append(explanation);
-        }
-        // The controls only exist when there is a control, so a read-only row
-        // is one grid item rather than one item beside an empty track.
-        row.append(textColumn);
-        if (controls.children.length) row.append(controls);
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "relationship-remove";
+        text(remove, "Remove");
+        remove.addEventListener("click", () => onRemove(relationship));
+        controls.append(remove);
+        row.removeButton = remove;
+        row.append(textColumn, controls);
         return row;
       }
       function taskRelationships(taskID, draftState = null) {
