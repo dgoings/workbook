@@ -26,6 +26,12 @@ describe('check-styles', () => {
     assert.deepEqual(missingClasses(usedClasses(read('index.html'), read('app.js')), definedClasses(css)), [])
   })
 
+  test('the Next view builds its priority modifier from data', () => {
+    // The prefix rule is exercised by real renderer code, not only by the
+    // fixtures below.
+    assert.ok(usedClasses('', read('app.js')).has('next-row__priority--'))
+  })
+
   test('a template-literal modifier harvests as a prefix ending in --', () => {
     const used = usedClasses('', 'chip.className = `label chip--${task.priority}`')
     assert.deepEqual([...used].sort(), ['chip--', 'label'])

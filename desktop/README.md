@@ -117,7 +117,10 @@ Ctrl on Windows and Linux.
 npm run check
 ```
 
-`check-styles.js` verifies every class the renderer applies has a rule,
+`check-styles.js` verifies every class the renderer applies has a rule (a
+modifier built from data, such as `next-row__priority--${task.priority}`, is
+checked by its static part ending in `--`, which any rule whose class starts
+with it satisfies),
 `check-shell.js` verifies every source file parses, every export is defined,
 the renderer references only element ids that exist, the channels each
 preload invokes, sends and listens for are the channels the main process

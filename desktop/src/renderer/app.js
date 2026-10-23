@@ -979,10 +979,14 @@ function renderNextRow (project, task) {
 
   const priority = document.createElement('span')
   priority.className = 'label next-row__priority'
-  // Only high is colored, and only high is named here: a literal is what the
-  // style checker can see, and a priority Workbook adds later cannot turn into
-  // a class name — or, with whitespace in it, into a DOMException.
-  if (task.priority === 'high') priority.classList.add('next-row__priority--high')
+  // Priorities are each project's own vocabulary, so the modifier is built from
+  // the value and styles.css colors whichever ones it has a rule for. Only a
+  // value that is one class token becomes one: anything else, whitespace
+  // included, keeps the plain chip rather than adding a stray class. Both are
+  // whole assignments so the style checker sees each class.
+  if (/^[\w-]+$/.test(task.priority)) {
+    priority.className = `label next-row__priority next-row__priority--${task.priority}`
+  }
   priority.textContent = task.priority
 
   // The row's spans keep the pointer only where they carry a tooltip of their
