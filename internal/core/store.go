@@ -135,6 +135,18 @@ const WarningAssignmentShared = "assignment-shared"
 // go and write more tasks.
 const WarningNextHeldByOthers = "next-held-by-others"
 
+// WarningStatusRenameReresolves reports that a status rename took a name a
+// rename or a removal had retired, and so moved every task whose stored status
+// still forwarded through that name into the renamed column.
+//
+// It is a warning rather than a refusal because taking the name back is a
+// legitimate decision — the forwarding decays as tasks are written to, and an
+// old project may want its old column name — but the move is invisible in the
+// rename's own arguments, so the person making it is told where those tasks
+// used to land and how many of them this clone holds. The structured account
+// travels beside it as the result's `reresolved` member.
+const WarningStatusRenameReresolves = "status-rename-reresolves"
+
 type Warning struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`

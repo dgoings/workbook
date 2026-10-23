@@ -1470,6 +1470,45 @@ func TestClientStatusesPageEditsOnlyWhatChanged(t *testing.T) {
 `)
 }
 
+// A rename onto a name a retirement still forwarded moves every task stored
+// under that name into the renamed column, which nothing on the form shows. The
+// server says so in a warning, and the page shows the warning to the person who
+// pressed Save, beneath the report of the rename and marked as a warning, in the
+// server's own words: they are the words the terminal prints.
+func TestClientStatusesPageShowsWhatARenameOntoARetiredNameMoved(t *testing.T) {
+	t.Parallel()
+	vocabulary := handlerVocabulary(t)
+	const message = `renaming "queued" onto "waiting" re-points a retired name: "waiting" was removed into ` +
+		`"icebox"; 3 active tasks stored under "waiting" or under a name that forwards through it now ` +
+		`resolve to "waiting" (formerly "queued") instead of "icebox"`
+	runPanelClient(t, "renaming onto a retired name", vocabulary, "head-7", nil, `
+  vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
+  vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedQueuedVocabulary(t), "head-8", VocabularyTaskCounts{}, []core.Warning{
+		{Code: core.WarningStatusRenameReresolves, Message: message},
+	})+` };
+  await openStatuses();
+
+  panelControl(panelRow("queued"), "Edit Queued Up").eventListeners.click();
+  const form = panelForm("queued", "vocabularyEdit");
+  const name = findElement(form, (element) => element.id === "status-name-queued");
+  name.value = "waiting";
+  name.eventListeners.input();
+  await submitPanelForm(form);
+
+  const said = panelMessages();
+  if (said.length !== 2 || said[0] !== "Updated Waiting On.") {
+    throw new Error("the panel said " + JSON.stringify(said));
+  }
+  if (said[1] !== `+strconv.Quote(message)+`) {
+    throw new Error("the panel did not show the server's warning as it was sent: " + JSON.stringify(said[1]));
+  }
+  const warned = findElements(vocabularyPanelStatus, (element) => hasDataKey(element, "panelWarning"));
+  if (warned.length !== 1 || warned[0].textContent !== said[1]) {
+    throw new Error("the re-resolution was not marked as a warning");
+  }
+`)
+}
+
 // A panel opened for a project whose statuses cannot be read says so, and offers
 // no controls that would compose a change against nothing.
 func TestClientStatusesPageReportsAVocabularyItCannotRead(t *testing.T) {
