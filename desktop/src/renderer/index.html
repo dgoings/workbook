@@ -59,6 +59,12 @@
   </aside>
 
   <main id="main">
+    <!-- The main column's half of the window's title row, as tall as the
+         sidebar head's first line: what the window is dragged by over the
+         shell's own views. A board view is laid in over it, and while one
+         is the band drags nothing (see .main-title-row in styles.css). -->
+    <div class="main-title-row" aria-hidden="true"></div>
+
     <!-- The discovery + selection wizard. Controls are anchored at the top and
          the import action at the bottom; only the repository list scrolls, so
          neither the search nor the button is ever scrolled out of reach. -->
