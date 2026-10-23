@@ -41,26 +41,28 @@ import (
 // all and leaks a spinning background descendant per call, so any concurrent
 // git resolved through PATH would run that instead of git.
 //
-// Four more stay serial for their timing rather than for process state:
+// Three more stay serial for their timing rather than for process state:
 //
 //	TestObserveWatcherWindowMeasuresARunningDaemon — watch_scenarios_test.go
-//	TestMeasureCommandTerminatesTimedOutDescendant — command_test.go
 //	TestPrepareProjectionValidatesRebuildEnvelope — scenarios_test.go
 //	TestMeasureCommandOutputPreservesStreamsAndCompatibilityWrapper — command_test.go
 //
 // The first observes a real `workbook sync --watch` daemon across two
 // 1500 ms windows and requires the steady window to complete more than one
 // synchronization while the idle window completes exactly one; a starved
-// daemon makes those counts equal and fails the test. The second gives a
-// shell 100 ms to fork a background descendant and have it record its pid
-// before the reap kills the group, and fails hard if the pid never arrived.
-// The last two allow a /bin/sh stub to start and print a line.
+// daemon makes those counts equal and fails the test. The last two allow a
+// /bin/sh stub to start and print a line.
+// TestMeasureCommandTerminatesTimedOutDescendant used to be on this list, for
+// the 100 ms it gave a shell to fork a descendant and record its pid. Serial or
+// not, a whole-tree run made that fork miss the window, so the test now waits
+// for the pid before the deadline passes, has no window left, and runs in
+// parallel.
 // The ruling is that they stay serial: Go finishes every serial test before
 // the parallel batch resumes, so they do not contend with the fixture builds
 // and the eighteen `go build`s the rest of this package runs, and a package
 // whose subject is elapsed time should not make its narrowest windows compete
 // with its own load. The cost of the ruling is about six and a half seconds of
-// serial time, which is what the four of them take together.
+// serial time, which is what the three of them take together.
 //
 // What being serial does not buy is a quiet machine, and an earlier version of
 // this comment claimed that it did. The serial-before-parallel ordering is a
@@ -72,7 +74,7 @@ import (
 // affected tests with -parallel 1 against the same load left three of them
 // still failing. So a narrow window here has to be wide enough for a loaded
 // machine on its own merits; the serial list is about this package's own load
-// and nothing more. The windows the four of them assert on are the subject and
+// and nothing more. The windows the three of them assert on are the subject and
 // stay as they are; the budgets that are only hang guards were widened.
 //
 // TestResourceHelperProcess is in neither list. It skips unless the resource
