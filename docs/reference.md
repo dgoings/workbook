@@ -576,6 +576,51 @@ against the tasks stored under `backlog`, and the next write to it records
 stored status, and it happens on any write to the task — a title edit, a move, a
 dependency change — not only on a status change.
 
+A retired name can be taken again, and taking it with `workbook status rename`
+moves history. The name stops forwarding the moment it is live, so every task
+still stored under it — and every task stored under a name whose chain runs
+through it — resolves to the renamed status instead of to wherever the
+retirement had sent it. The rename is allowed, because the forwarding decays as
+tasks are written to and an old column name is a reasonable thing to want back,
+but it is never silent: the result carries a `status-rename-reresolves` warning
+naming the retired name, what retired it, the live status its history used to
+resolve to, the status it resolves to now, and how many active tasks moved. The
+JSON result carries the same account in a `reresolved` member:
+
+```
+$ workbook status delete review --into backlog
+$ workbook status rename ready review
+Status:	rename	review
+	from:	ready
+	label:	Ready → Review (derived)
+	tags:	next
+	inverse:	workbook status rename review ready --label Ready	(not exact)
+	note:	renaming back leaves "review" forwarding to "ready", so the tasks this rename re-pointed stay there rather than returning to "backlog"
+	docs:	.workbook/guidelines.md	written
+Sync:	skipped	no origin remote configured
+workbook: warning: renaming "ready" onto "review" re-points a retired name: "review" was removed into "backlog"; 1 active task stored under "review" or under a name that forwards through it now resolves to "review" (formerly "ready") instead of "backlog"
+```
+
+```json
+"reresolved": {"status": "review", "retiredBy": "status.remove", "via": "backlog",
+               "previously": "backlog", "now": "review", "tasks": 1}
+```
+
+`previously` is the end of the chain and `via` its first hop, so the two differ
+when the retired name was itself renamed or removed again later; `previously` is
+omitted when the chain led to no live status at all. The count is exact for the
+tasks this clone holds: it reads each active task's stored value, so a task a
+later write already settled elsewhere is rightly not in it, and a task on a
+teammate's clone that has not been published yet cannot be. A count of zero is
+still warned, because those unpublished values move too. The printed inverse —
+renaming back — is marked not exact, since the name it gives up forwards to the
+renamed status rather than to where the retirement sent it. Renaming onto a
+retired name whose history already resolves to the status being renamed — the
+inverse of an earlier rename, or the name of a status removed into this one —
+moves nothing and is not warned. `workbook status add` of a retired name also
+stops it forwarding, and is not warned either: that is exactly what a removal's
+printed inverse relies on to bring the removed status's tasks back.
+
 Reading and writing treat a stale value differently, and deliberately.
 Everything that reads a *stored* status resolves it. Everything that *writes* a
 status a caller supplies requires a live member, without forwarding: `workbook
@@ -1404,7 +1449,10 @@ digits, or a color a priority already has reads exactly as it does in the
 terminal. A removal reports how many tasks it moved and how many of those
 `workbook next` can claim where they landed, and any warning a change carries,
 such as generated guidelines the server did not rewrite, is shown rather than
-swallowed. A board served without the four vocabulary mutations has no such
+swallowed. A rename onto a retired name is one of those: the page shows the
+same `status-rename-reresolves` sentence the terminal prints, naming the
+retired name, where its history used to resolve, where it resolves now, and how
+many active tasks moved. A board served without the four vocabulary mutations has no such
 page: no link, and `/config` is a 404; one served without the display writer
 has the page and not its Board settings section; and one served without all six
 priority mutations — the addition, the rename-and-relabel, the recolor, the
