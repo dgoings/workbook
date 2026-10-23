@@ -784,8 +784,11 @@
        to its max-content before the 1fr column is given anything, so sizing it
        to two sentences left the title column at 0px — and overflow-wrap:
        anywhere took the title down to one character per line rather than
-       letting it overflow. A badge or a draft's error spilled the same way
-       beside a button. Naming the two columns is the whole of the fix.
+       letting it overflow. Beside a button, Remove held rows one and two of
+       column two, so a badge still fell to row three of column one; only a
+       draft whose save was refused had a fourth part, and its error note was
+       dealt into column two beside the badge, widening that track at the
+       title's expense. Naming the two columns is the whole of the fix.
        min-width: 0 is belt and braces. It cannot widen anything — the title
        column's min sizing function is already a fixed 0, so no item's automatic
        minimum ever reaches that track's base size — it only keeps this stack
@@ -4254,10 +4257,10 @@
         // there is to press goes in the other. The row is a two-column grid,
         // and it used to hand each part to that grid loose: only the Remove
         // button named a column, so which part landed where came out of how
-        // many parts this branch appended. A row with a badge or a note beside
-        // its title auto-placed the extras into the controls column, and the
-        // one with no button at all crushed its title into a vertical line of
-        // single characters.
+        // many parts this branch appended. A failed draft's error note, its
+        // fourth part, auto-placed into the controls column and narrowed the
+        // title, and the row with no button at all crushed its title into a
+        // vertical line of single characters.
         const textColumn = document.createElement("div");
         textColumn.className = "relationship-row__text";
         textColumn.append(heading, metadata);

@@ -26,8 +26,9 @@ import (
 // maximized to those sentences before the minmax(0, 1fr) title column was given
 // anything, and the title column resolved to 0px. With overflow-wrap: anywhere
 // on the heading, the title came out one character per line. That row — a
-// deleted task in Blocks — is no longer drawn at all, but every row with more
-// to read than a title and an ID spilled the same way, so the two items stay.
+// deleted task in Blocks — is no longer drawn at all, but a row beside a button
+// spilled too once it had a fourth part: a draft whose save was refused dealt
+// its error note into column two, so the two items stay.
 
 // runRelationshipRowClient renders the New Task page, executes its client
 // script against the fake DOM, and runs body with relationshipRow reachable.
@@ -78,10 +79,11 @@ setTimeout(() => {
 	}
 }
 
-// Every row has something to press, and each shape with more to read than a
-// title spilled a part into column two: a deleted prerequisite has a badge, and
-// a failed draft has a badge, the failure text and a Retry button alongside
-// Remove. All of them are held to the same two items.
+// Every row has something to press, and every shape is held to the same two
+// items. A deleted prerequisite adds a badge, which fit in column one even
+// before the fix; a failed draft adds a badge, the failure text and a Retry
+// button alongside Remove, and its failure text is the part that used to land
+// in column two.
 func TestHandlerClientKeepsRelationshipControlsOutOfTheTextColumn(t *testing.T) {
 	t.Parallel()
 	runRelationshipRowClient(t, "relationship row layout", `
