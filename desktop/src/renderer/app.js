@@ -611,11 +611,19 @@ async function openProject (projectId) {
   if (await askForIdentity(projectId, () => openProject(projectId))) return
   try {
     await api.openProject(projectId)
-    el('board-state').textContent = ''
+    if (stillOpening(projectId)) el('board-state').textContent = ''
   } catch (error) {
-    el('board-state').textContent = `Could not start this board: ${error.message}`
+    if (stillOpening(projectId)) el('board-state').textContent = `Could not start this board: ${remoteMessage(error)}`
   }
   loadProjects()
+}
+
+// Whether the project view still belongs to this open. A start can take
+// seconds, and another project picked meanwhile has its own line under the
+// board views; the open it overtook settles into that view and must leave the
+// line alone, the way the main process leaves the window alone.
+function stillOpening (projectId) {
+  return state.view === 'project' && state.activeProjectId === projectId
 }
 
 // --- git identity -----------------------------------------------------------
@@ -1054,9 +1062,9 @@ async function openNextTask (projectId, task) {
   if (await askForIdentity(projectId, () => openNextTask(projectId, task))) return
   try {
     await api.openProject(projectId, task.id)
-    el('board-state').textContent = ''
+    if (stillOpening(projectId)) el('board-state').textContent = ''
   } catch (error) {
-    el('board-state').textContent = `Could not open this board: ${error.message}`
+    if (stillOpening(projectId)) el('board-state').textContent = `Could not open this board: ${remoteMessage(error)}`
   }
   loadProjects()
 }
