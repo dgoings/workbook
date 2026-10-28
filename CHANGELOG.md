@@ -25,6 +25,71 @@ version order rather than at the top; a heading no newer than the previous
 release counts as no entry, so it never blocks the next release. See
 [Patch releases to an older line](CONTRIBUTING.md#patch-releases-to-an-older-line).
 
+## v0.6.1 — 2026-10-28
+
+Fixes and polish on top of v0.6.0, most of them in the desktop app. An idle
+board stops resending every task once a second, the sidebar shows each
+project's current key, and a status rename that brings a retired name back to
+life now says what it moved. Nothing here changes a stored format, and a
+v0.6.0 clone works alongside a v0.6.1 one.
+
+### Added
+- **`workbook key list --no-counts`** prints the key listing without counting
+  the tasks under each key, so it never opens the projection. In JSON each
+  key's `tasks` member is left out, as the mutating key commands already leave
+  it out; in text the TASKS column is dropped. The desktop app uses it to read
+  every project's current key (#179).
+
+### Changed
+- **Renaming a status onto a retired name warns.** The rename still succeeds,
+  but it moves the history the retired name was forwarding elsewhere, so the
+  result now carries a `status-rename-reresolves` warning and, in JSON, a
+  `reresolved` member naming the retired name, where its tasks used to resolve,
+  where they resolve now and how many active tasks moved. The board's `/config`
+  Statuses page shows the same warning (#189).
+- **The board polls conditionally.** `GET /api/tasks` answers with an `ETag`
+  and a matching `If-None-Match` gets `304 Not Modified` with no body. An idle
+  board used to download, parse and redraw the whole document every second;
+  on this repository that was 437 KB a second. Now it receives headers only
+  (#181). To keep that true, the "assigned 5 minutes ago" wording is no longer
+  in the document: each assignment row in `/api/tasks` and in the assignment
+  mutation answers has lost its `ago` member, and the page words the row from
+  `createdAt` on its own tick by the same rule `workbook show` uses (#182).
+- **The desktop sidebar, rail, menu and Next view show each project's current
+  key**, not the key it was imported under, so they agree with `workbook key
+  list` after the key changes (#178).
+- A folded category can be unfolded from the collapsed rail, and both the
+  rail's and the sidebar's fold buttons are 24px click targets (#170, #174,
+  #176).
+- The window drags by the top row of the Import and Next views and of a board
+  that is starting or has failed, not only by the sidebar head (#188).
+
+### Fixed
+- **A failed board start shows its own message.** A board's view no longer
+  stays laid over the shell's "Could not start this board" text, whether the
+  start failed over a working board or you switched away during a slow start
+  (#183). The message no longer carries Electron's "Error invoking remote
+  method" prefix, and a start you have already clicked away from no longer
+  overwrites the status line of the board you are opening now (#193).
+- Hover tooltips in the desktop sidebar and Next view show reliably on macOS
+  instead of rarely after the first hover, working around
+  electron/electron#49843 (#180, #185).
+- A task's Blocks list no longer shows deleted tasks, whose edge cannot be
+  changed and has no effect while they are deleted (#190).
+- The task form's placeholder for a status or priority the project does not
+  define leads with the value, `Current: critical (not in this project)`, so a
+  narrow select cuts off the explanation rather than the value, and a card
+  holding such a priority marks its chip (#171).
+
+### Release tooling
+- A patch to an older minor line can be cut from a `maint/vX.Y` branch, which
+  `scripts/start-release-line.sh` creates (#175).
+- Publishing never moves the Latest badge, the Homebrew tap or the rolling
+  `desktop-latest` release backward to an older version (#172), and generated
+  release notes start at the line's previous release (#177).
+- `scripts/cut-release.sh` fetches only `main` and the release tags, so a
+  moved `desktop-latest` tag no longer blocks a cut (#168).
+
 ## v0.6.0 — 2026-10-08
 
 Priorities become a per-project vocabulary, the way statuses already are, a
