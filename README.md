@@ -234,3 +234,7 @@ architectural invariants every change is held to.
 ## License
 
 Workbook is released under the [MIT License](LICENSE).
+
+Test line for GitHub credentials check.
+
+Second test line for GitHub credentials check.
