@@ -1,0 +1,55 @@
+# syntax=docker/sandbox-kit:3
+# Project kit for working on Workbook itself in a DS9 worker. Layered on
+# DS9's base kits (GitHub egress, Git identity) by .ds9/sandbox.json.
+# The Go toolchain this repo needs (go.mod says 1.26) is already in the
+# sbx claude image, so this adds the released `workbook` CLI the agent
+# tracks its work with, and egress for fetching Go modules.
+schemaVersion: "3"
+displayName: Workbook CLI
+description: >-
+  The workbook CLI, Go module egress, and agent context for working on Workbook itself.
+sourceUrl: https://github.com/dgoings/workbook
+
+kind: mixin
+
+args:
+  workbookVersion:
+    default: "0.6.1"
+    pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
+    description: Workbook CLI release to install
+    buildArg: WORKBOOK_VERSION
+
+provides:
+  - "workbook@${{ kit.args.workbookVersion }}"
+
+capabilities:
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow:
+          # `go build` / `go test` fetch modules through the Go proxy and
+          # verify them against the checksum database.
+          - proxy.golang.org:443
+          - sum.golang.org:443
+
+  - type: com.docker.sandbox/agent-context@1
+    optional: true
+    config: &agent-context
+      content: |
+        # Workbook
+
+        This repository is Workbook itself, and it tracks its own work with a
+        released Workbook CLI (`workbook`, on PATH; not built from this tree).
+        Go is installed for building and testing the source.
+        Task state lives in git refs under `refs/workbook/*`; `workbook sync`
+        fetches and pushes them through the sandbox's GitHub credential.
+
+        - `workbook next --claim` takes the next task; `workbook show <id>` reads one.
+        - Update the task as you go (`workbook update <id> ...`) and run
+          `workbook push` before you finish so the planning environment sees it.
+
+  - type: com.docker.sandbox/agent-context@2
+    optional: true
+    config: *agent-context
+
+dockerfile: workbook.dockerfile
