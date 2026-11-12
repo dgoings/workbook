@@ -251,8 +251,8 @@ func keyReadService(
 		Keys:       state.Keys,
 		Reader:     store,
 		History:    store,
-		IDs:        core.CryptoULIDSource{},
-		Now:        time.Now,
+		IDs:        core.CryptoULIDSource{Now: recordedNow},
+		Now:        recordedNow,
 	}, release, nil
 }
 
@@ -546,7 +546,7 @@ func runKeyMutation(
 	}
 
 	written, err := session.repository.WriteConfigOperation(
-		ctx, session.config, core.CryptoULIDSource{}, plan.operations, keyCommitSubject(plan))
+		ctx, session.config, core.CryptoULIDSource{Now: recordedNow}, plan.operations, keyCommitSubject(plan))
 	if err != nil {
 		return keyWriteError(err)
 	}

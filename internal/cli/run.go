@@ -64,6 +64,11 @@ func Run(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout
 		return core.ExitCode(err)
 	}
 
+	if _, _, err := recordedTime(); err != nil {
+		writeError(stderr, err, jsonMode)
+		return core.ExitCode(err)
+	}
+
 	command := args[0]
 	commandArgs := args[1:]
 	var err error
@@ -309,8 +314,8 @@ func fetchSharingWarnings(
 		Keys:       state.Keys,
 		Reader:     store,
 		History:    store,
-		IDs:        core.CryptoULIDSource{},
-		Now:        time.Now,
+		IDs:        core.CryptoULIDSource{Now: recordedNow},
+		Now:        recordedNow,
 		Actor:      actor,
 	}
 	return reconciledSharingWarnings(ctx, service, fetched, "")
@@ -2539,8 +2544,8 @@ func openServiceParts(
 		BlobReads:  repository,
 		Projection: store,
 		History:    store,
-		IDs:        core.CryptoULIDSource{},
-		Now:        time.Now,
+		IDs:        core.CryptoULIDSource{Now: recordedNow},
+		Now:        recordedNow,
 		Actor:      actor,
 	}, repository, store, release, nil
 }
@@ -2581,8 +2586,8 @@ func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Se
 		// rather than projection rows, and serving one is a read like any
 		// other. It is the read half alone — nothing here may write.
 		BlobReads: repository,
-		IDs:       core.CryptoULIDSource{},
-		Now:       time.Now,
+		IDs:       core.CryptoULIDSource{Now: recordedNow},
+		Now:       recordedNow,
 	}, release, nil
 }
 
@@ -2599,6 +2604,7 @@ func openRepository(ctx context.Context, cwd string, stderr io.Writer) (*gitstor
 	if err != nil {
 		return nil, core.ProjectConfig{}, err
 	}
+	repository.Now = recordedNow
 	config, err := repository.LoadConfig()
 	if err != nil {
 		return nil, core.ProjectConfig{}, err

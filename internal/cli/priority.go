@@ -344,7 +344,7 @@ func runPriorityMutation(
 	}
 
 	written, err := session.repository.WriteConfigOperation(
-		ctx, session.config, core.CryptoULIDSource{}, plan.operations, priorityCommitSubject(plan))
+		ctx, session.config, core.CryptoULIDSource{Now: recordedNow}, plan.operations, priorityCommitSubject(plan))
 	if err != nil {
 		return priorityWriteError(err)
 	}
@@ -398,8 +398,8 @@ func priorityReadService(
 		Priorities: priorities,
 		Reader:     store,
 		History:    store,
-		IDs:        core.CryptoULIDSource{},
-		Now:        time.Now,
+		IDs:        core.CryptoULIDSource{Now: recordedNow},
+		Now:        recordedNow,
 	}, release, nil
 }
 

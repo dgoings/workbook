@@ -117,6 +117,7 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	if err != nil {
 		return err
 	}
+	repository.Now = recordedNow
 	// A checkout that predates the project's Workbook adoption carries no
 	// tracked configuration, so Init alone would mint a second identity for a
 	// project origin already has. Ask origin first; --no-sync keeps bootstrap
@@ -146,7 +147,7 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 			}
 		}
 	}
-	config, minted, err := repository.Init(ctx, *key, core.CryptoULIDSource{})
+	config, minted, err := repository.Init(ctx, *key, core.CryptoULIDSource{Now: recordedNow})
 	if err != nil {
 		return err
 	}
@@ -387,7 +388,7 @@ func seedMintedStatuses(
 			return nil
 		}
 	}
-	_, err = repository.MintConfigLedger(ctx, config, core.CryptoULIDSource{})
+	_, err = repository.MintConfigLedger(ctx, config, core.CryptoULIDSource{Now: recordedNow})
 	return err
 }
 

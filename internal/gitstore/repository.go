@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -30,7 +31,11 @@ type gitCommandResult struct {
 type Repository struct {
 	Root         string
 	CommonGitDir string
-	gitPath      string
+	// Now, when set, is the clock configuration packs are stamped with in
+	// place of the system clock, so a caller importing a project's past can
+	// date its configuration changes the way its task operations are dated.
+	Now     func() time.Time
+	gitPath string
 
 	metadataMu       sync.RWMutex
 	identityVerified bool
