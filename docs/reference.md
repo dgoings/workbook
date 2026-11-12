@@ -1074,6 +1074,39 @@ operations for a task, or for a commit it does not hold — every parked
 pre-replay tip, since the projection is fed from `refs/workbook/tasks/` only —
 Workbook falls back to a bounded Git read so `show` still answers.
 
+## Recording past work
+
+`WORKBOOK_NOW` fixes the time a command records, in place of the system clock.
+It exists to import a project's past: a migration runs each step with the time
+that step really happened, so the history reads as it would have had Workbook
+been there to record it.
+
+```sh
+WORKBOOK_NOW=2024-03-04T09:00:00Z workbook setup --key WB
+WORKBOOK_NOW=2024-03-05T14:00:00-05:00 workbook create "Ship the importer"
+WORKBOOK_NOW=2024-03-09T16:30:00Z workbook update WB-01HR --status done
+```
+
+The value is an RFC 3339 time and is recorded as given, offset included. It
+moves everything written into history: each operation pack's wall time, and with
+it a task's `createdAt` and `updatedAt`, a comment's or assignment's time, and
+every `--history` and `status log` row; the time encoded in every identifier the
+command mints, from the project and task IDs to each operation's; and the
+configuration packs `setup` and the `status`, `priority`, `key`, and `config`
+commands write. A value that does not parse is refused with exit `5` before the
+command reads or writes anything.
+
+It does not move the dates on the Git commits that carry those operations,
+which are Git's to stamp. Workbook's Git commands inherit the environment, so
+setting `GIT_AUTHOR_DATE` and `GIT_COMMITTER_DATE` beside it dates those too.
+Nor does it touch what measures the running process rather than the work: sync
+watcher freshness, timeouts, and relative ages such as how long ago a task was
+assigned stay on the real clock.
+
+Nothing checks the order of the times given. Wall time is attribution only, so a
+step recorded earlier than the change before it is stored as given, and
+`--history` still lists it in chain order, as described above.
+
 ## Local mutation durability
 
 Existing-task mutations plan from the validated current state in the SQLite

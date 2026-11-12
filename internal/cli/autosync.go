@@ -147,8 +147,8 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 		// written with rather than under the one the ledger names.
 		Keys:   state.Keys,
 		Reader: store,
-		IDs:    core.CryptoULIDSource{},
-		Now:    time.Now,
+		IDs:    core.CryptoULIDSource{Now: recordedNow},
+		Now:    recordedNow,
 	}
 	if withWriter {
 		service.Writer = repository

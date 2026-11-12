@@ -387,7 +387,7 @@ func runDisplayMutation(ctx context.Context, cwd string, mutation displayMutatio
 	}
 
 	written, err := session.repository.WriteConfigOperation(
-		ctx, session.config, core.CryptoULIDSource{}, []core.ConfigOperation{operation},
+		ctx, session.config, core.CryptoULIDSource{Now: recordedNow}, []core.ConfigOperation{operation},
 		displayCommitSubject(change))
 	if err != nil {
 		return displayWriteError(err)

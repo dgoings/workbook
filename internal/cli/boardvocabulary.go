@@ -158,7 +158,7 @@ func (board *boardVocabulary) apply(
 	// what makes the promise, because between that read and this write is
 	// exactly where a teammate's `workbook status rename` fits.
 	written, err := board.repository.WriteConfigOperationOnto(
-		ctx, board.config, core.CryptoULIDSource{}, plan.operations, configCommitSubject(plan), expectedHead)
+		ctx, board.config, core.CryptoULIDSource{Now: recordedNow}, plan.operations, configCommitSubject(plan), expectedHead)
 	if err != nil {
 		if core.CategoryOf(err) == core.CategoryStaleWrite {
 			// Whether the ledger moved while this change was being composed or
