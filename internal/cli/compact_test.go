@@ -847,3 +847,43 @@ func TestCompactCLIReportsConfigConflictsFromItsFetch(t *testing.T) {
 		t.Fatalf("text output = %q, want the configuration conflict", text)
 	}
 }
+
+// A clone whose task a teammate compacted takes the checkpoint on `workbook
+// sync`, replaying its own unpushed edit, and reads the result back through the
+// projection with no rebuild, although the projection last saw the old
+// history.
+func TestSyncAdoptsATeammatesCompactionIntoTheProjection(t *testing.T) {
+	t.Parallel()
+	first, second := cliSyncRepositories(t)
+	task := publishedDoneTask(t, first, "Compacted by a teammate")
+	compactRun(t, second, "sync")
+	compactRun(t, second, "update", task.ID, "--description", "Written offline", "--no-sync")
+	if shown := showTask(t, second, task.ID); shown.Description != "Written offline" {
+		t.Fatalf("description before the sync = %q, want the offline edit", shown.Description)
+	}
+	compactRun(t, first, "compact", "--no-backup")
+	checkpoint := remoteTaskRefValue(t, first, task.ID)
+
+	stdout := compactRun(t, second, "sync", "--json")
+	var result gitstore.SyncRunResult
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "sync").Data, &result); err != nil {
+		t.Fatalf("decode sync: %v; output = %q", err, stdout)
+	}
+	var fetched *gitstore.SyncTaskResult
+	for index := range result.Fetch.Tasks {
+		if result.Fetch.Tasks[index].TaskID == task.ID {
+			fetched = &result.Fetch.Tasks[index]
+		}
+	}
+	if fetched == nil || fetched.Status != gitstore.SyncAdoptedReplayed {
+		t.Fatalf("fetch tasks = %+v, want %s %s", result.Fetch.Tasks, task.ID, gitstore.SyncAdoptedReplayed)
+	}
+	if parent := cliGitOutput(t, second, "rev-parse", "refs/workbook/tasks/"+task.ID+"^"); parent != checkpoint {
+		t.Fatalf("replayed edit's parent = %s, want the teammate's checkpoint %s", parent, checkpoint)
+	}
+
+	shown := showTask(t, second, task.ID)
+	if shown.Title != "Compacted by a teammate" || shown.Status != core.StatusDone || shown.Description != "Written offline" {
+		t.Fatalf("shown task = %+v, want the checkpoint's title and status with the offline description", shown)
+	}
+}

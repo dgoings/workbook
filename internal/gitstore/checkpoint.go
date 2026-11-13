@@ -603,31 +603,56 @@ func (r *Repository) provenCompactions(
 // operation it summarized is still accounted for.
 func chainAccountsFor(current, previous []OperationCommit) bool {
 	summary, _ := current[0].Operation.Checkpoint()
-	accounted := make(map[string]struct{}, len(summary.CompactedOperations))
-	for _, id := range summary.CompactedOperations {
+	accounted := newOperationAccount(summary.CompactedOperations, current)
+	for _, commit := range previous {
+		if !accounted.covers(commit) {
+			return false
+		}
+	}
+	return true
+}
+
+// operationAccount is the set of operation IDs one history holds or
+// summarizes. It is the single rule for whether an operation is already
+// somewhere: the projection and head-advance guards ask it through
+// chainAccountsFor, and fetch asks it to find what is left to replay.
+type operationAccount map[string]struct{}
+
+// newOperationAccount accounts for the listed IDs, typically a checkpoint's
+// CompactedOperations, and every operation on chain.
+func newOperationAccount(ids []string, chain []OperationCommit) operationAccount {
+	accounted := make(operationAccount, len(ids)+len(chain))
+	for _, id := range ids {
 		accounted[id] = struct{}{}
 	}
-	for _, commit := range current {
+	for _, commit := range chain {
 		for _, operation := range commit.Operation.Operations {
 			accounted[operation.ID] = struct{}{}
 		}
 	}
-	accountsForAll := func(ids []string) bool {
-		for _, id := range ids {
-			if _, found := accounted[id]; !found {
-				return false
-			}
+	return accounted
+}
+
+// covers reports whether every operation commit holds is accounted for. A
+// checkpoint is also covered when everything it compacted is, whatever its own
+// ID: that is a checkpoint of history the account already holds, as when two
+// clones compacted the same tip, and it was never a change of its own.
+func (accounted operationAccount) covers(commit OperationCommit) bool {
+	for _, operation := range commit.Operation.Operations {
+		if _, found := accounted[operation.ID]; found {
+			continue
 		}
-		return true
+		if checkpoint, ok := commit.Operation.Checkpoint(); ok && accounted.coversAll(checkpoint.CompactedOperations) {
+			continue
+		}
+		return false
 	}
-	for _, commit := range previous {
-		for _, operation := range commit.Operation.Operations {
-			if _, found := accounted[operation.ID]; found {
-				continue
-			}
-			if checkpoint, ok := commit.Operation.Checkpoint(); ok && accountsForAll(checkpoint.CompactedOperations) {
-				continue
-			}
+	return true
+}
+
+func (accounted operationAccount) coversAll(ids []string) bool {
+	for _, id := range ids {
+		if _, found := accounted[id]; !found {
 			return false
 		}
 	}

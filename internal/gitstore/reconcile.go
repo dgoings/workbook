@@ -210,9 +210,17 @@ type taskReplay struct {
 	parent       core.Snapshot
 	dependencies map[string][]string
 	subjects     map[string]string
-	replayed     int
-	skipped      int
-	conflict     *core.Conflict
+	// generation, when set, is the history generation the replayed packs are
+	// rewritten into: the target's, when replay crosses a compaction. It also
+	// makes the replay record every pack, including one whose effect the
+	// target already has. Across a compaction an operation is known to be
+	// somewhere only by its ID being on the chain or in the checkpoint's list,
+	// so a pack dropped as a no-op would read as lost to every guard that
+	// checks the move.
+	generation string
+	replayed   int
+	skipped    int
+	conflict   *core.Conflict
 }
 
 // next replays one local operation pack. It reports done when replay must stop,
@@ -223,16 +231,20 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 		replay.conflict = conflict
 		return true, nil
 	}
-	if replayNoOp(replay.parent.State, local.Operation) {
+	if replay.generation == "" && replayNoOp(replay.parent.State, local.Operation) {
 		replay.skipped++
 		return false, nil
 	}
 
-	// Only the logical clock is rewritten. Actor, wall time, and operation
-	// ULIDs are the record of what someone actually did, and rewriting them
-	// would make the replayed history a different claim than the original.
+	// Only the logical clock, and across a compaction the generation, are
+	// rewritten. Actor, wall time, and operation ULIDs are the record of what
+	// someone actually did, and rewriting them would make the replayed history
+	// a different claim than the original.
 	pack := local.Operation
 	pack.LogicalClock = replay.parent.State.LogicalClock + 1
+	if replay.generation != "" {
+		pack.HistoryGeneration = replay.generation
+	}
 	state, err := core.Apply(&replay.parent.State, pack)
 	if err != nil {
 		// A newer-writer refusal keeps its own category rather than being
@@ -250,7 +262,7 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 			err,
 		)
 	}
-	if sameTaskState(replay.parent.State.Task, state.Task) {
+	if replay.generation == "" && sameTaskState(replay.parent.State.Task, state.Task) {
 		replay.skipped++
 		return false, nil
 	}
