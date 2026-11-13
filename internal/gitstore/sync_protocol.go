@@ -90,7 +90,16 @@ func isPublicationSingletonRef(refName string) bool {
 // parsePushPorcelain produces one exact task outcome for each expected
 // destination. Git can return useful porcelain records for partial rejections
 // even when the overall push command exits nonzero.
-func parsePushPorcelain(output []byte, expected map[string]string, commandErr error) (map[string]SyncTaskResult, error) {
+//
+// forced names the destinations pushed under a compaction lease. Only those may
+// come back as a forced update, and their rejections are reported in the words
+// of compactionDeniedDetail and compactionStaleDetail.
+func parsePushPorcelain(
+	output []byte,
+	expected map[string]string,
+	forced map[string]bool,
+	commandErr error,
+) (map[string]SyncTaskResult, error) {
 	results := make(map[string]SyncTaskResult, len(expected))
 	if len(output) > 0 && output[len(output)-1] != '\n' {
 		return nil, core.Errorf(core.CategoryOperational, "Git returned unterminated push porcelain")
@@ -131,8 +140,19 @@ func parsePushPorcelain(output []byte, expected map[string]string, commandErr er
 		case '!':
 			result.Status = SyncRejected
 			result.Detail = fields[2]
+			if forced[destination] {
+				result.Detail = leasedRejectionDetail(fields[2])
+			}
 			hasRejected = true
-		case '+', '-':
+		case '+':
+			// A forced update is a compaction's leased push and nothing else.
+			// For any other ref it would mean Git moved shared history
+			// backward, which no Workbook push asks for.
+			if !forced[destination] {
+				return nil, core.Errorf(core.CategoryOperational, "Git returned forbidden push porcelain flag %q", fields[0])
+			}
+			result.Status = SyncCompactionPublished
+		case '-':
 			return nil, core.Errorf(core.CategoryOperational, "Git returned forbidden push porcelain flag %q", fields[0])
 		default:
 			return nil, core.Errorf(core.CategoryOperational, "Git returned unknown push porcelain flag %q", fields[0])

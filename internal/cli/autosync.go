@@ -36,6 +36,10 @@ type syncReport struct {
 	Detail  string                   `json:"detail,omitempty"`
 	Fetch   *gitstore.SyncResult     `json:"fetch,omitempty"`
 	Push    *gitstore.SyncTaskResult `json:"push,omitempty"`
+	// Pushed reports a publication of several tasks at once, which only
+	// compact makes: it publishes every checkpoint the run wrote in one push.
+	// A single-task mutation reports through Push instead.
+	Pushed *gitstore.SyncResult `json:"pushed,omitempty"`
 	// Identity reports what publishing this change had to establish about
 	// origin's project, and is omitted when there was nothing to establish. A
 	// mutation is the most common way a project publishes anything, so it is
@@ -352,6 +356,50 @@ func (session *taskSession) pushConfigInline(ctx context.Context) {
 	session.report.Identity, _ = session.repository.IdentityReport()
 	if published != nil {
 		session.report.Config = published
+	}
+	if err != nil {
+		session.report.Status = syncStatusFailed
+		session.report.Detail = "push failed: " + err.Error()
+		return
+	}
+	session.report.Status = syncStatusCompleted
+}
+
+// publishTasks sends the refs one command changed across several tasks, as
+// compact does for the checkpoints it wrote. It is publish for a set of tasks:
+// a live watcher is nudged, and its own synchronization publishes them, leasing
+// a checkpoint exactly as the inline push would; otherwise the push is inline,
+// and skipped when the fetch did not complete.
+func (session *taskSession) publishTasks(ctx context.Context, taskIDs []string) {
+	if !session.report.Enabled || len(taskIDs) == 0 {
+		return
+	}
+	if session.deferred {
+		// The nudge carries no task ID, as publishConfig's does not: it only
+		// wakes the watcher's loop, which synchronizes every task.
+		if err := session.nudge(""); err == nil {
+			return
+		}
+		// The watcher answered the probe and was gone by the time the refs
+		// moved; publishing here keeps "deferred" from being an empty promise.
+		session.deferred = false
+		session.report.Status = syncStatusCompleted
+		session.report.Detail = ""
+		session.pushTasksInline(ctx, taskIDs)
+		return
+	}
+	if session.fetched == nil {
+		return
+	}
+	session.pushTasksInline(ctx, taskIDs)
+}
+
+func (session *taskSession) pushTasksInline(ctx context.Context, taskIDs []string) {
+	pushed, err := session.repository.PushTasks(ctx, session.config, taskIDs)
+	session.report.Pushed = &pushed
+	session.report.Identity, _ = session.repository.IdentityReport()
+	if pushed.Config != nil {
+		session.report.Config = pushed.Config
 	}
 	if err != nil {
 		session.report.Status = syncStatusFailed

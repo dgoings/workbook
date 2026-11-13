@@ -10,6 +10,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/compaction"
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/gitstore"
 )
 
 // compactNow is the clock a compact run measures its cutoff from and records
@@ -137,8 +138,8 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 	}
 	defer session.Close()
 	// Compaction starts from a tip origin already holds, so with sync on the
-	// tracking refs are brought up to date first. Publishing the checkpoints
-	// is not wired yet: a real run leaves them local.
+	// tracking refs are brought up to date first. A real run publishes the
+	// checkpoints at the end, as every mutation publishes what it changed.
 	session.fetchBefore(ctx)
 	if err := session.refreshConfiguration(ctx); err != nil {
 		return err
@@ -177,6 +178,14 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 			return err
 		}
 		compacted, summary.Skipped, summary.Bundle = result.Compacted, result.Skipped, result.BundlePath
+		// Each checkpoint goes out as a leased non-fast-forward, which origin
+		// accepts only while it still holds the tip that was compacted. A
+		// refusal leaves the task compacted here and is reported below.
+		taskIDs := make([]string, 0, len(compacted))
+		for _, candidate := range compacted {
+			taskIDs = append(taskIDs, candidate.TaskID)
+		}
+		session.publishTasks(ctx, taskIDs)
 	}
 	summary.Tasks, summary.Totals = compactTasks(compacted)
 	if summary.Skipped == nil {
@@ -191,8 +200,11 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 	writeCompactSummary(stdout, summary)
 	writeSyncReport(stdout, &session.report)
 	writeConflicts(stdout, session.conflicts)
+	writeConfigConflicts(stdout, session.report.configConflicts)
 	writeCompactHints(stdout, summary)
 	writeWarnings(stderr, warnings)
+	writeIdentityWarning(stderr, session.report.Identity)
+	writeConfigWarning(stderr, session.report.Config)
 	return nil
 }
 
@@ -208,10 +220,20 @@ func parseCompactCutoff(flagName, value string) (time.Duration, error) {
 	return parsed, nil
 }
 
-// compactSyncWarnings says what the fetch before the run could not do, as a
-// mutation's warnings do.
+// compactSyncWarnings says what the fetch before the run, or the publication
+// after it, could not do, as a mutation's warnings do. A refused checkpoint is
+// named with origin's reason, because that reason is what the person has to act
+// on: a stale lease clears with the next sync, a host policy does not.
 func compactSyncWarnings(session *taskSession) []core.Warning {
 	switch {
+	case session.report.Status == syncStatusFailed && session.report.Pushed != nil:
+		message := "the tasks were compacted locally, but " + session.report.Detail
+		for _, item := range session.report.Pushed.Tasks {
+			if item.Status == gitstore.SyncRejected || item.Status == gitstore.SyncInvalid {
+				message += fmt.Sprintf("; %s: %s", item.TaskID, item.Detail)
+			}
+		}
+		return []core.Warning{{Code: core.WarningAutoSync, Message: message}}
 	case session.report.Status == syncStatusFailed:
 		return []core.Warning{{
 			Code:    core.WarningAutoSync,

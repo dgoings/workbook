@@ -14,7 +14,9 @@ import (
 
 	"github.com/dgoings/workbook/internal/compaction"
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/historyvalidation"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 const compactUpgradeLine = "Every clone of this project must run workbook v0.7.0 or later before compacted tasks are pushed.\n"
@@ -642,4 +644,169 @@ func sortedIDs(ids ...string) []string {
 	sorted := append([]string{}, ids...)
 	sort.Strings(sorted)
 	return sorted
+}
+
+// compactEnvelope decodes the parts of compact's JSON result the publishing
+// tests read.
+type compactEnvelope struct {
+	Sync           *syncReport           `json:"sync"`
+	ConfigConflict []core.ConfigConflict `json:"configConflict"`
+	Warnings       []core.Warning        `json:"warnings"`
+}
+
+func decodeCompactEnvelope(t *testing.T, stdout string) compactEnvelope {
+	t.Helper()
+	var envelope compactEnvelope
+	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+		t.Fatalf("decode envelope: %v; output = %q", err, stdout)
+	}
+	if envelope.Sync == nil {
+		t.Fatalf("compact result carried no sync member; output = %q", stdout)
+	}
+	return envelope
+}
+
+// publishedDoneTask creates a task in repository, marks it Done, and pushes it,
+// so compact with sync on has a task origin already holds.
+func publishedDoneTask(t *testing.T, repository, title string) core.Task {
+	t.Helper()
+	task := cliCreateTask(t, repository, title)
+	compactRun(t, repository, "update", task.ID, "--status", "done", "--no-sync")
+	compactRun(t, repository, "push")
+	return task
+}
+
+// With sync on, compact publishes each checkpoint it wrote.
+func TestCompactCLIPublishesWhenSyncOn(t *testing.T) {
+	t.Parallel()
+	first, _ := cliSyncRepositories(t)
+	task := publishedDoneTask(t, first, "Published then compacted")
+
+	stdout := compactRun(t, first, "compact", "--json")
+	summary := compactSummary{}
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "compact").Data, &summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if got := compactedTaskIDs(summary); !reflect.DeepEqual(got, []string{task.ID}) {
+		t.Fatalf("tasks = %v, want %s", got, task.ID)
+	}
+	assertParentless(t, first, task.ID)
+	local := taskRefs(t, first)[task.ID]
+	if got := remoteTaskRefValue(t, first, task.ID); got != local {
+		t.Fatalf("origin holds %s, want the local checkpoint %s", got, local)
+	}
+	envelope := decodeCompactEnvelope(t, stdout)
+	if envelope.Sync.Status != syncStatusCompleted || envelope.Sync.Pushed == nil {
+		t.Fatalf("sync = %+v, want a completed run with a push", envelope.Sync)
+	}
+	want := []gitstore.SyncTaskResult{{TaskID: task.ID, Status: gitstore.SyncCompactionPublished}}
+	if !reflect.DeepEqual(envelope.Sync.Pushed.Tasks, want) {
+		t.Fatalf("sync.pushed.tasks = %+v, want %+v", envelope.Sync.Pushed.Tasks, want)
+	}
+	if got := cliGitOutput(t, first, "rev-parse", "refs/workbook/remotes/origin/tasks/"+task.ID); got != local {
+		t.Fatalf("tracking ref = %s, want the checkpoint %s", got, local)
+	}
+
+	// A run with nothing left to compact publishes nothing.
+	stdout = compactRun(t, first, "compact", "--json")
+	if envelope := decodeCompactEnvelope(t, stdout); envelope.Sync.Pushed != nil {
+		t.Fatalf("sync.pushed = %+v, want none when nothing was compacted", envelope.Sync.Pushed)
+	}
+}
+
+// An origin that refuses the checkpoint keeps it local, and compact says why,
+// with origin's reason, without failing the run. The refusal comes from an
+// update hook: Git's receive.denyNonFastForwards guards refs/heads/ only, so it
+// never refuses a task ref.
+func TestCompactCLIReportsOriginRefusingTheLease(t *testing.T) {
+	t.Parallel()
+	for _, jsonMode := range []bool{true, false} {
+		first, _ := cliSyncRepositories(t)
+		task := publishedDoneTask(t, first, "Refused checkpoint")
+		published := remoteTaskRefValue(t, first, task.ID)
+		hooks := filepath.Join(cliGitOutput(t, first, "config", "remote.origin.url"), "hooks")
+		if err := os.MkdirAll(hooks, 0o755); err != nil {
+			t.Fatalf("create %s: %v", hooks, err)
+		}
+		testenv.WriteExecutable(t, filepath.Join(hooks, "update"), []byte(
+			"#!/bin/sh\ncase \"$1\" in refs/workbook/tasks/*) exit 1;; esac\nexit 0\n"))
+
+		args := []string{"compact"}
+		if jsonMode {
+			args = append(args, "--json")
+		}
+		code, stdout, stderr := run(t, first, args...)
+		if code != 0 {
+			t.Fatalf("compact json=%v = code %d, stderr %q; want the run to succeed", jsonMode, code, stderr)
+		}
+		assertParentless(t, first, task.ID)
+		if got := remoteTaskRefValue(t, first, task.ID); got != published {
+			t.Fatalf("origin holds %s, want it unchanged at %s", got, published)
+		}
+		const detail = "[remote rejected] (hook declined)"
+		if !jsonMode {
+			if !strings.Contains(stdout, "Sync:\tfailed") || !strings.Contains(stderr, detail) {
+				t.Fatalf("text output = %q, stderr %q; want a failed sync and a warning naming %s", stdout, stderr, detail)
+			}
+			continue
+		}
+		envelope := decodeCompactEnvelope(t, stdout)
+		if envelope.Sync.Status != syncStatusFailed || envelope.Sync.Pushed == nil {
+			t.Fatalf("sync = %+v, want a failed push", envelope.Sync)
+		}
+		if len(envelope.Sync.Pushed.Tasks) != 1 || envelope.Sync.Pushed.Tasks[0].Status != gitstore.SyncRejected ||
+			!strings.Contains(envelope.Sync.Pushed.Tasks[0].Detail, detail) {
+			t.Fatalf("sync.pushed.tasks = %+v, want one rejection naming %s", envelope.Sync.Pushed.Tasks, detail)
+		}
+		if len(envelope.Warnings) != 1 || envelope.Warnings[0].Code != core.WarningAutoSync ||
+			!strings.Contains(envelope.Warnings[0].Message, detail) {
+			t.Fatalf("warnings = %+v, want one auto-sync warning naming %s", envelope.Warnings, detail)
+		}
+	}
+}
+
+// A live watcher is handed the publication, as a mutation hands it a change,
+// and its synchronization publishes the checkpoint. The watcher's interval is
+// an hour, so origin holds the checkpoint only if the nudge delivered it.
+func TestCompactCLIDefersPublicationToALiveWatcher(t *testing.T) {
+	t.Parallel()
+	first, _ := cliSyncRepositories(t)
+	task := publishedDoneTask(t, first, "Compacted beside a watcher")
+	startCLIWatcher(t, first, "1h")
+
+	stdout := compactRun(t, first, "compact", "--json")
+	envelope := decodeCompactEnvelope(t, stdout)
+	if envelope.Sync.Status != syncStatusDeferred || envelope.Sync.Pushed != nil {
+		t.Fatalf("sync = %+v, want the publication handed to the watcher", envelope.Sync)
+	}
+	assertParentless(t, first, task.ID)
+	waitForPublishedTip(t, first, task.ID)
+}
+
+// The fetch before the run can meet a configuration disagreement it cannot
+// decide. compact reports it as every other synchronizing command does.
+func TestCompactCLIReportsConfigConflictsFromItsFetch(t *testing.T) {
+	t.Parallel()
+	// The fetch that meets the dispute is the one that reports it, so each
+	// output mode gets a dispute of its own.
+	disputed := func(t *testing.T) string {
+		t.Helper()
+		first, second := cliSyncRepositories(t)
+		publishedDoneTask(t, first, "Compacted during a rename dispute")
+		compactRun(t, second, "sync")
+		compactRun(t, second, "status", "rename", "in-progress", "active", "--no-sync", "--no-docs")
+		compactRun(t, second, "sync")
+		compactRun(t, first, "status", "rename", "in-progress", "doing", "--no-sync", "--no-docs")
+		return first
+	}
+
+	stdout := compactRun(t, disputed(t), "compact", "--dry-run", "--json")
+	envelope := decodeCompactEnvelope(t, stdout)
+	if len(envelope.ConfigConflict) == 0 {
+		t.Fatalf("configConflict = %+v, want the rename dispute; output = %q", envelope.ConfigConflict, stdout)
+	}
+	text := compactRun(t, disputed(t), "compact", "--dry-run")
+	if !strings.Contains(text, "Config conflict:\t") {
+		t.Fatalf("text output = %q, want the configuration conflict", text)
+	}
 }

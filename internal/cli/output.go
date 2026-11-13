@@ -429,14 +429,21 @@ func writeSyncedResult(
 	conflicts []core.Conflict,
 	warnings []core.Warning,
 ) {
+	// The configuration conflicts the command's fetch met ride the envelope's
+	// own member, as they do for every mutation (writeThreadMutationResult).
+	var configConflicts []core.ConfigConflict
+	if sync != nil {
+		configConflicts = sync.configConflicts
+	}
 	_ = json.NewEncoder(output).Encode(ResultEnvelope{
-		Format:   "workbook.result",
-		Version:  1,
-		Command:  command,
-		Data:     data,
-		Conflict: conflicts,
-		Warnings: warnings,
-		Sync:     sync,
+		Format:         "workbook.result",
+		Version:        1,
+		Command:        command,
+		Data:           data,
+		Conflict:       conflicts,
+		ConfigConflict: configConflicts,
+		Warnings:       warnings,
+		Sync:           sync,
 	})
 }
 
