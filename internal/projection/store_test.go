@@ -1360,17 +1360,6 @@ func (emptyTaskOperations) ReadTaskOperations(
 	return results, nil
 }
 
-// CompactionAccountsFor proves no compaction, so every generation change a
-// fake reports stays the rewrite it was before compaction existed.
-func (emptyTaskOperations) CompactionAccountsFor(
-	_ context.Context,
-	_ core.ProjectConfig,
-	_ core.Snapshot,
-	_ gitstore.TaskHead,
-) (bool, error) {
-	return false, nil
-}
-
 type countingHeadSource struct {
 	emptyTaskOperations
 	heads             []gitstore.TaskHead
@@ -1484,15 +1473,6 @@ func (s *gitListBarrierSource) ReadTaskOperations(
 	return s.repository.ReadTaskOperations(ctx, config, requests)
 }
 
-func (s *gitListBarrierSource) CompactionAccountsFor(
-	ctx context.Context,
-	config core.ProjectConfig,
-	previous core.Snapshot,
-	current gitstore.TaskHead,
-) (bool, error) {
-	return s.repository.CompactionAccountsFor(ctx, config, previous, current)
-}
-
 func newGitListBarrierSource(repository *gitstore.Repository) *gitListBarrierSource {
 	return &gitListBarrierSource{
 		repository:  repository,
@@ -1524,8 +1504,8 @@ func (s *gitListBarrierSource) ReadTaskHeads(ctx context.Context, config core.Pr
 	return s.repository.ReadTaskHeads(ctx, config, heads)
 }
 
-func (s *gitListBarrierSource) ValidateTaskHeadAdvances(ctx context.Context, config core.ProjectConfig, advances []gitstore.HeadAdvance) error {
-	return s.repository.ValidateTaskHeadAdvances(ctx, config, advances)
+func (s *gitListBarrierSource) ValidateTaskHeadAdvancesWithCompactions(ctx context.Context, config core.ProjectConfig, advances []gitstore.HeadAdvance) (map[string]struct{}, error) {
+	return s.repository.ValidateTaskHeadAdvancesWithCompactions(ctx, config, advances)
 }
 
 func installSnapshotCollectionBlocker(t *testing.T, store *Store) *snapshotCollectionBlocker {
@@ -1594,8 +1574,8 @@ func (s *exactRefreshRaceSource) ReadTaskHeads(_ context.Context, _ core.Project
 	return []core.Snapshot{s.changed}, nil
 }
 
-func (s *exactRefreshRaceSource) ValidateTaskHeadAdvances(_ context.Context, _ core.ProjectConfig, _ []gitstore.HeadAdvance) error {
-	return nil
+func (s *exactRefreshRaceSource) ValidateTaskHeadAdvancesWithCompactions(_ context.Context, _ core.ProjectConfig, _ []gitstore.HeadAdvance) (map[string]struct{}, error) {
+	return nil, nil
 }
 
 func (s *concurrentRefreshSource) ListTaskHeads(_ context.Context, _ core.ProjectConfig) ([]gitstore.TaskHead, error) {
@@ -1634,8 +1614,8 @@ func (s *concurrentRefreshSource) ReadTaskHeads(_ context.Context, _ core.Projec
 	return snapshots, nil
 }
 
-func (s *concurrentRefreshSource) ValidateTaskHeadAdvances(_ context.Context, _ core.ProjectConfig, _ []gitstore.HeadAdvance) error {
-	return nil
+func (s *concurrentRefreshSource) ValidateTaskHeadAdvancesWithCompactions(_ context.Context, _ core.ProjectConfig, _ []gitstore.HeadAdvance) (map[string]struct{}, error) {
+	return nil, nil
 }
 
 func (s *staticHeadSource) ListTaskHeads(_ context.Context, _ core.ProjectConfig) ([]gitstore.TaskHead, error) {
@@ -1666,8 +1646,8 @@ func (s *staticHeadSource) ReadTaskHeads(_ context.Context, _ core.ProjectConfig
 	return snapshots, nil
 }
 
-func (s *staticHeadSource) ValidateTaskHeadAdvances(_ context.Context, _ core.ProjectConfig, _ []gitstore.HeadAdvance) error {
-	return nil
+func (s *staticHeadSource) ValidateTaskHeadAdvancesWithCompactions(_ context.Context, _ core.ProjectConfig, _ []gitstore.HeadAdvance) (map[string]struct{}, error) {
+	return nil, nil
 }
 
 func (d *queryCountingDriver) Open(name string) (driver.Conn, error) {
@@ -1753,8 +1733,8 @@ func (s *headSequenceSource) ReadTaskHeads(_ context.Context, _ core.ProjectConf
 	return snapshots, nil
 }
 
-func (s *headSequenceSource) ValidateTaskHeadAdvances(_ context.Context, _ core.ProjectConfig, _ []gitstore.HeadAdvance) error {
-	return nil
+func (s *headSequenceSource) ValidateTaskHeadAdvancesWithCompactions(_ context.Context, _ core.ProjectConfig, _ []gitstore.HeadAdvance) (map[string]struct{}, error) {
+	return nil, nil
 }
 
 func (s *countingHeadSource) ListTaskHeads(_ context.Context, _ core.ProjectConfig) ([]gitstore.TaskHead, error) {
@@ -1789,10 +1769,12 @@ func (s *countingHeadSource) ReadTaskHeads(_ context.Context, _ core.ProjectConf
 	return snapshots, nil
 }
 
-func (s *countingHeadSource) ValidateTaskHeadAdvances(_ context.Context, _ core.ProjectConfig, advances []gitstore.HeadAdvance) error {
+// ValidateTaskHeadAdvancesWithCompactions proves no compaction, so every
+// generation change this fake reports stays a rewrite.
+func (s *countingHeadSource) ValidateTaskHeadAdvancesWithCompactions(_ context.Context, _ core.ProjectConfig, advances []gitstore.HeadAdvance) (map[string]struct{}, error) {
 	s.validationCalls++
 	s.validatedAdvances = append(s.validatedAdvances, append([]gitstore.HeadAdvance(nil), advances...))
-	return s.validationErr
+	return nil, s.validationErr
 }
 
 func resetSourceCalls(source *countingHeadSource) {

@@ -295,12 +295,8 @@ func (s truncatingSource) ReadTaskHeads(ctx context.Context, config core.Project
 	return s.repository.ReadTaskHeads(ctx, config, heads)
 }
 
-func (s truncatingSource) ValidateTaskHeadAdvances(ctx context.Context, config core.ProjectConfig, advances []gitstore.HeadAdvance) error {
-	return s.repository.ValidateTaskHeadAdvances(ctx, config, advances)
-}
-
-func (s truncatingSource) CompactionAccountsFor(ctx context.Context, config core.ProjectConfig, previous core.Snapshot, current gitstore.TaskHead) (bool, error) {
-	return s.repository.CompactionAccountsFor(ctx, config, previous, current)
+func (s truncatingSource) ValidateTaskHeadAdvancesWithCompactions(ctx context.Context, config core.ProjectConfig, advances []gitstore.HeadAdvance) (map[string]struct{}, error) {
+	return s.repository.ValidateTaskHeadAdvancesWithCompactions(ctx, config, advances)
 }
 
 func (s truncatingSource) ReadTaskOperations(
@@ -478,12 +474,8 @@ func (s *crossTaskDuplicatingSource) ReadTaskHeads(ctx context.Context, config c
 	return s.repository.ReadTaskHeads(ctx, config, heads)
 }
 
-func (s *crossTaskDuplicatingSource) ValidateTaskHeadAdvances(ctx context.Context, config core.ProjectConfig, advances []gitstore.HeadAdvance) error {
-	return s.repository.ValidateTaskHeadAdvances(ctx, config, advances)
-}
-
-func (s *crossTaskDuplicatingSource) CompactionAccountsFor(ctx context.Context, config core.ProjectConfig, previous core.Snapshot, current gitstore.TaskHead) (bool, error) {
-	return s.repository.CompactionAccountsFor(ctx, config, previous, current)
+func (s *crossTaskDuplicatingSource) ValidateTaskHeadAdvancesWithCompactions(ctx context.Context, config core.ProjectConfig, advances []gitstore.HeadAdvance) (map[string]struct{}, error) {
+	return s.repository.ValidateTaskHeadAdvancesWithCompactions(ctx, config, advances)
 }
 
 func (s *crossTaskDuplicatingSource) ReadTaskOperations(
@@ -532,12 +524,8 @@ func (s duplicatingSource) ReadTaskHeads(ctx context.Context, config core.Projec
 	return s.repository.ReadTaskHeads(ctx, config, heads)
 }
 
-func (s duplicatingSource) ValidateTaskHeadAdvances(ctx context.Context, config core.ProjectConfig, advances []gitstore.HeadAdvance) error {
-	return s.repository.ValidateTaskHeadAdvances(ctx, config, advances)
-}
-
-func (s duplicatingSource) CompactionAccountsFor(ctx context.Context, config core.ProjectConfig, previous core.Snapshot, current gitstore.TaskHead) (bool, error) {
-	return s.repository.CompactionAccountsFor(ctx, config, previous, current)
+func (s duplicatingSource) ValidateTaskHeadAdvancesWithCompactions(ctx context.Context, config core.ProjectConfig, advances []gitstore.HeadAdvance) (map[string]struct{}, error) {
+	return s.repository.ValidateTaskHeadAdvancesWithCompactions(ctx, config, advances)
 }
 
 func (s duplicatingSource) ReadTaskOperations(

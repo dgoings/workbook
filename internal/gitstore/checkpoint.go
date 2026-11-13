@@ -347,84 +347,171 @@ func (r *Repository) CompactedHistory(
 	return ids, commits, first, last, nil
 }
 
-// CompactionAccountsFor reports whether moving a task from previous to
-// current is a compaction that loses nothing: current's chain is rooted at a
-// valid checkpoint, and every operation on previous's chain is either in that
-// checkpoint's CompactedOperations or on current's chain, as an unpushed
-// change replayed onto the checkpoint would be.
-//
-// It is the one generation change the head-advance and projection guards
-// accept. A history this clone cannot read in full on either side proves
-// nothing, so it answers false rather than failing: after gc the previous head
-// may be gone, and the caller then reports the move as a rewrite, as it does
-// any other.
+// CompactionAccountsFor reports whether moving one task from previous to
+// current is a compaction that loses nothing. It is provenCompactions for a
+// single advance; see there for the rule.
 func (r *Repository) CompactionAccountsFor(
 	ctx context.Context,
 	config core.ProjectConfig,
 	previous core.Snapshot,
 	current TaskHead,
 ) (bool, error) {
-	taskID := current.TaskID
-	// The two chains are read separately because one request set names each
-	// task once.
-	currentChain, ok, err := r.completeTaskChain(ctx, config, current)
-	if err != nil || !ok {
+	proven, err := r.provenCompactions(ctx, config, []HeadAdvance{{Previous: previous, Current: current}})
+	if err != nil {
 		return false, err
 	}
-	root := currentChain[0]
-	summary, isCheckpoint := root.Operation.Checkpoint()
-	if !isCheckpoint {
-		return false, nil
+	_, found := proven[current.TaskID]
+	return found, nil
+}
+
+// provenCompactions returns the IDs of the tasks among advances whose move is
+// a compaction that loses nothing: the current head's chain is rooted at a
+// valid checkpoint, and every operation on the previous head's chain is
+// either in that checkpoint's CompactedOperations or on the current chain, as
+// an unpushed change replayed onto the checkpoint would be. advances must name
+// each task once.
+//
+// It is the one generation change the head-advance and projection guards
+// accept. A history this clone cannot read in full on either side proves
+// nothing, so that task is simply left out rather than failing the call: after
+// gc the previous head may be gone, and the caller then reports the move as a
+// rewrite, as it does any other.
+//
+// The cost does not grow in Git processes with the number of tasks, because a
+// bulk compaction moves hundreds of heads at once: one operation read for every
+// current head, one validated read of every checkpoint root, and one operation
+// read for the previous heads that are still candidates.
+func (r *Repository) provenCompactions(
+	ctx context.Context,
+	config core.ProjectConfig,
+	advances []HeadAdvance,
+) (map[string]struct{}, error) {
+	proven := make(map[string]struct{})
+	if len(advances) == 0 {
+		return proven, nil
+	}
+	currentHeads := make([]TaskHead, 0, len(advances))
+	for _, advance := range advances {
+		currentHeads = append(currentHeads, advance.Current)
+	}
+	currentChains, err := r.completeTaskChains(ctx, config, currentHeads)
+	if err != nil {
+		return nil, err
+	}
+
+	var candidates []int
+	var roots []TaskHead
+	for index, chain := range currentChains {
+		if chain == nil {
+			continue
+		}
+		if _, isCheckpoint := chain[0].Operation.Checkpoint(); !isCheckpoint {
+			continue
+		}
+		candidates = append(candidates, index)
+		roots = append(roots, TaskHead{TaskID: advances[index].Current.TaskID, ObjectID: chain[0].ObjectID})
+	}
+	if len(candidates) == 0 {
+		return proven, nil
 	}
 	// The operation walk does not revalidate what it reads, and a list in a
 	// commit that is not a valid checkpoint vouches for nothing.
-	if _, err := r.ReadTaskHeads(ctx, config, []TaskHead{{TaskID: taskID, ObjectID: root.ObjectID}}); err != nil {
-		return false, err
-	}
-	previousChain, ok, err := r.completeTaskChain(ctx, config, TaskHead{TaskID: taskID, ObjectID: previous.Head})
-	if err != nil || !ok {
-		return false, err
+	if _, err := r.ReadTaskHeads(ctx, config, roots); err != nil {
+		return nil, err
 	}
 
+	previousHeads := make([]TaskHead, 0, len(candidates))
+	for _, index := range candidates {
+		previousHeads = append(previousHeads, TaskHead{
+			TaskID:   advances[index].Current.TaskID,
+			ObjectID: advances[index].Previous.Head,
+		})
+	}
+	previousChains, err := r.completeTaskChains(ctx, config, previousHeads)
+	if err != nil {
+		return nil, err
+	}
+	for position, index := range candidates {
+		previousChain := previousChains[position]
+		if previousChain == nil {
+			continue
+		}
+		if chainAccountsFor(currentChains[index], previousChain) {
+			proven[advances[index].Current.TaskID] = struct{}{}
+		}
+	}
+	return proven, nil
+}
+
+// chainAccountsFor reports whether current, a chain rooted at a checkpoint,
+// holds or summarizes every operation on previous.
+//
+// A checkpoint on previous that current was not built on is accounted for by
+// what it compacted rather than by its own ID. That is the case when two
+// clones compacted the same tip and one adopts the other's checkpoint: the
+// checkpoint it drops was never a change, so nothing is lost as long as every
+// operation it summarized is still accounted for.
+func chainAccountsFor(current, previous []OperationCommit) bool {
+	summary, _ := current[0].Operation.Checkpoint()
 	accounted := make(map[string]struct{}, len(summary.CompactedOperations))
 	for _, id := range summary.CompactedOperations {
 		accounted[id] = struct{}{}
 	}
-	for _, commit := range currentChain {
+	for _, commit := range current {
 		for _, operation := range commit.Operation.Operations {
 			accounted[operation.ID] = struct{}{}
 		}
 	}
-	for _, commit := range previousChain {
-		for _, operation := range commit.Operation.Operations {
-			if _, found := accounted[operation.ID]; !found {
-				return false, nil
+	accountsForAll := func(ids []string) bool {
+		for _, id := range ids {
+			if _, found := accounted[id]; !found {
+				return false
 			}
 		}
+		return true
 	}
-	return true, nil
+	for _, commit := range previous {
+		for _, operation := range commit.Operation.Operations {
+			if _, found := accounted[operation.ID]; found {
+				continue
+			}
+			if checkpoint, ok := commit.Operation.Checkpoint(); ok && accountsForAll(checkpoint.CompactedOperations) {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
-// completeTaskChain reads head's chain back to its root. It reports false,
-// with no error, when this clone holds only part of it: a missing commit, a
-// read that stopped early, or a chain that ends at a commit that is not a
-// root, as a shallow boundary does.
-func (r *Repository) completeTaskChain(
+// completeTaskChains reads each head's chain back to its root in one
+// operation read. A chain is nil when this clone holds only part of it: a
+// missing commit, a read that stopped early, or a chain that ends at a commit
+// that is not a root, as a shallow boundary does. heads must name each task
+// once.
+func (r *Repository) completeTaskChains(
 	ctx context.Context,
 	config core.ProjectConfig,
-	head TaskHead,
-) ([]OperationCommit, bool, error) {
-	results, err := r.ReadTaskOperations(ctx, config, []TaskHistoryRequest{{Head: head}})
+	heads []TaskHead,
+) ([][]OperationCommit, error) {
+	requests := make([]TaskHistoryRequest, 0, len(heads))
+	for _, head := range heads {
+		requests = append(requests, TaskHistoryRequest{Head: head})
+	}
+	results, err := r.ReadTaskOperations(ctx, config, requests)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	if len(results) != 1 {
-		return nil, false, core.Errorf(core.CategoryCorruptData,
-			"task operation read returned %d results, want 1", len(results))
+	if len(results) != len(requests) {
+		return nil, core.Errorf(core.CategoryCorruptData,
+			"task operation read returned %d results, want %d", len(results), len(requests))
 	}
-	result := results[0]
-	if result.Truncated != nil || len(result.Commits) == 0 || !isRootPack(result.Commits[0].Operation) {
-		return nil, false, nil
+	chains := make([][]OperationCommit, len(results))
+	for index, result := range results {
+		if result.Truncated != nil || len(result.Commits) == 0 || !isRootPack(result.Commits[0].Operation) {
+			continue
+		}
+		chains[index] = result.Commits
 	}
-	return result.Commits, true, nil
+	return chains, nil
 }

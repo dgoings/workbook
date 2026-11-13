@@ -160,6 +160,43 @@ func TestStoreRefreshAcceptsCompaction(t *testing.T) {
 	assertProjectedCheckpoint(t, store, listed[0], tip, checkpoint)
 }
 
+// A bulk compaction moves many heads at once, and one refresh takes them all,
+// with the proof made by the head-advance check alone.
+func TestStoreRefreshAcceptsSeveralCompactions(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository, config := initializeWorkbook(t)
+	taskIDs := []string{
+		doneTaskToCompact(t, repository, config),
+		doneTaskToCompact(t, repository, config),
+		doneTaskToCompact(t, repository, config),
+	}
+	store, err := openForTest(t, ctx, repository, config)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := store.List(ctx, config); err != nil {
+		t.Fatalf("List(before compaction) error = %v", err)
+	}
+	tips := make(map[string]core.Snapshot, len(taskIDs))
+	checkpoints := make(map[string]core.Snapshot, len(taskIDs))
+	for _, taskID := range taskIDs {
+		tips[taskID], checkpoints[taskID] = compactTask(t, repository, config, taskID)
+	}
+
+	listed, err := store.List(ctx, config)
+	if err != nil {
+		t.Fatalf("List(after compaction) error = %v", err)
+	}
+	if len(listed) != len(taskIDs) {
+		t.Fatalf("List() returned %d tasks, want %d", len(listed), len(taskIDs))
+	}
+	for _, snapshot := range listed {
+		taskID := snapshot.State.TaskID
+		assertProjectedCheckpoint(t, store, snapshot, tips[taskID], checkpoints[taskID])
+	}
+}
+
 // The exact read takes its own path to the same guard, and its conditional
 // advance has to accept the generation change too.
 func TestStoreGetAcceptsCompaction(t *testing.T) {

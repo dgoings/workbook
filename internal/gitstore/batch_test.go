@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -253,6 +254,144 @@ func TestValidateHeadAdvanceRejectsCheckpointMissingAnOperation(t *testing.T) {
 		t.Fatalf("CompactionAccountsFor() = %t, %v, want false, nil", accounted, err)
 	}
 	assertAdvanceRefusedAsRewrite(t, fixture.repo, fixture.config, HeadAdvance{Previous: fixture.tip, Current: current})
+}
+
+// Two clones compacted the same tip, and this one, already on its own
+// checkpoint, takes the remote one instead. Its checkpoint was never a change:
+// it is accounted for because everything it compacted is.
+func TestValidateHeadAdvanceAcceptsConcurrentCompaction(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newCompactedAdvance(t, nil)
+	repo, config, taskID := fixture.repo, fixture.config, fixture.taskID
+	ours := fixture.checkpoint
+	theirs := buildCheckpoint(t, repo, config, checkpointInputFor(t, repo, config, fixture.tip, false))
+	if ours.State.History.Generation == theirs.State.History.Generation {
+		t.Fatalf("both checkpoints opened generation %s", ours.State.History.Generation)
+	}
+	theirHead := TaskHead{TaskID: taskID, ObjectID: theirs.Head}
+
+	if err := repo.ValidateTaskHeadAdvances(ctx, config, []HeadAdvance{{Previous: ours, Current: theirHead}}); err != nil {
+		t.Fatalf("ValidateTaskHeadAdvances(our checkpoint to theirs) error = %v, want nil", err)
+	}
+
+	// A change written on our checkpoint is lost by taking theirs bare, and
+	// kept by replaying it onto theirs.
+	if err := repo.CompactTaskRef(ctx, config, taskID, fixture.tip.Head, ours.Head); err != nil {
+		t.Fatalf("CompactTaskRef() error = %v", err)
+	}
+	updateSyncTask(t, repo, config, taskID, "Edited after our compaction")
+	local := currentSnapshot(t, repo, config, taskID)
+	assertAdvanceRefusedAsRewrite(t, repo, config, HeadAdvance{Previous: local, Current: theirHead})
+	replayed := replayOnto(t, repo, theirs, local)
+	if err := repo.ValidateTaskHeadAdvances(ctx, config, []HeadAdvance{{
+		Previous: local, Current: TaskHead{TaskID: taskID, ObjectID: replayed.Head},
+	}}); err != nil {
+		t.Fatalf("ValidateTaskHeadAdvances(our edited checkpoint to theirs replayed) error = %v, want nil", err)
+	}
+}
+
+// Our checkpoint summarized an operation the remote checkpoint neither lists
+// nor carries, so taking theirs would lose it.
+func TestValidateHeadAdvanceRejectsConcurrentCompactionThatLosesAnOperation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	var extra string
+	fixture := newCompactedAdvance(t, func(input *CheckpointInput) {
+		extra = newCheckpointID(t)
+		ids := append(append([]string(nil), input.Summary.CompactedOperations...), extra)
+		sort.Strings(ids)
+		input.Summary.CompactedOperations = ids
+	})
+	repo, config, taskID := fixture.repo, fixture.config, fixture.taskID
+	theirs := buildCheckpoint(t, repo, config, checkpointInputFor(t, repo, config, fixture.tip, false))
+	summary, _ := theirs.Operation.Checkpoint()
+	if slices.Contains(summary.CompactedOperations, extra) {
+		t.Fatalf("their checkpoint lists %s", extra)
+	}
+	current := TaskHead{TaskID: taskID, ObjectID: theirs.Head}
+
+	accounted, err := repo.CompactionAccountsFor(ctx, config, fixture.checkpoint, current)
+	if err != nil || accounted {
+		t.Fatalf("CompactionAccountsFor(our checkpoint to theirs) = %t, %v, want false, nil", accounted, err)
+	}
+	assertAdvanceRefusedAsRewrite(t, repo, config, HeadAdvance{Previous: fixture.checkpoint, Current: current})
+}
+
+// A bulk compaction moves many heads at once, and the guard proves them all in
+// a fixed number of Git processes rather than a few per task. In a mixed batch
+// only the task whose checkpoint loses an operation is refused.
+func TestValidateHeadAdvancesProvesSeveralCompactionsInOneBatch(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo, config := writeRepository(t)
+	compact := func(title string, edit func(*CheckpointInput)) HeadAdvance {
+		t.Helper()
+		task := createSyncTask(t, repo, config, title)
+		updateSyncTask(t, repo, config, task.ID, title+" edited")
+		tip := currentSnapshot(t, repo, config, task.ID)
+		input := checkpointInputFor(t, repo, config, tip, false)
+		if edit != nil {
+			edit(&input)
+		}
+		checkpoint := buildCheckpoint(t, repo, config, input)
+		return HeadAdvance{Previous: tip, Current: TaskHead{TaskID: task.ID, ObjectID: checkpoint.Head}}
+	}
+	advances := []HeadAdvance{compact("First", nil), compact("Second", nil), compact("Third", nil)}
+	lossy := compact("Loses an operation", func(input *CheckpointInput) {
+		ids := input.Summary.CompactedOperations
+		input.Summary.CompactedOperations = ids[:len(ids)-1]
+	})
+
+	// The first call fills per-repository caches, so the counts compared
+	// below are both warm.
+	if _, err := repo.ValidateTaskHeadAdvancesWithCompactions(ctx, config, advances[:1]); err != nil {
+		t.Fatalf("ValidateTaskHeadAdvancesWithCompactions(warm-up) error = %v", err)
+	}
+	var commands [][]string
+	repo.commandObserver = func(args []string) {
+		commands = append(commands, append([]string(nil), args...))
+	}
+	if _, err := repo.ValidateTaskHeadAdvancesWithCompactions(ctx, config, advances[:1]); err != nil {
+		t.Fatalf("ValidateTaskHeadAdvancesWithCompactions(one) error = %v", err)
+	}
+	forOne := len(commands)
+	commands = nil
+	compactions, err := repo.ValidateTaskHeadAdvancesWithCompactions(ctx, config, advances)
+	if err != nil {
+		t.Fatalf("ValidateTaskHeadAdvancesWithCompactions(three) error = %v", err)
+	}
+	forThree := len(commands)
+	repo.commandObserver = nil
+	if forThree != forOne {
+		t.Fatalf("Git commands for three compactions = %d, for one = %d, want the same; commands = %v",
+			forThree, forOne, commands)
+	}
+	if len(compactions) != len(advances) {
+		t.Fatalf("compactions = %v, want all %d tasks", compactions, len(advances))
+	}
+	for _, advance := range advances {
+		if _, found := compactions[advance.Current.TaskID]; !found {
+			t.Fatalf("compactions = %v, missing %s", compactions, advance.Current.TaskID)
+		}
+	}
+
+	mixed := []HeadAdvance{advances[0], lossy, advances[1], advances[2]}
+	_, err = repo.ValidateTaskHeadAdvancesWithCompactions(ctx, config, mixed)
+	if got := core.CategoryOf(err); got != core.CategoryCorruptData {
+		t.Fatalf("ValidateTaskHeadAdvancesWithCompactions(mixed) category = %q, want %q; error = %v",
+			got, core.CategoryCorruptData, err)
+	}
+	want := `task "` + lossy.Current.TaskID + `" current head is not a descendant of its previous head`
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("ValidateTaskHeadAdvancesWithCompactions(mixed) error = %v, want it to contain %q", err, want)
+	}
+	for _, advance := range advances {
+		if strings.Contains(err.Error(), advance.Current.TaskID) {
+			t.Fatalf("ValidateTaskHeadAdvancesWithCompactions(mixed) error = %v names accounted task %s",
+				err, advance.Current.TaskID)
+		}
+	}
 }
 
 // A parentless commit that is not a checkpoint accounts for nothing, even

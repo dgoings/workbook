@@ -33,9 +33,8 @@ type taskHeadSource interface {
 	ListTaskHeads(context.Context, core.ProjectConfig) ([]gitstore.TaskHead, error)
 	InspectTaskHead(context.Context, core.ProjectConfig, string) (gitstore.TaskHead, bool, error)
 	ReadTaskHeads(context.Context, core.ProjectConfig, []gitstore.TaskHead) ([]core.Snapshot, error)
-	ValidateTaskHeadAdvances(context.Context, core.ProjectConfig, []gitstore.HeadAdvance) error
+	ValidateTaskHeadAdvancesWithCompactions(context.Context, core.ProjectConfig, []gitstore.HeadAdvance) (map[string]struct{}, error)
 	ReadTaskOperations(context.Context, core.ProjectConfig, []gitstore.TaskHistoryRequest) ([]gitstore.TaskOperationsResult, error)
-	CompactionAccountsFor(context.Context, core.ProjectConfig, core.Snapshot, gitstore.TaskHead) (bool, error)
 }
 
 type repositorySource struct {
@@ -54,8 +53,12 @@ func (s repositorySource) ReadTaskHeads(ctx context.Context, config core.Project
 	return s.repository.ReadTaskHeads(ctx, config, heads)
 }
 
-func (s repositorySource) ValidateTaskHeadAdvances(ctx context.Context, config core.ProjectConfig, advances []gitstore.HeadAdvance) error {
-	return s.repository.ValidateTaskHeadAdvances(ctx, config, advances)
+func (s repositorySource) ValidateTaskHeadAdvancesWithCompactions(
+	ctx context.Context,
+	config core.ProjectConfig,
+	advances []gitstore.HeadAdvance,
+) (map[string]struct{}, error) {
+	return s.repository.ValidateTaskHeadAdvancesWithCompactions(ctx, config, advances)
 }
 
 func (s repositorySource) ReadTaskOperations(
@@ -64,15 +67,6 @@ func (s repositorySource) ReadTaskOperations(
 	requests []gitstore.TaskHistoryRequest,
 ) ([]gitstore.TaskOperationsResult, error) {
 	return s.repository.ReadTaskOperations(ctx, config, requests)
-}
-
-func (s repositorySource) CompactionAccountsFor(
-	ctx context.Context,
-	config core.ProjectConfig,
-	previous core.Snapshot,
-	current gitstore.TaskHead,
-) (bool, error) {
-	return s.repository.CompactionAccountsFor(ctx, config, previous, current)
 }
 
 // Store is a read-only task store backed by a disposable SQLite projection.
@@ -655,10 +649,12 @@ func (s *Store) getExactActive(ctx context.Context, taskID string) (core.Snapsho
 			return cached, nil
 		}
 
+		var compactions map[string]struct{}
 		if cachedFound {
-			if err := s.source.ValidateTaskHeadAdvances(ctx, s.config, []gitstore.HeadAdvance{
+			compactions, err = s.source.ValidateTaskHeadAdvancesWithCompactions(ctx, s.config, []gitstore.HeadAdvance{
 				headAdvance(cached, head),
-			}); err != nil {
+			})
+			if err != nil {
 				return core.Snapshot{}, err
 			}
 		}
@@ -677,7 +673,7 @@ func (s *Store) getExactActive(ctx context.Context, taskID string) (core.Snapsho
 		// of the row at cached.Head, which is what advanceActive is told.
 		compacted := cachedFound && snapshot.State.History.Generation != cached.State.History.Generation
 		if compacted {
-			if err := s.acceptGenerationChange(ctx, headAdvance(cached, head)); err != nil {
+			if err := requireCompaction(compactions, taskID); err != nil {
 				return core.Snapshot{}, err
 			}
 		}
@@ -737,8 +733,11 @@ func (s *Store) refreshChangedHeads(ctx context.Context, cached map[string]cache
 		return nil
 	}
 
+	var compactions map[string]struct{}
 	if len(advances) > 0 {
-		if err := s.source.ValidateTaskHeadAdvances(ctx, s.config, advances); err != nil {
+		var err error
+		compactions, err = s.source.ValidateTaskHeadAdvancesWithCompactions(ctx, s.config, advances)
+		if err != nil {
 			return err
 		}
 	}
@@ -756,7 +755,7 @@ func (s *Store) refreshChangedHeads(ctx context.Context, cached map[string]cache
 		}
 		if previous, found := cached[head.TaskID]; found &&
 			snapshot.State.History.Generation != previous.historyGeneration {
-			if err := s.acceptGenerationChange(ctx, projectedHeadAdvance(head.TaskID, previous, head)); err != nil {
+			if err := requireCompaction(compactions, head.TaskID); err != nil {
 				return err
 			}
 		}
@@ -872,17 +871,15 @@ func historyGenerationChanged(taskID string) error {
 	return core.Errorf(core.CategoryCorruptData, "task %q history generation changed across a projected head advance", taskID)
 }
 
-// acceptGenerationChange allows a projected task to move to a new history
-// generation only when the move is a compaction: the new head is rooted at a
-// checkpoint that accounts for every operation on the head the projection last
-// saw. Any other generation change is still reported as a rewrite.
-func (s *Store) acceptGenerationChange(ctx context.Context, advance gitstore.HeadAdvance) error {
-	compacted, err := s.source.CompactionAccountsFor(ctx, s.config, advance.Previous, advance.Current)
-	if err != nil {
-		return err
-	}
-	if !compacted {
-		return historyGenerationChanged(advance.Current.TaskID)
+// requireCompaction allows a projected task to move to a new history
+// generation only when the head-advance check accepted the move as a
+// compaction: the new head is rooted at a checkpoint that accounts for every
+// operation on the head the projection last saw. compactions is the set that
+// check returned, so the proof is made once, in one batch, for every task an
+// advance moved. Any other generation change is still reported as a rewrite.
+func requireCompaction(compactions map[string]struct{}, taskID string) error {
+	if _, proven := compactions[taskID]; !proven {
+		return historyGenerationChanged(taskID)
 	}
 	return nil
 }

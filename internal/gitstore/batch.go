@@ -643,11 +643,25 @@ func (r *Repository) ValidateTaskHeadAdvances(
 	config core.ProjectConfig,
 	advances []HeadAdvance,
 ) error {
+	_, err := r.ValidateTaskHeadAdvancesWithCompactions(ctx, config, advances)
+	return err
+}
+
+// ValidateTaskHeadAdvancesWithCompactions is ValidateTaskHeadAdvances that
+// also returns the IDs of the tasks whose advance it accepted as a compaction.
+// Those are the only tasks whose history generation may change across the
+// advance, so a caller that sees a generation change for any other task
+// reports it as a rewrite.
+func (r *Repository) ValidateTaskHeadAdvancesWithCompactions(
+	ctx context.Context,
+	config core.ProjectConfig,
+	advances []HeadAdvance,
+) (map[string]struct{}, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
-		return err
+		return nil, err
 	}
 	if err := r.validateRepositoryConfig(config); err != nil {
-		return err
+		return nil, err
 	}
 
 	seenTaskIDs := make(map[string]struct{}, len(advances))
@@ -655,25 +669,25 @@ func (r *Repository) ValidateTaskHeadAdvances(
 	for _, advance := range advances {
 		taskID := advance.Current.TaskID
 		if _, duplicate := seenTaskIDs[taskID]; duplicate {
-			return core.Errorf(core.CategoryCorruptData, "task head advance contains duplicate task ID %q", taskID)
+			return nil, core.Errorf(core.CategoryCorruptData, "task head advance contains duplicate task ID %q", taskID)
 		}
 		seenTaskIDs[taskID] = struct{}{}
 		if taskID != advance.Previous.Operation.TaskID ||
 			taskID != advance.Previous.State.TaskID {
-			return core.Errorf(core.CategoryCorruptData, "task head advance IDs do not match")
+			return nil, core.Errorf(core.CategoryCorruptData, "task head advance IDs do not match")
 		}
 		if _, err := decodeObjectID(advance.Current.ObjectID); err != nil {
-			return core.Wrap(core.CategoryCorruptData, "current task head is missing or invalid", err)
+			return nil, core.Wrap(core.CategoryCorruptData, "current task head is missing or invalid", err)
 		}
 		if _, err := decodeObjectID(advance.Previous.Head); err != nil {
-			return core.Wrap(core.CategoryCorruptData, "previous task head is missing or invalid", err)
+			return nil, core.Wrap(core.CategoryCorruptData, "previous task head is missing or invalid", err)
 		}
 		if advance.Current.ObjectID != advance.Previous.Head {
 			changed = append(changed, advance)
 		}
 	}
 	if len(changed) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	var input bytes.Buffer
@@ -685,11 +699,11 @@ func (r *Repository) ValidateTaskHeadAdvances(
 	}
 	output, err := r.Git(ctx, input.Bytes(), "rev-list", "--parents", "--stdin")
 	if err != nil {
-		return core.Wrap(core.CategoryCorruptData, "cannot validate task head advances", err)
+		return nil, core.Wrap(core.CategoryCorruptData, "cannot validate task head advances", err)
 	}
 	graph, err := parseParentGraph(output)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	unreachable := make([]HeadAdvance, 0, len(changed))
 	for _, advance := range changed {
@@ -698,7 +712,7 @@ func (r *Repository) ValidateTaskHeadAdvances(
 		}
 	}
 	if len(unreachable) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// Reconciliation and compaction are the two things that legitimately move
@@ -707,29 +721,36 @@ func (r *Repository) ValidateTaskHeadAdvances(
 	// replay from a ref rolled backwards by corruption. Compaction parks
 	// nothing, because parking would keep the history it drops alive; its
 	// evidence is a checkpoint that accounts for every operation the previous
-	// tip held. Both cost Git processes only on this already-exceptional path.
+	// tip held, proven for every unparked advance at once. Both cost Git
+	// processes only on this already-exceptional path.
 	parked, err := r.parkedTaskHeads(ctx, config)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	unparked := make([]HeadAdvance, 0, len(unreachable))
 	for _, advance := range unreachable {
-		if _, found := parked[advance.Current.TaskID][advance.Previous.Head]; found {
+		if _, found := parked[advance.Current.TaskID][advance.Previous.Head]; !found {
+			unparked = append(unparked, advance)
+		}
+	}
+	if len(unparked) == 0 {
+		return nil, nil
+	}
+	compacted, err := r.provenCompactions(ctx, config, unparked)
+	if err != nil {
+		return nil, err
+	}
+	for _, advance := range unparked {
+		if _, found := compacted[advance.Current.TaskID]; found {
 			continue
 		}
-		compacted, err := r.CompactionAccountsFor(ctx, config, advance.Previous, advance.Current)
-		if err != nil {
-			return err
-		}
-		if compacted {
-			continue
-		}
-		return core.Errorf(
+		return nil, core.Errorf(
 			core.CategoryCorruptData,
 			"task %q current head is not a descendant of its previous head and that head was not parked by a reconciliation; run `workbook rebuild`",
 			advance.Current.TaskID,
 		)
 	}
-	return nil
+	return compacted, nil
 }
 
 func parseParentGraph(contents []byte) (map[string][]string, error) {
