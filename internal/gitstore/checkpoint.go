@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -195,6 +196,147 @@ func (r *Repository) ExpireTaskReflog(ctx context.Context, taskID string) error 
 		return core.Wrap(core.CategoryOperational, "expire the reflog of task "+taskID, err)
 	}
 	return nil
+}
+
+// DropTaskParkedRefs deletes every refs/workbook/reconciled/<id>/* in one
+// update-ref transaction, each only while it still names the commit it was
+// listed at. CompactTaskRef drops them together with the ref move; this is the
+// same cleanup for a task an earlier run already compacted, so a parked ref
+// left behind no longer keeps the replaced history reachable. A task with no
+// parked refs is a no-op.
+func (r *Repository) DropTaskParkedRefs(ctx context.Context, config core.ProjectConfig, taskID string) error {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return err
+	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return err
+	}
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		return err
+	}
+	if err := keys.RequireOwned(taskID); err != nil {
+		return core.Wrap(core.CategoryValidation, "task ID is invalid", err)
+	}
+	parked, err := r.listParkedRefs(ctx, config, reconciledRefPrefix+taskID+"/")
+	if err != nil {
+		return err
+	}
+	if len(parked) == 0 {
+		return nil
+	}
+	var input bytes.Buffer
+	input.WriteString("start\noption no-deref\n")
+	for _, entry := range parked {
+		if !validParkedRefName(taskID, entry.name) {
+			return core.Errorf(core.CategoryCorruptData, "parked ref %q does not belong to task %s", entry.name, taskID)
+		}
+		fmt.Fprintf(&input, "delete %s %s\n", entry.name, entry.objectID)
+	}
+	input.WriteString("prepare\ncommit\n")
+	if _, err := r.Git(ctx, input.Bytes(), "update-ref", "--no-deref", "--stdin"); err != nil {
+		return core.Wrap(core.CategoryOperational, "drop the parked refs of task "+taskID, err)
+	}
+	return nil
+}
+
+// TrackingTaskHeads returns, by task ID, the commit each task's tracking ref
+// refs/workbook/remotes/origin/tasks/<id> names: where this clone last saw
+// origin hold it. A tracking ref whose name is not one of this project's tasks
+// is left out, as every reader of that namespace leaves it out.
+func (r *Repository) TrackingTaskHeads(ctx context.Context, config core.ProjectConfig) (map[string]string, error) {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return nil, err
+	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return nil, err
+	}
+	refs, _, err := r.listOwnedTaskRefs(ctx, config, remoteTaskRefPrefix)
+	if err != nil {
+		return nil, err
+	}
+	heads := make(map[string]string, len(refs))
+	for _, ref := range refs {
+		heads[ref.taskID] = ref.objectID
+	}
+	return heads, nil
+}
+
+// CompactionReclaimableBytes estimates the bytes compacting taskID at tip lets
+// Git reclaim: the on-disk size of every object reachable from tip and the
+// task's parked refs and from no other ref, less the size of tip's state.json,
+// which stands in for the checkpoint the run writes. It may be negative for a
+// history too small to outweigh its checkpoint.
+//
+// The task's own ref, its tracking ref and its parked refs are left out of
+// "every other ref": a run moves the first, deletes the last, and the tracking
+// ref follows once the push lands, so none of them holds the history after the
+// run. It is an estimate in both directions: objects shared with another task
+// are not counted, and Git frees nothing until it prunes.
+func (r *Repository) CompactionReclaimableBytes(ctx context.Context, config core.ProjectConfig, taskID, tip string) (int64, error) {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return 0, err
+	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return 0, err
+	}
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		return 0, err
+	}
+	if err := keys.RequireOwned(taskID); err != nil {
+		return 0, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
+	}
+	if err := r.ensureGitObjectIDWidth(ctx); err != nil {
+		return 0, err
+	}
+	if err := r.validateFullObjectID(tip); err != nil {
+		return 0, core.Wrap(core.CategoryValidation, "compaction estimate must name a full tip", err)
+	}
+	parkedPrefix := reconciledRefPrefix + taskID + "/"
+	parked, err := r.listParkedRefs(ctx, config, parkedPrefix)
+	if err != nil {
+		return 0, err
+	}
+	args := []string{"rev-list", "--objects", "--disk-usage", tip}
+	for _, entry := range parked {
+		args = append(args, entry.objectID)
+	}
+	args = append(args, "--not",
+		"--exclude="+taskRefPrefix+taskID,
+		"--exclude="+remoteTaskRefPrefix+taskID,
+		"--exclude="+parkedPrefix+"*",
+		"--all",
+	)
+	output, err := r.Git(ctx, nil, args...)
+	if err != nil {
+		return 0, core.Wrap(core.CategoryOperational, "cannot measure the history of task "+taskID, err)
+	}
+	usage, err := parseByteCount(output)
+	if err != nil {
+		return 0, core.Wrap(core.CategoryOperational, "Git returned an invalid disk usage", err)
+	}
+	output, err = r.Git(ctx, nil, "cat-file", "-s", tip+":state.json")
+	if err != nil {
+		return 0, core.Wrap(core.CategoryOperational, "cannot measure the state of task "+taskID, err)
+	}
+	state, err := parseByteCount(output)
+	if err != nil {
+		return 0, core.Wrap(core.CategoryOperational, "Git returned an invalid object size", err)
+	}
+	return usage - state, nil
+}
+
+func parseByteCount(output []byte) (int64, error) {
+	line, err := gitSingleLine(output)
+	if err != nil {
+		return 0, err
+	}
+	count, err := strconv.ParseInt(line, 10, 64)
+	if err != nil || count < 0 {
+		return 0, fmt.Errorf("%q is not a byte count", line)
+	}
+	return count, nil
 }
 
 // requireKeptAttachmentBlobs proves every file a checkpoint keeps is a blob
