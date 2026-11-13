@@ -701,17 +701,26 @@ func (r *Repository) ValidateTaskHeadAdvances(
 		return nil
 	}
 
-	// Reconciliation is the one thing that legitimately moves a canonical ref
-	// off its previous tip, and it parks that tip in the process. The parked
-	// ref is therefore the evidence that distinguishes a replay from a ref
-	// rolled backwards by corruption, and it costs a Git process only on this
-	// already-exceptional path.
+	// Reconciliation and compaction are the two things that legitimately move
+	// a canonical ref off its previous tip. Reconciliation parks that tip in
+	// the process, so the parked ref is the evidence that distinguishes a
+	// replay from a ref rolled backwards by corruption. Compaction parks
+	// nothing, because parking would keep the history it drops alive; its
+	// evidence is a checkpoint that accounts for every operation the previous
+	// tip held. Both cost Git processes only on this already-exceptional path.
 	parked, err := r.parkedTaskHeads(ctx, config)
 	if err != nil {
 		return err
 	}
 	for _, advance := range unreachable {
 		if _, found := parked[advance.Current.TaskID][advance.Previous.Head]; found {
+			continue
+		}
+		compacted, err := r.CompactionAccountsFor(ctx, config, advance.Previous, advance.Current)
+		if err != nil {
+			return err
+		}
+		if compacted {
 			continue
 		}
 		return core.Errorf(

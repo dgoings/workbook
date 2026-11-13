@@ -346,3 +346,85 @@ func (r *Repository) CompactedHistory(
 	sort.Strings(ids)
 	return ids, commits, first, last, nil
 }
+
+// CompactionAccountsFor reports whether moving a task from previous to
+// current is a compaction that loses nothing: current's chain is rooted at a
+// valid checkpoint, and every operation on previous's chain is either in that
+// checkpoint's CompactedOperations or on current's chain, as an unpushed
+// change replayed onto the checkpoint would be.
+//
+// It is the one generation change the head-advance and projection guards
+// accept. A history this clone cannot read in full on either side proves
+// nothing, so it answers false rather than failing: after gc the previous head
+// may be gone, and the caller then reports the move as a rewrite, as it does
+// any other.
+func (r *Repository) CompactionAccountsFor(
+	ctx context.Context,
+	config core.ProjectConfig,
+	previous core.Snapshot,
+	current TaskHead,
+) (bool, error) {
+	taskID := current.TaskID
+	// The two chains are read separately because one request set names each
+	// task once.
+	currentChain, ok, err := r.completeTaskChain(ctx, config, current)
+	if err != nil || !ok {
+		return false, err
+	}
+	root := currentChain[0]
+	summary, isCheckpoint := root.Operation.Checkpoint()
+	if !isCheckpoint {
+		return false, nil
+	}
+	// The operation walk does not revalidate what it reads, and a list in a
+	// commit that is not a valid checkpoint vouches for nothing.
+	if _, err := r.ReadTaskHeads(ctx, config, []TaskHead{{TaskID: taskID, ObjectID: root.ObjectID}}); err != nil {
+		return false, err
+	}
+	previousChain, ok, err := r.completeTaskChain(ctx, config, TaskHead{TaskID: taskID, ObjectID: previous.Head})
+	if err != nil || !ok {
+		return false, err
+	}
+
+	accounted := make(map[string]struct{}, len(summary.CompactedOperations))
+	for _, id := range summary.CompactedOperations {
+		accounted[id] = struct{}{}
+	}
+	for _, commit := range currentChain {
+		for _, operation := range commit.Operation.Operations {
+			accounted[operation.ID] = struct{}{}
+		}
+	}
+	for _, commit := range previousChain {
+		for _, operation := range commit.Operation.Operations {
+			if _, found := accounted[operation.ID]; !found {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+// completeTaskChain reads head's chain back to its root. It reports false,
+// with no error, when this clone holds only part of it: a missing commit, a
+// read that stopped early, or a chain that ends at a commit that is not a
+// root, as a shallow boundary does.
+func (r *Repository) completeTaskChain(
+	ctx context.Context,
+	config core.ProjectConfig,
+	head TaskHead,
+) ([]OperationCommit, bool, error) {
+	results, err := r.ReadTaskOperations(ctx, config, []TaskHistoryRequest{{Head: head}})
+	if err != nil {
+		return nil, false, err
+	}
+	if len(results) != 1 {
+		return nil, false, core.Errorf(core.CategoryCorruptData,
+			"task operation read returned %d results, want 1", len(results))
+	}
+	result := results[0]
+	if result.Truncated != nil || len(result.Commits) == 0 || !isRootPack(result.Commits[0].Operation) {
+		return nil, false, nil
+	}
+	return result.Commits, true, nil
+}

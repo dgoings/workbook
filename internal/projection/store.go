@@ -35,6 +35,7 @@ type taskHeadSource interface {
 	ReadTaskHeads(context.Context, core.ProjectConfig, []gitstore.TaskHead) ([]core.Snapshot, error)
 	ValidateTaskHeadAdvances(context.Context, core.ProjectConfig, []gitstore.HeadAdvance) error
 	ReadTaskOperations(context.Context, core.ProjectConfig, []gitstore.TaskHistoryRequest) ([]gitstore.TaskOperationsResult, error)
+	CompactionAccountsFor(context.Context, core.ProjectConfig, core.Snapshot, gitstore.TaskHead) (bool, error)
 }
 
 type repositorySource struct {
@@ -63,6 +64,15 @@ func (s repositorySource) ReadTaskOperations(
 	requests []gitstore.TaskHistoryRequest,
 ) ([]gitstore.TaskOperationsResult, error) {
 	return s.repository.ReadTaskOperations(ctx, config, requests)
+}
+
+func (s repositorySource) CompactionAccountsFor(
+	ctx context.Context,
+	config core.ProjectConfig,
+	previous core.Snapshot,
+	current gitstore.TaskHead,
+) (bool, error) {
+	return s.repository.CompactionAccountsFor(ctx, config, previous, current)
 }
 
 // Store is a read-only task store backed by a disposable SQLite projection.
@@ -376,7 +386,7 @@ func (s *Store) Advance(ctx context.Context, config core.ProjectConfig, expected
 	}
 	var advanced bool
 	err := s.withActiveDatabase(ctx, func(ctx context.Context) error {
-		applied, err := s.advanceActive(ctx, expectedParent, snapshot, nil)
+		applied, err := s.advanceActive(ctx, expectedParent, snapshot, nil, false)
 		if err != nil {
 			return err
 		}
@@ -663,8 +673,13 @@ func (s *Store) getExactActive(ctx context.Context, taskID string) (core.Snapsho
 		if err := validateReadSnapshot(head, snapshot); err != nil {
 			return core.Snapshot{}, err
 		}
-		if cachedFound && snapshot.State.History.Generation != cached.State.History.Generation {
-			return core.Snapshot{}, historyGenerationChanged(taskID)
+		// A generation change that gets past this check is a proven compaction
+		// of the row at cached.Head, which is what advanceActive is told.
+		compacted := cachedFound && snapshot.State.History.Generation != cached.State.History.Generation
+		if compacted {
+			if err := s.acceptGenerationChange(ctx, headAdvance(cached, head)); err != nil {
+				return core.Snapshot{}, err
+			}
 		}
 		expectedParent := ""
 		if cachedFound {
@@ -679,7 +694,7 @@ func (s *Store) getExactActive(ctx context.Context, taskID string) (core.Snapsho
 		if err != nil {
 			return core.Snapshot{}, err
 		}
-		applied, err := s.advanceActive(ctx, expectedParent, snapshot, &chains[0])
+		applied, err := s.advanceActive(ctx, expectedParent, snapshot, &chains[0], compacted)
 		if err != nil {
 			return core.Snapshot{}, err
 		}
@@ -741,7 +756,9 @@ func (s *Store) refreshChangedHeads(ctx context.Context, cached map[string]cache
 		}
 		if previous, found := cached[head.TaskID]; found &&
 			snapshot.State.History.Generation != previous.historyGeneration {
-			return historyGenerationChanged(head.TaskID)
+			if err := s.acceptGenerationChange(ctx, projectedHeadAdvance(head.TaskID, previous, head)); err != nil {
+				return err
+			}
 		}
 	}
 	// Comparing tips is complete for current state but blind to the
@@ -855,15 +872,33 @@ func historyGenerationChanged(taskID string) error {
 	return core.Errorf(core.CategoryCorruptData, "task %q history generation changed across a projected head advance", taskID)
 }
 
+// acceptGenerationChange allows a projected task to move to a new history
+// generation only when the move is a compaction: the new head is rooted at a
+// checkpoint that accounts for every operation on the head the projection last
+// saw. Any other generation change is still reported as a rewrite.
+func (s *Store) acceptGenerationChange(ctx context.Context, advance gitstore.HeadAdvance) error {
+	compacted, err := s.source.CompactionAccountsFor(ctx, s.config, advance.Previous, advance.Current)
+	if err != nil {
+		return err
+	}
+	if !compacted {
+		return historyGenerationChanged(advance.Current.TaskID)
+	}
+	return nil
+}
+
 // advanceActive conditionally replaces one projected task. chain carries the
 // commits a multi-commit advance crossed; a nil chain means the caller just
 // wrote exactly one commit onto expectedParent and the snapshot's own pack is
-// the whole advance.
+// the whole advance. compacted reports that the caller proved, against the
+// row at expectedParent, that the advance is a compaction, which is the only
+// case in which the history generation may change.
 func (s *Store) advanceActive(
 	ctx context.Context,
 	expectedParent string,
 	snapshot core.Snapshot,
 	chain *gitstore.TaskOperationsResult,
+	compacted bool,
 ) (bool, error) {
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -896,7 +931,7 @@ func (s *Store) advanceActive(
 		}
 		return false, nil
 	}
-	if actualHead != "" && actualHistoryGeneration != snapshot.State.History.Generation {
+	if actualHead != "" && actualHistoryGeneration != snapshot.State.History.Generation && !compacted {
 		if err := transaction.Commit(); err != nil {
 			return false, s.databaseError("commit conditional projection advancement", err)
 		}

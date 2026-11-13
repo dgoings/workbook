@@ -1360,6 +1360,17 @@ func (emptyTaskOperations) ReadTaskOperations(
 	return results, nil
 }
 
+// CompactionAccountsFor proves no compaction, so every generation change a
+// fake reports stays the rewrite it was before compaction existed.
+func (emptyTaskOperations) CompactionAccountsFor(
+	_ context.Context,
+	_ core.ProjectConfig,
+	_ core.Snapshot,
+	_ gitstore.TaskHead,
+) (bool, error) {
+	return false, nil
+}
+
 type countingHeadSource struct {
 	emptyTaskOperations
 	heads             []gitstore.TaskHead
@@ -1471,6 +1482,15 @@ func (s *gitListBarrierSource) ReadTaskOperations(
 	requests []gitstore.TaskHistoryRequest,
 ) ([]gitstore.TaskOperationsResult, error) {
 	return s.repository.ReadTaskOperations(ctx, config, requests)
+}
+
+func (s *gitListBarrierSource) CompactionAccountsFor(
+	ctx context.Context,
+	config core.ProjectConfig,
+	previous core.Snapshot,
+	current gitstore.TaskHead,
+) (bool, error) {
+	return s.repository.CompactionAccountsFor(ctx, config, previous, current)
 }
 
 func newGitListBarrierSource(repository *gitstore.Repository) *gitListBarrierSource {
