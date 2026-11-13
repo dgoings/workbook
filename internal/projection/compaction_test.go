@@ -257,3 +257,64 @@ func TestRebuildAndValidateAfterCompaction(t *testing.T) {
 			result.Valid, result.Invalid, result.Failures)
 	}
 }
+
+// A snapshot read from the projection carries the checkpoint's compactedFrom,
+// as the state in Git does. A mutation folds its parent's history metadata into
+// the state it writes, so an edit built on a projection that dropped it would
+// write a state.json that replaying the history from Git does not compute, and
+// `validate --full` would call the task corrupt.
+func TestProjectionKeepsCompactedFromForTheEditAfterACheckpoint(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository, config := initializeWorkbook(t)
+	taskID := doneTaskToCompact(t, repository, config)
+	tip, _ := compactTask(t, repository, config, taskID)
+
+	store, err := openForTest(t, ctx, repository, config)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	got, err := store.Get(ctx, config, taskID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if from := got.State.History.CompactedFrom; from == nil || *from != tip.Head {
+		t.Fatalf("projected compactedFrom = %v, want the replaced tip %s", from, tip.Head)
+	}
+
+	service := compactionService(repository, config)
+	service.Reader = store
+	service.Projection = store
+	reopened := core.StatusReady
+	if _, err := service.UpdateMutation(ctx, taskID, core.UpdateInput{Status: &reopened}); err != nil {
+		t.Fatalf("UpdateMutation(ready) error = %v", err)
+	}
+	edited, err := repository.Get(ctx, config, taskID)
+	if err != nil {
+		t.Fatalf("Get(after edit) error = %v", err)
+	}
+	if from := edited.State.History.CompactedFrom; from == nil || *from != tip.Head {
+		t.Fatalf("compactedFrom after the edit = %v, want it carried from the checkpoint %s", from, tip.Head)
+	}
+	listed, err := store.List(ctx, config)
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("List() = %v, %v; want the one task", listed, err)
+	}
+	if from := listed[0].State.History.CompactedFrom; from == nil || *from != tip.Head {
+		t.Fatalf("listed compactedFrom = %v, want %s", from, tip.Head)
+	}
+
+	validator, err := historyvalidation.Open(ctx, repository, config)
+	if err != nil {
+		t.Fatalf("historyvalidation.Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = validator.Close() })
+	result, err := validator.Validate(ctx, true)
+	if err != nil {
+		t.Fatalf("Validate(full) error = %v", err)
+	}
+	if result.Invalid != 0 || len(result.Failures) != 0 || result.Valid != 1 {
+		t.Fatalf("Validate(full) = valid %d invalid %d failures %#v, want one valid task and no problems",
+			result.Valid, result.Invalid, result.Failures)
+	}
+}
