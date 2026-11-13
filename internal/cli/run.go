@@ -440,6 +440,19 @@ func runSyncStatus(repository *gitstore.Repository, stdout io.Writer, jsonMode b
 	return nil
 }
 
+// parseSyncInterval validates a --interval value. It lives apart from
+// runSyncWatch so the check can be tested without starting a watcher.
+func parseSyncInterval(interval string) (time.Duration, error) {
+	parsed, err := parseDuration(interval)
+	if errors.Is(err, errNonPositiveDuration) {
+		return 0, core.Errorf(core.CategoryInvocation, "sync --interval must be positive")
+	}
+	if err != nil {
+		return 0, core.Wrap(core.CategoryInvocation, "sync --interval must be a duration such as 5s", err)
+	}
+	return parsed, nil
+}
+
 func runSyncWatch(
 	ctx context.Context,
 	repository *gitstore.Repository,
@@ -450,12 +463,9 @@ func runSyncWatch(
 ) error {
 	every := syncloop.DefaultInterval
 	if interval != "" {
-		parsed, err := time.ParseDuration(interval)
+		parsed, err := parseSyncInterval(interval)
 		if err != nil {
-			return core.Wrap(core.CategoryInvocation, "sync --interval must be a duration such as 5s", err)
-		}
-		if parsed <= 0 {
-			return core.Errorf(core.CategoryInvocation, "sync --interval must be positive")
+			return err
 		}
 		every = parsed
 	}
