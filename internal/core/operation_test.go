@@ -567,6 +567,9 @@ func TestApplyAcceptsOnlyWellFormedCompactedFrom(t *testing.T) {
 			}
 			compactedFrom := test.compactedFrom
 			parent.History.CompactedFrom = &compactedFrom
+			// A state names compactedFrom only after a checkpoint, which leaves
+			// its generation behind on every state that follows.
+			parent.MinReader = 4
 
 			state, err := Apply(&parent, updatePack(2))
 			if !test.valid {
@@ -727,6 +730,34 @@ func TestApplyRefusesCheckpointRootWithOtherOperations(t *testing.T) {
 	})
 
 	assertCorrupt(t, applyError(nil, pack))
+}
+
+// The generation marker is the only thing an older build reads to tell an
+// upgrade notice from corruption, so a checkpoint that does not carry it, or a
+// compacted state that lost it, is corrupt rather than merely unusual.
+func TestApplyRefusesCheckpointBelowItsGeneration(t *testing.T) {
+	compacted, ids := historyToCompact(t)
+	pack := checkpointPackFor(compacted, ids)
+	pack.MinReader = 3
+
+	err := applyError(nil, pack)
+	assertCorrupt(t, err)
+	if !strings.Contains(err.Error(), "minimum reader") {
+		t.Fatalf("Apply(nil, low-marker checkpoint) error = %v, want the marker rule", err)
+	}
+}
+
+func TestApplyRefusesCompactedStateBelowCheckpointGeneration(t *testing.T) {
+	parent := createdTask(t)
+	compactedFrom := compactedTipOID
+	parent.History.CompactedFrom = &compactedFrom
+	parent.MinReader = 3
+
+	err := applyError(&parent, updatePack(2))
+	assertCorrupt(t, err)
+	if !strings.Contains(err.Error(), "minimum reader") {
+		t.Fatalf("Apply(low-marker compacted parent) error = %v, want the marker rule", err)
+	}
 }
 
 func TestApplyCarriesCompactedFromToChildren(t *testing.T) {

@@ -276,7 +276,11 @@ type StateDocument struct {
 // a reader needs in order to fold a pack containing it.
 //
 // The six original types are zero and stay zero forever; the two assignment
-// types and the five comment and attachment types are one. This is the one
+// types and the five comment and attachment types are one; history.checkpoint
+// is four, and is also the one entry a reader enforces rather than only
+// declares: a checkpoint pack below it, or a state naming compactedFrom below
+// it, is corrupt, because the marker is how an older build tells that it needs
+// an upgrade rather than a repair. This is the one
 // place a story that ships a new operation type bumps: every writing path picks
 // the value up from PackMinReader without being edited.
 //
@@ -302,6 +306,12 @@ var operationMinReader = map[OperationType]int{
 	// A checkpoint is generation four: a reader has to know that a root may be
 	// a checkpoint before it can fold a compacted task at all.
 	OperationHistoryCheckpoint: 4,
+}
+
+// checkpointMinReader is the generation every checkpoint pack, and every
+// compacted state after one, carries.
+func checkpointMinReader() int {
+	return operationMinReader[OperationHistoryCheckpoint]
 }
 
 // PackMinReader returns the generation a reader needs to fold these operations,
@@ -593,6 +603,14 @@ func applyCreate(pack OperationPack) (StateDocument, error) {
 func applyCheckpoint(pack OperationPack) (StateDocument, error) {
 	operation := pack.Operations[0]
 	summary := operation.Checkpoint
+	// The marker is what tells an older build that a compacted task needs an
+	// upgrade rather than a repair. A checkpoint written without it would reach
+	// such a build as a root it calls corrupt, so this build refuses to call it
+	// valid either.
+	if pack.MinReader < checkpointMinReader() {
+		return StateDocument{}, corrupt("history.checkpoint minimum reader generation %d is below %d",
+			pack.MinReader, checkpointMinReader())
+	}
 	// A checkpoint opens a new generation. One that named its own generation as
 	// the one it replaced would be indistinguishable from the history it
 	// claims to have compacted.
@@ -866,6 +884,14 @@ func validateStateEnvelope(state StateDocument) error {
 	// ceiling.
 	if state.History.CompactedFrom != nil && !objectIDPattern.MatchString(*state.History.CompactedFrom) {
 		return corrupt("task state history compactedFrom must be a Git object ID")
+	}
+	// Only a checkpoint introduces compactedFrom, and its generation is carried
+	// forward with it, so a state naming one without the marker lost it on the
+	// way and would reach an older build as corruption instead of an upgrade
+	// notice.
+	if state.History.CompactedFrom != nil && state.MinReader < checkpointMinReader() {
+		return corrupt("task state with compactedFrom has minimum reader generation %d, below %d",
+			state.MinReader, checkpointMinReader())
 	}
 	if state.LogicalClock == 0 {
 		return corrupt("task state logical clock must be positive")

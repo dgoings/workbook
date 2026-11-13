@@ -40,8 +40,8 @@ const selectOperationColumns = `
 	FROM operations WHERE task_id = ?`
 
 // operationPayload is everything an operation carries beyond the scalar columns
-// and the task-creation payload: what a comment says, and what an attachment
-// is.
+// and the task payload: what a comment says, what an attachment is, and the
+// compaction summary a history.checkpoint carries beside its task.
 //
 // It is cached because a projected chain is replayed, not only displayed. A
 // comparison between two commits folds the rows back into packs and applies
@@ -53,11 +53,12 @@ type operationPayload struct {
 	Body         string               `json:"body,omitempty"`
 	Attachment   *core.AttachmentData `json:"attachment,omitempty"`
 	AttachmentID string               `json:"attachmentId,omitempty"`
+	Checkpoint   *core.CheckpointData `json:"checkpoint,omitempty"`
 }
 
 func encodeOperationPayload(operation core.Operation) (string, error) {
 	if operation.CommentID == "" && operation.Body == "" &&
-		operation.Attachment == nil && operation.AttachmentID == "" {
+		operation.Attachment == nil && operation.AttachmentID == "" && operation.Checkpoint == nil {
 		return "", nil
 	}
 	encoded, err := json.Marshal(operationPayload{
@@ -65,6 +66,7 @@ func encodeOperationPayload(operation core.Operation) (string, error) {
 		Body:         operation.Body,
 		Attachment:   operation.Attachment,
 		AttachmentID: operation.AttachmentID,
+		Checkpoint:   operation.Checkpoint,
 	})
 	if err != nil {
 		return "", core.Wrap(core.CategoryCorruptData, "cannot project operation payload", err)
@@ -394,6 +396,7 @@ func decodeOperation(row operationScan) (core.Operation, bool) {
 		operation.Body = payload.Body
 		operation.Attachment = payload.Attachment
 		operation.AttachmentID = payload.AttachmentID
+		operation.Checkpoint = payload.Checkpoint
 	}
 	return operation, true
 }

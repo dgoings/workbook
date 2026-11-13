@@ -268,17 +268,31 @@ func validateBatchSnapshot(
 		return core.Snapshot{}, err
 	}
 	// A root tip is checked against its own fold, which is the one checkpoint a
-	// read can verify without walking the chain. A pack that needs a newer
-	// reader is exempt: folding it is exactly what this build must not do, and
-	// the refusal belongs to the mutation that would build on it rather than to
-	// the read that only has to show it.
-	if !pack.RequiresNewerReader() &&
-		len(pack.Operations) == 1 && pack.Operations[0].Type == core.OperationTaskCreate {
+	// read can verify without walking the chain. That covers a compacted task's
+	// history.checkpoint as well as a task.create: the checkpoint carries the
+	// whole task, so its stored state must be exactly what it folds to. A pack
+	// that needs a newer reader is exempt: folding it is exactly what this build
+	// must not do, and the refusal belongs to the mutation that would build on
+	// it rather than to the read that only has to show it.
+	if !pack.RequiresNewerReader() && isRootPack(pack) {
 		if err := core.ValidateCheckpoint(nil, pack, state); err != nil {
 			return core.Snapshot{}, err
 		}
 	}
 	return core.Snapshot{Head: head.ObjectID, Operation: pack, State: state}, nil
+}
+
+// isRootPack reports a pack that begins a task's chain: a task.create, or the
+// history.checkpoint a compaction replaced the history with.
+func isRootPack(pack core.OperationPack) bool {
+	if len(pack.Operations) != 1 {
+		return false
+	}
+	switch pack.Operations[0].Type {
+	case core.OperationTaskCreate, core.OperationHistoryCheckpoint:
+		return true
+	}
+	return false
 }
 
 func readBatchObject(reader *bufio.Reader) (batchObject, error) {
@@ -562,7 +576,15 @@ func validateConfigTreeEntries(tree workbookTree) error {
 // history and through nothing else. A commit that names a blob it does not
 // carry would be a task pointing into somebody else's object graph, which is
 // exactly what the future compaction verb must never have to reason about.
+//
+// A checkpoint is the other moment. It adds nothing, but it is a root, so the
+// blobs its task still claims have to be in its own tree: nothing older is
+// reachable from it. Every kept file attachment has its entry, and a dropped
+// one has none, because dropping the bytes is the point of dropping it.
 func validateAttachmentBlobs(pack core.OperationPack, tree workbookTree) error {
+	if _, ok := pack.Checkpoint(); ok {
+		return validateCheckpointAttachmentBlobs(pack, tree)
+	}
 	for _, operation := range pack.Operations {
 		if operation.Type != core.OperationAttachmentAdd || operation.Attachment == nil {
 			continue
@@ -575,6 +597,39 @@ func validateAttachmentBlobs(pack core.OperationPack, tree workbookTree) error {
 				core.CategoryCorruptData,
 				"task commit attaches %s but its tree does not carry the blob",
 				operation.ID,
+			)
+		}
+	}
+	return nil
+}
+
+func validateCheckpointAttachmentBlobs(pack core.OperationPack, tree workbookTree) error {
+	task := pack.Operations[0].Task
+	if task == nil {
+		// The fold refuses a checkpoint without its task; this is not the
+		// check that reports it.
+		return nil
+	}
+	for _, attachment := range task.Attachments {
+		if attachment.Kind != core.AttachmentFile {
+			continue
+		}
+		entry := tree.objectID(attachmentTreeName(attachment.ID))
+		if attachment.IsDropped() {
+			if entry != "" {
+				return core.Errorf(
+					core.CategoryCorruptData,
+					"task checkpoint dropped %s but its tree still carries the blob",
+					attachment.ID,
+				)
+			}
+			continue
+		}
+		if entry != attachment.Blob {
+			return core.Errorf(
+				core.CategoryCorruptData,
+				"task checkpoint keeps %s but its tree does not carry the blob",
+				attachment.ID,
 			)
 		}
 	}

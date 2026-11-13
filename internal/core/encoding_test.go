@@ -304,6 +304,7 @@ func TestDocumentsAcceptWellFormedCompactedFrom(t *testing.T) {
 			state := validState
 			value := compactedFrom
 			state.History.CompactedFrom = &value
+			state.MinReader = 4
 
 			encoded, err := EncodeDocument(state)
 			if err != nil {
