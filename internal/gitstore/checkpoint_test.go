@@ -5,11 +5,13 @@ import (
 	"os/exec"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 // checkpointNow is a late-evening compaction time west of UTC on purpose: in
@@ -658,5 +660,59 @@ func TestCompactionFreesObjectsAfterGC(t *testing.T) {
 	}
 	if after := reachableObjects(t, repo.Root); after >= before {
 		t.Fatalf("reachable objects after compaction = %d, want fewer than %d", after, before)
+	}
+}
+
+// The estimate sums the on-disk size of the objects only the task's refs
+// reach, less the tip's state.json. Git 2.31's `rev-list --disk-usage` is the
+// oracle here; the estimate itself must not need it.
+func TestCompactionReclaimableBytesCountsOnlyTheTaskHistory(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newCompactionFixture(t)
+	repo, taskID := fixture.repo, fixture.taskID
+	exclusions := []string{
+		"--not",
+		"--exclude=" + taskRefPrefix + taskID,
+		"--exclude=" + remoteTaskRefPrefix + taskID,
+		"--exclude=" + reconciledRefPrefix + taskID + "/*",
+		"--all",
+	}
+	oracle := func() int64 {
+		t.Helper()
+		args := append([]string{"-C", repo.Root, "rev-list", "--objects", "--disk-usage", fixture.tip.Head}, fixture.parked...)
+		output, err := exec.Command("git", append(args, exclusions...)...).Output()
+		if err != nil {
+			testenv.MissingCapability(t, "Git cannot report rev-list --disk-usage (needs 2.31): %v", err)
+		}
+		usage, err := strconv.ParseInt(strings.TrimSpace(string(output)), 10, 64)
+		if err != nil {
+			t.Fatalf("parse disk usage %q: %v", output, err)
+		}
+		state, err := strconv.ParseInt(syncGit(t, repo.Root, "cat-file", "-s", fixture.tip.Head+":state.json"), 10, 64)
+		if err != nil {
+			t.Fatalf("parse state size: %v", err)
+		}
+		return usage - state
+	}
+
+	got, err := repo.CompactionReclaimableBytes(ctx, fixture.config, taskID, fixture.tip.Head)
+	if err != nil {
+		t.Fatalf("CompactionReclaimableBytes() error = %v", err)
+	}
+	want := oracle()
+	if got != want || got <= 0 {
+		t.Fatalf("estimate = %d, want the oracle's positive %d", got, want)
+	}
+
+	// Another ref reaching the parked sibling keeps its objects, so they no
+	// longer count.
+	syncGit(t, repo.Root, "update-ref", "refs/heads/keeps-sibling", fixture.sibling)
+	shared, err := repo.CompactionReclaimableBytes(ctx, fixture.config, taskID, fixture.tip.Head)
+	if err != nil {
+		t.Fatalf("CompactionReclaimableBytes(shared) error = %v", err)
+	}
+	if want := oracle(); shared != want || shared >= got {
+		t.Fatalf("estimate with the sibling shared = %d, want the oracle's %d, below %d", shared, want, got)
 	}
 }

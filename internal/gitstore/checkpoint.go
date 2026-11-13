@@ -198,48 +198,6 @@ func (r *Repository) ExpireTaskReflog(ctx context.Context, taskID string) error 
 	return nil
 }
 
-// DropTaskParkedRefs deletes every refs/workbook/reconciled/<id>/* in one
-// update-ref transaction, each only while it still names the commit it was
-// listed at. CompactTaskRef drops them together with the ref move; this is the
-// same cleanup for a task an earlier run already compacted, so a parked ref
-// left behind no longer keeps the replaced history reachable. A task with no
-// parked refs is a no-op.
-func (r *Repository) DropTaskParkedRefs(ctx context.Context, config core.ProjectConfig, taskID string) error {
-	if err := r.verifyIdentity(ctx); err != nil {
-		return err
-	}
-	if err := r.validateRepositoryConfig(config); err != nil {
-		return err
-	}
-	keys, err := r.keySet(ctx, config)
-	if err != nil {
-		return err
-	}
-	if err := keys.RequireOwned(taskID); err != nil {
-		return core.Wrap(core.CategoryValidation, "task ID is invalid", err)
-	}
-	parked, err := r.listParkedRefs(ctx, config, reconciledRefPrefix+taskID+"/")
-	if err != nil {
-		return err
-	}
-	if len(parked) == 0 {
-		return nil
-	}
-	var input bytes.Buffer
-	input.WriteString("start\noption no-deref\n")
-	for _, entry := range parked {
-		if !validParkedRefName(taskID, entry.name) {
-			return core.Errorf(core.CategoryCorruptData, "parked ref %q does not belong to task %s", entry.name, taskID)
-		}
-		fmt.Fprintf(&input, "delete %s %s\n", entry.name, entry.objectID)
-	}
-	input.WriteString("prepare\ncommit\n")
-	if _, err := r.Git(ctx, input.Bytes(), "update-ref", "--no-deref", "--stdin"); err != nil {
-		return core.Wrap(core.CategoryOperational, "drop the parked refs of task "+taskID, err)
-	}
-	return nil
-}
-
 // TrackingTaskHeads returns, by task ID, the commit each task's tracking ref
 // refs/workbook/remotes/origin/tasks/<id> names: where this clone last saw
 // origin hold it. A tracking ref whose name is not one of this project's tasks
@@ -298,7 +256,10 @@ func (r *Repository) CompactionReclaimableBytes(ctx context.Context, config core
 	if err != nil {
 		return 0, err
 	}
-	args := []string{"rev-list", "--objects", "--disk-usage", tip}
+	// rev-list lists the objects and cat-file sizes them, rather than one
+	// `rev-list --disk-usage`, which needs Git 2.31: a dry run must work on
+	// every Git this build otherwise runs on.
+	args := []string{"rev-list", "--objects", tip}
 	for _, entry := range parked {
 		args = append(args, entry.objectID)
 	}
@@ -310,11 +271,11 @@ func (r *Repository) CompactionReclaimableBytes(ctx context.Context, config core
 	)
 	output, err := r.Git(ctx, nil, args...)
 	if err != nil {
-		return 0, core.Wrap(core.CategoryOperational, "cannot measure the history of task "+taskID, err)
+		return 0, core.Wrap(core.CategoryOperational, "cannot list the history of task "+taskID, err)
 	}
-	usage, err := parseByteCount(output)
+	usage, err := r.objectDiskUsage(ctx, output)
 	if err != nil {
-		return 0, core.Wrap(core.CategoryOperational, "Git returned an invalid disk usage", err)
+		return 0, err
 	}
 	output, err = r.Git(ctx, nil, "cat-file", "-s", tip+":state.json")
 	if err != nil {
@@ -325,6 +286,53 @@ func (r *Repository) CompactionReclaimableBytes(ctx context.Context, config core
 		return 0, core.Wrap(core.CategoryOperational, "Git returned an invalid object size", err)
 	}
 	return usage - state, nil
+}
+
+// objectDiskUsage sums the on-disk size of every object `rev-list --objects`
+// listed, with one cat-file batch. Each listed line is an object ID, followed
+// by a path for a tree or blob, and only the ID is sent on.
+func (r *Repository) objectDiskUsage(ctx context.Context, listed []byte) (int64, error) {
+	var input bytes.Buffer
+	count := 0
+	for _, line := range bytes.Split(listed, []byte{'\n'}) {
+		fields := bytes.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if err := r.validateFullObjectID(string(fields[0])); err != nil {
+			return 0, core.Wrap(core.CategoryOperational, "Git listed an invalid object", err)
+		}
+		input.Write(fields[0])
+		input.WriteByte('\n')
+		count++
+	}
+	if count == 0 {
+		return 0, nil
+	}
+	output, err := r.Git(ctx, input.Bytes(), "cat-file", "--batch-check=%(objectname) %(objectsize:disk)")
+	if err != nil {
+		return 0, core.Wrap(core.CategoryOperational, "cannot measure listed objects", err)
+	}
+	if len(output) == 0 || output[len(output)-1] != '\n' {
+		return 0, core.Errorf(core.CategoryOperational, "Git returned an unterminated object size listing")
+	}
+	lines := bytes.Split(output[:len(output)-1], []byte{'\n'})
+	if len(lines) != count {
+		return 0, core.Errorf(core.CategoryOperational, "Git sized %d objects, want %d", len(lines), count)
+	}
+	var total int64
+	for _, line := range lines {
+		fields := bytes.Fields(line)
+		if len(fields) != 2 {
+			return 0, core.Errorf(core.CategoryOperational, "Git returned an unexpected object size line %q", line)
+		}
+		size, err := strconv.ParseInt(string(fields[1]), 10, 64)
+		if err != nil || size < 0 {
+			return 0, core.Errorf(core.CategoryOperational, "Git returned an unexpected object size line %q", line)
+		}
+		total += size
+	}
+	return total, nil
 }
 
 func parseByteCount(output []byte) (int64, error) {

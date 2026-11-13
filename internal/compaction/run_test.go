@@ -589,8 +589,10 @@ func TestExecuteBundleFailureChangesNothing(t *testing.T) {
 }
 
 // A run that stops after its first task leaves that task compacted, the rest
-// untouched, and the first task's reflog and parked refs possibly still
-// holding its old history. The rerun finishes the rest and lets go of both.
+// untouched, and the first task's reflog possibly still naming its old tip.
+// The rerun finishes the rest and expires that reflog. A parked ref on the
+// compacted task can only come from a later reconcile and holds work no bundle
+// has, so the rerun leaves it alone.
 //
 // Not parallel: it sets afterTaskHook, which every Execute reads.
 func TestExecuteInterruptedThenRerun(t *testing.T) {
@@ -611,13 +613,13 @@ func TestExecuteInterruptedThenRerun(t *testing.T) {
 	var interrupted string
 	afterTaskHook = func(taskID string) error {
 		interrupted = taskID
-		// What a crash between the ref move and its cleanup could leave: a
-		// reflog naming the old tip, and a parked ref holding it.
+		// What a crash between the ref move and its reflog expiry could leave:
+		// a reflog naming the old tip. The ref move itself deleted the parked
+		// refs in the same transaction, so a crash cannot leave one.
 		checkpoint := f.tip(taskID).Head
 		ref := "refs/workbook/tasks/" + taskID
 		f.git("update-ref", "--create-reflog", "-m", "test: back", ref, tips[taskID], checkpoint)
 		f.git("update-ref", "--create-reflog", "-m", "test: forward", ref, checkpoint, tips[taskID])
-		f.git("update-ref", "refs/workbook/reconciled/"+taskID+"/0", tips[taskID])
 		return interruption
 	}
 	t.Cleanup(func() { afterTaskHook = nil })
@@ -640,6 +642,10 @@ func TestExecuteInterruptedThenRerun(t *testing.T) {
 	if reflog := f.git("reflog", "show", "--format=%H", "refs/workbook/tasks/"+interrupted); !strings.Contains(reflog, tips[interrupted]) {
 		t.Fatalf("fixture reflog %q does not name the old tip", reflog)
 	}
+
+	// A later reconcile parked work on the compacted task; it is in no bundle.
+	parkedRef := "refs/workbook/reconciled/" + interrupted + "/0"
+	f.git("update-ref", parkedRef, tips[interrupted])
 
 	plan = f.prepare(options)
 	if reason := skipFor(t, plan.Skipped, interrupted).Reason; reason != ReasonAlreadyCompacted {
@@ -664,8 +670,35 @@ func TestExecuteInterruptedThenRerun(t *testing.T) {
 	if reflog := f.git("reflog", "show", "--format=%H", "refs/workbook/tasks/"+interrupted); strings.Contains(reflog, tips[interrupted]) {
 		t.Fatalf("rerun left the reflog naming the old tip:\n%s", reflog)
 	}
-	if parked := f.git("for-each-ref", "refs/workbook/reconciled/"+interrupted+"/"); parked != "" {
-		t.Fatalf("rerun left parked refs:\n%s", parked)
+	if parked := f.git("for-each-ref", "--format=%(refname) %(objectname)", "refs/workbook/reconciled/"+interrupted+"/"); parked != parkedRef+" "+tips[interrupted] {
+		t.Fatalf("parked refs after the rerun = %q, want %s left at %s", parked, parkedRef, tips[interrupted])
+	}
+}
+
+// Execute refuses to run without the projection, before it writes anything:
+// left on the old heads, the cache could not follow once Git prunes them.
+func TestExecuteRequiresProjection(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	task := f.create("Done")
+	f.status(task, core.StatusDone)
+	options := Options{Criteria: everything(), Now: f.now}
+	plan := f.prepare(options)
+	deps := f.deps()
+	deps.Projection = nil
+
+	result, err := Execute(context.Background(), deps, plan, options)
+	if core.CategoryOf(err) != core.CategoryInvocation {
+		t.Fatalf("Execute() without a projection error = %v, want %s", err, core.CategoryInvocation)
+	}
+	if len(result.Compacted) != 0 || result.BundlePath != "" {
+		t.Fatalf("result = %+v, want nothing compacted and no bundle", result)
+	}
+	if got := f.tip(task).Head; got != plan.Candidates[0].Tip.Head {
+		t.Fatalf("task moved to %s without a projection", got)
+	}
+	if _, err := os.Stat(gitstore.DefaultArchivePath(f.repository.CommonGitDir, plan.RunID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Stat(default bundle) error = %v, want it absent", err)
 	}
 }
 

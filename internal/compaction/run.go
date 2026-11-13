@@ -109,8 +109,10 @@ type Deps struct {
 	// Service lists the tasks, deleted ones included, reads their histories,
 	// and supplies the vocabulary, IDs and actor.
 	Service core.Service
-	// Projection is the cache Execute moves onto the checkpoints. Nil leaves
-	// it to catch up on its next read.
+	// Projection is the cache Execute moves onto the checkpoints, and Execute
+	// refuses to run without it. Left behind, the cache could not catch up on
+	// its own: once Git prunes the heads it last saw, it can no longer prove the
+	// moves are compactions. Prepare does not use it.
 	Projection Projection
 }
 
@@ -258,16 +260,20 @@ type movedTask struct {
 // unless options.Backup is "-", then for each task builds its checkpoint and
 // compare-and-swaps the ref from the observed tip. A task whose ref moved since
 // Prepare is skipped with ReasonChanged. For each task Prepare found already
-// compacted it also lets go of any reflog entries and parked refs a run that
-// stopped early left behind. Last, it moves the projection onto the
-// checkpoints.
+// compacted it also expires any reflog entries a run that stopped early left
+// behind. Last, it moves the projection onto the checkpoints.
 //
-// A bundle failure returns before any ref moves. Any later failure returns the
+// deps.Projection is required, and its absence is refused before anything is
+// written. A bundle failure returns before any ref moves. Any later failure returns the
 // Result so far with the error: the tasks already compacted stay compacted,
 // the bundle is complete, and running again finishes the rest.
 func Execute(ctx context.Context, deps Deps, plan Plan, options Options) (Result, error) {
 	options = options.withNow()
 	result := Result{Plan: plan, Compacted: []Candidate{}}
+	if deps.Projection == nil {
+		return result, core.Errorf(core.CategoryInvocation,
+			"compaction needs the projection cache, so it can move it onto the checkpoints before Git prunes what it last saw")
+	}
 	result.Skipped = append([]Skip{}, plan.Skipped...)
 
 	generations := make([]string, len(plan.Candidates))
@@ -311,16 +317,17 @@ func Execute(ctx context.Context, deps Deps, plan Plan, options Options) (Result
 		}
 	}
 
-	// A run that stopped between a ref move and its cleanup leaves the task
-	// already compacted, so this rerun is the one that lets its old history go.
+	// A run that stopped between a ref move and its reflog expiry leaves the
+	// task already compacted, so this rerun is the one that lets the reflog's
+	// hold on the old history go. Its parked refs are left alone: the ref move
+	// deleted them in the same transaction, so any parked ref there now came
+	// from a later reconcile, holds work no bundle has, and is not this run's
+	// to drop.
 	for _, skipped := range plan.Skipped {
 		if skipped.Reason != ReasonAlreadyCompacted {
 			continue
 		}
 		if err := deps.Repository.ExpireTaskReflog(ctx, skipped.TaskID); err != nil {
-			return finish(err)
-		}
-		if err := deps.Repository.DropTaskParkedRefs(ctx, deps.Config, skipped.TaskID); err != nil {
 			return finish(err)
 		}
 	}
@@ -423,7 +430,7 @@ func optionalTime(value time.Time) *time.Time {
 // checkpoint, because the refresh failed or the row names some other head, is
 // invalidated and read afresh by a second refresh.
 func settleProjection(ctx context.Context, deps Deps, moved []movedTask) error {
-	if deps.Projection == nil || len(moved) == 0 {
+	if len(moved) == 0 {
 		return nil
 	}
 	refreshErr := deps.Projection.Refresh(ctx)
