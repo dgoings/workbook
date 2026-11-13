@@ -384,7 +384,7 @@ func TestAGenerationOneReaderParksOnADisplayConfiguredProject(t *testing.T) {
 	// check of that entry, so it stays exact — a display verb quietly asking
 	// for three is a regression nothing else would catch. The checkpoint beside
 	// it is a running maximum over the whole ledger, and every ledger this
-	// build writes starts from a genesis stamped with the current generation,
+	// build writes starts from a genesis stamped with configGenesisGeneration,
 	// so the checkpoint carries that instead.
 	head := cliGitOutput(t, writer, "rev-parse", "refs/workbook/config")
 	pack := cliGitOutput(t, writer, "show", head+":operation.json")
@@ -392,7 +392,7 @@ func TestAGenerationOneReaderParksOnADisplayConfiguredProject(t *testing.T) {
 		t.Fatalf("operation.json carries no generation-two marker: %s", pack)
 	}
 	checkpoint := cliGitOutput(t, writer, "show", head+":state.json")
-	if want := fmt.Sprintf(`"minReader":%d`, core.SupportedFormatGeneration); !strings.Contains(checkpoint, want) {
+	if want := fmt.Sprintf(`"minReader":%d`, configGenesisGeneration); !strings.Contains(checkpoint, want) {
 		t.Fatalf("state.json carries no %s marker: %s", want, checkpoint)
 	}
 
@@ -519,7 +519,7 @@ func TestAGenerationOneReaderParksOnEveryProjectThisBuildCreates(t *testing.T) {
 	if !strings.Contains(genesis, `"type":"config.genesis"`) {
 		t.Fatalf("the ledger's root commit is not a genesis: %s", genesis)
 	}
-	if want := fmt.Sprintf(`"minReader":%d`, core.SupportedFormatGeneration); !strings.Contains(genesis, want) {
+	if want := fmt.Sprintf(`"minReader":%d`, configGenesisGeneration); !strings.Contains(genesis, want) {
 		t.Fatalf("the genesis pack carries no %s marker: %s", want, genesis)
 	}
 

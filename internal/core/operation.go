@@ -76,6 +76,14 @@ const (
 // eleventh would be worse than a build that refuses all eleven: partial
 // folding is exactly the failure the marker exists to rule out.
 //
+// Four is the generation task archive compaction introduces, through one task
+// operation: history.checkpoint. A build that folds generation three does not
+// know that a root may be a checkpoint rather than a task.create, or that a
+// state may name the tip it was compacted from, so it must not fold a
+// compacted task. The checkpoint's pack and state carry the marker, and Apply's
+// running maximum keeps it on every state after the checkpoint, so an older
+// clone reads a compacted task from its stored state and refuses to change it.
+//
 // Raising this constant is the last step of shipping a new operation type, not
 // the first: the build has to be able to fold generation N before it may claim
 // to. It is also inseparable from the table that declares N — a pack this build
@@ -91,7 +99,7 @@ const (
 // has already happened, from cache, while the mutations it refused now succeed.
 // See historyvalidation.readerGeneration. Any future cache of a fold's outcome
 // owes the same.
-const SupportedFormatGeneration = 3
+const SupportedFormatGeneration = 4
 
 type Actor struct {
 	ID string `json:"id"`
@@ -128,7 +136,48 @@ const (
 	OperationCommentRemove    OperationType = "comment.remove"
 	OperationAttachmentAdd    OperationType = "attachment.add"
 	OperationAttachmentRemove OperationType = "attachment.remove"
+	// OperationHistoryCheckpoint is the root of a compacted task. It replaces a
+	// task's whole history with one parentless commit: it carries the complete
+	// task value, so it folds with no prior history, and a summary of what it
+	// replaced. Like task.create it is legal only as the sole operation of a
+	// root pack.
+	OperationHistoryCheckpoint OperationType = "history.checkpoint"
 )
+
+// The two values CheckpointData.Attachments takes: whether the checkpoint tree
+// carries every live file attachment's blob, or left them behind.
+const (
+	CheckpointAttachmentsKept    = "kept"
+	CheckpointAttachmentsDropped = "dropped"
+)
+
+// CheckpointData is the compaction summary a history.checkpoint carries
+// beside the task value. Everything a later reader would otherwise have walked
+// the discarded history for is here: which tip and generation it replaced,
+// how much it replaced and over what span, when the task last became Done or
+// Deleted, and the ID of every operation it folded in.
+//
+// The wall times are display metadata, like every wall time in a history, and
+// nothing orders by them.
+type CheckpointData struct {
+	RunID string `json:"runId"`
+	// CompactedFrom is the object ID of the tip the checkpoint replaced. The
+	// folded state records it as history.compactedFrom.
+	CompactedFrom      string     `json:"compactedFrom"`
+	PreviousGeneration string     `json:"previousGeneration"`
+	CompactedCommits   int        `json:"compactedCommits"`
+	FirstWallTime      time.Time  `json:"firstWallTime"`
+	LastWallTime       time.Time  `json:"lastWallTime"`
+	BecameDoneAt       *time.Time `json:"becameDoneAt,omitempty"`
+	BecameDeletedAt    *time.Time `json:"becameDeletedAt,omitempty"`
+	// Attachments is CheckpointAttachmentsKept or CheckpointAttachmentsDropped.
+	Attachments string `json:"attachments"`
+	// CompactedOperations is every operation ID in the replaced history, sorted
+	// and unique. Operation IDs survive replay, so any clone can tell which of
+	// its own operations the checkpoint already contains whatever Git did to
+	// its tracking refs.
+	CompactedOperations []string `json:"compactedOperations"`
+}
 
 // Operation is one recorded intent inside a pack.
 //
@@ -158,6 +207,9 @@ type Operation struct {
 	Attachment *AttachmentData `json:"attachment,omitempty"`
 	// AttachmentID names the attachment a removal acts on.
 	AttachmentID string `json:"attachmentId,omitempty"`
+	// Checkpoint is the compaction summary a history.checkpoint carries beside
+	// its Task. It is a pointer, as Task is, so Operation stays comparable.
+	Checkpoint *CheckpointData `json:"checkpoint,omitempty"`
 }
 
 type OperationPack struct {
@@ -180,6 +232,17 @@ type OperationPack struct {
 	LogicalClock      uint64      `json:"logicalClock"`
 	WallTime          time.Time   `json:"wallTime"`
 	Operations        []Operation `json:"operations"`
+}
+
+// Checkpoint returns the compaction summary when the pack is a single
+// history.checkpoint operation, which is the only shape a checkpoint takes.
+// Every reader that asks whether a commit is a checkpoint asks it here.
+func (pack OperationPack) Checkpoint() (*CheckpointData, bool) {
+	if len(pack.Operations) != 1 || pack.Operations[0].Type != OperationHistoryCheckpoint ||
+		pack.Operations[0].Checkpoint == nil {
+		return nil, false
+	}
+	return pack.Operations[0].Checkpoint, true
 }
 
 type History struct {
@@ -236,6 +299,9 @@ var operationMinReader = map[OperationType]int{
 	OperationCommentRemove:    1,
 	OperationAttachmentAdd:    1,
 	OperationAttachmentRemove: 1,
+	// A checkpoint is generation four: a reader has to know that a root may be
+	// a checkpoint before it can fold a compacted task at all.
+	OperationHistoryCheckpoint: 4,
 }
 
 // PackMinReader returns the generation a reader needs to fold these operations,
@@ -344,11 +410,18 @@ func Apply(parent *StateDocument, pack OperationPack) (StateDocument, error) {
 	}
 
 	if parent == nil {
+		// A root is either a task.create, which starts the logical clock, or a
+		// history.checkpoint, which replaces a compacted history and carries
+		// its clock on rather than resetting it.
+		if len(pack.Operations) == 1 && pack.Operations[0].Type == OperationHistoryCheckpoint {
+			return applyCheckpoint(pack)
+		}
 		if pack.LogicalClock != 1 {
 			return StateDocument{}, corrupt("root operation pack logical clock must be 1")
 		}
 		if len(pack.Operations) != 1 || pack.Operations[0].Type != OperationTaskCreate {
-			return StateDocument{}, corrupt("root operation pack must contain exactly one task.create operation")
+			return StateDocument{}, corrupt(
+				"root operation pack must contain exactly one task.create or history.checkpoint operation")
 		}
 		return applyCreate(pack)
 	}
@@ -426,6 +499,9 @@ func Apply(parent *StateDocument, pack OperationPack) (StateDocument, error) {
 		if operation.Type == OperationTaskCreate {
 			return StateDocument{}, corrupt("task.create requires no parent")
 		}
+		if operation.Type == OperationHistoryCheckpoint {
+			return StateDocument{}, corrupt("history.checkpoint requires no parent")
+		}
 		if err := applyOperation(&task, operation, authored); err != nil {
 			return StateDocument{}, err
 		}
@@ -499,6 +575,42 @@ func applyCreate(pack OperationPack) (StateDocument, error) {
 		ProjectID:    pack.ProjectID,
 		TaskID:       pack.TaskID,
 		History:      History{Generation: pack.HistoryGeneration},
+		LogicalClock: pack.LogicalClock,
+		Task:         normalized,
+	}, nil
+}
+
+// applyCheckpoint folds a history.checkpoint root into the state it replaced
+// the history of.
+//
+// The task value is taken as written, updatedAt included. A checkpoint changes
+// nothing about the task, only about the history behind it, and its pack's
+// wall time is when the compaction ran, so unlike applyCreate this does not
+// stamp the wall time onto updatedAt. The logical clock is the pack's own,
+// which continues the replaced tip's.
+// validateCheckpointOperation has already checked the operation's shape
+// through validateOperationPackDocument.
+func applyCheckpoint(pack OperationPack) (StateDocument, error) {
+	operation := pack.Operations[0]
+	summary := operation.Checkpoint
+	// A checkpoint opens a new generation. One that named its own generation as
+	// the one it replaced would be indistinguishable from the history it
+	// claims to have compacted.
+	if summary.PreviousGeneration == pack.HistoryGeneration {
+		return StateDocument{}, corrupt("history.checkpoint must open a new history generation")
+	}
+	normalized, err := normalizeCanonicalTask(copyTaskData(*operation.Task))
+	if err != nil {
+		return StateDocument{}, Wrap(CategoryCorruptData, "history.checkpoint contains an invalid task", err)
+	}
+	compactedFrom := summary.CompactedFrom
+	return StateDocument{
+		Format:       stateDocumentFormat,
+		Version:      documentVersion,
+		MinReader:    foldedMinReader(nil, pack),
+		ProjectID:    pack.ProjectID,
+		TaskID:       pack.TaskID,
+		History:      History{Generation: pack.HistoryGeneration, CompactedFrom: &compactedFrom},
 		LogicalClock: pack.LogicalClock,
 		Task:         normalized,
 	}, nil
@@ -748,8 +860,12 @@ func validateStateEnvelope(state StateDocument) error {
 	if err := validateCanonicalULID("task state history generation", state.History.Generation); err != nil {
 		return err
 	}
-	if state.History.CompactedFrom != nil {
-		return corrupt("task state compaction metadata is unsupported in the append-only POC")
+	// A state names the tip it was compacted from once its task has been
+	// compacted, and keeps naming it on every state after the checkpoint. The
+	// value is not quoted: a stored document is bounded only by the object
+	// ceiling.
+	if state.History.CompactedFrom != nil && !objectIDPattern.MatchString(*state.History.CompactedFrom) {
+		return corrupt("task state history compactedFrom must be a Git object ID")
 	}
 	if state.LogicalClock == 0 {
 		return corrupt("task state logical clock must be positive")
@@ -799,6 +915,15 @@ func validateOperation(operation Operation) error {
 	}
 }
 
+// validateNoCheckpointPayload keeps a compaction summary on the one operation
+// type that means something by it, for the reason validateNoThreadPayload gives.
+func validateNoCheckpointPayload(operation Operation) error {
+	if operation.Checkpoint != nil && operation.Type != OperationHistoryCheckpoint {
+		return corrupt("%s must not contain checkpoint data", operation.Type)
+	}
+	return nil
+}
+
 // validateNoThreadPayload keeps the operations that predate comments free of
 // the members comments and attachments added. An operation that carried a
 // member its type has no meaning for is a document nobody wrote on purpose, and
@@ -832,9 +957,14 @@ func validateOperationDocument(operation Operation) error {
 	if err := validateOperationID(operation.ID); err != nil {
 		return err
 	}
+	if err := validateNoCheckpointPayload(operation); err != nil {
+		return err
+	}
 	switch operation.Type {
 	case OperationTaskCreate:
 		return validateTaskCreateOperation(operation)
+	case OperationHistoryCheckpoint:
+		return validateCheckpointOperation(operation)
 	case OperationFieldSet:
 		if err := validateNoThreadPayload(operation); err != nil {
 			return err
@@ -916,6 +1046,79 @@ func validateTaskCreateOperation(operation Operation) error {
 	}
 	if !reflect.DeepEqual(*operation.Task, normalized) {
 		return corrupt("task.create task data is not canonical")
+	}
+	return nil
+}
+
+// validateCheckpointOperation checks a history.checkpoint's structure: a
+// complete, canonical task and a well-formed compaction summary.
+//
+// Unlike a task.create, a checkpoint may carry comments, assignments and
+// attachments, and may carry a deleted task. It says nothing new about the
+// task; it restates what the replaced history folded to, and the operations
+// that authored the thread are among those it lists as compacted.
+func validateCheckpointOperation(operation Operation) error {
+	if operation.Task == nil || operation.Checkpoint == nil {
+		return corrupt("history.checkpoint must contain task data and a compaction summary")
+	}
+	if operation.Field != "" || operation.Value != "" {
+		return corrupt("history.checkpoint must contain only task data and a compaction summary")
+	}
+	if err := validateNoThreadPayload(operation); err != nil {
+		return err
+	}
+	if operation.Task.CreatedAt.IsZero() {
+		return corrupt("history.checkpoint requires createdAt")
+	}
+	normalized, err := normalizeCanonicalTask(copyTaskData(*operation.Task))
+	if err != nil {
+		return Wrap(CategoryCorruptData, "history.checkpoint contains an invalid task", err)
+	}
+	if !reflect.DeepEqual(*operation.Task, normalized) {
+		return corrupt("history.checkpoint task data is not canonical")
+	}
+	return validateCheckpointSummary(*operation.Checkpoint)
+}
+
+func validateCheckpointSummary(summary CheckpointData) error {
+	if err := validateCanonicalULID("history.checkpoint run ID", summary.RunID); err != nil {
+		return err
+	}
+	if err := validateCanonicalULID("history.checkpoint previous generation", summary.PreviousGeneration); err != nil {
+		return err
+	}
+	// Not quoted, for the reason validateStateEnvelope gives.
+	if !objectIDPattern.MatchString(summary.CompactedFrom) {
+		return corrupt("history.checkpoint compactedFrom must be a Git object ID")
+	}
+	switch summary.Attachments {
+	case CheckpointAttachmentsKept, CheckpointAttachmentsDropped:
+	default:
+		return corrupt("history.checkpoint attachments must be %q or %q",
+			CheckpointAttachmentsKept, CheckpointAttachmentsDropped)
+	}
+	if summary.CompactedCommits < 1 {
+		return corrupt("history.checkpoint must compact at least one commit")
+	}
+	if summary.FirstWallTime.IsZero() || summary.LastWallTime.IsZero() {
+		return corrupt("history.checkpoint requires the first and last compacted wall times")
+	}
+	if summary.BecameDoneAt != nil && summary.BecameDoneAt.IsZero() {
+		return corrupt("history.checkpoint becameDoneAt must not be zero")
+	}
+	if summary.BecameDeletedAt != nil && summary.BecameDeletedAt.IsZero() {
+		return corrupt("history.checkpoint becameDeletedAt must not be zero")
+	}
+	if len(summary.CompactedOperations) == 0 {
+		return corrupt("history.checkpoint must list the operations it compacted")
+	}
+	for index, id := range summary.CompactedOperations {
+		if err := validateCanonicalULID("history.checkpoint compacted operation", id); err != nil {
+			return err
+		}
+		if index > 0 && summary.CompactedOperations[index-1] >= id {
+			return corrupt("history.checkpoint compacted operations must be sorted and unique")
+		}
 	}
 	return nil
 }

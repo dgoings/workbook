@@ -64,6 +64,13 @@ func storedMinReader(t *testing.T, document storedDocument) (int, bool) {
 	return *marker.MinReader, true
 }
 
+// configGenesisGeneration is the writer-format generation every configuration
+// genesis this build writes declares: three, for the priorities section each
+// one records. It is below core.SupportedFormatGeneration because generation
+// four belongs to a task operation, history.checkpoint, which no genesis
+// carries.
+const configGenesisGeneration = 3
+
 // The writer-format marker is spent per ref, and only where this build means to
 // spend it.
 //
@@ -85,14 +92,14 @@ func storedMinReader(t *testing.T, document storedDocument) (int, bool) {
 // checkpoint carries the running maximum, so it is never absent once the
 // genesis has stamped one and never above what this build can read back.
 //
-// A note for whoever raises the generation next. Both genesis assertions below
-// read core.SupportedFormatGeneration, and that is right only while the newest
-// section is one a genesis records — today the priorities. Add a generation
-// that a genesis does not carry and the genesis will keep asking for the older
-// number, and these will fail. The fix then is to name the generation the
-// genesis's own sections require, not to relax the comparison to "at least": an
-// under-marked genesis is exactly what this test is here to catch, and ">="
-// cannot see one.
+// A note for whoever raises the generation next. The genesis assertions below
+// read configGenesisGeneration, the generation the genesis's own sections
+// require, rather than core.SupportedFormatGeneration. The two were equal until
+// generation four, which history.checkpoint introduced: a task operation that
+// no genesis carries, so the genesis kept asking for three. If a later
+// generation adds a section a genesis records, raise configGenesisGeneration
+// with it; do not relax the comparison to "at least": an under-marked genesis
+// is exactly what this test is here to catch, and ">=" cannot see one.
 func TestTheWriterFormatMarkerIsSpentOnlyAtTheConfigurationGenesis(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
@@ -156,9 +163,9 @@ func TestTheWriterFormatMarkerIsSpentOnlyAtTheConfigurationGenesis(t *testing.T)
 			}
 		case document.name == "operation.json" && strings.Contains(document.contents, `"type":"`+string(core.ConfigGenesis)+`"`):
 			genesisPacks++
-			if !marked || generation != core.SupportedFormatGeneration {
+			if !marked || generation != configGenesisGeneration {
 				t.Fatalf("%s is the genesis pack and carries marker %d (present = %v), want exactly %d: %s",
-					document.label, generation, marked, core.SupportedFormatGeneration, document.contents)
+					document.label, generation, marked, configGenesisGeneration, document.contents)
 			}
 		case document.name == "operation.json":
 			if marked {
@@ -166,9 +173,9 @@ func TestTheWriterFormatMarkerIsSpentOnlyAtTheConfigurationGenesis(t *testing.T)
 					document.label, generation, document.contents)
 			}
 		default:
-			if !marked || generation != core.SupportedFormatGeneration {
+			if !marked || generation != configGenesisGeneration {
 				t.Fatalf("%s is a configuration checkpoint and carries marker %d (present = %v), want exactly %d: %s",
-					document.label, generation, marked, core.SupportedFormatGeneration, document.contents)
+					document.label, generation, marked, configGenesisGeneration, document.contents)
 			}
 		}
 	}
