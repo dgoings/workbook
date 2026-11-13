@@ -765,6 +765,43 @@ func TestCompactCLIReportsOriginRefusingTheLease(t *testing.T) {
 	}
 }
 
+// When the fetch before the run fails, the run still compacts from this clone's
+// last view of origin, and publishing is skipped. The warning says the
+// checkpoints stayed local; a dry run, which wrote none, does not.
+func TestCompactCLIWarnsCheckpointsStayLocalWhenTheFetchFails(t *testing.T) {
+	t.Parallel()
+	first, _ := cliSyncRepositories(t)
+	task := publishedDoneTask(t, first, "Compacted while offline")
+	compactRun(t, first, "fetch")
+	cliGit(t, first, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	const stayLocal = "; the compacted tasks stay local (unpublished) until the next successful sync"
+
+	stdout := compactRun(t, first, "compact", "--dry-run", "--json")
+	document := assertJSONResult(t, stdout, "compact")
+	if len(document.Warnings) != 1 || strings.Contains(document.Warnings[0].Message, stayLocal) {
+		t.Fatalf("dry-run warnings = %+v, want the fetch warning without %q", document.Warnings, stayLocal)
+	}
+
+	stdout = compactRun(t, first, "compact", "--json")
+	summary := compactSummary{}
+	document = assertJSONResult(t, stdout, "compact")
+	if err := json.Unmarshal(document.Data, &summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if got := compactedTaskIDs(summary); !reflect.DeepEqual(got, []string{task.ID}) {
+		t.Fatalf("tasks = %v, want %s compacted from the last view of origin", got, task.ID)
+	}
+	envelope := decodeCompactEnvelope(t, stdout)
+	if envelope.Sync.Status != syncStatusFailed || envelope.Sync.Pushed != nil {
+		t.Fatalf("sync = %+v, want a failed fetch and no push", envelope.Sync)
+	}
+	if len(envelope.Warnings) != 1 || envelope.Warnings[0].Code != core.WarningAutoSync ||
+		!strings.HasPrefix(envelope.Warnings[0].Message, "the run used this clone's last view of origin, because fetch failed: ") ||
+		!strings.HasSuffix(envelope.Warnings[0].Message, stayLocal) {
+		t.Fatalf("warnings = %+v, want the fetch failure ending %q", envelope.Warnings, stayLocal)
+	}
+}
+
 // A live watcher is handed the publication, as a mutation hands it a change,
 // and its synchronization publishes the checkpoint. The watcher's interval is
 // an hour, so origin holds the checkpoint only if the nudge delivered it.

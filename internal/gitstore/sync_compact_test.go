@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	wantDeniedDetail = "origin refuses non-fast-forward updates (receive.denyNonFastForwards is set); " +
-		"the compacted task stays local until that setting is changed"
+	wantDeniedDetail = "origin refuses non-fast-forward updates to Workbook refs " +
+		"(for example, a server-side hook or ruleset); the compacted task stays local until that changes"
 	wantStaleDetail = "origin changed since the compaction; the next sync reconciles it"
 )
 
@@ -56,13 +56,34 @@ func publishAndCompact(t *testing.T, repo *Repository, config core.ProjectConfig
 	if got := refValue(t, repo, remoteTaskRefPrefix+task.ID); got != tip.Head {
 		t.Fatalf("tracking ref = %s, want the tip %s before compaction", got, tip.Head)
 	}
-	history := strings.Fields(syncGit(t, repo.Root, "rev-list", tip.Head))
+	return compactLocally(t, repo, config, task.ID)
+}
 
+// compactLocally compacts taskID's current tip in repo and publishes nothing.
+func compactLocally(t *testing.T, repo *Repository, config core.ProjectConfig, taskID string) compactedSyncTask {
+	t.Helper()
+	tip := currentSnapshot(t, repo, config, taskID)
+	history := strings.Fields(syncGit(t, repo.Root, "rev-list", tip.Head))
 	checkpoint := buildCheckpoint(t, repo, config, checkpointInputFor(t, repo, config, tip, false))
-	if err := repo.CompactTaskRef(ctx, config, task.ID, tip.Head, checkpoint.Head); err != nil {
+	if err := repo.CompactTaskRef(context.Background(), config, taskID, tip.Head, checkpoint.Head); err != nil {
 		t.Fatalf("CompactTaskRef() error = %v", err)
 	}
-	return compactedSyncTask{taskID: task.ID, tip: tip, checkpoint: checkpoint, history: history}
+	return compactedSyncTask{taskID: taskID, tip: tip, checkpoint: checkpoint, history: history}
+}
+
+// assertNoLease fails if any push carried a lease or forced a refspec.
+func assertNoLease(t *testing.T, commands [][]string) {
+	t.Helper()
+	for _, command := range commands {
+		if len(command) == 0 || command[0] != "push" {
+			continue
+		}
+		for _, arg := range command {
+			if strings.HasPrefix(arg, "--force") || arg == "-f" || strings.HasPrefix(arg, "+") {
+				t.Fatalf("push leased or forced a ref that needed neither: %v", command)
+			}
+		}
+	}
 }
 
 func observeCommands(repo *Repository) *[][]string {
@@ -291,7 +312,7 @@ func TestLeasedPushRejectedByOriginLeavesTheCheckpointLocal(t *testing.T) {
 // refs/heads/ only, so origin accepts the lease on a task ref. This pins that
 // behavior: the denied-detail translation is reachable only through a host
 // that refuses with Git's "non-fast-forward" reason on its own terms.
-func TestLeasedPushRejectedByDenyNonFastForwards(t *testing.T) {
+func TestDenyNonFastForwardsDoesNotGuardTaskRefs(t *testing.T) {
 	t.Parallel()
 	first, _, config := syncRepositories(t)
 	bare := syncGit(t, first.Root, "config", "remote.origin.url")
@@ -304,6 +325,97 @@ func TestLeasedPushRejectedByDenyNonFastForwards(t *testing.T) {
 	}
 	assertSyncOutcome(t, result, compacted.taskID, SyncCompactionPublished)
 	assertPublishedCheckpoint(t, first, compacted)
+}
+
+// Once origin holds the checkpoint, an edit on top of it is an ordinary
+// fast-forward: no lease, and nothing stale about it.
+func TestPublishedCheckpointExtendedLocallyPushesAsAFastForward(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{"push-task", "push"} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			first, _, config := syncRepositories(t)
+			compacted := publishAndCompact(t, first, config)
+			if _, err := first.Push(ctx, config); err != nil {
+				t.Fatalf("Push() of the checkpoint error = %v", err)
+			}
+			assertPublishedCheckpoint(t, first, compacted)
+			updateSyncTask(t, first, config, compacted.taskID, "Edited after publication")
+			extended := refValue(t, first, taskRefPrefix+compacted.taskID)
+			if parent := syncGit(t, first.Root, "rev-parse", extended+"^"); parent != compacted.checkpoint.Head {
+				t.Fatalf("edit's parent = %s, want the checkpoint %s", parent, compacted.checkpoint.Head)
+			}
+			commands := observeCommands(first)
+
+			var (
+				item SyncTaskResult
+				err  error
+			)
+			if path == "push-task" {
+				item, err = first.PushTask(ctx, config, compacted.taskID)
+			} else {
+				var result SyncResult
+				result, err = first.Push(ctx, config)
+				item = syncOutcome(t, result, compacted.taskID)
+			}
+			if err != nil {
+				t.Fatalf("%s error = %v", path, err)
+			}
+			if want := (SyncTaskResult{TaskID: compacted.taskID, Status: SyncPublished}); item != want {
+				t.Fatalf("%s outcome = %#v, want %#v", path, item, want)
+			}
+			if got := remoteRefValue(t, first, taskRefPrefix+compacted.taskID); got != extended {
+				t.Fatalf("origin holds %s, want the new tip %s", got, extended)
+			}
+			assertNoLease(t, *commands)
+		})
+	}
+}
+
+// A task origin never held has nothing to lease against, so its checkpoint is
+// published as an ordinary create.
+func TestCompactedTaskOriginNeverHeldIsCreatedAtTheCheckpoint(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{"push-task", "push"} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			first, _, config := syncRepositories(t)
+			task := createSyncTask(t, first, config, "Never published")
+			done := core.StatusDone
+			if _, err := syncService(first, config).UpdateMutation(ctx, task.ID, core.UpdateInput{Status: &done}); err != nil {
+				t.Fatalf("UpdateMutation(done) error = %v", err)
+			}
+			compacted := compactLocally(t, first, config, task.ID)
+			if remoteRefExists(t, first, taskRefPrefix+task.ID) || refExists(t, first, remoteTaskRefPrefix+task.ID) {
+				t.Fatalf("origin or the tracking namespace already holds %s", task.ID)
+			}
+			commands := observeCommands(first)
+
+			var (
+				item SyncTaskResult
+				err  error
+			)
+			if path == "push-task" {
+				item, err = first.PushTask(ctx, config, task.ID)
+			} else {
+				var result SyncResult
+				result, err = first.Push(ctx, config)
+				item = syncOutcome(t, result, task.ID)
+			}
+			if err != nil {
+				t.Fatalf("%s error = %v", path, err)
+			}
+			if want := (SyncTaskResult{TaskID: task.ID, Status: SyncPublished}); item != want {
+				t.Fatalf("%s outcome = %#v, want %#v", path, item, want)
+			}
+			if got := remoteRefValue(t, first, taskRefPrefix+task.ID); got != compacted.checkpoint.Head {
+				t.Fatalf("origin holds %s, want the checkpoint %s", got, compacted.checkpoint.Head)
+			}
+			assertNoLease(t, *commands)
+		})
+	}
 }
 
 // A teammate's push after the compaction moves origin off the compacted tip, so

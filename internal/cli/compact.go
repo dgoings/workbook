@@ -191,7 +191,11 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 	if summary.Skipped == nil {
 		summary.Skipped = []compaction.Skip{}
 	}
-	warnings = append(warnings, compactSyncWarnings(session)...)
+	published := 0
+	if !*dryRun {
+		published = len(compacted)
+	}
+	warnings = append(warnings, compactSyncWarnings(session, published)...)
 
 	if *jsonMode {
 		writeSyncedResult(stdout, "compact", summary, &session.report, session.conflicts, warnings)
@@ -224,7 +228,10 @@ func parseCompactCutoff(flagName, value string) (time.Duration, error) {
 // after it, could not do, as a mutation's warnings do. A refused checkpoint is
 // named with origin's reason, because that reason is what the person has to act
 // on: a stale lease clears with the next sync, a host policy does not.
-func compactSyncWarnings(session *taskSession) []core.Warning {
+//
+// compacted counts the checkpoints a real run wrote. When the fetch failed,
+// publishing them was skipped, and the warning says so.
+func compactSyncWarnings(session *taskSession, compacted int) []core.Warning {
 	switch {
 	case session.report.Status == syncStatusFailed && session.report.Pushed != nil:
 		message := "the tasks were compacted locally, but " + session.report.Detail
@@ -235,10 +242,11 @@ func compactSyncWarnings(session *taskSession) []core.Warning {
 		}
 		return []core.Warning{{Code: core.WarningAutoSync, Message: message}}
 	case session.report.Status == syncStatusFailed:
-		return []core.Warning{{
-			Code:    core.WarningAutoSync,
-			Message: "the run used this clone's last view of origin, because " + session.report.Detail,
-		}}
+		message := "the run used this clone's last view of origin, because " + session.report.Detail
+		if compacted > 0 {
+			message += "; the compacted tasks stay local (unpublished) until the next successful sync"
+		}
+		return []core.Warning{{Code: core.WarningAutoSync, Message: message}}
 	case session.defects != "":
 		return []core.Warning{{
 			Code:    core.WarningAutoSync,

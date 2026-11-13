@@ -15,8 +15,10 @@ import (
 // "[remote rejected] (non-fast-forward)") describes the mechanism, not what
 // happened to the compaction.
 const (
-	compactionDeniedDetail = "origin refuses non-fast-forward updates (receive.denyNonFastForwards is set); " +
-		"the compacted task stays local until that setting is changed"
+	// It names no Git setting: receive.denyNonFastForwards covers refs/heads/
+	// only, so it is never why origin refuses a task ref.
+	compactionDeniedDetail = "origin refuses non-fast-forward updates to Workbook refs " +
+		"(for example, a server-side hook or ruleset); the compacted task stays local until that changes"
 	compactionStaleDetail = "origin changed since the compaction; the next sync reconciles it"
 )
 
@@ -129,8 +131,12 @@ func (r *Repository) pushTaskHeads(ctx context.Context, candidates []pushCandida
 }
 
 // advanceTrackingRef compare-and-swaps a task's tracking ref from the value it
-// holds now to next. It writes no reflog, because a reflog entry for the old
-// value would keep the compacted history reachable just as the ref did.
+// holds now to next. A reflog entry for the old value would keep the compacted
+// history reachable just as the ref did, so the update asks for none. That
+// holds only under Git's default core.logAllRefUpdates=true, which logs
+// refs/heads/, refs/remotes/ and refs/notes/ but not refs/workbook/; a clone
+// set to `always` keeps a reflog for the tracking ref, and that reflog holds
+// the old history until it expires.
 func (r *Repository) advanceTrackingRef(ctx context.Context, taskID, next string) error {
 	ref := remoteTaskRefPrefix + taskID
 	output, err := r.Git(ctx, nil, "for-each-ref", "--format=%(objectname)", ref)
