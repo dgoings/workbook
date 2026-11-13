@@ -2,6 +2,7 @@ package compaction
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -768,4 +769,68 @@ func writeNewerWriterTip(t *testing.T, f *fixture, taskID string) {
 	tree := write(fmt.Sprintf("100644 blob %s\toperation.json\n100644 blob %s\tstate.json\n", operationBlob, stateBlob), "mktree")
 	commit := write("workbook: comment on "+taskID, "commit-tree", tree, "-p", head)
 	f.git("update-ref", ref, commit, head)
+}
+
+// brokenProjection is a projection cache that refuses every update, standing
+// in for one a run cannot settle after its refs have moved.
+type brokenProjection struct{ Projection }
+
+func (brokenProjection) Refresh(context.Context) error { return errors.New("cache refresh broke") }
+
+func (brokenProjection) Advance(context.Context, core.ProjectConfig, string, core.Snapshot) (bool, error) {
+	return false, errors.New("cache advance broke")
+}
+
+// A projection that cannot be settled after the refs moved is a
+// ProjectionError, so the command can report a finished compaction with a
+// rebuild warning. A failure before any ref moved is not one.
+func TestExecuteReportsProjectionFailureAfterRefsMoved(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	task := f.create("Done")
+	f.status(task, core.StatusDone)
+	options := Options{Criteria: everything(), Backup: "-", Now: f.now}
+	plan := f.prepare(options)
+	deps := f.deps()
+	deps.Projection = brokenProjection{f.store}
+
+	result, err := Execute(context.Background(), deps, plan, options)
+	var projectionErr *ProjectionError
+	if !errors.As(err, &projectionErr) {
+		t.Fatalf("Execute() error = %v, want a *ProjectionError", err)
+	}
+	if !strings.Contains(err.Error(), "cache advance broke") {
+		t.Fatalf("Execute() error = %q, want it to carry the cache's own error", err)
+	}
+	if got := compactedIDs(result); len(got) != 1 || got[0] != task {
+		t.Fatalf("Compacted = %v, want [%s]", got, task)
+	}
+	if got := f.tip(task).Head; got == plan.Candidates[0].Tip.Head {
+		t.Fatalf("task still at its old tip %s, want the checkpoint", got)
+	}
+
+	// A failure before any ref moved stays an ordinary error.
+	existing := filepath.Join(t.TempDir(), "taken.bundle")
+	if err := os.WriteFile(existing, []byte("taken"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	other := f.create("Also done")
+	f.status(other, core.StatusDone)
+	options = Options{Criteria: everything(), Backup: existing, Now: f.now}
+	plan = f.prepare(options)
+	if _, err := Execute(context.Background(), f.deps(), plan, options); err == nil || errors.As(err, &projectionErr) {
+		t.Fatalf("Execute() onto an existing bundle error = %v, want an error that is not a *ProjectionError", err)
+	}
+}
+
+// Skip is part of the compact command's JSON, so its members are named for it.
+func TestSkipMarshalsWithJSONNames(t *testing.T) {
+	t.Parallel()
+	encoded, err := json.Marshal(Skip{TaskID: "WB-1", Title: "Title", Reason: ReasonChanged})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if want := `{"taskId":"WB-1","title":"Title","reason":"changed during the run"}`; string(encoded) != want {
+		t.Fatalf("Skip JSON = %s, want %s", encoded, want)
+	}
 }

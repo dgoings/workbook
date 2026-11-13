@@ -31,6 +31,7 @@ Commands:
   next [--any] [--claim] [--limit <n>] [--no-sync] [--json]
   rebuild [--json]
   validate [--full] [--json]
+  compact [--done-only [<duration>] | --deleted-only [<duration>]] [--since <duration>] [--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--json]
   version [--json]
   fetch [--json]
   push [--json]

@@ -244,7 +244,12 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"next":     {"any": boolFlag, "claim": boolFlag, "limit": stringFlag, "no-sync": boolFlag, "json": boolFlag},
 		"rebuild":  {"json": boolFlag},
 		"validate": {"full": boolFlag, "json": boolFlag},
-		"version":  {"json": boolFlag},
+		"compact": {
+			"done-only": optionalStringFlag, "deleted-only": optionalStringFlag, "since": stringFlag,
+			"keep-attachments": boolFlag, "no-backup": boolFlag, "backup": stringFlag,
+			"dry-run": boolFlag, "no-sync": boolFlag, "json": boolFlag,
+		},
+		"version": {"json": boolFlag},
 		// completion prints a static script, so it takes no options at all:
 		// not even --json, which has nothing to describe here.
 		"completion": {},

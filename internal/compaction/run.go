@@ -44,8 +44,26 @@ type Candidate struct {
 	doneAt, deletedAt time.Time
 }
 
-// Skip is a selected task a run leaves alone, and why.
-type Skip struct{ TaskID, Title, Reason string }
+// Skip is a selected task a run leaves alone, and why. It is part of the
+// compact command's JSON summary.
+type Skip struct {
+	TaskID string `json:"taskId"`
+	Title  string `json:"title"`
+	Reason string `json:"reason"`
+}
+
+// ProjectionError is Execute's error when every step but the last succeeded:
+// the refs moved and the run is done, but the projection cache could not be
+// moved onto the checkpoints. The cache can be rebuilt from the refs, and has
+// to be before Git prunes the heads it last saw. Any other Execute error means
+// the run did not finish.
+type ProjectionError struct{ Err error }
+
+func (e *ProjectionError) Error() string {
+	return "tasks were compacted, but the projection cache could not follow: " + e.Err.Error()
+}
+
+func (e *ProjectionError) Unwrap() error { return e.Err }
 
 // Plan is what a run will do. A dry run stops at it.
 type Plan struct {
@@ -266,7 +284,8 @@ type movedTask struct {
 // deps.Projection is required, and its absence is refused before anything is
 // written. A bundle failure returns before any ref moves. Any later failure returns the
 // Result so far with the error: the tasks already compacted stay compacted,
-// the bundle is complete, and running again finishes the rest.
+// the bundle is complete, and running again finishes the rest. A run that
+// finished everything but the projection settle returns a *ProjectionError.
 func Execute(ctx context.Context, deps Deps, plan Plan, options Options) (Result, error) {
 	options = options.withNow()
 	result := Result{Plan: plan, Compacted: []Candidate{}}
@@ -294,10 +313,15 @@ func Execute(ctx context.Context, deps Deps, plan Plan, options Options) (Result
 
 	var moved []movedTask
 	finish := func(err error) (Result, error) {
-		if settleErr := settleProjection(ctx, deps, moved); settleErr != nil {
-			err = errors.Join(err, settleErr)
+		settleErr := settleProjection(ctx, deps, moved)
+		switch {
+		case settleErr == nil:
+			return result, err
+		case err == nil:
+			return result, &ProjectionError{Err: settleErr}
+		default:
+			return result, errors.Join(err, settleErr)
 		}
-		return result, err
 	}
 	for index, candidate := range plan.Candidates {
 		checkpoint, err := compactOne(ctx, deps, plan, options, candidate, generations[index])

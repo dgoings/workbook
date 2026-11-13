@@ -9,6 +9,7 @@ import (
 	"github.com/dgoings/workbook/internal/autosync"
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/projection"
 	"github.com/dgoings/workbook/internal/syncloop"
 	"github.com/dgoings/workbook/internal/userconfig"
 )
@@ -58,9 +59,12 @@ type taskSession struct {
 	repository *gitstore.Repository
 	config     core.ProjectConfig
 	service    core.Service
-	report     syncReport
-	fetched    *gitstore.SyncResult
-	conflicts  []core.Conflict
+	// store is the projection the service reads and writes through, for a
+	// command such as compact that has to move it directly.
+	store     *projection.Store
+	report    syncReport
+	fetched   *gitstore.SyncResult
+	conflicts []core.Conflict
 	// defects carries what a fetch that still ran to completion reported about
 	// refs it could not validate. Publication follows such a fetch, so this is
 	// a warning the caller hears alongside a synchronized change rather than
@@ -161,6 +165,7 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 		repository:        repository,
 		config:            config,
 		service:           service,
+		store:             store,
 		report:            syncReport{Enabled: policy.Enabled, Source: policy.Source, Status: syncStatusSkipped},
 		releaseProjection: releaseProjection,
 	}

@@ -96,6 +96,8 @@ func Run(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout
 		err = runRebuild(ctx, commandArgs, cwd, stdout, stderr)
 	case "validate":
 		err = runValidate(ctx, commandArgs, cwd, stdout, stderr)
+	case "compact":
+		err = runCompact(ctx, commandArgs, cwd, stdout, stderr)
 	case "version":
 		err = runVersion(commandArgs, stdout)
 	case "fetch":
