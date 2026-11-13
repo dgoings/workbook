@@ -2,6 +2,8 @@ package gitstore
 
 import (
 	"context"
+	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -496,5 +498,165 @@ func TestCompactedHistoryRefusesAChainWhoseRootIsNotARoot(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), task.ID) || !strings.Contains(err.Error(), orphan) {
 		t.Fatalf("CompactedHistory() error = %v, want it to name task %s and commit %s", err, task.ID, orphan)
+	}
+}
+
+// compactionFixture is a Done task with a three-commit history in a clone that
+// has no origin, plus two parked refs for it: one at the task's first commit
+// and one at a sibling of its second commit, which nothing but that parked ref
+// reaches. It carries the tip it compacts from and the checkpoint built for
+// that tip.
+type compactionFixture struct {
+	repo       *Repository
+	config     core.ProjectConfig
+	taskID     string
+	tip        core.Snapshot
+	checkpoint core.Snapshot
+	parked     []string
+	sibling    string
+}
+
+func newCompactionFixture(t *testing.T) compactionFixture {
+	t.Helper()
+	repo, config := writeRepository(t)
+	task := createSyncTask(t, repo, config, "Compact me")
+	created := currentSnapshot(t, repo, config, task.ID)
+	updateSyncTask(t, repo, config, task.ID, "Second title")
+	second := currentSnapshot(t, repo, config, task.ID)
+	done := core.StatusDone
+	if _, err := syncService(repo, config).UpdateMutation(
+		context.Background(), task.ID, core.UpdateInput{Status: &done}); err != nil {
+		t.Fatalf("UpdateMutation(done) error = %v", err)
+	}
+	tip := currentSnapshot(t, repo, config, task.ID)
+
+	sibling := syncGit(t, repo.Root, "commit-tree", second.Head+"^{tree}", "-p", created.Head, "-m", "parked sibling")
+	parked := []string{
+		reconciledRefPrefix + task.ID + "/0",
+		reconciledRefPrefix + task.ID + "/1",
+	}
+	syncGit(t, repo.Root, "update-ref", parked[0], created.Head)
+	syncGit(t, repo.Root, "update-ref", parked[1], sibling)
+
+	checkpoint := buildCheckpoint(t, repo, config, checkpointInputFor(t, repo, config, tip, false))
+	return compactionFixture{
+		repo: repo, config: config, taskID: task.ID,
+		tip: tip, checkpoint: checkpoint, parked: parked, sibling: sibling,
+	}
+}
+
+func parkedRefNames(t *testing.T, repo *Repository, taskID string) []string {
+	t.Helper()
+	return strings.Fields(syncGit(t, repo.Root, "for-each-ref", "--format=%(refname)", reconciledRefPrefix+taskID+"/"))
+}
+
+func taskReflogObjects(t *testing.T, repo *Repository, taskID string) []string {
+	t.Helper()
+	return strings.Fields(syncGit(t, repo.Root, "reflog", "show", "--format=%H", taskRefPrefix+taskID))
+}
+
+func TestCompactTaskRefMovesRefAndDropsParkedRefs(t *testing.T) {
+	t.Parallel()
+	fixture := newCompactionFixture(t)
+	repo, taskID := fixture.repo, fixture.taskID
+	if got := parkedRefNames(t, repo, taskID); len(got) != 2 {
+		t.Fatalf("parked refs before compaction = %v, want two", got)
+	}
+	if !slices.Contains(taskReflogObjects(t, repo, taskID), fixture.tip.Head) {
+		t.Fatalf("task reflog before compaction does not name the tip %s", fixture.tip.Head)
+	}
+
+	if err := repo.CompactTaskRef(context.Background(), fixture.config, taskID,
+		fixture.tip.Head, fixture.checkpoint.Head); err != nil {
+		t.Fatalf("CompactTaskRef() error = %v", err)
+	}
+
+	if got := refValue(t, repo, taskRefPrefix+taskID); got != fixture.checkpoint.Head {
+		t.Fatalf("task ref = %s, want the checkpoint %s", got, fixture.checkpoint.Head)
+	}
+	if got := parkedRefNames(t, repo, taskID); len(got) != 0 {
+		t.Fatalf("parked refs after compaction = %v, want none", got)
+	}
+	reflog := syncGit(t, repo.Root, "reflog", "show", "--format=%H %gs", taskRefPrefix+taskID)
+	if strings.Contains(reflog, fixture.tip.Head) {
+		t.Fatalf("task reflog still names the old tip %s:\n%s", fixture.tip.Head, reflog)
+	}
+}
+
+func TestCompactTaskRefRefusesMovedRef(t *testing.T) {
+	t.Parallel()
+	fixture := newCompactionFixture(t)
+	repo, taskID := fixture.repo, fixture.taskID
+	stale := syncGit(t, repo.Root, "rev-parse", fixture.tip.Head+"^")
+	reflogBefore := taskReflogObjects(t, repo, taskID)
+
+	err := repo.CompactTaskRef(context.Background(), fixture.config, taskID, stale, fixture.checkpoint.Head)
+	if got, want := core.CategoryOf(err), core.CategoryStaleWrite; got != want {
+		t.Fatalf("CompactTaskRef(stale) category = %q, want %q; error = %v", got, want, err)
+	}
+	if got := refValue(t, repo, taskRefPrefix+taskID); got != fixture.tip.Head {
+		t.Fatalf("task ref = %s, want it unchanged at %s", got, fixture.tip.Head)
+	}
+	if got := parkedRefNames(t, repo, taskID); strings.Join(got, " ") != strings.Join(fixture.parked, " ") {
+		t.Fatalf("parked refs = %v, want them intact as %v", got, fixture.parked)
+	}
+	if got := taskReflogObjects(t, repo, taskID); strings.Join(got, " ") != strings.Join(reflogBefore, " ") {
+		t.Fatalf("task reflog = %v, want it unchanged from %v", got, reflogBefore)
+	}
+}
+
+// A task ref can exist without a reflog, for one written by a Git that logged
+// nothing, and a retried cleanup finds nothing left to expire. Neither is an
+// error.
+func TestExpireTaskReflogWithoutReflogIsANoOp(t *testing.T) {
+	t.Parallel()
+	repo, config := writeRepository(t)
+	task := createSyncTask(t, repo, config, "No reflog")
+	head := refValue(t, repo, taskRefPrefix+task.ID)
+	// Deleting the ref deletes its reflog; recreating it with logging off
+	// leaves it without one.
+	syncGit(t, repo.Root, "update-ref", "-d", taskRefPrefix+task.ID)
+	syncGit(t, repo.Root, "-c", "core.logAllRefUpdates=false", "update-ref", taskRefPrefix+task.ID, head)
+	if exists := exec.Command("git", "-C", repo.Root, "reflog", "exists", taskRefPrefix+task.ID).Run(); exists == nil {
+		t.Fatalf("fixture task ref still has a reflog")
+	}
+
+	if err := repo.ExpireTaskReflog(context.Background(), task.ID); err != nil {
+		t.Fatalf("ExpireTaskReflog() without a reflog error = %v", err)
+	}
+	if got := refValue(t, repo, taskRefPrefix+task.ID); got != head {
+		t.Fatalf("task ref = %s, want it unchanged at %s", got, head)
+	}
+}
+
+// Once the ref, its parked refs and its reflog let go of the old history, Git
+// can prune it. The clone has no origin, so no remote-tracking ref holds it
+// either.
+func TestCompactionFreesObjectsAfterGC(t *testing.T) {
+	t.Parallel()
+	fixture := newCompactionFixture(t)
+	repo, taskID := fixture.repo, fixture.taskID
+	if remotes := syncGit(t, repo.Root, "remote"); remotes != "" {
+		t.Fatalf("fixture remotes = %q, want none", remotes)
+	}
+	if refExists(t, repo, remoteTaskRefPrefix+taskID) {
+		t.Fatalf("fixture has a tracking ref for %s", taskID)
+	}
+	before := reachableObjects(t, repo.Root)
+
+	if err := repo.CompactTaskRef(context.Background(), fixture.config, taskID,
+		fixture.tip.Head, fixture.checkpoint.Head); err != nil {
+		t.Fatalf("CompactTaskRef() error = %v", err)
+	}
+	syncGit(t, repo.Root, "gc", "--prune=now", "--quiet")
+
+	for _, object := range []string{fixture.tip.Head, fixture.sibling} {
+		command := exec.Command("git", "-C", repo.Root, "cat-file", "-e", object)
+		if err := command.Run(); err == nil {
+			t.Fatalf("object %s survived gc --prune=now after compaction", object)
+		}
+	}
+	if after := reachableObjects(t, repo.Root); after >= before {
+		t.Fatalf("reachable objects after compaction = %d, want fewer than %d", after, before)
 	}
 }

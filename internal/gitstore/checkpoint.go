@@ -3,7 +3,9 @@ package gitstore
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"os/exec"
 	"sort"
 	"time"
 
@@ -118,6 +120,81 @@ func (r *Repository) BuildCheckpoint(ctx context.Context, config core.ProjectCon
 		return core.Snapshot{}, err
 	}
 	return core.Snapshot{Head: head, Operation: pack, State: state}, nil
+}
+
+// CompactTaskRef compare-and-swaps refs/workbook/tasks/<id> from expected to
+// checkpoint, deletes every refs/workbook/reconciled/<id>/* in the same
+// update-ref transaction, then expires the task ref's reflog. Returns
+// CategoryStaleWrite when the ref moved, and then changes nothing.
+//
+// After it returns nil, nothing Workbook keeps in this clone reaches the old
+// history, so `git gc` can prune it once it is older than gc.pruneExpire.
+func (r *Repository) CompactTaskRef(ctx context.Context, config core.ProjectConfig, taskID, expected, checkpoint string) error {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return err
+	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return err
+	}
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		return err
+	}
+	if err := keys.RequireOwned(taskID); err != nil {
+		return core.Wrap(core.CategoryValidation, "compacted task ID is invalid", err)
+	}
+	if err := r.ensureGitObjectIDWidth(ctx); err != nil {
+		return err
+	}
+	if err := r.validateFullObjectID(expected); err != nil {
+		return core.Wrap(core.CategoryValidation, "compaction must name the full tip it replaces", err)
+	}
+	if err := r.validateFullObjectID(checkpoint); err != nil {
+		return core.Wrap(core.CategoryValidation, "checkpoint must be a full Git object ID", err)
+	}
+
+	ref := taskRefPrefix + taskID
+	if err := r.rejectSymbolicTaskRef(ctx, ref); err != nil {
+		return err
+	}
+	parked, err := r.listParkedRefs(ctx, config, reconciledRefPrefix+taskID+"/")
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(parked))
+	for _, entry := range parked {
+		if !validParkedRefName(taskID, entry.name) {
+			return core.Errorf(core.CategoryCorruptData, "parked ref %q does not belong to task %s", entry.name, taskID)
+		}
+		names = append(names, entry.name)
+	}
+	if err := r.commitTaskRefUpdate(ctx, ref, checkpoint, expected, names, "compact"); err != nil {
+		return err
+	}
+	return r.ExpireTaskReflog(ctx, taskID)
+}
+
+// ExpireTaskReflog drops every reflog entry of refs/workbook/tasks/<id>, so the
+// reflog no longer keeps a compacted history reachable. A ref with no reflog
+// has nothing to expire, which makes a retried cleanup a no-op.
+func (r *Repository) ExpireTaskReflog(ctx context.Context, taskID string) error {
+	if err := core.ValidateTaskIDShape(taskID); err != nil {
+		return err
+	}
+	ref := taskRefPrefix + taskID
+	if _, err := r.Git(ctx, nil, "reflog", "exists", ref); err != nil {
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) && exitError.ExitCode() == 1 {
+			return nil
+		}
+		return core.Wrap(core.CategoryOperational, "cannot determine whether task "+taskID+" has a reflog", err)
+	}
+	if _, err := r.Git(ctx, nil,
+		"reflog", "expire", "--expire=now", "--expire-unreachable=now", ref,
+	); err != nil {
+		return core.Wrap(core.CategoryOperational, "expire the reflog of task "+taskID, err)
+	}
+	return nil
 }
 
 // requireKeptAttachmentBlobs proves every file a checkpoint keeps is a blob
