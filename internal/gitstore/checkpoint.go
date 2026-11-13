@@ -38,6 +38,8 @@ type CheckpointInput struct {
 // BuildCheckpoint writes the parentless checkpoint commit that replaces
 // input.Tip's history, and returns it as a snapshot. It writes objects only and
 // moves no ref: publishing the checkpoint is the caller's compare-and-swap.
+// input.Tip must be the snapshot read at input.Tip.Head; the checkpoint trusts
+// its state and does not reread it.
 //
 // The checkpoint carries the tip's task unchanged except for its file
 // attachments. By default each live file is marked dropped by this run and its
@@ -238,6 +240,14 @@ func (r *Repository) CompactedHistory(
 		ids = append(ids, id)
 	}
 	chain := result.Commits
+	// The walk stops at any parentless commit and does not revalidate what it
+	// reads, so a shallow boundary or a damaged history ends the chain at an
+	// ordinary commit. Summarizing from there would drop everything before it.
+	if !isRootPack(chain[0].Operation) {
+		return nil, 0, time.Time{}, time.Time{}, core.Errorf(core.CategoryCorruptData,
+			"task %s history ends at commit %s, which is not a task.create or history.checkpoint root",
+			taskID, chain[0].ObjectID)
+	}
 	first = chain[0].Operation.WallTime
 	if previous, ok := chain[0].Operation.Checkpoint(); ok {
 		for _, id := range previous.CompactedOperations {

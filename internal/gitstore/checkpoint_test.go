@@ -474,3 +474,27 @@ func TestReadRejectsCheckpointCarryingADroppedAttachment(t *testing.T) {
 
 	assertReadCorrupt(t, repo, config, task.ID, head, "dropped")
 }
+
+// A chain that ends at a parentless commit that is not a root is a history this
+// clone holds only part of: a shallow boundary, or damage. Summarizing it would
+// write a checkpoint that silently forgets the rest, so it is refused.
+func TestCompactedHistoryRefusesAChainWhoseRootIsNotARoot(t *testing.T) {
+	t.Parallel()
+	repo, _, config := syncRepositories(t)
+	task := createSyncTask(t, repo, config, "Partial history")
+	updateSyncTask(t, repo, config, task.ID, "Second title")
+	middle := currentSnapshot(t, repo, config, task.ID)
+	updateSyncTask(t, repo, config, task.ID, "Third title")
+	tip := currentSnapshot(t, repo, config, task.ID)
+
+	orphan := syncGit(t, repo.Root, "commit-tree", middle.Head+"^{tree}", "-m", "parentless ordinary commit")
+	head := syncGit(t, repo.Root, "commit-tree", tip.Head+"^{tree}", "-p", orphan, "-m", "tip on a cut chain")
+
+	_, _, _, _, err := repo.CompactedHistory(context.Background(), config, head)
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("CompactedHistory() category = %q, want %q; error = %v", got, want, err)
+	}
+	if !strings.Contains(err.Error(), task.ID) || !strings.Contains(err.Error(), orphan) {
+		t.Fatalf("CompactedHistory() error = %v, want it to name task %s and commit %s", err, task.ID, orphan)
+	}
+}
