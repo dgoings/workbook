@@ -792,6 +792,11 @@ func writeAttachments(output io.Writer, attachments []core.Attachment) {
 		if attachment.Kind == core.AttachmentFile {
 			detail = fmt.Sprintf("%d bytes", attachment.Size)
 			name = singleLine(attachment.Name)
+			// A dropped file keeps its row, so a reader learns it existed, and
+			// says why there is nothing to fetch.
+			if attachment.IsDropped() {
+				name += " (removed by compaction on " + attachment.Dropped.At.Format("2006-01-02") + ")"
+			}
 		}
 		fmt.Fprintf(output, "\t%s\t%s\t%s\t%s\n", attachment.ID, name, attachment.Kind, detail)
 	}

@@ -131,9 +131,9 @@ func (s Service) AttachmentRemoveMutation(ctx context.Context, idOrPrefix string
 // It exists so that reading an attachment goes through the same Service every
 // other read goes through, rather than each surface reaching past it into the
 // repository — the command line today, the web board next. What it adds beyond
-// the blob read is the two refusals every caller would otherwise write for
-// itself: a link stores nothing, and a Service built without a blob reader
-// cannot answer at all.
+// the blob read is the refusals every caller would otherwise write for itself:
+// a link stores nothing, a file compaction dropped no longer has its bytes, and
+// a Service built without a blob reader cannot answer at all.
 //
 // It takes the attachment rather than an identifier because the caller already
 // holds the list: an attachment is materialized on the task, so finding it is a
@@ -142,6 +142,9 @@ func (s Service) AttachmentRemoveMutation(ctx context.Context, idOrPrefix string
 func (s Service) AttachmentContent(ctx context.Context, attachment Attachment) ([]byte, error) {
 	if attachment.Kind != AttachmentFile {
 		return nil, Errorf(CategoryValidation, "attachment %s is a link and holds no bytes", attachment.ID)
+	}
+	if attachment.IsDropped() {
+		return nil, DroppedAttachmentError(attachment)
 	}
 	if s.BlobReads == nil {
 		return nil, Errorf(CategoryOperational, "attachment blob reader is not configured")
@@ -203,7 +206,7 @@ func newAttachmentBudget(task TaskData, changes []AttachmentChange) attachmentBu
 			continue
 		}
 		if index := findAttachment(task.Attachments, change.AttachmentID); index >= 0 &&
-			task.Attachments[index].Kind == AttachmentFile {
+			task.Attachments[index].Kind == AttachmentFile && !task.Attachments[index].IsDropped() {
 			budget.after -= task.Attachments[index].Size
 		}
 	}

@@ -4550,12 +4550,15 @@
       // one of them — the same rule the command line resolves a comment or an
       // attachment identifier by, so a reference typed there reads here. A
       // prefix that matches two attachments names neither: an ambiguous
-      // reference resolves to nothing and is drawn as the text it is.
+      // reference resolves to nothing and is drawn as the text it is. A file
+      // compaction dropped is not one: its bytes are gone, so a reference to it
+      // is drawn as text too.
       function markdownAttachment(attachments, reference) {
         const wanted = String(reference || "").trim().toUpperCase();
         if (!wanted) return null;
         const files = (attachments || []).filter(
-          (attachment) => attachment && attachment.kind !== "link" && typeof attachment.id === "string");
+          (attachment) => attachment && attachment.kind !== "link" && !attachment.dropped &&
+            typeof attachment.id === "string");
         const exact = files.find((attachment) => attachment.id.toUpperCase() === wanted);
         if (exact) return exact;
         const matches = files.filter((attachment) => attachment.id.toUpperCase().startsWith(wanted));
@@ -5503,6 +5506,10 @@
           reader.readAsDataURL(file);
         });
       }
+      // The calendar day a dropped file was removed, as the server wrote it.
+      function droppedOn(attachment) {
+        return String((attachment.dropped && attachment.dropped.at) || "").slice(0, 10);
+      }
       function attachmentMeta(attachment) {
         const parts = [attachment.kind === "link" ? "link" : "file"];
         if (attachment.kind === "link") {
@@ -5513,6 +5520,10 @@
         } else {
           if (attachment.media) parts.push(attachment.media);
           parts.push(attachmentSize(attachment.size));
+          // A file compaction dropped is still listed, so a reader knows it
+          // existed; the day is the one the command line and the download
+          // route's refusal both name.
+          if (attachment.dropped) parts.push("Removed by compaction on " + droppedOn(attachment));
         }
         parts.push("added " + attribution(attachment.author, attachment.addedAt));
         return parts.join(" · ");
@@ -6021,7 +6032,8 @@
       // in: a link stores nothing.
       function attachedFileBytes(attachments) {
         return (attachments || []).reduce(
-          (total, attachment) => total + (attachment.kind === "link" ? 0 : Number(attachment.size) || 0), 0);
+          (total, attachment) => total +
+            (attachment.kind === "link" || attachment.dropped ? 0 : Number(attachment.size) || 0), 0);
       }
       // The refusals a browser can make on its own, asked before a file is read,
       // encoded or sent — so a file the server would refuse costs nobody the
@@ -6163,6 +6175,10 @@
             } else {
               text(name, shown);
             }
+          } else if (attachment.dropped) {
+            // Its bytes are gone, so there is nothing to link to: the route
+            // would only answer 410.
+            text(name, attachment.name || "Unnamed file");
           } else {
             const link = document.createElement("a");
             link.href = attachmentPath(attachment.id);

@@ -838,6 +838,27 @@ func TestValidateCheckpointRejectsMalformedSummary(t *testing.T) {
 		"comment payload": func(pack *OperationPack) {
 			pack.Operations[0].Body = "x"
 		},
+		"dropped link": func(pack *OperationPack) {
+			pack.Operations[0].Task.Attachments = droppedAttachments(pack.Operations[0].Task.Attachments, func(attachment *Attachment) {
+				if attachment.Kind == AttachmentLink {
+					attachment.Dropped = &AttachmentDrop{RunID: checkpointRunID, At: checkpointWallTime}
+				}
+			})
+		},
+		"drop run ID not a ULID": func(pack *OperationPack) {
+			pack.Operations[0].Task.Attachments = droppedAttachments(pack.Operations[0].Task.Attachments, func(attachment *Attachment) {
+				if attachment.Dropped != nil {
+					attachment.Dropped.RunID = "run-1"
+				}
+			})
+		},
+		"drop without a time": func(pack *OperationPack) {
+			pack.Operations[0].Task.Attachments = droppedAttachments(pack.Operations[0].Task.Attachments, func(attachment *Attachment) {
+				if attachment.Dropped != nil {
+					attachment.Dropped.At = time.Time{}
+				}
+			})
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			compacted, ids := historyToCompact(t)
@@ -845,6 +866,70 @@ func TestValidateCheckpointRejectsMalformedSummary(t *testing.T) {
 			mutate(&pack)
 			assertCorrupt(t, applyError(nil, pack))
 		})
+	}
+}
+
+// droppedAttachments drops every file in a fresh copy of attachments and then
+// hands each entry to adjust, so a case can corrupt the copy without reaching
+// the history it was folded from.
+func droppedAttachments(attachments []Attachment, adjust func(*Attachment)) []Attachment {
+	_, _, out := DropFileAttachments(attachments, checkpointRunID, checkpointWallTime)
+	for index := range out {
+		if out[index].Dropped != nil {
+			drop := *out[index].Dropped
+			out[index].Dropped = &drop
+		}
+		adjust(&out[index])
+	}
+	return out
+}
+
+// A checkpoint that dropped its files carries each one as a tombstone, and the
+// tombstones survive the fold, validation and a round trip through the stored
+// documents. No ordinary operation can author one: attachment.add carries
+// AttachmentData, which has no drop in it.
+func TestCheckpointCarriesDroppedAttachments(t *testing.T) {
+	compacted, ids := historyToCompact(t)
+	pack := checkpointPackFor(compacted, ids)
+	dropped, bytes, attachments := DropFileAttachments(compacted.Task.Attachments, checkpointRunID, checkpointWallTime)
+	if dropped != 1 || bytes != 11 {
+		t.Fatalf("dropped, bytes = %d, %d; want 1, 11", dropped, bytes)
+	}
+	pack.Operations[0].Task.Attachments = attachments
+	pack.Operations[0].Checkpoint.Attachments = CheckpointAttachmentsDropped
+
+	state, err := Apply(nil, pack)
+	if err != nil {
+		t.Fatalf("Apply(nil, checkpoint) error = %v", err)
+	}
+	if err := ValidateCheckpoint(nil, pack, state); err != nil {
+		t.Fatalf("ValidateCheckpoint(nil, checkpoint) error = %v", err)
+	}
+	if !SameAttachments(state.Task.Attachments, attachments) {
+		t.Fatalf("folded attachments = %#v, want %#v", state.Task.Attachments, attachments)
+	}
+
+	encodedPack, err := EncodeDocument(pack)
+	if err != nil {
+		t.Fatalf("EncodeDocument(pack) error = %v", err)
+	}
+	decodedPack, err := DecodeOperationPack(encodedPack)
+	if err != nil {
+		t.Fatalf("DecodeOperationPack() error = %v", err)
+	}
+	encodedState, err := EncodeDocument(state)
+	if err != nil {
+		t.Fatalf("EncodeDocument(state) error = %v", err)
+	}
+	decodedState, err := DecodeStateDocument(encodedState)
+	if err != nil {
+		t.Fatalf("DecodeStateDocument() error = %v", err)
+	}
+	if err := ValidateCheckpoint(nil, decodedPack, decodedState); err != nil {
+		t.Fatalf("ValidateCheckpoint(decoded) error = %v", err)
+	}
+	if !SameAttachments(decodedState.Task.Attachments, attachments) {
+		t.Fatalf("decoded attachments = %#v, want %#v", decodedState.Task.Attachments, attachments)
 	}
 }
 

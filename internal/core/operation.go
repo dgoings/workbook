@@ -1077,6 +1077,9 @@ func validateCheckpointOperation(operation Operation) error {
 	if !reflect.DeepEqual(*operation.Task, normalized) {
 		return corrupt("history.checkpoint task data is not canonical")
 	}
+	if err := validateAttachmentDrops(operation.Task.Attachments); err != nil {
+		return err
+	}
 	return validateCheckpointSummary(*operation.Checkpoint)
 }
 

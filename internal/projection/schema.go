@@ -1,8 +1,13 @@
 package projection
 
-// schemaVersion is bumped to 5 because the projection now carries a task's
-// comments and attachments, and the payload of the operations that record
-// them.
+// schemaVersion is bumped to 6 because an attachment in the projected thread
+// can now carry the drop compaction records on a file it did not keep. The
+// version moves whenever the projected shape does: a thread a cache stored
+// without that field would serve a dropped file as one whose bytes can still be
+// downloaded, so a cache stamped earlier is discarded and Git read again.
+//
+// Version 5 was a task's comments and attachments, and the payload of the
+// operations that record them.
 //
 // A cache written by an earlier build has no column for either, and both are
 // load-bearing rather than decorative. A mutation is folded onto the parent
@@ -19,7 +24,7 @@ package projection
 // checkpoint and every recorded pack, where a missing column reads as
 // generation zero — a claim rather than an absence, and the one claim that must
 // never be made wrongly.
-const schemaVersion = "5"
+const schemaVersion = "6"
 
 const schema = `
 CREATE TABLE projection_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
