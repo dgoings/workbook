@@ -51,7 +51,7 @@ func runCompactAdopt(ctx context.Context, request compactAdoptRequest, cwd strin
 	session.report.Enabled = true
 	session.report.Detail = ""
 	if !session.repository.HasOrigin(ctx) {
-		return core.Errorf(core.CategoryInvocation, "compact --adopt needs an origin remote to fetch from")
+		return core.Errorf(core.CategoryValidation, "compact --adopt needs an origin remote to fetch from")
 	}
 	session.fetchBefore(ctx)
 	if session.report.Status == syncStatusFailed {

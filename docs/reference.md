@@ -1403,9 +1403,11 @@ With no selection flags, a run compacts every Done task and every Deleted task.
   a leading whole number of days, where a day is 24 hours: `30d`, `1d12h`. It
   must be positive. `sync --interval` takes the same format.
 - The value after `--done-only` or `--deleted-only` is optional. The next
-  argument is taken as the cutoff only when it is a duration, so
-  `--done-only --json` leaves `--json` alone. `--done-only=30d` always names
-  the value.
+  argument is taken as the cutoff when it is a duration or starts with a digit,
+  so `--done-only --json` leaves `--json` alone, while `--done-only 30` is
+  refused as `compact --done-only must be a duration such as 30d` and
+  `--done-only 0d` as `compact --done-only must be positive`.
+  `--done-only=30d` always names the value.
 
 "Became Done" is when the task's current unbroken stretch in done-tagged
 statuses began. Moving between two done-tagged statuses does not reset it, and
@@ -1452,7 +1454,12 @@ succeeds with a `projection-update-failed` warning saying to run
 `workbook rebuild` before `git gc`.
 
 The text output is one line per task, then the totals, any skipped tasks, the
-sync line, and the hints:
+sync line, and the hints. Each task is named by the shortest prefix of its ID
+that no other task in the project shares, at least eight characters of the
+ULID, so `workbook show` accepts it. Skipped tasks are listed with their reason
+under `Skipped:`, except those already compacted, which a later run finds
+again every time: they are counted on one line, such as
+`Skipped: 12 already compacted`. `--json` lists every one.
 
 ```text
 WB-01KYD75B  Finished work  done  6 commits  1 attachment dropped (412.0 KiB)
@@ -1641,6 +1648,8 @@ status is `compacted-on-origin`, with this detail:
 "<title>" was compacted on origin; you have <n> unpushed changes on the old history. Run "workbook compact --adopt <id>" to retry, or add --discard-local to take origin's version after saving yours to a bundle.
 ```
 
+With a single change it reads `you have 1 unpushed change on the old history`.
+
 It is that task's state, not a failed synchronization. `workbook sync` and
 `workbook fetch` still exit `0` when it is the only issue, and a watcher keeps
 working. A mutation of another task succeeds with an `auto-sync-incomplete`
@@ -1672,7 +1681,9 @@ workbook compact --adopt WB-01K… --discard-local --no-backup
 
 - It always fetches first, whatever the `auto-sync` setting and whether a
   watcher is running, because it settles against `origin`'s current tip. It
-  needs an `origin`, and it fails if that fetch fails. It cannot be combined
+  needs an `origin`, refusing a clone without one as `validation` (exit `5`)
+  with `compact --adopt needs an origin remote to fetch from`, and it fails if
+  that fetch fails. It cannot be combined
   with `--done-only`, `--deleted-only`, `--since`, `--keep-attachments`,
   `--dry-run` or `--no-sync`.
 - Without `--discard-local` it retries the replay. If the fetch or the retry
@@ -1686,8 +1697,9 @@ workbook compact --adopt WB-01K… --discard-local --no-backup
   task's parked refs and reflog. The status is `discarded-local`, and there is
   nothing to publish. `--no-backup` skips the bundle. `--no-backup` and
   `--backup` need `--discard-local` when used with `--adopt`.
-- A task in neither state is refused as an invocation error,
-  `task <id> has no compaction to adopt`. A checkpoint this build cannot read is
+- A task in neither state is refused as `validation` (exit `5`),
+  `task <id> has no compaction to adopt`. The command was typed correctly, so
+  these refusals print no usage text. A checkpoint this build cannot read is
   refused as `newer-writer` (exit `9`) before anything is written; only an
   upgrade settles it.
 

@@ -12,6 +12,7 @@ import (
 	"github.com/dgoings/workbook/internal/compaction"
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/presentation"
 )
 
 // compactNow is the clock a compact run measures its cutoff from and records
@@ -37,7 +38,16 @@ type compactSummary struct {
 	Skipped []compaction.Skip `json:"skipped"`
 	Totals  compactTotals     `json:"totals"`
 	Bundle  string            `json:"bundle,omitempty"`
+	// Notice is the upgrade requirement, carried on every run so a caller
+	// reading JSON hears what the text output says.
+	Notice string `json:"notice"`
 }
+
+// compactUpgradeNotice is what every run, dry or real, says about the
+// upgrade. It holds before a run and after one alike: a clone still on the
+// last release without compaction cannot sync a compacted task, whether or
+// not this run has published one yet.
+const compactUpgradeNotice = "Every clone must run workbook v0.7.0 or later; clones on v0.6.1 cannot sync compacted tasks."
 
 type compactTask struct {
 	ID                  string             `json:"id"`
@@ -68,15 +78,21 @@ type compactTotals struct {
 
 func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	given := append([]string{}, args...)
-	isDuration := func(value string) bool {
+	// A value that starts with a digit is a cutoff even when it is not a
+	// valid one, so `--done-only 30` says what is wrong with 30 rather than
+	// calling it a stray argument. Anything else has to parse.
+	isCutoff := func(value string) bool {
+		if value[0] >= '0' && value[0] <= '9' {
+			return true
+		}
 		_, err := parseDuration(value)
 		return err == nil
 	}
-	doneOnly, doneCutoff, args, err := takeOptionalValueOption("compact", "done-only", args, isDuration)
+	doneOnly, doneCutoff, args, err := takeOptionalValueOption("compact", "done-only", args, isCutoff)
 	if err != nil {
 		return err
 	}
-	deletedOnly, deletedCutoff, args, err := takeOptionalValueOption("compact", "deleted-only", args, isDuration)
+	deletedOnly, deletedCutoff, args, err := takeOptionalValueOption("compact", "deleted-only", args, isCutoff)
 	if err != nil {
 		return err
 	}
@@ -202,7 +218,7 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 	}
 
 	var warnings []core.Warning
-	summary := compactSummary{DryRun: *dryRun, RunID: plan.RunID, Skipped: plan.Skipped}
+	summary := compactSummary{DryRun: *dryRun, RunID: plan.RunID, Skipped: plan.Skipped, Notice: compactUpgradeNotice}
 	compacted := plan.Candidates
 	if !*dryRun {
 		result, err := compactExecute(ctx, deps, plan, options)
@@ -243,7 +259,7 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 		writeSyncedResult(stdout, "compact", summary, &session.report, session.conflicts, warnings)
 		return nil
 	}
-	writeCompactSummary(stdout, summary)
+	writeCompactSummary(stdout, summary, compactShortIDs(ctx, session.service))
 	writeSyncReport(stdout, &session.report)
 	writeConflicts(stdout, session.conflicts)
 	writeConfigConflicts(stdout, session.report.configConflicts)
@@ -343,11 +359,15 @@ func compactTasks(candidates []compaction.Candidate) ([]compactTask, compactTota
 }
 
 // writeCompactSummary prints one line per task, the totals, and the skipped
-// tasks with their reasons.
-func writeCompactSummary(output io.Writer, summary compactSummary) {
+// tasks with their reasons. A task an earlier run already compacted is
+// counted rather than listed: every later run finds all of them again, and a
+// list of them would bury the skips that need a decision. JSON lists each.
+//
+// shortID names each task; see compactShortIDs.
+func writeCompactSummary(output io.Writer, summary compactSummary, shortID func(string) string) {
 	for _, task := range summary.Tasks {
 		fmt.Fprintf(output, "%s  %s  %s  %s  %s\n",
-			compactShortID(task.ID), singleLine(task.Title), task.Kind,
+			shortID(task.ID), singleLine(task.Title), task.Kind,
 			plural(task.Commits, "commit"), compactAttachmentText(task.Attachments))
 	}
 	totals := summary.Totals
@@ -359,11 +379,23 @@ func writeCompactSummary(output io.Writer, summary compactSummary) {
 		verb, plural(totals.Done+totals.Deleted, "task"), totals.Done, totals.Deleted, plural(totals.Commits, "commit"))
 	fmt.Fprintf(output, "Attachments: %d dropped (%s), %d kept (%s).\n",
 		totals.AttachmentsDropped, humanBytes(totals.DroppedBytes), totals.AttachmentsKept, humanBytes(totals.KeptBytes))
-	if len(summary.Skipped) > 0 {
-		fmt.Fprintln(output, "Skipped:")
-		for _, skipped := range summary.Skipped {
-			fmt.Fprintf(output, "%s  %s  %s\n", compactShortID(skipped.TaskID), singleLine(skipped.Title), skipped.Reason)
+	already := 0
+	var listed []compaction.Skip
+	for _, skipped := range summary.Skipped {
+		if skipped.Reason == compaction.ReasonAlreadyCompacted {
+			already++
+			continue
 		}
+		listed = append(listed, skipped)
+	}
+	if len(listed) > 0 {
+		fmt.Fprintln(output, "Skipped:")
+		for _, skipped := range listed {
+			fmt.Fprintf(output, "%s  %s  %s\n", shortID(skipped.TaskID), singleLine(skipped.Title), skipped.Reason)
+		}
+	}
+	if already > 0 {
+		fmt.Fprintf(output, "Skipped: %d %s\n", already, compaction.ReasonAlreadyCompacted)
 	}
 }
 
@@ -375,7 +407,7 @@ func writeCompactHints(output io.Writer, summary compactSummary) {
 	if summary.Bundle != "" {
 		fmt.Fprintf(output, "Backup: %s\n", summary.Bundle)
 	}
-	fmt.Fprintln(output, "Every clone of this project must run workbook v0.7.0 or later before compacted tasks are pushed.")
+	fmt.Fprintln(output, summary.Notice)
 	if !summary.DryRun {
 		fmt.Fprintln(output, `Run "git gc" to reclaim the space locally; origin cleans up on its own schedule.`)
 	}
@@ -396,14 +428,24 @@ func compactAttachmentText(attachments compactAttachments) string {
 	}
 }
 
-// compactShortID abbreviates a task ID to its key and the first eight
-// characters of its body, which `show` accepts as a prefix.
-func compactShortID(taskID string) string {
-	key, body, ok := core.ParseTaskID(taskID)
-	if !ok || len(body) <= 8 {
-		return taskID
+// compactShortIDs abbreviates each task ID the way the board does: its key
+// and the shortest prefix of its ULID, eight characters at least, that no
+// other task in the project shares, so `show` accepts it. Tasks created in the
+// same instant share ten characters, which is why eight alone is not enough.
+//
+// Uniqueness is among every task the projection holds, deleted ones included,
+// since a prefix resolves against all of them. When they cannot be listed the
+// IDs are printed whole, which is always unambiguous.
+func compactShortIDs(ctx context.Context, service core.Service) func(string) string {
+	tasks, err := service.List(ctx, core.ListFilter{All: true})
+	if err != nil {
+		return func(taskID string) string { return taskID }
 	}
-	return key + "-" + body[:8]
+	ids := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		ids = append(ids, task.ID)
+	}
+	return func(taskID string) string { return presentation.ShortestUniquePrefix(taskID, ids) }
 }
 
 func plural(count int, noun string) string {

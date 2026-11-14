@@ -37,10 +37,14 @@ const unrelatedHistoryDetail = "origin has an unrelated history for this task; i
 // compactedOnOriginDetail is what fetch says about a task origin compacted
 // whose local-only changes it could not replay onto the checkpoint.
 func compactedOnOriginDetail(title, taskID string, unpushed int) string {
-	return fmt.Sprintf(`"%s" was compacted on origin; you have %d unpushed changes on the old history. `+
+	changes := fmt.Sprintf("%d unpushed changes", unpushed)
+	if unpushed == 1 {
+		changes = "1 unpushed change"
+	}
+	return fmt.Sprintf(`"%s" was compacted on origin; you have %s on the old history. `+
 		`Run "workbook compact --adopt %s" to retry, `+
 		`or add --discard-local to take origin's version after saving yours to a bundle.`,
-		title, unpushed, taskID)
+		title, changes, taskID)
 }
 
 // cannotCombineDetail is what fetch says about a task this clone deleted on
@@ -1087,9 +1091,10 @@ type CompactionAdoption struct {
 // DiscardLocal also undoes a compaction this clone made that origin has not
 // taken (unpublishedCompaction), in the same way: the checkpoint chain goes
 // into the bundle and the ref goes back to the tip origin holds. Without
-// DiscardLocal such a task is a CategoryInvocation error that says to add it.
+// DiscardLocal such a task is a CategoryValidation error that says to add it.
 //
-// A task in none of these states is a CategoryInvocation error.
+// A task in none of these states is a CategoryValidation error: the command
+// was well formed, and the task is in the wrong state for it.
 func (r *Repository) AdoptCompaction(
 	ctx context.Context,
 	config core.ProjectConfig,
@@ -1115,11 +1120,11 @@ func (r *Repository) AdoptCompaction(
 		}
 		switch {
 		case !unpublished:
-			return CompactionAdoption{}, core.Errorf(core.CategoryInvocation, "task %s has no compaction to adopt", taskID)
+			return CompactionAdoption{}, core.Errorf(core.CategoryValidation, "task %s has no compaction to adopt", taskID)
 		case !options.DiscardLocal:
 			// There is nothing to retry: the compaction is this clone's own,
 			// and origin has not refused anything fetch could settle.
-			return CompactionAdoption{}, core.Errorf(core.CategoryInvocation,
+			return CompactionAdoption{}, core.Errorf(core.CategoryValidation,
 				"task %s has a local compaction that is not published; add --discard-local to undo it after saving it to a bundle",
 				taskID)
 		}

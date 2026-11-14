@@ -815,7 +815,7 @@ func TestFetchAdoptionFallsBackOnConflict(t *testing.T) {
 	want := SyncTaskResult{
 		TaskID: task.ID,
 		Status: SyncCompactedOnOrigin,
-		Detail: `"` + title + `" was compacted on origin; you have 1 unpushed changes on the old history. ` +
+		Detail: `"` + title + `" was compacted on origin; you have 1 unpushed change on the old history. ` +
 			`Run "workbook compact --adopt ` + task.ID + `" to retry, ` +
 			`or add --discard-local to take origin's version after saving yours to a bundle.`,
 	}
@@ -1417,5 +1417,22 @@ func TestAdvanceTrackingRefIsACompareAndSwap(t *testing.T) {
 	}
 	if got := refValue(t, first, ref); got != three {
 		t.Fatalf("tracking ref = %s, want %s", got, three)
+	}
+}
+
+// The fallback detail counts the unpushed changes in words that agree with
+// the count.
+func TestCompactedOnOriginDetailCountsChanges(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		unpushed int
+		want     string
+	}{
+		{1, "you have 1 unpushed change on the old history."},
+		{2, "you have 2 unpushed changes on the old history."},
+	} {
+		if got := compactedOnOriginDetail("Title", "WB-1", test.unpushed); !strings.Contains(got, test.want) {
+			t.Fatalf("compactedOnOriginDetail(%d) = %q, want it to say %q", test.unpushed, got, test.want)
+		}
 	}
 }

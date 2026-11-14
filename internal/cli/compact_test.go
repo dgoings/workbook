@@ -17,10 +17,15 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/historyvalidation"
+	"github.com/dgoings/workbook/internal/presentation"
 	"github.com/dgoings/workbook/internal/testenv"
 )
 
-const compactUpgradeLine = "Every clone of this project must run workbook v0.7.0 or later before compacted tasks are pushed.\n"
+// wantUpgradeNotice is the upgrade requirement every run states, dry or
+// real, in text and in JSON alike.
+const wantUpgradeNotice = "Every clone must run workbook v0.7.0 or later; clones on v0.6.1 cannot sync compacted tasks."
+
+const compactUpgradeLine = wantUpgradeNotice + "\n"
 
 const compactGCLine = "Run \"git gc\" to reclaim the space locally; origin cleans up on its own schedule.\n"
 
@@ -288,7 +293,8 @@ func TestCompactTextOutputForARealRun(t *testing.T) {
 		t.Fatalf("archive directory = %v, %v; want one bundle", bundles, err)
 	}
 	bundle := filepath.Join(archiveDirectory(f.repository), bundles[0].Name())
-	short := func(id string) string { return id[:len(f.done.ID)-18] }
+	ids := []string{f.done.ID, f.deleted.ID, f.open.ID}
+	short := func(id string) string { return presentation.ShortestUniquePrefix(id, ids) }
 	for _, want := range []string{
 		short(f.done.ID) + "  Finished work  done  ",
 		"1 attachment dropped (16 bytes)\n",
@@ -305,6 +311,130 @@ func TestCompactTextOutputForARealRun(t *testing.T) {
 	}
 	if !strings.HasSuffix(stdout, compactUpgradeLine+compactGCLine) {
 		t.Fatalf("compact output = %q, want it to end with the upgrade line and the gc hint", stdout)
+	}
+}
+
+// createAtOneInstant creates done tasks whose IDs all draw the same timestamp,
+// as tasks created in one batch do, so their IDs share the first ten
+// characters after the key.
+func createAtOneInstant(t *testing.T, repository string, titles ...string) []string {
+	t.Helper()
+	ctx := context.Background()
+	repo, err := gitstore.Open(ctx, repository)
+	if err != nil {
+		t.Fatalf("gitstore.Open() error = %v", err)
+	}
+	config, err := repo.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	actor, err := repo.Actor(ctx)
+	if err != nil {
+		t.Fatalf("Actor() error = %v", err)
+	}
+	instant := time.Now()
+	service := core.Service{
+		Config: config, Reader: repo, Writer: repo,
+		IDs: core.CryptoULIDSource{Now: func() time.Time { return instant }}, Now: time.Now, Actor: actor,
+	}
+	ids := make([]string, 0, len(titles))
+	for _, title := range titles {
+		result, err := service.CreateMutation(ctx, core.CreateInput{Title: title, Status: core.StatusDone})
+		if err != nil {
+			t.Fatalf("CreateMutation(%q) error = %v", title, err)
+		}
+		ids = append(ids, result.Task.ID)
+	}
+	return ids
+}
+
+// Each line names its task by the shortest prefix no other task shares, which
+// show accepts. Eight characters of the ULID are not that prefix for tasks
+// created in the same instant: they share the whole timestamp.
+func TestCompactTextOutputNamesTasksByUniquePrefixes(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	titles := []string{"First of the batch", "Second of the batch"}
+	ids := createAtOneInstant(t, repository, titles...)
+	if eight := len(ids[0]) - 18; ids[0][:eight] != ids[1][:eight] {
+		t.Fatalf("IDs %v do not share eight characters; the fixture proves nothing", ids)
+	}
+
+	stdout := compactRun(t, repository, "compact", "--no-sync", "--no-backup")
+	for index, title := range titles {
+		prefix := ""
+		for _, line := range strings.Split(stdout, "\n") {
+			if strings.Contains(line, "  "+title+"  ") {
+				prefix, _, _ = strings.Cut(line, "  ")
+			}
+		}
+		other := ids[1-index]
+		if !strings.HasPrefix(ids[index], prefix) || len(prefix) <= len(ids[index])-18 || strings.HasPrefix(other, prefix) {
+			t.Fatalf("output = %q; %q names %s by %q, want a prefix longer than eight characters that %s does not share",
+				stdout, title, ids[index], prefix, other)
+		}
+		if shown := showTask(t, repository, prefix); shown.ID != ids[index] {
+			t.Fatalf("show %s = %s, want %s", prefix, shown.ID, ids[index])
+		}
+	}
+}
+
+// Every run carries the upgrade requirement, dry or real, in its JSON as well
+// as its text.
+func TestCompactJSONCarriesTheUpgradeNotice(t *testing.T) {
+	t.Parallel()
+	f := newCompactFixture(t)
+	for _, args := range [][]string{{"--dry-run", "--no-sync"}, {"--no-sync", "--no-backup"}} {
+		_, document := compactJSON(t, f.repository, args...)
+		var data map[string]any
+		if err := json.Unmarshal(document.Data, &data); err != nil {
+			t.Fatalf("decode compact %v data: %v", args, err)
+		}
+		if data["notice"] != wantUpgradeNotice {
+			t.Fatalf("compact %v data.notice = %#v, want %q", args, data["notice"], wantUpgradeNotice)
+		}
+	}
+}
+
+// A task an earlier run compacted is counted rather than listed in the text
+// output, since every later run finds all of them again. Every other reason
+// still names its task, and JSON still lists each one.
+func TestCompactTextOutputCountsAlreadyCompactedTasks(t *testing.T) {
+	t.Parallel()
+	first, _ := cliSyncRepositories(t)
+	compacted := []core.Task{
+		publishedDoneTask(t, first, "Compacted earlier"),
+		publishedDoneTask(t, first, "Also compacted earlier"),
+	}
+	compactRun(t, first, "compact", "--no-backup")
+	unpushed := cliCreateTask(t, first, "Not on origin yet")
+	compactRun(t, first, "update", unpushed.ID, "--status", "done", "--no-sync")
+
+	stdout := compactRun(t, first, "compact", "--dry-run")
+	if !strings.Contains(stdout, "Skipped: 2 already compacted\n") {
+		t.Fatalf("output = %q, want one line counting the 2 already compacted tasks", stdout)
+	}
+	for _, task := range compacted {
+		if strings.Contains(stdout, task.Title) {
+			t.Fatalf("output = %q, want %q counted, not listed", stdout, task.Title)
+		}
+	}
+	if !strings.Contains(stdout, "  Not on origin yet  "+compaction.ReasonNotPushed+"\n") {
+		t.Fatalf("output = %q, want the unpushed task listed with its reason", stdout)
+	}
+
+	summary, _ := compactJSON(t, first, "--dry-run")
+	reasons := map[string]string{}
+	for _, skipped := range summary.Skipped {
+		reasons[skipped.TaskID] = skipped.Reason
+	}
+	want := map[string]string{
+		compacted[0].ID: compaction.ReasonAlreadyCompacted,
+		compacted[1].ID: compaction.ReasonAlreadyCompacted,
+		unpushed.ID:     compaction.ReasonNotPushed,
+	}
+	if !reflect.DeepEqual(reasons, want) {
+		t.Fatalf("JSON skipped = %+v, want every task with its reason %v", summary.Skipped, want)
 	}
 }
 
@@ -549,7 +679,14 @@ func TestCompactRejectsInvalidDurations(t *testing.T) {
 	}{
 		{[]string{"--since", "soon"}, "compact --since must be a duration such as 30d"},
 		{[]string{"--since", "0d"}, "compact --since must be positive"},
+		{[]string{"--since", "30"}, "compact --since must be a duration such as 30d"},
 		{[]string{"--done-only=soon"}, "compact --done-only must be a duration such as 30d"},
+		// A value that starts with a digit is a cutoff that is wrong, not a
+		// stray argument, so the error names the duration.
+		{[]string{"--done-only", "30"}, "compact --done-only must be a duration such as 30d"},
+		{[]string{"--done-only", "0d"}, "compact --done-only must be positive"},
+		{[]string{"--deleted-only", "30"}, "compact --deleted-only must be a duration such as 30d"},
+		{[]string{"--deleted-only", "0d"}, "compact --deleted-only must be positive"},
 		{[]string{"--deleted-only", "--deleted-only"}, "compact accepts --deleted-only once"},
 	} {
 		code, _, stderr := run(t, repository, append(append([]string{"compact"}, test.args...), "--json")...)
@@ -1058,7 +1195,7 @@ func compactedOnOriginTask(t *testing.T) (first, second string, task core.Task) 
 func TestSyncShowsACompactedOnOriginTaskWithoutFailing(t *testing.T) {
 	t.Parallel()
 	_, second, task := compactedOnOriginTask(t)
-	detail := `"Kept on the old history" was compacted on origin; you have 1 unpushed changes on the old history.`
+	detail := `"Kept on the old history" was compacted on origin; you have 1 unpushed change on the old history.`
 
 	for _, command := range [][]string{{"sync"}, {"sync"}, {"fetch"}} {
 		code, stdout, stderr := run(t, second, command...)

@@ -189,13 +189,33 @@ func MarkUnresolvedPriorities(board Board, priorities core.PriorityVocabulary) B
 }
 
 func shortestUniquePrefix(index int, tasks []core.Task) string {
-	id := tasks[index].ID
+	return uniquePrefix(tasks[index].ID, func(prefix string) bool {
+		return isUniquePrefix(index, prefix, tasks)
+	})
+}
+
+// ShortestUniquePrefix is the prefix the board names id by among ids: its key
+// and at least eight characters of its ULID, longer until no other ID in ids
+// starts with it. Task IDs resolve by prefix, so the result names id wherever
+// one is accepted, as long as ids is every task the project holds.
+func ShortestUniquePrefix(id string, ids []string) string {
+	return uniquePrefix(id, func(prefix string) bool {
+		for _, other := range ids {
+			if other != id && strings.HasPrefix(other, prefix) {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+func uniquePrefix(id string, unique func(string) bool) string {
 	separatorEnd := strings.IndexByte(id, '-') + 1
 	minimumEnd := min(separatorEnd+8, len(id))
 
 	for end := minimumEnd; end <= len(id); end++ {
 		prefix := id[:end]
-		if isUniquePrefix(index, prefix, tasks) {
+		if unique(prefix) {
 			return prefix
 		}
 	}

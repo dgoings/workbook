@@ -21,7 +21,7 @@ import (
 // compactedOnOriginDetailFor is the fallback detail for the task
 // compactedOnOriginTask leaves stuck, with its one unpushed change.
 func compactedOnOriginDetailFor(taskID string) string {
-	return `"Kept on the old history" was compacted on origin; you have 1 unpushed changes on the old history. ` +
+	return `"Kept on the old history" was compacted on origin; you have 1 unpushed change on the old history. ` +
 		`Run "workbook compact --adopt ` + taskID + `" to retry, ` +
 		`or add --discard-local to take origin's version after saving yours to a bundle.`
 }
@@ -128,21 +128,43 @@ func TestCompactAdoptRejectsOtherModes(t *testing.T) {
 }
 
 // A task in neither stuck state has nothing to adopt, and saying so is an
-// invocation error rather than a silent success.
-func TestCompactAdoptWithNothingStuckIsAnInvocationError(t *testing.T) {
+// error rather than a silent success. The command was typed correctly, so the
+// error is about the task's state and prints no usage text.
+func TestCompactAdoptWithNothingStuckIsRefused(t *testing.T) {
 	t.Parallel()
 	first, _ := cliSyncRepositories(t)
 	task := publishedDoneTask(t, first, "Nothing to adopt")
 	before := taskRefs(t, first)
+	message := "task " + task.ID + " has no compaction to adopt"
 	code, stdout, stderr := run(t, first, "compact", "--adopt", task.ID, "--json")
-	if code != core.ExitCode(core.Errorf(core.CategoryInvocation, "probe")) || stdout != "" {
-		t.Fatalf("compact --adopt = code %d, stdout %q; want the invocation code", code, stdout)
+	if code != core.ExitCode(core.Errorf(core.CategoryValidation, "probe")) || stdout != "" {
+		t.Fatalf("compact --adopt = code %d, stdout %q; want the validation code", code, stdout)
 	}
-	assertJSONError(t, stderr, core.CategoryInvocation, "task "+task.ID+" has no compaction to adopt")
+	assertJSONError(t, stderr, core.CategoryValidation, message)
+	if _, _, stderr := run(t, first, "compact", "--adopt", task.ID); stderr != "workbook: "+message+"\n" {
+		t.Fatalf("compact --adopt stderr = %q, want only the message, without usage text", stderr)
+	}
 	if after := taskRefs(t, first); !reflect.DeepEqual(after, before) {
 		t.Fatalf("task refs = %v, want unchanged %v", after, before)
 	}
 	assertNoArchiveDirectory(t, first)
+}
+
+// A clone with no origin has nothing to adopt from. That is the repository's
+// state, not a mistyped command, so no usage text follows the message.
+func TestCompactAdoptWithoutOriginIsRefused(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	task := cliCreateTask(t, repository, "No origin")
+	const message = "compact --adopt needs an origin remote to fetch from"
+	code, _, stderr := run(t, repository, "compact", "--adopt", task.ID, "--json")
+	if code != core.ExitCode(core.Errorf(core.CategoryValidation, "probe")) {
+		t.Fatalf("compact --adopt = code %d, want the validation code; stderr %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryValidation, message)
+	if _, _, stderr := run(t, repository, "compact", "--adopt", task.ID); stderr != "workbook: "+message+"\n" {
+		t.Fatalf("compact --adopt stderr = %q, want only the message, without usage text", stderr)
+	}
 }
 
 // The replay that fell back still conflicts, so the retry returns the same
@@ -467,12 +489,16 @@ func TestCompactAdoptUndoesAnUnpublishedCompaction(t *testing.T) {
 	compactRun(t, first, "compact", "--no-sync", "--no-backup")
 	checkpoint := taskRefs(t, first)[task.ID]
 
+	message := "task " + task.ID +
+		" has a local compaction that is not published; add --discard-local to undo it after saving it to a bundle"
 	code, stdout, stderr := run(t, first, "compact", "--adopt", task.ID, "--json")
-	if code != core.ExitCode(core.Errorf(core.CategoryInvocation, "probe")) || stdout != "" {
-		t.Fatalf("compact --adopt = code %d, stdout %q; want the invocation code", code, stdout)
+	if code != core.ExitCode(core.Errorf(core.CategoryValidation, "probe")) || stdout != "" {
+		t.Fatalf("compact --adopt = code %d, stdout %q; want the validation code", code, stdout)
 	}
-	assertJSONError(t, stderr, core.CategoryInvocation, "task "+task.ID+
-		" has a local compaction that is not published; add --discard-local to undo it after saving it to a bundle")
+	assertJSONError(t, stderr, core.CategoryValidation, message)
+	if _, _, stderr := run(t, first, "compact", "--adopt", task.ID); stderr != "workbook: "+message+"\n" {
+		t.Fatalf("compact --adopt stderr = %q, want only the message, without usage text", stderr)
+	}
 	if got := taskRefs(t, first)[task.ID]; got != checkpoint {
 		t.Fatalf("local ref = %s, want the checkpoint %s left alone", got, checkpoint)
 	}
