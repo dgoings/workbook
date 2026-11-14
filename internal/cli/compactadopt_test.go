@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/webui"
 )
 
 // compactedOnOriginDetailFor is the fallback detail for the task
@@ -32,12 +35,35 @@ func cannotCombineDetailFor(title, taskID string) string {
 // its result.
 func adoptJSON(t *testing.T, repository string, args ...string) (compactAdoptResult, compactEnvelope) {
 	t.Helper()
+	result, envelope, _ := adoptJSONData(t, repository, args...)
+	return result, envelope
+}
+
+// adoptJSONData is adoptJSON that also returns the data member as a callers
+// read it, decoded into a map rather than through the production struct, so a
+// test can pin the shape itself.
+func adoptJSONData(t *testing.T, repository string, args ...string) (compactAdoptResult, compactEnvelope, map[string]any) {
+	t.Helper()
 	stdout := compactRun(t, repository, append(append([]string{"compact", "--adopt"}, args...), "--json")...)
+	data := assertJSONResult(t, stdout, "compact").Data
 	var result compactAdoptResult
-	if err := json.Unmarshal(assertJSONResult(t, stdout, "compact").Data, &result); err != nil {
+	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatalf("decode adopt result: %v; output = %q", err, stdout)
 	}
-	return result, decodeCompactEnvelope(t, stdout)
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("decode adopt data: %v; output = %q", err, stdout)
+	}
+	return result, decodeCompactEnvelope(t, stdout), raw
+}
+
+// assertAdoptData requires the data member to be exactly want: every key, no
+// others, and every value.
+func assertAdoptData(t *testing.T, got, want map[string]any) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("compact --adopt data = %#v, want exactly %#v", got, want)
+	}
 }
 
 // fetchOutcome runs `sync --json` in repository and returns the fetch phase's
@@ -92,6 +118,12 @@ func TestCompactAdoptRejectsOtherModes(t *testing.T) {
 	assertCompactRefused(t, repository, "--discard-local requires --adopt", "--discard-local", "--no-backup")
 	assertCompactRefused(t, repository, "--no-backup and --backup cannot be combined",
 		"--adopt", task.ID, "--discard-local", "--no-backup", "--backup", t.TempDir())
+	// A retry writes no bundle, so a backup flag beside it is a mistake to
+	// report rather than one to ignore.
+	const backupNeedsDiscard = "--no-backup and --backup require --discard-local when used with --adopt"
+	assertCompactRefused(t, repository, backupNeedsDiscard, "--adopt", task.ID, "--no-backup")
+	assertCompactRefused(t, repository, backupNeedsDiscard, "--adopt", task.ID, "--backup", t.TempDir())
+	assertCompactRefused(t, repository, backupNeedsDiscard, "--backup", t.TempDir(), "--adopt", task.ID)
 }
 
 // A task in neither stuck state has nothing to adopt, and saying so is an
@@ -145,11 +177,17 @@ func TestAdoptCompactionRetrySucceedsAfterResolvingConflict(t *testing.T) {
 	compactRun(t, first, "update", task.ID, "--description", "Our text")
 	resolved := remoteTaskRefValue(t, first, task.ID)
 
-	result, envelope := adoptJSON(t, second, task.ID)
+	result, envelope, data := adoptJSONData(t, second, task.ID)
 	if result.TaskID != task.ID || result.Status != gitstore.SyncAdoptedReplayed || result.Bundle != "" {
 		t.Fatalf("adopt result = %+v, want %s %s with no bundle", result, task.ID, gitstore.SyncAdoptedReplayed)
 	}
 	local := taskRefs(t, second)[task.ID]
+	assertAdoptData(t, data, map[string]any{
+		"taskId": task.ID,
+		"status": "adopted-replayed",
+		"detail": "replayed 1 local operation(s) onto origin's checkpoint",
+		"head":   local,
+	})
 	if result.Head != local {
 		t.Fatalf("adopt head = %s, want the local ref %s", result.Head, local)
 	}
@@ -182,7 +220,14 @@ func TestAdoptCompactionDiscardLocalBundlesFirst(t *testing.T) {
 	cliGit(t, second, "update-ref", parked, old)
 	checkpoint := remoteTaskRefValue(t, first, task.ID)
 
-	result, envelope := adoptJSON(t, second, task.ID, "--discard-local")
+	result, envelope, data := adoptJSONData(t, second, task.ID, "--discard-local")
+	assertAdoptData(t, data, map[string]any{
+		"taskId": task.ID,
+		"status": "discarded-local",
+		"detail": "took origin's version; the local history is saved in " + result.Bundle,
+		"head":   checkpoint,
+		"bundle": result.Bundle,
+	})
 	if result.TaskID != task.ID || result.Status != gitstore.SyncDiscardedLocal || result.Head != checkpoint {
 		t.Fatalf("adopt result = %+v, want %s %s at origin's checkpoint %s", result, task.ID, gitstore.SyncDiscardedLocal, checkpoint)
 	}
@@ -243,6 +288,21 @@ func TestCompactAdoptDiscardLocalTextOutput(t *testing.T) {
 			t.Fatalf("bundle %s: %v", bundle, err)
 		}
 	}
+}
+
+// A discard without a backup has no bundle member at all.
+func TestCompactAdoptDiscardLocalWithoutBackupJSON(t *testing.T) {
+	t.Parallel()
+	first, second, task := compactedOnOriginTask(t)
+	checkpoint := remoteTaskRefValue(t, first, task.ID)
+	_, _, data := adoptJSONData(t, second, task.ID, "--discard-local", "--no-backup")
+	assertAdoptData(t, data, map[string]any{
+		"taskId": task.ID,
+		"status": "discarded-local",
+		"detail": "took origin's version without saving the local history",
+		"head":   checkpoint,
+	})
+	assertNoArchiveDirectory(t, second)
 }
 
 // deletedAfterCompaction leaves first holding a task it compacted and then
@@ -393,41 +453,24 @@ func TestNextClaimSkipsAStuckTask(t *testing.T) {
 	}
 }
 
-// compactedDate renders t the way the compacted line does, written out here
-// independently of writeChangeLog.
-func compactedDate(t time.Time, now time.Time) string {
-	t = t.Local()
-	if t.Year() != now.Year() {
-		return t.Format("Jan 2, 2006")
-	}
-	return t.Format("Jan 2")
+// onDays makes every change and compaction a command makes land at whatever
+// *at holds when it runs, restoring both clocks when the test ends. A test that
+// uses it must not be parallel: both clocks are package state.
+func onDays(t *testing.T, at *time.Time) {
+	t.Helper()
+	command, compact := commandNow, compactNow
+	t.Cleanup(func() { commandNow, compactNow = command, compact })
+	commandNow = func() time.Time { return *at }
+	compactNow = func() time.Time { return *at }
 }
 
-// show --history on a compacted task lists the changes since the checkpoint,
-// not the checkpoint itself, then the line the checkpoint's summary gives.
-func TestShowHistoryShowsCompactedLine(t *testing.T) {
-	t.Parallel()
-	repository := initializedRepository(t)
-	task := cliCreateTask(t, repository, "Five commits")
-	compactRun(t, repository, "update", task.ID, "--title", "Five commits, revised", "--no-sync")
-	compactRun(t, repository, "update", task.ID, "--description", "Some words", "--no-sync")
-	compactRun(t, repository, "update", task.ID, "--priority", "high", "--no-sync")
-	compactRun(t, repository, "update", task.ID, "--status", "done", "--no-sync")
-	compactRun(t, repository, "compact", "--no-sync", "--no-backup")
-	compactRun(t, repository, "update", task.ID, "--title", "After the checkpoint", "--no-sync")
-
-	stdout := compactRun(t, repository, "show", task.ID, "--history", "--json")
+// compactedHistory reads show --history --json for taskID.
+func compactedHistory(t *testing.T, repository, taskID string) (*core.ChangeLog, map[string]json.RawMessage) {
+	t.Helper()
+	stdout := compactRun(t, repository, "show", taskID, "--history", "--json")
 	var detail core.TaskDetail
 	if err := json.Unmarshal(assertJSONResult(t, stdout, "show").Data, &detail); err != nil {
 		t.Fatalf("decode show: %v", err)
-	}
-	history := detail.History
-	if history == nil || history.Compacted == nil {
-		t.Fatalf("history = %+v, want a compacted summary", history)
-	}
-	if history.Compacted.Changes != 5 || history.Total != 1 || len(history.Changes) != 1 ||
-		history.Changes[0].Summary != "changed title" {
-		t.Fatalf("history = %+v (compacted %+v), want the one edit and 5 compacted changes", history, *history.Compacted)
 	}
 	var raw struct {
 		Data struct {
@@ -439,25 +482,94 @@ func TestShowHistoryShowsCompactedLine(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &raw); err != nil {
 		t.Fatalf("decode raw show: %v", err)
 	}
+	if detail.History == nil || detail.History.Compacted == nil {
+		t.Fatalf("history = %+v, want a compacted summary", detail.History)
+	}
+	return detail.History, raw.Data.History.Compacted
+}
+
+// assertCompactedLine requires show --history's text to hold want as a line of
+// its own, once, and to list exactly changes changes.
+func assertCompactedLine(t *testing.T, repository, taskID, want string, changes int) {
+	t.Helper()
+	text := compactRun(t, repository, "show", taskID, "--history")
+	if count := strings.Count("\n"+text, "\n"+want+"\n"); count != 1 {
+		t.Fatalf("show --history =\n%s\nwant the line %q once, found %d", text, want, count)
+	}
+	if footer := fmt.Sprintf("Showing all %d change(s).", changes); changes > 0 && !strings.Contains(text, footer) {
+		t.Fatalf("show --history =\n%s\nwant %q", text, footer)
+	}
+}
+
+// show --history on a compacted task lists the changes since the checkpoint,
+// not the checkpoint itself, then the line the checkpoint's summary gives:
+// from the first compacted change's day, to the last one's, and the day of the
+// compaction, each with its year when that is not this one. Compacting again
+// adds to the count and keeps the original first day.
+//
+// Not parallel: it sets the package clocks (onDays).
+func TestShowHistoryShowsCompactedLine(t *testing.T) {
+	year := time.Now().Year()
+	day := func(year int, month time.Month, date int) time.Time {
+		return time.Date(year, month, date, 12, 0, 0, 0, time.Local)
+	}
+	var at time.Time
+	onDays(t, &at)
+	repository := initializedRepository(t)
+
+	created := day(year-1, time.March, 3)
+	at = created
+	task := cliCreateTask(t, repository, "Compacted twice")
+	at = day(year-1, time.March, 9)
+	compactRun(t, repository, "update", task.ID, "--title", "Compacted twice, revised", "--no-sync")
+	lastBefore := day(year, time.January, 4)
+	at = lastBefore
+	compactRun(t, repository, "update", task.ID, "--status", "done", "--no-sync")
+	firstCompaction := day(year, time.January, 6)
+	at = firstCompaction
+	compactRun(t, repository, "compact", "--no-sync", "--no-backup")
+
+	history, raw := compactedHistory(t, repository, task.ID)
+	compacted := *history.Compacted
+	if compacted.Changes != 3 || !compacted.From.Equal(created) || !compacted.To.Equal(lastBefore) ||
+		!compacted.On.Equal(firstCompaction) || history.Total != 0 || len(history.Changes) != 0 {
+		t.Fatalf("history = %+v (compacted %+v), want 3 changes from %s to %s compacted on %s and none since",
+			history, compacted, created, lastBefore, firstCompaction)
+	}
+	if len(raw) != 4 {
+		t.Fatalf("compacted = %v, want exactly the members changes, from, to and on", raw)
+	}
 	for _, name := range []string{"changes", "from", "to", "on"} {
-		if _, found := raw.Data.History.Compacted[name]; !found {
-			t.Fatalf("compacted = %v, want a %q member", raw.Data.History.Compacted, name)
+		if _, found := raw[name]; !found {
+			t.Fatalf("compacted = %v, want a %q member", raw, name)
 		}
 	}
+	assertCompactedLine(t, repository, task.ID,
+		fmt.Sprintf("3 earlier changes from Mar 3, %d to Jan 4 were compacted on Jan 6.", year-1), 0)
 
-	now := time.Now()
-	compacted := history.Compacted
-	want := "5 earlier changes from " + compactedDate(compacted.From, now) + " to " + compactedDate(compacted.To, now) +
-		" were compacted on " + compactedDate(compacted.On, now) + "."
-	text := compactRun(t, repository, "show", task.ID, "--history")
-	lines := strings.Split(text, "\n")
-	found := false
-	for _, line := range lines {
-		found = found || line == want
+	// Two edits, then a second compaction over the first checkpoint.
+	at = day(year, time.January, 8)
+	compactRun(t, repository, "update", task.ID, "--description", "Some words", "--no-sync")
+	lastAfter := day(year, time.January, 9)
+	at = lastAfter
+	compactRun(t, repository, "update", task.ID, "--priority", "high", "--no-sync")
+	secondCompaction := day(year, time.January, 12)
+	at = secondCompaction
+	compactRun(t, repository, "compact", "--no-sync", "--no-backup")
+	at = day(year, time.January, 14)
+	compactRun(t, repository, "update", task.ID, "--title", "After the checkpoint", "--no-sync")
+
+	history, _ = compactedHistory(t, repository, task.ID)
+	compacted = *history.Compacted
+	if compacted.Changes != 5 || !compacted.From.Equal(created) || !compacted.To.Equal(lastAfter) ||
+		!compacted.On.Equal(secondCompaction) {
+		t.Fatalf("compacted = %+v, want 5 changes from %s to %s compacted on %s", compacted, created, lastAfter, secondCompaction)
 	}
-	if !found || !strings.Contains(text, "Showing all 1 change(s).") || strings.Count(text, "\tchanged title\n") != 1 {
-		t.Fatalf("show --history =\n%s\nwant one change and the line %q", text, want)
+	if history.Total != 1 || len(history.Changes) != 1 || history.Changes[0].Summary != "changed title" {
+		t.Fatalf("history = %+v, want only the edit after the second checkpoint", history)
 	}
+	assertCompactedLine(t, repository, task.ID,
+		fmt.Sprintf("5 earlier changes from Mar 3, %d to Jan 9 were compacted on Jan 12.", year-1), 1)
 }
 
 // A date outside the current year carries its year.
@@ -475,5 +587,79 @@ func TestChangeLogCompactedLineAddsTheYear(t *testing.T) {
 		" were compacted on " + now.Format("Jan 2") + ".\n"
 	if !strings.Contains(output.String(), want) {
 		t.Fatalf("change log =\n%s\nwant %q", output.String(), want)
+	}
+}
+
+// A board edit of a task kept on the old history is refused as the command
+// line refuses it: the board's conflict status, the fallback's own words, and
+// nothing written.
+func TestBoardMutationRefusedWhileCompactedOnOrigin(t *testing.T) {
+	t.Parallel()
+	_, second, task := compactedOnOriginTask(t)
+	compactRun(t, second, "sync")
+	before := taskRefs(t, second)[task.ID]
+	addr := startServeBoard(t, second)
+	for _, request := range []struct{ method, path, body string }{
+		{http.MethodPatch, "/api/tasks/" + task.ID, `{"title":"Refused"}`},
+		{http.MethodPatch, "/api/tasks/" + task.ID + "/status", `{"status":"ready"}`},
+		{http.MethodDelete, "/api/tasks/" + task.ID, ""},
+	} {
+		body, status := boardRequest(t, request.method, "http://"+addr+request.path, request.body)
+		if status != http.StatusConflict {
+			t.Fatalf("%s %s = %d, want %d; body = %s", request.method, request.path, status, http.StatusConflict, body)
+		}
+		var document webui.ErrorDocument
+		if err := json.Unmarshal(body, &document); err != nil {
+			t.Fatalf("decode %s %s: %v; body = %s", request.method, request.path, err, body)
+		}
+		if document.Error.Category != core.CategoryConflict || document.Error.Message != compactedOnOriginDetailFor(task.ID) {
+			t.Fatalf("%s %s error = %+v, want the conflict %q", request.method, request.path, document.Error,
+				compactedOnOriginDetailFor(task.ID))
+		}
+	}
+	if after := taskRefs(t, second)[task.ID]; after != before {
+		t.Fatalf("local ref = %s, want it unchanged at %s", after, before)
+	}
+}
+
+// newerCheckpointOnOrigin leaves second holding an unpushed change to a task
+// whose checkpoint on origin carries a change only a newer workbook could have
+// written, so fetch reports the task as needing an upgrade.
+func newerCheckpointOnOrigin(t *testing.T) (second string, task core.Task) {
+	t.Helper()
+	first, second, task := compactedOnOriginTask(t)
+	writeFutureTaskCommit(t, first, task.ID)
+	ref := "refs/workbook/tasks/" + task.ID
+	cliGit(t, first, "push", "origin", ref+":"+ref)
+	return second, task
+}
+
+// --adopt, with or without --discard-local, cannot take a checkpoint this
+// build cannot read: it refuses with fetch's own upgrade message before it
+// writes a bundle or moves a ref.
+func TestCompactAdoptDiscardLocalRefusesANewerWritersCheckpoint(t *testing.T) {
+	t.Parallel()
+	second, task := newerCheckpointOnOrigin(t)
+	newerWriterCode := core.ExitCode(core.Errorf(core.CategoryNewerWriter, "probe"))
+	if code, _, stderr := run(t, second, "sync"); code != newerWriterCode {
+		t.Fatalf("sync code = %d, want the newer-writer code; stderr = %q", code, stderr)
+	}
+	upgrade := "task " + task.ID + " has local changes that were not replayed: origin's history for it was written by a " +
+		"newer workbook; upgrade workbook to publish them. They are unchanged on this clone's task ref."
+	before := taskRefs(t, second)[task.ID]
+	backup := t.TempDir()
+	for _, args := range [][]string{{"--discard-local"}, {"--discard-local", "--backup", backup}, {}} {
+		code, stdout, stderr := run(t, second, append(append([]string{"compact", "--adopt", task.ID}, args...), "--json")...)
+		if code != newerWriterCode || stdout != "" {
+			t.Fatalf("compact --adopt %v = code %d, stdout %q; want the newer-writer code; stderr = %q", args, code, stdout, stderr)
+		}
+		assertJSONError(t, stderr, core.CategoryNewerWriter, upgrade)
+		if after := taskRefs(t, second)[task.ID]; after != before {
+			t.Fatalf("compact --adopt %v moved the local ref to %s, want it left at %s", args, after, before)
+		}
+		if entries, err := os.ReadDir(backup); err != nil || len(entries) != 0 {
+			t.Fatalf("backup directory = %v (%v), want it empty", entries, err)
+		}
+		assertNoArchiveDirectory(t, second)
 	}
 }

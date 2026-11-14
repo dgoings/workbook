@@ -18,6 +18,11 @@ import (
 // itself at. It is a seam for tests that need a task to have finished long ago.
 var compactNow = time.Now
 
+// commandNow is the clock a task session's mutations record their wall time
+// from. It is a seam for tests that need changes made on chosen days; the
+// wall time is display metadata only, so nothing but what is shown reads it.
+var commandNow = time.Now
+
 // compactExecute runs the compaction. It is a seam for tests that need a run
 // to fail after its refs moved.
 var compactExecute = compaction.Execute
@@ -104,6 +109,11 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 		}
 		if typed["no-sync"] {
 			return core.Errorf(core.CategoryInvocation, "--adopt cannot be combined with --no-sync")
+		}
+		// Only a discard writes a bundle; a retry keeps the local history.
+		if !*discardLocal && (typed["no-backup"] || typed["backup"]) {
+			return core.Errorf(core.CategoryInvocation,
+				"--no-backup and --backup require --discard-local when used with --adopt")
 		}
 	}
 

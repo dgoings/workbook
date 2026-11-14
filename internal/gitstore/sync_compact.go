@@ -1104,6 +1104,12 @@ func (r *Repository) AdoptCompaction(
 	if !found {
 		return CompactionAdoption{}, core.Errorf(core.CategoryInvocation, "task %s has no compaction to adopt", taskID)
 	}
+	// A checkpoint this build cannot read is not one it may take either, by
+	// retry or by discard: only an upgrade settles it. Refused before anything
+	// is written, in fetch's own words.
+	if entry.Category == core.CategoryNewerWriter {
+		return CompactionAdoption{}, core.Errorf(core.CategoryNewerWriter, "%s", entry.Detail)
+	}
 	if options.DiscardLocal {
 		return r.discardLocalHistory(ctx, config, entry, options)
 	}

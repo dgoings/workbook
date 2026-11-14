@@ -162,7 +162,7 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 		Keys:   state.Keys,
 		Reader: store,
 		IDs:    core.CryptoULIDSource{},
-		Now:    time.Now,
+		Now:    commandNow,
 	}
 	if withWriter {
 		service.Writer = repository
@@ -523,14 +523,25 @@ func (session *taskSession) resolveTaskID(ctx context.Context, target string) (s
 // --no-sync and when a watcher did the fetching. A target that does not
 // resolve is left for the command itself to report.
 func (session *taskSession) refuseStuck(ctx context.Context, target string) error {
+	return refuseStuckTask(ctx, session.repository, session.service, target)
+}
+
+// refuseStuckTask is refuseStuck for a caller that holds a service and a
+// repository rather than a session: the board's mutations, which go through
+// the service and the board's publisher rather than through mutate.
+func refuseStuckTask(ctx context.Context, repository *gitstore.Repository, service core.Service, target string) error {
 	if target == "" {
 		return nil
 	}
-	taskID, err := session.resolveTaskID(ctx, target)
-	if err != nil {
-		return nil
+	taskID := target
+	if !service.KeySet().Owns(target) {
+		resolved, err := service.Reader.Resolve(ctx, service.Config, target)
+		if err != nil {
+			return nil
+		}
+		taskID = resolved
 	}
-	stuck, err := session.repository.StuckCompactions(ctx, session.config, []string{taskID})
+	stuck, err := repository.StuckCompactions(ctx, service.Config, []string{taskID})
 	if err != nil {
 		return err
 	}
