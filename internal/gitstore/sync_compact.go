@@ -36,6 +36,16 @@ func compactedOnOriginDetail(title, taskID string, unpushed int) string {
 		title, unpushed, taskID)
 }
 
+// cannotCombineDetail is what fetch says about a task this clone deleted on
+// its checkpoint while origin changed the old history: nothing applies to a
+// deleted task, so origin's change cannot win the way an edit's does.
+func cannotCombineDetail(title, taskID string) string {
+	return fmt.Sprintf(`"%s" changed on origin after you compacted it, and the two can't be combined. `+
+		`Run "workbook compact --adopt %s --discard-local" to take origin's version `+
+		`after saving yours to a bundle; then compact it again.`,
+		title, taskID)
+}
+
 // leasedPush describes one ref pushed as a deliberate non-fast-forward.
 type leasedPush struct{ TaskID, Local, ExpectedRemote string }
 
@@ -93,6 +103,36 @@ func (r *Repository) compactionLease(
 		return leasedPush{}, false, err
 	}
 	return lease, true, nil
+}
+
+// compactedOnOriginOnly reports whether the tip the tracking ref names for
+// taskID belongs to a compacted history that local is not on: origin holds a
+// checkpoint, or work built on one, in a generation this clone's ref is not in.
+// That is the state adoption's fallback leaves a task in.
+func (r *Repository) compactedOnOriginOnly(
+	ctx context.Context,
+	config core.ProjectConfig,
+	taskID string,
+	local core.Snapshot,
+) (bool, error) {
+	tracking, err := r.TrackingTaskHeads(ctx, config)
+	if err != nil {
+		return false, err
+	}
+	remoteHead := tracking[taskID]
+	if remoteHead == "" {
+		return false, nil
+	}
+	tips, err := r.readTaskHeadsPartial(ctx, config, []TaskHead{{TaskID: taskID, ObjectID: remoteHead}})
+	if err != nil {
+		return false, err
+	}
+	if len(tips) != 1 || tips[0].Err != nil {
+		return false, nil
+	}
+	remote := tips[0].Snapshot
+	return remote.State.History.CompactedFrom != nil &&
+		remote.Operation.HistoryGeneration != local.Operation.HistoryGeneration, nil
 }
 
 // onLocalHistory reports whether commit is reachable from head. A compacted
@@ -368,8 +408,6 @@ const (
 	// replayed, as an ordinary reconciliation's failure does.
 	compactedNotReplayed
 	compactedNewerWriter
-	// compactedLeftOnOldHistory is adoption's fallback.
-	compactedLeftOnOldHistory
 )
 
 // compactedOutcome is what fetch does with one pair whose generations differ
@@ -522,8 +560,11 @@ func (r *Repository) adoptRemoteCheckpoint(
 			Status: SyncCompactedOnOrigin,
 			Detail: compactedOnOriginDetail(request.Local.State.Task.Title, request.TaskID, unpushed),
 		}
+		// The task's own state, reported on its line every run, rather
+		// than a failed synchronization: everything else fetched and
+		// published, and the watcher must stay trustworthy while one task
+		// waits for somebody to adopt it by hand.
 		outcome.Withhold = true
-		outcome.Kind = compactedLeftOnOldHistory
 		return outcome, nil
 	}
 	if refuseNewerWriterReplay(request) != nil {
@@ -610,7 +651,11 @@ func (r *Repository) replayOntoLocalCheckpoint(
 		// is not accounted for and could not be leased over.
 		conflict := fromLocalSide(*replay.conflict)
 		outcome.Conflict = &conflict
-		outcome.Result = SyncTaskResult{TaskID: request.TaskID, Status: SyncConflicted, Detail: core.ConflictDetail(conflict)}
+		outcome.Result = SyncTaskResult{
+			TaskID: request.TaskID,
+			Status: SyncConflicted,
+			Detail: cannotCombineDetail(request.Local.State.Task.Title, request.TaskID),
+		}
 	case replay.overridden != nil:
 		conflict := fromLocalSide(*replay.overridden)
 		outcome.Update = &canonicalRefUpdate{

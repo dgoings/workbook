@@ -805,11 +805,12 @@ func TestFetchAdoptionFallsBackOnConflict(t *testing.T) {
 			`or add --discard-local to take origin's version after saving yours to a bundle.`,
 	}
 
+	// The state is the task's own, reported on its line every run; it is not
+	// a failed synchronization.
 	for attempt := 1; attempt <= 2; attempt++ {
 		result, err := second.Sync(ctx, config)
-		if got := core.CategoryOf(err); got != core.CategoryOperational {
-			t.Fatalf("Sync() #%d error category = %q, want %q; error = %v; result = %#v",
-				attempt, got, core.CategoryOperational, err, result)
+		if err != nil {
+			t.Fatalf("Sync() #%d error = %v, want none; result = %#v", attempt, err, result)
 		}
 		if result.Fetch.Status != SyncPhaseCompleted {
 			t.Fatalf("Sync() #%d fetch = %#v, want a completed phase", attempt, result.Fetch)
@@ -827,6 +828,19 @@ func TestFetchAdoptionFallsBackOnConflict(t *testing.T) {
 			t.Fatalf("Sync() #%d left origin at %s, want the checkpoint %s", attempt, got, compacted.checkpoint.Head)
 		}
 		assertNoParkedRefs(t, second, task.ID)
+	}
+
+	// Publishing the task on its own, as a mutation does, is refused, and the
+	// refusal names the way out rather than promising a replay the next fetch
+	// will not perform.
+	_, err := second.PushTask(ctx, config, task.ID)
+	if got := core.CategoryOf(err); got != core.CategoryOperational {
+		t.Fatalf("PushTask() error category = %q, want %q; error = %v", got, core.CategoryOperational, err)
+	}
+	wantPush := "task ref " + task.ID + " was rejected by origin: the task was compacted on origin and is kept " +
+		`on the old history here; run "workbook compact --adopt ` + task.ID + `"`
+	if err.Error() != wantPush {
+		t.Fatalf("PushTask() error = %q, want %q", err.Error(), wantPush)
 	}
 }
 
@@ -851,8 +865,8 @@ func TestFetchAdoptionFallbackCountsOnlyOperationsAPersonMade(t *testing.T) {
 	publishCheckpoint(t, first, config, published)
 
 	result, err := second.Sync(ctx, config)
-	if got := core.CategoryOf(err); got != core.CategoryOperational {
-		t.Fatalf("Sync() error category = %q, want %q; error = %v; result = %#v", got, core.CategoryOperational, err, result)
+	if err != nil {
+		t.Fatalf("Sync() error = %v, want none; result = %#v", err, result)
 	}
 	want := SyncTaskResult{
 		TaskID: task.ID,
@@ -1015,15 +1029,58 @@ func currentSnapshotAt(t *testing.T, repo *Repository, config core.ProjectConfig
 	return tips[0].Snapshot
 }
 
-// Origin's edit cannot be applied over a deletion this clone made on its
-// checkpoint, so origin cannot win that one. The tombstone conflict is
-// reported, the ref stays where it is, and nothing is pushed.
+// A deletion this clone made on its checkpoint and a change origin made to the
+// old history cannot be combined: nothing applies to a deleted task, so origin
+// cannot win as it does for an edit. Every synchronization reports the same
+// conflict with the same way out, a conflict and never corrupt data, leaves the
+// ref where it is, and pushes nothing.
+func assertCannotCombineWithLocalDeletion(
+	t *testing.T,
+	first *Repository,
+	config core.ProjectConfig,
+	taskID, title, local, theirs string,
+) {
+	t.Helper()
+	want := SyncTaskResult{
+		TaskID: taskID,
+		Status: SyncConflicted,
+		Detail: `"` + title + `" changed on origin after you compacted it, and the two can't be combined. ` +
+			`Run "workbook compact --adopt ` + taskID + ` --discard-local" to take origin's version ` +
+			`after saving yours to a bundle; then compact it again.`,
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		result, err := first.Sync(context.Background(), config)
+		if got := core.CategoryOf(err); got != core.CategoryConflict {
+			t.Fatalf("Sync() #%d error category = %q, want %q; error = %v; result = %#v",
+				attempt, got, core.CategoryConflict, err, result)
+		}
+		if item := syncOutcome(t, result.Fetch, taskID); item != want {
+			t.Fatalf("Sync() #%d fetch outcome = %#v, want %#v", attempt, item, want)
+		}
+		if len(result.Fetch.Conflicts) != 1 || result.Fetch.Conflicts[0].Type != core.ConflictTombstone {
+			t.Fatalf("Sync() #%d conflicts = %#v, want one tombstone conflict", attempt, result.Fetch.Conflicts)
+		}
+		if got := refValue(t, first, taskRefPrefix+taskID); got != local {
+			t.Fatalf("Sync() #%d moved the local ref to %s, want it left on the deletion %s", attempt, got, local)
+		}
+		assertNoParkedRefs(t, first, taskID)
+		if item, found := pushOutcome(result.Push, taskID); found {
+			t.Fatalf("Sync() #%d published the task anyway: %#v", attempt, item)
+		}
+		if got := remoteRefValue(t, first, taskRefPrefix+taskID); got != theirs {
+			t.Fatalf("Sync() #%d left origin at %s, want the teammate's tip %s", attempt, got, theirs)
+		}
+	}
+}
+
+// Origin edited the task on the old history; this clone deleted it on its
+// checkpoint.
 func TestFetchReportsTombstoneConflictReplayingOriginOntoLocalCheckpoint(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 	task := sharedSyncTask(t, first, second, config, "Deleted after compaction")
-	compactLocally(t, first, config, task.ID)
+	compacted := compactLocally(t, first, config, task.ID)
 	deleteSyncTask(t, first, config, task.ID)
 	local := refValue(t, first, taskRefPrefix+task.ID)
 	updateSyncTask(t, second, config, task.ID, "Their title")
@@ -1031,25 +1088,26 @@ func TestFetchReportsTombstoneConflictReplayingOriginOntoLocalCheckpoint(t *test
 		t.Fatalf("second Sync() error = %v; result = %#v", err, result)
 	}
 	theirs := refValue(t, second, taskRefPrefix+task.ID)
+	assertCannotCombineWithLocalDeletion(t, first, config, task.ID, compacted.checkpoint.State.Task.Title, local, theirs)
+}
 
-	result, err := first.Sync(ctx, config)
-	if got := core.CategoryOf(err); got != core.CategoryConflict {
-		t.Fatalf("Sync() error category = %q, want %q; error = %v; result = %#v", got, core.CategoryConflict, err, result)
+// Both clones deleted the task: origin on the old history, this clone on its
+// checkpoint. Origin's deletion cannot be applied to a task already deleted,
+// so it is the same conflict, not a history that failed to replay.
+func TestFetchReportsDoubleDeletionOntoLocalCheckpointAsAConflict(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+	task := sharedSyncTask(t, first, second, config, "Deleted twice")
+	compacted := compactLocally(t, first, config, task.ID)
+	deleteSyncTask(t, first, config, task.ID)
+	local := refValue(t, first, taskRefPrefix+task.ID)
+	deleteSyncTask(t, second, config, task.ID)
+	if result, err := second.Sync(ctx, config); err != nil {
+		t.Fatalf("second Sync() error = %v; result = %#v", err, result)
 	}
-	assertSyncOutcome(t, result.Fetch, task.ID, SyncConflicted)
-	if len(result.Fetch.Conflicts) != 1 || result.Fetch.Conflicts[0].Type != core.ConflictTombstone {
-		t.Fatalf("conflicts = %#v, want one tombstone conflict", result.Fetch.Conflicts)
-	}
-	if got := refValue(t, first, taskRefPrefix+task.ID); got != local {
-		t.Fatalf("local ref = %s, want it left on the deletion %s", got, local)
-	}
-	assertNoParkedRefs(t, first, task.ID)
-	if item, found := pushOutcome(result.Push, task.ID); found {
-		t.Fatalf("push phase published the task anyway: %#v", item)
-	}
-	if got := remoteRefValue(t, first, taskRefPrefix+task.ID); got != theirs {
-		t.Fatalf("origin holds %s, want the teammate's tip %s", got, theirs)
-	}
+	theirs := refValue(t, second, taskRefPrefix+task.ID)
+	assertCannotCombineWithLocalDeletion(t, first, config, task.ID, compacted.checkpoint.State.Task.Title, local, theirs)
 }
 
 // Two clones compact the same tip. The second to synchronize takes the first's
@@ -1302,6 +1360,13 @@ func TestPushOverSameGenerationTipIsAnOrdinaryRejection(t *testing.T) {
 				t.Fatalf("Push() outcome = %#v, want an ordinary rejection", item)
 			}
 			assertNoLease(t, *commands)
+
+			// Origin's history is compacted, but this clone is on it, so a
+			// fetch does replay the edit: the rejection says so.
+			if _, err := first.PushTask(ctx, config, task.ID); err == nil ||
+				!strings.HasSuffix(err.Error(), "was rejected by origin; the next fetch replays it onto origin's tip") {
+				t.Fatalf("PushTask() error = %v, want the ordinary rejection", err)
+			}
 		})
 	}
 }

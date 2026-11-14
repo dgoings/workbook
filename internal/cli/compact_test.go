@@ -920,3 +920,112 @@ func TestSyncAdoptionReportsASharedClaim(t *testing.T) {
 		t.Fatalf("sync warnings = %#v, want the claim shared with one@example.com reported", document.Warnings)
 	}
 }
+
+// compactedOnOriginTask leaves second holding a task a teammate compacted and
+// published, with an unpushed description edit that conflicts with the
+// teammate's, so adopting the checkpoint falls back and the task is kept on the
+// old history.
+func compactedOnOriginTask(t *testing.T) (first, second string, task core.Task) {
+	t.Helper()
+	first, second = cliSyncRepositories(t)
+	task = publishedDoneTask(t, first, "Kept on the old history")
+	compactRun(t, second, "sync")
+	compactRun(t, second, "update", task.ID, "--description", "Our text", "--no-sync")
+	compactRun(t, first, "update", task.ID, "--description", "Their text")
+	compactRun(t, first, "compact", "--no-backup")
+	return first, second, task
+}
+
+// A task kept on the old history is that task's state, not a failed
+// synchronization: sync and fetch exit 0 and show its line, every run.
+func TestSyncShowsACompactedOnOriginTaskWithoutFailing(t *testing.T) {
+	t.Parallel()
+	_, second, task := compactedOnOriginTask(t)
+	detail := `"Kept on the old history" was compacted on origin; you have 1 unpushed changes on the old history.`
+
+	for _, command := range [][]string{{"sync"}, {"sync"}, {"fetch"}} {
+		code, stdout, stderr := run(t, second, command...)
+		if code != 0 {
+			t.Fatalf("%s code = %d, want 0; stdout = %q; stderr = %q", command[0], code, stdout, stderr)
+		}
+		line := ""
+		for _, candidate := range strings.Split(stdout, "\n") {
+			if strings.Contains(candidate, task.ID) {
+				line = candidate
+			}
+		}
+		if !strings.Contains(line, string(gitstore.SyncCompactedOnOrigin)) || !strings.Contains(line, detail) {
+			t.Fatalf("%s stdout = %q, want a %s line for %s with its detail", command[0], stdout, gitstore.SyncCompactedOnOrigin, task.ID)
+		}
+	}
+
+	code, stdout, stderr := run(t, second, "sync", "--json")
+	if code != 0 {
+		t.Fatalf("sync --json code = %d, want 0; stderr = %q", code, stderr)
+	}
+	var result gitstore.SyncRunResult
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "sync").Data, &result); err != nil {
+		t.Fatalf("decode sync: %v; output = %q", err, stdout)
+	}
+	found := false
+	for _, item := range result.Fetch.Tasks {
+		found = found || (item.TaskID == task.ID && item.Status == gitstore.SyncCompactedOnOrigin && strings.HasPrefix(item.Detail, detail))
+	}
+	if !found {
+		t.Fatalf("fetch tasks = %+v, want %s %s with its detail", result.Fetch.Tasks, task.ID, gitstore.SyncCompactedOnOrigin)
+	}
+}
+
+// One task kept on the old history does not make the watcher untrustworthy:
+// its synchronizations still count as successful, so mutations keep deferring
+// to it.
+func TestWatcherStaysTrustworthyWithACompactedOnOriginTask(t *testing.T) {
+	t.Parallel()
+	_, second, _ := compactedOnOriginTask(t)
+	startCLIWatcher(t, second, "1h")
+	if status := watcherStatus(t, second); !status.LastSyncOK || status.LastError != "" {
+		t.Fatalf("watcher status = %#v, want a successful synchronization", status)
+	}
+}
+
+// A mutation of another task still hears about the task kept on the old
+// history, in words that say what happened to it.
+func TestMutationWarnsAboutACompactedOnOriginTask(t *testing.T) {
+	t.Parallel()
+	_, second, task := compactedOnOriginTask(t)
+	code, stdout, stderr := run(t, second, "create", "Unrelated", "--json")
+	if code != 0 {
+		t.Fatalf("create code = %d, want 0; stderr = %q", code, stderr)
+	}
+	want := []core.Warning{{
+		Code: core.WarningAutoSync,
+		Message: "the change synchronized, but origin compacted tasks this clone keeps on the old history (" +
+			task.ID + `); run "workbook sync" for details`,
+	}}
+	if got := assertJSONResult(t, stdout, "create").Warnings; !reflect.DeepEqual(got, want) {
+		t.Fatalf("create warnings = %#v, want %#v", got, want)
+	}
+}
+
+// compact hears about it too, since its fetch is the same fetch.
+func TestCompactWarnsAboutACompactedOnOriginTask(t *testing.T) {
+	t.Parallel()
+	_, second, task := compactedOnOriginTask(t)
+	code, stdout, stderr := run(t, second, "compact", "--no-backup", "--json")
+	if code != 0 {
+		t.Fatalf("compact code = %d, want 0; stderr = %q", code, stderr)
+	}
+	want := core.Warning{
+		Code: core.WarningAutoSync,
+		Message: "origin compacted tasks this clone keeps on the old history (" +
+			task.ID + `); run "workbook sync" for details`,
+	}
+	warnings := assertJSONResult(t, stdout, "compact").Warnings
+	found := false
+	for _, warning := range warnings {
+		found = found || warning == want
+	}
+	if !found {
+		t.Fatalf("compact warnings = %#v, want %#v among them", warnings, want)
+	}
+}

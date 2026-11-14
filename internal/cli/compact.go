@@ -232,6 +232,16 @@ func parseCompactCutoff(flagName, value string) (time.Duration, error) {
 // compacted counts the checkpoints a real run wrote. When the fetch failed,
 // publishing them was skipped, and the warning says so.
 func compactSyncWarnings(session *taskSession, compacted int) []core.Warning {
+	warnings := fetchSyncWarnings(session, compacted)
+	if warning, found := session.compactedOnOriginWarning(""); found {
+		warnings = append(warnings, warning)
+	}
+	return warnings
+}
+
+// fetchSyncWarnings is the one warning, if any, about what synchronization
+// itself could not do.
+func fetchSyncWarnings(session *taskSession, compacted int) []core.Warning {
 	switch {
 	case session.report.Status == syncStatusFailed && session.report.Pushed != nil:
 		message := "the tasks were compacted locally, but " + session.report.Detail

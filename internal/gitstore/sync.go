@@ -378,6 +378,18 @@ func (r *Repository) PushTask(ctx context.Context, config core.ProjectConfig, ta
 		return result, core.Errorf(core.CategoryOperational, "task ref %s was rejected by origin: %s", taskID, result.Detail)
 	}
 	if result.Status == SyncRejected {
+		compacted, err := r.compactedOnOriginOnly(ctx, config, taskID, tips[0].Snapshot)
+		if err != nil {
+			return result, err
+		}
+		if compacted {
+			// The fetch before this push fell back and kept the task on the
+			// old history, and every later fetch does the same, so the
+			// sentence below would be untrue.
+			return result, core.Errorf(core.CategoryOperational,
+				"task ref %s was rejected by origin: the task was compacted on origin and is kept on the "+
+					"old history here; run \"workbook compact --adopt %s\"", taskID, taskID)
+		}
 		// A rejection means origin moved between this command's fetch and its
 		// push. The change is already durable locally and the next fetch
 		// replays it onto the new tip, so this is an ordinary operational
@@ -747,7 +759,6 @@ func (r *Repository) fetch(
 	}
 	invalidReconciled := 0
 	newerReconciled := 0
-	leftOnOldHistory := 0
 	for _, outcome := range compactedOutcomes {
 		if outcome.Update != nil {
 			updates = append(updates, *outcome.Update)
@@ -769,8 +780,6 @@ func (r *Repository) fetch(
 			invalidReconciled++
 		case compactedNewerWriter:
 			newerReconciled++
-		case compactedLeftOnOldHistory:
-			leftOnOldHistory++
 		}
 	}
 	for index, outcome := range reconciled {
@@ -850,15 +859,6 @@ func (r *Repository) fetch(
 			"%d divergent task history(s) were written by a newer workbook; "+
 				"upgrade workbook to replay the local changes onto them",
 			newerReconciled)
-	}
-	// Reported before conflicts so it is never hidden behind one: each of
-	// these is held off origin until somebody adopts it by hand, and each
-	// task's detail says how.
-	if leftOnOldHistory > 0 {
-		return state, result, core.Errorf(core.CategoryOperational,
-			"%d task(s) were compacted on origin and still have unpushed changes on the old history; "+
-				"run \"workbook compact --adopt <id>\" for each",
-			leftOnOldHistory)
 	}
 	if len(result.Conflicts) > 0 {
 		return state, result, core.ConflictError(result.Conflicts)

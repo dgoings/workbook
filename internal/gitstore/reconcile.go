@@ -298,7 +298,10 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 // intent that the fetched history already contradicts.
 func (replay *taskReplay) classify(pack core.OperationPack) *core.Conflict {
 	parent := replay.parent.State.Task
-	if parent.Deleted && !replayNoOp(replay.parent.State, pack) {
+	// Replaying origin's packs onto a task this clone deleted, even origin's
+	// own deletion conflicts: across a compaction a pack is recorded rather
+	// than skipped, and nothing can be recorded on a deleted task.
+	if parent.Deleted && (replay.originWins || !replayNoOp(replay.parent.State, pack)) {
 		blocked := pack.Operations[0]
 		for _, operation := range pack.Operations {
 			if operation.Type != core.OperationTaskRestore {

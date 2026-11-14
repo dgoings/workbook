@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/dgoings/workbook/internal/autosync"
@@ -74,6 +75,11 @@ type taskSession struct {
 	// a warning the caller hears alongside a synchronized change rather than
 	// the failure that used to stand in for it.
 	defects string
+	// compactedOnOrigin names the tasks the fetch kept on the old history
+	// because origin compacted them and their local changes would not replay.
+	// That is each task's own state rather than a defect of the fetch, so it
+	// is said in its own words.
+	compactedOnOrigin []string
 	// deferred reports that a trustworthy watcher answered, so this command
 	// writes locally and hands publication to it.
 	deferred bool
@@ -286,6 +292,24 @@ func (session *taskSession) fetchBefore(ctx context.Context) {
 	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
 		session.defects = err.Error()
 	}
+	for _, item := range result.Tasks {
+		if item.Status == gitstore.SyncCompactedOnOrigin {
+			session.compactedOnOrigin = append(session.compactedOnOrigin, item.TaskID)
+		}
+	}
+}
+
+// compactedOnOriginWarning says which tasks the fetch kept on the old history,
+// after prefix, or reports false when it kept none.
+func (session *taskSession) compactedOnOriginWarning(prefix string) (core.Warning, bool) {
+	if len(session.compactedOnOrigin) == 0 {
+		return core.Warning{}, false
+	}
+	return core.Warning{
+		Code: core.WarningAutoSync,
+		Message: prefix + "origin compacted tasks this clone keeps on the old history (" +
+			strings.Join(session.compactedOnOrigin, ", ") + `); run "workbook sync" for details`,
+	}, true
 }
 
 // publish sends exactly the ref the mutation changed.
@@ -523,6 +547,9 @@ func (session *taskSession) mutate(
 			Message: "the change synchronized, but origin holds task refs this fetch could not " +
 				"validate: " + session.defects,
 		})
+	}
+	if warning, found := session.compactedOnOriginWarning("the change synchronized, but "); found {
+		result.Warnings = append(result.Warnings, warning)
 	}
 	return result, nil
 }
