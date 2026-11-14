@@ -23,7 +23,7 @@ import (
 
 // wantUpgradeNotice is the upgrade requirement every run states, dry or
 // real, in text and in JSON alike.
-const wantUpgradeNotice = "Every clone must run workbook v0.7.0 or later; clones on v0.6.1 cannot sync compacted tasks."
+const wantUpgradeNotice = "Every clone must run Workbook 0.7.0 or later; clones on v0.6.1 cannot sync compacted tasks."
 
 const compactUpgradeLine = wantUpgradeNotice + "\n"
 

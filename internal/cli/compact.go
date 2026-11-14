@@ -47,7 +47,7 @@ type compactSummary struct {
 // upgrade. It holds before a run and after one alike: a clone still on the
 // last release without compaction cannot sync a compacted task, whether or
 // not this run has published one yet.
-const compactUpgradeNotice = "Every clone must run workbook v0.7.0 or later; clones on v0.6.1 cannot sync compacted tasks."
+const compactUpgradeNotice = "Every clone must run Workbook 0.7.0 or later; clones on v0.6.1 cannot sync compacted tasks."
 
 type compactTask struct {
 	ID                  string             `json:"id"`

@@ -1366,9 +1366,15 @@ checkpoint replaces the old checkpoint and those changes.
 
 Compaction ships in v0.7.0. Before anyone on a team compacts, every clone of the
 project has to run v0.7.0 or later. Compaction never runs on its own, so a team
-has time to upgrade first. The text output of every compaction run, dry run
-included, has a line near its end saying so. The `--json` output does not carry
-that line, and neither does `--adopt`.
+has time to upgrade first. Every compaction run, dry run included, says so.
+The text output has this line near its end, and `--json` carries the same text
+as `data.notice`:
+
+```text
+Every clone must run Workbook 0.7.0 or later; clones on v0.6.1 cannot sync compacted tasks.
+```
+
+`--adopt` does not repeat it.
 
 A clone still on v0.6.1 that already holds a task someone compacted fails
 safely, but not cleanly:
@@ -1434,7 +1440,9 @@ With `--no-sync`, or with no `origin`, the local tip is compacted as it is.
 
 1. With sync on, it fetches first, as every mutation does.
 2. It selects the tasks and computes the summary. `--dry-run` stops here: it
-   writes no bundle, moves no ref and pushes nothing.
+   compacts nothing, writes no bundle and pushes nothing. With sync on, the
+   fetch in step 1 still runs, so a dry run can still move task refs or adopt
+   a teammate's compaction, as any fetch does.
 3. It writes and verifies the backup bundle, unless `--no-backup`. If writing or
    verifying fails, the run changes nothing and exits with the error.
 4. For each task it builds the checkpoint and compare-and-swaps the task ref
@@ -1498,13 +1506,15 @@ With `--json`, `data` is the summary, beside the usual `sync`, `conflict` and
     "attachmentsDropped": 1, "attachmentsKept": 0,
     "droppedBytes": 421888, "keptBytes": 0, "estimatedSavedBytes": 436120
   },
-  "bundle": "/path/to/repo/.git/workbook-archive/01KZ8Q4V3T9S2R1N0M7K6J5H4G.bundle"
+  "bundle": "/path/to/repo/.git/workbook-archive/01KZ8Q4V3T9S2R1N0M7K6J5H4G.bundle",
+  "notice": "Every clone must run Workbook 0.7.0 or later; clones on v0.6.1 cannot sync compacted tasks."
 }
 ```
 
 `kind` is `done` or `deleted`. `tasks` and `skipped` are always lists, empty
 when there is nothing in them. `bundle` is omitted on a dry run, with
-`--no-backup`, and when nothing was compacted. The estimate is the on-disk size of the objects only that task's
+`--no-backup`, and when nothing was compacted. `notice` is the upgrade line,
+present on every run. The estimate is the on-disk size of the objects only that task's
 refs reach, less the checkpoint and any attachments kept. It is an estimate in
 both directions, and it applies only once Git prunes; see
 [Reclaiming space](#reclaiming-space).
@@ -1518,6 +1528,8 @@ the task as an entry with its name, size, media type and blob ID, marked
 - `workbook show` lists it as `notes.md (removed by compaction on 2026-11-10)`.
 - `workbook show --get-attachment` refuses it as `not-found` (exit `4`) with
   `attachment "notes.md" was removed when the task was compacted on 2026-11-10`.
+- The board, which the desktop app embeds, lists it with
+  `Removed by compaction on 2026-11-10` beside its size and no download link.
 - The board's attachment route answers `410 Gone` with the same message.
 
 `--keep-attachments` copies every live file's bytes into the checkpoint
@@ -1583,15 +1595,22 @@ unpublished:
   `origin changed since the compaction; the next sync reconciles it`. The next
   fetch replays what `origin` added onto the local checkpoint, and the push
   after it leases against `origin`'s new tip.
-- **`origin` refuses non-fast-forward updates to Workbook refs.** A host can do
-  this with a server-side hook or ruleset. When `origin` rejects the push as a
-  non-fast-forward, the detail reads `origin refuses non-fast-forward updates to
-  Workbook refs (for example, a server-side hook or ruleset); the compacted
-  task stays local until that changes`. A refusal worded some other way, such
-  as a hook that declines it, is reported with `origin`'s own reason, for
-  example `[remote rejected] (hook declined)`. Git's own
-  `receive.denyNonFastForwards` covers only branches (`refs/heads/*`), so it
-  does not block this push, and there is no need to change it.
+- **`origin` refuses the checkpoint itself.** A host can refuse
+  non-fast-forward updates to Workbook refs with a server-side hook or ruleset,
+  and a hook can decline the push for reasons of its own. Every refusal other
+  than a stale lease gives the same detail, with Git's reason in it:
+
+  ```text
+  origin refused the compacted checkpoint (<git reason>); the compacted task stays local. Run "workbook compact --adopt <id> --discard-local" to undo the compaction on this clone.
+  ```
+
+  The reason is what Git reported, such as `non-fast-forward` or
+  `[remote rejected] (hook declined)`. Every later push is refused the same way
+  until the host allows it or the compaction is undone; see
+  [Undoing a compaction origin will not take](#undoing-a-compaction-origin-will-not-take).
+  Git's own `receive.denyNonFastForwards` covers only branches
+  (`refs/heads/*`), so it does not block this push, and there is no need to
+  change it.
 
 `compact` itself still exits `0` when the push is refused, with an
 `auto-sync-incomplete` warning that starts
@@ -1650,6 +1669,10 @@ status is `compacted-on-origin`, with this detail:
 
 With a single change it reads `you have 1 unpushed change on the old history`.
 
+A task this clone deleted without pushing, when `origin` had already deleted
+and compacted it, is reported this way too. `compact --adopt <id>
+--discard-local` loses nothing there, because both sides deleted it.
+
 It is that task's state, not a failed synchronization. `workbook sync` and
 `workbook fetch` still exit `0` when it is the only issue, and a watcher keeps
 working. A mutation of another task succeeds with an `auto-sync-incomplete`
@@ -1697,14 +1720,29 @@ workbook compact --adopt WB-01K… --discard-local --no-backup
   task's parked refs and reflog. The status is `discarded-local`, and there is
   nothing to publish. `--no-backup` skips the bundle. `--no-backup` and
   `--backup` need `--discard-local` when used with `--adopt`.
-- A task in neither state is refused as `validation` (exit `5`),
-  `task <id> has no compaction to adopt`. The command was typed correctly, so
-  these refusals print no usage text. A checkpoint this build cannot read is
+- A task in neither state, and with no unpublished compaction (see below), is
+  refused as `validation` (exit `5`), `task <id> has no compaction to adopt`.
+  The command was typed correctly, so these refusals print no usage text. A checkpoint this build cannot read is
   refused as `newer-writer` (exit `9`) before anything is written; only an
   upgrade settles it.
 
 For a task this clone compacted, `--discard-local` returns it to `origin`'s
 uncompacted history. Compact it again afterwards if you still want it compacted.
+
+#### Undoing a compaction origin will not take
+
+`compact --adopt <id> --discard-local` also undoes a compaction this clone made
+that is not published yet, whether `origin` refused the checkpoint or the run
+used `--no-sync`. It saves the compacted history to
+`<run-id>-<task-id>-local.bundle` as above, unless `--no-backup`; moves the task
+ref back to the tip `origin` holds with a compare-and-swap; drops the task's
+parked refs; and moves the SQLite projection onto that tip. The status is
+`discarded-local`, and nothing is pushed. Without `--discard-local`, such a task
+is refused as `validation` (exit `5`), with no usage text:
+
+```text
+task <id> has a local compaction that is not published; add --discard-local to undo it after saving it to a bundle
+```
 
 The text output is a result line, such as
 `Took origin's version of <id>; the local history is saved in <path>.` or
@@ -1737,7 +1775,13 @@ Compaction makes the old history unreachable. It does not delete it.
 - **On `origin`**, the host decides. Hosts such as GitHub keep unreachable
   objects for an unspecified time, and Workbook cannot make them prune.
 - **In other clones**, the space comes back when they adopt the compaction and
-  then run `git gc`.
+  then run `git gc`. The fetch that adopts it moves the SQLite projection onto
+  the checkpoint while the old history is still there. If that update fails,
+  the command warns `projection-update-failed`, saying to run
+  `workbook rebuild` before `git gc`. If Git prunes the old history before the
+  projection moves, the next read is refused as `corrupt-data` (exit `7`), and
+  the message says to run `workbook rebuild`, which reads the task refs
+  afresh.
 
 ## Semantic history validation
 

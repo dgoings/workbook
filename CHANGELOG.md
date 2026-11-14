@@ -48,7 +48,11 @@ before anyone runs it; see Compatibility across versions below.
   `<git-common-dir>/workbook-archive/<run-id>.bundle`, or where `--backup`
   says, unless `--no-backup` is given. The bundle keeps dropped attachments
   too. With sync on, the run publishes the checkpoints with a leased push that
-  succeeds only while `origin` still holds the tip that was compacted.
+  succeeds only while `origin` still holds the tip that was compacted. A
+  compaction `origin` refuses, or one made with `--no-sync`, stays local until
+  `workbook compact --adopt <task> --discard-local` undoes it after saving it
+  to a bundle. Every run, dry or real, states the upgrade requirement, and
+  `--json` carries it as `data.notice`.
 - **Other clones adopt a compaction automatically** when they fetch, replaying
   any unpushed changes onto the checkpoint with their operation IDs intact. A
   task whose changes will not replay is reported as `compacted-on-origin`
