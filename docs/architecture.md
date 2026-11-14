@@ -48,7 +48,8 @@ ref
            └── attachment-<ULID> blob   (only on a commit that attached a file)
 ```
 
-- The root commit has no parents and contains `task.create`.
+- A task's root commit has no parents and holds `task.create`, or
+  `history.checkpoint` once the task is compacted (see [Compaction](#compaction)).
 - A normal edit commit has one parent.
 - A future reconciliation or resolution commit can have multiple parents.
 - Immutable `operation.json` packs are the authoritative record of task intent,
@@ -62,13 +63,14 @@ ref
   history. There is no shared attachment store and no cross-task deduplication:
   two tasks attaching identical bytes each carry the blob in their own commit,
   and Git storing one object for both is a property of content addressing rather
-  than a dependency between the two histories. A future compaction verb depends
-  on this — it can offer to strip one task's attachments by rewriting that
-  task's history without reasoning about any other task.
+  than a dependency between the two histories. `workbook compact` depends on
+  this: it can drop one task's attachments by replacing that task's history with
+  a checkpoint, without reasoning about any other task.
 - Removing an attachment hides it and reclaims nothing. The bytes stay in the
-  commit that added them, because that commit is shared append-only history that
-  no clone may rewrite. Space comes back only when compaction rewrites the
-  task's history.
+  commit that added them, because no command changes a commit. Space comes back
+  only after `workbook compact` moves the task's ref to a checkpoint that does
+  not carry the bytes, and Git then prunes the commits that are no longer
+  reachable.
 - The durable model requires each `state.json` checkpoint to match the result of
   applying that commit's operation pack to its parent state, or to no parent
   state for a root commit.
@@ -136,10 +138,15 @@ append-only history resists, and the convergent collection it does resist
 nothing at all turned out to be the better answer to the same problem.
 
 Historical operation commits are immutable. Tasks are tombstoned rather than
-deleting their refs. Shared task histories are never rebased or force-pushed. A
-clone that diverged from `origin` replays its own unpublished operations onto
-the fetched tip and parks the tip it replaced, which changes only local refs and
-appends to the shared history.
+deleting their refs. Shared task histories are never rebased, and Workbook never
+force-pushes a ref unconditionally. A clone that diverged from `origin` replays
+its own unpublished operations onto the fetched tip and parks the tip it
+replaced, which changes only local refs and appends to the shared history.
+
+The one visible, manual exception to moving a task ref only forward is
+`workbook compact`. It still changes no commit: it adds one new parentless
+checkpoint commit and moves the ref to it, leaving the old commits intact but
+unreachable. See [Compaction](#compaction).
 
 ### Assignments
 
@@ -251,6 +258,7 @@ than per release:
 | 1 | `assign.add`, `assign.remove`, `comment.add`, `comment.edit`, `comment.remove`, `attachment.add`, `attachment.remove` |
 | 2 | `display.set`, `display.unset` |
 | 3 | `priority.add`, `priority.rename`, `priority.relabel`, `priority.remove`, `priority.reorder`, `priority.tag`, `priority.untag`, `priority.recolor`, `key.add`, `key.current`, `key.retire` |
+| 4 | `history.checkpoint` |
 
 Generation 0 is every operation type Workbook shipped before assignments, and it
 is the only generation that writes no marker. So a create, a field change, a
@@ -365,6 +373,128 @@ The marker is a claim made by whoever wrote the pack, and it is trusted for the
 same reason every other field in a fetched ref is: anyone with push access can
 already write a ref this clone refuses. What the marker changes is which message
 that produces, not who is trusted.
+
+### Compaction
+
+Every commit on a task's ref carries a full `state.json`, so a task's history
+only grows, and every attachment ever added stays in it. `workbook compact`
+lets a team drop the step-by-step history of Done and Deleted tasks when it
+decides to. Workbook never compacts on its own. The command, its flags and its
+output are in [reference.md](reference.md#task-archive-compaction); this
+section covers what it does to the storage model.
+
+**What a run writes.** For each task it compacts, one parentless *checkpoint
+commit* (the checkpoint, below), whose tree holds:
+
+- `operation.json`: a pack holding one `history.checkpoint` operation. It
+  carries the complete task value, so it folds with no prior history, and a
+  summary of what it replaced: the run ID, `compactedFrom` (the object ID of the
+  tip it replaced), the previous history generation, how many commits it
+  replaced and the wall times of the first and last of them, when the task last
+  became Done and last became Deleted, whether attachments were `kept` or
+  `dropped`, and the ID of every operation it replaces. A task compacted a second
+  time lists the operations of both runs.
+- `state.json`: the task's current state. `history.generation` is a new ULID,
+  `history.compactedFrom` names the replaced tip, and the logical clock carries
+  on from the old tip rather than restarting.
+- `attachment-<ULID>` blobs, only with `--keep-attachments`. Without it, each
+  file attachment stays in `state.json` as an entry marked `dropped` with the run
+  ID and time, and its bytes are left behind with the old history. Links store
+  no bytes and are kept unchanged.
+
+Title, description, status, labels, priority, rank, dependencies, comments and
+assignments all live in `state.json` and survive unchanged. The task stays fully
+editable: the next change is an ordinary single-parent commit on top of the
+checkpoint, in the new generation.
+
+Before and after compacting one Done task, with a later edit:
+
+```text
+before                                after
+refs/workbook/tasks/WB-01K…           refs/workbook/tasks/WB-01K…
+ └── C3  field.set status=done         └── E1  field.set status=ready     (generation G2)
+      └── C2  comment.add                   └── K   history.checkpoint    (generation G2, no parent)
+           └── C1  task.create                       state.json: compactedFrom = C3
+                   (generation G1)                    lists the operations of C1, C2, C3
+
+                                      C3 ── C2 ── C1   unchanged, reachable from no ref,
+                                                       saved first in
+                                                       <git-common-dir>/workbook-archive/<run-id>.bundle
+```
+
+No commit is changed, rebased or deleted. The run adds `K`, and moves the ref
+from `C3` to `K` with a compare-and-swap on `C3`; a task whose ref moved since
+it was read is skipped. The same transaction deletes the task's parked refs
+under `refs/workbook/reconciled/<id>/`, and the run then expires the task's
+reflog, so nothing Workbook keeps holds the old history. The commits stay in the
+object store, unreachable, until `git gc` prunes them.
+
+**The backup bundle.** Before it moves any ref, a run writes a Git bundle of
+everything it is about to make unreachable: each task's old tip under
+`refs/workbook/tasks/<id>`, its parked refs under their own names, and a
+manifest commit at `refs/workbook/archive/manifest` whose `manifest.json`
+(`workbook.archive-manifest`, version 1) names the project, the run, the flags,
+and for each task its title, old tip, old and new generation and commit count.
+The histories are self-contained, so the bundle has no prerequisites. It is
+checked with `git bundle verify`, and a failure changes nothing. Workbook never
+reads, rotates or deletes a bundle. `compactedFrom` is what links a checkpoint
+to the bundle holding its history, by content rather than by file name.
+
+**Publishing is a leased non-fast-forward.** Git treats any ref move that does
+not build on the old tip as a forced update, so `K` cannot be pushed as a fast
+forward. The push names the ref in a plain refspec (no `+`, because a `+`
+refspec makes Git ignore the lease) and adds
+`--force-with-lease=refs/workbook/tasks/<id>:<expected>`. The expected value is
+origin's tip as this clone last fetched it, and the lease is offered only once
+this clone has shown that it accounts for every operation there: each one is in
+the checkpoint's list or on the local chain above it. `C3` itself is the simple
+case. If origin moved on after the compaction, the next fetch replays origin's
+new operations onto `K` and the lease names origin's newer tip. Origin accepts
+the push only while it still holds exactly that tip; otherwise Git refuses it
+without touching origin. After origin accepts it, the clone moves its tracking
+ref to `K` as well, because a stale tracking ref would keep the old history
+reachable. Git's own `receive.denyNonFastForwards` covers only `refs/heads/*`,
+so it does not block this push. A host that refuses non-fast-forward updates to
+Workbook refs some other way, such as a server-side hook or ruleset, rejects
+it, and the checkpoint stays local.
+
+**Other clones adopt it during fetch.** When a fetch finds origin's tip is a
+checkpoint in a generation the clone does not have:
+
+- If every local operation is in the checkpoint's list or already on origin,
+  the local ref moves to the checkpoint.
+- Otherwise the local-only operations, those neither in the list nor on origin
+  since the checkpoint, are replayed onto it as ordinary single-parent commits
+  in the new generation, keeping their actor, wall time and operation IDs. This
+  does not need `compactedFrom` to be present locally.
+- Unlike an ordinary reconcile, the old local tip is not parked, since parking
+  it would keep the history alive. The task's existing parked refs and reflog
+  are dropped too, without a bundle.
+- When two clones compact the same task, origin's checkpoint wins, and the
+  second clone adopts it the same way.
+- When the replay cannot run cleanly, the local ref stays on the old history and
+  the task is withheld from every push until `workbook compact --adopt`
+  settles it.
+
+The projection's head-advance guard accepts a generation change only when the
+new tip is rooted at a valid checkpoint that accounts for every operation on the
+head the projection last saw. Any other generation change is still a rewrite.
+`workbook validate` treats a checkpoint as a root: `state.json` must be what the
+`history.checkpoint` operation folds to, with no prior state, and none of the
+discarded history is needed.
+
+**Older clones.** A checkpoint and every state after it declare generation 4.
+v0.6.1, the last release before compaction, does not get as far as the
+newer-writer refusal above for a task it already holds. Its fetch force-moves
+the tracking ref to the checkpoint, and every sync then fails, reporting
+"tracking and canonical tips use different history generations" as if the data
+were invalid. The local ref stays on the old history, so v0.6.1 keeps accepting
+edits to the task that can never be pushed, and with the managed pre-push hook
+installed every code push from that clone fails too. It never pushes the old
+history over the checkpoint, so nothing is lost, but the message is wrong and
+the hook blocks unrelated work. That is why every clone has to upgrade before
+anyone compacts. From this release on, a checkpoint from a later generation
+than the reader's is handled by the marker like any other newer-writer history.
 
 ## Concurrency and synchronization
 
@@ -492,7 +622,9 @@ The default shared backend uses custom refs because they avoid branch switching 
 - **Agent-friendly:** stable semantic commands and machine-readable output minimize context and token use.
 - **Human-inspectable:** operation payloads use versioned, inspectable formats.
 - **Derived when possible:** do not duplicate facts already represented by Git.
-- **No hidden rewrites:** shared history is append-only and never force-pushed.
+- **No hidden rewrites:** shared history is append-only and never force-pushed
+  unconditionally. The one exception, `workbook compact`, is visible and manual,
+  and adds a checkpoint commit rather than changing any commit.
 - **Progressive complexity:** no service is required for the default workflow; stronger coordination can be optional.
 
 ## Non-goals

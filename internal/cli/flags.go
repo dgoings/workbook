@@ -39,7 +39,9 @@ type optionMetadata struct {
 }
 
 type commandMetadata struct {
-	Name        string
+	Name string
+	// Synopsis is one line per form of the command, each starting with
+	// "workbook <name>". Most commands have one form.
 	Synopsis    string
 	Description string
 	Positionals []string
@@ -638,9 +640,10 @@ var commandSchemas = map[string]commandMetadata{
 			"history in the order given. Both name entries by full Git commit object ID.\n\n" +
 			"With --get-attachment, write one attached file's bytes instead of the task:\n" +
 			"to standard output, or to the file --out names. A link attachment holds no\n" +
-			"bytes and is refused, reported with the URL it points at. Because the output\n" +
-			"is bytes rather than a rendered task, no other show option may be given\n" +
-			"beside it.",
+			"bytes and is refused, reported with the URL it points at. A file whose bytes\n" +
+			"compaction removed is refused as not found, naming the day the task was\n" +
+			"compacted. Because the output is bytes rather than a rendered task, no other\n" +
+			"show option may be given beside it.",
 		Positionals: []string{"<id-or-prefix>"},
 		Options: []optionMetadata{
 			{Name: "history", Kind: boolFlag, Description: "list this task's changes"},
@@ -743,7 +746,7 @@ var commandSchemas = map[string]commandMetadata{
 		Description: "Fetch then push shared task refs, once or continuously.",
 		Options: []optionMetadata{
 			{Name: "watch", Kind: boolFlag, Description: "synchronize continuously until interrupted"},
-			{Name: "interval", Kind: stringFlag, Value: "<duration>", Description: "time between synchronizations while watching (default 5s)"},
+			{Name: "interval", Kind: stringFlag, Value: "<duration>", Description: "time between synchronizations while watching, such as 30s, 2m or 1d (default 5s)"},
 			{Name: "status", Kind: boolFlag, Description: "report whether a watcher is running for this repository"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
@@ -838,9 +841,12 @@ var commandSchemas = map[string]commandMetadata{
 	},
 	"compact": {
 		Name: "compact",
+		// Two forms, one per line: --adopt refuses every selection flag and
+		// --dry-run and --no-sync, so a merged line would advertise
+		// combinations the command rejects.
 		Synopsis: "workbook compact [--done-only [<duration>] | --deleted-only [<duration>]] [--since <duration>] " +
-			"[--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] " +
-			"[--adopt <task> [--discard-local]] [--json]",
+			"[--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--json]\n" +
+			"workbook compact --adopt <task> [--discard-local] [--no-backup | --backup <path>] [--json]",
 		Description: "Replace the history of Done and Deleted tasks with one checkpoint each.\n\n" +
 			"A real run first writes a verified backup bundle of the history it drops.\n" +
 			"Attachments on compacted tasks are dropped unless --keep-attachments is\n" +

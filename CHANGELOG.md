@@ -25,6 +25,71 @@ version order rather than at the top; a heading no newer than the previous
 release counts as no entry, so it never blocks the next release. See
 [Patch releases to an older line](CONTRIBUTING.md#patch-releases-to-an-older-line).
 
+## Unreleased
+
+Finished work can now be compacted. `workbook compact`, run by hand, replaces
+the history of Done and Deleted tasks with one checkpoint commit each and saves
+the old history to a local backup bundle first. It changes no existing commit,
+and it is the first command that needs every clone of a project to upgrade
+before anyone runs it; see Compatibility across versions below.
+
+### Added
+- **`workbook compact`** replaces the step-by-step history of every Done and
+  Deleted task with a single parentless checkpoint commit holding the task's
+  current state. `--done-only` and `--deleted-only` pick one kind, each with an
+  optional cutoff (`--done-only 30d`), and `--since` sets a cutoff for both.
+  `--dry-run` reports what a run would compact and roughly how much it would
+  save, and changes nothing. File attachments are dropped by default and
+  kept with `--keep-attachments`; a dropped file keeps its row, `show` marks it
+  removed, `--get-attachment` refuses it as not found, and the board's
+  attachment route answers `410 Gone`. Every real run first writes a verified
+  Git bundle of the history it drops to
+  `<git-common-dir>/workbook-archive/<run-id>.bundle`, or where `--backup`
+  says, unless `--no-backup` is given. The bundle keeps dropped attachments
+  too. With sync on, the run publishes the checkpoints with a leased push that
+  succeeds only while `origin` still holds the tip that was compacted.
+- **Other clones adopt a compaction automatically** when they fetch, replaying
+  any unpushed changes onto the checkpoint with their operation IDs intact. A
+  task whose changes will not replay is reported as `compacted-on-origin`
+  without failing the sync, edits to it are refused, and `workbook next` skips
+  it. **`workbook compact --adopt <task>`** retries the replay, and
+  `--discard-local` takes `origin`'s version after saving the local history to
+  a bundle. Fetch, push and sync report the new per-task statuses
+  `compaction-published`, `adopted`, `adopted-replayed`, `compacted-on-origin`
+  and `discarded-local`.
+- **`workbook show --history` on a compacted task** lists the changes since the
+  checkpoint and then a line such as "12 earlier changes from Jul 3 to Sep 19
+  were compacted on Nov 10.", and `--json` carries the same facts as
+  `history.compacted`.
+- **Durations accept days.** `sync --interval` and the `compact` cutoffs take a
+  leading whole number of days, where a day is 24 hours: `30d`, `1d12h`.
+
+### Changed
+- **The SQLite projection is rebuilt once after upgrading.** Its schema version
+  moves from 5 to 7, so the first command this release runs discards the cache
+  and reads Git again. Nothing needs to be done, and no task data lives in the
+  cache.
+- **The format generation is now 4.** A `history.checkpoint` operation, and
+  every task state after one, declares generation 4. Nothing else this release
+  writes raises the generation, so a task nobody has compacted is unchanged,
+  byte for byte.
+
+### Compatibility across versions
+
+- **Upgrade every clone to v0.7.0 before anyone compacts.** Compaction never
+  runs on its own, so a team has time to do this, and every compaction run's
+  text output says so. Until someone compacts, v0.6.1 and newer clones work side
+  by side as before.
+- If a team skips that step, a v0.6.1 clone fails safely on a compacted task,
+  but not cleanly. A clone that already had the task reports it on every sync
+  as invalid ("tracking and canonical tips use different history
+  generations"), so every sync exits non-zero as if the data were corrupt. Its
+  local ref stays on the old history, so it keeps accepting edits to the task
+  that can never be pushed. With the managed pre-push hook installed, every
+  `git push` of code from that clone fails too, until its owner upgrades. No
+  old history gets pushed back over the checkpoint, so nothing on `origin` is
+  lost.
+
 ## v0.6.1 — 2026-10-28
 
 Fixes and polish on top of v0.6.0, most of them in the desktop app. An idle

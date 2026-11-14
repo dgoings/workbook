@@ -24,7 +24,8 @@ workbook free <task> <dependency> [--no-sync] [--json]
 workbook next [--any] [--claim] [--limit <n>] [--no-sync] [--json]
 workbook rebuild [--json]
 workbook validate [--full] [--json]
-workbook compact [--done-only [<duration>] | --deleted-only [<duration>]] [--since <duration>] [--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--adopt <task> [--discard-local]] [--json]
+workbook compact [--done-only [<duration>] | --deleted-only [<duration>]] [--since <duration>] [--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--json]
+workbook compact --adopt <task> [--discard-local] [--no-backup | --backup <path>] [--json]
 workbook version [--json]
 workbook fetch [--json]
 workbook push [--json]
@@ -252,10 +253,17 @@ bytes cannot use anyway. A refusal there is plain text and the exit code
 carries the category: a link holds no bytes and is refused with the URL it
 points at, and an attachment nobody holds is `not-found`.
 
+A file whose bytes [compaction](#task-archive-compaction) dropped keeps its
+row, so a reader still learns it existed. `show` lists it with
+`(removed by compaction on <date>)` after its name, its `--json` entry carries a
+`dropped` member with the run ID and time, and `--get-attachment` refuses it as
+`not-found` (exit `4`) with
+`attachment "<name>" was removed when the task was compacted on <date>`.
+
 Removing a comment or an attachment hides it. The bytes of a removed file stay
-in the commit that added them, because that commit is shared append-only
-history no clone may rewrite; space comes back only when a future compaction
-pass rewrites the task's history.
+in the commit that added them, because no command changes a commit; space comes
+back only after `workbook compact` moves the task to a checkpoint that does not
+carry them and Git prunes the old commits.
 
 ## Machine-readable output and exit codes
 
@@ -1068,6 +1076,19 @@ pre-replay chain is collectable. A named object that no longer resolves is an
 ordinary not-found for that argument, exit `4`, naming the commit rather than
 reporting corruption.
 
+A [compacted](#task-archive-compaction) task has no step-by-step history before
+its checkpoint. `--history` lists the changes made since the checkpoint, then
+one line taken from the checkpoint's summary, with dates in local time and the
+year shown only when it is not the current one:
+
+```text
+12 earlier changes from Jul 3 to Sep 19 were compacted on Nov 10.
+```
+
+In `--json` the same facts are the `history.compacted` member, `{"changes",
+"from", "to", "on"}`, present only for a compacted task. The checkpoint itself is
+not a change: it is not among `changes` and is not counted in `total`.
+
 Both views are served from the SQLite projection's `operations` table, which
 stores operations alone and reconstructs any state by replaying from the root;
 `--compare` replays both endpoints in full. Where the projection holds no
@@ -1118,7 +1139,8 @@ canonical tips' IDs, documents, and safe ancestry relationship before touching
 the corresponding local task ref. A missing local task is created, and a behind
 local task is fast-forwarded in one compare-and-swap transaction. Local-ahead
 tasks are left alone; a divergent task has its local-only operations replayed
-onto the fetched tip in the same transaction. Invalid fetched data remains
+onto the fetched tip in the same transaction, and a task a teammate compacted is
+adopted (see [Task archive compaction](#task-archive-compaction)). Invalid fetched data remains
 isolated to its own task and causes a nonzero exit; valid unrelated tracking
 refs can still reconcile in that run, and because the fetch phase ran to
 completion the publication that follows it in a `sync` or an automatically
@@ -1191,7 +1213,8 @@ documents naming another project under `refs/workbook/tasks/*` are corruption
 and are refused as such.
 
 `workbook push` publishes validated local `refs/workbook/tasks/*` refs to
-`origin` without force or deletion. One bounded, non-atomic publication retains
+`origin` without deletion, and without force except for the leased push that
+publishes a [compacted task](#publishing-a-compaction). One bounded, non-atomic publication retains
 per-ref outcomes, so an unrelated task can publish even when another task is
 rejected as non-fast-forward. Invalid local tips are omitted. The command
 reports every outcome and exits nonzero if any ref is invalid, rejected, or
@@ -1226,6 +1249,10 @@ does not create a hidden tasks branch.
 `workbook sync --watch` runs the same sequence on a loop in the foreground,
 default every five seconds, until it is interrupted. It is an optimization and
 never a requirement: every command works unchanged with none running.
+`--interval <duration>` changes the period. It takes anything Go's
+`time.ParseDuration` accepts, such as `30s` or `2m`, plus a leading whole number
+of days, where a day is 24 hours (`1d`, `1d12h`), and it must be positive.
+`workbook compact` cutoffs use the same format.
 
 While a watcher is running, a mutation writes locally, asks the watcher to
 publish, and returns, reporting a `sync` status of `deferred` rather than the
@@ -1265,8 +1292,8 @@ tip. The canonical task ref moves to the last replayed commit, the orphaned
 local tip is parked at `refs/workbook/reconciled/<task-id>/<n>` in the same
 compare-and-swap transaction, and every replayed pack keeps its actor, wall
 time, and operation IDs, rewriting only its logical clock. Replayed commits have
-exactly one parent; Workbook writes no merge commits and never rebases or
-force-pushes a shared ref.
+exactly one parent; Workbook writes no merge commits, never rebases a shared ref,
+and never force-pushes one unconditionally.
 
 Most concurrent edits touch different fields, commute, and replay silently, so a
 mutation that loses a push race and a fetch that finds week-old local work both
@@ -1293,7 +1320,9 @@ value into a commit.
 
 Resolution is a plain retry of the ordinary command against the now
 fast-forwarded ref. There is no reconcile command, no continue command, no
-discard flow, and no conflict state kept between invocations. The contract is
+discard flow, and no conflict state kept between invocations. The one exception
+is a task a compaction left stuck, which only
+[`workbook compact --adopt`](#when-a-compaction-cannot-be-combined) settles. The contract is
 complete without a terminal, so JSON output, hooks, agents, and the web board
 all consume the same list.
 
@@ -1303,6 +1332,397 @@ mutation of a task retires that task's oldest parked refs inside the same
 `update-ref` transaction, keeping the most recent few. Fetches and reads never
 prune them: a fetch must not delete recoverable work in the command that
 orphaned it.
+
+## Task archive compaction
+
+Every change to a task is a commit, and every commit carries a full copy of the
+task's state, so a task's history only grows. `workbook compact` replaces the
+history of Done and Deleted tasks with one new parentless *checkpoint* commit
+each, holding the task's current state, after saving the old history to a local
+backup bundle. Title, description, status, labels, priority, rank,
+dependencies, comments and assignments survive unchanged; only the step-by-step
+history goes. Workbook never compacts on its own, and there is no confirmation
+prompt: `--dry-run` is the way to look first.
+
+```sh
+workbook compact --dry-run
+workbook compact
+workbook compact --done-only 30d
+workbook compact --deleted-only --keep-attachments
+workbook compact --since 90d --backup ~/workbook-backups
+```
+
+No existing commit is changed. The run adds the checkpoint and moves the task's
+ref to it; the old commits stay intact but are no longer reachable from any ref.
+[Compaction](architecture.md#compaction) in the architecture document shows the
+object graph before and after.
+
+A compacted task stays fully editable. The next change is an ordinary commit on
+top of the checkpoint, reopening a Done task works as it does for any task, and
+a compacted task that picked up new changes can be compacted again: the new
+checkpoint replaces the old checkpoint and those changes.
+
+### Upgrade every clone first
+
+Compaction ships in v0.7.0. Before anyone on a team compacts, every clone of the
+project has to run v0.7.0 or later. Compaction never runs on its own, so a team
+has time to upgrade first. The text output of every compaction run, dry run
+included, has a line near its end saying so. The `--json` output does not carry
+that line, and neither does `--adopt`.
+
+A clone still on v0.6.1 that already holds a task someone compacted fails
+safely, but not cleanly:
+
+- Every `workbook sync` on that clone exits non-zero, reporting the task as
+  invalid with `tracking and canonical tips use different history generations`,
+  as if the data were corrupt.
+- Its local ref stays on the old history, so it keeps accepting edits to that
+  task, and none of them can be pushed: `workbook push` is rejected, and
+  `origin` keeps the checkpoint.
+- With the managed pre-push hook installed, every `git push` of code from that
+  clone fails as well, until its owner upgrades.
+
+No old history is pushed back over the checkpoint, so nothing on `origin` is
+lost.
+
+### Choosing tasks
+
+With no selection flags, a run compacts every Done task and every Deleted task.
+
+- A task is Done when its status carries the `done` tag under the project's
+  current [statuses](#project-statuses), not only when the status is literally
+  `done`. A Deleted task counts as Deleted whatever its status. Tasks in any
+  other status are never compacted.
+- `--done-only` compacts only Done tasks, and `--deleted-only` only Deleted
+  ones. The two cannot be combined.
+- `--since <duration>` keeps only tasks that became Done or Deleted longer ago
+  than `<duration>`. `--done-only <duration>` and `--deleted-only <duration>`
+  take the same cutoff directly: `--done-only 30d` means `--done-only --since
+  30d`. Giving a cutoff both ways is an error, even when the two match.
+- A duration is anything Go's `time.ParseDuration` accepts, such as `36h`, plus
+  a leading whole number of days, where a day is 24 hours: `30d`, `1d12h`. It
+  must be positive. `sync --interval` takes the same format.
+- The value after `--done-only` or `--deleted-only` is optional. The next
+  argument is taken as the cutoff only when it is a duration, so
+  `--done-only --json` leaves `--json` alone. `--done-only=30d` always names
+  the value.
+
+"Became Done" is when the task's current unbroken stretch in done-tagged
+statuses began. Moving between two done-tagged statuses does not reset it, and
+nor does a comment or any other edit. If no change to the task started the
+stretch, because its status became done-tagged through the project's
+configuration, the task's most recent status change is used, and failing that
+its creation time. "Became Deleted" is the time of the most recent delete. Both
+are wall times, compared only against the cutoff.
+
+A task of the selected kinds, past the cutoff, can still be left alone. A run
+lists each one under `skipped` with one of these reasons:
+
+| Reason | Why |
+| --- | --- |
+| `already compacted` | Its tip is already a checkpoint with nothing after it, so there is nothing to save. |
+| `has changes not yet on origin` | Sync is on, `origin` exists, and the local tip is not the tip `origin` holds. Compaction always starts from a tip `origin` already has. |
+| `written by a newer workbook` | This build cannot fold its history. Reported whatever the cutoff. |
+| `history cannot be read in full` | Its history could not be replayed to the root. Reported whatever the cutoff. |
+| `changed during the run` | Its ref moved between selection and compaction, so it was not touched. |
+
+With `--no-sync`, or with no `origin`, the local tip is compacted as it is.
+
+### What a run does and reports
+
+1. With sync on, it fetches first, as every mutation does.
+2. It selects the tasks and computes the summary. `--dry-run` stops here: it
+   writes no bundle, moves no ref and pushes nothing.
+3. It writes and verifies the backup bundle, unless `--no-backup`. If writing or
+   verifying fails, the run changes nothing and exits with the error.
+4. For each task it builds the checkpoint and compare-and-swaps the task ref
+   from the tip it read. The same transaction deletes the task's parked refs
+   under `refs/workbook/reconciled/<id>/`, and the run then expires the task's
+   reflog.
+5. It moves the SQLite projection onto the checkpoints.
+6. With sync on, it publishes the checkpoints, or hands them to a running
+   watcher, as every mutation publishes what it changed. With `--no-sync` they
+   stay local until a later `workbook sync`, `workbook push` or watcher
+   publishes them.
+
+Tasks are independent. A run that stops part way leaves some tasks compacted
+and the bundle already complete, and running the same command again finishes
+the rest. If every ref moved but the projection could not follow, the run still
+succeeds with a `projection-update-failed` warning saying to run
+`workbook rebuild` before `git gc`.
+
+The text output is one line per task, then the totals, any skipped tasks, the
+sync line, and the hints:
+
+```text
+WB-01KYD75B  Finished work  done  6 commits  1 attachment dropped (412.0 KiB)
+WB-01KZ3M2Q  Abandoned work  deleted  2 commits  no attachments
+Compacted 2 tasks (1 done, 1 deleted), replacing 8 commits.
+Attachments: 1 dropped (412.0 KiB), 0 kept (0 bytes).
+Sync:	completed
+Estimated space saved: 431.2 KiB (applies once Git cleans up unreachable objects)
+Backup: /path/to/repo/.git/workbook-archive/01KZ8Q4V3T9S2R1N0M7K6J5H4G.bundle
+```
+
+followed by the upgrade line and, for a real run, a hint that `git gc` reclaims
+the space locally and that `origin` cleans up on its own schedule. A dry run
+says `Would compact` and prints no backup or `git gc` line.
+
+With `--json`, `data` is the summary, beside the usual `sync`, `conflict` and
+`warnings` members:
+
+```json
+{
+  "dryRun": false,
+  "runId": "01KZ8Q4V3T9S2R1N0M7K6J5H4G",
+  "tasks": [
+    {
+      "id": "WB-01KYD75B1R6CW2ZGCC0YEQ7Q28",
+      "title": "Finished work",
+      "kind": "done",
+      "commits": 6,
+      "attachments": {"dropped": 1, "kept": 0, "droppedBytes": 421888, "keptBytes": 0},
+      "estimatedSavedBytes": 436120
+    }
+  ],
+  "skipped": [{"taskId": "WB-01KZ…", "title": "Waiting on review", "reason": "has changes not yet on origin"}],
+  "totals": {
+    "done": 1, "deleted": 0, "commits": 6,
+    "attachmentsDropped": 1, "attachmentsKept": 0,
+    "droppedBytes": 421888, "keptBytes": 0, "estimatedSavedBytes": 436120
+  },
+  "bundle": "/path/to/repo/.git/workbook-archive/01KZ8Q4V3T9S2R1N0M7K6J5H4G.bundle"
+}
+```
+
+`kind` is `done` or `deleted`. `tasks` and `skipped` are always lists, empty
+when there is nothing in them. `bundle` is omitted on a dry run, with
+`--no-backup`, and when nothing was compacted. The estimate is the on-disk size of the objects only that task's
+refs reach, less the checkpoint and any attachments kept. It is an estimate in
+both directions, and it applies only once Git prunes; see
+[Reclaiming space](#reclaiming-space).
+
+### Attachments
+
+File attachments on compacted tasks are dropped by default. Each one stays on
+the task as an entry with its name, size, media type and blob ID, marked
+`dropped` with the run ID and time:
+
+- `workbook show` lists it as `notes.md (removed by compaction on 2026-11-10)`.
+- `workbook show --get-attachment` refuses it as `not-found` (exit `4`) with
+  `attachment "notes.md" was removed when the task was compacted on 2026-11-10`.
+- The board's attachment route answers `410 Gone` with the same message.
+
+`--keep-attachments` copies every live file's bytes into the checkpoint
+instead, so those attachments keep working. It is one choice for the whole run.
+A later run with `--keep-attachments` does not bring back bytes an earlier run
+dropped. Link attachments store no bytes, cost the repository nothing, and are
+always kept unchanged. A file removed before compaction is reclaimed either
+way, because nothing refers to it any more.
+
+Dropping attachments is not final while a backup bundle exists: the bundle
+holds the old history, and the old history holds the bytes. To remove something
+on purpose, such as a file attached by mistake, compact with `--no-backup`, and
+delete any earlier bundle that holds it. `origin` may also keep the old objects
+for a while; see [Reclaiming space](#reclaiming-space).
+
+### The backup bundle
+
+Every real run that compacts anything writes a Git bundle of the history it is
+about to make unreachable, unless `--no-backup` is given. By default it is written to
+`<git-common-dir>/workbook-archive/<run-id>.bundle`: inside `.git`, so it is
+never committed, outside the disposable caches under `.git/workbook`, and shared
+by every worktree. `--backup <path>` writes it elsewhere: an existing directory
+gets the default file name, and any other path is used as the file name.
+`--no-backup` and `--backup` cannot be combined. Workbook never overwrites a
+file; a bundle path that already exists is refused.
+
+The bundle holds each compacted task's old tip under `refs/workbook/tasks/<id>`,
+the task's parked refs under their own names, and a manifest commit at
+`refs/workbook/archive/manifest` whose `manifest.json` names the format
+(`workbook.archive-manifest`, version `1`), the project, the run, its time, the
+flags given, and for each task its ID, title, old tip, old and new generation,
+and commit count. It needs no other objects, and it is checked with
+`git bundle verify` before any ref moves. `git bundle list-heads <file>` shows
+what one holds.
+
+Workbook does not read bundles back. Restoring a compaction after it is
+published is not supported; the bundle is a manual recovery copy. Workbook
+never deletes or rotates bundles either. Keeping them, moving them off the
+machine, or deleting them is up to you. A bundle written inside a DS9 sandbox,
+or any other machine that is thrown away, is lost with it.
+
+### Publishing a compaction
+
+A checkpoint does not build on the tip it replaced, so Git sees publishing it
+as a forced update. Workbook publishes it with a lease instead of a force-push:
+the push uses a plain refspec with
+`--force-with-lease=refs/workbook/tasks/<id>:<expected>`, where `<expected>` is
+the tip `origin` held when this clone last fetched, and only once this clone has
+shown that the checkpoint accounts for every operation in it. `origin` accepts
+the push only while it still points at that tip. The task's sync status is then
+`compaction-published`, and the clone moves its own tracking ref to the
+checkpoint.
+
+`workbook sync`, `workbook push` and a running watcher publish a local
+checkpoint the same way, so one compacted with `--no-sync` goes out with the
+next synchronization.
+
+When `origin` refuses the push, the task stays compacted locally and
+unpublished:
+
+- **`origin` moved on.** The lease is stale, and the task's detail reads
+  `origin changed since the compaction; the next sync reconciles it`. The next
+  fetch replays what `origin` added onto the local checkpoint, and the push
+  after it leases against `origin`'s new tip.
+- **`origin` refuses non-fast-forward updates to Workbook refs.** A host can do
+  this with a server-side hook or ruleset. When `origin` rejects the push as a
+  non-fast-forward, the detail reads `origin refuses non-fast-forward updates to
+  Workbook refs (for example, a server-side hook or ruleset); the compacted
+  task stays local until that changes`. A refusal worded some other way, such
+  as a hook that declines it, is reported with `origin`'s own reason, for
+  example `[remote rejected] (hook declined)`. Git's own
+  `receive.denyNonFastForwards` covers only branches (`refs/heads/*`), so it
+  does not block this push, and there is no need to change it.
+
+`compact` itself still exits `0` when the push is refused, with an
+`auto-sync-incomplete` warning that starts
+`the tasks were compacted locally, but` and names each refused task with its
+detail. `workbook push` and `workbook sync` report the refusal as a `rejected`
+task and exit non-zero.
+
+If the fetch before the run failed, the run compacts from this clone's last view
+of `origin`, skips publishing, and warns that the compacted tasks stay local
+(unpublished) until the next successful sync.
+
+### Other clones adopt a compaction
+
+Any fetch, whether from `workbook fetch`, `workbook sync`, a mutation's own
+synchronization or a watcher, adopts a teammate's compaction automatically:
+
+| Status | What happened |
+| --- | --- |
+| `adopted` | Origin compacted the task and this clone had nothing it lacked. The local ref moved to origin's checkpoint. |
+| `adopted-replayed` | Origin compacted the task and this clone had unpushed changes. They were replayed onto the checkpoint, keeping their actor, wall time and operation IDs, and are published like any other local change. The detail reads `replayed <n> local operation(s) onto origin's checkpoint`. |
+| `reconciled` | This clone compacted the task and origin then gained changes on the old history. Those were replayed onto the local checkpoint, whose push then leases against origin's tip. The detail reads `replayed <n> operation(s) from origin onto the local checkpoint`. |
+
+Which local changes are unpushed is decided by operation ID: those neither in
+the checkpoint's list of compacted operations nor on `origin` since the
+checkpoint. When two clones compact the same task, `origin`'s checkpoint wins,
+and the second clone adopts it the same way, replaying any of its operations
+`origin`'s checkpoint lacks.
+
+When origin's changes are replayed onto a local checkpoint and one clashes with
+a local change, `origin`'s version wins, as in an ordinary reconcile: the
+conflict is reported, the task is `conflicted`, and the local tip from before
+the sync is parked under `refs/workbook/reconciled/<id>/<n>` so its text can be
+recovered.
+
+**Adopting drops some local data without a backup.** An adopted task's parked
+refs under `refs/workbook/reconciled/<id>/` (text an earlier clash pushed aside)
+and its reflog are deleted, and they are not written to any bundle. Parking or
+keeping them would keep the old history alive. Unpushed changes are replayed,
+not dropped.
+
+### When a compaction cannot be combined
+
+Two situations leave a task that no synchronization settles by itself. Either
+way the task's ref holds history `origin` will not accept, so the task stays
+unpublished. Commands find these tasks from local refs, so what follows holds
+with `--no-sync` and beside a watcher too.
+
+**Compacted on origin, with changes that will not replay.** A teammate
+compacted the task, and this clone's unpushed changes to it cannot be replayed
+onto their checkpoint. The local ref stays on the old history and the task's
+status is `compacted-on-origin`, with this detail:
+
+```text
+"<title>" was compacted on origin; you have <n> unpushed changes on the old history. Run "workbook compact --adopt <id>" to retry, or add --discard-local to take origin's version after saving yours to a bundle.
+```
+
+It is that task's state, not a failed synchronization. `workbook sync` and
+`workbook fetch` still exit `0` when it is the only issue, and a watcher keeps
+working. A mutation of another task succeeds with an `auto-sync-incomplete`
+warning that names the task: `the change synchronized, but origin compacted
+tasks this clone keeps on the old history (<ids>); run "workbook sync" for
+details`.
+
+**Changed on origin after you compacted it.** This clone compacted and deleted a
+task, and `origin` then changed it on the old history, its own deletion
+included. Nothing applies to a deleted task, so the change cannot be replayed
+onto the checkpoint. It is reported as a conflict, the task is `conflicted`, and
+the checkpoint stays unpublished:
+
+```text
+"<title>" changed on origin after you compacted it, and the two can't be combined. Run "workbook compact --adopt <id> --discard-local" to take origin's version after saving yours to a bundle; then compact it again.
+```
+
+In either state, a command that would change the task, including one from the
+board, is refused with that detail as a `conflict` (exit `8`; the board answers
+`409`), and `workbook next` and `next --claim` skip the task.
+
+`workbook compact --adopt <task>` is the way out:
+
+```sh
+workbook compact --adopt WB-01K…
+workbook compact --adopt WB-01K… --discard-local
+workbook compact --adopt WB-01K… --discard-local --no-backup
+```
+
+- It always fetches first, whatever the `auto-sync` setting and whether a
+  watcher is running, because it settles against `origin`'s current tip. It
+  needs an `origin`, and it fails if that fetch fails. It cannot be combined
+  with `--done-only`, `--deleted-only`, `--since`, `--keep-attachments`,
+  `--dry-run` or `--no-sync`.
+- Without `--discard-local` it retries the replay. If the fetch or the retry
+  settles the task, the result is `adopted` or `adopted-replayed` (or, for a
+  task this clone compacted, `reconciled` or `conflicted`), and the task is
+  published. If the replay still fails, it exits `8` with the same detail.
+- `--discard-local` takes `origin`'s version. It first saves the local history,
+  the old tip and the task's parked refs, to a bundle at
+  `<git-common-dir>/workbook-archive/<run-id>-<task-id>-local.bundle`, or where
+  `--backup` says. Then it moves the task ref to `origin`'s tip and drops the
+  task's parked refs and reflog. The status is `discarded-local`, and there is
+  nothing to publish. `--no-backup` skips the bundle. `--no-backup` and
+  `--backup` need `--discard-local` when used with `--adopt`.
+- A task in neither state is refused as an invocation error,
+  `task <id> has no compaction to adopt`. A checkpoint this build cannot read is
+  refused as `newer-writer` (exit `9`) before anything is written; only an
+  upgrade settles it.
+
+For a task this clone compacted, `--discard-local` returns it to `origin`'s
+uncompacted history. Compact it again afterwards if you still want it compacted.
+
+The text output is one line, such as
+`Took origin's version of <id>; the local history is saved in <path>.` or
+`Adopted origin's compaction of <id>.` With `--json`, `data` is:
+
+```json
+{"taskId": "WB-01K…", "status": "discarded-local", "detail": "took origin's version; the local history is saved in /path/to/repo/.git/workbook-archive/01KZ…-WB-01K…-local.bundle", "head": "<object ID>", "bundle": "/path/to/repo/.git/workbook-archive/01KZ…-WB-01K…-local.bundle"}
+```
+
+`head` is the tip the task's ref holds afterwards. `detail` is omitted when
+there is nothing to add, and `bundle` is present only when `--discard-local`
+wrote one.
+
+A fetch that meets a checkpoint this build cannot fold, while this clone has
+unpushed changes to the task, reports the task as `needs-upgrade` and exits `9`
+instead, as for any newer-writer history.
+
+### Reclaiming space
+
+Compaction makes the old history unreachable. It does not delete it.
+
+- **Locally**, the space comes back when `git gc` prunes unreachable objects.
+  By default Git prunes only objects older than two weeks (`gc.pruneExpire`);
+  `git gc --prune=now` prunes them at once. The run removes the task's reflog
+  entries and parked refs, and the remote-tracking ref moves once the push
+  lands, so nothing Workbook keeps holds the old history. A backup bundle is a
+  separate file and holds nothing in the repository.
+- **On `origin`**, the host decides. Hosts such as GitHub keep unreachable
+  objects for an unspecified time, and Workbook cannot make them prune.
+- **In other clones**, the space comes back when they adopt the compaction and
+  then run `git gc`.
 
 ## Semantic history validation
 
@@ -1314,7 +1734,10 @@ workbook validate [--full] [--json]
 ```
 
 `validate` reads canonical task histories and verifies every stored checkpoint
-against the operation sequence that produced it. It stores resumable,
+against the operation sequence that produced it. A compacted task's history
+starts at its `history.checkpoint` commit, which `validate` treats as the root:
+its `state.json` must be what that operation folds to with no prior state, and
+the discarded history is never needed. It stores resumable,
 non-authoritative progress in the disposable shared cache at
 `<git-common-dir>/workbook/validation.sqlite`; linked worktrees therefore share
 the same audit cache. Validator version `1` records each observed head as
@@ -1863,9 +2286,11 @@ of the set is how a type could come to be drawn inline on a page that the route
 would only ever serve as a download.
 
 A link holds no bytes: the route refuses one and names the URL, so a client that
-followed the wrong address is told where the thing is. An attachment whose blob
-this clone does not hold — which a future compaction that strips attachments will
-produce — is answered `404`. So is an identifier the addressed task does not
+followed the wrong address is told where the thing is. A file whose bytes
+[compaction](#task-archive-compaction) dropped is answered `410 Gone`, with the
+same `attachment "<name>" was removed when the task was compacted on <date>`
+message the command line gives. Any other attachment whose blob this clone does
+not hold is answered `404`. So is an identifier the addressed task does not
 carry: an attachment is read out of that task's own live list, so naming another
 task's attachment, or a comment, reaches nothing.
 

@@ -31,7 +31,8 @@ Commands:
   next [--any] [--claim] [--limit <n>] [--no-sync] [--json]
   rebuild [--json]
   validate [--full] [--json]
-  compact [--done-only [<duration>] | --deleted-only [<duration>]] [--since <duration>] [--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--adopt <task> [--discard-local]] [--json]
+  compact [--done-only [<duration>] | --deleted-only [<duration>]] [--since <duration>] [--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--json]
+  compact --adopt <task> [--discard-local] [--no-backup | --backup <path>] [--json]
   version [--json]
   fetch [--json]
   push [--json]
@@ -51,8 +52,10 @@ func renderGlobalHelp(output io.Writer) {
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Commands:")
 	for _, name := range commandOrder {
-		metadata := commandSchemas[name]
-		fmt.Fprintf(output, "  %-8s %s\n", name, strings.TrimPrefix(metadata.Synopsis, "workbook "+name+" "))
+		// A command with several forms lists each on its own line.
+		for _, form := range strings.Split(commandSchemas[name].Synopsis, "\n") {
+			fmt.Fprintf(output, "  %-8s %s\n", name, strings.TrimPrefix(form, "workbook "+name+" "))
+		}
 	}
 	fmt.Fprintln(output, "  help [command]")
 }
@@ -78,7 +81,12 @@ func renderCommandHelp(output io.Writer, helpTarget []string) error {
 		}
 	}
 
-	fmt.Fprintf(output, "Usage: %s\n", metadata.Synopsis)
+	// Each further form lines up under the first, past "Usage: ".
+	forms := strings.Split(metadata.Synopsis, "\n")
+	fmt.Fprintf(output, "Usage: %s\n", forms[0])
+	for _, form := range forms[1:] {
+		fmt.Fprintf(output, "       %s\n", form)
+	}
 	if metadata.Description != "" {
 		fmt.Fprintf(output, "\n%s\n", metadata.Description)
 	}
