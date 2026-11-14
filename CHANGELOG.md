@@ -39,7 +39,8 @@ before anyone runs it; see Compatibility across versions below.
   current state. `--done-only` and `--deleted-only` pick one kind, each with an
   optional cutoff (`--done-only 30d`), and `--since` sets a cutoff for both.
   `--dry-run` reports what a run would compact and roughly how much it would
-  save, and changes nothing. File attachments are dropped by default and
+  save, and compacts nothing (with sync on it still runs the usual fetch first).
+  File attachments are dropped by default and
   kept with `--keep-attachments`; a dropped file keeps its row, `show` marks it
   removed, `--get-attachment` refuses it as not found, and the board's
   attachment route answers `410 Gone`. Every real run first writes a verified
@@ -55,8 +56,9 @@ before anyone runs it; see Compatibility across versions below.
   it. **`workbook compact --adopt <task>`** retries the replay, and
   `--discard-local` takes `origin`'s version after saving the local history to
   a bundle. Fetch, push and sync report the new per-task statuses
-  `compaction-published`, `adopted`, `adopted-replayed`, `compacted-on-origin`
-  and `discarded-local`.
+  `compaction-published`, `adopted`, `adopted-replayed` and
+  `compacted-on-origin`, and `compact --adopt --discard-local` reports
+  `discarded-local`.
 - **`workbook show --history` on a compacted task** lists the changes since the
   checkpoint and then a line such as "12 earlier changes from Jul 3 to Sep 19
   were compacted on Nov 10.", and `--json` carries the same facts as

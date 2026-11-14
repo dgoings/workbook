@@ -412,10 +412,10 @@ Before and after compacting one Done task, with a later edit:
 ```text
 before                                after
 refs/workbook/tasks/WB-01K…           refs/workbook/tasks/WB-01K…
- └── C3  field.set status=done         └── E1  field.set status=ready     (generation G2)
-      └── C2  comment.add                   └── K   history.checkpoint    (generation G2, no parent)
+ └── C3  field.set status=done         └── E1  field.set status=ready     (history generation G2)
+      └── C2  comment.add                   └── K   history.checkpoint    (history generation G2, no parent)
            └── C1  task.create                       state.json: compactedFrom = C3
-                   (generation G1)                    lists the operations of C1, C2, C3
+                   (history generation G1)            lists the operations of C1, C2, C3
 
                                       C3 ── C2 ── C1   unchanged, reachable from no ref,
                                                        saved first in

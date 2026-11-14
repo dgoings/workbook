@@ -1549,8 +1549,9 @@ what one holds.
 Workbook does not read bundles back. Restoring a compaction after it is
 published is not supported; the bundle is a manual recovery copy. Workbook
 never deletes or rotates bundles either. Keeping them, moving them off the
-machine, or deleting them is up to you. A bundle written inside a DS9 sandbox,
-or any other machine that is thrown away, is lost with it.
+machine, or deleting them is up to you. A bundle written on a machine that is
+thrown away, such as a disposable sandbox, is lost with it. Once Git prunes the
+replaced commits, the bundle is this clone's only copy of the old history.
 
 ### Publishing a compaction
 
@@ -1693,9 +1694,10 @@ workbook compact --adopt WB-01K… --discard-local --no-backup
 For a task this clone compacted, `--discard-local` returns it to `origin`'s
 uncompacted history. Compact it again afterwards if you still want it compacted.
 
-The text output is one line, such as
+The text output is a result line, such as
 `Took origin's version of <id>; the local history is saved in <path>.` or
-`Adopted origin's compaction of <id>.` With `--json`, `data` is:
+`Adopted origin's compaction of <id>.`, then the `Sync:` line and any
+conflicts and warnings. With `--json`, `data` is:
 
 ```json
 {"taskId": "WB-01K…", "status": "discarded-local", "detail": "took origin's version; the local history is saved in /path/to/repo/.git/workbook-archive/01KZ…-WB-01K…-local.bundle", "head": "<object ID>", "bundle": "/path/to/repo/.git/workbook-archive/01KZ…-WB-01K…-local.bundle"}
@@ -1718,7 +1720,8 @@ Compaction makes the old history unreachable. It does not delete it.
   `git gc --prune=now` prunes them at once. The run removes the task's reflog
   entries and parked refs, and the remote-tracking ref moves once the push
   lands, so nothing Workbook keeps holds the old history. A backup bundle is a
-  separate file and holds nothing in the repository.
+  separate file and holds nothing in the repository; once Git prunes the
+  replaced commits, the bundle is this clone's only copy of them.
 - **On `origin`**, the host decides. Hosts such as GitHub keep unreachable
   objects for an unspecified time, and Workbook cannot make them prune.
 - **In other clones**, the space comes back when they adopt the compaction and
