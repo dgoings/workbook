@@ -1304,6 +1304,9 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if err := session.refreshConfiguration(ctx); err != nil {
 		return err
 	}
+	if options.Exclude, err = session.stuckTasks(ctx); err != nil {
+		return err
+	}
 	if limited {
 		return writeNextCandidates(ctx, session, options, limit, stdout, stderr, *jsonMode)
 	}
@@ -1442,6 +1445,15 @@ func runNextClaim(
 ) error {
 	var chosen *core.Task
 	result, err := session.mutate(ctx, "", func(ctx context.Context) (core.MutationResult, error) {
+		// A task its compaction left stuck is never offered: mutate cannot
+		// refuse it, because which task it is was not known when the command
+		// started, and refusing it here would stop the claim rather than move
+		// on to the next task.
+		stuck, err := session.stuckTasks(ctx)
+		if err != nil {
+			return core.MutationResult{}, err
+		}
+		options.Exclude = stuck
 		task, err := session.service.Next(ctx, options)
 		if err != nil {
 			return core.MutationResult{}, err

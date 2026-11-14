@@ -494,13 +494,9 @@ func (session *taskSession) conflictFor(ctx context.Context, target string) *cor
 	if len(session.conflicts) == 0 || target == "" {
 		return nil
 	}
-	taskID := target
-	if !session.service.KeySet().Owns(taskID) {
-		resolved, err := session.service.Reader.Resolve(ctx, session.config, target)
-		if err != nil {
-			return nil
-		}
-		taskID = resolved
+	taskID, err := session.resolveTaskID(ctx, target)
+	if err != nil {
+		return nil
 	}
 	for index := range session.conflicts {
 		if session.conflicts[index].TaskID == taskID {
@@ -508,6 +504,54 @@ func (session *taskSession) conflictFor(ctx context.Context, target string) *cor
 		}
 	}
 	return nil
+}
+
+// resolveTaskID turns the id-or-prefix a command was given into a task ID.
+func (session *taskSession) resolveTaskID(ctx context.Context, target string) (string, error) {
+	if session.service.KeySet().Owns(target) {
+		return target, nil
+	}
+	return session.service.Reader.Resolve(ctx, session.config, target)
+}
+
+// refuseStuck refuses a command that would change a task its compaction left
+// stuck, in the words fetch reports for that task. Changing it would only
+// add history origin will not take, and for a task kept on the old history
+// would add to the changes `compact --adopt` has to replay.
+//
+// It reads local refs rather than this command's fetch, so it holds with
+// --no-sync and when a watcher did the fetching. A target that does not
+// resolve is left for the command itself to report.
+func (session *taskSession) refuseStuck(ctx context.Context, target string) error {
+	if target == "" {
+		return nil
+	}
+	taskID, err := session.resolveTaskID(ctx, target)
+	if err != nil {
+		return nil
+	}
+	stuck, err := session.repository.StuckCompactions(ctx, session.config, []string{taskID})
+	if err != nil {
+		return err
+	}
+	if entry, found := stuck[taskID]; found {
+		return core.Errorf(entry.Category, "%s", entry.Detail)
+	}
+	return nil
+}
+
+// stuckTasks names every task a compaction left stuck, which next must not
+// offer.
+func (session *taskSession) stuckTasks(ctx context.Context) (map[string]struct{}, error) {
+	stuck, err := session.repository.StuckCompactions(ctx, session.config, nil)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]struct{}, len(stuck))
+	for taskID := range stuck {
+		ids[taskID] = struct{}{}
+	}
+	return ids, nil
 }
 
 // mutate runs the fetch, the mutation, and the targeted push in order. The
@@ -524,6 +568,12 @@ func (session *taskSession) mutate(
 ) (core.MutationResult, error) {
 	session.fetchBefore(ctx)
 	if err := session.refreshConfiguration(ctx); err != nil {
+		return core.MutationResult{}, err
+	}
+	// Ahead of the conflict check: a task this clone deleted on its
+	// checkpoint also carries the fetch's tombstone conflict, and the stuck
+	// state's own words are the ones that say how to get out of it.
+	if err := session.refuseStuck(ctx, target); err != nil {
 		return core.MutationResult{}, err
 	}
 	if conflict := session.conflictFor(ctx, target); conflict != nil {

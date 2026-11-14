@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/dgoings/workbook/internal/compaction"
@@ -81,12 +82,30 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 	backup := flags.String("backup", "", "write the backup bundle here, or into this directory")
 	dryRun := flags.Bool("dry-run", false, "report what would be compacted and change nothing")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
+	adopt := flags.String("adopt", "", "settle one task a compaction left stuck, retrying the replay")
+	discardLocal := flags.Bool("discard-local", false, "with --adopt, take origin's version after saving the local history to a bundle")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
 	typed := map[string]bool{}
 	flags.Visit(func(visited *flag.Flag) { typed[visited.Name] = true })
+
+	// --adopt is a different command sharing the name: it settles one task
+	// rather than selecting many, so none of the selection flags mean
+	// anything beside it, and it has to fetch to know what origin holds.
+	if *discardLocal && !typed["adopt"] {
+		return core.Errorf(core.CategoryInvocation, "--discard-local requires --adopt")
+	}
+	if typed["adopt"] {
+		if doneOnly || deletedOnly || typed["since"] || typed["keep-attachments"] || typed["dry-run"] {
+			return core.Errorf(core.CategoryInvocation,
+				"--adopt cannot be combined with --done-only, --deleted-only, --since, --keep-attachments or --dry-run")
+		}
+		if typed["no-sync"] {
+			return core.Errorf(core.CategoryInvocation, "--adopt cannot be combined with --no-sync")
+		}
+	}
 
 	if doneOnly && deletedOnly {
 		return core.Errorf(core.CategoryInvocation, "--done-only and --deleted-only cannot be combined")
@@ -100,6 +119,19 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 	}
 	if typed["backup"] && *backup == "" {
 		return core.Errorf(core.CategoryInvocation, "compact --backup requires a path")
+	}
+	if typed["adopt"] {
+		if strings.TrimSpace(*adopt) == "" {
+			return core.Errorf(core.CategoryInvocation, "compact --adopt requires a task")
+		}
+		return runCompactAdopt(ctx, compactAdoptRequest{
+			target:       *adopt,
+			discardLocal: *discardLocal,
+			noBackup:     *noBackup,
+			backup:       *backup,
+			flags:        given,
+			jsonMode:     *jsonMode,
+		}, cwd, stdout, stderr)
 	}
 
 	criteria := compaction.Criteria{Done: !deletedOnly, Deleted: !doneOnly}

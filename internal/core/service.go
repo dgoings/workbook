@@ -513,6 +513,10 @@ type NextOptions struct {
 	// which is what `workbook next --any` asks for and what next did before
 	// assignments existed.
 	IncludeHeldByOthers bool
+	// Exclude names tasks next must never offer, whatever their status: a
+	// task whose compaction left it stuck, which no command may change until
+	// `workbook compact --adopt` settles it.
+	Exclude map[string]struct{}
 }
 
 // NextCandidates returns every task Next may pick, in the order Next picks
@@ -549,6 +553,9 @@ func (s Service) NextCandidates(ctx context.Context, options NextOptions) ([]Tas
 			continue
 		}
 		if skipHeld && HeldOnlyByOthers(task.Assignments, s.Actor) {
+			continue
+		}
+		if _, excluded := options.Exclude[snapshot.State.TaskID]; excluded {
 			continue
 		}
 		rank, err := parseRank(task.Rank)

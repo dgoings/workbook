@@ -247,7 +247,7 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"compact": {
 			"done-only": optionalStringFlag, "deleted-only": optionalStringFlag, "since": stringFlag,
 			"keep-attachments": boolFlag, "no-backup": boolFlag, "backup": stringFlag,
-			"dry-run": boolFlag, "no-sync": boolFlag, "json": boolFlag,
+			"dry-run": boolFlag, "no-sync": boolFlag, "adopt": stringFlag, "discard-local": boolFlag, "json": boolFlag,
 		},
 		"version": {"json": boolFlag},
 		// completion prints a static script, so it takes no options at all:

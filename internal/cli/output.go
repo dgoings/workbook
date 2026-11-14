@@ -31,7 +31,7 @@ Commands:
   next [--any] [--claim] [--limit <n>] [--no-sync] [--json]
   rebuild [--json]
   validate [--full] [--json]
-  compact [--done-only [<duration>] | --deleted-only [<duration>]] [--since <duration>] [--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--json]
+  compact [--done-only [<duration>] | --deleted-only [<duration>]] [--since <duration>] [--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--adopt <task> [--discard-local]] [--json]
   version [--json]
   fetch [--json]
   push [--json]
@@ -635,7 +635,23 @@ func writeChangeLog(output io.Writer, log core.ChangeLog) {
 		)
 		writeFieldChanges(output, change.Fields)
 	}
+	if compacted := log.Compacted; compacted != nil {
+		now := time.Now()
+		fmt.Fprintf(output, "%d earlier changes from %s to %s were compacted on %s.\n",
+			compacted.Changes, compactedDay(compacted.From, now), compactedDay(compacted.To, now),
+			compactedDay(compacted.On, now))
+	}
 	writeHistoryTruncation(output, log.Truncated)
+}
+
+// compactedDay renders one date of the compacted-history line in local time,
+// with its year only when that is not the current one.
+func compactedDay(day, now time.Time) string {
+	day = day.Local()
+	if day.Year() != now.Year() {
+		return day.Format("Jan 2, 2006")
+	}
+	return day.Format("Jan 2")
 }
 
 func writeComparison(output io.Writer, comparison core.Comparison) {

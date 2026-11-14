@@ -839,13 +839,19 @@ var commandSchemas = map[string]commandMetadata{
 	"compact": {
 		Name: "compact",
 		Synopsis: "workbook compact [--done-only [<duration>] | --deleted-only [<duration>]] [--since <duration>] " +
-			"[--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--json]",
+			"[--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] " +
+			"[--adopt <task> [--discard-local]] [--json]",
 		Description: "Replace the history of Done and Deleted tasks with one checkpoint each.\n\n" +
 			"A real run first writes a verified backup bundle of the history it drops.\n" +
 			"Attachments on compacted tasks are dropped unless --keep-attachments is\n" +
 			"given. A duration such as 30d limits the run to tasks that finished more\n" +
 			"than that long ago. --dry-run reports what a run would do and changes\n" +
-			"nothing.",
+			"nothing.\n\n" +
+			"--adopt <task> settles one task a compaction left stuck: one origin\n" +
+			"compacted while this clone had changes that would not replay onto it, or\n" +
+			"one this clone compacted and deleted while origin changed it. It fetches,\n" +
+			"then retries the replay; with --discard-local it instead takes origin's\n" +
+			"version, after saving the local history to a bundle.",
 		Options: []optionMetadata{
 			{Name: "done-only", Kind: optionalStringFlag, Value: "[<duration>]", Description: "compact only Done tasks, optionally only those done longer ago than this"},
 			{Name: "deleted-only", Kind: optionalStringFlag, Value: "[<duration>]", Description: "compact only Deleted tasks, optionally only those deleted longer ago than this"},
@@ -855,6 +861,8 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "backup", Kind: stringFlag, Value: "<path>", Description: "write the backup bundle here, or into this directory"},
 			{Name: "dry-run", Kind: boolFlag, Description: "report what would be compacted and change nothing"},
 			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "adopt", Kind: stringFlag, Value: "<task>", Description: "settle one task a compaction left stuck, retrying the replay"},
+			{Name: "discard-local", Kind: boolFlag, Description: "with --adopt, take origin's version after saving the local history to a bundle"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},

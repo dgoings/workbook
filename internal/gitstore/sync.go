@@ -53,6 +53,11 @@ const (
 	// operations could not be replayed onto the checkpoint. The canonical ref
 	// stays on the old history, unpublished, until `workbook compact --adopt`.
 	SyncCompactedOnOrigin SyncStatus = "compacted-on-origin"
+	// SyncDiscardedLocal reports a task `workbook compact --adopt
+	// --discard-local` moved to origin's tip, dropping the local history that
+	// could not be combined with it, after saving that history to a bundle
+	// unless told not to.
+	SyncDiscardedLocal SyncStatus = "discarded-local"
 )
 
 const (

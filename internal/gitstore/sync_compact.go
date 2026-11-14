@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -491,17 +492,12 @@ func (r *Repository) reconcileCompactedTask(
 	localChain, remoteChain []OperationCommit,
 ) (compactedOutcome, error) {
 	if localChain != nil && remoteChain != nil {
-		localCheckpoint, _ := localChain[0].Operation.Checkpoint()
-		remoteCheckpoint, _ := remoteChain[0].Operation.Checkpoint()
-		// A local checkpoint written from origin's generation means origin is
-		// the older side, whatever its own root is.
-		localFromRemote := localCheckpoint != nil &&
-			localCheckpoint.PreviousGeneration == request.Remote.Operation.HistoryGeneration
+		adopt, onto := compactedSides(localChain, remoteChain, request.Remote.Operation.HistoryGeneration)
 		switch {
-		case remoteCheckpoint != nil && !localFromRemote:
-			return r.adoptRemoteCheckpoint(ctx, config, dependencies, request, remoteCheckpoint)
-		case localCheckpoint != nil:
-			return r.replayOntoLocalCheckpoint(ctx, config, dependencies, parkedIndex, request, localCheckpoint, remoteChain)
+		case adopt != nil:
+			return r.adoptRemoteCheckpoint(ctx, config, dependencies, request, adopt)
+		case onto != nil:
+			return r.replayOntoLocalCheckpoint(ctx, config, dependencies, parkedIndex, request, onto, remoteChain)
 		}
 	}
 	return compactedOutcome{
@@ -510,6 +506,29 @@ func (r *Repository) reconcileCompactedTask(
 		Snapshot: request.Local,
 		Kind:     compactedInvalid,
 	}, nil
+}
+
+// compactedSides decides which side of a pair whose generations differ was
+// compacted. adopt is origin's checkpoint, when origin compacted the task and
+// this clone is to take it; onto is this clone's checkpoint, when origin still
+// holds the older history and its changes are replayed onto the local one.
+// Both are nil when neither chain begins at a checkpoint that explains the
+// difference.
+//
+// A local checkpoint written from origin's generation means origin is the
+// older side, whatever its own root is. Fetch and the stuck-task detection
+// both ask this, so the two can never disagree about which way a pair goes.
+func compactedSides(localChain, remoteChain []OperationCommit, remoteGeneration string) (adopt, onto *core.CheckpointData) {
+	localCheckpoint, _ := localChain[0].Operation.Checkpoint()
+	remoteCheckpoint, _ := remoteChain[0].Operation.Checkpoint()
+	localFromRemote := localCheckpoint != nil && localCheckpoint.PreviousGeneration == remoteGeneration
+	switch {
+	case remoteCheckpoint != nil && !localFromRemote:
+		return remoteCheckpoint, nil
+	case localCheckpoint != nil:
+		return nil, localCheckpoint
+	}
+	return nil, nil
 }
 
 // adoptRemoteCheckpoint moves the canonical ref onto origin's checkpoint. The
@@ -567,13 +586,25 @@ func (r *Repository) adoptRemoteCheckpoint(
 		outcome.Withhold = true
 		return outcome, nil
 	}
-	if refuseNewerWriterReplay(request) != nil {
-		return fallBack()
+	// A checkpoint this build cannot fold is a fact about this build, not a
+	// replay to retry by hand: the task waits for an upgrade, as a divergent
+	// one does, and `compact --adopt` would meet the same refusal.
+	needsUpgrade := func(refusal error) (compactedOutcome, error) {
+		outcome.Result = SyncTaskResult{TaskID: request.TaskID, Status: SyncNeedsUpgrade, Detail: refusal.Error()}
+		outcome.Withhold = true
+		outcome.Kind = compactedNewerWriter
+		return outcome, nil
+	}
+	if refusal := refuseNewerWriterReplay(request); refusal != nil {
+		return needsUpgrade(refusal)
 	}
 	replay, failure, err := r.replayOperations(ctx, config, request.TaskID, request.Remote, localOnly, false,
 		request.Remote.Operation.HistoryGeneration, dependencies)
 	if err != nil {
 		return outcome, err
+	}
+	if failure != nil && core.CategoryOf(failure) == core.CategoryNewerWriter {
+		return needsUpgrade(failure)
 	}
 	if failure != nil || replay.conflict != nil {
 		return fallBack()
@@ -826,4 +857,381 @@ func (r *Repository) replayOperations(
 		}
 	}
 	return replay, nil, nil
+}
+
+// StuckKind names one of the two states a compaction can leave a task in that
+// no synchronization settles by itself. Either way the canonical ref holds
+// history origin will not take, fetch withholds it from every push, and only
+// `workbook compact --adopt` moves it.
+type StuckKind string
+
+const (
+	// StuckCompactedOnOrigin is a task origin compacted whose local-only
+	// changes would not replay onto the checkpoint. The ref stays on the old
+	// history (SyncCompactedOnOrigin).
+	StuckCompactedOnOrigin StuckKind = "compacted-on-origin"
+	// StuckCannotCombine is a task this clone compacted and deleted while
+	// origin changed the old history. Nothing applies to a deleted task, so
+	// origin's changes cannot replay onto the local checkpoint the way an edit
+	// does (the tombstone conflict replayOntoLocalCheckpoint reports).
+	StuckCannotCombine StuckKind = "cannot-combine"
+)
+
+// StuckCompaction is one task in a stuck state, with the detail fetch reports
+// for it, which is also what a command refusing to touch it says, and the
+// category that refusal carries: a conflict, or CategoryNewerWriter for a
+// checkpoint this build cannot fold, which only an upgrade settles.
+type StuckCompaction struct {
+	TaskID   string
+	Kind     StuckKind
+	Category core.Category
+	Detail   string
+
+	local, remote core.Snapshot
+	// checkpoint is origin's for StuckCompactedOnOrigin and this clone's for
+	// StuckCannotCombine.
+	checkpoint  *core.CheckpointData
+	localChain  []OperationCommit
+	remoteChain []OperationCommit
+}
+
+// StuckCompactions finds the stuck tasks among taskIDs, or among every task
+// when taskIDs is nil, from local refs alone: each canonical ref against its
+// tracking ref. It costs two ref listings and one tip read for the tasks whose
+// two refs differ; only a pair whose generations differ is read further.
+//
+// Reading refs rather than the last fetch's outcome is what makes the answer
+// hold with --no-sync, beside a live watcher that did the fetching, and right
+// after a fetch alike. It relies on fetch always attempting the settlement:
+// fetch moves a tracking ref and tries to adopt or replay in the same run, so a
+// pair still in one of these shapes is one that attempt could not settle.
+func (r *Repository) StuckCompactions(ctx context.Context, config core.ProjectConfig, taskIDs []string) (map[string]StuckCompaction, error) {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return nil, err
+	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return nil, err
+	}
+	var wanted map[string]struct{}
+	if taskIDs != nil {
+		wanted = operationIDSet(taskIDs)
+	}
+	canonical, _, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
+	if err != nil {
+		return nil, err
+	}
+	trackingRefs, _, err := r.listOwnedTaskRefs(ctx, config, remoteTaskRefPrefix)
+	if err != nil {
+		return nil, err
+	}
+	tracking := make(map[string]string, len(trackingRefs))
+	for _, ref := range trackingRefs {
+		tracking[ref.taskID] = ref.objectID
+	}
+	var heads []TaskHead
+	for _, ref := range canonical {
+		if _, ok := wanted[ref.taskID]; wanted != nil && !ok {
+			continue
+		}
+		remote := tracking[ref.taskID]
+		if remote == "" || remote == ref.objectID {
+			continue
+		}
+		heads = append(heads, TaskHead{TaskID: ref.taskID, ObjectID: ref.objectID}, TaskHead{TaskID: ref.taskID, ObjectID: remote})
+	}
+	stuck := make(map[string]StuckCompaction)
+	if len(heads) == 0 {
+		return stuck, nil
+	}
+	tips, err := r.readTaskHeadsPartial(ctx, config, heads)
+	if err != nil {
+		return nil, err
+	}
+	for index := 0; index+1 < len(tips); index += 2 {
+		local, remote := tips[index], tips[index+1]
+		if local.Err != nil || remote.Err != nil {
+			continue
+		}
+		entry, found, err := r.classifyStuck(ctx, config, local.Head.TaskID, local.Snapshot, remote.Snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			stuck[entry.TaskID] = entry
+		}
+	}
+	return stuck, nil
+}
+
+// classifyStuck decides whether one canonical and tracking pair is stuck, by
+// the rules reconcileCompactedTask settles the same pair with.
+func (r *Repository) classifyStuck(
+	ctx context.Context,
+	config core.ProjectConfig,
+	taskID string,
+	local, remote core.Snapshot,
+) (StuckCompaction, bool, error) {
+	if local.Operation.HistoryGeneration == remote.Operation.HistoryGeneration ||
+		awaitsCheckpointPublication(local, remote) ||
+		(local.State.History.CompactedFrom == nil && remote.State.History.CompactedFrom == nil) {
+		return StuckCompaction{}, false, nil
+	}
+	localChains, err := r.completeTaskChains(ctx, config, []TaskHead{{TaskID: taskID, ObjectID: local.Head}})
+	if err != nil {
+		return StuckCompaction{}, false, err
+	}
+	remoteChains, err := r.completeTaskChains(ctx, config, []TaskHead{{TaskID: taskID, ObjectID: remote.Head}})
+	if err != nil {
+		return StuckCompaction{}, false, err
+	}
+	if localChains[0] == nil || remoteChains[0] == nil {
+		return StuckCompaction{}, false, nil
+	}
+	entry := StuckCompaction{
+		TaskID:      taskID,
+		local:       local,
+		remote:      remote,
+		localChain:  localChains[0],
+		remoteChain: remoteChains[0],
+	}
+	adopt, onto := compactedSides(entry.localChain, entry.remoteChain, remote.Operation.HistoryGeneration)
+	switch {
+	case adopt != nil:
+		localOnly, err := r.operationsNotIn(ctx, config, taskID, local.Head, remote.Head,
+			operationIDSet(adopt.CompactedOperations))
+		if err != nil || len(localOnly) == 0 {
+			return StuckCompaction{}, false, err
+		}
+		unpushed := 0
+		for _, commit := range localOnly {
+			if _, isCheckpoint := commit.Operation.Checkpoint(); !isCheckpoint {
+				unpushed++
+			}
+		}
+		entry.Kind = StuckCompactedOnOrigin
+		entry.checkpoint = adopt
+		entry.Category = core.CategoryConflict
+		entry.Detail = compactedOnOriginDetail(local.State.Task.Title, taskID, unpushed)
+		// What fetch reported instead for a checkpoint this build cannot
+		// fold (adoptRemoteCheckpoint): an upgrade, not --adopt, moves it.
+		if refusal := refuseNewerWriterReplay(reconcileRequest{TaskID: taskID, Local: local, Remote: remote}); refusal != nil {
+			entry.Category = core.CategoryNewerWriter
+			entry.Detail = refusal.Error()
+		}
+		return entry, true, nil
+	case onto != nil:
+		// Only a deleted local task makes origin's changes impossible to
+		// replay: any other conflict on the local checkpoint is settled
+		// origin-wins. A history unrelated to the checkpoint is a different
+		// refusal, and so is an origin that added nothing.
+		if !local.State.Task.Deleted || !newOperationAccount(onto.CompactedOperations, nil).covers(entry.remoteChain[0]) {
+			return StuckCompaction{}, false, nil
+		}
+		remoteOnly, err := r.operationsNotIn(ctx, config, taskID, remote.Head, local.Head,
+			operationIDSet(onto.CompactedOperations))
+		if err != nil || len(remoteOnly) == 0 {
+			return StuckCompaction{}, false, err
+		}
+		entry.Kind = StuckCannotCombine
+		entry.checkpoint = onto
+		entry.Category = core.CategoryConflict
+		entry.Detail = cannotCombineDetail(local.State.Task.Title, taskID)
+		return entry, true, nil
+	}
+	return StuckCompaction{}, false, nil
+}
+
+// AdoptOptions are what `workbook compact --adopt` asks of AdoptCompaction.
+type AdoptOptions struct {
+	// DiscardLocal takes origin's tip instead of retrying the replay, dropping
+	// the local history that could not be combined with it.
+	DiscardLocal bool
+	// BundlePath is where DiscardLocal saves the local history first. Empty
+	// writes no bundle.
+	BundlePath string
+	// RunID, Flags and Now go into the bundle's manifest.
+	RunID string
+	Flags []string
+	Now   time.Time
+}
+
+// CompactionAdoption is what AdoptCompaction did to one task.
+type CompactionAdoption struct {
+	Result SyncTaskResult
+	// Previous is the tip the canonical ref held when the command read it, and
+	// Head the tip it holds now. They are equal when nothing moved.
+	Previous string
+	Head     string
+	// Bundle is the bundle written before a discard, or "".
+	Bundle string
+}
+
+// AdoptCompaction settles one stuck task (see StuckCompactions) by hand. The
+// caller fetches first, so the tracking ref is origin's current tip.
+//
+// Without DiscardLocal it retries what fetch tried: adopting origin's
+// checkpoint with the local-only changes replayed onto it, or replaying
+// origin's changes onto this clone's checkpoint. A retry that still cannot run
+// moves nothing and returns the same guided detail as a CategoryConflict.
+//
+// With DiscardLocal it writes the local history, parked refs included, to
+// BundlePath (unless that is empty), then compare-and-swaps the canonical ref
+// from the tip it read to origin's tip, dropping parked refs and expiring the
+// reflog, as an adoption does. For a task this clone compacted that move goes
+// back to the older generation, which no head-advance guard accepts as a
+// compaction: it is an explicit discard, so the caller settles the projection
+// itself (Invalidate, then a fresh read).
+//
+// A task in neither state is a CategoryInvocation error.
+func (r *Repository) AdoptCompaction(
+	ctx context.Context,
+	config core.ProjectConfig,
+	taskID string,
+	options AdoptOptions,
+) (CompactionAdoption, error) {
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		return CompactionAdoption{}, err
+	}
+	if err := keys.RequireOwned(taskID); err != nil {
+		return CompactionAdoption{}, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
+	}
+	stuck, err := r.StuckCompactions(ctx, config, []string{taskID})
+	if err != nil {
+		return CompactionAdoption{}, err
+	}
+	entry, found := stuck[taskID]
+	if !found {
+		return CompactionAdoption{}, core.Errorf(core.CategoryInvocation, "task %s has no compaction to adopt", taskID)
+	}
+	if options.DiscardLocal {
+		return r.discardLocalHistory(ctx, config, entry, options)
+	}
+	return r.retryAdoption(ctx, config, entry)
+}
+
+// retryAdoption runs fetch's settlement of a stuck pair once more and applies
+// it when it now succeeds.
+func (r *Repository) retryAdoption(ctx context.Context, config core.ProjectConfig, entry StuckCompaction) (CompactionAdoption, error) {
+	adoption := CompactionAdoption{Previous: entry.local.Head, Head: entry.local.Head}
+	request := reconcileRequest{TaskID: entry.TaskID, Local: entry.local, Remote: entry.remote}
+	dependencies, err := r.adoptionDependencies(ctx, config, request)
+	if err != nil {
+		return adoption, err
+	}
+	var outcome compactedOutcome
+	switch entry.Kind {
+	case StuckCompactedOnOrigin:
+		outcome, err = r.adoptRemoteCheckpoint(ctx, config, dependencies, request, entry.checkpoint)
+	default:
+		parked, parkErr := r.nextParkedRefIndexes(ctx, config)
+		if parkErr != nil {
+			return adoption, parkErr
+		}
+		outcome, err = r.replayOntoLocalCheckpoint(ctx, config, dependencies, parked[entry.TaskID], request,
+			entry.checkpoint, entry.remoteChain)
+	}
+	if err != nil {
+		return adoption, err
+	}
+	if outcome.Update == nil {
+		switch outcome.Result.Status {
+		case SyncNeedsUpgrade:
+			return adoption, core.Errorf(core.CategoryNewerWriter, "%s", outcome.Result.Detail)
+		case SyncInvalid:
+			return adoption, core.Errorf(core.CategoryCorruptData, "%s", outcome.Result.Detail)
+		}
+		return adoption, core.Errorf(core.CategoryConflict, "%s", entry.Detail)
+	}
+	if err := r.updateCanonicalRefs(ctx, config, []canonicalRefUpdate{*outcome.Update}); err != nil {
+		return adoption, err
+	}
+	if outcome.Update.NoPark {
+		// As after fetch's own adoption: the refs are right, and only
+		// reclaiming the space waits on a failure here.
+		_ = r.ExpireTaskReflog(ctx, entry.TaskID)
+	}
+	adoption.Result = outcome.Result
+	adoption.Head = outcome.Update.Next
+	return adoption, nil
+}
+
+// discardLocalHistory saves the local history to a bundle and moves the
+// canonical ref to origin's tip.
+func (r *Repository) discardLocalHistory(
+	ctx context.Context,
+	config core.ProjectConfig,
+	entry StuckCompaction,
+	options AdoptOptions,
+) (CompactionAdoption, error) {
+	adoption := CompactionAdoption{Previous: entry.local.Head, Head: entry.local.Head}
+	if options.BundlePath != "" {
+		manifest := ArchiveManifest{
+			ProjectID: config.ProjectID,
+			RunID:     options.RunID,
+			CreatedAt: options.Now,
+			Flags:     options.Flags,
+			Tasks: []ArchiveTask{{
+				TaskID:        entry.TaskID,
+				Title:         entry.local.State.Task.Title,
+				OldTip:        entry.local.Head,
+				OldGeneration: entry.local.Operation.HistoryGeneration,
+				NewGeneration: entry.remote.Operation.HistoryGeneration,
+				Commits:       len(entry.localChain),
+			}},
+		}
+		// WriteArchiveBundle refuses a ref that moved since it was read, so
+		// the bundle holds exactly the tip the move below swaps from.
+		if err := r.WriteArchiveBundle(ctx, config, options.BundlePath, manifest); err != nil {
+			return adoption, err
+		}
+		adoption.Bundle = options.BundlePath
+	}
+	update := canonicalRefUpdate{
+		TaskID:     entry.TaskID,
+		Next:       entry.remote.Head,
+		Expected:   entry.local.Head,
+		NoPark:     true,
+		DropParked: true,
+	}
+	if err := r.updateCanonicalRefs(ctx, config, []canonicalRefUpdate{update}); err != nil {
+		return adoption, err
+	}
+	_ = r.ExpireTaskReflog(ctx, entry.TaskID)
+	adoption.Head = entry.remote.Head
+	detail := "took origin's version without saving the local history"
+	if adoption.Bundle != "" {
+		detail = "took origin's version; the local history is saved in " + adoption.Bundle
+	}
+	adoption.Result = SyncTaskResult{TaskID: entry.TaskID, Status: SyncDiscardedLocal, Detail: detail}
+	return adoption, nil
+}
+
+// adoptionDependencies is fetchedDependencies for one settlement outside a
+// fetch: every active task's edges from its canonical tip, with origin's for
+// the task being settled.
+func (r *Repository) adoptionDependencies(
+	ctx context.Context,
+	config core.ProjectConfig,
+	request reconcileRequest,
+) (map[string][]string, error) {
+	refs, _, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
+	if err != nil {
+		return nil, err
+	}
+	heads := make([]TaskHead, 0, len(refs))
+	for _, ref := range refs {
+		heads = append(heads, TaskHead{TaskID: ref.taskID, ObjectID: ref.objectID})
+	}
+	tips, err := r.readTaskHeadsPartial(ctx, config, heads)
+	if err != nil {
+		return nil, err
+	}
+	state := fetchState{Canonical: make(map[string]core.Snapshot, len(tips))}
+	for _, tip := range tips {
+		if tip.Err == nil {
+			state.Canonical[tip.Head.TaskID] = tip.Snapshot
+		}
+	}
+	return fetchedDependencies(state, nil, []reconcileRequest{request}), nil
 }
