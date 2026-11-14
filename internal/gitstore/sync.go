@@ -60,6 +60,25 @@ const (
 	SyncDiscardedLocal SyncStatus = "discarded-local"
 )
 
+// LeavesPreviousHistory reports an outcome that moved the canonical ref onto a
+// history its previous tip is not on: origin's compaction adopted, with or
+// without local operations replayed onto it, or the local history discarded
+// for origin's. Nothing keeps that previous tip alive afterwards, neither a
+// parked ref nor a reflog entry, so whatever last read it, such as the
+// projection, has to read the task again before Git prunes it; once it is
+// gone, no advance from it can be proven.
+//
+// Every other outcome leaves the ref on a descendant of its previous tip, or
+// parks the previous tip, which keeps it reachable.
+func (s SyncStatus) LeavesPreviousHistory() bool {
+	switch s {
+	case SyncAdopted, SyncAdoptedReplayed, SyncDiscardedLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 const (
 	SyncPhaseCompleted SyncPhaseStatus = "completed"
 	SyncPhaseFailed    SyncPhaseStatus = "failed"

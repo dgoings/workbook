@@ -461,6 +461,10 @@ func setupSync(
 		return setupSyncResult{Status: "skipped", Detail: "no origin remote configured"}, nil
 	}
 	run, err := repository.Sync(ctx, config)
+	// Re-running setup on a clone that already has a projection can adopt a
+	// teammate's compaction like any sync. Setup reports one detail and no
+	// warnings, so a cache that could not take the move is said there.
+	unsettled := settleFetchedHistories(ctx, repository, config, run.Fetch)
 	if err != nil {
 		status := "failed"
 		if core.CategoryOf(err) == core.CategoryConflict {
@@ -468,7 +472,11 @@ func setupSync(
 		}
 		return setupSyncResult{Status: status, Detail: err.Error(), Result: &run}, err
 	}
-	return setupSyncResult{Status: "completed", Result: &run}, nil
+	completed := setupSyncResult{Status: "completed", Result: &run}
+	if len(unsettled) > 0 {
+		completed.Detail = unsettled[0].Message
+	}
+	return completed, nil
 }
 
 // runDocs manages the agent documentation Workbook generates for a project.

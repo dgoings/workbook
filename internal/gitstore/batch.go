@@ -699,6 +699,9 @@ func (r *Repository) ValidateTaskHeadAdvancesWithCompactions(
 	}
 	output, err := r.Git(ctx, input.Bytes(), "rev-list", "--parents", "--stdin")
 	if err != nil {
+		if missing := r.missingPreviousHead(ctx, changed); missing != nil {
+			return nil, missing
+		}
 		return nil, core.Wrap(core.CategoryCorruptData, "cannot validate task head advances", err)
 	}
 	graph, err := parseParentGraph(output)
@@ -751,6 +754,41 @@ func (r *Repository) ValidateTaskHeadAdvancesWithCompactions(
 		)
 	}
 	return compacted, nil
+}
+
+// missingPreviousHead explains a failed ancestry walk whose cause is a
+// previous head Git no longer holds, which is what a projection that missed a
+// history change looks like once Git prunes the history it last read. Nothing
+// can prove that advance any more, so it stays an error, but the projection is
+// a cache built from the refs, and the error names the command that rebuilds
+// it. It returns nil when every previous head is still there, or the probe
+// itself fails, leaving the walk's own error to speak.
+func (r *Repository) missingPreviousHead(ctx context.Context, advances []HeadAdvance) error {
+	var input bytes.Buffer
+	for _, advance := range advances {
+		fmt.Fprintln(&input, advance.Previous.Head)
+	}
+	output, err := r.Git(ctx, input.Bytes(), "cat-file", "--batch-check")
+	if err != nil || len(output) == 0 || output[len(output)-1] != '\n' {
+		return nil
+	}
+	lines := bytes.Split(output[:len(output)-1], []byte{'\n'})
+	if len(lines) != len(advances) {
+		return nil
+	}
+	for index, line := range lines {
+		advance := advances[index]
+		fields := bytes.Fields(line)
+		if len(fields) == 2 && string(fields[0]) == advance.Previous.Head && string(fields[1]) == "missing" {
+			return core.Errorf(
+				core.CategoryCorruptData,
+				"cannot validate task head advances: task %q was last read at %s, which Git no longer has; "+
+					"run `workbook rebuild` to rebuild the cache from the task refs",
+				advance.Current.TaskID, advance.Previous.Head,
+			)
+		}
+	}
+	return nil
 }
 
 func parseParentGraph(contents []byte) (map[string][]string, error) {

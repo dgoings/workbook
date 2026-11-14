@@ -76,12 +76,20 @@ func runCompactAdopt(ctx context.Context, request compactAdoptRequest, cwd strin
 			return err
 		}
 		result.Status, result.Detail, result.Bundle = adoption.Result.Status, adoption.Result.Detail, adoption.Bundle
-		if adoption.Result.Status == gitstore.SyncDiscardedLocal {
+		switch {
+		case adoption.Result.Status == gitstore.SyncDiscardedLocal:
 			if warning, failed := settleDiscardProjection(ctx, session, adoption); failed {
 				warnings = append(warnings, warning)
 			}
+		case adoption.Result.Status.LeavesPreviousHistory():
+			// The retry took origin's checkpoint, which the projection proves
+			// against the old history while it is still here.
+			if _, err := session.store.Get(ctx, session.config, taskID); err != nil {
+				warnings = append(warnings, unsettledWarning(err))
+			}
 		}
 	}
+	warnings = append(warnings, session.unsettledWarnings()...)
 	if head, found := taskRefHead(ctx, session, taskID); found {
 		result.Head = head
 	}

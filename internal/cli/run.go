@@ -242,7 +242,8 @@ func runFetch(ctx context.Context, args []string, cwd string, stdout, stderr io.
 		return err
 	}
 	result, syncErr := repository.Fetch(ctx, config)
-	warnings := fetchSharingWarnings(ctx, repository, config, &result)
+	warnings := settleFetchedHistories(ctx, repository, config, result)
+	warnings = append(warnings, fetchSharingWarnings(ctx, repository, config, &result)...)
 	writeSyncPhaseResultWithConfig(stdout, "fetch", result, result.Conflicts, result.ConfigConflicts, warnings, *jsonMode,
 		func(output io.Writer) {
 			writeSyncResult(output, result)
@@ -366,7 +367,8 @@ func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	}
 
 	result, syncErr := repository.Sync(ctx, config)
-	warnings := fetchSharingWarnings(ctx, repository, config, &result.Fetch)
+	warnings := settleFetchedHistories(ctx, repository, config, result.Fetch)
+	warnings = append(warnings, fetchSharingWarnings(ctx, repository, config, &result.Fetch)...)
 	writeSyncPhaseResultWithConfig(stdout, "sync", result, result.Fetch.Conflicts, result.Fetch.ConfigConflicts, warnings, *jsonMode,
 		func(output io.Writer) {
 			writeSyncRunResult(output, result)

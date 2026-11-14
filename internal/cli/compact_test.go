@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -886,6 +887,122 @@ func TestSyncAdoptsATeammatesCompactionIntoTheProjection(t *testing.T) {
 	if shown.Title != "Compacted by a teammate" || shown.Status != core.StatusDone || shown.Description != "Written offline" {
 		t.Fatalf("shown task = %+v, want the checkpoint's title and status with the offline description", shown)
 	}
+}
+
+// pruneUnreachable has Git drop every object nothing reaches, at once, as
+// docs/reference.md tells a clone to do once it has adopted a compaction.
+func pruneUnreachable(t *testing.T, repository string) {
+	t.Helper()
+	cliGit(t, repository, "-c", "gc.reflogExpire=now", "-c", "gc.reflogExpireUnreachable=now",
+		"gc", "--prune=now", "--quiet")
+}
+
+// assertObjectGone fails unless Git no longer holds objectID, so a test that
+// means to read past a pruned head knows the head really went.
+func assertObjectGone(t *testing.T, repository, objectID string) {
+	t.Helper()
+	if err := exec.Command("git", "-C", repository, "cat-file", "-e", objectID).Run(); err == nil {
+		t.Fatalf("object %s is still in %s, want it pruned", objectID, repository)
+	}
+}
+
+// A clone that adopts a teammate's compaction moves its projection onto the
+// checkpoint before the adopting command returns. Once Git prunes the old
+// history, as the docs say to, every command still reads and writes: the
+// projection names no head that is gone. Each adopting path is its own case,
+// since each one fetches.
+func TestAdoptionSurvivesPruningTheOldHistory(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		command func(other core.Task) []string
+	}{
+		{name: "sync", command: func(core.Task) []string { return []string{"sync", "--json"} }},
+		{name: "fetch", command: func(core.Task) []string { return []string{"fetch", "--json"} }},
+		{name: "mutation", command: func(other core.Task) []string {
+			return []string{"update", other.ID, "--description", "Unrelated edit", "--json"}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			first, second := cliSyncRepositories(t)
+			task := publishedDoneTask(t, first, "Compacted by a teammate")
+			other := cliCreateTask(t, first, "Unrelated work")
+			compactRun(t, first, "push")
+			compactRun(t, second, "sync")
+			// The projection learns the old head.
+			compactRun(t, second, "list", "--all")
+			old := taskRefs(t, second)[task.ID]
+			compactRun(t, first, "compact", "--no-backup")
+			checkpoint := remoteTaskRefValue(t, first, task.ID)
+
+			compactRun(t, second, tc.command(other)...)
+			if got := taskRefs(t, second)[task.ID]; got != checkpoint {
+				t.Fatalf("%s left the task on %s, want the adopted checkpoint %s", tc.name, got, checkpoint)
+			}
+			pruneUnreachable(t, second)
+			assertObjectGone(t, second, old)
+
+			compactRun(t, second, "list", "--all")
+			if shown := showTask(t, second, task.ID); shown.Head != checkpoint {
+				t.Fatalf("shown head = %s, want the checkpoint %s", shown.Head, checkpoint)
+			}
+			compactRun(t, second, "create", "Written after the prune", "--no-sync")
+		})
+	}
+}
+
+// A clone that compacted without publishing, while a teammate changed the old
+// history, replays the teammate's change onto its own checkpoint. That moves
+// the ref forward from the head its projection last read, so pruning drops
+// nothing the projection needs.
+func TestReplayOntoALocalCheckpointSurvivesPruning(t *testing.T) {
+	t.Parallel()
+	first, second := cliSyncRepositories(t)
+	task := publishedDoneTask(t, first, "Compacted here, changed there")
+	compactRun(t, second, "sync")
+	compactRun(t, first, "compact", "--no-backup", "--no-sync")
+	checkpoint := taskRefs(t, first)[task.ID]
+	compactRun(t, second, "update", task.ID, "--description", "Changed on the old history")
+
+	if item := syncFetchOutcome(t, first, task.ID); item.Status != gitstore.SyncReconciled {
+		t.Fatalf("fetch outcome = %+v, want %s", item, gitstore.SyncReconciled)
+	}
+	if parent := cliGitOutput(t, first, "rev-parse", "refs/workbook/tasks/"+task.ID+"^"); parent != checkpoint {
+		t.Fatalf("replayed change's parent = %s, want the local checkpoint %s", parent, checkpoint)
+	}
+	pruneUnreachable(t, first)
+	compactRun(t, first, "list", "--all")
+	if shown := showTask(t, first, task.ID); shown.Description != "Changed on the old history" {
+		t.Fatalf("shown description = %q, want the teammate's change on the checkpoint", shown.Description)
+	}
+}
+
+// A projection whose last-seen head Git pruned, for no reason an adoption
+// explains, still fails: the guard exists to catch a ref moved off its
+// history. The error says how to recover, since the projection is a cache.
+func TestPrunedPreviousHeadPointsToRebuild(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	task := cliCreateTask(t, repository, "Rolled back")
+	compactRun(t, repository, "update", task.ID, "--description", "First", "--no-sync")
+	rollback := taskRefs(t, repository)[task.ID]
+	compactRun(t, repository, "update", task.ID, "--description", "Second", "--no-sync")
+	projected := showTask(t, repository, task.ID).Head
+	cliGit(t, repository, "update-ref", "refs/workbook/tasks/"+task.ID, rollback, projected)
+	pruneUnreachable(t, repository)
+	assertObjectGone(t, repository, projected)
+
+	code, _, stderr := run(t, repository, "list", "--all", "--json")
+	if code != core.ExitCode(core.Errorf(core.CategoryCorruptData, "probe")) {
+		t.Fatalf("list code = %d, want the corrupt-data code; stderr = %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryCorruptData,
+		"cannot validate task head advances: task \""+task.ID+"\" was last read at "+projected+
+			", which Git no longer has; run `workbook rebuild` to rebuild the cache from the task refs")
+	compactRun(t, repository, "rebuild")
+	compactRun(t, repository, "list", "--all")
 }
 
 // Adopting a teammate's checkpoint replays the local claim onto it, which is a

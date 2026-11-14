@@ -278,7 +278,7 @@ func compactSyncWarnings(session *taskSession, compacted int) []core.Warning {
 	if warning, found := session.compactedOnOriginWarning(""); found {
 		warnings = append(warnings, warning)
 	}
-	return warnings
+	return append(warnings, session.unsettledWarnings()...)
 }
 
 // fetchSyncWarnings is the one warning, if any, about what synchronization

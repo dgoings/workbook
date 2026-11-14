@@ -80,6 +80,10 @@ type taskSession struct {
 	// That is each task's own state rather than a defect of the fetch, so it
 	// is said in its own words.
 	compactedOnOrigin []string
+	// unsettled is why the projection could not take a task the fetch moved
+	// onto another history, which leaves a cache to rebuild before Git prunes
+	// the history it last read. See settleMovedHistories.
+	unsettled error
 	// deferred reports that a trustworthy watcher answered, so this command
 	// writes locally and hands publication to it.
 	deferred bool
@@ -297,6 +301,85 @@ func (session *taskSession) fetchBefore(ctx context.Context) {
 			session.compactedOnOrigin = append(session.compactedOnOrigin, item.TaskID)
 		}
 	}
+	session.unsettled = settleMovedHistories(ctx, session.store, session.config, result)
+}
+
+// settleMovedHistories reads, through the projection, every task a fetch moved
+// onto another history (gitstore.SyncStatus.LeavesPreviousHistory), so the
+// command that moved the ref also moves the cache before it returns.
+//
+// It has to happen then. The projection proves such a move against the head it
+// last read, and nothing keeps that head alive once the ref leaves it: after
+// `git gc` prunes it, the proof cannot run and every read fails until a
+// rebuild. A fetch that moved no task this way reads nothing here, so a
+// steady-state synchronization costs exactly what it did.
+//
+// Every command that fetches comes through here: the mutations, next and
+// compact through their session's fetch, and sync, fetch and setup on their
+// own. The watcher refreshes its own projection after each synchronization.
+func settleMovedHistories(ctx context.Context, store *projection.Store, config core.ProjectConfig, fetched gitstore.SyncResult) error {
+	for _, item := range fetched.Tasks {
+		if !item.Status.LeavesPreviousHistory() {
+			continue
+		}
+		if _, err := store.Get(ctx, config, item.TaskID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// movesHistories reports whether settleMovedHistories has anything to read, so
+// a caller holding no projection opens one only then.
+func movesHistories(fetched gitstore.SyncResult) bool {
+	for _, item := range fetched.Tasks {
+		if item.Status.LeavesPreviousHistory() {
+			return true
+		}
+	}
+	return false
+}
+
+// settleFetchedHistories is settleMovedHistories for a command that holds no
+// projection of its own: sync, fetch and setup. A failure is a warning, since
+// the refs are right and the cache can be rebuilt from them.
+func settleFetchedHistories(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	fetched gitstore.SyncResult,
+) []core.Warning {
+	if !movesHistories(fetched) {
+		return nil
+	}
+	store, releaseProjection, err := openProjection(ctx, repository, config)
+	if err == nil {
+		defer releaseProjection()
+		err = settleMovedHistories(ctx, store, config, fetched)
+	}
+	if err == nil {
+		return nil
+	}
+	return []core.Warning{unsettledWarning(err)}
+}
+
+// unsettledWarning says that the projection could not take a task the fetch
+// moved onto another history.
+func unsettledWarning(err error) core.Warning {
+	return core.Warning{
+		Code: core.WarningProjectionUpdate,
+		Message: "origin's compaction was adopted, but the SQLite cache could not be updated; run " +
+			"`workbook rebuild` before `git gc`: " + err.Error(),
+	}
+}
+
+// unsettledWarnings is unsettledWarning for a session's own fetch, or nothing
+// when its projection took every task the fetch moved.
+func (session *taskSession) unsettledWarnings() []core.Warning {
+	if session.unsettled == nil {
+		return nil
+	}
+	return []core.Warning{unsettledWarning(session.unsettled)}
 }
 
 // compactedOnOriginWarning says which tasks the fetch kept on the old history,
@@ -612,5 +695,6 @@ func (session *taskSession) mutate(
 	if warning, found := session.compactedOnOriginWarning("the change synchronized, but "); found {
 		result.Warnings = append(result.Warnings, warning)
 	}
+	result.Warnings = append(result.Warnings, session.unsettledWarnings()...)
 	return result, nil
 }
