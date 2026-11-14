@@ -729,6 +729,82 @@ func TestExecuteSkipsTaskChangedDuringRun(t *testing.T) {
 	}
 }
 
+// A task that moves between selection and the bundle is found by the bundle,
+// before any ref moves. It is skipped and reported like a task that moves
+// later, and the rest are bundled and compacted: the bundle holds them, and
+// not the task the run left alone.
+func TestExecuteSkipsTaskChangedBeforeTheBundle(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	moved := f.create("Moves before the bundle")
+	f.status(moved, core.StatusDone)
+	steady := f.create("Steady")
+	f.status(steady, core.StatusDone)
+	options := Options{Criteria: everything(), Now: f.now}
+	plan := f.prepare(options)
+	steadyTip := f.tip(steady).Head
+	f.comment(moved, "Arrived after selection")
+	movedTip := f.tip(moved).Head
+
+	result, err := Execute(context.Background(), f.deps(), plan, options)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	requireIDs(t, "compacted", compactedIDs(result), []string{steady})
+	if reason := skipFor(t, result.Skipped, moved).Reason; reason != ReasonChanged {
+		t.Fatalf("skip reason = %q, want %q", reason, ReasonChanged)
+	}
+	if got := f.tip(moved).Head; got != movedTip {
+		t.Fatalf("task changed before the bundle is at %s, want it left at %s", got, movedTip)
+	}
+	if _, ok := f.tip(steady).Operation.Checkpoint(); !ok {
+		t.Fatalf("steady task was not compacted")
+	}
+	f.git("bundle", "verify", "--quiet", result.BundlePath)
+	heads := f.git("bundle", "list-heads", result.BundlePath)
+	if !strings.Contains(heads, steadyTip+" refs/workbook/tasks/"+steady) || strings.Contains(heads, moved) {
+		t.Fatalf("bundle heads = %q, want %s at %s and nothing of %s", heads, steady, steadyTip, moved)
+	}
+}
+
+// A second move while the run writes the bundle again fails the run, as any
+// bundle failure does: no ref moves and no bundle is left.
+//
+// Not parallel: it sets beforeBundleRetryHook, which every Execute reads.
+func TestExecuteFailsWhenATaskMovesDuringTheBundleRetry(t *testing.T) {
+	f := newFixture(t)
+	first := f.create("Moves before the bundle")
+	f.status(first, core.StatusDone)
+	second := f.create("Moves before the retry")
+	f.status(second, core.StatusDone)
+	options := Options{Criteria: everything(), Now: f.now}
+	plan := f.prepare(options)
+	f.comment(first, "Arrived after selection")
+	tips := map[string]string{first: f.tip(first).Head}
+	beforeBundleRetryHook = func() {
+		f.comment(second, "Arrived during the retry")
+		tips[second] = f.tip(second).Head
+	}
+	t.Cleanup(func() { beforeBundleRetryHook = nil })
+
+	result, err := Execute(context.Background(), f.deps(), plan, options)
+	if core.CategoryOf(err) != core.CategoryStaleWrite {
+		t.Fatalf("Execute() error = %v, want a stale write", err)
+	}
+	beforeBundleRetryHook = nil
+	if len(result.Compacted) != 0 || result.BundlePath != "" {
+		t.Fatalf("result = %+v, want nothing compacted and no bundle", result)
+	}
+	for taskID, head := range tips {
+		if got := f.tip(taskID).Head; got != head {
+			t.Fatalf("task %s moved to %s after a failed bundle, want %s", taskID, got, head)
+		}
+	}
+	if _, err := os.Stat(gitstore.DefaultArchivePath(f.repository.CommonGitDir, plan.RunID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Stat(default bundle) error = %v, want it absent", err)
+	}
+}
+
 // writeNewerWriterTip appends a commit to a task ref that only a newer
 // Workbook could have written: an operation pack declaring a generation this
 // build cannot fold beside a checkpoint carrying a member it cannot decode.

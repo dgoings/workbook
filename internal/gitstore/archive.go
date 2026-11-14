@@ -86,8 +86,8 @@ func ResolveArchivePath(commonGitDir, runID, flagValue string) (string, error) {
 //
 // It never overwrites a file, and it publishes the bundle by renaming a
 // verified, synced temporary file beside path, so path either holds a complete
-// bundle or nothing. A task whose ref no longer points at its OldTip is a
-// CategoryStaleWrite error. Every failure removes the temporary file, and
+// bundle or nothing. Tasks whose refs no longer point at their OldTip are an
+// *ArchiveTasksMovedError naming them all. Every failure removes the temporary file, and
 // archiveManifestRef is gone from this repository whenever it returns.
 func (r *Repository) WriteArchiveBundle(ctx context.Context, config core.ProjectConfig, path string, manifest ArchiveManifest) error {
 	if err := r.verifyIdentity(ctx); err != nil {
@@ -322,18 +322,40 @@ func (r *Repository) checkArchiveHeads(ctx context.Context, bundle, manifestComm
 		return core.Errorf(core.CategoryStaleWrite,
 			"%s changed while the backup bundle was written; another compaction may be running", archiveManifestRef)
 	}
+	var moved *ArchiveTasksMovedError
 	for _, task := range tasks {
 		got, found := heads[taskRefPrefix+task.TaskID]
 		if !found {
 			return core.Errorf(core.CategoryOperational, "the backup bundle lacks task %s", task.TaskID)
 		}
-		if got != task.OldTip {
-			return core.Errorf(core.CategoryStaleWrite,
-				"task %s moved from %s to %s since it was selected for compaction", task.TaskID, task.OldTip, got)
+		if got == task.OldTip {
+			continue
 		}
+		if moved == nil {
+			moved = &ArchiveTasksMovedError{err: core.Errorf(core.CategoryStaleWrite,
+				"task %s moved from %s to %s since it was selected for compaction", task.TaskID, task.OldTip, got)}
+		}
+		moved.TaskIDs = append(moved.TaskIDs, task.TaskID)
+	}
+	if moved != nil {
+		return moved
 	}
 	return nil
 }
+
+// ArchiveTasksMovedError is WriteArchiveBundle's refusal of a bundle in which
+// some tasks' refs had moved from the tips the manifest names. It is a
+// CategoryStaleWrite error naming the first such task, and carries every one,
+// in manifest order, so a caller can leave those tasks out and bundle the
+// rest. No bundle was written.
+type ArchiveTasksMovedError struct {
+	TaskIDs []string
+	err     error
+}
+
+func (e *ArchiveTasksMovedError) Error() string { return e.err.Error() }
+
+func (e *ArchiveTasksMovedError) Unwrap() error { return e.err }
 
 func syncFile(path string) error {
 	file, err := os.OpenFile(path, os.O_RDWR, 0)

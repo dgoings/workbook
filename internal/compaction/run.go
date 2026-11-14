@@ -138,6 +138,11 @@ type Deps struct {
 // interrupted run, and nil otherwise.
 var afterTaskHook func(taskID string) error
 
+// beforeBundleRetryHook runs before a run writes its bundle the second time,
+// after the first found tasks that had moved. It is a test seam for a task
+// that moves again in between, and nil otherwise.
+var beforeBundleRetryHook func()
+
 // Prepare selects the tasks a run compacts and estimates what it saves. It
 // writes nothing.
 func Prepare(ctx context.Context, deps Deps, options Options) (Plan, error) {
@@ -277,9 +282,11 @@ type movedTask struct {
 // Execute compacts plan's candidates: it writes and verifies the backup bundle
 // unless options.Backup is "-", then for each task builds its checkpoint and
 // compare-and-swaps the ref from the observed tip. A task whose ref moved since
-// Prepare is skipped with ReasonChanged. For each task Prepare found already
-// compacted it also expires any reflog entries a run that stopped early left
-// behind. Last, it moves the projection onto the checkpoints.
+// Prepare is skipped with ReasonChanged, whether the bundle or its own ref move
+// is what finds it; the bundle is then written once more without it. For each
+// task Prepare found already compacted it also expires any reflog entries a
+// run that stopped early left behind. Last, it moves the projection onto the
+// checkpoints.
 //
 // deps.Projection is required, and its absence is refused before anything is
 // written. A bundle failure returns before any ref moves. Any later failure returns the
@@ -303,8 +310,29 @@ func Execute(ctx context.Context, deps Deps, plan Plan, options Options) (Result
 		}
 		generations[index] = generation
 	}
-	if len(plan.Candidates) > 0 && options.Backup != "-" {
-		path, err := writeBundle(ctx, deps, plan, options, generations)
+	candidates := plan.Candidates
+	if len(candidates) > 0 && options.Backup != "-" {
+		path, err := writeBundle(ctx, deps, plan.RunID, options, candidates, generations)
+		var changed *gitstore.ArchiveTasksMovedError
+		if errors.As(err, &changed) {
+			// A task whose ref moved since selection is skipped and reported
+			// (run order, step 4), here as at its own ref move: the bundle
+			// found it first. The rest are bundled once more. A task that
+			// moves during that second write fails the run, as any bundle
+			// failure does, with nothing moved.
+			var skipped []Skip
+			candidates, generations, skipped = withoutChanged(candidates, generations, changed.TaskIDs)
+			path, err = "", nil
+			if len(candidates) > 0 {
+				if beforeBundleRetryHook != nil {
+					beforeBundleRetryHook()
+				}
+				path, err = writeBundle(ctx, deps, plan.RunID, options, candidates, generations)
+			}
+			if err == nil {
+				result.Skipped = append(result.Skipped, skipped...)
+			}
+		}
 		if err != nil {
 			return result, err
 		}
@@ -323,7 +351,7 @@ func Execute(ctx context.Context, deps Deps, plan Plan, options Options) (Result
 			return result, errors.Join(err, settleErr)
 		}
 	}
-	for index, candidate := range plan.Candidates {
+	for index, candidate := range candidates {
 		checkpoint, err := compactOne(ctx, deps, plan, options, candidate, generations[index])
 		if core.CategoryOf(err) == core.CategoryStaleWrite {
 			result.Skipped = append(result.Skipped, Skip{TaskID: candidate.TaskID, Title: candidate.Title, Reason: ReasonChanged})
@@ -358,10 +386,38 @@ func Execute(ctx context.Context, deps Deps, plan Plan, options Options) (Result
 	return finish(nil)
 }
 
-// writeBundle writes and verifies the run's backup bundle and returns its
-// absolute path.
-func writeBundle(ctx context.Context, deps Deps, plan Plan, options Options, generations []string) (string, error) {
-	path, err := gitstore.ResolveArchivePath(deps.Repository.CommonGitDir, plan.RunID, options.Backup)
+// withoutChanged drops the candidates named in changed, with their
+// generations, and reports each as a ReasonChanged skip.
+func withoutChanged(candidates []Candidate, generations []string, changed []string) ([]Candidate, []string, []Skip) {
+	drop := make(map[string]struct{}, len(changed))
+	for _, taskID := range changed {
+		drop[taskID] = struct{}{}
+	}
+	keptCandidates := make([]Candidate, 0, len(candidates))
+	keptGenerations := make([]string, 0, len(generations))
+	var skipped []Skip
+	for index, candidate := range candidates {
+		if _, found := drop[candidate.TaskID]; found {
+			skipped = append(skipped, Skip{TaskID: candidate.TaskID, Title: candidate.Title, Reason: ReasonChanged})
+			continue
+		}
+		keptCandidates = append(keptCandidates, candidate)
+		keptGenerations = append(keptGenerations, generations[index])
+	}
+	return keptCandidates, keptGenerations, skipped
+}
+
+// writeBundle writes and verifies the backup bundle for candidates and
+// returns its absolute path.
+func writeBundle(
+	ctx context.Context,
+	deps Deps,
+	runID string,
+	options Options,
+	candidates []Candidate,
+	generations []string,
+) (string, error) {
+	path, err := gitstore.ResolveArchivePath(deps.Repository.CommonGitDir, runID, options.Backup)
 	if err != nil {
 		return "", err
 	}
@@ -370,12 +426,12 @@ func writeBundle(ctx context.Context, deps Deps, plan Plan, options Options, gen
 	}
 	manifest := gitstore.ArchiveManifest{
 		ProjectID: deps.Config.ProjectID,
-		RunID:     plan.RunID,
+		RunID:     runID,
 		CreatedAt: options.Now,
 		Flags:     options.Flags,
-		Tasks:     make([]gitstore.ArchiveTask, 0, len(plan.Candidates)),
+		Tasks:     make([]gitstore.ArchiveTask, 0, len(candidates)),
 	}
-	for index, candidate := range plan.Candidates {
+	for index, candidate := range candidates {
 		manifest.Tasks = append(manifest.Tasks, gitstore.ArchiveTask{
 			TaskID:        candidate.TaskID,
 			Title:         candidate.Title,
