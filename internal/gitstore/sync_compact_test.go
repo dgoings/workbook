@@ -15,11 +15,14 @@ import (
 	"github.com/dgoings/workbook/internal/testrepo"
 )
 
-const (
-	wantDeniedDetail = "origin refuses non-fast-forward updates to Workbook refs " +
-		"(for example, a server-side hook or ruleset); the compacted task stays local until that changes"
-	wantStaleDetail = "origin changed since the compaction; the next sync reconciles it"
-)
+const wantStaleDetail = "origin changed since the compaction; the next sync reconciles it"
+
+// wantRefusedDetail is what a push says when origin refuses taskID's leased
+// checkpoint for reason, anything but a stale lease.
+func wantRefusedDetail(taskID, reason string) string {
+	return "origin refused the compacted checkpoint (" + reason + "); the compacted task stays local. " +
+		`Run "workbook compact --adopt ` + taskID + ` --discard-local" to undo the compaction on this clone.`
+}
 
 // compactedSyncTask is a Done task origin holds at tip, compacted in one clone
 // into checkpoint and not yet published, as `compact --no-sync` leaves it.
@@ -299,7 +302,8 @@ func TestLeasedPushRejectedByOriginLeavesTheCheckpointLocal(t *testing.T) {
 				t.Fatalf("%s error category = %q, want %q; error = %v", path, got, core.CategoryOperational, err)
 			}
 			item := syncOutcome(t, result, compacted.taskID)
-			want := SyncTaskResult{TaskID: compacted.taskID, Status: SyncRejected, Detail: "[remote rejected] (hook declined)"}
+			want := SyncTaskResult{TaskID: compacted.taskID, Status: SyncRejected,
+				Detail: wantRefusedDetail(compacted.taskID, "[remote rejected] (hook declined)")}
 			if item != want {
 				t.Fatalf("%s outcome = %#v, want %#v", path, item, want)
 			}
@@ -311,8 +315,8 @@ func TestLeasedPushRejectedByOriginLeavesTheCheckpointLocal(t *testing.T) {
 // The design expected a remote with receive.denyNonFastForwards (as `git init
 // --bare --shared` sets) to refuse the checkpoint. Git applies that setting to
 // refs/heads/ only, so origin accepts the lease on a task ref. This pins that
-// behavior: the denied-detail translation is reachable only through a host
-// that refuses with Git's "non-fast-forward" reason on its own terms.
+// behavior: a refusal of the checkpoint comes only from a host that refuses
+// it on its own terms, such as a hook.
 func TestDenyNonFastForwardsDoesNotGuardTaskRefs(t *testing.T) {
 	t.Parallel()
 	first, _, config := syncRepositories(t)
@@ -545,8 +549,19 @@ func TestPushRejectsPlusFlagForOrdinaryRefs(t *testing.T) {
 			output: "!\tabc:" + leasedRef + "\t[remote rejected] (non-fast-forward)\n" +
 				"=\tdef:" + plainRef + "\t[up to date]\n",
 			want: map[string]SyncTaskResult{
-				"task-leased": {TaskID: "task-leased", Status: SyncRejected, Detail: wantDeniedDetail},
-				"task-plain":  {TaskID: "task-plain", Status: SyncUpToDate},
+				"task-leased": {TaskID: "task-leased", Status: SyncRejected,
+					Detail: wantRefusedDetail("task-leased", "[remote rejected] (non-fast-forward)")},
+				"task-plain": {TaskID: "task-plain", Status: SyncUpToDate},
+			},
+		},
+		{
+			name: "origin refuses in its own words",
+			output: "!\tabc:" + leasedRef + "\t[remote rejected] (pre-receive hook declined)\n" +
+				"!\tdef:" + plainRef + "\t[remote rejected] (pre-receive hook declined)\n",
+			want: map[string]SyncTaskResult{
+				"task-leased": {TaskID: "task-leased", Status: SyncRejected,
+					Detail: wantRefusedDetail("task-leased", "[remote rejected] (pre-receive hook declined)")},
+				"task-plain": {TaskID: "task-plain", Status: SyncRejected, Detail: "[remote rejected] (pre-receive hook declined)"},
 			},
 		},
 	}

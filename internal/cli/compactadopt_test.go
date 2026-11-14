@@ -14,6 +14,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/testenv"
 	"github.com/dgoings/workbook/internal/webui"
 )
 
@@ -369,6 +370,130 @@ func TestCompactAdoptDiscardLocalTakesOriginsOlderHistory(t *testing.T) {
 				t.Fatalf("next sync reported %+v, want it quiet", item)
 			}
 		}
+	}
+}
+
+// refusedCheckpointDetail is what a push says when origin refuses a leased
+// checkpoint for a reason other than a stale lease.
+func refusedCheckpointDetail(taskID, reason string) string {
+	return "origin refused the compacted checkpoint (" + reason + "); the compacted task stays local. " +
+		`Run "workbook compact --adopt ` + taskID + ` --discard-local" to undo the compaction on this clone.`
+}
+
+// refuseRewrites installs an update hook in repository's origin that refuses
+// every task ref update that is not a fast-forward, as a host that protects
+// shared history does. Creation and ordinary pushes still go through.
+func refuseRewrites(t *testing.T, repository string) {
+	t.Helper()
+	hooks := filepath.Join(cliGitOutput(t, repository, "config", "remote.origin.url"), "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatalf("create %s: %v", hooks, err)
+	}
+	testenv.WriteExecutable(t, filepath.Join(hooks, "update"), []byte(`#!/bin/sh
+case "$1" in refs/workbook/tasks/*)
+  if [ -n "$(printf %s "$2" | tr -d 0)" ] && ! git merge-base --is-ancestor "$2" "$3"; then exit 1; fi ;;
+esac
+exit 0
+`))
+}
+
+// An origin that refuses rewrites refuses the checkpoint, and says how to get
+// out: undoing the compaction with --discard-local, after which sync and push
+// have nothing to refuse, origin is unchanged, and the task reads as it did.
+func TestCompactAdoptDiscardLocalUndoesACheckpointOriginRefused(t *testing.T) {
+	t.Parallel()
+	first, _ := cliSyncRepositories(t)
+	task := publishedDoneTask(t, first, "Refused by origin")
+	published := remoteTaskRefValue(t, first, task.ID)
+	refuseRewrites(t, first)
+
+	stdout := compactRun(t, first, "compact", "--json")
+	envelope := decodeCompactEnvelope(t, stdout)
+	want := []gitstore.SyncTaskResult{{
+		TaskID: task.ID,
+		Status: gitstore.SyncRejected,
+		Detail: refusedCheckpointDetail(task.ID, "[remote rejected] (hook declined)"),
+	}}
+	if envelope.Sync.Pushed == nil || !reflect.DeepEqual(envelope.Sync.Pushed.Tasks, want) {
+		t.Fatalf("sync.pushed = %+v, want %+v", envelope.Sync.Pushed, want)
+	}
+	assertParentless(t, first, task.ID)
+	checkpoint := taskRefs(t, first)[task.ID]
+	for _, command := range []string{"sync", "push"} {
+		if code, _, stderr := run(t, first, command); code == 0 {
+			t.Fatalf("%s before the undo = code 0, want the refusal; stderr = %q", command, stderr)
+		}
+	}
+
+	result, envelope, data := adoptJSONData(t, first, task.ID, "--discard-local")
+	assertAdoptData(t, data, map[string]any{
+		"taskId": task.ID,
+		"status": "discarded-local",
+		"detail": "took origin's version; the local history is saved in " + result.Bundle,
+		"head":   published,
+		"bundle": result.Bundle,
+	})
+	if envelope.Sync.Status != syncStatusCompleted {
+		t.Fatalf("sync = %+v, want a completed fetch", envelope.Sync)
+	}
+	if filepath.Dir(result.Bundle) != archiveDirectory(first) || !strings.HasSuffix(result.Bundle, "-"+task.ID+"-local.bundle") {
+		t.Fatalf("bundle = %q, want <run>-%s-local.bundle in %s", result.Bundle, task.ID, archiveDirectory(first))
+	}
+	cliGit(t, first, "bundle", "verify", "--quiet", result.Bundle)
+	if heads := bundleHeads(t, first, result.Bundle); heads["refs/workbook/tasks/"+task.ID] != checkpoint {
+		t.Fatalf("bundle heads = %v, want the undone checkpoint %s", heads, checkpoint)
+	}
+	if got := taskRefs(t, first)[task.ID]; got != published {
+		t.Fatalf("local ref = %s, want origin's tip %s back", got, published)
+	}
+	for _, command := range []string{"sync", "push"} {
+		compactRun(t, first, command)
+	}
+	if got := remoteTaskRefValue(t, first, task.ID); got != published {
+		t.Fatalf("origin holds %s, want it unchanged at %s", got, published)
+	}
+	if shown := showTask(t, first, task.ID); shown.Head != published || shown.Status != core.StatusDone {
+		t.Fatalf("shown task = %+v, want the published tip %s, done", shown, published)
+	}
+}
+
+// A compaction held local with --no-sync is undone the same way, and without
+// --discard-local the command says what it would do rather than retrying.
+func TestCompactAdoptUndoesAnUnpublishedCompaction(t *testing.T) {
+	t.Parallel()
+	first, _ := cliSyncRepositories(t)
+	task := publishedDoneTask(t, first, "Compacted offline")
+	published := remoteTaskRefValue(t, first, task.ID)
+	compactRun(t, first, "compact", "--no-sync", "--no-backup")
+	checkpoint := taskRefs(t, first)[task.ID]
+
+	code, stdout, stderr := run(t, first, "compact", "--adopt", task.ID, "--json")
+	if code != core.ExitCode(core.Errorf(core.CategoryInvocation, "probe")) || stdout != "" {
+		t.Fatalf("compact --adopt = code %d, stdout %q; want the invocation code", code, stdout)
+	}
+	assertJSONError(t, stderr, core.CategoryInvocation, "task "+task.ID+
+		" has a local compaction that is not published; add --discard-local to undo it after saving it to a bundle")
+	if got := taskRefs(t, first)[task.ID]; got != checkpoint {
+		t.Fatalf("local ref = %s, want the checkpoint %s left alone", got, checkpoint)
+	}
+
+	stdout = compactRun(t, first, "compact", "--adopt", task.ID, "--discard-local", "--no-backup")
+	if line, _, _ := strings.Cut(stdout, "\n"); line !=
+		"Took origin's version of "+task.ID+"; the local history was discarded without a backup." {
+		t.Fatalf("first line = %q, want the discard without a backup", line)
+	}
+	assertNoArchiveDirectory(t, first)
+	if got := taskRefs(t, first)[task.ID]; got != published {
+		t.Fatalf("local ref = %s, want origin's tip %s back", got, published)
+	}
+	if shown := showTask(t, first, task.ID); shown.Head != published {
+		t.Fatalf("shown head = %s, want origin's tip %s", shown.Head, published)
+	}
+	if item := syncFetchOutcome(t, first, task.ID); item.Status != gitstore.SyncUnchanged {
+		t.Fatalf("next fetch outcome = %+v, want %s", item, gitstore.SyncUnchanged)
+	}
+	if got := remoteTaskRefValue(t, first, task.ID); got != published {
+		t.Fatalf("origin holds %s, want it unchanged at %s", got, published)
 	}
 }
 

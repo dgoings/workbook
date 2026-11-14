@@ -93,7 +93,7 @@ func isPublicationSingletonRef(refName string) bool {
 //
 // forced names the destinations pushed under a compaction lease. Only those may
 // come back as a forced update, and their rejections are reported in the words
-// of compactionDeniedDetail and compactionStaleDetail.
+// of compactionStaleDetail and compactionRefusedDetail.
 func parsePushPorcelain(
 	output []byte,
 	expected map[string]string,
@@ -141,7 +141,7 @@ func parsePushPorcelain(
 			result.Status = SyncRejected
 			result.Detail = fields[2]
 			if forced[destination] {
-				result.Detail = leasedRejectionDetail(fields[2])
+				result.Detail = leasedRejectionDetail(taskID, fields[2])
 			}
 			hasRejected = true
 		case '+':

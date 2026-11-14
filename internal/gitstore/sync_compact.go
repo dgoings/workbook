@@ -11,17 +11,23 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 )
 
-// The two ways origin can refuse a leased checkpoint, in the words the person
-// who ran the push has to act on. Git's own text ("[rejected] (stale info)",
-// "[remote rejected] (non-fast-forward)") describes the mechanism, not what
-// happened to the compaction.
-const (
-	// It names no Git setting: receive.denyNonFastForwards covers refs/heads/
-	// only, so it is never why origin refuses a task ref.
-	compactionDeniedDetail = "origin refuses non-fast-forward updates to Workbook refs " +
-		"(for example, a server-side hook or ruleset); the compacted task stays local until that changes"
-	compactionStaleDetail = "origin changed since the compaction; the next sync reconciles it"
-)
+// compactionStaleDetail is what a push says when the lease on a checkpoint
+// went stale: origin moved since this clone looked, and Git refused the push
+// without touching origin. Git's own text ("[rejected] (stale info)")
+// describes the mechanism, not what happened to the compaction.
+const compactionStaleDetail = "origin changed since the compaction; the next sync reconciles it"
+
+// compactionRefusedDetail is what a push says when origin refused a leased
+// checkpoint for any other reason: a server-side hook, a ruleset, or a host
+// that refuses rewrites whatever Git calls it. Git's reason stays in
+// parentheses, since it is the only account of origin's policy. Nothing
+// settles this from this clone except undoing the compaction, which the text
+// names: every later sync and push would meet the same refusal.
+func compactionRefusedDetail(taskID, reason string) string {
+	return fmt.Sprintf(`origin refused the compacted checkpoint (%s); the compacted task stays local. `+
+		`Run "workbook compact --adopt %s --discard-local" to undo the compaction on this clone.`,
+		reason, taskID)
+}
 
 // unrelatedHistoryDetail reports a local checkpoint whose task origin holds a
 // history it shares nothing with. Publishing would replace that history, so
@@ -235,16 +241,12 @@ func (r *Repository) advanceTrackingRef(ctx context.Context, taskID, expected, n
 	return err
 }
 
-// leasedRejectionDetail translates Git's refusal of a leased ref.
-func leasedRejectionDetail(detail string) string {
-	switch {
-	case strings.Contains(detail, "stale info"):
+// leasedRejectionDetail translates Git's refusal of taskID's leased ref.
+func leasedRejectionDetail(taskID, detail string) string {
+	if strings.Contains(detail, "stale info") {
 		return compactionStaleDetail
-	case strings.Contains(detail, "non-fast-forward"):
-		return compactionDeniedDetail
-	default:
-		return detail
 	}
+	return compactionRefusedDetail(taskID, detail)
 }
 
 // awaitsCheckpointPublication reports a fetched pair whose generations differ
@@ -1082,7 +1084,12 @@ type CompactionAdoption struct {
 // compaction: it is an explicit discard, so the caller settles the projection
 // itself (Invalidate, then a fresh read).
 //
-// A task in neither state is a CategoryInvocation error.
+// DiscardLocal also undoes a compaction this clone made that origin has not
+// taken (unpublishedCompaction), in the same way: the checkpoint chain goes
+// into the bundle and the ref goes back to the tip origin holds. Without
+// DiscardLocal such a task is a CategoryInvocation error that says to add it.
+//
+// A task in none of these states is a CategoryInvocation error.
 func (r *Repository) AdoptCompaction(
 	ctx context.Context,
 	config core.ProjectConfig,
@@ -1102,7 +1109,21 @@ func (r *Repository) AdoptCompaction(
 	}
 	entry, found := stuck[taskID]
 	if !found {
-		return CompactionAdoption{}, core.Errorf(core.CategoryInvocation, "task %s has no compaction to adopt", taskID)
+		pending, unpublished, err := r.unpublishedCompaction(ctx, config, taskID)
+		if err != nil {
+			return CompactionAdoption{}, err
+		}
+		switch {
+		case !unpublished:
+			return CompactionAdoption{}, core.Errorf(core.CategoryInvocation, "task %s has no compaction to adopt", taskID)
+		case !options.DiscardLocal:
+			// There is nothing to retry: the compaction is this clone's own,
+			// and origin has not refused anything fetch could settle.
+			return CompactionAdoption{}, core.Errorf(core.CategoryInvocation,
+				"task %s has a local compaction that is not published; add --discard-local to undo it after saving it to a bundle",
+				taskID)
+		}
+		return r.discardLocalHistory(ctx, config, pending, options)
 	}
 	// A checkpoint this build cannot read is not one it may take either, by
 	// retry or by discard: only an upgrade settles it. Refused before anything
@@ -1114,6 +1135,59 @@ func (r *Repository) AdoptCompaction(
 		return r.discardLocalHistory(ctx, config, entry, options)
 	}
 	return r.retryAdoption(ctx, config, entry)
+}
+
+// unpublishedCompaction finds a compaction of taskID this clone made and origin
+// has not taken: the canonical ref holds a checkpoint chain, and the tracking
+// ref holds the older history it accounts for, which is exactly the tip the
+// push phase would lease against (compactionLease). That is the state a
+// --no-sync run leaves, and the one an origin that refuses the leased push
+// leaves for good. It is not stuck in StuckCompactions' sense: the task stays
+// editable, and the next push retries the lease. Discarding it is the way back
+// when that push will never succeed.
+//
+// The pair comes back as a StuckCompaction so discardLocalHistory can take it
+// as it takes a stuck one: local is the checkpoint chain, remote the tip it
+// replaced or one it accounts for.
+func (r *Repository) unpublishedCompaction(
+	ctx context.Context,
+	config core.ProjectConfig,
+	taskID string,
+) (StuckCompaction, bool, error) {
+	ref, found, err := r.taskRef(ctx, taskID)
+	if err != nil || !found {
+		return StuckCompaction{}, false, err
+	}
+	tracking, err := r.TrackingTaskHeads(ctx, config)
+	if err != nil {
+		return StuckCompaction{}, false, err
+	}
+	remoteHead := tracking[taskID]
+	if remoteHead == "" || remoteHead == ref.objectID {
+		return StuckCompaction{}, false, nil
+	}
+	tips, err := r.readTaskHeadsPartial(ctx, config, []TaskHead{
+		{TaskID: taskID, ObjectID: ref.objectID},
+		{TaskID: taskID, ObjectID: remoteHead},
+	})
+	if err != nil {
+		return StuckCompaction{}, false, err
+	}
+	if len(tips) != 2 || tips[0].Err != nil || tips[1].Err != nil {
+		return StuckCompaction{}, false, nil
+	}
+	local, remote := tips[0].Snapshot, tips[1].Snapshot
+	if local.Operation.HistoryGeneration == remote.Operation.HistoryGeneration {
+		return StuckCompaction{}, false, nil
+	}
+	if _, leased, err := r.compactionLease(ctx, config, taskID, local, remoteHead); err != nil || !leased {
+		return StuckCompaction{}, false, err
+	}
+	chains, err := r.completeTaskChains(ctx, config, []TaskHead{{TaskID: taskID, ObjectID: local.Head}})
+	if err != nil {
+		return StuckCompaction{}, false, err
+	}
+	return StuckCompaction{TaskID: taskID, local: local, remote: remote, localChain: chains[0]}, true, nil
 }
 
 // retryAdoption runs fetch's settlement of a stuck pair once more and applies
