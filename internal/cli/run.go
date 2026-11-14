@@ -1060,9 +1060,10 @@ func sharedAssignmentWarning(taskID string, others []core.Assignment) core.Warni
 // task. A reconcile is the design's own sentence — the push lost, reconcile
 // replays, and the post-replay state shows the other assignment — and it is also
 // what keeps this off the hot path, since a steady-state synchronization
-// reconciles nothing and therefore asks nothing.
+// reconciles nothing and therefore asks nothing. Adopting a teammate's
+// checkpoint with local operations replayed onto it is the same replay.
 func replayedByFetch(status gitstore.SyncStatus) bool {
-	return status == gitstore.SyncReconciled
+	return status == gitstore.SyncReconciled || status == gitstore.SyncAdoptedReplayed
 }
 
 // reconciledSharingWarnings names the tasks this identity turns out to share,

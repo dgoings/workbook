@@ -427,9 +427,15 @@ func (r *Repository) reconcileCompactedTasks(
 		return nil, err
 	}
 
+	parked, err := r.nextParkedRefIndexes(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+
 	outcomes := make([]compactedOutcome, len(requests))
 	for index, request := range requests {
-		outcome, err := r.reconcileCompactedTask(ctx, config, dependencies, request, localChains[index], remoteChains[index])
+		outcome, err := r.reconcileCompactedTask(ctx, config, dependencies, parked[request.TaskID], request,
+			localChains[index], remoteChains[index])
 		if err != nil {
 			return nil, err
 		}
@@ -442,6 +448,7 @@ func (r *Repository) reconcileCompactedTask(
 	ctx context.Context,
 	config core.ProjectConfig,
 	dependencies map[string][]string,
+	parkedIndex int,
 	request reconcileRequest,
 	localChain, remoteChain []OperationCommit,
 ) (compactedOutcome, error) {
@@ -456,7 +463,7 @@ func (r *Repository) reconcileCompactedTask(
 		case remoteCheckpoint != nil && !localFromRemote:
 			return r.adoptRemoteCheckpoint(ctx, config, dependencies, request, remoteCheckpoint)
 		case localCheckpoint != nil:
-			return r.replayOntoLocalCheckpoint(ctx, config, dependencies, request, localCheckpoint, remoteChain)
+			return r.replayOntoLocalCheckpoint(ctx, config, dependencies, parkedIndex, request, localCheckpoint, remoteChain)
 		}
 	}
 	return compactedOutcome{
@@ -502,10 +509,18 @@ func (r *Repository) adoptRemoteCheckpoint(
 	}
 
 	fallBack := func() (compactedOutcome, error) {
+		// A person made each change the detail counts; a leftover local
+		// checkpoint is bookkeeping, not one of them.
+		unpushed := 0
+		for _, commit := range localOnly {
+			if _, isCheckpoint := commit.Operation.Checkpoint(); !isCheckpoint {
+				unpushed++
+			}
+		}
 		outcome.Result = SyncTaskResult{
 			TaskID: request.TaskID,
 			Status: SyncCompactedOnOrigin,
-			Detail: compactedOnOriginDetail(request.Local.State.Task.Title, request.TaskID, len(localOnly)),
+			Detail: compactedOnOriginDetail(request.Local.State.Task.Title, request.TaskID, unpushed),
 		}
 		outcome.Withhold = true
 		outcome.Kind = compactedLeftOnOldHistory
@@ -514,7 +529,7 @@ func (r *Repository) adoptRemoteCheckpoint(
 	if refuseNewerWriterReplay(request) != nil {
 		return fallBack()
 	}
-	replay, failure, err := r.replayOperations(ctx, config, request.TaskID, request.Remote, localOnly,
+	replay, failure, err := r.replayOperations(ctx, config, request.TaskID, request.Remote, localOnly, false,
 		request.Remote.Operation.HistoryGeneration, dependencies)
 	if err != nil {
 		return outcome, err
@@ -539,12 +554,20 @@ func (r *Repository) adoptRemoteCheckpoint(
 // is among those the checkpoint compacted; anything else is an unrelated
 // history and is never published over. What origin added that the checkpoint
 // does not hold is replayed onto the local tip in the local generation, so the
-// canonical ref only moves forward and nothing is parked. Origin's tip is then
-// fully accounted for, and the push phase leases against it.
+// canonical ref only moves forward. Origin's tip is then fully accounted for,
+// and the push phase leases against it.
+//
+// A conflict is settled as an ordinary reconcile settles one: origin wins.
+// Origin's operation is applied over the local value, replay goes on, the
+// pre-sync local tip is parked under parkedIndex so its text can be recovered,
+// and the conflict is reported. A tombstone conflict cannot be settled that
+// way, since nothing applies to a deleted task, so it leaves the ref where it
+// is and keeps the task off origin.
 func (r *Repository) replayOntoLocalCheckpoint(
 	ctx context.Context,
 	config core.ProjectConfig,
 	dependencies map[string][]string,
+	parkedIndex int,
 	request reconcileRequest,
 	checkpoint *core.CheckpointData,
 	remoteChain []OperationCommit,
@@ -567,7 +590,7 @@ func (r *Repository) replayOntoLocalCheckpoint(
 		return outcome, nil
 	}
 
-	replay, failure, err := r.replayOperations(ctx, config, request.TaskID, request.Local, remoteOnly,
+	replay, failure, err := r.replayOperations(ctx, config, request.TaskID, request.Local, remoteOnly, true,
 		request.Local.Operation.HistoryGeneration, dependencies)
 	if err != nil {
 		return outcome, err
@@ -583,16 +606,21 @@ func (r *Repository) replayOntoLocalCheckpoint(
 		}
 		outcome.Result = SyncTaskResult{TaskID: request.TaskID, Status: status, Detail: failure.Error()}
 	case replay.conflict != nil:
-		// Replay ran in the other direction from an ordinary reconcile: the
-		// pack it stopped on is origin's, and the value it ran into is this
-		// clone's. The ref stays where it is, since origin's tip is not yet
-		// accounted for and could not be leased over.
-		conflict := *replay.conflict
-		if conflict.Description != nil {
-			swapped := *conflict.Description
-			swapped.Ours, swapped.Theirs = swapped.Theirs, swapped.Ours
-			conflict.Description = &swapped
+		// A tombstone conflict. The ref stays where it is, since origin's tip
+		// is not accounted for and could not be leased over.
+		conflict := fromLocalSide(*replay.conflict)
+		outcome.Conflict = &conflict
+		outcome.Result = SyncTaskResult{TaskID: request.TaskID, Status: SyncConflicted, Detail: core.ConflictDetail(conflict)}
+	case replay.overridden != nil:
+		conflict := fromLocalSide(*replay.overridden)
+		outcome.Update = &canonicalRefUpdate{
+			TaskID:     request.TaskID,
+			Next:       replay.parent.Head,
+			Expected:   request.Local.Head,
+			ParkedRef:  fmt.Sprintf("%s%s/%d", reconciledRefPrefix, request.TaskID, parkedIndex),
+			ParkedHead: request.Local.Head,
 		}
+		outcome.Snapshot = replay.parent
 		outcome.Conflict = &conflict
 		outcome.Result = SyncTaskResult{TaskID: request.TaskID, Status: SyncConflicted, Detail: core.ConflictDetail(conflict)}
 	default:
@@ -673,6 +701,18 @@ func (r *Repository) operationsNotIn(
 	return missing, nil
 }
 
+// fromLocalSide restates a conflict met replaying origin's operations onto
+// this clone's history the way every other conflict is reported: ours is this
+// clone's value and theirs is origin's. Replay found them the other way round.
+func fromLocalSide(conflict core.Conflict) core.Conflict {
+	if conflict.Description != nil {
+		swapped := *conflict.Description
+		swapped.Ours, swapped.Theirs = swapped.Theirs, swapped.Ours
+		conflict.Description = &swapped
+	}
+	return conflict
+}
+
 func operationIDSet(ids []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
@@ -683,6 +723,8 @@ func operationIDSet(ids []string) map[string]struct{} {
 
 // replayOperations replays commits, oldest first, onto onto in generation. The
 // three-way base is the commit before the first of them on its own history.
+// originWins says the commits are origin's, so a conflict applies them over
+// onto's value rather than stopping (see taskReplay.originWins).
 // failure reports why the replay could not run cleanly: a commit with no
 // history before it, one that does not validate, or one that cannot be applied
 // onto onto. err is reserved for this clone failing to read its own objects.
@@ -692,6 +734,7 @@ func (r *Repository) replayOperations(
 	taskID string,
 	onto core.Snapshot,
 	commits []OperationCommit,
+	originWins bool,
 	generation string,
 	dependencies map[string][]string,
 ) (replay taskReplay, failure error, err error) {
@@ -726,6 +769,7 @@ func (r *Repository) replayOperations(
 		dependencies: taskDependencyGraph(dependencies, taskID, onto.State.Task),
 		subjects:     subjects,
 		generation:   generation,
+		originWins:   originWins,
 	}
 	for _, tip := range tips[1:] {
 		done, err := replay.next(ctx, r, tip.Snapshot)

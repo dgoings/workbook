@@ -887,3 +887,36 @@ func TestSyncAdoptsATeammatesCompactionIntoTheProjection(t *testing.T) {
 		t.Fatalf("shown task = %+v, want the checkpoint's title and status with the offline description", shown)
 	}
 }
+
+// Adopting a teammate's checkpoint replays the local claim onto it, which is a
+// reconcile like any other: the claimant learns from that sync that the claim
+// landed beside the teammate's.
+func TestSyncAdoptionReportsASharedClaim(t *testing.T) {
+	t.Parallel()
+	first, second, task := stagedClaimRace(t)
+	compactRun(t, first, "update", task.ID, "--status", "done")
+	compactRun(t, first, "compact", "--no-backup")
+
+	stdout := compactRun(t, second, "sync", "--json")
+	document := assertJSONResult(t, stdout, "sync")
+	var result gitstore.SyncRunResult
+	if err := json.Unmarshal(document.Data, &result); err != nil {
+		t.Fatalf("decode sync: %v; output = %q", err, stdout)
+	}
+	adopted := false
+	for _, item := range result.Fetch.Tasks {
+		adopted = adopted || (item.TaskID == task.ID && item.Status == gitstore.SyncAdoptedReplayed)
+	}
+	if !adopted {
+		t.Fatalf("fetch tasks = %+v, want %s %s", result.Fetch.Tasks, task.ID, gitstore.SyncAdoptedReplayed)
+	}
+	shared := false
+	for _, warning := range document.Warnings {
+		if warning.Code == core.WarningAssignmentShared && strings.Contains(warning.Message, "one@example.com") {
+			shared = true
+		}
+	}
+	if !shared {
+		t.Fatalf("sync warnings = %#v, want the claim shared with one@example.com reported", document.Warnings)
+	}
+}

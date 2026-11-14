@@ -218,6 +218,14 @@ type taskReplay struct {
 	// so a pack dropped as a no-op would read as lost to every guard that
 	// checks the move.
 	generation string
+	// originWins makes a description or dependency-cycle conflict apply the
+	// replayed pack over the value it ran into instead of stopping, and
+	// records the first such conflict in overridden. Replay runs this way
+	// when the replayed packs are origin's, so that, as in an ordinary
+	// reconcile, origin's side is the one kept. A tombstone conflict still
+	// stops: a pack cannot be applied to a deleted task.
+	originWins bool
+	overridden *core.Conflict
 	replayed   int
 	skipped    int
 	conflict   *core.Conflict
@@ -228,8 +236,13 @@ type taskReplay struct {
 // last-syncer-wins.
 func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Snapshot) (bool, error) {
 	if conflict := replay.classify(local.Operation); conflict != nil {
-		replay.conflict = conflict
-		return true, nil
+		if !replay.originWins || conflict.Type == core.ConflictTombstone {
+			replay.conflict = conflict
+			return true, nil
+		}
+		if replay.overridden == nil {
+			replay.overridden = conflict
+		}
 	}
 	if replay.generation == "" && replayNoOp(replay.parent.State, local.Operation) {
 		replay.skipped++

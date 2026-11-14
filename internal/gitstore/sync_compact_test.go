@@ -830,6 +830,40 @@ func TestFetchAdoptionFallsBackOnConflict(t *testing.T) {
 	}
 }
 
+// The fallback counts the changes a person made, not checkpoints. Here this
+// clone compacted an unpushed edit, lost the history behind its checkpoint to
+// gc, and edited again; origin compacted the earlier tip. The leftover local
+// checkpoint cannot be replayed, so the fallback runs, and it reports the one
+// edit made on top of the checkpoint.
+func TestFetchAdoptionFallbackCountsOnlyOperationsAPersonMade(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+	task := sharedSyncTask(t, first, second, config, "Compacted twice")
+	updateSyncTask(t, second, config, task.ID, "Compacted unpushed title")
+	unpushed := compactLocally(t, second, config, task.ID)
+	syncGit(t, second.Root, "gc", "--prune=now", "--quiet")
+	if err := exec.Command("git", "-C", second.Root, "cat-file", "-e", unpushed.tip.Head).Run(); err == nil {
+		t.Fatalf("the compacted unpushed edit %s survived gc --prune=now", unpushed.tip.Head)
+	}
+	updateSyncTask(t, second, config, task.ID, "Title after the checkpoint")
+	published := compactLocally(t, first, config, task.ID)
+	publishCheckpoint(t, first, config, published)
+
+	result, err := second.Sync(ctx, config)
+	if got := core.CategoryOf(err); got != core.CategoryOperational {
+		t.Fatalf("Sync() error category = %q, want %q; error = %v; result = %#v", got, core.CategoryOperational, err, result)
+	}
+	want := SyncTaskResult{
+		TaskID: task.ID,
+		Status: SyncCompactedOnOrigin,
+		Detail: compactedOnOriginDetail("Title after the checkpoint", task.ID, 1),
+	}
+	if item := syncOutcome(t, result.Fetch, task.ID); item != want {
+		t.Fatalf("fetch outcome = %#v, want %#v", item, want)
+	}
+}
+
 // A clone that compacted without publishing, while a teammate added a change to
 // the old history, replays that change onto its checkpoint and then leases
 // against the teammate's tip.
@@ -874,9 +908,10 @@ func TestFetchReconcilesRemoteEditAfterLocalCompaction(t *testing.T) {
 }
 
 // Origin's change to the old history conflicts with an edit this clone made on
-// its checkpoint. The conflict is reported from this clone's side, the ref
-// stays where it is, and nothing is pushed: origin's tip is not accounted for,
-// so the checkpoint may not be leased over it.
+// its checkpoint. Origin wins, as in an ordinary reconcile: its operation is
+// applied over the local value, the pre-sync tip is parked so the local text
+// can be recovered, the conflict is reported, and the push leases against
+// origin's tip as usual. The next synchronization has nothing to say.
 func TestFetchReportsConflictReplayingOriginOntoLocalCheckpoint(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -893,35 +928,124 @@ func TestFetchReportsConflictReplayingOriginOntoLocalCheckpoint(t *testing.T) {
 	setSyncTaskDescription(t, first, config, task.ID, "Our text")
 	local := refValue(t, first, taskRefPrefix+task.ID)
 	setSyncTaskDescription(t, second, config, task.ID, "Their text")
+	theirText := currentSnapshot(t, second, config, task.ID)
+	updateSyncTask(t, second, config, task.ID, "Their title")
 	if result, err := second.Sync(ctx, config); err != nil {
 		t.Fatalf("second Sync() error = %v; result = %#v", err, result)
 	}
-	theirs := refValue(t, second, taskRefPrefix+task.ID)
+	teammate := currentSnapshot(t, second, config, task.ID)
 	commands := observeCommands(first)
 
 	result, err := first.Sync(ctx, config)
 	if got := core.CategoryOf(err); got != core.CategoryConflict {
 		t.Fatalf("Sync() error category = %q, want %q; error = %v; result = %#v", got, core.CategoryConflict, err, result)
 	}
-	assertSyncOutcome(t, result.Fetch, task.ID, SyncConflicted)
 	if len(result.Fetch.Conflicts) != 1 || result.Fetch.Conflicts[0].Description == nil {
 		t.Fatalf("conflicts = %#v, want one description conflict", result.Fetch.Conflicts)
 	}
+	conflict := result.Fetch.Conflicts[0]
 	want := core.DescriptionConflict{Base: "Base text", Ours: "Our text", Theirs: "Their text"}
-	if got := *result.Fetch.Conflicts[0].Description; got != want {
+	if got := *conflict.Description; got != want {
 		t.Fatalf("description conflict = %#v, want %#v", got, want)
 	}
-	if got := refValue(t, first, taskRefPrefix+task.ID); got != local {
-		t.Fatalf("local ref = %s, want it left at %s", got, local)
+	if item := syncOutcome(t, result.Fetch, task.ID); item.Status != SyncConflicted || item.Detail != core.ConflictDetail(conflict) {
+		t.Fatalf("fetch outcome = %#v, want %q with the conflict's detail", item, SyncConflicted)
+	}
+
+	// Origin's text is canonical, on top of this clone's own edit, with
+	// origin's operation ID, and replay went on to origin's next change.
+	resolved := currentSnapshot(t, first, config, task.ID)
+	if resolved.State.Task.Description != "Their text" || resolved.State.Task.Title != "Their title" {
+		t.Fatalf("task = %q / %q, want origin's text and title", resolved.State.Task.Title, resolved.State.Task.Description)
+	}
+	described := syncGit(t, first.Root, "rev-parse", resolved.Head+"^")
+	if parent := syncGit(t, first.Root, "rev-parse", described+"^"); parent != local {
+		t.Fatalf("replayed description's parent = %s, want the local edit %s", parent, local)
 	}
 	if parent := syncGit(t, first.Root, "rev-parse", local+"^"); parent != compacted.checkpoint.Head {
 		t.Fatalf("local edit's parent = %s, want the checkpoint %s", parent, compacted.checkpoint.Head)
 	}
+	if got, want := operationIDs(currentSnapshotAt(t, first, config, task.ID, described)), operationIDs(theirText); !slices.Equal(got, want) {
+		t.Fatalf("replayed description operation IDs = %v, want origin's %v", got, want)
+	}
+	if got, want := operationIDs(resolved), operationIDs(teammate); !slices.Equal(got, want) {
+		t.Fatalf("replayed title operation IDs = %v, want origin's %v", got, want)
+	}
+
+	// The local text is recoverable from the parked pre-sync tip.
+	parked := reconciledRefPrefix + task.ID + "/0"
+	if names := parkedRefNames(t, first, task.ID); !slices.Equal(names, []string{parked}) {
+		t.Fatalf("parked refs = %v, want only %s", names, parked)
+	}
+	if got := refValue(t, first, parked); got != local {
+		t.Fatalf("parked ref = %s, want the pre-sync tip %s", got, local)
+	}
+	if recovered := currentSnapshotAt(t, first, config, task.ID, local); recovered.State.Task.Description != "Our text" {
+		t.Fatalf("parked description = %q, want the local text", recovered.State.Task.Description)
+	}
+
+	// The push leased against origin's tip and published.
+	assertSyncOutcome(t, result.Push, task.ID, SyncCompactionPublished)
+	assertLeasedPush(t, *commands, compactedSyncTask{taskID: task.ID, tip: teammate, checkpoint: resolved})
+	if got := remoteRefValue(t, first, taskRefPrefix+task.ID); got != resolved.Head {
+		t.Fatalf("origin holds %s, want the resolved tip %s", got, resolved.Head)
+	}
+
+	again, err := first.Sync(ctx, config)
+	if err != nil {
+		t.Fatalf("second Sync() error = %v; result = %#v", err, again)
+	}
+	assertSyncOutcome(t, again.Fetch, task.ID, SyncUnchanged)
+	assertSyncOutcome(t, again.Push, task.ID, SyncUpToDate)
+	if len(again.Fetch.Conflicts) != 0 {
+		t.Fatalf("second Sync() conflicts = %#v, want none", again.Fetch.Conflicts)
+	}
+	if names := parkedRefNames(t, first, task.ID); !slices.Equal(names, []string{parked}) {
+		t.Fatalf("parked refs after the second Sync() = %v, want only %s", names, parked)
+	}
+}
+
+// currentSnapshotAt reads the task's validated snapshot at commit.
+func currentSnapshotAt(t *testing.T, repo *Repository, config core.ProjectConfig, taskID, commit string) core.Snapshot {
+	t.Helper()
+	tips, err := repo.readTaskHeadsPartial(context.Background(), config, []TaskHead{{TaskID: taskID, ObjectID: commit}})
+	if err != nil || len(tips) != 1 || tips[0].Err != nil {
+		t.Fatalf("read %s at %s: %v %#v", taskID, commit, err, tips)
+	}
+	return tips[0].Snapshot
+}
+
+// Origin's edit cannot be applied over a deletion this clone made on its
+// checkpoint, so origin cannot win that one. The tombstone conflict is
+// reported, the ref stays where it is, and nothing is pushed.
+func TestFetchReportsTombstoneConflictReplayingOriginOntoLocalCheckpoint(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+	task := sharedSyncTask(t, first, second, config, "Deleted after compaction")
+	compactLocally(t, first, config, task.ID)
+	deleteSyncTask(t, first, config, task.ID)
+	local := refValue(t, first, taskRefPrefix+task.ID)
+	updateSyncTask(t, second, config, task.ID, "Their title")
+	if result, err := second.Sync(ctx, config); err != nil {
+		t.Fatalf("second Sync() error = %v; result = %#v", err, result)
+	}
+	theirs := refValue(t, second, taskRefPrefix+task.ID)
+
+	result, err := first.Sync(ctx, config)
+	if got := core.CategoryOf(err); got != core.CategoryConflict {
+		t.Fatalf("Sync() error category = %q, want %q; error = %v; result = %#v", got, core.CategoryConflict, err, result)
+	}
+	assertSyncOutcome(t, result.Fetch, task.ID, SyncConflicted)
+	if len(result.Fetch.Conflicts) != 1 || result.Fetch.Conflicts[0].Type != core.ConflictTombstone {
+		t.Fatalf("conflicts = %#v, want one tombstone conflict", result.Fetch.Conflicts)
+	}
+	if got := refValue(t, first, taskRefPrefix+task.ID); got != local {
+		t.Fatalf("local ref = %s, want it left on the deletion %s", got, local)
+	}
+	assertNoParkedRefs(t, first, task.ID)
 	if item, found := pushOutcome(result.Push, task.ID); found {
 		t.Fatalf("push phase published the task anyway: %#v", item)
-	}
-	if got := countPushesTargeting(*commands, taskRefPrefix+task.ID); got != 0 {
-		t.Fatalf("pushes naming the task ref = %d, want none; commands = %v", got, *commands)
 	}
 	if got := remoteRefValue(t, first, taskRefPrefix+task.ID); got != theirs {
 		t.Fatalf("origin holds %s, want the teammate's tip %s", got, theirs)
