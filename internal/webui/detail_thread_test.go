@@ -984,3 +984,45 @@ globalThis.FileReader = class {
   }
 };
 `
+
+// A file compaction dropped is drawn by name with no link, says it was removed
+// by compaction and when, and weighs nothing in the panel's total. An image
+// reference to it in a comment draws as the text somebody typed rather than as
+// an <img> pointing at bytes nobody kept.
+func TestHandlerClientDrawsADroppedAttachmentAsRemoved(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	task := threadPageTask()
+	_, _, dropped := core.DropFileAttachments(task.Attachments[:1],
+		"01K0M6B8A4FTT8C39MXXYTWD01", time.Date(2026, time.November, 10, 14, 30, 0, 0, time.UTC))
+	task.Attachments[0] = dropped[0]
+	task.Comments = []core.Comment{{
+		ID: threadPageOldest, Author: "first@example.com", CreatedAt: time.Date(2026, time.August, 13, 9, 0, 0, 0, time.UTC),
+		Body: "![trace](attachment:" + threadPageFileID + ")",
+	}}
+	program := threadPageProgram(t, []core.Task{task}, `
+setTimeout(() => {
+  const rows = panelRows("attachments");
+  const name = findElement(rows[0], (element) => hasClassToken(element, "attachment__name"));
+  if (findElement(name, (element) => element.tagName === "A")) {
+    throw new Error("a dropped attachment still links to its download route");
+  }
+  if (name.textContent !== "trace.log") throw new Error("the dropped file's name = " + JSON.stringify(name.textContent));
+  const meta = findElement(rows[0], (element) => hasClassToken(element, "attachment__meta"));
+  if (!meta.textContent.includes("Removed by compaction on 2026-11-10")) {
+    throw new Error("the dropped file does not say it was removed: " + JSON.stringify(meta.textContent));
+  }
+  const count = findElement(panelSection("attachments"), (element) => hasDataKey(element, "panelCount"));
+  if (!count.textContent.includes("0 B of files")) {
+    throw new Error("a dropped file still counts toward the total: " + JSON.stringify(count.textContent));
+  }
+  const comment = panelRows("comments")[0];
+  if (findElement(comment, (element) => element.tagName === "IMG" || element.tagName === "A")) {
+    throw new Error("a reference to a dropped file still draws it");
+  }
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the dropped attachment render: %v\n%s", err, output)
+	}
+}

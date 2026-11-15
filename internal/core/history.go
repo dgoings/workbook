@@ -101,6 +101,20 @@ type ChangeLog struct {
 	Showing   int                `json:"showing"`
 	Changes   []Change           `json:"changes"`
 	Truncated *HistoryTruncation `json:"truncated,omitempty"`
+	// Compacted summarizes the history a checkpoint replaced, when the chain
+	// begins at one. The checkpoint itself is not a change, so it is not
+	// among Changes and is not counted in Total.
+	Compacted *CompactedSummary `json:"compacted,omitempty"`
+}
+
+// CompactedSummary is what a checkpoint records about the changes it
+// replaced: how many there were, the wall times of the first and last of them,
+// and when the compaction ran.
+type CompactedSummary struct {
+	Changes int       `json:"changes"`
+	From    time.Time `json:"from"`
+	To      time.Time `json:"to"`
+	On      time.Time `json:"on"`
 }
 
 // Comparison is a field-level diff between two points in one task's history,
@@ -216,11 +230,23 @@ func StateAt(history TaskHistory) (TaskData, error) {
 // as they are rather than reordered.
 func BuildChangeLog(history TaskHistory, limit int, all bool) ChangeLog {
 	steps, truncation := ReplayHistory(history)
+	var compacted *CompactedSummary
+	if len(steps) > 0 && steps[0].Entry.Parent == "" {
+		if checkpoint, ok := steps[0].Entry.Operation.Checkpoint(); ok {
+			compacted = &CompactedSummary{
+				Changes: checkpoint.CompactedCommits,
+				From:    checkpoint.FirstWallTime,
+				To:      checkpoint.LastWallTime,
+				On:      steps[0].Entry.Operation.WallTime,
+			}
+			steps = steps[1:]
+		}
+	}
 	changes := make([]Change, 0, len(steps))
 	for _, step := range steps {
 		changes = append(changes, describeStep(step))
 	}
-	log := ChangeLog{Total: len(changes), Truncated: truncation}
+	log := ChangeLog{Total: len(changes), Truncated: truncation, Compacted: compacted}
 	if !all {
 		if limit <= 0 {
 			limit = DefaultChangeLimit

@@ -96,6 +96,8 @@ func Run(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout
 		err = runRebuild(ctx, commandArgs, cwd, stdout, stderr)
 	case "validate":
 		err = runValidate(ctx, commandArgs, cwd, stdout, stderr)
+	case "compact":
+		err = runCompact(ctx, commandArgs, cwd, stdout, stderr)
 	case "version":
 		err = runVersion(commandArgs, stdout)
 	case "fetch":
@@ -240,7 +242,8 @@ func runFetch(ctx context.Context, args []string, cwd string, stdout, stderr io.
 		return err
 	}
 	result, syncErr := repository.Fetch(ctx, config)
-	warnings := fetchSharingWarnings(ctx, repository, config, &result)
+	warnings := settleFetchedHistories(ctx, repository, config, result)
+	warnings = append(warnings, fetchSharingWarnings(ctx, repository, config, &result)...)
 	writeSyncPhaseResultWithConfig(stdout, "fetch", result, result.Conflicts, result.ConfigConflicts, warnings, *jsonMode,
 		func(output io.Writer) {
 			writeSyncResult(output, result)
@@ -364,7 +367,8 @@ func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	}
 
 	result, syncErr := repository.Sync(ctx, config)
-	warnings := fetchSharingWarnings(ctx, repository, config, &result.Fetch)
+	warnings := settleFetchedHistories(ctx, repository, config, result.Fetch)
+	warnings = append(warnings, fetchSharingWarnings(ctx, repository, config, &result.Fetch)...)
 	writeSyncPhaseResultWithConfig(stdout, "sync", result, result.Fetch.Conflicts, result.Fetch.ConfigConflicts, warnings, *jsonMode,
 		func(output io.Writer) {
 			writeSyncRunResult(output, result)
@@ -440,6 +444,19 @@ func runSyncStatus(repository *gitstore.Repository, stdout io.Writer, jsonMode b
 	return nil
 }
 
+// parseSyncInterval validates a --interval value. It lives apart from
+// runSyncWatch so the check can be tested without starting a watcher.
+func parseSyncInterval(interval string) (time.Duration, error) {
+	parsed, err := parseDuration(interval)
+	if errors.Is(err, errNonPositiveDuration) {
+		return 0, core.Errorf(core.CategoryInvocation, "sync --interval must be positive")
+	}
+	if err != nil {
+		return 0, core.Wrap(core.CategoryInvocation, "sync --interval must be a duration such as 5s", err)
+	}
+	return parsed, nil
+}
+
 func runSyncWatch(
 	ctx context.Context,
 	repository *gitstore.Repository,
@@ -450,12 +467,9 @@ func runSyncWatch(
 ) error {
 	every := syncloop.DefaultInterval
 	if interval != "" {
-		parsed, err := time.ParseDuration(interval)
+		parsed, err := parseSyncInterval(interval)
 		if err != nil {
-			return core.Wrap(core.CategoryInvocation, "sync --interval must be a duration such as 5s", err)
-		}
-		if parsed <= 0 {
-			return core.Errorf(core.CategoryInvocation, "sync --interval must be positive")
+			return err
 		}
 		every = parsed
 	}
@@ -1048,9 +1062,10 @@ func sharedAssignmentWarning(taskID string, others []core.Assignment) core.Warni
 // task. A reconcile is the design's own sentence — the push lost, reconcile
 // replays, and the post-replay state shows the other assignment — and it is also
 // what keeps this off the hot path, since a steady-state synchronization
-// reconciles nothing and therefore asks nothing.
+// reconciles nothing and therefore asks nothing. Adopting a teammate's
+// checkpoint with local operations replayed onto it is the same replay.
 func replayedByFetch(status gitstore.SyncStatus) bool {
-	return status == gitstore.SyncReconciled
+	return status == gitstore.SyncReconciled || status == gitstore.SyncAdoptedReplayed
 }
 
 // reconciledSharingWarnings names the tasks this identity turns out to share,
@@ -1291,6 +1306,9 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if err := session.refreshConfiguration(ctx); err != nil {
 		return err
 	}
+	if options.Exclude, err = session.stuckTasks(ctx); err != nil {
+		return err
+	}
 	if limited {
 		return writeNextCandidates(ctx, session, options, limit, stdout, stderr, *jsonMode)
 	}
@@ -1429,6 +1447,15 @@ func runNextClaim(
 ) error {
 	var chosen *core.Task
 	result, err := session.mutate(ctx, "", func(ctx context.Context) (core.MutationResult, error) {
+		// A task its compaction left stuck is never offered: mutate cannot
+		// refuse it, because which task it is was not known when the command
+		// started, and refusing it here would stop the claim rather than move
+		// on to the next task.
+		stuck, err := session.stuckTasks(ctx)
+		if err != nil {
+			return core.MutationResult{}, err
+		}
+		options.Exclude = stuck
 		task, err := session.service.Next(ctx, options)
 		if err != nil {
 			return core.MutationResult{}, err
@@ -1750,6 +1777,20 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		fresh.Keys = state.Keys
 		return fresh, nil
 	}
+	// writerFor is current for a mutation of one existing task: a task its
+	// compaction left stuck is refused here in the words the command line
+	// uses, since the board's writes go through the service and the board's
+	// publisher rather than through taskSession.mutate. See refuseStuckTask.
+	writerFor := func(requestContext context.Context, id string) (core.Service, error) {
+		writer, err := current(requestContext)
+		if err != nil {
+			return core.Service{}, err
+		}
+		if err := refuseStuckTask(requestContext, repository, writer, id); err != nil {
+			return core.Service{}, err
+		}
+		return writer, nil
+	}
 	// The board's status administration goes through the verb family's own
 	// planners, so what it refuses and what it records are what `workbook
 	// status` refuses and records. Only the write's surroundings differ; see
@@ -1888,7 +1929,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			return publisher.publish(requestContext, result, err)
 		},
 		Update: func(requestContext context.Context, id string, input core.UpdateInput) (core.MutationResult, error) {
-			writer, err := current(requestContext)
+			writer, err := writerFor(requestContext, id)
 			if err != nil {
 				return core.MutationResult{}, err
 			}
@@ -1896,7 +1937,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			return publisher.publish(requestContext, result, err)
 		},
 		UpdateStatus: func(requestContext context.Context, id string, status core.Status, expectedHead string) (core.MutationResult, error) {
-			writer, err := current(requestContext)
+			writer, err := writerFor(requestContext, id)
 			if err != nil {
 				return core.MutationResult{}, err
 			}
@@ -1904,7 +1945,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			return publisher.publish(requestContext, result, err)
 		},
 		Position: func(requestContext context.Context, id string, input core.PlaceInput) (core.MutationResult, error) {
-			writer, err := current(requestContext)
+			writer, err := writerFor(requestContext, id)
 			if err != nil {
 				return core.MutationResult{}, err
 			}
@@ -1912,7 +1953,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			return publisher.publish(requestContext, result, err)
 		},
 		Delete: func(requestContext context.Context, id string, input core.DeleteInput) (core.MutationResult, error) {
-			writer, err := current(requestContext)
+			writer, err := writerFor(requestContext, id)
 			if err != nil {
 				return core.MutationResult{}, err
 			}
@@ -1920,7 +1961,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			return publisher.publish(requestContext, result, err)
 		},
 		Restore: func(requestContext context.Context, id string, input core.RestoreInput) (core.MutationResult, error) {
-			writer, err := current(requestContext)
+			writer, err := writerFor(requestContext, id)
 			if err != nil {
 				return core.MutationResult{}, err
 			}
@@ -1932,7 +1973,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		// and the command line write one pack shape and share one refusal
 		// surface.
 		AddComment: func(requestContext context.Context, id string, input core.CommentAddInput) (core.MutationResult, error) {
-			writer, err := current(requestContext)
+			writer, err := writerFor(requestContext, id)
 			if err != nil {
 				return core.MutationResult{}, err
 			}
@@ -1940,7 +1981,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			return publisher.publish(requestContext, result, err)
 		},
 		EditComment: func(requestContext context.Context, id string, input core.CommentEditInput) (core.MutationResult, error) {
-			writer, err := current(requestContext)
+			writer, err := writerFor(requestContext, id)
 			if err != nil {
 				return core.MutationResult{}, err
 			}
@@ -1948,7 +1989,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			return publisher.publish(requestContext, result, err)
 		},
 		RemoveComment: func(requestContext context.Context, id string, input core.CommentRemoveInput) (core.MutationResult, error) {
-			writer, err := current(requestContext)
+			writer, err := writerFor(requestContext, id)
 			if err != nil {
 				return core.MutationResult{}, err
 			}
@@ -1968,7 +2009,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		// answer, because core refuses to record an assignment with no creator.
 		Identity: service.Actor,
 		Assign: func(requestContext context.Context, id string, input core.AssignInput) (core.MutationResult, error) {
-			writer, err := current(requestContext)
+			writer, err := writerFor(requestContext, id)
 			if err != nil {
 				return core.MutationResult{}, err
 			}
@@ -1976,7 +2017,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			return publisher.publish(requestContext, sharedAssignment(result), err)
 		},
 		Unassign: func(requestContext context.Context, id string, input core.UnassignInput) (core.MutationResult, error) {
-			writer, err := current(requestContext)
+			writer, err := writerFor(requestContext, id)
 			if err != nil {
 				return core.MutationResult{}, err
 			}
@@ -1984,7 +2025,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			return publisher.publish(requestContext, result, err)
 		},
 		AddAttachment: func(requestContext context.Context, id string, input core.AttachmentAddInput) (core.MutationResult, error) {
-			writer, err := current(requestContext)
+			writer, err := writerFor(requestContext, id)
 			if err != nil {
 				return core.MutationResult{}, err
 			}
@@ -1992,7 +2033,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			return publisher.publish(requestContext, result, err)
 		},
 		RemoveAttachment: func(requestContext context.Context, id string, input core.AttachmentRemoveInput) (core.MutationResult, error) {
-			writer, err := current(requestContext)
+			writer, err := writerFor(requestContext, id)
 			if err != nil {
 				return core.MutationResult{}, err
 			}
@@ -2028,7 +2069,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			return reader.AttachmentContent(requestContext, attachment)
 		},
 		Depend: func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
-			writer, err := current(requestContext)
+			writer, err := writerFor(requestContext, id)
 			if err != nil {
 				return core.MutationResult{}, err
 			}
@@ -2036,7 +2077,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			return publisher.publish(requestContext, result, err)
 		},
 		Free: func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
-			writer, err := current(requestContext)
+			writer, err := writerFor(requestContext, id)
 			if err != nil {
 				return core.MutationResult{}, err
 			}

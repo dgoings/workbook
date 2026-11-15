@@ -91,6 +91,18 @@ func TestCommandHelp(t *testing.T) {
 			positionals: nil,
 			options:     []string{"full", "json"},
 		},
+		{
+			// Two forms, the second lined up under the first.
+			name:   "compact",
+			target: []string{"compact"},
+			synopsis: "Usage: workbook compact [--done-only [<duration>] | --deleted-only [<duration>]] " +
+				"[--since <duration>] [--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--json]\n" +
+				"       workbook compact --adopt <task> [--discard-local] [--no-backup | --backup <path>] [--json]\n",
+			options: []string{
+				"done-only", "deleted-only", "since", "keep-attachments", "no-backup", "backup",
+				"dry-run", "no-sync", "adopt", "discard-local", "json",
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
@@ -165,7 +177,6 @@ func TestGlobalUsageAgreesWithEverySynopsis(t *testing.T) {
 	t.Parallel()
 	for _, name := range commandOrder {
 		synopsis := commandSchemas[name].Synopsis
-		want := "  " + strings.TrimPrefix(synopsis, "workbook ")
 		if exception, listed := usageSynopsisExceptions[name]; listed {
 			if synopsis != exception.synopsis {
 				t.Errorf("%s synopsis = %q, but its usage exception was written against %q; "+
@@ -174,13 +185,18 @@ func TestGlobalUsageAgreesWithEverySynopsis(t *testing.T) {
 			if !strings.Contains(usage, exception.line+"\n") {
 				t.Errorf("usage = %q, want the %s exception line %q", usage, name, exception.line)
 			}
-			if strings.Contains(usage, want+"\n") {
+			if strings.Contains(usage, "  "+strings.TrimPrefix(synopsis, "workbook ")+"\n") {
 				t.Errorf("usage carries both the %s synopsis and its exception; drop the exception", name)
 			}
 			continue
 		}
-		if !strings.Contains(usage, want+"\n") {
-			t.Errorf("usage = %q, want the line %q", usage, want)
+		// A command with several forms, as compact has, is one usage line per
+		// form.
+		for _, form := range strings.Split(synopsis, "\n") {
+			want := "  " + strings.TrimPrefix(form, "workbook ")
+			if !strings.Contains(usage, want+"\n") {
+				t.Errorf("usage = %q, want the line %q", usage, want)
+			}
 		}
 	}
 }
@@ -244,7 +260,12 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"next":     {"any": boolFlag, "claim": boolFlag, "limit": stringFlag, "no-sync": boolFlag, "json": boolFlag},
 		"rebuild":  {"json": boolFlag},
 		"validate": {"full": boolFlag, "json": boolFlag},
-		"version":  {"json": boolFlag},
+		"compact": {
+			"done-only": optionalStringFlag, "deleted-only": optionalStringFlag, "since": stringFlag,
+			"keep-attachments": boolFlag, "no-backup": boolFlag, "backup": stringFlag,
+			"dry-run": boolFlag, "no-sync": boolFlag, "adopt": stringFlag, "discard-local": boolFlag, "json": boolFlag,
+		},
+		"version": {"json": boolFlag},
 		// completion prints a static script, so it takes no options at all:
 		// not even --json, which has nothing to describe here.
 		"completion": {},

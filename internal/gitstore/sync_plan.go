@@ -37,6 +37,15 @@ type canonicalRefUpdate struct {
 	// tip, so the commit is never unreachable even momentarily.
 	ParkedRef  string
 	ParkedHead string
+	// NoPark marks a move off the old tip that deliberately keeps nothing of
+	// it, as adopting origin's compaction does: parking the tip, or leaving it
+	// in the task ref's reflog, would keep the compacted history alive. It
+	// excludes ParkedRef, and the caller expires the reflog once the
+	// transaction lands.
+	NoPark bool
+	// DropParked deletes every refs/workbook/reconciled/<id>/* in the same
+	// transaction, for the same reason.
+	DropParked bool
 }
 
 // classifyTaskHeadRelationships classifies validated canonical and tracking
@@ -232,6 +241,9 @@ func (r *Repository) updateCanonicalRefsFromValidated(
 				return core.Wrap(core.CategoryCorruptData, "canonical task ref expected target is invalid", err)
 			}
 		}
+		if update.ParkedRef != "" && (update.NoPark || update.DropParked) {
+			return core.Errorf(core.CategoryCorruptData, "canonical ref update for task %q both parks and drops its old tip", update.TaskID)
+		}
 		if update.ParkedRef != "" {
 			if !validParkedRefName(update.TaskID, update.ParkedRef) {
 				return core.Errorf(core.CategoryCorruptData, "parked task ref %q does not name task %q", update.ParkedRef, update.TaskID)
@@ -255,6 +267,18 @@ func (r *Repository) updateCanonicalRefsFromValidated(
 		ref := taskRefPrefix + update.TaskID
 		if update.ParkedRef != "" {
 			fmt.Fprintf(&input, "create %s %s\n", update.ParkedRef, update.ParkedHead)
+		}
+		if update.DropParked {
+			parked, err := r.listParkedRefs(ctx, config, reconciledRefPrefix+update.TaskID+"/")
+			if err != nil {
+				return err
+			}
+			for _, entry := range parked {
+				if !validParkedRefName(update.TaskID, entry.name) {
+					return core.Errorf(core.CategoryCorruptData, "parked ref %q does not belong to task %s", entry.name, update.TaskID)
+				}
+				fmt.Fprintf(&input, "delete %s %s\n", entry.name, entry.objectID)
+			}
 		}
 		if update.Expected == "" {
 			fmt.Fprintf(&input, "create %s %s\n", ref, update.Next)

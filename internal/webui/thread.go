@@ -338,9 +338,9 @@ func (handler *handler) removeTaskAttachment(writer http.ResponseWriter, request
 //     nothing at all.
 //
 // A link refuses: it holds no bytes, and the refusal names the URL so a client
-// that followed the wrong address is told where the thing actually is. An
-// attachment whose blob this clone does not have is core's own not-found, which
-// is what a compacted history will produce.
+// that followed the wrong address is told where the thing actually is. A file
+// compaction dropped answers 410 Gone, naming the day it was removed. An
+// attachment whose blob this clone does not have is core's own not-found.
 func (handler *handler) serveTaskAttachment(writer http.ResponseWriter, request *http.Request) {
 	if handler.Attachment == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "attachment reading is not configured"))
@@ -356,6 +356,16 @@ func (handler *handler) serveTaskAttachment(writer http.ResponseWriter, request 
 		handler.writeError(writer, core.Errorf(core.CategoryValidation,
 			"attachment %s is a link to %s and holds no bytes to download; open the link itself",
 			attachment.ID, attachment.URL))
+		return
+	}
+	// Gone rather than not found: the attachment is real and named on the
+	// task, and its bytes were removed on purpose and will not come back.
+	if attachment.IsDropped() {
+		writeJSON(writer, http.StatusGone, ErrorDocument{
+			Format:  "workbook.error",
+			Version: 1,
+			Error:   errorBody(core.DroppedAttachmentError(attachment)),
+		})
 		return
 	}
 	if handler.AttachmentContent == nil {

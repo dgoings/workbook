@@ -31,6 +31,8 @@ Commands:
   next [--any] [--claim] [--limit <n>] [--no-sync] [--json]
   rebuild [--json]
   validate [--full] [--json]
+  compact [--done-only [<duration>] | --deleted-only [<duration>]] [--since <duration>] [--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--json]
+  compact --adopt <task> [--discard-local] [--no-backup | --backup <path>] [--json]
   version [--json]
   fetch [--json]
   push [--json]
@@ -50,8 +52,10 @@ func renderGlobalHelp(output io.Writer) {
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Commands:")
 	for _, name := range commandOrder {
-		metadata := commandSchemas[name]
-		fmt.Fprintf(output, "  %-8s %s\n", name, strings.TrimPrefix(metadata.Synopsis, "workbook "+name+" "))
+		// A command with several forms lists each on its own line.
+		for _, form := range strings.Split(commandSchemas[name].Synopsis, "\n") {
+			fmt.Fprintf(output, "  %-8s %s\n", name, strings.TrimPrefix(form, "workbook "+name+" "))
+		}
 	}
 	fmt.Fprintln(output, "  help [command]")
 }
@@ -77,7 +81,12 @@ func renderCommandHelp(output io.Writer, helpTarget []string) error {
 		}
 	}
 
-	fmt.Fprintf(output, "Usage: %s\n", metadata.Synopsis)
+	// Each further form lines up under the first, past "Usage: ".
+	forms := strings.Split(metadata.Synopsis, "\n")
+	fmt.Fprintf(output, "Usage: %s\n", forms[0])
+	for _, form := range forms[1:] {
+		fmt.Fprintf(output, "       %s\n", form)
+	}
 	if metadata.Description != "" {
 		fmt.Fprintf(output, "\n%s\n", metadata.Description)
 	}
@@ -428,14 +437,21 @@ func writeSyncedResult(
 	conflicts []core.Conflict,
 	warnings []core.Warning,
 ) {
+	// The configuration conflicts the command's fetch met ride the envelope's
+	// own member, as they do for every mutation (writeThreadMutationResult).
+	var configConflicts []core.ConfigConflict
+	if sync != nil {
+		configConflicts = sync.configConflicts
+	}
 	_ = json.NewEncoder(output).Encode(ResultEnvelope{
-		Format:   "workbook.result",
-		Version:  1,
-		Command:  command,
-		Data:     data,
-		Conflict: conflicts,
-		Warnings: warnings,
-		Sync:     sync,
+		Format:         "workbook.result",
+		Version:        1,
+		Command:        command,
+		Data:           data,
+		Conflict:       conflicts,
+		ConfigConflict: configConflicts,
+		Warnings:       warnings,
+		Sync:           sync,
 	})
 }
 
@@ -627,7 +643,23 @@ func writeChangeLog(output io.Writer, log core.ChangeLog) {
 		)
 		writeFieldChanges(output, change.Fields)
 	}
+	if compacted := log.Compacted; compacted != nil {
+		now := time.Now()
+		fmt.Fprintf(output, "%d earlier changes from %s to %s were compacted on %s.\n",
+			compacted.Changes, compactedDay(compacted.From, now), compactedDay(compacted.To, now),
+			compactedDay(compacted.On, now))
+	}
 	writeHistoryTruncation(output, log.Truncated)
+}
+
+// compactedDay renders one date of the compacted-history line in local time,
+// with its year only when that is not the current one.
+func compactedDay(day, now time.Time) string {
+	day = day.Local()
+	if day.Year() != now.Year() {
+		return day.Format("Jan 2, 2006")
+	}
+	return day.Format("Jan 2")
 }
 
 func writeComparison(output io.Writer, comparison core.Comparison) {
@@ -792,6 +824,11 @@ func writeAttachments(output io.Writer, attachments []core.Attachment) {
 		if attachment.Kind == core.AttachmentFile {
 			detail = fmt.Sprintf("%d bytes", attachment.Size)
 			name = singleLine(attachment.Name)
+			// A dropped file keeps its row, so a reader learns it existed, and
+			// says why there is nothing to fetch.
+			if attachment.IsDropped() {
+				name += " (removed by compaction on " + attachment.Dropped.At.Format("2006-01-02") + ")"
+			}
 		}
 		fmt.Fprintf(output, "\t%s\t%s\t%s\t%s\n", attachment.ID, name, attachment.Kind, detail)
 	}

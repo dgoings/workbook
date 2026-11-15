@@ -607,7 +607,7 @@ func TestWriteRejectsMalformedAndDuplicateOperationIDsBeforePublishing(t *testin
 	})
 }
 
-func TestWriteRejectsUnsupportedCompactionMetadataBeforePublishing(t *testing.T) {
+func TestWriteRejectsMalformedCompactionMetadataBeforePublishing(t *testing.T) {
 	t.Parallel()
 	repo, config := writeRepository(t)
 	pack := writeCreatePack()
@@ -620,11 +620,16 @@ func TestWriteRejectsUnsupportedCompactionMetadataBeforePublishing(t *testing.T)
 	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
 		t.Fatalf("Write() category = %q, want %q; error = %v", got, want, err)
 	}
+	// A well-formed compactedFrom is valid now, so the refusal has to be the
+	// object-ID rule rather than a blanket ban on compaction metadata.
+	if !strings.Contains(err.Error(), "compactedFrom must be a Git object ID") {
+		t.Fatalf("Write() error = %v, want the compactedFrom object-ID rule", err)
+	}
 	if after := gitOutput(t, repo, "count-objects", "-v"); after != before {
 		t.Fatalf("Write() wrote objects: before %q, after %q", before, after)
 	}
 	if _, err := repo.Git(context.Background(), nil, "rev-parse", "--verify", taskRef(pack.TaskID)); err == nil {
-		t.Fatal("Write() created a task ref for unsupported compaction metadata")
+		t.Fatal("Write() created a task ref for malformed compaction metadata")
 	}
 }
 

@@ -22,10 +22,10 @@ Preserve these decisions unless the user explicitly changes them and the documen
 - Each task is rooted at a tool-private Git ref under `refs/workbook/tasks/`.
 - A task ref points to a Git commit object.
 - Each operation commit points to a small tree containing a versioned `operation.json` blob and optional attachment blobs.
-- Git commit parents define causal ancestry. Root commits have no parent, ordinary edits have one parent, and reconciliations may have multiple parents.
+- Git commit parents define causal ancestry. Root commits have no parent, ordinary edits have one parent, and reconciliations may have multiple parents. A task's root commit holds `task.create`, or `history.checkpoint` once the task is compacted.
 - Operation IDs are globally unique and remain independent of Git commit IDs.
 - Wall-clock timestamps are display metadata only. Do not use them as the primary semantic conflict rule.
-- Shared task history is append-only. Never rebase or force-push Workbook refs.
+- Shared task history is append-only. No command changes, rebases or deletes an existing commit, and Workbook never force-pushes a ref unconditionally. The one deliberate exception to moving a task ref only forward is `workbook compact`, run by hand on Done and Deleted tasks. It adds a parentless checkpoint commit that holds the task's current state and lists every operation it replaces, then moves the task ref to it. The replaced commits are left untouched, no longer reachable, and saved to a bundle first unless the user opts out. Publishing that move is a non-fast-forward push that succeeds only if the remote still points at the tip that was compacted.
 - Deletion is represented by a tombstone operation; do not delete a task ref during normal operation.
 - SQLite is a disposable materialized projection. It must always be possible to delete and rebuild it from Workbook refs.
 - Direct SQL writes to projected task state are unsupported.

@@ -210,9 +210,25 @@ type taskReplay struct {
 	parent       core.Snapshot
 	dependencies map[string][]string
 	subjects     map[string]string
-	replayed     int
-	skipped      int
-	conflict     *core.Conflict
+	// generation, when set, is the history generation the replayed packs are
+	// rewritten into: the target's, when replay crosses a compaction. It also
+	// makes the replay record every pack, including one whose effect the
+	// target already has. Across a compaction an operation is known to be
+	// somewhere only by its ID being on the chain or in the checkpoint's list,
+	// so a pack dropped as a no-op would read as lost to every guard that
+	// checks the move.
+	generation string
+	// originWins makes a description or dependency-cycle conflict apply the
+	// replayed pack over the value it ran into instead of stopping, and
+	// records the first such conflict in overridden. Replay runs this way
+	// when the replayed packs are origin's, so that, as in an ordinary
+	// reconcile, origin's side is the one kept. A tombstone conflict still
+	// stops: a pack cannot be applied to a deleted task.
+	originWins bool
+	overridden *core.Conflict
+	replayed   int
+	skipped    int
+	conflict   *core.Conflict
 }
 
 // next replays one local operation pack. It reports done when replay must stop,
@@ -220,19 +236,28 @@ type taskReplay struct {
 // last-syncer-wins.
 func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Snapshot) (bool, error) {
 	if conflict := replay.classify(local.Operation); conflict != nil {
-		replay.conflict = conflict
-		return true, nil
+		if !replay.originWins || conflict.Type == core.ConflictTombstone {
+			replay.conflict = conflict
+			return true, nil
+		}
+		if replay.overridden == nil {
+			replay.overridden = conflict
+		}
 	}
-	if replayNoOp(replay.parent.State, local.Operation) {
+	if replay.generation == "" && replayNoOp(replay.parent.State, local.Operation) {
 		replay.skipped++
 		return false, nil
 	}
 
-	// Only the logical clock is rewritten. Actor, wall time, and operation
-	// ULIDs are the record of what someone actually did, and rewriting them
-	// would make the replayed history a different claim than the original.
+	// Only the logical clock, and across a compaction the generation, are
+	// rewritten. Actor, wall time, and operation ULIDs are the record of what
+	// someone actually did, and rewriting them would make the replayed history
+	// a different claim than the original.
 	pack := local.Operation
 	pack.LogicalClock = replay.parent.State.LogicalClock + 1
+	if replay.generation != "" {
+		pack.HistoryGeneration = replay.generation
+	}
 	state, err := core.Apply(&replay.parent.State, pack)
 	if err != nil {
 		// A newer-writer refusal keeps its own category rather than being
@@ -250,7 +275,7 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 			err,
 		)
 	}
-	if sameTaskState(replay.parent.State.Task, state.Task) {
+	if replay.generation == "" && sameTaskState(replay.parent.State.Task, state.Task) {
 		replay.skipped++
 		return false, nil
 	}
@@ -273,7 +298,10 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 // intent that the fetched history already contradicts.
 func (replay *taskReplay) classify(pack core.OperationPack) *core.Conflict {
 	parent := replay.parent.State.Task
-	if parent.Deleted && !replayNoOp(replay.parent.State, pack) {
+	// Replaying origin's packs onto a task this clone deleted, even origin's
+	// own deletion conflicts: across a compaction a pack is recorded rather
+	// than skipped, and nothing can be recorded on a deleted task.
+	if parent.Deleted && (replay.originWins || !replayNoOp(replay.parent.State, pack)) {
 		blocked := pack.Operations[0]
 		for _, operation := range pack.Operations {
 			if operation.Type != core.OperationTaskRestore {

@@ -2,6 +2,7 @@ package core
 
 import (
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -545,15 +546,517 @@ func TestApplyRejectsMalformedDurableIdentifiersAndDuplicateOperations(t *testin
 	assertCorrupt(t, applyError(&parent, duplicate))
 }
 
-func TestApplyRejectsUnsupportedCompactionMetadata(t *testing.T) {
-	parent, err := Apply(nil, createPack())
-	if err != nil {
-		t.Fatalf("Apply(create) error = %v", err)
-	}
-	compactedFrom := "0123456789abcdef"
-	parent.History.CompactedFrom = &compactedFrom
+// A state may name the tip it was compacted from, and only by a well-formed
+// object ID of either hash length.
+func TestApplyAcceptsOnlyWellFormedCompactedFrom(t *testing.T) {
+	for name, test := range map[string]struct {
+		compactedFrom string
+		valid         bool
+	}{
+		"sha-1 object ID":         {compactedFrom: compactedTipOID, valid: true},
+		"sha-256 object ID":       {compactedFrom: strings.Repeat("ab", 32), valid: true},
+		"truncated object ID":     {compactedFrom: "0123456789abcdef"},
+		"uppercase object ID":     {compactedFrom: strings.ToUpper(compactedTipOID)},
+		"empty object ID":         {compactedFrom: ""},
+		"object ID with a suffix": {compactedFrom: compactedTipOID + "0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			parent, err := Apply(nil, createPack())
+			if err != nil {
+				t.Fatalf("Apply(create) error = %v", err)
+			}
+			compactedFrom := test.compactedFrom
+			parent.History.CompactedFrom = &compactedFrom
+			// A state names compactedFrom only after a checkpoint, which leaves
+			// its generation behind on every state that follows.
+			parent.MinReader = 4
 
-	assertCorrupt(t, applyError(&parent, updatePack(2)))
+			state, err := Apply(&parent, updatePack(2))
+			if !test.valid {
+				assertCorrupt(t, err)
+				return
+			}
+			if err != nil {
+				t.Fatalf("Apply() error = %v", err)
+			}
+			if state.History.CompactedFrom == nil || *state.History.CompactedFrom != test.compactedFrom {
+				t.Fatalf("Apply() compactedFrom = %v, want %q", state.History.CompactedFrom, test.compactedFrom)
+			}
+		})
+	}
+}
+
+const (
+	compactedTipOID        = "4f6a1d2c9b8e7a6f5e4d3c2b1a0918273645abcd"
+	checkpointGenerationID = "01K0M6B8A4FTT8C39MXXYTWK01"
+	checkpointRunID        = "01K0M6B8A4FTT8C39MXXYTWK02"
+	checkpointOperationID  = "01K0M6B8A4FTT8C39MXXYTWK03"
+	afterCheckpointOpID    = "01K0M6B8A4FTT8C39MXXYTWK04"
+)
+
+var checkpointWallTime = time.Date(2026, time.November, 10, 9, 0, 0, 0, time.UTC)
+
+// historyToCompact folds a task through a create and every kind of edit a
+// checkpoint has to carry: an assignment, a comment, a file attachment and a
+// link attachment. It returns the folded state and every operation ID the
+// history holds.
+func historyToCompact(t *testing.T) (StateDocument, []string) {
+	t.Helper()
+	state := createdTask(t)
+	ids := []string{operationID1}
+	for _, operation := range []Operation{
+		assign(assignID1, "dylan@example.com"),
+		comment(commentOneID, "First note"),
+		fileAttachment(attachOneID, "notes.txt"),
+		linkAttachment(attachTwoID, "https://example.com/spec", "Spec"),
+	} {
+		pack := NewOperationPack(projectID, taskID, generationID, "developer@example.com",
+			state.LogicalClock+1, updatedAt, []Operation{operation})
+		next, err := Apply(&state, pack)
+		if err != nil {
+			t.Fatalf("Apply(%s) error = %v", operation.Type, err)
+		}
+		state = next
+		ids = append(ids, operation.ID)
+	}
+	sort.Strings(ids)
+	return state, ids
+}
+
+// checkpointPackFor builds the checkpoint that replaces state's history, at the
+// next logical clock and in a new generation.
+func checkpointPackFor(state StateDocument, compacted []string) OperationPack {
+	task := state.Task
+	return NewOperationPack(projectID, taskID, checkpointGenerationID, "compactor@example.com",
+		state.LogicalClock+1, checkpointWallTime, []Operation{{
+			ID:   checkpointOperationID,
+			Type: OperationHistoryCheckpoint,
+			Task: &task,
+			Checkpoint: &CheckpointData{
+				RunID:               checkpointRunID,
+				CompactedFrom:       compactedTipOID,
+				PreviousGeneration:  state.History.Generation,
+				CompactedCommits:    len(compacted),
+				FirstWallTime:       createdAt,
+				LastWallTime:        updatedAt,
+				Attachments:         CheckpointAttachmentsKept,
+				CompactedOperations: append([]string(nil), compacted...),
+			},
+		}})
+}
+
+func TestApplyFoldsCheckpointWithoutParent(t *testing.T) {
+	compacted, ids := historyToCompact(t)
+	pack := checkpointPackFor(compacted, ids)
+
+	state, err := Apply(nil, pack)
+	if err != nil {
+		t.Fatalf("Apply(nil, checkpoint) error = %v", err)
+	}
+	if !reflect.DeepEqual(state.Task, compacted.Task) {
+		t.Fatalf("Apply(nil, checkpoint) task = %#v, want %#v", state.Task, compacted.Task)
+	}
+	if len(state.Task.Comments) != 1 || len(state.Task.Assignments) != 1 || len(state.Task.Attachments) != 2 {
+		t.Fatalf("checkpoint lost the thread: %#v", state.Task)
+	}
+	if got, want := state.History.Generation, checkpointGenerationID; got != want {
+		t.Fatalf("Apply(nil, checkpoint) generation = %q, want %q", got, want)
+	}
+	if state.History.CompactedFrom == nil || *state.History.CompactedFrom != compactedTipOID {
+		t.Fatalf("Apply(nil, checkpoint) compactedFrom = %v, want %q", state.History.CompactedFrom, compactedTipOID)
+	}
+	if got, want := state.LogicalClock, compacted.LogicalClock+1; got != want {
+		t.Fatalf("Apply(nil, checkpoint) logical clock = %d, want %d", got, want)
+	}
+	if got, want := state.MinReader, 4; got != want {
+		t.Fatalf("Apply(nil, checkpoint) minReader = %d, want %d", got, want)
+	}
+	if got, want := pack.MinReader, 4; got != want {
+		t.Fatalf("checkpoint pack minReader = %d, want %d", got, want)
+	}
+	if err := ValidateCheckpoint(nil, pack, state); err != nil {
+		t.Fatalf("ValidateCheckpoint(nil, checkpoint) error = %v", err)
+	}
+}
+
+// The compaction summary rides inside the pack; the folded state names only the
+// replaced tip. The pack's accessor hands the summary back to every later
+// reader.
+func TestOperationPackCheckpointReturnsTheSummary(t *testing.T) {
+	compacted, ids := historyToCompact(t)
+	pack := checkpointPackFor(compacted, ids)
+
+	summary, ok := pack.Checkpoint()
+	if !ok {
+		t.Fatal("Checkpoint() ok = false for a checkpoint pack")
+	}
+	if summary != pack.Operations[0].Checkpoint {
+		t.Fatalf("Checkpoint() = %p, want the operation's payload %p", summary, pack.Operations[0].Checkpoint)
+	}
+	if _, ok := createPack().Checkpoint(); ok {
+		t.Fatal("Checkpoint() ok = true for a task.create pack")
+	}
+	if _, ok := updatePack(2).Checkpoint(); ok {
+		t.Fatal("Checkpoint() ok = true for a field.set pack")
+	}
+	twoOperations := pack
+	twoOperations.Operations = append(append([]Operation(nil), pack.Operations...), Operation{
+		ID: afterCheckpointOpID, Type: OperationFieldSet, Field: "status", Value: "ready",
+	})
+	if _, ok := twoOperations.Checkpoint(); ok {
+		t.Fatal("Checkpoint() ok = true for a pack that carries more than the checkpoint")
+	}
+}
+
+func TestApplyRefusesCheckpointWithParent(t *testing.T) {
+	compacted, ids := historyToCompact(t)
+	pack := checkpointPackFor(compacted, ids)
+	// The pack is otherwise a valid child of the parent, so the only rule it
+	// breaks is that a checkpoint is a root.
+	pack.HistoryGeneration = compacted.History.Generation
+
+	err := applyError(&compacted, pack)
+	assertCorrupt(t, err)
+	if !strings.Contains(err.Error(), "history.checkpoint requires no parent") {
+		t.Fatalf("Apply(parent, checkpoint) error = %v, want the root rule", err)
+	}
+}
+
+func TestApplyRefusesCheckpointRootWithOtherOperations(t *testing.T) {
+	compacted, ids := historyToCompact(t)
+	pack := checkpointPackFor(compacted, ids)
+	pack.Operations = append(pack.Operations, Operation{
+		ID: afterCheckpointOpID, Type: OperationFieldSet, Field: "status", Value: "ready",
+	})
+
+	assertCorrupt(t, applyError(nil, pack))
+}
+
+// The generation marker is the only thing an older build reads to tell an
+// upgrade notice from corruption, so a checkpoint that does not carry it, or a
+// compacted state that lost it, is corrupt rather than merely unusual.
+func TestApplyRefusesCheckpointBelowItsGeneration(t *testing.T) {
+	compacted, ids := historyToCompact(t)
+	pack := checkpointPackFor(compacted, ids)
+	pack.MinReader = 3
+
+	err := applyError(nil, pack)
+	assertCorrupt(t, err)
+	if !strings.Contains(err.Error(), "minimum reader") {
+		t.Fatalf("Apply(nil, low-marker checkpoint) error = %v, want the marker rule", err)
+	}
+}
+
+func TestApplyRefusesCompactedStateBelowCheckpointGeneration(t *testing.T) {
+	parent := createdTask(t)
+	compactedFrom := compactedTipOID
+	parent.History.CompactedFrom = &compactedFrom
+	parent.MinReader = 3
+
+	err := applyError(&parent, updatePack(2))
+	assertCorrupt(t, err)
+	if !strings.Contains(err.Error(), "minimum reader") {
+		t.Fatalf("Apply(low-marker compacted parent) error = %v, want the marker rule", err)
+	}
+}
+
+func TestApplyCarriesCompactedFromToChildren(t *testing.T) {
+	compacted, ids := historyToCompact(t)
+	root, err := Apply(nil, checkpointPackFor(compacted, ids))
+	if err != nil {
+		t.Fatalf("Apply(nil, checkpoint) error = %v", err)
+	}
+	child := NewOperationPack(projectID, taskID, checkpointGenerationID, "developer@example.com",
+		root.LogicalClock+1, checkpointWallTime.Add(time.Minute), []Operation{{
+			ID: afterCheckpointOpID, Type: OperationFieldSet, Field: "status", Value: "ready",
+		}})
+	if child.MinReader != 0 {
+		t.Fatalf("an ordinary pack after a checkpoint carries minReader %d, want 0", child.MinReader)
+	}
+
+	state, err := Apply(&root, child)
+	if err != nil {
+		t.Fatalf("Apply(checkpoint, field.set) error = %v", err)
+	}
+	if state.History.CompactedFrom == nil || *state.History.CompactedFrom != compactedTipOID {
+		t.Fatalf("child compactedFrom = %v, want %q", state.History.CompactedFrom, compactedTipOID)
+	}
+	if got, want := state.History.Generation, checkpointGenerationID; got != want {
+		t.Fatalf("child generation = %q, want %q", got, want)
+	}
+	if got, want := state.MinReader, 4; got != want {
+		t.Fatalf("child minReader = %d, want %d", got, want)
+	}
+	if got, want := state.Task.Status, Status("ready"); got != want {
+		t.Fatalf("child status = %q, want %q", got, want)
+	}
+}
+
+func TestValidateCheckpointRejectsMalformedCompactedFrom(t *testing.T) {
+	compacted, ids := historyToCompact(t)
+	pack := checkpointPackFor(compacted, ids)
+	pack.Operations[0].Checkpoint.CompactedFrom = "xyz"
+
+	assertCorrupt(t, applyError(nil, pack))
+	_, err := EncodeDocument(pack)
+	assertCorrupt(t, err)
+}
+
+func TestValidateCheckpointRejectsMalformedSummary(t *testing.T) {
+	for name, mutate := range map[string]func(*OperationPack){
+		"run ID not a ULID": func(pack *OperationPack) {
+			pack.Operations[0].Checkpoint.RunID = "run-1"
+		},
+		"lowercase run ID": func(pack *OperationPack) {
+			pack.Operations[0].Checkpoint.RunID = strings.ToLower(checkpointRunID)
+		},
+		"previous generation not a ULID": func(pack *OperationPack) {
+			pack.Operations[0].Checkpoint.PreviousGeneration = ""
+		},
+		"previous generation is the new generation": func(pack *OperationPack) {
+			pack.Operations[0].Checkpoint.PreviousGeneration = pack.HistoryGeneration
+		},
+		"sha-1 object ID too short": func(pack *OperationPack) {
+			pack.Operations[0].Checkpoint.CompactedFrom = compactedTipOID[:39]
+		},
+		"unknown attachments mode": func(pack *OperationPack) {
+			pack.Operations[0].Checkpoint.Attachments = "maybe"
+		},
+		"no attachments mode": func(pack *OperationPack) {
+			pack.Operations[0].Checkpoint.Attachments = ""
+		},
+		"no compacted operations": func(pack *OperationPack) {
+			pack.Operations[0].Checkpoint.CompactedOperations = nil
+		},
+		"unsorted compacted operations": func(pack *OperationPack) {
+			ids := pack.Operations[0].Checkpoint.CompactedOperations
+			ids[0], ids[1] = ids[1], ids[0]
+		},
+		"duplicate compacted operations": func(pack *OperationPack) {
+			ids := pack.Operations[0].Checkpoint.CompactedOperations
+			ids[1] = ids[0]
+		},
+		"compacted operation not a ULID": func(pack *OperationPack) {
+			pack.Operations[0].Checkpoint.CompactedOperations = []string{"not-a-ulid"}
+		},
+		"no compacted commits": func(pack *OperationPack) {
+			pack.Operations[0].Checkpoint.CompactedCommits = 0
+		},
+		"no first wall time": func(pack *OperationPack) {
+			pack.Operations[0].Checkpoint.FirstWallTime = time.Time{}
+		},
+		"no last wall time": func(pack *OperationPack) {
+			pack.Operations[0].Checkpoint.LastWallTime = time.Time{}
+		},
+		"zero became-done time": func(pack *OperationPack) {
+			pack.Operations[0].Checkpoint.BecameDoneAt = &time.Time{}
+		},
+		"zero became-deleted time": func(pack *OperationPack) {
+			pack.Operations[0].Checkpoint.BecameDeletedAt = &time.Time{}
+		},
+		"noncanonical task": func(pack *OperationPack) {
+			pack.Operations[0].Task.Labels = []string{"poc", "git"}
+		},
+		"task without createdAt": func(pack *OperationPack) {
+			pack.Operations[0].Task.CreatedAt = time.Time{}
+		},
+		"field payload": func(pack *OperationPack) {
+			pack.Operations[0].Field = "title"
+		},
+		"value payload": func(pack *OperationPack) {
+			pack.Operations[0].Value = "x"
+		},
+		"comment payload": func(pack *OperationPack) {
+			pack.Operations[0].Body = "x"
+		},
+		"dropped link": func(pack *OperationPack) {
+			pack.Operations[0].Task.Attachments = droppedAttachments(pack.Operations[0].Task.Attachments, func(attachment *Attachment) {
+				if attachment.Kind == AttachmentLink {
+					attachment.Dropped = &AttachmentDrop{RunID: checkpointRunID, At: checkpointWallTime}
+				}
+			})
+		},
+		"drop run ID not a ULID": func(pack *OperationPack) {
+			pack.Operations[0].Task.Attachments = droppedAttachments(pack.Operations[0].Task.Attachments, func(attachment *Attachment) {
+				if attachment.Dropped != nil {
+					attachment.Dropped.RunID = "run-1"
+				}
+			})
+		},
+		"drop without a time": func(pack *OperationPack) {
+			pack.Operations[0].Task.Attachments = droppedAttachments(pack.Operations[0].Task.Attachments, func(attachment *Attachment) {
+				if attachment.Dropped != nil {
+					attachment.Dropped.At = time.Time{}
+				}
+			})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			compacted, ids := historyToCompact(t)
+			pack := checkpointPackFor(compacted, ids)
+			mutate(&pack)
+			assertCorrupt(t, applyError(nil, pack))
+		})
+	}
+}
+
+// droppedAttachments drops every file in a fresh copy of attachments and then
+// hands each entry to adjust, so a case can corrupt the copy without reaching
+// the history it was folded from.
+func droppedAttachments(attachments []Attachment, adjust func(*Attachment)) []Attachment {
+	_, _, out := DropFileAttachments(attachments, checkpointRunID, checkpointWallTime)
+	for index := range out {
+		if out[index].Dropped != nil {
+			drop := *out[index].Dropped
+			out[index].Dropped = &drop
+		}
+		adjust(&out[index])
+	}
+	return out
+}
+
+// A checkpoint that dropped its files carries each one as a tombstone, and the
+// tombstones survive the fold, validation and a round trip through the stored
+// documents. No ordinary operation can author one: attachment.add carries
+// AttachmentData, which has no drop in it.
+func TestCheckpointCarriesDroppedAttachments(t *testing.T) {
+	compacted, ids := historyToCompact(t)
+	pack := checkpointPackFor(compacted, ids)
+	dropped, bytes, attachments := DropFileAttachments(compacted.Task.Attachments, checkpointRunID, checkpointWallTime)
+	if dropped != 1 || bytes != 11 {
+		t.Fatalf("dropped, bytes = %d, %d; want 1, 11", dropped, bytes)
+	}
+	pack.Operations[0].Task.Attachments = attachments
+	pack.Operations[0].Checkpoint.Attachments = CheckpointAttachmentsDropped
+
+	state, err := Apply(nil, pack)
+	if err != nil {
+		t.Fatalf("Apply(nil, checkpoint) error = %v", err)
+	}
+	if err := ValidateCheckpoint(nil, pack, state); err != nil {
+		t.Fatalf("ValidateCheckpoint(nil, checkpoint) error = %v", err)
+	}
+	if !SameAttachments(state.Task.Attachments, attachments) {
+		t.Fatalf("folded attachments = %#v, want %#v", state.Task.Attachments, attachments)
+	}
+
+	encodedPack, err := EncodeDocument(pack)
+	if err != nil {
+		t.Fatalf("EncodeDocument(pack) error = %v", err)
+	}
+	decodedPack, err := DecodeOperationPack(encodedPack)
+	if err != nil {
+		t.Fatalf("DecodeOperationPack() error = %v", err)
+	}
+	encodedState, err := EncodeDocument(state)
+	if err != nil {
+		t.Fatalf("EncodeDocument(state) error = %v", err)
+	}
+	decodedState, err := DecodeStateDocument(encodedState)
+	if err != nil {
+		t.Fatalf("DecodeStateDocument() error = %v", err)
+	}
+	if err := ValidateCheckpoint(nil, decodedPack, decodedState); err != nil {
+		t.Fatalf("ValidateCheckpoint(decoded) error = %v", err)
+	}
+	if !SameAttachments(decodedState.Task.Attachments, attachments) {
+		t.Fatalf("decoded attachments = %#v, want %#v", decodedState.Task.Attachments, attachments)
+	}
+}
+
+func TestCheckpointRequiresSummary(t *testing.T) {
+	for name, mutate := range map[string]func(*OperationPack){
+		"no summary": func(pack *OperationPack) {
+			pack.Operations[0].Checkpoint = nil
+		},
+		"no task": func(pack *OperationPack) {
+			pack.Operations[0].Task = nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			compacted, ids := historyToCompact(t)
+			pack := checkpointPackFor(compacted, ids)
+			mutate(&pack)
+			assertCorrupt(t, applyError(nil, pack))
+		})
+	}
+}
+
+// A compaction summary belongs to a checkpoint and to nothing else; an
+// ordinary operation carrying one is a document nobody wrote on purpose.
+func TestCheckpointSummaryOnAnotherOperationIsCorrupt(t *testing.T) {
+	parent := createdTask(t)
+	pack := updatePack(2)
+	pack.Operations[0].Checkpoint = &CheckpointData{RunID: checkpointRunID}
+
+	assertCorrupt(t, applyError(&parent, pack))
+	_, err := EncodeDocument(pack)
+	assertCorrupt(t, err)
+
+	create := createPack()
+	create.Operations[0].Checkpoint = &CheckpointData{RunID: checkpointRunID}
+	assertCorrupt(t, applyError(nil, create))
+}
+
+// A checkpoint round-trips through the strict decoder this build reads its own
+// documents with, so every member it writes is one it declares.
+func TestCheckpointDocumentsRoundTripStrictly(t *testing.T) {
+	compacted, ids := historyToCompact(t)
+	pack := checkpointPackFor(compacted, ids)
+	done := updatedAt.Add(time.Hour)
+	pack.Operations[0].Checkpoint.BecameDoneAt = &done
+	state, err := Apply(nil, pack)
+	if err != nil {
+		t.Fatalf("Apply(nil, checkpoint) error = %v", err)
+	}
+
+	encodedPack, err := EncodeDocument(pack)
+	if err != nil {
+		t.Fatalf("EncodeDocument(checkpoint pack) error = %v", err)
+	}
+	decodedPack, err := DecodeOperationPack(encodedPack)
+	if err != nil {
+		t.Fatalf("DecodeOperationPack(checkpoint) error = %v", err)
+	}
+	if !reflect.DeepEqual(decodedPack, pack) {
+		t.Fatalf("decoded checkpoint pack = %#v, want %#v", decodedPack, pack)
+	}
+
+	encodedState, err := EncodeDocument(state)
+	if err != nil {
+		t.Fatalf("EncodeDocument(checkpoint state) error = %v", err)
+	}
+	decodedState, err := DecodeStateDocument(encodedState)
+	if err != nil {
+		t.Fatalf("DecodeStateDocument(checkpoint) error = %v", err)
+	}
+	if err := ValidateCheckpoint(nil, decodedPack, decodedState); err != nil {
+		t.Fatalf("ValidateCheckpoint(decoded) error = %v", err)
+	}
+}
+
+// A compacted task can be deleted; its checkpoint carries the tombstone.
+func TestApplyFoldsCheckpointOfADeletedTask(t *testing.T) {
+	compacted, ids := historyToCompact(t)
+	tombstone := NewOperationPack(projectID, taskID, generationID, "developer@example.com",
+		compacted.LogicalClock+1, updatedAt, []Operation{{ID: afterCheckpointOpID, Type: OperationTaskTombstone}})
+	deleted, err := Apply(&compacted, tombstone)
+	if err != nil {
+		t.Fatalf("Apply(tombstone) error = %v", err)
+	}
+	ids = append(ids, afterCheckpointOpID)
+	sort.Strings(ids)
+	pack := checkpointPackFor(deleted, ids)
+	gone := updatedAt
+	pack.Operations[0].Checkpoint.BecameDeletedAt = &gone
+
+	state, err := Apply(nil, pack)
+	if err != nil {
+		t.Fatalf("Apply(nil, checkpoint of deleted task) error = %v", err)
+	}
+	if !state.Task.Deleted {
+		t.Fatal("checkpoint of a deleted task folded to a live task")
+	}
 }
 
 func TestValidateCheckpointRejectsByteDifferentState(t *testing.T) {
