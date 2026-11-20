@@ -1,7 +1,7 @@
 /* Workbench adopts the board's design vocabulary so that the shell and the
    board it frames read as one application. Every value here is taken from
-   workbook/internal/webui/assets/index.html: the palette, the two font
-   families, the 3-4px radii, and the #b9c6d8 hairline.
+   the board's stylesheet in workbook/internal/webui/assets/style/: the
+   palette, the two font families, the 3-4px radii, and the #b9c6d8 hairline.
 
    Light is Workbook's palette unchanged. Dark moves only the token values, so
    both modes are the same design lit differently. The boards draw their own

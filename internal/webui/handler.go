@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -37,9 +36,6 @@ import (
 // scheme, or `data:` would be the way one gets through a bug in the first lock.
 const securityPolicy = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
 
-//go:embed assets/index.html
-var assets embed.FS
-
 // pageFuncs are the derivations the page template reaches for rather than
 // re-deriving in template syntax.
 //
@@ -59,7 +55,7 @@ var pageFuncs = template.FuncMap{"cardAssignees": assignmentRow}
 // Sharing this value means every handler's first page render pays that escape
 // exactly once for the whole process instead of once per handler.
 var pageTemplate = sync.OnceValue(func() *template.Template {
-	return template.Must(template.New("index.html").Funcs(pageFuncs).ParseFS(assets, "assets/index.html"))
+	return template.Must(template.New("index.html").Funcs(pageFuncs).Parse(pageSource()))
 })
 
 type TaskLister func(context.Context) ([]core.Task, error)
