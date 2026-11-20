@@ -36,7 +36,9 @@ test('renderProjects draws from the layout, not from the bare project list', () 
 
 test('a project row does not open its project on the click that ends a drag', () => {
   const body = fn('projectRow')
-  assert.match(body, /addEventListener\('click', \(\) => \{\s*if \(justDragged\(\)\) return\s*openProject\(/)
+  // A press on one of the row's own buttons (its remove control) is that
+  // button's; anything else on the row opens the project unless it ends a drag.
+  assert.match(body, /addEventListener\('click', \(event\) => \{\s*if \(event\?\.target\?\.closest\?\.\('button'\)\) return\s*if \(justDragged\(\)\) return\s*openProject\(/)
   const guard = fn('justDragged')
   assert.match(guard, /drag\.current !== null/)
   assert.match(guard, /performance\.now\(\) - drag\.endedAt < \d+/)

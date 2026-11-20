@@ -181,8 +181,9 @@ describe('a keyboard fold keeps its focus', () => {
   function redraw ({ focusedId, rebuiltIds = ['cw', 'p'], focusOutsideList = false }) {
     const focusCalls = []
     const toggleFor = (id) => ({
-      dataset: { categoryId: id },
+      dataset: { categoryId: id, focus: `toggle:category:${id}` },
       classList: { contains: (name) => name === 'category-toggle' },
+      closest: () => null,
       focus () { focusCalls.push(id) }
     })
     const old = focusedId === null ? null : toggleFor(focusedId)
@@ -191,7 +192,7 @@ describe('a keyboard fold keeps its focus', () => {
       children: [],
       contains: (node) => !focusOutsideList && current.includes(node),
       querySelector: () => null,
-      querySelectorAll: (selector) => selector === '.category-toggle' ? current : [],
+      querySelectorAll: (selector) => selector === '[data-focus]' ? current : [],
       append (node) { this.children.push(node) },
       set innerHTML (value) { current = []; this.children = [] }
     }
@@ -228,6 +229,7 @@ renderProjects()`, context)
 
   test('categoryGroup stamps each toggle with its category id', () => {
     assert.match(fn('categoryGroup'), /toggle\.dataset\.categoryId = category\.id/)
+    assert.match(fn('categoryGroup'), /toggle\.dataset\.focus = `toggle:category:\$\{category\.id\}`/)
   })
 })
 
