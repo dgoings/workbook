@@ -1,0 +1,72 @@
+    /* The body of a configuration section. It is a page rather than a region on the
+       board: it sits inside the route shell every other page uses, which is
+       inside main, so it takes the height its rows and forms need and the page
+       scrolls. The panel it replaced was an item in the viewport-height flex
+       column — a sibling of the notices and of main — and could only have the
+       height the header and the board did not want, which on an ordinary
+       desktop window was a sliver too short to open a form in. Nothing here
+       caps its height for that reason. What lets the shell around it grow is
+       .task-route--admin, which is with the other .task-route rules below,
+       because it only wins where it is written after the one it overrides. */
+    .admin { display: grid; gap: .6rem; padding: 1.15rem; }
+    /* The heading over each section of the configuration route. It belongs to
+       the route rather than to the panel underneath it, which is what lets a
+       panel be moved in and out of the document without taking its own name
+       with it — and which is why the panel's padding cannot reach it: the
+       heading states the same inset itself, so it aligns with the content it
+       names instead of sitting flush against the card's edge. */
+    .admin__heading { margin: .9rem 0 -.35rem; padding: 0 1.15rem; font-size: .95rem; letter-spacing: -.01em; }
+    .admin:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: -3px; }
+    .admin__note { max-width: 84ch; margin: 0; color: var(--wb-ink-muted); font-size: .8rem; line-height: 1.5; }
+    .admin__note strong { color: var(--wb-ink); }
+    .admin__note code { font-size: .72rem; }
+    /* A live region, so it stands in the document whatever it holds: one created
+       in the same frame as its first message never announces it. It collapses
+       while empty rather than reserving a row, because the page is opened far
+       less often than a label is added and the rows below it are not something
+       the reader is watching for a jump. */
+    .admin__status { display: grid; gap: .2rem; font-size: .8rem; }
+    .admin__status:empty { display: none; }
+    .admin__status p { margin: 0; }
+    .admin__status[data-kind="error"] { color: var(--wb-danger-ink); }
+    .admin__status [data-panel-warning] { color: var(--wb-warning-ink); }
+    .admin-statuses { display: grid; gap: .4rem; margin: 0; padding: 0; list-style: none; }
+    .admin-status { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .45rem .75rem; padding: .6rem .7rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface); cursor: grab; }
+    .admin-status:active { cursor: grabbing; }
+    /* A key row is not draggable — a key has no rank, so there is no order a drag here could ask for — and it must not offer the grab cursor its status and priority siblings earn. draggable is a reflected attribute, so the selector tracks the property the client sets, exactly as .task-card[draggable="false"] does for the stand-in card a create has not placed yet. */
+    .admin-status[draggable="false"], .admin-status[draggable="false"]:active { cursor: default; }
+    .admin-status[data-dragging="true"] { opacity: .5; }
+    .admin-status[data-drop-target="true"] { border-color: var(--wb-primary); box-shadow: inset 0 0 0 1px var(--wb-primary); }
+    .admin-status__name { display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem; min-width: 0; font-size: .9rem; font-weight: 750; }
+    .admin-status__token { color: var(--wb-primary-ink); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .74rem; font-weight: 400; overflow-wrap: anywhere; }
+    /* A key row's token IS its name — a key has no label beside it, because the key is the prefix every task ID minted under it carries — so it takes the size and weight its siblings give a label, rather than the quieter treatment a token earns when it sits beside one. Without this the Keys section read as a list of annotations instead of the administrable list it is. The selector is the attribute keyRow writes for the key it addresses, which no other row carries. */
+    .admin-status[data-vocabulary-key] .admin-status__token { font-size: .9rem; font-weight: 750; }
+    .admin-tag { padding: .08rem .32rem; border: 1px solid var(--wb-border); border-radius: 3px; color: var(--wb-ink); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .66rem; font-weight: 400; }
+    .admin-status__controls { display: flex; flex-wrap: wrap; gap: .35rem; }
+    .admin-button { border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); color: var(--wb-ink); cursor: pointer; font: inherit; font-size: .78rem; font-weight: 700; padding: .35rem .65rem; }
+    .admin-button:hover:enabled { border-color: var(--wb-primary); color: var(--wb-primary); }
+    .admin-button:disabled { cursor: default; opacity: .52; }
+    .admin-button--primary { border-color: var(--wb-primary-edge); background: var(--wb-primary); color: var(--wb-on-accent); }
+    .admin-button--primary:hover:enabled { background: var(--wb-primary-hover); color: var(--wb-on-accent); }
+    .admin-button--danger { border-color: var(--wb-danger-edge); background: var(--wb-danger); color: var(--wb-on-accent); }
+    .admin-button--danger:hover:enabled { background: var(--wb-danger-hover); color: var(--wb-on-accent); }
+    .admin-button:focus-visible, .admin input:focus-visible, .admin select:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 1px; }
+    .admin input, .admin select { border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); color: var(--wb-text); font: inherit; font-size: .82rem; padding: .4rem .5rem; }
+    .admin input:focus, .admin select:focus { border-color: var(--wb-primary); }
+    .admin-form { display: flex; flex-wrap: wrap; align-items: end; gap: .55rem .8rem; grid-column: 1 / -1; margin-top: .2rem; padding-top: .6rem; border-top: 1px dashed var(--wb-border); }
+    .admin-field { display: grid; gap: .2rem; }
+    .admin-field label { color: var(--wb-ink); font-size: .74rem; font-weight: 750; }
+    /* A color field and the well beside it. The well takes the row's height
+       rather than a height of its own, so it stays the size of whatever the
+       inputs measure. */
+    .admin-color { display: flex; align-items: stretch; gap: .4rem; }
+    .admin .admin-color__well { flex: 0 0 auto; width: 2.2rem; padding: .15rem; cursor: pointer; }
+    .admin-tags { display: flex; flex-wrap: wrap; align-items: center; gap: .1rem .7rem; margin: 0; padding: 0; border: 0; }
+    .admin-tags legend { padding: 0; color: var(--wb-ink); font-size: .74rem; font-weight: 750; }
+    .admin-tag-choice { display: inline-flex; align-items: center; gap: .3rem; color: var(--wb-ink); cursor: pointer; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .76rem; }
+    .admin-tag-choice input { width: 1rem; height: 1rem; margin: 0; accent-color: var(--wb-primary); cursor: pointer; padding: 0; }
+    .admin-hint { max-width: 60ch; margin: .15rem 0 0; color: var(--wb-ink-muted); font-size: .72rem; line-height: 1.45; }
+    .admin-note { margin: 0; color: var(--wb-warning-ink); font-size: .76rem; }
+    .admin-add { display: grid; gap: .5rem; margin-top: .6rem; padding: .8rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-primary-tint-4); }
+    .admin-add__title { margin: 0; font-size: .88rem; }
+    .admin-add .admin-form { grid-column: auto; margin-top: 0; padding-top: 0; border-top: 0; }
