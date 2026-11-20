@@ -183,13 +183,15 @@ something this workflow can assert, and until that happens a Windows-only
 desktop regression can reach `main` behind a green tick.
 
 A suite that skips is the failure this workflow is built to prevent. The
-embedded web board tests execute the rendered client with `node`, and the
+embedded web board tests execute the rendered client with `node`, its layout
+tests measure the board in headless Chrome or Chromium (found on `PATH`, in
+the macOS application bundles, or at `WORKBOOK_TEST_CHROME`), and the
 cross-object-format tests need a Git that can create SHA-256 repositories;
-without either, those tests skip and the package still reports `ok`. Four
+without any of these, those tests skip and the package still reports `ok`. Four
 things stop that:
 
 - `scripts/check-ci-capabilities.sh` runs before the suite and fails, naming
-  the tool, when node or SHA-256 Git support is absent.
+  the tool, when node, Chrome or SHA-256 Git support is absent.
 - `WORKBOOK_TEST_REQUIRE_CAPABILITIES=1` turns a missing capability into a test
   failure. Tests report one through `internal/testenv.MissingCapability`
   instead of `t.Skip`, which skips locally and fails wherever the variable is

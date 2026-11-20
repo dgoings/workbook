@@ -1,7 +1,11 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/testenv"
 )
@@ -71,7 +76,7 @@ type browserPage struct {
 	// Keys are pressed in order after Setup, as real key events, so a
 	// control's built-in keyboard behavior runs the way it does for a reader.
 	// Each is a key name the driver knows: ArrowLeft, ArrowRight, ArrowUp,
-	// ArrowDown, Tab or Space.
+	// ArrowDown, Tab, Space or Enter.
 	Keys []string
 	// Script is an expression evaluated in the page once it has loaded, after
 	// Setup and Keys. It may be a promise; what it resolves to is decoded into
@@ -82,6 +87,15 @@ type browserPage struct {
 	Screenshot string
 }
 
+// browserLaunches caps how many Chromes the package runs at once. The layout
+// tests are parallel, and a dozen browsers starting together on a loaded
+// machine is slow enough to look like a hang.
+var browserLaunches = make(chan struct{}, 4)
+
+// browserDeadline is how long one page load may take, Chrome's start included,
+// before the test gives up on it rather than waiting for the package timeout.
+const browserDeadline = 60 * time.Second
+
 // openInBrowser serves handler, loads page in headless Chrome, and decodes
 // what the page's script resolved to into result.
 func openInBrowser(t *testing.T, handler http.Handler, page browserPage, result any) {
@@ -90,11 +104,29 @@ func openInBrowser(t *testing.T, handler http.Handler, page browserPage, result 
 	chrome := requireChrome(t)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
+	output, err := driveBrowser(node, chrome, t.TempDir(), server.URL, page, browserDeadline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(output, result); err != nil {
+		t.Fatalf("decode the page's answer %q: %v", strings.TrimSpace(string(output)), err)
+	}
+}
 
-	profile := t.TempDir()
+// driveBrowser starts Chrome on profile, has the node driver load page from
+// the server at base, and returns what the page's script resolved to as JSON.
+// Chrome has exited by the time it returns, whatever happened, and a driver
+// still running at deadline is killed with it.
+func driveBrowser(node, chrome, profile, base string, page browserPage, deadline time.Duration) ([]byte, error) {
+	browserLaunches <- struct{}{}
+	defer func() { <-browserLaunches }()
+
 	arguments := []string{
 		"--headless", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
 		"--disable-extensions", "--disable-background-networking", "--disable-sync",
+		// Without it, Chrome on macOS can ask the login keychain for its
+		// storage key, which on a desktop is a dialog nobody is there to answer.
+		"--use-mock-keychain",
 		"--hide-scrollbars", "--remote-debugging-port=0", "--user-data-dir=" + profile,
 		"--window-size=1920,1200", "about:blank",
 	}
@@ -105,18 +137,18 @@ func openInBrowser(t *testing.T, handler http.Handler, page browserPage, result 
 	}
 	browser := exec.Command(chrome, arguments...)
 	if err := browser.Start(); err != nil {
-		t.Fatalf("start Chrome: %v", err)
+		return nil, fmt.Errorf("start Chrome: %w", err)
 	}
-	// Registered after the profile, so it runs first: the profile directory
-	// cannot be removed on Windows while Chrome still holds it open.
-	t.Cleanup(func() {
+	// Stopped before this returns, and so before the profile directory is
+	// removed: Windows cannot remove it while Chrome still holds it open.
+	defer func() {
 		_ = browser.Process.Kill()
 		_ = browser.Wait()
-	})
+	}()
 
 	request, err := json.Marshal(map[string]any{
 		"portFile":   filepath.Join(profile, "DevToolsActivePort"),
-		"url":        server.URL + page.Path,
+		"url":        base + page.Path,
 		"width":      page.Width,
 		"height":     page.Height,
 		"setup":      page.Setup,
@@ -125,20 +157,65 @@ func openInBrowser(t *testing.T, handler http.Handler, page browserPage, result 
 		"screenshot": page.Screenshot,
 	})
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	command := nodeCommand(node, devtoolsDriver)
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+	command := exec.CommandContext(ctx, node, "-")
+	command.Stdin = strings.NewReader(devtoolsDriver)
 	command.Env = append(os.Environ(), "WORKBOOK_BROWSER_REQUEST="+string(request))
+	command.WaitDelay = 5 * time.Second
 	output, err := command.Output()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return nil, fmt.Errorf("measure %s at %dx%d: the browser driver did not finish within %s, so it and Chrome were killed",
+			page.Path, page.Width, page.Height, deadline)
+	}
 	if err != nil {
 		stderr := ""
-		if exit, ok := err.(*exec.ExitError); ok {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
 			stderr = string(exit.Stderr)
 		}
-		t.Fatalf("measure %s at %dx%d: %v\n%s", page.Path, page.Width, page.Height, err, stderr)
+		return nil, fmt.Errorf("measure %s at %dx%d: %w\n%s", page.Path, page.Width, page.Height, err, stderr)
 	}
-	if err := json.Unmarshal(output, result); err != nil {
-		t.Fatalf("decode the page's answer %q: %v", strings.TrimSpace(string(output)), err)
+	return output, nil
+}
+
+// A page that never answers does not hold the test until the package times
+// out: the driver is stopped at its deadline, the failure says so, and Chrome
+// is gone by then rather than left running behind the test.
+func TestBrowserDriverStopsAPageThatNeverAnswersAtItsDeadline(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	chrome := requireChrome(t)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte("<!doctype html><title>silent</title>"))
+	}))
+	t.Cleanup(server.Close)
+	profile := t.TempDir()
+	const deadline = 5 * time.Second
+	started := time.Now()
+	_, err := driveBrowser(node, chrome, profile, server.URL, browserPage{
+		Width: 800, Height: 600, Path: "/", Script: "new Promise(() => {})",
+	}, deadline)
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatal("a page whose script never resolves was reported as answered")
+	}
+	if !strings.Contains(err.Error(), "did not finish within "+deadline.String()) {
+		t.Errorf("the failure does not name the deadline: %v", err)
+	}
+	if elapsed > deadline+15*time.Second {
+		t.Errorf("the driver took %s to give up on a %s deadline", elapsed, deadline)
+	}
+	port, readErr := os.ReadFile(filepath.Join(profile, "DevToolsActivePort"))
+	if readErr != nil {
+		t.Fatalf("Chrome never wrote its DevTools port, so this did not test a running browser: %v", readErr)
+	}
+	address := net.JoinHostPort("127.0.0.1", strings.TrimSpace(strings.SplitN(string(port), "\n", 2)[0]))
+	if connection, dialErr := net.DialTimeout("tcp", address, time.Second); dialErr == nil {
+		_ = connection.Close()
+		t.Errorf("Chrome is still listening on %s after the driver gave up", address)
 	}
 }
 
@@ -203,13 +280,17 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     return evaluated;
   };
   if (request.setup) await evaluate(request.setup);
-  const keyCodes = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Tab: 9, Space: 32 };
+  const keyCodes = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Tab: 9, Space: 32, Enter: 13 };
+  // Keys that type a character are sent as keyDown with their text, which is
+  // what makes Chrome run the key's default action: a space toggles, and an
+  // Enter submits the form its control sits in.
+  const keyText = { Space: " ", Enter: "\r" };
   for (const key of request.keys || []) {
     if (!keyCodes[key]) throw new Error("the driver cannot press " + key);
     const name = key === "Space" ? " " : key;
     const event = { key: name, code: key, windowsVirtualKeyCode: keyCodes[key], nativeVirtualKeyCode: keyCodes[key] };
-    if (key === "Space") event.text = " ";
-    await send("Input.dispatchKeyEvent", Object.assign({ type: key === "Space" ? "keyDown" : "rawKeyDown" }, event));
+    if (keyText[key]) event.text = keyText[key];
+    await send("Input.dispatchKeyEvent", Object.assign({ type: keyText[key] ? "keyDown" : "rawKeyDown" }, event));
     await send("Input.dispatchKeyEvent", Object.assign({ type: "keyUp" }, event));
   }
   const evaluated = await evaluate(request.expression);
