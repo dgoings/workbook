@@ -333,6 +333,12 @@ setTimeout(async () => {
   if (!drafts[0].textContent.includes("must be an email address") || !drafts[0].textContent.includes("Not saved")) {
     throw new Error("the failed row does not say why: " + JSON.stringify(drafts[0].textContent));
   }
+  // Only an assignment failed, so its Retry takes the caret, the way a failed
+  // dependency's does: it is the one thing on this page the reader came to do.
+  if (document.activeElement !== rowControl(drafts[0], "Retry")) {
+    throw new Error("an assignment-only failure did not focus the failed row's Retry: " +
+      JSON.stringify(document.activeElement && document.activeElement.textContent));
+  }
 
   // Retried against the same task, naming the tip the page holds; a success
   // takes the row away.

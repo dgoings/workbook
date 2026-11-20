@@ -104,6 +104,10 @@
           pendingRelationshipRecoveryFocus = { taskID: recovery.taskID };
         }
         if (hasAssignmentFailures(recovery)) {
+          // The caret goes to the first failed row, as it does for a failed
+          // dependency, unless a dependency failed too: the relationships come
+          // first in the sidebar, so their Retry is the first one to reach.
+          if (!said.length) pendingRelationshipRecoveryFocus = { taskID: recovery.taskID, assignments: true };
           said.push(said.length
             ? "Some assignments were not saved either."
             : "Task created, but some assignments were not saved.");
@@ -438,6 +442,13 @@
         if (!request || request.taskID !== taskID) return;
         Promise.resolve().then(() => {
           if (pendingRelationshipRecoveryFocus !== request) return;
+          if (request.assignments) {
+            pendingRelationshipRecoveryFocus = null;
+            const retry = openThreadPanels && openThreadPanels.taskID === taskID &&
+              openThreadPanels.firstAssignmentRetry ? openThreadPanels.firstAssignmentRetry() : null;
+            if (retry && main.contains(retry)) retry.focus();
+            return;
+          }
           if (generation !== relationshipRefreshGeneration ||
               !ownsDependencyController(controller) ||
               !main.contains(controller.region)) {

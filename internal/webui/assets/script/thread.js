@@ -229,6 +229,7 @@
           const retry = panel.claim(threadButton("Retry"));
           retry.addEventListener("click", () => actions.retry());
           controls.append(retry);
+          if (actions.retryControl) actions.retryControl(retry);
         }
         const remove = panel.claim(threadButton("Remove"));
         remove.addEventListener("click", () => actions.remove());
@@ -414,6 +415,9 @@
         // handed over by the create so they are retried here, against the task
         // that now exists — the way a failed dependency draft is.
         const drafts = pendingAssignmentDrafts.get(taskID) || [];
+        // Each failed draft's Retry, in the order the rows are drawn, so a
+        // create that lands here can put the caret on the first of them.
+        let draftRetries = [];
         let lastHeld = [];
         function retireDraft(draft) {
           const at = drafts.indexOf(draft);
@@ -501,11 +505,13 @@
           panel.resetControls();
           panel.setCount(held.length === 0 ? "" : held.length === 1 ? "1 assignment" : held.length + " assignments");
           ages = [];
+          draftRetries = [];
           const now = Date.now();
           panel.list.replaceChildren(
             ...held.map((assignment) => assignmentRow(assignment, now)),
             ...drafts.map((draft) => assignmentDraftRow(panel, draft, {
               retry: () => retryDraft(draft),
+              retryControl: (control) => draftRetries.push(control),
               remove: () => { if (!panel.busy) retireDraft(draft); }
             })));
           if (assignable) panel.claim(submit);
@@ -591,6 +597,12 @@
           // changes with every poll.
           mountBefore(into, before) { parent = into; anchor = before; },
           follow(view) { draw(view && view.assignments); },
+          // The first failed draft's Retry while it is in the document, for
+          // the create that handed the drafts over to focus.
+          firstDraftRetry() {
+            const retry = draftRetries[0];
+            return retry && panel.section.contains(retry) ? retry : null;
+          },
           age
         };
       }

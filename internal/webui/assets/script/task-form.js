@@ -744,7 +744,8 @@
             // How long each assignment has stood, re-worded on the page's own
             // tick whatever the poll answered: a board left idle is answered
             // 304 and brings this section nothing, and its rows still age.
-            age: () => assignments.age()
+            age: () => assignments.age(),
+            firstAssignmentRetry: () => assignments.firstDraftRetry()
           };
           // Attachments and assignments stand in the sidebar, as they do on a
           // New Task form: both are bounded at fifty rows, and both are part of
