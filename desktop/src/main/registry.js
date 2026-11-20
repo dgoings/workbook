@@ -348,12 +348,35 @@ class Registry {
     return applied
   }
 
+  /**
+   * Forget a project: drop its entry and its place in the sidebar, and nothing
+   * else. Its repository, refs/workbook/* and .workbook/config.json are never
+   * touched, and nothing here reads the path at all, so a project whose
+   * repository is gone is removed like any other.
+   *
+   * Resolves whether there was anything to remove. An id the registry does not
+   * hold — already removed, by a second click or a second window — writes
+   * nothing. Rolled back on a failed save like setTheme: save() writes the
+   * whole state, and a project dropped from memory only would vanish for good
+   * at the next unrelated save while the caller reported the removal as failed.
+   *
+   * @returns {Promise<boolean>}
+   */
   async remove (projectId) {
+    if (this.find(projectId) === null) return false
+    const previous = { projects: this.state.projects, sidebarLayout: this.state.sidebarLayout }
     this.state.projects = this.state.projects.filter((project) => project.id !== projectId)
     // A forgotten project leaves the layout too, from a category or the top
     // level, so a later import of the same repository starts at the bottom.
     this.state.sidebarLayout = normalize(this.state.sidebarLayout, this.#projectIds())
-    await this.save()
+    try {
+      await this.save()
+    } catch (error) {
+      this.state.projects = previous.projects
+      this.state.sidebarLayout = previous.sidebarLayout
+      throw error
+    }
+    return true
   }
 }
 

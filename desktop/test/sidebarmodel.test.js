@@ -157,3 +157,16 @@ test('rowAt puts a pointer in a gap before the row below it, above the first row
   assert.deepEqual(rowAt(rows, 130), { over: { kind: 'end' }, fraction: 1 })
   assert.deepEqual(rowAt([], 10), { over: { kind: 'end' }, fraction: 1 })
 })
+
+// Which project to show after the showing one is removed from Workbench: the
+// one below it in sidebar order, else the one above, else none.
+test('neighborAfterRemoval takes the next project, then the previous, then none', () => {
+  const { neighborAfterRemoval } = require('../src/renderer/sidebarmodel')
+  assert.equal(neighborAfterRemoval(['a', 'b', 'c'], 'b'), 'c')
+  assert.equal(neighborAfterRemoval(['a', 'b', 'c'], 'c'), 'b')
+  assert.equal(neighborAfterRemoval(['a', 'b', 'c'], 'a'), 'b')
+  assert.equal(neighborAfterRemoval(['a'], 'a'), null)
+  assert.equal(neighborAfterRemoval([], 'a'), null)
+  // Not in the list (already gone): nothing to stand next to.
+  assert.equal(neighborAfterRemoval(['a', 'b'], 'z'), null)
+})

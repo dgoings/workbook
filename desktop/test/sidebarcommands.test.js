@@ -194,3 +194,114 @@ test('a failed save in the middle rejects that command alone; the next one build
     assert.deepEqual(broadcasts.at(-1).layout, registry.sidebarLayout)
   })
 })
+
+// Removing a project from Workbench: sidebar:removeProject, which the
+// project:forget channel runs. It drops the registry entry and its place in the
+// sidebar, hands the project to onRemoved (main.js stops its board there), and
+// announces the result the way every layout edit is announced.
+
+async function withRemovals (body) {
+  await withCommands(async (context) => {
+    const removed = []
+    const commands = createSidebarCommands({
+      registry: context.registry,
+      mintId: () => 'unused',
+      listProjects: () => context.registry.orderedProjects,
+      rebuildMenu: () => { context.menuCount = (context.menuCount ?? 0) + 1 },
+      broadcast: (payload) => context.broadcasts.push(payload),
+      onRemoved: (projectId) => removed.push(projectId)
+    })
+    await body({ ...context, commands, removed, menus: () => context.menuCount ?? 0 })
+  })
+}
+
+test('removeProject drops the project from the registry and its category, then announces it', async () => {
+  await withRemovals(async ({ registry, commands, broadcasts, removed, menus, directory }) => {
+    const answer = await commands.removeProject({ projectId: 'b' })
+    assert.equal(answer.removed, true)
+    assert.deepEqual(ids(answer.projects), ['a', 'c'])
+    assert.deepEqual(answer.layout.items, [
+      top('a'), { kind: 'category', id: 'work', name: 'Work', collapsed: false, projects: [] }, top('c')
+    ])
+    assert.deepEqual(removed, ['b'])
+    assert.equal(menus(), 1)
+    assert.deepEqual(broadcasts, [{ layout: answer.layout, projects: answer.projects }])
+    assert.equal(registry.find('b'), null)
+
+    const reloaded = new Registry(directory)
+    await reloaded.load()
+    assert.deepEqual(ids(reloaded.orderedProjects), ['a', 'c'])
+  })
+})
+
+test('removing an unknown or already-removed project is a quiet no-op', async () => {
+  await withRemovals(async ({ commands, broadcasts, removed, menus }) => {
+    const answer = await commands.removeProject({ projectId: 'nobody' })
+    assert.equal(answer.removed, false)
+    assert.deepEqual(ids(answer.projects), ['a', 'b', 'c'])
+    assert.deepEqual(removed, [])
+    assert.equal(menus(), 0)
+    assert.deepEqual(broadcasts, [])
+  })
+})
+
+test('two removes of the same project at once remove it once', async () => {
+  await withRemovals(async ({ commands, broadcasts, removed }) => {
+    const [first, second] = await Promise.all([
+      commands.removeProject({ projectId: 'a' }),
+      commands.removeProject({ projectId: 'a' })
+    ])
+    assert.equal(first.removed, true)
+    assert.equal(second.removed, false)
+    assert.deepEqual(removed, ['a'])
+    assert.equal(broadcasts.length, 1)
+  })
+})
+
+test('a remove queues behind a layout edit and the edit after it sees the removal', async () => {
+  await withRemovals(async ({ registry, commands }) => {
+    const move = commands.moveProject({ projectId: 'c', target: { kind: 'category', id: 'work', index: 0 } })
+    const remove = commands.removeProject({ projectId: 'c' })
+    const later = commands.moveProject({ projectId: 'c', target: { kind: 'top', index: 0 } })
+    await move
+    await remove
+    await assert.rejects(later, /is not a project/)
+    assert.deepEqual(ids(registry.orderedProjects), ['a', 'b'])
+  })
+})
+
+test('a remove whose save fails rejects, keeps the project, and stops nothing', async () => {
+  await withRemovals(async ({ registry, commands, broadcasts, removed }) => {
+    registry.save = () => Promise.reject(new Error('disk full'))
+    await assert.rejects(commands.removeProject({ projectId: 'b' }), /disk full/)
+    assert.notEqual(registry.find('b'), null)
+    assert.deepEqual(removed, [])
+    assert.deepEqual(broadcasts, [])
+  })
+})
+
+test('removeProject refuses a malformed request before it queues', async () => {
+  await withRemovals(async ({ commands }) => {
+    for (const args of [undefined, null, [], {}, { projectId: '' }, { projectId: 7 }]) {
+      await assert.rejects(commands.removeProject(args), /sidebar:removeProject: /)
+    }
+  })
+})
+
+test('a failing onRemoved does not undo the removal or hide it from the sidebar', async () => {
+  await withCommands(async ({ registry, broadcasts }) => {
+    const commands = createSidebarCommands({
+      registry,
+      mintId: () => 'unused',
+      listProjects: () => registry.orderedProjects,
+      rebuildMenu: () => {},
+      broadcast: (payload) => broadcasts.push(payload),
+      onRemoved: () => { throw new Error('the window is gone') },
+      log: () => {}
+    })
+    const answer = await commands.removeProject({ projectId: 'a' })
+    assert.equal(answer.removed, true)
+    assert.equal(registry.find('a'), null)
+    assert.equal(broadcasts.length, 1)
+  })
+})

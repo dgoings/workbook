@@ -23,8 +23,20 @@ const layouts = require('./sidebarlayout')
  * @param {() => void} options.rebuildMenu reinstall the application menu
  * @param {(payload: { layout: object, projects: object[] }) => void} options.broadcast
  *   send sidebar:layoutChanged to the shell page
+ * @param {(projectId: string) => void} [options.onRemoved] let go of a project
+ *   removeProject has just dropped: its board view, its server, anything kept
+ *   for it
+ * @param {(line: string) => void} [options.log]
  */
-function createSidebarCommands ({ registry, mintId, listProjects, rebuildMenu, broadcast }) {
+function createSidebarCommands ({
+  registry,
+  mintId,
+  listProjects,
+  rebuildMenu,
+  broadcast,
+  onRemoved = () => {},
+  log = (line) => console.error(line)
+}) {
   // One command at a time. Each edit reads the layout, computes the next one
   // and saves it; two overlapping would both read the same layout and the
   // second save would silently undo the first, and a failed save's rollback
@@ -144,6 +156,41 @@ function createSidebarCommands ({ registry, mintId, listProjects, rebuildMenu, b
       return commit((layout) => {
         existingCategory(channel, 'categoryId', layout, categoryId)
         return layouts.deleteCategory(layout, categoryId)
+      })
+    },
+
+    /**
+     * sidebar:removeProject { projectId } — project:forget runs this.
+     *
+     * Drops Workbench's registry entry and the project's place in the sidebar,
+     * then hands the id to onRemoved, which in main.js stops its board and lets
+     * go of anything else kept for it. The repository is never touched.
+     *
+     * In the queue like every layout edit, so a drag in flight and a removal do
+     * not overwrite each other's save. An id that is not a project — removed
+     * already, by a second click or an earlier request — answers
+     * `{ removed: false }` with the current layout and announces nothing: there
+     * is nothing for the user to be told. A failed save rejects and changes
+     * nothing, so the board keeps running and the row stays where it was.
+     * onRemoved runs after the save, and its failure is logged, not thrown: the
+     * project is already gone from the registry, and the sidebar must hear so.
+     */
+    async removeProject (args) {
+      const channel = 'sidebar:removeProject'
+      const { projectId } = object(channel, args)
+      string(channel, 'projectId', projectId)
+      return enqueue(async () => {
+        const removed = await registry.remove(projectId)
+        if (!removed) return { ...snapshot(), removed: false }
+        try {
+          onRemoved(projectId)
+        } catch (error) {
+          log(`workbench: removed ${projectId}, but could not let go of its board: ${error?.message ?? error}`)
+        }
+        rebuildMenu()
+        const payload = snapshot()
+        broadcast(payload)
+        return { ...payload, removed: true }
       })
     }
   }
