@@ -181,3 +181,54 @@ test('a check that throws reads as present, and the refresh still settles', asyn
   assert.equal(presence.get('a').missing, false)
   assert.equal(presence.get('b').missing, true)
 })
+
+// Settles with `promise`, or fails after `ms`: a check a regression leaves
+// hanging fails the test instead of hanging the run.
+function within (promise, ms, what) {
+  let timer
+  const limit = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} did not settle within ${ms}ms`)), ms)
+  })
+  return Promise.race([promise, limit]).finally(() => clearTimeout(timer))
+}
+
+test('the check started last wins, whichever answer arrives last', async () => {
+  // A slow look started when the window took the focus finishes after a newer
+  // one started by opening the project: the older answer must not overwrite it.
+  const projects = [{ id: 'a', path: '/a' }]
+  const pending = []
+  const presence = createPresenceTracker({
+    projects: () => projects,
+    check: () => new Promise((resolve) => { pending.push(resolve) }),
+    onChanged: () => {}
+  })
+  const older = presence.refresh(['a'])
+  const newer = presence.refresh(['a'])
+  assert.equal(pending.length, 2)
+  pending[1](gone)
+  assert.equal(await within(newer, 1000, 'the newer check'), true)
+  pending[0]({ missing: false, reason: null, message: null })
+  assert.equal(await within(older, 1000, 'the older check'), false, 'a superseded answer reported a change')
+  assert.deepEqual(presence.get('a'), gone, 'the older answer overwrote the newer one')
+})
+
+test('a check that hangs gives up in time and reads as present, not missing', async () => {
+  // A network mount that never answers must not leave "Starting the board…"
+  // up forever, and not knowing is not the same as missing: the board start
+  // goes on, as for a path that cannot be read.
+  const projects = [{ id: 'a', path: '/a' }, { id: 'b', path: '/b' }]
+  const presence = createPresenceTracker({
+    projects: () => projects,
+    check: (dir) => dir === '/a' ? new Promise(() => {}) : Promise.resolve(gone),
+    onChanged: () => {},
+    timeoutMs: 20
+  })
+  assert.equal(await within(presence.refresh(), 1000, 'a refresh over a hung check'), true)
+  assert.equal(presence.get('a').missing, false)
+  assert.equal(presence.get('b').missing, true)
+})
+
+test('the default time limit is a few seconds', () => {
+  const { CHECK_TIMEOUT_MS } = require('../src/main/presence')
+  assert.ok(CHECK_TIMEOUT_MS >= 1000 && CHECK_TIMEOUT_MS <= 10000, `CHECK_TIMEOUT_MS is ${CHECK_TIMEOUT_MS}`)
+})

@@ -20,6 +20,13 @@ const path = require('node:path')
 
 const PRESENT = Object.freeze({ missing: false, reason: null, message: null })
 
+// How long one look may take. Two stats are instant on a local disk; a network
+// mount that has gone away can leave them pending for minutes, and the board
+// start waits on this answer. A look that runs out of time is taken as
+// present — not knowing is not missing — and the start goes on to report
+// whatever the real problem is, as for a path that cannot be read.
+const CHECK_TIMEOUT_MS = 4000
+
 /**
  * Look for a checkout at `dir`.
  *
@@ -66,10 +73,33 @@ function certainlyAbsent (error) {
  * @param {() => Array<{ id: string, path: string }>} options.projects the registry's projects
  * @param {(dir: string) => Promise<object>} [options.check] checkRepository, or a stand-in
  * @param {() => void} options.onChanged called once after a refresh that changed anything
+ * @param {number} [options.timeoutMs] how long one look may take; see CHECK_TIMEOUT_MS
  */
-function createPresenceTracker ({ projects, check = checkRepository, onChanged }) {
+function createPresenceTracker ({ projects, check = checkRepository, onChanged, timeoutMs = CHECK_TIMEOUT_MS }) {
   /** @type {Map<string, { missing: boolean, reason: string|null, message: string|null }>} */
   const known = new Map()
+  // The last look started for each project. Looks overlap — the window taking
+  // the focus and the project being opened each start one — and a slow one
+  // that finishes after a newer one must not overwrite the newer answer, so
+  // only the answer to the look started last is recorded.
+  const latest = new Map()
+  let looks = 0
+
+  /** One look, bounded by timeoutMs; never rejects. */
+  async function look (dir) {
+    let timer
+    const outOfTime = new Promise((resolve) => {
+      timer = setTimeout(() => resolve(PRESENT), timeoutMs)
+      timer.unref?.()
+    })
+    try {
+      return await Promise.race([check(dir), outOfTime])
+    } catch {
+      return PRESENT
+    } finally {
+      clearTimeout(timer)
+    }
+  }
 
   return {
     /** What was last found for `projectId`; present until something looks. */
@@ -79,9 +109,10 @@ function createPresenceTracker ({ projects, check = checkRepository, onChanged }
 
     /**
      * Look again at the named projects, or at every one. Resolves whether
-     * anything changed; never rejects. A project no longer listed by the time
-     * its answer arrives — removed while it was being looked at — is not
-     * recorded, so nothing is kept for a project the app has let go of.
+     * anything changed; never rejects, and settles within timeoutMs. A project
+     * no longer listed by the time its answer arrives — removed while it was
+     * being looked at — is not recorded, so nothing is kept for a project the
+     * app has let go of; nor is an answer a newer look has overtaken.
      *
      * @param {string[]} [ids]
      * @returns {Promise<boolean>}
@@ -90,14 +121,13 @@ function createPresenceTracker ({ projects, check = checkRepository, onChanged }
       const wanted = ids ? new Set(ids) : null
       const targets = projects().filter((project) => wanted === null || wanted.has(project.id))
       const answers = await Promise.all(targets.map(async (project) => {
-        try {
-          return [project, await check(project.path)]
-        } catch {
-          return [project, PRESENT]
-        }
+        const turn = ++looks
+        latest.set(project.id, turn)
+        return [project, turn, await look(project.path)]
       }))
       let changed = false
-      for (const [project, found] of answers) {
+      for (const [project, turn, found] of answers) {
+        if (latest.get(project.id) !== turn) continue
         const still = projects().find((entry) => entry.id === project.id)
         if (!still || still.path !== project.path) continue
         const before = known.get(project.id) ?? PRESENT
@@ -115,8 +145,9 @@ function createPresenceTracker ({ projects, check = checkRepository, onChanged }
     /** Drop what is known about a project that has been removed. */
     forget (projectId) {
       known.delete(projectId)
+      latest.delete(projectId)
     }
   }
 }
 
-module.exports = { checkRepository, createPresenceTracker }
+module.exports = { checkRepository, createPresenceTracker, CHECK_TIMEOUT_MS }

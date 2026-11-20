@@ -17,7 +17,7 @@ const projectkeys = require('./projectkeys')
 const clipath = require('./clipath')
 const { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_POSITION, RAIL_WIDTH, boardBounds } = require('./layout')
 const { buildMenuTemplate } = require('./menu')
-const { createSidebarCommands } = require('./sidebarcommands')
+const { createSidebarCommands, object: argumentsObject, string: nonEmptyString } = require('./sidebarcommands')
 const { createPresenceTracker } = require('./presence')
 const { setupUpdater } = require('./updater')
 
@@ -1048,9 +1048,13 @@ ipcMain.handle('project:forget', (_event, args) => sidebarCommands.removeProject
  * Asked by the shell before it opens a board, so a missing repository is shown
  * as missing rather than as a board that would not start, and asked again when
  * a start fails. An id that is not a project answers rather than throwing: it
- * was removed a moment ago, and there is nothing to report.
+ * was removed a moment ago, and there is nothing to report. Arguments that are
+ * not { projectId: string } are refused the way the sidebar channels refuse
+ * theirs. Settles within presence.js's time limit, however slow the disk.
  */
-ipcMain.handle('project:presence', async (_event, { projectId } = {}) => {
+ipcMain.handle('project:presence', async (_event, args) => {
+  const { projectId } = argumentsObject('project:presence', args)
+  nonEmptyString('project:presence', 'projectId', projectId)
   if (!registry.find(projectId)) return { known: false, missing: false, reason: null, message: null }
   await presence.refresh([projectId])
   return { known: true, ...presence.get(projectId) }

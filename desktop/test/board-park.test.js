@@ -447,6 +447,18 @@ describe('removing a project from Workbench', () => {
     assert.equal((await app.presence('B')).known, false)
   })
 
+  test('project:presence refuses arguments that are not a project id, as the sidebar channels do', async () => {
+    const app = await launch()
+    const ask = (args) => app.h.handlers.get('project:presence')({ sender: app.h.chrome.webContents }, args)
+    for (const args of [undefined, null, 'A', ['A']]) {
+      await assert.rejects(async () => ask(args), /^TypeError: project:presence: arguments must be an object$/)
+    }
+    for (const projectId of [undefined, null, '', 42]) {
+      await assert.rejects(async () => ask({ projectId }), /^TypeError: project:presence: projectId must be a non-empty string$/)
+    }
+    assert.equal((await ask({ projectId: 'A' })).known, true)
+  })
+
   test('the window coming back into focus looks at every repository again', async () => {
     const app = await launch()
     app.h.missing.add(PROJECTS[1].path)

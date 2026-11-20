@@ -222,4 +222,6 @@ function existingCategory (channel, name, layout, id) {
   }
 }
 
-module.exports = { createSidebarCommands }
+// The argument checks are shared with main.js's project channels, so a bad
+// argument reads the same on every channel.
+module.exports = { createSidebarCommands, object, string }
