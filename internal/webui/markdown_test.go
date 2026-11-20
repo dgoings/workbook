@@ -712,15 +712,19 @@ setTimeout(async () => {
 
   toggle.eventListeners.click();
   if (!pane.hidden || editor.hidden) throw new Error("Edit did not swap the rendering for the editor");
-  if (toggle.textContent !== "Done") throw new Error("the toggle still reads " + toggle.textContent);
+  // The way back to the rendering is named for what it shows.
+  if (toggle.textContent !== "Preview") throw new Error("the toggle reads " + JSON.stringify(toggle.textContent) + " while editing, want Preview");
+  if (toggle.getAttribute("aria-label") !== "Preview the description") {
+    throw new Error("the toggle's accessible name = " + JSON.stringify(toggle.getAttribute("aria-label")));
+  }
   if (globalThis.activeElement !== editor) throw new Error("Edit did not put the caret in the editor");
 
   editor.value = "Rewritten with `+"`code`"+` in it.";
   toggle.eventListeners.click();
-  if (pane.hidden || !editor.hidden) throw new Error("Done did not return to the rendering");
+  if (pane.hidden || !editor.hidden) throw new Error("Preview did not return to the rendering");
   const rewritten = shapeOf(markdownClean(pane, "the description"));
   if (rewritten !== 'p["Rewritten with ",code["code"]," in it."]') {
-    throw new Error("Done rendered " + rewritten);
+    throw new Error("Preview rendered " + rewritten);
   }
 
   // And the save is the save it always was: one field, because one field

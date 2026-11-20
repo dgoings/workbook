@@ -428,7 +428,8 @@ at three chips with a `+N more` beside them: a task may hold fifty assignments
 and a card is one box in one column. A long identity is truncated to its column
 and never widens it. The task's own page carries the whole list under
 **Assignments** — the full value, the time it was recorded, and the same
-"assigned 3 days ago" phrasing `workbook show` prints — above the attachments.
+"assigned 3 days ago" phrasing `workbook show` prints — in the page's sidebar,
+below Depends On and Blocks and above Attachments.
 It follows the poll, so an assignment made from the CLI in another terminal
 appears on an open page within a second without disturbing anything being typed
 into it. The phrasing is worded by the page from the recorded time, by the same
@@ -451,6 +452,17 @@ differs from the command line, and it is worth knowing if your habits come from
 there: plain `workbook update --assign` refuses a task somebody else holds, and
 `--force` is what assigns you beside them. The board always behaves the way
 `--force` does, and offers no way to ask for the gate.
+
+The New Task form offers the same control in the same place, and stages what it
+is given rather than sending it: a task has to exist before anything can be
+assigned to it. Once the create answers with the task's ID, each staged
+assignment is sent through the assignment route above, in the order it was
+staged, exactly as the task page's control would send it — so a blank one is
+`serve`'s own identity there too. An assignment the server refuses after the
+create is handled the way a refused dependency is: the task exists, so the
+board opens its page, says some assignments were not saved, and draws each one
+in the Assignments section with the reason and a Retry and Remove. **Create
+more** re-arms a form with nothing staged.
 
 Each row carries **Unassign** where this checkout may withdraw it — its own
 assignments, and the ones it recorded against somebody else. A row without the
@@ -2603,8 +2615,13 @@ directed edge: **Depends On** lists the current task's prerequisites, while
 eligible active tasks through an integrated combobox and uses the nested
 Git-durable mutation routes above.
 
-Task forms use a wide main column and a compact Properties sidebar for status,
-priority, labels, Depends On, and Blocks. A New Task form on a project with more
+Task forms use a wide main column and a compact sidebar holding, in order,
+Properties (status, priority and labels), Depends On and Blocks, Assignments,
+and Attachments; the New Task form and a task's own page lay it out alike. The
+New Task header is a compact band reading "New task"; both pages put a ×
+(Close) at the right of the header that leaves the way Back does, and a New
+Task form's footer has Save with **Create more** beside it and Cancel at the
+far right. A New Task form on a project with more
 than one active [key](#project-keys) also offers the key to mint under, standing
 at the current one; a project with a single key draws no such field, and a form
 whose reader took the default sends the create every client sent before keys
@@ -2612,7 +2629,7 @@ could be chosen. New Task stages both Depends On and Blocks without writing task
 refs; relationship mutations run after the task receives its durable ID. If
 only some edges succeed, successful relationships remain durable while failed
 relationships remain available to retry or remove.
-On narrow screens, the task editor, Properties, Relationships, and actions
+On narrow screens, the task editor, the sidebar's sections, and the actions
 stack in that order.
 
 Saving a new task returns to the board, and a **Create more** toggle on the New
@@ -2707,11 +2724,15 @@ Active task details also provide Delete; a successful deletion returns to the
 board with its Deleted column shown, where the task now is and where the
 Restore that undoes it sits on the card.
 
-A task's page also carries what is attached to it and what has been said about
-it, as two sections below the form and above the change history. The attachment
+A task's page also carries what is attached to it, in its sidebar, and what
+has been said about it, below the form and above the change history. The attachment
 list shows both kinds in one list — a file's name links to its download, a
 link's label to its destination — with the size, the media type and who added
-it, an upload control, a form for adding a link, and a Remove on each row. The
+it, an upload control, a form for adding a link, and a Remove on each row. A
+chosen file is listed by name with a × that takes it back out before anything
+is sent, and the chooser gives way to an **Add file** button until the list is
+empty again; the New Task form's staged list works the same way. An empty
+list draws only its heading and controls. The
 thread is drawn oldest first, each comment carrying its author, when it was
 written, and whether it has been edited since, with an Edit and a Remove on each
 one and a box for adding another. Comment bodies render as markdown, in the

@@ -82,17 +82,38 @@
         return draftState &&
           (draftState.dependsOn.size > 0 || draftState.blocks.size > 0);
       }
-      function applyCreatedTaskRecovery(recovery) {
-        if (!recovery) return;
+      function hasAssignmentFailures(recovery) {
+        return Boolean(recovery.assignmentFailures && recovery.assignmentFailures.length);
+      }
+      // Hands what a create could not write to the task's own page: the rows
+      // its sidebar retries, and the sentence that says why they are there.
+      function stageCreatedTaskDrafts(recovery) {
         if (hasRelationshipDrafts(recovery.failures)) {
           pendingRelationshipDrafts.set(recovery.taskID, recovery.failures);
-          pendingTaskMessages.set(recovery.taskID, [
-            "Task created, but some relationships were not saved.",
-            ...recovery.warnings
-          ]);
+        }
+        if (hasAssignmentFailures(recovery)) {
+          pendingAssignmentDrafts.set(recovery.taskID, recovery.assignmentFailures);
+        }
+      }
+      function applyCreatedTaskRecovery(recovery) {
+        if (!recovery) return;
+        stageCreatedTaskDrafts(recovery);
+        const said = [];
+        if (hasRelationshipDrafts(recovery.failures)) {
+          said.push("Task created, but some relationships were not saved.");
           pendingRelationshipRecoveryFocus = { taskID: recovery.taskID };
-        } else if (recovery.warnings.length) {
-          pendingTaskMessages.set(recovery.taskID, recovery.warnings);
+        }
+        if (hasAssignmentFailures(recovery)) {
+          // The caret goes to the first failed row, as it does for a failed
+          // dependency, unless a dependency failed too: the relationships come
+          // first in the sidebar, so their Retry is the first one to reach.
+          if (!said.length) pendingRelationshipRecoveryFocus = { taskID: recovery.taskID, assignments: true };
+          said.push(said.length
+            ? "Some assignments were not saved either."
+            : "Task created, but some assignments were not saved.");
+        }
+        if (said.length || recovery.warnings.length) {
+          pendingTaskMessages.set(recovery.taskID, [...said, ...recovery.warnings]);
         }
         pendingDetailRelationshipContextTaskID = recovery.taskID;
       }
@@ -106,7 +127,8 @@
       // actions only exist on the task's own detail route, so that create opens
       // the task instead of dropping what it has to say.
       function createdTaskLanding(recovery) {
-        if (recovery.warnings.length || hasRelationshipDrafts(recovery.failures)) {
+        if (recovery.warnings.length || hasRelationshipDrafts(recovery.failures) ||
+            hasAssignmentFailures(recovery)) {
           return { path: taskPath(recovery.taskID), stageRecovery: true, replace: false };
         }
         if (createMoreTasks) {
@@ -420,6 +442,13 @@
         if (!request || request.taskID !== taskID) return;
         Promise.resolve().then(() => {
           if (pendingRelationshipRecoveryFocus !== request) return;
+          if (request.assignments) {
+            pendingRelationshipRecoveryFocus = null;
+            const retry = openThreadPanels && openThreadPanels.taskID === taskID &&
+              openThreadPanels.firstAssignmentRetry ? openThreadPanels.firstAssignmentRetry() : null;
+            if (retry && main.contains(retry)) retry.focus();
+            return;
+          }
           if (generation !== relationshipRefreshGeneration ||
               !ownsDependencyController(controller) ||
               !main.contains(controller.region)) {

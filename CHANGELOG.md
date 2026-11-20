@@ -71,6 +71,20 @@ before anyone runs it; see Compatibility across versions below.
   leading whole number of days, where a day is 24 hours: `30d`, `1d12h`.
 
 ### Changed
+- **The web board's New Task form can assign.** On a board that can record
+  assignments, the form stages them beside its dependencies and attachments
+  and sends them once the task exists; one the server refuses is retried from
+  the new task's page, as a refused dependency is.
+- **A task's page is laid out like the New Task form.** Assignments and
+  attachments moved into the sidebar, after Depends On and Blocks; only the
+  comments and the change history sit below the form. Empty assignment and
+  attachment lists no longer explain themselves or count to zero, and a chosen
+  file is listed with a × to take it back out before **Add file** sends or
+  stages it.
+- **Smaller task form changes.** The New Task header is a compact band with a ×
+  that closes the form, as a task's page now has too; Back on the New Task form
+  is Cancel, at the far right; **Create more** sits beside Save, its checkbox
+  after its words; and the description's Done button reads Preview.
 - **The SQLite projection is rebuilt once after upgrading.** Its schema version
   moves from 5 to 7, so the first command this release runs discards the cache
   and reads Git again. Nothing needs to be done, and no task data lives in the

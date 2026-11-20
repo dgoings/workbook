@@ -149,6 +149,215 @@
               : (error instanceof Error ? error.message : "The change failed.")),
           open);
       }
+      // The control that names who to assign: one field, the hint that says
+      // what a blank means, and one button. A task's own page sends what it is
+      // given and a New Task form stages it, so both build it here and each
+      // decides what its submit does.
+      function assignmentAdder(action) {
+        const form = document.createElement("form");
+        form.className = "assignment-add";
+        form.dataset.assignmentForm = "";
+        const label = document.createElement("label");
+        label.setAttribute("for", "assignment-to");
+        text(label, "Assign someone");
+        const field = document.createElement("input");
+        field.type = "text";
+        field.id = "assignment-to";
+        field.name = "assignee";
+        // The identity this board writes as, offered rather than filled in. A
+        // placeholder says "leave this alone and it is you" without putting a
+        // value in the field that a reader who meant somebody else would have
+        // to clear first — and the empty value is what core resolves, so who
+        // is acting is decided in one place rather than two.
+        field.placeholder = assignIdentity;
+        const hint = document.createElement("p");
+        hint.className = "assignment-add__hint";
+        text(hint, "Leave blank to assign yourself. Add a /label to name one agent, as in " +
+          assignIdentity + "/impl-1.");
+        const actions = document.createElement("div");
+        actions.className = "assignment-add__actions";
+        const submit = threadButton(action, true);
+        submit.type = "submit";
+        actions.append(submit);
+        form.append(label, field, hint, actions);
+        return { form, field, submit };
+      }
+      // Who a staged value names, drawn the way a recorded assignment is: the
+      // address, and the agent label styled apart from it. A blank value is
+      // this board's identity, which is what core will record it as. The split
+      // is for drawing only; the value sent is the one the reader typed.
+      function stagedAssignmentWho(value) {
+        const who = document.createElement("p");
+        who.className = "assignment__who";
+        const shown = value || assignIdentity;
+        const slash = shown.indexOf("/");
+        const principal = document.createElement("span");
+        principal.className = "assignment__principal";
+        text(principal, slash < 0 ? shown : shown.slice(0, slash));
+        who.append(principal);
+        if (slash >= 0) {
+          const label = document.createElement("span");
+          label.className = "assignment__label";
+          text(label, shown.slice(slash));
+          who.append(label);
+        }
+        return who;
+      }
+      // An assignment that is not recorded yet: staged on a New Task form, or
+      // handed to a task's page by a create that could not save it. The second
+      // kind says so and why, and offers the retry a failed dependency offers.
+      function assignmentDraftRow(panel, draft, actions) {
+        const item = document.createElement("li");
+        item.className = "assignment";
+        item.dataset.assignmentDraft = draft.key || draft.value;
+        item.append(stagedAssignmentWho(draft.value));
+        if (draft.error !== undefined && actions.retry) {
+          const state = document.createElement("strong");
+          state.className = "relationship-state";
+          text(state, "Not saved");
+          item.append(state);
+          if (draft.error) {
+            const failure = document.createElement("p");
+            failure.className = "assignment__failure";
+            text(failure, draft.error);
+            item.append(failure);
+          }
+        }
+        const controls = document.createElement("div");
+        controls.className = "assignment__actions";
+        if (actions.retry) {
+          const retry = panel.claim(threadButton("Retry"));
+          retry.addEventListener("click", () => actions.retry());
+          controls.append(retry);
+          if (actions.retryControl) actions.retryControl(retry);
+        }
+        const remove = panel.claim(threadButton("Remove"));
+        remove.addEventListener("click", () => actions.remove());
+        controls.append(remove);
+        item.append(controls);
+        return item;
+      }
+      // ─── Assignments staged on a New Task form ──────────────────────────────
+      //
+      // An assignment is recorded on the task's own ref, so a create form holds
+      // what it is given and sends it once the create has answered with an ID,
+      // exactly as it holds a dependency or an attachment.
+      function newAssignmentDraftState() {
+        return { items: [], sequence: 0 };
+      }
+      function hasAssignmentDrafts(draftState) {
+        return Boolean(draftState) && draftState.items.length > 0;
+      }
+      // Every staged assignment, sent in the order it was staged to the task
+      // the create just made. Through the assignment route the task page uses,
+      // so what is recorded is what that page's control records; with no
+      // expectedHead, for the reason the dependency and attachment drafts send
+      // none — nobody else has heard of this task yet. One refusal does not stop
+      // the run: each item is owed its own answer.
+      // A staged value as the server records it: principal[/label], split at
+      // the first separator as core splits it, with a blank principal standing
+      // for this board's identity.
+      function stagedAssignmentHolder(value) {
+        const cut = value.indexOf("/");
+        const principal = (cut < 0 ? value : value.slice(0, cut)) || assignIdentity;
+        return { principal, value: principal + (cut < 0 ? "" : value.slice(cut)) };
+      }
+      // Whether an "also assigned to" answer names only assignees this form
+      // staged. The server's warning is prose — "task X is also assigned to"
+      // and the other holders' values joined with commas — so the holders are
+      // read from the task the same answer carries instead: core names as
+      // others every assignment under a principal this write did not name, and
+      // each is compared by the value the warning would have spelled. Anything
+      // this cannot account for counts as news.
+      function sharedOnlyWithStaged(answer, item, staged) {
+        const assignments = answer && answer.task && answer.task.assignments;
+        if (!Array.isArray(assignments)) return false;
+        const principal = stagedAssignmentHolder(item.value).principal;
+        return assignments
+          .filter((held) => held.principal !== principal)
+          .every((held) => staged.has(held.principal + (held.label ? "/" + held.label : "")));
+      }
+      async function persistAssignmentDrafts(taskID, draftState) {
+        const path = "/api/tasks/" + encodeURIComponent(taskID) + "/assignments";
+        const failures = [];
+        const warnings = [];
+        const staged = new Set(draftState.items.map((item) => stagedAssignmentHolder(item.value).value));
+        for (const item of [...draftState.items]) {
+          try {
+            const answer = await mutateTask("POST", path, { to: item.value });
+            // Every warning, except a "shared" one naming nobody but the
+            // assignees staged here: the reader staged them together, so one
+            // landing beside another is what they asked for. Anybody else it
+            // names — an agent that claimed the task between the create and
+            // this write — is news the reader did not cause, and is said the
+            // way the task page says it.
+            (answer.warnings || [])
+              .filter((warning) => warning.code !== "assignment-shared" || !sharedOnlyWithStaged(answer, item, staged))
+              .forEach((warning) => warnings.push(warning.message));
+          } catch (error) {
+            failures.push({
+              key: item.key,
+              value: item.value,
+              error: error instanceof Error ? error.message : "That assignment was not saved."
+            });
+          }
+        }
+        draftState.items = [];
+        return { failures, warnings };
+      }
+      // The staged list, drawn in the New Task form's sidebar as the section a
+      // task's own page draws there.
+      function taskAssignmentDrafts(draftState) {
+        // It owns itself: no poll writes to it, and it leaves with the route.
+        const panel = taskPanel("", "assignments", "Assignments", () => true);
+        panel.section.className += " task-panel--staged";
+        panel.empty.hidden = true;
+        const adder = assignmentAdder("Assign");
+        panel.section.append(adder.form, panel.status);
+        adder.form.addEventListener("submit", (event) => {
+          event.preventDefault();
+          if (panel.busy) return;
+          panel.report("");
+          // Trimmed as the task page trims it, and judged no further: whether a
+          // value is an assignment is core's to say, and it says so after the
+          // create, in the failure path below. A repeat is the one thing asked
+          // here, because it is a question about this list rather than about
+          // assignments.
+          const value = adder.field.value.trim();
+          if (draftState.items.some((item) => item.value === value)) {
+            panel.report("That assignment is already staged.");
+            return;
+          }
+          draftState.items.push({ key: "staged-assignment-" + (++draftState.sequence), value });
+          adder.field.value = "";
+          render();
+        });
+        function render() {
+          panel.resetControls();
+          panel.claim(adder.submit);
+          panel.setCount(draftState.items.length ? draftState.items.length + " staged" : "");
+          panel.list.replaceChildren(...draftState.items.map((item) => assignmentDraftRow(panel, item, {
+            remove: () => {
+              if (panel.busy) return;
+              draftState.items = draftState.items.filter((held) => held !== item);
+              panel.report("");
+              render();
+            }
+          })));
+        }
+        render();
+        return {
+          section: panel.section,
+          render,
+          // The field goes with the button, as the dependency inputs go with
+          // theirs: a field that takes typing beside an Assign that does nothing
+          // reads as a control that is broken rather than one that is off.
+          setBusy: (value) => {
+            panel.setBusy(value);
+            adder.field.disabled = value;
+          }
+        };
+      }
       // Who holds this task, and — on a board that has an identity to write one
       // against — who is about to.
       //
@@ -181,34 +390,11 @@
         let field = null;
         let submit = null;
         if (assignable) {
-          const form = document.createElement("form");
-          form.className = "assignment-add";
-          form.dataset.assignmentForm = "";
-          const label = document.createElement("label");
-          label.setAttribute("for", "assignment-to");
-          text(label, "Assign someone");
-          field = document.createElement("input");
-          field.type = "text";
-          field.id = "assignment-to";
-          field.name = "assignee";
-          // The identity this board writes as, offered rather than filled in. A
-          // placeholder says "leave this alone and it is you" without putting a
-          // value in the field that a reader who meant somebody else would have
-          // to clear first — and the empty value is what core resolves, so who
-          // is acting is decided in one place rather than two.
-          field.placeholder = assignIdentity;
-          const hint = document.createElement("p");
-          hint.className = "assignment-add__hint";
-          text(hint, "Leave blank to assign yourself. Add a /label to name one agent, as in " +
-            assignIdentity + "/impl-1.");
-          const actions = document.createElement("div");
-          actions.className = "assignment-add__actions";
-          submit = threadButton("Assign", true);
-          submit.type = "submit";
-          actions.append(submit);
-          form.append(label, field, hint, actions);
-          panel.section.append(form, panel.status);
-          form.addEventListener("submit", async (event) => {
+          const adder = assignmentAdder("Assign");
+          field = adder.field;
+          submit = adder.submit;
+          panel.section.append(adder.form, panel.status);
+          adder.form.addEventListener("submit", async (event) => {
             event.preventDefault();
             if (panel.busy) return;
             // A field trimmed to nothing is the empty value, which is this
@@ -220,11 +406,36 @@
               panel, "POST", path, headed(head, { to: field.value.trim() }), "your assignment");
             if (answer) field.value = "";
           });
-        } else {
-          // A read-only section has no empty state at all: a task nobody holds
-          // draws nothing, so the message this element exists to carry is one it
-          // is never in the document to say.
-          panel.empty.hidden = true;
+        }
+        // An empty section is its heading and its form. It used to say so in a
+        // sentence as well, and to count its nothing; the form is the whole of
+        // what a task nobody holds needs, so neither is drawn.
+        panel.empty.hidden = true;
+        // The assignments a create staged for this task and could not save,
+        // handed over by the create so they are retried here, against the task
+        // that now exists — the way a failed dependency draft is.
+        const drafts = pendingAssignmentDrafts.get(taskID) || [];
+        // Each failed draft's Retry, in the order the rows are drawn, so a
+        // create that lands here can put the caret on the first of them.
+        let draftRetries = [];
+        let lastHeld = [];
+        function retireDraft(draft) {
+          const at = drafts.indexOf(draft);
+          if (at >= 0) drafts.splice(at, 1);
+          if (!drafts.length) pendingAssignmentDrafts.delete(taskID);
+          draw(lastHeld);
+        }
+        async function retryDraft(draft) {
+          if (panel.busy || !panel.owns()) return;
+          const answer = await writeThreadChange(
+            panel, "POST", path, headed(head, { to: draft.value }), "that assignment");
+          if (answer) {
+            retireDraft(draft);
+            return;
+          }
+          if (!panel.owns()) return;
+          draft.error = panel.status.textContent || draft.error;
+          draw(lastHeld);
         }
         // What the section was last drawn from. A poll that changed nothing
         // costs one string comparison and touches no node, which is what keeps
@@ -245,10 +456,10 @@
         // re-worded in place without walking the list back out of the document.
         let ages = [];
         function assignmentSignature(held) {
-          return JSON.stringify(held.map((assignment) => [
+          return JSON.stringify([held.map((assignment) => [
             assignment.value, assignment.principal, assignment.label || "",
             assignment.createdAt, assignment.removable === true
-          ]));
+          ]), drafts.map((draft) => [draft.value, draft.error])]);
         }
         function assignmentMetaText(createdAt, now) {
           const phrase = assignedAgo(createdAt, now);
@@ -273,6 +484,7 @@
         let anchor = null;
         function draw(assignments) {
           const held = Array.isArray(assignments) ? assignments : [];
+          lastHeld = held;
           const next = assignmentSignature(held);
           if (next === signature) {
             age();
@@ -284,22 +496,25 @@
           // comment thread's empty message deliberately does not extend to a
           // section a reader cannot act on. A board that can assign keeps the
           // section, because the form is the thing a task nobody holds needs.
-          if (!held.length && !assignable) {
+          if (!held.length && !drafts.length && !assignable) {
             panel.section.remove();
             panel.list.replaceChildren();
             ages = [];
             return;
           }
           panel.resetControls();
-          panel.setCount(held.length === 1 ? "1 assignment" : held.length + " assignments");
+          panel.setCount(held.length === 0 ? "" : held.length === 1 ? "1 assignment" : held.length + " assignments");
           ages = [];
+          draftRetries = [];
           const now = Date.now();
-          panel.list.replaceChildren(...held.map((assignment) => assignmentRow(assignment, now)));
-          if (assignable) {
-            panel.claim(submit);
-            text(panel.empty, "Nobody is assigned to this task yet.");
-            panel.empty.hidden = held.length > 0;
-          }
+          panel.list.replaceChildren(
+            ...held.map((assignment) => assignmentRow(assignment, now)),
+            ...drafts.map((draft) => assignmentDraftRow(panel, draft, {
+              retry: () => retryDraft(draft),
+              retryControl: (control) => draftRetries.push(control),
+              remove: () => { if (!panel.busy) retireDraft(draft); }
+            })));
+          if (assignable) panel.claim(submit);
           if (parent && !parent.contains(panel.section)) parent.insertBefore(panel.section, anchor);
         }
         function assignmentRow(assignment, now) {
@@ -382,6 +597,12 @@
           // changes with every poll.
           mountBefore(into, before) { parent = into; anchor = before; },
           follow(view) { draw(view && view.assignments); },
+          // The first failed draft's Retry while it is in the document, for
+          // the create that handed the drafts over to focus.
+          firstDraftRetry() {
+            const retry = draftRetries[0];
+            return retry && panel.section.contains(retry) ? retry : null;
+          },
           age
         };
       }

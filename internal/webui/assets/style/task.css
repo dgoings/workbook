@@ -5,6 +5,20 @@
     .task-route__header .task-id-copy-group { margin-top: .35rem; }
     .task-route__header .task-id-copy code { display: inline; margin-top: 0; }
     .task-route__header .copy-status { top: calc(50% + .1rem); }
+    /* The task form's header is its heading and, at the far right, the close
+       that leaves the way Back does. The heading block takes whatever width is
+       left, and min-width: 0 lets a long title wrap inside it rather than push
+       the close off the card. */
+    .task-route__header--form { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; }
+    .task-route__heading { flex: 1 1 auto; min-width: 0; }
+    .task-route__close { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 2rem; height: 2rem; margin: -.25rem -.4rem 0 0; border: 1px solid transparent; border-radius: 4px; color: var(--wb-ink); font-size: 1.4rem; font-weight: 400; line-height: 1; text-decoration: none; }
+    .task-route__close:hover { border-color: var(--wb-border-strong); background: var(--wb-surface); color: var(--wb-primary); }
+    .task-route__close:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 1px; }
+    /* A new task has no name yet, so its header is a band that says what the
+       page is rather than a headline. */
+    .task-route__header--compact { align-items: center; padding: .45rem 1.15rem; }
+    .task-route__header--compact h2 { margin: 0; font-size: .95rem; letter-spacing: 0; }
+    .task-route__header--compact .task-route__close { margin-top: 0; }
     .task-layout { display: grid; flex: 1 1 auto; grid-template-columns: minmax(0, 1fr) 20rem; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; }
     .task-editor { display: grid; grid-template-rows: auto minmax(8rem, 1fr); gap: 1rem; min-width: 0; min-height: 0; padding: 1.15rem; }
     .task-sidebar { min-width: 0; min-height: 0; overflow-y: auto; padding: 1.15rem; border-left: 1px solid var(--wb-hairline); background: var(--wb-surface-2); }
@@ -61,13 +75,14 @@
     .form-status { min-height: 1.35rem; margin: 0; color: var(--wb-danger-ink); font-size: .82rem; }
     .form-status:empty { min-height: 0; }
     .form-actions { display: flex; align-items: center; justify-content: space-between; gap: .85rem; width: 100%; }
-    .form-primary-actions { display: flex; align-items: center; gap: .85rem; }
-    .form-danger { margin-left: auto; }
-    /* justify-self, because a grid item stretches across its row by default and
-       a label is clickable everywhere it is drawn: without this the checkbox's
-       caption would reach the far side of the footer and a click meant for the
-       empty space beside it would toggle the box. */
-    .create-more { display: inline-flex; align-items: center; justify-self: start; gap: .4rem; color: var(--wb-ink); cursor: pointer; font-size: .82rem; font-weight: 700; }
+    .form-primary-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem .85rem; }
+    /* The far corner of the action bar: a task's Delete, or a New Task form's
+       Cancel — the two ways of leaving that give something up. */
+    .form-danger, .form-cancel { margin-left: auto; }
+    /* Create more sits on Save's line, after it, its words before its box. An
+       inline-flex label is only as wide as what it holds, so a click beside it
+       toggles nothing. */
+    .create-more { display: inline-flex; align-items: center; gap: .4rem; color: var(--wb-ink); cursor: pointer; font-size: .82rem; font-weight: 700; }
     .create-more input { width: .95rem; height: .95rem; margin: 0; accent-color: var(--wb-primary); cursor: pointer; }
     .create-more input:focus-visible { outline: 3px solid var(--wb-primary-glow-strong); outline-offset: 2px; }
     .save-button { border: 1px solid var(--wb-primary-edge); border-radius: 4px; background: var(--wb-primary); color: var(--wb-on-accent); cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
@@ -154,6 +169,13 @@
     .relationship-editor:focus-within .relationship-empty:empty { min-height: 1rem; }
     .task-route--history { height: auto; min-height: 100%; }
     .task-route--history .task-layout { min-height: min(60vh, 34rem); }
+    /* A task's page grows to its content and scrolls once, as a page, so its
+       sidebar is never a scroller of its own: with the assignments and the
+       attachments in it, a sidebar held to the form's height hid both in a
+       scroller nested inside a page that also scrolls. No height is given
+       the form to hold it to either — any estimate of the window is wrong
+       once the app header stacks or the title wraps. */
+    .task-route--history .task-sidebar { overflow-y: visible; }
     /* The configuration route, which grows with its lists the way the history route
        does and lets main scroll. Both of these are as specific as .task-route
        itself, so they only take effect written after it: the same rule text up
@@ -161,49 +183,39 @@
        rows spilled out of the card it is drawn in. */
     .task-route--admin { height: auto; min-height: 100%; }
     .task-route--admin .task-route__header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem 1rem; }
-    /* The two panels a task's page grows below its form: what has been said
-       about the task, and what is attached to it.
+    /* The panels a task's page draws: the comment thread below the form, and
+       the assignments and attachments in its sidebar.
 
-       They are full-width sections under the form rather than regions in the
-       20rem sidebar, and that is a measured decision rather than a taste. The
-       sidebar already holds the properties and both relationship groups; a
-       thread of twenty comments or a file name at core's 255-byte ceiling in a
-       column that narrow wraps to a paragraph per line and pushes the
-       relationship editor off the bottom of the panel. Down here each row has
-       the card's whole width at every viewport this was measured at, and the
-       page scrolls — .task-route--history already lets it.
-
-       They sit between the form and the history for the same reason the history
-       sits last: the form is what the reader came to change, the thread is what
-       has been said about it, and the change log is the record underneath both. */
+       The thread is the one that stays full width under the form, with the
+       change log after it, because it has no length a page can rely on: twenty
+       comments in a 20rem column wrap to a paragraph per line. The assignments
+       and attachments are bounded at fifty rows each and are part of what the
+       task is, so they stand in the sidebar on a task's page exactly where a
+       New Task form stages them, and the two pages are laid out alike. */
     .task-panel { display: grid; gap: .55rem; padding: 1.15rem; border-top: 1px solid var(--wb-hairline); }
     .task-panel--comments { background: var(--wb-surface); }
     .task-panel--attachments { background: var(--wb-surface-2); }
-    /* The same panel drawn inside the New Task form's sidebar, which supplies
-       the padding and the background this one would otherwise repeat. It keeps
-       the rule above it, because it is a section of that sidebar in the way
-       Properties is and reads as one. */
-    /* The horizontal padding is given back by the negative margin, so the
-       content keeps the sidebar's full width while the drop outline has a few
-       pixels to sit in rather than resting on the text. */
-    .task-panel--staged { padding: .85rem .5rem .5rem; margin: 0 -.5rem; background: none; }
+    /* A panel inside the sidebar, which supplies the padding and the
+       background this one would otherwise repeat. It keeps the rule above it,
+       because it is a section of that sidebar in the way Properties is and
+       reads as one. The horizontal padding is given back by the negative
+       margin, so the content keeps the sidebar's full width while the drop
+       outline has a few pixels to sit in rather than resting on the text. */
+    .task-sidebar .task-panel { padding: .85rem .5rem .5rem; margin: 0 -.5rem; background: none; }
     /* Every grid inside it bounded at the column it is in.
-       These are the same single-column grids the task page draws, and there
-       they sit in a panel as wide as the page. In a 20rem sidebar they do not:
-       a grid track sized `auto` grows to the widest thing in it, and a file
-       input's intrinsic width is wider than the sidebar — so the whole column
-       grew, the sidebar scrolled sideways, and the Remove button on every row
-       sat off the edge of it. Bounded, the track can never exceed the sidebar
-       and the rows wrap inside it. */
-    .task-panel--staged,
-    .task-panel--staged .task-panel__list,
-    .task-panel--staged .attachment-add,
-    .task-panel--staged .attachment-add__group { grid-template-columns: minmax(0, 1fr); }
-    .task-panel--staged .attachment-add input[type="file"] { min-width: 0; }
-    /* The count is the one line here that cannot wrap usefully, so it is
-       allowed to sit under the heading rather than push it out of the panel. */
-    .task-panel--staged .task-panel__header { flex-wrap: wrap; row-gap: .1rem; }
-    .task-panel--staged .task-panel__count { min-width: 0; overflow-wrap: anywhere; }
+       These are single-column grids, and a grid track sized `auto` grows to
+       the widest thing in it: a file input's intrinsic width is wider than the
+       sidebar, so the whole column grew, the sidebar scrolled sideways, and the
+       Remove button on every row sat off the edge of it. Bounded, the track can
+       never exceed the sidebar and the rows wrap inside it. */
+    .task-sidebar .task-panel,
+    .task-sidebar .task-panel__list,
+    .task-sidebar .attachment-add,
+    .task-sidebar .attachment-add__group,
+    .task-sidebar .assignment-add { grid-template-columns: minmax(0, 1fr); }
+    .task-sidebar .attachment-add input[type="file"] { min-width: 0; }
+    .task-sidebar .task-panel__header { flex-wrap: wrap; row-gap: .1rem; }
+    .task-sidebar .task-panel__count { min-width: 0; overflow-wrap: anywhere; }
     .task-panel__header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .3rem .75rem; }
     .task-panel__header h3 { margin: 0; font-size: .88rem; }
     .task-panel__count { margin: 0; color: var(--wb-ink-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .7rem; }
@@ -212,6 +224,8 @@
        the reason .column__empty above says. */
     .task-panel__empty { margin: 0; color: var(--wb-ink-muted); font-size: .78rem; }
     .task-panel__list { display: grid; gap: .4rem; margin: 0; padding: 0; list-style: none; }
+    /* An empty list draws no row, so the panel's grid spends no gap on it. */
+    .task-panel__list:empty { display: none; }
     /* One line of feedback per panel, and it is the same live region the form
        uses so a refusal reads the same wherever it happens on this page. */
     .task-panel .form-status { min-height: 0; }
@@ -230,6 +244,7 @@
     .assignment__principal { font-weight: 700; }
     .assignment__label { color: var(--wb-primary); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .8rem; font-weight: 700; }
     .assignment__meta { margin: 0; color: var(--wb-ink-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
+    .assignment__failure { margin: .1rem 0 0; color: var(--wb-danger-ink); font-size: .74rem; overflow-wrap: anywhere; }
     .assignment__actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .25rem; }
     /* The form under the rows, on a board with an identity to record an
        assignment against. It is the comment form's grid, with the hint the
@@ -292,6 +307,16 @@
        a reader who cannot drop right now can see that without reading. */
     [data-attachment-drop][data-drop-state="refused"] { outline: 2px dashed var(--wb-danger-ink); outline-offset: -3px; }
     .attachment-add__hint { margin: 0; color: var(--wb-ink-muted); font-size: .72rem; }
+    /* The files chosen and not yet added: each name with the red × that takes
+       it back out before anything is sent or staged. 1.5rem square, as the
+       label chiclets' remove is, because it is a 24px target that takes
+       something away. */
+    .attachment-pending { display: grid; grid-template-columns: minmax(0, 1fr); gap: .25rem; margin: 0; padding: 0; list-style: none; }
+    .attachment-pending__item { display: flex; align-items: center; justify-content: space-between; gap: .4rem; min-width: 0; padding: .15rem .2rem .15rem .55rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface); font-size: .8rem; }
+    .attachment-pending__name { min-width: 0; font-weight: 700; overflow-wrap: anywhere; }
+    .attachment-pending__remove { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--wb-danger-ink); cursor: pointer; font: inherit; font-size: 1.05rem; font-weight: 800; line-height: 1; }
+    .attachment-pending__remove:hover { background: var(--wb-danger-surface); color: var(--wb-danger); }
+    .attachment-pending__remove:focus-visible { outline: 2px solid var(--wb-danger-ink); outline-offset: 1px; }
     .attachment-add { display: grid; gap: .55rem; padding-top: .1rem; }
     .attachment-add__group { display: grid; gap: .3rem; margin: 0; }
     .attachment-add input[type="text"], .attachment-add input[type="url"] { width: 100%; border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); color: var(--wb-text); font: inherit; font-size: .82rem; padding: .45rem .55rem; }

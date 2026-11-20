@@ -556,8 +556,13 @@ setTimeout(() => {
   if (!panel) throw new Error("a board that can assign drew no assignments section");
   if (assignmentRows().length !== 0) throw new Error("an unheld task drew a row");
   assignmentForm();
+  // Nothing held is the heading and the form: no count of nothing and no
+  // sentence explaining the empty list.
   const count = findElement(panel, (element) => hasDataKey(element, "panelCount"));
-  if (count.textContent !== "0 assignments") throw new Error("count = " + JSON.stringify(count.textContent));
+  if (count.textContent !== "") throw new Error("an empty section still counts itself: " + JSON.stringify(count.textContent));
+  if (panel.textContent.includes("Nobody is assigned")) throw new Error("an empty section still explains itself");
+  const empty = findElement(panel, (element) => hasDataKey(element, "panelEmpty"));
+  if (empty && (!empty.hidden || empty.textContent)) throw new Error("the empty line is still drawn: " + JSON.stringify(empty.textContent));
 }, 0);
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {

@@ -834,8 +834,12 @@ function assertSharedLayout(expectedMode) {
     (element.className || "").split(/\s+/).includes("form-primary-actions"));
   const save = primaryActions && findElement(primaryActions, (element) =>
     element.tagName === "BUTTON" && element.textContent === "Save");
-  const back = primaryActions && findElement(primaryActions, (element) =>
-    element.tagName === "A" && element.textContent === "Back");
+  // A task's page groups Back with Save. A New Task form groups Create more
+  // with Save and puts its way out, Cancel, in the corner a task's Delete
+  // stands in, apart from the primary group.
+  const leave = expectedMode === "new" ? "Cancel" : "Back";
+  const back = actionBar && findElement(actionBar, (element) =>
+    element.tagName === "A" && element.textContent === leave);
   const danger = actionBar && findElement(actionBar, (element) =>
     (element.className || "").split(/\s+/).includes("form-danger"));
   if (!layout || !editor || !sidebar || !properties || !footer) {
@@ -843,11 +847,21 @@ function assertSharedLayout(expectedMode) {
   }
   if (!actionBar || !primaryActions || !save || !back ||
       primaryActions.parentElement !== actionBar) {
-    throw new Error(expectedMode + " does not left-group Save and Back");
+    throw new Error(expectedMode + " does not left-group Save and find " + leave);
   }
   if (expectedMode === "new") {
     if (danger) throw new Error("new task unexpectedly renders destructive actions");
+    if (findElement(primaryActions, (element) => element.tagName === "A" && element.textContent === "Back")) {
+      throw new Error("new task still offers Back beside Save");
+    }
+    const cancelGroup = back.parentElement;
+    if (primaryActions.contains(back) || !(cancelGroup.className || "").split(/\s+/).includes("form-cancel") ||
+        cancelGroup.parentElement !== actionBar ||
+        actionBar.children.indexOf(cancelGroup) < actionBar.children.indexOf(primaryActions)) {
+      throw new Error("new task does not put Cancel after the primary actions, apart from them");
+    }
   } else {
+    if (!primaryActions.contains(back)) throw new Error("detail no longer groups Back with Save");
     const remove = danger && findElement(danger, (element) =>
       element.tagName === "BUTTON" && element.textContent === "Delete");
     if (!danger || !remove || danger.parentElement !== actionBar ||
@@ -930,11 +944,10 @@ setTimeout(() => {
   if (!form || !editor || !sidebar || !actions) {
     throw new Error("shared task regions did not render");
   }
-  // A New Task form's sidebar holds the attachments the create is carrying as
-  // well, so it says so. A task that already exists draws those in a panel of
-  // their own below the form and its sidebar names the two regions it has.
+  // The sidebar is the same on both pages and holds the relationships,
+  // assignments and attachments as well as the properties, so it says so.
   if (sidebar.getAttribute("aria-label") !==
-      "Task properties, attachments and relationships") {
+      "Task properties, relationships, assignments and attachments") {
     throw new Error("sidebar does not identify its contents: " +
       JSON.stringify(sidebar.getAttribute("aria-label")));
   }
