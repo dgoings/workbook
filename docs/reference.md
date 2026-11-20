@@ -429,7 +429,7 @@ and a card is one box in one column. A long identity is truncated to its column
 and never widens it. The task's own page carries the whole list under
 **Assignments** — the full value, the time it was recorded, and the same
 "assigned 3 days ago" phrasing `workbook show` prints — in the page's sidebar,
-below Depends On and Blocks and above Attachments.
+below Dependencies and above Attachments.
 It follows the poll, so an assignment made from the CLI in another terminal
 appears on an open page within a second without disturbing anything being typed
 into it. The phrasing is worded by the page from the recorded time, by the same
@@ -2609,14 +2609,20 @@ Restore instead of a link.
 
 Cards with prerequisites show completed versus total dependency progress.
 Ready cards whose prerequisites are not all active and Done also say
-`Waiting on dependencies`. Task detail pages derive two views from the same
-directed edge: **Depends On** lists the current task's prerequisites, while
-**Blocks** lists live tasks that depend on the current task. Each group searches
-eligible active tasks through an integrated combobox and uses the nested
-Git-durable mutation routes above.
+`Waiting on dependencies`. Task forms list a task's edges in one
+**Dependencies** section, seen from both ends of the same directed edge: a row
+tagged **Depends On** is one of the current task's prerequisites, and a row
+tagged **Blocks** is a live task that depends on the current task. Depends On
+rows come first, then Blocks. One combobox searches eligible active tasks, and
+an **Add as** toggle (a radio group, so the arrow keys move it) chooses whether
+the task picked is added as Depends On or Blocks; it starts on Depends On and
+stays where it was put after an add. The combobox leaves out the tasks the
+chosen kind already lists, and the current task itself. Adding and removing use
+the nested Git-durable mutation routes above: a Depends On edge is written to
+the current task and a Blocks edge to the other task.
 
 Task forms use a wide main column and a compact sidebar holding, in order,
-Properties (status, priority and labels), Depends On and Blocks, Assignments,
+Properties (status, priority and labels), Dependencies, Assignments,
 and Attachments; the New Task form and a task's own page lay it out alike. The
 New Task header is a compact band reading "New task"; both pages put a ×
 (Close) at the right of the header that leaves the way Back does, and a New
@@ -2625,12 +2631,18 @@ far right. A New Task form on a project with more
 than one active [key](#project-keys) also offers the key to mint under, standing
 at the current one; a project with a single key draws no such field, and a form
 whose reader took the default sends the create every client sent before keys
-could be chosen. New Task stages both Depends On and Blocks without writing task
-refs; relationship mutations run after the task receives its durable ID. If
+could be chosen. New Task stages both Depends On and Blocks entries without
+writing task refs; relationship mutations run after the task receives its
+durable ID. If
 only some edges succeed, successful relationships remain durable while failed
 relationships remain available to retry or remove.
-On narrow screens, the task editor, the sidebar's sections, and the actions
-stack in that order.
+In a window at least 761px wide and 701px tall, both forms are held to the
+height the window has left under the app header: the description and the Save
+row stay on the screen, and a sidebar longer than that scrolls inside the form.
+A task's page has its comments and change history below the form, and the page
+scrolls down to them. A shorter window scrolls the whole page instead, sidebar
+included. On narrow screens, the task editor, the sidebar's sections, and the
+actions stack in that order.
 
 Saving a new task returns to the board, and a **Create more** toggle on the New
 Task form re-arms a clean form filed under the same column instead, so a run of
@@ -2668,14 +2680,15 @@ is the same array of strings it always was.
 
 Missing prerequisite IDs remain visible and removable. Tombstoned
 prerequisites are also removable because the active dependent owns that edge.
-A deleted task that depends on the current one is not listed in Blocks. Its
+A deleted task that depends on the current one is not listed as Blocks. Its
 edge is stored on the deleted task's own record, which a tombstone does not let
 anyone change, and it has no effect while that task is deleted, because
 readiness never reads a deleted task's dependencies. Restoring the task lists it
 again, and from there its Remove control drops the edge as it would for any
 other.
-Dependency warnings and failures stay beside the initiating group, and
-dependency refreshes leave unsaved task-form fields mounted.
+Dependency warnings and failures are reported on the Dependencies section's
+own message line, and dependency refreshes leave unsaved task-form fields
+mounted.
 
 Task detail pages show that task's change history by default, unlike
 `workbook show`, where it is opt in behind `--history`. The view leads with a

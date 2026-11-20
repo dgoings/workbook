@@ -19,21 +19,31 @@
          of the control is additive and grows downward away from it. */
       .task-properties .field--labels { align-items: start; }
       .task-properties .field--labels > label { padding-top: .65rem; }
-      .task-relationships { gap: .5rem; padding-top: .55rem; }
-      .relationship-group { padding-top: .55rem; }
+      .task-relationships { margin-top: .55rem; padding-top: .55rem; }
       .relationship-list { gap: .25rem; margin: .3rem 0 .35rem; }
       .relationship-editor { gap: .25rem .4rem; }
       .relationship-editor input { padding: .45rem .55rem; }
       .relationship-editor button { padding: .48rem .62rem; }
       .relationship-message { min-height: .75rem; margin-top: .25rem; }
     }
-    /* Beside a sidebar that runs long, a task page's editor keeps its own
-       height rather than stretching to the sidebar's: a description box as tall
-       as four assignments and four attachments is a page of empty box. It is
-       the height the form was given before the sidebar grew, and the sidebar
-       simply runs on below it. Short windows size the editor themselves. */
+    /* A task's page holds its header and form to the window, as a New Task
+       form is held: the description stays on the screen, a long sidebar
+       scrolls inside the form, and the Save row stays in view, with the thread
+       and the change log below for main to scroll to.
+       The header and the form are at least 100cqh of main, which is a size
+       container, so it is the height main actually has once the app header
+       has taken its share — however many rows that header stacks into —
+       rather than an estimate of the chrome. calc(100dvh - 16rem) was that
+       estimate, and it put Save below the fold whenever the header stacked or
+       the title wrapped. The form grows from nothing into what the header
+       leaves, so a title's lines come out of the form; the floor is on the
+       form itself, so a title long enough to leave less than the floor makes
+       the block taller than main and the page scrolls, rather than folding
+       the description under the Save row.
+       Short and narrow windows keep the one scrolling page below. */
     @media (min-width: 761px) and (min-height: 701px) {
-      .task-route--history .task-editor { align-self: start; min-height: min(60vh, 34rem); }
+      .task-route--history .task-route__screen { flex: none; min-height: 100cqh; }
+      .task-route--history .task-layout { flex: 1 1 0; min-height: 26rem; }
     }
     @media (min-width: 761px) and (max-height: 700px) {
       .task-route { height: auto; min-height: 100%; }
@@ -48,7 +58,6 @@
       .task-sidebar { overflow-y: visible; border-top: 1px solid var(--wb-hairline); border-left: 0; }
       .task-actions { grid-column: 1; }
       .field--description textarea { min-height: 12rem; }
-      .task-route--history .task-layout { min-height: 0; }
       .change-row__summary { grid-template-columns: minmax(0, 1fr); gap: .12rem; }
       .field-change { grid-template-columns: minmax(0, 1fr); }
       /* An attachment row stacks on a phone. Measured at 390px, a 255-byte file

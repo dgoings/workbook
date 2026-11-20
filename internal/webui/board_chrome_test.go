@@ -639,7 +639,7 @@ func TestHandlerFilterRowDrawsNoRuleAndMainPadsNoTop(t *testing.T) {
 	if rule := cssRules(t, body, ".filter-row {"); strings.Contains(rule, "border-bottom") {
 		t.Errorf("the filter row still draws a rule under itself: %s", rule)
 	}
-	if !strings.Contains(body, "main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 1.25rem 1.25rem; }") {
+	if !strings.Contains(body, "main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 1.25rem 1.25rem; container-type: size; }") {
 		t.Errorf("main no longer pads its sides and its bottom alone: %s", cssRules(t, body, "main {"))
 	}
 	// One bare main rule in the whole stylesheet. The scheme blocks redefine colors

@@ -3,7 +3,7 @@
         const region = document.createElement("div");
         region.className = "relationship-editor";
         // The caption is the input's accessible name and is drawn clipped: the
-        // group heading directly above it already says which set is being added
+        // kind toggle directly above it already says which set is being added
         // to, and the placeholder says it again inside the box, so nothing
         // visible is lost by not spending a row of the sidebar on it. Kept as a
         // real label rather than replaced by an aria-label, so the name stays
@@ -234,15 +234,33 @@
 
         const controller = {
           region, input, listbox, empty, add,
-          setCandidates(candidates) {
+          // A chosen task the new set no longer offers loses its selection.
+          // A poll keeps its title in the box, so the reader sees what went
+          // stale; a kind change clears the box too (clearStalePick), because
+          // there the reader moved the toggle themselves, and a title left
+          // beside a disabled Add would read as a pick that cannot be added
+          // for no reason given.
+          setCandidates(candidates, { clearStalePick = false } = {}) {
             state.candidates = candidates;
-            if (!selectedCandidate()) state.selectedID = "";
+            if (state.selectedID && !selectedCandidate()) {
+              state.selectedID = "";
+              if (clearStalePick) {
+                state.query = "";
+                input.value = "";
+              }
+            }
             state.activeIndex = -1;
             renderOptions();
           },
           setBusy(busy) {
             input.disabled = busy;
             renderOptions();
+          },
+          // The caption and the placeholder say which kind of edge the box
+          // adds, so they change with the kind toggle beside it.
+          setPrompt(caption, placeholder) {
+            text(label, caption);
+            input.placeholder = placeholder;
           },
           clear() {
             state.query = "";
@@ -255,11 +273,15 @@
         };
         return controller;
       }
-      function relationshipRow(relationship, onRemove, isDraft = false, onRetry = null) {
+      // kind is the entry in relationshipKinds the row is listed under. The
+      // sidebar lists both kinds in one list, so each row says which it is in
+      // words, not only in color.
+      function relationshipRow(relationship, onRemove, isDraft = false, onRetry = null, kind = null) {
         const row = document.createElement("article");
         row.className = "relationship-row relationship-row--compact";
         row.dataset.relationshipRow = "";
         row.dataset.relationshipId = relationship.id;
+        if (kind) row.dataset.relationshipKind = kind.direction;
         if (isDraft) row.dataset.relationshipDraft = "";
         const heading = document.createElement("h4");
         if (relationship.task && !relationship.task.deleted) {
@@ -288,7 +310,18 @@
         // vertical line of single characters.
         const textColumn = document.createElement("div");
         textColumn.className = "relationship-row__text";
-        textColumn.append(heading, metadata);
+        if (kind) {
+          // The tag leads the title's line rather than taking a line of its own.
+          const titleLine = document.createElement("div");
+          titleLine.className = "relationship-row__title";
+          const tag = document.createElement("span");
+          tag.className = "relationship-row__kind relationship-row__kind--" + kind.direction;
+          text(tag, kind.label);
+          titleLine.append(tag, heading);
+          textColumn.append(titleLine, metadata);
+        } else {
+          textColumn.append(heading, metadata);
+        }
         const controls = document.createElement("div");
         controls.className = "relationship-row__controls";
         if (isDraft) {
@@ -327,81 +360,137 @@
         row.append(textColumn, controls);
         return row;
       }
+      // The two kinds of edge the sidebar adds and lists. Both are one stored
+      // edge seen from either end: a Depends On edge is recorded on this task,
+      // and a Blocks edge on the other one.
+      const relationshipKinds = [
+        { name: "dependsOn", direction: "depends-on", label: "Depends On", caption: "Find a prerequisite", placeholder: "Prerequisite" },
+        { name: "blocks", direction: "blocks", label: "Blocks", caption: "Find a task to block", placeholder: "Task to block" }
+      ];
+      // The task's dependencies in one section: one list holding both kinds,
+      // each row tagged with its kind, and one task picker with a toggle that
+      // says which kind the next entry is. It replaced a Depends On group and a
+      // Blocks group, which were two headings, two empty lines, two pickers and
+      // two message lines for what is one set of edges.
       function taskRelationships(taskID, draftState = null) {
         const region = document.createElement("section");
         region.className = "task-relationships";
-        region.setAttribute("aria-label", "Task relationships");
+        region.setAttribute("aria-labelledby", "dependency-heading");
+        const heading = document.createElement("h3");
+        heading.id = "dependency-heading";
+        text(heading, "Dependencies");
+        const list = document.createElement("div"); list.className = "relationship-list";
+        // The kind of the next entry, as a radio group: arrow keys move the
+        // choice, and Tab reaches the group once. It stays as set after an add,
+        // so a run of the same kind is one choice and several picks.
+        let kind = relationshipKinds[0];
+        const kindGroup = document.createElement("div");
+        kindGroup.className = "relationship-kind";
+        kindGroup.setAttribute("role", "radiogroup");
+        kindGroup.setAttribute("aria-labelledby", "dependency-kind-label");
+        const kindLabel = document.createElement("span");
+        kindLabel.className = "relationship-kind__label";
+        kindLabel.id = "dependency-kind-label";
+        text(kindLabel, "Add as");
+        const kindOptions = document.createElement("span");
+        kindOptions.className = "relationship-kind__options";
+        const kindInputs = relationshipKinds.map((candidate) => {
+          const input = document.createElement("input");
+          input.type = "radio";
+          input.className = "relationship-kind__input";
+          input.name = "dependency-kind";
+          input.id = "dependency-kind-" + candidate.direction;
+          input.value = candidate.direction;
+          input.checked = candidate === kind;
+          const label = document.createElement("label");
+          label.className = "relationship-kind__option";
+          label.htmlFor = input.id;
+          text(label, candidate.label);
+          input.addEventListener("change", () => {
+            if (!input.checked) return;
+            kindInputs.forEach((other) => { if (other !== input) other.checked = false; });
+            chooseKind(candidate);
+          });
+          // The radios sit inside the task form, where Enter on one submits
+          // it: it would create a half-filled task, or save an edit and leave.
+          // Enter chooses the option instead, the way Space does.
+          input.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            if (input.checked) return;
+            input.checked = true;
+            kindInputs.forEach((other) => { if (other !== input) other.checked = false; });
+            chooseKind(candidate);
+          });
+          kindOptions.append(input, label);
+          return input;
+        });
+        kindGroup.append(kindLabel, kindOptions);
+        const message = document.createElement("p");
+        message.className = "relationship-message";
+        message.setAttribute("role", "status");
+        message.setAttribute("aria-live", "polite");
         const status = document.createElement("p");
         status.className = "form-status";
         status.setAttribute("role", "status");
         status.setAttribute("aria-live", "polite");
-        const groups = new Map();
         let controller;
-        [
-          ["dependsOn", "depends-on", "Depends On", "No prerequisites.", "Find a prerequisite", "Prerequisite"],
-          ["blocks", "blocks", "Blocks", "No tasks are blocked by this task.", "Find a task to block", "Task to block"]
-        ].forEach(([name, direction, headingText, emptyText, labelText, placeholderText]) => {
-          const group = document.createElement("section");
-          group.className = "relationship-group";
-          const heading = document.createElement("h3");
-          heading.id = "dependency-" + direction + "-heading";
-          text(heading, headingText);
-          const list = document.createElement("div"); list.className = "relationship-list";
-          const message = document.createElement("p");
-          message.className = "relationship-message";
-          message.setAttribute("role", "status");
-          message.setAttribute("aria-live", "polite");
-          const groupController = {
-            group, list, message, emptyText, direction, busy: false, removeButtons: [],
-            setBusy(busy) {
-              this.busy = busy;
-              this.combobox.setBusy(busy);
-              this.removeButtons.forEach((button) => { button.disabled = busy; });
-            },
-            setMessage(value) { text(message, value); }
-          };
-          groupController.combobox = dependencyCombobox({
-            id: "dependency-" + direction,
-            label: labelText,
-            placeholder: placeholderText,
-            isBusy: () => groupController.busy,
-            onAdd: (selectedID) => {
-              if (controller.busy) return;
-              if (!taskID) {
-                const selectedTask = reconciledRelationshipTasks().active.find((task) => task.id === selectedID);
-                if (!selectedTask) return;
-                const draftMap = direction === "depends-on" ? draftState.dependsOn : draftState.blocks;
-                draftMap.set(selectedID, draftEntry(selectedTask));
-                controller.update();
-                return;
-              }
-              const dependentID = direction === "depends-on" ? taskID : selectedID;
-              const prerequisiteID = direction === "depends-on" ? selectedID : taskID;
-              return mutateRelationship("PUT", dependentID, prerequisiteID, controller, groupController);
+        const combobox = dependencyCombobox({
+          id: "dependency",
+          label: kind.caption,
+          placeholder: kind.placeholder,
+          isBusy: () => controller.busy,
+          onAdd: (selectedID) => {
+            if (controller.busy) return;
+            if (!taskID) {
+              const selectedTask = reconciledRelationshipTasks().active.find((task) => task.id === selectedID);
+              if (!selectedTask) return;
+              draftState[kind.name].set(selectedID, draftEntry(selectedTask));
+              combobox.clear();
+              controller.update();
+              return;
             }
-          });
-          group.append(heading, list, groupController.combobox.region, message);
-          region.append(group);
-          groups.set(name, groupController);
+            const dependentID = kind.name === "dependsOn" ? taskID : selectedID;
+            const prerequisiteID = kind.name === "dependsOn" ? selectedID : taskID;
+            return mutateRelationship("PUT", dependentID, prerequisiteID, controller);
+          }
         });
-        region.append(status);
+        function chooseKind(next) {
+          kind = next;
+          combobox.setPrompt(kind.caption, kind.placeholder);
+          // What the picker offers depends on the kind: a task this one already
+          // depends on is not offered for Depends On, and one it already blocks
+          // is not offered for Blocks.
+          combobox.setCandidates(relationshipCandidates(taskID, kind.direction, draftState), { clearStalePick: true });
+        }
+        region.append(heading, list, kindGroup, combobox.region, message, status);
         controller = {
-          region, status, groups, taskID, draftState, busy: false, recoveryActions: [],
+          region, status, list, message, combobox, kindInputs, taskID, draftState,
+          busy: false, removeButtons: [], recoveryActions: [],
+          // The kind the next entry is added as.
+          get kind() { return kind; },
           // Replaced by the detail form so an edge written to this task can
           // hand back the head it moved to. The sidebar is also mounted on the
           // new-task form, which has no head to move, hence the default.
           adoptTaskHead() {},
           setBusy(busy) {
             this.busy = busy;
-            groups.forEach((group) => group.setBusy(busy));
+            combobox.setBusy(busy);
+            this.removeButtons.forEach((button) => { button.disabled = busy; });
           },
+          setMessage(value) { text(message, value); },
           update() {
             this.recoveryActions = [];
+            this.removeButtons = [];
             const state = taskID ? dependencyState(taskID) : { dependsOn: [], blocks: [] };
             if (taskID && !state) return;
-            [["dependsOn", state.dependsOn], ["blocks", state.blocks]].forEach(([name, persistedRelationships]) => {
-              const group = groups.get(name);
-              const draftMap = draftState ? (name === "dependsOn" ? draftState.dependsOn : draftState.blocks) : null;
+            // Depends On rows first and then Blocks, each in the order its own
+            // list has always had.
+            const rows = [];
+            relationshipKinds.forEach((rowKind) => {
+              const name = rowKind.name;
+              const persistedRelationships = state[name];
+              const draftMap = draftState ? draftState[name] : null;
               const persistedIDs = new Set(persistedRelationships.map((relationship) => relationship.id));
               if (draftMap && taskID && ownsDependencyController(controller)) {
                 persistedIDs.forEach((id) => draftMap.delete(id));
@@ -415,29 +504,14 @@
                   ...[...draftMap.values()].filter((relationship) => !persistedIDs.has(relationship.id))
                 ]
                 : persistedRelationships;
-              group.combobox.setCandidates(relationshipCandidates(taskID, group.direction, draftState));
-              group.removeButtons = [];
-              if (relationships.length === 0) {
-                const empty = document.createElement("p");
-                empty.className = "relationship-row__note";
-                text(empty, group.emptyText);
-                group.list.replaceChildren(empty);
-                return;
-              }
-              group.list.replaceChildren(...relationships.map((relationship) => {
+              relationships.forEach((relationship) => {
                 const isDraft = Boolean(
                   draftMap &&
                   draftMap.has(relationship.id) &&
                   !persistedIDs.has(relationship.id)
                 );
                 const retryDraft = isDraft && taskID && relationship.error
-                  ? () => retryRelationshipDraft(
-                    name,
-                    relationship,
-                    draftMap,
-                    controller,
-                    group
-                  )
+                  ? () => retryRelationshipDraft(name, relationship, draftMap, controller)
                   : null;
                 const row = relationshipRow(relationship, () => {
                   if (controller.busy) return;
@@ -452,25 +526,34 @@
                   }
                   const dependentID = name === "dependsOn" ? taskID : relationship.id;
                   const prerequisiteID = name === "dependsOn" ? relationship.id : taskID;
-                  return mutateRelationship("DELETE", dependentID, prerequisiteID, controller, group);
-                }, isDraft, retryDraft);
+                  return mutateRelationship("DELETE", dependentID, prerequisiteID, controller);
+                }, isDraft, retryDraft, rowKind);
                 const remove = row.removeButton;
                 if (remove) {
-                  remove.disabled = group.busy;
-                  group.removeButtons.push(remove);
+                  remove.disabled = controller.busy;
+                  controller.removeButtons.push(remove);
                 }
                 const retry = row.retryButton;
                 if (retry) {
-                  retry.disabled = group.busy;
-                  group.removeButtons.push(retry);
+                  retry.disabled = controller.busy;
+                  controller.removeButtons.push(retry);
                 }
                 if (isDraft) {
                   const recoveryAction = retry || remove;
                   if (recoveryAction) controller.recoveryActions.push(recoveryAction);
                 }
-                return row;
-              }));
+                rows.push(row);
+              });
             });
+            combobox.setCandidates(relationshipCandidates(taskID, kind.direction, draftState));
+            if (rows.length === 0) {
+              const empty = document.createElement("p");
+              empty.className = "relationship-row__note";
+              text(empty, "No dependencies.");
+              list.replaceChildren(empty);
+              return;
+            }
+            list.replaceChildren(...rows);
           }
         };
         controller.update();
