@@ -2,6 +2,8 @@
       // so a user who changes their mind while the create is in flight gets the
       // answer they left the box on.
       function createMoreToggle() {
+        // The words first and the box after them, on the line Save is on: it
+        // reads as a setting on that button rather than as a control of its own.
         const wrapper = document.createElement("label");
         wrapper.className = "create-more";
         const control = document.createElement("input");
@@ -11,7 +13,7 @@
         control.addEventListener("change", () => { createMoreTasks = control.checked; });
         const caption = document.createElement("span");
         text(caption, "Create more");
-        wrapper.append(control, caption);
+        wrapper.append(caption, control);
         return wrapper;
       }
       // The key a new task is minted under, when more than one of this
@@ -54,14 +56,44 @@
         const attachmentDrafts = isNew
           ? newAttachmentDraftState()
           : null;
+        // Assignments a create is carrying, on a board that can assign at all:
+        // one that cannot offers no control on a task's own page either.
+        const assignmentDrafts = isNew && assignIdentity
+          ? newAssignmentDraftState()
+          : null;
+        // Back is the board the reader came from, which is the same board every
+        // landing in this client goes to: a reader who narrowed the board down,
+        // opened a task and then changed their mind should not be punished for
+        // not having saved. Computed as this form is built, and this form is
+        // built by the render of the route it is on, so it is the state the
+        // address was in when the reader left the board — or the bare board,
+        // when they opened this page by its own address and there is no board
+        // state to return to. The header's close, the footer's Back and a New
+        // Task form's Cancel are all this one way out.
+        const leaveAddress = boardAddress(deletedColumnShown, boardFilters);
         const section = document.createElement("section"); section.className = "task-route"; section.setAttribute("aria-labelledby", "task-form-title");
-        const header = document.createElement("header"); header.className = "task-route__header";
-        const eyebrow = document.createElement("p"); eyebrow.className = "eyebrow"; text(eyebrow, isNew ? "New task" : "Task detail");
-        const heading = document.createElement("h2"); heading.id = "task-form-title"; text(heading, isNew ? "Add work to the board" : task.title);
-        header.append(eyebrow, heading);
-        if (!isNew) {
-          header.append(taskIDCopyControl(task.id, task.id));
+        const header = document.createElement("header"); header.className = "task-route__header task-route__header--form";
+        const headingBlock = document.createElement("div"); headingBlock.className = "task-route__heading";
+        // A new task has no name yet, so its header is a band that says what
+        // the page is; the heading is still the route's name for the region.
+        const heading = document.createElement("h2"); heading.id = "task-form-title"; text(heading, isNew ? "New task" : task.title);
+        if (isNew) {
+          header.className += " task-route__header--compact";
+          headingBlock.append(heading);
+        } else {
+          const eyebrow = document.createElement("p"); eyebrow.className = "eyebrow"; text(eyebrow, "Task detail");
+          headingBlock.append(eyebrow, heading, taskIDCopyControl(task.id, task.id));
         }
+        // A link, as Back is, so it leaves exactly the way Back does: the
+        // document listener turns it into the same render.
+        const close = document.createElement("a");
+        close.className = "task-route__close";
+        close.dataset.taskClose = "";
+        close.href = leaveAddress;
+        close.setAttribute("aria-label", "Close");
+        close.title = "Close";
+        text(close, "×");
+        header.append(headingBlock, close);
 
         const form = document.createElement("form"); form.className = "task-layout";
         const title = document.createElement("input"); title.id = "task-title"; title.name = "title"; title.required = true; title.value = task.title || "";
@@ -119,9 +151,9 @@
         function renderDescriptionMode() {
           description.hidden = !descriptionEditing;
           descriptionView.hidden = descriptionEditing;
-          text(descriptionToggleControl, descriptionEditing ? "Done" : "Edit");
+          text(descriptionToggleControl, descriptionEditing ? "Preview" : "Edit");
           descriptionToggleControl.setAttribute("aria-label",
-            descriptionEditing ? "Finish editing the description" : "Edit the description");
+            descriptionEditing ? "Preview the description" : "Edit the description");
           if (!descriptionEditing) renderDescriptionView();
         }
         descriptionToggleControl.addEventListener("click", () => {
@@ -129,7 +161,7 @@
           renderDescriptionMode();
           // The control the reader asked for takes the caret. Leaving it on the
           // button would put the next keystroke nowhere on the way in, and
-          // Done's own rendering is what the reader wants to see on the way out.
+          // the preview is what the reader wants to see on the way out.
           if (descriptionEditing) description.focus(); else descriptionView.focus();
         });
         const status = select("status", statusDefinitions, task.status); status.required = true;
@@ -157,16 +189,14 @@
         const actions = document.createElement("div"); actions.className = "form-actions";
         const primaryActions = document.createElement("div"); primaryActions.className = "form-primary-actions";
         const save = document.createElement("button"); save.className = "save-button"; save.type = "submit"; text(save, "Save");
-        // Back is the board the reader came from, which is the same board every
-        // landing in this client goes to: a reader who narrowed the board down,
-        // opened a task and then changed their mind should not be punished for
-        // not having saved. Computed as this form is built, and this form is
-        // built by the render of the route it is on, so it is the state the
-        // address was in when the reader left the board — or the bare board,
-        // when they opened this page by its own address and there is no board
-        // state to return to.
-        const back = document.createElement("a"); back.className = "board-link"; back.href = boardAddress(deletedColumnShown, boardFilters); text(back, "Back");
-        primaryActions.append(save, back); actions.append(primaryActions);
+        // A New Task form calls it Cancel and puts it in the corner a task's
+        // Delete stands in, because leaving abandons what was typed; a task's
+        // page keeps Back beside Save, because nothing there is lost by it.
+        const back = document.createElement("a"); back.className = "board-link"; back.href = leaveAddress; text(back, isNew ? "Cancel" : "Back");
+        primaryActions.append(save);
+        if (isNew) primaryActions.append(createMoreToggle());
+        else primaryActions.append(back);
+        actions.append(primaryActions);
         // The way out of the one state this form does not leave on its own: the
         // task was created and some of its attachments were not attached. It is
         // shipped hidden and revealed there, because until then it would be a
@@ -176,7 +206,11 @@
         openCreatedTask.dataset.openCreatedTask = "";
         openCreatedTask.hidden = true;
         text(openCreatedTask, "Open task");
-        if (isNew) primaryActions.append(openCreatedTask);
+        if (isNew) {
+          primaryActions.append(openCreatedTask);
+          const cancel = document.createElement("div"); cancel.className = "form-cancel";
+          cancel.append(back); actions.append(cancel);
+        }
 		if (!isNew) {
 		  const danger = document.createElement("div"); danger.className = "form-danger";
 		  const remove = document.createElement("button"); remove.className = "delete-button"; remove.type = "button"; text(remove, "Delete");
@@ -206,7 +240,13 @@
           field("Title", title, true),
           descriptionField
         );
-        const sidebar = document.createElement("aside"); sidebar.className = "task-sidebar"; sidebar.setAttribute("aria-label", isNew ? "Task properties, attachments and relationships" : "Task properties and relationships");
+        // The sidebar is the same on both pages, in the order a reader reaches
+        // for its parts: the task's own properties, the tasks it depends on and
+        // blocks, who holds it, and what is attached to it. On a New Task form
+        // the last two are staged and sent once the task exists; on a task's
+        // page they write as they are used. Only what grows without bound —
+        // the comment thread and the change log — goes below the form.
+        const sidebar = document.createElement("aside"); sidebar.className = "task-sidebar"; sidebar.setAttribute("aria-label", "Task properties, relationships, assignments and attachments");
         const properties = document.createElement("section"); properties.className = "task-properties";
         const propertiesHeading = document.createElement("h3"); text(propertiesHeading, "Properties");
         properties.append(
@@ -217,29 +257,18 @@
         if (key) properties.append(field("Key", key));
         properties.append(field("Labels", labels.region, true, "field--labels"));
         const relationshipMount = document.createElement("div"); relationshipMount.dataset.relationshipMount = "";
-        // Attachments between the properties and the relationships, because they
-        // are part of composing this task and the relationships are about other
-        // ones. On a task that exists the same list is a panel below the form,
-        // where there is room for fifty rows; here it is what the reader is
-        // filling in, so it stands with the rest of the form.
+        const assignmentDraftPanel = assignmentDrafts ? taskAssignmentDrafts(assignmentDrafts) : null;
         const attachmentDraftPanel = isNew ? taskAttachmentDrafts(attachmentDrafts) : null;
         // What a departure would announce follows the list it is about, so the
         // Remove beside a failed row retires the report along with the row.
         if (attachmentDraftPanel) {
           attachmentDraftPanel.onChange = () => publishOutstandingAttachments();
         }
-        sidebar.append(properties);
+        sidebar.append(properties, relationshipMount);
+        if (assignmentDraftPanel) sidebar.append(assignmentDraftPanel.section);
         if (attachmentDraftPanel) sidebar.append(attachmentDraftPanel.section);
-        sidebar.append(relationshipMount);
         const footer = document.createElement("footer"); footer.className = "task-actions";
-        // "Create more" is a setting on the Save beneath it, not an action of
-        // its own, so it stands on its own row directly above the button it
-        // changes. Off in the footer's right corner it was read after the save
-        // it governs, if at all, and it sat level with a Delete it has nothing
-        // to do with.
-        footer.append(result);
-        if (isNew) footer.append(createMoreToggle());
-        footer.append(actions);
+        footer.append(result, actions);
         form.append(editor, sidebar, footer);
 
         let taskWasCreated = false;
@@ -377,9 +406,7 @@
           // The relationships this create could not write are staged on the
           // task's own form, where the sidebar that retries them is. They are
           // named here too, because here is where the reader is standing.
-          if (hasRelationshipDrafts(recovery.failures)) {
-            pendingRelationshipDrafts.set(recovery.taskID, recovery.failures);
-          }
+          stageCreatedTaskDrafts(recovery);
           text(save, "Retry attachments");
           openCreatedTask.href = taskPath(recovery.taskID);
           openCreatedTask.hidden = false;
@@ -421,6 +448,9 @@
           if (recovery && hasRelationshipDrafts(recovery.failures)) {
             said.push("Some relationships were not saved either; open the task to retry those.");
           }
+          if (recovery && hasAssignmentFailures(recovery)) {
+            said.push("Some assignments were not saved either; open the task to retry those.");
+          }
           (recovery ? recovery.warnings : outcome.warnings).forEach((warning) => said.push(warning));
           text(result, said.join(" "));
         }
@@ -455,6 +485,7 @@
           // bytes exist nowhere but this node — so it is the same rule for the
           // same reason, held harder.
           if (isNew && !hasRelationshipDrafts(relationshipDrafts) &&
+              !hasAssignmentDrafts(assignmentDrafts) &&
               !hasAttachmentDrafts(attachmentDrafts)) {
             taskWasCreated = true;
             return createOptimistically(values);
@@ -470,6 +501,7 @@
           // which takes the File with the node and reports not one word. A list
           // that cannot change under the walk cannot lose anything that way.
           if (isNew) attachmentDraftPanel.setBusy(true);
+          if (assignmentDraftPanel) assignmentDraftPanel.setBusy(true);
           text(result, "");
           try {
             const document = await mutateTask(isNew ? "POST" : "PATCH", isNew ? "/api/tasks" : "/api/tasks/" + encodeURIComponent(task.id), values);
@@ -483,6 +515,13 @@
               );
               relationshipDrafts.dependsOn.clear();
               relationshipDrafts.blocks.clear();
+              // Who holds it, after the edges and before the uploads, for the
+              // reason the edges go first: a cheap write should not wait behind
+              // a megabyte. What fails is handed to the task's own page.
+              const assignmentOutcome = assignmentDrafts
+                ? await persistAssignmentDrafts(taskID, assignmentDrafts)
+                : { failures: [], warnings: [] };
+              if (assignmentDraftPanel) assignmentDraftPanel.render();
               // After the relationships and never before the create. The task
               // has to exist to have a ref to attach to, and the relationships
               // are cheap writes that should not be left untried behind a
@@ -492,9 +531,11 @@
                 taskID,
                 status: document.task.status,
                 failures: relationshipOutcome.failures,
+                assignmentFailures: assignmentOutcome.failures,
                 warnings: [
                   ...mutationWarnings(document),
                   ...relationshipOutcome.warnings,
+                  ...assignmentOutcome.warnings,
                   ...attachmentOutcome.warnings
                 ]
               };
@@ -649,6 +690,7 @@
               // this form is holding and the reader has to be able to change it
               // before saving again.
               if (isNew) attachmentDraftPanel.setBusy(false);
+              if (assignmentDraftPanel) assignmentDraftPanel.setBusy(false);
             } else if (outstandingAttachments) {
               // The form is staying, so its Save has to work — as the retry it
               // now says it is. The relationship sidebar does not come back: its
@@ -698,19 +740,17 @@
             // 304 and brings this section nothing, and its rows still age.
             age: () => assignments.age()
           };
-          // Attachments before comments, and the change log after both: the
-          // attachment list is bounded at fifty rows while a thread has no
-          // length a page can rely on, so the short section stays reachable
-          // without scrolling past a long one to find it.
-          //
-          // Assignments come before all three. It is the shortest section on the
-          // page, it is bounded at fifty rows by the same ceiling the fold
-          // enforces, and it answers the question a reader opening a task in a
-          // fleet's project asks first: is anybody already on this. A task nobody
-          // holds draws none of it, and the row below is what the section is
-          // inserted in front of when a CLI assign lands while the page is open.
-          section.append(attachments.section, comments.section, taskHistory(task.id));
-          assignments.mountBefore(section, attachments.section);
+          // Attachments and assignments stand in the sidebar, as they do on a
+          // New Task form: both are bounded at fifty rows, and both are part of
+          // what the task is rather than what has been said about it. The
+          // assignments go between the relationships and the attachments, and
+          // are inserted there again whenever a CLI assign lands on a task this
+          // page drew without them. Below the form are only the comment thread
+          // and the change log, the two things with no length a page can rely
+          // on.
+          sidebar.append(attachments.section);
+          assignments.mountBefore(sidebar, attachments.section);
+          section.append(comments.section, taskHistory(task.id));
           assignments.follow(latestPresentation.get(task.id));
         }
         const failedDrafts = isNew

@@ -96,38 +96,49 @@ func TestHandlerClientTopAlignsTheLabelsCaption(t *testing.T) {
 	}
 }
 
-// "Create more" says what the next Save does, so it belongs in the reader's
-// path to that button rather than in the opposite corner of the footer, level
-// with a Delete it has nothing to do with.
-func TestHandlerClientPlacesCreateMoreAboveTheSaveButton(t *testing.T) {
+// "Create more" says what the next Save does, so it sits on Save's own line,
+// right after it, with its words before its box. The way out of a New Task
+// form is Cancel, in the corner a task's Delete stands in.
+func TestHandlerClientPlacesCreateMoreBesideTheSaveButton(t *testing.T) {
 	t.Parallel()
 	runTaskFormClient(t, "Create more placement", `
   const footer = findElement(form, (element) => classTokens(element).includes("task-actions"));
   const actionBar = footer && findElement(footer, (element) => classTokens(element).includes("form-actions"));
-  const save = actionBar && findElement(actionBar, (element) =>
+  const primary = actionBar && findElement(actionBar, (element) => classTokens(element).includes("form-primary-actions"));
+  const save = primary && findElement(primary, (element) =>
     element.tagName === "BUTTON" && element.textContent === "Save");
-  if (!footer || !actionBar || !save) throw new Error("the New Task footer lost its action bar");
+  if (!footer || !actionBar || !primary || !save) throw new Error("the New Task footer lost its action bar");
 
   const toggle = findElement(form, (element) => element.id === "task-create-more");
   if (!toggle) throw new Error("the New Task form does not offer a Create more toggle");
   const wrapper = toggle.parentElement;
-  if (!wrapper || !classTokens(wrapper).includes("create-more")) {
+  if (!wrapper || wrapper.tagName !== "LABEL" || !classTokens(wrapper).includes("create-more")) {
     throw new Error("the Create more checkbox lost the label that names it");
   }
-  if (wrapper.parentElement !== footer) {
-    throw new Error("Create more is not a row of the footer");
+  if (wrapper.parentElement !== primary) throw new Error("Create more is not on Save's line");
+  if (primary.children.indexOf(wrapper) !== primary.children.indexOf(save) + 1) {
+    throw new Error("Create more does not follow the Save button it governs");
   }
-  if (actionBar.contains(wrapper)) {
-    throw new Error("Create more is still inside the action bar beside Save");
+  // The text first and the box to the right of it.
+  if (wrapper.children.length !== 2 || wrapper.children[0].textContent !== "Create more" ||
+      wrapper.children[1] !== toggle) {
+    throw new Error("Create more does not put its words before its checkbox");
   }
-  if (footer.children.indexOf(wrapper) >= footer.children.indexOf(actionBar)) {
-    throw new Error("Create more is drawn below the Save button it governs");
+  // Cancel, apart from the primary group and after it.
+  const cancel = findElement(actionBar, (element) => element.tagName === "A" && element.textContent === "Cancel");
+  if (!cancel || primary.contains(cancel)) throw new Error("Cancel is not apart from Save");
+  const cancelGroup = cancel.parentElement;
+  if (!classTokens(cancelGroup).includes("form-cancel") || cancelGroup.parentElement !== actionBar ||
+      actionBar.children.indexOf(cancelGroup) <= actionBar.children.indexOf(primary)) {
+    throw new Error("Cancel is not in the action bar's far corner");
   }
-  // The feedback line still leads the footer: a save that has something to say
-  // says it above everything the reader could press next.
+  if (findElement(form, (element) => element.tagName === "A" && element.textContent === "Back")) {
+    throw new Error("the New Task form still offers Back");
+  }
+  // The footer is its feedback line and the one action bar.
   const status = findElement(footer, (element) => classTokens(element).includes("form-status"));
-  if (footer.children.indexOf(status) !== 0) {
-    throw new Error("the footer no longer opens with its feedback line");
+  if (footer.children.length !== 2 || footer.children[0] !== status || footer.children[1] !== actionBar) {
+    throw new Error("the footer is not its feedback line over its action bar");
   }
   // Changing it is still what arms the next save.
   toggle.checked = true;
@@ -140,12 +151,9 @@ func TestHandlerClientPlacesCreateMoreAboveTheSaveButton(t *testing.T) {
 		// Slimmer than the page section it was padded like: the footer holds one
 		// line of feedback and one row of buttons.
 		`.task-actions { display: grid; grid-column: 1 / -1; gap: .4rem; padding: .5rem 1.15rem .6rem;`,
-		`justify-self: start`,
-		// Moving Create more into the footer put back exactly what the padding
-		// cut took out, so the New Task footer came out of that change no
-		// shorter than it went in. The blank feedback line is the rest of it:
-		// 22px the footer spends saying nothing. It still stands in the
-		// document while empty, so it can still announce.
+		`.form-danger, .form-cancel { margin-left: auto; }`,
+		// The blank feedback line still stands in the document while empty, so
+		// it can still announce, but it spends no height saying nothing.
 		`.form-status:empty { min-height: 0; }`,
 	} {
 		if !strings.Contains(body, fragment) {
@@ -154,7 +162,7 @@ func TestHandlerClientPlacesCreateMoreAboveTheSaveButton(t *testing.T) {
 	}
 	for _, stale := range []string{
 		`padding: .85rem 1.15rem 1.15rem`,
-		`.create-more { display: inline-flex; align-items: center; gap: .4rem; margin-left: auto`,
+		`.create-more { display: inline-flex; align-items: center; justify-self: start;`,
 	} {
 		if strings.Contains(body, stale) {
 			t.Errorf("task footer styling still contains %q", stale)
@@ -232,5 +240,153 @@ func TestHandlerClientCompactsTheRelationshipGroups(t *testing.T) {
 	}
 	if strings.Contains(body, `.relationship-editor label { grid-column: 1 / -1;`) {
 		t.Error("the combobox caption still claims a row of its own")
+	}
+}
+
+// sidebarOrderCheck asserts the sidebar holds, in order, the properties, the
+// relationship groups, the assignments and the attachments — the order a New
+// Task form and a task's page share.
+const sidebarOrderCheck = `
+function sidebarSections(form) {
+  const sidebar = findElement(form, (element) => classTokens(element).includes("task-sidebar"));
+  if (!sidebar) throw new Error("the form has no sidebar");
+  const properties = findElement(sidebar, (element) => classTokens(element).includes("task-properties"));
+  const relationships = findElement(sidebar, (element) => classTokens(element).includes("task-relationships"));
+  const assignments = findElement(sidebar, (element) => element.dataset.taskPanel === "assignments");
+  const attachments = findElement(sidebar, (element) => element.dataset.taskPanel === "attachments");
+  if (!properties || !relationships || !assignments || !attachments) {
+    throw new Error("the sidebar is missing a section: properties=" + Boolean(properties) +
+      " relationships=" + Boolean(relationships) + " assignments=" + Boolean(assignments) +
+      " attachments=" + Boolean(attachments));
+  }
+  // Each section's position among the sidebar's own children.
+  const at = (node) => {
+    let child = node;
+    while (child.parentElement !== sidebar) child = child.parentElement;
+    return sidebar.children.indexOf(child);
+  };
+  const order = [properties, relationships, assignments, attachments].map(at);
+  if (!(order[0] < order[1] && order[1] < order[2] && order[2] < order[3])) {
+    throw new Error("the sidebar order is " + JSON.stringify(order) +
+      ", want properties, relationships, assignments, attachments");
+  }
+  return sidebar;
+}
+`
+
+// A New Task form's sidebar is the task page's sidebar: the dependency inputs,
+// then who to assign, then what to attach.
+func TestHandlerClientOrdersTheNewTaskSidebar(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	program := createAssignmentProgram(t, sidebarOrderCheck+`
+setTimeout(async () => {
+  const form = await openCreateForm();
+  sidebarSections(form);
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the New Task sidebar order: %v\n%s", err, output)
+	}
+}
+
+// A task's page lays its sidebar out as the New Task form does, and below the
+// form there is only the comment thread and the change log.
+func TestHandlerClientOrdersTheTaskPageSidebar(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	board := &assignableBoard{task: heldTask()}
+	program := assignablePageProgram(t, board, []core.Task{heldTask()}, sidebarOrderCheck+`
+setTimeout(() => {
+  const route = main.firstElementChild;
+  const form = findElement(route, (element) => element.tagName === "FORM" && classTokens(element).includes("task-layout"));
+  sidebarSections(form);
+  const below = route.children.slice(route.children.indexOf(form) + 1);
+  if (below.length !== 2 || below[0].dataset.taskPanel !== "comments" ||
+      !classTokens(below[1]).includes("task-history")) {
+    throw new Error("below the form = " + JSON.stringify(below.map((node) =>
+      node.dataset.taskPanel || node.className)) + ", want the comments and the history");
+  }
+  const footer = findElement(form, (element) => classTokens(element).includes("task-actions"));
+  if (form.children[form.children.length - 1] !== footer) {
+    throw new Error("the Save row is not the last thing in the form");
+  }
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the task page sidebar order: %v\n%s", err, output)
+	}
+}
+
+// closeCheck clicks the header's × the way a reader does and asserts it left
+// the way Back does: onto the board, with one history entry pushed.
+const closeCheck = `
+async function closeFromHeader() {
+  const route = main.firstElementChild;
+  const header = findElement(route, (element) => element.tagName === "HEADER");
+  const close = header && findElement(header, (element) => hasDataKey(element, "taskClose"));
+  if (!close || close.tagName !== "A") throw new Error("the header has no close link");
+  if (close.getAttribute("aria-label") !== "Close" || close.textContent !== "×") {
+    throw new Error("the close is not a × named Close");
+  }
+  if (header.children[header.children.length - 1] !== close) throw new Error("the × is not at the header's right");
+  const leave = findElement(route, (element) => element.tagName === "A" && hasClassToken(element, "board-link") &&
+    (element.textContent === "Back" || element.textContent === "Cancel"));
+  if (!leave || close.href !== leave.href) {
+    throw new Error("the × does not go where " + (leave ? leave.textContent : "Back") + " goes");
+  }
+  const pushed = historyPaths.length;
+  await documentEventListeners.click({
+    target: close, button: 0, defaultPrevented: false,
+    metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+    preventDefault() { this.defaultPrevented = true; }
+  });
+  if (main.firstElementChild !== boardView) throw new Error("the × did not return to the board");
+  if (historyPaths.length !== pushed + 1) throw new Error("the × did not navigate the way Back does");
+}
+`
+
+// The New Task header is a compact band naming the page, with the × that
+// closes it. The heading is still the region's name.
+func TestHandlerClientDrawsACompactNewTaskHeaderThatCloses(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	program := createAssignmentProgram(t, closeCheck+`
+setTimeout(async () => {
+  await openCreateForm();
+  const route = main.firstElementChild;
+  const header = findElement(route, (element) => element.tagName === "HEADER");
+  if (!classTokens(header).includes("task-route__header--compact")) throw new Error("the New Task header is not the compact band");
+  const heading = findElement(header, (element) => element.tagName === "H2");
+  if (!heading || heading.textContent !== "New task" || heading.id !== "task-form-title") {
+    throw new Error("the New Task heading = " + JSON.stringify(heading && heading.textContent));
+  }
+  if (route.getAttribute("aria-labelledby") !== heading.id) throw new Error("the route is not named by its heading");
+  if (route.textContent.includes("Add work to the board")) throw new Error("the old headline is still drawn");
+  if (findElement(header, (element) => hasClassToken(element, "eyebrow"))) throw new Error("the band still has an eyebrow");
+  await closeFromHeader();
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the New Task header: %v\n%s", err, output)
+	}
+}
+
+// A task's page keeps its header and gains the same ×.
+func TestHandlerClientClosesTheTaskPageFromItsHeader(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	board := &assignableBoard{task: heldTask()}
+	program := assignablePageProgram(t, board, []core.Task{heldTask()}, closeCheck+`
+setTimeout(async () => {
+  const route = main.firstElementChild;
+  const heading = findElement(route, (element) => element.id === "task-form-title");
+  if (!heading || heading.textContent !== "Held task") throw new Error("the task page lost its title heading");
+  if (route.getAttribute("aria-labelledby") !== "task-form-title") throw new Error("the route is not named by its heading");
+  await closeFromHeader();
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the task page close: %v\n%s", err, output)
 	}
 }

@@ -581,6 +581,10 @@
       let currentTaskRefresh = null;
       let pendingDetailRelationshipContextTaskID = null;
       const pendingRelationshipDrafts = new Map();
+      // The assignments a create staged and could not save, by the task it
+      // made, for that task's page to draw and retry. The counterpart of the
+      // relationship drafts above.
+      const pendingAssignmentDrafts = new Map();
       const pendingTaskMessages = new Map();
       let createdTaskRecovery = null;
       // What a New Task form is still holding for a task it already made: the

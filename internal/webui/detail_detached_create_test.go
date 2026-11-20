@@ -81,11 +81,11 @@ func heldDetachedCreate(prerequisiteID, prerequisiteTitle, resolution string) st
 `
 }
 
-// leaveForTheBoard is the reader giving up on the request and taking the Back
-// link, which is what takes the node this create reports into out of the
-// document.
+// leaveForTheBoard is the reader giving up on the request and taking the
+// Cancel link — a New Task form's Back — which is what takes the node this
+// create reports into out of the document.
 const leaveForTheBoard = `
-  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Back");
+  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Cancel");
   await documentEventListeners.click({
     target: back, button: 0, defaultPrevented: false,
     metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
