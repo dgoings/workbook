@@ -789,6 +789,8 @@ ipcMain.handle('discovery:scan', async (_event, { root, maxDepth }) => {
   const repositories = await discovery.scan(root, { maxDepth })
   await registry.rememberScanRoot(root)
 
+  // True as of this scan only. The Import view asks its current project list
+  // instead (isImported in app.js), since a removal after the scan changes it.
   const imported = new Map(registry.projects.map((project) => [project.path, project]))
   for (const repository of repositories) {
     repository.imported = imported.has(repository.path)

@@ -104,9 +104,26 @@ async function loadProjects () {
  * and Previous/Next walked another.
  */
 function adoptProjects ({ projects, layout }) {
+  const before = new Set(state.projects.map((project) => project.path))
   state.projects = projects
   state.layout = layout ?? { items: projects.map((project) => ({ kind: 'project', id: project.id })) }
   renderProjects()
+  // The import list marks what is imported from these projects (isImported),
+  // so a project removed or added redraws it. Only then: it is also redrawn
+  // here for every board that starts, and a key being typed into it would be
+  // lost each time.
+  const changed = projects.length !== before.size || projects.some((project) => !before.has(project.path))
+  if (changed && state.view === 'import') renderScan()
+}
+
+/**
+ * Whether a scanned repository is one of Workbench's projects, now. Asked of
+ * the projects rather than read from the scan, whose answer is the one from
+ * when it ran: a project removed since would stay "imported", its box
+ * disabled, until a Rescan.
+ */
+function isImported (repository) {
+  return state.projects.some((project) => project.path === repository.path)
 }
 
 // A redraw between a press and its release replaces the row being pressed,
@@ -1422,8 +1439,8 @@ function matchesQuery (repository, query) {
 
 function visibleRepositories () {
   return state.scan.repositories.filter((repository) => {
-    if (state.filter === 'new' && repository.imported) return false
-    if (state.filter === 'imported' && !repository.imported) return false
+    if (state.filter === 'new' && isImported(repository)) return false
+    if (state.filter === 'imported' && !isImported(repository)) return false
     return matchesQuery(repository, state.query)
   })
 }
@@ -1464,7 +1481,7 @@ function renderScan () {
   for (const repository of visible) {
     const row = document.createElement('div')
     row.className = 'repo'
-    const alreadyImported = repository.imported
+    const alreadyImported = isImported(repository)
 
     const check = document.createElement('input')
     check.type = 'checkbox'
@@ -1560,7 +1577,7 @@ async function runScan (root) {
     // A rescan re-reads identities from disk, so selections for repositories
     // that have since been imported are dropped rather than re-attempted.
     for (const repository of result.repositories) {
-      if (repository.imported) state.selected.delete(repository.path)
+      if (isImported(repository)) state.selected.delete(repository.path)
     }
     el('scan-root').textContent = `${result.repositories.length} repositories under ${root}`
     renderScan()
@@ -1783,7 +1800,7 @@ for (const button of document.querySelectorAll('.chip')) {
 // Selection acts on what is shown, which is the only set the user can see.
 el('select-visible').addEventListener('click', () => {
   for (const repository of visibleRepositories()) {
-    if (!repository.imported) state.selected.add(repository.path)
+    if (!isImported(repository)) state.selected.add(repository.path)
   }
   renderScan()
 })
