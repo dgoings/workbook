@@ -954,12 +954,23 @@ func TestHandlerClientScriptHasNoHTMLSink(t *testing.T) {
 const fileHarness = `
 const readCalls = [];
 // Choosing files is what a browser does with the chooser: it fills the input's
-// list and raises change. The page lists what was chosen and resets the input,
-// so a test sets the list and raises the event the way the browser does rather
-// than leaving files in an input nobody told the page about.
+// list, sets its value to a fake path naming the first file, and raises change
+// — but only when the choice differs from what the input still holds. Choosing
+// the same files again into an input that was never reset raises nothing, which
+// is why the page resets the input after every choice, and why this helper
+// refuses the same way: one that always raised change could not tell a page
+// that resets from one that does not.
+function sameFileSelection(held, chosen) {
+  held = [...(held || [])];
+  if (held.length !== chosen.length) return false;
+  return held.every((file, at) => file.name === chosen[at].name && file.size === chosen[at].size);
+}
 function chooseFiles(chooser, files) {
-  chooser.files = files;
   if (!chooser.eventListeners.change) throw new Error("the file chooser does not listen for a choice");
+  const path = files.length ? "C:\\fakepath\\" + files[0].name : "";
+  if (chooser.value !== "" && chooser.value === path && sameFileSelection(chooser.files, files)) return;
+  chooser.files = files;
+  chooser.value = path;
   chooser.eventListeners.change({ target: chooser });
 }
 class TestFile {
@@ -1079,24 +1090,33 @@ setTimeout(async () => {
     throw new Error("before a choice the task page shows more than its chooser");
   }
   const before = fetchCalls.length;
+  chooser.focus();
   chooseFiles(chooser, [new TestFile("notes.txt", 5, "notes")]);
   if (fetchCalls.length !== before) throw new Error("choosing a file sent it");
   if (!chooser.hidden || add.parentElement.hidden || pending.hidden) {
     throw new Error("after a choice the chooser did not give way to Add file");
   }
+  if (document.activeElement !== add) throw new Error("a choice left the caret on the hidden chooser, not on Add file");
   const remove = findElement(pending, (element) => element.getAttribute("aria-label") === "Remove notes.txt");
   if (!remove) throw new Error("the chosen file has no × naming it");
+  remove.focus();
   remove.eventListeners.click();
   if (chooser.hidden || !add.parentElement.hidden || !pending.hidden || pending.children.length) {
     throw new Error("taking the file out did not return the chooser");
   }
+  if (document.activeElement !== chooser) throw new Error("emptying the list did not return the caret to the chooser");
+  // The same file again: a browser raises no change for a choice the input
+  // still holds, so this works only because the input was reset.
   chooseFiles(chooser, [new TestFile("notes.txt", 5, "notes")]);
+  if (pending.children.length !== 1) throw new Error("a file taken out could not be chosen again");
+  add.focus();
   await submitForm(attachmentForm("file"));
   const writes = fetchCalls.slice(before).filter((call) => call.options.method === "POST");
   if (writes.length !== 1 || JSON.parse(writes[0].options.body).name !== "notes.txt") {
     throw new Error("Add file sent " + writes.length + " writes");
   }
   if (pending.children.length || chooser.hidden) throw new Error("a sent file is still pending");
+  if (document.activeElement !== chooser) throw new Error("sending the chosen file left the caret on the hidden Add file");
 }, 0);
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {

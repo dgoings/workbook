@@ -186,12 +186,19 @@ setTimeout(async () => {
     throw new Error("before a choice the form shows chooser=" + shows(chooser) + " add=" + shows(add) + " list=" + shows(pending));
   }
 
-  chooseFiles(chooser, [new TestFile("trace.log", 2048, "trace"), new TestFile("shot.png", 4096, "png")]);
+  function chosen() {
+    return [new TestFile("trace.log", 2048, "trace"), new TestFile("shot.png", 4096, "png"), new TestFile("notes.txt", 5, "notes")];
+  }
+  // The reader is on the chooser when they choose, and the chooser is hidden
+  // by the choice: the caret goes to the Add file that takes its place.
+  chooser.focus();
+  chooseFiles(chooser, chosen());
   if (chooser.value !== "") throw new Error("the chooser was not reset, so the same file could not be chosen again");
   if (shows(chooser) || !shows(add) || !shows(pending)) {
     throw new Error("after a choice the form shows chooser=" + shows(chooser) + " add=" + shows(add) + " list=" + shows(pending));
   }
-  if (JSON.stringify(pendingNames()) !== JSON.stringify(["trace.log", "shot.png"])) {
+  if (document.activeElement !== add) throw new Error("a choice left the caret on the hidden chooser, not on Add file");
+  if (JSON.stringify(pendingNames()) !== JSON.stringify(["trace.log", "shot.png", "notes.txt"])) {
     throw new Error("the pending list = " + JSON.stringify(pendingNames()));
   }
   const remove = removeControl("shot.png");
@@ -201,27 +208,42 @@ setTimeout(async () => {
   }
   if (stagedRows().length !== 0) throw new Error("choosing staged a file before Add file was pressed");
 
+  // Out of the middle: the caret goes to the × of the file that took its place.
+  remove.focus();
   remove.eventListeners.click();
-  if (JSON.stringify(pendingNames()) !== JSON.stringify(["trace.log"])) {
+  if (JSON.stringify(pendingNames()) !== JSON.stringify(["trace.log", "notes.txt"])) {
     throw new Error("× took out the wrong file: " + JSON.stringify(pendingNames()));
+  }
+  if (document.activeElement !== removeControl("notes.txt")) {
+    throw new Error("removing a file did not put the caret on the next file's ×");
+  }
+  // Off the end: the caret goes to the one before it.
+  removeControl("notes.txt").eventListeners.click();
+  if (document.activeElement !== removeControl("trace.log")) {
+    throw new Error("removing the last listed file did not put the caret on the one before it");
   }
   removeControl("trace.log").eventListeners.click();
   if (pendingNames().length !== 0 || !shows(chooser) || shows(add) || shows(pending)) {
     throw new Error("taking out the last file did not return the chooser");
   }
+  if (document.activeElement !== chooser) throw new Error("emptying the list did not return the caret to the chooser");
 
-  // The same file again, after it was taken out.
-  chooseFiles(chooser, [new TestFile("shot.png", 4096, "png")]);
-  if (JSON.stringify(pendingNames()) !== JSON.stringify(["shot.png"])) {
-    throw new Error("a file taken out could not be chosen again: " + JSON.stringify(pendingNames()));
+  // The same files again, after they were taken out: a browser raises no
+  // change for a choice the input still holds, so this works only because the
+  // input was reset.
+  chooseFiles(chooser, chosen());
+  if (JSON.stringify(pendingNames()) !== JSON.stringify(["trace.log", "shot.png", "notes.txt"])) {
+    throw new Error("files taken out could not be chosen again: " + JSON.stringify(pendingNames()));
   }
+  add.focus();
   await submitForm(attachmentForm("file"));
-  if (JSON.stringify(stagedNames()) !== JSON.stringify(["shot.png"])) {
+  if (JSON.stringify(stagedNames()) !== JSON.stringify(["trace.log", "shot.png", "notes.txt"])) {
     throw new Error("Add file staged " + JSON.stringify(stagedNames()));
   }
   if (pendingNames().length !== 0 || !shows(chooser) || shows(add)) {
     throw new Error("staging the chosen files did not return the chooser");
   }
+  if (document.activeElement !== chooser) throw new Error("staging the chosen files left the caret on the hidden Add file");
 }, 0);
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {

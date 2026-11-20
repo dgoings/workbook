@@ -115,14 +115,18 @@
             remove.title = "Remove " + chosen.name;
             text(remove, "×");
             remove.addEventListener("click", () => {
+              const at = pending.indexOf(chosen);
               pending = pending.filter((held) => held !== chosen);
               drawPending();
-              // The caret goes where the reader is likely to go next: the next
-              // file's ×, or back to the chooser once there is nothing left.
-              const next = pendingList.children.length
-                ? findPendingRemove(0)
+              // The × just pressed is gone, and a caret left on it would fall
+              // to the page body. It goes where the reader is likely to go
+              // next: the × of the file that moved into this one's place, the
+              // one before it when this was the last, or back to the chooser
+              // once there is nothing left.
+              const next = pending.length
+                ? findPendingRemove(Math.min(at, pending.length - 1))
                 : file;
-              if (next && typeof next.focus === "function") next.focus();
+              if (next) next.focus();
             });
             row.append(name, remove);
             return row;
@@ -145,6 +149,9 @@
           // queueing a second file the surface would send one by one.
           pending = config.multiple ? pending.concat(chosen) : chosen;
           drawPending();
+          // The choice hides the chooser the reader is on, so the caret moves
+          // to the Add file that took its place rather than to the page body.
+          addFile.focus();
         });
         drawPending();
         // A drop target nobody knows about is a chooser. Said once, in the group
@@ -200,7 +207,18 @@
         });
         return {
           region, file, url, caption, addFile, addLink,
-          clearFile() { file.value = ""; pending = []; drawPending(); },
+          // Called once the chosen files are sent or staged. That hides the
+          // Add file the reader pressed, so a caret on it — or one already
+          // dropped to the body — goes back to the chooser. A caret somewhere
+          // else entirely, as it is after a drop or a paste, is left alone.
+          clearFile() {
+            const caret = document.activeElement;
+            const ours = !caret || caret === document.body || fileGroup.contains(caret);
+            file.value = "";
+            pending = [];
+            drawPending();
+            if (ours) file.focus();
+          },
           clearLink() { url.value = ""; caption.value = ""; }
         };
       }
