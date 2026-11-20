@@ -137,6 +137,10 @@ describe('the page', () => {
     }
     assert.match(section, /<div id="missing-repo" class="missing-repo" hidden>/)
     assert.match(section, /Remove from Workbench/)
+    // Look again is the action that looks like the default; removing is offered
+    // beside it, quieter.
+    assert.match(section, /<button id="missing-retry" class="primary" type="button">Look again<\/button>/)
+    assert.match(section, /<button id="missing-remove" class="ghost inline" type="button">Remove from Workbench<\/button>/)
     assert.match(section, /The repository is not touched/)
   })
 })
