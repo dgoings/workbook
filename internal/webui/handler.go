@@ -714,9 +714,9 @@ type TaskPresentation struct {
 	// rules, and a second copy of a rule in JavaScript is a copy that goes on
 	// saying the old thing the day the rule changes. presentation.AssignmentChip
 	// is the same function `workbook board` prints through, so the surfaces
-	// cannot drift. The words a staleness hint is phrased in are a rule too, and
-	// they reach the page as one — see AssignmentPresentation for why they are
-	// not phrased here.
+	// cannot drift. How long ago an assignment was made is worded by a rule
+	// too, and that wording does not reach the page at all: the page shows when
+	// the assignment was recorded, and AssignmentPresentation says why.
 	AssignmentChips []string                 `json:"assignmentChips,omitempty"`
 	MoreAssignments int                      `json:"moreAssignments,omitempty"`
 	Assignments     []AssignmentPresentation `json:"assignments,omitempty"`

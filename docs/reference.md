@@ -463,8 +463,9 @@ in the Assignments section with the reason, a Retry, and a red × to remove it.
 Each row carries a red × at its right end, named **Unassign** followed by the
 value (for example "Unassign sam@example.com/impl-1"), where this checkout may
 withdraw it — its own assignments, and the ones it recorded against somebody
-else. A row without the control is somebody else's to release, under the same rule `workbook update
---unassign` enforces; the button is drawn from the server's answer, so a control
+else. A row without the control is somebody else's to release, under the same
+rule `workbook update --unassign` enforces; the button is drawn from the
+server's answer, so a control
 this page offers is one the write would accept.
 
 A board with no identity to record an assignment against draws none of this: an
@@ -2755,7 +2756,8 @@ the list are a **Choose file** button, which opens the browser's own file
 picker (the real file input stays the focusable control, so the keyboard,
 screen readers, multiple selection, drop and paste all work as before), and a
 form for adding a link: the URL with **Attach** beside it, then the optional
-label on its own line. Enter in either box attaches. Each row has the same red × the other sidebar rows have. A
+label on its own line. Enter in either box attaches. Each row has the same red
+× the other sidebar rows have. A
 chosen file is listed by name with a × that takes it back out before anything
 is sent, and the chooser gives way to an **Add file** button until the list is
 empty again; the New Task form's staged list works the same way, its buttons
