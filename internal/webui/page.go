@@ -28,8 +28,8 @@ import (
 //
 // Adding a fragment means creating the file under assets/ and naming it in
 // pageFragments at the place its text belongs. A file that exists but is not
-// named, or is named but does not exist, stops the process the first time the
-// page is wanted rather than serving it with a piece missing, and the tests in
+// named, or is named but does not exist, stops `workbook serve` when it builds
+// its handler rather than serving a page with a piece missing, and the tests in
 // page_test.go fail on the same mismatch before that.
 
 //go:embed assets
@@ -85,7 +85,7 @@ var pageFragments = []string{
 }
 
 // pageSource is the board's template source, composed once, the first time a
-// page is rendered. Composing it at package initialization would charge every
+// handler is built. Composing it at package initialization would charge every
 // workbook command for a page only `workbook serve` draws, and would let one
 // stray file under assets/ in a source build stop commands that never touch
 // the board.
