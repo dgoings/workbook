@@ -47,7 +47,13 @@ async function launch () {
     starts: new Map(),
     loads: new Map(),
     supervisor: null,
-    chrome: null
+    chrome: null,
+    // Paths whose repository the presence check reports as gone, the board
+    // starts asked for, the servers stopped, and the last menu installed.
+    missing: new Set(),
+    started: [],
+    stopped: [],
+    menu: null
   }
 
   class FakeView {
@@ -113,13 +119,14 @@ async function launch () {
     dialog: {},
     shell: { openExternal () {} },
     nativeTheme: { shouldUseDarkColors: false, on () {} },
-    Menu: { setApplicationMenu () {}, buildFromTemplate: (template) => template },
+    Menu: { setApplicationMenu (menu) { h.menu = menu }, buildFromTemplate: (template) => template },
     session: { defaultSession: { webRequest: { onCompleted () {} } } }
   }
 
   class FakeRegistry {
     constructor () {
-      this.projects = PROJECTS
+      h.registry = this
+      this.projects = [...PROJECTS]
       this.theme = 'system'
       this.sidebarCollapsed = false
       this.sidebarLayout = {}
@@ -127,8 +134,13 @@ async function launch () {
     }
 
     get orderedProjects () { return this.projects }
-    find (id) { return this.projects.find((project) => project.id === id) }
+    find (id) { return this.projects.find((project) => project.id === id) ?? null }
     async load () {}
+    async remove (id) {
+      if (!this.find(id)) return false
+      this.projects = this.projects.filter((project) => project.id !== id)
+      return true
+    }
   }
 
   class FakeSupervisor extends EventEmitter {
@@ -138,18 +150,30 @@ async function launch () {
     }
 
     start (project) {
+      h.started.push(project.id)
       const start = h.starts.get(project.id)
       return start ? start() : Promise.resolve(project.url)
     }
 
     status () { return { status: 'running' } }
-    stop () {}
+    stop (projectId) { h.stopped.push(projectId) }
     stopAll () {}
     reapOrphans () { return [] }
   }
 
+  // The real tracker, looking at the paths the test says are gone instead of
+  // the disk.
+  const { createPresenceTracker } = require('../src/main/presence')
   const stubs = {
     electron,
+    './presence': {
+      createPresenceTracker: (options) => createPresenceTracker({
+        ...options,
+        check: async (dir) => h.missing.has(dir)
+          ? { missing: true, reason: 'not-found', message: `Repository not found at ${dir}` }
+          : { missing: false, reason: null, message: null }
+      })
+    },
     './registry': { Registry: FakeRegistry },
     './supervisor': { Supervisor: FakeSupervisor },
     './updater': { setupUpdater () {} },
@@ -180,6 +204,9 @@ async function launch () {
     open: (projectId) => ipc('project:open', { projectId }),
     showChrome: () => ipc('project:showChrome'),
     close: (projectId) => ipc('project:close', { projectId }),
+    remove: (projectId) => ipc('project:forget', { projectId }),
+    presence: (projectId) => ipc('project:presence', { projectId }),
+    listed: () => ipc('registry:list'),
     exit: (projectId) => h.supervisor.emit('exited', { projectId, code: 1, wasRunning: true }),
     startWith: (projectId, start) => h.starts.set(projectId, start),
     loadWith: (projectId, load) => {
@@ -312,5 +339,114 @@ describe('a board view is never left over the shell\'s own message', () => {
     start.resolve(PROJECTS[1].url)
     await openB
     assert.deepEqual(app.shown(), ['B'])
+  })
+})
+
+describe('removing a project from Workbench', () => {
+  const sentOn = (app, channel) => app.h.sent.filter((message) => message.channel === channel).map((message) => message.payload)
+  const menuNames = (app) => JSON.stringify(app.h.menu)
+
+  test('the showing board is let go of, its server stopped, and the sidebar and menu told', async () => {
+    const app = await launch()
+    await app.open('A')
+    assert.deepEqual(app.shown(), ['A'])
+    assert.match(menuNames(app), /Project A/)
+
+    const answer = await app.remove('A')
+    assert.equal(answer.removed, true)
+    assert.deepEqual(answer.projects.map((project) => project.id), ['B', 'C'])
+    assert.deepEqual(app.shown(), [])
+    assert.ok(app.h.views.every((view) => view.closed), 'the removed board\'s view is still open')
+    assert.deepEqual(app.h.stopped, ['A'])
+    assert.equal(app.showing().at(-1), false)
+    const layouts = sentOn(app, 'sidebar:layoutChanged')
+    assert.deepEqual(layouts.at(-1).projects.map((project) => project.id), ['B', 'C'])
+    assert.doesNotMatch(menuNames(app), /Project A/)
+    assert.match(menuNames(app), /Project B/)
+  })
+
+  test('a second removal, or one of an id never known, is a quiet no-op', async () => {
+    const app = await launch()
+    await app.remove('B')
+    const before = app.h.sent.length
+    assert.equal((await app.remove('B')).removed, false)
+    assert.equal((await app.remove('nobody')).removed, false)
+    assert.deepEqual(app.h.stopped, ['B'])
+    assert.equal(app.h.sent.length, before, 'a no-op announced something')
+  })
+
+  test('a project whose repository is gone is marked, never started, and removed like any other', async () => {
+    const app = await launch()
+    app.h.missing.add(PROJECTS[1].path)
+    const found = await app.presence('B')
+    assert.equal(found.known, true)
+    assert.equal(found.missing, true)
+    assert.equal(found.message, `Repository not found at ${PROJECTS[1].path}`)
+    const listed = (await app.listed()).projects.find((project) => project.id === 'B')
+    assert.equal(listed.missing, true)
+    assert.equal(listed.missingMessage, found.message)
+    // The change was announced, so the sidebar marks it without a reload.
+    assert.ok(sentOn(app, 'sidebar:layoutChanged').some((payload) =>
+      payload.projects.find((project) => project.id === 'B')?.missing === true))
+
+    const started = app.h.started.length
+    await assert.rejects(app.open('B'), /Repository not found at/)
+    assert.equal(app.h.started.length, started, 'a server was spawned for a missing repository')
+    assert.deepEqual(app.shown(), [])
+
+    assert.equal((await app.remove('B')).removed, true)
+    assert.equal((await app.presence('B')).known, false)
+  })
+
+  test('a repository that comes back is unmarked the next time anything looks', async () => {
+    const app = await launch()
+    app.h.missing.add(PROJECTS[2].path)
+    assert.equal((await app.presence('C')).missing, true)
+    app.h.missing.clear()
+    assert.equal((await app.presence('C')).missing, false)
+    await app.open('C')
+    assert.deepEqual(app.shown(), ['C'])
+  })
+
+  test('a board still starting when its project is removed never lays in', async () => {
+    const app = await launch()
+    const start = deferred()
+    app.startWith('A', () => start.promise)
+    const opening = app.open('A')
+    await settle()
+    await app.remove('A')
+    start.resolve(PROJECTS[0].url)
+    await assert.rejects(opening, /removed from Workbench/)
+    assert.deepEqual(app.shown(), [])
+    assert.equal(app.h.views.length, 0, 'a view was made for a removed project')
+  })
+
+  test('a board still loading when its project is removed is let go of', async () => {
+    const app = await launch()
+    const load = deferred()
+    app.loadWith('A', () => load.promise)
+    const opening = app.open('A')
+    await settle()
+    await app.remove('A')
+    load.resolve()
+    await assert.rejects(opening, /removed from Workbench/)
+    assert.deepEqual(app.shown(), [])
+    assert.ok(app.h.views.every((view) => view.closed))
+  })
+
+  test('a project imported again after removal is a new one: no stale board, no stale mark', async () => {
+    const app = await launch()
+    app.h.missing.add(PROJECTS[0].path)
+    await app.presence('A')
+    await app.open('A').catch(() => {})
+    await app.remove('A')
+    app.h.missing.clear()
+    // What import:apply does for the repository, without the discovery it
+    // needs a real checkout for.
+    app.h.registry.projects.push(PROJECTS[0])
+    const listed = (await app.listed()).projects.find((project) => project.id === 'A')
+    assert.equal(listed.missing, false)
+    await app.open('A')
+    assert.deepEqual(app.shown(), ['A'])
   })
 })
