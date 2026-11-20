@@ -253,19 +253,45 @@
       // expectedHead, for the reason the dependency and attachment drafts send
       // none — nobody else has heard of this task yet. One refusal does not stop
       // the run: each item is owed its own answer.
+      // A staged value as the server records it: principal[/label], split at
+      // the first separator as core splits it, with a blank principal standing
+      // for this board's identity.
+      function stagedAssignmentHolder(value) {
+        const cut = value.indexOf("/");
+        const principal = (cut < 0 ? value : value.slice(0, cut)) || assignIdentity;
+        return { principal, value: principal + (cut < 0 ? "" : value.slice(cut)) };
+      }
+      // Whether an "also assigned to" answer names only assignees this form
+      // staged. The server's warning is prose — "task X is also assigned to"
+      // and the other holders' values joined with commas — so the holders are
+      // read from the task the same answer carries instead: core names as
+      // others every assignment under a principal this write did not name, and
+      // each is compared by the value the warning would have spelled. Anything
+      // this cannot account for counts as news.
+      function sharedOnlyWithStaged(answer, item, staged) {
+        const assignments = answer && answer.task && answer.task.assignments;
+        if (!Array.isArray(assignments)) return false;
+        const principal = stagedAssignmentHolder(item.value).principal;
+        return assignments
+          .filter((held) => held.principal !== principal)
+          .every((held) => staged.has(held.principal + (held.label ? "/" + held.label : "")));
+      }
       async function persistAssignmentDrafts(taskID, draftState) {
         const path = "/api/tasks/" + encodeURIComponent(taskID) + "/assignments";
         const failures = [];
         const warnings = [];
+        const staged = new Set(draftState.items.map((item) => stagedAssignmentHolder(item.value).value));
         for (const item of [...draftState.items]) {
           try {
             const answer = await mutateTask("POST", path, { to: item.value });
-            // Every warning but the one saying the task is shared: the reader
-            // staged these assignments together on this form, so the second
-            // one landing beside the first is what they asked for rather than
-            // news about somebody else's.
+            // Every warning, except a "shared" one naming nobody but the
+            // assignees staged here: the reader staged them together, so one
+            // landing beside another is what they asked for. Anybody else it
+            // names — an agent that claimed the task between the create and
+            // this write — is news the reader did not cause, and is said the
+            // way the task page says it.
             (answer.warnings || [])
-              .filter((warning) => warning.code !== "assignment-shared")
+              .filter((warning) => warning.code !== "assignment-shared" || !sharedOnlyWithStaged(answer, item, staged))
               .forEach((warning) => warnings.push(warning.message));
           } catch (error) {
             failures.push({

@@ -65,9 +65,10 @@ function assignmentWrites() {
 function createWrites() {
   return fetchCalls.filter((call) => call.options.method === "POST" && call.url === "/api/tasks");
 }
-// Answers the create, the assignment writes (refusing whatever refuse names),
-// and the reads the landing makes.
-function stubCreate(refuse = () => "") {
+// Answers the create, the assignment writes (refusing whatever refuse names,
+// and answering whatever sharing names as landing beside other holders), and
+// the reads the landing makes.
+function stubCreate(refuse = () => "", sharing = () => null) {
   globalThis.fetch = async (url, options = {}) => {
     fetchCalls.push({ url, options });
     const method = options.method || "GET";
@@ -78,6 +79,15 @@ function stubCreate(refuse = () => "") {
       const refusal = refuse(JSON.parse(options.body));
       if (refusal) {
         return { ok: false, json: async () => ({ format: "workbook.error", version: 1, error: { category: "validation", message: refusal } }) };
+      }
+      const shared = sharing(JSON.parse(options.body));
+      if (shared) {
+        // What the server answers when the assignment landed beside somebody
+        // else's: the task with everyone who holds it, and the warning naming
+        // the others the way the command line does.
+        const task = Object.assign({}, refreshedTasks.tasks[0], { assignments: shared.holders });
+        return { ok: true, json: async () => ({ format: "workbook.task-mutation", version: 1, task, assignments: [],
+          warnings: [{ code: "assignment-shared", message: "task " + createdTaskID + " is also assigned to " + shared.others.join(", ") }] }) };
       }
       return { ok: true, json: async () => ({ format: "workbook.task-mutation", version: 1, task: refreshedTasks.tasks[0], assignments: [] }) };
     }
@@ -204,6 +214,91 @@ setTimeout(async () => {
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute staged assignment create: %v\n%s", err, output)
+	}
+}
+
+// Assignments staged together land beside each other, and the server says so:
+// the second one is "also assigned to" the first. That is what the reader asked
+// for on this form, so it is not news and the create lands where one with
+// nothing to report does. A blank value is this board's identity, so it counts
+// as staged under that name.
+func TestHandlerClientKeepsQuietWhenStagedAssigneesShareTheTask(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	program := createAssignmentProgram(t, `
+setTimeout(async () => {
+  const form = await openCreateForm();
+  const me = `+strconv.Quote(boardIdentity)+`;
+  stubCreate(() => "", (body) => {
+    if (body.to === "") {
+      return { holders: [{ principal: "sam@example.com", label: "impl-2" }, { principal: me }], others: ["sam@example.com/impl-2"] };
+    }
+    if (body.to === "ana@example.com") {
+      return {
+        holders: [{ principal: "sam@example.com", label: "impl-2" }, { principal: me }, { principal: "ana@example.com" }],
+        others: ["sam@example.com/impl-2", me]
+      };
+    }
+    return null;
+  });
+  typeTitle(form, "Task with assignees");
+  await stageAssignment("sam@example.com/impl-2");
+  await stageAssignment("");
+  await stageAssignment("ana@example.com");
+  await form.eventListeners.submit({ preventDefault() {} });
+
+  if (assignmentWrites().length !== 3) throw new Error("assignment writes = " + assignmentWrites().length);
+  if (historyPaths.length !== 1 || historyPaths[0] !== "/") {
+    throw new Error("sharing the task with its own staged assignees was reported: landed at " + JSON.stringify(historyPaths));
+  }
+  if (main.firstElementChild !== boardView) throw new Error("the create did not land on the board");
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute staged assignees sharing the task: %v\n%s", err, output)
+	}
+}
+
+// Somebody else can claim the task between the create and the assignments
+// that follow it — an agent watching for new work, say. The warning naming
+// them is news the reader did not cause, so it is said on the task's page the
+// way the task page says it, even though the staged assignees are named in the
+// same warning.
+func TestHandlerClientReportsAHolderTheCreateFormDidNotStage(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	program := createAssignmentProgram(t, `
+setTimeout(async () => {
+  const form = await openCreateForm();
+  const me = `+strconv.Quote(boardIdentity)+`;
+  const agent = { principal: "agent@example.com", label: "impl-1" };
+  stubCreate(() => "", (body) => {
+    if (body.to === "sam@example.com") {
+      return { holders: [agent, { principal: "sam@example.com" }], others: ["agent@example.com/impl-1"] };
+    }
+    if (body.to === "") {
+      return { holders: [agent, { principal: "sam@example.com" }, { principal: me }], others: ["agent@example.com/impl-1", "sam@example.com"] };
+    }
+    return null;
+  });
+  typeTitle(form, "Task with assignees");
+  await stageAssignment("sam@example.com");
+  await stageAssignment("");
+  await form.eventListeners.submit({ preventDefault() {} });
+
+  const wantPath = "/tasks/" + encodeURIComponent(createdTaskID);
+  if (historyPaths[historyPaths.length - 1] !== wantPath) {
+    throw new Error("a create that found another holder landed at " + JSON.stringify(historyPaths));
+  }
+  const said = findElement(main, (element) => hasDataKey(element, "saveStatus"));
+  const told = said ? said.textContent : "";
+  if (!told.includes("is also assigned to agent@example.com/impl-1")) {
+    throw new Error("the task page did not name the holder nobody staged: " + JSON.stringify(told));
+  }
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute a holder the form did not stage: %v\n%s", err, output)
 	}
 }
 
