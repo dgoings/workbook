@@ -453,6 +453,25 @@ setTimeout(async () => {
     throw new Error("the held form does not name the failed assignments: " + JSON.stringify(said));
   }
   if (stagedAssignmentRows().length !== 0) throw new Error("the spent form still stages the assignments");
+  // The task exists and the staged assignments were sent, so staging another
+  // here would go nowhere. The control is off as a whole, as the dependency
+  // inputs beside it are, and the notice says why.
+  const assignButton = findElement(assignmentPanel(), (element) => element.tagName === "BUTTON" && element.textContent === "Assign");
+  if (!assignmentField().disabled || !assignButton || !assignButton.disabled) {
+    throw new Error("the held form's assignment control looks usable: field disabled=" + assignmentField().disabled +
+      " Assign disabled=" + (assignButton && assignButton.disabled));
+  }
+  const dependencyInputs = [];
+  findElement(form, (element) => {
+    if (element.tagName === "INPUT" && element.getAttribute("role") === "combobox") dependencyInputs.push(element);
+    return false;
+  });
+  if (!dependencyInputs.length || dependencyInputs.some((input) => !input.disabled)) {
+    throw new Error("the held form's dependency inputs are not off the way its assignment control is");
+  }
+  if (!said.includes("can no longer be staged on this form")) {
+    throw new Error("the held form does not say why staging is off: " + JSON.stringify(said));
+  }
 
   const open = findElement(main, (element) => hasDataKey(element, "openCreatedTask"));
   await documentEventListeners.click({

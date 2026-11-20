@@ -451,6 +451,12 @@
           if (recovery && hasAssignmentFailures(recovery)) {
             said.push("Some assignments were not saved either; open the task to retry those.");
           }
+          // The sidebar's other staging controls stay off from here on: what
+          // they staged has been sent, and anything staged now would be composed
+          // against a create that is over. Said, because a control that is off
+          // with no reason given reads as one that is broken.
+          said.push((assignmentDraftPanel ? "Relationships and assignments" : "Relationships") +
+            " can no longer be staged on this form; open the task to add more.");
           (recovery ? recovery.warnings : outcome.warnings).forEach((warning) => said.push(warning));
           text(result, said.join(" "));
         }

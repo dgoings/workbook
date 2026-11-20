@@ -348,7 +348,13 @@
         return {
           section: panel.section,
           render,
-          setBusy: (value) => panel.setBusy(value)
+          // The field goes with the button, as the dependency inputs go with
+          // theirs: a field that takes typing beside an Assign that does nothing
+          // reads as a control that is broken rather than one that is off.
+          setBusy: (value) => {
+            panel.setBusy(value);
+            adder.field.disabled = value;
+          }
         };
       }
       // Who holds this task, and — on a board that has an identity to write one
