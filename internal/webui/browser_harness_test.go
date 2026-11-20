@@ -104,13 +104,38 @@ func openInBrowser(t *testing.T, handler http.Handler, page browserPage, result 
 	chrome := requireChrome(t)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	output, err := driveBrowser(node, chrome, t.TempDir(), server.URL, page, browserDeadline)
+	output, err := driveBrowser(node, chrome, browserProfile(t), server.URL, page, browserDeadline)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal(output, result); err != nil {
 		t.Fatalf("decode the page's answer %q: %v", strings.TrimSpace(string(output)), err)
 	}
+}
+
+// browserProfile makes the directory one Chrome keeps its profile in. It is
+// not t.TempDir, which fails the test when its one removal attempt does: on
+// Linux, Chrome's helper processes outlive the killed browser for a moment
+// and can still be writing into the profile, so the removal finds the
+// directory "not empty". This one retries for a few seconds, and a directory
+// that still will not go is logged rather than failing a test that passed.
+func browserProfile(t *testing.T) string {
+	t.Helper()
+	profile, err := os.MkdirTemp("", "workbook-browser-profile-")
+	if err != nil {
+		t.Fatalf("make Chrome's profile directory: %v", err)
+	}
+	t.Cleanup(func() {
+		var err error
+		for attempt := 0; attempt < 50; attempt++ {
+			if err = os.RemoveAll(profile); err == nil {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		t.Logf("leave Chrome's profile directory %s behind: %v", profile, err)
+	})
+	return profile
 }
 
 // driveBrowser starts Chrome on profile, has the node driver load page from
@@ -192,7 +217,7 @@ func TestBrowserDriverStopsAPageThatNeverAnswersAtItsDeadline(t *testing.T) {
 		_, _ = response.Write([]byte("<!doctype html><title>silent</title>"))
 	}))
 	t.Cleanup(server.Close)
-	profile := t.TempDir()
+	profile := browserProfile(t)
 	const deadline = 5 * time.Second
 	started := time.Now()
 	_, err := driveBrowser(node, chrome, profile, server.URL, browserPage{
