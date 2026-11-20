@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"slices"
 	"strings"
+	"sync"
 )
 
 // The board is one document and one html/template, kept as several files so
@@ -27,8 +28,9 @@ import (
 //
 // Adding a fragment means creating the file under assets/ and naming it in
 // pageFragments at the place its text belongs. A file that exists but is not
-// named, or is named but does not exist, stops the process at package
-// initialization rather than serving a page with a piece missing.
+// named, or is named but does not exist, stops the process the first time the
+// page is wanted rather than serving it with a piece missing, and the tests in
+// page_test.go fail on the same mismatch before that.
 
 //go:embed assets
 var assets embed.FS
@@ -82,18 +84,18 @@ var pageFragments = []string{
 	"page/tail.html",
 }
 
-// pageSource is the board's template source, composed once at package
-// initialization so that a fragment list out of step with the files fails the
-// process at start rather than on the first page served.
-var pageSource = mustComposePage(assets)
-
-func mustComposePage(fsys fs.FS) string {
-	source, err := composePage(fsys, pageFragments)
+// pageSource is the board's template source, composed once, the first time a
+// page is rendered. Composing it at package initialization would charge every
+// workbook command for a page only `workbook serve` draws, and would let one
+// stray file under assets/ in a source build stop commands that never touch
+// the board.
+var pageSource = sync.OnceValue(func() string {
+	source, err := composePage(assets, pageFragments)
 	if err != nil {
 		panic(err)
 	}
 	return source
-}
+})
 
 // composePage joins fragments, read from the assets directory of fsys, in the
 // order given. It refuses a list that names a file twice, names a file that is

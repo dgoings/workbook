@@ -10,12 +10,13 @@ import (
 	"testing/fstest"
 )
 
-// The fragment list and the files on disk name the same set. Package
-// initialization already refuses an embedded file that is not listed, but
-// go:embed leaves out a name that begins with "." or "_", so a fragment named
-// that way would be missing from the embedded tree and invisible to that check.
-// Reading the directory itself is what catches it. .DS_Store is the one name
-// passed over, because Finder writes it and go:embed never embeds it.
+// The fragment list and the files on disk name the same set. Composing the page
+// already refuses an embedded file that is not listed, but go:embed leaves out
+// a name that begins with "." or "_", so a fragment named with a leading "_"
+// would be missing from the embedded tree and invisible to that check. Reading
+// the directory itself is what catches it. Names that begin with "." are passed
+// over: Finder and editors write them (.DS_Store, a swap file beside an open
+// fragment), go:embed never embeds them, and no fragment is named that way.
 func TestPageFragmentsMatchAssetsDirectory(t *testing.T) {
 	t.Parallel()
 	var onDisk []string
@@ -23,7 +24,7 @@ func TestPageFragmentsMatchAssetsDirectory(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if !entry.IsDir() && path.Base(name) != ".DS_Store" {
+		if !entry.IsDir() && !strings.HasPrefix(path.Base(name), ".") {
 			onDisk = append(onDisk, name)
 		}
 		return nil
@@ -42,6 +43,53 @@ func TestPageFragmentsMatchAssetsDirectory(t *testing.T) {
 		if _, found := slices.BinarySearch(onDisk, name); !found {
 			t.Errorf("pageFragments names %s, which is not under assets/", name)
 		}
+	}
+}
+
+// The real list composes, and to the source the handler parses.
+func TestPageSourceComposesTheEmbeddedFragments(t *testing.T) {
+	t.Parallel()
+	source, err := composePage(assets, pageFragments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source != pageSource() {
+		t.Fatal("pageSource() is not the composition of pageFragments")
+	}
+}
+
+// The list keeps the shape of the document: the card template and the head,
+// then the stylesheet, then the body, then the script, then the closing tags.
+// Order within the stylesheet is the cascade and order within the script is
+// its declaration order, neither of which a test can judge, but a fragment
+// filed under the wrong element changes what html/template takes its text to
+// be, and the script's first and last files hold the function's two ends.
+func TestPageFragmentsKeepTheDocumentShape(t *testing.T) {
+	t.Parallel()
+	var styles, scripts []string
+	for _, name := range pageFragments {
+		switch {
+		case strings.HasPrefix(name, "style/"):
+			styles = append(styles, name)
+		case strings.HasPrefix(name, "script/"):
+			scripts = append(scripts, name)
+		}
+	}
+	if len(styles) == 0 || len(scripts) == 0 {
+		t.Fatalf("pageFragments has %d style and %d script fragments, want some of each", len(styles), len(scripts))
+	}
+	if scripts[0] != "script/boot.js" || scripts[len(scripts)-1] != "script/events.js" {
+		t.Errorf("script fragments run from %s to %s, want script/boot.js to script/events.js", scripts[0], scripts[len(scripts)-1])
+	}
+	want := slices.Concat(
+		[]string{"page/card.html", "page/head.html"},
+		styles,
+		[]string{"page/body.html"},
+		scripts,
+		[]string{"page/tail.html"},
+	)
+	if !slices.Equal(pageFragments, want) {
+		t.Errorf("pageFragments = %v, want the card and head, the style fragments, the body, the script fragments, then the tail: %v", pageFragments, want)
 	}
 }
 

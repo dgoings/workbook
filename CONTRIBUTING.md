@@ -122,9 +122,10 @@ inside that one function.
 To add a fragment, create the file and name it in `pageFragments` at the place
 its text belongs. Cut only between whole top-level CSS rules, elements, or
 script statements. A file that is not listed, or a listed file that is
-missing, stops the process at startup, and `TestPageFragmentsMatchAssetsDirectory`
-also catches a file `go:embed` would leave out, such as one whose name begins
-with `_`. No build step or bundler is involved; Go embeds the files as they
+missing, fails the `internal/webui` tests and stops `workbook serve` the first
+time it draws the page, and `TestPageFragmentsMatchAssetsDirectory` also
+catches a file `go:embed` would leave out, such as one whose name begins with
+`_`. No build step or bundler is involved; Go embeds the files as they
 are.
 
 ## Continuous integration

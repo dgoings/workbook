@@ -55,7 +55,7 @@ var pageFuncs = template.FuncMap{"cardAssignees": assignmentRow}
 // Sharing this value means every handler's first page render pays that escape
 // exactly once for the whole process instead of once per handler.
 var pageTemplate = sync.OnceValue(func() *template.Template {
-	return template.Must(template.New("index.html").Funcs(pageFuncs).Parse(pageSource))
+	return template.Must(template.New("index.html").Funcs(pageFuncs).Parse(pageSource()))
 })
 
 type TaskLister func(context.Context) ([]core.Task, error)

@@ -4440,7 +4440,7 @@ func requireNode(t *testing.T) string {
 }
 
 // nodeCommand feeds the program to node over stdin rather than as an argument.
-// The client programs embed assets/index.html, and Linux caps one argv string
+// The client programs embed the page's whole script, and Linux caps one argv string
 // at 128 KiB (MAX_ARG_STRLEN), a ceiling the largest programs have outgrown;
 // stdin has no such limit and behaves identically on every platform CI runs.
 func nodeCommand(node, program string) *exec.Cmd {
