@@ -192,7 +192,7 @@ function renderer ({ forget, view = 'project', active = 'b' } = {}) {
     remoteMessage: (error) => String(error.message),
     console: { error: (...args) => calls.errors.push(args) }
   })
-  const names = ['projectRow', 'removeProjectConfirmation', 'buttonText', 'removeProject', 'showMissing', 'hideMissing']
+  const names = ['projectRow', 'removeProjectConfirmation', 'confirmRemoval', 'askRemoval', 'cancelRemoval', 'showSidebarError', 'clearSidebarError', 'buttonText', 'removeProject', 'showMissing', 'hideMissing']
   const built = vm.runInContext(`${names.map(appFn).join('\n')}\n({ ${names.join(', ')} })`, context)
   return { ...built, state: context.state, calls, el }
 }

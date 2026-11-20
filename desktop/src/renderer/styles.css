@@ -543,7 +543,15 @@ body {
   font-size: .74rem;
   cursor: pointer;
   opacity: 0;
+  /* Inside a remove question they sit in its group, which ignores the pointer
+     with the rest of the row's non-button children and would pass that on. */
+  pointer-events: auto;
 }
+
+/* The remove question's group exists to be named to a screen reader when the
+   focus lands on its No; it draws nothing, so the row lays out the question
+   and its buttons as its own children. */
+.remove-confirm { display: contents; }
 
 .category-head:hover .category-action,
 .category-head:focus-within .category-action,
@@ -592,6 +600,15 @@ body {
 }
 
 .category-name-input.invalid { border-color: var(--wb-danger); }
+
+/* A sidebar remove that failed: said under the list, until the next remove is
+   asked. */
+.sidebar-error {
+  margin: .3rem 0 0;
+  padding: 4px 9px;
+  color: var(--wb-danger);
+  font-size: .74rem;
+}
 
 .category-projects {
   list-style: none;
@@ -790,7 +807,8 @@ body {
 :root.sidebar-collapsed .category-confirm,
 :root.sidebar-collapsed .category-name-input,
 :root.sidebar-collapsed .project-action,
-:root.sidebar-collapsed .project-confirm {
+:root.sidebar-collapsed .project-confirm,
+:root.sidebar-collapsed .sidebar-error {
   display: none;
 }
 

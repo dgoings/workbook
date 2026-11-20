@@ -20,6 +20,11 @@ const state = {
   // not send another.
   removingProjectId: null,
   removals: new Set(),
+  // Where the keyboard focus goes when the sidebar is next drawn, while a
+  // redraw is about to destroy the control that has it: { keys, fallback },
+  // the first key whose control is drawn, else the element with id fallback.
+  // See renderProjects.
+  sidebarFocus: null,
   // The project the missing-repository panel is about, while it is showing.
   missingProjectId: null,
   activeProjectId: null,
@@ -142,13 +147,17 @@ function renderProjects () {
     state.editingSelection = [typing.selectionStart, typing.selectionEnd]
     state.editingRefused = typing.classList.contains('invalid')
   }
-  // So does a focused fold toggle: folding from the keyboard redraws the list
-  // when the main process answers, and the rebuilt toggle takes the focus
-  // back, so Enter or Space can fold it again without a trip through Tab.
+  // So does the keyboard focus. Every control in the list carries a
+  // data-focus key, and the rebuilt control with the focused one's key takes
+  // the focus back: folding from the keyboard redraws the list when the main
+  // process answers, and Enter or Space can fold again without a trip through
+  // Tab. A redraw that replaces the focused control with another — a remove
+  // question asked or answered — says where the focus goes instead, in
+  // state.sidebarFocus.
   const focused = document.activeElement
-  const refocus = list.contains(focused) && focused.classList.contains('category-toggle')
-    ? focused.dataset.categoryId
-    : null
+  const kept = focused && list.contains(focused) ? focused.dataset.focus ?? null : null
+  const asked = state.sidebarFocus
+  state.sidebarFocus = null
   list.innerHTML = ''
 
   // Two or more: with one project its board already answers "what is next".
@@ -174,11 +183,15 @@ function renderProjects () {
     }
   }
   // Compared in JavaScript rather than matched by a selector, as renderNext
-  // finds its focused row: the id is the registry's, not ours.
-  if (refocus !== null) {
-    [...list.querySelectorAll('.category-toggle')]
-      .find((toggle) => toggle.dataset.categoryId === refocus)
-      ?.focus()
+  // finds its focused row: the id is the registry's, not ours. A control in a
+  // folded category cannot take the focus, so it is passed over.
+  const wanted = asked?.keys ?? (kept === null ? [] : [kept])
+  if (wanted.length > 0) {
+    const controls = [...list.querySelectorAll('[data-focus]')]
+      .filter((control) => !control.closest('.category-projects')?.hidden)
+    const target = wanted.map((key) => controls.find((control) => control.dataset.focus === key)).find(Boolean)
+    if (target) target.focus()
+    else if (asked?.fallback) el(asked.fallback).focus()
   }
 
   if (list.children.length === 0) {
@@ -230,7 +243,7 @@ function projectRow (project) {
   name.textContent = project.name
 
   if (state.removingProjectId === project.id) {
-    item.append(dot, key, ...removeProjectConfirmation(project))
+    item.append(dot, key, removeProjectConfirmation(project))
   } else {
     // Shown on hover or keyboard focus, like a category's rename and remove,
     // and hidden in the rail with them. Its title differs from the row's, so
@@ -239,14 +252,11 @@ function projectRow (project) {
     const remove = document.createElement('button')
     remove.type = 'button'
     remove.className = 'project-action'
+    remove.dataset.focus = `remove:project:${project.id}`
     remove.append(buttonText('×'))
     remove.title = 'Remove from Workbench'
     remove.setAttribute('aria-label', `Remove ${project.name} from Workbench`)
-    remove.addEventListener('click', () => {
-      state.removingCategoryId = null
-      state.removingProjectId = project.id
-      renderProjects()
-    })
+    remove.addEventListener('click', () => { askRemoval('project', project.id) })
     item.append(dot, key, name, remove)
   }
   item.addEventListener('click', (event) => {
@@ -264,28 +274,107 @@ function projectRow (project) {
  * ask. The same shape as a category's, in the row's own place.
  */
 function removeProjectConfirmation (project) {
-  const question = document.createElement('span')
-  question.className = 'project-confirm'
-  question.textContent = 'Remove project?'
+  return confirmRemoval({
+    kind: 'project',
+    id: project.id,
+    question: 'Remove project?',
+    label: `Remove ${project.name} from Workbench?`,
+    yes: {
+      title: 'Removes it from Workbench only. The repository is not touched.',
+      label: `Remove ${project.name} from Workbench. The repository is not touched.`,
+      onClick: () => { removeProject(project.id) }
+    },
+    noTitle: 'Keep the project'
+  })
+}
 
+/**
+ * The remove question a project row and a category header share, so the two
+ * look, read and answer the keyboard the same.
+ *
+ * One group, named for the question, around the question and its Yes and No:
+ * the focus is moved onto No when it is asked (askRemoval), and a screen
+ * reader names the group it lands in, so the question is heard without
+ * anyone tabbing back to find it. The group is `display: contents`, so the
+ * row lays its three parts out as before. Escape answers No from either
+ * button. Each button carries a data-focus key, which is how renderProjects
+ * finds it again across a redraw.
+ *
+ * @param {{ kind: 'project'|'category', id: string, question: string, label: string,
+ *   yes: { title: string, label?: string, onClick: () => void }, noTitle: string }} options
+ */
+function confirmRemoval ({ kind, id, question, label, yes, noTitle }) {
+  const group = document.createElement('span')
+  group.className = 'remove-confirm'
+  group.setAttribute('role', 'group')
+  group.setAttribute('aria-label', label)
+
+  const text = document.createElement('span')
+  text.className = kind === 'project' ? 'project-confirm' : 'category-confirm'
+  text.textContent = question
+
+  const action = kind === 'project' ? 'project-action' : 'category-action'
   const confirm = document.createElement('button')
   confirm.type = 'button'
-  confirm.className = 'project-action project-confirm-yes'
+  confirm.className = kind === 'project'
+    ? 'project-action project-confirm-yes'
+    : 'category-action category-confirm-yes'
+  confirm.dataset.focus = `yes:${kind}:${id}`
   confirm.append(buttonText('Yes'))
-  confirm.title = 'Removes it from Workbench only. The repository is not touched.'
-  confirm.setAttribute('aria-label', `Remove ${project.name} from Workbench. The repository is not touched.`)
-  confirm.addEventListener('click', () => { removeProject(project.id) })
+  confirm.title = yes.title
+  if (yes.label) confirm.setAttribute('aria-label', yes.label)
+  confirm.addEventListener('click', yes.onClick)
 
   const cancel = document.createElement('button')
   cancel.type = 'button'
-  cancel.className = 'project-action'
+  cancel.className = action
+  cancel.dataset.focus = `no:${kind}:${id}`
   cancel.append(buttonText('No'))
-  cancel.title = 'Keep the project'
-  cancel.addEventListener('click', () => {
-    state.removingProjectId = null
-    renderProjects()
+  cancel.title = noTitle
+  cancel.addEventListener('click', () => { cancelRemoval(kind, id) })
+
+  group.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    event.stopPropagation()
+    cancelRemoval(kind, id)
   })
-  return [question, confirm, cancel]
+  group.append(text, confirm, cancel)
+  return group
+}
+
+/** Ask whether to remove a project or a category, with the focus on No. */
+function askRemoval (kind, id) {
+  clearSidebarError()
+  state.removingProjectId = kind === 'project' ? id : null
+  state.removingCategoryId = kind === 'category' ? id : null
+  state.sidebarFocus = { keys: [`no:${kind}:${id}`] }
+  renderProjects()
+}
+
+/** Put the question away, and the focus back on the × that asked it. */
+function cancelRemoval (kind, id) {
+  if (kind === 'project' && state.removingProjectId === id) state.removingProjectId = null
+  if (kind === 'category' && state.removingCategoryId === id) state.removingCategoryId = null
+  state.sidebarFocus = { keys: [`remove:${kind}:${id}`] }
+  renderProjects()
+}
+
+/**
+ * Say in the sidebar that a remove failed, under the list. A row that is
+ * still there is not news, and a console line is not something a reader
+ * sees. It goes when the next remove is asked.
+ */
+function showSidebarError (message) {
+  const notice = el('sidebar-error')
+  notice.textContent = message
+  notice.hidden = false
+}
+
+function clearSidebarError () {
+  const notice = el('sidebar-error')
+  notice.textContent = ''
+  notice.hidden = true
 }
 
 /**
@@ -305,7 +394,10 @@ async function removeProject (projectId) {
   if (state.removals.has(projectId)) return
   state.removals.add(projectId)
   const order = state.projects.map((project) => project.id)
-  if (state.removingProjectId === projectId) state.removingProjectId = null
+  const name = state.projects.find((project) => project.id === projectId)?.name ?? 'the project'
+  // Asked from the row, whose question stays up, its Yes still focused,
+  // until the main process answers; the focus then goes to what is left.
+  const fromRow = state.removingProjectId === projectId
   const panel = state.missingProjectId === projectId
   if (panel) {
     el('missing-remove').disabled = true
@@ -320,13 +412,24 @@ async function removeProject (projectId) {
       el('missing-status').textContent = `Could not remove it: ${remoteMessage(error)}`
       el('missing-remove').disabled = false
     }
+    if (fromRow) {
+      if (state.removingProjectId === projectId) state.removingProjectId = null
+      state.sidebarFocus = { keys: [`remove:project:${projectId}`] }
+      showSidebarError(`Could not remove ${name}: ${remoteMessage(error)}`)
+    }
     renderProjects()
     return
   } finally {
     state.removals.delete(projectId)
   }
+  if (fromRow) {
+    if (state.removingProjectId === projectId) state.removingProjectId = null
+    const next = sidebarModel.neighborAfterRemoval(order, projectId)
+    state.sidebarFocus = { keys: next === null ? [] : [`remove:project:${next}`], fallback: 'new-category' }
+  }
   // The broadcast usually lands first; the answer is the same list either way.
   if (answer?.projects) adoptProjects(answer)
+  else if (fromRow) renderProjects()
   if (state.identity?.projectId === projectId) hideIdentityForm()
   const showing = state.view === 'project' && state.activeProjectId === projectId
   if (state.missingProjectId === projectId) hideMissing()
@@ -377,6 +480,7 @@ function categoryGroup (category, byId) {
   toggle.type = 'button'
   toggle.className = 'category-toggle'
   toggle.dataset.categoryId = category.id
+  toggle.dataset.focus = `toggle:category:${category.id}`
   toggle.title = action
   toggle.setAttribute('aria-expanded', String(!category.collapsed))
   toggle.setAttribute('aria-label', action)
@@ -401,7 +505,7 @@ function categoryGroup (category, byId) {
     head.draggable = false
     head.append(nameEditor(category))
   } else if (state.removingCategoryId === category.id) {
-    head.append(...removeConfirmation(category))
+    head.append(removeConfirmation(category))
   } else {
     // The name ignores the pointer so the header is one node under it for its
     // tooltip, so a double-click renames from anywhere on the header rather
@@ -422,6 +526,7 @@ function categoryGroup (category, byId) {
     const rename = document.createElement('button')
     rename.type = 'button'
     rename.className = 'category-action'
+    rename.dataset.focus = `rename:category:${category.id}`
     rename.append(buttonText('✎'))
     rename.title = 'Rename category'
     rename.setAttribute('aria-label', `Rename ${category.name}`)
@@ -430,13 +535,11 @@ function categoryGroup (category, byId) {
     const remove = document.createElement('button')
     remove.type = 'button'
     remove.className = 'category-action'
+    remove.dataset.focus = `remove:category:${category.id}`
     remove.append(buttonText('×'))
     remove.title = 'Remove category'
     remove.setAttribute('aria-label', `Remove ${category.name}`)
-    remove.addEventListener('click', () => {
-      state.removingCategoryId = category.id
-      renderProjects()
-    })
+    remove.addEventListener('click', () => { askRemoval('category', category.id) })
     head.append(name, rename, remove)
   }
 
@@ -534,33 +637,58 @@ function nameEditor (category) {
 
 /** The second step of removing a category: say what happens, and ask. */
 function removeConfirmation (category) {
-  const question = document.createElement('span')
-  question.className = 'category-confirm'
-  question.textContent = 'Remove category?'
-
-  const confirm = document.createElement('button')
-  confirm.type = 'button'
-  confirm.className = 'category-action category-confirm-yes'
-  confirm.append(buttonText('Yes'))
-  confirm.title = 'Its projects move to the top level'
-  confirm.addEventListener('click', () => {
-    state.removingCategoryId = null
-    api.deleteCategory(category.id).catch((error) => {
-      console.error('workbench: could not remove the category', error)
-      renderProjects()
-    })
+  return confirmRemoval({
+    kind: 'category',
+    id: category.id,
+    question: 'Remove category?',
+    label: `Remove ${category.name}? Its projects move to the top level.`,
+    yes: {
+      title: 'Its projects move to the top level',
+      onClick: () => { removeCategory(category) }
+    },
+    noTitle: 'Keep the category'
   })
+}
 
-  const cancel = document.createElement('button')
-  cancel.type = 'button'
-  cancel.className = 'category-action'
-  cancel.append(buttonText('No'))
-  cancel.title = 'Keep the category'
-  cancel.addEventListener('click', () => {
-    state.removingCategoryId = null
+/**
+ * Remove a category, from its header's question. The question stays up, its
+ * Yes still focused, until the main process answers; its broadcast redraws the
+ * list, and the focus goes to the first project the category held, now at the
+ * top level, else the item that took its place. A failure says so under the
+ * list and gives the focus back to the header's ×.
+ */
+async function removeCategory (category) {
+  const after = sidebarFocusAfterCategory(category)
+  try {
+    await api.deleteCategory(category.id)
+  } catch (error) {
+    console.error('workbench: could not remove the category', error)
+    if (state.removingCategoryId === category.id) state.removingCategoryId = null
+    state.sidebarFocus = { keys: [`remove:category:${category.id}`] }
+    showSidebarError(`Could not remove ${category.name}: ${remoteMessage(error)}`)
     renderProjects()
-  })
-  return [question, confirm, cancel]
+    return
+  }
+  if (state.removingCategoryId === category.id) state.removingCategoryId = null
+  state.sidebarFocus = after
+  renderProjects()
+}
+
+/** Where the focus goes once `category` is removed; see removeCategory. */
+function sidebarFocusAfterCategory (category) {
+  const control = (item) => item.kind === 'project'
+    ? `remove:project:${item.id}`
+    : `toggle:category:${item.id}`
+  const order = state.layout.items.map(control)
+  const self = control(category)
+  const next = sidebarModel.neighborAfterRemoval(order, self)
+  return {
+    keys: [
+      ...category.projects.map((id) => `remove:project:${id}`),
+      ...(next === null ? [] : [next])
+    ],
+    fallback: 'new-category'
+  }
 }
 
 async function createCategory () {

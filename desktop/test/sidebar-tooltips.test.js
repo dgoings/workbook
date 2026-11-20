@@ -68,7 +68,7 @@ function renderer ({ rail = false } = {}) {
     queueMicrotask: () => {},
     console
   })
-  const names = ['projectRow', 'categoryGroup', 'nameEditor', 'removeConfirmation', 'removeProjectConfirmation', 'buttonText']
+  const names = ['projectRow', 'categoryGroup', 'nameEditor', 'removeConfirmation', 'removeProjectConfirmation', 'confirmRemoval', 'buttonText']
   const built = vm.runInContext(`${names.map(fn).join('\n')}\n({ projectRow, categoryGroup })`, context)
   return { ...built, renames }
 }
