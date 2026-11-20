@@ -1,7 +1,6 @@
 package presentation
 
 import (
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -270,12 +269,10 @@ func AssignmentChips(assignments []core.Assignment) []string {
 // AgeStep is one band of AssignedAgo's wording: the ages it covers, the unit
 // it counts them in, and the phrases it reads as.
 //
-// The rule is data rather than a switch so that it can be handed to a reader
-// that is not Go. The web board words an open page's rows itself, on its own
-// clock, so that the document it polls carries nothing that moves with time —
-// and it does so from this table, served to it as data, rather than from a
-// JavaScript copy of the rule that would go on saying the old thing the day this
-// one changed.
+// The rule is a table rather than a switch so its bands can be read and
+// checked as data. Only `workbook show` words an age; the web board shows an
+// assignment's recorded time and no phrase, so nothing outside this package
+// reads the table.
 type AgeStep struct {
 	// Below is the exclusive upper bound of the ages this band covers. Zero is
 	// no bound, which only the last band has, so every age reads as something.
@@ -305,14 +302,6 @@ var assignedAgoSteps = []AgeStep{
 	{Unit: 24 * time.Hour, One: "assigned 1 day ago", Many: "assigned {count} days ago"},
 }
 
-// AssignedAgoSteps returns AssignedAgo's rule as the table it is, for a reader
-// that words an assignment's age somewhere this package cannot run. It is a copy:
-// the rule is this package's, and a caller that edited what it was handed would
-// otherwise be editing what `workbook show` prints.
-func AssignedAgoSteps() []AgeStep {
-	return slices.Clone(assignedAgoSteps)
-}
-
 // AssignedAgo says how long an assignment has stood, which is the whole of what
 // this design means by staleness.
 //
@@ -330,8 +319,7 @@ func AssignedAgo(assignment core.Assignment, now time.Time) string {
 	return wordAge(assignedAgoSteps, now.Sub(assignment.CreatedAt))
 }
 
-// wordAge reads an age through a table of bands. The web board's page reads the
-// served table the same way; a change to one reading is a change to the other.
+// wordAge reads an age through a table of bands.
 func wordAge(steps []AgeStep, elapsed time.Duration) string {
 	for _, step := range steps {
 		if step.Below != 0 && elapsed >= step.Below {

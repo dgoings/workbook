@@ -339,16 +339,12 @@ func TestAssignedAgoReadsInWholeUnits(t *testing.T) {
 	}
 }
 
-// The rule is a table so that it can travel: the web board words an open page's
-// rows from this same table, served to it as data, rather than from a copy of
-// the rule. What the table must be for that is a ladder: ascending bounds, one
-// unbounded last band so every age has a phrase, and a count's phrase wherever
-// a band counts. It is handed out as a copy, so a caller that edits what it was
-// given cannot change what AssignedAgo says.
+// The rule is a ladder: ascending bounds, one unbounded last band so every
+// age has a phrase, and a count's phrase wherever a band counts.
 func TestAssignedAgoStepsAreTheRule(t *testing.T) {
-	steps := AssignedAgoSteps()
+	steps := assignedAgoSteps
 	if len(steps) == 0 {
-		t.Fatal("AssignedAgoSteps() is empty")
+		t.Fatal("assignedAgoSteps is empty")
 	}
 	for index, step := range steps {
 		last := index == len(steps)-1
@@ -364,14 +360,6 @@ func TestAssignedAgoStepsAreTheRule(t *testing.T) {
 		if step.Unit != 0 && !strings.Contains(step.Many, AgeCountPlaceholder) {
 			t.Fatalf("step %d counts in %v but its Many phrase %q has no %s", index, step.Unit, step.Many, AgeCountPlaceholder)
 		}
-	}
-
-	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
-	stood := core.Assignment{CreatedAt: now.Add(-5 * time.Minute)}
-	before := AssignedAgo(stood, now)
-	steps[1].Many = "edited by a caller"
-	if after := AssignedAgo(stood, now); after != before {
-		t.Fatalf("editing the returned table changed AssignedAgo from %q to %q", before, after)
 	}
 }
 
