@@ -76,13 +76,19 @@ before anyone runs it; see Compatibility across versions below.
   and sends them once the task exists; one the server refuses is retried from
   the new task's page, as a refused dependency is.
 - **A task's page is laid out like the New Task form.** Assignments and
-  attachments moved into the sidebar, after Depends On and Blocks; only the
+  attachments moved into the sidebar, after the dependencies; only the
   comments and the change history sit below the form. As on the New Task form,
   the form fits the window: the description and Save stay on the screen and a
   long sidebar scrolls inside the form, however tall the header and the task's
   title are. Empty assignment and attachment lists no longer explain
   themselves or count to zero, and a chosen file is listed with a × to take it
   back out before **Add file** sends or stages it.
+- **Depends On and Blocks are one Dependencies section** on both task forms:
+  one list in which each row is tagged Depends On or Blocks, Depends On first,
+  and one task picker with an **Add as** toggle choosing which kind the next
+  entry is. The toggle stays where it was put after an add, so several entries
+  of one kind are one choice and several picks. Nothing about how an edge is
+  stored or sent changed.
 - **Smaller task form changes.** The New Task header is a compact band with a ×
   that closes the form, as a task's page now has too; Back on the New Task form
   is Cancel, at the far right; **Create more** sits beside Save, its checkbox

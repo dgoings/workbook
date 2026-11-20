@@ -19,8 +19,7 @@
          of the control is additive and grows downward away from it. */
       .task-properties .field--labels { align-items: start; }
       .task-properties .field--labels > label { padding-top: .65rem; }
-      .task-relationships { gap: .5rem; padding-top: .55rem; }
-      .relationship-group { padding-top: .55rem; }
+      .task-relationships { margin-top: .55rem; padding-top: .55rem; }
       .relationship-list { gap: .25rem; margin: .3rem 0 .35rem; }
       .relationship-editor { gap: .25rem .4rem; }
       .relationship-editor input { padding: .45rem .55rem; }

@@ -180,7 +180,7 @@ setTimeout(async () => {
   toggle.checked = true;
   toggle.eventListeners.change();
   findElement(main, (element) => element.id === "task-title").value = ` + strconv.Quote(created.Title) + `;
-  const dependsGroup = findElement(main, (element) => element.textContent === "Depends On").parentElement;
+  const dependsGroup = relationshipGroup(main, "Depends On");
   const combobox = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
   combobox.value = ` + strconv.Quote(prerequisite.Title) + `;
   combobox.eventListeners.input();

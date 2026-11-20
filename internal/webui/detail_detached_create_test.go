@@ -66,7 +66,7 @@ func heldDetachedCreate(prerequisiteID, prerequisiteTitle, resolution string) st
 
   // A staged relationship is what makes this create wait for the server instead
   // of leaving the form the moment Save is pressed.
-  const dependsGroup = findElement(main, (element) => element.textContent === "Depends On").parentElement;
+  const dependsGroup = relationshipGroup(main, "Depends On");
   const combobox = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
   combobox.value = ` + strconv.Quote(prerequisiteTitle) + `;
   combobox.eventListeners.input();

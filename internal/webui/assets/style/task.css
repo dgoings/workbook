@@ -102,10 +102,27 @@
     .board-link { color: var(--wb-ink); font-size: .84rem; font-weight: 700; text-underline-offset: .18em; }
     .route-message { padding: 1.15rem; color: var(--wb-ink-muted); }
     .route-message p { margin: 0 0 1rem; }
-    .task-relationships { display: grid; gap: .7rem; padding: .7rem 0 0; }
-    .relationship-group { border-top: 1px solid var(--wb-hairline); padding-top: .7rem; }
-    .relationship-group h3 { margin: 0; font-size: .88rem; }
+    /* A task's dependencies, both kinds in one section: a heading, one list,
+       the toggle that says which kind the next entry is, and one picker. It
+       is not a grid, because its two live regions stand in it empty almost all
+       the time, and a grid spends a gap on an empty item. */
+    .task-relationships { margin-top: .7rem; padding-top: .7rem; border-top: 1px solid var(--wb-hairline); }
+    .task-relationships h3 { margin: 0; font-size: .88rem; }
     .relationship-list { display: grid; gap: .35rem; margin: .45rem 0 .5rem; }
+    /* Which kind the next entry is added as: two radios drawn as one
+       segmented control. The radios stay in the document, clipped, so the
+       group keeps the browser's own keyboard behavior: Tab reaches it once and
+       the arrow keys move the choice. Each label is a 24px target. */
+    .relationship-kind { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; margin: 0 0 .35rem; }
+    .relationship-kind__label { color: var(--wb-ink); font-size: .74rem; font-weight: 750; }
+    .relationship-kind__options { position: relative; display: inline-flex; }
+    .relationship-kind__input { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .relationship-kind__option { display: inline-flex; align-items: center; min-height: 1.5rem; padding: .1rem .6rem; border: 1px solid var(--wb-border-strong); background: var(--wb-surface); color: var(--wb-ink); cursor: pointer; font-size: .74rem; font-weight: 750; }
+    .relationship-kind__option:first-of-type { border-radius: 4px 0 0 4px; }
+    .relationship-kind__option:last-of-type { margin-left: -1px; border-radius: 0 4px 4px 0; }
+    .relationship-kind__option:hover { border-color: var(--wb-primary); color: var(--wb-primary); }
+    .relationship-kind__input:checked + .relationship-kind__option { position: relative; z-index: 1; border-color: var(--wb-primary-edge); background: var(--wb-primary); color: var(--wb-on-accent); }
+    .relationship-kind__input:focus-visible + .relationship-kind__option { position: relative; z-index: 2; outline: 3px solid var(--wb-primary); outline-offset: 1px; }
     .relationship-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .75rem; border: 1px solid var(--wb-hairline); border-radius: 4px; padding: .7rem; }
     .relationship-row h4, .relationship-row p { margin: 0; }
     .relationship-row h4 { font-size: .84rem; overflow-wrap: anywhere; }
@@ -132,17 +149,25 @@
        from overflowing its own track if the sidebar were ever narrower than the
        word "Deleted", the one run in here that does not carry overflow-wrap. */
     .relationship-row__text { display: grid; gap: .35rem; min-width: 0; }
+    /* The kind a row is listed under, in words, at the start of its title's
+       line. The two kinds also differ in color, but the word is what says it.
+       The title runs on inline after the tag and wraps under it, rather than
+       being squeezed into a column beside it. */
+    .relationship-row__title { min-width: 0; }
+    .relationship-row__title h4 { display: inline; }
+    .relationship-row__kind { display: inline-block; margin-right: .35rem; padding: 0 .4rem; border: 1px solid var(--wb-border); border-radius: 999px; background: var(--wb-primary-tint-1); color: var(--wb-primary-ink); font-size: .66rem; font-weight: 800; line-height: 1.35; white-space: nowrap; }
+    .relationship-row__kind--blocks { border-color: var(--wb-warning-border); background: var(--wb-warning-surface); color: var(--wb-warning-ink); }
     /* Stacked, because a draft whose save was refused offers Retry as well as
        Remove, and centered against the text as the lone Remove button was. */
     .relationship-row__controls { display: grid; align-self: center; gap: .35rem; grid-column: 2; }
     .relationship-state { color: var(--wb-danger-ink); font-size: .75rem; }
     .relationship-editor { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .3rem .45rem; align-items: end; }
-    /* The caption used to hold a row of the sidebar to itself, in each of the
-       two groups, to repeat what the heading above the input and the
-       placeholder inside it already say. It is clipped rather than removed or
-       display: none'd, because it is what gives the combobox its accessible
-       name; the placeholder repeats that name exactly, so what is seen and what
-       is announced stay the same words. */
+    /* The caption used to hold a row of the sidebar to itself, to repeat what
+       the kind toggle above the input and the placeholder inside it already
+       say. It is clipped rather than removed or display: none'd, because it is
+       what gives the combobox its accessible name; the placeholder repeats
+       that name exactly, so what is seen and what is announced stay the same
+       words. */
     .relationship-editor__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     .relationship-editor input { min-width: 0; width: 100%; border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); color: var(--wb-text); font: inherit; padding: .55rem .62rem; }
     .relationship-editor input:focus { border-color: var(--wb-primary); outline: 3px solid var(--wb-primary-glow); }
@@ -166,7 +191,7 @@
        rules above and the ones in the media query, so it decides the height
        wherever it applies.
        .relationship-message reports a failed add or remove and is rare, so it
-       moves the group down when it comes. "No matching tasks." is not rare: it
+       moves what is under it down when it comes. "No matching tasks." is not rare: it
        is written on every keystroke the filter matches nothing on, so the row
        under an open combobox is reserved for as long as the reader is in it.
        That trades a jump per keystroke for one when the box takes focus, and

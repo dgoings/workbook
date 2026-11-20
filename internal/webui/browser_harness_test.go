@@ -65,8 +65,17 @@ type browserPage struct {
 	Width, Height int
 	// Path is the board address to open, such as /tasks/<id>.
 	Path string
-	// Script is an expression evaluated in the page once it has loaded. It may
-	// be a promise; what it resolves to is decoded into the result.
+	// Setup, when set, is an expression evaluated in the page once it has
+	// loaded and before Keys are pressed. It may be a promise.
+	Setup string
+	// Keys are pressed in order after Setup, as real key events, so a
+	// control's built-in keyboard behavior runs the way it does for a reader.
+	// Each is a key name the driver knows: ArrowLeft, ArrowRight, ArrowUp,
+	// ArrowDown, Tab or Space.
+	Keys []string
+	// Script is an expression evaluated in the page once it has loaded, after
+	// Setup and Keys. It may be a promise; what it resolves to is decoded into
+	// the result.
 	Script string
 	// Screenshot, when set, is a file a PNG of the viewport is written to
 	// after the script has run.
@@ -110,6 +119,8 @@ func openInBrowser(t *testing.T, handler http.Handler, page browserPage, result 
 		"url":        server.URL + page.Path,
 		"width":      page.Width,
 		"height":     page.Height,
+		"setup":      page.Setup,
+		"keys":       page.Keys,
 		"expression": page.Script,
 		"screenshot": page.Screenshot,
 	})
@@ -183,11 +194,25 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const loaded = once("Page.loadEventFired");
   await send("Page.navigate", { url: request.url });
   await loaded;
-  const evaluated = await send("Runtime.evaluate", { expression: request.expression, awaitPromise: true, returnByValue: true });
-  if (evaluated.exceptionDetails) {
-    const details = evaluated.exceptionDetails;
-    throw new Error((details.exception && details.exception.description) || details.text);
+  const evaluate = async (expression) => {
+    const evaluated = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+    if (evaluated.exceptionDetails) {
+      const details = evaluated.exceptionDetails;
+      throw new Error((details.exception && details.exception.description) || details.text);
+    }
+    return evaluated;
+  };
+  if (request.setup) await evaluate(request.setup);
+  const keyCodes = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Tab: 9, Space: 32 };
+  for (const key of request.keys || []) {
+    if (!keyCodes[key]) throw new Error("the driver cannot press " + key);
+    const name = key === "Space" ? " " : key;
+    const event = { key: name, code: key, windowsVirtualKeyCode: keyCodes[key], nativeVirtualKeyCode: keyCodes[key] };
+    if (key === "Space") event.text = " ";
+    await send("Input.dispatchKeyEvent", Object.assign({ type: key === "Space" ? "keyDown" : "rawKeyDown" }, event));
+    await send("Input.dispatchKeyEvent", Object.assign({ type: "keyUp" }, event));
   }
+  const evaluated = await evaluate(request.expression);
   if (request.screenshot) {
     const shot = await send("Page.captureScreenshot", { format: "png" });
     fs.writeFileSync(request.screenshot, Buffer.from(shot.data, "base64"));

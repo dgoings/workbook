@@ -171,58 +171,80 @@ func TestHandlerClientPlacesCreateMoreBesideTheSaveButton(t *testing.T) {
 	}
 }
 
-// Depends On and Blocks are two thirds of the sidebar, and most of that was
-// air: a caption on a row of its own repeating the heading above it, and two
-// permanently reserved lines per group for messages that are almost never
-// there. What each group still owes the reader is unchanged — a name for its
-// combobox, and live regions that exist before they have anything to announce.
-func TestHandlerClientCompactsTheRelationshipGroups(t *testing.T) {
+// Depends On and Blocks are one section: a heading, one list, a toggle saying
+// which kind the next entry is, and one picker. They were two groups, each
+// with a heading, an empty line, a picker and a message line, which was two
+// thirds of the sidebar for what is one set of edges. What the section still
+// owes the reader is unchanged — a name for its combobox that the placeholder
+// is part of, for either kind, and live regions that exist before they have
+// anything to announce.
+func TestHandlerClientDrawsOneDependencySection(t *testing.T) {
 	t.Parallel()
-	runTaskFormClient(t, "relationship group compaction", `
+	runTaskFormClient(t, "the dependency section", `
   const sidebar = findElement(form, (element) => classTokens(element).includes("task-sidebar"));
-  const groups = findElements(sidebar, (element) => classTokens(element).includes("relationship-group"));
-  if (groups.length !== 2) throw new Error("the sidebar does not render both relationship groups: " + groups.length);
+  const sections = findElements(sidebar, (element) => classTokens(element).includes("task-relationships"));
+  if (sections.length !== 1) throw new Error("the sidebar draws " + sections.length + " dependency sections, want 1");
+  const section = sections[0];
+  if (findElements(sidebar, (element) => classTokens(element).includes("relationship-group")).length !== 0) {
+    throw new Error("the sidebar still draws a group per kind");
+  }
+  const headings = findElements(section, (element) => element.tagName === "H3");
+  if (headings.length !== 1 || headings[0].textContent !== "Dependencies" ||
+      section.attributes["aria-labelledby"] !== headings[0].id) {
+    throw new Error("the section is not one heading naming it");
+  }
+  // In reading order: the heading, the list, the toggle, the picker.
+  const list = findElement(section, (element) => classTokens(element).includes("relationship-list"));
+  const toggle = findElement(section, (element) => element.attributes.role === "radiogroup");
+  const editor = findElement(section, (element) => classTokens(element).includes("relationship-editor"));
+  const order = [headings[0], list, toggle, editor].map((element) => section.children.indexOf(element));
+  if (order.some((index, at) => index < 0 || (at > 0 && index <= order[at - 1]))) {
+    throw new Error("the section's parts are out of order: " + JSON.stringify(order));
+  }
+  const empties = findElements(list, (element) => classTokens(element).includes("relationship-row__note"));
+  if (empties.length !== 1 || empties[0].textContent !== "No dependencies.") {
+    throw new Error("an empty section does not say so in one line");
+  }
+  if (findElements(section, (element) => element.attributes.role === "combobox").length !== 1) {
+    throw new Error("the section has more than one picker");
+  }
 
-  const captions = [];
-  groups.forEach((group) => {
-    const heading = group.children[0];
-    if (!heading || heading.tagName !== "H3") throw new Error("a relationship group lost its heading");
-    const name = heading.textContent;
-    const editor = findElement(group, (element) => classTokens(element).includes("relationship-editor"));
-    const caption = editor && findElement(editor, (element) => element.tagName === "LABEL");
-    const input = editor && findElement(editor, (element) => element.attributes.role === "combobox");
-    if (!editor || !caption || !input) throw new Error(name + " lost its combobox");
-    if (caption.htmlFor !== input.id) throw new Error(name + " no longer names its combobox");
+  const prompts = [];
+  for (const kind of ["Depends On", "Blocks"]) {
+    chooseRelationshipKind(form, kind);
+    const caption = findElement(editor, (element) => element.tagName === "LABEL");
+    const input = findElement(editor, (element) => element.attributes.role === "combobox");
+    if (!caption || !input || caption.htmlFor !== input.id) throw new Error(kind + " no longer names the combobox");
     if (!classTokens(caption).includes("relationship-editor__label")) {
-      throw new Error(name + " still spends a row of the sidebar on its caption");
+      throw new Error(kind + " spends a row of the sidebar on the combobox caption");
     }
-    if (!caption.textContent) throw new Error(name + " combobox has no accessible name");
     // The placeholder is what a sighted reader has left to go on, so it has to
     // be part of the name the control answers to: a speech user saying "click
     // prerequisite" reaches a box that says "Prerequisite" only while the two
     // strings still overlap.
-    if (!input.placeholder) throw new Error(name + " combobox says nothing inside the box");
-    if (!caption.textContent.toLowerCase().includes(input.placeholder.toLowerCase())) {
-      throw new Error(name + " placeholder " + JSON.stringify(input.placeholder) +
+    if (!input.placeholder || !caption.textContent.toLowerCase().includes(input.placeholder.toLowerCase())) {
+      throw new Error(kind + " placeholder " + JSON.stringify(input.placeholder) +
         " is not part of its accessible name " + JSON.stringify(caption.textContent));
     }
     if (!findElement(editor, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency")) {
-      throw new Error(name + " lost its Add dependency button");
+      throw new Error(kind + " lost its Add dependency button");
     }
-    // Both live regions are still in the document while empty. Only the height
-    // they reserved is gone, and that is the stylesheet's business: a region
-    // created in the same frame as its first message never announces it.
-    const empty = findElement(editor, (element) => classTokens(element).includes("relationship-empty"));
-    const message = findElement(group, (element) => classTokens(element).includes("relationship-message"));
-    for (const region of [empty, message]) {
-      if (!region || region.attributes.role !== "status" || region.attributes["aria-live"] !== "polite") {
-        throw new Error(name + " no longer keeps its announcements in the document");
-      }
-      if (region.textContent !== "") throw new Error(name + " opens with a message it has no reason to have");
+    prompts.push(caption.textContent);
+  }
+  if (prompts[0] === prompts[1]) throw new Error("both kinds ask for the same thing: " + prompts[0]);
+
+  // Both live regions are still in the document while empty. Only the height
+  // they reserved is gone, and that is the stylesheet's business: a region
+  // created in the same frame as its first message never announces it.
+  const empty = findElement(editor, (element) => classTokens(element).includes("relationship-empty"));
+  const messages = findElements(section, (element) => classTokens(element).includes("relationship-message"));
+  if (messages.length !== 1) throw new Error("the section has " + messages.length + " message lines, want 1");
+  for (const region of [empty, messages[0]]) {
+    if (!region || region.attributes.role !== "status" || region.attributes["aria-live"] !== "polite") {
+      throw new Error("the section no longer keeps its announcements in the document");
     }
-    captions.push(caption.textContent);
-  });
-  if (captions[0] === captions[1]) throw new Error("both groups ask for the same thing: " + captions[0]);
+    if (region.textContent !== "") throw new Error("the section opens with a message it has no reason to have");
+  }
 `)
 	body := newTaskPage(t)
 	for _, fragment := range []string{
@@ -232,15 +254,21 @@ func TestHandlerClientCompactsTheRelationshipGroups(t *testing.T) {
 		// nothing, so the combobox the reader is typing in keeps the row it
 		// would appear on rather than growing one under their cursor.
 		`.relationship-editor:focus-within .relationship-empty:empty { min-height: 1rem; }`,
-		`.task-relationships { display: grid; gap: .7rem; padding: .7rem 0 0; }`,
-		`.relationship-group { border-top: 1px solid var(--wb-hairline); padding-top: .7rem; }`,
+		`.task-relationships { margin-top: .7rem; padding-top: .7rem; border-top: 1px solid var(--wb-hairline); }`,
+		// The radios are clipped rather than hidden, so the group keeps the
+		// browser's keyboard behavior, and the focus ring lands on the label
+		// the reader sees.
+		`.relationship-kind__input { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }`,
+		`.relationship-kind__input:focus-visible + .relationship-kind__option { position: relative; z-index: 2; outline: 3px solid var(--wb-primary); outline-offset: 1px; }`,
 	} {
 		if !strings.Contains(body, fragment) {
-			t.Errorf("relationship group styling does not contain %q", fragment)
+			t.Errorf("dependency section styling does not contain %q", fragment)
 		}
 	}
-	if strings.Contains(body, `.relationship-editor label { grid-column: 1 / -1;`) {
-		t.Error("the combobox caption still claims a row of its own")
+	for _, stale := range []string{`.relationship-group {`, `.relationship-editor label { grid-column: 1 / -1;`} {
+		if strings.Contains(body, stale) {
+			t.Errorf("the stylesheet still contains %q", stale)
+		}
 	}
 }
 

@@ -194,14 +194,14 @@
         if (dependentID !== controller.taskID) return;
         controller.adoptTaskHead(document.task && document.task.head || "");
       }
-      async function retryRelationshipDraft(name, relationship, draftMap, controller, group) {
+      async function retryRelationshipDraft(name, relationship, draftMap, controller) {
         if (!ownsDependencyController(controller)) return;
         const dependentID = name === "dependsOn" ? controller.taskID : relationship.id;
         const prerequisiteID = name === "dependsOn" ? relationship.id : controller.taskID;
         const path = "/api/tasks/" + encodeURIComponent(dependentID) +
           "/dependencies/" + encodeURIComponent(prerequisiteID);
-        group.setBusy(true);
-        group.setMessage("");
+        controller.setBusy(true);
+        controller.setMessage("");
         try {
           const document = await mutateTask("PUT", path);
           adoptDependencyHead(controller, dependentID, document);
@@ -214,13 +214,13 @@
           if (refreshed.status === "superseded") return;
           if (refreshed.status === "failed") {
             controller.update();
-            group.setMessage("The dependency was saved durably, but the latest task state could not be refreshed.");
+            controller.setMessage("The dependency was saved durably, but the latest task state could not be refreshed.");
             return;
           }
           controller.update();
           const warnings = mutationWarnings(document);
           if (warnings.length) {
-            group.setMessage("Dependency saved durably. " + warnings.join(" "));
+            controller.setMessage("Dependency saved durably. " + warnings.join(" "));
           }
         } catch (error) {
           await refresh();
@@ -229,16 +229,16 @@
             ? error.message
             : "Dependency update failed.";
           controller.update();
-          group.setMessage(relationship.error);
+          controller.setMessage(relationship.error);
         } finally {
-          group.setBusy(false);
+          controller.setBusy(false);
         }
       }
-      async function mutateRelationship(method, dependentID, prerequisiteID, controller, group) {
+      async function mutateRelationship(method, dependentID, prerequisiteID, controller) {
         const path = "/api/tasks/" + encodeURIComponent(dependentID) +
           "/dependencies/" + encodeURIComponent(prerequisiteID);
-        group.setBusy(true);
-        group.setMessage("");
+        controller.setBusy(true);
+        controller.setMessage("");
         try {
           const document = await mutateTask(method, path);
           adoptDependencyHead(controller, dependentID, document);
@@ -253,21 +253,21 @@
           if (refreshed.status === "superseded") return;
           if (refreshed.status === "failed") {
             messages.push("The dependency was saved durably, but the latest task state could not be refreshed.");
-            group.setMessage(messages.join(" "));
+            controller.setMessage(messages.join(" "));
             return;
           }
           if (refreshed.relationshipContext.status === "failed") {
             messages.push(refreshed.relationshipContext.message);
           }
           controller.update();
-          if (method === "PUT") group.combobox.clear();
-          group.setMessage(messages.join(" "));
+          if (method === "PUT") controller.combobox.clear();
+          controller.setMessage(messages.join(" "));
         } catch (error) {
           await refresh();
           if (!ownsDependencyController(controller)) return;
-          group.setMessage(error instanceof Error ? error.message : "Dependency update failed.");
+          controller.setMessage(error instanceof Error ? error.message : "Dependency update failed.");
         } finally {
-          group.setBusy(false);
+          controller.setBusy(false);
         }
       }
       function routeMessage(titleText, message, retryable = false) {
