@@ -361,6 +361,23 @@ const menuActions = {
 }
 
 /**
+ * Throw if a project has been removed from Workbench, stopping its server
+ * first.
+ *
+ * Called on either side of supervisor.start by both of the paths that start a
+ * board. Removal stops the server it finds, but a start still waiting — on the
+ * presence check, or on the server binding — can outlast it: before the start,
+ * this keeps `workbook serve` from being spawned for a project that is gone,
+ * and after it, the server a removal could not reach is stopped here rather
+ * than left running for a project nothing will ever stop again.
+ */
+function stillListed (projectId) {
+  if (registry.find(projectId)) return
+  supervisor.stop(projectId)
+  throw new Error('this project was removed from Workbench')
+}
+
+/**
  * Start one project's board server and tell the shell how it went.
  *
  * `supervisor.start` already emits `started` on success; the failure branch
@@ -376,7 +393,10 @@ async function startProjectServer (project) {
     await presence.refresh([project.id])
     const found = presence.get(project.id)
     if (found.missing) throw new Error(found.message)
-    return await supervisor.start(project)
+    stillListed(project.id)
+    const url = await supervisor.start(project)
+    stillListed(project.id)
+    return url
   } finally {
     toChrome('project:started', { projectId: project.id, ...supervisor.status(project.id) })
     // Every board starts at launch and after an import, which makes this the
@@ -440,11 +460,12 @@ async function layInBoard (project, taskId, generation) {
   await presence.refresh([projectId])
   const found = presence.get(projectId)
   if (found.missing) throw new Error(found.message)
+  // Removed from Workbench while its repository was looked for, or while its
+  // server started; see stillListed. Laying a board in now would show a
+  // project the sidebar no longer has.
+  stillListed(projectId)
   const url = await supervisor.start(project)
-  // Removed from Workbench while its server started. Removal has already
-  // stopped the server and let go of the view; laying a board in now would
-  // show a project the sidebar no longer has.
-  if (!registry.find(projectId)) throw new Error('this project was removed from Workbench')
+  stillListed(projectId)
   if (generation !== openGeneration) return { url }
   // The board has a route per task, so a row can open the thing it names
   // rather than the board it lives on.

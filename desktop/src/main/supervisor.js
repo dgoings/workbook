@@ -99,6 +99,12 @@ class Supervisor extends EventEmitter {
       : null
     /** @type {Map<string, {child: import('node:child_process').ChildProcess, url: string|null, status: string, error: string|null, log: string[]}>} */
     this.processes = new Map()
+    // How many times each project has been stopped. A start awaits the
+    // binary's location before it spawns, and holds nothing for the project
+    // while it does, so a stop in that moment has nothing to stop. The start
+    // compares this count before and after its wait instead, and a stop that
+    // landed in between means no spawn.
+    this.stops = new Map()
     this.stopping = false
   }
 
@@ -154,7 +160,11 @@ class Supervisor extends EventEmitter {
       return existing.pending
     }
 
+    const stops = this.stops.get(project.id) ?? 0
     const binary = await resolveBinary(options.binary)
+    if (this.stopping || (this.stops.get(project.id) ?? 0) !== stops) {
+      throw new Error('serve stopped before it started')
+    }
     const child = spawn(binary, ['serve'], { cwd: project.path, env: process.env })
 
     const entry = {
@@ -230,6 +240,7 @@ class Supervisor extends EventEmitter {
 
   /** Stop one project's board. */
   stop (projectId) {
+    this.stops.set(projectId, (this.stops.get(projectId) ?? 0) + 1)
     const entry = this.processes.get(projectId)
     if (!entry) return
     entry.status = 'stopped'

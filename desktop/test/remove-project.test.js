@@ -89,9 +89,18 @@ describe('main.js', () => {
   })
 
   test('an open overtaken by the project\'s removal never lays its board in', () => {
+    // Both start paths ask on either side of the start: before, so nothing is
+    // spawned for a project removed while its repository was looked for; after,
+    // so a server removal could not reach is stopped. board-park.test.js runs it.
+    for (const [name, id] of [['layInBoard', 'projectId'], ['startProjectServer', 'project.id']]) {
+      const body = mainFn(name)
+      const start = body.indexOf('await supervisor.start(project)')
+      assert.notEqual(start, -1, `${name} does not start the server`)
+      assert.ok(body.slice(0, start).includes(`stillListed(${id})`), `${name} does not ask before the start`)
+      assert.ok(body.slice(start).includes(`stillListed(${id})`), `${name} does not ask after the start`)
+    }
+    assert.match(mainFn('stillListed'), /if \(registry\.find\(projectId\)\) return\s*supervisor\.stop\(projectId\)\s*throw new Error\('this project was removed from Workbench'\)/)
     const body = mainFn('layInBoard')
-    const afterStart = body.slice(body.indexOf('supervisor.start(project)'))
-    assert.match(afterStart, /if \(!registry\.find\(projectId\)\) throw new Error\(/)
     const afterLoad = body.slice(body.indexOf('await view.webContents.loadURL(target)'))
     assert.match(afterLoad, /if \(!registry\.find\(projectId\)\) \{\s*closeProject\(projectId\)\s*throw new Error\(/)
   })

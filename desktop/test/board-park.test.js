@@ -30,6 +30,23 @@ function deferred () {
   return { promise, resolve, reject }
 }
 
+function holdPresence (h, projectId) {
+  const gate = deferred()
+  h.holds.set(PROJECTS.find((project) => project.id === projectId).path, () => gate.promise)
+  return () => {
+    h.holds.clear()
+    gate.resolve()
+  }
+}
+
+function serving (h, projectId) {
+  let up = false
+  for (const [event, id] of h.events) {
+    if (id === projectId) up = event === 'up'
+  }
+  return up
+}
+
 async function settle () {
   for (let i = 0; i < 10; i++) await new Promise((resolve) => setImmediate(resolve))
 }
@@ -39,7 +56,7 @@ async function settle () {
  * project's address unless `starts` says otherwise, and pages load at once
  * unless `loads` does.
  */
-async function launch () {
+async function launch (before = () => {}) {
   const h = {
     sent: [],
     views: [],
@@ -53,7 +70,14 @@ async function launch () {
     missing: new Set(),
     started: [],
     stopped: [],
-    menu: null
+    menu: null,
+    // Presence checks held open until the test lets them go, by path, and the
+    // order servers came up and were stopped in: 'up' when a start resolves
+    // with an address, 'stop' when one is stopped. A stop that arrives before
+    // its start resolves is modeled as lost, the worst a supervisor can do, so
+    // only a stop after the last 'up' counts as stopped.
+    holds: new Map(),
+    events: []
   }
 
   class FakeView {
@@ -152,11 +176,17 @@ async function launch () {
     start (project) {
       h.started.push(project.id)
       const start = h.starts.get(project.id)
-      return start ? start() : Promise.resolve(project.url)
+      return (start ? start() : Promise.resolve(project.url)).then((url) => {
+        h.events.push(['up', project.id])
+        return url
+      })
     }
 
     status () { return { status: 'running' } }
-    stop (projectId) { h.stopped.push(projectId) }
+    stop (projectId) {
+      h.stopped.push(projectId)
+      h.events.push(['stop', projectId])
+    }
     stopAll () {}
     reapOrphans () { return [] }
   }
@@ -169,9 +199,13 @@ async function launch () {
     './presence': {
       createPresenceTracker: (options) => createPresenceTracker({
         ...options,
-        check: async (dir) => h.missing.has(dir)
-          ? { missing: true, reason: 'not-found', message: `Repository not found at ${dir}` }
-          : { missing: false, reason: null, message: null }
+        check: async (dir) => {
+          const hold = h.holds.get(dir)
+          if (hold) await hold()
+          return h.missing.has(dir)
+            ? { missing: true, reason: 'not-found', message: `Repository not found at ${dir}` }
+            : { missing: false, reason: null, message: null }
+        }
       })
     },
     './registry': { Registry: FakeRegistry },
@@ -183,6 +217,7 @@ async function launch () {
     }
   }
 
+  before(h)
   const load = Module._load
   Module._load = function (request, parent, isMain) {
     if (parent?.filename === MAIN && Object.hasOwn(stubs, request)) return stubs[request]
@@ -209,6 +244,12 @@ async function launch () {
     listed: () => ipc('registry:list'),
     exit: (projectId) => h.supervisor.emit('exited', { projectId, code: 1, wasRunning: true }),
     startWith: (projectId, start) => h.starts.set(projectId, start),
+    // Hold the presence check for a project open until the returned function
+    // is called.
+    holdPresence: (projectId) => holdPresence(h, projectId),
+    // Whether a server for the project is up: it came up and nothing stopped
+    // it after.
+    serving: (projectId) => serving(h, projectId),
     loadWith: (projectId, load) => {
       h.loads.set(PROJECTS.find((project) => project.id === projectId).url, load)
     },
@@ -419,6 +460,41 @@ describe('removing a project from Workbench', () => {
     await assert.rejects(opening, /removed from Workbench/)
     assert.deepEqual(app.shown(), [])
     assert.equal(app.h.views.length, 0, 'a view was made for a removed project')
+    assert.equal(app.serving('A'), false, 'the removed project\'s server was left running')
+  })
+
+  test('an open still looking for its repository when the project is removed spawns nothing', async () => {
+    const app = await launch()
+    const started = app.h.started.length
+    const release = app.holdPresence('A')
+    const opening = app.open('A')
+    await settle()
+    await app.remove('A')
+    release()
+    await assert.rejects(opening, /removed from Workbench/)
+    assert.deepEqual(app.h.started.slice(started), [], 'a server was spawned for a removed project')
+    assert.equal(app.serving('A'), false)
+    assert.deepEqual(app.shown(), [])
+  })
+
+  test('a launch start still looking for its repository when the project is removed spawns nothing', async () => {
+    let release
+    const app = await launch((h) => { release = holdPresence(h, 'A') })
+    assert.deepEqual(app.h.started, ['B', 'C'])
+    await app.remove('A')
+    release()
+    await settle()
+    assert.deepEqual(app.h.started, ['B', 'C'], 'a server was spawned for a removed project')
+    assert.equal(app.serving('A'), false)
+  })
+
+  test('a launch start still binding when the project is removed is stopped once it comes up', async () => {
+    const start = deferred()
+    const app = await launch((h) => { h.starts.set('A', () => start.promise) })
+    await app.remove('A')
+    start.resolve(PROJECTS[0].url)
+    await settle()
+    assert.equal(app.serving('A'), false, 'the removed project\'s server was left running')
   })
 
   test('a board still loading when its project is removed is let go of', async () => {
