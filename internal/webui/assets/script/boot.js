@@ -284,50 +284,6 @@
       // which the shared scaffolding always appends: on this path it is hidden,
       // never given text, and never unhidden.
       const assignIdentity = boardView.dataset.assignIdentity || "";
-      // How long an assignment has stood, in the words `workbook show` prints:
-      // "assigned just now", then minutes, hours and days. The rule is
-      // presentation.AssignedAgo's, and it arrives here as the table that
-      // function reads — each band's exclusive upper bound and unit in
-      // milliseconds, and its phrases — rather than as a copy written into this
-      // script, so the day the rule changes this page says the new thing.
-      //
-      // It is applied here rather than on the server because the phrase moves
-      // with the clock and nothing else. Carried in the polled document, it
-      // changed that document each time a fresh assignment's age crossed a
-      // minute, and every open board read the whole task list again for a
-      // phrase. The document carries the recorded time instead, which never
-      // moves, and this page words it on its own tick.
-      //
-      // The clock is this page's, where it was the server's. For the board
-      // `workbook serve` opens on this machine they are the same clock; for a
-      // browser elsewhere the two can disagree by the few seconds clones'
-      // clocks already disagree by, which moves a phrase's change by those few
-      // seconds and no more. A time ahead of this clock reads as the first
-      // band, "just now", exactly as it does in Go. A table that cannot be read words nothing, and a row then
-      // shows when it was recorded and stops there. `{count}` is the table's
-      // own marker for where a number goes (presentation.AgeCountPlaceholder),
-      // part of its format rather than of the rule; assignment_age_test.go
-      // words every boundary here and in Go and fails if the two part ways.
-      const assignedAgoSteps = (() => {
-        try {
-          const steps = JSON.parse(boardView.dataset.assignedAgo || "[]");
-          return Array.isArray(steps) ? steps : [];
-        } catch (_) {
-          return [];
-        }
-      })();
-      function assignedAgo(createdAt, now) {
-        const recorded = Date.parse(createdAt);
-        if (Number.isNaN(recorded)) return "";
-        const elapsed = now - recorded;
-        for (const step of assignedAgoSteps) {
-          if (step.below && elapsed >= step.below) continue;
-          if (!step.unit) return step.one || "";
-          const count = Math.floor(elapsed / step.unit);
-          return count === 1 ? step.one || "" : String(step.many || "").split("{count}").join(String(count));
-        }
-        return "";
-      }
       let vocabularyChanged = false;
       const syncToggle = document.querySelector("[data-sync-toggle]");
       const descriptionToggle = document.querySelector("[data-description-toggle]");

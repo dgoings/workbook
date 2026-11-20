@@ -5,6 +5,75 @@
         text(button, caption);
         return button;
       }
+      // The red × that takes one row out of a sidebar list: a dependency, an
+      // assignment, an attachment, or a file chosen and not yet added. Every
+      // one of them is this button, so they look and behave alike. The ×
+      // alone says nothing to a screen reader or to a pointer hovering it, so
+      // the button carries its whole meaning as its accessible name and as
+      // its tooltip, naming the thing it removes: "Unassign sam@example.com",
+      // not a row of identical "Remove" buttons.
+      function rowRemoveButton(name) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "row-remove";
+        button.dataset.rowRemove = "";
+        button.setAttribute("aria-label", name);
+        button.title = name;
+        text(button, "×");
+        return button;
+      }
+      // Where the caret goes once a sidebar write has been drawn. Each list is
+      // rebuilt from what the write answered, and a button disabled while the
+      // write is in flight lets go of the caret, so the control a keyboard
+      // reader pressed is gone or blurred by the time anything is drawn —
+      // and a caret left to the browser falls to the page body. This is the
+      // rule the chosen-file × keeps (see attachmentAdder), for every row and
+      // every add control in the sidebar.
+      //
+      // Asked for when the control is pressed, because that is when the
+      // pressed row's place in its list is known, and settled once the write
+      // has finished and its rows are drawn:
+      //
+      //   - saved, after a removal: the × now in the removed row's place, the
+      //     one before it when it was the last, or the section's own input
+      //     once there are none;
+      //   - saved, after an add: the section's own input, ready for the next;
+      //   - not saved: the control that was pressed, or the same control in
+      //     its row's redrawn replacement — so the reader can press it again.
+      //
+      // A row is any child of `list` carrying the properties its builder
+      // sets: rowKey, which names it across redraws, removeButton, and a
+      // retryButton where it has one. The caret is only moved while it is
+      // still on the pressed control or on the body that control dropped it
+      // to; a reader who has gone somewhere else while the write was in flight
+      // keeps the place they went to.
+      function holdSidebarFocus(trigger, list, row, input) {
+        const rows = () => (list ? [...list.children] : []);
+        const removes = () => rows().map((held) => held.removeButton).filter(Boolean);
+        const at = row && row.removeButton ? removes().indexOf(row.removeButton) : -1;
+        const key = row ? row.rowKey : undefined;
+        const role = row && trigger === row.retryButton ? "retryButton" : "removeButton";
+        return function settle(saved) {
+          const caret = document.activeElement;
+          if (caret && caret !== document.body && caret !== trigger) return;
+          const same = key === undefined ? null : rows().find((held) => held.rowKey === key);
+          let target = null;
+          if (!saved) target = trigger.isConnected ? trigger : (same && (same[role] || same.removeButton));
+          // A Retry that saved turns its row into a recorded one under the
+          // same name, and that row's × is the control in its place.
+          if (!target && saved && same && same !== row) target = same.removeButton;
+          if (!target && at >= 0) {
+            const now = removes();
+            if (now.length) target = now[Math.min(at, now.length - 1)];
+          }
+          if (!target) target = typeof input === "function" ? input() : input;
+          if (!target || !target.isConnected || target.disabled || document.activeElement === target) return;
+          // The dependency picker opens its list on focus, which is right for
+          // a reader arriving at it and wrong for one handed back to it.
+          if (typeof target.focusQuietly === "function") target.focusQuietly();
+          else target.focus();
+        };
+      }
       // Every thread change names the tip this page read, exactly as a save from
       // the form beside it does, and leaves the member out when there is none.
       function headed(head, values) {
@@ -149,10 +218,12 @@
               : (error instanceof Error ? error.message : "The change failed.")),
           open);
       }
-      // The control that names who to assign: one field, the hint that says
-      // what a blank means, and one button. A task's own page sends what it is
-      // given and a New Task form stages it, so both build it here and each
-      // decides what its submit does.
+      // The control that names who to assign: one field and, on its line, one
+      // button. A blank field assigns this board's identity, which the
+      // placeholder shows; a /label after it names one agent, as the command
+      // line's --assign takes it. A task's own page sends what it is given and
+      // a New Task form stages it, so both build it here and each decides what
+      // its submit does.
       function assignmentAdder(action) {
         const form = document.createElement("form");
         form.className = "assignment-add";
@@ -170,16 +241,12 @@
         // to clear first — and the empty value is what core resolves, so who
         // is acting is decided in one place rather than two.
         field.placeholder = assignIdentity;
-        const hint = document.createElement("p");
-        hint.className = "assignment-add__hint";
-        text(hint, "Leave blank to assign yourself. Add a /label to name one agent, as in " +
-          assignIdentity + "/impl-1.");
-        const actions = document.createElement("div");
-        actions.className = "assignment-add__actions";
+        const row = document.createElement("div");
+        row.className = "sidebar-inline";
         const submit = threadButton(action, true);
         submit.type = "submit";
-        actions.append(submit);
-        form.append(label, field, hint, actions);
+        row.append(field, submit);
+        form.append(label, row);
         return { form, field, submit };
       }
       // Who a staged value names, drawn the way a recorded assignment is: the
@@ -206,35 +273,46 @@
       // An assignment that is not recorded yet: staged on a New Task form, or
       // handed to a task's page by a create that could not save it. The second
       // kind says so and why, and offers the retry a failed dependency offers.
+      //
+      // The × sits at the right end of the name's line, as on every row. A
+      // failed one says "Not saved", why, and offers its Retry on a line of
+      // its own under them, across the card, the way a failed dependency
+      // does: beside the ×, Retry took the width the name needed.
       function assignmentDraftRow(panel, draft, actions) {
         const item = document.createElement("li");
-        item.className = "assignment";
+        item.className = "assignment sidebar-card";
         item.dataset.assignmentDraft = draft.key || draft.value;
+        item.rowKey = "draft:" + (draft.key || draft.value);
         item.append(stagedAssignmentWho(draft.value));
-        if (draft.error !== undefined && actions.retry) {
-          const state = document.createElement("strong");
-          state.className = "relationship-state";
-          text(state, "Not saved");
-          item.append(state);
-          if (draft.error) {
-            const failure = document.createElement("p");
-            failure.className = "assignment__failure";
-            text(failure, draft.error);
-            item.append(failure);
-          }
-        }
         const controls = document.createElement("div");
         controls.className = "assignment__actions";
-        if (actions.retry) {
-          const retry = panel.claim(threadButton("Retry"));
-          retry.addEventListener("click", () => actions.retry());
-          controls.append(retry);
-          if (actions.retryControl) actions.retryControl(retry);
-        }
-        const remove = panel.claim(threadButton("Remove"));
-        remove.addEventListener("click", () => actions.remove());
+        const remove = panel.claim(rowRemoveButton("Remove " + (draft.value || assignIdentity)));
+        remove.addEventListener("click", () => actions.remove(item));
         controls.append(remove);
+        item.removeButton = remove;
         item.append(controls);
+        if (actions.retry) {
+          const failed = document.createElement("div");
+          failed.className = "assignment__failed";
+          if (draft.error !== undefined) {
+            const state = document.createElement("strong");
+            state.className = "relationship-state";
+            text(state, "Not saved");
+            failed.append(state);
+            if (draft.error) {
+              const failure = document.createElement("p");
+              failure.className = "assignment__failure";
+              text(failure, draft.error);
+              failed.append(failure);
+            }
+          }
+          const retry = panel.claim(threadButton("Retry"));
+          retry.addEventListener("click", () => actions.retry(item));
+          failed.append(retry);
+          item.retryButton = retry;
+          if (actions.retryControl) actions.retryControl(retry);
+          item.append(failed);
+        }
         return item;
       }
       // ─── Assignments staged on a New Task form ──────────────────────────────
@@ -337,11 +415,13 @@
           panel.claim(adder.submit);
           panel.setCount(draftState.items.length ? draftState.items.length + " staged" : "");
           panel.list.replaceChildren(...draftState.items.map((item) => assignmentDraftRow(panel, item, {
-            remove: () => {
+            remove: (row) => {
               if (panel.busy) return;
+              const settle = holdSidebarFocus(row.removeButton, panel.list, row, adder.field);
               draftState.items = draftState.items.filter((held) => held !== item);
               panel.report("");
               render();
+              settle(true);
             }
           })));
         }
@@ -425,56 +505,33 @@
           if (!drafts.length) pendingAssignmentDrafts.delete(taskID);
           draw(lastHeld);
         }
-        async function retryDraft(draft) {
+        async function retryDraft(draft, row) {
           if (panel.busy || !panel.owns()) return;
+          const settle = holdSidebarFocus(row.retryButton, panel.list, row, field);
           const answer = await writeThreadChange(
             panel, "POST", path, headed(head, { to: draft.value }), "that assignment");
           if (answer) {
             retireDraft(draft);
+            settle(true);
             return;
           }
           if (!panel.owns()) return;
           draft.error = panel.status.textContent || draft.error;
           draw(lastHeld);
+          settle(false);
         }
         // What the section was last drawn from. A poll that changed nothing
         // costs one string comparison and touches no node, which is what keeps
         // the rows from being rebuilt under a reader's caret once a second — the
-        // same contract a card holds through cardSignature.
-        //
-        // Each row's "assigned 5 minutes ago" is not part of it. That phrase is
-        // worded from this page's clock (assignedAgo) and moves about once a
-        // minute for a recent assignment with nothing about the assignment
-        // having changed; redrawing the rows for it would rebuild every row on
-        // that tick. That was invisible while the rows held only text, but a row
-        // now holds a focusable Unassign button, and destroying it takes a
-        // keyboard reader's focus to <body> mid-tab. So the phrase is written
-        // into the existing meta lines instead, by age() below.
+        // same contract a card holds through cardSignature. A row holds a
+        // focusable Unassign button, and destroying it would take a keyboard
+        // reader's focus to <body> mid-tab.
         let signature = null;
-        // The meta line of each row currently drawn and the time it was
-        // recorded, in the order the rows are in, so the phrase can be
-        // re-worded in place without walking the list back out of the document.
-        let ages = [];
         function assignmentSignature(held) {
           return JSON.stringify([held.map((assignment) => [
             assignment.value, assignment.principal, assignment.label || "",
             assignment.createdAt, assignment.removable === true
           ]), drafts.map((draft) => [draft.value, draft.error])]);
-        }
-        function assignmentMetaText(createdAt, now) {
-          const phrase = assignedAgo(createdAt, now);
-          return phrase ? recordedAt(createdAt) + " · " + phrase : recordedAt(createdAt);
-        }
-        // Re-words every drawn row against one reading of the clock, so two
-        // assignments recorded in the same second never read as two ages. It
-        // writes only a line whose words changed: the tick that calls it comes
-        // once a second, and nearly every one of them changes nothing.
-        function age() {
-          const now = Date.now();
-          for (const row of ages) {
-            const next = assignmentMetaText(row.createdAt, now);
-            if (row.meta.textContent !== next) text(row.meta, next);
-          }
         }
         // Where the section belongs when there is something to draw: this parent,
         // immediately before this sibling. Held rather than looked up so that a
@@ -486,10 +543,7 @@
           const held = Array.isArray(assignments) ? assignments : [];
           lastHeld = held;
           const next = assignmentSignature(held);
-          if (next === signature) {
-            age();
-            return;
-          }
+          if (next === signature) return;
           signature = next;
           // A board that cannot assign draws nothing where there is nothing to
           // read — not a heading over an empty list, which is the convention the
@@ -499,27 +553,30 @@
           if (!held.length && !drafts.length && !assignable) {
             panel.section.remove();
             panel.list.replaceChildren();
-            ages = [];
             return;
           }
           panel.resetControls();
           panel.setCount(held.length === 0 ? "" : held.length === 1 ? "1 assignment" : held.length + " assignments");
-          ages = [];
           draftRetries = [];
-          const now = Date.now();
           panel.list.replaceChildren(
-            ...held.map((assignment) => assignmentRow(assignment, now)),
+            ...held.map((assignment) => assignmentRow(assignment)),
             ...drafts.map((draft) => assignmentDraftRow(panel, draft, {
-              retry: () => retryDraft(draft),
+              retry: (row) => retryDraft(draft, row),
               retryControl: (control) => draftRetries.push(control),
-              remove: () => { if (!panel.busy) retireDraft(draft); }
+              remove: (row) => {
+                if (panel.busy) return;
+                const settle = holdSidebarFocus(row.removeButton, panel.list, row, field);
+                retireDraft(draft);
+                settle(true);
+              }
             })));
           if (assignable) panel.claim(submit);
           if (parent && !parent.contains(panel.section)) parent.insertBefore(panel.section, anchor);
         }
-        function assignmentRow(assignment, now) {
+        function assignmentRow(assignment) {
           const item = document.createElement("li");
-          item.className = "assignment";
+          item.className = "assignment sidebar-card";
+          item.rowKey = "held:" + assignment.value;
           // The principal and the label, drawn as the one value somebody types
           // into `--unassign` and still visibly two things: the slash is the
           // separator core composes the value with, and the label is styled
@@ -541,17 +598,14 @@
             text(label, "/" + assignment.label);
             who.append(label);
           }
-          // The exact time it was recorded and how long ago that was. The
-          // phrase is presentation.AssignedAgo's — the same words `workbook
-          // show` prints, by the rule the server rendered into this page — and
-          // it is re-worded on every tick, so an open page's hint ages without
-          // a reload and without a poll having to bring anything. Nothing
-          // expires and this is not a warning: an assignment three weeks old is
-          // a fact for people to settle between themselves.
+          // The exact time it was recorded. How long ago that was is left to
+          // `workbook show`, which words it: in a sidebar row it was a second
+          // line of text saying what the timestamp beside it already says, and
+          // nothing on the page acted on it. An assignment three weeks old is
+          // a fact for people to settle between themselves, not a warning.
           const meta = document.createElement("p");
           meta.className = "assignment__meta";
-          text(meta, assignmentMetaText(assignment.createdAt, now));
-          ages.push({ meta, createdAt: assignment.createdAt });
+          text(meta, recordedAt(assignment.createdAt));
           item.append(who, meta);
           // Withdrawal is offered only where the server said this board may make
           // one. The rule is core's — the assignee may release what they hold,
@@ -568,9 +622,13 @@
             // would put a copy of core's separator on the client, and a copy
             // that disagreed about where the first slash falls would withdraw a
             // different assignment than the row this button sits in.
-            const withdraw = panel.claim(threadButton("Unassign"));
-            withdraw.addEventListener("click", () => writeThreadChange(
-              panel, "DELETE", path, headed(head, { from: assignment.value }), "that withdrawal"));
+            const withdraw = panel.claim(rowRemoveButton("Unassign " + assignment.value));
+            withdraw.addEventListener("click", async () => {
+              const settle = holdSidebarFocus(withdraw, panel.list, item, field);
+              settle(Boolean(await writeThreadChange(
+                panel, "DELETE", path, headed(head, { from: assignment.value }), "that withdrawal")));
+            });
+            item.removeButton = withdraw;
             actions.append(withdraw);
             item.append(actions);
           }
@@ -602,8 +660,7 @@
           firstDraftRetry() {
             const retry = draftRetries[0];
             return retry && panel.section.contains(retry) ? retry : null;
-          },
-          age
+          }
         };
       }
       function commentAttribution(comment) {

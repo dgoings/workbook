@@ -125,8 +125,13 @@ setTimeout(async () => {
   if (!rows[0].children[1].textContent.includes("2 KiB")) {
     throw new Error("a staged file does not say what it weighs: " + rows[0].children[1].textContent);
   }
-  if (!rows[2].children[1].textContent.includes("https://example.test/design")) {
-    throw new Error("a staged link does not say where it goes: " + rows[2].children[1].textContent);
+  // A staged link says where it goes on hover, not by repeating its URL in
+  // the metadata line under it.
+  if (rows[2].children[0].title !== "https://example.test/design") {
+    throw new Error("a staged link does not say where it goes: " + JSON.stringify(rows[2].children[0].title));
+  }
+  if (rows[2].children[1].textContent !== "link") {
+    throw new Error("a staged link's metadata repeats more than its kind: " + rows[2].children[1].textContent);
   }
   // A staged row offers nothing to follow: a file has no route to download from
   // and a link is a destination this page has not stored.

@@ -91,6 +91,32 @@ before anyone runs it; see Compatibility across versions below.
   entry is. The toggle stays where it was put after an add, so several entries
   of one kind are one choice and several picks. Nothing about how an edge is
   stored or sent changed.
+- **The task form's sidebar is tidier.** Every section — Properties,
+  Dependencies, Assignments and Attachments — is spaced alike, with the same
+  room above and below the rule between sections, and every dependency,
+  assignment and attachment is the same bordered card. Each card's Remove or
+  Unassign button is now a red × at the right end of its first line, named
+  for what it removes ("Unassign sam@example.com", "Remove dependency on
+  …") for screen readers and as its tooltip, so titles and file names get the
+  card's width. A dependency no longer prints the other task's ID (hover its
+  title for it); an assignment shows when it was recorded but no longer how
+  long ago; a link's URL is its name's tooltip rather than repeated under it,
+  and an attachment's details are one line (hover it for the media type and
+  exact time). The browser's "Choose File / No file chosen" control is a
+  **Choose file** button over the same file input; the dependency picker's
+  **Add**, **Assign**, and the link form's **Attach** (**Add** on the New Task
+  form) sit on their box's line, the link button beside the URL with the
+  optional label on the line below; and the help paragraph under the
+  assignment box is gone, its placeholder still showing who a blank box
+  assigns. A dependency or assignment that was not saved shows "Not saved",
+  the reason and **Retry** on their own lines under its title rather than
+  beside the ×. A focused × also keeps the keyboard focus across the board's
+  once-a-second poll, which the dependency list's and the attachment list's
+  did not, and keyboard focus no longer falls to the top of the page after a
+  sidebar change: removing a row moves it to the × that took the row's place
+  (or the one before it, or the section's box once the list is empty), adding
+  a dependency or a link returns it to the box it was added from, and a change
+  that was refused leaves it on the button that was pressed.
 - **Smaller task form changes.** The New Task header is a compact band with a ×
   that closes the form, as a task's page now has too; Back on the New Task form
   is Cancel, at the far right; **Create more** sits beside Save, its checkbox

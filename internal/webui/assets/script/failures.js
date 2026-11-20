@@ -194,6 +194,9 @@
         if (dependentID !== controller.taskID) return;
         controller.adoptTaskHead(document.task && document.task.head || "");
       }
+      // Both answer whether the edge was saved, which is what the caret is
+      // put back by (see holdSidebarFocus); a controller this page has left
+      // answers nothing, because there is nowhere left to put it.
       async function retryRelationshipDraft(name, relationship, draftMap, controller) {
         if (!ownsDependencyController(controller)) return;
         const dependentID = name === "dependsOn" ? controller.taskID : relationship.id;
@@ -211,17 +214,18 @@
           if (!hasRelationshipDrafts(controller.draftState)) {
             pendingRelationshipDrafts.delete(controller.taskID);
           }
-          if (refreshed.status === "superseded") return;
+          if (refreshed.status === "superseded") return true;
           if (refreshed.status === "failed") {
             controller.update();
             controller.setMessage("The dependency was saved durably, but the latest task state could not be refreshed.");
-            return;
+            return true;
           }
           controller.update();
           const warnings = mutationWarnings(document);
           if (warnings.length) {
             controller.setMessage("Dependency saved durably. " + warnings.join(" "));
           }
+          return true;
         } catch (error) {
           await refresh();
           if (!ownsDependencyController(controller)) return;
@@ -230,6 +234,7 @@
             : "Dependency update failed.";
           controller.update();
           controller.setMessage(relationship.error);
+          return false;
         } finally {
           controller.setBusy(false);
         }
@@ -250,11 +255,11 @@
           }
           const refreshed = await currentRefreshResult(refresh());
           if (!ownsDependencyController(controller)) return;
-          if (refreshed.status === "superseded") return;
+          if (refreshed.status === "superseded") return true;
           if (refreshed.status === "failed") {
             messages.push("The dependency was saved durably, but the latest task state could not be refreshed.");
             controller.setMessage(messages.join(" "));
-            return;
+            return true;
           }
           if (refreshed.relationshipContext.status === "failed") {
             messages.push(refreshed.relationshipContext.message);
@@ -262,10 +267,12 @@
           controller.update();
           if (method === "PUT") controller.combobox.clear();
           controller.setMessage(messages.join(" "));
+          return true;
         } catch (error) {
           await refresh();
-          if (!ownsDependencyController(controller)) return;
+          if (!ownsDependencyController(controller)) return false;
           controller.setMessage(error instanceof Error ? error.message : "Dependency update failed.");
+          return false;
         } finally {
           controller.setBusy(false);
         }

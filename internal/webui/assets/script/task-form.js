@@ -749,10 +749,6 @@
             // every other panel on this page, it moves nothing the form above it
             // is holding, because no field on that form follows the poll at all.
             follow: (held, view) => { attachments.follow(held); comments.follow(held); adoptDescriptionAttachments(held); assignments.follow(view); },
-            // How long each assignment has stood, re-worded on the page's own
-            // tick whatever the poll answered: a board left idle is answered
-            // 304 and brings this section nothing, and its rows still age.
-            age: () => assignments.age(),
             firstAssignmentRetry: () => assignments.firstDraftRetry()
           };
           // Attachments and assignments stand in the sidebar, as they do on a

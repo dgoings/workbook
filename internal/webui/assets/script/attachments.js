@@ -25,23 +25,46 @@
       function droppedOn(attachment) {
         return String((attachment.dropped && attachment.dropped.at) || "").slice(0, 10);
       }
+      // What an attachment's row names it as: a link's label, or its URL when
+      // it has none, and a file's name.
+      function attachmentShownName(attachment) {
+        if (attachment.kind === "link") return attachment.label || attachment.url || "Unnamed link";
+        return attachment.name || "Unnamed file";
+      }
+      // An attachment's metadata, as the one line its card draws and as the
+      // fuller tooltip on that line. The line is held to what fits a sidebar
+      // card: the kind, a file's size, the day it was added and who added it.
+      // The tooltip keeps everything the line used to say — a file's media type
+      // and the exact time — so nothing a reader could read before is gone,
+      // only a hover away. A link's destination is in neither: it is the name
+      // above when the link has no label, and the name's tooltip either way,
+      // so a reader deciding whether to follow one can still see where it goes.
       function attachmentMeta(attachment) {
-        const parts = [attachment.kind === "link" ? "link" : "file"];
-        if (attachment.kind === "link") {
-          // The destination, whether or not the caption above it is a link: a
-          // reader deciding whether to follow one is entitled to see where it
-          // goes, and this is text either way.
-          if (attachment.url) parts.push(attachment.url);
-        } else {
-          if (attachment.media) parts.push(attachment.media);
-          parts.push(attachmentSize(attachment.size));
+        const kind = attachment.kind === "link" ? "link" : "file";
+        const line = [kind];
+        const full = [kind];
+        if (attachment.kind !== "link") {
+          if (attachment.media) full.push(attachment.media);
+          line.push(attachmentSize(attachment.size));
+          full.push(attachmentSize(attachment.size));
           // A file compaction dropped is still listed, so a reader knows it
           // existed; the day is the one the command line and the download
           // route's refusal both name.
-          if (attachment.dropped) parts.push("Removed by compaction on " + droppedOn(attachment));
+          if (attachment.dropped) {
+            const note = "Removed by compaction on " + droppedOn(attachment);
+            line.push(note);
+            full.push(note);
+          }
         }
-        parts.push("added " + attribution(attachment.author, attachment.addedAt));
-        return parts.join(" · ");
+        line.push(attachmentAddedOn(attachment.addedAt));
+        if (attachment.author) line.push(attachment.author);
+        full.push("added " + attribution(attachment.author, attachment.addedAt));
+        return { line: line.join(" · "), full: full.join(" · ") };
+      }
+      // The calendar day an attachment was added, in the reader's own format.
+      function attachmentAddedOn(wallTime) {
+        const when = new Date(wallTime);
+        return Number.isNaN(when.getTime()) ? String(wallTime || "") : when.toLocaleDateString();
       }
       // ─── Adding attachments ─────────────────────────────────────────────────
       //
@@ -77,6 +100,20 @@
         file.type = "file";
         file.id = "attachment-file";
         file.name = "attachment-file";
+        file.className = "attachment-add__file";
+        // The browser's own chooser draws a gray "Choose File" and a "No file
+        // chosen" beside it, in its own type and colors. The input stays the
+        // control — clipped out of sight, still in the tab order, still what a
+        // screen reader names, still the thing Space and Enter open — and this
+        // label is what is seen of it: a button like the sidebar's others.
+        // Clicking a label activates its input, so a press opens the real
+        // picker, multiple selection included; the pending list below is the
+        // feedback for what was chosen.
+        const choose = document.createElement("label");
+        choose.className = "thread-button attachment-add__choose";
+        choose.htmlFor = file.id;
+        choose.dataset.attachmentChoose = "";
+        text(choose, config.multiple ? "Choose files" : "Choose file");
         // Offered only where more than one can be taken at a time. A task page
         // sends each file as its own write against a head the one before it
         // moved; a form that is only staging holds a list already, so choosing
@@ -108,12 +145,8 @@
             const name = document.createElement("span");
             name.className = "attachment-pending__name";
             text(name, chosen.name);
-            const remove = document.createElement("button");
-            remove.type = "button";
-            remove.className = "attachment-pending__remove";
-            remove.setAttribute("aria-label", "Remove " + chosen.name);
-            remove.title = "Remove " + chosen.name;
-            text(remove, "×");
+            const remove = rowRemoveButton("Remove " + chosen.name);
+            remove.className += " attachment-pending__remove";
             remove.addEventListener("click", () => {
               const at = pending.indexOf(chosen);
               pending = pending.filter((held) => held !== chosen);
@@ -135,6 +168,7 @@
           pendingList.hidden = !holding;
           fileActions.hidden = !holding;
           file.hidden = holding;
+          choose.hidden = holding;
         }
         function findPendingRemove(at) {
           const row = pendingList.children[at];
@@ -161,7 +195,7 @@
         dropHint.className = "attachment-add__hint";
         dropHint.dataset.attachmentDropHint = "";
         text(dropHint, "Or drop files anywhere in this panel.");
-        fileGroup.append(fileLabel, file, pendingList, dropHint, fileActions);
+        fileGroup.append(fileLabel, file, choose, pendingList, dropHint, fileActions);
         const linkGroup = document.createElement("form");
         linkGroup.className = "attachment-add__group";
         linkGroup.dataset.attachmentLinkForm = "";
@@ -186,12 +220,22 @@
         caption.name = "attachment-label";
         caption.placeholder = "Label (optional)";
         caption.setAttribute("aria-label", "Link label");
-        const linkActions = document.createElement("div");
-        linkActions.className = "attachment-add__actions";
+        // The button that attaches sits on the URL's line, as every other add
+        // control in the sidebar sits beside the box it takes, and the
+        // optional label has the full width of the line under them. The order
+        // in the document is the order on screen, so Tab goes URL, Attach,
+        // label; Enter in either box submits the form, so a reader who fills
+        // in the label never has to go back up for the button. It reads one
+        // word and is named for what it does.
+        const linkLine = document.createElement("div");
+        linkLine.className = "sidebar-inline";
+        linkLine.dataset.attachmentLinkLine = "";
         const addLink = threadButton(config.linkAction, true);
         addLink.type = "submit";
-        linkActions.append(addLink);
-        linkGroup.append(linkLabel, url, caption, linkActions);
+        addLink.dataset.attachmentAddLink = "";
+        addLink.setAttribute("aria-label", config.linkName);
+        linkLine.append(url, addLink);
+        linkGroup.append(linkLabel, linkLine, caption);
         region.append(fileGroup, linkGroup);
         fileGroup.addEventListener("submit", (event) => {
           event.preventDefault();
@@ -199,11 +243,16 @@
           if (chosen.length === 0) return config.report("Choose a file to attach.");
           return config.acceptFiles(chosen);
         });
-        linkGroup.addEventListener("submit", (event) => {
+        // The button is disabled while the link is sent, which takes the
+        // caret off it. A link that was attached hands it back to the URL box,
+        // emptied for the next; one that was refused hands it back to the
+        // control that sent it, with what was typed still in the boxes.
+        linkGroup.addEventListener("submit", async (event) => {
           event.preventDefault();
+          const settle = holdSidebarFocus(event.submitter || document.activeElement || addLink, null, null, url);
           const destination = url.value.trim();
           if (!destination) return config.report("A link needs a URL.");
-          return config.acceptLink(destination, caption.value.trim());
+          settle((await config.acceptLink(destination, caption.value.trim())) === true);
         });
         return {
           region, file, url, caption, addFile, addLink,
@@ -722,7 +771,8 @@
         // form cannot.
         const adder = attachmentAdder({
           fileAction: "Add file",
-          linkAction: "Attach link",
+          linkAction: "Attach",
+          linkName: "Attach link",
           report: (message) => panel.report(message),
           acceptFiles: (files) => acceptFiles(files),
           acceptLink: (destination, label) => attachLink(destination, label)
@@ -748,8 +798,9 @@
         }
         function attachmentRow(attachment) {
           const row = document.createElement("li");
-          row.className = "attachment";
+          row.className = "attachment sidebar-card";
           row.dataset.attachmentId = attachment.id;
+          row.rowKey = attachment.id;
           const name = document.createElement("p");
           name.className = "attachment__name";
           if (attachment.kind === "link") {
@@ -763,9 +814,11 @@
               // window or the address the reader is on.
               link.target = "_blank";
               link.rel = "noopener noreferrer nofollow";
+              if (attachment.url) link.title = attachment.url;
               text(link, shown);
               name.append(link);
             } else {
+              if (attachment.url) name.title = attachment.url;
               text(name, shown);
             }
           } else if (attachment.dropped) {
@@ -784,15 +837,30 @@
           }
           const meta = document.createElement("p");
           meta.className = "attachment__meta";
-          text(meta, attachmentMeta(attachment));
-          const remove = panel.claim(threadButton("Remove"));
+          const described = attachmentMeta(attachment);
+          text(meta, described.line);
+          meta.title = described.full;
+          const remove = panel.claim(rowRemoveButton("Remove " + attachmentShownName(attachment)));
           remove.className += " attachment__remove";
-          remove.addEventListener("click", () => writeThreadChange(
-            panel, "DELETE", attachmentPath(attachment.id), headed(head, {}), "that removal"));
+          remove.addEventListener("click", async () => {
+            const settle = holdSidebarFocus(remove, panel.list, row, adder.url);
+            settle(Boolean(await writeThreadChange(
+              panel, "DELETE", attachmentPath(attachment.id), headed(head, {}), "that removal")));
+          });
+          row.removeButton = remove;
           row.append(name, meta, remove);
           return row;
         }
+        // What the list was last drawn from. Every read of the board that
+        // changed any task brings this panel the task again, and rebuilding
+        // rows that had not changed destroyed the × under a keyboard reader's
+        // caret — the one the write before it had just put there. Unchanged,
+        // the rows stand, as the dependency and assignment lists' do.
+        let drawn = null;
         function render() {
+          const signature = JSON.stringify(attachments);
+          if (signature === drawn) return;
+          drawn = signature;
           panel.resetControls();
           const rows = attachments.map(attachmentRow);
           panel.claim(adder.addFile);
@@ -849,8 +917,9 @@
           const answer = await writeThreadChange(
             panel, "POST", "/api/tasks/" + encodeURIComponent(taskID) + "/attachments",
             headed(head, values), "that link");
-          if (!answer) return;
+          if (!answer) return false;
           adder.clearLink();
+          return true;
         }
         panel.follow = (held) => {
           attachments = (held && held.attachments) || [];
@@ -938,7 +1007,8 @@
         const adder = attachmentAdder({
           multiple: true,
           fileAction: "Add file",
-          linkAction: "Add link",
+          linkAction: "Add",
+          linkName: "Add link",
           report: (message) => panel.report(message),
           acceptFiles: (files) => acceptFiles(files),
           acceptLink: (destination, label) => acceptLink(destination, label)
@@ -988,7 +1058,7 @@
           render();
         }
         function acceptLink(destination, label) {
-          if (panel.busy) return;
+          if (panel.busy) return false;
           panel.report("");
           // Asked here rather than left to the server, which is the opposite of
           // what the task page does and for a reason that only exists here: the
@@ -998,7 +1068,7 @@
           const refusal = stagedLinkRefusal(destination, label);
           if (refusal) {
             panel.report(refusal);
-            return;
+            return false;
           }
           draftState.items.push({
             key: "staged-" + (++draftState.sequence),
@@ -1010,24 +1080,28 @@
           });
           adder.clearLink();
           render();
+          return true;
         }
         function draftRow(item) {
           const row = document.createElement("li");
-          row.className = "attachment";
+          row.className = "attachment sidebar-card";
           row.dataset.attachmentDraft = item.key;
+          row.rowKey = item.key;
           const name = document.createElement("p");
           name.className = "attachment__name";
           // Drawn as text rather than as a link, both kinds of it. A staged file
           // has no route to download from, and a staged link is a destination
           // this page has not stored yet — offering either as something to
           // follow would be offering a state that does not exist.
-          text(name, item.kind === "link" ? (item.label || item.url) : item.name);
+          const shown = item.kind === "link" ? (item.label || item.url) : item.name;
+          text(name, shown);
+          if (item.kind === "link") name.title = item.url;
           const meta = document.createElement("p");
           meta.className = "attachment__meta";
           text(meta, item.kind === "link"
-            ? "link · " + item.url
+            ? "link"
             : "file · " + attachmentSize(item.size));
-          const remove = panel.claim(threadButton("Remove"));
+          const remove = panel.claim(rowRemoveButton("Remove " + shown));
           remove.className += " attachment__remove";
           remove.addEventListener("click", () => {
             // Asked as well as disabled, for the reason the adders ask it: a
@@ -1036,10 +1110,13 @@
             // while the reader watches it leave the screen. The disabled
             // attribute is what a browser honours; this is what makes it true.
             if (panel.busy) return;
+            const settle = holdSidebarFocus(remove, panel.list, row, adder.url);
             draftState.items = draftState.items.filter((held) => held !== item);
             panel.report("");
             render();
+            settle(true);
           });
+          row.removeButton = remove;
           row.append(name, meta, remove);
           if (item.error) {
             const failure = document.createElement("p");
