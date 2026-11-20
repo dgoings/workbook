@@ -319,8 +319,32 @@ setTimeout(() => {
 }
 
 // closeCheck clicks the header's × the way a reader does and asserts it left
-// the way Back does: onto the board, with one history entry pushed.
+// the way Back does: onto the board the reader came from, with one history
+// entry pushed. The board is filtered first, so the address the form leaves for
+// carries a query: with no filters set, the × and Back would both lead to "/"
+// whether or not the × was given Back's address.
 const closeCheck = `
+const filteredBoard = "/?q=held";
+async function followLink(address) {
+  const link = document.createElement("a");
+  link.href = address;
+  await documentEventListeners.click({
+    target: link, button: 0, defaultPrevented: false,
+    metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+    preventDefault() { this.defaultPrevented = true; }
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+// Leaves this page for the filtered board and comes back to it, which is how a
+// reader opens a form from a narrowed board.
+async function arriveFromFilteredBoard() {
+  const at = new URL(window.location.href);
+  const here = at.pathname + at.search;
+  await followLink(filteredBoard);
+  if (main.firstElementChild !== boardView) throw new Error("the filtered board did not render");
+  await followLink(here);
+  if (main.firstElementChild === boardView) throw new Error("the form did not render again after the board");
+}
 async function closeFromHeader() {
   const route = main.firstElementChild;
   const header = findElement(route, (element) => element.tagName === "HEADER");
@@ -332,8 +356,12 @@ async function closeFromHeader() {
   if (header.children[header.children.length - 1] !== close) throw new Error("the × is not at the header's right");
   const leave = findElement(route, (element) => element.tagName === "A" && hasClassToken(element, "board-link") &&
     (element.textContent === "Back" || element.textContent === "Cancel"));
-  if (!leave || close.href !== leave.href) {
-    throw new Error("the × does not go where " + (leave ? leave.textContent : "Back") + " goes");
+  if (!leave) throw new Error("the form has no Back or Cancel");
+  if (leave.href !== filteredBoard) {
+    throw new Error(leave.textContent + " leads to " + JSON.stringify(leave.href) + ", want the filtered board " + filteredBoard);
+  }
+  if (close.href !== leave.href) {
+    throw new Error("the × leads to " + JSON.stringify(close.href) + ", not where " + leave.textContent + " goes: " + JSON.stringify(leave.href));
   }
   const pushed = historyPaths.length;
   await documentEventListeners.click({
@@ -343,6 +371,9 @@ async function closeFromHeader() {
   });
   if (main.firstElementChild !== boardView) throw new Error("the × did not return to the board");
   if (historyPaths.length !== pushed + 1) throw new Error("the × did not navigate the way Back does");
+  if (historyPaths[historyPaths.length - 1] !== leave.href) {
+    throw new Error("the × landed on " + JSON.stringify(historyPaths[historyPaths.length - 1]) + ", not on " + JSON.stringify(leave.href));
+  }
 }
 `
 
@@ -364,6 +395,7 @@ setTimeout(async () => {
   if (route.getAttribute("aria-labelledby") !== heading.id) throw new Error("the route is not named by its heading");
   if (route.textContent.includes("Add work to the board")) throw new Error("the old headline is still drawn");
   if (findElement(header, (element) => hasClassToken(element, "eyebrow"))) throw new Error("the band still has an eyebrow");
+  await arriveFromFilteredBoard();
   await closeFromHeader();
 }, 0);
 `)
@@ -383,6 +415,7 @@ setTimeout(async () => {
   const heading = findElement(route, (element) => element.id === "task-form-title");
   if (!heading || heading.textContent !== "Held task") throw new Error("the task page lost its title heading");
   if (route.getAttribute("aria-labelledby") !== "task-form-title") throw new Error("the route is not named by its heading");
+  await arriveFromFilteredBoard();
   await closeFromHeader();
 }, 0);
 `)
