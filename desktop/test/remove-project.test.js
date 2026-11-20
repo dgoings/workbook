@@ -269,15 +269,18 @@ describe('a project row', () => {
 
 describe('removing a project', () => {
   test('asks the main process once, however many clicks arrive while it answers', async () => {
-    let release
+    // Every request is answered when released, so a second one a regression
+    // let through settles too rather than leaving its caller pending.
+    const pending = []
     const { removeProject, calls } = renderer({
-      forget: () => new Promise((resolve) => { release = () => resolve({ removed: true, layout: { items: [] }, projects: [] }) })
+      forget: () => new Promise((resolve) => { pending.push(resolve) })
     })
     const first = removeProject('b')
     const second = removeProject('b')
-    release()
-    await Promise.all([first, second])
+    // Asked before anything is answered: the guard is what stops the second.
     assert.deepEqual(calls.forgets, ['b'])
+    for (const resolve of pending) resolve({ removed: true, layout: { items: [] }, projects: [] })
+    await Promise.all([first, second])
   })
 
   test('the showing project gives way to the one below it', async () => {
