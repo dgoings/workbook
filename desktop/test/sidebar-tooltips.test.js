@@ -30,7 +30,10 @@ const projects = new Map([
   ['b', project('b', 'SITE', 'site')],
   ['c', project('c', 'API', 'api')],
   ['d', project('d', 'OPS', 'ops')],
-  ['e', project('e', 'DOC', 'docs')]
+  ['e', project('e', 'DOC', 'docs')],
+  // A project being asked about, and one whose repository is gone.
+  ['r', project('r', 'RM', 'removing')],
+  ['m', { ...project('m', 'GONE', 'gone'), status: 'stopped', missing: true, missingMessage: 'Repository not found at /src/gone' }]
 ])
 
 const open = { kind: 'category', id: 'cw', name: 'Client work', collapsed: false, projects: ['b'] }
@@ -48,7 +51,7 @@ function renderer ({ rail = false } = {}) {
       createElement: (tag) => new FakeElement(tag),
       documentElement: { classList: { contains: (name) => rail && name === 'sidebar-collapsed' } }
     },
-    state: { editingCategoryId: 'ed', removingCategoryId: 'rm', activeProjectId: null, editingDraft: null, editingSelection: null, editingRefused: false },
+    state: { editingCategoryId: 'ed', removingCategoryId: 'rm', removingProjectId: 'r', activeProjectId: null, editingDraft: null, editingSelection: null, editingRefused: false },
     drag: { current: null },
     sidebarModel: { initials },
     api: {
@@ -56,6 +59,7 @@ function renderer ({ rail = false } = {}) {
       renameCategory: () => Promise.resolve(),
       deleteCategory: () => Promise.resolve()
     },
+    removeProject: () => {},
     justDragged: () => false,
     openProject: () => {},
     startRename: (id) => { renames.push(id) },
@@ -64,7 +68,7 @@ function renderer ({ rail = false } = {}) {
     queueMicrotask: () => {},
     console
   })
-  const names = ['projectRow', 'categoryGroup', 'nameEditor', 'removeConfirmation', 'buttonText']
+  const names = ['projectRow', 'categoryGroup', 'nameEditor', 'removeConfirmation', 'removeProjectConfirmation', 'buttonText']
   const built = vm.runInContext(`${names.map(fn).join('\n')}\n({ projectRow, categoryGroup })`, context)
   return { ...built, renames }
 }
@@ -87,7 +91,12 @@ function sidebarPage ({ collapsed, platform }) {
   const list = cascade.byId(root, 'project-list')
   assert.ok(list, 'index.html has no #project-list')
   const { projectRow, categoryGroup } = renderer()
-  const rows = [projectRow(projects.get('a')), ...[open, folded, editing, removing].map((category) => categoryGroup(category, projects))]
+  const rows = [
+    projectRow(projects.get('a')),
+    projectRow(projects.get('r')),
+    projectRow(projects.get('m')),
+    ...[open, folded, editing, removing].map((category) => categoryGroup(category, projects))
+  ]
   cascade.append(list, ...rows.map(adopt))
   const sidebar = cascade.byId(root, 'sidebar')
   assert.ok(sidebar, 'index.html has no #sidebar')
@@ -151,7 +160,10 @@ describe('every tooltip in the sidebar is one node under the pointer', () => {
       'div.category-head',
       'button.category-toggle',
       'button.category-action',
-      'button.category-action.category-confirm-yes'
+      'button.category-action.category-confirm-yes',
+      'li.project-item.missing',
+      'button.project-action',
+      'button.project-action.project-confirm-yes'
     ]) {
       assert.ok(titled.includes(expected), `expected ${expected} among the titled elements, found ${titled.join(', ')}`)
     }
@@ -230,14 +242,14 @@ describe('the version line boot writes is one node under the pointer', () => {
 
 describe('the guard sees a regression', () => {
   test('it fails the stylesheet without the rule that takes children off the pointer', () => {
-    const without = stylesheet.filter((rule) => !rule.selectors.includes('.project-item > *'))
-    assert.ok(without.length < stylesheet.length, 'no rule has the selector .project-item > *')
+    const without = stylesheet.filter((rule) => !rule.selectors.includes('.project-item > :not(button)'))
+    assert.ok(without.length < stylesheet.length, 'no rule has the selector .project-item > :not(button)')
     // Both layouts: the rail hides the version line and the category names,
     // and the expanded sidebar hides the initials.
     const found = [true, false]
       .flatMap((collapsed) => crossings(without, sidebarPage({ collapsed, platform: 'mac' }).sidebar, rest()))
       .join('\n')
-    for (const node of ['span.dot', 'span.project-key', 'span.category-chevron', 'span.category-initials', 'svg', 'span#version-text', 'span.glyph', 'span.category-name', 'span.category-confirm']) {
+    for (const node of ['span.dot', 'span.project-key', 'span.category-chevron', 'span.category-initials', 'svg', 'span#version-text', 'span.glyph', 'span.category-name', 'span.category-confirm', 'span.project-confirm']) {
       // A dot also carries its status as a class: span.dot.running.
       assert.match(found, new RegExp(`^${node.replace(/[.#]/g, '\\$&')}(?:\\.[\\w-]+)* takes the pointer`, 'm'))
     }
@@ -249,6 +261,15 @@ describe('the guard sees a regression', () => {
     walk(sidebar, (node) => { if (!toggle && node.classes.has('category-toggle')) toggle = node })
     toggle.attributes.set('title', title(toggle.parent))
     assert.match(crossings(stylesheet, sidebar, rest()).join('\n'), /^button\.category-toggle takes the pointer inside div\.category-head and repeats its tooltip/m)
+  })
+
+  test('it fails a project\'s remove control that repeats the row\'s tooltip', () => {
+    const { sidebar } = sidebarPage({ collapsed: false, platform: 'mac' })
+    let remove = null
+    walk(sidebar, (node) => { if (!remove && node.classes.has('project-action')) remove = node })
+    assert.ok(remove, 'no project row has a remove control')
+    remove.attributes.set('title', title(remove.parent))
+    assert.match(crossings(stylesheet, sidebar, rest()).join('\n'), /^button\.project-action takes the pointer inside li\.project-item and repeats its tooltip/m)
   })
 
   test('it fails a header whose name field shares its tooltip', () => {

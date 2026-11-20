@@ -192,6 +192,34 @@
     <section id="view-project" class="view" hidden>
       <div class="board-state" id="board-state"></div>
 
+      <!-- Shown in place of a board whose repository is not where Workbench
+           has it: deleted, moved, no longer a Git repository, or on a drive
+           that is not connected. Nothing is removed for it — a drive comes
+           back — so the reader decides: look again, or remove the project
+           from Workbench, which leaves the repository alone. -->
+      <div id="missing-repo" class="missing-repo" hidden>
+        <header class="view-head">
+          <h1 id="missing-heading">Repository not found</h1>
+          <p class="subtitle">
+            <code id="missing-message"></code>
+          </p>
+          <p class="subtitle">
+            It may have been moved or deleted, or it may be on a drive that is
+            not connected right now.
+          </p>
+        </header>
+        <div class="missing-actions">
+          <button id="missing-retry" class="ghost inline" type="button">Look again</button>
+          <button id="missing-remove" class="primary" type="button">Remove from Workbench</button>
+          <span id="missing-status" class="missing-status"></span>
+        </div>
+        <p class="missing-note">
+          Removes it from Workbench only. The repository is not touched: its
+          files, its Workbook tasks and its configuration stay where they are,
+          and importing it again brings the project back.
+        </p>
+      </div>
+
       <!-- Asked for in place of the board when Git cannot supply the identity a
            board records changes against. Which half is missing is a fact about
            the machine — Git derives a name from the account, but that derivation

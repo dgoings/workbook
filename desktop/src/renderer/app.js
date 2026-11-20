@@ -15,6 +15,13 @@ const state = {
   editingSelection: null,
   editingRefused: false,
   removingCategoryId: null,
+  // The project whose removal from Workbench is being asked about, likewise,
+  // and the removals already sent, so a second click on the same confirm does
+  // not send another.
+  removingProjectId: null,
+  removals: new Set(),
+  // The project the missing-repository panel is about, while it is showing.
+  missingProjectId: null,
   activeProjectId: null,
   scan: { root: null, repositories: [] },
   // Search text and the New/Imported filter are view state, not scan state:
@@ -198,12 +205,21 @@ function projectRow (project) {
   // name and path exactly where the pointer is most likely to land. The dot,
   // key and name ignore the pointer, so the row is the one node under it; see
   // "One node under the pointer" in styles.css.
+  //
+  // A project whose repository is not where Workbench has it is drawn muted,
+  // and says so on that same tooltip in place of the status: whatever the
+  // server last did, the repository being gone is the thing worth knowing.
   const status = project.status ?? 'stopped'
-  const health = project.error ? `${status} — ${project.error}` : status
+  const missing = project.missing === true
+  if (missing) item.classList.add('missing')
+  const health = missing
+    ? project.missingMessage ?? `Repository not found at ${project.path}`
+    : project.error ? `${status} — ${project.error}` : status
   item.title = `${project.name}\n${project.path}\n${health}`
 
   const dot = document.createElement('span')
   dot.className = `dot ${status}`
+  if (missing) dot.className = 'dot missing'
 
   const key = document.createElement('span')
   key.className = 'project-key'
@@ -213,13 +229,114 @@ function projectRow (project) {
   name.className = 'project-name'
   name.textContent = project.name
 
-  item.append(dot, key, name)
-  item.addEventListener('click', () => {
+  if (state.removingProjectId === project.id) {
+    item.append(dot, key, ...removeProjectConfirmation(project))
+  } else {
+    // Shown on hover or keyboard focus, like a category's rename and remove,
+    // and hidden in the rail with them. Its title differs from the row's, so
+    // the row's tooltip survives the pointer crossing onto it ("One node under
+    // the pointer" in styles.css).
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'project-action'
+    remove.append(buttonText('×'))
+    remove.title = 'Remove from Workbench'
+    remove.setAttribute('aria-label', `Remove ${project.name} from Workbench`)
+    remove.addEventListener('click', () => {
+      state.removingCategoryId = null
+      state.removingProjectId = project.id
+      renderProjects()
+    })
+    item.append(dot, key, name, remove)
+  }
+  item.addEventListener('click', (event) => {
+    // A press on one of the row's own buttons is that button's, not an open.
+    if (event?.target?.closest?.('button')) return
     // Letting go of a drag is not a click on the row it was dragged from.
     if (justDragged()) return
     openProject(project.id)
   })
   return item
+}
+
+/**
+ * The second step of removing a project from Workbench: say what happens, and
+ * ask. The same shape as a category's, in the row's own place.
+ */
+function removeProjectConfirmation (project) {
+  const question = document.createElement('span')
+  question.className = 'project-confirm'
+  question.textContent = 'Remove project?'
+
+  const confirm = document.createElement('button')
+  confirm.type = 'button'
+  confirm.className = 'project-action project-confirm-yes'
+  confirm.append(buttonText('Yes'))
+  confirm.title = 'Removes it from Workbench only. The repository is not touched.'
+  confirm.setAttribute('aria-label', `Remove ${project.name} from Workbench. The repository is not touched.`)
+  confirm.addEventListener('click', () => { removeProject(project.id) })
+
+  const cancel = document.createElement('button')
+  cancel.type = 'button'
+  cancel.className = 'project-action'
+  cancel.append(buttonText('No'))
+  cancel.title = 'Keep the project'
+  cancel.addEventListener('click', () => {
+    state.removingProjectId = null
+    renderProjects()
+  })
+  return [question, confirm, cancel]
+}
+
+/**
+ * Remove a project from Workbench, from its row's confirm or from the missing
+ * repository panel.
+ *
+ * Only Workbench's entry goes; the main process stops its board and leaves the
+ * repository alone. The sidebar redraws from the answer, as from any layout
+ * edit. One request per project at a time, so a double click sends one; the
+ * main process also treats an id it no longer has as done, so a request that
+ * slips past this from somewhere else still reaches nobody as an error.
+ *
+ * If the project was the one showing and still is, the reader is moved to the
+ * project below it in the sidebar, else the one above, else the empty state.
+ */
+async function removeProject (projectId) {
+  if (state.removals.has(projectId)) return
+  state.removals.add(projectId)
+  const order = state.projects.map((project) => project.id)
+  if (state.removingProjectId === projectId) state.removingProjectId = null
+  const panel = state.missingProjectId === projectId
+  if (panel) {
+    el('missing-remove').disabled = true
+    el('missing-status').textContent = 'Removing…'
+  }
+  let answer
+  try {
+    answer = await api.forgetProject(projectId)
+  } catch (error) {
+    console.error('workbench: could not remove the project', error)
+    if (state.missingProjectId === projectId) {
+      el('missing-status').textContent = `Could not remove it: ${remoteMessage(error)}`
+      el('missing-remove').disabled = false
+    }
+    renderProjects()
+    return
+  } finally {
+    state.removals.delete(projectId)
+  }
+  // The broadcast usually lands first; the answer is the same list either way.
+  if (answer?.projects) adoptProjects(answer)
+  if (state.identity?.projectId === projectId) hideIdentityForm()
+  const showing = state.view === 'project' && state.activeProjectId === projectId
+  if (state.missingProjectId === projectId) hideMissing()
+  if (!showing) return
+  const neighbor = sidebarModel.neighborAfterRemoval(order, projectId)
+  if (neighbor !== null && state.projects.some((project) => project.id === neighbor)) {
+    openProject(neighbor)
+  } else {
+    setView(state.projects.length >= 2 ? 'next' : 'import')
+  }
 }
 
 /**
@@ -606,16 +723,66 @@ function wireDragAndDrop () {
 async function openProject (projectId) {
   setView('project', projectId)
   hideIdentityForm()
+  hideMissing()
   const project = state.projects.find((candidate) => candidate.id === projectId)
   el('board-state').textContent = `Starting the board for ${project?.name ?? projectId}…`
+  // Before the identity: Git asked about a folder that is not there, or is not
+  // a repository, answers for the global configuration, and the reader would be
+  // asked who they are for a board that cannot start.
+  if (await showIfMissing(projectId)) return
   if (await askForIdentity(projectId, () => openProject(projectId))) return
   try {
     await api.openProject(projectId)
     if (stillOpening(projectId)) el('board-state').textContent = ''
   } catch (error) {
-    if (stillOpening(projectId)) el('board-state').textContent = `Could not start this board: ${remoteMessage(error)}`
+    if (stillOpening(projectId) && !(await showIfMissing(projectId))) {
+      el('board-state').textContent = `Could not start this board: ${remoteMessage(error)}`
+    }
   }
   loadProjects()
+}
+
+/**
+ * Show the missing-repository panel if this project's repository is not
+ * there, asking the main process to look now.
+ *
+ * Resolves true when the panel was shown, or when the open went stale while
+ * the main process looked, the way askForIdentity does; false when the open
+ * should go on. A failure to ask is not a reason to stop: the start that
+ * follows reports the real problem.
+ */
+async function showIfMissing (projectId) {
+  let found
+  try {
+    found = await api.projectPresence(projectId)
+  } catch (error) {
+    console.error('workbench: could not look for the repository', error)
+    return false
+  }
+  if (!stillOpening(projectId)) return true
+  if (!found?.missing) return false
+  showMissing(projectId, found)
+  return true
+}
+
+function showMissing (projectId, found) {
+  state.missingProjectId = projectId
+  // A board opened before this one may still be showing, and it is a native
+  // view drawn over this document: the panel would be underneath it.
+  api.showChrome()
+  el('board-state').textContent = ''
+  el('missing-heading').textContent = found.reason === 'not-a-repository'
+    ? 'Not a Git repository'
+    : 'Repository not found'
+  el('missing-message').textContent = found.message ?? ''
+  el('missing-status').textContent = ''
+  el('missing-remove').disabled = false
+  el('missing-repo').hidden = false
+}
+
+function hideMissing () {
+  state.missingProjectId = null
+  el('missing-repo').hidden = true
 }
 
 // Whether the project view still belongs to this open. A start can take
@@ -782,6 +949,15 @@ async function saveIdentity (event) {
 }
 
 el('identity-form').addEventListener('submit', saveIdentity)
+
+// The missing-repository panel: remove the project it is about, or look again,
+// which is an ordinary open and shows the board if the repository is back.
+el('missing-remove').addEventListener('click', () => {
+  if (state.missingProjectId) removeProject(state.missingProjectId)
+})
+el('missing-retry').addEventListener('click', () => {
+  if (state.missingProjectId) openProject(state.missingProjectId)
+})
 
 // --- next -------------------------------------------------------------------
 
@@ -1058,13 +1234,17 @@ function relativeDate (iso) {
 async function openNextTask (projectId, task) {
   setView('project', projectId)
   hideIdentityForm()
+  hideMissing()
   el('board-state').textContent = `Opening ${task.title}…`
+  if (await showIfMissing(projectId)) return
   if (await askForIdentity(projectId, () => openNextTask(projectId, task))) return
   try {
     await api.openProject(projectId, task.id)
     if (stillOpening(projectId)) el('board-state').textContent = ''
   } catch (error) {
-    if (stillOpening(projectId)) el('board-state').textContent = `Could not open this board: ${remoteMessage(error)}`
+    if (stillOpening(projectId) && !(await showIfMissing(projectId))) {
+      el('board-state').textContent = `Could not open this board: ${remoteMessage(error)}`
+    }
   }
   loadProjects()
 }
@@ -1425,12 +1605,19 @@ el('new-category').addEventListener('click', () => { createCategory() })
 wireDragAndDrop()
 document.addEventListener('mousedown', (event) => {
   holdRedraw()
-  // The remove question goes away when the user clicks anywhere but its row.
+  // A remove question goes away when the user clicks anywhere but its row.
+  let asked = false
   if (state.removingCategoryId !== null &&
       event.target.closest?.('.category-head')?.dataset.categoryId !== state.removingCategoryId) {
     state.removingCategoryId = null
-    renderProjects()
+    asked = true
   }
+  if (state.removingProjectId !== null &&
+      event.target.closest?.('.project-item')?.dataset.projectId !== state.removingProjectId) {
+    state.removingProjectId = null
+    asked = true
+  }
+  if (asked) renderProjects()
 }, true)
 // After the click: a timer queued from mouseup runs once the click it
 // produces has been dispatched.
