@@ -77,10 +77,12 @@ before anyone runs it; see Compatibility across versions below.
   the new task's page, as a refused dependency is.
 - **A task's page is laid out like the New Task form.** Assignments and
   attachments moved into the sidebar, after Depends On and Blocks; only the
-  comments and the change history sit below the form. Empty assignment and
-  attachment lists no longer explain themselves or count to zero, and a chosen
-  file is listed with a × to take it back out before **Add file** sends or
-  stages it.
+  comments and the change history sit below the form. As on the New Task form,
+  the form fits the window: the description and Save stay on the screen and a
+  long sidebar scrolls inside the form, however tall the header and the task's
+  title are. Empty assignment and attachment lists no longer explain
+  themselves or count to zero, and a chosen file is listed with a × to take it
+  back out before **Add file** sends or stages it.
 - **Smaller task form changes.** The New Task header is a compact band with a ×
   that closes the form, as a task's page now has too; Back on the New Task form
   is Cancel, at the far right; **Create more** sits beside Save, its checkbox

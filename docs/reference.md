@@ -2629,8 +2629,13 @@ could be chosen. New Task stages both Depends On and Blocks without writing task
 refs; relationship mutations run after the task receives its durable ID. If
 only some edges succeed, successful relationships remain durable while failed
 relationships remain available to retry or remove.
-On narrow screens, the task editor, the sidebar's sections, and the actions
-stack in that order.
+In a window at least 761px wide and 701px tall, both forms are held to the
+height the window has left under the app header: the description and the Save
+row stay on the screen, and a sidebar longer than that scrolls inside the form.
+A task's page has its comments and change history below the form, and the page
+scrolls down to them. A shorter window scrolls the whole page instead, sidebar
+included. On narrow screens, the task editor, the sidebar's sections, and the
+actions stack in that order.
 
 Saving a new task returns to the board, and a **Create more** toggle on the New
 Task form re-arms a clean form filed under the same column instead, so a run of

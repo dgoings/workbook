@@ -707,7 +707,15 @@
             }
           }
         });
-        section.append(header, form);
+        // The header and the form are one window's worth of the route. On a
+        // New Task form that is the whole route; on a task's page the thread
+        // and the change log follow it, and the stylesheet holds this block to
+        // the height of the scrolling main rather than to an estimate of it, so
+        // the form takes whatever the header leaves — however many lines the
+        // title wraps to — and the Save row stays on the screen.
+        const screen = document.createElement("div"); screen.className = "task-route__screen";
+        screen.append(header, form);
+        section.append(screen);
         if (!isNew) {
           section.className = "task-route task-route--history";
           // The thread panels write to this task, so they move the very head

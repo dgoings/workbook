@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -291,7 +292,7 @@ setTimeout(async () => {
 }
 
 // A task's page lays its sidebar out as the New Task form does, and below the
-// form there is only the comment thread and the change log.
+// header and the form there is only the comment thread and the change log.
 func TestHandlerClientOrdersTheTaskPageSidebar(t *testing.T) {
 	t.Parallel()
 	node := requireNode(t)
@@ -301,7 +302,14 @@ setTimeout(() => {
   const route = main.firstElementChild;
   const form = findElement(route, (element) => element.tagName === "FORM" && classTokens(element).includes("task-layout"));
   sidebarSections(form);
-  const below = route.children.slice(route.children.indexOf(form) + 1);
+  // The header and the form are one block, the part held to the window, and
+  // everything else follows it.
+  const screen = route.children[0];
+  if (!classTokens(screen).includes("task-route__screen") || form.parentElement !== screen ||
+      !findElement(screen, (element) => element.tagName === "HEADER")) {
+    throw new Error("the header and the form are not the route's first block");
+  }
+  const below = route.children.slice(1);
   if (below.length !== 2 || below[0].dataset.taskPanel !== "comments" ||
       !classTokens(below[1]).includes("task-history")) {
     throw new Error("below the form = " + JSON.stringify(below.map((node) =>
@@ -424,34 +432,237 @@ setTimeout(async () => {
 	}
 }
 
-// A task's page grows to its content and scrolls once, as a page. Its form is
-// not held to an estimate of the window: the estimate was wrong whenever the
-// app header stacked or the title wrapped, which put the Save row below the
-// fold or cut the sidebar off at Blocks with the rest in a scroller nested
-// inside a page that scrolled as well. So there is no height on the edit
-// page's form at any size, and its sidebar is never a scroller of its own.
-// The New Task form keeps its own sizing, which this does not touch.
-func TestHandlerStylesTheTaskPageToGrowWithItsSidebar(t *testing.T) {
+// longSidebarTaskID is the task the layout tests open: it depends on five
+// tasks, five depend on it, three people hold it and four links are attached,
+// which is a sidebar longer than any window these tests draw it in.
+const longSidebarTaskID = "WB-01J0000000000000000000GE00"
+
+// longSidebarBoard serves a board whose task longSidebarTaskID carries title
+// and a sidebar that overflows, with comments and a change log below the form.
+func longSidebarBoard(t *testing.T, title string) http.Handler {
+	t.Helper()
+	target := clientPlacementTask(longSidebarTaskID, title, core.StatusInProgress, core.PriorityHigh)
+	target.Head = "head-1"
+	target.Description = "## Summary\n\nThe description of a task whose sidebar runs long.\n\n- one\n- two\n- three"
+	target.Assignments = []core.Assignment{
+		{Principal: boardIdentity, Label: "impl-1", Creator: boardIdentity, CreatedAt: assignmentStamp},
+		{Principal: "sam@example.com", Creator: boardIdentity, CreatedAt: assignmentStamp},
+		{Principal: "stranger@example.com", Creator: "stranger@example.com", CreatedAt: assignmentStamp},
+	}
+	for index := 1; index <= 4; index++ {
+		target.Attachments = append(target.Attachments, core.Attachment{
+			ID: fmt.Sprintf("att-%d", index), Author: boardIdentity, AddedAt: assignmentStamp,
+			AttachmentData: core.AttachmentData{Kind: core.AttachmentLink, URL: fmt.Sprintf("https://example.com/design/%d", index), Label: fmt.Sprintf("Design note %d", index)},
+		})
+	}
+	target.Comments = []core.Comment{{ID: "comment-1", Author: boardIdentity, Body: "A comment below the form.", CreatedAt: assignmentStamp}}
+	tasks := []core.Task{}
+	for index := 1; index <= 5; index++ {
+		prerequisite := clientPlacementTask(fmt.Sprintf("WB-01J0000000000000000000GP%02d", index), fmt.Sprintf("Prerequisite task %d", index), core.StatusDone, core.PriorityMedium)
+		target.Dependencies = append(target.Dependencies, prerequisite.ID)
+		blocked := clientPlacementTask(fmt.Sprintf("WB-01J0000000000000000000GB%02d", index), fmt.Sprintf("Blocked task %d", index), core.StatusReady, core.PriorityLow)
+		blocked.Dependencies = []string{longSidebarTaskID}
+		tasks = append(tasks, prerequisite, blocked)
+	}
+	tasks = append([]core.Task{target}, tasks...)
+	board := &assignableBoard{task: target}
+	options := board.options(t, tasks)
+	options.History = func(context.Context, string) (core.TaskDetail, error) {
+		detail := historyDetail()
+		detail.Task = target
+		return detail, nil
+	}
+	return NewHandler(options)
+}
+
+// taskPageGeometry is what the page reports about a task's page: where the
+// parts of the form landed with the page at its top, and what scrolling the
+// sidebar to its end showed.
+type taskPageGeometry struct {
+	Viewport struct{ Width, Height float64 }
+	Box      map[string]struct{ Top, Bottom, Height float64 }
+	// TitleLines is how many lines the task's title was drawn on.
+	TitleLines int
+	// The sidebar as a scroller.
+	SidebarScrollHeight, SidebarClientHeight, SidebarScrolledTo float64
+	SidebarOverflowY                                            string
+	// The sidebar's last section once the sidebar is scrolled to its end. It
+	// can be taller than the sidebar, so it is its end that has to be in view.
+	LastSectionAfterScroll struct{ Top, Bottom float64 }
+	SidebarAfterScroll     struct{ Top, Bottom float64 }
+	// main, the page's own scroller, and where the thread and the change log
+	// are once main is scrolled to them.
+	MainScrollHeight, MainClientHeight  float64
+	CommentsReachable, HistoryReachable bool
+}
+
+// taskPageGeometryScript waits for a task's page to finish drawing its
+// sidebar, then measures it.
+const taskPageGeometryScript = pageGeometryHelpers + `
+(async () => {
+  const main = document.querySelector("main");
+  const ready = () => {
+    const sidebar = main.querySelector(".task-route--history .task-sidebar");
+    return sidebar &&
+      sidebar.querySelector('[data-task-panel="attachments"]') &&
+      sidebar.querySelector('[data-task-panel="assignments"]') &&
+      sidebar.querySelectorAll("[data-relationship-row]").length >= 10 &&
+      main.querySelector('[data-task-panel="comments"]') &&
+      main.querySelector(".task-history");
+  };
+  await waitFor(ready, "the task page and its sidebar");
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const route = main.firstElementChild;
+  const form = route.querySelector("form.task-layout");
+  const sidebar = form.querySelector(".task-sidebar");
+  const heading = route.querySelector("#task-form-title");
+  const parts = {
+    appHeader: document.querySelector(".app-header"),
+    main,
+    routeHeader: route.querySelector(".task-route__header"),
+    form,
+    description: form.querySelector(".field--description"),
+    sidebar,
+    save: form.querySelector(".save-button"),
+    footer: form.querySelector(".task-actions")
+  };
+  const boxes = {};
+  for (const [name, element] of Object.entries(parts)) {
+    if (!element) throw new Error("the page has no " + name);
+    boxes[name] = box(element);
+  }
+  // The title's lines are the distinct tops of the line boxes its text sits in.
+  const range = document.createRange();
+  range.selectNodeContents(heading);
+  const lineTops = new Set([...range.getClientRects()].map((rect) => Math.round(rect.top)));
+  const scrollHeight = sidebar.scrollHeight;
+  const clientHeight = sidebar.clientHeight;
+  const overflowY = getComputedStyle(sidebar).overflowY;
+  sidebar.scrollTop = sidebar.scrollHeight;
+  const last = sidebar.lastElementChild;
+  const geometry = {
+    viewport: { width: innerWidth, height: innerHeight },
+    box: boxes,
+    titleLines: lineTops.size,
+    sidebarScrollHeight: scrollHeight,
+    sidebarClientHeight: clientHeight,
+    sidebarScrolledTo: sidebar.scrollTop,
+    sidebarOverflowY: overflowY,
+    lastSectionAfterScroll: box(last),
+    sidebarAfterScroll: box(sidebar),
+    mainScrollHeight: main.scrollHeight,
+    mainClientHeight: main.clientHeight
+  };
+  // Below the form, main scrolls to the thread and then to the change log.
+  const reachable = (element) => {
+    element.scrollIntoView({ block: "start" });
+    const rect = element.getBoundingClientRect();
+    return rect.top >= 0 && rect.top < innerHeight;
+  };
+  geometry.commentsReachable = reachable(route.querySelector('[data-task-panel="comments"]'));
+  geometry.historyReachable = reachable(route.querySelector(".task-history"));
+  return geometry;
+})()
+`
+
+// measureTaskPage opens the long-sidebar task at one viewport.
+func measureTaskPage(t *testing.T, title string, width, height int) taskPageGeometry {
+	t.Helper()
+	var geometry taskPageGeometry
+	openInBrowser(t, longSidebarBoard(t, title), browserPage{
+		Width: width, Height: height,
+		Path:   "/tasks/" + longSidebarTaskID,
+		Script: taskPageGeometryScript,
+	}, &geometry)
+	if geometry.Viewport.Width != float64(width) || geometry.Viewport.Height != float64(height) {
+		t.Fatalf("the page was drawn at %vx%v, want %dx%d", geometry.Viewport.Width, geometry.Viewport.Height, width, height)
+	}
+	return geometry
+}
+
+// longWrappingTitle is a title long enough to wrap onto several lines at
+// every width the layout tests draw.
+const longWrappingTitle = "Hold the task page's form to the window it is read in, so the description and the Save row stay on the screen while a sidebar holding dependencies, assignments and attachments scrolls inside it"
+
+// A task's page holds its form to the window the way a New Task form is held:
+// the description and the Save row are on the screen, and a sidebar longer
+// than the window scrolls inside the form, down to its last section. The
+// thread and the change log follow underneath, and the page scrolls to them.
+//
+// The height comes from the layout rather than an estimate of the chrome:
+// calc(100dvh - 16rem) put Save below the fold once the app header stacked or
+// the title wrapped. So each viewport is measured with a one-line title and
+// with one that wraps, and 820px is a width the app header stacks at.
+func TestBrowserHoldsTheTaskPageFormToTheWindow(t *testing.T) {
 	t.Parallel()
-	body := newTaskPage(t)
-	for _, stale := range []string{
-		`.task-route--history .task-layout { height:`,
-		`100dvh - 16rem`,
+	for _, viewport := range []struct{ width, height int }{
+		{1440, 900}, {1280, 720}, {1024, 768}, {820, 900},
 	} {
-		if strings.Contains(body, stale) {
-			t.Errorf("the task page's form is still held to a height: %q", stale)
+		for _, title := range []struct{ name, text string }{
+			{"short title", "Long sidebar task"},
+			{"wrapped title", longWrappingTitle},
+		} {
+			t.Run(fmt.Sprintf("%dx%d %s", viewport.width, viewport.height, title.name), func(t *testing.T) {
+				t.Parallel()
+				geometry := measureTaskPage(t, title.text, viewport.width, viewport.height)
+				if title.text == longWrappingTitle && geometry.TitleLines < 2 {
+					t.Fatalf("the long title was drawn on %d line, so this case does not test a wrapped title", geometry.TitleLines)
+				}
+				bottom := geometry.Viewport.Height
+				for _, part := range []string{"description", "save", "footer", "sidebar"} {
+					got := geometry.Box[part]
+					if got.Top < geometry.Box["main"].Top || got.Bottom > bottom {
+						t.Errorf("the %s spans %.0f..%.0f, outside the visible %.0f..%.0f (title on %d lines, app header %.0fpx)",
+							part, got.Top, got.Bottom, geometry.Box["main"].Top, bottom, geometry.TitleLines, geometry.Box["appHeader"].Height)
+					}
+				}
+				if geometry.SidebarOverflowY != "auto" && geometry.SidebarOverflowY != "scroll" {
+					t.Errorf("the sidebar's overflow-y is %q, so it is not the scroller", geometry.SidebarOverflowY)
+				}
+				if geometry.SidebarScrollHeight <= geometry.SidebarClientHeight {
+					t.Errorf("the sidebar is %.0fpx of content in %.0fpx: it does not overflow, so this does not test a long sidebar",
+						geometry.SidebarScrollHeight, geometry.SidebarClientHeight)
+				}
+				if geometry.SidebarScrolledTo <= 0 {
+					t.Errorf("scrolling the sidebar to its end moved it %.0fpx", geometry.SidebarScrolledTo)
+				}
+				last, sidebar := geometry.LastSectionAfterScroll, geometry.SidebarAfterScroll
+				if last.Bottom > sidebar.Bottom+1 || last.Bottom < sidebar.Top || last.Bottom > bottom {
+					t.Errorf("scrolled to its end, the sidebar's last section spans %.0f..%.0f in a sidebar at %.0f..%.0f",
+						last.Top, last.Bottom, sidebar.Top, sidebar.Bottom)
+				}
+				if geometry.MainScrollHeight <= geometry.MainClientHeight {
+					t.Errorf("main does not scroll (%.0f in %.0f), so nothing follows the form", geometry.MainScrollHeight, geometry.MainClientHeight)
+				}
+				if !geometry.CommentsReachable || !geometry.HistoryReachable {
+					t.Errorf("below the form, the comments reachable = %v and the change log reachable = %v",
+						geometry.CommentsReachable, geometry.HistoryReachable)
+				}
+			})
 		}
 	}
-	for _, fragment := range []string{
-		`.task-route--history .task-sidebar { overflow-y: visible; }`,
-		// The editor keeps its own height beside a long sidebar.
-		`.task-route--history .task-editor { align-self: start; min-height: min(60vh, 34rem); }`,
-		// The New Task form's sizing, as it was.
-		`.task-layout { display: grid; flex: 1 1 auto; grid-template-columns: minmax(0, 1fr) 20rem; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; }`,
-		`.task-sidebar { min-width: 0; min-height: 0; overflow-y: auto;`,
-	} {
-		if !strings.Contains(body, fragment) {
-			t.Errorf("task page styling does not contain %q", fragment)
-		}
+}
+
+// A short or a narrow window keeps the one scrolling page: the form is not
+// held to a window that has no room for it, the sidebar is not a scroller of
+// its own, and every part of it is reached by scrolling the page.
+func TestBrowserLetsASmallWindowScrollTheTaskPageAsOnePage(t *testing.T) {
+	t.Parallel()
+	for _, viewport := range []struct{ width, height int }{{1280, 640}, {390, 844}} {
+		t.Run(fmt.Sprintf("%dx%d", viewport.width, viewport.height), func(t *testing.T) {
+			t.Parallel()
+			geometry := measureTaskPage(t, longWrappingTitle, viewport.width, viewport.height)
+			if geometry.SidebarScrollHeight > geometry.SidebarClientHeight+1 {
+				t.Errorf("the sidebar is a %.0fpx scroller of %.0fpx of content in a window too small for one",
+					geometry.SidebarClientHeight, geometry.SidebarScrollHeight)
+			}
+			if geometry.MainScrollHeight <= geometry.MainClientHeight {
+				t.Errorf("the page does not scroll (%.0f in %.0f)", geometry.MainScrollHeight, geometry.MainClientHeight)
+			}
+			if !geometry.CommentsReachable || !geometry.HistoryReachable {
+				t.Errorf("the comments reachable = %v and the change log reachable = %v",
+					geometry.CommentsReachable, geometry.HistoryReachable)
+			}
+		})
 	}
 }

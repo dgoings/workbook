@@ -174,8 +174,14 @@
     @media (prefers-reduced-motion: reduce) { .nav-switch__track, .nav-switch__knob { transition: none; } }
     /* No padding at the top. The filter row is what separates the header from the
        columns now, and a board inset under it stood the columns a row's height
-       below a control that acts on them. */
-    main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 1.25rem 1.25rem; }
+       below a control that acts on them.
+       main is a size container so a route can be held to the height main
+       really has, in cq units: a task's page holds its form to 100cqh. main's
+       size comes from the body's column and never from what it holds, so the
+       size containment changes nothing about how it is laid out, and it does
+       not become the containing block for the fixed-position popups drawn
+       inside it. */
+    main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 1.25rem 1.25rem; container-type: size; }
     /* The routes that draw no columns want that inset back: a task's page, the
        configuration page and a route message are each a bordered card with a
        shadow, and one flush under the header's own line reads as a thickened
