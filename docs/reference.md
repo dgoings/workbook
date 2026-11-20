@@ -429,7 +429,7 @@ and a card is one box in one column. A long identity is truncated to its column
 and never widens it. The task's own page carries the whole list under
 **Assignments** — the full value, the time it was recorded, and the same
 "assigned 3 days ago" phrasing `workbook show` prints — in the page's sidebar,
-between Depends On and Blocks and the attachments.
+below Depends On and Blocks and above Attachments.
 It follows the poll, so an assignment made from the CLI in another terminal
 appears on an open page within a second without disturbing anything being typed
 into it. The phrasing is worded by the page from the recorded time, by the same
