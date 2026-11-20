@@ -169,6 +169,13 @@
     .relationship-editor:focus-within .relationship-empty:empty { min-height: 1rem; }
     .task-route--history { height: auto; min-height: 100%; }
     .task-route--history .task-layout { min-height: min(60vh, 34rem); }
+    /* A task's page grows to its content and scrolls once, as a page, so its
+       sidebar is never a scroller of its own: with the assignments and the
+       attachments in it, a sidebar held to the form's height hid both in a
+       scroller nested inside a page that also scrolls. No height is given
+       the form to hold it to either — any estimate of the window is wrong
+       once the app header stacks or the title wraps. */
+    .task-route--history .task-sidebar { overflow-y: visible; }
     /* The configuration route, which grows with its lists the way the history route
        does and lets main scroll. Both of these are as specific as .task-route
        itself, so they only take effect written after it: the same rule text up

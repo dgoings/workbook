@@ -423,3 +423,35 @@ setTimeout(async () => {
 		t.Fatalf("execute the task page close: %v\n%s", err, output)
 	}
 }
+
+// A task's page grows to its content and scrolls once, as a page. Its form is
+// not held to an estimate of the window: the estimate was wrong whenever the
+// app header stacked or the title wrapped, which put the Save row below the
+// fold or cut the sidebar off at Blocks with the rest in a scroller nested
+// inside a page that scrolled as well. So there is no height on the edit
+// page's form at any size, and its sidebar is never a scroller of its own.
+// The New Task form keeps its own sizing, which this does not touch.
+func TestHandlerStylesTheTaskPageToGrowWithItsSidebar(t *testing.T) {
+	t.Parallel()
+	body := newTaskPage(t)
+	for _, stale := range []string{
+		`.task-route--history .task-layout { height:`,
+		`100dvh - 16rem`,
+	} {
+		if strings.Contains(body, stale) {
+			t.Errorf("the task page's form is still held to a height: %q", stale)
+		}
+	}
+	for _, fragment := range []string{
+		`.task-route--history .task-sidebar { overflow-y: visible; }`,
+		// The editor keeps its own height beside a long sidebar.
+		`.task-route--history .task-editor { align-self: start; min-height: min(60vh, 34rem); }`,
+		// The New Task form's sizing, as it was.
+		`.task-layout { display: grid; flex: 1 1 auto; grid-template-columns: minmax(0, 1fr) 20rem; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; }`,
+		`.task-sidebar { min-width: 0; min-height: 0; overflow-y: auto;`,
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("task page styling does not contain %q", fragment)
+		}
+	}
+}

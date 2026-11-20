@@ -27,14 +27,13 @@
       .relationship-editor button { padding: .48rem .62rem; }
       .relationship-message { min-height: .75rem; margin-top: .25rem; }
     }
-    /* A task's page grows below its form, so its form is not held to the
-       route's height the way a New Task form is, and with the assignments and
-       attachments in the sidebar a long sidebar would push the Save row below
-       the fold. Bounded to about the window it is read in, the sidebar
-       scrolls inside the form as a New Task form's does and the Save row
-       stays on the screen; the thread and the change log follow underneath. */
+    /* Beside a sidebar that runs long, a task page's editor keeps its own
+       height rather than stretching to the sidebar's: a description box as tall
+       as four assignments and four attachments is a page of empty box. It is
+       the height the form was given before the sidebar grew, and the sidebar
+       simply runs on below it. Short windows size the editor themselves. */
     @media (min-width: 761px) and (min-height: 701px) {
-      .task-route--history .task-layout { height: calc(100dvh - 16rem); }
+      .task-route--history .task-editor { align-self: start; min-height: min(60vh, 34rem); }
     }
     @media (min-width: 761px) and (max-height: 700px) {
       .task-route { height: auto; min-height: 100%; }
