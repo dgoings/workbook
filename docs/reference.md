@@ -427,24 +427,20 @@ so an unassigned board is exactly the board it has always been, and it is capped
 at three chips with a `+N more` beside them: a task may hold fifty assignments
 and a card is one box in one column. A long identity is truncated to its column
 and never widens it. The task's own page carries the whole list under
-**Assignments** — the full value, the time it was recorded, and the same
-"assigned 3 days ago" phrasing `workbook show` prints — in the page's sidebar,
-below Dependencies and above Attachments.
+**Assignments** — the full value and the time it was recorded — in the page's
+sidebar, below Dependencies and above Attachments. It does not repeat the
+"assigned 3 days ago" phrasing `workbook show` prints; the recorded time is the
+fact, and `workbook show` is where the phrase is worded.
 It follows the poll, so an assignment made from the CLI in another terminal
 appears on an open page within a second without disturbing anything being typed
-into it. The phrasing is worded by the page from the recorded time, by the same
-rule `workbook show` uses, which the server renders into the page as data; it
-advances from "just now" through minutes, hours and days on the page's own
-one-second tick, so an open page's rows keep aging while the poll reports
-nothing changed. The page's clock is the browser's: on the machine running
-`serve` that is the server's clock, and a browser elsewhere whose clock
-disagrees by a few seconds can read a phrase that much early or late.
+into it.
 
 The section also makes assignments. Type an identity into **Assign someone** and
-press Assign; leave the field blank and the assignment is `serve`'s own
-identity, which is this checkout's `user.email` — the same one `--assign self`
-resolves from the same directory. Add a `/label` to name one agent, exactly as
-on the command line. Assigning from the board is additive and never takes the
+press Assign, which sits on the field's line; leave the field blank and the
+assignment is `serve`'s own identity, which is this checkout's `user.email` —
+the same one `--assign self` resolves from the same directory, and the one the
+empty field shows as its placeholder. Add a `/label` to name one agent, exactly
+as on the command line. Assigning from the board is additive and never takes the
 claim gate: the section in front of you already names everybody who holds the
 task, so nothing is refused for being shared, and a warning names the others
 when your assignment lands beside one. That is the one place this surface
@@ -461,12 +457,13 @@ staged, exactly as the task page's control would send it — so a blank one is
 `serve`'s own identity there too. An assignment the server refuses after the
 create is handled the way a refused dependency is: the task exists, so the
 board opens its page, says some assignments were not saved, and draws each one
-in the Assignments section with the reason and a Retry and Remove. **Create
-more** re-arms a form with nothing staged.
+in the Assignments section with the reason, a Retry, and a red × to remove it.
+**Create more** re-arms a form with nothing staged.
 
-Each row carries **Unassign** where this checkout may withdraw it — its own
-assignments, and the ones it recorded against somebody else. A row without the
-control is somebody else's to release, under the same rule `workbook update
+Each row carries a red × at its right end, named **Unassign** followed by the
+value (for example "Unassign sam@example.com/impl-1"), where this checkout may
+withdraw it — its own assignments, and the ones it recorded against somebody
+else. A row without the control is somebody else's to release, under the same rule `workbook update
 --unassign` enforces; the button is drawn from the server's answer, so a control
 this page offers is one the write would accept.
 
@@ -2536,9 +2533,10 @@ The executable embeds its HTML, CSS, and JavaScript, and the page polls
 `/api/tasks` every second. Each answer carries an `ETag`, and the page sends it
 back as `If-None-Match`; a poll that finds nothing changed is answered
 `304 Not Modified` with no body, counts as a sync, and redraws nothing. The
-document carries nothing derived from the clock — an assignment's "assigned 5
-minutes ago" is worded by the page, as described above — so a board nobody is
-changing is answered 304 on every poll, however recent its assignments. Each
+document carries nothing derived from the clock — an assignment carries the
+time it was recorded, never a phrase such as "assigned 5 minutes ago" — so a
+board nobody is changing is answered 304 on every poll, however recent its
+assignments. Each
 poll that does bring a new document reconciles the board by task ID instead of
 rebuilding it: a card whose data did not change keeps its element, a changed one
 is updated in place, and only added, removed, and reordered cards are touched.
@@ -2623,7 +2621,16 @@ the current task and a Blocks edge to the other task.
 
 Task forms use a wide main column and a compact sidebar holding, in order,
 Properties (status, priority and labels), Dependencies, Assignments,
-and Attachments; the New Task form and a task's own page lay it out alike. The
+and Attachments; the New Task form and a task's own page lay it out alike.
+Every section is spaced the same way, a rule between each, and every
+dependency, assignment and attachment is drawn as the same bordered card with
+a red × at the right end of its first line that removes it. Each × is a
+keyboard-reachable button named for what it removes — "Remove dependency on
+<title>", "Remove blocked task <title>", "Unassign <who>", "Remove <name>" —
+and that name is also its tooltip. A dependency row shows the other task's
+title, its kind, and its status and priority; the task's ID is the title's
+tooltip rather than a line of the row. The dependency picker's box and its
+**Add** button share a line, as the assignment box and **Assign** do. The
 New Task header is a compact band reading "New task"; both pages put a ×
 (Close) at the right of the header that leaves the way Back does, and a New
 Task form's footer has Save with **Create more** beside it and Cancel at the
@@ -2740,11 +2747,19 @@ Restore that undoes it sits on the card.
 A task's page also carries what is attached to it, in its sidebar, and what
 has been said about it, below the form and above the change history. The attachment
 list shows both kinds in one list — a file's name links to its download, a
-link's label to its destination — with the size, the media type and who added
-it, an upload control, a form for adding a link, and a Remove on each row. A
+link's label (or its URL, when it has no label) to its destination — with one
+line saying what kind it is, a file's size, the day it was added and who added
+it. The line's tooltip adds a file's media type and the exact time, and a
+link's URL is its name's tooltip rather than a second copy in that line. Under
+the list are a **Choose file** button, which opens the browser's own file
+picker (the real file input stays the focusable control, so the keyboard,
+screen readers, multiple selection, drop and paste all work as before), and a
+form for adding a link: the URL on its own line, then the optional label with
+**Attach** beside it. Each row has the same red × the other sidebar rows have. A
 chosen file is listed by name with a × that takes it back out before anything
 is sent, and the chooser gives way to an **Add file** button until the list is
-empty again; the New Task form's staged list works the same way. An empty
+empty again; the New Task form's staged list works the same way, its buttons
+reading **Choose files** and **Add**. An empty
 list draws only its heading and controls. The
 thread is drawn oldest first, each comment carrying its author, when it was
 written, and whether it has been edited since, with an Edit and a Remove on each

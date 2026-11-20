@@ -345,11 +345,6 @@
         const held = tasks.find((candidate) => candidate.id === openThreadPanels.taskID);
         if (held) openThreadPanels.follow(held, presentation ? presentation.get(held.id) : null);
       }
-      // The open task page's assignment ages, brought up to this page's clock.
-      // A page showing no task has none.
-      function renderAssignmentAges() {
-        if (openThreadPanels && openThreadPanels.age) openThreadPanels.age();
-      }
       function refresh() {
         const wasLoaded = tasksLoaded;
         const generation = ++taskRefreshGeneration;

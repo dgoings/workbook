@@ -226,7 +226,7 @@ func TestHandlerClientDrawsOneDependencySection(t *testing.T) {
       throw new Error(kind + " placeholder " + JSON.stringify(input.placeholder) +
         " is not part of its accessible name " + JSON.stringify(caption.textContent));
     }
-    if (!findElement(editor, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency")) {
+    if (!findElement(editor, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency")) {
       throw new Error(kind + " lost its Add dependency button");
     }
     prompts.push(caption.textContent);
@@ -253,8 +253,11 @@ func TestHandlerClientDrawsOneDependencySection(t *testing.T) {
 		// "No matching tasks." is written on every keystroke that matches
 		// nothing, so the combobox the reader is typing in keeps the row it
 		// would appear on rather than growing one under their cursor.
-		`.relationship-editor:focus-within .relationship-empty:empty { min-height: 1rem; }`,
-		`.task-relationships { margin-top: .7rem; padding-top: .7rem; border-top: 1px solid var(--wb-hairline); }`,
+		`.relationship-editor:focus-within .relationship-empty:empty { min-height: 1rem; margin-top: var(--sb-label-gap); }`,
+		// Spaced from the sidebar's rhythm tokens, and bled past the content
+		// as the panels below it are, so every rule in the sidebar is one
+		// length with the same space above and below it.
+		`.task-relationships { margin: 0 -.5rem; padding: var(--sb-section-pad) .5rem; border-top: 1px solid var(--wb-hairline); }`,
 		// The radios are clipped rather than hidden, so the group keeps the
 		// browser's keyboard behavior, and the focus ring lands on the label
 		// the reader sees.

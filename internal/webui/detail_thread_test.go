@@ -98,8 +98,16 @@ function attachmentForm(which) {
 function submitForm(form) {
   return form.eventListeners.submit({ preventDefault() {} });
 }
+// A row's control by what it says: its text, or — for the × that removes a
+// row, which says one character — the accessible name it carries, which
+// begins with the verb ("Remove notes.txt", "Unassign sam@example.com").
 function rowControl(row, caption) {
-  return findElement(row, (element) => element.tagName === "BUTTON" && element.textContent === caption);
+  return findElement(row, (element) => {
+    if (element.tagName !== "BUTTON") return false;
+    if (element.textContent === caption) return true;
+    const name = element.getAttribute("aria-label") || "";
+    return name === caption || name.startsWith(caption + " ");
+  });
 }
 // What a comment reads as, whatever elements were built to draw it.
 //
@@ -251,11 +259,15 @@ setTimeout(() => {
   if (unsafe.textContent !== "Read me") {
     throw new Error("the refused link is not drawn as its label: " + JSON.stringify(unsafe.textContent));
   }
-  // The destination is still shown, as text, because a reader deciding whether
-  // to follow a link is entitled to see where it goes.
+  // The destination is still shown, as the name's tooltip, because a reader
+  // deciding whether to follow a link is entitled to see where it goes; it is
+  // no longer repeated in the metadata line.
+  if (!String(unsafe.title || "").includes("javascript:")) {
+    throw new Error("the refused link's destination is hidden: " + JSON.stringify(unsafe.title));
+  }
   const meta = findElement(rows[1], (element) => hasClassToken(element, "attachment__meta"));
-  if (!meta.textContent.includes("javascript:")) {
-    throw new Error("the refused link's destination is hidden: " + JSON.stringify(meta.textContent));
+  if (meta.textContent.includes("javascript:")) {
+    throw new Error("the refused link's metadata repeats its URL: " + JSON.stringify(meta.textContent));
   }
 }, 0);
 `)
@@ -281,10 +293,17 @@ setTimeout(() => {
     throw new Error("the file does not link to its download route: " + JSON.stringify(link && link.href));
   }
   if (link.target !== "_blank") throw new Error("the download replaces the task page");
+  // The line holds what fits a sidebar card; the media type and the exact
+  // time are on its tooltip, so nothing the line used to say is gone.
   const meta = findElement(rows[0], (element) => hasClassToken(element, "attachment__meta"));
-  for (const part of ["file", "text/plain", "2 KiB", "first@example.com"]) {
+  for (const part of ["file", "2 KiB", "first@example.com"]) {
     if (!meta.textContent.includes(part)) {
       throw new Error("the file's line does not state " + part + ": " + JSON.stringify(meta.textContent));
+    }
+  }
+  for (const part of ["file", "text/plain", "2 KiB", "added ", "first@example.com"]) {
+    if (!String(meta.title || "").includes(part)) {
+      throw new Error("the file's line's tooltip does not state " + part + ": " + JSON.stringify(meta.title));
     }
   }
 }, 0);

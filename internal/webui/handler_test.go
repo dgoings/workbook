@@ -1102,7 +1102,7 @@ setTimeout(async () => {
   const inputFor = (group) => findElement(group, (element) =>
     element.tagName === "INPUT" && element.attributes.role === "combobox");
   const addFor = (group) => findElement(group, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
   const candidateIDs = (group) => findElements(group, (element) =>
     element.attributes.role === "option").map((option) => option.dataset.candidateId);
   const resetCandidates = (group) => {
@@ -1172,7 +1172,7 @@ setTimeout(async () => {
   }
 
   const currentDependsRow = findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(dependsCandidate.ID) + `);
-  const remove = currentDependsRow && findElement(currentDependsRow, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  const remove = currentDependsRow && findElement(currentDependsRow, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   if (!remove || !remove.eventListeners.click) throw new Error("Depends On draft is not removable");
   await remove.eventListeners.click();
   assertFormValues();
@@ -1239,7 +1239,7 @@ setTimeout(async () => {
   const inputFor = (group) => findElement(group, (element) =>
     element.tagName === "INPUT" && element.attributes.role === "combobox");
   const addFor = (group) => findElement(group, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
   const selectCandidate = (group, candidateID, query) => {
     const input = inputFor(group);
     input.value = query;
@@ -1415,7 +1415,7 @@ setTimeout(async () => {
     const option = findElement(group, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID);
     if (!option) throw new Error("candidate is not selectable: " + candidateID);
     option.eventListeners.click();
-    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
     if (!add || add.disabled) throw new Error("selected candidate did not enable Add dependency");
     return add.eventListeners.click();
   };
@@ -1479,12 +1479,12 @@ setTimeout(async () => {
 	    element.attributes.role === "option" &&
 	    element.dataset.candidateId === lateCandidateID).eventListeners.click();
 	  const lateAdd = findElement(dependsGroup, (element) =>
-	    element.tagName === "BUTTON" && element.textContent === "Add dependency");
+	    element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
 	  const capturedBlocksRow = findElement(blocksGroup, (element) =>
 	    element.dataset.relationshipId === blockedTaskID &&
 	    element.dataset.relationshipDraft !== undefined);
 	  const capturedRemove = capturedBlocksRow && findElement(capturedBlocksRow, (element) =>
-	    element.tagName === "BUTTON" && element.textContent === "Remove");
+	    element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
 	  const form = findElement(main, (element) => element.tagName === "FORM");
 	  if (!form || !form.eventListeners.submit) throw new Error("New Task form did not register submit behavior");
 	  const submission = form.eventListeners.submit({ preventDefault() {} });
@@ -1614,7 +1614,7 @@ setTimeout(async () => {
       element.attributes.role === "option" && element.dataset.candidateId === candidateID);
     option.eventListeners.click();
     return findElement(group, (element) =>
-      element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+      element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency").eventListeners.click();
   };
   const dependsGroup = groupFor("Depends On");
   const blocksGroup = groupFor("Blocks");
@@ -1644,7 +1644,7 @@ setTimeout(async () => {
     return {
       input,
       add: findElement(group, (element) =>
-        element.tagName === "BUTTON" && element.textContent === "Add dependency")
+        element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency")
     };
   };
   // The picker holds one selection, made here as a Blocks entry and left
@@ -1718,7 +1718,7 @@ setTimeout(async () => {
     throw new Error("create failure attempted relationship persistence");
   }
   const removeBlocks = findElement(draftBlocksRow, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Remove");
+    element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   await removeBlocks.eventListeners.click();
   if (!findElement(dependsGroup, (element) =>
       element.dataset.relationshipId === ` + strconv.Quote(prerequisite.ID) + ` &&
@@ -1783,7 +1783,7 @@ setTimeout(async () => {
     findElement(group, (element) =>
       element.attributes.role === "option" && element.dataset.candidateId === candidateID).eventListeners.click();
     return findElement(group, (element) =>
-      element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+      element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency").eventListeners.click();
   };
   const prerequisiteID = ` + strconv.Quote(prerequisite.ID) + `;
   const blockedTaskID = ` + strconv.Quote(blockedTask.ID) + `;
@@ -1881,7 +1881,7 @@ setTimeout(async () => {
 	  const retry = failedBlocksRow && findElement(failedBlocksRow, (element) =>
 	    element.tagName === "BUTTON" && element.textContent === "Retry");
 	  const remove = failedBlocksRow && findElement(failedBlocksRow, (element) =>
-	    element.tagName === "BUTTON" && element.textContent === "Remove");
+	    element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   if (!durableDependsOnRow) throw new Error("durable Depends On relationship was not rendered");
   if (!failedBlocksRow ||
       !failedBlocksRow.textContent.includes("Not saved") ||
@@ -1966,7 +1966,7 @@ setTimeout(async () => {
     throw new Error("canonical refresh did not replace the detached draft with durable state");
   }
   const removeDurableBlock = findElement(retriedBlocksRow, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Remove");
+    element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   await removeDurableBlock.eventListeners.click();
   if (blocksDeletes !== 1 ||
       findElement(groupFor("Blocks"), (element) =>
@@ -2017,7 +2017,7 @@ setTimeout(async () => {
     findElement(group, (element) =>
       element.attributes.role === "option" && element.dataset.candidateId === candidateID).eventListeners.click();
     return findElement(group, (element) =>
-      element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+      element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency").eventListeners.click();
   };
   let createCalls = 0;
   let activeRefreshCalls = 0;
@@ -2154,7 +2154,7 @@ setTimeout(async () => {
   if (!blockedOption) throw new Error("Blocks candidate is not selectable");
   blockedOption.eventListeners.click();
   await findElement(blocksGroup, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+    element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency").eventListeners.click();
 
   const createdID = ` + strconv.Quote(createdID) + `;
   const blockedTaskID = ` + strconv.Quote(blockedTask.ID) + `;
@@ -2390,11 +2390,11 @@ setTimeout(async () => {
 
   const deletedDependency = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedDependency.ID) + `);
   if (!deletedDependency || !deletedDependency.textContent.includes("Deleted") ||
-      !findElement(deletedDependency, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+      !findElement(deletedDependency, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""))) {
     throw new Error("tombstoned prerequisite was not rendered removable");
   }
   const activeBlock = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
-  if (!activeBlock || !findElement(activeBlock, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+  if (!activeBlock || !findElement(activeBlock, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""))) {
     throw new Error("active blocked task was not rendered removable");
   }
 
@@ -2506,7 +2506,7 @@ setTimeout(async () => {
   const deletedDependency = findElement(region, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedDependency.ID) + `);
   const activeBlock = findElement(region, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
   const deletedBlock = findElement(region, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedBlocked.ID) + `);
-  const hasRemove = (row) => findElement(row, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  const hasRemove = (row) => findElement(row, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   if (!missing || !hasRemove(missing) || !deletedDependency || !hasRemove(deletedDependency)) {
     throw new Error("missing or tombstoned Depends On rows were not removable");
   }
@@ -2675,7 +2675,7 @@ setTimeout(async () => {
   const dependsRows = relationshipRowsOfKind(main, "Depends On")
     .filter((row) => row.dataset.relationshipId === ` + strconv.Quote(activeDependency.ID) + `);
   if (dependsRows.length !== 1 || !dependsRows[0].textContent.includes("Deleted") ||
-      !findElement(dependsRows[0], (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+      !findElement(dependsRows[0], (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""))) {
     throw new Error("tombstoned Depends On ID was not rendered once and removable");
   }
 
@@ -2719,7 +2719,7 @@ setTimeout(() => {
     const listbox = findElement(group, (element) => element.attributes.role === "listbox");
     const selected = findElement(group, (element) =>
       element.attributes.role === "option" && element.attributes["aria-selected"] === "true");
-    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
     if (input.value !== candidate.title) {
       throw new Error(label + " did not expose the accepted task as the combobox value");
     }
@@ -2825,7 +2825,7 @@ setTimeout(async () => {
     const group = relationshipGroup(main, headingText);
     const input = findElement(group, (element) => element.tagName === "INPUT" && element.attributes.role === "combobox");
     const listbox = findElement(group, (element) => element.attributes.role === "listbox");
-    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
     return { group, input, listbox, add, region: input.parentElement };
   };
   const assertOpen = (parts, label) => {
@@ -2993,7 +2993,7 @@ setTimeout(async () => {
     const option = findElement(group, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID);
     if (!option || !option.eventListeners.click) throw new Error("candidate option is not pointer selectable: " + candidateID);
     option.eventListeners.click();
-    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
     if (!add || add.disabled || !add.eventListeners.click) throw new Error("selected candidate did not enable Add dependency");
     return add;
   };
@@ -3038,7 +3038,7 @@ setTimeout(async () => {
 
   dependsGroup = groupFor("Depends On");
   const existingDependencyRow = findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingDependency.ID) + `);
-  const dependsRemove = existingDependencyRow && findElement(existingDependencyRow, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  const dependsRemove = existingDependencyRow && findElement(existingDependencyRow, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   if (!dependsRemove || !dependsRemove.eventListeners.click) throw new Error("active Depends On row is not removable");
   let resolveDependsRefresh;
   taskResponse = new Promise((resolve) => { resolveDependsRefresh = resolve; });
@@ -3063,7 +3063,7 @@ setTimeout(async () => {
 
   blocksGroup = groupFor("Blocks");
   const existingBlockedRow = findElement(blocksGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingBlocked.ID) + `);
-  const blocksRemove = existingBlockedRow && findElement(existingBlockedRow, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  const blocksRemove = existingBlockedRow && findElement(existingBlockedRow, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   if (!blocksRemove || !blocksRemove.eventListeners.click) throw new Error("active Blocks row is not removable");
   let resolveBlocksRefresh;
   taskResponse = new Promise((resolve) => { resolveBlocksRefresh = resolve; });
@@ -3133,7 +3133,7 @@ setTimeout(async () => {
   const option = findElement(dependsGroup, (element) =>
     element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
   option.eventListeners.click();
-  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
 
   let resolveSupersededRefresh;
   let activeGets = 0;
@@ -3229,7 +3229,7 @@ setTimeout(async () => {
   const option = findElement(dependsGroup, (element) =>
     element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
   option.eventListeners.click();
-  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
 
   let resolveDeletedContext;
   let activeGets = 0;
@@ -3365,7 +3365,7 @@ setTimeout(async () => {
   const option = findElement(dependsGroup, (element) =>
     element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
   option.eventListeners.click();
-  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
 
   let resolveDeletedContext;
   let activeGets = 0;
@@ -3484,7 +3484,7 @@ setTimeout(async () => {
   const option = findElement(dependsGroup, (element) =>
     element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
   option.eventListeners.click();
-  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
 
   let resolveMutationError;
   let activeGets = 0;
@@ -3578,7 +3578,7 @@ setTimeout(async () => {
   const option = findElement(dependsGroup, (element) =>
     element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
   option.eventListeners.click();
-  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
 
   globalThis.fetch = async (url, options = {}) => {
     fetchCalls.push({ url, options });
@@ -3662,7 +3662,7 @@ setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   const groupFor = (headingText) => relationshipGroup(main, headingText);
   const inputFor = (group) => findElement(group, (element) => element.tagName === "INPUT" && element.attributes.role === "combobox");
-  const addFor = (group) => findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const addFor = (group) => findElement(group, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
   const dispatchKey = (input, key) => {
     let prevented = false;
     input.eventListeners.keydown({ key, preventDefault() { prevented = true; } });
@@ -4553,11 +4553,6 @@ const boardAttachmentURLLimit = ` + strconv.Itoa(core.MaxAttachmentURLBytes) + `
 // image only for one of these, so a harness that invented the list would be
 // testing a rule the server does not have.
 const boardInlineMedia = ` + strconv.Quote(strings.Join(InlineAttachmentMediaTypes(), " ")) + `;
-// How long an assignment has stood is worded by presentation.AssignedAgo's rule,
-// which the server renders into the page as a table. It is written by the
-// encoder the page itself uses, so a harness cannot word an age by a rule the
-// server does not have.
-const boardAssignedAgo = ` + strconv.Quote(pageAssignedAgo()) + `;
 const scrollIntoViewCalls = [];
 function classTokens(element) {
   return (element.className || "").split(/\s+/).filter(Boolean);
@@ -4856,7 +4851,6 @@ boardView.dataset.attachmentNameLimit = String(boardAttachmentNameLimit);
 boardView.dataset.attachmentLabelLimit = String(boardAttachmentLabelLimit);
 boardView.dataset.attachmentUrlLimit = String(boardAttachmentURLLimit);
 boardView.dataset.inlineMedia = boardInlineMedia;
-boardView.dataset.assignedAgo = boardAssignedAgo;
 // The region that holds tasks whose status matches no column. It is always in
 // the document and hidden while empty, because the status that strands a task
 // arrives on a poll rather than on the first paint, and a region the server
@@ -7067,7 +7061,7 @@ setTimeout(async () => {
     const option = findElement(group, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID);
     if (!option || !option.eventListeners.click) throw new Error("candidate option is not selectable: " + candidateID);
     option.eventListeners.click();
-    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
     if (!add || add.disabled) throw new Error("selected candidate did not enable Add dependency");
     return add.eventListeners.click();
   };
@@ -7140,7 +7134,7 @@ setTimeout(async () => {
   title.value = renderedTitle;
 
   const row = findElement(groupFor("Depends On"), (element) => element.dataset.relationshipId === ` + strconv.Quote(prerequisite.ID) + `);
-  const remove = row && findElement(row, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  const remove = row && findElement(row, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   if (!remove) throw new Error("the added prerequisite is not removable");
   nextMutation = { format: "workbook.task-mutation", version: 1, task: ` + documentJSON([]core.Task{afterDependsRemove}) + `.tasks[0] };
   taskResponse = ` + documentJSON([]core.Task{afterDependsRemove, prerequisite, blockedAfterAdd}) + `;

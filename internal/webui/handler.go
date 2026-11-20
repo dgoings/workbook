@@ -725,18 +725,16 @@ type TaskPresentation struct {
 // AssignmentPresentation is one assignment as the task page draws it: who holds
 // the task, which of their agents holds it, and when that was recorded.
 //
-// How long ago that was is not here, though the page shows it. The phrase is
-// `workbook show`'s own wording, from presentation.AssignedAgo, and it moves on
-// the clock — "assigned 59 minutes ago" becomes "assigned 1 hour ago" with
-// nothing about the assignment having changed. A document that carried it would
-// change on those ticks too, and the board's conditional poll would send every
-// open page the whole task list again each time a fresh assignment's phrase
-// crossed a minute. So the document carries CreatedAt, which never moves, and
-// the page words it on its own tick from presentation.AssignedAgoSteps, which
-// the server renders into the page as data (see pageAssignedAgo). The rule
-// stays one rule in one place; only where it is applied moved. CreatedAt is
-// also what a reader settling a stale assignment between themselves actually
-// needs, since a phrase in whole days cannot carry the exact time.
+// How long ago that was is not here, and the page does not show it either. The
+// phrase is `workbook show`'s own wording, from presentation.AssignedAgo, and it
+// moves on the clock — "assigned 59 minutes ago" becomes "assigned 1 hour ago"
+// with nothing about the assignment having changed. A document that carried it
+// would change on those ticks too, and the board's conditional poll would send
+// every open page the whole task list again each time a fresh assignment's
+// phrase crossed a minute. So the document carries CreatedAt, which never
+// moves, and the page shows that time. CreatedAt is also what a reader settling
+// a stale assignment between themselves actually needs, since a phrase in
+// whole days cannot carry the exact time.
 // Removable is whether the identity this board writes as may withdraw this
 // assignment. It is core.Assignment.RemovableBy, asked on the server, because
 // the rule is decided from the assignment's own principal and creator and the
@@ -1098,11 +1096,6 @@ type pageData struct {
 	// the name could offer to assign somebody it could not name. See
 	// handler.assignIdentity for what makes it empty.
 	AssignIdentity string
-	// AssignedAgo is presentation.AssignedAgo's wording rule, as the JSON table
-	// pageAssignedAgo encodes, rendered into the page so that the page can word
-	// an assignment's age on its own clock. See AssignmentPresentation for why
-	// the polled document does not carry the phrase itself.
-	AssignedAgo string
 	// StatusTags are the three roles a status may carry, rendered into the
 	// configuration page's forms for the reason the columns are rendered into
 	// the board: the client must not carry a second copy of a set the server
@@ -1956,7 +1949,6 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		AttachmentURLLimit:    core.MaxAttachmentURLBytes,
 		InlineImageMediaTypes: strings.Join(InlineAttachmentMediaTypes(), " "),
 		AssignIdentity:        handler.assignIdentity(),
-		AssignedAgo:           pageAssignedAgo(),
 		StatusTags:            core.StatusTags(),
 		PriorityTags:          core.PriorityTags(),
 		Administrable:         handler.administrable(),
@@ -2165,47 +2157,6 @@ func keyViews(keys core.KeySet) []KeyView {
 		})
 	}
 	return views
-}
-
-// pageAgeStep is one band of presentation.AssignedAgoSteps as the page carries
-// it. The bounds are in milliseconds, which is what a browser's clock counts in;
-// a zero bound is left out, which the page reads as no bound, the way Go does.
-type pageAgeStep struct {
-	Below int64  `json:"below,omitempty"`
-	Unit  int64  `json:"unit,omitempty"`
-	One   string `json:"one"`
-	Many  string `json:"many,omitempty"`
-}
-
-// pageAssignedAgo encodes presentation.AssignedAgo's rule for the attribute the
-// page carries it in.
-//
-// It is the table itself rather than anything derived from it, so the page
-// applies the one rule `workbook show` prints through and holds no copy of its
-// own: a change to the thresholds or the phrases is a change to
-// presentation.AssignedAgoSteps, and the page says the new thing on its next
-// load. Nothing in it depends on the clock, so it is rendered once with the
-// page rather than sent on every poll.
-func pageAssignedAgo() string {
-	steps := presentation.AssignedAgoSteps()
-	views := make([]pageAgeStep, 0, len(steps))
-	for _, step := range steps {
-		views = append(views, pageAgeStep{
-			Below: step.Below.Milliseconds(),
-			Unit:  step.Unit.Milliseconds(),
-			One:   step.One,
-			Many:  step.Many,
-		})
-	}
-	encoded, err := json.Marshal(views)
-	if err != nil {
-		// Two integers and two strings per step: nothing encoding/json can
-		// refuse. An empty table is a better answer to the impossible case than
-		// a page that will not load — a row then shows when it was recorded and
-		// no phrase beside it.
-		return "[]"
-	}
-	return string(encoded)
 }
 
 // pageKeys encodes a project's keys for the attribute the page carries them in.
@@ -2885,13 +2836,11 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 	// fall out of step with what a client would have read.
 	//
 	// Nothing in the document is derived from the clock, which is what lets an
-	// idle board be answered 304 on every poll. The one thing on the page that
-	// does move with time — an assignment row's "assigned 5 minutes ago" — is
-	// worded by the page from the assignment's CreatedAt, on its own tick, by
-	// the rule presentation.AssignedAgo applies, served to it as data with the
-	// page. Were the phrase in here, the tag would move each time a fresh
-	// assignment's age crossed a minute, hour or day, and every open board would
-	// read the whole document again with no task having changed.
+	// idle board be answered 304 on every poll. An assignment carries the time
+	// it was recorded, never a phrase such as "assigned 5 minutes ago": were the
+	// phrase in here, the tag would move each time a fresh assignment's age
+	// crossed a minute, hour or day, and every open board would read the whole
+	// document again with no task having changed.
 	err = writeTaggedJSON(writer, request, TasksDocument{
 		Format:          "workbook.tasks",
 		Version:         1,

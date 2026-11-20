@@ -23,7 +23,7 @@ const sectionPicker = () => {
   const section = relationshipSection(main);
   return {
     input: findElement(section, (element) => element.attributes.role === "combobox"),
-    add: findElement(section, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency")
+    add: findElement(section, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency")
   };
 };
 const pickAndAdd = async (candidateID, query) => {
@@ -50,7 +50,7 @@ const listedRows = () => findElements(relationshipSection(main), (element) => ha
 });
 const removeRow = async (id) => {
   const row = findElement(relationshipSection(main), (element) => hasDataKey(element, "relationshipRow") && element.dataset.relationshipId === id);
-  const remove = row && findElement(row, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  const remove = row && findElement(row, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   if (!remove) throw new Error("row " + id + " has no Remove");
   await remove.eventListeners.click();
 };

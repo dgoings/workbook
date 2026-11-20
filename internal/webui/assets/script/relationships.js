@@ -35,10 +35,13 @@
         empty.className = "relationship-empty";
         empty.setAttribute("role", "status");
         empty.setAttribute("aria-live", "polite");
-        const add = document.createElement("button");
-        add.type = "button";
+        // "Add" on the button, so it keeps its natural width beside the box;
+        // its accessible name says what it adds and contains the word shown,
+        // as label-in-name asks.
+        const add = threadButton("Add", true);
         add.disabled = true;
-        text(add, "Add dependency");
+        add.dataset.relationshipAdd = "";
+        add.setAttribute("aria-label", "Add dependency");
         region.append(label, input, add, listbox, empty);
         let tracksPosition = false;
 
@@ -278,28 +281,34 @@
       // words, not only in color.
       function relationshipRow(relationship, onRemove, isDraft = false, onRetry = null, kind = null) {
         const row = document.createElement("article");
-        row.className = "relationship-row relationship-row--compact";
+        row.className = "relationship-row relationship-row--compact sidebar-card";
         row.dataset.relationshipRow = "";
         row.dataset.relationshipId = relationship.id;
         if (kind) row.dataset.relationshipKind = kind.direction;
         if (isDraft) row.dataset.relationshipDraft = "";
+        // The task's ID is not printed in the row: it is a long run of
+        // characters that wrapped a sidebar row onto three lines and says
+        // nothing a reader scanning their dependencies needs. It stays one
+        // hover away as the title's tooltip, and the link goes to the task.
         const heading = document.createElement("h4");
+        const title = relationship.task ? relationship.task.title : "Unavailable task";
         if (relationship.task && !relationship.task.deleted) {
           const link = document.createElement("a");
           link.href = "/tasks/" + encodeURIComponent(relationship.id);
-          text(link, relationship.task.title);
+          link.title = relationship.id;
+          text(link, title);
           heading.append(link);
         } else {
-          text(heading, relationship.task ? relationship.task.title : "Unavailable task");
+          heading.title = relationship.id;
+          text(heading, title);
         }
         const metadata = document.createElement("p");
         metadata.className = "relationship-row__metadata";
-        const metadataParts = [];
-        if (relationship.task) {
-          metadataParts.push(relationship.task.status, relationship.task.priority);
-        }
-        metadataParts.push(relationship.id);
-        text(metadata, metadataParts.join(" · "));
+        // A task nobody can find has no status or priority to give, so its
+        // ID is the one thing there is to say about it.
+        text(metadata, relationship.task
+          ? relationship.task.status + " · " + relationship.task.priority
+          : relationship.id);
         // Everything there is to read goes in one grid item, and everything
         // there is to press goes in the other. The row is a two-column grid,
         // and it used to hand each part to that grid loose: only the Remove
@@ -342,18 +351,16 @@
           textColumn.append(deleted);
         }
         if (isDraft && onRetry) {
-          const retry = document.createElement("button");
-          retry.type = "button";
-          retry.className = "relationship-retry";
-          text(retry, "Retry");
+          const retry = threadButton("Retry");
+          retry.className += " relationship-retry";
           retry.addEventListener("click", () => onRetry(relationship));
           controls.append(retry);
           row.retryButton = retry;
         }
-        const remove = document.createElement("button");
-        remove.type = "button";
-        remove.className = "relationship-remove";
-        text(remove, "Remove");
+        const remove = rowRemoveButton(kind && kind.direction === "blocks"
+          ? "Remove blocked task " + title
+          : "Remove dependency on " + title);
+        remove.className += " relationship-remove";
         remove.addEventListener("click", () => onRemove(relationship));
         controls.append(remove);
         row.removeButton = remove;
@@ -464,6 +471,12 @@
           combobox.setCandidates(relationshipCandidates(taskID, kind.direction, draftState), { clearStalePick: true });
         }
         region.append(heading, list, kindGroup, combobox.region, message, status);
+        // What the list was last drawn from. A poll that changed nothing about
+        // the rows leaves them standing, the way the assignments section does:
+        // every row holds a focusable ×, and rebuilding the list once a second
+        // took a keyboard reader's caret off it and dropped it on <body>
+        // before Enter could reach it.
+        let rowSignature = null;
         controller = {
           region, status, list, message, combobox, kindInputs, taskID, draftState,
           busy: false, removeButtons: [], recoveryActions: [],
@@ -480,6 +493,9 @@
           },
           setMessage(value) { text(message, value); },
           update() {
+            const previousRemoveButtons = this.removeButtons;
+            const previousRecoveryActions = this.recoveryActions;
+            const signatureParts = [];
             this.recoveryActions = [];
             this.removeButtons = [];
             const state = taskID ? dependencyState(taskID) : { dependsOn: [], blocks: [] };
@@ -513,6 +529,11 @@
                 const retryDraft = isDraft && taskID && relationship.error
                   ? () => retryRelationshipDraft(name, relationship, draftMap, controller)
                   : null;
+                const task = relationship.task;
+                signatureParts.push([
+                  name, relationship.id, isDraft, relationship.error || "", Boolean(retryDraft),
+                  task ? [task.title, task.status, task.priority, Boolean(task.deleted)] : null
+                ]);
                 const row = relationshipRow(relationship, () => {
                   if (controller.busy) return;
                   if (isDraft) {
@@ -546,6 +567,13 @@
               });
             });
             combobox.setCandidates(relationshipCandidates(taskID, kind.direction, draftState));
+            const signature = JSON.stringify(signatureParts);
+            if (signature === rowSignature && list.children.length) {
+              this.removeButtons = previousRemoveButtons;
+              this.recoveryActions = previousRecoveryActions;
+              return;
+            }
+            rowSignature = signature;
             if (rows.length === 0) {
               const empty = document.createElement("p");
               empty.className = "relationship-row__note";

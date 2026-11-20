@@ -124,7 +124,10 @@ func TestHandlerClientKeepsRelationshipControlsOutOfTheTextColumn(t *testing.T) 
     if (!row.removeButton || row.removeButton.parentElement !== controls) {
       throw new Error(label + " does not hold its Remove button in the controls");
     }
-    if (row.removeButton.textContent !== "Remove" || row.removeButton.type !== "button" ||
+    // The red × that every sidebar row uses, named for what it removes.
+    if (!classTokens(row.removeButton).includes("row-remove") || row.removeButton.type !== "button" ||
+        !/^Remove (dependency on|blocked task) /.test(row.removeButton.getAttribute("aria-label") || "") ||
+        row.removeButton.title !== row.removeButton.getAttribute("aria-label") ||
         !row.removeButton.eventListeners.click) {
       throw new Error(label + " lost the working Remove button itself");
     }
@@ -133,7 +136,7 @@ func TestHandlerClientKeepsRelationshipControlsOutOfTheTextColumn(t *testing.T) 
         throw new Error(label + " does not hold its Retry button in the controls");
       }
       if (controls.children.indexOf(row.retryButton) >= controls.children.indexOf(row.removeButton)) {
-        throw new Error(label + " draws Retry below the Remove button it used to precede");
+        throw new Error(label + " draws Retry after the × it precedes");
       }
       // The failure text is the part that was dealt into column two and sized
       // that track to a whole sentence.
@@ -160,17 +163,13 @@ func TestHandlerClientKeepsRelationshipControlsOutOfTheTextColumn(t *testing.T) 
 	body := newTaskPage(t)
 	// What places the structure above. The fix itself is structural — the item
 	// count is what the test through the harness pins — so these hold the
-	// stack to the gaps the row used to set on its own parts. min-width: 0 is
-	// pinned because it is served, not because it rescues the title: the title
+	// stack to the line gap every sidebar card uses. min-width: 0 is pinned
+	// because it is served, not because it rescues the title: the title
 	// column's min sizing function is a fixed 0 already, so no item minimum can
 	// reach it. It is there for the day someone writes the template as
 	// `1fr auto`, where that minimum would start to count.
 	for _, fragment := range []string{
-		// The stack, and the tighter gap the compact row already sets on its
-		// own items — the text column has to split them the same way, or a
-		// sidebar row would be spaced like a full-width one.
-		`.relationship-row__text { display: grid; gap: .35rem; min-width: 0; }`,
-		`.relationship-row--compact .relationship-row__text { gap: .16rem; }`,
+		`.relationship-row__text { display: grid; gap: var(--sb-card-line-gap); min-width: 0; }`,
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("relationship row styling does not contain %q", fragment)
@@ -199,10 +198,9 @@ func TestHandlerClientKeepsRelationshipControlsOutOfTheTextColumn(t *testing.T) 
 		}
 	}
 	// Declared rather than emergent: the controls name the column the Remove
-	// button used to claim for itself, and stack because a failed draft offers
-	// two buttons. Centered against the text beside them, as the lone Remove
-	// button was.
-	if !strings.Contains(body, `.relationship-row__controls { display: grid; align-self: center; gap: .35rem; grid-column: 2; }`) {
+	// button used to claim for itself, and sit on the title's line, Retry
+	// before the × on a failed draft.
+	if !strings.Contains(body, `.relationship-row__controls { display: flex; align-items: center; align-self: start; gap: var(--sb-inline-gap); grid-column: 2; }`) {
 		t.Error("relationship row styling does not place the controls in the row's second column")
 	}
 }

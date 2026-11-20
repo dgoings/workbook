@@ -73,7 +73,7 @@ func heldDetachedCreate(prerequisiteID, prerequisiteTitle, resolution string) st
   findElement(dependsGroup, (element) => element.attributes.role === "option" &&
     element.dataset.candidateId === prerequisiteID).eventListeners.click();
   await findElement(dependsGroup, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+    element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency").eventListeners.click();
 
   const creating = form.eventListeners.submit({ preventDefault() {} });
   await Promise.resolve();

@@ -5,6 +5,23 @@
         text(button, caption);
         return button;
       }
+      // The red × that takes one row out of a sidebar list: a dependency, an
+      // assignment, an attachment, or a file chosen and not yet added. Every
+      // one of them is this button, so they look and behave alike. The ×
+      // alone says nothing to a screen reader or to a pointer hovering it, so
+      // the button carries its whole meaning as its accessible name and as
+      // its tooltip, naming the thing it removes: "Unassign sam@example.com",
+      // not a row of identical "Remove" buttons.
+      function rowRemoveButton(name) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "row-remove";
+        button.dataset.rowRemove = "";
+        button.setAttribute("aria-label", name);
+        button.title = name;
+        text(button, "×");
+        return button;
+      }
       // Every thread change names the tip this page read, exactly as a save from
       // the form beside it does, and leaves the member out when there is none.
       function headed(head, values) {
@@ -149,10 +166,12 @@
               : (error instanceof Error ? error.message : "The change failed.")),
           open);
       }
-      // The control that names who to assign: one field, the hint that says
-      // what a blank means, and one button. A task's own page sends what it is
-      // given and a New Task form stages it, so both build it here and each
-      // decides what its submit does.
+      // The control that names who to assign: one field and, on its line, one
+      // button. A blank field assigns this board's identity, which the
+      // placeholder shows; a /label after it names one agent, as the command
+      // line's --assign takes it. A task's own page sends what it is given and
+      // a New Task form stages it, so both build it here and each decides what
+      // its submit does.
       function assignmentAdder(action) {
         const form = document.createElement("form");
         form.className = "assignment-add";
@@ -170,16 +189,12 @@
         // to clear first — and the empty value is what core resolves, so who
         // is acting is decided in one place rather than two.
         field.placeholder = assignIdentity;
-        const hint = document.createElement("p");
-        hint.className = "assignment-add__hint";
-        text(hint, "Leave blank to assign yourself. Add a /label to name one agent, as in " +
-          assignIdentity + "/impl-1.");
-        const actions = document.createElement("div");
-        actions.className = "assignment-add__actions";
+        const row = document.createElement("div");
+        row.className = "sidebar-inline";
         const submit = threadButton(action, true);
         submit.type = "submit";
-        actions.append(submit);
-        form.append(label, field, hint, actions);
+        row.append(field, submit);
+        form.append(label, row);
         return { form, field, submit };
       }
       // Who a staged value names, drawn the way a recorded assignment is: the
@@ -208,7 +223,7 @@
       // kind says so and why, and offers the retry a failed dependency offers.
       function assignmentDraftRow(panel, draft, actions) {
         const item = document.createElement("li");
-        item.className = "assignment";
+        item.className = "assignment sidebar-card";
         item.dataset.assignmentDraft = draft.key || draft.value;
         item.append(stagedAssignmentWho(draft.value));
         if (draft.error !== undefined && actions.retry) {
@@ -231,7 +246,7 @@
           controls.append(retry);
           if (actions.retryControl) actions.retryControl(retry);
         }
-        const remove = panel.claim(threadButton("Remove"));
+        const remove = panel.claim(rowRemoveButton("Remove " + (draft.value || assignIdentity)));
         remove.addEventListener("click", () => actions.remove());
         controls.append(remove);
         item.append(controls);
@@ -440,41 +455,15 @@
         // What the section was last drawn from. A poll that changed nothing
         // costs one string comparison and touches no node, which is what keeps
         // the rows from being rebuilt under a reader's caret once a second — the
-        // same contract a card holds through cardSignature.
-        //
-        // Each row's "assigned 5 minutes ago" is not part of it. That phrase is
-        // worded from this page's clock (assignedAgo) and moves about once a
-        // minute for a recent assignment with nothing about the assignment
-        // having changed; redrawing the rows for it would rebuild every row on
-        // that tick. That was invisible while the rows held only text, but a row
-        // now holds a focusable Unassign button, and destroying it takes a
-        // keyboard reader's focus to <body> mid-tab. So the phrase is written
-        // into the existing meta lines instead, by age() below.
+        // same contract a card holds through cardSignature. A row holds a
+        // focusable Unassign button, and destroying it would take a keyboard
+        // reader's focus to <body> mid-tab.
         let signature = null;
-        // The meta line of each row currently drawn and the time it was
-        // recorded, in the order the rows are in, so the phrase can be
-        // re-worded in place without walking the list back out of the document.
-        let ages = [];
         function assignmentSignature(held) {
           return JSON.stringify([held.map((assignment) => [
             assignment.value, assignment.principal, assignment.label || "",
             assignment.createdAt, assignment.removable === true
           ]), drafts.map((draft) => [draft.value, draft.error])]);
-        }
-        function assignmentMetaText(createdAt, now) {
-          const phrase = assignedAgo(createdAt, now);
-          return phrase ? recordedAt(createdAt) + " · " + phrase : recordedAt(createdAt);
-        }
-        // Re-words every drawn row against one reading of the clock, so two
-        // assignments recorded in the same second never read as two ages. It
-        // writes only a line whose words changed: the tick that calls it comes
-        // once a second, and nearly every one of them changes nothing.
-        function age() {
-          const now = Date.now();
-          for (const row of ages) {
-            const next = assignmentMetaText(row.createdAt, now);
-            if (row.meta.textContent !== next) text(row.meta, next);
-          }
         }
         // Where the section belongs when there is something to draw: this parent,
         // immediately before this sibling. Held rather than looked up so that a
@@ -486,10 +475,7 @@
           const held = Array.isArray(assignments) ? assignments : [];
           lastHeld = held;
           const next = assignmentSignature(held);
-          if (next === signature) {
-            age();
-            return;
-          }
+          if (next === signature) return;
           signature = next;
           // A board that cannot assign draws nothing where there is nothing to
           // read — not a heading over an empty list, which is the convention the
@@ -499,16 +485,13 @@
           if (!held.length && !drafts.length && !assignable) {
             panel.section.remove();
             panel.list.replaceChildren();
-            ages = [];
             return;
           }
           panel.resetControls();
           panel.setCount(held.length === 0 ? "" : held.length === 1 ? "1 assignment" : held.length + " assignments");
-          ages = [];
           draftRetries = [];
-          const now = Date.now();
           panel.list.replaceChildren(
-            ...held.map((assignment) => assignmentRow(assignment, now)),
+            ...held.map((assignment) => assignmentRow(assignment)),
             ...drafts.map((draft) => assignmentDraftRow(panel, draft, {
               retry: () => retryDraft(draft),
               retryControl: (control) => draftRetries.push(control),
@@ -517,9 +500,9 @@
           if (assignable) panel.claim(submit);
           if (parent && !parent.contains(panel.section)) parent.insertBefore(panel.section, anchor);
         }
-        function assignmentRow(assignment, now) {
+        function assignmentRow(assignment) {
           const item = document.createElement("li");
-          item.className = "assignment";
+          item.className = "assignment sidebar-card";
           // The principal and the label, drawn as the one value somebody types
           // into `--unassign` and still visibly two things: the slash is the
           // separator core composes the value with, and the label is styled
@@ -541,17 +524,14 @@
             text(label, "/" + assignment.label);
             who.append(label);
           }
-          // The exact time it was recorded and how long ago that was. The
-          // phrase is presentation.AssignedAgo's — the same words `workbook
-          // show` prints, by the rule the server rendered into this page — and
-          // it is re-worded on every tick, so an open page's hint ages without
-          // a reload and without a poll having to bring anything. Nothing
-          // expires and this is not a warning: an assignment three weeks old is
-          // a fact for people to settle between themselves.
+          // The exact time it was recorded. How long ago that was is left to
+          // `workbook show`, which words it: in a sidebar row it was a second
+          // line of text saying what the timestamp beside it already says, and
+          // nothing on the page acted on it. An assignment three weeks old is
+          // a fact for people to settle between themselves, not a warning.
           const meta = document.createElement("p");
           meta.className = "assignment__meta";
-          text(meta, assignmentMetaText(assignment.createdAt, now));
-          ages.push({ meta, createdAt: assignment.createdAt });
+          text(meta, recordedAt(assignment.createdAt));
           item.append(who, meta);
           // Withdrawal is offered only where the server said this board may make
           // one. The rule is core's — the assignee may release what they hold,
@@ -568,7 +548,7 @@
             // would put a copy of core's separator on the client, and a copy
             // that disagreed about where the first slash falls would withdraw a
             // different assignment than the row this button sits in.
-            const withdraw = panel.claim(threadButton("Unassign"));
+            const withdraw = panel.claim(rowRemoveButton("Unassign " + assignment.value));
             withdraw.addEventListener("click", () => writeThreadChange(
               panel, "DELETE", path, headed(head, { from: assignment.value }), "that withdrawal"));
             actions.append(withdraw);
@@ -602,8 +582,7 @@
           firstDraftRetry() {
             const retry = draftRetries[0];
             return retry && panel.section.contains(retry) ? retry : null;
-          },
-          age
+          }
         };
       }
       function commentAttribution(comment) {
