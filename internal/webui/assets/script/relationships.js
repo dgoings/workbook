@@ -234,9 +234,21 @@
 
         const controller = {
           region, input, listbox, empty, add,
-          setCandidates(candidates) {
+          // A chosen task the new set no longer offers loses its selection.
+          // A poll keeps its title in the box, so the reader sees what went
+          // stale; a kind change clears the box too (clearStalePick), because
+          // there the reader moved the toggle themselves, and a title left
+          // beside a disabled Add would read as a pick that cannot be added
+          // for no reason given.
+          setCandidates(candidates, { clearStalePick = false } = {}) {
             state.candidates = candidates;
-            if (!selectedCandidate()) state.selectedID = "";
+            if (state.selectedID && !selectedCandidate()) {
+              state.selectedID = "";
+              if (clearStalePick) {
+                state.query = "";
+                input.value = "";
+              }
+            }
             state.activeIndex = -1;
             renderOptions();
           },
@@ -399,6 +411,17 @@
             kindInputs.forEach((other) => { if (other !== input) other.checked = false; });
             chooseKind(candidate);
           });
+          // The radios sit inside the task form, where Enter on one submits
+          // it: it would create a half-filled task, or save an edit and leave.
+          // Enter chooses the option instead, the way Space does.
+          input.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            if (input.checked) return;
+            input.checked = true;
+            kindInputs.forEach((other) => { if (other !== input) other.checked = false; });
+            chooseKind(candidate);
+          });
           kindOptions.append(input, label);
           return input;
         });
@@ -438,7 +461,7 @@
           // What the picker offers depends on the kind: a task this one already
           // depends on is not offered for Depends On, and one it already blocks
           // is not offered for Blocks.
-          combobox.setCandidates(relationshipCandidates(taskID, kind.direction, draftState));
+          combobox.setCandidates(relationshipCandidates(taskID, kind.direction, draftState), { clearStalePick: true });
         }
         region.append(heading, list, kindGroup, combobox.region, message, status);
         controller = {

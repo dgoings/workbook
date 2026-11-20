@@ -30,17 +30,20 @@
        form is held: the description stays on the screen, a long sidebar
        scrolls inside the form, and the Save row stays in view, with the thread
        and the change log below for main to scroll to.
-       The height is 100cqh of main, which is a size container, so it is the
-       height main actually has once the app header has taken its share —
-       however many rows that header stacks into — rather than an estimate of
-       the chrome. calc(100dvh - 16rem) was that estimate, and it put Save
-       below the fold whenever the header stacked or the title wrapped. The
-       title's lines come out of the form, because the form is the flexible
-       part of this block. The floor keeps a cramped window from shrinking the
-       form to a sliver; there the page scrolls to the rest of it.
+       The header and the form are at least 100cqh of main, which is a size
+       container, so it is the height main actually has once the app header
+       has taken its share — however many rows that header stacks into —
+       rather than an estimate of the chrome. calc(100dvh - 16rem) was that
+       estimate, and it put Save below the fold whenever the header stacked or
+       the title wrapped. The form grows from nothing into what the header
+       leaves, so a title's lines come out of the form; the floor is on the
+       form itself, so a title long enough to leave less than the floor makes
+       the block taller than main and the page scrolls, rather than folding
+       the description under the Save row.
        Short and narrow windows keep the one scrolling page below. */
     @media (min-width: 761px) and (min-height: 701px) {
-      .task-route--history .task-route__screen { flex: none; height: 100cqh; min-height: 26rem; }
+      .task-route--history .task-route__screen { flex: none; min-height: 100cqh; }
+      .task-route--history .task-layout { flex: 1 1 0; min-height: 26rem; }
     }
     @media (min-width: 761px) and (max-height: 700px) {
       .task-route { height: auto; min-height: 100%; }

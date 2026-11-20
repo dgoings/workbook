@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -213,7 +214,7 @@ setTimeout(async () => {
     throw new Error("after two Blocks adds the list is " + JSON.stringify(listedRows()) + ", want " + JSON.stringify(after));
   }
   // With the toggle on Blocks, a task this one already blocks is not offered,
-  // and the stored prerequisite is; on Depends On it is the other way round.
+  // and the stored prerequisite is; on Depends On it is the other way around.
   const offered = () => findElements(relationshipSection(main), (element) => element.attributes.role === "option").map((option) => option.dataset.candidateId);
   if (offered().includes(` + strconv.Quote(firstBlocked.ID) + `) || !offered().includes(` + strconv.Quote(prerequisite.ID) + `)) {
     throw new Error("Blocks offers " + JSON.stringify(offered()));
@@ -230,6 +231,69 @@ setTimeout(async () => {
 	}
 }
 
+// A task picked under one kind and not offered under the other is let go of
+// when the toggle moves: the box empties and Add stays off, rather than the
+// box still showing a title that Add will not take. A pick both kinds offer
+// survives the move.
+func TestHandlerClientDropsAPickTheNewDependencyKindExcludes(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	current := clientPlacementTask("WB-01J0000000000000000000KS00", "Current task", core.StatusReady, core.PriorityMedium)
+	current.Head = "head-1"
+	prerequisite := clientPlacementTask("WB-01J0000000000000000000KS01", "Stored prerequisite", core.StatusDone, core.PriorityHigh)
+	unrelated := clientPlacementTask("WB-01J0000000000000000000KS02", "Unrelated task", core.StatusBacklog, core.PriorityLow)
+	current.Dependencies = []string{prerequisite.ID}
+	tasks := []core.Task{current, prerequisite, unrelated}
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	program := clientDOMHarness("/tasks/"+current.ID, string(document)) + script + relationshipKindProgramHelpers + `
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const pick = (candidateID, query) => {
+    const picker = sectionPicker();
+    picker.input.value = query;
+    picker.input.eventListeners.input();
+    const option = findElement(relationshipSection(main), (element) =>
+      element.attributes.role === "option" && element.dataset.candidateId === candidateID);
+    if (!option) throw new Error("the picker does not offer " + candidateID);
+    option.eventListeners.click();
+    if (picker.add.disabled) throw new Error("choosing " + candidateID + " did not enable Add dependency");
+  };
+  const selected = () => findElements(relationshipSection(main), (element) =>
+    element.attributes.role === "option" && element.attributes["aria-selected"] === "true").map((option) => option.dataset.candidateId);
+
+  // Blocks offers the stored prerequisite; Depends On does not.
+  chooseRelationshipKind(main, "Blocks");
+  pick(` + strconv.Quote(prerequisite.ID) + `, "Stored");
+  chooseRelationshipKind(main, "Depends On");
+  const picker = sectionPicker();
+  if (picker.input.value !== "") {
+    throw new Error("after the toggle moved to Depends On the box still reads " + JSON.stringify(picker.input.value));
+  }
+  if (!picker.add.disabled) throw new Error("Add dependency is on with nothing picked");
+  if (selected().length !== 0) throw new Error("the picker still marks " + JSON.stringify(selected()) + " as chosen");
+
+  // A task both kinds offer stays picked.
+  pick(` + strconv.Quote(unrelated.ID) + `, "Unrelated");
+  chooseRelationshipKind(main, "Blocks");
+  if (sectionPicker().input.value !== "Unrelated task" || sectionPicker().add.disabled) {
+    throw new Error("a pick both kinds offer was dropped by the toggle: box " + JSON.stringify(sectionPicker().input.value));
+  }
+}, 0);
+`
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the kind toggle over a pick: %v\n%s", err, output)
+	}
+}
+
 // The toggle is a radio group a keyboard operates the way it operates any:
 // the arrow keys move the choice and the focus together, the picker follows,
 // and the focused option shows a focus ring. Pressed as real keys in a real
@@ -237,7 +301,7 @@ setTimeout(async () => {
 func TestBrowserOperatesTheDependencyKindToggleFromTheKeyboard(t *testing.T) {
 	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) {
-		return []core.Task{clientPlacementTask("WB-01J0000000000000000000KN01", "Neighbour task", core.StatusReady, core.PriorityMedium)}, nil
+		return []core.Task{clientPlacementTask("WB-01J0000000000000000000KN01", "Neighbor task", core.StatusReady, core.PriorityMedium)}, nil
 	})
 	var result struct{ Checked, Focused, Placeholder, Outline string }
 	report := `
@@ -285,5 +349,87 @@ func TestBrowserOperatesTheDependencyKindToggleFromTheKeyboard(t *testing.T) {
 	}, &back)
 	if back.Checked != "depends-on" || back.Focused != "dependency-kind-depends-on" || back.Placeholder != "Prerequisite" {
 		t.Errorf("ArrowRight then ArrowLeft left %+v, want Depends On checked and focused, asking for a prerequisite", back)
+	}
+}
+
+// writeRecorder passes requests to the board and keeps every one that is not
+// a read, so a test can say that a key press wrote nothing.
+type writeRecorder struct {
+	next   http.Handler
+	mu     sync.Mutex
+	writes []string
+}
+
+func (recorder *writeRecorder) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		recorder.mu.Lock()
+		recorder.writes = append(recorder.writes, request.Method+" "+request.URL.Path)
+		recorder.mu.Unlock()
+	}
+	recorder.next.ServeHTTP(response, request)
+}
+
+func (recorder *writeRecorder) recorded() []string {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return append([]string(nil), recorder.writes...)
+}
+
+// Enter on an "Add as" option chooses it and does nothing else. The radios
+// sit inside the task form, where Chrome treats Enter as a request to submit
+// it: on New Task that created the half-filled task, and on a task's page it
+// saved the edit and left. Pressed as a real key in a real browser, because
+// the submission is the browser's own.
+func TestBrowserEnterOnTheDependencyKindChoosesItWithoutSubmitting(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{"/tasks/new", "/tasks/" + longSidebarTaskID} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			recorder := &writeRecorder{next: longSidebarBoard(t, "Long sidebar task")}
+			var result struct {
+				Path, Checked, Placeholder string
+				Submitted                  bool
+			}
+			openInBrowser(t, recorder, browserPage{
+				Width: 1280, Height: 800, Path: path,
+				Setup: pageGeometryHelpers + `
+(async () => {
+  await waitFor(() => document.querySelector("#dependency-kind-blocks") && document.querySelector("#task-title"), "the task form and its dependency toggle");
+  // An edit, so a submitted form has something to write.
+  const title = document.querySelector("#task-title");
+  title.value = "Half-filled title";
+  title.dispatchEvent(new Event("input", { bubbles: true }));
+  window.__submitted = false;
+  document.querySelector("form.task-layout").addEventListener("submit", () => { window.__submitted = true; }, true);
+  document.querySelector("#dependency-kind-blocks").focus();
+})()`,
+				Keys: []string{"Enter"},
+				Script: `(async () => {
+  // Long enough for a submitted form to have written and navigated.
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  const checked = document.querySelector(".task-relationships input[type=radio]:checked");
+  const picker = document.querySelector(".task-relationships [role=combobox]");
+  return {
+    path: location.pathname,
+    submitted: window.__submitted === true,
+    checked: checked ? checked.value : "",
+    placeholder: picker ? picker.placeholder : ""
+  };
+})()`,
+			}, &result)
+			if result.Submitted {
+				t.Errorf("Enter on the Blocks option submitted the task form")
+			}
+			if writes := recorder.recorded(); len(writes) != 0 {
+				t.Errorf("Enter on the Blocks option wrote %v", writes)
+			}
+			if result.Path != path {
+				t.Errorf("Enter on the Blocks option moved the page to %q, want it on %q", result.Path, path)
+			}
+			if result.Checked != "blocks" || result.Placeholder != "Task to block" {
+				t.Errorf("Enter on the Blocks option left %q checked and the picker asking for %q, want Blocks and %q",
+					result.Checked, result.Placeholder, "Task to block")
+			}
+		})
 	}
 }

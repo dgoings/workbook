@@ -78,9 +78,11 @@ before anyone runs it; see Compatibility across versions below.
 - **A task's page is laid out like the New Task form.** Assignments and
   attachments moved into the sidebar, after the dependencies; only the
   comments and the change history sit below the form. As on the New Task form,
-  the form fits the window: the description and Save stay on the screen and a
-  long sidebar scrolls inside the form, however tall the header and the task's
-  title are. Empty assignment and attachment lists no longer explain
+  the form fills the window: the description and Save stay on the screen and a
+  long sidebar scrolls inside the form, whether the header stacks onto several
+  rows or the task's title wraps. A title so long that it leaves the form
+  under 26rem is the exception: the form keeps that height and the page
+  scrolls to its Save row. Empty assignment and attachment lists no longer explain
   themselves or count to zero, and a chosen file is listed with a × to take it
   back out before **Add file** sends or stages it.
 - **Depends On and Blocks are one Dependencies section** on both task forms:

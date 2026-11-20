@@ -552,7 +552,8 @@ const taskPageGeometryScript = pageGeometryHelpers + `
     description: form.querySelector(".field--description"),
     sidebar,
     save: form.querySelector(".save-button"),
-    footer: form.querySelector(".task-actions")
+    footer: form.querySelector(".task-actions"),
+    comments: route.querySelector('[data-task-panel="comments"]')
   };
   const boxes = {};
   for (const [name, element] of Object.entries(parts)) {
@@ -637,6 +638,14 @@ func TestBrowserHoldsTheTaskPageFormToTheWindow(t *testing.T) {
 					t.Fatalf("the long title was drawn on %d line, so this case does not test a wrapped title", geometry.TitleLines)
 				}
 				bottom := geometry.Viewport.Height
+				// The form fills the window rather than merely fitting in it: a
+				// height estimated from the chrome that comes out too short
+				// leaves a band of thread below Save, with nothing off screen.
+				visibleBottom := min(geometry.Box["main"].Bottom, bottom)
+				if gap := visibleBottom - geometry.Box["footer"].Bottom; gap > 24 {
+					t.Errorf("the Save row ends at %.0f, %.0fpx above main's visible bottom at %.0f, so the form does not fill the window (title on %d lines, app header %.0fpx)",
+						geometry.Box["footer"].Bottom, gap, visibleBottom, geometry.TitleLines, geometry.Box["appHeader"].Height)
+				}
 				for _, part := range []string{"description", "save", "footer", "sidebar"} {
 					got := geometry.Box[part]
 					if got.Top < geometry.Box["main"].Top || got.Bottom > bottom {
@@ -668,6 +677,44 @@ func TestBrowserHoldsTheTaskPageFormToTheWindow(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// veryLongTitle wraps onto ten or more lines at 800px. A title is capped at
+// 500 bytes, so it is set in wide capitals to reach ten lines inside that.
+const veryLongTitle = "Make the WebUI MOVE WHOLE MEMO WINDOWS: Make the WebUI MOVE WHOLE MEMO WINDOWS: Make the WebUI MOVE WHOLE MEMO WINDOWS: Make the WebUI MOVE WHOLE MEMO WINDOWS: Make the WebUI MOVE WHOLE MEMO WINDOWS: Make the WebUI MOVE WHOLE MEMO WINDOWS: Make the WebUI MOVE WHOLE MEMO WINDOWS: Make the WebUI MOVE WHOLE MEMO WINDOWS: Make the WebUI MOVE WHOLE MEMO WINDOWS: Make the WebUI MOVE WHOLE MEMO WINDOWS: Make the WebUI MOVE WHOLE MEMO WINDOWS: Make the WebUI MOVE WHOLE MEMO WINDOWS: Make the WebUI"
+
+// A title so long that the header and a floored form no longer fit the window
+// does not crush the form: the form keeps its floor and its own shape, the
+// description stays above the Save row, the thread stays below the form, and
+// the page scrolls to the rest. The floor used to sit on the header and the
+// form together, so a ten-line title took its lines from the form until the
+// description was drawn under the Save row.
+func TestBrowserKeepsAVeryLongTitleFromCrushingTheTaskPageForm(t *testing.T) {
+	t.Parallel()
+	const floor = 26 * 16
+	geometry := measureTaskPage(t, veryLongTitle, 800, 720)
+	if geometry.TitleLines < 10 {
+		t.Fatalf("the title was drawn on %d lines, so this case does not test a ten-line title", geometry.TitleLines)
+	}
+	form, description, footer, comments := geometry.Box["form"], geometry.Box["description"], geometry.Box["footer"], geometry.Box["comments"]
+	if form.Height < floor-1 {
+		t.Errorf("the form is %.0fpx tall, under its %dpx floor", form.Height, floor)
+	}
+	if description.Bottom > footer.Top+1 {
+		t.Errorf("the description spans %.0f..%.0f and the Save row %.0f..%.0f: they overlap", description.Top, description.Bottom, footer.Top, footer.Bottom)
+	}
+	if footer.Bottom > form.Bottom+1 {
+		t.Errorf("the Save row ends at %.0f, below the form's end at %.0f", footer.Bottom, form.Bottom)
+	}
+	if comments.Top < form.Bottom-1 {
+		t.Errorf("the thread starts at %.0f, inside the form that ends at %.0f", comments.Top, form.Bottom)
+	}
+	if geometry.MainScrollHeight <= geometry.MainClientHeight {
+		t.Errorf("the page does not scroll (%.0f in %.0f)", geometry.MainScrollHeight, geometry.MainClientHeight)
+	}
+	if !geometry.CommentsReachable || !geometry.HistoryReachable {
+		t.Errorf("the comments reachable = %v and the change log reachable = %v", geometry.CommentsReachable, geometry.HistoryReachable)
 	}
 }
 
