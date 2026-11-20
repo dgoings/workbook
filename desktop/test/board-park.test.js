@@ -77,7 +77,10 @@ async function launch (before = () => {}) {
     // its start resolves is modeled as lost, the worst a supervisor can do, so
     // only a stop after the last 'up' counts as stopped.
     holds: new Map(),
-    events: []
+    events: [],
+    // The window's event handlers, and every path the presence check looked at.
+    windowEvents: new Map(),
+    checked: []
   }
 
   class FakeView {
@@ -120,7 +123,10 @@ async function launch (before = () => {}) {
     }
 
     getContentBounds () { return { x: 0, y: 0, width: 1280, height: 820 } }
-    on () {}
+    on (event, handler) {
+      if (!h.windowEvents.has(event)) h.windowEvents.set(event, [])
+      h.windowEvents.get(event).push(handler)
+    }
     once () {}
     setBackgroundColor () {}
     static getAllWindows () { return h.window ? [h.window] : [] }
@@ -200,6 +206,7 @@ async function launch (before = () => {}) {
       createPresenceTracker: (options) => createPresenceTracker({
         ...options,
         check: async (dir) => {
+          h.checked.push(dir)
           const hold = h.holds.get(dir)
           if (hold) await hold()
           return h.missing.has(dir)
@@ -242,6 +249,7 @@ async function launch (before = () => {}) {
     remove: (projectId) => ipc('project:forget', { projectId }),
     presence: (projectId) => ipc('project:presence', { projectId }),
     listed: () => ipc('registry:list'),
+    focusWindow: () => { for (const handler of h.windowEvents.get('focus') ?? []) handler() },
     exit: (projectId) => h.supervisor.emit('exited', { projectId, code: 1, wasRunning: true }),
     startWith: (projectId, start) => h.starts.set(projectId, start),
     // Hold the presence check for a project open until the returned function
@@ -437,6 +445,31 @@ describe('removing a project from Workbench', () => {
 
     assert.equal((await app.remove('B')).removed, true)
     assert.equal((await app.presence('B')).known, false)
+  })
+
+  test('the window coming back into focus looks at every repository again', async () => {
+    const app = await launch()
+    app.h.missing.add(PROJECTS[1].path)
+    app.h.checked.length = 0
+    app.focusWindow()
+    await settle()
+    assert.deepEqual([...app.h.checked].sort(), PROJECTS.map((project) => project.path).sort())
+    const listed = (await app.listed()).projects.find((project) => project.id === 'B')
+    assert.equal(listed.missing, true, 'a repository gone while the app was in the background is not marked')
+    assert.ok(sentOn(app, 'sidebar:layoutChanged').some((payload) =>
+      payload.projects.find((project) => project.id === 'B')?.missing === true), 'the sidebar was not told')
+  })
+
+  test('a board that stops looks at its own repository again', async () => {
+    const app = await launch()
+    await app.open('A')
+    app.h.missing.add(PROJECTS[0].path)
+    app.h.checked.length = 0
+    app.exit('A')
+    await settle()
+    assert.deepEqual(app.h.checked, [PROJECTS[0].path])
+    const listed = (await app.listed()).projects.find((project) => project.id === 'A')
+    assert.equal(listed.missing, true)
   })
 
   test('a repository that comes back is unmarked the next time anything looks', async () => {

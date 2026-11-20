@@ -324,6 +324,16 @@ describe('removing a project', () => {
     assert.deepEqual(calls.opens, [])
   })
 
+  test('the identity form asked for a removed project is put away, and one for another project is not', async () => {
+    const { removeProject, state } = renderer({ active: 'a' })
+    state.identity = { projectId: 'c' }
+    await removeProject('c')
+    assert.equal(state.identity, null, 'the form still asks who to be for a project that is gone')
+    state.identity = { projectId: 'a' }
+    await removeProject('b')
+    assert.deepEqual(state.identity, { projectId: 'a' })
+  })
+
   test('the missing panel names the problem and is put away once the project is removed', async () => {
     const { removeProject, showMissing, el, calls } = renderer()
     showMissing('b', { missing: true, reason: 'not-a-repository', message: 'No Git repository at /src/beta' })
@@ -333,6 +343,78 @@ describe('removing a project', () => {
     assert.ok(calls.chrome >= 1, 'a board still laid in would cover the panel')
     await removeProject('b')
     assert.equal(el('missing-repo').hidden, true)
+  })
+})
+
+describe('Look again', () => {
+  // The panel's button, from app.js's own listener, through openProject to the
+  // main process's presence question: a repository that has come back opens,
+  // and one that is still gone keeps the panel up.
+  function panel (answers) {
+    const asked = []
+    const opened = []
+    const elements = new Map()
+    const el = (id) => {
+      if (!elements.has(id)) elements.set(id, new FakeElement('div'))
+      return elements.get(id)
+    }
+    const context = vm.createContext({
+      state: {
+        projects: projects.map((project) => ({ ...project, status: 'running' })),
+        view: 'project',
+        activeProjectId: 'b',
+        missingProjectId: null,
+        identity: null
+      },
+      api: {
+        projectPresence: async (id) => {
+          asked.push(id)
+          return answers.shift()
+        },
+        openProject: async (id) => { opened.push(id) },
+        showChrome () {}
+      },
+      el,
+      setView: (name, id) => {
+        context.state.view = name
+        if (id) context.state.activeProjectId = id
+      },
+      hideIdentityForm () {},
+      askForIdentity: async () => false,
+      loadProjects () {},
+      removeProject () { throw new Error('remove is not under test') },
+      remoteMessage: (error) => String(error.message),
+      console
+    })
+    const code = require('./support/tooltips').app
+    const listeners = code.match(/\nel\('missing-remove'\)\.addEventListener[\s\S]*?\n\}\)\nel\('missing-retry'\)\.addEventListener[\s\S]*?\n\}\)\n/)
+    assert.ok(listeners, 'no missing-panel listeners in app.js')
+    const names = ['openProject', 'showIfMissing', 'showMissing', 'hideMissing', 'stillOpening']
+    vm.runInContext(`${names.map(appFn).join('\n')}\n${listeners[0]}`, context)
+    return { context, el, asked, opened }
+  }
+
+  const gone = { known: true, missing: true, reason: 'not-found', message: 'Repository not found at /src/beta' }
+  const back = { known: true, missing: false, reason: null, message: null }
+
+  test('looks again, and opens the board once the repository is back', async () => {
+    const { context, el, asked, opened } = panel([back])
+    context.showMissing('b', gone)
+    click(el('missing-retry'))
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(asked, ['b'], 'Look again did not ask whether the repository is there')
+    assert.deepEqual(opened, ['b'])
+    assert.equal(el('missing-repo').hidden, true)
+  })
+
+  test('a repository still gone keeps the panel up and starts nothing', async () => {
+    const { context, el, asked, opened } = panel([gone])
+    context.showMissing('b', gone)
+    click(el('missing-retry'))
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(asked, ['b'])
+    assert.deepEqual(opened, [])
+    assert.equal(el('missing-repo').hidden, false)
   })
 })
 

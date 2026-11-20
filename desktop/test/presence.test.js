@@ -76,6 +76,18 @@ test('a path that cannot be read for some other reason is not called missing', a
   assert.equal((await checkRepository(path.join('anywhere'), { stat })).missing, false)
 })
 
+test('a folder whose .git cannot be read is not called missing', async () => {
+  // The folder is there and only its .git refuses to say: permission denied
+  // on a checkout someone else owns is not a deleted repository.
+  const folder = { isDirectory: () => true }
+  const stat = async (target) => {
+    if (path.basename(target) === '.git') throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    return folder
+  }
+  assert.deepEqual(await checkRepository(path.join('somewhere', 'repo'), { stat }),
+    { missing: false, reason: null, message: null })
+})
+
 test('a path that is not a non-empty string is missing rather than a throw', async () => {
   for (const value of [undefined, null, '', 42]) {
     assert.equal((await checkRepository(value)).missing, true)
