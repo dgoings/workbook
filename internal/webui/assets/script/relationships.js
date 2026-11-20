@@ -164,7 +164,15 @@
           showListbox();
           renderOptions();
         }
-        input.addEventListener("focus", openListbox);
+        // Set while the page hands the caret back to the box after a write,
+        // so the list does not open over the sidebar under a reader who did
+        // not ask for it. A press on the box still opens it.
+        let quiet = false;
+        input.focusQuietly = () => {
+          quiet = true;
+          try { input.focus(); } finally { quiet = false; }
+        };
+        input.addEventListener("focus", () => { if (!quiet) openListbox(); });
         // A press on an already focused input fires no focus event, and pointer
         // selection deliberately leaves focus in the input, so without this the
         // popup could only be reopened by first clicking somewhere else.
@@ -286,6 +294,10 @@
         row.dataset.relationshipId = relationship.id;
         if (kind) row.dataset.relationshipKind = kind.direction;
         if (isDraft) row.dataset.relationshipDraft = "";
+        // What names this row across the list's redraws, for the caret: a
+        // draft and the recorded edge it becomes share it, because the
+        // recorded row is the one in the draft's place.
+        row.rowKey = (kind ? kind.direction : "") + ":" + relationship.id;
         // The task's ID is not printed in the row: it is a long run of
         // characters that wrapped a sidebar row onto three lines and says
         // nothing a reader scanning their dependencies needs. It stays one
@@ -309,14 +321,19 @@
         text(metadata, relationship.task
           ? relationship.task.status + " · " + relationship.task.priority
           : relationship.id);
-        // Everything there is to read goes in one grid item, and everything
-        // there is to press goes in the other. The row is a two-column grid,
-        // and it used to hand each part to that grid loose: only the Remove
-        // button named a column, so which part landed where came out of how
-        // many parts this branch appended. A failed draft's error note, its
-        // fourth part, auto-placed into the controls column and narrowed the
-        // title, and the row with no button at all crushed its title into a
-        // vertical line of single characters.
+        // Everything there is to read goes in one grid item, and the × goes
+        // in the other, at the right end of the title's line. The row is a
+        // two-column grid, and it used to hand each part to that grid loose:
+        // only the Remove button named a column, so which part landed where
+        // came out of how many parts this branch appended. A failed draft's
+        // error note, its fourth part, auto-placed into the controls column
+        // and narrowed the title, and the row with no button at all crushed
+        // its title into a vertical line of single characters.
+        //
+        // A draft says so on a line of its own under both, across the whole
+        // card: "Not saved", why, and the Retry that saves it. Beside the ×,
+        // Retry and the note squeezed the title into what was left of the
+        // card's width, which is the part of the row a reader came to read.
         const textColumn = document.createElement("div");
         textColumn.className = "relationship-row__text";
         if (kind) {
@@ -333,16 +350,19 @@
         }
         const controls = document.createElement("div");
         controls.className = "relationship-row__controls";
+        let failure = null;
         if (isDraft) {
+          failure = document.createElement("div");
+          failure.className = "relationship-row__failure";
           const draft = document.createElement("strong");
           draft.className = "relationship-state";
           text(draft, "Not saved");
-          textColumn.append(draft);
+          failure.append(draft);
           if (relationship.error) {
             const error = document.createElement("p");
             error.className = "relationship-row__note";
             text(error, relationship.error);
-            textColumn.append(error);
+            failure.append(error);
           }
         } else if (relationship.task && relationship.task.deleted) {
           const deleted = document.createElement("strong");
@@ -354,7 +374,7 @@
           const retry = threadButton("Retry");
           retry.className += " relationship-retry";
           retry.addEventListener("click", () => onRetry(relationship));
-          controls.append(retry);
+          failure.append(retry);
           row.retryButton = retry;
         }
         const remove = rowRemoveButton(kind && kind.direction === "blocks"
@@ -365,6 +385,7 @@
         controls.append(remove);
         row.removeButton = remove;
         row.append(textColumn, controls);
+        if (failure) row.append(failure);
         return row;
       }
       // The two kinds of edge the sidebar adds and lists. Both are one stored
@@ -447,19 +468,23 @@
           label: kind.caption,
           placeholder: kind.placeholder,
           isBusy: () => controller.busy,
-          onAdd: (selectedID) => {
+          // An add hands the caret back to the picker, cleared for the next
+          // one; a refused one leaves it on Add, beside the pick it kept.
+          onAdd: async (selectedID) => {
             if (controller.busy) return;
+            const settle = holdSidebarFocus(combobox.add, list, null, combobox.input);
             if (!taskID) {
               const selectedTask = reconciledRelationshipTasks().active.find((task) => task.id === selectedID);
               if (!selectedTask) return;
               draftState[kind.name].set(selectedID, draftEntry(selectedTask));
               combobox.clear();
               controller.update();
+              settle(true);
               return;
             }
             const dependentID = kind.name === "dependsOn" ? taskID : selectedID;
             const prerequisiteID = kind.name === "dependsOn" ? selectedID : taskID;
-            return mutateRelationship("PUT", dependentID, prerequisiteID, controller);
+            settle(await mutateRelationship("PUT", dependentID, prerequisiteID, controller));
           }
         });
         function chooseKind(next) {
@@ -526,16 +551,23 @@
                   draftMap.has(relationship.id) &&
                   !persistedIDs.has(relationship.id)
                 );
+                // Both of a row's buttons rebuild the list they sit in, so
+                // each asks for the caret back before it writes; see
+                // holdSidebarFocus for where it goes.
                 const retryDraft = isDraft && taskID && relationship.error
-                  ? () => retryRelationshipDraft(name, relationship, draftMap, controller)
+                  ? async () => {
+                    const settle = holdSidebarFocus(row.retryButton, list, row, combobox.input);
+                    settle(await retryRelationshipDraft(name, relationship, draftMap, controller));
+                  }
                   : null;
                 const task = relationship.task;
                 signatureParts.push([
                   name, relationship.id, isDraft, relationship.error || "", Boolean(retryDraft),
                   task ? [task.title, task.status, task.priority, Boolean(task.deleted)] : null
                 ]);
-                const row = relationshipRow(relationship, () => {
+                const row = relationshipRow(relationship, async () => {
                   if (controller.busy) return;
+                  const settle = holdSidebarFocus(row.removeButton, list, row, combobox.input);
                   if (isDraft) {
                     if (taskID && !ownsDependencyController(controller)) return;
                     draftMap.delete(relationship.id);
@@ -543,11 +575,12 @@
                       pendingRelationshipDrafts.delete(taskID);
                     }
                     controller.update();
+                    settle(true);
                     return;
                   }
                   const dependentID = name === "dependsOn" ? taskID : relationship.id;
                   const prerequisiteID = name === "dependsOn" ? relationship.id : taskID;
-                  return mutateRelationship("DELETE", dependentID, prerequisiteID, controller);
+                  settle(await mutateRelationship("DELETE", dependentID, prerequisiteID, controller));
                 }, isDraft, retryDraft, rowKind);
                 const remove = row.removeButton;
                 if (remove) {

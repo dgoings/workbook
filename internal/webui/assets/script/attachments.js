@@ -101,7 +101,7 @@
         file.id = "attachment-file";
         file.name = "attachment-file";
         file.className = "attachment-add__file";
-        // The browser's own chooser draws a grey "Choose File" and a "No file
+        // The browser's own chooser draws a gray "Choose File" and a "No file
         // chosen" beside it, in its own type and colors. The input stays the
         // control — clipped out of sight, still in the tab order, still what a
         // screen reader names, still the thing Space and Enter open — and this
@@ -243,11 +243,16 @@
           if (chosen.length === 0) return config.report("Choose a file to attach.");
           return config.acceptFiles(chosen);
         });
-        linkGroup.addEventListener("submit", (event) => {
+        // The button is disabled while the link is sent, which takes the
+        // caret off it. A link that was attached hands it back to the URL box,
+        // emptied for the next; one that was refused hands it back to the
+        // control that sent it, with what was typed still in the boxes.
+        linkGroup.addEventListener("submit", async (event) => {
           event.preventDefault();
+          const settle = holdSidebarFocus(event.submitter || document.activeElement || addLink, null, null, url);
           const destination = url.value.trim();
           if (!destination) return config.report("A link needs a URL.");
-          return config.acceptLink(destination, caption.value.trim());
+          settle((await config.acceptLink(destination, caption.value.trim())) === true);
         });
         return {
           region, file, url, caption, addFile, addLink,
@@ -795,6 +800,7 @@
           const row = document.createElement("li");
           row.className = "attachment sidebar-card";
           row.dataset.attachmentId = attachment.id;
+          row.rowKey = attachment.id;
           const name = document.createElement("p");
           name.className = "attachment__name";
           if (attachment.kind === "link") {
@@ -836,12 +842,25 @@
           meta.title = described.full;
           const remove = panel.claim(rowRemoveButton("Remove " + attachmentShownName(attachment)));
           remove.className += " attachment__remove";
-          remove.addEventListener("click", () => writeThreadChange(
-            panel, "DELETE", attachmentPath(attachment.id), headed(head, {}), "that removal"));
+          remove.addEventListener("click", async () => {
+            const settle = holdSidebarFocus(remove, panel.list, row, adder.url);
+            settle(Boolean(await writeThreadChange(
+              panel, "DELETE", attachmentPath(attachment.id), headed(head, {}), "that removal")));
+          });
+          row.removeButton = remove;
           row.append(name, meta, remove);
           return row;
         }
+        // What the list was last drawn from. Every read of the board that
+        // changed any task brings this panel the task again, and rebuilding
+        // rows that had not changed destroyed the × under a keyboard reader's
+        // caret — the one the write before it had just put there. Unchanged,
+        // the rows stand, as the dependency and assignment lists' do.
+        let drawn = null;
         function render() {
+          const signature = JSON.stringify(attachments);
+          if (signature === drawn) return;
+          drawn = signature;
           panel.resetControls();
           const rows = attachments.map(attachmentRow);
           panel.claim(adder.addFile);
@@ -898,8 +917,9 @@
           const answer = await writeThreadChange(
             panel, "POST", "/api/tasks/" + encodeURIComponent(taskID) + "/attachments",
             headed(head, values), "that link");
-          if (!answer) return;
+          if (!answer) return false;
           adder.clearLink();
+          return true;
         }
         panel.follow = (held) => {
           attachments = (held && held.attachments) || [];
@@ -1038,7 +1058,7 @@
           render();
         }
         function acceptLink(destination, label) {
-          if (panel.busy) return;
+          if (panel.busy) return false;
           panel.report("");
           // Asked here rather than left to the server, which is the opposite of
           // what the task page does and for a reason that only exists here: the
@@ -1048,7 +1068,7 @@
           const refusal = stagedLinkRefusal(destination, label);
           if (refusal) {
             panel.report(refusal);
-            return;
+            return false;
           }
           draftState.items.push({
             key: "staged-" + (++draftState.sequence),
@@ -1060,11 +1080,13 @@
           });
           adder.clearLink();
           render();
+          return true;
         }
         function draftRow(item) {
           const row = document.createElement("li");
           row.className = "attachment sidebar-card";
           row.dataset.attachmentDraft = item.key;
+          row.rowKey = item.key;
           const name = document.createElement("p");
           name.className = "attachment__name";
           // Drawn as text rather than as a link, both kinds of it. A staged file
@@ -1088,10 +1110,13 @@
             // while the reader watches it leave the screen. The disabled
             // attribute is what a browser honours; this is what makes it true.
             if (panel.busy) return;
+            const settle = holdSidebarFocus(remove, panel.list, row, adder.url);
             draftState.items = draftState.items.filter((held) => held !== item);
             panel.report("");
             render();
+            settle(true);
           });
+          row.removeButton = remove;
           row.append(name, meta, remove);
           if (item.error) {
             const failure = document.createElement("p");

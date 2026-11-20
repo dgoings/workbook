@@ -183,9 +183,13 @@
     .relationship-row__title h4 { display: inline; }
     .relationship-row__kind { display: inline-block; margin-right: .35rem; padding: 0 .4rem; border: 1px solid var(--wb-border); border-radius: 999px; background: var(--wb-primary-tint-1); color: var(--wb-primary-ink); font-size: .66rem; font-weight: 800; line-height: 1.35; white-space: nowrap; }
     .relationship-row__kind--blocks { border-color: var(--wb-warning-border); background: var(--wb-warning-surface); color: var(--wb-warning-ink); }
-    /* On the title's line, at the card's right end: the × alone, or Retry
-       then the × on a draft whose save was refused. */
+    /* On the title's line, at the card's right end: the × alone. */
     .relationship-row__controls { display: flex; align-items: center; align-self: start; gap: var(--sb-inline-gap); grid-column: 2; }
+    /* A draft's state, under the title and the ×, across the whole card:
+       "Not saved", the reason, and the Retry that saves it, each on its own
+       line. Retry and the reason used to sit beside the ×, and they took the
+       title down to a narrow column of what was left. */
+    .relationship-row__failure { display: grid; grid-column: 1 / -1; justify-items: start; gap: var(--sb-card-line-gap); min-width: 0; }
     .relationship-state { color: var(--wb-danger-ink); font-size: .75rem; }
     /* The box and its Add on one line, laid out as every inline add row in
        the sidebar is (see .sidebar-inline): the box takes the width, the
@@ -310,6 +314,11 @@
     .assignment__meta { margin: 0; color: var(--wb-ink-muted); font-size: .72rem; overflow-wrap: anywhere; }
     .assignment__failure { margin: .1rem 0 0; color: var(--wb-danger-ink); font-size: .74rem; overflow-wrap: anywhere; }
     .assignment__actions { display: flex; grid-column: 2; grid-row: 1; align-items: center; gap: var(--sb-inline-gap); }
+    /* A draft that was not saved, under the name and its ×, as a failed
+       dependency's is: the state, the reason, and Retry, each on its own line
+       across the card. */
+    .assignment__failed { display: grid; justify-items: start; gap: var(--sb-card-line-gap); min-width: 0; }
+    .assignment__failed .assignment__failure { margin: 0; }
     /* The form under the rows, on a board with an identity to record an
        assignment against: a caption, and the box with Assign on its line. The
        placeholder names the identity a blank box assigns. */

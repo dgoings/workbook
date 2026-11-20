@@ -20,8 +20,8 @@ import (
 // task's page lists it under Blocks.
 const sidebarControlsBlockedID = "WB-01J0000000000000000000RH02"
 
-// sidebarControlsTasks is the rhythm task with a labelled link besides its
-// unlabelled one and a task it blocks, so every kind of row and every way of
+// sidebarControlsTasks is the rhythm task with a labeled link besides its
+// unlabeled one and a task it blocks, so every kind of row and every way of
 // naming one is drawn.
 func sidebarControlsTasks() []core.Task {
 	target := clientPlacementTask(rhythmTaskID, "Polish the task sidebar", core.StatusInProgress, core.PriorityHigh)
@@ -37,7 +37,7 @@ func sidebarControlsTasks() []core.Task {
 		{ID: "att-link", Author: boardIdentity, AddedAt: assignmentStamp, AttachmentData: core.AttachmentData{
 			Kind: core.AttachmentLink, URL: "https://ersc.io/blog/what-comes-after-git",
 		}},
-		{ID: "att-labelled", Author: boardIdentity, AddedAt: assignmentStamp, AttachmentData: core.AttachmentData{
+		{ID: "att-labeled", Author: boardIdentity, AddedAt: assignmentStamp, AttachmentData: core.AttachmentData{
 			Kind: core.AttachmentLink, URL: "https://example.test/design", Label: "Design doc",
 		}},
 		{ID: "att-file", Author: boardIdentity, AddedAt: assignmentStamp, AttachmentData: core.AttachmentData{
@@ -214,7 +214,7 @@ setTimeout(() => {
 
   for (const [id, name, url] of [
     ["att-link", "https://ersc.io/blog/what-comes-after-git", "https://ersc.io/blog/what-comes-after-git"],
-    ["att-labelled", "Design doc", "https://example.test/design"]
+    ["att-labeled", "Design doc", "https://example.test/design"]
   ]) {
     const row = attachmentRow(id);
     const link = findElement(row, (element) => element.tagName === "A");
@@ -538,5 +538,64 @@ func TestBrowserKeepsAFocusedRemoveButtonAcrossPolls(t *testing.T) {
 				t.Fatalf("after three idle polls the focused × was replaced (still in the page: %v); focus is on %q", kept.Connected, kept.Active)
 			}
 		})
+	}
+}
+
+// Two rules the sidebar's controls depend on that only a layout engine can
+// see. The file chooser is a label drawn as a button over a clipped file
+// input, so the input — which is what Tab reaches — draws no focus ring of
+// its own on screen: the label has to draw it. And the labels editor's
+// status line is a live region that stands empty almost always, so in the
+// sidebar it takes no room until it has something to say.
+func TestBrowserDrawsTheChooserFocusRingAndCollapsesTheEmptyLabelStatus(t *testing.T) {
+	t.Parallel()
+	var drawn struct {
+		Focused                    string
+		OutlineStyle, OutlineWidth string
+		StatusHeight               float64
+		StatusText                 string
+	}
+	openInBrowser(t, rhythmBoard(t), browserPage{
+		Width: 1280, Height: 800,
+		Path: "/tasks/" + rhythmTaskID,
+		Setup: `
+(async () => {
+` + pageGeometryHelpers + rhythmSidebarReady + `
+  await waitFor(sidebarReady, "the sidebar");
+  // Reach the file input the way a keyboard does: from the control before
+  // it, by Tab, so the browser decides it is a keyboard focus.
+  const file = document.querySelector("#attachment-file");
+  const focusable = [...document.querySelectorAll("a[href], button, input, select, textarea")]
+    .filter((element) => !element.disabled && (element.offsetParent !== null || element === file));
+  focusable[focusable.indexOf(file) - 1].focus();
+})()`,
+		Keys: []string{"Tab"},
+		Script: `
+(async () => {
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const choose = document.querySelector("[data-attachment-choose]");
+  const ring = getComputedStyle(choose);
+  const status = document.querySelector(".task-sidebar .label-editor__status");
+  if (!status) throw new Error("the sidebar's labels editor has no status line");
+  return {
+    focused: document.activeElement.id,
+    outlineStyle: ring.outlineStyle,
+    outlineWidth: ring.outlineWidth,
+    statusHeight: status.getBoundingClientRect().height,
+    statusText: status.textContent
+  };
+})()`,
+	}, &drawn)
+	if drawn.Focused != "attachment-file" {
+		t.Fatalf("Tab landed on %q, not the file input", drawn.Focused)
+	}
+	if drawn.OutlineStyle != "solid" || drawn.OutlineWidth != "3px" {
+		t.Errorf("with the file input focused, Choose file draws outline %s %s, want a solid 3px ring", drawn.OutlineStyle, drawn.OutlineWidth)
+	}
+	if drawn.StatusText != "" {
+		t.Fatalf("the labels editor's status line says %q, so its empty height cannot be measured", drawn.StatusText)
+	}
+	if drawn.StatusHeight != 0 {
+		t.Errorf("the empty labels status line is %.1fpx tall in the sidebar, want 0", drawn.StatusHeight)
 	}
 }
