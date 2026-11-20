@@ -91,6 +91,33 @@ category's projects are reachable without expanding the sidebar. Nothing drags
 in the rail, and renaming or removing a category waits for the expanded
 sidebar.
 
+### Removing a project
+
+Every project row has a remove control, a `×` that shows on hover or keyboard
+focus like a category's, at the row's right end. It asks once, in the row
+("Remove project?", Yes or No), and a click anywhere else puts the question
+away. Removing a project drops Workbench's entry for it and its place in the
+sidebar or its category, stops its board server and closes its board, and
+renumbers Cmd+1 to Cmd+9 and the menu's project items. **It never touches the
+repository**: the checkout, its `refs/workbook/*` and its
+`.workbook/config.json` stay exactly as they were, so importing the same
+repository again brings the project back, at the bottom of the sidebar, as a
+new entry. If the removed project was showing, the one below it opens, or the
+one above when it was last, or the Import view when none is left. A second
+click, or a removal of a project already gone, does nothing.
+
+A project whose repository is not where Workbench has it (deleted, moved, no
+longer a Git repository, or on a drive that is not connected) is drawn muted
+with an amber dot, and its tooltip says where Workbench looked, as in
+"Repository not found at /path". Selecting it shows that message in place of
+the board, with **Look again** and **Remove from Workbench**, rather than a
+board that fails to start; no board server is spawned for it. Workbench looks
+with two cheap file checks (the folder, then a `.git` in it) when a board
+starts, when a project is opened, when a board stops on its own and when the
+window comes back into focus, with no background polling. It never removes a
+missing project by itself: a drive that is unmounted comes back, and the
+project is unmarked the next time Workbench looks.
+
 ## Keyboard shortcuts
 
 Every shortcut is an application-menu item, so it works from the shell and
@@ -508,7 +535,7 @@ The wizard suggests one per repository, validates it against Workbook's own
   a newer Workbook means a newer app.
 - Building requires Go and this checkout. There is no fallback to downloading
   a released CLI.
-- Projects can be forgotten but not renamed from the UI.
+- Projects can be removed from Workbench but not renamed from the UI.
 - Workbook's CLI JSON envelope and HTTP routes are not versioned as a public
   contract, so a change to either can break this; living in the same
   repository is what keeps them in step.
