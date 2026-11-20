@@ -292,6 +292,16 @@
        a reader who cannot drop right now can see that without reading. */
     [data-attachment-drop][data-drop-state="refused"] { outline: 2px dashed var(--wb-danger-ink); outline-offset: -3px; }
     .attachment-add__hint { margin: 0; color: var(--wb-ink-muted); font-size: .72rem; }
+    /* The files chosen and not yet added: each name with the red × that takes
+       it back out before anything is sent or staged. 1.5rem square, as the
+       label chiclets' remove is, because it is a 24px target that takes
+       something away. */
+    .attachment-pending { display: grid; grid-template-columns: minmax(0, 1fr); gap: .25rem; margin: 0; padding: 0; list-style: none; }
+    .attachment-pending__item { display: flex; align-items: center; justify-content: space-between; gap: .4rem; min-width: 0; padding: .15rem .2rem .15rem .55rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface); font-size: .8rem; }
+    .attachment-pending__name { min-width: 0; font-weight: 700; overflow-wrap: anywhere; }
+    .attachment-pending__remove { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--wb-danger-ink); cursor: pointer; font: inherit; font-size: 1.05rem; font-weight: 800; line-height: 1; }
+    .attachment-pending__remove:hover { background: var(--wb-danger-surface); color: var(--wb-danger); }
+    .attachment-pending__remove:focus-visible { outline: 2px solid var(--wb-danger-ink); outline-offset: 1px; }
     .attachment-add { display: grid; gap: .55rem; padding-top: .1rem; }
     .attachment-add__group { display: grid; gap: .3rem; margin: 0; }
     .attachment-add input[type="text"], .attachment-add input[type="url"] { width: 100%; border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); color: var(--wb-text); font: inherit; font-size: .82rem; padding: .45rem .55rem; }

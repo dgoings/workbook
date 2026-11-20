@@ -87,6 +87,66 @@
         const addFile = threadButton(config.fileAction, true);
         addFile.type = "submit";
         fileActions.append(addFile);
+        // What has been chosen and not yet added, held here rather than read
+        // back off the input. An input's FileList is read-only, so a file the
+        // reader changes their mind about could not be taken out of it; this
+        // list can lose one, and the input is reset after every choice so the
+        // same file chosen again is a change the browser reports.
+        //
+        // The chooser and Add file take turns: nothing chosen draws only the
+        // chooser, and anything chosen draws the list, each name with a × that
+        // takes it back out, and the Add file that sends or stages them.
+        // Taking the last one out returns the chooser.
+        let pending = [];
+        const pendingList = document.createElement("ul");
+        pendingList.className = "attachment-pending";
+        pendingList.dataset.attachmentPending = "";
+        function drawPending() {
+          pendingList.replaceChildren(...pending.map((chosen) => {
+            const row = document.createElement("li");
+            row.className = "attachment-pending__item";
+            const name = document.createElement("span");
+            name.className = "attachment-pending__name";
+            text(name, chosen.name);
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "attachment-pending__remove";
+            remove.setAttribute("aria-label", "Remove " + chosen.name);
+            remove.title = "Remove " + chosen.name;
+            text(remove, "×");
+            remove.addEventListener("click", () => {
+              pending = pending.filter((held) => held !== chosen);
+              drawPending();
+              // The caret goes where the reader is likely to go next: the next
+              // file's ×, or back to the chooser once there is nothing left.
+              const next = pendingList.children.length
+                ? findPendingRemove(0)
+                : file;
+              if (next && typeof next.focus === "function") next.focus();
+            });
+            row.append(name, remove);
+            return row;
+          }));
+          const holding = pending.length > 0;
+          pendingList.hidden = !holding;
+          fileActions.hidden = !holding;
+          file.hidden = holding;
+        }
+        function findPendingRemove(at) {
+          const row = pendingList.children[at];
+          return row ? row.children[row.children.length - 1] : null;
+        }
+        file.addEventListener("change", () => {
+          const chosen = [...(file.files || [])];
+          file.value = "";
+          if (chosen.length === 0) return;
+          // A chooser that takes one file at a time is answered with the one
+          // it took, so choosing again replaces the choice rather than
+          // queueing a second file the surface would send one by one.
+          pending = config.multiple ? pending.concat(chosen) : chosen;
+          drawPending();
+        });
+        drawPending();
         // A drop target nobody knows about is a chooser. Said once, in the group
         // it belongs to, rather than drawn as a dashed box taking up room the
         // sidebar has not got.
@@ -94,7 +154,7 @@
         dropHint.className = "attachment-add__hint";
         dropHint.dataset.attachmentDropHint = "";
         text(dropHint, "Or drop files anywhere in this panel.");
-        fileGroup.append(fileLabel, file, dropHint, fileActions);
+        fileGroup.append(fileLabel, file, pendingList, dropHint, fileActions);
         const linkGroup = document.createElement("form");
         linkGroup.className = "attachment-add__group";
         linkGroup.dataset.attachmentLinkForm = "";
@@ -128,7 +188,7 @@
         region.append(fileGroup, linkGroup);
         fileGroup.addEventListener("submit", (event) => {
           event.preventDefault();
-          const chosen = [...(file.files || [])];
+          const chosen = [...pending];
           if (chosen.length === 0) return config.report("Choose a file to attach.");
           return config.acceptFiles(chosen);
         });
@@ -140,7 +200,7 @@
         });
         return {
           region, file, url, caption, addFile, addLink,
-          clearFile() { file.value = ""; },
+          clearFile() { file.value = ""; pending = []; drawPending(); },
           clearLink() { url.value = ""; caption.value = ""; }
         };
       }
@@ -643,7 +703,7 @@
         // arrives, which is what a task that already exists can do and a create
         // form cannot.
         const adder = attachmentAdder({
-          fileAction: "Attach file",
+          fileAction: "Add file",
           linkAction: "Attach link",
           report: (message) => panel.report(message),
           acceptFiles: (files) => acceptFiles(files),
@@ -719,11 +779,12 @@
           const rows = attachments.map(attachmentRow);
           panel.claim(adder.addFile);
           panel.claim(adder.addLink);
+          // Nothing attached is the heading and the controls: no count of
+          // nothing, and no sentence explaining an empty list.
           panel.setCount(attachments.length === 0
-            ? "Nothing attached"
+            ? ""
             : attachments.length + " attached · " + attachmentSize(attachedFileBytes(attachments)) + " of files");
-          text(panel.empty, "Nothing is attached to this task yet.");
-          panel.empty.hidden = rows.length > 0;
+          panel.empty.hidden = true;
           panel.list.replaceChildren(...rows);
         }
         // Every file this panel is handed, sent one at a time in the order they
@@ -976,12 +1037,12 @@
           const rows = draftState.items.map(draftRow);
           panel.claim(adder.addFile);
           panel.claim(adder.addLink);
+          // An empty list says nothing, as the task page's does.
           panel.setCount(draftState.items.length === 0
-            ? "Nothing staged"
+            ? ""
             : draftState.items.length + " staged · " +
               attachmentSize(stagedFileBytes(draftState)) + " of files");
-          text(panel.empty, "Nothing is staged. Anything added here is attached once the task is created.");
-          panel.empty.hidden = rows.length > 0;
+          panel.empty.hidden = true;
           panel.list.replaceChildren(...rows);
           // Announced after the list is drawn, so whatever the form does with
           // this is deciding against a list that is already on the screen.

@@ -614,7 +614,7 @@ setTimeout(async () => {
   const before = fetchCalls.length;
   const panel = panelSection("attachments");
   const chooser = findElement(panel, (element) => element.id === "attachment-file");
-  chooser.files = [new TestFile("enormous.bin", `+strconv.Itoa(core.MaxAttachmentFileBytes+1)+`, "x")];
+  chooseFiles(chooser, [new TestFile("enormous.bin", `+strconv.Itoa(core.MaxAttachmentFileBytes+1)+`, "x")]);
   await submitForm(attachmentForm("file"));
 
   const reported = panelStatusText("attachments");
@@ -631,7 +631,7 @@ setTimeout(async () => {
 
   // A file the unit can separate keeps the unit, which is what a reader can
   // actually judge a download by.
-  chooser.files = [new TestFile("enormous.bin", `+strconv.Itoa(core.MaxAttachmentFileBytes*9)+`, "x")];
+  chooseFiles(chooser, [new TestFile("enormous.bin", `+strconv.Itoa(core.MaxAttachmentFileBytes*9)+`, "x")]);
   await submitForm(attachmentForm("file"));
   const second = panelStatusText("attachments");
   if (!second.includes("9 MiB") || !second.includes("1 MiB")) {
@@ -667,7 +667,7 @@ setTimeout(async () => {
   const before = fetchCalls.length;
   const panel = panelSection("attachments");
   const chooser = findElement(panel, (element) => element.id === "attachment-file");
-  chooser.files = [new TestFile("one-more.png", 1, "x")];
+  chooseFiles(chooser, [new TestFile("one-more.png", 1, "x")]);
   await submitForm(attachmentForm("file"));
 
   const reported = panelStatusText("attachments");
@@ -723,7 +723,7 @@ setTimeout(async () => {
   if (file === link) throw new Error("the two adders are still one form");
 
   const chooser = findElement(panelSection("attachments"), (element) => element.id === "attachment-file");
-  chooser.files = [new TestFile("notes.txt", 5, "notes")];
+  chooseFiles(chooser, [new TestFile("notes.txt", 5, "notes")]);
   await submitForm(file);
 
   const writes = fetchCalls.filter((call) => call.options.method === "POST");
@@ -774,7 +774,7 @@ setTimeout(async () => {
   };
   const panel = panelSection("attachments");
   const chooser = findElement(panel, (element) => element.id === "attachment-file");
-  chooser.files = [new TestFile("screenshot.svg", 5, "hello", "image/svg+xml")];
+  chooseFiles(chooser, [new TestFile("screenshot.svg", 5, "hello", "image/svg+xml")]);
   await submitForm(attachmentForm("file"));
 
   const writes = fetchCalls.filter((call) => call.options.method === "POST");
@@ -953,6 +953,15 @@ func TestHandlerClientScriptHasNoHTMLSink(t *testing.T) {
 // was never read.
 const fileHarness = `
 const readCalls = [];
+// Choosing files is what a browser does with the chooser: it fills the input's
+// list and raises change. The page lists what was chosen and resets the input,
+// so a test sets the list and raises the event the way the browser does rather
+// than leaving files in an input nobody told the page about.
+function chooseFiles(chooser, files) {
+  chooser.files = files;
+  if (!chooser.eventListeners.change) throw new Error("the file chooser does not listen for a choice");
+  chooser.eventListeners.change({ target: chooser });
+}
 class TestFile {
   constructor(name, size, contents, type = "") {
     this.name = name;
@@ -1024,5 +1033,73 @@ setTimeout(() => {
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute the dropped attachment render: %v\n%s", err, output)
+	}
+}
+
+// A task with nothing attached draws the heading and the controls and nothing
+// about the empty list: no count of nothing and no sentence explaining it.
+func TestHandlerClientDrawsNoEmptyStateForAnUnattachedTask(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	task := threadPageTask()
+	task.Attachments = nil
+	program := threadPageProgram(t, []core.Task{task}, `
+setTimeout(() => {
+  const panel = panelSection("attachments");
+  if (!panel) throw new Error("the task page draws no attachments panel");
+  const count = findElement(panel, (element) => hasDataKey(element, "panelCount"));
+  if (count.textContent !== "") throw new Error("an empty panel still counts itself: " + JSON.stringify(count.textContent));
+  if (panel.textContent.includes("Nothing")) throw new Error("an empty panel still explains itself: " + JSON.stringify(panel.textContent));
+  const empty = findElement(panel, (element) => hasDataKey(element, "panelEmpty"));
+  if (empty && (!empty.hidden || empty.textContent)) throw new Error("the empty line is still drawn");
+  attachmentForm("file");
+  attachmentForm("link");
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the unattached task page: %v\n%s", err, output)
+	}
+}
+
+// The task page lists the chosen file before it is sent, with the × that takes
+// it back out, exactly as the New Task form does; Add file sends it.
+func TestHandlerClientListsAChosenFileBeforeItIsSent(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	tasks := []core.Task{threadPageTask()}
+	program := threadPageProgram(t, tasks, `
+`+fileHarness+`
+setTimeout(async () => {
+  const panel = panelSection("attachments");
+  const chooser = findElement(panel, (element) => element.id === "attachment-file");
+  const pending = findElement(panel, (element) => hasDataKey(element, "attachmentPending"));
+  const add = findElement(attachmentForm("file"), (element) => element.tagName === "BUTTON" && element.textContent === "Add file");
+  if (!pending || !add) throw new Error("the task page's file form has no pending list or no Add file");
+  if (chooser.hidden !== false || !add.parentElement.hidden || !pending.hidden) {
+    throw new Error("before a choice the task page shows more than its chooser");
+  }
+  const before = fetchCalls.length;
+  chooseFiles(chooser, [new TestFile("notes.txt", 5, "notes")]);
+  if (fetchCalls.length !== before) throw new Error("choosing a file sent it");
+  if (!chooser.hidden || add.parentElement.hidden || pending.hidden) {
+    throw new Error("after a choice the chooser did not give way to Add file");
+  }
+  const remove = findElement(pending, (element) => element.getAttribute("aria-label") === "Remove notes.txt");
+  if (!remove) throw new Error("the chosen file has no × naming it");
+  remove.eventListeners.click();
+  if (chooser.hidden || !add.parentElement.hidden || !pending.hidden || pending.children.length) {
+    throw new Error("taking the file out did not return the chooser");
+  }
+  chooseFiles(chooser, [new TestFile("notes.txt", 5, "notes")]);
+  await submitForm(attachmentForm("file"));
+  const writes = fetchCalls.slice(before).filter((call) => call.options.method === "POST");
+  if (writes.length !== 1 || JSON.parse(writes[0].options.body).name !== "notes.txt") {
+    throw new Error("Add file sent " + writes.length + " writes");
+  }
+  if (pending.children.length || chooser.hidden) throw new Error("a sent file is still pending");
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the task page's pending file: %v\n%s", err, output)
 	}
 }
