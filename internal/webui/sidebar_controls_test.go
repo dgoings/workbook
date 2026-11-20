@@ -275,6 +275,96 @@ setTimeout(() => {`+check+`}, 0);
 	}
 }
 
+// The link form puts Attach on the URL's line and gives the optional label
+// the line under them, in that order in the document as on screen, on the
+// task page and on a New Task form alike.
+func TestHandlerClientPutsAttachOnTheLinkURLsLine(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	check := `
+  const form = findElement(panelSection("attachments"), (element) => hasDataKey(element, "attachmentLinkForm"));
+  if (!form) throw new Error("no link form");
+  const url = findElement(form, (element) => element.id === "attachment-url");
+  const label = findElement(form, (element) => element.id === "attachment-label");
+  const attach = findElement(form, (element) => hasDataKey(element, "attachmentAddLink"));
+  if (!url || !label || !attach) throw new Error("the link form is missing its URL, label or Attach");
+  const line = url.parentElement;
+  if (!hasClassToken(line, "sidebar-inline") || line.parentElement !== form) {
+    throw new Error("the URL is not on an inline line of its own form");
+  }
+  if (line.children.length !== 2 || line.children[0] !== url || line.children[1] !== attach) {
+    throw new Error("the URL's line holds " + line.children.map((child) => child.id || child.textContent).join(", ") + ", want the URL then Attach");
+  }
+  if (label.parentElement !== form) throw new Error("the optional label does not have a line of its own");
+  const order = form.children;
+  if (order.indexOf(line) < 0 || order.indexOf(label) !== order.indexOf(line) + 1) {
+    throw new Error("the optional label does not follow the URL's line");
+  }
+  if (attach.type !== "submit") throw new Error("Attach does not submit the form Enter submits");
+`
+	pageProgram := sidebarControlsProgram(t, `
+setTimeout(() => {`+check+`}, 0);
+`)
+	if output, err := nodeCommand(node, pageProgram).CombinedOutput(); err != nil {
+		t.Fatalf("execute the task page's link form: %v\n%s", err, output)
+	}
+	formProgram := createAssignmentProgram(t, `
+(async () => {
+  await openCreateForm();`+check+`
+})().catch((error) => { console.error(error); process.exit(1); });
+`)
+	if output, err := nodeCommand(node, formProgram).CombinedOutput(); err != nil {
+		t.Fatalf("execute the New Task form's link form: %v\n%s", err, output)
+	}
+}
+
+// Enter in either box of the link form attaches, pressed as a real key in a
+// real browser: the browser's implicit submission is what runs, so the
+// button's new place must not have taken it away from the label box.
+func TestBrowserAttachesALinkOnEnterInEitherBox(t *testing.T) {
+	t.Parallel()
+	for _, box := range []string{"attachment-url", "attachment-label"} {
+		t.Run(box, func(t *testing.T) {
+			t.Parallel()
+			var sent []string
+			openInBrowser(t, rhythmBoard(t), browserPage{
+				Width: 1280, Height: 800,
+				Path: "/tasks/" + rhythmTaskID,
+				Setup: pageGeometryHelpers + rhythmSidebarReady + `
+(async () => {
+  await waitFor(sidebarReady, "the sidebar");
+  window.sentWrites = [];
+  const realFetch = window.fetch;
+  window.fetch = (url, options = {}) => {
+    const method = options.method || "GET";
+    if (method !== "GET") {
+      window.sentWrites.push(method + " " + new URL(String(url), location.href).pathname + " " + (options.body || ""));
+      return new Promise(() => {});
+    }
+    return realFetch(url, options);
+  };
+  document.querySelector("#attachment-url").value = "https://example.test/spec";
+  document.querySelector("#attachment-label").value = "Spec";
+  document.querySelector("#` + box + `").focus();
+})()`,
+				Keys:   []string{"Enter"},
+				Script: `new Promise((resolve) => setTimeout(() => resolve(window.sentWrites), 100))`,
+			}, &sent)
+			found := false
+			for _, line := range sent {
+				if strings.HasPrefix(line, "POST ") && strings.Contains(line, "/attachments") &&
+					strings.Contains(line, "https://example.test/spec") && strings.Contains(line, "Spec") {
+					found = true
+				}
+			}
+			if !found {
+				encoded, _ := json.Marshal(sent)
+				t.Fatalf("Enter in #%s sent %s, want a POST of the link to /attachments", box, encoded)
+			}
+		})
+	}
+}
+
 // The file chooser is a button-styled label for the real file input: a press
 // on it opens that input's picker, which a label does for the control it
 // names, and the input itself stays the focusable, named control. Choosing

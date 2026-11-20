@@ -2754,8 +2754,8 @@ link's URL is its name's tooltip rather than a second copy in that line. Under
 the list are a **Choose file** button, which opens the browser's own file
 picker (the real file input stays the focusable control, so the keyboard,
 screen readers, multiple selection, drop and paste all work as before), and a
-form for adding a link: the URL on its own line, then the optional label with
-**Attach** beside it. Each row has the same red × the other sidebar rows have. A
+form for adding a link: the URL with **Attach** beside it, then the optional
+label on its own line. Enter in either box attaches. Each row has the same red × the other sidebar rows have. A
 chosen file is listed by name with a × that takes it back out before anything
 is sent, and the chooser gives way to an **Add file** button until the list is
 empty again; the New Task form's staged list works the same way, its buttons

@@ -220,18 +220,22 @@
         caption.name = "attachment-label";
         caption.placeholder = "Label (optional)";
         caption.setAttribute("aria-label", "Link label");
-        // The URL has a line to itself, because it is the long part; the
-        // optional label shares the next line with the button that attaches
-        // the two, as every other add control in the sidebar sits beside its
-        // box. The button reads one word and is named for what it does.
-        const linkActions = document.createElement("div");
-        linkActions.className = "sidebar-inline";
+        // The button that attaches sits on the URL's line, as every other add
+        // control in the sidebar sits beside the box it takes, and the
+        // optional label has the full width of the line under them. The order
+        // in the document is the order on screen, so Tab goes URL, Attach,
+        // label; Enter in either box submits the form, so a reader who fills
+        // in the label never has to go back up for the button. It reads one
+        // word and is named for what it does.
+        const linkLine = document.createElement("div");
+        linkLine.className = "sidebar-inline";
+        linkLine.dataset.attachmentLinkLine = "";
         const addLink = threadButton(config.linkAction, true);
         addLink.type = "submit";
         addLink.dataset.attachmentAddLink = "";
         addLink.setAttribute("aria-label", config.linkName);
-        linkActions.append(caption, addLink);
-        linkGroup.append(linkLabel, url, linkActions);
+        linkLine.append(url, addLink);
+        linkGroup.append(linkLabel, linkLine, caption);
         region.append(fileGroup, linkGroup);
         fileGroup.addEventListener("submit", (event) => {
           event.preventDefault();

@@ -190,7 +190,7 @@ const sidebarRhythmScript = pageGeometryHelpers + rhythmSidebarReady + `
   const inline = {
     dependencies: pair(dependencies.querySelector(".relationship-editor input"), dependencies.querySelector("[data-relationship-add]")),
     assignments: pair(assignments.querySelector(".sidebar-inline input"), assignments.querySelector(".sidebar-inline button")),
-    attachLink: pair(attachments.querySelector("#attachment-label"), attachments.querySelector("[data-attachment-add-link]"))
+    attachLink: pair(attachments.querySelector("#attachment-url"), attachments.querySelector("[data-attachment-add-link]"))
   };
   const card = cards.dependency;
   const cardStyle = style(card);

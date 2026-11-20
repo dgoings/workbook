@@ -104,7 +104,8 @@ before anyone runs it; see Compatibility across versions below.
   and an attachment's details are one line (hover it for the media type and
   exact time). The browser's "Choose File / No file chosen" control is a
   **Choose file** button over the same file input; the dependency picker's
-  **Add**, **Assign**, and the link form's **Attach** sit on their box's line;
+  **Add**, **Assign**, and the link form's **Attach** sit on their box's line,
+  Attach beside the URL with the optional label on the line below;
   and the help paragraph under the assignment box is gone, its placeholder
   still showing who a blank box assigns. A focused × also keeps the keyboard
   focus across the board's once-a-second poll, which the dependency list's
