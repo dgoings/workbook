@@ -94,7 +94,8 @@ type sidebarRhythm struct {
 	}
 	// TitleShare is the dependency title's width over its card's inner width.
 	TitleShare float64
-	// MetaLines maps each attachment to how many lines its metadata takes.
+	// MetaLines maps each attachment to how many lines its metadata takes,
+	// counting one forced wrap as none where the text cannot fit its card.
 	MetaLines map[string]int
 	// DependencyRules lists every border a Dependencies element draws on one
 	// side only — the rule that used to sit under the heading.
@@ -152,7 +153,12 @@ const sidebarRhythmScript = pageGeometryHelpers + rhythmSidebarReady + `
   };
   const headingGaps = {};
   for (const [name, section] of Object.entries(sections)) {
-    headingGaps[name] = rect(firstContent[name]).top - rect(heading(section)).bottom;
+    // From the heading's row, not the heading: a count beside the heading
+    // wraps under it where the machine's fonts are wider, and the gap that
+    // matters is the one below whatever the row came to.
+    const title = heading(section);
+    const row = title.closest(".task-panel__header") || title;
+    headingGaps[name] = rect(firstContent[name]).top - rect(row).bottom;
   }
   // The bottom of the last thing drawn in a section, whatever it is.
   const drawnBottom = (section) => Math.max(...[...section.querySelectorAll("*")]
@@ -201,9 +207,21 @@ const sidebarRhythmScript = pageGeometryHelpers + rhythmSidebarReady + `
     range.selectNodeContents(element);
     return new Set([...range.getClientRects()].filter((box) => box.width > 0).map((box) => Math.round(box.top))).size;
   };
+  // How many lines the metadata takes beyond what its text needs: a line
+  // that fits the card is one line, and where the machine's fonts are too
+  // wide for it to fit, a single wrap is all it may take. One item to a line
+  // is what this guards against, and no font makes that right.
+  const metaLinesOf = (element) => {
+    const before = element.style.whiteSpace;
+    element.style.whiteSpace = "nowrap";
+    const fits = element.scrollWidth <= element.clientWidth;
+    element.style.whiteSpace = before;
+    const taken = lines(element);
+    return !fits && taken === 2 ? 1 : taken;
+  };
   const metaLines = {
-    link: lines(cards.link.querySelector(".attachment__meta")),
-    file: lines(cards.file.querySelector(".attachment__meta"))
+    link: metaLinesOf(cards.link.querySelector(".attachment__meta")),
+    file: metaLinesOf(cards.file.querySelector(".attachment__meta"))
   };
   const dependencyRules = [];
   for (const element of [dependencies, ...dependencies.querySelectorAll("*")]) {
