@@ -736,8 +736,11 @@ func TestCompactWithSyncFetchesFirstAndSkipsUnpushed(t *testing.T) {
 		t.Fatalf("refs = %v from %v, want only the pushed task moved", after, before)
 	}
 
+	// The two tasks were created within milliseconds of each other, so how
+	// many characters tell them apart varies from run to run.
+	short := presentation.ShortestUniquePrefix(local.ID, []string{pushed.ID, local.ID})
 	text := compactRun(t, first, "compact", "--dry-run")
-	if want := local.ID[:len(local.ID)-18] + "  Done but never pushed  " + compaction.ReasonNotPushed + "\n"; !strings.Contains(text, want) {
+	if want := short + "  Done but never pushed  " + compaction.ReasonNotPushed + "\n"; !strings.Contains(text, want) {
 		t.Fatalf("dry-run output = %q, want the skipped task %q", text, want)
 	}
 }
