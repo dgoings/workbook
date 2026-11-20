@@ -234,6 +234,25 @@ describe('after a removal, the focus lands on what is left', () => {
     assert.notEqual(doc.activeElement, doc.body)
   })
 
+  test('a reader who has moved on keeps the focus where they put it', async () => {
+    // Between Yes and the main process's answer the reader may have clicked
+    // into a field elsewhere; the answer must not pull the focus back out.
+    const { control, doc, el, state } = harness({
+      forget: async (id) => {
+        state.projects = state.projects.filter((project) => project.id !== id)
+        state.layout = { items: state.layout.items.filter((item) => item.id !== id) }
+        return { removed: true, projects: state.projects, layout: state.layout }
+      }
+    })
+    click(control('remove:project:a'))
+    click(control('yes:project:a'))
+    const elsewhere = el('import-key-field')
+    elsewhere.focus()
+    await tick()
+    assert.equal(control('remove:project:a'), null)
+    assert.equal(doc.activeElement, elsewhere)
+  })
+
   test('the last project in the list hands it to the one above', async () => {
     const { control, doc, state } = harness({
       forget: async (id) => {

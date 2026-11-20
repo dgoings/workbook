@@ -212,6 +212,26 @@ test('the check started last wins, whichever answer arrives last', async () => {
   assert.deepEqual(presence.get('a'), gone, 'the older answer overwrote the newer one')
 })
 
+test('a check a newer one has started behind still records its own answer first', async () => {
+  // A board start asks, and the window takes the focus before the answer: the
+  // start must read what its own look found, not whatever was known before.
+  const projects = [{ id: 'a', path: '/a' }]
+  const pending = []
+  const presence = createPresenceTracker({
+    projects: () => projects,
+    check: () => new Promise((resolve) => { pending.push(resolve) }),
+    onChanged: () => {}
+  })
+  const older = presence.refresh(['a'])
+  const newer = presence.refresh(['a'])
+  pending[0](gone)
+  assert.equal(await within(older, 1000, 'the older check'), true)
+  assert.deepEqual(presence.get('a'), gone, 'the overtaken check read a stale answer')
+  pending[1]({ missing: false, reason: null, message: null })
+  assert.equal(await within(newer, 1000, 'the newer check'), true)
+  assert.equal(presence.get('a').missing, false, 'the newer answer did not replace the older one')
+})
+
 test('a check that hangs gives up in time and reads as present, not missing', async () => {
   // A network mount that never answers must not leave "Starting the board…"
   // up forever, and not knowing is not the same as missing: the board start

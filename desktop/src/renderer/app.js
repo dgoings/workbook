@@ -173,6 +173,10 @@ function renderProjects () {
   // state.sidebarFocus.
   const focused = document.activeElement
   const kept = focused && list.contains(focused) ? focused.dataset.focus ?? null : null
+  // A remove step's say holds only while the focus is still in the list or
+  // has fallen to the page with the control it was on. A reader who has since
+  // put it somewhere else, in a field in another view, keeps it there.
+  const free = !focused || focused === document.body || list.contains(focused)
   const asked = state.sidebarFocus
   state.sidebarFocus = null
   list.innerHTML = ''
@@ -202,13 +206,13 @@ function renderProjects () {
   // Compared in JavaScript rather than matched by a selector, as renderNext
   // finds its focused row: the id is the registry's, not ours. A control in a
   // folded category cannot take the focus, so it is passed over.
-  const wanted = asked?.keys ?? (kept === null ? [] : [kept])
+  const wanted = (free ? asked?.keys : null) ?? (kept === null ? [] : [kept])
   if (wanted.length > 0) {
     const controls = [...list.querySelectorAll('[data-focus]')]
       .filter((control) => !control.closest('.category-projects')?.hidden)
     const target = wanted.map((key) => controls.find((control) => control.dataset.focus === key)).find(Boolean)
     if (target) target.focus()
-    else if (asked?.fallback) el(asked.fallback).focus()
+    else if (free && asked?.fallback) el(asked.fallback).focus()
   }
 
   if (list.children.length === 0) {

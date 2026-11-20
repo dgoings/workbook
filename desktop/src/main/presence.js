@@ -112,7 +112,7 @@ function createPresenceTracker ({ projects, check = checkRepository, onChanged, 
      * anything changed; never rejects, and settles within timeoutMs. A project
      * no longer listed by the time its answer arrives — removed while it was
      * being looked at — is not recorded, so nothing is kept for a project the
-     * app has let go of; nor is an answer a newer look has overtaken.
+     * app has let go of; nor is an answer that arrives after a newer look's.
      *
      * @param {string[]} [ids]
      * @returns {Promise<boolean>}
@@ -122,12 +122,15 @@ function createPresenceTracker ({ projects, check = checkRepository, onChanged, 
       const targets = projects().filter((project) => wanted === null || wanted.has(project.id))
       const answers = await Promise.all(targets.map(async (project) => {
         const turn = ++looks
-        latest.set(project.id, turn)
         return [project, turn, await look(project.path)]
       }))
       let changed = false
       for (const [project, turn, found] of answers) {
-        if (latest.get(project.id) !== turn) continue
+        // Dropped only when a look started later has already answered. A
+        // look that is merely overtaken still records what it found, so its
+        // caller reads its own answer rather than whatever was known before.
+        if ((latest.get(project.id) ?? 0) > turn) continue
+        latest.set(project.id, turn)
         const still = projects().find((entry) => entry.id === project.id)
         if (!still || still.path !== project.path) continue
         const before = known.get(project.id) ?? PRESENT
