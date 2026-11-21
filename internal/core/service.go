@@ -635,13 +635,23 @@ func (options ShowOptions) requested() bool {
 	return options.History || options.Compare != nil
 }
 
-// TaskDetail is a task plus the history views the caller asked for. Both extra
-// members are omitted when they are not requested, so a consumer that reads
-// plain show sees an unchanged shape.
+// TaskDetail is a task plus the history views the caller asked for. Both
+// history members are omitted when they are not requested, so a consumer that
+// reads plain show sees them only when it asks.
+//
+// Comments and RemovedComments are the thread as one reader is shown it, and
+// are on every detail. Comments deliberately has the same name and JSON member
+// as the task's own: the shallower field wins in Go and in encoding/json, so
+// `comments` in a detail's JSON is the same list in the same order with two
+// members added to each entry — who last edited it and whether the reader may
+// edit it — rather than a second copy of the thread under another name. The
+// stored list is still Task.Comments.
 type TaskDetail struct {
 	Task
-	History    *ChangeLog  `json:"history,omitempty"`
-	Comparison *Comparison `json:"comparison,omitempty"`
+	Comments        []ThreadComment  `json:"comments,omitempty"`
+	RemovedComments []RemovedComment `json:"removedComments,omitempty"`
+	History         *ChangeLog       `json:"history,omitempty"`
+	Comparison      *Comparison      `json:"comparison,omitempty"`
 }
 
 // ShowDetail returns one task, optionally with its change log and a field-level
@@ -652,20 +662,29 @@ func (s Service) ShowDetail(ctx context.Context, idOrPrefix string, options Show
 		return TaskDetail{}, err
 	}
 	detail := TaskDetail{Task: s.Project(snapshot)}
-	if !options.requested() {
-		return detail, nil
-	}
-	if s.History == nil {
+	if options.requested() && s.History == nil {
 		return TaskDetail{}, Errorf(CategoryOperational, "task history source is not configured")
 	}
-
-	if options.History {
+	// The thread's trace is read from the same chain the change log is, so a
+	// detail that asks for both reads it once. A Service built with no
+	// history source — a test double — shows the live thread with no trace
+	// rather than refusing a plain read.
+	var trace CommentTrace
+	if s.History != nil {
 		history, err := s.History.TaskHistory(ctx, s.Config, detail.ID)
 		if err != nil {
 			return TaskDetail{}, err
 		}
-		log := BuildChangeLog(history, options.Limit, options.All)
-		detail.History = &log
+		trace = TraceComments(history)
+		if options.History {
+			log := BuildChangeLog(history, options.Limit, options.All)
+			detail.History = &log
+		}
+	}
+	detail.Comments = trace.Thread(detail.Task.Comments, s.ActorFor(ctx))
+	detail.RemovedComments = trace.Removed(detail.Task.Comments)
+	if !options.requested() {
+		return detail, nil
 	}
 	if options.Compare != nil {
 		comparison, err := s.compare(ctx, detail.ID, *options.Compare)

@@ -251,6 +251,14 @@ func (s Service) commentOperation(task TaskData, change CommentChange) (Operatio
 	if index < 0 {
 		return Operation{}, Errorf(CategoryNotFound, "task has no comment %s", change.CommentID)
 	}
+	// Asked before whether the text changes, so somebody editing a comment
+	// that is not theirs is told that, rather than told their words match.
+	// The acting person is s.Actor because UpdateMutation resolved it from
+	// the context before planning; see Comment.EditableBy for why this is the
+	// only place the rule is enforced.
+	if !task.Comments[index].EditableBy(s.Actor) {
+		return Operation{}, Errorf(CategoryValidation, "%s", foreignEditMessage(task.Comments[index]))
+	}
 	if task.Comments[index].Body == body {
 		return Operation{}, Errorf(CategoryValidation, "comment %s already reads that way", change.CommentID)
 	}

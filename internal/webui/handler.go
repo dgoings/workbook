@@ -120,6 +120,11 @@ type TaskDependencyRemover func(context.Context, string, string) (core.MutationR
 // ten-change default window.
 type TaskHistoryReader func(context.Context, string) (core.TaskDetail, error)
 
+// TaskDetailReader reads one task as `workbook show` reads it: the task, its
+// thread as the request's person reads it, and what the history says about
+// comments that were removed. It reads no change log.
+type TaskDetailReader func(context.Context, string) (core.TaskDetail, error)
+
 // SyncStateReporter answers what the board will do with the next mutation.
 type SyncStateReporter func(context.Context) SyncState
 
@@ -733,6 +738,23 @@ type TaskMutationDocument struct {
 	// page that emptied a task's assignments an answer indistinguishable from a
 	// title save, and it would redraw the row it had just removed.
 	Assignments *[]AssignmentPresentation `json:"assignments,omitempty"`
+	// EditableComments is which of the task's comments the request's person
+	// may edit, carried only by the comment routes, for the reason
+	// Assignments is carried by the assignment routes: whether a comment is
+	// yours is a question about the reader, not a field of the task, so the
+	// page cannot answer it from the task it was handed. A pointer for the
+	// same reason too: `[]` is "none of them", absent is "this answer does
+	// not say".
+	EditableComments *[]string `json:"editableComments,omitempty"`
+}
+
+// TaskDocument is GET /api/tasks/{id}: one task in the shape `workbook show
+// --json` gives it, so its comments carry `editable` and `editedBy` and the
+// removed ones are listed under `removedComments`.
+type TaskDocument struct {
+	Format  string          `json:"format"`
+	Version int             `json:"version"`
+	Task    core.TaskDetail `json:"task"`
 }
 
 type TaskPresentation struct {
@@ -757,6 +779,12 @@ type TaskPresentation struct {
 	AssignmentChips []string                 `json:"assignmentChips,omitempty"`
 	MoreAssignments int                      `json:"moreAssignments,omitempty"`
 	Assignments     []AssignmentPresentation `json:"assignments,omitempty"`
+	// EditableComments names the task's comments the request's person may
+	// edit: core.Comment.EditableBy, asked on the server for the person
+	// commentIdentity names, so the page draws an Edit only where the
+	// service would accept one. Absent when there are none, which is every
+	// task on a board that cannot edit comments.
+	EditableComments []string `json:"editableComments,omitempty"`
 }
 
 // AssignmentPresentation is one assignment as the task page draws it: who holds
@@ -990,6 +1018,10 @@ type Options struct {
 	RemoveAttachment  TaskAttachmentRemover
 	Attachment        TaskAttachmentFinder
 	AttachmentContent AttachmentContentReader
+	// Detail answers GET /api/tasks/{id}, which the task page reads its
+	// thread's removals from. A board built without it answers that address
+	// as unconfigured and draws its thread without them.
+	Detail TaskDetailReader
 	// The two assignment mutations, and the identity they are recorded against.
 	//
 	// The identity is a value rather than a reader for the reason RepoName is:
@@ -1539,6 +1571,7 @@ func NewHandler(options Options) http.Handler {
 	handler.mux.HandleFunc("POST /api/vocabulary/keys", handler.addVocabularyKey)
 	handler.mux.HandleFunc("PATCH /api/vocabulary/keys/{key}", handler.editVocabularyKey)
 	handler.mux.HandleFunc("PATCH /api/display", handler.updateDisplay)
+	handler.mux.HandleFunc("GET /api/tasks/{id}", handler.serveTaskDetail)
 	handler.mux.HandleFunc("GET /api/tasks/{id}/history", handler.serveTaskHistory)
 	handler.mux.HandleFunc("POST /api/tasks", handler.createTask)
 	handler.mux.HandleFunc("PATCH /api/tasks/{id}", handler.updateTask)
@@ -1711,7 +1744,7 @@ func allowedMethod(path string) (string, bool) {
 			return http.MethodGet, true
 		}
 		if taskPathID(path) != "" {
-			return http.MethodPatch + ", " + http.MethodDelete, true
+			return http.MethodGet + ", " + http.MethodPatch + ", " + http.MethodDelete, true
 		}
 		if taskPagePathID(path) != "" {
 			return http.MethodGet, true
@@ -2884,7 +2917,7 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 		VocabularyHead:  vocabulary.Head,
 		VocabularyShape: vocabularyShape(vocabulary),
 		Tasks:           tasks,
-		Presentation:    taskPresentation(tasks, vocabulary.Vocabulary, handler.assignIdentity(request)),
+		Presentation:    taskPresentation(tasks, vocabulary.Vocabulary, handler.assignIdentity(request), handler.commentIdentity(request)),
 	})
 	if err != nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "encode the tasks document: %v", err))
@@ -3244,7 +3277,7 @@ func (handler *handler) writeTaskMutation(writer http.ResponseWriter, result cor
 	})
 }
 
-func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary, actor string) []TaskPresentation {
+func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary, actor, commenter string) []TaskPresentation {
 	views := presentation.TaskViews(tasks, vocabulary)
 	result := make([]TaskPresentation, len(views))
 	for index, view := range views {
@@ -3258,6 +3291,7 @@ func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary, actor strin
 			AssignmentChips:       row.Chips,
 			MoreAssignments:       row.More,
 			Assignments:           assignmentPresentation(view.Task.Assignments, actor),
+			EditableComments:      editableComments(view.Task.Comments, commenter),
 		}
 	}
 	return result

@@ -68,6 +68,16 @@ func (handler *handler) assignIdentity(request *http.Request) string {
 	if handler.Assign == nil || handler.Unassign == nil {
 		return ""
 	}
+	return handler.requestPerson(request)
+}
+
+// requestPerson is the person a request acts for: the one its context names
+// (core.WithActor) when it names one, and the board's own Identity only when
+// it does not. It is core.Service.ActorFor's answer for the same request, so
+// every question this board answers about "you" — which assignments you may
+// remove, which comments you may edit — is answered for the person the service
+// records the request's edit under.
+func (handler *handler) requestPerson(request *http.Request) string {
 	if actor, asserted := core.ActorFrom(request.Context()); asserted {
 		return actor
 	}

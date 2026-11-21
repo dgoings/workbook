@@ -4014,7 +4014,7 @@ func TestHandlerClientBoardSurfacesUnknownStatuses(t *testing.T) {
 		Format:       "workbook.tasks",
 		Version:      1,
 		Tasks:        tasks,
-		Presentation: taskPresentation(tasks, core.LegacyVocabulary(), ""),
+		Presentation: taskPresentation(tasks, core.LegacyVocabulary(), "", ""),
 	}
 	documentJSON, err := json.Marshal(document)
 	if err != nil {
@@ -4126,7 +4126,7 @@ func TestHandlerClientDragsOnlyOutOfRenderedColumns(t *testing.T) {
 		Format:       "workbook.tasks",
 		Version:      1,
 		Tasks:        tasks,
-		Presentation: taskPresentation(tasks, core.LegacyVocabulary(), ""),
+		Presentation: taskPresentation(tasks, core.LegacyVocabulary(), "", ""),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -5798,7 +5798,7 @@ func TestHandlerRejectsWrongMethods(t *testing.T) {
 		path      string
 		wantAllow string
 	}{
-		{method: http.MethodGet, path: "/api/tasks/WB-01J00000000000000000000001", wantAllow: http.MethodPatch + ", " + http.MethodDelete},
+		{method: http.MethodPost, path: "/api/tasks/WB-01J00000000000000000000001", wantAllow: http.MethodGet + ", " + http.MethodPatch + ", " + http.MethodDelete},
 		{method: http.MethodGet, path: "/api/tasks/WB-01J00000000000000000000001/position", wantAllow: http.MethodPatch},
 		{method: http.MethodPut, path: "/api/tasks", wantAllow: http.MethodGet + ", " + http.MethodPost},
 	} {

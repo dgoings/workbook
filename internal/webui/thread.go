@@ -156,7 +156,7 @@ func (handler *handler) addTaskComment(writer http.ResponseWriter, request *http
 		handler.writeError(writer, err)
 		return
 	}
-	handler.writeTaskMutation(writer, result)
+	handler.writeCommentMutation(writer, request, result)
 }
 
 func (handler *handler) editTaskComment(writer http.ResponseWriter, request *http.Request) {
@@ -179,7 +179,7 @@ func (handler *handler) editTaskComment(writer http.ResponseWriter, request *htt
 		handler.writeError(writer, err)
 		return
 	}
-	handler.writeTaskMutation(writer, result)
+	handler.writeCommentMutation(writer, request, result)
 }
 
 func (handler *handler) removeTaskComment(writer http.ResponseWriter, request *http.Request) {
@@ -201,7 +201,7 @@ func (handler *handler) removeTaskComment(writer http.ResponseWriter, request *h
 		handler.writeError(writer, err)
 		return
 	}
-	handler.writeTaskMutation(writer, result)
+	handler.writeCommentMutation(writer, request, result)
 }
 
 func (handler *handler) addTaskAttachment(writer http.ResponseWriter, request *http.Request) {
