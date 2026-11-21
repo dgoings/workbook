@@ -66,7 +66,7 @@
         // drawing has to go with them.
         if (current.view !== "config") leaveConfigRoute();
         if (current.view === "board") {
-          document.title = boardName;
+          document.title = withoutDirectionControls(boardName);
           // The board is re-attached rather than rebuilt, which is what makes
           // coming back from the configuration page cost nothing: every card node the
           // reader left is the node they return to, holding whatever it was
@@ -156,7 +156,7 @@
           main.replaceChildren(routeMessage("Task not found", "No task has the full ID " + current.id + "."));
           return;
         }
-        document.title = task.title + boardTitleSuffix;
+        document.title = withoutDirectionControls(task.title + boardTitleSuffix);
         const detail = taskForm("detail", task);
         const controller = activeDependencyController;
         const relationshipGeneration = relationshipRefreshGeneration;

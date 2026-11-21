@@ -1,10 +1,10 @@
 {{ define "task" }}
-<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-priority="{{ .Task.Priority }}" data-id-prefix="{{ .IDPrefix }}" draggable="true" aria-label="{{ if .StatusUnresolved }}Move task {{ .Task.Title }} out of the unrecognized status {{ .ResolvedStatus }}{{ else }}Move task {{ .Task.Title }} from {{ .ResolvedStatus }}{{ end }}{{ if .PriorityUnresolved }}, at the unrecognized priority {{ .Task.Priority }}{{ end }}">
+<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-priority="{{ .Task.Priority }}" data-id-prefix="{{ .IDPrefix }}" draggable="true" aria-label="{{ if .StatusUnresolved }}Move task {{ shown .Task.Title }} out of the unrecognized status {{ .ResolvedStatus }}{{ else }}Move task {{ shown .Task.Title }} from {{ .ResolvedStatus }}{{ end }}{{ if .PriorityUnresolved }}, at the unrecognized priority {{ .Task.Priority }}{{ end }}">
   <div class="task-card__meta"><span class="task-id-copy-group"><button type="button" class="task-id-copy" data-copy-task-id="{{ .Task.ID }}" aria-label="Copy full task ID {{ .Task.ID }}"><code>{{ .IDPrefix }}</code></button><span class="copy-status" data-copy-status role="status" aria-live="polite" aria-atomic="true"></span></span><span class="priority priority--{{ .Task.Priority }}"{{ if .PriorityUnresolved }} data-priority-unresolved title="Priority {{ .Task.Priority }} is not one of this project's"{{ end }}>{{ .Task.Priority }}</span></div>
-  <h3><a href="/tasks/{{ .Task.ID }}">{{ .Task.Title }}</a></h3>
-  {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
-  {{ if .Task.Labels }}<div class="labels">{{ range .Task.Labels }}<span class="label">{{ . }}</span>{{ end }}</div>{{ end }}
-  {{ if .Task.Assignments }}{{ $assignees := cardAssignees .Task.Assignments }}<div class="assignees" data-assignees role="group" aria-label="Assignees">{{ range $assignees.Chips }}<span class="assignee">@{{ . }}</span>{{ end }}{{ if $assignees.More }}<span class="assignee assignee--more">+{{ $assignees.More }} more</span>{{ end }}</div>{{ end }}
+  <h3><a href="/tasks/{{ .Task.ID }}">{{ shown .Task.Title }}</a></h3>
+  {{ if .Task.Description }}<p>{{ shown .Task.Description }}</p>{{ end }}
+  {{ if .Task.Labels }}<div class="labels">{{ range .Task.Labels }}<span class="label">{{ shown . }}</span>{{ end }}</div>{{ end }}
+  {{ if .Task.Assignments }}{{ $assignees := cardAssignees .Task.Assignments }}<div class="assignees" data-assignees role="group" aria-label="Assignees">{{ range $assignees.Chips }}<span class="assignee">@{{ shown . }}</span>{{ end }}{{ if $assignees.More }}<span class="assignee assignee--more">+{{ $assignees.More }} more</span>{{ end }}</div>{{ end }}
   {{ if .DependenciesTotal }}
   <div class="dependency-progress" data-dependency-progress>
     <span>{{ .DependenciesComplete }} of {{ .DependenciesTotal }} prerequisites complete</span>

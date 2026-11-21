@@ -85,7 +85,9 @@
       // an anchor, src and alt on an image. No class, no id, no data, no style,
       // and no event listener is ever attached to anything built here.
 
-      function markdownText(value) { return document.createTextNode(value); }
+      // Every character of a rendering is drawn without its direction controls;
+      // see withoutDirectionControls.
+      function markdownText(value) { return document.createTextNode(withoutDirectionControls(value)); }
       function markdownNode(tagName, children) {
         const element = document.createElement(tagName);
         if (children && children.length) element.append(...children);
@@ -136,20 +138,30 @@
         if (!attachment) return null;
         const address = "/api/tasks/" + encodeURIComponent(context.taskID) +
           "/attachments/" + encodeURIComponent(attachment.id);
+        const caption = shownLine(alt);
         if (!inlineImageMedia.has(attachment.media)) {
-          const link = markdownNode("a", [markdownText(alt || shownFileName(attachment.name) || "attachment")]);
+          // The link reads as the file's real name and nothing else. A reader
+          // decides from that name whether to open what it downloads, and the
+          // author's own words in its place would let
+          // `![invoice.pdf](attachment:<id>)` draw "invoice.pdf" over a file
+          // named "invoice<U+202E>fdp.exe" that saves as an .exe. What the
+          // author wrote is kept beside it as a caption, in parentheses, when
+          // it says anything the name does not.
+          const shown = shownFileName(attachment.name) || "attachment";
+          const link = markdownNode("a", [markdownText(shown)]);
           link.href = address;
           link.target = "_blank";
           link.rel = "noopener noreferrer nofollow";
-          return link;
+          if (!caption || caption === shown) return [link];
+          return [link, markdownText(" (" + caption + ")")];
         }
         const image = markdownNode("img");
         image.src = address;
         // An empty alt is a decorative image to a screen reader, which is the
         // right answer when the author wrote no alt text: inventing one out of
         // the file name would put a ULID-shaped string in the reading.
-        image.alt = alt || "";
-        return image;
+        image.alt = caption;
+        return [image];
       }
       // A link, or null when the target is not one this page will draw as a
       // link. safeLinkURL is the same gate the attachment list asks — http and
@@ -260,7 +272,7 @@
                 : (context && context.inline ? null : markdownLink(span.target));
               if (image && drawn) {
                 flush();
-                nodes.push(drawn);
+                nodes.push(...drawn);
                 index = span.end + 1;
                 continue;
               }

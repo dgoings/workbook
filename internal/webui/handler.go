@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/presentation"
@@ -44,7 +45,25 @@ const securityPolicy = "default-src 'none'; img-src 'self'; style-src 'unsafe-in
 // the poll's presentation carries what this returned, so the card a reader loads
 // and the card the first poll redraws hold the same chips. Every other card fact
 // already arrives on presentation.TaskView for exactly that reason.
-var pageFuncs = template.FuncMap{"cardAssignees": assignmentRow}
+//
+// The other is shown, which every piece of text somebody typed passes through
+// on its way into the page: it is the client's withoutDirectionControls, so a
+// title or a label drawn by the server reads as the client will redraw it.
+var pageFuncs = template.FuncMap{"cardAssignees": assignmentRow, "shown": withoutDirectionControls}
+
+// withoutDirectionControls draws each bidi control — the overrides,
+// embeddings, isolates and directional marks — as a space. U+202E
+// RIGHT-TO-LEFT OVERRIDE in a title would otherwise redraw the rest of its
+// line backwards for every reader. Everything else, line breaks included, is
+// kept; html/template escapes the result as it escapes any text.
+func withoutDirectionControls(value string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Bidi_Control, r) {
+			return ' '
+		}
+		return r
+	}, value)
+}
 
 // pageTemplate is the board's page template, parsed and escaped once for the
 // process rather than once per NewHandler call.

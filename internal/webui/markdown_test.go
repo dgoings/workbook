@@ -558,9 +558,11 @@ setTimeout(() => {
   });
   // An SVG is markup that can carry script. The route already refuses to hand
   // one back inline, so a reference to one degrades to a link to that route,
-  // which answers with Content-Disposition: attachment and downloads it.
+  // which answers with Content-Disposition: attachment and downloads it. The
+  // link reads as the file's real name, and the author's words follow it as a
+  // caption rather than standing in for it.
   const svg = commentBody(4);
-  if (shapeOf(svg) !== 'p[a["the chart"]]') throw new Error("an SVG reference rendered as " + shapeOf(svg));
+  if (shapeOf(svg) !== 'p[a["chart.svg"]," (the chart)"]') throw new Error("an SVG reference rendered as " + shapeOf(svg));
   const link = elementsUnder(svg)[1];
   if (link.href !== address + `+strconv.Quote(markdownSVGID)+`) throw new Error("the SVG link points at " + link.href);
   if (link.rel !== "noopener noreferrer nofollow" || link.target !== "_blank") {

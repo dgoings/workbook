@@ -317,7 +317,7 @@
           // has ever followed the title field's keystrokes — so they follow the
           // task the board holds even while the field carries an edit.
           text(heading, held.title || "");
-          document.title = (held.title || "") + boardTitleSuffix;
+          document.title = withoutDirectionControls((held.title || "") + boardTitleSuffix);
           if (!("status" in edited)) showStatus(controls.status, held.status);
           // Both vocabulary fields are always showable: each builds a
           // placeholder naming a value this project cannot resolve, so the

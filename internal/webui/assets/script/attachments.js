@@ -25,9 +25,7 @@
       function droppedOn(attachment) {
         return String((attachment.dropped && attachment.dropped.at) || "").slice(0, 10);
       }
-      // A file's name as this board draws it: control and bidi-control
-      // characters become spaces and runs of space collapse, which is what the
-      // command line's core.DisplayLine does to the same names.
+      // A file's name as this board draws it; see shownLine.
       //
       // The name is somebody else's text, and the reader decides from it
       // whether to open the file. U+202E RIGHT-TO-LEFT OVERRIDE draws the rest
@@ -36,12 +34,16 @@
       // name is untouched — the download is still named by the server — and
       // only what is drawn changes.
       function shownFileName(name) {
-        return String(name || "").replace(/[\p{Cc}\p{Bidi_Control}]/gu, " ").split(/\s+/).filter(Boolean).join(" ");
+        return shownLine(name);
       }
       // What an attachment's row names it as: a link's label, or its URL when
-      // it has none, and a file's name.
+      // it has none, and a file's name. A link's label and address are drawn
+      // the way a file's name is, for the same reason: the core refuses a
+      // direction control in a new link's address, but a stored one, or one in
+      // its label, would otherwise make "https://evil.example/<U+202E>fdp.exe"
+      // read as ".../exe.pdf".
       function attachmentShownName(attachment) {
-        if (attachment.kind === "link") return attachment.label || attachment.url || "Unnamed link";
+        if (attachment.kind === "link") return shownLine(attachment.label) || shownLine(attachment.url) || "Unnamed link";
         return shownFileName(attachment.name) || "Unnamed file";
       }
       // An attachment's metadata, as the one line its card draws and as the
@@ -818,7 +820,7 @@
           name.className = "attachment__name";
           if (attachment.kind === "link") {
             const destination = safeLinkURL(attachment.url);
-            const shown = attachment.label || attachment.url || "Unnamed link";
+            const shown = attachmentShownName(attachment);
             if (destination) {
               const link = document.createElement("a");
               link.href = destination;
@@ -827,11 +829,11 @@
               // window or the address the reader is on.
               link.target = "_blank";
               link.rel = "noopener noreferrer nofollow";
-              if (attachment.url) link.title = attachment.url;
+              if (attachment.url) link.title = shownLine(attachment.url);
               text(link, shown);
               name.append(link);
             } else {
-              if (attachment.url) name.title = attachment.url;
+              if (attachment.url) name.title = shownLine(attachment.url);
               text(name, shown);
             }
           } else if (attachment.dropped) {
@@ -852,7 +854,7 @@
           meta.className = "attachment__meta";
           const described = attachmentMeta(attachment);
           text(meta, described.line);
-          meta.title = described.full;
+          meta.title = withoutDirectionControls(described.full);
           const remove = panel.claim(rowRemoveButton("Remove " + attachmentShownName(attachment)));
           remove.className += " attachment__remove";
           remove.addEventListener("click", async () => {
@@ -1106,9 +1108,9 @@
           // has no route to download from, and a staged link is a destination
           // this page has not stored yet — offering either as something to
           // follow would be offering a state that does not exist.
-          const shown = item.kind === "link" ? (item.label || item.url) : item.name;
+          const shown = item.kind === "link" ? (shownLine(item.label) || shownLine(item.url)) : shownFileName(item.name);
           text(name, shown);
-          if (item.kind === "link") name.title = item.url;
+          if (item.kind === "link") name.title = shownLine(item.url);
           const meta = document.createElement("p");
           meta.className = "attachment__meta";
           text(meta, item.kind === "link"

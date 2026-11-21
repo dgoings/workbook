@@ -1,4 +1,24 @@
-      function text(element, value) { element.textContent = value || ""; return element; }
+      // Text drawn into the page, without its direction controls.
+      //
+      // Nearly everything this board draws is text somebody else typed — a
+      // title, a label, a comment, an author, a file or link name — and U+202E
+      // RIGHT-TO-LEFT OVERRIDE and the other bidi controls (the embeddings,
+      // isolates and directional marks) redraw whatever follows them in its
+      // paragraph: "invoice<U+202E>fdp.exe" reads as "invoiceexe.pdf". Each
+      // becomes a space, which is what the command line's core.DisplayLine does
+      // to the same text. Line breaks and every other character are kept, so a
+      // multi-line value still draws as written. The stored text is untouched.
+      function withoutDirectionControls(value) {
+        return String(value).replace(/\p{Bidi_Control}/gu, " ");
+      }
+      // One line of text somebody typed — a file's name, a link's label or
+      // address — as this board draws it: control and bidi-control characters
+      // become spaces and runs of space collapse, exactly core.DisplayLine.
+      function shownLine(value) {
+        return String(value == null ? "" : value).replace(/[\p{Cc}\p{Bidi_Control}]/gu, " ")
+          .split(/\s+/).filter(Boolean).join(" ");
+      }
+      function text(element, value) { element.textContent = withoutDirectionControls(value || ""); return element; }
 
       // How long ago the board last read the repository successfully.
       //
