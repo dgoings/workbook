@@ -568,7 +568,7 @@ setTimeout(async () => {
     throw new Error("the edit did not survive: " + JSON.stringify(stillOpen && stillOpen.value));
   }
   const note = findElement(kept, (element) => hasClassToken(element, "comment__note"));
-  if (!note || !note.textContent.includes("removed elsewhere")) {
+  if (!note || !note.textContent.includes("was removed") || !note.textContent.includes("cannot be saved")) {
     throw new Error("the row does not say what happened: " + JSON.stringify(note && note.textContent));
   }
 }, 0);
