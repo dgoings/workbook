@@ -89,8 +89,14 @@ before anyone runs it; see Compatibility across versions below.
   one list in which each row is tagged Depends On or Blocks, Depends On first,
   and one task picker with an **Add as** toggle choosing which kind the next
   entry is. The toggle stays where it was put after an add, so several entries
-  of one kind are one choice and several picks. Nothing about how an edge is
-  stored or sent changed.
+  of one kind are one choice and several picks. The picker no longer offers a
+  task the server would refuse as a cycle: under Depends On, a task that
+  already depends on this one, directly or through others; under Blocks, a task
+  this one already depends on, directly or through others. Staged rows on the
+  New Task form count, and a task left out comes back when the toggle moves or
+  the row that closed the path is removed. The option highlighted with the
+  arrow keys no longer jumps back to none on the board's once-a-second refresh.
+  Nothing about how an edge is stored or sent changed.
 - **The task form's sidebar is tidier.** Every section — Properties,
   Dependencies, Assignments and Attachments — is spaced alike, with the same
   room above and below the rule between sections, and every dependency,

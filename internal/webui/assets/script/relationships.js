@@ -118,7 +118,11 @@
           hideListbox();
           renderOptions();
         }
-        function renderOptions() {
+        // reveal scrolls the highlighted option into view. Only a key that
+        // moved the highlight asks for it: the board's poll redraws this list
+        // about once a second, and a redraw that scrolled would drag the list
+        // back to the highlight from wherever the reader had scrolled it.
+        function renderOptions(reveal = false) {
           const options = matchingCandidates();
           if (state.activeIndex >= options.length) state.activeIndex = options.length - 1;
           const active = state.activeIndex >= 0 ? options[state.activeIndex] : null;
@@ -146,7 +150,7 @@
             option.addEventListener("click", () => selectCandidate(task));
             return option;
           }));
-          if (activeOptionID && !listbox.hidden) {
+          if (reveal && activeOptionID && !listbox.hidden) {
             const activeOption = [...listbox.children].find((option) => option.id === activeOptionID);
             if (activeOption) activeOption.scrollIntoView({ block: "nearest" });
           }
@@ -212,7 +216,7 @@
           } else {
             return;
           }
-          renderOptions();
+          renderOptions(event.key === "ArrowDown" || event.key === "ArrowUp");
         });
         add.addEventListener("click", () => {
           if (config.isBusy()) return;
@@ -251,7 +255,17 @@
           // there the reader moved the toggle themselves, and a title left
           // beside a disabled Add would read as a pick that cannot be added
           // for no reason given.
+          //
+          // The highlight follows its task, not its place in the list. The
+          // board hands the picker its candidates on every once-a-second poll,
+          // and resetting the highlight there took it off the option a
+          // keyboard reader had arrowed to, so Enter picked nothing. It is let
+          // go of only when the new set no longer lists that task.
           setCandidates(candidates, { clearStalePick = false } = {}) {
+            const previous = matchingCandidates();
+            const highlighted = state.activeIndex >= 0 && previous[state.activeIndex]
+              ? previous[state.activeIndex].id
+              : "";
             state.candidates = candidates;
             if (state.selectedID && !selectedCandidate()) {
               state.selectedID = "";
@@ -260,7 +274,9 @@
                 input.value = "";
               }
             }
-            state.activeIndex = -1;
+            state.activeIndex = highlighted
+              ? matchingCandidates().findIndex((task) => task.id === highlighted)
+              : -1;
             renderOptions();
           },
           setBusy(busy) {
@@ -492,7 +508,8 @@
           combobox.setPrompt(kind.caption, kind.placeholder);
           // What the picker offers depends on the kind: a task this one already
           // depends on is not offered for Depends On, and one it already blocks
-          // is not offered for Blocks.
+          // is not offered for Blocks. Nor is a task whose edge would close a
+          // cycle; see dependencyCycleCandidates.
           combobox.setCandidates(relationshipCandidates(taskID, kind.direction, draftState), { clearStalePick: true });
         }
         region.append(heading, list, kindGroup, combobox.region, message, status);

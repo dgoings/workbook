@@ -1153,9 +1153,11 @@ setTimeout(async () => {
       !dependsRow.textContent.includes("Not saved")) {
     throw new Error("Depends On draft did not render as a compact unsaved row");
   }
+  // A staged prerequisite is not offered again under Depends On, and not
+  // under Blocks either, where it would close a cycle with the staged edge.
   if (resetCandidates(dependsGroup).includes(` + strconv.Quote(dependsCandidate.ID) + `) ||
-      !resetCandidates(blocksGroup).includes(` + strconv.Quote(dependsCandidate.ID) + `)) {
-    throw new Error("Depends On draft did not filter candidates by direction");
+      resetCandidates(blocksGroup).includes(` + strconv.Quote(dependsCandidate.ID) + `)) {
+    throw new Error("Depends On draft did not filter candidates");
   }
 
   await selectAndAdd(blocksGroup, ` + strconv.Quote(blocksCandidate.ID) + `, ` + strconv.Quote(blocksCandidate.Title) + `);
@@ -1167,8 +1169,8 @@ setTimeout(async () => {
     throw new Error("Blocks draft did not render as a compact unsaved row");
   }
   if (resetCandidates(blocksGroup).includes(` + strconv.Quote(blocksCandidate.ID) + `) ||
-      !resetCandidates(dependsGroup).includes(` + strconv.Quote(blocksCandidate.ID) + `)) {
-    throw new Error("Blocks draft did not filter candidates by direction");
+      resetCandidates(dependsGroup).includes(` + strconv.Quote(blocksCandidate.ID) + `)) {
+    throw new Error("Blocks draft did not filter candidates");
   }
 
   const currentDependsRow = findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(dependsCandidate.ID) + `);
@@ -1178,6 +1180,9 @@ setTimeout(async () => {
   assertFormValues();
   if (findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(dependsCandidate.ID) + `)) {
     throw new Error("removing a Depends On draft left its row mounted");
+  }
+  if (!resetCandidates(blocksGroup).includes(` + strconv.Quote(dependsCandidate.ID) + `)) {
+    throw new Error("removing a Depends On draft did not offer its task under Blocks again");
   }
   const dependencyMutations = fetchCalls.filter((call) =>
     /\/api\/tasks\/.+\/dependencies\/.+/.test(call.url) &&
@@ -2601,13 +2606,13 @@ setTimeout(() => {
     });
   };
 
+  // Neither kind offers the other's stored task: depending on a task this one
+  // blocks, or blocking a task this one depends on, would close a cycle.
   const dependsCandidates = [
-    ` + strconv.Quote(alreadyBlocked.ID) + `,
     ` + strconv.Quote(firstCandidate.ID) + `,
     ` + strconv.Quote(secondCandidate.ID) + `
   ];
   const blocksCandidates = [
-    ` + strconv.Quote(existingDependency.ID) + `,
     ` + strconv.Quote(firstCandidate.ID) + `,
     ` + strconv.Quote(secondCandidate.ID) + `
   ];
@@ -3761,7 +3766,14 @@ setTimeout(async () => {
     throw new Error("the dependency toggle did not stay on Blocks after a Blocks entry was added");
   }
   chooseRelationshipKind(main, "Depends On");
+  // Beta now depends on this task, so Depends On no longer offers it: the
+  // edge would close a cycle. Alpha is still on offer.
   dependsInput.value = "Beta";
+  dependsInput.eventListeners.input();
+  if (findElement(dependsGroup, (element) => element.attributes.role === "option")) {
+    throw new Error("Depends On offers the task this one now blocks");
+  }
+  dependsInput.value = "Alpha";
   dependsInput.eventListeners.input();
   dispatchKey(dependsInput, "ArrowDown");
   if (!dependsInput.attributes["aria-activedescendant"] || selectedOption(dependsGroup)) {
