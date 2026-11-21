@@ -433,3 +433,21 @@ func TestAnUnknownCommandIsReportedBeforeAnUnusableWorkbookActor(t *testing.T) {
 		t.Fatalf("stderr = %q; an unknown command must not be refused over WORKBOOK_ACTOR", stderr)
 	}
 }
+
+// A value that is not valid UTF-8 would be recorded as somebody else: the
+// operation's JSON turns each bad byte into U+FFFD. It is refused as an
+// assignee exactly as it is refused as the acting person, and nothing moves.
+func TestAssignRefusesAPersonThatIsNotValidUTF8(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	existing := createReadyTask(t, repository, "Existing")
+	refsBefore := gitOutput(t, repository, "for-each-ref", "refs/workbook/")
+	code, stdout, stderr := runWithActorEnvironment(t, repository, nil,
+		"update", existing.ID, "--assign", "s\xffam@example.com", "--no-sync", "--json")
+	if code != 5 || stdout != "" || !strings.Contains(stderr, "valid UTF-8") {
+		t.Fatalf("--assign with invalid UTF-8 = (%d, %q, %q), want the validation refusal", code, stdout, stderr)
+	}
+	if refsAfter := gitOutput(t, repository, "for-each-ref", "refs/workbook/"); refsAfter != refsBefore {
+		t.Fatalf("a refused assignment moved refs:\nbefore %s\nafter  %s", refsBefore, refsAfter)
+	}
+}

@@ -157,3 +157,31 @@ func TestWithEnvironmentActor(t *testing.T) {
 		}
 	}
 }
+
+// An operation is stored as JSON, whose encoder turns each byte that is not
+// UTF-8 into U+FFFD, so a value that is not would be recorded as somebody else.
+// The assignment rule's patterns cannot see it — Go's regexp reads a bad byte as
+// U+FFFD, which they accept — so it is checked on its own, and nothing the rule
+// accepted before is refused now.
+func TestValidateAssigneeAuthoringRefusesInvalidUTF8Only(t *testing.T) {
+	t.Parallel()
+	if !assignmentPrincipalPattern.MatchString("s\xffam@example.com") {
+		t.Fatal("the principal pattern refuses invalid UTF-8 by itself; this test no longer covers a hole")
+	}
+	for _, value := range []string{"s\xffam@example.com", "sam@example.com/impl\xff", "sam@exa\xc3mple.com"} {
+		err := ValidateAssigneeAuthoring(value)
+		if err == nil || !strings.Contains(err.Error(), "valid UTF-8") {
+			t.Errorf("ValidateAssigneeAuthoring(%q) = %v, want it refused as invalid UTF-8", value, err)
+		}
+	}
+	for _, value := range []string{"sam@example.com", "ä@example.com", "sam@example.com/ünï code", "josé@exämple.com/impl-1"} {
+		if err := ValidateAssigneeAuthoring(value); err != nil && strings.Contains(err.Error(), "UTF-8") {
+			t.Errorf("ValidateAssigneeAuthoring(%q) = %v; a valid UTF-8 value was refused for its encoding", value, err)
+		}
+	}
+	for _, value := range []string{"sam@example.com", "ä@example.com", "josé@exämple.com/impl-1"} {
+		if err := ValidateAssigneeAuthoring(value); err != nil {
+			t.Errorf("ValidateAssigneeAuthoring(%q) = %v, want accepted", value, err)
+		}
+	}
+}

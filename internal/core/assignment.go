@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Assignment is one recorded claim of responsibility for a task.
@@ -209,6 +210,14 @@ func ValidateAssigneeAuthoring(value string) error {
 	principal, _, err := SplitAssignmentValue(value)
 	if err != nil {
 		return err
+	}
+	// On the whole value, label included, and after the split has bounded its
+	// size: an operation is stored as JSON, whose encoder replaces every byte
+	// that is not UTF-8 with U+FFFD, so such a value would be recorded as a
+	// different one from the one somebody typed. The patterns cannot see this,
+	// because Go's regexp reads a bad byte as U+FFFD, which they accept.
+	if !utf8.ValidString(value) {
+		return Errorf(CategoryValidation, "assignment %q must be valid UTF-8", value)
 	}
 	if !assignmentPrincipalPattern.MatchString(principal) {
 		return Errorf(
