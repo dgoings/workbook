@@ -137,7 +137,7 @@
         const address = "/api/tasks/" + encodeURIComponent(context.taskID) +
           "/attachments/" + encodeURIComponent(attachment.id);
         if (!inlineImageMedia.has(attachment.media)) {
-          const link = markdownNode("a", [markdownText(alt || attachment.name || "attachment")]);
+          const link = markdownNode("a", [markdownText(alt || shownFileName(attachment.name) || "attachment")]);
           link.href = address;
           link.target = "_blank";
           link.rel = "noopener noreferrer nofollow";

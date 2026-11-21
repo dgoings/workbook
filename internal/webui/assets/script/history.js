@@ -87,9 +87,12 @@
         } else {
           value = document.createElement("span");
           value.className = "field-change__value";
+          // An attachment change names the file, and a file's name is drawn
+          // the way its row draws it; see shownFileName.
+          const shown = field.field === "attachment" ? shownFileName : (value) => value;
           if (field.kind === "reordered") text(value, "Reordered");
-          else if (field.kind === "added") text(value, "+ " + field.to);
-          else if (field.kind === "removed") text(value, "− " + field.from);
+          else if (field.kind === "added") text(value, "+ " + shown(field.to));
+          else if (field.kind === "removed") text(value, "− " + shown(field.from));
           else if (field.kind === "created") text(value, "Created " + (field.to || ""));
           else if (field.kind === "deleted") text(value, "Deleted");
           else if (field.kind === "restored") text(value, "Restored");

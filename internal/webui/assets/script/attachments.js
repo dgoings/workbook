@@ -25,11 +25,24 @@
       function droppedOn(attachment) {
         return String((attachment.dropped && attachment.dropped.at) || "").slice(0, 10);
       }
+      // A file's name as this board draws it: control and bidi-control
+      // characters become spaces and runs of space collapse, which is what the
+      // command line's core.DisplayLine does to the same names.
+      //
+      // The name is somebody else's text, and the reader decides from it
+      // whether to open the file. U+202E RIGHT-TO-LEFT OVERRIDE draws the rest
+      // of a name backwards, so "invoice<U+202E>fdp.exe" would read here as
+      // "invoiceexe.pdf" while the route hands it back as an .exe. The stored
+      // name is untouched — the download is still named by the server — and
+      // only what is drawn changes.
+      function shownFileName(name) {
+        return String(name || "").replace(/[\p{Cc}\p{Bidi_Control}]/gu, " ").split(/\s+/).filter(Boolean).join(" ");
+      }
       // What an attachment's row names it as: a link's label, or its URL when
       // it has none, and a file's name.
       function attachmentShownName(attachment) {
         if (attachment.kind === "link") return attachment.label || attachment.url || "Unnamed link";
-        return attachment.name || "Unnamed file";
+        return shownFileName(attachment.name) || "Unnamed file";
       }
       // An attachment's metadata, as the one line its card draws and as the
       // fuller tooltip on that line. The line is held to what fits a sidebar
@@ -824,7 +837,7 @@
           } else if (attachment.dropped) {
             // Its bytes are gone, so there is nothing to link to: the route
             // would only answer 410.
-            text(name, attachment.name || "Unnamed file");
+            text(name, attachmentShownName(attachment));
           } else {
             const link = document.createElement("a");
             link.href = attachmentPath(attachment.id);
@@ -832,7 +845,7 @@
             // opens in a tab of its own either way so the task stays where it is.
             link.target = "_blank";
             link.rel = "noopener noreferrer";
-            text(link, attachment.name || "Unnamed file");
+            text(link, attachmentShownName(attachment));
             name.append(link);
           }
           const meta = document.createElement("p");
