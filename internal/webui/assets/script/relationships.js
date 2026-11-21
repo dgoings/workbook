@@ -251,7 +251,17 @@
           // there the reader moved the toggle themselves, and a title left
           // beside a disabled Add would read as a pick that cannot be added
           // for no reason given.
+          //
+          // The highlight follows its task, not its place in the list. The
+          // board hands the picker its candidates on every once-a-second poll,
+          // and resetting the highlight there took it off the option a
+          // keyboard reader had arrowed to, so Enter picked nothing. It is let
+          // go of only when the new set no longer lists that task.
           setCandidates(candidates, { clearStalePick = false } = {}) {
+            const previous = matchingCandidates();
+            const highlighted = state.activeIndex >= 0 && previous[state.activeIndex]
+              ? previous[state.activeIndex].id
+              : "";
             state.candidates = candidates;
             if (state.selectedID && !selectedCandidate()) {
               state.selectedID = "";
@@ -260,7 +270,9 @@
                 input.value = "";
               }
             }
-            state.activeIndex = -1;
+            state.activeIndex = highlighted
+              ? matchingCandidates().findIndex((task) => task.id === highlighted)
+              : -1;
             renderOptions();
           },
           setBusy(busy) {
