@@ -136,10 +136,13 @@ request's context, and nothing else. A pack written for a context that names a
 different person is refused rather than recorded.
 
 The commit holding a pack takes its author and committer from the pack's own
-actor, never from the process writing it. When the actor is the checkout's own
-`user.email`, the commit is the one Git writes from the checkout's
-configuration, exactly as before the override existed. Any other actor becomes
-both author and committer, with the email as the display name too:
+actor, never from the process writing it. When nobody named the person — the
+context asserts no actor, so the actor is the checkout's own `user.email` — the
+commit is the one Git writes from the checkout's configuration, exactly as
+before the override existed. A replay asserts nobody of its own, so a replayed
+pack whose actor is the checkout's `user.email` is written that way too. Any
+other actor, and a named one even when it is the checkout's own address,
+becomes both author and committer, with the email as the display name too:
 
 ```text
 operation.json   "actor": {"id": "sam@example.com"}
@@ -155,8 +158,11 @@ from the pack is what lets one background sync replay several people's edits,
 each under its own name, in a folder with no Git identity at all. An actor Git
 would not store byte for byte (it drops `<` and `>`, trims some characters from
 the ends, and stores bytes where the pack's JSON cannot hold invalid UTF-8) is
-refused rather than written. Either way the actor is asserted, not verified;
-see [the assignment value](#assignments) below.
+refused for a first write. A replay is never refused for it, because the name
+is already in history and nobody can change it: the replayed commit takes the
+author and committer recorded on the commit it replays instead. Either way the
+actor is asserted, not verified; see [the assignment value](#assignments)
+below.
 
 Operation IDs are globally unique and independent of Git object IDs. Git commit ancestry provides causal ordering; a logical clock assists validation and deterministic presentation. Wall-clock time is for display only and must not decide semantic conflicts.
 

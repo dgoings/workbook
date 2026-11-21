@@ -565,3 +565,198 @@ func rebuildCommitUnaided(t *testing.T, directory, commit string, identity []str
 	}
 	return strings.TrimSpace(string(rebuilt))
 }
+
+// inheritCIIdentity routes repo's Git through a wrapper that supplies, as a
+// process started inside a CI job would inherit them, an author and committer
+// of its own, and the pinned commit dates. Like the dates, each is only a
+// default: whatever Workbook gives Git itself wins.
+func inheritCIIdentity(t *testing.T, repo *Repository) {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("find git: %v", err)
+	}
+	wrapper := filepath.Join(t.TempDir(), "git")
+	testenv.WriteExecutable(t, wrapper, []byte("#!/bin/sh\n"+
+		": \"${GIT_AUTHOR_DATE:="+pinnedCommitDate+"}\"\n"+
+		": \"${GIT_COMMITTER_DATE:="+pinnedCommitDate+"}\"\n"+
+		": \"${GIT_AUTHOR_NAME:=CI Bot}\"\n"+
+		": \"${GIT_AUTHOR_EMAIL:=ci-bot@example.test}\"\n"+
+		": \"${GIT_COMMITTER_NAME:=CI Bot}\"\n"+
+		": \"${GIT_COMMITTER_EMAIL:=ci-bot@example.test}\"\n"+
+		"export GIT_AUTHOR_DATE GIT_COMMITTER_DATE GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL\n"+
+		"exec '"+git+"' \"$@\"\n"))
+	repo.gitPath = wrapper
+}
+
+// Naming the person is what decides the commit, not whether the name happens
+// to be the checkout's own: once a context names somebody, even the checkout's
+// own user.email, the commit carries that name as author and committer, and no
+// inherited GIT_AUTHOR_* or GIT_COMMITTER_* takes part. Only an edit for which
+// nobody named the person is the one Git writes from its own surroundings.
+func TestANamedActorThatIsTheCheckoutsOwnEmailStillNamesTheCommit(t *testing.T) {
+	t.Parallel()
+	repo, config := writeRepository(t)
+	syncGit(t, repo.Root, "config", "user.name", "Alice")
+	syncGit(t, repo.Root, "config", "user.email", "alice@example.test")
+	repo = openSyncCloneAt(t, repo.Root)
+	inheritCIIdentity(t, repo)
+	alice := actorService(repo, config, "alice@example.test")
+	named := actorContext(t, "alice@example.test")
+
+	created, err := alice.CreateMutation(named, core.CreateInput{Title: "Hers"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := "Hers, renamed"
+	updated, err := alice.UpdateMutation(named, created.Task.ID, core.UpdateInput{Title: &title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := repo.WriteConfigOperation(named, config, core.CryptoULIDSource{},
+		[]core.ConfigOperation{addOperation("triage", "Triage", "1/2")}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for kind, head := range map[string]string{
+		"task create": created.Task.Head, "task update": updated.Task.Head, "config-ledger write": ledger.Head,
+	} {
+		author, committer := commitIdentities(t, repo.Root, head)
+		if author != "alice@example.test <alice@example.test>" || committer != author {
+			t.Errorf("%s with alice named: author %q, committer %q; want alice@example.test as both, not the inherited CI Bot",
+				kind, author, committer)
+		}
+		if rebuilt := rebuildCommitUnaided(t, repo.Root, head, identityEnvironment("alice@example.test")); rebuilt != head {
+			t.Errorf("%s: plain git commit-tree as alice rebuilt %s as %s", kind, head, rebuilt)
+		}
+	}
+
+	// The same edit with nobody named is written exactly as before, which in
+	// this process means under the inherited identity: the wrapper is real.
+	again := "Hers, renamed again"
+	plain, err := alice.UpdateMutation(context.Background(), created.Task.ID, core.UpdateInput{Title: &again})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if author, _ := commitIdentities(t, repo.Root, plain.Task.Head); author != "CI Bot <ci-bot@example.test>" {
+		t.Fatalf("an edit nobody named the person for has author %q, want the inherited CI Bot as Git chooses", author)
+	}
+}
+
+// A replay has no named person of its own: it re-records an edit somebody made
+// earlier, and the context of whichever command syncs says nothing about that
+// edit. So a replay of an edit recorded under the checkout's own user.email is
+// written as before even when the syncing context names that same address.
+func TestAReplayOfTheCheckoutsOwnEditIsWrittenAsBeforeWhateverTheContextNames(t *testing.T) {
+	t.Parallel()
+	first, second, config := syncRepositories(t)
+	syncGit(t, second.Root, "config", "user.name", "Checkout Owner")
+	syncGit(t, second.Root, "config", "user.email", "owner@example.test")
+	second = openSyncCloneAt(t, second.Root)
+	pinCommitDates(t, second)
+	owner := actorService(second, config, "owner@example.test")
+
+	shared := createSyncTask(t, first, config, "Shared")
+	if _, err := first.Sync(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Fetch(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	updateSyncTask(t, first, config, shared.ID, "Shared, renamed remotely")
+	if _, err := first.Sync(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	high := core.PriorityHigh
+	local, err := owner.UpdateMutation(context.Background(), shared.ID, core.UpdateInput{Priority: &high})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := second.Sync(actorContext(t, "owner@example.test"), config)
+	if err != nil {
+		t.Fatalf("Sync() error = %v; result = %#v", err, result)
+	}
+	assertSyncOutcome(t, result.Fetch, shared.ID, SyncReconciled)
+	head := refValue(t, second, taskRefPrefix+shared.ID)
+	if head == local.Task.Head {
+		t.Fatal("the sync did not replay the owner's edit")
+	}
+	if rebuilt := rebuildCommitUnaided(t, second.Root, head, nil); rebuilt != head {
+		t.Fatalf("plain git commit-tree rebuilt the replay %s as %s; want the commit Git writes unaided", head, rebuilt)
+	}
+	if author, _ := commitIdentities(t, second.Root, head); author != "Checkout Owner <owner@example.test>" {
+		t.Fatalf("replay author = %q, want the checkout's own identity", author)
+	}
+}
+
+// A replay is never refused for the form of a name already in history. Here
+// the edits were recorded under a user.email Git stores without its brackets,
+// and the checkout's email has since been corrected, so neither the actor nor
+// the checkout's identity can name the replayed commits. Each takes the author
+// and committer of the commit it replays, task and configuration ledger alike.
+func TestAReplayOfANameGitCannotStoreTakesTheReplayedCommitsIdentity(t *testing.T) {
+	t.Parallel()
+	first, second, config := syncRepositories(t)
+	syncGit(t, second.Root, "config", "user.name", "Bob")
+	syncGit(t, second.Root, "config", "user.email", "<bob@example.test>")
+	second = openSyncCloneAt(t, second.Root)
+	bob := actorService(second, config, "<bob@example.test>")
+
+	shared := createSyncTask(t, first, config, "Shared")
+	writeConfig(t, first, config, configOperations(addOperation("icebox", "Icebox", "7/1"))...)
+	if _, err := first.Sync(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Fetch(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	updateSyncTask(t, first, config, shared.ID, "Shared, renamed remotely")
+	writeConfig(t, first, config, configOperations(relabelOperation("icebox", "Ice box"))...)
+	if _, err := first.Sync(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	high := core.PriorityHigh
+	local, err := bob.UpdateMutation(context.Background(), shared.ID, core.UpdateInput{Priority: &high})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := second.WriteConfigOperation(context.Background(), config, core.CryptoULIDSource{},
+		[]core.ConfigOperation{addOperation("triage", "Triage", "1/2")}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	syncGit(t, second.Root, "config", "user.email", "bob@example.test")
+	second = openSyncCloneAt(t, second.Root)
+	result, err := second.Sync(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Sync() error = %v; result = %#v", err, result)
+	}
+	assertSyncOutcome(t, result.Fetch, shared.ID, SyncReconciled)
+	assertConfigStatus(t, result.Fetch.Config, SyncConfigReconciled)
+	for _, replayed := range []struct {
+		ref, original string
+	}{
+		{taskRefPrefix + shared.ID, local.Task.Head},
+		{configRef, ledger.Head},
+	} {
+		head := refValue(t, second, replayed.ref)
+		if head == replayed.original {
+			t.Errorf("%s: the sync did not replay %s", replayed.ref, replayed.original)
+			continue
+		}
+		if got := remoteRefValue(t, second, replayed.ref); got != head {
+			t.Errorf("%s: origin holds %s, want the replayed commit %s published", replayed.ref, got, head)
+		}
+		wantAuthor, wantCommitter := commitIdentities(t, second.Root, replayed.original)
+		author, committer := commitIdentities(t, second.Root, head)
+		if wantAuthor != "Bob <bob@example.test>" || author != wantAuthor || committer != wantCommitter {
+			t.Errorf("%s replay: author %q, committer %q; want the replayed commit's %q, %q",
+				replayed.ref, author, committer, wantAuthor, wantCommitter)
+		}
+		if got := operationActor(t, second.Root, head); got != "<bob@example.test>" {
+			t.Errorf("%s replay: operation actor %q, want the name it was recorded under", replayed.ref, got)
+		}
+	}
+}

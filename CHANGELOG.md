@@ -100,7 +100,8 @@ before anyone runs it; see Compatibility across versions below.
 - **`WORKBOOK_ACTOR` records an edit under somebody else's name.** Set to an
   email address, it replaces the checkout's `user.email` as the person every
   edit, `--assign self`, `workbook next` and assignment removal go by, and the
-  commit behind each edit names that address as its author and committer. A
+  commit behind each edit names that address as its author and committer, even
+  when it is the checkout's own `user.email`. A
   folder with no Git identity works when it is set, which is what a server
   acting for many signed-in people needs. An empty or malformed value,
   including one that is not valid UTF-8, is refused with exit `5` rather than
@@ -121,7 +122,11 @@ before anyone runs it; see Compatibility across versions below.
   replays and publishes each person's task and configuration edits under
   their own name, several people's in one pass, even in a folder with no Git
   identity. A replay of an edit recorded under the checkout's own
-  `user.email` still takes the display name of the process that writes it.
+  `user.email` still takes the display name of the process that writes it. A
+  replay is never refused for the form of a name already in history: one Git
+  cannot store exactly, such as a `user.email` written with angle brackets,
+  takes the author and committer of the commit it replays, so the task still
+  synchronizes.
 - **`--assign` refuses a person that is not valid UTF-8.** Such a value was
   recorded with each bad byte replaced, so as a different person. Every value
   it accepted before is still accepted.

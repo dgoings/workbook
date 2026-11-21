@@ -406,7 +406,7 @@ func forgeCheckpointCommit(
 	if err != nil {
 		t.Fatal(err)
 	}
-	commit, err := repo.writeCommit(ctx, tree, "", "forged checkpoint", "")
+	commit, err := repo.writeCommit(ctx, tree, "", "forged checkpoint", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

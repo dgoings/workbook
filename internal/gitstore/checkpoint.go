@@ -119,7 +119,7 @@ func (r *Repository) BuildCheckpoint(ctx context.Context, config core.ProjectCon
 	if err := refuseActorMismatch(ctx, pack.Actor.ID); err != nil {
 		return core.Snapshot{}, err
 	}
-	head, err := r.writeTaskObjects(ctx, "", pack, state, "compact")
+	head, err := r.writeTaskObjects(ctx, "", pack, state, "compact", "")
 	if err != nil {
 		return core.Snapshot{}, err
 	}

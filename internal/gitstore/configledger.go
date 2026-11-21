@@ -708,7 +708,7 @@ func (r *Repository) seedConfigLedger(
 	if err != nil {
 		return ConfigWriteResult{}, false, err
 	}
-	head, err := r.writeConfigObjects(ctx, genesisHead, pack, state, reason)
+	head, err := r.writeConfigObjects(ctx, genesisHead, pack, state, reason, "")
 	if err != nil {
 		return ConfigWriteResult{}, false, err
 	}
@@ -775,7 +775,7 @@ func (r *Repository) writeConfigGenesis(
 	if err != nil {
 		return core.ConfigStateDocument{}, "", err
 	}
-	head, err := r.writeConfigObjects(ctx, "", pack, state, configGenesisSubject)
+	head, err := r.writeConfigObjects(ctx, "", pack, state, configGenesisSubject, "")
 	if err != nil {
 		return core.ConfigStateDocument{}, "", err
 	}
@@ -879,7 +879,7 @@ func (r *Repository) appendConfigOperation(
 	if err != nil {
 		return ConfigWriteResult{}, err
 	}
-	head, err := r.writeConfigObjects(ctx, tip.Head, pack, state, reason)
+	head, err := r.writeConfigObjects(ctx, tip.Head, pack, state, reason, "")
 	if err != nil {
 		return ConfigWriteResult{}, err
 	}
@@ -1127,6 +1127,7 @@ func (r *Repository) writeConfigObjects(
 	pack core.ConfigOperationPack,
 	state core.ConfigStateDocument,
 	reason string,
+	replayOf string,
 ) (string, error) {
 	packBytes, err := core.EncodeDocument(pack)
 	if err != nil {
@@ -1148,7 +1149,7 @@ func (r *Repository) writeConfigObjects(
 	if err != nil {
 		return "", err
 	}
-	return r.writeCommit(ctx, tree, parentHead, reason, pack.Actor.ID)
+	return r.writeCommit(ctx, tree, parentHead, reason, pack.Actor.ID, replayOf)
 }
 
 // commitConfigRefUpdate compare-and-swaps the configuration ref and retires

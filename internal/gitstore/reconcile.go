@@ -284,7 +284,7 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 	if subject == "" {
 		subject = "workbook: replay task operation"
 	}
-	head, err := r.writeTaskObjects(ctx, replay.parent.Head, pack, state, subject)
+	head, err := r.writeTaskObjects(ctx, replay.parent.Head, pack, state, subject, local.Head)
 	if err != nil {
 		return false, err
 	}

@@ -563,7 +563,9 @@ everything Workbook decides by identity:
 
 The Git commit behind each edit carries the name as both its author and its
 committer, in place of the checkout's `user.name` and `user.email` and any
-`GIT_AUTHOR_*` or `GIT_COMMITTER_*` variables. Workbook is given an email
+`GIT_AUTHOR_*` or `GIT_COMMITTER_*` variables. That holds even when the name is
+the checkout's own `user.email`: setting the variable names the person, so the
+commit does not take its identity from anywhere else. Workbook is given an email
 address and nothing else, so the address is the commit's display name as well:
 `sam@example.com <sam@example.com>`. A folder with no Git identity configured
 works when the variable is set. The commit's date is Git's, as it always is;
@@ -574,9 +576,11 @@ writes it. That matters for synchronization, which sometimes writes commits of
 its own: when somebody else has published changes to the same task or to the
 project's configuration, a sync replays this checkout's unpublished edits onto
 theirs as new commits. Each replayed commit names the person its edit was
-recorded under, not the person running the sync. An edit recorded under the
-checkout's own `user.email` is committed exactly as any commit from the
-checkout is; any other name is the commit's author and committer as above. So
+recorded under, not the person running the sync. A replay has no
+`WORKBOOK_ACTOR` of its own, whatever the syncing command was started with: a
+replayed edit recorded under the checkout's own `user.email` is committed
+exactly as any commit from the checkout is, and any other name is the commit's
+author and committer as above. So
 a `workbook sync --watch` or `workbook serve` started without the variable
 replays and publishes everybody's edits under their own names, several people's
 in one pass, and needs no Git identity of its own to do it. One limit remains
@@ -584,9 +588,14 @@ for a watcher started separately: a replay of an edit recorded under the
 checkout's own `user.email` takes its display name, and any `GIT_AUTHOR_*` or
 `GIT_COMMITTER_*` variables, from the process that writes the replay, which for
 a deferred sync is the watcher rather than the command that recorded the edit.
-A replay whose recorded name Git could not store exactly is refused and
-reported, and the edit stays on this checkout unpublished rather than being
-committed under a different name.
+A replay is never refused because of the form of a name already in history.
+When a replayed edit's name is not the checkout's `user.email` and Git could
+not store it exactly, such as a `user.email` somebody configured with angle
+brackets around it, which Git quietly drops, the replayed commit takes its
+author and committer from the commit being replayed: the identity Git recorded
+when the edit was made. So no other person's name is attached, and the task or
+the configuration still synchronizes. Only a new edit is refused for such a
+name, and only when `WORKBOOK_ACTOR` gives it, as below.
 
 The name must be an email address, by the same rule `--assign` applies to a
 person, with no `/label` part. It also must be valid UTF-8, must not contain

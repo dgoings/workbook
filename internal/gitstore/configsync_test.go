@@ -1097,7 +1097,7 @@ func growConfigLedger(t *testing.T, repo *Repository, config core.ProjectConfig,
 		if err != nil {
 			t.Fatalf("ApplyConfig(%d) error = %v", index, err)
 		}
-		head, err = repo.writeConfigObjects(ctx, head, pack, next, "workbook: offline configuration change")
+		head, err = repo.writeConfigObjects(ctx, head, pack, next, "workbook: offline configuration change", "")
 		if err != nil {
 			t.Fatalf("writeConfigObjects(%d) error = %v", index, err)
 		}

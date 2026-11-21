@@ -493,7 +493,7 @@ func (replay *configReplay) next(ctx context.Context, r *Repository, local confi
 		return false, nil
 	}
 
-	head, err := r.writeConfigObjects(ctx, replay.parent.Head, pack, state, configReplaySubject)
+	head, err := r.writeConfigObjects(ctx, replay.parent.Head, pack, state, configReplaySubject, local.Head)
 	if err != nil {
 		return false, err
 	}

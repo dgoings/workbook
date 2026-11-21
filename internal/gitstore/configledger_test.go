@@ -425,7 +425,7 @@ func TestOverBudgetLedgerIsRefusedWithoutTouchingTheCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyConfig() error = %v; the pack itself is perfectly foldable, which is the point", err)
 	}
-	hostile, err := repo.writeConfigObjects(ctx, seeded.Head, pack, state, "workbook: a very large configuration change")
+	hostile, err := repo.writeConfigObjects(ctx, seeded.Head, pack, state, "workbook: a very large configuration change", "")
 	if err != nil {
 		t.Fatalf("writeConfigObjects() error = %v", err)
 	}
