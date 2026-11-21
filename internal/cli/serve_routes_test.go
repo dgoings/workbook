@@ -299,7 +299,7 @@ func boardRequest(t *testing.T, method, url, body string) ([]byte, int) {
 		t.Fatal(err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
+	response, err := boardTestClient.Do(request)
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, url, err)
 	}
