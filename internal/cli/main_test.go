@@ -115,6 +115,11 @@ func TestMain(m *testing.M) {
 	os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	os.Setenv("HOME", home)
 	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	// Every test that drives Run reads the real environment, so a developer
+	// whose shell names somebody in WORKBOOK_ACTOR would otherwise run the
+	// whole package as that person. The tests about the variable hand Run an
+	// environment of their own; see runWithActorEnvironment.
+	os.Unsetenv("WORKBOOK_ACTOR")
 
 	templateRoot = filepath.Join(home, "template")
 	if err := os.MkdirAll(templateRoot, 0o755); err != nil {

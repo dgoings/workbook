@@ -167,7 +167,7 @@ func (l *loop) run(ctx context.Context) error {
 	// window would correctly refuse to defer.
 	l.syncOnce(ctx)
 	l.wait(ctx)
-	l.finalSync()
+	l.finalSync(ctx)
 	return nil
 }
 
@@ -211,8 +211,13 @@ func (l *loop) wait(ctx context.Context) {
 	}
 }
 
-func (l *loop) finalSync() {
-	ctx, cancel := context.WithTimeout(context.Background(), l.options.Shutdown)
+// finalSync runs on a context cut loose from the cancellation that ended the
+// loop but not from its values, so the last sync runs with what every other
+// sync in the loop ran with. Nothing it writes takes a name from them: a
+// replayed commit names its own operation's actor (see
+// gitstore.Repository.commitIdentityEnvironment), whoever started the loop.
+func (l *loop) finalSync(parent context.Context) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), l.options.Shutdown)
 	defer cancel()
 	l.syncOnce(ctx)
 }

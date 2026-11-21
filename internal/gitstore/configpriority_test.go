@@ -616,7 +616,7 @@ func writeLegacyConfigGenesis(t *testing.T, repo *Repository, config core.Projec
 	if err != nil {
 		t.Fatalf("ApplyConfig() error = %v", err)
 	}
-	head, err := repo.writeConfigObjects(ctx, "", pack, state, configGenesisSubject)
+	head, err := repo.writeConfigObjects(ctx, "", pack, state, configGenesisSubject, "")
 	if err != nil {
 		t.Fatalf("writeConfigObjects() error = %v", err)
 	}

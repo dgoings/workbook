@@ -122,6 +122,48 @@ operations that should be applied atomically:
 }
 ```
 
+The `actor` is the person the edit is recorded under. It is the checkout's Git
+`user.email` unless `WORKBOOK_ACTOR` names somebody else. In code the override
+travels on the operation's `context.Context` (`core.WithActor`) rather than on
+the repository handle or the service. Everything that decides or records by
+identity resolves the person from that context first and from the checkout only
+when the context names nobody (`core.Service.ActorFor`): the pack's actor, the
+assignee `self`, the creator an assignment records, who may remove an
+assignment, which tasks `next` skips, and the board's answers about which
+assignments are the reader's and which they may remove. So one long-running
+process can serve each request as its own person by putting that person on the
+request's context, and nothing else. A pack written for a context that names a
+different person is refused rather than recorded.
+
+The commit holding a pack takes its author and committer from the pack's own
+actor, never from the process writing it. When nobody named the person — the
+context asserts no actor, so the actor is the checkout's own `user.email` — the
+commit is the one Git writes from the checkout's configuration, exactly as
+before the override existed. A replay asserts nobody of its own, so a replayed
+pack whose actor is the checkout's `user.email` is written that way too. Any
+other actor, and a named one even when it is the checkout's own address,
+becomes both author and committer, with the email as the display name too:
+
+```text
+operation.json   "actor": {"id": "sam@example.com"}
+commit           author    sam@example.com <sam@example.com>
+                 committer sam@example.com <sam@example.com>
+```
+
+The rule holds for every commit that carries a pack: a first write, a replay of
+a task's or the configuration ledger's pack onto a fetched tip, a replay onto a
+compaction checkpoint, and the checkpoint itself. A replay is written by
+synchronization, which in a hosting process acts for nobody, so taking the name
+from the pack is what lets one background sync replay several people's edits,
+each under its own name, in a folder with no Git identity at all. An actor Git
+would not store byte for byte (it drops `<` and `>`, trims some characters from
+the ends, and stores bytes where the pack's JSON cannot hold invalid UTF-8) is
+refused for a first write. A replay is never refused for it, because the name
+is already in history and nobody can change it: the replayed commit takes the
+author and committer recorded on the commit it replays instead. Either way the
+actor is asserted, not verified; see [the assignment value](#assignments)
+below.
+
 Operation IDs are globally unique and independent of Git object IDs. Git commit ancestry provides causal ordering; a logical clock assists validation and deterministic presentation. Wall-clock time is for display only and must not decide semantic conflicts.
 
 The format supports task creation, scalar and label updates, dependency edges,
@@ -176,6 +218,9 @@ There is no roster and no verification protocol; verifying identity would import
 the central authority Workbook deliberately lacks, and within its trust model
 (push access is trust) an asserted identity is exactly as strong as everything
 else in a fetched ref. A wrong address is visible noise, corrected socially.
+The asserted name need not be the checkout's own: `WORKBOOK_ACTOR` lets a
+hosting process record an edit under the person it is acting for, and that name
+is exactly as asserted as `user.email`. Whoever can set it can already push.
 
 **What is stored.** The checkpoint materializes the live list, ordered by
 principal and then label so that every clone folding the same history writes the

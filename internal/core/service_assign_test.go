@@ -660,3 +660,60 @@ func TestNextOffersATaskThisIdentityShares(t *testing.T) {
 		t.Fatalf("Next() as a stranger = %#v (error %v), want nothing", selected, err)
 	}
 }
+
+// A Service is built once and serves many requests, so the person a request's
+// context names decides every identity question the Service asks — the pack's
+// actor, what `self` means, the creator recorded, who may withdraw, and what
+// `next` passes over — and the Service's own Actor answers only for a context
+// that names nobody.
+func TestTheContextsPersonDecidesEveryIdentityQuestion(t *testing.T) {
+	const server, bob = "server@example.com", "bob@example.com"
+	bobContext, err := WithActor(context.Background(), bob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := assignService(nil, server).ActorFor(bobContext); got != bob {
+		t.Fatalf("ActorFor(bob) = %q, want bob", got)
+	}
+	if got := assignService(nil, server).ActorFor(context.Background()); got != server {
+		t.Fatalf("ActorFor(plain) = %q, want the service's own", got)
+	}
+
+	store := newMemoryTaskStore(assignedSnapshot(serviceAssignTaskID))
+	service := assignService(store, server, operationID1, operationID2)
+	assigned, err := service.AssignMutation(bobContext, serviceAssignTaskID, AssignInput{})
+	if err != nil {
+		t.Fatalf("AssignMutation(self, as bob) error = %v", err)
+	}
+	if got := store.writes[0].pack.Actor.ID; got != bob {
+		t.Fatalf("pack actor = %q, want bob", got)
+	}
+	if got := assigned.Task.Assignments; len(got) != 1 || got[0].Principal != bob || got[0].Creator != bob {
+		t.Fatalf("self as bob assigned %#v, want bob as principal and creator", got)
+	}
+	// The service's own identity may not withdraw bob's assignment; bob may.
+	if _, err := service.UnassignMutation(context.Background(), serviceAssignTaskID, UnassignInput{From: bob}); err == nil {
+		t.Fatal("the service's own identity withdrew the assignment bob holds and recorded")
+	}
+	if _, err := service.UnassignMutation(bobContext, serviceAssignTaskID, UnassignInput{From: bob}); err != nil {
+		t.Fatalf("bob withdrawing his own assignment: %v", err)
+	}
+
+	// next as bob passes over the server's task and keeps his own; the plain
+	// context does the reverse.
+	servers := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{
+		Title: "Server's", Status: StatusReady, Priority: PriorityHigh, Rank: "1/1",
+	})
+	servers.State.Task.Assignments = []Assignment{heldBy(server, "", server)}
+	bobs := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E3", TaskData{
+		Title: "Bob's", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1",
+	})
+	bobs.State.Task.Assignments = []Assignment{heldBy(bob, "", bob)}
+	next := assignService(newMemoryTaskStore(servers, bobs), server)
+	if selected, err := next.Next(bobContext, NextOptions{}); err != nil || selected == nil || selected.ID != bobs.State.TaskID {
+		t.Fatalf("Next(as bob) = %#v, %v; want bob's own task", selected, err)
+	}
+	if selected, err := next.Next(context.Background(), NextOptions{}); err != nil || selected == nil || selected.ID != servers.State.TaskID {
+		t.Fatalf("Next(plain) = %#v, %v; want the server's own task", selected, err)
+	}
+}

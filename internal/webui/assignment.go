@@ -57,9 +57,19 @@ type unassignTaskRequest struct {
 // into an attribute the script reads, and taskPresentation derives each row's
 // removal rule from it, so a board that draws a withdrawal is a board whose
 // service would accept one.
-func (handler *handler) assignIdentity() string {
+//
+// It is a question about the request, not the board: the person a request's
+// context names (core.WithActor) when it names one, and the board's own
+// Identity only when it does not. That is the answer core.Service.ActorFor
+// gives the mutation the request goes on to make, so "which assignments are
+// yours" and "what may you remove" are answered for the same person the
+// service records the edit under — whoever a deployment puts on each request.
+func (handler *handler) assignIdentity(request *http.Request) string {
 	if handler.Assign == nil || handler.Unassign == nil {
 		return ""
+	}
+	if actor, asserted := core.ActorFrom(request.Context()); asserted {
+		return actor
 	}
 	return strings.TrimSpace(handler.Identity)
 }
@@ -77,8 +87,8 @@ func (handler *handler) assignIdentity() string {
 //
 // The category is operational because nothing about the request is wrong: this
 // deployment cannot answer, and no rewording of the body will change that.
-func (handler *handler) assignmentRefusal(what string) error {
-	if handler.assignIdentity() != "" {
+func (handler *handler) assignmentRefusal(request *http.Request, what string) error {
+	if handler.assignIdentity(request) != "" {
 		return nil
 	}
 	if handler.Assign == nil || handler.Unassign == nil {
@@ -88,7 +98,7 @@ func (handler *handler) assignmentRefusal(what string) error {
 }
 
 func (handler *handler) addTaskAssignment(writer http.ResponseWriter, request *http.Request) {
-	if err := handler.assignmentRefusal("assignment"); err != nil {
+	if err := handler.assignmentRefusal(request, "assignment"); err != nil {
 		handler.writeError(writer, err)
 		return
 	}
@@ -115,11 +125,11 @@ func (handler *handler) addTaskAssignment(writer http.ResponseWriter, request *h
 		handler.writeError(writer, err)
 		return
 	}
-	handler.writeAssignmentMutation(writer, result)
+	handler.writeAssignmentMutation(writer, request, result)
 }
 
 func (handler *handler) removeTaskAssignment(writer http.ResponseWriter, request *http.Request) {
-	if err := handler.assignmentRefusal("assignment withdrawal"); err != nil {
+	if err := handler.assignmentRefusal(request, "assignment withdrawal"); err != nil {
 		handler.writeError(writer, err)
 		return
 	}
@@ -142,7 +152,7 @@ func (handler *handler) removeTaskAssignment(writer http.ResponseWriter, request
 		handler.writeError(writer, err)
 		return
 	}
-	handler.writeAssignmentMutation(writer, result)
+	handler.writeAssignmentMutation(writer, request, result)
 }
 
 // writeAssignmentMutation answers with the changed task and the section the page
@@ -159,8 +169,8 @@ func (handler *handler) removeTaskAssignment(writer http.ResponseWriter, request
 // leaving the member out: see TaskMutationDocument.Assignments for why the
 // difference between "no assignments" and "not about assignments" has to survive
 // the wire.
-func (handler *handler) writeAssignmentMutation(writer http.ResponseWriter, result core.MutationResult) {
-	section := assignmentPresentation(result.Task.Assignments, handler.assignIdentity())
+func (handler *handler) writeAssignmentMutation(writer http.ResponseWriter, request *http.Request, result core.MutationResult) {
+	section := assignmentPresentation(result.Task.Assignments, handler.assignIdentity(request))
 	if section == nil {
 		section = []AssignmentPresentation{}
 	}

@@ -97,10 +97,39 @@ before anyone runs it; see Compatibility across versions below.
   reports success, or restores a setting somebody changed and names it. Setup
   needs no `user.email`; edits made there do. `--json` reports the run in a
   `tasksOnly` object.
+- **`WORKBOOK_ACTOR` records an edit under somebody else's name.** Set to an
+  email address, it replaces the checkout's `user.email` as the person every
+  edit, `--assign self`, `workbook next` and assignment removal go by, and the
+  commit behind each edit names that address as its author and committer, even
+  when it is the checkout's own `user.email`. A
+  folder with no Git identity works when it is set, which is what a server
+  acting for many signed-in people needs. An empty or malformed value,
+  including one that is not valid UTF-8, is refused with exit `5` rather than
+  ignored; a mistyped command is still reported as unknown first. The name
+  must match a `user.email` exactly, including case, to be the same person.
+  It is asserted, like `user.email`, and nothing verifies it.
 
 ### Changed
 - **Git 2.29 or later is required**, and the README now says so. Workbook's
   fetches already used options from that release.
+- **A commit names the person its edit is recorded under, including when a
+  sync replays it.** An edit recorded under the checkout's own `user.email` is
+  committed exactly as before. An edit recorded under any other name, whether
+  through `WORKBOOK_ACTOR` or by a teammate whose change is replayed while
+  adopting a compaction, is committed with that name as author and committer,
+  where a replay used to take the identity of whoever ran the sync. So a
+  `workbook sync --watch` or `workbook serve` started without the variable
+  replays and publishes each person's task and configuration edits under
+  their own name, several people's in one pass, even in a folder with no Git
+  identity. A replay of an edit recorded under the checkout's own
+  `user.email` still takes the display name of the process that writes it. A
+  replay is never refused for the form of a name already in history: one Git
+  cannot store exactly, such as a `user.email` written with angle brackets,
+  takes the author and committer of the commit it replays, so the task still
+  synchronizes.
+- **`--assign` refuses a person that is not valid UTF-8.** Such a value was
+  recorded with each bad byte replaced, so as a different person. Every value
+  it accepted before is still accepted.
 - **The web board's New Task form can assign.** On a board that can record
   assignments, the form stages them beside its dependencies and attachments
   and sends them once the task exists; one the server refuses is retried from

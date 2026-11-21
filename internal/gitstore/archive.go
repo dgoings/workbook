@@ -270,7 +270,7 @@ func (r *Repository) writeArchiveManifest(ctx context.Context, manifest ArchiveM
 	if err != nil {
 		return "", core.Wrap(core.CategoryOperational, "Git returned an invalid tree object ID", err)
 	}
-	return r.writeCommit(ctx, tree, "", "workbook archive manifest "+manifest.RunID)
+	return r.writeCommit(ctx, tree, "", "workbook archive manifest "+manifest.RunID, "", "")
 }
 
 // setArchiveManifestRef points archiveManifestRef at commit. It replaces any

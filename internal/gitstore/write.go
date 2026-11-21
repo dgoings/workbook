@@ -125,11 +125,14 @@ func (r *Repository) writeCanonical(
 	state core.StateDocument,
 	reason string,
 ) (core.Snapshot, error) {
+	if err := refuseActorMismatch(ctx, pack.Actor.ID); err != nil {
+		return core.Snapshot{}, err
+	}
 	parentHead := ""
 	if parent != nil {
 		parentHead = parent.Head
 	}
-	head, err := r.writeTaskObjects(ctx, parentHead, pack, state, reason)
+	head, err := r.writeTaskObjects(ctx, parentHead, pack, state, reason, "")
 	if err != nil {
 		return core.Snapshot{}, err
 	}
@@ -158,6 +161,7 @@ func (r *Repository) writeTaskObjects(
 	pack core.OperationPack,
 	state core.StateDocument,
 	reason string,
+	replayOf string,
 ) (string, error) {
 	packBytes, err := core.EncodeDocument(pack)
 	if err != nil {
@@ -179,7 +183,7 @@ func (r *Repository) writeTaskObjects(
 	if err != nil {
 		return "", err
 	}
-	return r.writeCommit(ctx, tree, parentHead, reason)
+	return r.writeCommit(ctx, tree, parentHead, reason, pack.Actor.ID, replayOf)
 }
 
 // StageAttachment writes an attached file's bytes as a Git object and returns
@@ -456,13 +460,23 @@ func (r *Repository) writeTaskTree(
 	return treeID, nil
 }
 
-func (r *Repository) writeCommit(ctx context.Context, tree string, parentHead string, reason string) (string, error) {
+// writeCommit writes a commit of tree onto parentHead. actor is the person the
+// operation inside the tree is recorded under, and empty for the one commit
+// that carries no operation (an archive manifest). replayOf is the commit whose
+// operation this one records again, when it is a replay, and empty for a first
+// write; see commitIdentityEnvironment for how the two name the commit's author
+// and committer.
+func (r *Repository) writeCommit(ctx context.Context, tree, parentHead, reason, actor, replayOf string) (string, error) {
+	environment, err := r.commitIdentityEnvironment(ctx, actor, replayOf)
+	if err != nil {
+		return "", err
+	}
 	args := []string{"commit-tree", tree}
 	if parentHead != "" {
 		args = append(args, "-p", parentHead)
 	}
 	args = append(args, "-m", reason)
-	output, err := r.Git(ctx, nil, args...)
+	output, err := r.gitWithEnv(ctx, environment, nil, args...)
 	if err != nil {
 		return "", err
 	}
@@ -471,6 +485,140 @@ func (r *Repository) writeCommit(ctx context.Context, tree string, parentHead st
 		return "", core.Wrap(core.CategoryOperational, "Git returned an invalid commit object ID", err)
 	}
 	return commitID, nil
+}
+
+// commitIdentityEnvironment names the author and committer of a commit.
+//
+// The commit behind an operation names that operation's own actor, whoever
+// writes it and whenever: the command that first records an edit, and the
+// synchronization that later replays it onto somebody else's history, which in
+// a server acting for several people runs on a context naming none of them. So
+// the name comes from the operation, never from the writing process.
+//
+// A first write (replayOf empty) is written exactly as it always was, with Git
+// choosing the identity from the checkout's configuration and the process
+// environment, only when nobody named the person: the context asserts no actor
+// and the operation's is the checkout's own `user.email`. That is the whole of
+// an ordinary clone's case. Once the context names somebody, even that same
+// address, the commit names them: whoever set WORKBOOK_ACTOR asked for that
+// name, not for whatever GIT_AUTHOR_* the process happened to inherit.
+//
+// A replay re-records an edit somebody made earlier, and the context of the
+// sync writing it says nothing about that edit. So it is written as before
+// when its actor is the checkout's own `user.email`, whatever the context
+// names, and otherwise names its actor.
+//
+// Naming an actor replaces all four values, so the checkout's own `user.name`
+// and `user.email`, and any GIT_AUTHOR_* or GIT_COMMITTER_* the process was
+// started with, take no part, and a folder with no Git identity of its own can
+// still write. The actor is an email address and nothing else, so it is the
+// display name as well: inventing a name from its local part would put words
+// in the commit nobody gave.
+//
+// Git silently drops or trims some characters from an identity
+// (core.ValidateGitIdentity), and a commit written under such a name would
+// name somebody the operation does not. A first write under one is refused;
+// core.ValidateActor already refuses it wherever a name is asserted. A replay
+// is never refused for it, because the name is already in history and nobody
+// can change it, so refusing would leave the task or the ledger unable to
+// synchronize for good. It takes the author and committer of the commit it
+// replays instead: the identity Git recorded when the edit was made.
+//
+// A commit with no operation (actor empty) names the person the context
+// asserts, when it asserts one, and is otherwise Git's own choice.
+func (r *Repository) commitIdentityEnvironment(ctx context.Context, actor, replayOf string) ([]string, error) {
+	asserted, named := core.ActorFrom(ctx)
+	switch {
+	case actor == "":
+		if !named {
+			return nil, nil
+		}
+		actor = asserted
+	case replayOf != "" || !named:
+		// A checkout whose identity Git cannot report has no email to match,
+		// so every actor is somebody else's and is named explicitly.
+		if own, err := r.checkoutEmail(ctx); err == nil && own == actor {
+			return nil, nil
+		}
+	}
+	if err := core.ValidateGitIdentity(actor); err != nil {
+		if replayOf != "" {
+			return r.recordedIdentityEnvironment(ctx, replayOf)
+		}
+		return nil, core.Wrap(core.CategoryValidation,
+			fmt.Sprintf("cannot write a commit under %q", actor), err)
+	}
+	return []string{
+		"GIT_AUTHOR_NAME=" + actor,
+		"GIT_AUTHOR_EMAIL=" + actor,
+		"GIT_COMMITTER_NAME=" + actor,
+		"GIT_COMMITTER_EMAIL=" + actor,
+	}, nil
+}
+
+// recordedIdentityEnvironment gives Git the author and committer, name and
+// email, recorded on commit, read from the raw object so that no mailmap or
+// display setting changes them. The dates are left to Git, as for every other
+// commit Workbook writes.
+//
+// A recorded identity is one Git already normalized, so writing it again
+// stores it unchanged. Git refuses an empty name, which only a commit written
+// by some other tool can carry; the email stands in for it then.
+func (r *Repository) recordedIdentityEnvironment(ctx context.Context, commit string) ([]string, error) {
+	output, err := r.Git(ctx, nil, "cat-file", "commit", commit)
+	if err != nil {
+		return nil, err
+	}
+	header, _, _ := bytes.Cut(output, []byte("\n\n"))
+	identities := map[string][2]string{}
+	for _, line := range strings.Split(string(header), "\n") {
+		role, ident, found := strings.Cut(line, " ")
+		if !found || (role != "author" && role != "committer") {
+			continue
+		}
+		if _, seen := identities[role]; seen {
+			continue
+		}
+		open := strings.IndexByte(ident, '<')
+		closing := strings.LastIndexByte(ident, '>')
+		if open < 0 || closing < open {
+			return nil, core.Errorf(core.CategoryCorruptData,
+				"commit %s records an unreadable %s identity", commit, role)
+		}
+		name := strings.TrimSpace(ident[:open])
+		email := ident[open+1 : closing]
+		if name == "" {
+			name = email
+		}
+		identities[role] = [2]string{name, email}
+	}
+	author, haveAuthor := identities["author"]
+	committer, haveCommitter := identities["committer"]
+	if !haveAuthor || !haveCommitter {
+		return nil, core.Errorf(core.CategoryCorruptData,
+			"commit %s records no author or committer to replay it under", commit)
+	}
+	return []string{
+		"GIT_AUTHOR_NAME=" + author[0],
+		"GIT_AUTHOR_EMAIL=" + author[1],
+		"GIT_COMMITTER_NAME=" + committer[0],
+		"GIT_COMMITTER_EMAIL=" + committer[1],
+	}, nil
+}
+
+// refuseActorMismatch refuses to record an edit under one person while the
+// context it is written for names another.
+//
+// Everything that authors an edit resolves its actor from the context first
+// (see core.Service.ActorFor), so the two agree by construction. This is the
+// check that they did: where two names meet, neither is recorded.
+func refuseActorMismatch(ctx context.Context, recorded string) error {
+	asserted, ok := core.ActorFrom(ctx)
+	if !ok || asserted == recorded {
+		return nil
+	}
+	return core.Errorf(core.CategoryOperational,
+		"refusing to record an edit under %q for a request acting as %q; nothing was written", recorded, asserted)
 }
 
 func (r *Repository) refValueDiffers(ctx context.Context, ref, expected string) bool {

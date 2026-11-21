@@ -145,7 +145,7 @@ func replayOnto(t *testing.T, repo *Repository, parent, local core.Snapshot) cor
 	if err != nil {
 		t.Fatalf("Apply(replayed pack) error = %v", err)
 	}
-	head, err := repo.writeTaskObjects(context.Background(), parent.Head, pack, state, "replay")
+	head, err := repo.writeTaskObjects(context.Background(), parent.Head, pack, state, "replay", "")
 	if err != nil {
 		t.Fatalf("writeTaskObjects(replay) error = %v", err)
 	}

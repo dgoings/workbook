@@ -297,8 +297,25 @@ func (r *Repository) HasOrigin(ctx context.Context) bool {
 	return err == nil
 }
 
-// Actor returns the author email configured for this repository.
+// Actor returns the person this context's edits are recorded under.
+//
+// That is the actor core.WithActor put on the context, when there is one — the
+// command line's WORKBOOK_ACTOR, or a long-running caller's per-request name —
+// and otherwise the checkout's own `user.email` (see checkoutEmail). The
+// context's actor is answered without asking Git anything, so a folder with no
+// `user.email` works when somebody names the person, and it is never memoized:
+// one Repository serves contexts naming different people.
 func (r *Repository) Actor(ctx context.Context) (string, error) {
+	if actor, asserted := core.ActorFrom(ctx); asserted {
+		return actor, nil
+	}
+	return r.checkoutEmail(ctx)
+}
+
+// checkoutEmail returns the author email configured for this checkout,
+// whatever the context asserts. It is memoized: unlike the acting person, it
+// is a fact about the folder.
+func (r *Repository) checkoutEmail(ctx context.Context) (string, error) {
 	r.actorOnce.Do(func() {
 		output, err := r.Git(ctx, nil, "config", "--get", "user.email")
 		if err != nil {

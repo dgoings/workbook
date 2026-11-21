@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -45,6 +47,20 @@ type helpRequest struct {
 }
 
 func Run(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return runWithEnvironment(ctx, os.LookupEnv, args, cwd, stdin, stdout, stderr)
+}
+
+// runWithEnvironment is Run with the process environment as a parameter, so the
+// tests that set WORKBOOK_ACTOR can run beside the hundreds that do not without
+// any of them touching the real environment.
+func runWithEnvironment(
+	ctx context.Context,
+	lookupEnv func(string) (string, bool),
+	args []string,
+	cwd string,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+) int {
 	help, handled, helpErr := parseHelpRequest(args)
 	if handled {
 		if helpErr == nil {
@@ -66,6 +82,15 @@ func Run(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout
 
 	command := args[0]
 	commandArgs := args[1:]
+	// A command that does not exist is the first thing wrong with any
+	// invocation of it, so it is reported before anything about the
+	// environment that command would have run under: somebody who mistyped
+	// `udpate` needs to hear that, not that WORKBOOK_ACTOR is unusable.
+	if _, known := commandSchemas[command]; !known {
+		err := core.Errorf(core.CategoryInvocation, "unknown command %q", command)
+		writeError(stderr, err, jsonMode)
+		return core.ExitCode(err)
+	}
 	// version records nothing, like help above, so neither is refused over a
 	// time it would never have used.
 	if command != "version" {
@@ -73,6 +98,20 @@ func Run(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout
 			writeError(stderr, err, jsonMode)
 			return core.ExitCode(err)
 		}
+	}
+	// Who is acting, settled once for the whole command and carried on its
+	// context, which is where everything that records an edit reads it from.
+	// A value that is set and unusable stops the command here, before anything
+	// is read or written: an edit recorded under the checkout's own name instead
+	// of the one somebody asked for would be wrong without saying so. Only the
+	// two commands that never open a repository are spared it.
+	if command != "version" && command != "completion" {
+		actorCtx, err := core.WithEnvironmentActor(ctx, lookupEnv)
+		if err != nil {
+			writeError(stderr, err, jsonMode)
+			return core.ExitCode(err)
+		}
+		ctx = actorCtx
 	}
 	var err error
 	switch command {
@@ -871,7 +910,7 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	// the answer as soon as it is open, and nothing the fetch brings down can
 	// change it.
 	if assignment != nil {
-		change, err := assignment.change(session.service.Actor)
+		change, err := assignment.change(session.service.ActorFor(ctx))
 		if err != nil {
 			return err
 		}
@@ -1109,7 +1148,8 @@ func reconciledSharingWarnings(
 	fetched *gitstore.SyncResult,
 	reported string,
 ) []core.Warning {
-	if fetched == nil || strings.TrimSpace(service.Actor) == "" {
+	actor := service.ActorFor(ctx)
+	if fetched == nil || strings.TrimSpace(actor) == "" {
 		return nil
 	}
 	var warnings []core.Warning
@@ -1121,10 +1161,10 @@ func reconciledSharingWarnings(
 		if err != nil {
 			continue
 		}
-		if !core.HeldBy(task.Assignments, service.Actor) {
+		if !core.HeldBy(task.Assignments, actor) {
 			continue
 		}
-		others := core.AssignmentsHeldByOthers(task.Assignments, service.Actor)
+		others := core.AssignmentsHeldByOthers(task.Assignments, actor)
 		if len(others) == 0 {
 			continue
 		}
@@ -2021,6 +2061,8 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		// has typed anything. A checkout with none configured leaves it empty,
 		// and the board draws no assignment control at all — which is the honest
 		// answer, because core refuses to record an assignment with no creator.
+		// It is the fallback only: a request whose context names a person (see
+		// actingAs) is answered for that person, by the board and by core alike.
 		Identity: service.Actor,
 		Assign: func(requestContext context.Context, id string, input core.AssignInput) (core.MutationResult, error) {
 			writer, err := writerFor(requestContext, id)
@@ -2136,10 +2178,65 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 	// webui.Serve refuses foreign Host headers, cross-origin requests, and
 	// mutations that do not declare JSON. That guard is the board's only access
 	// control, and a non-loopback bind is what the warning above is about.
-	if err := webui.Serve(ctx, listener, handler); err != nil {
+	if err := webui.Serve(ctx, listener, actingAs(ctx, handler)); err != nil {
 		return core.Wrap(core.CategoryOperational, "serve board", err)
 	}
 	return nil
+}
+
+// actingAs hands every request the person it acts for.
+//
+// A request's context is the HTTP server's, not the command's, so an actor
+// WORKBOOK_ACTOR put on the command's context would otherwise stop at the
+// first request, and every route would answer for the checkout's own identity
+// instead. Everything a request decides by identity reads it from the
+// request's context — the operation's actor and the assignee `self` through
+// core.Service.ActorFor, the board's "yours" and "may remove" through the
+// handler's assignIdentity — and the commit behind an edit names that
+// operation's actor, so one name on the request's context is all it takes.
+//
+// That makes this the one place a request's person is decided. Today it is the
+// person serve was started as, for every request. A requestActor on serve's
+// context (see withRequestActor) names a person per request instead, falling
+// back to that one when it names nobody; a name it gives that is not a usable
+// actor is refused with a 400 before any route runs, never replaced by another.
+func actingAs(ctx context.Context, next http.Handler) http.Handler {
+	actor, asserted := core.ActorFrom(ctx)
+	resolve, perRequest := ctx.Value(requestActorKey{}).(requestActor)
+	if !asserted && !perRequest {
+		return next
+	}
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		name, named := actor, asserted
+		if perRequest {
+			if given, ok := resolve(request); ok {
+				name, named = given, true
+			}
+		}
+		if !named {
+			next.ServeHTTP(writer, request)
+			return
+		}
+		requestContext, err := core.WithActor(request.Context(), name)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		next.ServeHTTP(writer, request.WithContext(requestContext))
+	})
+}
+
+// requestActor names the person one board request acts for, and reports false
+// for a request it names nobody for.
+type requestActor func(*http.Request) (string, bool)
+
+type requestActorKey struct{}
+
+// withRequestActor gives serve a per-request person. Nothing in this build sets
+// one except the tests that prove two people can be served at once; it is the
+// seam a deployment that signs people in plugs its header into.
+func withRequestActor(ctx context.Context, resolve requestActor) context.Context {
+	return context.WithValue(ctx, requestActorKey{}, resolve)
 }
 
 // boardPriorityAnswer carries a priority writer's result across to the board's

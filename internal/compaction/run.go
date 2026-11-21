@@ -480,7 +480,7 @@ func compactOne(
 		RunID:           plan.RunID,
 		Generation:      generation,
 		OperationID:     operationID,
-		Actor:           deps.Service.Actor,
+		Actor:           deps.Service.ActorFor(ctx),
 		Now:             options.Now,
 		KeepAttachments: options.KeepAttachments,
 		Summary:         summary,
