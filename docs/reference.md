@@ -2768,11 +2768,72 @@ everywhere but the attachment upload, which is bounded at the encoded size of
 the largest attachment plus its envelope, for the reason the limits table above
 gives. The bound is well above the largest task the field limits above allow,
 and it applies to routes that ignore their body as well, so no route can read an
-unbounded one by forgetting to ask for a limit. The server also bounds how long a connection may hold a header
-incomplete, a request body unfinished, or a keep-alive idle, so a client that
-opens a connection and stops talking is closed rather than holding a goroutine
-until `serve` exits. There is no response deadline: a mutation publishing inline
-waits on `origin`, and that has no honest bound.
+unbounded one by forgetting to ask for a limit.
+
+The board takes every request in three steps, and bounds each one separately:
+it receives the body, it works on the request, and it delivers the answer. Only
+the middle step takes one of the board's work turns, described below, so a
+client that sends or reads slowly costs a connection and the bytes it is moving,
+never a turn that someone else's refresh is waiting for.
+
+| Bound | Value |
+| --- | --- |
+| A request's headers | must arrive within 10 seconds |
+| A request body in transit | may pause for at most 10 seconds between bytes, and after its first 10 seconds must have averaged 8 KiB a second |
+| An answer in transit | must be taken whole within 10 seconds plus 1 second for every 8 KiB of it: an average of 8 KiB a second after its first 10 seconds |
+| Open connections | 512; past that the board closes connections idle between requests, and otherwise accepts no more until one closes |
+| A connection idle between requests | closed after 2 minutes |
+| Request bodies held in memory | 32 MiB in all, beyond the first 8 KiB of each |
+| Answers held in memory | 32 MiB in all, beyond the first 8 KiB of each, counting only what the connection has not yet taken |
+
+A transfer that breaks the pace is cut off: the board closes the connection,
+and nothing the request would have done is done if the body was still
+arriving. An answer has no rule against pausing because the board cannot see a
+reader pause: it writes into the connection's buffers, which take much of an
+answer at once, and the operating system then holds the board's next write
+back for five or ten seconds at a time while a slow reader is still taking
+bytes. A reader that takes nothing at all is cut off when the average runs out,
+never later than the whole answer's deadline.
+
+The slowest connection that works is one that keeps up 8 KiB a second (about
+64 kbit/s), and, while it uploads, does not pause for 10 seconds. At that rate
+a 1 MiB attachment downloads in about 2 minutes 20 seconds and the largest
+upload, a 1 MiB file encoded inside its JSON, takes about 3 minutes; a faster
+start buys room for a slower finish, because the pace is an average.
+
+Measured over a local connection paced to a fixed rate, one client downloading
+the 1 MiB attachment and another uploading a 1 MiB file at the same time:
+
+| Rate | Download | Upload |
+| --- | --- | --- |
+| 16 KiB a second | complete in 64 s | complete in 86 s |
+| 9 KiB a second | complete in 114 s | complete in 152 s |
+| 7 KiB a second | complete in 146 s | cut off after 80 s |
+| 4 KiB a second | complete in 256 s, or cut off after 237 s, depending on how much the operating system took at once | cut off after 20 s |
+
+A download below the floor can still finish because the board counts what it
+has written, and the operating system takes much of an answer at once; an
+upload below it cannot, because the board reads a body as it arrives. Before
+this pace, the board gave a whole request 30 seconds to arrive, so every one of
+those uploads was cut off, the fastest after 30 seconds; a 1.4 MB upload needed
+about 375 kbit/s to get through at all.
+
+A body is read whole before its request asks for a turn. One that does not fit
+in what is left of the body budget is read to its end and thrown away, and its
+sender is answered `503` with `Retry-After: 2` on a connection that stays open
+for its next request, so a client still sending reads the refusal rather than a
+broken connection. The first 8 KiB of every body is let through whatever the
+budget holds, so an ordinary create or edit is never refused for room while
+large uploads fill it.
+
+An answer is held in memory while it is written and given its turn back before
+it is sent, so a reader that stops reading holds nothing but its own connection
+and answer until the pace cuts it off, and each part of the answer stops
+counting against the budget once the connection has taken it. An answer to a
+read that does not fit in the answer budget is thrown away and replaced with
+the same `503` refusal; the read changed nothing and can be asked again. An answer to a write is always
+delivered, whatever the budget holds, because the change it reports has already
+been made.
 
 The board also caps how much work it does at once. It works on at most 16
 requests at a time, and writes may hold at most half of those, so the reads
@@ -2782,9 +2843,9 @@ up to five seconds; at most four requests per slot (64 by default) may wait,
 and a request past that is refused at once rather than added to the line. A
 request that gets no turn is answered `503 Service Unavailable` with
 `Retry-After: 2` and a `workbook.error` document in the `operational`
-category, before the board has read its body or started any work on it, so the
-same request can safely be sent again. `GET /healthz` is never capped and never
-waits, because a busy board is still a live one.
+category, before any of its work has started, so the same request can safely be
+sent again. `GET /healthz` is never capped and never waits, because a busy
+board is still a live one.
 
 `--max-requests <n>`, or `WORKBOOK_SERVE_MAX_REQUESTS` when the option is not
 given, sets the cap; writes get half of it, rounded down but at least one. It
@@ -2793,55 +2854,129 @@ board starts: there is no value that turns the cap off. A person's own board
 never comes near the default. One page has one refresh out at a time, sends one
 change per task at a time, and opens a handful of reads when it loads.
 
-The cap bounds the server, not each person's share of it. Every Git process
-the board starts belongs to a request it is working on, and every upload's
-bytes belong to the request carrying them, so bounding requests bounds both.
-Against a board serving a temporary repository with a local origin on an
-Apple-silicon laptop, the default cap measured as follows; *before* is the same
-board with no cap:
+Every Git process a request starts runs inside its turn, so the cap bounds
+those processes too. The one Git work that is not a request's is the board's
+own synchronization with `origin`, which runs one synchronization at a time on
+its interval whatever the requests are doing, so it adds at most one
+synchronization's processes to what the cap allows. There is no deadline on a
+turn itself: a write that publishes inline waits on `origin`, and that has no
+honest bound.
 
-| Flood | Peak Git processes | Peak server memory | Another reader's refresh, median / max | Refused |
+Against a board of 200 tasks, whose task list is 209 KB, serving a temporary
+repository with a local origin on an Apple-silicon laptop, the default bounds
+measured as follows. Each slow-client row holds that many connections open for
+25 seconds while another person's page refreshes once a second and creates a
+task every two seconds. A slow reader asks for a 1 MiB attachment and never
+reads it; a stalled sender starts a 1.4 MB upload and sends one byte. *Before*
+is the board with no cap at all, and *first cap* is the cap as it was first
+written, which held a turn while a body arrived and while an answer was read:
+
+| Slow clients | Other person's refreshes answered, median / max | Their creates answered | Peak server memory | Peak goroutines |
 | --- | --- | --- | --- | --- |
-| 300 simultaneous creates | 363 before, 26 after | 96 MB before, 45 MB after | 365 ms / 8.3 s before, 39 ms / 42 ms after | 228 of 300 |
-| 150 simultaneous 1 MiB uploads | 314 before, 25 after | 422 MB before, 69 MB after | 334 ms / 3.8 s before, 50 ms / 163 ms after | 78 of 150 |
-| 600 simultaneous reads | 11 before, 11 after | 92 MB before, 61 MB after | 239 ms / 1.2 s before, 56 ms / 187 ms after | 520 of 600 |
+| 16 slow readers | before 26 of 26, 42 ms / 95 ms; first cap 0 of 5, each refused after 5 s; now 25 of 25, 41 ms / 175 ms | before 13 of 13; first cap 0 of 8; now 13 of 13 | 69 MB before, 58 MB first cap, 54 MB now | 95, 91, 90 |
+| 64 slow readers | before 26 of 26, 42 ms / 296 ms; first cap 0 of 5; now 26 of 26, 42 ms / 328 ms | before 13 of 13; first cap 0 of 7; now 13 of 13 | 153 MB, 59 MB, 90 MB | 290, 187, 188 |
+| 500 slow readers | before 26 of 26, 41 ms / 1.1 s; first cap 0 of 9; now 25 of 26, 42 ms / 47 ms | before 12 of 13; first cap 0 of 8; now 12 of 13 | 358 MB, 63 MB, 112 MB | 631, 547, 485 |
+| 8 stalled senders | before 25 of 25, 41 ms / 48 ms; first cap 26 of 26; now 25 of 25, 42 ms / 45 ms | before 13 of 13; first cap 0 of 5; now 13 of 13 | 36 MB, 36 MB, 36 MB | 28, 28, 26 |
+| 64 stalled senders | before 26 of 26, 40 ms / 46 ms; first cap 26 of 26; now 26 of 26, 41 ms / 47 ms | before 13 of 13; first cap 1 of 6; now 13 of 13 | 39 MB, 38 MB, 39 MB | 82, 78, 82 |
+| 500 stalled senders | before 26 of 26, 40 ms / 49 ms; first cap 25 of 25; now 25 of 25, 42 ms / 49 ms | before 13 of 13; first cap 2 of 9; now 13 of 13 | 58 MB, 40 MB, 59 MB | 518, 514, 518 |
 
-Those are measurements, not guarantees: how many Git processes one write runs
-depends on what it does and whether it publishes inline. What the cap does
-guarantee is the number of requests at work at once and the number waiting.
+The refresh and create lost at 500 slow readers were connections reset while
+the board was out of connections and closing idle ones, as one create was
+before the cap; a browser sends such a request again by itself. Every stalled
+sender is now cut off ten seconds after its last byte. The slow readers are cut
+off when their answers' pace runs out, which here is after the 25 seconds
+measured: the operating system took nearly every answer into the connection's
+buffers at once, so the answer budget, which counts only what the board still
+holds, never filled. Across a real network it takes less, and the limit below
+applies.
+
+The floods are as many requests as the row says, sent at once, while another
+reader refreshes every 50 ms:
+
+| Flood | Answered | Refused with `503` | Other reader's refreshes answered, median / max | Peak server memory |
+| --- | --- | --- | --- | --- |
+| 300 simultaneous creates | 236 before, 72 first cap, 72 now | none, 226, 138 | before 5 of 9 (four `500`s), 194 ms / 3.2 s; first cap 14 of 15 (one `500`), 55 ms / 187 ms; now 14 of 14, 66 ms / 173 ms | 144 MB, 50 MB, 48 MB |
+| 150 simultaneous 1 MiB uploads | 1, 9, 3 | none, 78, 126 | before 7 of 7, 421 ms / 2.5 s; first cap 19 of 19, 46 ms / 160 ms; now 12 of 12, 54 ms / 63 ms | 497 MB, 76 MB, 142 MB |
+| 600 simultaneous reads | 231, 79, 79 | none, 294, 164 | before 4 of 4, 50 ms / 1.3 s; first cap 4 of 4, 73 ms / 295 ms; now 4 of 4, 56 ms / 302 ms | 152 MB, 59 MB, 61 MB |
+
+Requests in those floods that were neither answered nor refused were reset
+before the board saw them, because they arrived faster than the operating
+system's queue of 128 waiting connections could hold, or, among the uploads,
+were refused with `409` because they all changed the same task at once, or,
+under the first cap, were answered `400`. The
+uploads peak higher now than under the first cap because bodies are read before
+a turn rather than refused unread, up to the 32 MiB body budget. The `500`s the
+other reader got are the projection cache failing under simultaneous writes,
+which the cap makes rarer rather than fixing.
+
+Those are measurements, not guarantees. What the bounds guarantee is the number
+of connections, the bytes held for bodies and answers, the requests at work and
+the requests waiting, and that a client that stops moving bytes is cut off
+within the pace.
 
 The board's own page treats a refusal as "not yet" rather than "no". A change
 it was refused stays drawn as made, a notice at the top of the page says the
-board is busy and the change is kept, and the page sends the same request again
-after the wait the server named, then after twice that, then after twice that
-again: 2, 4 and 8 seconds. A change still refused after those three resends is
-reported where every refusal is, saying the board was too busy, and a form
-keeps what was typed into it. A `503` without `Retry-After` comes from
-something other than the board, such as a proxy with no board behind it, and
-says nothing about whether the change was made, so it is not resent. The
-once-a-second refresh sends nothing while its last read is still out, and a
-refused read holds it off for the time the server named, doubling with each
-refusal in a row up to 30 seconds; the banner above the board says the board is
-busy, and the first answered read puts the refresh back on its one-second beat.
+board is busy and the change is held in this tab, and the page sends the same
+request again after the wait the server named, then after twice that, then
+after twice that again: 2, 4 and 8 seconds, and never more than a minute at a
+time. The change lives only in the open tab while it waits, so the notice says
+that closing or leaving the tab loses it, and the browser asks before the tab
+is closed or navigated away from. A change still refused after those three
+resends is reported where every refusal is, saying the board was too busy, and
+a form keeps what was typed into it. A `429 Too Many Requests` with
+`Retry-After` is treated the same way, so a proxy's per-person limits slow the
+page down rather than lose its changes; `Retry-After` may be a number of
+seconds or a date. A `503` or `429` without `Retry-After` says nothing about
+whether the change was made, so it is not resent. The once-a-second refresh
+sends nothing while its last read is still out, and a refused read holds it
+off for the time the server named, doubling with each refusal in a row up to
+30 seconds; the banner above the board says the board is busy, and the first
+answered read puts the refresh back on its one-second beat.
 
-A board several people share behind a sign-in proxy needs the proxy to give
-each person a fair share, because the cap cannot tell people apart and one
-person's flood still fills it for everyone. A deployment should set, at the
-proxy, per signed-in person:
+What the board's own bounds guarantee is that the server survives whatever
+arrives: its connections, goroutines, held bytes, work turns and the line for
+them are all bounded, a slow or stalled client is cut off within the pace, and
+anything the board cannot take is refused at once with a `Retry-After` rather
+than left hanging. What they do not do is tell people apart. One person with
+enough connections can still fill the turns, the line, the budgets or the 512
+connections, and then everybody else is refused until they stop. The longest
+of those is the answer budget: a few dozen connections that ask for an
+attachment and never read it can fill it, and until the pace cuts them off, up
+to about 2 minutes 20 seconds later, every read whose answer is over 8 KiB,
+which includes most boards' task list, is refused with `503` and
+`Retry-After`. Writes and small reads still go through and the page waits the
+refusals out, but nobody's board refreshes meanwhile. A board
+several people share behind a sign-in proxy needs the proxy to give each
+person a fair share. A deployment should set, at the proxy, per signed-in
+person:
 
-- **Concurrent requests:** about 8, which is the board's whole write share.
-  An ordinary page uses one or two at a time and a handful while it loads.
+- **Buffering:** have the proxy read each request body whole before passing
+  it on, and take each answer from the board as fast as the board sends it.
+  Then a phone on a weak connection is slow against the proxy, not the board,
+  the board's pace never cuts it off, and nobody's slow or stalled reading
+  holds any of the board's answer budget.
+- **Concurrent requests:** about 6. A browser opens at most six connections to
+  one site, so an ordinary page never reaches it, and it is under the 8 write
+  turns, so no one person can hold every write turn alone. Three people at the
+  limit together fill all 16 turns; past that the board's own line and
+  refusals take over.
 - **Request rate:** about 10 a second sustained, with a burst of about 30. An
   open page refreshes once a second, so a person with three tabs open uses
-  three a second before they change anything.
+  three a second before they change anything, and the burst covers a page
+  load.
 - **Request body size:** 1.5 MiB, which admits the largest attachment upload
-  the board accepts (1 MiB encoded as base64 inside JSON) and nothing larger.
-- **Connections:** about 16, so idle keep-alive connections cannot pile up
-  either.
+  the board accepts (1,463,640 bytes: a 1 MiB file encoded as base64 inside
+  JSON) and nothing larger.
+- **Connections to the board:** the proxy's own connections to the board are
+  what count against its 512. Keep the proxy's pool of them well under that,
+  and limit each person's connections to the proxy to about 8, the browser's
+  six and a spare pair, so idle keep-alive connections cannot pile up either.
 
 Answer requests over those limits with `429 Too Many Requests` and a
-`Retry-After`. The page treats a `429` as it treats any refusal it was not
-told how to resend, and reports it.
+`Retry-After` of a few seconds; nginx, for one, answers its request and
+connection limits with `503` unless `limit_req_status` and `limit_conn_status`
+say `429`. The page waits out a `429` that names a wait and reports one that
+does not.
 
 Binding `--addr` to anything other than a loopback address makes the board
 reachable by whoever shares the network, and those checks cannot tell a

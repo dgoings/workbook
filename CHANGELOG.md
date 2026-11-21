@@ -157,19 +157,32 @@ before anyone runs it; see Compatibility across versions below.
   works on at most 16 requests at a time, writes take at most half of them, and
   a request past that waits up to five seconds for a turn and is then answered
   `503` with `Retry-After: 2`, before any of its work has started. The health
-  check is never made to wait. Against a temporary repository, 300 simultaneous
-  creates peaked at 26 Git processes instead of 363 and another reader's refresh
-  at 42 ms instead of 8.3 seconds, and 150 simultaneous 1 MiB uploads peaked at
-  69 MB of memory instead of 422 MB. `--max-requests <n>`, or
+  check is never made to wait. A turn covers only the board's own work: a
+  request's body is received before it and its answer delivered after it, each
+  at a pace that cuts off a client that stalls and each counted against a
+  32 MiB budget of its own, and the board keeps at most 512 connections open.
+  So a client that sends or reads slowly holds no turn and nothing unbounded,
+  while one on a link as slow as 64 kbit/s still downloads and uploads a 1 MiB
+  attachment, which the old 30-second read deadline cut off for any upload
+  slower than about 375 kbit/s. Against a 200-task board in a temporary
+  repository, 500 connections asking for an attachment and never reading it
+  left another person's refresh at 42 ms, where the first version of the cap
+  refused it after five seconds, and the server at 112 MB instead of 358 MB
+  with no cap; 150 simultaneous 1 MiB uploads peaked at 142 MB instead of
+  497 MB, with another reader's refresh under 63 ms instead of 2.5 seconds. The
+  reference has the full measurements. `--max-requests <n>`, or
   `WORKBOOK_SERVE_MAX_REQUESTS`, changes the number; nothing turns the cap off.
   The reference lists the per-person limits a shared board should set at its
-  sign-in proxy, since the cap bounds the server rather than any one person's
-  share.
+  sign-in proxy, and why, since the cap bounds the server rather than any one
+  person's share.
 - **The board's page waits out a busy server.** A change the server was too
   busy to start stays drawn as made, a notice says the board is busy and the
-  change is kept, and the page sends it again after 2, 4 and 8 seconds before
-  reporting it. The once-a-second refresh no longer sends a read while its last
-  one is still out, and backs off when it is refused.
+  change is held in the tab, and the page sends it again after 2, 4 and 8
+  seconds before reporting it. The browser asks before a tab holding such a
+  change is closed or left. A `429` with `Retry-After`, as a proxy's
+  per-person limit sends, is waited out the same way, and no wait is longer
+  than a minute. The once-a-second refresh no longer sends a read while its
+  last one is still out, and backs off when it is refused.
 
 ### Changed
 - **Git 2.29 or later is required**, and the README now says so. Workbook's

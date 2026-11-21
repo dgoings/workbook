@@ -211,8 +211,11 @@ sets up and refuses.
 The board caps how much work it does at once, so a flood of requests from one
 person cannot run the server out of processes or memory: it works on 16
 requests at a time, writes take at most half, and a request past that waits up
-to five seconds and is then refused with `503` and `Retry-After`. The board's
-own page keeps a refused change and sends it again. `workbook serve
+to five seconds and is then refused with `503` and `Retry-After`. A turn covers
+only the board's own work: bodies are received before it and answers delivered
+after it, each within its own bounds, and a client that stalls is cut off
+rather than left holding anything. The board's own page keeps a refused change
+in the tab and sends it again. `workbook serve
 --max-requests <n>` or `WORKBOOK_SERVE_MAX_REQUESTS` changes the number. The cap
 protects the server, not each person's share of it; see
 [Local web board](docs/reference.md#local-web-board) for the limits to set at a
