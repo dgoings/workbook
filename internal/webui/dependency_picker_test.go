@@ -92,6 +92,80 @@ func TestBrowserKeepsThePickerHighlightAcrossPolls(t *testing.T) {
 	}
 }
 
+// Keeping the highlight across polls must not also keep scrolling to it. A
+// reader who moved the highlight with a key and then scrolled the open list by
+// hand finds the list where they left it after the polls, and an arrow key
+// still brings the highlight into view when it moves.
+func TestBrowserLeavesThePickerListScrolledAcrossPolls(t *testing.T) {
+	t.Parallel()
+	tasks := []core.Task{}
+	for index := 1; index <= 60; index++ {
+		tasks = append(tasks, clientPlacementTask(
+			fmt.Sprintf("WB-01J0000000000000000000SC%02d", index),
+			fmt.Sprintf("Scroll candidate %d", index),
+			core.StatusReady, core.PriorityMedium))
+	}
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
+	var result struct {
+		Max, Set, After, Polls int
+		KeyRevealed            bool
+	}
+	openInBrowser(t, handler, browserPage{
+		Width: 1280, Height: 900, Path: "/tasks/new",
+		Setup: pageGeometryHelpers + `
+(async () => {
+  window.__polls = 0;
+  const realFetch = window.fetch;
+  window.fetch = async (url, options = {}) => {
+    const response = await realFetch(url, options);
+    if ((options.method || "GET") === "GET" && String(url).startsWith("/api/tasks")) window.__polls++;
+    return response;
+  };
+  await waitFor(() => document.querySelector("#dependency-input"), "the dependency picker");
+  const input = document.querySelector("#dependency-input");
+  input.focus();
+  input.click();
+  await waitFor(() => !document.querySelector("#dependency-listbox").hidden, "the picker's list to open");
+})()`,
+		Keys: []string{"ArrowDown"},
+		Script: `
+(async () => {
+  const listbox = document.querySelector("#dependency-listbox");
+  const max = listbox.scrollHeight - listbox.clientHeight;
+  listbox.scrollTop = max;
+  const set = listbox.scrollTop;
+  const polls = window.__polls;
+  const deadline = Date.now() + 10000;
+  while (window.__polls < polls + 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const after = listbox.scrollTop;
+  const answered = window.__polls - polls;
+  // A key that moves the highlight still scrolls to it.
+  document.querySelector("#dependency-input").dispatchEvent(
+    new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+  const active = listbox.querySelector(".relationship-option.is-active");
+  const box = listbox.getBoundingClientRect();
+  const row = active ? active.getBoundingClientRect() : null;
+  return {
+    max: Math.round(max), set: Math.round(set), after: Math.round(after), polls: answered,
+    keyRevealed: Boolean(row) && row.top >= box.top - 1 && row.bottom <= box.bottom + 1
+  };
+})()`,
+	}, &result)
+	if result.Max < 100 || result.Set < 100 {
+		t.Fatalf("the list scrolls %dpx and was set to %dpx, so there is nothing to drag back", result.Max, result.Set)
+	}
+	if result.Polls < 2 {
+		t.Fatalf("the page answered %d polls while the test waited, so this proves nothing", result.Polls)
+	}
+	if result.After != result.Set {
+		t.Errorf("after %d polls the list is scrolled to %dpx, want it left at %dpx", result.Polls, result.After, result.Set)
+	}
+	if !result.KeyRevealed {
+		t.Errorf("an ArrowDown after scrolling away did not bring the highlighted option into view")
+	}
+}
+
 // dependencyPickerOffered names what the open picker lists, in its order.
 const dependencyPickerOffered = `
 const offered = () => findElements(relationshipSection(main), (element) =>

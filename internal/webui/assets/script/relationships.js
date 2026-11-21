@@ -118,7 +118,11 @@
           hideListbox();
           renderOptions();
         }
-        function renderOptions() {
+        // reveal scrolls the highlighted option into view. Only a key that
+        // moved the highlight asks for it: the board's poll redraws this list
+        // about once a second, and a redraw that scrolled would drag the list
+        // back to the highlight from wherever the reader had scrolled it.
+        function renderOptions(reveal = false) {
           const options = matchingCandidates();
           if (state.activeIndex >= options.length) state.activeIndex = options.length - 1;
           const active = state.activeIndex >= 0 ? options[state.activeIndex] : null;
@@ -146,7 +150,7 @@
             option.addEventListener("click", () => selectCandidate(task));
             return option;
           }));
-          if (activeOptionID && !listbox.hidden) {
+          if (reveal && activeOptionID && !listbox.hidden) {
             const activeOption = [...listbox.children].find((option) => option.id === activeOptionID);
             if (activeOption) activeOption.scrollIntoView({ block: "nearest" });
           }
@@ -212,7 +216,7 @@
           } else {
             return;
           }
-          renderOptions();
+          renderOptions(event.key === "ArrowDown" || event.key === "ArrowUp");
         });
         add.addEventListener("click", () => {
           if (config.isBusy()) return;

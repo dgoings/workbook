@@ -2617,14 +2617,17 @@ an **Add as** toggle (a radio group, so the arrow keys move it) chooses whether
 the task picked is added as Depends On or Blocks; it starts on Depends On and
 stays where it was put after an add. The combobox leaves out the tasks the
 chosen kind already lists, the current task itself, and every task whose edge
-the server would refuse as a cycle: under Depends On, any live task that
+would close a cycle through the current task: under Depends On, any live task that
 already depends on the current task, directly or through other live tasks;
 under Blocks, any live task the current task already depends on, directly or
 through others. Staged and unsaved rows count as edges for this, which is what
 the New Task form has. A task left out this way is offered again once the
 toggle moves to the other kind or the row that closed the path is removed. The
 highlighted option in the open list stays on its task across the board's
-once-a-second refresh. Adding and removing use
+once-a-second refresh, and the list stays where it was scrolled. The server
+remains the authority: if the stored dependencies already hold a cycle, it
+refuses any edge that leads into it, and the combobox still offers those tasks.
+Adding and removing use
 the nested Git-durable mutation routes above: a Depends On edge is written to
 the current task and a Blocks edge to the other task.
 
