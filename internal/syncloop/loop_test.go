@@ -82,22 +82,27 @@ func TestScheduledTickIsSuppressedWhileANudgeIsPending(t *testing.T) {
 	syncer := &fakeSyncer{origin: true}
 	directory, output := startWatcher(t, syncer, func(options *Options) {
 		options.Interval = 20 * time.Millisecond
-		options.Quiet = 400 * time.Millisecond
+		options.Quiet = 600 * time.Millisecond
 	})
 	waitForOutput(t, output, ReadyPrefix)
 	waitForSyncs(t, syncer, 1)
 
 	nudge(t, directory)
-	// Sample inside the quiet window. Roughly fifteen ticks fall in it, and
-	// every one must be skipped because a nudged synchronization is already
-	// pending; only the opening synchronization should have happened.
-	time.Sleep(300 * time.Millisecond)
-	if got := syncer.syncCount(); got != 1 {
-		t.Fatalf("syncs inside the quiet window = %d, want 1 (the ticks suppressed)", got)
+	// A tick can land between the opening synchronization and the watcher
+	// taking up the nudge, and that one is not suppressed. Let two intervals
+	// pass so any such tick is counted before the sample begins.
+	time.Sleep(40 * time.Millisecond)
+	before := syncer.syncCount()
+
+	// Sample inside the quiet window. Roughly ten ticks fall in it, and every
+	// one must be skipped because a nudged synchronization is already pending.
+	time.Sleep(200 * time.Millisecond)
+	if got := syncer.syncCount(); got != before {
+		t.Fatalf("syncs inside the quiet window went from %d to %d, want none (the ticks suppressed)", before, got)
 	}
 
 	// The pending synchronization still has to arrive.
-	waitForSyncs(t, syncer, 2)
+	waitForSyncs(t, syncer, before+1)
 }
 
 func TestLoopIsAQuietNoOpWithoutAnOrigin(t *testing.T) {
@@ -130,6 +135,7 @@ func TestFinalSyncRunsOnCancellation(t *testing.T) {
 			Config:       watcherConfig(),
 			Interval:     time.Hour,
 			Stderr:       output,
+			published:    syncer.notePublished,
 		})
 	}()
 	waitForOutput(t, output, ReadyPrefix)
@@ -382,6 +388,7 @@ func startWatcher(t *testing.T, syncer *fakeSyncer, adjust func(*Options)) (stri
 		Repository:   syncer,
 		Config:       watcherConfig(),
 		Stderr:       output,
+		published:    syncer.notePublished,
 	}
 	if adjust != nil {
 		adjust(&options)
@@ -438,16 +445,23 @@ func waitForOutput(t *testing.T, output *syncBuffer, want string) {
 	t.Fatalf("watcher never wrote %q; wrote %q", want, output.String())
 }
 
+// waitForSyncs waits until the watcher has finished its want-th
+// synchronization: the syncer was called and the status that run produced is
+// stored. Waiting for the call alone is not enough. Everything a test reads
+// afterwards — the status, the conflict set, the terminal, the parking sweeps
+// — is written after Sync returns, so a test that looked as soon as the call
+// was counted could still see the run before.
 func waitForSyncs(t *testing.T, syncer *fakeSyncer, want int) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if syncer.syncCount() >= want {
+		if syncer.publishedSyncCount() >= want {
 			return
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	t.Fatalf("watcher performed %d syncs, want at least %d", syncer.syncCount(), want)
+	t.Fatalf("watcher finished %d syncs (%d called), want at least %d",
+		syncer.publishedSyncCount(), syncer.syncCount(), want)
 }
 
 type syncBuffer struct {
@@ -470,6 +484,7 @@ func (b *syncBuffer) String() string {
 type fakeSyncer struct {
 	mu             sync.Mutex
 	syncs          int
+	publishedSyncs int
 	prunes         int
 	configPrunes   int
 	origin         bool
@@ -548,6 +563,21 @@ func (f *fakeSyncer) HasOrigin(context.Context) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.origin
+}
+
+// notePublished is the watcher's published seam: it records how many
+// synchronizations had been called when a status was stored, which is how many
+// have finished, since the watcher runs one at a time.
+func (f *fakeSyncer) notePublished() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.publishedSyncs = f.syncs
+}
+
+func (f *fakeSyncer) publishedSyncCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.publishedSyncs
 }
 
 func (f *fakeSyncer) syncCount() int {

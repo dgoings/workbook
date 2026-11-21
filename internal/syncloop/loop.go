@@ -69,6 +69,12 @@ type Options struct {
 	// person learns about a conflict nobody was present for.
 	Stderr io.Writer
 	Now    func() time.Time
+
+	// published, when set, is called after each synchronization has stored
+	// the status it produced. It is a seam for tests, which otherwise cannot
+	// tell a synchronization that has been called from one whose outcome a
+	// status request can already see.
+	published func()
 }
 
 // Run binds this repository's watcher socket, publishes the pointer file that
@@ -341,6 +347,9 @@ func (l *loop) publish(ok bool, message string, ignored []gitstore.IgnoredRef) {
 		LastError:   message,
 		IgnoredRefs: ignored,
 	})
+	if l.options.published != nil {
+		l.options.published()
+	}
 }
 
 // changedRefs reports whether the synchronization moved anything, which gates
