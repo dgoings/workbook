@@ -255,6 +255,9 @@ func TestGitFailureRedactsConfiguredCredentials(t *testing.T) {
 			t.Run(setupName+"/"+passwordName, func(t *testing.T) {
 				t.Parallel()
 				repository, _ := writeRepository(t)
+				// Something to push, so the push reaches the remote and fails
+				// there rather than on a missing source ref.
+				gitstoreGit(t, repository, "-c", "user.email=a@example.com", "-c", "user.name=A", "commit", "--quiet", "--allow-empty", "-m", "x")
 				credential := "deploy-bot:" + password
 				setup(t, repository, credential)
 				secret := password[strings.LastIndex(password, "SECRET"):]
@@ -269,6 +272,9 @@ func TestGitFailureRedactsConfiguredCredentials(t *testing.T) {
 				}
 				if !strings.Contains(reason, host) {
 					t.Fatalf("push refusal = %q, want the remote at %s still named", reason, host)
+				}
+				if strings.Contains(reason, "src refspec") {
+					t.Fatalf("push refusal = %q, which failed before reaching the remote", reason)
 				}
 
 				_, err := repository.Git(context.Background(), nil, "fetch", "origin")
