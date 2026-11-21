@@ -393,8 +393,8 @@ nothing at all.
 one that holds a control or bidi-control character: U+202E RIGHT-TO-LEFT
 OVERRIDE would draw `https://evil.example/<U+202E>fdp.exe` as
 `https://evil.example/exe.pdf`. The web board refuses the same addresses. A link
-stored before this rule, or by another clone, is kept and drawn with those
-characters as spaces.
+stored before this rule, or by another clone, is kept, and the command line and
+the board draw its control characters and direction overrides as spaces.
 
 A comment or attachment identifier may be typed as any unambiguous prefix of
 the one `workbook show` prints, the way a task ID may be. `show` prints them
@@ -2416,6 +2416,10 @@ they were written. The same rule already shaped Git commit subjects and now
 applies to `list`, `board`, `show`, its history and comparison output, conflict
 detail, and the line a mutation prints.
 
+The web board is less strict about one part of this: it keeps the three
+directional marks and replaces only the overrides, embeddings and isolates. See [Local web board](#local-web-board) for its rule and
+the reason.
+
 The description `workbook show` prints is the one place where structure is worth
 keeping — most descriptions are several paragraphs, and collapsing them makes
 the main human-facing read command hard to read — so it is sanitized a line at a
@@ -2641,20 +2645,43 @@ somebody else's bytes, and its headers are the whole of its security:
   `Content-Disposition: attachment`, so an attached HTML file downloads rather
   than rendering. The file name inside that header is formatted rather than
   concatenated, because an attachment name is text somebody typed.
-- The board draws a file's name the way the command line prints one: control
-  and bidi-control characters become spaces. A U+202E RIGHT-TO-LEFT OVERRIDE
-  would otherwise draw `invoice<U+202E>fdp.exe` as `invoiceexe.pdf` for a reader
-  deciding whether to open it. A link attachment's label, its address and the
-  address's tooltip are drawn the same way. The stored name is unchanged, and
-  the download is named by this route, which a browser saves as
-  `invoice_fdp.exe`.
+- The file name in that header is not quite the stored one: each control
+  character and each direction override, embedding or isolate (U+202A to
+  U+202E and U+2066 to U+2069) is sent as `_`, in the plain `filename=` form
+  and in the RFC 2231 `filename*=` form alike. So `invoice<U+202E>fdp.exe`
+  downloads as `invoice_fdp.exe` in every browser and file manager, rather
+  than relying on each to clean the name itself. The stored name is unchanged.
+- The board draws a file's name with its control characters and direction
+  overrides, embeddings and isolates as spaces. A U+202E RIGHT-TO-LEFT
+  OVERRIDE would otherwise draw `invoice<U+202E>fdp.exe` as `invoiceexe.pdf` for
+  a reader deciding whether to open it. A drawn file name also reads the
+  blank-looking fillers U+3164, U+115F, U+1160, U+FFA0, U+2800 and U+180E, and
+  every Unicode space separator, as a space, and collapses each run of spaces
+  to one, so `invoice.pdf`, seventy-eight U+3164 and `.exe` draws as
+  `invoice.pdf .exe` rather than pushing the extension out of sight. That
+  applies to file names in the attachment list, in references and in the
+  history. A link attachment's label, its address and the address's tooltip
+  are drawn with the same control and direction characters as spaces. The
+  stored name is unchanged.
 - Everything else the board draws from text somebody typed — titles,
   descriptions, comments, labels, assignees, status and priority labels, the
-  project's name, the history, tooltips, an image's `alt` and the browser tab's
-  title — is drawn with its bidi-control characters as spaces, on the page the
-  server renders and in everything the page's script draws. Line breaks are
-  kept. A field being edited shows its stored text as it is, so saving it
-  changes nothing the author did not change.
+  project's name, the history, tooltips, accessible names, an image's `alt` and
+  every route's browser tab title — is drawn with its direction overrides,
+  embeddings and isolates as spaces, on the page the server renders and in what
+  the page's script draws. Line breaks are kept.
+- The board keeps the three directional marks, U+200E LEFT-TO-RIGHT MARK,
+  U+200F RIGHT-TO-LEFT MARK and U+061C ARABIC LETTER MARK, where the command
+  line's `show` and `list` print them as spaces. A mark is an invisible letter
+  with a direction: Hebrew and Arabic writers use it to put an exclamation mark
+  or a digit on the right side of a word, and it cannot reverse a run of
+  letters.
+- A one-line field shown before anything is edited — a task's Title field, and
+  the configuration page's project name and status and priority label fields —
+  holds the cleaned text. A save treats a field that still holds exactly that
+  as unchanged and sends the stored text back, or nothing, so saving some other
+  change never rewrites the stored title or name to its cleaned form. An editor
+  that opens only when asked, such as the description and comment editors,
+  shows the stored text exactly.
 - `X-Content-Type-Options: nosniff` is set on both paths, so no browser may
   decide for itself that an octet-stream is HTML.
 - The response carries `Content-Security-Policy: default-src 'none'; sandbox`
@@ -2826,22 +2853,34 @@ What the board reveals about the machine serving it:
 - The serving checkout's `user.email`, in the page and on every change it
   records.
 - `origin`'s address: not shown by any route, but a change whose publication
-  fails is answered with a warning carrying Git's message about the failure,
-  and that message usually names `origin`'s URL or path, with the credential
-  removed as described next. An operational error
-  carries the failing command and Git's own words in the same way, which can
-  include paths on the server.
+  fails is answered with a warning carrying the failing Git command, its exit
+  status and Git's message, and that message usually names `origin`'s full URL
+  or path, with the credential removed as described next. For example, a task
+  created while `origin` is unreachable is answered `200` with the warning
+  `the change was recorded locally, but publishing it failed: cannot ask origin
+  which Workbook project it holds before publishing: git ls-remote --refs origin
+  refs/workbook/project failed: exit status 128: fatal: unable to access
+  'http://127.0.0.1:1/team/secret-path/repo.git/': Failed to connect …`, and
+  one whose `origin` is a missing folder names that folder's path on the
+  server. Task, status, priority, key and display changes all answer this way.
+  An operational error carries the failing command and Git's own words in the
+  same way, which can include paths on the server.
 - `origin`'s credential: the user name and password in a remote's address are
-  removed. When a Git command fails, Workbook reads the addresses Git is
-  configured with — each `remote.<name>.url` and `pushurl`, each
-  `url.<base>.insteadOf` and `pushInsteadOf`, and the addresses those rewrites
-  produce — and removes each address's user name and password, by their exact
-  text, from Git's error output and from the command the error names. A user
-  name or password of eight characters or more is also removed wherever it
-  appears on its own, as `***`; a shorter one, such as the user name `git`, is
-  removed only inside its address, so ordinary words in Git's messages are left
-  alone. Any other `scheme://user@` in Git's output loses its user part too. A
-  successful command costs no extra Git process.
+  removed. When a Git command fails and its error output contains an `@`,
+  Workbook looks up the addresses Git is configured with — each
+  `remote.<name>.url` and `pushurl`, each `url.<base>.insteadOf` and
+  `pushInsteadOf`, and the addresses those rewrites produce — and removes each
+  address's credential, by its exact text, from Git's error output and from the
+  command the error names. A failure whose output holds no `@`, and a
+  successful command, cost no extra Git process. Outside its address, a
+  password of eight characters or more is also removed wherever it appears on
+  its own, as `***`. A user name of that length is removed on its own only when
+  its address has no password, because a token is often the whole userinfo
+  (`https://<token>@host/…`); beside a password, a user name such as
+  `workbook` is removed only inside its address, so `refs/workbook/tasks/*` and
+  a path segment `/workbook/` read as written. A shorter user name or password,
+  such as the user name `git`, is removed only inside its address. Any other
+  `scheme://user@` in Git's output loses its user part too.
 - What is not removed: anything a credential helper, a Git hook or the remote
   itself prints (a helper that writes `refreshing token <token>` to its error
   output is reported as written), and a token placed in an address's path or
@@ -3230,8 +3269,11 @@ above; the reference's own text, when it says something the name does not,
 follows the link as a caption in parentheses. So
 `![invoice.pdf](attachment:<id>)` naming a file called `invoice<U+202E>fdp.exe`
 draws as `invoice fdp.exe (invoice.pdf)`, never as a link reading
-`invoice.pdf`. A reference that resolves to nothing, to more than one
-attachment, or to a link attachment is drawn as the text it is. Every other
+`invoice.pdf`. An image's alternative text follows the same rule — the file's
+real name, then the author's text in parentheses — because a browser draws it
+in place of a file that does not decode as an image. A reference that resolves
+to nothing, to more than one attachment, or to a link attachment is drawn as
+the text it is. Every other
 image target — an external URL, a `data:` URI, an address on this board — is
 drawn as text as well: a board that fetched images named in task text would
 report every reader of every card to whoever wrote the task.

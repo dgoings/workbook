@@ -32,24 +32,41 @@ Git leaves them in some failure messages, such as the one for a remote that
 answers a push with something other than Git, and in every message naming an
 address whose password holds a slash. Those messages reached the warning a
 failed publication carries — on the web board, the browser of whoever made the
-change. When a Git command fails, Workbook now reads the addresses Git is
-configured with (remote URLs and push URLs, and `insteadOf` and
-`pushInsteadOf` rewrites) and removes each one's user name and password from
-Git's error output and from the command the error names, on the board and the
-command line alike; the remote is still named. Output a credential helper or
-the remote prints, and a token in an address's path or query string, are not
-removed; the
+change. When a Git command fails and its error output contains an `@`,
+Workbook now looks up the addresses Git is configured with (remote URLs and
+push URLs, and `insteadOf` and `pushInsteadOf` rewrites) and removes each one's
+credential from Git's error output and from the command the error names, on the
+board and the command line alike; the remote is still named. A password of
+eight characters or more is also removed wherever else it appears, and so is a
+user name of that length when its address has no password, since that user
+name is usually a token; beside a password, a user name such as `workbook` is
+left alone outside its address, so `refs/workbook/tasks/*` still reads as
+written. Output a credential helper or the remote prints, and a token in an
+address's path or query string, are not removed; the
 [reference](docs/reference.md#what-anyone-who-can-open-the-board-can-do-and-see)
 says how to keep a server's credential out of its address.
 
-The web board draws text somebody typed with its bidi-control characters as
-spaces — attachment names, link labels and addresses, titles, comments, labels,
-history and tooltips — so a right-to-left override can no longer make an
-`.exe` read as a `.pdf`. A markdown reference to a file that is not drawn as an
-image always reads as the file's real name, with the author's own text as a
-caption beside it, and a new link attachment's address may not hold a control
-or bidi-control character. The page's content policy now carries
-`form-action 'self'`. The
+The web board draws text somebody typed with its direction overrides,
+embeddings and isolates as spaces — attachment names, link labels and
+addresses, titles, comments, labels, history, tooltips, accessible names and
+every browser tab title, including the project's name in it — so a
+right-to-left override can no longer make an `.exe` read as a `.pdf`. The
+right-to-left and left-to-right marks are kept, because Hebrew and Arabic text
+uses them to place punctuation and they cannot reverse a word; the command line
+still prints them as spaces. A task's Title field and the configuration page's
+project name and label fields show the cleaned text, and saving some other
+change sends the stored text back exactly, so it is never rewritten to its
+cleaned form. A file's drawn name also reads blank-looking filler characters,
+such as U+3164 HANGUL FILLER, as one space, so padding cannot push its
+extension out of sight. The download route sends a file's name with each
+control character and each override, embedding or isolate replaced by `_`, so
+`invoice<U+202E>fdp.exe` downloads as `invoice_fdp.exe` whatever the browser.
+A markdown reference to a file that is not drawn as an image always reads as
+the file's real name, with the author's own text as a caption beside it, and an
+attachment image's alternative text is its real name with the author's text in
+parentheses. A new link attachment's address may not hold a control or
+bidi-control character. Stored text and file names are unchanged. The page's
+content policy now carries `form-action 'self'`. The
 [reference](docs/reference.md#what-anyone-who-can-open-the-board-can-do-and-see)
 now lists everything anyone who can open the board can do and see, including
 what it reveals about the machine serving it.
