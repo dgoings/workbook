@@ -28,6 +28,13 @@ var urlUserinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/\s'"]*@`)
 // own, wherever it appears, rather than only as part of its URL. Anything
 // shorter, such as the user name "git", is an ordinary word in Git's messages
 // and replacing it would mangle them.
+//
+// A user name is removed on its own only from an address with no password,
+// where it is often the token itself (`https://ghp_…@github.com/…`). Beside a
+// password it is usually an ordinary name such as `workbook`, which Git's
+// messages also spell as a ref prefix (`refs/workbook/tasks/*`) or a path
+// segment (`/workbook/repo.git`), so there only the password is removed on its
+// own and the user name goes only with the rest of its address's userinfo.
 const credentialPartMinimum = 8
 
 // credentialRedactionMark stands in for a credential found outside its URL.
@@ -53,8 +60,9 @@ type redaction struct {
 // Its zero value removes what the userinfo pattern finds. One built by
 // readCredentialRedactor or argumentCredentialRedactor also removes every
 // configured or named credential by its exact text: the whole userinfo of each
-// address where it follows `://`, and the whole userinfo, the user name and the
-// password on their own wherever each is long enough not to be an ordinary word.
+// address where it follows `://`, and on its own wherever it is long enough not
+// to be an ordinary word, the whole userinfo, the password, and — only for an
+// address that has no password — the user name.
 type credentialRedactor struct {
 	redactions []redaction
 }
@@ -169,8 +177,16 @@ func newCredentialRedactor(addresses []string) credentialRedactor {
 			addPart(tail)
 		}
 		addPart(userinfo)
-		user, password, _ := strings.Cut(userinfo, ":")
-		for _, part := range []string{user, password} {
+		user, password, hasPassword := strings.Cut(userinfo, ":")
+		parts := []string{user}
+		if hasPassword {
+			// The user name still goes wherever it is printed as the userinfo
+			// of an address, which is where Git puts it once it has dropped the
+			// password; on its own it stays, see credentialPartMinimum.
+			add("://"+user+"@", "://")
+			parts = []string{password}
+		}
+		for _, part := range parts {
 			addPart(part)
 			if decoded, err := url.PathUnescape(part); err == nil {
 				addPart(decoded)

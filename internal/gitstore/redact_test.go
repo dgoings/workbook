@@ -114,8 +114,9 @@ func assertNoURLCredentials(t *testing.T, what, text string) {
 // Git prints such userinfo whole: its anonymizer gives up on a slash, and "no
 // DAV locking support on <url>" is never anonymized. So the credentials Git is
 // configured with are also removed by their exact text — the whole userinfo
-// where it follows "://", and the user name and password on their own when
-// they are long enough not to be ordinary words.
+// where it follows "://", and on their own when they are long enough not to be
+// ordinary words the password, and the user name of an address that has no
+// password.
 func TestCredentialRedactorRemovesConfiguredCredentialsByTheirText(t *testing.T) {
 	t.Parallel()
 	cases := []struct{ name, address, input, want string }{
@@ -144,10 +145,37 @@ func TestCredentialRedactorRemovesConfiguredCredentialsByTheirText(t *testing.T)
 			want:    "fatal: unable to access 'http://127.0.0.1:7493/team/repo.git/': URL rejected: Bad hostname",
 		},
 		{
+			// Beside a password, the user name is a name rather than the
+			// secret, and only the password is removed on its own.
 			name:    "a password outside its URL",
 			address: "https://deploy-bot:SECRETTOKEN@git.example/team/repo.git",
 			input:   "remote: token SECRETTOKEN is expired; deploy-bot must sign in again",
-			want:    "remote: token *** is expired; *** must sign in again",
+			want:    "remote: token *** is expired; deploy-bot must sign in again",
+		},
+		{
+			// The reviewer's case: a user named for the tool beside a password.
+			// Every failure names refs/workbook/... and the path holds the word
+			// too; neither is a credential and neither may be blanked.
+			name:    "a user name that is an ordinary word, beside a password",
+			address: "http://workbook:SECRETPASSWORD@127.0.0.1:7493/workbook/repo.git",
+			input:   "git ls-remote --refs origin refs/workbook/tasks/* refs/workbook/project failed: exit status 128: fatal: unable to access 'http://workbook:SECRETPASSWORD@127.0.0.1:7493/workbook/repo.git/': Failed to connect; SECRETPASSWORD",
+			want:    "git ls-remote --refs origin refs/workbook/tasks/* refs/workbook/project failed: exit status 128: fatal: unable to access 'http://127.0.0.1:7493/workbook/repo.git/': Failed to connect; ***",
+		},
+		{
+			// Git may print the address with the password dropped and the user
+			// name kept; that userinfo still goes, inside its address.
+			name:    "a user name printed as an address's userinfo without its password",
+			address: "http://workbook:SECRETPASSWORD@127.0.0.1:7493/workbook/repo.git",
+			input:   "error: no DAV locking support on http://workbook@127.0.0.1:7493/workbook/repo.git/",
+			want:    "error: no DAV locking support on http://127.0.0.1:7493/workbook/repo.git/",
+		},
+		{
+			// With no password, the user name is often the token itself, and it
+			// is removed wherever it is printed.
+			name:    "a token as the whole userinfo",
+			address: "https://ghp_SECRETTOKEN123@git.example/team/repo.git",
+			input:   "remote: ghp_SECRETTOKEN123 has expired",
+			want:    "remote: *** has expired",
 		},
 		{
 			name:    "a percent-encoded password, printed decoded",
