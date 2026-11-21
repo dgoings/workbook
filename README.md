@@ -26,6 +26,9 @@ Workbook aims for a middle ground:
 
 ## Installation
 
+Workbook runs the `git` command and needs Git 2.29 or later. Its fetches use
+options and refspecs that first shipped in that release.
+
 ### Homebrew
 
 ```sh
@@ -36,7 +39,8 @@ The tap serves macOS and Linux bottles for Apple Silicon and Intel.
 
 ### Building from source
 
-A Go 1.26 (or newer) toolchain and Git are the only requirements:
+A Go 1.26 (or newer) toolchain and Git 2.29 (or newer) are the only
+requirements:
 
 ```sh
 git clone https://github.com/dgoings/workbook.git
