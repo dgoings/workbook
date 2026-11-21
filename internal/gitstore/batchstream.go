@@ -188,7 +188,7 @@ func (b *objectBatch) wait() error {
 }
 
 func (b *objectBatch) errorWithStderr(err error) error {
-	detail := strings.TrimSpace(b.stderr.String())
+	detail := strings.TrimSpace(redactURLCredentials(b.stderr.String()))
 	if detail == "" {
 		return err
 	}
