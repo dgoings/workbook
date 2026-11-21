@@ -1252,9 +1252,15 @@ func TestAnEditThatChangesNothingIsRefusedRatherThanWritten(t *testing.T) {
 	task := TaskData{Title: "Task", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1"}
 	task.Comments = []Comment{{ID: commentOneID, Author: threadActor, Body: "unchanged", CreatedAt: threadWallTime}}
 	service, store, _ := threadServiceUnderTest(t, task)
+	// The author, so the refusal is the unchanged text rather than the
+	// authorship rule, which is asked first.
+	service.Actor = threadActor
 
 	_, err := service.CommentEditMutation(context.Background(), threadTaskID,
 		CommentEditInput{CommentID: commentOneID, Body: "  unchanged  "})
+	if err == nil || !strings.Contains(err.Error(), "already reads that way") {
+		t.Fatalf("error = %v, want the unchanged-text refusal", err)
+	}
 	if got := CategoryOf(err); got != CategoryValidation {
 		t.Fatalf("category = %q, want %q; error = %v", got, CategoryValidation, err)
 	}

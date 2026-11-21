@@ -129,8 +129,9 @@ the repository handle or the service. Everything that decides or records by
 identity resolves the person from that context first and from the checkout only
 when the context names nobody (`core.Service.ActorFor`): the pack's actor, the
 assignee `self`, the creator an assignment records, who may remove an
-assignment, which tasks `next` skips, and the board's answers about which
-assignments are the reader's and which they may remove. So one long-running
+assignment, who may edit a comment, which tasks `next` skips, and the board's
+answers about which assignments are the reader's, which they may remove, and
+which comments they may edit. So one long-running
 process can serve each request as its own person by putting that person on the
 request's context, and nothing else. A pack written for a context that names a
 different person is refused rather than recorded.
@@ -277,6 +278,99 @@ only where somebody is adding one, never in the fold: two people assigning
 themselves the same task on the same afternoon can carry it past any count
 without either operation being anything but ordinary, and a fold that failed on
 a count would make that pair of acts a task no clone could ever read again.
+
+### Comments
+
+A comment is `comment.add`, `comment.edit` and `comment.remove` operations on
+the task, and the checkpoint materializes the live thread. A comment's
+identifier is the ULID of the `comment.add` that recorded it, its `author` is
+that pack's actor, and `createdAt` and `editedAt` are the wall times of the
+packs that added it and last edited it.
+
+**Who may change what.** Only a comment's author may change its text: the
+acting person (`core.Service.ActorFor`) must equal the comment's recorded
+`author`, exactly. Anybody may remove a comment. Both are asserted names, like
+every other identity here.
+
+**Enforced where an edit is authored, and nowhere else.** A foreign edit is
+refused at the mutation boundary with category `validation`, and nothing is
+written, on the command line and on the board alike. Unlike the assignment
+removal rule, the fold deliberately does not enforce it a second time:
+
+- Builds before this rule let anybody edit any comment, so existing histories
+  already hold such edits. A fold that dropped them would change what a thread
+  already says on every clone that upgraded, and an upgraded clone and an older
+  one would fold the same history to different tasks.
+- An older build can still record one. A no-op in the new fold would silently
+  throw away words somebody wrote, which the concurrency rules forbid.
+
+So `Apply` treats every `comment.edit` exactly as it always has: an edit of a
+live comment replaces its body and stamps `editedAt`, whoever recorded it, and
+an edit of a comment that is gone changes nothing. Every clone folds the same
+history to the same thread, whichever build wrote it. No operation type, no
+serialization and no format generation changed.
+
+**What the thread shows about its history.** The checkpoint holds only the live
+thread, but the operations already record who removed a comment and who made
+each edit: the actor and wall time of the pack that carried them. Readers
+derive both from the task's chain on every read (`core.TraceComments`) and
+store nothing new:
+
+```text
+C1  comment.add     actor bob    id 01K7…A1   "first take"
+C2  comment.edit    actor alice  01K7…A1      "alice's words"   ← an older build
+C3  comment.remove  actor alice  01K7…A1
+
+thread at C2:  01K7…A1 · bob · "alice's words" · edited by alice
+thread at C3:  01K7…A1 · bob · removed by alice at C3's wall time (no text)
+```
+
+The derivation mirrors the fold. A removal counts only when it took a live
+comment out of the thread, so a second removal of the same comment does not
+rename the remover, and an edit counts only when the comment was live to
+receive it. The editor named is the actor of the edit whose wall time is the
+`editedAt` the checkpoint records. A root `history.checkpoint` starts the
+derivation afresh, because a compacted task's earlier operations are no longer
+on its chain, and the checkpoint holds only the live thread. So, for what
+happened before the compaction:
+
+- a comment removed then is gone from the thread entirely: the checkpoint does
+  not hold it and no operation left on the chain mentions it;
+- a comment edited then keeps its `editedAt`, but no operation on the chain
+  has that wall time, so readers mark it as edited by somebody the history no
+  longer records (`editorNotRecorded` in JSON, `editor not recorded` in text
+  and on the board) rather than draw it as the author's own words.
+
+```text
+before compaction
+K1  task.create
+C1  comment.add     actor bob    id 01K7…A1   "first take"
+C2  comment.add     actor bob    id 01K7…B2   "second take"
+C3  comment.edit    actor alice  01K7…A1      "alice's words"   ← an older build
+C4  comment.remove  actor alice  01K7…B2
+
+after compaction
+K2  history.checkpoint  (no parent)
+    thread: 01K7…A1 · bob · "alice's words" · editedAt = C3's wall time
+
+thread at K2:  01K7…A1 · bob · "alice's words" · edited, editor not recorded
+               (no line for 01K7…B2)
+```
+
+Recording who removed and edited in the checkpoint itself would need a format
+change, and is left for a later release.
+
+Two clones racing an edit and a removal of the same comment converge on the
+removal in either order. If the removal reaches `origin` first, the edit
+replays onto a task whose comment is gone, changes nothing, and so records no
+commit; the clone that made it keeps its pre-replay tip parked under
+`refs/workbook/reconciled/` for a while, as every reconciliation does. If the
+edit reaches `origin` first, the removal replays after it and both stay in
+history.
+
+The SQLite projection is unchanged. The operation rows it already keeps for
+`show --history` are what the derivation reads, so an existing cache serves it
+with nothing to rebuild.
 
 ### Mixed Workbook versions
 

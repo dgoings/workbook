@@ -396,6 +396,48 @@ OVERRIDE would draw `https://evil.example/<U+202E>fdp.exe` as
 stored before this rule, or by another clone, is kept, and the command line and
 the board draw its control characters and direction overrides as spaces.
 
+Only the person who wrote a comment may change its text. The author is the
+name the comment was recorded under, and the person editing is the one
+[`WORKBOOK_ACTOR`](#who-an-edit-is-recorded-under) names, or else the
+checkout's `user.email`; both are asserted names, compared exactly, and
+nothing verifies either. Anybody else's `--edit-comment` is refused with
+category `validation` (exit `5`), naming the author, and nothing is recorded —
+including the rest of the same `update`, since one invocation records all of
+its changes or none. Anybody may remove any comment, and the thread then says
+who did:
+
+```text
+Comments:
+	01K7…A1	bob@example.com	2026-11-21T09:00:00Z	(removed 2026-11-21T10:30:00Z by alice@example.com)
+	01K7…B2	bob@example.com	2026-11-21T09:05:00Z
+		Still here.
+```
+
+A removed comment keeps its place in the thread as that one line — whose it
+was, when it was written, and who removed it when — and its text is not
+printed. Removing a comment takes it out of the thread, and its text remains in
+the task's history, which anyone who can open the board or fetch the repository
+can read; `show --history` shows it. A
+history can also hold an edit somebody other than the author made, before this
+rule existed or from a clone running a build without it. Such an edit stands as
+recorded, on every clone, and the thread names who made it:
+`(edited 2026-11-21T11:00:00Z by alice@example.com)`. An edit by the author
+prints as it always has, `(edited …)`.
+
+Who removed a comment and who made an edit come from the operations that
+recorded them, read on every `show`. A task that was
+[compacted](#task-archive-compaction) keeps only its checkpoint, which holds
+the live thread and not the operations that changed it, so for anything done
+before the compaction:
+
+- a removed comment is gone from the thread entirely, with no line for it;
+- an edited comment still says when it changed but not who changed it, and
+  says so: `(edited 2026-11-21T11:00:00Z, editor not recorded)`. It never reads
+  as its author's own words, because it may not be.
+
+An edit or a removal made after the compaction is on the task's chain again,
+and names its maker as above.
+
 A comment or attachment identifier may be typed as any unambiguous prefix of
 the one `workbook show` prints, the way a task ID may be. `show` prints them
 whole rather than shortened, because identifiers minted moments apart share a
@@ -403,7 +445,16 @@ long prefix and a display that could not be typed back would be worse than a
 long one.
 
 `workbook show` renders the thread and the attachment list under the task, and
-`--json` carries both in the task document. One attached file's bytes come back
+`--json` carries both in the task document. In `show --json` each entry of
+`comments` also carries `editable`, always present, which says whether the
+person running the command may edit it, and `editedBy` when the history names
+who made the edit `editedAt` records. When the comment was edited and the
+history no longer records who made the edit, because it came before the task
+was compacted, the entry carries `"editorNotRecorded": true` and no `editedBy`;
+the member is absent otherwise. Removed comments are listed under
+`removedComments`, in identifier order, as `id`, `author`, `createdAt`,
+`removedBy` and `removedAt`, and never with a body; the member is absent when
+nothing was removed. One attached file's bytes come back
 with `workbook show <task> --get-attachment <attachment>`, on standard output or
 into the file `--out` names:
 
@@ -565,6 +616,8 @@ everything Workbook decides by identity:
 - `workbook next` skips tasks held by anybody other than it, and `next --claim`
   claims for it;
 - only that name, or whoever recorded an assignment, may remove the assignment;
+- only that name may edit a comment recorded under it, and `show --json`
+  answers `editable` for it;
 - `workbook serve` records the board's edits under it, and the board's empty
   **Assign someone** field assigns to it.
 
@@ -2540,6 +2593,8 @@ PATCH /api/display                       record the project's name and colors;
                                          the body states all three, an empty
                                          value clears a setting, and only what
                                          changed is recorded
+GET /api/tasks/<id>            the task as `workbook show --json` gives it, for
+                              the request's person
 GET /api/tasks/<id>/history   versioned change log and status lifecycle JSON
 POST /api/tasks               create a task
 PATCH /api/tasks/<id>         update task fields
@@ -2585,7 +2640,22 @@ answers with. They also refuse two things only a request can be wrong about — 
 have no flag to be the counterpart of. Each takes an optional `expectedHead` and
 answers with the whole task, thread and attachment list included, the way every
 other task mutation does; the two removals also accept no body at all, which is
-the bare verb.
+the bare verb. An edit of somebody else's comment is refused with a `400` and
+category `validation`, and nothing is recorded.
+
+Whether a comment is yours is a question about the reader, so the board answers
+it on the server for the person each request acts for — the person
+`WORKBOOK_ACTOR` named when `serve` started, or else the serving checkout's
+`user.email` — and never from anything the page decides. The three comment
+routes answer with an `editableComments` array beside the task: the
+identifiers of its comments that person may edit, `[]` when there are none.
+The poll's `presentation` carries the same `editableComments` for each task,
+leaving it out when there are none. `GET /api/tasks/<id>` answers
+`{"format":"workbook.task","version":1,"task":…}`, where `task` is what
+`workbook show --json` prints for that person, without a change log: each
+comment with `editable`, `editedBy` and `editorNotRecorded`, and
+`removedComments`. A board built
+without the edit route answers every comment as not editable.
 
 The two assignment mutations are `workbook update --assign` and `--unassign`
 reached over HTTP, through the same planners and the same refusals. Both take an
@@ -3226,8 +3296,13 @@ empty again; the New Task form's staged list works the same way, its buttons
 reading **Choose files** and **Add**. An empty
 list draws only its heading and controls. The
 thread is drawn oldest first, each comment carrying its author, when it was
-written, and whether it has been edited since, with an Edit and a Remove on each
-one and a box for adding another. Comment bodies render as markdown, in the
+written, and whether it has been edited since — and by whom, when that was not
+its author, or that the history no longer records who, for an edit made before
+the task was compacted — with a Remove on each one, an Edit only on your own,
+and a box for adding another. A removed comment stays in its place as one quieter line naming
+whose it was and who removed it when, without its text. The page reads those
+lines from `GET /api/tasks/<id>`, once when it opens and again whenever the
+task changes. Comment bodies render as markdown, in the
 subset documented below.
 
 None of these is drawn optimistically the way a board drag is. A comment's
@@ -3236,7 +3311,10 @@ so there is nothing for a client to paint in advance; each change is sent with
 the tip the page read, and the thread the answer carries is what is drawn. A
 refusal is reported in the section it was made in and keeps the text you typed;
 a tip that has moved on is re-based, so saving again applies your change to the
-version the server holds. A file too large to attach is refused before it is
+version the server holds. The one exception is an edit whose comment somebody
+removed while you were editing it: no save can succeed, so the form says it
+was removed and by whom, drops its Save, and keeps what you typed in the box
+for you to copy. A file too large to attach is refused before it is
 read or sent, naming the ceiling, and the server enforces the same one. The
 board's cards say nothing about either section: a card is an identifier, a
 title, and its labels.

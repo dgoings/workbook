@@ -612,7 +612,7 @@ func writeList(output io.Writer, tasks []core.Task) error {
 }
 
 func writeShowDetail(output io.Writer, detail core.TaskDetail) {
-	writeShow(output, detail.Task)
+	writeShowThread(output, detail.Task, detail.Comments, detail.RemovedComments)
 	if detail.History != nil {
 		writeChangeLog(output, *detail.History)
 	}
@@ -734,7 +734,17 @@ func writeHistoryTruncation(output io.Writer, truncation *core.HistoryTruncation
 	fmt.Fprintf(output, "Truncated at %s: %s\n", truncation.Commit, truncation.Message)
 }
 
+// writeShow prints a task the way `show` does, with its live thread and no
+// trace of removals: the callers that print a bare task have read no history
+// to derive one from.
 func writeShow(output io.Writer, task core.Task) {
+	writeShowThread(output, task, core.CommentTrace{}.Thread(task.Comments, ""), nil)
+}
+
+// writeShowThread prints a task with the thread as one reader is shown it:
+// each live comment with whoever edited it when that was not its author, and
+// a line for each removed one saying who removed it.
+func writeShowThread(output io.Writer, task core.Task, comments []core.ThreadComment, removed []core.RemovedComment) {
 	fmt.Fprintf(output, "ID:\t%s\n", task.ID)
 	fmt.Fprintf(output, "Project ID:\t%s\n", task.ProjectID)
 	fmt.Fprintf(output, "Title:\t%s\n", singleLine(task.Title))
@@ -750,7 +760,7 @@ func writeShow(output io.Writer, task core.Task) {
 	fmt.Fprintf(output, "Deleted:\t%t\n", task.Deleted)
 	fmt.Fprintf(output, "History Generation:\t%s\n", task.HistoryGeneration)
 	fmt.Fprintf(output, "Head:\t%s\n", task.Head)
-	writeComments(output, task.Comments)
+	writeComments(output, comments, removed)
 	writeAttachments(output, task.Attachments)
 }
 
@@ -772,13 +782,23 @@ func writeShow(output io.Writer, task core.Task) {
 // ULID opens with ten characters of millisecond timestamp and is random after
 // that, so anything shorter than eleven characters is shared outright by two
 // items minted in the same millisecond, which one pack's are.
-func writeComments(output io.Writer, comments []core.Comment) {
-	if len(comments) == 0 {
+//
+// A removed comment keeps its place in the thread — identifier order is
+// creation order, live or not — as an attribution line with no body, ending
+// in who removed it and when. Its text is not printed: removing a comment
+// hides what it said from the thread, and `show --history` is where the
+// history still holds it.
+func writeComments(output io.Writer, comments []core.ThreadComment, removed []core.RemovedComment) {
+	if len(comments) == 0 && len(removed) == 0 {
 		return
 	}
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Comments:")
+	next := 0
 	for _, comment := range comments {
+		for ; next < len(removed) && removed[next].ID < comment.ID; next++ {
+			writeRemovedComment(output, removed[next])
+		}
 		fmt.Fprintf(output, "\t%s\t%s\t%s%s\n",
 			comment.ID,
 			singleLine(comment.Author),
@@ -793,14 +813,40 @@ func writeComments(output io.Writer, comments []core.Comment) {
 			fmt.Fprintf(output, "\t\t%s\n", line)
 		}
 	}
+	for ; next < len(removed); next++ {
+		writeRemovedComment(output, removed[next])
+	}
+}
+
+func writeRemovedComment(output io.Writer, removal core.RemovedComment) {
+	fmt.Fprintf(output, "\t%s\t%s\t%s\t(removed %s by %s)\n",
+		removal.ID,
+		singleLine(removal.Author),
+		removal.CreatedAt.Format(time.RFC3339),
+		removal.RemovedAt.Format(time.RFC3339),
+		singleLine(removal.RemovedBy),
+	)
 }
 
 // editedMarker states that a comment no longer reads as it was written, and
 // when it changed. The presence of the time is the flag, exactly as it is in
 // the stored document, so there is no second spelling of the same fact.
-func editedMarker(comment core.Comment) string {
+//
+// It names the editor only when that was somebody other than the author. Only
+// the author may edit a comment now, but a history can hold an edit made
+// before that rule or by a build without it, and a comment shown under its
+// author's name over somebody else's words has to say so. When the history no
+// longer records who made the edit — it came before the task was compacted —
+// the marker says that instead, for the same reason.
+func editedMarker(comment core.ThreadComment) string {
 	if !comment.Edited() {
 		return ""
+	}
+	if comment.EditorNotRecorded {
+		return "\t(edited " + comment.EditedAt.Format(time.RFC3339) + ", editor not recorded)"
+	}
+	if comment.EditedByOther() {
+		return "\t(edited " + comment.EditedAt.Format(time.RFC3339) + " by " + singleLine(comment.EditedBy) + ")"
 	}
 	return "\t(edited " + comment.EditedAt.Format(time.RFC3339) + ")"
 }

@@ -154,7 +154,11 @@
       // said out loud, because these panels have no queue to re-base them; a
       // change that outlives the page it was made on follows the reader to the
       // notice, exactly as a detached save does.
-      async function writeThreadChange(panel, method, path, values, describe) {
+      //
+      // refusal, when given, may put its own words in place of a refusal's:
+      // it is asked once the panel has redrawn from the task the server
+      // holds, and a non-empty answer is reported instead.
+      async function writeThreadChange(panel, method, path, values, describe, refusal) {
         panel.setBusy(true);
         panel.report("");
         try {
@@ -194,12 +198,12 @@
             }
             const held = projectTasks(latestTasks).find((candidate) => candidate.id === panel.taskID);
             if (held) panel.follow(held);
-            panel.report(rebase.boardRead
+            panel.report((refusal && refusal(error)) || (rebase.boardRead
               ? "That task changed elsewhere, so " + describe + " was not saved. This list now shows the version the server holds; try again."
-              : "That task changed elsewhere and the board could not be refreshed, so " + describe + " was not saved. Try again once the board is current.");
+              : "That task changed elsewhere and the board could not be refreshed, so " + describe + " was not saved. Try again once the board is current."));
             return null;
           }
-          panel.report(error instanceof Error ? error.message : "That change failed.");
+          panel.report((refusal && refusal(error)) || (error instanceof Error ? error.message : "That change failed."));
           return null;
         } finally {
           panel.setBusy(false);
@@ -666,9 +670,56 @@
           }
         };
       }
-      function commentAttribution(comment) {
-        const written = attribution(comment.author, comment.createdAt);
-        return comment.editedAt ? written + " · edited " + recordedAt(comment.editedAt) : written;
+      // A comment's attribution, naming whoever made its latest edit when that
+      // was not its author. Only the author may edit a comment now, but a
+      // history can hold an edit made before that rule, or by a build without
+      // it, and somebody else's words drawn under the author's name have to
+      // say whose they are. The editor comes from the task answer, for the
+      // edit the comment records and no other. When that answer says the
+      // history no longer records who made the edit — it came before the task
+      // was compacted — the attribution says so, for the same reason.
+      //
+      // Every name in it is somebody's asserted identity, which can hold
+      // anything, so each is drawn as one clean line (shownLine); the
+      // comparison is between the names as recorded.
+      function commentAttribution(comment, edit) {
+        const written = attribution(shownLine(comment.author), comment.createdAt);
+        if (!comment.editedAt) return written;
+        const edited = written + " · edited " + recordedAt(comment.editedAt);
+        const traced = edit && edit.editedAt === comment.editedAt ? edit : null;
+        if (traced && traced.editorNotRecorded) return edited + " · editor not recorded";
+        const editor = traced ? traced.editedBy : "";
+        return editor && editor !== comment.author ? edited + " by " + shownLine(editor) : edited;
+      }
+      // What an edit form says once the comment under it has been removed:
+      // that it was, by whom when the history says, and that the words typed
+      // are still there to copy. It invites no retry, because no save of a
+      // removed comment can ever succeed.
+      function removedUnderEdit(removal) {
+        const by = removal && shownLine(removal.removedBy)
+          ? " by " + shownLine(removal.removedBy) + " · " + recordedAt(removal.removedAt)
+          : "";
+        return "This comment was removed" + by + ", so this edit cannot be saved. " +
+          "Your text is still in the box if you want to copy it.";
+      }
+      // Which of a task's comments the reader may edit, from an answer that
+      // carries it: the poll's presentation or a comment route's answer. It is
+      // the server's answer for the person the request was made as — the page
+      // never decides it by comparing names, because the page does not know
+      // who it is being read as.
+      function editableComments(view) {
+        return new Set(view && Array.isArray(view.editableComments) ? view.editableComments : []);
+      }
+      // The task as `workbook show --json` gives it, which is where what the
+      // history says about the thread comes from: who removed each removed
+      // comment, and who made each comment's latest edit.
+      async function readTaskDetail(taskID) {
+        const response = await fetch("/api/tasks/" + encodeURIComponent(taskID), { cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok || payload.format !== "workbook.task" || payload.version !== 1 || !payload.task) {
+          throw new Error(payload.error && payload.error.message || "This task could not be read.");
+        }
+        return payload.task;
       }
       // The comment thread: oldest first, which is the order the server sends —
       // a comment's identifier is the ULID of the operation that recorded it, so
@@ -703,6 +754,47 @@
         // Rebuilding it would take the sentence they are in the middle of with
         // it, and a poll lands once a second.
         const editing = new Map();
+        // Which comments carry an Edit: see editableComments.
+        let editable = editableComments(latestPresentation.get(taskID));
+        // What the history says beyond the live thread, as of the task answer
+        // last read: the removed comments, and each live comment's latest
+        // editor. Only a change to the task can change either, so it is read
+        // again when the task's head moves and at no other time; traceHead is
+        // the head the latest read was asked for, so an answer that lands
+        // after a newer one was asked for is dropped.
+        let removed = [];
+        let edits = new Map();
+        let traceHead = "";
+        function readTrace(head) {
+          if (!head || head === traceHead) return;
+          traceHead = head;
+          readTaskDetail(taskID).then((detail) => {
+            if (traceHead !== head || !main.contains(panel.section)) return;
+            removed = Array.isArray(detail.removedComments) ? detail.removedComments : [];
+            // A refusal already reported for a comment removed under its form
+            // is said again now that the history may name who removed it.
+            editing.forEach((entry, id) => {
+              if (removedSince(id) && panel.status.textContent === removedUnderEdit(null)) {
+                panel.report(removedUnderEdit(removalOf(id)));
+              }
+            });
+            edits = new Map((Array.isArray(detail.comments) ? detail.comments : [])
+              .filter((comment) => comment.editedBy || comment.editorNotRecorded).map((comment) => [comment.id, comment]));
+            render();
+          }).catch(() => {
+            // Asked again with the next poll. The thread is still drawn; it
+            // only goes without the trace until a read succeeds.
+            if (traceHead === head) traceHead = "";
+          });
+        }
+        // Whether a comment the reader opened has left the thread, and what
+        // the history says about its removal when it says anything.
+        function removedSince(commentID) {
+          return !comments.some((comment) => comment.id === commentID);
+        }
+        function removalOf(commentID) {
+          return removed.find((removal) => removal.id === commentID) || null;
+        }
         function commentPath(commentID) {
           return "/api/tasks/" + encodeURIComponent(taskID) + "/comments/" + encodeURIComponent(commentID);
         }
@@ -712,7 +804,7 @@
           row.dataset.commentId = comment.id;
           const written = document.createElement("p");
           written.className = "comment__attribution";
-          text(written, commentAttribution(comment));
+          text(written, commentAttribution(comment, edits.get(comment.id)));
           // A div rather than a paragraph, because what goes in it may be
           // several paragraphs, a list or a fenced block, and none of those may
           // nest inside a <p>. The class and the marker are unchanged.
@@ -727,8 +819,15 @@
           renderMarkdown(bodyText, comment.body || "", { taskID, attachments });
           const rowActions = document.createElement("div");
           rowActions.className = "comment__actions";
-          const edit = panel.claim(threadButton("Edit"));
-          edit.addEventListener("click", () => beginEdit(comment));
+          // Edit only on the reader's own comments, because only a comment's
+          // author may change what it says and the server refuses anybody
+          // else. Remove is on every comment: anybody may remove one, and the
+          // thread then says who did.
+          if (editable.has(comment.id)) {
+            const edit = panel.claim(threadButton("Edit"));
+            edit.addEventListener("click", () => beginEdit(comment));
+            rowActions.append(edit);
+          }
           // Removal is immediate, like every other removal on this page: the
           // Delete beside it, a label chiclet, a relationship row. What makes
           // that safe here is that a comment is history — removing one hides it
@@ -736,8 +835,27 @@
           const remove = panel.claim(threadButton("Remove"));
           remove.addEventListener("click", () => writeThreadChange(
             panel, "DELETE", commentPath(comment.id), headed(head, {}), "that removal"));
-          rowActions.append(edit, remove);
+          rowActions.append(remove);
           row.append(written, bodyText, rowActions);
+          return row;
+        }
+        // A removed comment keeps its place in the thread as one line: whose
+        // it was, when it was written, and who removed it when. What it said
+        // is not drawn — removing a comment takes its words out of the
+        // thread, and the change log below is where the history still holds
+        // them.
+        function removedRow(removal) {
+          const row = document.createElement("li");
+          row.className = "comment comment--removed";
+          row.dataset.commentId = removal.id;
+          row.dataset.commentRemoved = "";
+          const written = document.createElement("p");
+          written.className = "comment__attribution";
+          text(written, attribution(shownLine(removal.author), removal.createdAt));
+          const note = document.createElement("p");
+          note.className = "comment__removed";
+          text(note, "Removed by " + (shownLine(removal.removedBy) || "somebody") + " · " + recordedAt(removal.removedAt));
+          row.append(written, note);
           return row;
         }
         function beginEdit(comment) {
@@ -748,7 +866,7 @@
           row.dataset.commentEditing = "";
           const written = document.createElement("p");
           written.className = "comment__attribution";
-          text(written, commentAttribution(comment));
+          text(written, commentAttribution(comment, edits.get(comment.id)));
           const editor = document.createElement("div");
           editor.className = "comment__editor";
           const area = document.createElement("textarea");
@@ -768,7 +886,13 @@
               return;
             }
             const answer = await writeThreadChange(
-              panel, "PATCH", commentPath(comment.id), headed(head, { body: area.value }), "that edit");
+              panel, "PATCH", commentPath(comment.id), headed(head, { body: area.value }), "that edit",
+              // A save refused because the comment is gone says that, rather
+              // than the refusal's own "try again": the comment was removed
+              // underneath the form, and no retry can save it.
+              (error) => removedSince(comment.id) || (error && error.category === "not-found")
+                ? removedUnderEdit(removalOf(comment.id))
+                : "");
             if (!answer) return;
             editing.delete(comment.id);
             render();
@@ -780,24 +904,40 @@
           editActions.append(save, cancel);
           editor.append(area, editActions);
           row.append(written, editor, note);
-          editing.set(comment.id, { row, area, note, buttons: [save, cancel] });
+          editing.set(comment.id, { row, written, area, note, save, buttons: [save, cancel] });
           render();
           area.focus();
         }
         function render() {
           panel.resetControls();
           const known = new Set(comments.map((comment) => comment.id));
-          const rows = comments.map((comment, at) => {
+          // Removed comments go in among the live ones by identifier, which is
+          // creation order. One the reader is still editing is drawn as that
+          // row instead, below, so it is not drawn twice.
+          const traces = removed.filter((removal) => !known.has(removal.id) && !editing.has(removal.id));
+          const rows = [];
+          let next = 0;
+          comments.forEach((comment) => {
+            for (; next < traces.length && traces[next].id < comment.id; next++) rows.push(removedRow(traces[next]));
             const entry = editing.get(comment.id);
-            if (!entry) return commentRow(comment);
+            if (!entry) {
+              rows.push(commentRow(comment));
+              return;
+            }
             // Where this comment stands in the thread, remembered while it is
             // still in it. It is what puts the row back in the same place if it
             // stops being in it, below.
-            entry.at = at;
+            entry.at = rows.length;
+            // The attribution follows the thread, so who edited the comment
+            // appears once the task answer that says so lands, even on a form
+            // opened before it did. Only the line above the box is redrawn;
+            // what the reader has typed is not touched.
+            text(entry.written, commentAttribution(comment, edits.get(comment.id)));
             text(entry.note, "");
             entry.buttons.forEach((button) => panel.claim(button));
-            return entry.row;
+            rows.push(entry.row);
           });
+          for (; next < traces.length; next++) rows.push(removedRow(traces[next]));
           // A comment being edited that has left the thread — removed by another
           // clone, or by this reader somewhere else — keeps its row rather than
           // taking the words in it away mid-sentence. It says what happened, and
@@ -806,10 +946,14 @@
           // It keeps its place, too. Appended to the end, the row jumped down the
           // page under the caret of somebody mid-sentence, which is the one thing
           // keeping the row was for.
+          //
+          // Its Save goes, since nothing can save it now, and Cancel stays to
+          // close the form once the reader has what they typed.
           editing.forEach((entry, id) => {
             if (known.has(id)) return;
-            text(entry.note, "This comment was removed elsewhere. Your edit is kept here, but saving it would be refused.");
-            entry.buttons.forEach((button) => panel.claim(button));
+            text(entry.note, removedUnderEdit(removalOf(id)));
+            entry.save.hidden = true;
+            entry.buttons.forEach((button) => { if (button !== entry.save) panel.claim(button); });
             const at = typeof entry.at === "number" ? Math.min(entry.at, rows.length) : rows.length;
             rows.splice(at, 0, entry.row);
           });
@@ -817,7 +961,23 @@
           panel.setCount(comments.length === 1 ? "1 comment" : comments.length + " comments");
           text(panel.empty, "Nothing has been said about this task yet.");
           panel.empty.hidden = rows.length > 0;
+          // Putting the rows back moves an open edit row out of the document
+          // and in again, and a browser blurs whatever is focused inside a
+          // node that leaves it. A redraw while somebody types — the task
+          // answer landing, a teammate's comment arriving — would then drop
+          // their next keystrokes, so the box they were typing in gets its
+          // focus and caret back.
+          const active = document.activeElement;
+          const typing = active && active.dataset && "commentEditor" in active.dataset && panel.list.contains(active)
+            ? { box: active, start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection }
+            : null;
           panel.list.replaceChildren(...rows);
+          if (typing && panel.list.contains(typing.box) && document.activeElement !== typing.box) {
+            typing.box.focus({ preventScroll: true });
+            if (typeof typing.start === "number" && typeof typing.box.setSelectionRange === "function") {
+              typing.box.setSelectionRange(typing.start, typing.end, typing.direction);
+            }
+          }
         }
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
@@ -831,11 +991,17 @@
             headed(head, { body: body.value }), "your comment");
           if (answer) body.value = "";
         });
-        panel.follow = (held) => {
+        // Followed with the task and, beside it, whatever answer says which
+        // comments the reader may edit: the poll's presentation for this task,
+        // or a comment route's answer. A follow with neither — a refusal
+        // re-reading the board — keeps to the last poll's.
+        panel.follow = (held, view) => {
           comments = (held && held.comments) || [];
           attachments = (held && held.attachments) || [];
+          editable = editableComments(view && Array.isArray(view.editableComments) ? view : latestPresentation.get(taskID));
           render();
+          readTrace(held && held.head);
         };
-        panel.follow(task);
+        panel.follow(task, latestPresentation.get(taskID));
         return panel;
       }

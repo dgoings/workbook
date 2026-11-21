@@ -335,6 +335,10 @@
        Still no innerHTML anywhere — the formatting is built as nodes. */
     .comment__body { margin: 0; font-size: .84rem; line-height: 1.45; overflow-wrap: anywhere; }
     .comment__note { margin: 0; color: var(--wb-warning-ink); font-size: .74rem; }
+    /* A removed comment is a line in the thread rather than a card: whose it
+       was and who removed it, drawn quieter than the comments still in it. */
+    .comment--removed { background: var(--wb-surface-3); border-style: dashed; }
+    .comment__removed { margin: 0; color: var(--wb-ink-muted); font-size: .78rem; font-style: italic; overflow-wrap: anywhere; }
     .comment__actions { display: flex; flex-wrap: wrap; gap: .4rem; }
     .comment__editor { display: grid; gap: .35rem; }
     .comment__editor textarea, .comment-add textarea { width: 100%; min-height: 4.5rem; border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); color: var(--wb-text); font: inherit; font-size: .84rem; line-height: 1.45; padding: .5rem .6rem; resize: vertical; }

@@ -804,7 +804,7 @@ func runShow(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		return err
 	}
 
-	service, releaseProjection, err := openReadService(ctx, cwd, stderr)
+	service, releaseProjection, err := openReadServiceAsReader(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
@@ -2140,6 +2140,16 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			result, err := writer.FreeMutation(requestContext, id, dependency)
 			return publisher.publish(requestContext, result, err)
 		},
+		// The task page reads its thread's removals, and who may edit each
+		// comment, from the task as `workbook show` reads it. The request's
+		// context carries the person, so ShowDetail answers for them.
+		Detail: func(requestContext context.Context, id string) (core.TaskDetail, error) {
+			reader, err := current(requestContext)
+			if err != nil {
+				return core.TaskDetail{}, err
+			}
+			return reader.ShowDetail(requestContext, id, core.ShowOptions{})
+		},
 		// The board's detail view shows history by default and derives a status
 		// lane that reaches back to the task's creation, so it reads the whole
 		// chain rather than the CLI's ten-change default window.
@@ -2700,9 +2710,33 @@ func openServiceParts(
 // openReadService also returns the release that closes the projection the
 // service reads through; see openProjection.
 func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Service, func(), error) {
-	repository, config, err := openRepository(ctx, cwd, stderr)
+	service, _, release, err := openReadServiceWithRepository(ctx, cwd, stderr)
+	return service, release, err
+}
+
+// openReadServiceAsReader is a read service that also knows who is reading:
+// the person WORKBOOK_ACTOR names, or else this checkout's `user.email`.
+//
+// Only `show` asks, because only `show` answers a question about the reader —
+// which comments they may edit — and the checkout's identity costs a Git
+// call the other reads have no use for. A checkout with no identity reads as
+// nobody, who may edit nothing; that is the answer the write service would
+// give, since it refuses to record anything without one.
+func openReadServiceAsReader(ctx context.Context, cwd string, stderr io.Writer) (core.Service, func(), error) {
+	service, repository, release, err := openReadServiceWithRepository(ctx, cwd, stderr)
 	if err != nil {
 		return core.Service{}, nil, err
+	}
+	if actor, err := repository.Actor(ctx); err == nil {
+		service.Actor = actor
+	}
+	return service, release, nil
+}
+
+func openReadServiceWithRepository(ctx context.Context, cwd string, stderr io.Writer) (core.Service, *gitstore.Repository, func(), error) {
+	repository, config, err := openRepository(ctx, cwd, stderr)
+	if err != nil {
+		return core.Service{}, nil, nil, err
 	}
 	// Both configured vocabularies, from one read, exactly as the write
 	// service above opens on both. A read service that loaded only the statuses
@@ -2711,13 +2745,13 @@ func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Se
 	// use.
 	state, err := repository.LoadVocabularyState(ctx, config)
 	if err != nil {
-		return core.Service{}, nil, err
+		return core.Service{}, nil, nil, err
 	}
 	// Opened last, after the read above that can fail, for the reason
 	// openServiceParts opens it last.
 	store, release, err := openProjection(ctx, repository, config)
 	if err != nil {
-		return core.Service{}, nil, err
+		return core.Service{}, nil, nil, err
 	}
 	return core.Service{
 		Config:     config,
@@ -2735,7 +2769,7 @@ func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Se
 		BlobReads: repository,
 		IDs:       core.CryptoULIDSource{Now: recordedNow},
 		Now:       recordedNow,
-	}, release, nil
+	}, repository, release, nil
 }
 
 // openRepository opens the repository a command runs against and loads its
