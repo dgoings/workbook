@@ -527,14 +527,17 @@ func TestBoardRefusesAReadItHasNoRoomToHoldButNeverAWritesAnswer(t *testing.T) {
 	// the connection cap times the largest answer, which for a board's task
 	// list has no ceiling at all.
 	bounds := defaultTransferLimits()
-	const stuck = 16 << 20
-	bounds.answerBytes = stuck
+	bounds.answerBytes = 1 << 20
 	stack, address := startBoardStack(t, newTransferRoutes(), WorkLimits{MaxRequests: 4}, bounds)
 
-	// An answer the reader never takes, filling the budget.
-	reader := rawRequest(t, address, http.MethodGet, "/answer/"+strconv.Itoa(stuck+transferChunk), -1, nil)
-	awaitTransfers(t, stack.transfers, "the budget full", func(state transferState) bool {
-		return state.Delivering == 1 && state.AnswerBytes == stuck
+	// A write's answer the reader never takes. It is held whatever the budget
+	// says, and it is far larger than anything the operating system takes
+	// into the connection's buffers, so the board still holds more of it than
+	// the whole budget.
+	const stuck = 16 << 20
+	reader := rawRequest(t, address, http.MethodPost, "/write/"+strconv.Itoa(stuck), 2, []byte(`{}`))
+	awaitTransfers(t, stack.transfers, "the budget overfull", func(state transferState) bool {
+		return state.Delivering == 1 && state.AnswerBytes >= bounds.answerBytes
 	})
 
 	response, err := http.Get("http://" + address + "/answer/" + strconv.Itoa(3*transferChunk))
@@ -551,13 +554,67 @@ func TestBoardRefusesAReadItHasNoRoomToHoldButNeverAWritesAnswer(t *testing.T) {
 	if write.StatusCode != http.StatusOK || len(written) != len("read 2\n")+3*transferChunk {
 		t.Fatalf("a write's answer beside a full budget = %d with %d bytes, want it whole", write.StatusCode, len(written))
 	}
-	if state := stack.transfers.state(); state.Delivering != 1 || state.AnswerBytes != stuck {
-		t.Fatalf("transfers after the write = %+v, want the stalled answer alone", state)
+	if state := stack.transfers.state(); state.Delivering != 1 || state.AnswerBytes < bounds.answerBytes {
+		t.Fatalf("transfers after the write = %+v, want the stalled answer alone, still over the budget", state)
 	}
 	reader.Close()
 	awaitTransfers(t, stack.transfers, "the budget given back", func(state transferState) bool {
 		return state.Delivering == 0 && state.AnswerBytes == 0
 	})
+}
+
+// takingConnection is the connection an answer is written to, recording how
+// much of the answer budget is held each time a chunk is handed to it.
+type takingConnection struct {
+	header http.Header
+	status int
+	taken  int
+	held   []int64
+	budget *byteBudget
+}
+
+func (connection *takingConnection) Header() http.Header              { return connection.header }
+func (connection *takingConnection) WriteHeader(status int)           { connection.status = status }
+func (connection *takingConnection) FlushError() error                { return nil }
+func (connection *takingConnection) SetWriteDeadline(time.Time) error { return nil }
+func (connection *takingConnection) Write(content []byte) (int, error) {
+	connection.held = append(connection.held, connection.budget.current())
+	connection.taken += len(content)
+	return len(content), nil
+}
+
+func TestAnswerGivesBackEachChunkOnceTheConnectionHasTakenIt(t *testing.T) {
+	t.Parallel()
+	// Production mutation: an answer that keeps its whole budget until the
+	// last byte is written. The operating system takes most of a megabyte
+	// into a connection's buffers at once, so a reader that never reads
+	// holds almost nothing in the board, yet held a megabyte of the budget
+	// for over two minutes: 32 of them refused every larger read for everyone.
+	board := newTransfers(defaultTransferLimits())
+	const chunks = 6
+	answer := &heldAnswer{header: make(http.Header), body: heldBytes{size: transferChunk, budget: &board.answers}, refusable: true}
+	if _, err := answer.Write(bytes.Repeat([]byte("a"), chunks*transferChunk)); err != nil || answer.refused {
+		t.Fatalf("hold the answer: %v, refused %v", err, answer.refused)
+	}
+	if held := board.answers.current(); held != (chunks-1)*transferChunk {
+		t.Fatalf("answer budget while held = %d, want %d: every chunk but the first", held, (chunks-1)*transferChunk)
+	}
+	connection := &takingConnection{header: make(http.Header), budget: &board.answers}
+	board.send(connection, http.NewResponseController(connection), answer)
+	if connection.taken != chunks*transferChunk {
+		t.Fatalf("the connection took %d bytes, want %d", connection.taken, chunks*transferChunk)
+	}
+	// The first chunk was never counted; each later one is given back once the
+	// connection has taken it, so the budget falls a chunk at a time.
+	want := []int64{5, 5, 4, 3, 2, 1}
+	for index, held := range connection.held {
+		if held != want[index]*transferChunk {
+			t.Fatalf("budget held as each chunk was handed over = %v chunks of %d, want %v", connection.held, transferChunk, want)
+		}
+	}
+	if held := board.answers.current(); held != 0 {
+		t.Fatalf("budget after the whole answer was taken = %d, want 0", held)
+	}
 }
 
 func TestBoardClosesIdleConnectionsToMakeRoomAndOtherwiseWaits(t *testing.T) {

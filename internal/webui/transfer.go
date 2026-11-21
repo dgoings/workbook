@@ -34,7 +34,12 @@ import (
 //     does not fit is answered 503 with Retry-After instead; a write's answer
 //     always fits, because the change it reports has been made.
 //  3. Delivering. The turn has been given back. The answer is written to the
-//     connection at the pace below, and a too-slow reader is cut off.
+//     connection at the pace below, each chunk giving back its share of
+//     answerBytes as the connection takes it, and a too-slow reader is cut
+//     off. So the budget counts what the board itself still holds: the
+//     operating system takes much of an answer into the connection's buffers
+//     at once, and a reader that never reads would otherwise keep the whole of
+//     it counted until it was cut off.
 //
 // A body is paced by two rules: no pause longer than transferStall, and after
 // an allowance of transferAllowance, no slower than transferRate on average.
@@ -340,7 +345,7 @@ func (board *transfers) send(writer http.ResponseWriter, control *http.ResponseC
 	_ = control.SetWriteDeadline(schedule.deadline(min(limits.chunk, length)))
 	writer.WriteHeader(status)
 	if bodyAllowed {
-		for _, chunk := range chunks {
+		for index, chunk := range chunks {
 			_ = control.SetWriteDeadline(schedule.deadline(len(chunk)))
 			if _, err := writer.Write(chunk); err != nil {
 				panic(http.ErrAbortHandler)
@@ -351,6 +356,10 @@ func (board *transfers) send(writer http.ResponseWriter, control *http.ResponseC
 				panic(http.ErrAbortHandler)
 			}
 			schedule.done += int64(len(chunk))
+			if !answer.refused {
+				// The connection has it now, so the board no longer does.
+				answer.body.giveBack(index)
+			}
 		}
 	}
 	if err := control.Flush(); err != nil {
@@ -411,6 +420,19 @@ func (held *heldBytes) reader() io.Reader {
 		readers[index] = bytes.NewReader(chunk)
 	}
 	return io.MultiReader(readers...)
+}
+
+// giveBack gives up chunk index once it is no longer needed, and the budget
+// it was counted against with it.
+func (held *heldBytes) giveBack(index int) {
+	if held.chunks[index] == nil {
+		return
+	}
+	held.chunks[index] = nil
+	if index > 0 {
+		held.budget.give(int64(held.size))
+		held.reserved -= int64(held.size)
+	}
 }
 
 func (held *heldBytes) release() {
