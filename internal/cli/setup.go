@@ -38,6 +38,10 @@ type setupTasksOnly struct {
 	// Changed names each Git setting this run wrote. A run in a folder that
 	// was already set up reports an empty list.
 	Changed []string `json:"changed"`
+	// restored names the settings in Changed that held a different value
+	// before this run, as opposed to being absent. Only the text output tells
+	// the two apart.
+	restored []string
 	// Actor is the address later edits in this folder are recorded under, or
 	// empty when none is configured. Setup records nothing itself, so it
 	// needs none; every command that edits a task does.
@@ -153,7 +157,7 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 		if err := validateTasksOnlyFlags(*noSync, *skillDir, *force); err != nil {
 			return err
 		}
-		prepared, err := gitstore.PrepareTasksOnlyFolder(ctx, cwd, *tasksOnlyURL)
+		prepared, err := gitstore.PrepareTasksOnlyFolder(ctx, cwd, *tasksOnlyURL, *key)
 		if err != nil {
 			return err
 		}
@@ -269,6 +273,7 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 			Remote:      tasksOnly.Remote,
 			Initialized: tasksOnly.Initialized,
 			Changed:     tasksOnly.Changed,
+			restored:    tasksOnly.Restored,
 			Actor:       actor,
 			Unavailable: append([]string(nil), tasksOnlyUnavailableCommands...),
 		}
@@ -457,7 +462,26 @@ func tasksOnlyModeDescription(report setupTasksOnly) string {
 	case report.Initialized:
 		return "created; branches and code are never fetched"
 	case len(report.Changed) > 0:
-		return "restored " + strings.Join(report.Changed, ", ")
+		restored := make(map[string]bool, len(report.restored))
+		for _, name := range report.restored {
+			restored[name] = true
+		}
+		var set, put []string
+		for _, name := range report.Changed {
+			if restored[name] {
+				put = append(put, name)
+			} else {
+				set = append(set, name)
+			}
+		}
+		var parts []string
+		if len(set) > 0 {
+			parts = append(parts, "set "+strings.Join(set, ", "))
+		}
+		if len(put) > 0 {
+			parts = append(parts, "restored "+strings.Join(put, ", "))
+		}
+		return strings.Join(parts, "; ")
 	default:
 		return "already set up; nothing changed"
 	}

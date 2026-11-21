@@ -84,16 +84,23 @@ before anyone runs it; see Compatibility across versions below.
   `^refs/*`, so a plain `git fetch` or `git pull` in it downloads nothing, and
   setup never reads the remote's default branch to find the project. It joins
   a project whose identity the remote already publishes and never creates one.
-  It refuses a folder that holds files or a repository it did not set up, and
-  asks the remote before creating anything. Agent documentation and the skill
-  are skipped, and `workbook docs` and `workbook hooks install` refuse in the
-  folder with exit `5`. The marker is `workbook.tasksOnly` in the folder's own
-  Git settings. Running setup again, with or without `--tasks-only`, changes
-  nothing and reports success, or restores a setting somebody changed and
-  names it. Setup needs no `user.email`; edits made there do. `--json` reports
-  the run in a `tasksOnly` object.
+  It refuses a folder that holds files, a repository it did not set up, or a
+  Git folder whose object format differs from the remote's, and asks the
+  remote, including whether a given `--key` is its founding key, before
+  creating anything. The URL is compared exactly; to change it, run `git
+  config remote.origin.url <url>` in the folder and set up again. Agent
+  documentation and the skill are skipped, and `workbook docs` and `workbook
+  hooks install` refuse in the folder with exit `5`. The marker is
+  `workbook.tasksOnly` in the folder's own Git settings, and only there: the
+  same setting in global Git configuration or the environment is ignored.
+  Running setup again, with or without `--tasks-only`, changes nothing and
+  reports success, or restores a setting somebody changed and names it. Setup
+  needs no `user.email`; edits made there do. `--json` reports the run in a
+  `tasksOnly` object.
 
 ### Changed
+- **Git 2.29 or later is required**, and the README now says so. Workbook's
+  fetches already used options from that release.
 - **The web board's New Task form can assign.** On a board that can record
   assignments, the form stages them beside its dependencies and attachments
   and sends them once the task exists; one the server refuses is retried from

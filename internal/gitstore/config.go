@@ -173,6 +173,9 @@ func (r *Repository) AdoptOriginProject(ctx context.Context, key string) (core.P
 		if err != nil {
 			return core.ProjectConfig{}, false, err
 		}
+		if url == "" {
+			return core.ProjectConfig{}, false, tasksOnlyFolderWithoutRemote(r.Root)
+		}
 		if _, err := probeTasksOnlyOrigin(ctx, gitPath, r.Root, url); err != nil {
 			return core.ProjectConfig{}, false, err
 		}

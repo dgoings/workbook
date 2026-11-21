@@ -175,8 +175,11 @@ fetches name the refs they want on the command line and are not narrowed by it.
 Git's default setting would fetch every branch, and leaving the refspec out
 would fetch the default branch into `FETCH_HEAD`, which `git pull` then checks
 out. A Git command that names a branch, such as `git fetch origin main`, still
-downloads it, because it asks for it explicitly. The negative refspec needs Git
-2.29 or later, the same version Workbook's own fetches already need.
+downloads it, because it asks for it explicitly. `git fetch --refetch origin`
+does not finish in the folder and has to be interrupted; it downloads nothing.
+Git does the same in any repository whose only fetch refspec is negative. The negative refspec needs Git 2.29 or
+later, which is the version Workbook needs anyway (see
+[Installation](../README.md#installation)).
 
 Setup accepts three folders:
 
@@ -191,8 +194,30 @@ Setup accepts three folders:
 
 It refuses, before changing anything, a folder that holds files, an existing
 repository it did not set up (a clone of the code, for one), an empty folder
-inside another repository, and a tasks-only folder set up for a different URL.
-Each refusal exits `5`, the same on every retry.
+inside another repository, a Git folder whose object format (SHA-1 or SHA-256)
+differs from the remote's, since Git cannot fetch between the two, and a
+tasks-only folder set up for a different URL. Each refusal exits `5`, the same
+on every retry.
+
+The URL is compared exactly as written, so another spelling of the same remote
+(`../project.git` for `/srv/git/project.git`, a trailing `/`, a `file://`
+prefix) is refused like a different remote. To give a tasks-only folder a new
+address, because the remote moved or you prefer another spelling, change it in
+the folder and run setup again:
+
+```sh
+git config remote.origin.url git@example.com:team/moved.git
+workbook setup --tasks-only git@example.com:team/moved.git
+```
+
+A plain `workbook setup` in a tasks-only folder that has no remote URL yet, as
+a first run interrupted before its last step leaves, refuses with exit `5` and
+names `workbook setup --tasks-only <url>`, which finishes it.
+
+Only the folder's own Git configuration (`git config --local`) counts. A
+`workbook.tasksOnly` set in your global or system Git settings, or supplied
+through `GIT_CONFIG_*` environment variables or `git -c`, is ignored, so it
+cannot turn an ordinary clone into a tasks-only folder.
 
 Setup asks the remote before it creates anything, so a wrong URL, an
 unreachable remote or a remote with no Workbook project leaves the empty folder
@@ -210,7 +235,8 @@ already has. `--skill-dir` and `--force` are refused because the folder installs
 no agent documentation. `--no-docs` and `--no-skill` are accepted and change
 nothing, since that is already what a tasks-only setup does. Each refusal exits
 `2`. `--key` is a claim, as in a clone: it has to agree with the project's
-founding key.
+founding key. Setup checks it against the remote before it creates or changes
+anything, so a wrong key leaves the folder as it was.
 
 Setup records nothing in task history, so it needs no author and succeeds in a
 folder with no `user.email`. Every command that edits a task does need one. The
@@ -236,7 +262,9 @@ because no documentation is installed:
 `changed` names each Git setting the run wrote, and is `[]` on a rerun that
 changed nothing. `actor` is the address edits will be recorded under, or `""`.
 `unavailable` lists the commands that refuse in this folder. The text report
-says the same in `Mode:`, `Remote:`, `Author:` and `Unavailable:` lines.
+says the same in `Mode:`, `Remote:`, `Author:` and `Unavailable:` lines. Its
+`Mode:` line also tells a setting the folder lacked, which it says it `set`,
+from one somebody had changed, which it says it `restored`.
 
 #### What is unavailable without the code
 
