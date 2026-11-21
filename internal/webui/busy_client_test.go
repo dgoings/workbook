@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -99,15 +100,25 @@ func busyClientProgram(t *testing.T, body string) string {
 setTimeout(async () => {
   await settle();
 ` + body + `
+  process.stdout.write("\n` + busyClientFinished + `\n");
 }, 0);
 `
 }
 
+// busyClientFinished is printed once a program's checks have all run. Node
+// exits cleanly when nothing is left scheduled, so a program stalled on a
+// promise nobody settles would otherwise pass without checking anything.
+const busyClientFinished = "busy-client-finished"
+
 func runBusyClient(t *testing.T, purpose, program string) {
 	t.Helper()
 	node := requireNode(t)
-	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+	output, err := nodeCommand(node, program).CombinedOutput()
+	if err != nil {
 		t.Fatalf("execute %s: %v\n%s", purpose, err, output)
+	}
+	if !strings.Contains(string(output), busyClientFinished) {
+		t.Fatalf("%s stopped before its checks finished\n%s", purpose, output)
 	}
 }
 
