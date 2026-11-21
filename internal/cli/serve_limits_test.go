@@ -148,9 +148,12 @@ func TestRunServeCapsWritesWhileAPushHoldsTheWriteSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
+	// Hang guard, not a measurement: the board refuses this create once its
+	// five-second wait is up. A board that admitted it instead would leave it
+	// held in the hook beside the first, and this says so rather than hanging.
+	response, err := (&http.Client{Timeout: 60 * time.Second}).Do(request)
 	if err != nil {
-		t.Fatalf("second create: %v", err)
+		t.Fatalf("second create was not refused while the write slot was held: %v", err)
 	}
 	var document webui.ErrorDocument
 	decodeErr := json.NewDecoder(response.Body).Decode(&document)
