@@ -554,7 +554,54 @@
             : draftState.blocks;
           draftMap.forEach((_entry, id) => excluded.add(id));
         }
+        dependencyCycleCandidates(activeTasks, taskID, direction, draftState)
+          .forEach((id) => excluded.add(id));
         return activeTasks.filter((task) => !excluded.has(task.id));
+      }
+      // The tasks the server would refuse as the other end of a new edge,
+      // because the edge would close a cycle. It refuses an edge from A to B
+      // whenever B already reaches A along live tasks' dependencies, however
+      // long the path, and a deleted task ends a path there as here. So under
+      // Depends On every task that already reaches this one is left out, and
+      // under Blocks every task this one already reaches. Staged and unsaved
+      // rows count as edges too: on New Task they are the only edges this
+      // task has, and each one is written after the others.
+      //
+      // The New Task form has no ID yet, so it stands in the graph under a
+      // key no task can have.
+      function dependencyCycleCandidates(activeTasks, taskID, direction, draftState) {
+        const self = taskID || "\u0000new-task";
+        const forward = new Map();
+        const backward = new Map();
+        const link = (from, to) => {
+          if (!forward.has(from)) forward.set(from, []);
+          forward.get(from).push(to);
+          if (!backward.has(to)) backward.set(to, []);
+          backward.get(to).push(from);
+        };
+        const live = new Set(activeTasks.map((task) => task.id));
+        activeTasks.forEach((task) => {
+          (task.dependencies || []).forEach((id) => { if (live.has(id)) link(task.id, id); });
+        });
+        if (draftState) {
+          draftState.dependsOn.forEach((_entry, id) => { if (live.has(id)) link(self, id); });
+          draftState.blocks.forEach((_entry, id) => { if (live.has(id)) link(id, self); });
+        }
+        // Under Depends On a new edge runs self -> candidate, so a candidate
+        // that reaches self closes a cycle: walk the edges backward from self.
+        // Under Blocks it runs candidate -> self: walk them forward.
+        const edges = direction === "depends-on" ? backward : forward;
+        const reached = new Set();
+        const pending = [self];
+        while (pending.length) {
+          const id = pending.pop();
+          (edges.get(id) || []).forEach((next) => {
+            if (reached.has(next)) return;
+            reached.add(next);
+            pending.push(next);
+          });
+        }
+        return reached;
       }
       function relationshipListboxPlacement(anchor, bounds, desiredHeight = 288, gap = 5) {
         const belowTop = Math.max(bounds.top, anchor.bottom + gap);

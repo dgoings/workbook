@@ -140,15 +140,16 @@ func TestHandlerClientKeepsTheDependencyKindAcrossTaskPageAdds(t *testing.T) {
 	storedBlocked := clientPlacementTask("WB-01J0000000000000000000KB00", "Stored blocked task", core.StatusBacklog, core.PriorityLow)
 	firstBlocked := clientPlacementTask("WB-01J0000000000000000000KB01", "First new blocked", core.StatusBacklog, core.PriorityLow)
 	secondBlocked := clientPlacementTask("WB-01J0000000000000000000KB02", "Second new blocked", core.StatusReady, core.PriorityMedium)
+	unrelated := clientPlacementTask("WB-01J0000000000000000000KU01", "Unrelated task", core.StatusReady, core.PriorityMedium)
 	current.Dependencies = []string{prerequisite.ID}
 	storedBlocked.Dependencies = []string{current.ID}
-	initial := []core.Task{storedBlocked, current, prerequisite, firstBlocked, secondBlocked}
+	initial := []core.Task{storedBlocked, current, prerequisite, firstBlocked, secondBlocked, unrelated}
 	firstAdded := firstBlocked
 	firstAdded.Dependencies = []string{current.ID}
-	afterFirst := []core.Task{storedBlocked, current, prerequisite, firstAdded, secondBlocked}
+	afterFirst := []core.Task{storedBlocked, current, prerequisite, firstAdded, secondBlocked, unrelated}
 	secondAdded := secondBlocked
 	secondAdded.Dependencies = []string{current.ID}
-	afterSecond := []core.Task{storedBlocked, current, prerequisite, firstAdded, secondAdded}
+	afterSecond := []core.Task{storedBlocked, current, prerequisite, firstAdded, secondAdded, unrelated}
 	documentJSON := func(tasks []core.Task) string {
 		t.Helper()
 		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
@@ -213,15 +214,16 @@ setTimeout(async () => {
   if (JSON.stringify(listedRows()) !== JSON.stringify(after)) {
     throw new Error("after two Blocks adds the list is " + JSON.stringify(listedRows()) + ", want " + JSON.stringify(after));
   }
-  // With the toggle on Blocks, a task this one already blocks is not offered,
-  // and the stored prerequisite is; on Depends On it is the other way around.
+  // Neither kind offers a task already on either side of this one: under
+  // Blocks a blocked task is already there and the stored prerequisite would
+  // close a cycle, and under Depends On it is the other way around. Only the
+  // unrelated task is left to offer, and never this task itself.
   const offered = () => findElements(relationshipSection(main), (element) => element.attributes.role === "option").map((option) => option.dataset.candidateId);
-  if (offered().includes(` + strconv.Quote(firstBlocked.ID) + `) || !offered().includes(` + strconv.Quote(prerequisite.ID) + `)) {
+  if (JSON.stringify(offered()) !== JSON.stringify([` + strconv.Quote(unrelated.ID) + `])) {
     throw new Error("Blocks offers " + JSON.stringify(offered()));
   }
   chooseRelationshipKind(main, "Depends On");
-  if (offered().includes(` + strconv.Quote(prerequisite.ID) + `) || !offered().includes(` + strconv.Quote(firstBlocked.ID) + `) ||
-      offered().includes(` + strconv.Quote(current.ID) + `)) {
+  if (JSON.stringify(offered()) !== JSON.stringify([` + strconv.Quote(unrelated.ID) + `])) {
     throw new Error("Depends On offers " + JSON.stringify(offered()));
   }
 }, 0);
@@ -234,16 +236,20 @@ setTimeout(async () => {
 // A task picked under one kind and not offered under the other is let go of
 // when the toggle moves: the box empties and Add stays off, rather than the
 // box still showing a title that Add will not take. A pick both kinds offer
-// survives the move.
+// survives the move. The task Blocks offers and Depends On does not is one
+// that already depends on this task through another: a second path to it is
+// no cycle, but depending on it would be.
 func TestHandlerClientDropsAPickTheNewDependencyKindExcludes(t *testing.T) {
 	t.Parallel()
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J0000000000000000000KS00", "Current task", core.StatusReady, core.PriorityMedium)
 	current.Head = "head-1"
-	prerequisite := clientPlacementTask("WB-01J0000000000000000000KS01", "Stored prerequisite", core.StatusDone, core.PriorityHigh)
+	blocked := clientPlacementTask("WB-01J0000000000000000000KS01", "Stored blocked task", core.StatusDone, core.PriorityHigh)
+	further := clientPlacementTask("WB-01J0000000000000000000KS03", "Further blocked task", core.StatusReady, core.PriorityHigh)
 	unrelated := clientPlacementTask("WB-01J0000000000000000000KS02", "Unrelated task", core.StatusBacklog, core.PriorityLow)
-	current.Dependencies = []string{prerequisite.ID}
-	tasks := []core.Task{current, prerequisite, unrelated}
+	blocked.Dependencies = []string{current.ID}
+	further.Dependencies = []string{blocked.ID}
+	tasks := []core.Task{current, blocked, further, unrelated}
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	if response.Code != http.StatusOK {
@@ -270,9 +276,9 @@ setTimeout(async () => {
   const selected = () => findElements(relationshipSection(main), (element) =>
     element.attributes.role === "option" && element.attributes["aria-selected"] === "true").map((option) => option.dataset.candidateId);
 
-  // Blocks offers the stored prerequisite; Depends On does not.
+  // Blocks offers the further blocked task; Depends On does not.
   chooseRelationshipKind(main, "Blocks");
-  pick(` + strconv.Quote(prerequisite.ID) + `, "Stored");
+  pick(` + strconv.Quote(further.ID) + `, "Further");
   chooseRelationshipKind(main, "Depends On");
   const picker = sectionPicker();
   if (picker.input.value !== "") {

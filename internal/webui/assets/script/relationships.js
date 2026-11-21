@@ -504,7 +504,8 @@
           combobox.setPrompt(kind.caption, kind.placeholder);
           // What the picker offers depends on the kind: a task this one already
           // depends on is not offered for Depends On, and one it already blocks
-          // is not offered for Blocks.
+          // is not offered for Blocks. Nor is a task whose edge would close a
+          // cycle; see dependencyCycleCandidates.
           combobox.setCandidates(relationshipCandidates(taskID, kind.direction, draftState), { clearStalePick: true });
         }
         region.append(heading, list, kindGroup, combobox.region, message, status);
