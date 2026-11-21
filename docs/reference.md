@@ -1119,14 +1119,25 @@ WORKBOOK_NOW=2024-03-05T14:00:00-05:00 workbook create "Ship the importer"
 WORKBOOK_NOW=2024-03-09T16:30:00Z workbook update WB-01HR --status done
 ```
 
-The value is an RFC 3339 time and is recorded as given, offset included. It
+The value is an RFC 3339 time. A task operation records it as given, offset
+included; a configuration pack records the same instant in UTC. It
 moves everything written into history: each operation pack's wall time, and with
 it a task's `createdAt` and `updatedAt`, a comment's or assignment's time, and
 every `--history` and `status log` row; the time encoded in every identifier the
 command mints, from the project and task IDs to each operation's; and the
 configuration packs `setup` and the `status`, `priority`, `key`, and `config`
-commands write. A value that does not parse is refused with exit `5` before the
-command reads or writes anything.
+commands write, whether typed or made through the board `workbook serve` runs.
+A value that does not parse is refused with exit `5` before the command reads or
+writes anything; only `help` and `version`, which record nothing, still answer.
+
+`workbook compact` runs at that time as well: its cutoff is measured from it,
+so `--done-only 30d` selects what had been done for thirty days by then, and the
+checkpoints and the run ID are dated with it.
+
+Identifiers minted at the same instant share their first ten characters, the
+part that encodes the time. Tasks imported with one timestamp between them,
+such as a tracker export that kept only the day, therefore need a longer prefix
+than usual to be told apart, or the full ID.
 
 It does not move the dates on the Git commits that carry those operations,
 which are Git's to stamp. Workbook's Git commands inherit the environment, so

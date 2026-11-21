@@ -64,13 +64,16 @@ func Run(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout
 		return core.ExitCode(err)
 	}
 
-	if _, _, err := recordedTime(); err != nil {
-		writeError(stderr, err, jsonMode)
-		return core.ExitCode(err)
-	}
-
 	command := args[0]
 	commandArgs := args[1:]
+	// version records nothing, like help above, so neither is refused over a
+	// time it would never have used.
+	if command != "version" {
+		if _, _, err := recordedTime(); err != nil {
+			writeError(stderr, err, jsonMode)
+			return core.ExitCode(err)
+		}
+	}
 	var err error
 	switch command {
 	case "setup":

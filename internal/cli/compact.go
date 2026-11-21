@@ -179,7 +179,7 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 		KeepAttachments: *keepAttachments,
 		Backup:          *backup,
 		Flags:           given,
-		Now:             compactNow(),
+		Now:             compactionNow(),
 	}
 	switch {
 	case *noBackup:

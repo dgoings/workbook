@@ -34,6 +34,14 @@ and it is the first command that needs every clone of a project to upgrade
 before anyone runs it; see Compatibility across versions below.
 
 ### Added
+- **`WORKBOOK_NOW=<RFC 3339 time>`** makes a command record that time in place
+  of the system clock, so a project's past can be imported with each step dated
+  when it happened. It moves operation wall times, the time inside every new
+  identifier, configuration packs, and the time a `workbook compact` run
+  measures its cutoff from and records itself at. Git commit dates stay Git's
+  (`GIT_AUTHOR_DATE`, `GIT_COMMITTER_DATE`), and sync freshness, timeouts and
+  relative ages stay on the real clock. A value that does not parse is refused
+  before anything is written. See "Recording past work" in `docs/reference.md`.
 - **`workbook compact`** replaces the step-by-step history of every Done and
   Deleted task with a single parentless checkpoint commit holding the task's
   current state. `--done-only` and `--deleted-only` pick one kind, each with an
