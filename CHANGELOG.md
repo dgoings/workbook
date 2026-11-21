@@ -102,14 +102,29 @@ before anyone runs it; see Compatibility across versions below.
   edit, `--assign self`, `workbook next` and assignment removal go by, and the
   commit behind each edit names that address as its author and committer. A
   folder with no Git identity works when it is set, which is what a server
-  acting for many signed-in people needs. An empty or malformed value is
-  refused with exit `5` rather than ignored, and with the variable unset
-  nothing changes. The name is asserted, like `user.email`, and nothing
-  verifies it.
+  acting for many signed-in people needs. An empty or malformed value,
+  including one that is not valid UTF-8, is refused with exit `5` rather than
+  ignored; a mistyped command is still reported as unknown first. The name
+  must match a `user.email` exactly, including case, to be the same person.
+  It is asserted, like `user.email`, and nothing verifies it.
 
 ### Changed
 - **Git 2.29 or later is required**, and the README now says so. Workbook's
   fetches already used options from that release.
+- **A commit names the person its edit is recorded under, including when a
+  sync replays it.** An edit recorded under the checkout's own `user.email` is
+  committed exactly as before. An edit recorded under any other name, whether
+  through `WORKBOOK_ACTOR` or by a teammate whose change is replayed while
+  adopting a compaction, is committed with that name as author and committer,
+  where a replay used to take the identity of whoever ran the sync. So a
+  `workbook sync --watch` or `workbook serve` started without the variable
+  replays and publishes each person's task and configuration edits under
+  their own name, several people's in one pass, even in a folder with no Git
+  identity. A replay of an edit recorded under the checkout's own
+  `user.email` still takes the display name of the process that writes it.
+- **`--assign` refuses a person that is not valid UTF-8.** Such a value was
+  recorded with each bad byte replaced, so as a different person. Every value
+  it accepted before is still accepted.
 - **The web board's New Task form can assign.** On a board that can record
   assignments, the form stages them beside its dependencies and attachments
   and sends them once the task exists; one the server refuses is retried from

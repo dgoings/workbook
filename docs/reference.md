@@ -566,22 +566,49 @@ committer, in place of the checkout's `user.name` and `user.email` and any
 `GIT_AUTHOR_*` or `GIT_COMMITTER_*` variables. Workbook is given an email
 address and nothing else, so the address is the commit's display name as well:
 `sam@example.com <sam@example.com>`. A folder with no Git identity configured
-works when the variable is set. Synchronization run by the same command, the
-same `workbook sync --watch`, or the same `workbook serve` writes any commit it
-needs, such as a replayed edit, under the name too.
+works when the variable is set. The commit's date is Git's, as it always is;
+`WORKBOOK_NOW` dates the operation, not the commit.
+
+A commit always names the person its edit is recorded under, whichever process
+writes it. That matters for synchronization, which sometimes writes commits of
+its own: when somebody else has published changes to the same task or to the
+project's configuration, a sync replays this checkout's unpublished edits onto
+theirs as new commits. Each replayed commit names the person its edit was
+recorded under, not the person running the sync. An edit recorded under the
+checkout's own `user.email` is committed exactly as any commit from the
+checkout is; any other name is the commit's author and committer as above. So
+a `workbook sync --watch` or `workbook serve` started without the variable
+replays and publishes everybody's edits under their own names, several people's
+in one pass, and needs no Git identity of its own to do it. One limit remains
+for a watcher started separately: a replay of an edit recorded under the
+checkout's own `user.email` takes its display name, and any `GIT_AUTHOR_*` or
+`GIT_COMMITTER_*` variables, from the process that writes the replay, which for
+a deferred sync is the watcher rather than the command that recorded the edit.
+A replay whose recorded name Git could not store exactly is refused and
+reported, and the edit stays on this checkout unpublished rather than being
+committed under a different name.
 
 The name must be an email address, by the same rule `--assign` applies to a
-person, with no `/label` part. It also must not contain `<` or `>`, or begin or
-end with any of `` , : ; " ' \ ``, because Git would drop those characters from
-the commit and the commit would name somebody the operation does not. The value
-is used exactly as given and is never trimmed. A variable that is set but empty,
+person, with no `/label` part. It also must be valid UTF-8, must not contain
+`<` or `>`, and must not begin or end with any of `` , : ; " ' \ ``, because
+the operation or the commit would otherwise record somebody else. The value is
+used exactly as given and is never trimmed. A variable that is set but empty,
 or set to anything else, is refused with exit `5` and a validation error that
 names the variable, before the command reads or writes anything. It never falls
-back to the checkout's name. `workbook version`, `workbook completion` and help
-are the only commands that do not check it.
+back to the checkout's name. A command name that does not exist is reported as
+unknown first. `workbook version`, `workbook completion` and help are the only
+commands that do not check the variable.
 
-With the variable unset, every command records exactly what it recorded before
-the variable existed.
+To count as the same person as a checkout's `user.email`, or as an assignment's
+principal or creator, the name must match it exactly, including case:
+`Sam@example.com` and `sam@example.com` are two different people, as they are
+for `user.email`.
+
+With the variable unset, a command's own edits are recorded and committed
+exactly as they were before the variable existed. The one difference is in
+replays: a replayed edit that was recorded under a name other than this
+checkout's `user.email`, such as a teammate's change replayed while adopting a
+compaction, is now committed under that name rather than this checkout's.
 
 The name is asserted, exactly as `user.email` is. Workbook does not verify it
 and keeps no list of who may use it: whoever can set the variable can already
