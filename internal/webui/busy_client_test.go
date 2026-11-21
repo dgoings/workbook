@@ -35,8 +35,25 @@ function busyAnswer(retryAfter = "2") {
     ok: false, status: 503,
     headers: { get: (name) => (name.toLowerCase() === "retry-after" ? retryAfter : null) },
     json: async () => ({ format: "workbook.error", version: 1,
-      error: { category: "operational", message: "the board is busy: it is already working on the 16 requests it takes at once, so this one was not started; try again in a moment" } })
+      error: { category: "operational", message: "The board is busy: it is already working on the 16 requests it takes at once, so this one was not started. Try again in a moment." } })
   };
+}
+// What a proxy in front of a shared board answers past a person's limit.
+function limitedAnswer(retryAfter) {
+  return {
+    ok: false, status: 429,
+    headers: { get: (name) => (name.toLowerCase() === "retry-after" ? retryAfter : null) },
+    json: async () => { throw new SyntaxError("Unexpected token '<'"); }
+  };
+}
+// What leaving the page would do now: whether a listener stops to ask.
+function leavingAsks() {
+  const listener = windowEventListeners.beforeunload;
+  if (!listener) return false;
+  let prevented = false;
+  const event = { returnValue: undefined, preventDefault() { prevented = true; } };
+  listener(event);
+  return prevented && event.returnValue === "";
 }
 const writes = [];
 let writeAnswers = [];
@@ -258,5 +275,100 @@ func TestClientPollSendsNoReadWhileTheLastIsStillOut(t *testing.T) {
   await first;
   await intervalCallback();
   if (reads.length !== 2) throw new Error("the tick after the read came back did not read");
+`))
+}
+
+func TestClientWarnsBeforeLeavingWhileAChangeWaitsToBeSent(t *testing.T) {
+	t.Parallel()
+	// Production mutation: a notice that says the change is kept, with nothing
+	// stopping the tab from closing, loses a change the reader was told was
+	// safe — the review closed the tab seven seconds in and the title never
+	// reached the server.
+	// The notice says what is true: the change is held in this tab, and what
+	// would lose it.
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
+	page := request(t, handler, http.MethodGet, "/").Body.String()
+	notice := page[strings.Index(page, "data-busy-notice"):]
+	notice = notice[:strings.Index(notice, "</div>")]
+	if !strings.Contains(notice, "held in this tab") || !strings.Contains(notice, "closing or leaving the tab before then loses it") {
+		t.Fatalf("the busy notice reads %q, want it to say the change is held in this tab and what loses it", notice)
+	}
+	runBusyClient(t, "a warning before leaving", busyClientProgram(t, `
+  if (leavingAsks()) throw new Error("leaving was stopped to ask before anything was waiting");
+  writeAnswers = [() => busyAnswer("2")];
+  const dropped = dragTo("in-progress");
+  const wait = await nextWait();
+  if (!leavingAsks()) throw new Error("leaving the page while a change waited to be sent was not stopped to ask");
+  await endWait(wait);
+  await dropped;
+  if (writes.length !== 2) throw new Error("the change was sent " + writes.length + " times, want 2");
+  if (leavingAsks()) throw new Error("leaving is still stopped to ask once the change was confirmed");
+  if (windowEventListeners.beforeunload) throw new Error("the warning's listener was left behind");
+`))
+}
+
+func TestClientResendsAChangeAProxyAskedToWaitFor(t *testing.T) {
+	t.Parallel()
+	// Production mutation: a page that reads a proxy's 429 as a failure tells
+	// the reader their change did not go and never sends it, though the proxy
+	// said exactly when it would be taken.
+	runBusyClient(t, "resend after a 429", busyClientProgram(t, `
+  Date.now = () => Date.parse("Sat, 21 Nov 2026 12:00:00 GMT");
+  writeAnswers = [() => limitedAnswer("3"), () => limitedAnswer("Sat, 21 Nov 2026 12:00:05 GMT")];
+  const dropped = dragTo("in-progress");
+  const first = await nextWait();
+  if (first.delay !== 3000) throw new Error("a 429 asking for 3 seconds waited " + first.delay + "ms");
+  if (busyNotice.hidden || !leavingAsks()) throw new Error("a change waiting on a 429 was not announced and guarded like a busy one");
+  if (!cardIn("in-progress")) throw new Error("the card went back while its change waited out a 429");
+  await endWait(first);
+  // A Retry-After given as a date, five seconds off, doubled for the second
+  // refusal in a row.
+  const second = await nextWait();
+  if (second.delay !== 10000) throw new Error("a 429 naming a date five seconds off waited " + second.delay + "ms on its second refusal, want 10000");
+  await endWait(second);
+  await dropped;
+  if (writes.length !== 3 || !cardIn("in-progress")) throw new Error("the change was not sent again after the 429s: " + writes.length + " writes");
+  if (!busyNotice.hidden) throw new Error("the notice stayed up after the change was confirmed");
+
+  // A 429 that does not say when is somebody else's refusal, and the change is
+  // reported rather than resent.
+  writeAnswers = [() => limitedAnswer(null)];
+  await dragTo("ready");
+  if (writes.length !== 4) throw new Error("a 429 without Retry-After was sent again");
+  if (!busyNotice.hidden) throw new Error("a 429 without Retry-After was announced as a wait");
+
+  // The poll steps back from a 429 with Retry-After the way it does from the
+  // board's own refusal.
+  let clock = Date.parse("Sat, 21 Nov 2026 12:01:00 GMT");
+  Date.now = () => clock;
+  const reads = [];
+  const pageFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") === "GET" && url.startsWith("/api/tasks")) {
+      reads.push(url);
+      return limitedAnswer("2");
+    }
+    return pageFetch(url, options);
+  };
+  await intervalCallback();
+  if (stale.dataset.visible !== "true" || !stale.textContent.includes("busy")) {
+    throw new Error("a 429 poll was not shown as the board being busy: " + JSON.stringify(stale.textContent));
+  }
+  clock += 1000; await intervalCallback();
+  if (reads.length !== 1) throw new Error("the refresh asked again inside the wait a 429 named");
+`))
+}
+
+func TestClientWaitsNoLongerThanAMinuteForAResend(t *testing.T) {
+	t.Parallel()
+	// Production mutation: a Retry-After of an hour, doubled, holds a change
+	// in a tab for longer than anyone keeps one open waiting.
+	runBusyClient(t, "a bounded wait", busyClientProgram(t, `
+  writeAnswers = [() => limitedAnswer("3600")];
+  const dropped = dragTo("in-progress");
+  const wait = await nextWait();
+  if (wait.delay !== 60000) throw new Error("a Retry-After of an hour waited " + wait.delay + "ms, want 60000");
+  await endWait(wait);
+  await dropped;
 `))
 }

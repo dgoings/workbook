@@ -1,27 +1,51 @@
-      // The server's answer when it had no turn for a request: 503 with a
-      // Retry-After, which the board sends only from its cap on how much work it
-      // does at once and only before it has started on the request. Nothing was
-      // read or recorded, so the very same request may be sent again. A 503
-      // without the header is somebody else's — a proxy with no board behind it
-      // — and says nothing about whether the change was made, so it is not
-      // retried.
+      // An answer that says "not now" and when to ask again: a 503 or a 429
+      // with a Retry-After. The board sends the 503 only from its caps on how
+      // much it takes at once, and only before it has made any change for the
+      // request; a proxy in front of a shared board sends the 429 from a
+      // per-person limit, without passing the request on at all. Either way
+      // nothing was changed, so the very same request may be sent again. A 503
+      // or 429 without the header is somebody else's — a proxy with no board
+      // behind it, or one that does not say — and says nothing about whether
+      // the change was made, so it is not retried.
       function busyRefusal(response) {
-        return Boolean(response && response.status === 503 && response.headers &&
+        return Boolean(response && (response.status === 503 || response.status === 429) && response.headers &&
           typeof response.headers.get === "function" && response.headers.get("Retry-After") !== null);
       }
-      // How long the server asked for, in milliseconds, at least one second.
+      // How long the answer asked for, in milliseconds: at least one second,
+      // whether it was given in seconds or as a date. A value the page cannot
+      // read waits the board's own two seconds.
       function busyRetryDelay(response) {
-        const seconds = Number(response.headers.get("Retry-After"));
+        const value = String(response.headers.get("Retry-After")).trim();
+        const seconds = /^\d+$/.test(value) ? Number(value) : (Date.parse(value) - Date.now()) / 1000;
         return Math.max(1, Number.isFinite(seconds) ? seconds : 2) * 1000;
       }
+      // The longest one wait for a resend is allowed to be, whatever the answer
+      // asked for, so a change is never held for longer than a reader would
+      // keep a tab open waiting on it.
+      const BUSY_LONGEST_WAIT = 60000;
       function pause(milliseconds) {
         return new Promise((resolve) => { window.setTimeout(resolve, milliseconds); });
       }
-      // How many of this page's changes are waiting on the server's cap right
-      // now, which is what the busy notice is drawn from.
+      // How many of this page's changes are waiting to be sent again right
+      // now, which is what the busy notice and the warning before leaving are
+      // drawn from. A waiting change exists only in this tab, so closing the
+      // tab or leaving the page would lose it without a word; while one waits,
+      // the browser asks the reader first.
       let busyWrites = 0;
+      let leavingWarned = false;
+      function warnBeforeLeaving(event) {
+        event.preventDefault();
+        // What older browsers need to ask. The words are the browser's own.
+        event.returnValue = "";
+        return "";
+      }
       function renderBusyNotice() {
         if (busyNotice) busyNotice.hidden = busyWrites === 0;
+        const warn = busyWrites > 0;
+        if (warn === leavingWarned) return;
+        leavingWarned = warn;
+        if (warn) window.addEventListener("beforeunload", warnBeforeLeaving);
+        else window.removeEventListener("beforeunload", warnBeforeLeaving);
       }
       // How many times a refused change is sent again before the refusal is
       // reported, each wait twice the one before it: with the board's two
@@ -46,7 +70,7 @@
               busyWrites += 1;
               renderBusyNotice();
             }
-            await pause(busyRetryDelay(response) * 2 ** attempt);
+            await pause(Math.min(busyRetryDelay(response) * 2 ** attempt, BUSY_LONGEST_WAIT));
           }
         } finally {
           if (waiting) {

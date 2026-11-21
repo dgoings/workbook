@@ -354,11 +354,12 @@
       // read a second piled onto a read that has not come back is the page
       // adding to the very load it is waiting on.
       //
-      // A read the server refused as busy holds the ticks off for the time it
-      // asked for, and each refusal in a row doubles that, up to half a
-      // minute, so a page left open on a flooded board steps back rather than
-      // knocking every second. The first read that is answered puts it back
-      // on its one-second beat.
+      // A read the server refused as busy, or a proxy turned away with a 429
+      // and a Retry-After, holds the ticks off for the time it asked for, and
+      // each refusal in a row doubles that, up to half a minute, so a page
+      // left open on a flooded board steps back rather than knocking every
+      // second. The first read that is answered puts it back on its
+      // one-second beat.
       let pollBusyStreak = 0;
       let pollResumeAt = 0;
       let tickRefresh = null;
@@ -502,7 +503,7 @@
           } catch (_) {
             if (generation !== taskRefreshGeneration) return { status: "superseded", boardRead };
             text(stale, refusedBusy
-              ? "The board is busy with other requests. Showing the last board it read; it will look again shortly."
+              ? "The board is busy and asked this page to wait. Showing the last board it read; it will look again shortly."
               : "Task refresh failed. Showing the last successful board.");
             stale.dataset.visible = "true";
             if (!tasksLoaded) {

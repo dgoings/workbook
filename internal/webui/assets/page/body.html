@@ -117,14 +117,16 @@
        next poll. -->
   <div class="notice" data-notice role="status" aria-live="polite" hidden></div>
   <!-- What the board says while a change of the reader's is waiting because
-       the server is too busy to start it. The change is still drawn as made
-       and is sent again on its own, so this says that rather than offering a
-       control: there is nothing for the reader to do but wait or keep working,
-       and it comes down by itself once every waiting change has been sent or
-       reported. -->
+       the server asked the page to wait before sending it. The change is still
+       drawn as made and is sent again on its own, so this says that rather
+       than offering a control: there is nothing for the reader to do but wait
+       or keep working. It also says the one thing that would lose the change,
+       because the change lives only in this tab until it is sent; the browser
+       asks before the tab is closed or left meanwhile. It comes down by itself
+       once every waiting change has been sent or reported. -->
   <div class="notice" data-busy-notice role="status" aria-live="polite" hidden>
     <div class="notice__report">
-      <p>The board is busy with other requests. Your change is kept and will be sent again in a moment.</p>
+      <p>The board is busy and asked this page to wait. Your change is held in this tab and will be sent again shortly; closing or leaving the tab before then loses it.</p>
     </div>
   </div>
   <!-- What the board says when the project's statuses change under a page that

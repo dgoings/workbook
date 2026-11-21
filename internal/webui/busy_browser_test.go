@@ -89,7 +89,15 @@ const busyBrowserScript = `(async () => {
   await until(() => !notice.hidden, "showed the busy notice");
   const box = notice.getBoundingClientRect();
   const text = notice.querySelector("p");
+  // Whether leaving now would be stopped to ask, which is what the page arms
+  // while a change waits: a cancelable beforeunload the page cancels.
+  const leaving = () => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
   const waiting = {
+    leaveWarned: leaving(),
     top: box.top, bottom: box.bottom, left: box.left, right: box.right,
     display: getComputedStyle(notice).display,
     fontSize: parseFloat(getComputedStyle(text).fontSize),
@@ -104,6 +112,7 @@ const busyBrowserScript = `(async () => {
     scrollWidth: document.documentElement.scrollWidth,
     waiting,
     noticeDisplayAfter: getComputedStyle(notice).display,
+    leaveWarnedAfter: leaving(),
     typedAfter: document.querySelector("#task-title") ? document.querySelector("#task-title").value : null,
     formText: form ? form.textContent : "",
   };
@@ -113,6 +122,7 @@ type busyBrowserResult struct {
 	Viewport    struct{ Width, Height float64 }
 	ScrollWidth float64
 	Waiting     struct {
+		LeaveWarned              bool
 		Top, Bottom, Left, Right float64
 		Display                  string
 		FontSize                 float64
@@ -120,6 +130,7 @@ type busyBrowserResult struct {
 		Typed                    string
 	}
 	NoticeDisplayAfter string
+	LeaveWarnedAfter   bool
 	TypedAfter         *string
 	FormText           string
 }
@@ -160,8 +171,15 @@ func TestBrowserTellsTheReaderTheBoardIsBusyAndKeepsTheirChange(t *testing.T) {
 				if waiting.Bottom-waiting.Top < 20 || waiting.FontSize < 12 {
 					t.Fatalf("the busy notice is %v tall in %vpx type, want a readable line", waiting.Bottom-waiting.Top, waiting.FontSize)
 				}
-				if !strings.Contains(waiting.Text, "busy") || !strings.Contains(waiting.Text, "kept") {
-					t.Fatalf("the busy notice says %q, want it to say the board is busy and the change is kept", waiting.Text)
+				if !strings.Contains(waiting.Text, "busy") || !strings.Contains(waiting.Text, "held in this tab") ||
+					!strings.Contains(waiting.Text, "closing or leaving the tab before then loses it") {
+					t.Fatalf("the busy notice says %q, want it to say the board is busy, the change is held in this tab, and what would lose it", waiting.Text)
+				}
+				if !waiting.LeaveWarned {
+					t.Fatal("leaving the page while a change waited to be sent was not stopped to ask")
+				}
+				if result.LeaveWarnedAfter {
+					t.Fatal("leaving the page once nothing was waiting is still stopped to ask")
 				}
 				if waiting.Typed != "Renamed while the board was busy" {
 					t.Fatalf("the title field held %q while the change waited, want what was typed", waiting.Typed)
