@@ -97,6 +97,15 @@ before anyone runs it; see Compatibility across versions below.
   reports success, or restores a setting somebody changed and names it. Setup
   needs no `user.email`; edits made there do. `--json` reports the run in a
   `tasksOnly` object.
+- **`WORKBOOK_ACTOR` records an edit under somebody else's name.** Set to an
+  email address, it replaces the checkout's `user.email` as the person every
+  edit, `--assign self`, `workbook next` and assignment removal go by, and the
+  commit behind each edit names that address as its author and committer. A
+  folder with no Git identity works when it is set, which is what a server
+  acting for many signed-in people needs. An empty or malformed value is
+  refused with exit `5` rather than ignored, and with the variable unset
+  nothing changes. The name is asserted, like `user.email`, and nothing
+  verifies it.
 
 ### Changed
 - **Git 2.29 or later is required**, and the README now says so. Workbook's

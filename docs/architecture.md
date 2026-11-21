@@ -122,6 +122,14 @@ operations that should be applied atomically:
 }
 ```
 
+The `actor` is the person the edit is recorded under. It is the checkout's Git
+`user.email` unless `WORKBOOK_ACTOR` names somebody else, in which case the
+commit holding the pack names that person as its author and committer too. In
+code the override travels on the operation's `context.Context` (`core.WithActor`)
+rather than on the repository handle, so one long-running process can record
+each request under its own person. Either way the actor is asserted, not
+verified; see [the assignment value](#assignments) below.
+
 Operation IDs are globally unique and independent of Git object IDs. Git commit ancestry provides causal ordering; a logical clock assists validation and deterministic presentation. Wall-clock time is for display only and must not decide semantic conflicts.
 
 The format supports task creation, scalar and label updates, dependency edges,
@@ -176,6 +184,9 @@ There is no roster and no verification protocol; verifying identity would import
 the central authority Workbook deliberately lacks, and within its trust model
 (push access is trust) an asserted identity is exactly as strong as everything
 else in a fetched ref. A wrong address is visible noise, corrected socially.
+The asserted name need not be the checkout's own: `WORKBOOK_ACTOR` lets a
+hosting process record an edit under the person it is acting for, and that name
+is exactly as asserted as `user.email`. Whoever can set it can already push.
 
 **What is stored.** The checkpoint materializes the live list, ordered by
 principal and then label so that every clone folding the same history writes the

@@ -535,6 +535,58 @@ full task IDs, descriptions, and the rest of the task data. Normal `list`,
 `show`, `board`, and `next` reads use the local SQLite projection.
 Implementation links remain future work.
 
+## Who an edit is recorded under
+
+Every edit Workbook records names the person who made it. By default that is
+the Git `user.email` of the checkout the command runs in, read once per
+command. Setting `WORKBOOK_ACTOR` names somebody else:
+
+```sh
+WORKBOOK_ACTOR=sam@example.com workbook update WB-01K0 --comment "on it" --assign self
+```
+
+There is no command-line flag for this. The variable is meant for hosting, where
+one checkout acts for many signed-in people, and not for everyday use on your
+own machine.
+
+With the variable set, the command treats the given name as the person for
+everything Workbook decides by identity:
+
+- every operation it records carries the name, so `workbook show --history`
+  shows it, and comments and attachments are authored by it;
+- `--assign self` assigns to it, and an assignment records it as its creator;
+- `workbook next` skips tasks held by anybody other than it, and `next --claim`
+  claims for it;
+- only that name, or whoever recorded an assignment, may remove the assignment;
+- `workbook serve` records the board's edits under it, and the board's empty
+  **Assign someone** field assigns to it.
+
+The Git commit behind each edit carries the name as both its author and its
+committer, in place of the checkout's `user.name` and `user.email` and any
+`GIT_AUTHOR_*` or `GIT_COMMITTER_*` variables. Workbook is given an email
+address and nothing else, so the address is the commit's display name as well:
+`sam@example.com <sam@example.com>`. A folder with no Git identity configured
+works when the variable is set. Synchronization run by the same command, the
+same `workbook sync --watch`, or the same `workbook serve` writes any commit it
+needs, such as a replayed edit, under the name too.
+
+The name must be an email address, by the same rule `--assign` applies to a
+person, with no `/label` part. It also must not contain `<` or `>`, or begin or
+end with any of `` , : ; " ' \ ``, because Git would drop those characters from
+the commit and the commit would name somebody the operation does not. The value
+is used exactly as given and is never trimmed. A variable that is set but empty,
+or set to anything else, is refused with exit `5` and a validation error that
+names the variable, before the command reads or writes anything. It never falls
+back to the checkout's name. `workbook version`, `workbook completion` and help
+are the only commands that do not check it.
+
+With the variable unset, every command records exactly what it recorded before
+the variable existed.
+
+The name is asserted, exactly as `user.email` is. Workbook does not verify it
+and keeps no list of who may use it: whoever can set the variable can already
+push under any name they like.
+
 ## Assignments
 
 An assignment says who is responsible for a task. It is a convergent collection
@@ -544,7 +596,7 @@ disagreements. There are no leases, no renewals, and no expiry — nothing a clo
 takes away — and an assignment never blocks a write.
 
 ```sh
-workbook update WB-01K0 --assign self                 # this repository's user.email
+workbook update WB-01K0 --assign self                 # this repository's user.email, or WORKBOOK_ACTOR
 workbook update WB-01K0 --assign self/impl-1          # one agent of that identity
 workbook update WB-01K0 --assign sam@example.com      # somebody else
 workbook update WB-01K0 --unassign self/impl-1        # give it back
@@ -594,7 +646,8 @@ into it.
 
 The section also makes assignments. Type an identity into **Assign someone** and
 press Assign, which sits on the field's line; leave the field blank and the
-assignment is `serve`'s own identity, which is this checkout's `user.email` —
+assignment is `serve`'s own identity, which is this checkout's `user.email`, or
+the name `WORKBOOK_ACTOR` gave `serve` when it started —
 the same one `--assign self` resolves from the same directory, and the one the
 empty field shows as its placeholder. Add a `/label` to name one agent, exactly
 as on the command line. Assigning from the board is additive and never takes the
@@ -631,8 +684,10 @@ is the read-only section — no form, no control, and no section at all on a tas
 nobody holds — and both assignment addresses answer it with an operational
 error rather than staging a write nothing could be attributed to. `workbook
 serve` never reaches that state by accident: a checkout with no configured
-`user.email` fails to start at all, because every command opens the service
-through the same identity this one would have assigned as.
+`user.email` fails to start at all unless `WORKBOOK_ACTOR` names the person (see
+[Who an edit is recorded under](#who-an-edit-is-recorded-under)), because every
+command opens the service through the same identity this one would have
+assigned as.
 
 ### Claiming work as an agent
 

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -45,6 +47,20 @@ type helpRequest struct {
 }
 
 func Run(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return runWithEnvironment(ctx, os.LookupEnv, args, cwd, stdin, stdout, stderr)
+}
+
+// runWithEnvironment is Run with the process environment as a parameter, so the
+// tests that set WORKBOOK_ACTOR can run beside the hundreds that do not without
+// any of them touching the real environment.
+func runWithEnvironment(
+	ctx context.Context,
+	lookupEnv func(string) (string, bool),
+	args []string,
+	cwd string,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+) int {
 	help, handled, helpErr := parseHelpRequest(args)
 	if handled {
 		if helpErr == nil {
@@ -73,6 +89,20 @@ func Run(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout
 			writeError(stderr, err, jsonMode)
 			return core.ExitCode(err)
 		}
+	}
+	// Who is acting, settled once for the whole command and carried on its
+	// context, which is where everything that records an edit reads it from.
+	// A value that is set and unusable stops the command here, before anything
+	// is read or written: an edit recorded under the checkout's own name instead
+	// of the one somebody asked for would be wrong without saying so. Only the
+	// two commands that never open a repository are spared it.
+	if command != "version" && command != "completion" {
+		actorCtx, err := core.WithEnvironmentActor(ctx, lookupEnv)
+		if err != nil {
+			writeError(stderr, err, jsonMode)
+			return core.ExitCode(err)
+		}
+		ctx = actorCtx
 	}
 	var err error
 	switch command {
@@ -2136,10 +2166,37 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 	// webui.Serve refuses foreign Host headers, cross-origin requests, and
 	// mutations that do not declare JSON. That guard is the board's only access
 	// control, and a non-loopback bind is what the warning above is about.
-	if err := webui.Serve(ctx, listener, handler); err != nil {
+	if err := webui.Serve(ctx, listener, actingAs(ctx, handler)); err != nil {
 		return core.Wrap(core.CategoryOperational, "serve board", err)
 	}
 	return nil
+}
+
+// actingAs hands every request the person this command was started as.
+//
+// A request's context is the HTTP server's, not the command's, so an actor
+// WORKBOOK_ACTOR put on the command's context would otherwise stop at the
+// first request: the service each route builds would still record the person
+// (its Actor was read when serve opened), but the commit behind the edit would
+// fall back to the checkout's Git identity, and in a folder with none it could
+// not be written at all. Putting the actor on each request's context is what
+// keeps the operation and its commit naming the same person.
+//
+// It is also the one place a request's person is decided, which is where a
+// per-request name would be given instead: core.WithActor on the request's
+// context, then the service's Actor read back from it (see current, which
+// copies the service per request).
+func actingAs(ctx context.Context, next http.Handler) http.Handler {
+	actor, asserted := core.ActorFrom(ctx)
+	if !asserted {
+		return next
+	}
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		// The name was validated when the command's context was built, so this
+		// cannot be refused.
+		requestContext, _ := core.WithActor(request.Context(), actor)
+		next.ServeHTTP(writer, request.WithContext(requestContext))
+	})
 }
 
 // boardPriorityAnswer carries a priority writer's result across to the board's
