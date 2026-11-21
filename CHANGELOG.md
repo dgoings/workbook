@@ -153,6 +153,24 @@ before anyone runs it; see Compatibility across versions below.
   must match a `user.email` exactly, including case, to be the same person.
   It is asserted, like `user.email`, and nothing verifies it.
 
+- **The web board caps how much work it does at once.** `workbook serve`
+  works on at most 16 requests at a time, writes take at most half of them, and
+  a request past that waits up to five seconds for a turn and is then answered
+  `503` with `Retry-After: 2`, before any of its work has started. The health
+  check is never made to wait. Against a temporary repository, 300 simultaneous
+  creates peaked at 26 Git processes instead of 363 and another reader's refresh
+  at 42 ms instead of 8.3 seconds, and 150 simultaneous 1 MiB uploads peaked at
+  69 MB of memory instead of 422 MB. `--max-requests <n>`, or
+  `WORKBOOK_SERVE_MAX_REQUESTS`, changes the number; nothing turns the cap off.
+  The reference lists the per-person limits a shared board should set at its
+  sign-in proxy, since the cap bounds the server rather than any one person's
+  share.
+- **The board's page waits out a busy server.** A change the server was too
+  busy to start stays drawn as made, a notice says the board is busy and the
+  change is kept, and the page sends it again after 2, 4 and 8 seconds before
+  reporting it. The once-a-second refresh no longer sends a read while its last
+  one is still out, and backs off when it is refused.
+
 ### Changed
 - **Git 2.29 or later is required**, and the README now says so. Workbook's
   fetches already used options from that release.

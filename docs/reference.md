@@ -62,7 +62,7 @@ workbook docs update [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook docs status [--skill-dir <dir>] [--no-skill] [--json]
 workbook docs remove [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook hooks install [--json]
-workbook serve [--addr <address>]
+workbook serve [--addr <address>] [--max-requests <n>]
 workbook completion <shell>
 workbook help [command]
 ```
@@ -2773,6 +2773,75 @@ incomplete, a request body unfinished, or a keep-alive idle, so a client that
 opens a connection and stops talking is closed rather than holding a goroutine
 until `serve` exits. There is no response deadline: a mutation publishing inline
 waits on `origin`, and that has no honest bound.
+
+The board also caps how much work it does at once. It works on at most 16
+requests at a time, and writes may hold at most half of those, so the reads
+every open page makes once a second always have room while writes are
+saturated. A request past the cap waits its turn, first come first served, for
+up to five seconds; at most four requests per slot (64 by default) may wait,
+and a request past that is refused at once rather than added to the line. A
+request that gets no turn is answered `503 Service Unavailable` with
+`Retry-After: 2` and a `workbook.error` document in the `operational`
+category, before the board has read its body or started any work on it, so the
+same request can safely be sent again. `GET /healthz` is never capped and never
+waits, because a busy board is still a live one.
+
+`--max-requests <n>`, or `WORKBOOK_SERVE_MAX_REQUESTS` when the option is not
+given, sets the cap; writes get half of it, rounded down but at least one. It
+must be a whole number of at least 1, and anything else is refused before the
+board starts: there is no value that turns the cap off. A person's own board
+never comes near the default. One page has one refresh out at a time, sends one
+change per task at a time, and opens a handful of reads when it loads.
+
+The cap bounds the server, not each person's share of it. Every Git process
+the board starts belongs to a request it is working on, and every upload's
+bytes belong to the request carrying them, so bounding requests bounds both.
+Against a board serving a temporary repository with a local origin on an
+Apple-silicon laptop, the default cap measured as follows; *before* is the same
+board with no cap:
+
+| Flood | Peak Git processes | Peak server memory | Another reader's refresh, median / max | Refused |
+| --- | --- | --- | --- | --- |
+| 300 simultaneous creates | 363 before, 26 after | 96 MB before, 45 MB after | 365 ms / 8.3 s before, 39 ms / 42 ms after | 228 of 300 |
+| 150 simultaneous 1 MiB uploads | 314 before, 25 after | 422 MB before, 69 MB after | 334 ms / 3.8 s before, 50 ms / 163 ms after | 78 of 150 |
+| 600 simultaneous reads | 11 before, 11 after | 92 MB before, 61 MB after | 239 ms / 1.2 s before, 56 ms / 187 ms after | 520 of 600 |
+
+Those are measurements, not guarantees: how many Git processes one write runs
+depends on what it does and whether it publishes inline. What the cap does
+guarantee is the number of requests at work at once and the number waiting.
+
+The board's own page treats a refusal as "not yet" rather than "no". A change
+it was refused stays drawn as made, a notice at the top of the page says the
+board is busy and the change is kept, and the page sends the same request again
+after the wait the server named, then after twice that, then after twice that
+again: 2, 4 and 8 seconds. A change still refused after those three resends is
+reported where every refusal is, saying the board was too busy, and a form
+keeps what was typed into it. A `503` without `Retry-After` comes from
+something other than the board, such as a proxy with no board behind it, and
+says nothing about whether the change was made, so it is not resent. The
+once-a-second refresh sends nothing while its last read is still out, and a
+refused read holds it off for the time the server named, doubling with each
+refusal in a row up to 30 seconds; the banner above the board says the board is
+busy, and the first answered read puts the refresh back on its one-second beat.
+
+A board several people share behind a sign-in proxy needs the proxy to give
+each person a fair share, because the cap cannot tell people apart and one
+person's flood still fills it for everyone. A deployment should set, at the
+proxy, per signed-in person:
+
+- **Concurrent requests:** about 8, which is the board's whole write share.
+  An ordinary page uses one or two at a time and a handful while it loads.
+- **Request rate:** about 10 a second sustained, with a burst of about 30. An
+  open page refreshes once a second, so a person with three tabs open uses
+  three a second before they change anything.
+- **Request body size:** 1.5 MiB, which admits the largest attachment upload
+  the board accepts (1 MiB encoded as base64 inside JSON) and nothing larger.
+- **Connections:** about 16, so idle keep-alive connections cannot pile up
+  either.
+
+Answer requests over those limits with `429 Too Many Requests` and a
+`Retry-After`. The page treats a `429` as it treats any refusal it was not
+told how to resend, and reports it.
 
 Binding `--addr` to anything other than a loopback address makes the board
 reachable by whoever shares the network, and those checks cannot tell a
