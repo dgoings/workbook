@@ -90,6 +90,44 @@ ends up with a CLI.
 
 Use help to discover commands and their options:
 
+## Working on the web board
+
+The page `workbook serve` draws is one HTML document and one Go
+`html/template`, but its source is split by concern into files under
+`internal/webui/assets/`:
+
+- `page/` holds the markup: `card.html` is the card template every column
+  renders, `head.html` the document head, `body.html` the server-rendered
+  body, and `tail.html` the closing tags.
+- `style/` holds the one stylesheet, in cascade order: `theme.css` declares
+  the color tokens a project may override, then `chrome.css` (header, filter
+  row, switches, notices), `config.css`, `board.css`, `task.css`,
+  `markdown.css`, `layout.css` (width and motion queries) and `dark.css`.
+- `script/` holds the one client script, which is a single function from the
+  first line of `boot.js` (page elements and shared state) to the last line
+  of `events.js` (document listeners and the poll). The files between are
+  named for what they draw or do: `cards.js`, `filters.js`, `task-form.js`,
+  `mutations.js` (the optimistic queue), `config-statuses.js`,
+  `config-priorities.js`, `config-keys.js`, `config-display.js`, `drag.js`,
+  `render.js` and so on.
+
+`pageFragments` in `internal/webui/page.go` lists every file in the order
+they are joined. The handler joins their text and parses the result once, so
+the page served is the same bytes one file would produce and html/template
+escapes each piece in the context it lands in after the join. That is why a
+fragment is usually not valid on its own: `head.html` opens the `<style>`
+element the `style/` files fill, and a script file is a run of statements
+inside that one function.
+
+To add a fragment, create the file and name it in `pageFragments` at the place
+its text belongs. Cut only between whole top-level CSS rules, elements, or
+script statements. A file that is not listed, or a listed file that is
+missing, fails the `internal/webui` tests and stops `workbook serve` as it
+starts, before it listens, and `TestPageFragmentsMatchAssetsDirectory` also
+catches a file `go:embed` would leave out, such as one whose name begins with
+`_`. No build step or bundler is involved; Go embeds the files as they
+are.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push to `main` and every pull request
@@ -145,13 +183,15 @@ something this workflow can assert, and until that happens a Windows-only
 desktop regression can reach `main` behind a green tick.
 
 A suite that skips is the failure this workflow is built to prevent. The
-embedded web board tests execute the rendered client with `node`, and the
+embedded web board tests execute the rendered client with `node`, its layout
+tests measure the board in headless Chrome or Chromium (found on `PATH`, in
+the macOS application bundles, or at `WORKBOOK_TEST_CHROME`), and the
 cross-object-format tests need a Git that can create SHA-256 repositories;
-without either, those tests skip and the package still reports `ok`. Four
+without any of these, those tests skip and the package still reports `ok`. Four
 things stop that:
 
 - `scripts/check-ci-capabilities.sh` runs before the suite and fails, naming
-  the tool, when node or SHA-256 Git support is absent.
+  the tool, when node, Chrome or SHA-256 Git support is absent.
 - `WORKBOOK_TEST_REQUIRE_CAPABILITIES=1` turns a missing capability into a test
   failure. Tests report one through `internal/testenv.MissingCapability`
   instead of `t.Skip`, which skips locally and fails wherever the variable is

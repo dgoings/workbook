@@ -42,7 +42,13 @@ contextBridge.exposeInMainWorld('workbench', {
     ipcRenderer.invoke('project:open', { projectId, taskId }),
   showChrome: () => ipcRenderer.invoke('project:showChrome'),
   closeProject: (projectId) => ipcRenderer.invoke('project:close', { projectId }),
+  // Removes Workbench's entry for the project and its place in the sidebar,
+  // stopping its board; the repository is never touched. Resolves with
+  // { layout, projects, removed }, removed false for an id already gone.
   forgetProject: (projectId) => ipcRenderer.invoke('project:forget', { projectId }),
+  // Whether the project's repository is there, looked at now:
+  // { known, missing, reason, message }.
+  projectPresence: (projectId) => ipcRenderer.invoke('project:presence', { projectId }),
 
   // The Git identity a board records changes against; see identity:get.
   // `scope` is 'global' or 'local'.

@@ -422,18 +422,24 @@ func validateTipTopologyBytes(contents []byte, pack core.OperationPack) error {
 		return nil
 	}
 
-	containsCreate := false
-	for _, operation := range pack.Operations {
-		if operation.Type == core.OperationTaskCreate {
-			containsCreate = true
+	// A task has two kinds of root: the task.create that started it, and the
+	// history.checkpoint that replaced its history when it was compacted. Each
+	// is the only operation in its pack and has no parent.
+	for _, root := range []core.OperationType{core.OperationTaskCreate, core.OperationHistoryCheckpoint} {
+		contains := false
+		for _, operation := range pack.Operations {
+			if operation.Type == root {
+				contains = true
+			}
 		}
-	}
-	if containsCreate {
-		if len(pack.Operations) != 1 || pack.Operations[0].Type != core.OperationTaskCreate {
-			return core.Errorf(core.CategoryCorruptData, "task.create must be the only operation in a root pack")
+		if !contains {
+			continue
+		}
+		if len(pack.Operations) != 1 {
+			return core.Errorf(core.CategoryCorruptData, "%s must be the only operation in a root pack", root)
 		}
 		if parentCount != 0 {
-			return core.Errorf(core.CategoryCorruptData, "task.create tip must have no parents")
+			return core.Errorf(core.CategoryCorruptData, "%s tip must have no parents", root)
 		}
 		return nil
 	}

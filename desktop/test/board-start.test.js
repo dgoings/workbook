@@ -57,6 +57,10 @@ function shell () {
       state.activeProjectId = projectId
     },
     hideIdentityForm: () => {},
+    // Every repository here is where it should be; remove-project.test.js
+    // covers the one that is not.
+    hideMissing: () => {},
+    showIfMissing: async () => false,
     askForIdentity: async () => false,
     loadProjects: () => {},
     api: {

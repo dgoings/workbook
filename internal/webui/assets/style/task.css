@@ -1,0 +1,434 @@
+    .task-route { display: flex; flex-direction: column; height: 100%; min-height: 0; width: min(100%, 84rem); margin: 0 auto; border: 1px solid var(--wb-border); background: var(--wb-surface); box-shadow: 0 12px 32px var(--wb-text-shadow-soft); }
+    .task-route__header { padding: 1rem 1.15rem; border-top: 3px solid var(--wb-primary); border-bottom: 1px solid var(--wb-hairline); background: var(--wb-primary-tint-4); }
+    .task-route__header h2 { margin: .15rem 0 0; font-size: clamp(1.15rem, 3vw, 1.55rem); letter-spacing: -.025em; }
+    .task-route__header code { display: block; margin-top: .35rem; color: var(--wb-primary-ink); font-size: .72rem; overflow-wrap: anywhere; }
+    .task-route__header .task-id-copy-group { margin-top: .35rem; }
+    .task-route__header .task-id-copy code { display: inline; margin-top: 0; }
+    .task-route__header .copy-status { top: calc(50% + .1rem); }
+    /* The task form's header is its heading and, at the far right, the close
+       that leaves the way Back does. The heading block takes whatever width is
+       left, and min-width: 0 lets a long title wrap inside it rather than push
+       the close off the card. */
+    .task-route__header--form { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; }
+    .task-route__heading { flex: 1 1 auto; min-width: 0; }
+    .task-route__close { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 2rem; height: 2rem; margin: -.25rem -.4rem 0 0; border: 1px solid transparent; border-radius: 4px; color: var(--wb-ink); font-size: 1.4rem; font-weight: 400; line-height: 1; text-decoration: none; }
+    .task-route__close:hover { border-color: var(--wb-border-strong); background: var(--wb-surface); color: var(--wb-primary); }
+    .task-route__close:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 1px; }
+    /* A new task has no name yet, so its header is a band that says what the
+       page is rather than a headline. */
+    .task-route__header--compact { align-items: center; padding: .45rem 1.15rem; }
+    .task-route__header--compact h2 { margin: 0; font-size: .95rem; letter-spacing: 0; }
+    .task-route__header--compact .task-route__close { margin-top: 0; }
+    /* The header and the form, the part of a task route that has to fit the
+       window. It fills a New Task route, which is held to main's height; a
+       task's page sizes it in layout.css. The form takes what the header
+       leaves, so a title that wraps takes its lines from the form rather than
+       pushing the Save row out of view. */
+    .task-route__screen { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
+    .task-layout { display: grid; flex: 1 1 auto; grid-template-columns: minmax(0, 1fr) 20rem; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; }
+    .task-editor { display: grid; grid-template-rows: auto minmax(8rem, 1fr); gap: 1rem; min-width: 0; min-height: 0; padding: 1.15rem; }
+    /* The sidebar's rhythm, in one place. Every section in it — Properties,
+       Dependencies, Assignments and Attachments, on a task's page and on a
+       New Task form alike — spaces itself from these and from nothing else,
+       so no section can drift from the others by a number of its own:
+       --sb-section-pad   above and below the rule between two sections
+       --sb-heading-gap   a section's heading to its first content
+       --sb-row-gap       one card or property row to the next
+       --sb-controls-gap  a list to the controls that add to it, and one
+                          group of add controls to the next
+       --sb-label-gap     a caption to the control it names
+       --sb-inline-gap    a box to the button on its line
+       --sb-card-pad      inside every dependency, assignment and attachment
+                          card (see .sidebar-card)
+       --sb-card-line-gap one line of a card to the next */
+    .task-sidebar { --sb-section-pad: .85rem; --sb-heading-gap: .5rem; --sb-row-gap: .4rem; --sb-controls-gap: .7rem; --sb-label-gap: .3rem; --sb-inline-gap: .4rem; --sb-card-pad: .45rem .55rem; --sb-card-line-gap: .15rem; min-width: 0; min-height: 0; overflow-y: auto; padding: 1.15rem; border-left: 1px solid var(--wb-hairline); background: var(--wb-surface-2); }
+    /* Every section heading in the sidebar is the same size and sits flush on
+       the section's top padding; the gap under it is the content's to take. */
+    .task-sidebar h3 { margin: 0; font-size: .88rem; line-height: 1.3; }
+    .task-properties { display: grid; gap: var(--sb-row-gap); padding-bottom: var(--sb-section-pad); }
+    .task-properties h3 { margin-bottom: calc(var(--sb-heading-gap) - var(--sb-row-gap)); }
+    /* The footer is a rule, a line of feedback, and a row of buttons. It was
+       padded like a page section and stood a finger tall on a laptop, taking
+       the height from the description it sits under. */
+    .task-actions { display: grid; grid-column: 1 / -1; gap: .4rem; padding: .5rem 1.15rem .6rem; border-top: 1px solid var(--wb-hairline); }
+    .field { display: grid; gap: .35rem; }
+    .field--wide { grid-column: 1 / -1; }
+    .field--description { grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+    .field label { color: var(--wb-ink); font-size: .78rem; font-weight: 750; }
+    .field input, .field textarea, .field select { width: 100%; border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); color: var(--wb-text); font: inherit; padding: .62rem .68rem; }
+    .field textarea { min-height: 8rem; resize: vertical; line-height: 1.45; }
+    .field--description textarea { height: 100%; min-height: 0; overflow-y: auto; resize: none; }
+    .field input:focus, .field textarea:focus, .field select:focus { border-color: var(--wb-primary); outline: 3px solid var(--wb-primary-glow); }
+    /* A caption with an action beside it. The row is still the field's first
+       grid track, so the control underneath keeps the flexible one it had. */
+    .field__header { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
+    .description-edit-toggle { flex: 0 0 auto; min-height: 1.5rem; border: 1px solid var(--wb-border-strong); border-radius: 3px; background: var(--wb-surface); color: var(--wb-ink); cursor: pointer; font: inherit; font-size: .72rem; font-weight: 800; padding: .12rem .5rem; }
+    .description-edit-toggle:hover { border-color: var(--wb-primary); color: var(--wb-primary); }
+    .description-edit-toggle:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 1px; }
+    /* The description as it reads, which is what the page shows until somebody
+       asks to edit it. It takes the flexible row the textarea takes and scrolls
+       inside itself for the same reason: the form's footer must stay on the
+       screen. It is focusable because it scrolls — a region a pointer can scroll
+       and a keyboard cannot is one the keyboard cannot read the bottom of. */
+    .description-read { min-height: 0; overflow-y: auto; padding: .62rem .68rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface-1); font-size: .84rem; line-height: 1.5; }
+    .description-read:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: -1px; }
+    .description-read__empty { margin: 0; color: var(--wb-ink-muted); font-size: .82rem; }
+    .label-editor { display: grid; gap: .35rem; }
+    .label-chips { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; padding: 0; list-style: none; }
+    .label-chips:empty { display: none; }
+    .label-chip { display: inline-flex; align-items: center; gap: .2rem; max-width: 100%; padding: 0 .1rem 0 .44rem; border: 1px solid var(--wb-border); border-radius: 999px; background: var(--wb-primary-tint-1); color: var(--wb-ink); font-size: .7rem; }
+    .label-chip__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* 1.5rem square, because removal is immediate and has no undo: a 24px
+       target is what WCAG 2.2 asks for, and the chiclets wrap too tightly for
+       the spacing exception to cover anything smaller. */
+    .label-chip__remove { display: inline-flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--wb-primary-ink); cursor: pointer; font: inherit; font-size: .85rem; line-height: 1; }
+    .label-chip__remove:hover { background: var(--wb-primary-chip); color: var(--wb-text); }
+    .label-chip__remove:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
+    .label-editor__hint, .label-editor__status { margin: 0; color: var(--wb-ink-muted); font-size: .72rem; }
+    /* Drawn while empty rather than created when there is something to say: an
+       unrendered element is not in the accessibility tree, and a live region
+       that appears in the same frame as its first message does not announce
+       it — which would cost exactly the first add or remove. It keeps the row
+       it reserves, because a label add or remove reports every single time and
+       the reader is looking at the chiclets it would push.
+       .form-status below is the other case: it speaks only when a save fails,
+       so it stands in the document at no height until it does. Reserving it
+       cost the footer a blank line — 22px of the "extra padding around the
+       buttons" this footer was asked to lose. */
+    .label-editor__status { min-height: 1.15rem; }
+    /* In the sidebar it stands at no height until it speaks, as the panels'
+       status lines do: a reserved blank line there was the one gap in the
+       sidebar that did not come from its rhythm tokens, and it doubled the
+       space above the rule under Properties. The first add or remove moves
+       Dependencies down a line, once. */
+    .task-sidebar .label-editor__status:empty { min-height: 0; }
+    .form-status { min-height: 1.35rem; margin: 0; color: var(--wb-danger-ink); font-size: .82rem; }
+    .form-status:empty { min-height: 0; }
+    .form-actions { display: flex; align-items: center; justify-content: space-between; gap: .85rem; width: 100%; }
+    .form-primary-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem .85rem; }
+    /* The far corner of the action bar: a task's Delete, or a New Task form's
+       Cancel — the two ways of leaving that give something up. */
+    .form-danger, .form-cancel { margin-left: auto; }
+    /* Create more sits on Save's line, after it, its words before its box. An
+       inline-flex label is only as wide as what it holds, so a click beside it
+       toggles nothing. */
+    .create-more { display: inline-flex; align-items: center; gap: .4rem; color: var(--wb-ink); cursor: pointer; font-size: .82rem; font-weight: 700; }
+    .create-more input { width: .95rem; height: .95rem; margin: 0; accent-color: var(--wb-primary); cursor: pointer; }
+    .create-more input:focus-visible { outline: 3px solid var(--wb-primary-glow-strong); outline-offset: 2px; }
+    .save-button { border: 1px solid var(--wb-primary-edge); border-radius: 4px; background: var(--wb-primary); color: var(--wb-on-accent); cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
+    .save-button:hover { background: var(--wb-primary-hover); }
+    .save-button:focus-visible { outline: 3px solid var(--wb-primary-glow-strong); outline-offset: 2px; }
+    .save-button:disabled { cursor: wait; opacity: .62; }
+    .delete-button { border: 1px solid var(--wb-danger-edge); border-radius: 4px; background: var(--wb-danger); color: var(--wb-on-accent); cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
+    .delete-button:hover { background: var(--wb-danger-hover); }
+    .delete-button:focus-visible { outline: 3px solid var(--wb-danger-glow); outline-offset: 2px; }
+    .delete-button:disabled { cursor: wait; opacity: .62; }
+    .board-link { color: var(--wb-ink); font-size: .84rem; font-weight: 700; text-underline-offset: .18em; }
+    .route-message { padding: 1.15rem; color: var(--wb-ink-muted); }
+    .route-message p { margin: 0 0 1rem; }
+    /* A task's dependencies, both kinds in one section: a heading, one list,
+       the toggle that says which kind the next entry is, and one picker. It
+       is not a grid, because its two live regions stand in it empty almost all
+       the time, and a grid spends a gap on an empty item. */
+    /* Drawn as the panels below it are drawn: the rule bleeds half a rem past
+       the content on either side and the padding gives it back, so all three
+       rules in the sidebar are one length. */
+    .task-relationships { margin: 0 -.5rem; padding: var(--sb-section-pad) .5rem; border-top: 1px solid var(--wb-hairline); }
+    .relationship-list { display: grid; gap: var(--sb-row-gap); margin: var(--sb-heading-gap) 0 0; }
+    /* Which kind the next entry is added as: two radios drawn as one
+       segmented control. The radios stay in the document, clipped, so the
+       group keeps the browser's own keyboard behavior: Tab reaches it once and
+       the arrow keys move the choice. Each label is a 24px target. */
+    .relationship-kind { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; margin: var(--sb-controls-gap) 0 0; }
+    .relationship-kind__label { color: var(--wb-ink); font-size: .74rem; font-weight: 750; }
+    .relationship-kind__options { position: relative; display: inline-flex; }
+    .relationship-kind__input { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .relationship-kind__option { display: inline-flex; align-items: center; min-height: 1.5rem; padding: .1rem .6rem; border: 1px solid var(--wb-border-strong); background: var(--wb-surface); color: var(--wb-ink); cursor: pointer; font-size: .74rem; font-weight: 750; }
+    .relationship-kind__option:first-of-type { border-radius: 4px 0 0 4px; }
+    .relationship-kind__option:last-of-type { margin-left: -1px; border-radius: 0 4px 4px 0; }
+    .relationship-kind__option:hover { border-color: var(--wb-primary); color: var(--wb-primary); }
+    .relationship-kind__input:checked + .relationship-kind__option { position: relative; z-index: 1; border-color: var(--wb-primary-edge); background: var(--wb-primary); color: var(--wb-on-accent); }
+    .relationship-kind__input:focus-visible + .relationship-kind__option { position: relative; z-index: 2; outline: 3px solid var(--wb-primary); outline-offset: 1px; }
+    .relationship-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+    .relationship-row h4, .relationship-row p { margin: 0; }
+    .relationship-row h4 { font-size: .84rem; overflow-wrap: anywhere; }
+    .relationship-row h4 a { color: var(--wb-text); text-decoration-color: var(--wb-border-underline); text-underline-offset: .16em; }
+    .relationship-row h4 a:hover { color: var(--wb-primary); text-decoration-color: currentcolor; }
+    .relationship-row__metadata, .relationship-row__note { color: var(--wb-ink-muted); font-size: .72rem; overflow-wrap: anywhere; }
+    /* A row has these two items and no others, because it used to have as many
+       as the branch that built it happened to append. Only the Remove button
+       named a column, so the rest were dealt in row-major: a row with no
+       button — a deleted task in Blocks, which is no longer listed — put the
+       heading and the badge in column one and the metadata and the note in
+       column two. Column two is an auto track, and an auto track is maximized
+       to its max-content before the 1fr column is given anything, so sizing it
+       to two sentences left the title column at 0px — and overflow-wrap:
+       anywhere took the title down to one character per line rather than
+       letting it overflow. Beside a button, Remove held rows one and two of
+       column two, so a badge still fell to row three of column one; only a
+       draft whose save was refused had a fourth part, and its error note was
+       dealt into column two beside the badge, widening that track at the
+       title's expense. Naming the two columns is the whole of the fix.
+       min-width: 0 is belt and braces. It cannot widen anything — the title
+       column's min sizing function is already a fixed 0, so no item's automatic
+       minimum ever reaches that track's base size — it only keeps this stack
+       from overflowing its own track if the sidebar were ever narrower than the
+       word "Deleted", the one run in here that does not carry overflow-wrap. */
+    .relationship-row__text { display: grid; gap: var(--sb-card-line-gap); min-width: 0; }
+    /* The kind a row is listed under, in words, at the start of its title's
+       line. The two kinds also differ in color, but the word is what says it.
+       The title runs on inline after the tag and wraps under it, rather than
+       being squeezed into a column beside it. */
+    .relationship-row__title { min-width: 0; }
+    .relationship-row__title h4 { display: inline; }
+    .relationship-row__kind { display: inline-block; margin-right: .35rem; padding: 0 .4rem; border: 1px solid var(--wb-border); border-radius: 999px; background: var(--wb-primary-tint-1); color: var(--wb-primary-ink); font-size: .66rem; font-weight: 800; line-height: 1.35; white-space: nowrap; }
+    .relationship-row__kind--blocks { border-color: var(--wb-warning-border); background: var(--wb-warning-surface); color: var(--wb-warning-ink); }
+    /* On the title's line, at the card's right end: the × alone. */
+    .relationship-row__controls { display: flex; align-items: center; align-self: start; gap: var(--sb-inline-gap); grid-column: 2; }
+    /* A draft's state, under the title and the ×, across the whole card:
+       "Not saved", the reason, and the Retry that saves it, each on its own
+       line. Retry and the reason used to sit beside the ×, and they took the
+       title down to a narrow column of what was left. */
+    .relationship-row__failure { display: grid; grid-column: 1 / -1; justify-items: start; gap: var(--sb-card-line-gap); min-width: 0; }
+    .relationship-state { color: var(--wb-danger-ink); font-size: .75rem; }
+    /* The box and its Add on one line, laid out as every inline add row in
+       the sidebar is (see .sidebar-inline): the box takes the width, the
+       button keeps its own, and the two stretch to one height. No row gap: the
+       line under them is a live region that stands empty almost always, and
+       it brings its own margin when it has something to say. */
+    .relationship-editor { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 var(--sb-inline-gap); align-items: stretch; margin-top: var(--sb-label-gap); }
+    /* The caption used to hold a row of the sidebar to itself, to repeat what
+       the kind toggle above the input and the placeholder inside it already
+       say. It is clipped rather than removed or display: none'd, because it is
+       what gives the combobox its accessible name; the placeholder repeats
+       that name exactly, so what is seen and what is announced stay the same
+       words. */
+    .relationship-editor__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .relationship-editor input { min-width: 0; width: 100%; border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); color: var(--wb-text); font: inherit; font-size: .82rem; padding: .45rem .55rem; }
+    .relationship-editor input:focus { border-color: var(--wb-primary); outline: 3px solid var(--wb-primary-glow); }
+    .relationship-listbox { position: fixed; z-index: 20; max-height: 18rem; overflow-y: auto; border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); box-shadow: 0 8px 20px var(--wb-text-shadow); }
+    .relationship-option { display: grid; gap: .18rem; padding: .55rem .62rem; border-bottom: 1px solid var(--wb-border-muted); cursor: pointer; }
+    .relationship-option:last-child { border-bottom: 0; }
+    .relationship-option[aria-selected="true"], .relationship-option.is-active { background: var(--wb-primary-tint-1); }
+    .relationship-option strong { font-size: .8rem; }
+    .relationship-option span { color: var(--wb-ink-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
+    .relationship-empty { grid-column: 1 / -1; min-height: 1rem; margin: var(--sb-label-gap) 0 0; color: var(--wb-ink-muted); font-size: .75rem; }
+    .relationship-message { min-height: 1rem; margin: var(--sb-label-gap) 0 0; color: var(--wb-danger-ink); font-size: .78rem; }
+    .task-relationships .form-status:not(:empty) { margin-top: var(--sb-label-gap); }
+    /* Both of these are live regions and both stay in the document whatever
+       they hold — an element the renderer creates in the same frame as its
+       first message never announces it. What they no longer keep is a reserved
+       row apiece: four blank lines stood in the sidebar permanently so that a
+       message could arrive without moving anything. Higher specificity than the
+       rules above and the ones in the media query, so it decides the height
+       wherever it applies.
+       .relationship-message reports a failed add or remove and is rare, so it
+       moves what is under it down when it comes. "No matching tasks." is not rare: it
+       is written on every keystroke the filter matches nothing on, so the row
+       under an open combobox is reserved for as long as the reader is in it.
+       That trades a jump per keystroke for one when the box takes focus, and
+       the listbox opens over the space it happens in. */
+    .relationship-empty:empty, .relationship-message:empty { min-height: 0; margin: 0; }
+    .relationship-editor:focus-within .relationship-empty:empty { min-height: 1rem; margin-top: var(--sb-label-gap); }
+    /* A task's page grows below its form: the thread and the change log follow
+       it, and main scrolls to them. The form itself is held to the window in
+       layout.css, the way a New Task form is. */
+    .task-route--history { height: auto; min-height: 100%; }
+    /* The configuration route, which grows with its lists the way the history route
+       does and lets main scroll. Both of these are as specific as .task-route
+       itself, so they only take effect written after it: the same rule text up
+       beside the .admin rules lost to the height: 100% above, and the route's
+       rows spilled out of the card it is drawn in. */
+    .task-route--admin { height: auto; min-height: 100%; }
+    .task-route--admin .task-route__header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem 1rem; }
+    /* The panels a task's page draws: the comment thread below the form, and
+       the assignments and attachments in its sidebar.
+
+       The thread is the one that stays full width under the form, with the
+       change log after it, because it has no length a page can rely on: twenty
+       comments in a 20rem column wrap to a paragraph per line. The assignments
+       and attachments are bounded at fifty rows each and are part of what the
+       task is, so they stand in the sidebar on a task's page exactly where a
+       New Task form stages them, and the two pages are laid out alike. */
+    .task-panel { display: grid; gap: .55rem; padding: 1.15rem; border-top: 1px solid var(--wb-hairline); }
+    .task-panel--comments { background: var(--wb-surface); }
+    .task-panel--attachments { background: var(--wb-surface-2); }
+    /* A panel inside the sidebar, which supplies the padding and the
+       background this one would otherwise repeat. It keeps the rule above it,
+       because it is a section of that sidebar in the way Properties is and
+       reads as one. The horizontal padding is given back by the negative
+       margin, so the content keeps the sidebar's full width while the drop
+       outline has a few pixels to sit in rather than resting on the text. */
+    .task-sidebar .task-panel { display: block; padding: var(--sb-section-pad) .5rem; margin: 0 -.5rem; background: none; }
+    /* Spaced by margins rather than the panel's grid gap, because two of the
+       panel's parts are live regions that stand empty, and a grid spends a gap
+       on an empty item: the rule under an Attachments section sat a gap
+       further from its last control than the rule above it did from the
+       heading. Heading to list, list to the add controls, and the status line
+       only once it says something. */
+    .task-sidebar .task-panel__list { margin-top: var(--sb-heading-gap); gap: var(--sb-row-gap); }
+    .task-sidebar .task-panel__empty { margin-top: var(--sb-heading-gap); }
+    .task-sidebar .task-panel > :is(.assignment-add, .attachment-add) { margin-top: var(--sb-heading-gap); }
+    .task-sidebar .task-panel__list:not(:empty) ~ :is(.assignment-add, .attachment-add) { margin-top: var(--sb-controls-gap); }
+    .task-sidebar .task-panel > .form-status:not(:empty) { margin-top: var(--sb-label-gap); }
+    /* Every grid inside it bounded at the column it is in.
+       These are single-column grids, and a grid track sized `auto` grows to
+       the widest thing in it: a file input's intrinsic width is wider than the
+       sidebar, so the whole column grew, the sidebar scrolled sideways, and the
+       Remove button on every row sat off the edge of it. Bounded, the track can
+       never exceed the sidebar and the rows wrap inside it. */
+    .task-sidebar .task-panel,
+    .task-sidebar .task-panel__list,
+    .task-sidebar .attachment-add,
+    .task-sidebar .attachment-add__group,
+    .task-sidebar .assignment-add { grid-template-columns: minmax(0, 1fr); }
+    .task-sidebar .task-panel__header { flex-wrap: wrap; row-gap: .1rem; }
+    .task-sidebar .task-panel__count { min-width: 0; overflow-wrap: anywhere; }
+    .task-panel__header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .3rem .75rem; }
+    .task-panel__header h3 { margin: 0; font-size: .88rem; }
+    .task-panel__count { margin: 0; color: var(--wb-ink-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .7rem; line-height: 1.3; }
+    /* The empty state carries no display of its own, so the hidden attribute
+       the renderer sets is the only thing that decides whether it is seen, for
+       the reason .column__empty above says. */
+    .task-panel__empty { margin: 0; color: var(--wb-ink-muted); font-size: .78rem; }
+    .task-panel__list { display: grid; gap: .4rem; margin: 0; padding: 0; list-style: none; }
+    /* An empty list draws no row, so the panel's grid spends no gap on it. */
+    .task-panel__list:empty { display: none; }
+    /* One line of feedback per panel, and it is the same live region the form
+       uses so a refusal reads the same wherever it happens on this page. */
+    .task-panel .form-status { min-height: 0; }
+    /* An assignment row is the attachment row's geometry: one line naming who
+       holds the task with — where this board may withdraw it — the × at its
+       right end, and one line saying when that was recorded.
+
+       overflow-wrap: anywhere on both, for the reason the comment body carries
+       it — a 254-byte principal with no space in it is not a reason for this page
+       to scroll sideways. Nothing here is clamped to one line: this section is
+       where the whole value is legible, which is what makes the card's chip above
+       it safe to truncate. */
+    .task-panel--assignments { background: var(--wb-surface-2); }
+    .assignment__who { grid-column: 1; grid-row: 1; align-self: center; margin: 0; min-width: 0; font-size: .84rem; overflow-wrap: anywhere; }
+    .assignment > :not(.assignment__who, .assignment__actions) { grid-column: 1 / -1; }
+    .assignment__principal { font-weight: 700; }
+    .assignment__label { color: var(--wb-primary); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .8rem; font-weight: 700; }
+    .assignment__meta { margin: 0; color: var(--wb-ink-muted); font-size: .72rem; overflow-wrap: anywhere; }
+    .assignment__failure { margin: .1rem 0 0; color: var(--wb-danger-ink); font-size: .74rem; overflow-wrap: anywhere; }
+    .assignment__actions { display: flex; grid-column: 2; grid-row: 1; align-items: center; gap: var(--sb-inline-gap); }
+    /* A draft that was not saved, under the name and its ×, as a failed
+       dependency's is: the state, the reason, and Retry, each on its own line
+       across the card. */
+    .assignment__failed { display: grid; justify-items: start; gap: var(--sb-card-line-gap); min-width: 0; }
+    .assignment__failed .assignment__failure { margin: 0; }
+    /* The form under the rows, on a board with an identity to record an
+       assignment against: a caption, and the box with Assign on its line. The
+       placeholder names the identity a blank box assigns. */
+    .assignment-add { display: grid; gap: var(--sb-label-gap); }
+    .assignment-add label { color: var(--wb-ink); font-size: .74rem; font-weight: 750; }
+    .assignment-add input { width: 100%; border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); color: var(--wb-text); font: inherit; font-size: .82rem; padding: .45rem .55rem; }
+    .assignment-add input:focus { border-color: var(--wb-primary); outline: 3px solid var(--wb-primary-glow); }
+    .comment { display: grid; gap: .25rem; padding: .6rem .7rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface); }
+    .comment__attribution { margin: 0; color: var(--wb-ink-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
+    /* overflow-wrap, because a body with no spaces in it is not a reason for the
+       page to scroll sideways. There is no white-space: pre-wrap here any more:
+       the renderer below draws a comment's line breaks as <br> elements, so
+       preserving the source newlines as well would double every one of them.
+       Still no innerHTML anywhere — the formatting is built as nodes. */
+    .comment__body { margin: 0; font-size: .84rem; line-height: 1.45; overflow-wrap: anywhere; }
+    .comment__note { margin: 0; color: var(--wb-warning-ink); font-size: .74rem; }
+    .comment__actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+    .comment__editor { display: grid; gap: .35rem; }
+    .comment__editor textarea, .comment-add textarea { width: 100%; min-height: 4.5rem; border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); color: var(--wb-text); font: inherit; font-size: .84rem; line-height: 1.45; padding: .5rem .6rem; resize: vertical; }
+    .comment__editor textarea:focus, .comment-add textarea:focus, .attachment-add input:focus { border-color: var(--wb-primary); outline: 3px solid var(--wb-primary-glow); }
+    .comment-add { display: grid; gap: .35rem; }
+    .comment-add label, .attachment-add label:not(.thread-button) { color: var(--wb-ink); font-size: .74rem; font-weight: 750; }
+    .comment-add__actions, .attachment-add__actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+    .attachment__name { grid-column: 1; grid-row: 1; align-self: center; margin: 0; min-width: 0; font-size: .84rem; font-weight: 700; overflow-wrap: anywhere; }
+    /* inline-block with padding and a floor on both axes, so the one action in
+       an attachment's row is a 24px target whatever it is called. Measured on
+       the page: the bare anchor was 18px tall at every viewport, and a file
+       named `..` — which core allows, since it forbids only a path separator
+       and a NUL — drew an 8px-wide one. Both are under what WCAG 2.2 asks of a
+       target, and this is the control that downloads the file. The minimum only
+       decides anything for a name of one or two characters; every longer one is
+       already past it. */
+    .attachment__name a { display: inline-block; min-width: 1.5rem; padding: .2rem 0; color: var(--wb-text); text-decoration-color: var(--wb-border-underline); text-underline-offset: .16em; }
+    .attachment__name a:hover { color: var(--wb-primary); text-decoration-color: currentcolor; }
+    /* The card's whole width, under the name and the × alike, so the line
+       reads as one run of " · "-separated facts and wraps only where it has
+       to. Every card's metadata line is the same small sans, so the three
+       kinds of row read alike. overflow-wrap: break-word rather than anywhere, which lets a grid
+       size the line by its longest single character. */
+    .attachment__meta { grid-column: 1 / -1; margin: 0; color: var(--wb-ink-muted); font-size: .72rem; overflow-wrap: break-word; }
+    .attachment__remove { grid-column: 2; grid-row: 1; }
+    /* Why a staged attachment did not attach, on the row it belongs to rather
+       than only in the panel's one status line: a create that failed on two of
+       five has two different reasons to give, and one line can hold one. */
+    .attachment__failure { grid-column: 1 / -1; margin: .1rem 0 0; color: var(--wb-danger-ink); font-size: .74rem; overflow-wrap: anywhere; }
+    /* The two adders, each its own form: see the client for why one form with
+       two buttons in it was a bug rather than a shortcut. */
+    /* The drop target around the attachment controls. It is the whole panel,
+       because a reader dragging a file out of Finder aims at the list of things
+       already attached rather than at the chooser beside it.
+
+       Drawn with an outline rather than a border so nothing on the panel moves
+       when it lights up: a border would take a few pixels the layout does not
+       have spare, and a target that reflows as the cursor crosses it is a
+       target that shifts out from under the drop. Inset, so it reads as this
+       panel rather than as the page. */
+    [data-attachment-drop][data-drop-state="active"] { outline: 2px dashed var(--wb-primary); outline-offset: -3px; background: var(--wb-primary-tint-2); }
+    /* Refused: the same shape in the colour every refusal on this page uses, so
+       a reader who cannot drop right now can see that without reading. */
+    [data-attachment-drop][data-drop-state="refused"] { outline: 2px dashed var(--wb-danger-ink); outline-offset: -3px; }
+    .attachment-add__hint { margin: 0; color: var(--wb-ink-muted); font-size: .72rem; }
+    /* The files chosen and not yet added: each name with the red × that takes
+       it back out before anything is sent or staged. The × is .row-remove,
+       the one every sidebar row uses. */
+    .attachment-pending { display: grid; grid-template-columns: minmax(0, 1fr); gap: .25rem; margin: 0; padding: 0; list-style: none; }
+    .attachment-pending__item { display: flex; align-items: center; justify-content: space-between; gap: .4rem; min-width: 0; padding: .15rem .2rem .15rem .55rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface); font-size: .8rem; }
+    .attachment-pending__name { min-width: 0; font-weight: 700; overflow-wrap: anywhere; }
+    .attachment-add { display: grid; gap: var(--sb-controls-gap); }
+    .attachment-add__group { position: relative; display: grid; gap: var(--sb-label-gap); margin: 0; }
+    .attachment-add input[type="text"], .attachment-add input[type="url"] { width: 100%; border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); color: var(--wb-text); font: inherit; font-size: .82rem; padding: .45rem .55rem; }
+    /* The browser's file control, kept as the control and drawn as nothing:
+       clipped, out of the group's grid, and still focusable, so Tab reaches
+       it, a screen reader names it, and Space or Enter opens the picker. What
+       is seen is the label after it, drawn as a secondary button, which
+       carries the input's focus ring for it. */
+    .attachment-add__file { position: absolute; width: 1px; height: 1px; margin: 0; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; opacity: 0; }
+    .attachment-add__choose { display: inline-flex; align-items: center; justify-self: start; }
+    .attachment-add__file:focus-visible + .attachment-add__choose { outline: 3px solid var(--wb-primary); outline-offset: 1px; }
+    .attachment-add__file:disabled + .attachment-add__choose { cursor: default; opacity: .52; }
+    /* Every button in these two panels. 2rem tall with the text at .78rem is a
+       comfortable target at every viewport this was measured at, and Remove has
+       no confirmation — the page's other direct removals do not either — so it
+       is the one that must not be a sliver. */
+    .thread-button { min-height: 2rem; border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); color: var(--wb-ink); cursor: pointer; font: inherit; font-size: .78rem; font-weight: 700; padding: .35rem .7rem; }
+    .thread-button:hover:enabled { border-color: var(--wb-primary); color: var(--wb-primary); }
+    .thread-button:disabled { cursor: default; opacity: .52; }
+    .thread-button:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 1px; }
+    .thread-button--primary { border-color: var(--wb-primary-edge); background: var(--wb-primary); color: var(--wb-on-accent); }
+    .thread-button--primary:hover:enabled { background: var(--wb-primary-hover); color: var(--wb-on-accent); }
+    /* One line of the sidebar holding a box and the button that acts on it:
+       assigning someone, attaching a link with its label. The box takes the
+       width, the button keeps its natural one, and both stretch to the taller
+       of the two so their tops and heights agree. The dependency picker is
+       laid out the same way in its own grid. */
+    .sidebar-inline { display: flex; align-items: stretch; gap: var(--sb-inline-gap); min-width: 0; }
+    .task-sidebar .sidebar-inline > input { flex: 1 1 auto; width: auto; min-width: 0; }
+    .sidebar-inline > button { flex: 0 0 auto; }
+    /* A dependency, an assignment or an attachment, as one card: the same
+       border, radius, padding and line spacing for all three, from the
+       sidebar's tokens, so no kind of row is drawn a little differently from
+       the others. Two columns: what the row is in the first, its × (and a
+       failed draft's Retry) at the right end of the first line, and anything
+       after the first line free to take both. Written after the row rules it
+       shares with, so it decides their geometry. */
+    .sidebar-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: var(--sb-card-line-gap) var(--sb-inline-gap); padding: var(--sb-card-pad); border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface); }
+    /* The red × that takes a row out of a sidebar list. 1.5rem square — a
+       24px target, which is what WCAG 2.2 asks of a control that removes
+       something with no confirmation — and red, as removal is everywhere on
+       this page. Its name and tooltip are on the element; see rowRemoveButton. */
+    .row-remove { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--wb-danger-ink); cursor: pointer; font: inherit; font-size: 1.05rem; font-weight: 800; line-height: 1; }
+    .row-remove:hover:enabled { background: var(--wb-danger-surface); color: var(--wb-danger); }
+    .row-remove:focus-visible { outline: 2px solid var(--wb-danger-ink); outline-offset: 1px; }
+    .row-remove:disabled { cursor: default; opacity: .45; }

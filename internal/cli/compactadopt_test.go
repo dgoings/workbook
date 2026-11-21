@@ -1,0 +1,816 @@
+package cli
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/testenv"
+	"github.com/dgoings/workbook/internal/webui"
+)
+
+// compactedOnOriginDetailFor is the fallback detail for the task
+// compactedOnOriginTask leaves stuck, with its one unpushed change.
+func compactedOnOriginDetailFor(taskID string) string {
+	return `"Kept on the old history" was compacted on origin; you have 1 unpushed change on the old history. ` +
+		`Run "workbook compact --adopt ` + taskID + `" to retry, ` +
+		`or add --discard-local to take origin's version after saving yours to a bundle.`
+}
+
+func cannotCombineDetailFor(title, taskID string) string {
+	return `"` + title + `" changed on origin after you compacted it, and the two can't be combined. ` +
+		`Run "workbook compact --adopt ` + taskID + ` --discard-local" to take origin's version ` +
+		`after saving yours to a bundle; then compact it again.`
+}
+
+// adoptJSON runs compact --adopt with --json, which must succeed, and decodes
+// its result.
+func adoptJSON(t *testing.T, repository string, args ...string) (compactAdoptResult, compactEnvelope) {
+	t.Helper()
+	result, envelope, _ := adoptJSONData(t, repository, args...)
+	return result, envelope
+}
+
+// adoptJSONData is adoptJSON that also returns the data member as a callers
+// read it, decoded into a map rather than through the production struct, so a
+// test can pin the shape itself.
+func adoptJSONData(t *testing.T, repository string, args ...string) (compactAdoptResult, compactEnvelope, map[string]any) {
+	t.Helper()
+	stdout := compactRun(t, repository, append(append([]string{"compact", "--adopt"}, args...), "--json")...)
+	data := assertJSONResult(t, stdout, "compact").Data
+	var result compactAdoptResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("decode adopt result: %v; output = %q", err, stdout)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("decode adopt data: %v; output = %q", err, stdout)
+	}
+	return result, decodeCompactEnvelope(t, stdout), raw
+}
+
+// assertAdoptData requires the data member to be exactly want: every key, no
+// others, and every value.
+func assertAdoptData(t *testing.T, got, want map[string]any) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("compact --adopt data = %#v, want exactly %#v", got, want)
+	}
+}
+
+// fetchOutcome runs `sync --json` in repository and returns the fetch phase's
+// line for taskID, requiring the run to exit 0.
+func syncFetchOutcome(t *testing.T, repository, taskID string) gitstore.SyncTaskResult {
+	t.Helper()
+	stdout := compactRun(t, repository, "sync", "--json")
+	var result gitstore.SyncRunResult
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "sync").Data, &result); err != nil {
+		t.Fatalf("decode sync: %v; output = %q", err, stdout)
+	}
+	for _, item := range result.Fetch.Tasks {
+		if item.TaskID == taskID {
+			return item
+		}
+	}
+	t.Fatalf("sync fetch tasks = %+v, want a line for %s", result.Fetch.Tasks, taskID)
+	return gitstore.SyncTaskResult{}
+}
+
+// bundleHeads lists the refs a bundle holds, by name.
+func bundleHeads(t *testing.T, repository, bundle string) map[string]string {
+	t.Helper()
+	heads := map[string]string{}
+	for _, line := range strings.Split(cliGitOutput(t, repository, "bundle", "list-heads", bundle), "\n") {
+		if objectID, name, found := strings.Cut(line, " "); found {
+			heads[name] = objectID
+		}
+	}
+	return heads
+}
+
+func TestCompactAdoptRejectsOtherModes(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	task := cliCreateTask(t, repository, "Not stuck")
+	const combined = "--adopt cannot be combined with --done-only, --deleted-only, --since, --keep-attachments or --dry-run"
+	for _, args := range [][]string{
+		{"--adopt", task.ID, "--done-only"},
+		{"--adopt", task.ID, "--done-only", "30d"},
+		{"--adopt", task.ID, "--deleted-only"},
+		{"--deleted-only", "7d", "--adopt", task.ID},
+		{"--adopt", task.ID, "--since", "7d"},
+		{"--adopt", task.ID, "--keep-attachments"},
+		{"--adopt", task.ID, "--dry-run"},
+		{"--adopt", task.ID, "--discard-local", "--dry-run"},
+	} {
+		assertCompactRefused(t, repository, combined, args...)
+	}
+	assertCompactRefused(t, repository, "--adopt cannot be combined with --no-sync", "--adopt", task.ID, "--no-sync")
+	assertCompactRefused(t, repository, "--discard-local requires --adopt", "--discard-local")
+	assertCompactRefused(t, repository, "--discard-local requires --adopt", "--discard-local", "--no-backup")
+	assertCompactRefused(t, repository, "--no-backup and --backup cannot be combined",
+		"--adopt", task.ID, "--discard-local", "--no-backup", "--backup", t.TempDir())
+	// A retry writes no bundle, so a backup flag beside it is a mistake to
+	// report rather than one to ignore.
+	const backupNeedsDiscard = "--no-backup and --backup require --discard-local when used with --adopt"
+	assertCompactRefused(t, repository, backupNeedsDiscard, "--adopt", task.ID, "--no-backup")
+	assertCompactRefused(t, repository, backupNeedsDiscard, "--adopt", task.ID, "--backup", t.TempDir())
+	assertCompactRefused(t, repository, backupNeedsDiscard, "--backup", t.TempDir(), "--adopt", task.ID)
+}
+
+// A task in neither stuck state has nothing to adopt, and saying so is an
+// error rather than a silent success. The command was typed correctly, so the
+// error is about the task's state and prints no usage text.
+func TestCompactAdoptWithNothingStuckIsRefused(t *testing.T) {
+	t.Parallel()
+	first, _ := cliSyncRepositories(t)
+	task := publishedDoneTask(t, first, "Nothing to adopt")
+	before := taskRefs(t, first)
+	message := "task " + task.ID + " has no compaction to adopt"
+	code, stdout, stderr := run(t, first, "compact", "--adopt", task.ID, "--json")
+	if code != core.ExitCode(core.Errorf(core.CategoryValidation, "probe")) || stdout != "" {
+		t.Fatalf("compact --adopt = code %d, stdout %q; want the validation code", code, stdout)
+	}
+	assertJSONError(t, stderr, core.CategoryValidation, message)
+	if _, _, stderr := run(t, first, "compact", "--adopt", task.ID); stderr != "workbook: "+message+"\n" {
+		t.Fatalf("compact --adopt stderr = %q, want only the message, without usage text", stderr)
+	}
+	if after := taskRefs(t, first); !reflect.DeepEqual(after, before) {
+		t.Fatalf("task refs = %v, want unchanged %v", after, before)
+	}
+	assertNoArchiveDirectory(t, first)
+}
+
+// A clone with no origin has nothing to adopt from. That is the repository's
+// state, not a mistyped command, so no usage text follows the message.
+func TestCompactAdoptWithoutOriginIsRefused(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	task := cliCreateTask(t, repository, "No origin")
+	const message = "compact --adopt needs an origin remote to fetch from"
+	code, _, stderr := run(t, repository, "compact", "--adopt", task.ID, "--json")
+	if code != core.ExitCode(core.Errorf(core.CategoryValidation, "probe")) {
+		t.Fatalf("compact --adopt = code %d, want the validation code; stderr %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryValidation, message)
+	if _, _, stderr := run(t, repository, "compact", "--adopt", task.ID); stderr != "workbook: "+message+"\n" {
+		t.Fatalf("compact --adopt stderr = %q, want only the message, without usage text", stderr)
+	}
+}
+
+// The replay that fell back still conflicts, so the retry returns the same
+// fallback and moves nothing.
+func TestCompactAdoptRetryThatStillConflictsReturnsTheFallback(t *testing.T) {
+	t.Parallel()
+	_, second, task := compactedOnOriginTask(t)
+	if item := syncFetchOutcome(t, second, task.ID); item.Status != gitstore.SyncCompactedOnOrigin {
+		t.Fatalf("fetch outcome = %+v, want %s", item, gitstore.SyncCompactedOnOrigin)
+	}
+	before := taskRefs(t, second)[task.ID]
+	code, _, stderr := run(t, second, "compact", "--adopt", task.ID, "--json")
+	if code != core.ExitCode(core.Errorf(core.CategoryConflict, "probe")) {
+		t.Fatalf("compact --adopt code = %d, want the conflict code; stderr = %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryConflict, compactedOnOriginDetailFor(task.ID))
+	if after := taskRefs(t, second)[task.ID]; after != before {
+		t.Fatalf("local ref = %s, want it left on the old history at %s", after, before)
+	}
+	assertNoArchiveDirectory(t, second)
+}
+
+// Once origin's text agrees with the local change, the replay that fell back
+// runs, and --adopt takes the checkpoint with the local change on top of it and
+// publishes it. A mutation cannot settle the conflict from this side, because
+// mutations refuse the stuck task, so it is settled on origin.
+func TestAdoptCompactionRetrySucceedsAfterResolvingConflict(t *testing.T) {
+	t.Parallel()
+	first, second, task := compactedOnOriginTask(t)
+	if item := syncFetchOutcome(t, second, task.ID); item.Status != gitstore.SyncCompactedOnOrigin {
+		t.Fatalf("fetch outcome = %+v, want %s", item, gitstore.SyncCompactedOnOrigin)
+	}
+	compactRun(t, first, "update", task.ID, "--description", "Our text")
+	resolved := remoteTaskRefValue(t, first, task.ID)
+
+	result, envelope, data := adoptJSONData(t, second, task.ID)
+	if result.TaskID != task.ID || result.Status != gitstore.SyncAdoptedReplayed || result.Bundle != "" {
+		t.Fatalf("adopt result = %+v, want %s %s with no bundle", result, task.ID, gitstore.SyncAdoptedReplayed)
+	}
+	local := taskRefs(t, second)[task.ID]
+	assertAdoptData(t, data, map[string]any{
+		"taskId": task.ID,
+		"status": "adopted-replayed",
+		"detail": "replayed 1 local operation(s) onto origin's checkpoint",
+		"head":   local,
+	})
+	if result.Head != local {
+		t.Fatalf("adopt head = %s, want the local ref %s", result.Head, local)
+	}
+	if parent := cliGitOutput(t, second, "rev-parse", "refs/workbook/tasks/"+task.ID+"^"); parent != resolved {
+		t.Fatalf("replayed change's parent = %s, want origin's tip %s", parent, resolved)
+	}
+	if got := remoteTaskRefValue(t, second, task.ID); got != local {
+		t.Fatalf("origin holds %s, want the adopted tip %s published", got, local)
+	}
+	if envelope.Sync.Status != syncStatusCompleted || envelope.Sync.Fetch == nil {
+		t.Fatalf("sync = %+v, want a completed fetch and push", envelope.Sync)
+	}
+	if shown := showTask(t, second, task.ID); shown.Description != "Our text" || shown.Status != core.StatusDone {
+		t.Fatalf("shown task = %+v, want the agreed description on the checkpoint", shown)
+	}
+	if item := syncFetchOutcome(t, second, task.ID); item.Status != gitstore.SyncUnchanged {
+		t.Fatalf("next fetch outcome = %+v, want %s", item, gitstore.SyncUnchanged)
+	}
+}
+
+// --discard-local writes the local history, parked refs included, to a
+// verified bundle at the default path first, then takes origin's checkpoint
+// and keeps nothing of the old history in the clone.
+func TestAdoptCompactionDiscardLocalBundlesFirst(t *testing.T) {
+	t.Parallel()
+	first, second, task := compactedOnOriginTask(t)
+	syncFetchOutcome(t, second, task.ID)
+	old := taskRefs(t, second)[task.ID]
+	parked := "refs/workbook/reconciled/" + task.ID + "/0"
+	cliGit(t, second, "update-ref", parked, old)
+	checkpoint := remoteTaskRefValue(t, first, task.ID)
+
+	result, envelope, data := adoptJSONData(t, second, task.ID, "--discard-local")
+	assertAdoptData(t, data, map[string]any{
+		"taskId": task.ID,
+		"status": "discarded-local",
+		"detail": "took origin's version; the local history is saved in " + result.Bundle,
+		"head":   checkpoint,
+		"bundle": result.Bundle,
+	})
+	if result.TaskID != task.ID || result.Status != gitstore.SyncDiscardedLocal || result.Head != checkpoint {
+		t.Fatalf("adopt result = %+v, want %s %s at origin's checkpoint %s", result, task.ID, gitstore.SyncDiscardedLocal, checkpoint)
+	}
+	if envelope.Sync.Status != syncStatusCompleted || envelope.Sync.Fetch == nil {
+		t.Fatalf("sync = %+v, want a completed fetch", envelope.Sync)
+	}
+	directory := archiveDirectory(second)
+	if filepath.Dir(result.Bundle) != directory || !strings.HasSuffix(result.Bundle, "-"+task.ID+"-local.bundle") {
+		t.Fatalf("bundle = %q, want <run>-%s-local.bundle in %s", result.Bundle, task.ID, directory)
+	}
+	if result.Detail != "took origin's version; the local history is saved in "+result.Bundle {
+		t.Fatalf("detail = %q, want it to name the bundle", result.Detail)
+	}
+	cliGit(t, second, "bundle", "verify", "--quiet", result.Bundle)
+	heads := bundleHeads(t, second, result.Bundle)
+	if heads["refs/workbook/tasks/"+task.ID] != old || heads[parked] != old {
+		t.Fatalf("bundle heads = %v, want the old tip %s under the task ref and the parked ref", heads, old)
+	}
+	if got := taskRefs(t, second)[task.ID]; got != checkpoint {
+		t.Fatalf("local ref = %s, want origin's checkpoint %s", got, checkpoint)
+	}
+	if refs := cliGitOutput(t, second, "for-each-ref", "refs/workbook/reconciled/"+task.ID+"/"); refs != "" {
+		t.Fatalf("parked refs = %q, want none", refs)
+	}
+	if reflog := cliGitOutput(t, second, "reflog", "show", "--format=%H", "refs/workbook/tasks/"+task.ID); strings.Contains(reflog, old) {
+		t.Fatalf("task reflog %q still names the old tip %s", reflog, old)
+	}
+	if shown := showTask(t, second, task.ID); shown.Description != "Their text" {
+		t.Fatalf("shown description = %q, want origin's text", shown.Description)
+	}
+	if item := syncFetchOutcome(t, second, task.ID); item.Status != gitstore.SyncUnchanged {
+		t.Fatalf("next fetch outcome = %+v, want %s", item, gitstore.SyncUnchanged)
+	}
+}
+
+// The text output is one line naming the bundle, or saying none was written.
+func TestCompactAdoptDiscardLocalTextOutput(t *testing.T) {
+	t.Parallel()
+	backup := t.TempDir()
+	for _, args := range [][]string{{"--backup", backup}, {"--no-backup"}} {
+		_, second, task := compactedOnOriginTask(t)
+		stdout := compactRun(t, second, append([]string{"compact", "--adopt", task.ID, "--discard-local"}, args...)...)
+		line, _, _ := strings.Cut(stdout, "\n")
+		if args[0] == "--no-backup" {
+			want := "Took origin's version of " + task.ID + "; the local history was discarded without a backup."
+			if line != want {
+				t.Fatalf("first line = %q, want %q", line, want)
+			}
+			assertNoArchiveDirectory(t, second)
+			continue
+		}
+		prefix := "Took origin's version of " + task.ID + "; the local history is saved in " + backup + string(filepath.Separator)
+		if !strings.HasPrefix(line, prefix) || !strings.HasSuffix(line, "-"+task.ID+"-local.bundle.") {
+			t.Fatalf("first line = %q, want %q<run>-%s-local.bundle.", line, prefix, task.ID)
+		}
+		bundle := strings.TrimSuffix(strings.TrimPrefix(line, "Took origin's version of "+task.ID+"; the local history is saved in "), ".")
+		if _, err := os.Stat(bundle); err != nil {
+			t.Fatalf("bundle %s: %v", bundle, err)
+		}
+	}
+}
+
+// A discard without a backup has no bundle member at all.
+func TestCompactAdoptDiscardLocalWithoutBackupJSON(t *testing.T) {
+	t.Parallel()
+	first, second, task := compactedOnOriginTask(t)
+	checkpoint := remoteTaskRefValue(t, first, task.ID)
+	_, _, data := adoptJSONData(t, second, task.ID, "--discard-local", "--no-backup")
+	assertAdoptData(t, data, map[string]any{
+		"taskId": task.ID,
+		"status": "discarded-local",
+		"detail": "took origin's version without saving the local history",
+		"head":   checkpoint,
+	})
+	assertNoArchiveDirectory(t, second)
+}
+
+// deletedAfterCompaction leaves first holding a task it compacted and then
+// deleted, unpublished, while second edited the old history and published:
+// origin's change cannot be combined with the deletion.
+func deletedAfterCompaction(t *testing.T) (first, second string, task core.Task, local string) {
+	t.Helper()
+	first, second = cliSyncRepositories(t)
+	task = publishedDoneTask(t, first, "Deleted after compaction")
+	compactRun(t, second, "sync")
+	compactRun(t, first, "compact", "--no-sync", "--no-backup")
+	compactRun(t, first, "delete", task.ID, "--no-sync")
+	local = taskRefs(t, first)[task.ID]
+	compactRun(t, second, "update", task.ID, "--title", "Their title")
+	return first, second, task, local
+}
+
+// A task this clone compacted and deleted, while origin edited the old
+// history, is taken back to origin's version by --discard-local: the bundle
+// holds the local checkpoint chain, the ref moves back to the old generation,
+// the projection shows origin's task without a rebuild, and the next sync has
+// nothing to say.
+func TestCompactAdoptDiscardLocalTakesOriginsOlderHistory(t *testing.T) {
+	t.Parallel()
+	first, second, task, local := deletedAfterCompaction(t)
+	theirs := remoteTaskRefValue(t, second, task.ID)
+	code, _, stderr := run(t, first, "sync")
+	if code != core.ExitCode(core.Errorf(core.CategoryConflict, "probe")) {
+		t.Fatalf("sync code = %d, want the conflict code; stderr = %q", code, stderr)
+	}
+
+	// Retrying cannot combine them either.
+	code, _, stderr = run(t, first, "compact", "--adopt", task.ID, "--json")
+	if code != core.ExitCode(core.Errorf(core.CategoryConflict, "probe")) {
+		t.Fatalf("compact --adopt code = %d, want the conflict code; stderr = %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryConflict, cannotCombineDetailFor(task.Title, task.ID))
+	if got := taskRefs(t, first)[task.ID]; got != local {
+		t.Fatalf("local ref after the retry = %s, want it left at %s", got, local)
+	}
+
+	result, _ := adoptJSON(t, first, task.ID, "--discard-local")
+	if result.Status != gitstore.SyncDiscardedLocal || result.Head != theirs {
+		t.Fatalf("adopt result = %+v, want %s at origin's tip %s", result, gitstore.SyncDiscardedLocal, theirs)
+	}
+	if heads := bundleHeads(t, first, result.Bundle); heads["refs/workbook/tasks/"+task.ID] != local {
+		t.Fatalf("bundle heads = %v, want the local checkpoint tip %s", heads, local)
+	}
+	if got := taskRefs(t, first)[task.ID]; got != theirs {
+		t.Fatalf("local ref = %s, want origin's tip %s", got, theirs)
+	}
+	shown := showTask(t, first, task.ID)
+	if shown.Title != "Their title" || shown.Deleted {
+		t.Fatalf("shown task = %+v, want origin's title and not deleted", shown)
+	}
+	stdout := compactRun(t, first, "sync", "--json")
+	var synced gitstore.SyncRunResult
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "sync").Data, &synced); err != nil {
+		t.Fatalf("decode sync: %v", err)
+	}
+	for _, phase := range []gitstore.SyncResult{synced.Fetch, synced.Push} {
+		for _, item := range phase.Tasks {
+			if item.TaskID == task.ID && item.Status != gitstore.SyncUnchanged && item.Status != gitstore.SyncUpToDate {
+				t.Fatalf("next sync reported %+v, want it quiet", item)
+			}
+		}
+	}
+}
+
+// refusedCheckpointDetail is what a push says when origin refuses a leased
+// checkpoint for a reason other than a stale lease.
+func refusedCheckpointDetail(taskID, reason string) string {
+	return "origin refused the compacted checkpoint (" + reason + "); the compacted task stays local. " +
+		`Run "workbook compact --adopt ` + taskID + ` --discard-local" to undo the compaction on this clone.`
+}
+
+// refuseRewrites installs an update hook in repository's origin that refuses
+// every task ref update that is not a fast-forward, as a host that protects
+// shared history does. Creation and ordinary pushes still go through.
+func refuseRewrites(t *testing.T, repository string) {
+	t.Helper()
+	hooks := filepath.Join(cliGitOutput(t, repository, "config", "remote.origin.url"), "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatalf("create %s: %v", hooks, err)
+	}
+	testenv.WriteExecutable(t, filepath.Join(hooks, "update"), []byte(`#!/bin/sh
+case "$1" in refs/workbook/tasks/*)
+  if [ -n "$(printf %s "$2" | tr -d 0)" ] && ! git merge-base --is-ancestor "$2" "$3"; then exit 1; fi ;;
+esac
+exit 0
+`))
+}
+
+// An origin that refuses rewrites refuses the checkpoint, and says how to get
+// out: undoing the compaction with --discard-local, after which sync and push
+// have nothing to refuse, origin is unchanged, and the task reads as it did.
+func TestCompactAdoptDiscardLocalUndoesACheckpointOriginRefused(t *testing.T) {
+	t.Parallel()
+	first, _ := cliSyncRepositories(t)
+	task := publishedDoneTask(t, first, "Refused by origin")
+	published := remoteTaskRefValue(t, first, task.ID)
+	refuseRewrites(t, first)
+
+	stdout := compactRun(t, first, "compact", "--json")
+	envelope := decodeCompactEnvelope(t, stdout)
+	want := []gitstore.SyncTaskResult{{
+		TaskID: task.ID,
+		Status: gitstore.SyncRejected,
+		Detail: refusedCheckpointDetail(task.ID, "[remote rejected] (hook declined)"),
+	}}
+	if envelope.Sync.Pushed == nil || !reflect.DeepEqual(envelope.Sync.Pushed.Tasks, want) {
+		t.Fatalf("sync.pushed = %+v, want %+v", envelope.Sync.Pushed, want)
+	}
+	assertParentless(t, first, task.ID)
+	checkpoint := taskRefs(t, first)[task.ID]
+	for _, command := range []string{"sync", "push"} {
+		if code, _, stderr := run(t, first, command); code == 0 {
+			t.Fatalf("%s before the undo = code 0, want the refusal; stderr = %q", command, stderr)
+		}
+	}
+
+	result, envelope, data := adoptJSONData(t, first, task.ID, "--discard-local")
+	assertAdoptData(t, data, map[string]any{
+		"taskId": task.ID,
+		"status": "discarded-local",
+		"detail": "took origin's version; the local history is saved in " + result.Bundle,
+		"head":   published,
+		"bundle": result.Bundle,
+	})
+	if envelope.Sync.Status != syncStatusCompleted {
+		t.Fatalf("sync = %+v, want a completed fetch", envelope.Sync)
+	}
+	if filepath.Dir(result.Bundle) != archiveDirectory(first) || !strings.HasSuffix(result.Bundle, "-"+task.ID+"-local.bundle") {
+		t.Fatalf("bundle = %q, want <run>-%s-local.bundle in %s", result.Bundle, task.ID, archiveDirectory(first))
+	}
+	cliGit(t, first, "bundle", "verify", "--quiet", result.Bundle)
+	if heads := bundleHeads(t, first, result.Bundle); heads["refs/workbook/tasks/"+task.ID] != checkpoint {
+		t.Fatalf("bundle heads = %v, want the undone checkpoint %s", heads, checkpoint)
+	}
+	if got := taskRefs(t, first)[task.ID]; got != published {
+		t.Fatalf("local ref = %s, want origin's tip %s back", got, published)
+	}
+	for _, command := range []string{"sync", "push"} {
+		compactRun(t, first, command)
+	}
+	if got := remoteTaskRefValue(t, first, task.ID); got != published {
+		t.Fatalf("origin holds %s, want it unchanged at %s", got, published)
+	}
+	if shown := showTask(t, first, task.ID); shown.Head != published || shown.Status != core.StatusDone {
+		t.Fatalf("shown task = %+v, want the published tip %s, done", shown, published)
+	}
+}
+
+// A compaction held local with --no-sync is undone the same way, and without
+// --discard-local the command says what it would do rather than retrying.
+func TestCompactAdoptUndoesAnUnpublishedCompaction(t *testing.T) {
+	t.Parallel()
+	first, _ := cliSyncRepositories(t)
+	task := publishedDoneTask(t, first, "Compacted offline")
+	published := remoteTaskRefValue(t, first, task.ID)
+	compactRun(t, first, "compact", "--no-sync", "--no-backup")
+	checkpoint := taskRefs(t, first)[task.ID]
+
+	message := "task " + task.ID +
+		" has a local compaction that is not published; add --discard-local to undo it after saving it to a bundle"
+	code, stdout, stderr := run(t, first, "compact", "--adopt", task.ID, "--json")
+	if code != core.ExitCode(core.Errorf(core.CategoryValidation, "probe")) || stdout != "" {
+		t.Fatalf("compact --adopt = code %d, stdout %q; want the validation code", code, stdout)
+	}
+	assertJSONError(t, stderr, core.CategoryValidation, message)
+	if _, _, stderr := run(t, first, "compact", "--adopt", task.ID); stderr != "workbook: "+message+"\n" {
+		t.Fatalf("compact --adopt stderr = %q, want only the message, without usage text", stderr)
+	}
+	if got := taskRefs(t, first)[task.ID]; got != checkpoint {
+		t.Fatalf("local ref = %s, want the checkpoint %s left alone", got, checkpoint)
+	}
+
+	stdout = compactRun(t, first, "compact", "--adopt", task.ID, "--discard-local", "--no-backup")
+	if line, _, _ := strings.Cut(stdout, "\n"); line !=
+		"Took origin's version of "+task.ID+"; the local history was discarded without a backup." {
+		t.Fatalf("first line = %q, want the discard without a backup", line)
+	}
+	assertNoArchiveDirectory(t, first)
+	if got := taskRefs(t, first)[task.ID]; got != published {
+		t.Fatalf("local ref = %s, want origin's tip %s back", got, published)
+	}
+	if shown := showTask(t, first, task.ID); shown.Head != published {
+		t.Fatalf("shown head = %s, want origin's tip %s", shown.Head, published)
+	}
+	if item := syncFetchOutcome(t, first, task.ID); item.Status != gitstore.SyncUnchanged {
+		t.Fatalf("next fetch outcome = %+v, want %s", item, gitstore.SyncUnchanged)
+	}
+	if got := remoteTaskRefValue(t, first, task.ID); got != published {
+		t.Fatalf("origin holds %s, want it unchanged at %s", got, published)
+	}
+}
+
+// Every mutation of a task kept on the old history is refused with the
+// fallback's own words, after a fetch, with --no-sync, and beside a watcher
+// that did the fetching.
+func TestMutationRefusedWhileCompactedOnOrigin(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"fetch", "no-sync", "watcher"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			_, second, task := compactedOnOriginTask(t)
+			args := []string{"update", task.ID, "--title", "Refused", "--json"}
+			switch mode {
+			case "no-sync":
+				compactRun(t, second, "sync")
+				args = append(args, "--no-sync")
+			case "watcher":
+				startCLIWatcher(t, second, "1h")
+			}
+			before := taskRefs(t, second)[task.ID]
+			code, _, stderr := run(t, second, args...)
+			if code != core.ExitCode(core.Errorf(core.CategoryConflict, "probe")) {
+				t.Fatalf("update code = %d, want the conflict code; stderr = %q", code, stderr)
+			}
+			assertJSONError(t, stderr, core.CategoryConflict, compactedOnOriginDetailFor(task.ID))
+			if after := taskRefs(t, second)[task.ID]; after != before {
+				t.Fatalf("local ref = %s, want it unchanged at %s", after, before)
+			}
+		})
+	}
+}
+
+// A restore of the task this clone compacted and deleted, while origin edited
+// the old history, is refused with that state's words, with and without
+// --no-sync.
+func TestMutationRefusedWhileOriginChangedADeletedCompaction(t *testing.T) {
+	t.Parallel()
+	for _, noSync := range []bool{false, true} {
+		first, _, task, local := deletedAfterCompaction(t)
+		args := []string{"restore", task.ID, "--json"}
+		if noSync {
+			run(t, first, "sync")
+			args = append(args, "--no-sync")
+		}
+		code, _, stderr := run(t, first, args...)
+		if code != core.ExitCode(core.Errorf(core.CategoryConflict, "probe")) {
+			t.Fatalf("restore (no-sync %v) code = %d, want the conflict code; stderr = %q", noSync, code, stderr)
+		}
+		assertJSONError(t, stderr, core.CategoryConflict, cannotCombineDetailFor(task.Title, task.ID))
+		if after := taskRefs(t, first)[task.ID]; after != local {
+			t.Fatalf("local ref = %s, want it unchanged at %s", after, local)
+		}
+	}
+}
+
+// next never offers a stuck task, and next --claim claims the next one
+// instead.
+func TestNextClaimSkipsAStuckTask(t *testing.T) {
+	t.Parallel()
+	first, second := cliSyncRepositories(t)
+	stuck := cliCreateTaskAtPriority(t, first, "Stuck but urgent", "high")
+	compactRun(t, first, "update", stuck.ID, "--status", "done", "--no-sync")
+	other := cliCreateTask(t, first, "Ordinary work")
+	compactRun(t, first, "update", other.ID, "--status", "ready", "--no-sync")
+	compactRun(t, first, "push")
+	compactRun(t, second, "sync")
+	compactRun(t, second, "update", stuck.ID, "--status", "ready", "--description", "Our text", "--no-sync")
+	compactRun(t, first, "update", stuck.ID, "--description", "Their text")
+	compactRun(t, first, "compact", "--no-backup")
+
+	stdout := compactRun(t, second, "next", "--json")
+	if task := decodeMutationTask(t, stdout, "next"); task.ID != other.ID {
+		t.Fatalf("next = %s, want %s rather than the stuck %s", task.ID, other.ID, stuck.ID)
+	}
+	stdout = compactRun(t, second, "next", "--claim", "--json")
+	if task := decodeMutationTask(t, stdout, "next"); task.ID != other.ID {
+		t.Fatalf("next --claim = %s, want %s rather than the stuck %s", task.ID, other.ID, stuck.ID)
+	}
+	if item := syncFetchOutcome(t, second, stuck.ID); item.Status != gitstore.SyncCompactedOnOrigin {
+		t.Fatalf("stuck task fetch outcome = %+v, want it still %s", item, gitstore.SyncCompactedOnOrigin)
+	}
+}
+
+// onDays makes every change and compaction a command makes land at whatever
+// *at holds when it runs, restoring both clocks when the test ends. A test that
+// uses it must not be parallel: both clocks are package state.
+func onDays(t *testing.T, at *time.Time) {
+	t.Helper()
+	command, compact := commandNow, compactNow
+	t.Cleanup(func() { commandNow, compactNow = command, compact })
+	commandNow = func() time.Time { return *at }
+	compactNow = func() time.Time { return *at }
+}
+
+// compactedHistory reads show --history --json for taskID.
+func compactedHistory(t *testing.T, repository, taskID string) (*core.ChangeLog, map[string]json.RawMessage) {
+	t.Helper()
+	stdout := compactRun(t, repository, "show", taskID, "--history", "--json")
+	var detail core.TaskDetail
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "show").Data, &detail); err != nil {
+		t.Fatalf("decode show: %v", err)
+	}
+	var raw struct {
+		Data struct {
+			History struct {
+				Compacted map[string]json.RawMessage `json:"compacted"`
+			} `json:"history"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &raw); err != nil {
+		t.Fatalf("decode raw show: %v", err)
+	}
+	if detail.History == nil || detail.History.Compacted == nil {
+		t.Fatalf("history = %+v, want a compacted summary", detail.History)
+	}
+	return detail.History, raw.Data.History.Compacted
+}
+
+// assertCompactedLine requires show --history's text to hold want as a line of
+// its own, once, and to list exactly changes changes.
+func assertCompactedLine(t *testing.T, repository, taskID, want string, changes int) {
+	t.Helper()
+	text := compactRun(t, repository, "show", taskID, "--history")
+	if count := strings.Count("\n"+text, "\n"+want+"\n"); count != 1 {
+		t.Fatalf("show --history =\n%s\nwant the line %q once, found %d", text, want, count)
+	}
+	if footer := fmt.Sprintf("Showing all %d change(s).", changes); changes > 0 && !strings.Contains(text, footer) {
+		t.Fatalf("show --history =\n%s\nwant %q", text, footer)
+	}
+}
+
+// show --history on a compacted task lists the changes since the checkpoint,
+// not the checkpoint itself, then the line the checkpoint's summary gives:
+// from the first compacted change's day, to the last one's, and the day of the
+// compaction, each with its year when that is not this one. Compacting again
+// adds to the count and keeps the original first day.
+//
+// Not parallel: it sets the package clocks (onDays).
+func TestShowHistoryShowsCompactedLine(t *testing.T) {
+	year := time.Now().Year()
+	day := func(year int, month time.Month, date int) time.Time {
+		return time.Date(year, month, date, 12, 0, 0, 0, time.Local)
+	}
+	var at time.Time
+	onDays(t, &at)
+	repository := initializedRepository(t)
+
+	created := day(year-1, time.March, 3)
+	at = created
+	task := cliCreateTask(t, repository, "Compacted twice")
+	at = day(year-1, time.March, 9)
+	compactRun(t, repository, "update", task.ID, "--title", "Compacted twice, revised", "--no-sync")
+	lastBefore := day(year, time.January, 4)
+	at = lastBefore
+	compactRun(t, repository, "update", task.ID, "--status", "done", "--no-sync")
+	firstCompaction := day(year, time.January, 6)
+	at = firstCompaction
+	compactRun(t, repository, "compact", "--no-sync", "--no-backup")
+
+	history, raw := compactedHistory(t, repository, task.ID)
+	compacted := *history.Compacted
+	if compacted.Changes != 3 || !compacted.From.Equal(created) || !compacted.To.Equal(lastBefore) ||
+		!compacted.On.Equal(firstCompaction) || history.Total != 0 || len(history.Changes) != 0 {
+		t.Fatalf("history = %+v (compacted %+v), want 3 changes from %s to %s compacted on %s and none since",
+			history, compacted, created, lastBefore, firstCompaction)
+	}
+	if len(raw) != 4 {
+		t.Fatalf("compacted = %v, want exactly the members changes, from, to and on", raw)
+	}
+	for _, name := range []string{"changes", "from", "to", "on"} {
+		if _, found := raw[name]; !found {
+			t.Fatalf("compacted = %v, want a %q member", raw, name)
+		}
+	}
+	assertCompactedLine(t, repository, task.ID,
+		fmt.Sprintf("3 earlier changes from Mar 3, %d to Jan 4 were compacted on Jan 6.", year-1), 0)
+
+	// Two edits, then a second compaction over the first checkpoint.
+	at = day(year, time.January, 8)
+	compactRun(t, repository, "update", task.ID, "--description", "Some words", "--no-sync")
+	lastAfter := day(year, time.January, 9)
+	at = lastAfter
+	compactRun(t, repository, "update", task.ID, "--priority", "high", "--no-sync")
+	secondCompaction := day(year, time.January, 12)
+	at = secondCompaction
+	compactRun(t, repository, "compact", "--no-sync", "--no-backup")
+	at = day(year, time.January, 14)
+	compactRun(t, repository, "update", task.ID, "--title", "After the checkpoint", "--no-sync")
+
+	history, _ = compactedHistory(t, repository, task.ID)
+	compacted = *history.Compacted
+	if compacted.Changes != 5 || !compacted.From.Equal(created) || !compacted.To.Equal(lastAfter) ||
+		!compacted.On.Equal(secondCompaction) {
+		t.Fatalf("compacted = %+v, want 5 changes from %s to %s compacted on %s", compacted, created, lastAfter, secondCompaction)
+	}
+	if history.Total != 1 || len(history.Changes) != 1 || history.Changes[0].Summary != "changed title" {
+		t.Fatalf("history = %+v, want only the edit after the second checkpoint", history)
+	}
+	assertCompactedLine(t, repository, task.ID,
+		fmt.Sprintf("5 earlier changes from Mar 3, %d to Jan 9 were compacted on Jan 12.", year-1), 1)
+}
+
+// A date outside the current year carries its year.
+func TestChangeLogCompactedLineAddsTheYear(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	from := time.Date(now.Year()-2, time.March, 4, 12, 0, 0, 0, time.Local)
+	to := time.Date(now.Year()-1, time.July, 3, 12, 0, 0, 0, time.Local)
+	var output bytes.Buffer
+	writeChangeLog(&output, core.ChangeLog{
+		Changes:   []core.Change{},
+		Compacted: &core.CompactedSummary{Changes: 12, From: from, To: to, On: now},
+	})
+	want := "12 earlier changes from Mar 4, " + from.Format("2006") + " to Jul 3, " + to.Format("2006") +
+		" were compacted on " + now.Format("Jan 2") + ".\n"
+	if !strings.Contains(output.String(), want) {
+		t.Fatalf("change log =\n%s\nwant %q", output.String(), want)
+	}
+}
+
+// A board edit of a task kept on the old history is refused as the command
+// line refuses it: the board's conflict status, the fallback's own words, and
+// nothing written.
+func TestBoardMutationRefusedWhileCompactedOnOrigin(t *testing.T) {
+	t.Parallel()
+	_, second, task := compactedOnOriginTask(t)
+	compactRun(t, second, "sync")
+	before := taskRefs(t, second)[task.ID]
+	addr := startServeBoard(t, second)
+	for _, request := range []struct{ method, path, body string }{
+		{http.MethodPatch, "/api/tasks/" + task.ID, `{"title":"Refused"}`},
+		{http.MethodPatch, "/api/tasks/" + task.ID + "/status", `{"status":"ready"}`},
+		{http.MethodDelete, "/api/tasks/" + task.ID, ""},
+	} {
+		body, status := boardRequest(t, request.method, "http://"+addr+request.path, request.body)
+		if status != http.StatusConflict {
+			t.Fatalf("%s %s = %d, want %d; body = %s", request.method, request.path, status, http.StatusConflict, body)
+		}
+		var document webui.ErrorDocument
+		if err := json.Unmarshal(body, &document); err != nil {
+			t.Fatalf("decode %s %s: %v; body = %s", request.method, request.path, err, body)
+		}
+		if document.Error.Category != core.CategoryConflict || document.Error.Message != compactedOnOriginDetailFor(task.ID) {
+			t.Fatalf("%s %s error = %+v, want the conflict %q", request.method, request.path, document.Error,
+				compactedOnOriginDetailFor(task.ID))
+		}
+	}
+	if after := taskRefs(t, second)[task.ID]; after != before {
+		t.Fatalf("local ref = %s, want it unchanged at %s", after, before)
+	}
+}
+
+// newerCheckpointOnOrigin leaves second holding an unpushed change to a task
+// whose checkpoint on origin carries a change only a newer workbook could have
+// written, so fetch reports the task as needing an upgrade.
+func newerCheckpointOnOrigin(t *testing.T) (second string, task core.Task) {
+	t.Helper()
+	first, second, task := compactedOnOriginTask(t)
+	writeFutureTaskCommit(t, first, task.ID)
+	ref := "refs/workbook/tasks/" + task.ID
+	cliGit(t, first, "push", "origin", ref+":"+ref)
+	return second, task
+}
+
+// --adopt, with or without --discard-local, cannot take a checkpoint this
+// build cannot read: it refuses with fetch's own upgrade message before it
+// writes a bundle or moves a ref.
+func TestCompactAdoptDiscardLocalRefusesANewerWritersCheckpoint(t *testing.T) {
+	t.Parallel()
+	second, task := newerCheckpointOnOrigin(t)
+	newerWriterCode := core.ExitCode(core.Errorf(core.CategoryNewerWriter, "probe"))
+	if code, _, stderr := run(t, second, "sync"); code != newerWriterCode {
+		t.Fatalf("sync code = %d, want the newer-writer code; stderr = %q", code, stderr)
+	}
+	upgrade := "task " + task.ID + " has local changes that were not replayed: origin's history for it was written by a " +
+		"newer workbook; upgrade workbook to publish them. They are unchanged on this clone's task ref."
+	before := taskRefs(t, second)[task.ID]
+	backup := t.TempDir()
+	for _, args := range [][]string{{"--discard-local"}, {"--discard-local", "--backup", backup}, {}} {
+		code, stdout, stderr := run(t, second, append(append([]string{"compact", "--adopt", task.ID}, args...), "--json")...)
+		if code != newerWriterCode || stdout != "" {
+			t.Fatalf("compact --adopt %v = code %d, stdout %q; want the newer-writer code; stderr = %q", args, code, stdout, stderr)
+		}
+		assertJSONError(t, stderr, core.CategoryNewerWriter, upgrade)
+		if after := taskRefs(t, second)[task.ID]; after != before {
+			t.Fatalf("compact --adopt %v moved the local ref to %s, want it left at %s", args, after, before)
+		}
+		if entries, err := os.ReadDir(backup); err != nil || len(entries) != 0 {
+			t.Fatalf("backup directory = %v (%v), want it empty", entries, err)
+		}
+		assertNoArchiveDirectory(t, second)
+	}
+}

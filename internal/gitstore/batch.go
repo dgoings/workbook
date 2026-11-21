@@ -268,17 +268,31 @@ func validateBatchSnapshot(
 		return core.Snapshot{}, err
 	}
 	// A root tip is checked against its own fold, which is the one checkpoint a
-	// read can verify without walking the chain. A pack that needs a newer
-	// reader is exempt: folding it is exactly what this build must not do, and
-	// the refusal belongs to the mutation that would build on it rather than to
-	// the read that only has to show it.
-	if !pack.RequiresNewerReader() &&
-		len(pack.Operations) == 1 && pack.Operations[0].Type == core.OperationTaskCreate {
+	// read can verify without walking the chain. That covers a compacted task's
+	// history.checkpoint as well as a task.create: the checkpoint carries the
+	// whole task, so its stored state must be exactly what it folds to. A pack
+	// that needs a newer reader is exempt: folding it is exactly what this build
+	// must not do, and the refusal belongs to the mutation that would build on
+	// it rather than to the read that only has to show it.
+	if !pack.RequiresNewerReader() && isRootPack(pack) {
 		if err := core.ValidateCheckpoint(nil, pack, state); err != nil {
 			return core.Snapshot{}, err
 		}
 	}
 	return core.Snapshot{Head: head.ObjectID, Operation: pack, State: state}, nil
+}
+
+// isRootPack reports a pack that begins a task's chain: a task.create, or the
+// history.checkpoint a compaction replaced the history with.
+func isRootPack(pack core.OperationPack) bool {
+	if len(pack.Operations) != 1 {
+		return false
+	}
+	switch pack.Operations[0].Type {
+	case core.OperationTaskCreate, core.OperationHistoryCheckpoint:
+		return true
+	}
+	return false
 }
 
 func readBatchObject(reader *bufio.Reader) (batchObject, error) {
@@ -562,7 +576,15 @@ func validateConfigTreeEntries(tree workbookTree) error {
 // history and through nothing else. A commit that names a blob it does not
 // carry would be a task pointing into somebody else's object graph, which is
 // exactly what the future compaction verb must never have to reason about.
+//
+// A checkpoint is the other moment. It adds nothing, but it is a root, so the
+// blobs its task still claims have to be in its own tree: nothing older is
+// reachable from it. Every kept file attachment has its entry, and a dropped
+// one has none, because dropping the bytes is the point of dropping it.
 func validateAttachmentBlobs(pack core.OperationPack, tree workbookTree) error {
+	if _, ok := pack.Checkpoint(); ok {
+		return validateCheckpointAttachmentBlobs(pack, tree)
+	}
 	for _, operation := range pack.Operations {
 		if operation.Type != core.OperationAttachmentAdd || operation.Attachment == nil {
 			continue
@@ -581,6 +603,39 @@ func validateAttachmentBlobs(pack core.OperationPack, tree workbookTree) error {
 	return nil
 }
 
+func validateCheckpointAttachmentBlobs(pack core.OperationPack, tree workbookTree) error {
+	task := pack.Operations[0].Task
+	if task == nil {
+		// The fold refuses a checkpoint without its task; this is not the
+		// check that reports it.
+		return nil
+	}
+	for _, attachment := range task.Attachments {
+		if attachment.Kind != core.AttachmentFile {
+			continue
+		}
+		entry := tree.objectID(attachmentTreeName(attachment.ID))
+		if attachment.IsDropped() {
+			if entry != "" {
+				return core.Errorf(
+					core.CategoryCorruptData,
+					"task checkpoint dropped %s but its tree still carries the blob",
+					attachment.ID,
+				)
+			}
+			continue
+		}
+		if entry != attachment.Blob {
+			return core.Errorf(
+				core.CategoryCorruptData,
+				"task checkpoint keeps %s but its tree does not carry the blob",
+				attachment.ID,
+			)
+		}
+	}
+	return nil
+}
+
 // ValidateTaskHeadAdvances verifies all changed heads with one bounded ancestry
 // walk. Each previous head and its ancestors are excluded from Git's traversal.
 func (r *Repository) ValidateTaskHeadAdvances(
@@ -588,11 +643,25 @@ func (r *Repository) ValidateTaskHeadAdvances(
 	config core.ProjectConfig,
 	advances []HeadAdvance,
 ) error {
+	_, err := r.ValidateTaskHeadAdvancesWithCompactions(ctx, config, advances)
+	return err
+}
+
+// ValidateTaskHeadAdvancesWithCompactions is ValidateTaskHeadAdvances that
+// also returns the IDs of the tasks whose advance it accepted as a compaction.
+// Those are the only tasks whose history generation may change across the
+// advance, so a caller that sees a generation change for any other task
+// reports it as a rewrite.
+func (r *Repository) ValidateTaskHeadAdvancesWithCompactions(
+	ctx context.Context,
+	config core.ProjectConfig,
+	advances []HeadAdvance,
+) (map[string]struct{}, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
-		return err
+		return nil, err
 	}
 	if err := r.validateRepositoryConfig(config); err != nil {
-		return err
+		return nil, err
 	}
 
 	seenTaskIDs := make(map[string]struct{}, len(advances))
@@ -600,25 +669,25 @@ func (r *Repository) ValidateTaskHeadAdvances(
 	for _, advance := range advances {
 		taskID := advance.Current.TaskID
 		if _, duplicate := seenTaskIDs[taskID]; duplicate {
-			return core.Errorf(core.CategoryCorruptData, "task head advance contains duplicate task ID %q", taskID)
+			return nil, core.Errorf(core.CategoryCorruptData, "task head advance contains duplicate task ID %q", taskID)
 		}
 		seenTaskIDs[taskID] = struct{}{}
 		if taskID != advance.Previous.Operation.TaskID ||
 			taskID != advance.Previous.State.TaskID {
-			return core.Errorf(core.CategoryCorruptData, "task head advance IDs do not match")
+			return nil, core.Errorf(core.CategoryCorruptData, "task head advance IDs do not match")
 		}
 		if _, err := decodeObjectID(advance.Current.ObjectID); err != nil {
-			return core.Wrap(core.CategoryCorruptData, "current task head is missing or invalid", err)
+			return nil, core.Wrap(core.CategoryCorruptData, "current task head is missing or invalid", err)
 		}
 		if _, err := decodeObjectID(advance.Previous.Head); err != nil {
-			return core.Wrap(core.CategoryCorruptData, "previous task head is missing or invalid", err)
+			return nil, core.Wrap(core.CategoryCorruptData, "previous task head is missing or invalid", err)
 		}
 		if advance.Current.ObjectID != advance.Previous.Head {
 			changed = append(changed, advance)
 		}
 	}
 	if len(changed) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	var input bytes.Buffer
@@ -630,11 +699,14 @@ func (r *Repository) ValidateTaskHeadAdvances(
 	}
 	output, err := r.Git(ctx, input.Bytes(), "rev-list", "--parents", "--stdin")
 	if err != nil {
-		return core.Wrap(core.CategoryCorruptData, "cannot validate task head advances", err)
+		if missing := r.missingPreviousHead(ctx, changed); missing != nil {
+			return nil, missing
+		}
+		return nil, core.Wrap(core.CategoryCorruptData, "cannot validate task head advances", err)
 	}
 	graph, err := parseParentGraph(output)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	unreachable := make([]HeadAdvance, 0, len(changed))
 	for _, advance := range changed {
@@ -643,27 +715,78 @@ func (r *Repository) ValidateTaskHeadAdvances(
 		}
 	}
 	if len(unreachable) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	// Reconciliation is the one thing that legitimately moves a canonical ref
-	// off its previous tip, and it parks that tip in the process. The parked
-	// ref is therefore the evidence that distinguishes a replay from a ref
-	// rolled backwards by corruption, and it costs a Git process only on this
-	// already-exceptional path.
+	// Reconciliation and compaction are the two things that legitimately move
+	// a canonical ref off its previous tip. Reconciliation parks that tip in
+	// the process, so the parked ref is the evidence that distinguishes a
+	// replay from a ref rolled backwards by corruption. Compaction parks
+	// nothing, because parking would keep the history it drops alive; its
+	// evidence is a checkpoint that accounts for every operation the previous
+	// tip held, proven for every unparked advance at once. Both cost Git
+	// processes only on this already-exceptional path.
 	parked, err := r.parkedTaskHeads(ctx, config)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	unparked := make([]HeadAdvance, 0, len(unreachable))
 	for _, advance := range unreachable {
-		if _, found := parked[advance.Current.TaskID][advance.Previous.Head]; found {
+		if _, found := parked[advance.Current.TaskID][advance.Previous.Head]; !found {
+			unparked = append(unparked, advance)
+		}
+	}
+	if len(unparked) == 0 {
+		return nil, nil
+	}
+	compacted, err := r.provenCompactions(ctx, config, unparked)
+	if err != nil {
+		return nil, err
+	}
+	for _, advance := range unparked {
+		if _, found := compacted[advance.Current.TaskID]; found {
 			continue
 		}
-		return core.Errorf(
+		return nil, core.Errorf(
 			core.CategoryCorruptData,
 			"task %q current head is not a descendant of its previous head and that head was not parked by a reconciliation; run `workbook rebuild`",
 			advance.Current.TaskID,
 		)
+	}
+	return compacted, nil
+}
+
+// missingPreviousHead explains a failed ancestry walk whose cause is a
+// previous head Git no longer holds, which is what a projection that missed a
+// history change looks like once Git prunes the history it last read. Nothing
+// can prove that advance any more, so it stays an error, but the projection is
+// a cache built from the refs, and the error names the command that rebuilds
+// it. It returns nil when every previous head is still there, or the probe
+// itself fails, leaving the walk's own error to speak.
+func (r *Repository) missingPreviousHead(ctx context.Context, advances []HeadAdvance) error {
+	var input bytes.Buffer
+	for _, advance := range advances {
+		fmt.Fprintln(&input, advance.Previous.Head)
+	}
+	output, err := r.Git(ctx, input.Bytes(), "cat-file", "--batch-check")
+	if err != nil || len(output) == 0 || output[len(output)-1] != '\n' {
+		return nil
+	}
+	lines := bytes.Split(output[:len(output)-1], []byte{'\n'})
+	if len(lines) != len(advances) {
+		return nil
+	}
+	for index, line := range lines {
+		advance := advances[index]
+		fields := bytes.Fields(line)
+		if len(fields) == 2 && string(fields[0]) == advance.Previous.Head && string(fields[1]) == "missing" {
+			return core.Errorf(
+				core.CategoryCorruptData,
+				"cannot validate task head advances: task %q was last read at %s, which Git no longer has; "+
+					"run `workbook rebuild` to rebuild the cache from the task refs",
+				advance.Current.TaskID, advance.Previous.Head,
+			)
+		}
 	}
 	return nil
 }

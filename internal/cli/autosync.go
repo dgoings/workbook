@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/dgoings/workbook/internal/autosync"
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/projection"
 	"github.com/dgoings/workbook/internal/syncloop"
 	"github.com/dgoings/workbook/internal/userconfig"
 )
@@ -35,6 +37,10 @@ type syncReport struct {
 	Detail  string                   `json:"detail,omitempty"`
 	Fetch   *gitstore.SyncResult     `json:"fetch,omitempty"`
 	Push    *gitstore.SyncTaskResult `json:"push,omitempty"`
+	// Pushed reports a publication of several tasks at once, which only
+	// compact makes: it publishes every checkpoint the run wrote in one push.
+	// A single-task mutation reports through Push instead.
+	Pushed *gitstore.SyncResult `json:"pushed,omitempty"`
 	// Identity reports what publishing this change had to establish about
 	// origin's project, and is omitted when there was nothing to establish. A
 	// mutation is the most common way a project publishes anything, so it is
@@ -58,14 +64,26 @@ type taskSession struct {
 	repository *gitstore.Repository
 	config     core.ProjectConfig
 	service    core.Service
-	report     syncReport
-	fetched    *gitstore.SyncResult
-	conflicts  []core.Conflict
+	// store is the projection the service reads and writes through, for a
+	// command such as compact that has to move it directly.
+	store     *projection.Store
+	report    syncReport
+	fetched   *gitstore.SyncResult
+	conflicts []core.Conflict
 	// defects carries what a fetch that still ran to completion reported about
 	// refs it could not validate. Publication follows such a fetch, so this is
 	// a warning the caller hears alongside a synchronized change rather than
 	// the failure that used to stand in for it.
 	defects string
+	// compactedOnOrigin names the tasks the fetch kept on the old history
+	// because origin compacted them and their local changes would not replay.
+	// That is each task's own state rather than a defect of the fetch, so it
+	// is said in its own words.
+	compactedOnOrigin []string
+	// unsettled is why the projection could not take a task the fetch moved
+	// onto another history, which leaves a cache to rebuild before Git prunes
+	// the history it last read. See settleMovedHistories.
+	unsettled error
 	// deferred reports that a trustworthy watcher answered, so this command
 	// writes locally and hands publication to it.
 	deferred bool
@@ -148,7 +166,7 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 		Keys:   state.Keys,
 		Reader: store,
 		IDs:    core.CryptoULIDSource{Now: recordedNow},
-		Now:    recordedNow,
+		Now:    sessionNow,
 	}
 	if withWriter {
 		service.Writer = repository
@@ -161,6 +179,7 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 		repository:        repository,
 		config:            config,
 		service:           service,
+		store:             store,
 		report:            syncReport{Enabled: policy.Enabled, Source: policy.Source, Status: syncStatusSkipped},
 		releaseProjection: releaseProjection,
 	}
@@ -277,6 +296,103 @@ func (session *taskSession) fetchBefore(ctx context.Context) {
 	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
 		session.defects = err.Error()
 	}
+	for _, item := range result.Tasks {
+		if item.Status == gitstore.SyncCompactedOnOrigin {
+			session.compactedOnOrigin = append(session.compactedOnOrigin, item.TaskID)
+		}
+	}
+	session.unsettled = settleMovedHistories(ctx, session.store, session.config, result)
+}
+
+// settleMovedHistories reads, through the projection, every task a fetch moved
+// onto another history (gitstore.SyncStatus.LeavesPreviousHistory), so the
+// command that moved the ref also moves the cache before it returns.
+//
+// It has to happen then. The projection proves such a move against the head it
+// last read, and nothing keeps that head alive once the ref leaves it: after
+// `git gc` prunes it, the proof cannot run and every read fails until a
+// rebuild. A fetch that moved no task this way reads nothing here, so a
+// steady-state synchronization costs exactly what it did.
+//
+// Every command that fetches comes through here: the mutations, next and
+// compact through their session's fetch, and sync, fetch and setup on their
+// own. The watcher refreshes its own projection after each synchronization.
+func settleMovedHistories(ctx context.Context, store *projection.Store, config core.ProjectConfig, fetched gitstore.SyncResult) error {
+	for _, item := range fetched.Tasks {
+		if !item.Status.LeavesPreviousHistory() {
+			continue
+		}
+		if _, err := store.Get(ctx, config, item.TaskID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// movesHistories reports whether settleMovedHistories has anything to read, so
+// a caller holding no projection opens one only then.
+func movesHistories(fetched gitstore.SyncResult) bool {
+	for _, item := range fetched.Tasks {
+		if item.Status.LeavesPreviousHistory() {
+			return true
+		}
+	}
+	return false
+}
+
+// settleFetchedHistories is settleMovedHistories for a command that holds no
+// projection of its own: sync, fetch and setup. A failure is a warning, since
+// the refs are right and the cache can be rebuilt from them.
+func settleFetchedHistories(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	fetched gitstore.SyncResult,
+) []core.Warning {
+	if !movesHistories(fetched) {
+		return nil
+	}
+	store, releaseProjection, err := openProjection(ctx, repository, config)
+	if err == nil {
+		defer releaseProjection()
+		err = settleMovedHistories(ctx, store, config, fetched)
+	}
+	if err == nil {
+		return nil
+	}
+	return []core.Warning{unsettledWarning(err)}
+}
+
+// unsettledWarning says that the projection could not take a task the fetch
+// moved onto another history.
+func unsettledWarning(err error) core.Warning {
+	return core.Warning{
+		Code: core.WarningProjectionUpdate,
+		Message: "origin's compaction was adopted, but the SQLite cache could not be updated; run " +
+			"`workbook rebuild` before `git gc`: " + err.Error(),
+	}
+}
+
+// unsettledWarnings is unsettledWarning for a session's own fetch, or nothing
+// when its projection took every task the fetch moved.
+func (session *taskSession) unsettledWarnings() []core.Warning {
+	if session.unsettled == nil {
+		return nil
+	}
+	return []core.Warning{unsettledWarning(session.unsettled)}
+}
+
+// compactedOnOriginWarning says which tasks the fetch kept on the old history,
+// after prefix, or reports false when it kept none.
+func (session *taskSession) compactedOnOriginWarning(prefix string) (core.Warning, bool) {
+	if len(session.compactedOnOrigin) == 0 {
+		return core.Warning{}, false
+	}
+	return core.Warning{
+		Code: core.WarningAutoSync,
+		Message: prefix + "origin compacted tasks this clone keeps on the old history (" +
+			strings.Join(session.compactedOnOrigin, ", ") + `); run "workbook sync" for details`,
+	}, true
 }
 
 // publish sends exactly the ref the mutation changed.
@@ -356,6 +472,50 @@ func (session *taskSession) pushConfigInline(ctx context.Context) {
 	session.report.Status = syncStatusCompleted
 }
 
+// publishTasks sends the refs one command changed across several tasks, as
+// compact does for the checkpoints it wrote. It is publish for a set of tasks:
+// a live watcher is nudged, and its own synchronization publishes them, leasing
+// a checkpoint exactly as the inline push would; otherwise the push is inline,
+// and skipped when the fetch did not complete.
+func (session *taskSession) publishTasks(ctx context.Context, taskIDs []string) {
+	if !session.report.Enabled || len(taskIDs) == 0 {
+		return
+	}
+	if session.deferred {
+		// The nudge carries no task ID, as publishConfig's does not: it only
+		// wakes the watcher's loop, which synchronizes every task.
+		if err := session.nudge(""); err == nil {
+			return
+		}
+		// The watcher answered the probe and was gone by the time the refs
+		// moved; publishing here keeps "deferred" from being an empty promise.
+		session.deferred = false
+		session.report.Status = syncStatusCompleted
+		session.report.Detail = ""
+		session.pushTasksInline(ctx, taskIDs)
+		return
+	}
+	if session.fetched == nil {
+		return
+	}
+	session.pushTasksInline(ctx, taskIDs)
+}
+
+func (session *taskSession) pushTasksInline(ctx context.Context, taskIDs []string) {
+	pushed, err := session.repository.PushTasks(ctx, session.config, taskIDs)
+	session.report.Pushed = &pushed
+	session.report.Identity, _ = session.repository.IdentityReport()
+	if pushed.Config != nil {
+		session.report.Config = pushed.Config
+	}
+	if err != nil {
+		session.report.Status = syncStatusFailed
+		session.report.Detail = "push failed: " + err.Error()
+		return
+	}
+	session.report.Status = syncStatusCompleted
+}
+
 func (session *taskSession) pushInline(ctx context.Context, taskID string) {
 	pushed, err := session.repository.PushTask(ctx, session.config, taskID)
 	session.report.Push = &pushed
@@ -417,13 +577,9 @@ func (session *taskSession) conflictFor(ctx context.Context, target string) *cor
 	if len(session.conflicts) == 0 || target == "" {
 		return nil
 	}
-	taskID := target
-	if !session.service.KeySet().Owns(taskID) {
-		resolved, err := session.service.Reader.Resolve(ctx, session.config, target)
-		if err != nil {
-			return nil
-		}
-		taskID = resolved
+	taskID, err := session.resolveTaskID(ctx, target)
+	if err != nil {
+		return nil
 	}
 	for index := range session.conflicts {
 		if session.conflicts[index].TaskID == taskID {
@@ -431,6 +587,65 @@ func (session *taskSession) conflictFor(ctx context.Context, target string) *cor
 		}
 	}
 	return nil
+}
+
+// resolveTaskID turns the id-or-prefix a command was given into a task ID.
+func (session *taskSession) resolveTaskID(ctx context.Context, target string) (string, error) {
+	if session.service.KeySet().Owns(target) {
+		return target, nil
+	}
+	return session.service.Reader.Resolve(ctx, session.config, target)
+}
+
+// refuseStuck refuses a command that would change a task its compaction left
+// stuck, in the words fetch reports for that task. Changing it would only
+// add history origin will not take, and for a task kept on the old history
+// would add to the changes `compact --adopt` has to replay.
+//
+// It reads local refs rather than this command's fetch, so it holds with
+// --no-sync and when a watcher did the fetching. A target that does not
+// resolve is left for the command itself to report.
+func (session *taskSession) refuseStuck(ctx context.Context, target string) error {
+	return refuseStuckTask(ctx, session.repository, session.service, target)
+}
+
+// refuseStuckTask is refuseStuck for a caller that holds a service and a
+// repository rather than a session: the board's mutations, which go through
+// the service and the board's publisher rather than through mutate.
+func refuseStuckTask(ctx context.Context, repository *gitstore.Repository, service core.Service, target string) error {
+	if target == "" {
+		return nil
+	}
+	taskID := target
+	if !service.KeySet().Owns(target) {
+		resolved, err := service.Reader.Resolve(ctx, service.Config, target)
+		if err != nil {
+			return nil
+		}
+		taskID = resolved
+	}
+	stuck, err := repository.StuckCompactions(ctx, service.Config, []string{taskID})
+	if err != nil {
+		return err
+	}
+	if entry, found := stuck[taskID]; found {
+		return core.Errorf(entry.Category, "%s", entry.Detail)
+	}
+	return nil
+}
+
+// stuckTasks names every task a compaction left stuck, which next must not
+// offer.
+func (session *taskSession) stuckTasks(ctx context.Context) (map[string]struct{}, error) {
+	stuck, err := session.repository.StuckCompactions(ctx, session.config, nil)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]struct{}, len(stuck))
+	for taskID := range stuck {
+		ids[taskID] = struct{}{}
+	}
+	return ids, nil
 }
 
 // mutate runs the fetch, the mutation, and the targeted push in order. The
@@ -447,6 +662,12 @@ func (session *taskSession) mutate(
 ) (core.MutationResult, error) {
 	session.fetchBefore(ctx)
 	if err := session.refreshConfiguration(ctx); err != nil {
+		return core.MutationResult{}, err
+	}
+	// Ahead of the conflict check: a task this clone deleted on its
+	// checkpoint also carries the fetch's tombstone conflict, and the stuck
+	// state's own words are the ones that say how to get out of it.
+	if err := session.refuseStuck(ctx, target); err != nil {
 		return core.MutationResult{}, err
 	}
 	if conflict := session.conflictFor(ctx, target); conflict != nil {
@@ -471,5 +692,9 @@ func (session *taskSession) mutate(
 				"validate: " + session.defects,
 		})
 	}
+	if warning, found := session.compactedOnOriginWarning("the change synchronized, but "); found {
+		result.Warnings = append(result.Warnings, warning)
+	}
+	result.Warnings = append(result.Warnings, session.unsettledWarnings()...)
 	return result, nil
 }

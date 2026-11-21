@@ -33,7 +33,7 @@ type taskHeadSource interface {
 	ListTaskHeads(context.Context, core.ProjectConfig) ([]gitstore.TaskHead, error)
 	InspectTaskHead(context.Context, core.ProjectConfig, string) (gitstore.TaskHead, bool, error)
 	ReadTaskHeads(context.Context, core.ProjectConfig, []gitstore.TaskHead) ([]core.Snapshot, error)
-	ValidateTaskHeadAdvances(context.Context, core.ProjectConfig, []gitstore.HeadAdvance) error
+	ValidateTaskHeadAdvancesWithCompactions(context.Context, core.ProjectConfig, []gitstore.HeadAdvance) (map[string]struct{}, error)
 	ReadTaskOperations(context.Context, core.ProjectConfig, []gitstore.TaskHistoryRequest) ([]gitstore.TaskOperationsResult, error)
 }
 
@@ -53,8 +53,12 @@ func (s repositorySource) ReadTaskHeads(ctx context.Context, config core.Project
 	return s.repository.ReadTaskHeads(ctx, config, heads)
 }
 
-func (s repositorySource) ValidateTaskHeadAdvances(ctx context.Context, config core.ProjectConfig, advances []gitstore.HeadAdvance) error {
-	return s.repository.ValidateTaskHeadAdvances(ctx, config, advances)
+func (s repositorySource) ValidateTaskHeadAdvancesWithCompactions(
+	ctx context.Context,
+	config core.ProjectConfig,
+	advances []gitstore.HeadAdvance,
+) (map[string]struct{}, error) {
+	return s.repository.ValidateTaskHeadAdvancesWithCompactions(ctx, config, advances)
 }
 
 func (s repositorySource) ReadTaskOperations(
@@ -376,7 +380,7 @@ func (s *Store) Advance(ctx context.Context, config core.ProjectConfig, expected
 	}
 	var advanced bool
 	err := s.withActiveDatabase(ctx, func(ctx context.Context) error {
-		applied, err := s.advanceActive(ctx, expectedParent, snapshot, nil)
+		applied, err := s.advanceActive(ctx, expectedParent, snapshot, nil, false)
 		if err != nil {
 			return err
 		}
@@ -608,7 +612,7 @@ func (s *Store) metaMatches(ctx context.Context) bool {
 func (s *Store) requiredSchemaExists(ctx context.Context) bool {
 	for _, query := range []string{
 		`SELECT key, value FROM projection_meta LIMIT 0`,
-		`SELECT task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread FROM tasks LIMIT 0`,
+		`SELECT task_id, head, project_id, history_generation, compacted_from, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread FROM tasks LIMIT 0`,
 		`SELECT task_id, label FROM task_labels LIMIT 0`,
 		`SELECT task_id, dependency_id FROM task_dependencies LIMIT 0`,
 		`SELECT task_id, principal, label, creator, created_at FROM task_assignments LIMIT 0`,
@@ -645,10 +649,12 @@ func (s *Store) getExactActive(ctx context.Context, taskID string) (core.Snapsho
 			return cached, nil
 		}
 
+		var compactions map[string]struct{}
 		if cachedFound {
-			if err := s.source.ValidateTaskHeadAdvances(ctx, s.config, []gitstore.HeadAdvance{
+			compactions, err = s.source.ValidateTaskHeadAdvancesWithCompactions(ctx, s.config, []gitstore.HeadAdvance{
 				headAdvance(cached, head),
-			}); err != nil {
+			})
+			if err != nil {
 				return core.Snapshot{}, err
 			}
 		}
@@ -663,8 +669,13 @@ func (s *Store) getExactActive(ctx context.Context, taskID string) (core.Snapsho
 		if err := validateReadSnapshot(head, snapshot); err != nil {
 			return core.Snapshot{}, err
 		}
-		if cachedFound && snapshot.State.History.Generation != cached.State.History.Generation {
-			return core.Snapshot{}, historyGenerationChanged(taskID)
+		// A generation change that gets past this check is a proven compaction
+		// of the row at cached.Head, which is what advanceActive is told.
+		compacted := cachedFound && snapshot.State.History.Generation != cached.State.History.Generation
+		if compacted {
+			if err := requireCompaction(compactions, taskID); err != nil {
+				return core.Snapshot{}, err
+			}
 		}
 		expectedParent := ""
 		if cachedFound {
@@ -679,7 +690,7 @@ func (s *Store) getExactActive(ctx context.Context, taskID string) (core.Snapsho
 		if err != nil {
 			return core.Snapshot{}, err
 		}
-		applied, err := s.advanceActive(ctx, expectedParent, snapshot, &chains[0])
+		applied, err := s.advanceActive(ctx, expectedParent, snapshot, &chains[0], compacted)
 		if err != nil {
 			return core.Snapshot{}, err
 		}
@@ -722,8 +733,11 @@ func (s *Store) refreshChangedHeads(ctx context.Context, cached map[string]cache
 		return nil
 	}
 
+	var compactions map[string]struct{}
 	if len(advances) > 0 {
-		if err := s.source.ValidateTaskHeadAdvances(ctx, s.config, advances); err != nil {
+		var err error
+		compactions, err = s.source.ValidateTaskHeadAdvancesWithCompactions(ctx, s.config, advances)
+		if err != nil {
 			return err
 		}
 	}
@@ -741,7 +755,9 @@ func (s *Store) refreshChangedHeads(ctx context.Context, cached map[string]cache
 		}
 		if previous, found := cached[head.TaskID]; found &&
 			snapshot.State.History.Generation != previous.historyGeneration {
-			return historyGenerationChanged(head.TaskID)
+			if err := requireCompaction(compactions, head.TaskID); err != nil {
+				return err
+			}
 		}
 	}
 	// Comparing tips is complete for current state but blind to the
@@ -855,15 +871,31 @@ func historyGenerationChanged(taskID string) error {
 	return core.Errorf(core.CategoryCorruptData, "task %q history generation changed across a projected head advance", taskID)
 }
 
+// requireCompaction allows a projected task to move to a new history
+// generation only when the head-advance check accepted the move as a
+// compaction: the new head is rooted at a checkpoint that accounts for every
+// operation on the head the projection last saw. compactions is the set that
+// check returned, so the proof is made once, in one batch, for every task an
+// advance moved. Any other generation change is still reported as a rewrite.
+func requireCompaction(compactions map[string]struct{}, taskID string) error {
+	if _, proven := compactions[taskID]; !proven {
+		return historyGenerationChanged(taskID)
+	}
+	return nil
+}
+
 // advanceActive conditionally replaces one projected task. chain carries the
 // commits a multi-commit advance crossed; a nil chain means the caller just
 // wrote exactly one commit onto expectedParent and the snapshot's own pack is
-// the whole advance.
+// the whole advance. compacted reports that the caller proved, against the
+// row at expectedParent, that the advance is a compaction, which is the only
+// case in which the history generation may change.
 func (s *Store) advanceActive(
 	ctx context.Context,
 	expectedParent string,
 	snapshot core.Snapshot,
 	chain *gitstore.TaskOperationsResult,
+	compacted bool,
 ) (bool, error) {
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -896,7 +928,7 @@ func (s *Store) advanceActive(
 		}
 		return false, nil
 	}
-	if actualHead != "" && actualHistoryGeneration != snapshot.State.History.Generation {
+	if actualHead != "" && actualHistoryGeneration != snapshot.State.History.Generation && !compacted {
 		if err := transaction.Commit(); err != nil {
 			return false, s.databaseError("commit conditional projection advancement", err)
 		}
@@ -1094,10 +1126,16 @@ func upsertSnapshot(ctx context.Context, transaction *sql.Tx, snapshot core.Snap
 	if err != nil {
 		return err
 	}
+	// An empty column is a history no checkpoint started: compactedFrom is
+	// always a full object ID when present.
+	compactedFrom := ""
+	if state.History.CompactedFrom != nil {
+		compactedFrom = *state.History.CompactedFrom
+	}
 	_, err = transaction.ExecContext(ctx, `
-		INSERT INTO tasks (task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		state.TaskID, snapshot.Head, state.ProjectID, state.History.Generation, int64(state.LogicalClock),
+		INSERT INTO tasks (task_id, head, project_id, history_generation, compacted_from, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		state.TaskID, snapshot.Head, state.ProjectID, state.History.Generation, compactedFrom, int64(state.LogicalClock),
 		int64(state.MinReader), state.Task.Title, state.Task.Description,
 		string(state.Task.Status), string(state.Task.Priority), state.Task.Rank, formatTime(state.Task.CreatedAt), formatTime(state.Task.UpdatedAt), deleted, thread)
 	if err != nil {
@@ -1161,7 +1199,7 @@ func (s *Store) querySnapshots(ctx context.Context) ([]core.Snapshot, error) {
 	defer transaction.Rollback()
 
 	rows, err := transaction.QueryContext(ctx, `
-		SELECT task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread
+		SELECT task_id, head, project_id, history_generation, compacted_from, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread
 		FROM tasks ORDER BY task_id`)
 	if err != nil {
 		return nil, s.databaseError("query projected tasks", err)
@@ -1282,19 +1320,20 @@ type rowScanner interface {
 
 func scanSnapshotScalars(scanner rowScanner) (core.Snapshot, error) {
 	var (
-		snapshot  core.Snapshot
-		state     core.StateDocument
-		status    string
-		priority  string
-		created   string
-		updated   string
-		deleted   int
-		clock     int64
-		minReader int64
-		thread    string
+		snapshot      core.Snapshot
+		state         core.StateDocument
+		compactedFrom string
+		status        string
+		priority      string
+		created       string
+		updated       string
+		deleted       int
+		clock         int64
+		minReader     int64
+		thread        string
 	)
 	if err := scanner.Scan(
-		&state.TaskID, &snapshot.Head, &state.ProjectID, &state.History.Generation, &clock, &minReader,
+		&state.TaskID, &snapshot.Head, &state.ProjectID, &state.History.Generation, &compactedFrom, &clock, &minReader,
 		&state.Task.Title, &state.Task.Description,
 		&status, &priority, &state.Task.Rank, &created, &updated, &deleted, &thread,
 	); err != nil {
@@ -1319,6 +1358,9 @@ func scanSnapshotScalars(scanner rowScanner) (core.Snapshot, error) {
 	// projection that silently answered zero would let a mutation build on a
 	// history this build cannot replay.
 	state.MinReader = int(minReader)
+	if compactedFrom != "" {
+		state.History.CompactedFrom = &compactedFrom
+	}
 	state.Task.Status = core.Status(status)
 	state.Task.Priority = core.Priority(priority)
 	state.Task.Labels = []string{}
@@ -1380,7 +1422,7 @@ func (s *Store) querySnapshot(ctx context.Context, taskID string) (core.Snapshot
 	defer transaction.Rollback()
 
 	snapshot, err := scanSnapshotScalars(transaction.QueryRowContext(ctx, `
-			SELECT task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread
+			SELECT task_id, head, project_id, history_generation, compacted_from, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread
 			FROM tasks WHERE task_id = ?`, taskID))
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := transaction.Commit(); err != nil {

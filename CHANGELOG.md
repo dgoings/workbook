@@ -25,6 +25,127 @@ version order rather than at the top; a heading no newer than the previous
 release counts as no entry, so it never blocks the next release. See
 [Patch releases to an older line](CONTRIBUTING.md#patch-releases-to-an-older-line).
 
+## Unreleased
+
+Finished work can now be compacted. `workbook compact`, run by hand, replaces
+the history of Done and Deleted tasks with one checkpoint commit each and saves
+the old history to a local backup bundle first. It changes no existing commit,
+and it is the first command that needs every clone of a project to upgrade
+before anyone runs it; see Compatibility across versions below.
+
+### Added
+- **`workbook compact`** replaces the step-by-step history of every Done and
+  Deleted task with a single parentless checkpoint commit holding the task's
+  current state. `--done-only` and `--deleted-only` pick one kind, each with an
+  optional cutoff (`--done-only 30d`), and `--since` sets a cutoff for both.
+  `--dry-run` reports what a run would compact and roughly how much it would
+  save, and compacts nothing (with sync on it still runs the usual fetch first).
+  File attachments are dropped by default and
+  kept with `--keep-attachments`; a dropped file keeps its row, `show` marks it
+  removed, `--get-attachment` refuses it as not found, and the board's
+  attachment route answers `410 Gone`. Every real run first writes a verified
+  Git bundle of the history it drops to
+  `<git-common-dir>/workbook-archive/<run-id>.bundle`, or where `--backup`
+  says, unless `--no-backup` is given. The bundle keeps dropped attachments
+  too. With sync on, the run publishes the checkpoints with a leased push that
+  succeeds only while `origin` still holds the tip that was compacted. A
+  compaction `origin` refuses, or one made with `--no-sync`, stays local until
+  `workbook compact --adopt <task> --discard-local` undoes it after saving it
+  to a bundle. Every run, dry or real, states the upgrade requirement, and
+  `--json` carries it as `data.notice`.
+- **Other clones adopt a compaction automatically** when they fetch, replaying
+  any unpushed changes onto the checkpoint with their operation IDs intact. A
+  task whose changes will not replay is reported as `compacted-on-origin`
+  without failing the sync, edits to it are refused, and `workbook next` skips
+  it. **`workbook compact --adopt <task>`** retries the replay, and
+  `--discard-local` takes `origin`'s version after saving the local history to
+  a bundle. Fetch, push and sync report the new per-task statuses
+  `compaction-published`, `adopted`, `adopted-replayed` and
+  `compacted-on-origin`, and `compact --adopt --discard-local` reports
+  `discarded-local`.
+- **`workbook show --history` on a compacted task** lists the changes since the
+  checkpoint and then a line such as "12 earlier changes from Jul 3 to Sep 19
+  were compacted on Nov 10.", and `--json` carries the same facts as
+  `history.compacted`.
+- **Durations accept days.** `sync --interval` and the `compact` cutoffs take a
+  leading whole number of days, where a day is 24 hours: `30d`, `1d12h`.
+
+### Changed
+- **The web board's New Task form can assign.** On a board that can record
+  assignments, the form stages them beside its dependencies and attachments
+  and sends them once the task exists; one the server refuses is retried from
+  the new task's page, as a refused dependency is.
+- **A task's page is laid out like the New Task form.** Assignments and
+  attachments moved into the sidebar, after the dependencies; only the
+  comments and the change history sit below the form. As on the New Task form,
+  the form fills the window: the description and Save stay on the screen and a
+  long sidebar scrolls inside the form, whether the header stacks onto several
+  rows or the task's title wraps. A title so long that it leaves the form
+  under 26rem is the exception: the form keeps that height and the page
+  scrolls to its Save row. Empty assignment and attachment lists no longer explain
+  themselves or count to zero, and a chosen file is listed with a × to take it
+  back out before **Add file** sends or stages it.
+- **Depends On and Blocks are one Dependencies section** on both task forms:
+  one list in which each row is tagged Depends On or Blocks, Depends On first,
+  and one task picker with an **Add as** toggle choosing which kind the next
+  entry is. The toggle stays where it was put after an add, so several entries
+  of one kind are one choice and several picks. Nothing about how an edge is
+  stored or sent changed.
+- **The task form's sidebar is tidier.** Every section — Properties,
+  Dependencies, Assignments and Attachments — is spaced alike, with the same
+  room above and below the rule between sections, and every dependency,
+  assignment and attachment is the same bordered card. Each card's Remove or
+  Unassign button is now a red × at the right end of its first line, named
+  for what it removes ("Unassign sam@example.com", "Remove dependency on
+  …") for screen readers and as its tooltip, so titles and file names get the
+  card's width. A dependency no longer prints the other task's ID (hover its
+  title for it); an assignment shows when it was recorded but no longer how
+  long ago; a link's URL is its name's tooltip rather than repeated under it,
+  and an attachment's details are one line (hover it for the media type and
+  exact time). The browser's "Choose File / No file chosen" control is a
+  **Choose file** button over the same file input; the dependency picker's
+  **Add**, **Assign**, and the link form's **Attach** (**Add** on the New Task
+  form) sit on their box's line, the link button beside the URL with the
+  optional label on the line below; and the help paragraph under the
+  assignment box is gone, its placeholder still showing who a blank box
+  assigns. A dependency or assignment that was not saved shows "Not saved",
+  the reason and **Retry** on their own lines under its title rather than
+  beside the ×. A focused × also keeps the keyboard focus across the board's
+  once-a-second poll, which the dependency list's and the attachment list's
+  did not, and keyboard focus no longer falls to the top of the page after a
+  sidebar change: removing a row moves it to the × that took the row's place
+  (or the one before it, or the section's box once the list is empty), adding
+  a dependency or a link returns it to the box it was added from, and a change
+  that was refused leaves it on the button that was pressed.
+- **Smaller task form changes.** The New Task header is a compact band with a ×
+  that closes the form, as a task's page now has too; Back on the New Task form
+  is Cancel, at the far right; **Create more** sits beside Save, its checkbox
+  after its words; and the description's Done button reads Preview.
+- **The SQLite projection is rebuilt once after upgrading.** Its schema version
+  moves from 5 to 7, so the first command this release runs discards the cache
+  and reads Git again. Nothing needs to be done, and no task data lives in the
+  cache.
+- **The format generation is now 4.** A `history.checkpoint` operation, and
+  every task state after one, declares generation 4. Nothing else this release
+  writes raises the generation, so a task nobody has compacted is unchanged,
+  byte for byte.
+
+### Compatibility across versions
+
+- **Upgrade every clone to v0.7.0 before anyone compacts.** Compaction never
+  runs on its own, so a team has time to do this, and every compaction run's
+  text output says so. Until someone compacts, v0.6.1 and newer clones work side
+  by side as before.
+- If a team skips that step, a v0.6.1 clone fails safely on a compacted task,
+  but not cleanly. A clone that already had the task reports it on every sync
+  as invalid ("tracking and canonical tips use different history
+  generations"), so every sync exits non-zero as if the data were corrupt. Its
+  local ref stays on the old history, so it keeps accepting edits to the task
+  that can never be pushed. With the managed pre-push hook installed, every
+  `git push` of code from that clone fails too, until its owner upgrades. No
+  old history gets pushed back over the checkpoint, so nothing on `origin` is
+  lost.
+
 ## v0.6.1 — 2026-10-28
 
 Fixes and polish on top of v0.6.0, most of them in the desktop app. An idle

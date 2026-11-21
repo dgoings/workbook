@@ -23,6 +23,12 @@ const (
 	// `--compare <commit> <commit>` does. The flag package cannot express it,
 	// so a pair option is lifted out of the argument list before parsing.
 	pairFlag
+	// optionalStringFlag is an option whose value may be left out, as
+	// `--done-only [<duration>]` does. It takes the next argument only when
+	// that argument is a value it accepts, so `--done-only --json` leaves
+	// `--json` alone. The flag package cannot express it either, so it is
+	// lifted out with takeOptionalValueOption before parsing.
+	optionalStringFlag
 )
 
 type optionMetadata struct {
@@ -33,7 +39,9 @@ type optionMetadata struct {
 }
 
 type commandMetadata struct {
-	Name        string
+	Name string
+	// Synopsis is one line per form of the command, each starting with
+	// "workbook <name>". Most commands have one form.
 	Synopsis    string
 	Description string
 	Positionals []string
@@ -632,9 +640,10 @@ var commandSchemas = map[string]commandMetadata{
 			"history in the order given. Both name entries by full Git commit object ID.\n\n" +
 			"With --get-attachment, write one attached file's bytes instead of the task:\n" +
 			"to standard output, or to the file --out names. A link attachment holds no\n" +
-			"bytes and is refused, reported with the URL it points at. Because the output\n" +
-			"is bytes rather than a rendered task, no other show option may be given\n" +
-			"beside it.",
+			"bytes and is refused, reported with the URL it points at. A file whose bytes\n" +
+			"compaction removed is refused as not found, naming the day the task was\n" +
+			"compacted. Because the output is bytes rather than a rendered task, no other\n" +
+			"show option may be given beside it.",
 		Positionals: []string{"<id-or-prefix>"},
 		Options: []optionMetadata{
 			{Name: "history", Kind: boolFlag, Description: "list this task's changes"},
@@ -737,7 +746,7 @@ var commandSchemas = map[string]commandMetadata{
 		Description: "Fetch then push shared task refs, once or continuously.",
 		Options: []optionMetadata{
 			{Name: "watch", Kind: boolFlag, Description: "synchronize continuously until interrupted"},
-			{Name: "interval", Kind: stringFlag, Value: "<duration>", Description: "time between synchronizations while watching (default 5s)"},
+			{Name: "interval", Kind: stringFlag, Value: "<duration>", Description: "time between synchronizations while watching, such as 30s, 2m or 1d (default 5s)"},
 			{Name: "status", Kind: boolFlag, Description: "report whether a watcher is running for this repository"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
@@ -830,6 +839,39 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
+	"compact": {
+		Name: "compact",
+		// Two forms, one per line: --adopt refuses every selection flag and
+		// --dry-run and --no-sync, so a merged line would advertise
+		// combinations the command rejects.
+		Synopsis: "workbook compact [--done-only [<duration>] | --deleted-only [<duration>]] [--since <duration>] " +
+			"[--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--json]\n" +
+			"workbook compact --adopt <task> [--discard-local] [--no-backup | --backup <path>] [--json]",
+		Description: "Replace the history of Done and Deleted tasks with one checkpoint each.\n\n" +
+			"A real run first writes a verified backup bundle of the history it drops.\n" +
+			"Attachments on compacted tasks are dropped unless --keep-attachments is\n" +
+			"given. A duration such as 30d limits the run to tasks that finished more\n" +
+			"than that long ago. --dry-run reports what a run would do and changes\n" +
+			"nothing.\n\n" +
+			"--adopt <task> settles one task a compaction left stuck: one origin\n" +
+			"compacted while this clone had changes that would not replay onto it, or\n" +
+			"one this clone compacted and deleted while origin changed it. It fetches,\n" +
+			"then retries the replay; with --discard-local it instead takes origin's\n" +
+			"version, after saving the local history to a bundle.",
+		Options: []optionMetadata{
+			{Name: "done-only", Kind: optionalStringFlag, Value: "[<duration>]", Description: "compact only Done tasks, optionally only those done longer ago than this"},
+			{Name: "deleted-only", Kind: optionalStringFlag, Value: "[<duration>]", Description: "compact only Deleted tasks, optionally only those deleted longer ago than this"},
+			{Name: "since", Kind: stringFlag, Value: "<duration>", Description: "compact only tasks that became Done or Deleted longer ago than this"},
+			{Name: "keep-attachments", Kind: boolFlag, Description: "keep attachment contents in the checkpoints"},
+			{Name: "no-backup", Kind: boolFlag, Description: "write no backup bundle"},
+			{Name: "backup", Kind: stringFlag, Value: "<path>", Description: "write the backup bundle here, or into this directory"},
+			{Name: "dry-run", Kind: boolFlag, Description: "report what would be compacted and change nothing"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "adopt", Kind: stringFlag, Value: "<task>", Description: "settle one task a compaction left stuck, retrying the replay"},
+			{Name: "discard-local", Kind: boolFlag, Description: "with --adopt, take origin's version after saving the local history to a bundle"},
+			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+		},
+	},
 	"version": {
 		Name:        "version",
 		Synopsis:    "workbook version [--json]",
@@ -851,7 +893,7 @@ var commandSchemas = map[string]commandMetadata{
 }
 
 var commandOrder = []string{
-	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "version", "fetch", "push", "sync", "status", "priority", "key", "config", "docs", "hooks", "serve", "completion",
+	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "compact", "version", "fetch", "push", "sync", "status", "priority", "key", "config", "docs", "hooks", "serve", "completion",
 }
 
 type commandFlagSet struct {
@@ -922,7 +964,8 @@ func (flags *commandFlagSet) validateSchema() {
 	for _, option := range flags.schema.Options {
 		// A pair option never reaches the flag set: it is lifted out of the
 		// argument list first, because the flag package has no two-value form.
-		if option.Kind == pairFlag {
+		// Nor has it an optional-value form.
+		if option.Kind == pairFlag || option.Kind == optionalStringFlag {
 			continue
 		}
 		if _, exists := defined[option.Name]; !exists {
@@ -976,6 +1019,49 @@ func takePairOption(command, name string, args []string) ([2]string, []string, b
 	return values, rest, true, nil
 }
 
+// takeOptionalValueOption removes `--name [value]` from args. The argument
+// after the option is its value only when it exists, does not start with `-`,
+// and accepts it; anything else is left in place for the flag parser, so
+// `--done-only --json` keeps `--json`. `--name=value` always names the value,
+// accepted or not, so the caller can say what is wrong with it rather than
+// leaving it to read as a stray argument. A repeated option is refused.
+func takeOptionalValueOption(
+	command, name string,
+	args []string,
+	accepts func(string) bool,
+) (present bool, value string, rest []string, err error) {
+	rest = make([]string, 0, len(args))
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		if argument == "--" {
+			rest = append(rest, args[index:]...)
+			break
+		}
+		optionName, inline, hasValue, isFlag := splitFlag(argument)
+		if !isFlag || optionName != name {
+			rest = append(rest, argument)
+			continue
+		}
+		if present {
+			return false, "", nil, core.Errorf(core.CategoryInvocation, "%s accepts --%s once", command, name)
+		}
+		present = true
+		switch {
+		case hasValue && inline == "":
+			return false, "", nil, core.Errorf(core.CategoryInvocation, "%s --%s= requires a value after the =", command, name)
+		case hasValue:
+			value = inline
+		case index+1 < len(args) && args[index+1] != "" && isRequiredFirstArgument(args[index+1]) && accepts(args[index+1]):
+			value = args[index+1]
+			index++
+		}
+	}
+	if !present {
+		return false, "", args, nil
+	}
+	return true, value, rest, nil
+}
+
 func requiredFirstArgument(command, name string, args []string) (string, []string, error) {
 	if len(args) == 0 || !isRequiredFirstArgument(args[0]) {
 		return "", nil, core.Errorf(core.CategoryInvocation, "%s must be the first argument after %s", name, command)
@@ -1020,6 +1106,16 @@ func requestedJSON(args []string) bool {
 
 		kind, known := schema.optionKind(name)
 		if !known {
+			continue
+		}
+		// An optional value is skipped whenever the next argument could be
+		// one. The scan cannot ask the command whether it accepts it, and the
+		// only cost of a wrong guess is reading past one argument that the
+		// parser will refuse anyway.
+		if kind == optionalStringFlag {
+			if !hasValue && index+1 < len(args) && isRequiredFirstArgument(args[index+1]) {
+				index++
+			}
 			continue
 		}
 		if kind == stringFlag || kind == pairFlag {

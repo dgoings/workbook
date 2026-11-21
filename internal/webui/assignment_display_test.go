@@ -408,8 +408,10 @@ setTimeout(() => {
   if (assignmentText(rows[1])[0] !== "teammate@example.com") {
     throw new Error("a labelless assignment is not drawn whole: " + JSON.stringify(assignmentText(rows[1])[0]));
   }
-  if (!first[1].endsWith("assigned 3 days ago")) {
-    throw new Error("the row carries no staleness hint: " + JSON.stringify(first[1]));
+  // When it was recorded, and nothing about how long ago: the timestamp is
+  // the whole line (assignment_age_test.go).
+  if (!first[1] || /ago/.test(first[1]) || first[1].includes(" · ")) {
+    throw new Error("the row's metadata is not its recorded time alone: " + JSON.stringify(first[1]));
   }
   const count = findElement(assignmentsPanel(), (element) => hasDataKey(element, "panelCount"));
   if (count.textContent !== "2 assignments") throw new Error("count = " + JSON.stringify(count.textContent));

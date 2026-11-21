@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
@@ -648,4 +649,15 @@ func cliGitOutput(t *testing.T, directory string, args ...string) string {
 		t.Fatalf("git %v: %v", args, err)
 	}
 	return strings.TrimSpace(string(output))
+}
+
+func TestSyncIntervalAcceptsDays(t *testing.T) {
+	t.Parallel()
+	got, err := parseSyncInterval("1d")
+	if err != nil {
+		t.Fatalf("parseSyncInterval(1d) error = %v", err)
+	}
+	if got != 24*time.Hour {
+		t.Fatalf("parseSyncInterval(1d) = %v, want 24h", got)
+	}
 }

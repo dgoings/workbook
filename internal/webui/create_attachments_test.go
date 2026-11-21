@@ -48,7 +48,7 @@ function panelCountText(name) {
 }
 function stageFiles(files) {
   const chooser = findElement(panelSection("attachments"), (element) => element.id === "attachment-file");
-  chooser.files = files;
+  chooseFiles(chooser, files);
   return submitForm(attachmentForm("file"));
 }
 function stageLink(destination, label = "") {
@@ -95,8 +95,12 @@ func TestHandlerClientStagesAttachmentsOnTheCreateForm(t *testing.T) {
 	program := createAttachmentProgram(t, `
 setTimeout(async () => {
   await openCreateForm();
-  if (panelCountText("attachments") !== "Nothing staged") {
+  // An empty list is the heading and the controls, with nothing said about it.
+  if (panelCountText("attachments") !== "") {
     throw new Error("an empty staging list said " + JSON.stringify(panelCountText("attachments")));
+  }
+  if (panelSection("attachments").textContent.includes("Nothing is staged")) {
+    throw new Error("an empty staging list still explains itself");
   }
   // Two at once, which is what a chooser that takes more than one file hands
   // back and what a drop will hand the same entry point later.
@@ -121,8 +125,13 @@ setTimeout(async () => {
   if (!rows[0].children[1].textContent.includes("2 KiB")) {
     throw new Error("a staged file does not say what it weighs: " + rows[0].children[1].textContent);
   }
-  if (!rows[2].children[1].textContent.includes("https://example.test/design")) {
-    throw new Error("a staged link does not say where it goes: " + rows[2].children[1].textContent);
+  // A staged link says where it goes on hover, not by repeating its URL in
+  // the metadata line under it.
+  if (rows[2].children[0].title !== "https://example.test/design") {
+    throw new Error("a staged link does not say where it goes: " + JSON.stringify(rows[2].children[0].title));
+  }
+  if (rows[2].children[1].textContent !== "link") {
+    throw new Error("a staged link's metadata repeats more than its kind: " + rows[2].children[1].textContent);
   }
   // A staged row offers nothing to follow: a file has no route to download from
   // and a link is a destination this page has not stored.
@@ -141,13 +150,109 @@ setTimeout(async () => {
   rowControl(stagedRows()[0], "Remove").eventListeners.click();
   rowControl(stagedRows()[0], "Remove").eventListeners.click();
   if (stagedRows().length !== 0) throw new Error("the list did not empty");
-  if (panelCountText("attachments") !== "Nothing staged") {
+  if (panelCountText("attachments") !== "") {
     throw new Error("an emptied list said " + JSON.stringify(panelCountText("attachments")));
   }
 }, 0);
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute staging on the create form: %v\n%s", err, output)
+	}
+}
+
+// Choosing files lists them before anything is staged, each with a red × that
+// takes it back out, and the chooser gives way to the Add file that stages
+// them. Taking out the last one returns the chooser, and a file taken out can be
+// chosen again — the input is reset, so choosing the same file is a change.
+func TestHandlerClientListsChosenFilesUntilTheyAreAdded(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	program := createAttachmentProgram(t, `
+setTimeout(async () => {
+  await openCreateForm();
+  const panel = panelSection("attachments");
+  const chooser = findElement(panel, (element) => element.id === "attachment-file");
+  const add = findElement(attachmentForm("file"), (element) => element.tagName === "BUTTON" && element.textContent === "Add file");
+  const pending = findElement(panel, (element) => hasDataKey(element, "attachmentPending"));
+  if (!add || !pending) throw new Error("the file form has no Add file or no pending list");
+  function shows(element) {
+    for (let at = element; at; at = at.parentElement) if (at.hidden) return false;
+    return true;
+  }
+  function pendingNames() {
+    return pending.children.map((row) => row.children[0].textContent);
+  }
+  function removeControl(name) {
+    return findElement(pending, (element) => element.tagName === "BUTTON" &&
+      element.getAttribute("aria-label") === "Remove " + name);
+  }
+  // Nothing chosen: the chooser and nothing else.
+  if (!shows(chooser) || shows(add) || shows(pending)) {
+    throw new Error("before a choice the form shows chooser=" + shows(chooser) + " add=" + shows(add) + " list=" + shows(pending));
+  }
+
+  function chosen() {
+    return [new TestFile("trace.log", 2048, "trace"), new TestFile("shot.png", 4096, "png"), new TestFile("notes.txt", 5, "notes")];
+  }
+  // The reader is on the chooser when they choose, and the chooser is hidden
+  // by the choice: the caret goes to the Add file that takes its place.
+  chooser.focus();
+  chooseFiles(chooser, chosen());
+  if (chooser.value !== "") throw new Error("the chooser was not reset, so the same file could not be chosen again");
+  if (shows(chooser) || !shows(add) || !shows(pending)) {
+    throw new Error("after a choice the form shows chooser=" + shows(chooser) + " add=" + shows(add) + " list=" + shows(pending));
+  }
+  if (document.activeElement !== add) throw new Error("a choice left the caret on the hidden chooser, not on Add file");
+  if (JSON.stringify(pendingNames()) !== JSON.stringify(["trace.log", "shot.png", "notes.txt"])) {
+    throw new Error("the pending list = " + JSON.stringify(pendingNames()));
+  }
+  const remove = removeControl("shot.png");
+  if (!remove || remove.textContent !== "×" || remove.type !== "button" ||
+      !hasClassToken(remove, "attachment-pending__remove")) {
+    throw new Error("a pending file has no red × that names it");
+  }
+  if (stagedRows().length !== 0) throw new Error("choosing staged a file before Add file was pressed");
+
+  // Out of the middle: the caret goes to the × of the file that took its place.
+  remove.focus();
+  remove.eventListeners.click();
+  if (JSON.stringify(pendingNames()) !== JSON.stringify(["trace.log", "notes.txt"])) {
+    throw new Error("× took out the wrong file: " + JSON.stringify(pendingNames()));
+  }
+  if (document.activeElement !== removeControl("notes.txt")) {
+    throw new Error("removing a file did not put the caret on the next file's ×");
+  }
+  // Off the end: the caret goes to the one before it.
+  removeControl("notes.txt").eventListeners.click();
+  if (document.activeElement !== removeControl("trace.log")) {
+    throw new Error("removing the last listed file did not put the caret on the one before it");
+  }
+  removeControl("trace.log").eventListeners.click();
+  if (pendingNames().length !== 0 || !shows(chooser) || shows(add) || shows(pending)) {
+    throw new Error("taking out the last file did not return the chooser");
+  }
+  if (document.activeElement !== chooser) throw new Error("emptying the list did not return the caret to the chooser");
+
+  // The same files again, after they were taken out: a browser raises no
+  // change for a choice the input still holds, so this works only because the
+  // input was reset.
+  chooseFiles(chooser, chosen());
+  if (JSON.stringify(pendingNames()) !== JSON.stringify(["trace.log", "shot.png", "notes.txt"])) {
+    throw new Error("files taken out could not be chosen again: " + JSON.stringify(pendingNames()));
+  }
+  add.focus();
+  await submitForm(attachmentForm("file"));
+  if (JSON.stringify(stagedNames()) !== JSON.stringify(["trace.log", "shot.png", "notes.txt"])) {
+    throw new Error("Add file staged " + JSON.stringify(stagedNames()));
+  }
+  if (pendingNames().length !== 0 || !shows(chooser) || shows(add)) {
+    throw new Error("staging the chosen files did not return the chooser");
+  }
+  if (document.activeElement !== chooser) throw new Error("staging the chosen files left the caret on the hidden Add file");
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the pending file list: %v\n%s", err, output)
 	}
 }
 

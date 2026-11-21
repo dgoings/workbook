@@ -966,9 +966,9 @@ func TestKeyCurrentRegeneratesTheGuidelinesAndNoDocsSkipsIt(t *testing.T) {
 	mustRunKey(t, repository, "key", "add", "NEW", "--no-sync")
 
 	// The JSON envelope carries the same docs member a status or priority
-	// mutation's does (status_test.go's TestStatusChangesRegenerateTheGuidelines
-	// pins the shape), so a caller that already reads one does not need a
-	// second parser for the other.
+	// mutation's does (TestStatusChangesRegenerateTheGuidelines, in
+	// guidelines_regenerate_test.go, pins the shape), so a caller that already
+	// reads one does not need a second parser for the other.
 	document := cliKeyMutation(t, repository, "key current", "key", "current", "NEW", "--no-sync", "--json")
 	if document.Docs == nil || len(document.Docs.Artifacts) != 1 {
 		t.Fatalf("key current docs = %#v, want the guidelines alone", document.Docs)

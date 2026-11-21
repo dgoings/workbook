@@ -19,7 +19,7 @@ Workbook aims for a middle ground:
 - project state travels through the same Git remote as the code;
 - developers can clone a repository and bootstrap with one command;
 - agents can discover, claim, and update work through a small CLI with JSON output;
-- task history is append-only, inspectable, and mergeable;
+- task history is append-only, inspectable, and mergeable, with a manual `workbook compact` for finished work;
 - no hosted service or MCP server is required for the default workflow;
 - SQLite provides efficient local task reads and filtering without becoming a
   second source of truth.
@@ -188,7 +188,10 @@ Workbook separates its data model, transport, and query engine:
 
 - **Operation model** — task history is a chain of immutable, append-only
   operations with tip checkpoints; deletes are tombstones, and history is
-  inspectable and mergeable.
+  inspectable and mergeable. `workbook compact`, run by hand, replaces the
+  history of Done and Deleted tasks with one new checkpoint commit each, after
+  saving the old history to a local backup bundle; it changes no existing
+  commit.
 - **Git storage** — operations live in tool-private refs under
   `refs/workbook/`, synchronized explicitly and only with `origin`. Task state
   never touches the checked-out code branch.

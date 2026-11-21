@@ -320,7 +320,7 @@ deletedTaskResponse = `+deleted+`;
   const dependencyID = `+strconv.Quote(conditionalPollDependencyID)+`;
   const deletedRow = () => findElement(main, (element) => element.dataset.relationshipId === dependencyID);
   const removable = (row) => row && row.textContent.includes("Deleted") &&
-    findElement(row, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+    findElement(row, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   if (!removable(deletedRow())) throw new Error("the tombstoned prerequisite was never drawn, so this test proves nothing");
   const first = lastRead("/api/tasks?deleted=true");
   if (!first || first.tag !== null) throw new Error("the sidebar's first read named a tag: " + JSON.stringify(first));

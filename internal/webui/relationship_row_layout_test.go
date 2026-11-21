@@ -49,6 +49,7 @@ func runRelationshipRowClient(t *testing.T, purpose, body string) {
 	}
 	script := renderedClientScript(t, response.Body.String())
 	script = strings.Replace(script, "function relationshipRow(", "globalThis.relationshipRow = function relationshipRow(", 1)
+	script = strings.Replace(script, "function taskRelationships(", "globalThis.taskRelationships = function taskRelationships(", 1)
 	document, err := json.Marshal(TasksDocument{
 		Format:       "workbook.tasks",
 		Version:      1,
@@ -80,10 +81,11 @@ setTimeout(() => {
 }
 
 // Every row has something to press, and every shape is held to the same two
-// items. A deleted prerequisite adds a badge, which fit in column one even
-// before the fix; a failed draft adds a badge, the failure text and a Retry
-// button alongside Remove, and its failure text is the part that used to land
-// in column two.
+// items on its first line. A deleted prerequisite adds a badge, which fit in
+// column one even before the fix; a failed draft adds a badge, the failure
+// text and a Retry button, and those go on a third item that spans the card
+// under the other two — the failure text is the part that used to land in
+// column two, and Retry beside the × narrowed the title the same way.
 func TestHandlerClientKeepsRelationshipControlsOutOfTheTextColumn(t *testing.T) {
 	t.Parallel()
 	runRelationshipRowClient(t, "relationship row layout", `
@@ -100,17 +102,25 @@ func TestHandlerClientKeepsRelationshipControlsOutOfTheTextColumn(t *testing.T) 
     ["a draft row carrying a save failure", relationshipRow({ id: liveTask.id, task: liveTask, error: "the save was refused" }, () => {}, true, () => {}), true]
   ];
   shapes.forEach(([label, row, expectRetry]) => {
-    if (row.children.length > 2) {
-      throw new Error(label + " deals " + row.children.length + " items into the row's own grid, not two");
+    const want = expectRetry ? 3 : 2;
+    if (row.children.length !== want) {
+      throw new Error(label + " deals " + row.children.length + " items into the row's own grid, not " + want);
     }
     const column = item(row, "relationship-row__text");
     const controls = item(row, "relationship-row__controls");
+    const failure = item(row, "relationship-row__failure");
     if (!column || !controls) throw new Error(label + " is missing its text column or its controls");
     if (row.children[0] !== column || row.children[1] !== controls) {
       throw new Error(label + " no longer reads left to right as text then controls");
     }
-    if (textParts(row).some((part) => !column.contains(part))) {
+    if (expectRetry !== Boolean(failure) || (failure && row.children[2] !== failure)) {
+      throw new Error(label + " does not put its draft state on a line of its own after the controls");
+    }
+    if (textParts(row).some((part) => !column.contains(part) && !(failure && failure.contains(part)))) {
       throw new Error(label + " leaves a text part loose in the row's grid");
+    }
+    if (controls.children.length !== 1) {
+      throw new Error(label + " draws " + controls.children.length + " controls beside its title, not the × alone");
     }
     // The row keeps its identity through the wrapping: the list finds its rows
     // by this attribute, and the compact class is what makes a row a sidebar
@@ -124,22 +134,29 @@ func TestHandlerClientKeepsRelationshipControlsOutOfTheTextColumn(t *testing.T) 
     if (!row.removeButton || row.removeButton.parentElement !== controls) {
       throw new Error(label + " does not hold its Remove button in the controls");
     }
-    if (row.removeButton.textContent !== "Remove" || row.removeButton.type !== "button" ||
+    // The red × that every sidebar row uses, named for what it removes.
+    if (!classTokens(row.removeButton).includes("row-remove") || row.removeButton.type !== "button" ||
+        !/^Remove (dependency on|blocked task) /.test(row.removeButton.getAttribute("aria-label") || "") ||
+        row.removeButton.title !== row.removeButton.getAttribute("aria-label") ||
         !row.removeButton.eventListeners.click) {
       throw new Error(label + " lost the working Remove button itself");
     }
     if (expectRetry) {
-      if (!row.retryButton || row.retryButton.parentElement !== controls) {
-        throw new Error(label + " does not hold its Retry button in the controls");
+      // "Not saved", then why, then Retry: the order they are read in.
+      const state = item(failure, "relationship-state");
+      const note = item(failure, "relationship-row__note");
+      if (!row.retryButton || row.retryButton.parentElement !== failure) {
+        throw new Error(label + " does not hold its Retry button on its failure line");
       }
-      if (controls.children.indexOf(row.retryButton) >= controls.children.indexOf(row.removeButton)) {
-        throw new Error(label + " draws Retry below the Remove button it used to precede");
+      if (!state || state.textContent !== "Not saved" || !note || note.textContent !== "the save was refused") {
+        throw new Error(label + " does not report the failure on its own line: " + JSON.stringify(failure.textContent));
       }
-      // The failure text is the part that was dealt into column two and sized
-      // that track to a whole sentence.
-      const note = item(column, "relationship-row__note");
-      if (!note || note.textContent !== "the save was refused") {
-        throw new Error(label + " does not report the failure inside its text column");
+      const order = failure.children;
+      if (!(order.indexOf(state) < order.indexOf(note) && order.indexOf(note) < order.indexOf(row.retryButton))) {
+        throw new Error(label + " does not read Not saved, the reason, then Retry");
+      }
+      if (item(column, "relationship-row__note") || item(column, "relationship-state")) {
+        throw new Error(label + " still reports its failure inside the title's column");
       }
     } else {
       if (row.retryButton) throw new Error(label + " grew a Retry button it has nothing to retry");
@@ -160,17 +177,13 @@ func TestHandlerClientKeepsRelationshipControlsOutOfTheTextColumn(t *testing.T) 
 	body := newTaskPage(t)
 	// What places the structure above. The fix itself is structural — the item
 	// count is what the test through the harness pins — so these hold the
-	// stack to the gaps the row used to set on its own parts. min-width: 0 is
-	// pinned because it is served, not because it rescues the title: the title
+	// stack to the line gap every sidebar card uses. min-width: 0 is pinned
+	// because it is served, not because it rescues the title: the title
 	// column's min sizing function is a fixed 0 already, so no item minimum can
 	// reach it. It is there for the day someone writes the template as
 	// `1fr auto`, where that minimum would start to count.
 	for _, fragment := range []string{
-		// The stack, and the tighter gap the compact row already sets on its
-		// own items — the text column has to split them the same way, or a
-		// sidebar row would be spaced like a full-width one.
-		`.relationship-row__text { display: grid; gap: .35rem; min-width: 0; }`,
-		`.relationship-row--compact .relationship-row__text { gap: .16rem; }`,
+		`.relationship-row__text { display: grid; gap: var(--sb-card-line-gap); min-width: 0; }`,
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("relationship row styling does not contain %q", fragment)
@@ -199,10 +212,67 @@ func TestHandlerClientKeepsRelationshipControlsOutOfTheTextColumn(t *testing.T) 
 		}
 	}
 	// Declared rather than emergent: the controls name the column the Remove
-	// button used to claim for itself, and stack because a failed draft offers
-	// two buttons. Centered against the text beside them, as the lone Remove
-	// button was.
-	if !strings.Contains(body, `.relationship-row__controls { display: grid; align-self: center; gap: .35rem; grid-column: 2; }`) {
+	// button used to claim for itself, and sit on the title's line; a draft's
+	// state spans both columns on the line under them.
+	if !strings.Contains(body, `.relationship-row__controls { display: flex; align-items: center; align-self: start; gap: var(--sb-inline-gap); grid-column: 2; }`) {
 		t.Error("relationship row styling does not place the controls in the row's second column")
 	}
+	if !strings.Contains(body, `.relationship-row__failure { display: grid; grid-column: 1 / -1;`) {
+		t.Error("relationship row styling does not give a draft's state the card's whole width")
+	}
+}
+
+// A dependency list skips a redraw when nothing it draws has changed, so a
+// poll leaves its rows — and the × under a keyboard reader's caret — standing.
+// What it compares has to include everything a row draws. A draft's error is
+// drawn as the note under "Not saved", so a refusal arriving, or a retry
+// clearing one, must redraw the row even when nothing else about it moved.
+func TestHandlerClientRedrawsADependencyDraftWhenItsErrorChanges(t *testing.T) {
+	t.Parallel()
+	runRelationshipRowClient(t, "a draft's error redraw", `
+  const draftState = { dependsOn: new Map(), blocks: new Map() };
+  const entry = { id: liveTask.id, task: { id: liveTask.id, title: liveTask.title, status: liveTask.status, priority: liveTask.priority, deleted: false } };
+  draftState.dependsOn.set(liveTask.id, entry);
+  const controller = taskRelationships("", draftState);
+  const note = () => {
+    const row = controller.list.children[0];
+    if (!row || row.dataset.relationshipRow === undefined) throw new Error("the draft drew no row");
+    const found = item(row, "relationship-row__note");
+    return found ? found.textContent : "";
+  };
+  if (note() !== "") throw new Error("a draft nobody tried to save explains a refusal: " + JSON.stringify(note()));
+  entry.error = "the save was refused";
+  controller.update();
+  if (note() !== "the save was refused") {
+    throw new Error("a refusal arriving left the row undrawn: its note reads " + JSON.stringify(note()));
+  }
+  entry.error = "";
+  controller.update();
+  if (note() !== "") throw new Error("a cleared refusal is still drawn: " + JSON.stringify(note()));
+`)
+}
+
+// A skipped redraw keeps the rows on screen, so it has to keep the buttons
+// the controller disables and re-enables with them. Holding on to the buttons
+// of the rows it built and threw away instead, a poll that landed while a
+// removal was in flight left the × on screen disabled for good once the
+// write had finished: setBusy(false) re-enabled buttons nobody can see.
+func TestHandlerClientKeepsTheDrawnRemoveButtonsAcrossAnUnchangedRedraw(t *testing.T) {
+	t.Parallel()
+	runRelationshipRowClient(t, "the kept remove buttons", `
+  const draftState = { dependsOn: new Map(), blocks: new Map() };
+  draftState.dependsOn.set(liveTask.id, { id: liveTask.id, task: { id: liveTask.id, title: liveTask.title, status: liveTask.status, priority: liveTask.priority, deleted: false } });
+  const controller = taskRelationships("", draftState);
+  const row = controller.list.children[0];
+  const remove = row && row.removeButton;
+  if (!remove) throw new Error("the draft drew no ×");
+  controller.setBusy(true);
+  if (!remove.disabled) throw new Error("a write in flight left the × enabled");
+  // A poll that changed nothing about the rows.
+  controller.update();
+  if (controller.list.children[0] !== row) throw new Error("an unchanged poll rebuilt the row");
+  if (!remove.disabled) throw new Error("an unchanged poll re-enabled the × while the write was in flight");
+  controller.setBusy(false);
+  if (remove.disabled) throw new Error("the × on screen stayed disabled after the write finished");
+`)
 }

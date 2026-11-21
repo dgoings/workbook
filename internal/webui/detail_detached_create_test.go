@@ -66,14 +66,14 @@ func heldDetachedCreate(prerequisiteID, prerequisiteTitle, resolution string) st
 
   // A staged relationship is what makes this create wait for the server instead
   // of leaving the form the moment Save is pressed.
-  const dependsGroup = findElement(main, (element) => element.textContent === "Depends On").parentElement;
+  const dependsGroup = relationshipGroup(main, "Depends On");
   const combobox = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
   combobox.value = ` + strconv.Quote(prerequisiteTitle) + `;
   combobox.eventListeners.input();
   findElement(dependsGroup, (element) => element.attributes.role === "option" &&
     element.dataset.candidateId === prerequisiteID).eventListeners.click();
   await findElement(dependsGroup, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+    element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency").eventListeners.click();
 
   const creating = form.eventListeners.submit({ preventDefault() {} });
   await Promise.resolve();
@@ -81,11 +81,11 @@ func heldDetachedCreate(prerequisiteID, prerequisiteTitle, resolution string) st
 `
 }
 
-// leaveForTheBoard is the reader giving up on the request and taking the Back
-// link, which is what takes the node this create reports into out of the
-// document.
+// leaveForTheBoard is the reader giving up on the request and taking the
+// Cancel link — a New Task form's Back — which is what takes the node this
+// create reports into out of the document.
 const leaveForTheBoard = `
-  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Back");
+  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Cancel");
   await documentEventListeners.click({
     target: back, button: 0, defaultPrevented: false,
     metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
