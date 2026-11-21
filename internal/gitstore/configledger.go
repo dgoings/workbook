@@ -697,7 +697,7 @@ func (r *Repository) seedConfigLedger(
 		return ConfigWriteResult{}, false, err
 	}
 
-	pack, err := core.NewConfigOperationPack(config.ProjectID, generation, actor, 2, configWallTime(), operations)
+	pack, err := core.NewConfigOperationPack(config.ProjectID, generation, actor, 2, r.configWallTime(), operations)
 	if err != nil {
 		return ConfigWriteResult{}, false, err
 	}
@@ -759,7 +759,7 @@ func (r *Repository) writeConfigGenesis(
 			"cannot generate configuration operation ID", err)
 	}
 	priorityDocument := priorities.Document()
-	pack, err := core.NewConfigOperationPack(config.ProjectID, generation, actor, 1, configWallTime(),
+	pack, err := core.NewConfigOperationPack(config.ProjectID, generation, actor, 1, r.configWallTime(),
 		[]core.ConfigOperation{{
 			ID:   genesisID,
 			Type: core.ConfigGenesis,
@@ -866,7 +866,7 @@ func (r *Repository) appendConfigOperation(
 		tip.State.History.Generation,
 		actor,
 		tip.State.LogicalClock+1,
-		configWallTime(),
+		r.configWallTime(),
 		operations,
 	)
 	if err != nil {
@@ -1104,9 +1104,12 @@ func operationsTouchPriorities(operations []core.ConfigOperation) bool {
 
 // configWallTime stamps a pack's display timestamp. Wall time is attribution
 // only — the logical clock and the commit graph carry every causal claim — so
-// this reads the process clock directly rather than threading one more
-// injectable dependency through the ledger.
-func configWallTime() time.Time {
+// this reads the process clock unless the repository was opened with one of
+// its own.
+func (r *Repository) configWallTime() time.Time {
+	if r.Now != nil {
+		return r.Now().UTC()
+	}
 	return time.Now().UTC()
 }
 

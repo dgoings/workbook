@@ -428,8 +428,8 @@ func statusReadService(
 		Vocabulary: vocabulary,
 		Reader:     store,
 		History:    store,
-		IDs:        core.CryptoULIDSource{},
-		Now:        time.Now,
+		IDs:        core.CryptoULIDSource{Now: recordedNow},
+		Now:        recordedNow,
 	}, release, nil
 }
 
@@ -1011,7 +1011,7 @@ func runStatusMutation(
 	}
 
 	written, err := session.repository.WriteConfigOperation(
-		ctx, session.config, core.CryptoULIDSource{}, plan.operations, configCommitSubject(plan))
+		ctx, session.config, core.CryptoULIDSource{Now: recordedNow}, plan.operations, configCommitSubject(plan))
 	if err != nil {
 		return statusWriteError(err)
 	}

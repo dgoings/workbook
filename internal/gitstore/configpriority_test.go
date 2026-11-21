@@ -601,7 +601,7 @@ func writeLegacyConfigGenesis(t *testing.T, repo *Repository, config core.Projec
 	if err != nil {
 		t.Fatalf("Actor() error = %v", err)
 	}
-	pack, err := core.NewConfigOperationPack(config.ProjectID, generation, actor, 1, configWallTime(),
+	pack, err := core.NewConfigOperationPack(config.ProjectID, generation, actor, 1, repo.configWallTime(),
 		[]core.ConfigOperation{{
 			ID:   genesisID,
 			Type: core.ConfigGenesis,

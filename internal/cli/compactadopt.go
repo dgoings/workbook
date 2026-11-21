@@ -132,7 +132,7 @@ func adoptStuckTask(
 	taskID string,
 	request compactAdoptRequest,
 ) (gitstore.CompactionAdoption, error) {
-	options := gitstore.AdoptOptions{DiscardLocal: request.discardLocal, Flags: request.flags, Now: compactNow()}
+	options := gitstore.AdoptOptions{DiscardLocal: request.discardLocal, Flags: request.flags, Now: compactionNow()}
 	if request.discardLocal {
 		runID, err := session.service.IDs.New()
 		if err != nil {

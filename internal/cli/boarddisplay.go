@@ -75,7 +75,7 @@ func (board *boardDisplay) set(
 		}, nil
 	}
 	written, err := board.repository.WriteConfigOperationOnto(
-		ctx, board.config, core.CryptoULIDSource{}, operations,
+		ctx, board.config, core.CryptoULIDSource{Now: recordedNow}, operations,
 		displayOperationsSubject(operations), change.ExpectedHead)
 	if err != nil {
 		if core.CategoryOf(err) == core.CategoryStaleWrite {

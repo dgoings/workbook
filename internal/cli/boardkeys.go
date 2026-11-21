@@ -163,7 +163,7 @@ func (board *boardKeys) apply(
 	// what makes the promise, because between that read and this write is
 	// exactly where a teammate's `workbook key current` fits.
 	written, err := board.repository.WriteConfigOperationOnto(
-		ctx, board.config, core.CryptoULIDSource{}, plan.operations, keyCommitSubject(plan), expectedHead)
+		ctx, board.config, core.CryptoULIDSource{Now: recordedNow}, plan.operations, keyCommitSubject(plan), expectedHead)
 	if err != nil {
 		if core.CategoryOf(err) == core.CategoryStaleWrite {
 			// Whether the ledger moved while this change was being composed or
