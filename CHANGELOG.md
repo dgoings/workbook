@@ -154,6 +154,26 @@ before anyone runs it; see Compatibility across versions below.
   It is asserted, like `user.email`, and nothing verifies it.
 
 ### Changed
+- **Only a comment's author can edit it.** Editing somebody else's comment,
+  with `workbook update --edit-comment` or from the board, is refused with exit
+  `5` (a `400` on the board) and nothing is recorded; it used to be accepted
+  and the new text shown under the original author's name. The author is the
+  name the comment was recorded under, and the person editing is
+  `WORKBOOK_ACTOR` or else the checkout's `user.email`, so this is asserted
+  identity like everything else. Anybody can still remove any comment. The
+  board draws Edit only on your own comments and Remove on every one.
+- **The thread says who removed a comment, and who edited one when it was not
+  its author.** `workbook show` keeps a removed comment in its place as one
+  line, `(removed <time> by <person>)`, without its text, and an edit made by
+  somebody other than the author reads `(edited <time> by <person>)`. `show
+  --json` lists removed comments under `removedComments` and gives each live
+  comment `editable` (whether you may edit it) and `editedBy`. The board shows
+  the same, and its new `GET /api/tasks/<id>` answers with the task in that
+  shape; the poll and the comment routes carry `editableComments`. All of it is
+  read from operations every history already holds, so it covers comments
+  removed before this release, needs no format change, and leaves the cache as
+  it is. A compacted task names nobody for removals and edits made before it
+  was compacted.
 - **Git 2.29 or later is required**, and the README now says so. Workbook's
   fetches already used options from that release.
 - **A commit names the person its edit is recorded under, including when a
@@ -241,6 +261,12 @@ before anyone runs it; see Compatibility across versions below.
 
 ### Compatibility across versions
 
+- **An older clone can still edit somebody else's comment.** The refusal is
+  made where an edit is authored, so a clone running an earlier release
+  records such an edit as it always did, and every clone, old or new, shows
+  the new text. A clone running this release names who made the edit, so it no
+  longer reads as the author's own words. Upgrading every clone is what makes
+  the rule hold everywhere.
 - **Upgrade every clone to v0.7.0 before anyone compacts.** Compaction never
   runs on its own, so a team has time to do this, and every compaction run's
   text output says so. Until someone compacts, v0.6.1 and newer clones work side
