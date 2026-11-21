@@ -27,6 +27,21 @@ release counts as no entry, so it never blocks the next release. See
 
 ## Unreleased
 
+Workbook no longer repeats a credential from a remote URL. Git leaves the user
+name and token of origin's URL in some failure messages, such as the one for a
+remote that answers a push with something other than Git, and those messages
+reached the warning a failed publication carries — on the web board, the
+browser of whoever made the change. Every Git message now has the userinfo of
+each URL removed before it is reported, on the board and the command line
+alike; the remote is still named.
+
+The web board draws attachment names the way the command line prints them,
+with control and bidi-control characters as spaces, so a name using a
+right-to-left override can no longer make an `.exe` read as a `.pdf`. The
+[reference](docs/reference.md#what-anyone-who-can-open-the-board-can-do-and-see)
+now lists everything anyone who can open the board can do and see, including
+what it reveals about the machine serving it.
+
 Finished work can now be compacted. `workbook compact`, run by hand, replaces
 the history of Done and Deleted tasks with one checkpoint commit each and saves
 the old history to a local backup bundle first. It changes no existing commit,

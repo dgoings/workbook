@@ -2634,6 +2634,11 @@ somebody else's bytes, and its headers are the whole of its security:
   `Content-Disposition: attachment`, so an attached HTML file downloads rather
   than rendering. The file name inside that header is formatted rather than
   concatenated, because an attachment name is text somebody typed.
+- The board draws a file's name the way the command line prints one: control
+  and bidi-control characters become spaces. A U+202E RIGHT-TO-LEFT OVERRIDE
+  would otherwise draw `invoice<U+202E>fdp.exe` as `invoiceexe.pdf` for a reader
+  deciding whether to open it. The stored name and the downloaded one are
+  unchanged.
 - `X-Content-Type-Options: nosniff` is set on both paths, so no browser may
   decide for itself that an octet-stream is HTML.
 - The response carries `Content-Security-Policy: default-src 'none'; sandbox`
@@ -2740,6 +2745,84 @@ of whoever opens it — including writes that publish to `origin` and are later
 read as agent instructions — without ever being on the network. `workbook
 serve` says so in the warning it prints for a wildcard bind. Bind the one
 address you mean instead, and the `Host` is pinned to it.
+
+### What anyone who can open the board can do and see
+
+The board has no roles. Whoever can open it — on a person's own machine, that
+person; behind a sign-in proxy, everyone the proxy lets in — can do everything
+below, through the page or by calling the same routes directly. This list is
+the whole of it, so a team deciding whom to let in can read what they are
+granting.
+
+Every write is recorded under the serving checkout's `user.email`, whoever made
+it, and that address is shown in the page (the assignment control names it).
+`workbook serve` has no way to tell people apart, so nothing below is limited
+to the person who wrote something first, with the one exception noted for
+assignments.
+
+Read:
+
+- `GET /`, `/tasks/new`, `/tasks/<id>`, `/config` and `GET /api/tasks`: every
+  task, active and deleted — titles, descriptions, labels, statuses,
+  priorities, dependencies, comments with their authors, attachments with who
+  added them, and assignments with who holds them and who made them.
+- `GET /api/tasks/<id>/history`: every recorded change to a task, each with the
+  email address of whoever recorded it and the old and new values. Text that was
+  edited or removed — an old title, a rewritten comment — stays readable here.
+- `GET /api/tasks/<id>/attachments/<aid>`: the bytes of any attached file still
+  live on its task.
+- `GET /api/vocabulary`: the project's statuses, priorities, keys and display
+  settings, with the configuration head.
+- `GET /api/sync`: whether an `origin` is configured and whether a sync watcher
+  answers. It does not give `origin`'s address.
+- `GET /healthz`: that the board is up.
+
+Write, all of it published to `origin` like any other change:
+
+- Create tasks, and change any task's title, description, status, priority,
+  labels, position and dependencies (`POST /api/tasks`, `PATCH
+  /api/tasks/<id>`, `/status`, `/position`, the dependency routes).
+- Delete any task and restore any deleted one (`DELETE /api/tasks/<id>`,
+  `POST /api/tasks/<id>/restore`). Deleting records a tombstone; nothing is
+  erased.
+- Add a comment, and edit or remove anyone's comment. An edited comment keeps
+  its original author and is marked as edited; the history records the edit
+  under the serving checkout's identity, not the original author's.
+- Attach files and links to any task, and remove anyone's attachment. Removing
+  an attachment does not give back the space its file took.
+- Assign anyone to any task by email address, and withdraw any assignment that
+  names the serving checkout's identity or was recorded by it. An assignment
+  somebody else recorded for somebody else is refused, as it is on the command
+  line.
+- Add, rename, relabel, retag, reorder and remove statuses and priorities,
+  record priority colors, add keys and change which is current or retired, and
+  rename and recolor the project (the `/api/vocabulary` and `/api/display`
+  routes). Removing a status or priority moves its tasks where the request says.
+- Switch the board between publishing inline and handing changes to a watcher
+  (`PUT /api/sync`). The setting is the server's, so it changes what happens to
+  everyone's next change.
+
+What the board reveals about the machine serving it:
+
+- The serving checkout's folder: its last path element is shown in the page
+  header as `Repository: <name>`. The rest of the path is not shown, except
+  inside an error message as described below.
+- The serving checkout's `user.email`, in the page and on every change it
+  records.
+- `origin`'s address: not shown by any route, but a change whose publication
+  fails is answered with a warning carrying Git's message about the failure,
+  and that message usually names `origin`'s URL or path. An operational error
+  carries the failing command and Git's own words in the same way, which can
+  include paths on the server.
+- `origin`'s credential: not shown. If `origin`'s URL carries a user name or
+  token, Workbook removes it from every Git message before the message is
+  reported anywhere.
+
+Two limits a hosted board does not have yet, so whoever deploys one should know
+them: nothing bounds how many tasks, attachments or requests one person may
+send beyond the per-request and per-task ceilings above, so one person can fill
+the server's disk and `origin` and slow the board for everyone; and nothing
+records which person behind the proxy made a change.
 
 Drag a task card within a column to reorder it or into another of the
 project's status columns to change status and position together. Workbook keeps the task's priority
