@@ -27,17 +27,29 @@ release counts as no entry, so it never blocks the next release. See
 
 ## Unreleased
 
-Workbook no longer repeats a credential from a remote URL. Git leaves the user
-name and token of origin's URL in some failure messages, such as the one for a
-remote that answers a push with something other than Git, and those messages
-reached the warning a failed publication carries — on the web board, the
-browser of whoever made the change. Every Git message now has the userinfo of
-each URL removed before it is reported, on the board and the command line
-alike; the remote is still named.
+Workbook no longer repeats the user name and password of a remote's address.
+Git leaves them in some failure messages, such as the one for a remote that
+answers a push with something other than Git, and in every message naming an
+address whose password holds a slash. Those messages reached the warning a
+failed publication carries — on the web board, the browser of whoever made the
+change. When a Git command fails, Workbook now reads the addresses Git is
+configured with (remote URLs and push URLs, and `insteadOf` and
+`pushInsteadOf` rewrites) and removes each one's user name and password from
+Git's error output and from the command the error names, on the board and the
+command line alike; the remote is still named. Output a credential helper or
+the remote prints, and a token in an address's path or query string, are not
+removed; the
+[reference](docs/reference.md#what-anyone-who-can-open-the-board-can-do-and-see)
+says how to keep a server's credential out of its address.
 
-The web board draws attachment names the way the command line prints them,
-with control and bidi-control characters as spaces, so a name using a
-right-to-left override can no longer make an `.exe` read as a `.pdf`. The
+The web board draws text somebody typed with its bidi-control characters as
+spaces — attachment names, link labels and addresses, titles, comments, labels,
+history and tooltips — so a right-to-left override can no longer make an
+`.exe` read as a `.pdf`. A markdown reference to a file that is not drawn as an
+image always reads as the file's real name, with the author's own text as a
+caption beside it, and a new link attachment's address may not hold a control
+or bidi-control character. The page's content policy now carries
+`form-action 'self'`. The
 [reference](docs/reference.md#what-anyone-who-can-open-the-board-can-do-and-see)
 now lists everything anyone who can open the board can do and see, including
 what it reveals about the machine serving it.

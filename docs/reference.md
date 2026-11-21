@@ -389,6 +389,13 @@ workbook update WB-01K --status done --comment "shipped" --attach-url https://ex
 records the status change, the comment and the link together, or records
 nothing at all.
 
+`--attach-url` takes an `http` or `https` address and nothing else, and refuses
+one that holds a control or bidi-control character: U+202E RIGHT-TO-LEFT
+OVERRIDE would draw `https://evil.example/<U+202E>fdp.exe` as
+`https://evil.example/exe.pdf`. The web board refuses the same addresses. A link
+stored before this rule, or by another clone, is kept and drawn with those
+characters as spaces.
+
 A comment or attachment identifier may be typed as any unambiguous prefix of
 the one `workbook show` prints, the way a task ID may be. `show` prints them
 whole rather than shortened, because identifiers minted moments apart share a
@@ -2637,8 +2644,17 @@ somebody else's bytes, and its headers are the whole of its security:
 - The board draws a file's name the way the command line prints one: control
   and bidi-control characters become spaces. A U+202E RIGHT-TO-LEFT OVERRIDE
   would otherwise draw `invoice<U+202E>fdp.exe` as `invoiceexe.pdf` for a reader
-  deciding whether to open it. The stored name and the downloaded one are
-  unchanged.
+  deciding whether to open it. A link attachment's label, its address and the
+  address's tooltip are drawn the same way. The stored name is unchanged, and
+  the download is named by this route, which a browser saves as
+  `invoice_fdp.exe`.
+- Everything else the board draws from text somebody typed — titles,
+  descriptions, comments, labels, assignees, status and priority labels, the
+  project's name, the history, tooltips, an image's `alt` and the browser tab's
+  title — is drawn with its bidi-control characters as spaces, on the page the
+  server renders and in everything the page's script draws. Line breaks are
+  kept. A field being edited shows its stored text as it is, so saving it
+  changes nothing the author did not change.
 - `X-Content-Type-Options: nosniff` is set on both paths, so no browser may
   decide for itself that an octet-stream is HTML.
 - The response carries `Content-Security-Policy: default-src 'none'; sandbox`
@@ -2811,12 +2827,28 @@ What the board reveals about the machine serving it:
   records.
 - `origin`'s address: not shown by any route, but a change whose publication
   fails is answered with a warning carrying Git's message about the failure,
-  and that message usually names `origin`'s URL or path. An operational error
+  and that message usually names `origin`'s URL or path, with the credential
+  removed as described next. An operational error
   carries the failing command and Git's own words in the same way, which can
   include paths on the server.
-- `origin`'s credential: not shown. If `origin`'s URL carries a user name or
-  token, Workbook removes it from every Git message before the message is
-  reported anywhere.
+- `origin`'s credential: the user name and password in a remote's address are
+  removed. When a Git command fails, Workbook reads the addresses Git is
+  configured with — each `remote.<name>.url` and `pushurl`, each
+  `url.<base>.insteadOf` and `pushInsteadOf`, and the addresses those rewrites
+  produce — and removes each address's user name and password, by their exact
+  text, from Git's error output and from the command the error names. A user
+  name or password of eight characters or more is also removed wherever it
+  appears on its own, as `***`; a shorter one, such as the user name `git`, is
+  removed only inside its address, so ordinary words in Git's messages are left
+  alone. Any other `scheme://user@` in Git's output loses its user part too. A
+  successful command costs no extra Git process.
+- What is not removed: anything a credential helper, a Git hook or the remote
+  itself prints (a helper that writes `refreshing token <token>` to its error
+  output is reported as written), and a token placed in an address's path or
+  query string, such as `https://git.example/repo.git?access_token=<token>`. A
+  deployment should give the server its credential by a means that keeps it out
+  of the address where it can: a credential helper that prints nothing, or an
+  SSH key, rather than a token in `origin`'s URL.
 
 Two limits a hosted board does not have yet, so whoever deploys one should know
 them: nothing bounds how many tasks, attachments or requests one person may
@@ -3193,7 +3225,12 @@ attachment the download route serves inline (`image/gif`, `image/jpeg`,
 `image/png`, `image/webp`) is drawn as an image; anything else it holds — an
 SVG, a PDF, a text file — is drawn as a **link** to the same route, which
 answers those with `Content-Disposition: attachment` and downloads them rather
-than rendering them. A reference that resolves to nothing, to more than one
+than rendering them. That link always reads as the file's real name, drawn as
+above; the reference's own text, when it says something the name does not,
+follows the link as a caption in parentheses. So
+`![invoice.pdf](attachment:<id>)` naming a file called `invoice<U+202E>fdp.exe`
+draws as `invoice fdp.exe (invoice.pdf)`, never as a link reading
+`invoice.pdf`. A reference that resolves to nothing, to more than one
 attachment, or to a link attachment is drawn as the text it is. Every other
 image target — an external URL, a `data:` URI, an address on this board — is
 drawn as text as well: a board that fetched images named in task text would
