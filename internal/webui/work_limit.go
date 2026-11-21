@@ -2,6 +2,7 @@ package webui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -148,7 +149,7 @@ func (limiter *workLimiter) wrap(inner http.Handler) http.Handler {
 		}
 		release, admitted := limiter.acquire(request.Context(), mutatingMethod(request.Method))
 		if !admitted {
-			writeBusy(writer, limiter.slots)
+			writeBusy(writer, fmt.Sprintf(busyWorkMessage, limiter.slots))
 			return
 		}
 		defer release()
@@ -156,24 +157,42 @@ func (limiter *workLimiter) wrap(inner http.Handler) http.Handler {
 	})
 }
 
-// writeBusy refuses a request the board had no turn for.
+// The three things a busy board says. Each is a sentence of its own, because a
+// client may show it after words of its own.
+const (
+	busyWorkMessage   = "The board is busy: it is already working on the %d requests it takes at once, so this one was not started. Try again in a moment."
+	busyBodyMessage   = "The board is busy: it is already holding as many request bodies as it takes at once, so this one was not started. Try again in a moment."
+	busyAnswerMessage = "The board is busy: it is already holding as many answers as it delivers at once, so this read was not kept. Try again in a moment."
+)
+
+// writeBusy refuses a request the board had no room for.
 //
 // 503 with Retry-After is the answer HTTP has for "not now": nothing about the
-// request was wrong and nothing was done with it, so a client may send exactly
+// request was wrong and nothing was changed by it, so a client may send exactly
 // the same request again. The board's own page does, after the wait this names.
 // The body is the board's usual error document so a client reading only that
 // still learns what happened.
-func writeBusy(writer http.ResponseWriter, slots int) {
-	writeSecurityHeaders(writer)
-	writer.Header().Set("Retry-After", strconv.Itoa(workRetryAfterSeconds))
-	writeJSON(writer, http.StatusServiceUnavailable, ErrorDocument{
+func writeBusy(writer http.ResponseWriter, message string) {
+	status, body := busyAnswer(writer.Header(), message)
+	writer.WriteHeader(status)
+	_, _ = writer.Write(body)
+}
+
+// busyAnswer sets a refusal's headers and hands back its status and body.
+func busyAnswer(header http.Header, message string) (int, []byte) {
+	header.Set("Content-Security-Policy", securityPolicy)
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("Retry-After", strconv.Itoa(workRetryAfterSeconds))
+	header.Set("Content-Type", "application/json; charset=utf-8")
+	body, _ := json.Marshal(ErrorDocument{
 		Format:  "workbook.error",
 		Version: 1,
 		Error: ErrorBody{
 			Category: core.CategoryOperational,
-			Message:  fmt.Sprintf("the board is busy: it is already working on the %d requests it takes at once, so this one was not started; try again in a moment", slots),
+			Message:  message,
 		},
 	})
+	return http.StatusServiceUnavailable, append(body, '\n')
 }
 
 // fits reports whether a request of this kind could start now. The caller

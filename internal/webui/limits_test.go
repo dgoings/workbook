@@ -111,14 +111,16 @@ func TestBoardServerBoundsHowLongAConnectionMayIdle(t *testing.T) {
 	if server.IdleTimeout <= 0 {
 		t.Fatalf("IdleTimeout = %v, want a positive bound", server.IdleTimeout)
 	}
-	if server.ReadTimeout <= 0 {
-		t.Fatalf("ReadTimeout = %v, want a positive bound", server.ReadTimeout)
+	// A deadline for the whole request is deliberately absent: it would cut
+	// off a slow phone's upload. The body is paced instead; see
+	// TestBoardCutsOffASenderThatFallsBehind.
+	if server.ReadTimeout != time.Duration(0) {
+		t.Fatalf("ReadTimeout = %v, want none", server.ReadTimeout)
 	}
-	if server.ReadHeaderTimeout > server.ReadTimeout {
-		t.Fatalf("ReadHeaderTimeout = %v, want no more than ReadTimeout %v", server.ReadHeaderTimeout, server.ReadTimeout)
-	}
-	// A write deadline is deliberately absent: a mutation may wait on an inline
-	// push to origin, which has no bound this package can name honestly.
+	// A write deadline is deliberately absent too: a mutation may wait on an
+	// inline push to origin, which has no bound this package can name honestly.
+	// The answer is paced once it is ready; see
+	// TestBoardCutsOffAReaderThatFallsBehind.
 	if server.WriteTimeout != time.Duration(0) {
 		t.Fatalf("WriteTimeout = %v, want none", server.WriteTimeout)
 	}

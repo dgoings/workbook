@@ -13,16 +13,19 @@ import (
 //
 // An http.Server with no deadlines keeps a goroutine and a file descriptor for
 // every connection that opens and then stops talking, until the process exits.
-// The board listens on the loopback interface, so the sender is a local process
-// rather than the internet, but a browser tab left open across a laptop suspend
-// or a script that dies mid-request is enough to accumulate them.
+// A browser tab left open across a laptop suspend or a script that dies
+// mid-request is enough to accumulate them, and on a board several people
+// share, so is one person who means to.
 //
-// The values are generous because nothing legitimate is slow here: a local
-// browser sends a whole request at once, and MaxRequestBodyBytes already bounds
-// how much of one there can be.
+// The server's own deadlines cover what happens before a request reaches the
+// board's handler and between requests: its headers must arrive within
+// boardReadHeaderTimeout, and a connection may sit idle between requests for
+// boardIdleTimeout. Everything after the headers, the body and the answer, is
+// paced by the board itself (see transfer.go), because one deadline for the
+// whole request cannot tell a phone uploading slowly from a client that sends
+// its headers and stops.
 const (
 	boardReadHeaderTimeout = 10 * time.Second
-	boardReadTimeout       = 30 * time.Second
 	boardIdleTimeout       = 2 * time.Minute
 	// boardShutdownGrace is all the time a request that is already in flight
 	// gets to finish its response once the board has been asked to stop. Someone
@@ -38,12 +41,14 @@ const (
 
 // newBoardServer builds the board's HTTP server with its connection deadlines.
 //
-// WriteTimeout is deliberately absent. A mutation may publish inline to origin
-// before it answers, and how long a push to an unreachable remote takes is not
-// something this package can bound honestly; a write deadline would abort the
-// response of a mutation that is still going to succeed. Read and idle
-// deadlines cover the stalled-connection case a write deadline was never the
-// right tool for.
+// ReadTimeout and WriteTimeout are deliberately absent. A read deadline for the
+// whole request would cut off a phone uploading an attachment over a weak link,
+// and a write deadline would abort the response of a mutation that is still
+// going to succeed, because a mutation may publish inline to origin before it
+// answers and how long a push to an unreachable remote takes is not something
+// this package can bound honestly. The board paces each body and each answer
+// instead, and only while it is actually moving: the work in between is the
+// work turn's to bound.
 //
 // Shutdown is the one place that wait is bounded, and boardShutdownGrace is
 // what bounds it. The two are not in tension: while the board is serving, an
@@ -56,7 +61,6 @@ func newBoardServer(handler http.Handler) *http.Server {
 	return &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: boardReadHeaderTimeout,
-		ReadTimeout:       boardReadTimeout,
 		IdleTimeout:       boardIdleTimeout,
 	}
 }
@@ -82,11 +86,45 @@ func Serve(ctx context.Context, listener net.Listener, handler http.Handler) err
 // ServeLimited is Serve with the cap on the board's work given rather than
 // defaulted. The cap sits inside the same-origin guard, so a request the guard
 // refuses never takes a turn, and outside everything else, so no route can
-// start work the cap has not admitted. See LimitWork.
+// start work the cap has not admitted. See LimitWork, and transfer.go for how
+// requests are received and answers delivered around it.
 func ServeLimited(ctx context.Context, listener net.Listener, handler http.Handler, limits WorkLimits) error {
-	server := newBoardServer(GuardSameOrigin(LimitWork(handler, limits), listener.Addr().String()))
-	awaited := &awaitedConnections{}
-	server.ConnState = awaited.track
+	return newBoardStack(listener, handler, limits, defaultTransferLimits()).serve(ctx)
+}
+
+// boardStack is everything between a listener and the board's handler.
+//
+// The stages nest from the connection inwards: the connection cap, then the
+// delivery of every answer (the same-origin guard's refusals included), then
+// the guard, then the receiving of a body the guard let through, and only then
+// the work turn and the handler. So a turn is taken with the body already in
+// memory and given back before the answer is sent.
+type boardStack struct {
+	listener    *connectionLimit
+	transfers   *transfers
+	work        *workLimiter
+	server      *http.Server
+	connections *awaitedConnections
+}
+
+func newBoardStack(listener net.Listener, handler http.Handler, limits WorkLimits, transferBounds transferLimits) *boardStack {
+	stack := &boardStack{
+		listener:    limitConnections(listener, transferBounds.maxConnections),
+		transfers:   newTransfers(transferBounds),
+		work:        newWorkLimiter(limits),
+		connections: &awaitedConnections{},
+	}
+	guarded := GuardSameOrigin(stack.transfers.receive(stack.work.wrap(handler)), listener.Addr().String())
+	stack.server = newBoardServer(stack.transfers.deliver(guarded))
+	stack.server.ConnState = func(connection net.Conn, state http.ConnState) {
+		stack.connections.track(connection, state)
+		stack.listener.track(connection, state)
+	}
+	return stack
+}
+
+func (stack *boardStack) serve(ctx context.Context) error {
+	server, listener, awaited := stack.server, stack.listener, stack.connections
 	result := make(chan error, 1)
 	go func() { result <- server.Serve(listener) }()
 

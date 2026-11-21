@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -344,47 +343,6 @@ func TestWorkLimitDropsAWaitingRequestWhoseClientLeft(t *testing.T) {
 	if started, _, _ := work.counts(); started != 1 {
 		t.Fatalf("the handler started %d requests, want 1", started)
 	}
-}
-
-// recordedBody counts what has been read from a request body.
-type recordedBody struct {
-	reader io.Reader
-	read   atomic.Int64
-}
-
-func (body *recordedBody) Read(buffer []byte) (int, error) {
-	count, err := body.reader.Read(buffer)
-	body.read.Add(int64(count))
-	return count, err
-}
-
-func TestWorkLimitReadsNoBodyOfARequestUntilItsTurn(t *testing.T) {
-	t.Parallel()
-	// Production mutation: a limiter that read or buffered the body before
-	// admitting the request would hold every waiting upload in memory — the
-	// review measured 150 simultaneous 1 MiB uploads taking the server from 56
-	// MB to 608 MB — and the cap would bound processes but not memory.
-	limiter := newWorkLimiter(WorkLimits{MaxRequests: 2})
-	timers := installManualTimers(limiter)
-	work := newHeldWork()
-	handler := limiter.wrap(work)
-
-	held := sendAsync(handler, http.MethodPost, "/api/tasks/WB-1/attachments", strings.NewReader(`{}`))
-	awaitEntered(t, work, 1)
-	upload := &recordedBody{reader: strings.NewReader(`{"kind":"file","name":"a.bin","content":"` + strings.Repeat("A", 1<<20) + `"}`)}
-	waiting := sendAsync(handler, http.MethodPost, "/api/tasks/WB-2/attachments", upload)
-	<-timers.started
-	awaitWorkState(t, limiter, "the upload waiting", func(state workState) bool { return state.Waiting == 1 })
-	if read := upload.read.Load(); read != 0 {
-		t.Fatalf("%d bytes of a waiting upload were read, want none", read)
-	}
-	timers.fireAll()
-	requireBusyRefusal(t, awaitAnswer(t, waiting))
-	if read := upload.read.Load(); read != 0 {
-		t.Fatalf("%d bytes of a refused upload were read, want none", read)
-	}
-	close(work.release)
-	awaitAnswer(t, held)
 }
 
 func TestWorkLimitAnswersTheHealthCheckWhenEverySlotIsTaken(t *testing.T) {

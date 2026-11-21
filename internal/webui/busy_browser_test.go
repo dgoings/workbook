@@ -43,7 +43,7 @@ func (front *busyFront) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		}
 		front.mutex.Unlock()
 		if refuse {
-			writeBusy(writer, DefaultMaxRequests)
+			writeBusy(writer, fmt.Sprintf(busyWorkMessage, DefaultMaxRequests))
 			return
 		}
 	}
