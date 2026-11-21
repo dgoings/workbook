@@ -2412,7 +2412,33 @@ setTimeout(async () => {
   const stalePoll = intervalCallback();
   await new Promise((resolve) => setTimeout(resolve, 0));
   deletedTaskResponse = ` + string(deletedAfterPollDocument) + `;
-  await intervalCallback();
+  // The poll never overlaps itself, so the read that overtakes the stale one is
+  // a refresh something else starts. A refused write is one: the page reads the
+  // board again at once to show what the server holds, while the poll's read of
+  // the deleted tasks is still out. The refusal leaves the prerequisite where it
+  // is, so every check below is about the two reads and nothing else.
+  const activeRow = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeDependency.ID) + `);
+  const removeActive = activeRow && findElement(activeRow, (element) =>
+    element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
+  if (!removeActive) throw new Error("the active prerequisite offers no Remove control");
+  const harnessAnswers = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") === "DELETE") {
+      fetchCalls.push({ url, options });
+      return { ok: false, status: 422, json: async () => ({
+        format: "workbook.error", version: 1, error: { category: "validation", message: "removal refused for this test" }
+      }) };
+    }
+    return harnessAnswers(url, options);
+  };
+  const readsBeforeRemoval = fetchCalls.length;
+  await removeActive.eventListeners.click({ preventDefault() {} });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  globalThis.fetch = harnessAnswers;
+  const removalReads = fetchCalls.slice(readsBeforeRemoval).map((call) => (call.options.method || "GET") + " " + call.url);
+  if (!removalReads.some((read) => read.startsWith("DELETE ")) || !removalReads.includes("GET /api/tasks?deleted=true")) {
+    throw new Error("the refused removal did not read the board and the deleted tasks again: " + JSON.stringify(removalReads));
+  }
   if (title.value !== "Unsaved title") throw new Error("relationship refresh reconstructed the task form");
   if (findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedDependency.ID) + `) ||
       findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(missingDependencyID) + `)) {
@@ -4456,11 +4482,41 @@ func requireNode(t *testing.T) string {
 // string at 128 KiB (MAX_ARG_STRLEN), a ceiling the largest programs have
 // outgrown; stdin has no such limit and behaves identically on every platform
 // CI runs.
+//
+// It also puts clientProgramGuard in front of every program, so a program
+// whose checks never finish fails rather than exiting cleanly.
 func nodeCommand(node, program string) *exec.Cmd {
 	command := exec.Command(node, "-")
-	command.Stdin = strings.NewReader(program)
+	command.Stdin = strings.NewReader(clientProgramGuard + program)
 	return command
 }
+
+// clientProgramGuard fails a client program that ends without reaching the end
+// of its checks.
+//
+// Node exits cleanly once nothing is left scheduled, so a check that awaits a
+// promise nobody ever settles does not fail: the event loop simply runs dry
+// with the rest of the checks unrun, and the program exits 0. Every program in
+// this package runs its checks in an async callback handed to Node's
+// setTimeout, or in an async function handed to clientProgram, so the guard
+// counts those that have started and those that have finished, and at exit
+// fails the program if any started and never finished. A check that throws
+// still fails the way it always did, as an unhandled rejection.
+//
+// It wraps Node's own setTimeout, which only the program's checks call; the
+// page's script schedules through the fake window's, which this leaves alone.
+// It is one line so the line numbers in a failing program's stack are off by
+// exactly one.
+const clientProgramGuard = `(() => { const realSetTimeout = globalThis.setTimeout; let unfinished = 0; ` +
+	`const follow = (result) => { if (!result || typeof result.then !== "function") return result; unfinished += 1; ` +
+	`result.then(() => { unfinished -= 1; }, (error) => { unfinished -= 1; throw error; }); return result; }; ` +
+	`const guarded = function setTimeout(callback, ...rest) { if (typeof callback !== "function") return realSetTimeout(callback, ...rest); ` +
+	`return realSetTimeout(function (...args) { return follow(callback.apply(this, args)); }, ...rest); }; ` +
+	`guarded[require("util").promisify.custom] = realSetTimeout[require("util").promisify.custom]; globalThis.setTimeout = guarded; ` +
+	`globalThis.clientProgram = (body) => follow(body()); ` +
+	`process.on("exit", (code) => { if (code === 0 && unfinished > 0) { ` +
+	`process.stderr.write("client program ended with " + unfinished + " of its checks unfinished: something they awaited never settled\n"); ` +
+	`process.exitCode = 1; } }); })();` + "\n"
 
 func renderedClientScript(t *testing.T, body string) string {
 	t.Helper()

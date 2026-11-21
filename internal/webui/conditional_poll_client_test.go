@@ -197,30 +197,47 @@ serve = (url) => ({ ok: true, json: async () => taskResponse });
 
 // A read that lost the race never touched the model, so its tag names a
 // document the page is not holding. Only the read that was applied records its
-// tag: A leaves first and lands last, B is the one drawn, and the next poll
-// names B.
+// tag.
+//
+// The poll never overlaps itself — a tick sends nothing while the last tick's
+// read is out — so the read that overtakes a poll is one something else
+// starts. Showing the Deleted column is one: it reads at once rather than on the
+// next tick. The poll's read A leaves first and lands last, the column's read B
+// is the one drawn, and the next poll names B's tag for B's address. Had A's
+// tag been kept, the next poll would name nothing, because A's tag belongs to an
+// address the board is no longer reading.
 func TestClientConditionalPollIgnoresTheTagOfASupersededRead(t *testing.T) {
 	t.Parallel()
 	program := conditionalPollProgram(t, "/", conditionalPollTasks(), "", `
   let releaseA = null;
   serve = (url, tag) => {
-    if (!releaseA) return new Promise((resolve) => { releaseA = () => resolve(taggedAnswer(taskResponse, "\"a\"")); });
-    return taggedAnswer(taskResponse, "\"b\"");
+    if (url === "/api/tasks" && !releaseA) {
+      return new Promise((resolve) => { releaseA = () => resolve(taggedAnswer(taskResponse, "\"a\"")); });
+    }
+    return honestAnswer(url, tag);
   };
   const pollA = intervalCallback();
   await settle();
-  if (!releaseA) throw new Error("refresh A never reached the server");
-  const pollB = intervalCallback();
-  await pollB;
+  if (!releaseA) throw new Error("the poll's read A never reached the server");
+  // A tick while A is out hands back A's own promise rather than a read of
+  // its own, so it is not awaited here: A is released only further down.
+  const readsWhileAIsOut = reads.length;
+  intervalCallback();
+  await settle();
+  if (reads.length !== readsWhileAIsOut) throw new Error("a tick read again while the last tick's read was still out");
+
+  await documentEventListeners.click({ target: deletedToggle, button: 0, preventDefault() {} });
+  await settle();
+  const readB = lastRead("/api/tasks?deleted=include");
+  if (!readB) throw new Error("showing the column did not read at once, so nothing overtook A");
   releaseA();
   await pollA;
 
-  serve = honestAnswer;
-  taskTag = "\"b\"";
   await intervalCallback();
-  const read = lastRead("/api/tasks");
-  if (read.tag !== "\"b\"") {
-    throw new Error("the poll after a superseded read named " + JSON.stringify(read.tag) + ", want the applied read's \"b\"");
+  const read = lastRead("/api/tasks?deleted=include");
+  if (read === readB) throw new Error("no poll followed the superseded read");
+  if (read.tag !== includedTag) {
+    throw new Error("the poll after a superseded read named " + JSON.stringify(read.tag) + ", want the applied read's " + includedTag);
   }
 `)
 	runConditionalPollClient(t, "a superseded read's tag", program)
