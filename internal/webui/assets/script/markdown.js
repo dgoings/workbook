@@ -157,10 +157,14 @@
         }
         const image = markdownNode("img");
         image.src = address;
-        // An empty alt is a decorative image to a screen reader, which is the
-        // right answer when the author wrote no alt text: inventing one out of
-        // the file name would put a ULID-shaped string in the reading.
-        image.alt = caption;
+        // The alternative text is the file's real name too, with what the
+        // author wrote beside it in parentheses — the rule the link above
+        // follows, and for the same reason: an alt is what a browser draws in
+        // place of a file that does not decode as an image, so the author's
+        // own words alone would let `![invoice.pdf](attachment:<id>)` caption a
+        // broken image over a file that saves as an .exe.
+        const named = shownFileName(attachment.name) || "attachment";
+        image.alt = !caption || caption === named ? named : named + " (" + caption + ")";
         return [image];
       }
       // A link, or null when the target is not one this page will draw as a

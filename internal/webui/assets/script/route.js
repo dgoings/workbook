@@ -66,7 +66,7 @@
         // drawing has to go with them.
         if (current.view !== "config") leaveConfigRoute();
         if (current.view === "board") {
-          document.title = withoutDirectionControls(boardName);
+          document.title = boardName;
           // The board is re-attached rather than rebuilt, which is what makes
           // coming back from the configuration page cost nothing: every card node the
           // reader left is the node they return to, holding whatever it was

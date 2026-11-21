@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -411,8 +412,15 @@ func attachmentDelivery(stored string) (string, string) {
 // a backslash, a newline, or a right-to-left override. Formatting escapes the
 // quotable ones and percent-encodes the rest as RFC 2231, and a name it cannot
 // format at all costs the response its file name rather than its safety.
+//
+// The name sent is not quite the stored one: each control character and each
+// direction control that redraws a run (see isDirectionOverride) becomes an
+// underscore, in whichever form the header carries it. A browser or a file
+// manager that drew "invoice<U+202E>fdp.exe" from the header would show
+// "invoiceexe.pdf" for a file that saves as an .exe, and the server does not
+// leave it to each of them to clean. The stored name is untouched.
 func contentDisposition(disposition, name string) string {
-	name = strings.TrimSpace(name)
+	name = strings.TrimSpace(downloadFileName(name))
 	if name == "" {
 		return disposition
 	}
@@ -421,6 +429,17 @@ func contentDisposition(disposition, name string) string {
 		return disposition
 	}
 	return formatted
+}
+
+// downloadFileName is an attachment's name as a download header carries it:
+// control characters and run-redrawing direction controls become `_`.
+func downloadFileName(name string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || isDirectionOverride(r) {
+			return '_'
+		}
+		return r
+	}, name)
 }
 
 // taskCollectionID and taskMemberIDs read the identifiers a route addresses,

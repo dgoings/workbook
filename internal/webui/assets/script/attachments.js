@@ -33,8 +33,19 @@
       // "invoiceexe.pdf" while the route hands it back as an .exe. The stored
       // name is untouched — the download is still named by the server — and
       // only what is drawn changes.
+      //
+      // A name can also push its extension out of sight with characters that
+      // draw as blank space without being spaces to shownLine: "invoice.pdf"
+      // and seventy-eight U+3164 HANGUL FILLER before ".exe" draws as
+      // "invoice.pdf", a run of blank lines and an ".exe" nobody scrolls to.
+      // The Hangul fillers (U+3164, U+115F, U+1160 and the halfwidth U+FFA0),
+      // U+2800 BRAILLE PATTERN BLANK, and U+180E MONGOLIAN VOWEL SEPARATOR are
+      // read as spaces here, as every Unicode space separator already is, and
+      // the run collapses to one so the extension sits beside the name. That
+      // is only for a file's name: a title or a comment keeps those characters,
+      // which Korean and braille text use as written.
       function shownFileName(name) {
-        return shownLine(name);
+        return shownLine(String(name == null ? "" : name).replace(/[\u115F\u1160\u180E\u2800\u3164\uFFA0]/g, " "));
       }
       // What an attachment's row names it as: a link's label, or its URL when
       // it has none, and a file's name. A link's label and address are drawn

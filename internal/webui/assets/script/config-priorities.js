@@ -135,7 +135,8 @@
         form.className = "admin-form";
         form.dataset.priorityEdit = definition.priority;
         const name = panelTextInput("priority-name-" + definition.priority, definition.priority, "", priorityControls);
-        const label = panelTextInput("priority-label-" + definition.priority, definition.label, "", priorityControls);
+        // The label as the board draws it; see the status form's.
+        const label = panelTextInput("priority-label-" + definition.priority, shownField(definition.label), "", priorityControls);
         // A priority with no stored color is drawn in one the board derives from
         // its position, and there is no stored default to put in the field: the
         // empty field is the state, and the placeholder says the shape rather
@@ -161,7 +162,7 @@
           // edited must not become one.
           const change = {};
           if (renamed !== definition.priority) change.name = renamed;
-          if (label.value !== definition.label) change.label = label.value;
+          if (storedUnlessEdited(label.value, definition.label) !== definition.label) change.label = label.value;
           const takes = role.taken();
           const edited = Object.keys(change).length > 0;
           // The color as it was typed, and the question of whether it is a

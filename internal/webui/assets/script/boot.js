@@ -212,14 +212,19 @@
       // appends to its own name. Both are the server's answers rather than
       // derived here: the fallbacks are core's, and a client that spelled them
       // would go on saying the old word the day core's changed.
-      const boardName = boardView.dataset.projectName || "Workbook board";
+      //
+      // Both are cleaned once, here, where they are read: the project's name
+      // is text anybody who can open this board can set, and every route's
+      // tab title, the settings form's placeholder and the board's own title
+      // are built from these. See withoutDirectionControls.
+      const boardName = withoutDirectionControls(boardView.dataset.projectName || "Workbook board");
       // What this board would be called if its name were cleared, which is what
       // the settings form's own placeholder says. It is not boardName: a project
       // called Atlas whose name field is emptied gets the generic heading, so a
       // placeholder reading "Atlas" would be advertising the value the field no
       // longer holds — and would go on doing so after a save that cleared it.
-      const boardDefaultName = boardView.dataset.defaultProjectName || "Workbook board";
-      const boardTitleSuffix = " · " + (boardView.dataset.titleSuffix || "Workbook");
+      const boardDefaultName = withoutDirectionControls(boardView.dataset.defaultProjectName || "Workbook board");
+      const boardTitleSuffix = " · " + withoutDirectionControls(boardView.dataset.titleSuffix || "Workbook");
       // The configuration ledger tip these columns were built from. The server
       // renders it into the page and repeats it on every poll, so the poll can
       // notice a change without fetching the vocabulary itself once a second.

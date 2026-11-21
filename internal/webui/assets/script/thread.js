@@ -17,6 +17,9 @@
         button.type = "button";
         button.className = "row-remove";
         button.dataset.rowRemove = "";
+        // The name carries what the row names — a file, a link, an assignee —
+        // so it is cleaned the way the row's own text is.
+        name = withoutDirectionControls(name);
         button.setAttribute("aria-label", name);
         button.title = name;
         text(button, "×");
@@ -240,7 +243,7 @@
         // value in the field that a reader who meant somebody else would have
         // to clear first — and the empty value is what core resolves, so who
         // is acting is decided in one place rather than two.
-        field.placeholder = assignIdentity;
+        field.placeholder = withoutDirectionControls(assignIdentity);
         const row = document.createElement("div");
         row.className = "sidebar-inline";
         const submit = threadButton(action, true);

@@ -554,7 +554,10 @@ setTimeout(() => {
     if (image.src !== address + `+strconv.Quote(markdownPNGID)+`) {
       throw new Error(markdownCases[at].name + " points at " + image.src);
     }
-    if (image.alt !== "the diagram") throw new Error(markdownCases[at].name + " carries alt " + image.alt);
+    // The alternative text is the file's real name, with the author's words
+    // as a caption: it is what a browser draws when the bytes do not decode
+    // as an image, so the author's words alone could name a different file.
+    if (image.alt !== "diagram.png (the diagram)") throw new Error(markdownCases[at].name + " carries alt " + image.alt);
   });
   // An SVG is markup that can carry script. The route already refuses to hand
   // one back inline, so a reference to one degrades to a link to that route,

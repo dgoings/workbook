@@ -229,7 +229,9 @@
         // nothing inside it is read on focus. A tombstone's label says it too,
         // because its chip is marked for the readers who can see it.
         const priorityNote = priorityStranded ? ", at the unrecognized priority " + task.priority : "";
-        article.setAttribute("aria-label", view.pending
+        // Cleaned as the server's card template cleans it, so a card the poll
+        // redraws names its task the way the card the page loaded with did.
+        article.setAttribute("aria-label", withoutDirectionControls(view.pending
           ? "Task " + task.title + ", saving"
           : task.deleted
             // A deleted card drags too, and the only place it can go is a
@@ -238,7 +240,7 @@
             ? "Restore task " + task.title + " by moving it to a column" + priorityNote
             : (stranded
               ? "Move task " + task.title + " out of the unrecognized status " + task.status
-              : "Move task " + task.title + " from " + task.status) + priorityNote);
+              : "Move task " + task.title + " from " + task.status) + priorityNote));
         // A tombstone has no detail page: the route answers for the tasks the
         // board holds, and a deleted task cannot be edited. The heading keeps
         // the same node either way — an anchor with no href is text, to the
@@ -249,7 +251,7 @@
           else parts.link.href = "/tasks/" + encodeURIComponent(task.id);
         }
         parts.restore.hidden = !task.deleted;
-        parts.restore.setAttribute("aria-label", "Restore task " + task.title);
+        parts.restore.setAttribute("aria-label", withoutDirectionControls("Restore task " + task.title));
         if (parts.idText) text(parts.idText, view.idPrefix);
         // The chip is the priority's token, not this project's label for it,
         // and the server's card template says the same so the two never
