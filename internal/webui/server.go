@@ -72,8 +72,19 @@ func newBoardServer(handler http.Handler) *http.Server {
 // it is dropped outright, a request already in flight has boardShutdownGrace to
 // answer, and whatever is still going after that is dropped too and reported as
 // a clean exit, because being told to stop is not a failure to serve.
+//
+// Serve caps the board's work at DefaultWorkLimits; ServeLimited takes the cap
+// as an argument.
 func Serve(ctx context.Context, listener net.Listener, handler http.Handler) error {
-	server := newBoardServer(GuardSameOrigin(handler, listener.Addr().String()))
+	return ServeLimited(ctx, listener, handler, DefaultWorkLimits())
+}
+
+// ServeLimited is Serve with the cap on the board's work given rather than
+// defaulted. The cap sits inside the same-origin guard, so a request the guard
+// refuses never takes a turn, and outside everything else, so no route can
+// start work the cap has not admitted. See LimitWork.
+func ServeLimited(ctx context.Context, listener net.Listener, handler http.Handler, limits WorkLimits) error {
+	server := newBoardServer(GuardSameOrigin(LimitWork(handler, limits), listener.Addr().String()))
 	awaited := &awaitedConnections{}
 	server.ConnState = awaited.track
 	result := make(chan error, 1)

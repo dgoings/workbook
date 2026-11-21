@@ -1729,16 +1729,27 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 func runServeWith(ctx context.Context, listen func(network, address string) (net.Listener, error), args []string, cwd string, stdout io.Writer, stderr io.Writer) error {
 	flags := newFlagSet("serve")
 	addr := flags.String("addr", defaultServeAddr, "listener address (default "+defaultServeAddr+", or a free port when that one is taken)")
+	maxRequests := flags.String("max-requests", "", "requests the board works on at once")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
 	// An address the user typed is a contract; the default is a preference.
 	addrChosen := false
+	maxRequestsGiven := false
 	flags.Visit(func(visited *flag.Flag) {
-		if visited.Name == "addr" {
+		switch visited.Name {
+		case "addr":
 			addrChosen = true
+		case "max-requests":
+			maxRequestsGiven = true
 		}
 	})
+	// Read before anything is opened, so a cap that cannot be read is refused
+	// rather than served past.
+	limits, err := boardWorkLimits(*maxRequests, maxRequestsGiven, os.Getenv)
+	if err != nil {
+		return err
+	}
 
 	service, repository, store, releaseProjection, err := openServiceParts(ctx, cwd, stderr)
 	if err != nil {
@@ -2178,7 +2189,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 	// webui.Serve refuses foreign Host headers, cross-origin requests, and
 	// mutations that do not declare JSON. That guard is the board's only access
 	// control, and a non-loopback bind is what the warning above is about.
-	if err := webui.Serve(ctx, listener, actingAs(ctx, handler)); err != nil {
+	if err := webui.ServeLimited(ctx, listener, actingAs(ctx, handler), limits); err != nil {
 		return core.Wrap(core.CategoryOperational, "serve board", err)
 	}
 	return nil

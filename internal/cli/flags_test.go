@@ -157,8 +157,8 @@ var usageSynopsisExceptions = map[string]struct{ synopsis, line string }{
 	// serve prints the address it will try rather than <address>, because the
 	// port is the thing a reader of the usage wants to know.
 	"serve": {
-		synopsis: "workbook serve [--addr <address>]",
-		line:     "  serve [--addr 127.0.0.1:7331]",
+		synopsis: "workbook serve [--addr <address>] [--max-requests <n>]",
+		line:     "  serve [--addr 127.0.0.1:7331] [--max-requests <n>]",
 	},
 	// hooks names its one subcommand, because <command> would tell a reader
 	// nothing about a verb that has exactly one.

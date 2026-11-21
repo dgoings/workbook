@@ -265,13 +265,19 @@ func statusNames(definitions []core.StatusDefinition) string {
 // another parallel test to claim; see reservedListener.
 func startServeBoard(t *testing.T, repository string) string {
 	t.Helper()
+	return startServeBoardWith(t, repository)
+}
+
+// startServeBoardWith is startServeBoard with serve options beyond the address.
+func startServeBoardWith(t *testing.T, repository string, options ...string) string {
+	t.Helper()
 	reserved := reserveListener(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	var serveStdout, serveStderr bytes.Buffer
 	go func() {
-		result <- runServeWith(ctx, reserved.listen, []string{"--addr", reserved.addr}, repository, &serveStdout, &serveStderr)
+		result <- runServeWith(ctx, reserved.listen, append([]string{"--addr", reserved.addr}, options...), repository, &serveStdout, &serveStderr)
 	}()
 	t.Cleanup(func() {
 		cancel()
