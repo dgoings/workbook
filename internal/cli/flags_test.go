@@ -249,7 +249,7 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		},
 		"delete":   {"no-sync": boolFlag, "json": boolFlag},
 		"restore":  {"into": stringFlag, "no-sync": boolFlag, "json": boolFlag},
-		"serve":    {"addr": stringFlag},
+		"serve":    {"addr": stringFlag, "max-requests": stringFlag},
 		"fetch":    {"json": boolFlag},
 		"push":     {"json": boolFlag},
 		"sync":     {"json": boolFlag, "watch": boolFlag, "interval": stringFlag, "status": boolFlag},
