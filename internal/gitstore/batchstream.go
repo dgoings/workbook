@@ -36,6 +36,10 @@ type objectBatch struct {
 	reader  *bufio.Reader
 	stderr  *bytes.Buffer
 	args    []string
+	// gitPath and directory are where the batch ran, so a failure's stderr can
+	// be redacted against that repository's configured credentials.
+	gitPath   string
+	directory string
 
 	writeErr    chan error
 	writeOnce   sync.Once
@@ -86,12 +90,14 @@ func (r *Repository) startObjectBatch(
 	}
 
 	batch := &objectBatch{
-		command:  command,
-		cancel:   cancel,
-		reader:   bufio.NewReader(stdout),
-		stderr:   stderr,
-		args:     args,
-		writeErr: make(chan error, 1),
+		command:   command,
+		cancel:    cancel,
+		reader:    bufio.NewReader(stdout),
+		stderr:    stderr,
+		args:      args,
+		gitPath:   gitPath,
+		directory: r.Root,
+		writeErr:  make(chan error, 1),
 	}
 	go func() {
 		writer := bufio.NewWriter(stdin)
@@ -187,8 +193,14 @@ func (b *objectBatch) wait() error {
 	return b.waitResult
 }
 
+// errorWithStderr reports a failed batch with Git's stderr, which can name a
+// remote: reading an object a partial clone lacks fetches it from the promisor
+// remote, and that fetch's failure is printed here. The command's context is
+// not at hand and may be spent anyway, so the configuration is read under its
+// own bound.
 func (b *objectBatch) errorWithStderr(err error) error {
-	detail := strings.TrimSpace(redactURLCredentials(b.stderr.String()))
+	redactor := failureCredentialRedactor(context.Background(), b.gitPath, b.directory, nil, b.args, err, b.stderr.Bytes())
+	detail := strings.TrimSpace(redactor.redact(b.stderr.String()))
 	if detail == "" {
 		return err
 	}

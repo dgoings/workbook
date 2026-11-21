@@ -24,6 +24,9 @@ type gitCommandResult struct {
 	stdout []byte
 	stderr []byte
 	err    error
+	// redactor removed credentials from stderr, and removes the same ones from
+	// anything else reported about this command, such as its arguments.
+	redactor credentialRedactor
 }
 
 // Repository identifies a working tree and the Git directory shared by its
@@ -262,7 +265,7 @@ func (r *Repository) Git(ctx context.Context, stdin []byte, args ...string) ([]b
 func (r *Repository) gitWithEnv(ctx context.Context, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
 	result := r.gitWithEnvResult(ctx, extraEnv, stdin, args...)
 	if result.err != nil {
-		return nil, core.Wrap(core.CategoryOperational, fmt.Sprintf("git %s failed", redactURLCredentials(strings.Join(args, " "))), gitCommandResultError(result))
+		return nil, core.Wrap(core.CategoryOperational, fmt.Sprintf("git %s failed", result.redactor.redact(strings.Join(args, " "))), gitCommandResultError(result))
 	}
 	return result.stdout, nil
 }
@@ -353,8 +356,19 @@ func runGitWithEnvResult(ctx context.Context, gitPath, directory string, extraEn
 	err := command.Run()
 	// Redacted here, where it is captured, so that no reader of Git's stderr —
 	// an error, a refusal reason, a warning the board shows — can carry a
-	// credential out of a remote URL. See redactURLCredentials.
-	return gitCommandResult{stdout: stdout.Bytes(), stderr: []byte(redactURLCredentials(stderr.String())), err: err}
+	// credential out of a remote URL. See readCredentialRedactor.
+	redactor := failureCredentialRedactor(ctx, gitPath, directory, extraEnv, args, err, stderr.Bytes())
+	return gitCommandResult{stdout: stdout.Bytes(), stderr: []byte(redactor.redact(stderr.String())), err: err, redactor: redactor}
+}
+
+// failureCredentialRedactor chooses how much a command's output needs: the
+// configured credentials are read only when the command failed and printed an
+// `@`, the one case where Git's words are reported and can hold a userinfo.
+func failureCredentialRedactor(ctx context.Context, gitPath, directory string, extraEnv, args []string, err error, stderr []byte) credentialRedactor {
+	if err != nil && bytes.IndexByte(stderr, '@') >= 0 {
+		return readCredentialRedactor(ctx, gitPath, directory, extraEnv, args)
+	}
+	return argumentCredentialRedactor(args)
 }
 
 func gitCommandResultError(result gitCommandResult) error {

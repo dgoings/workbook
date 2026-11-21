@@ -2,7 +2,12 @@ package gitstore
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -33,6 +38,13 @@ func TestRedactURLCredentialsDropsUserinfoFromEveryURL(t *testing.T) {
 			name:  "a password holding punctuation",
 			input: "push to https://bot:p%40ss:w;rd!@host.example/r.git failed",
 			want:  "push to https://host.example/r.git failed",
+		},
+		{
+			// Git's own anonymizer cuts at the first @ and leaves the rest of
+			// such a password; the pattern takes the userinfo to its last @.
+			name:  "a password holding an unencoded @",
+			input: "fatal: unable to access 'https://u:p@ss@h.example/r.git/' and https://ss@h.example/r.git",
+			want:  "fatal: unable to access 'https://h.example/r.git/' and https://h.example/r.git",
 		},
 		{
 			name:  "no credentials",
@@ -95,5 +107,246 @@ func assertNoURLCredentials(t *testing.T, what, text string) {
 		if strings.Contains(text, secret) {
 			t.Fatalf("%s = %q, which still carries %q", what, text, secret)
 		}
+	}
+}
+
+// The pattern cannot tell where a userinfo holding a quote or a slash ends, and
+// Git prints such userinfo whole: its anonymizer gives up on a slash, and "no
+// DAV locking support on <url>" is never anonymized. So the credentials Git is
+// configured with are also removed by their exact text — the whole userinfo
+// where it follows "://", and the user name and password on their own when
+// they are long enough not to be ordinary words.
+func TestCredentialRedactorRemovesConfiguredCredentialsByTheirText(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ name, address, input, want string }{
+		{
+			name:    "a password holding an apostrophe",
+			address: "http://deploy-bot:it's-SECRETTOKEN@127.0.0.1:7493/team/repo.git",
+			input:   "error: no DAV locking support on http://deploy-bot:it's-SECRETTOKEN@127.0.0.1:7493/team/repo.git/",
+			want:    "error: no DAV locking support on http://127.0.0.1:7493/team/repo.git/",
+		},
+		{
+			name:    "a password holding a double quote",
+			address: `http://reviewer:a"SECRETD@127.0.0.1:7493/team/repo.git`,
+			input:   `error: no DAV locking support on http://reviewer:a"SECRETD@127.0.0.1:7493/team/repo.git/`,
+			want:    "error: no DAV locking support on http://127.0.0.1:7493/team/repo.git/",
+		},
+		{
+			name:    "a password holding a slash",
+			address: "http://reviewer:a/SECRETE@127.0.0.1:7493/team/repo.git",
+			input:   "fatal: unable to access 'http://reviewer:a/SECRETE@127.0.0.1:7493/team/repo.git/': URL rejected: Port number was not a decimal number",
+			want:    "fatal: unable to access 'http://127.0.0.1:7493/team/repo.git/': URL rejected: Port number was not a decimal number",
+		},
+		{
+			name:    "a password holding an @, as Git anonymizes it",
+			address: "http://reviewer:p@ss'SECRETG@127.0.0.1:7493/team/repo.git",
+			input:   "fatal: unable to access 'http://ss'SECRETG@127.0.0.1:7493/team/repo.git/': URL rejected: Bad hostname",
+			want:    "fatal: unable to access 'http://127.0.0.1:7493/team/repo.git/': URL rejected: Bad hostname",
+		},
+		{
+			name:    "a password outside its URL",
+			address: "https://deploy-bot:SECRETTOKEN@git.example/team/repo.git",
+			input:   "remote: token SECRETTOKEN is expired; deploy-bot must sign in again",
+			want:    "remote: token *** is expired; *** must sign in again",
+		},
+		{
+			name:    "a percent-encoded password, printed decoded",
+			address: "https://bot:SECRET%2FTOKEN@git.example/team/repo.git",
+			input:   "remote: SECRET/TOKEN refused",
+			want:    "remote: *** refused",
+		},
+		{
+			name:    "an @ in the path is not a userinfo",
+			address: "https://git.example/team/@scope/repo.git",
+			input:   "fatal: repository 'https://git.example/team/@scope/repo.git/' not found",
+			want:    "fatal: repository 'https://git.example/team/@scope/repo.git/' not found",
+		},
+		{
+			name:    "an @ in the path after a port is not a userinfo",
+			address: "https://git.example:8443/team/@scope/repo.git",
+			input:   "fatal: repository 'https://git.example:8443/team/@scope/repo.git/' not found",
+			want:    "fatal: repository 'https://git.example:8443/team/@scope/repo.git/' not found",
+		},
+		{
+			// A short user name is an ordinary word in Git's messages and is
+			// left alone outside its URL.
+			name:    "ordinary messages",
+			address: "ssh://git@git.example/team/repo.git",
+			input:   "fatal: git-http-push failed; Author: sam@example.com; scp-style git@host.example:o/r.git",
+			want:    "fatal: git-http-push failed; Author: sam@example.com; scp-style git@host.example:o/r.git",
+		},
+	}
+	for _, test := range cases {
+		redactor := newCredentialRedactor([]string{test.address})
+		if got := redactor.redact(test.input); got != test.want {
+			t.Errorf("%s: redact(%q) = %q, want %q", test.name, test.input, got, test.want)
+		}
+	}
+}
+
+// A remote's address is not the only place a credential is configured: a push
+// URL, and a url.<base>.insteadOf or pushInsteadOf rewrite whose base carries
+// the userinfo, are addresses Git connects to and prints as well.
+func TestConfiguredAddressesIncludeRewritesAndPushURLs(t *testing.T) {
+	t.Parallel()
+	listing := strings.Join([]string{
+		"remote.origin.url\nhttps://git.example/team/repo.git",
+		"remote.origin.pushurl\nhttps://pusher:PUSHSECRET@git.example/team/repo.git",
+		"remote.mirror.url\ngh:team/repo.git",
+		"url.https://bot:REWRITESECRET@git.example/.insteadof\nhttps://git.example/",
+		"url.https://u:PREFIXSECRET@.pushinsteadof\ngh:",
+		"",
+	}, "\x00")
+	got := configuredAddresses(listing)
+	want := []string{
+		"https://git.example/team/repo.git",
+		"https://pusher:PUSHSECRET@git.example/team/repo.git",
+		"gh:team/repo.git",
+		"https://bot:REWRITESECRET@git.example/",
+		"https://git.example/",
+		"https://bot:REWRITESECRET@git.example/team/repo.git",
+		"https://u:PREFIXSECRET@",
+		"gh:",
+		"https://u:PREFIXSECRET@team/repo.git",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("configuredAddresses() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// Every way of configuring a credential the reviewer leaked through, run
+// through real Git against a remote that answers plain text, on the push path
+// the board's warning carries and on the fetch path.
+func TestGitFailureRedactsConfiguredCredentials(t *testing.T) {
+	t.Parallel()
+	notGit := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.Copy(io.Discard, request.Body)
+		writer.Header().Set("Content-Type", "text/plain")
+		_, _ = writer.Write([]byte("not a Git server"))
+	}))
+	t.Cleanup(notGit.Close)
+	host := strings.TrimPrefix(notGit.URL, "http://")
+	plain := "http://" + host + "/team/repo.git"
+	passwords := map[string]string{
+		"apostrophe":   "it's-SECRETA",
+		"double quote": `a"SECRETD`,
+		"slash":        "a/SECRETE",
+		"at sign":      "p@ss'SECRETG",
+	}
+	setups := map[string]func(t *testing.T, repository *Repository, credential string){
+		"url": func(t *testing.T, repository *Repository, credential string) {
+			gitstoreGit(t, repository, "remote", "add", "origin", "http://"+credential+"@"+host+"/team/repo.git")
+		},
+		"pushurl": func(t *testing.T, repository *Repository, credential string) {
+			gitstoreGit(t, repository, "remote", "add", "origin", plain)
+			gitstoreGit(t, repository, "config", "remote.origin.pushurl", "http://"+credential+"@"+host+"/team/repo.git")
+		},
+		"insteadOf": func(t *testing.T, repository *Repository, credential string) {
+			gitstoreGit(t, repository, "remote", "add", "origin", plain)
+			gitstoreGit(t, repository, "config", "url.http://"+credential+"@"+host+"/.insteadOf", "http://"+host+"/")
+		},
+		"pushInsteadOf": func(t *testing.T, repository *Repository, credential string) {
+			gitstoreGit(t, repository, "remote", "add", "origin", plain)
+			gitstoreGit(t, repository, "config", "url.http://"+credential+"@"+host+"/.pushInsteadOf", "http://"+host+"/")
+		},
+	}
+	for setupName, setup := range setups {
+		for passwordName, password := range passwords {
+			t.Run(setupName+"/"+passwordName, func(t *testing.T) {
+				t.Parallel()
+				repository, _ := writeRepository(t)
+				credential := "deploy-bot:" + password
+				setup(t, repository, credential)
+				secret := password[strings.LastIndex(password, "SECRET"):]
+
+				push := repository.gitWithEnvResult(context.Background(), nil, nil, "push", "--porcelain", "origin", "HEAD:refs/workbook/config")
+				if push.err == nil {
+					t.Fatal("push to a remote that is not Git succeeded")
+				}
+				reason := pushRefusalReason(push)
+				if strings.Contains(reason, secret) || strings.Contains(reason, "deploy-bot") {
+					t.Fatalf("push refusal = %q, which still carries the credential", reason)
+				}
+				if !strings.Contains(reason, host) {
+					t.Fatalf("push refusal = %q, want the remote at %s still named", reason, host)
+				}
+
+				_, err := repository.Git(context.Background(), nil, "fetch", "origin")
+				if err != nil && (strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "deploy-bot")) {
+					t.Fatalf("fetch error = %q, which still carries the credential", err)
+				}
+			})
+		}
+	}
+}
+
+// The fetch path on its own, with the one password Git prints there: a slash
+// in the password makes Git's URL unusable and its anonymizer give up, so the
+// fetch fails naming the whole address.
+func TestGitFetchFailureRedactsAPasswordHoldingASlash(t *testing.T) {
+	t.Parallel()
+	repository, _ := writeRepository(t)
+	gitstoreGit(t, repository, "remote", "add", "origin", "http://reviewer:a/SECRETE@127.0.0.1:9/team/repo.git")
+	_, err := repository.Git(context.Background(), nil, "fetch", "origin")
+	if err == nil {
+		t.Fatal("fetch from an unusable address succeeded")
+	}
+	if strings.Contains(err.Error(), "SECRETE") {
+		t.Fatalf("fetch error = %q, which still carries the password", err)
+	}
+	if !strings.Contains(err.Error(), "unable to access 'http://127.0.0.1:9/team/repo.git/'") {
+		t.Fatalf("fetch error = %q, want Git's message kept with the address named", err)
+	}
+}
+
+// An object batch reports Git's stderr when it fails, and a partial clone's
+// batch fetches what it lacks from its promisor remote, so that stderr can name
+// the remote, credential and all.
+func TestObjectBatchFailureRedactsConfiguredCredentials(t *testing.T) {
+	t.Parallel()
+	repository, _ := writeRepository(t)
+	directory := t.TempDir()
+	fakeGit := filepath.Join(directory, "git")
+	// The address holds a quote, so the script reads it from a file rather
+	// than from its own text.
+	addressFile := filepath.Join(directory, "address")
+	if err := os.WriteFile(addressFile, []byte("http://deploy-bot:it's-SECRETTOKEN@127.0.0.1:9/team/repo.git"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\n" +
+		"ADDRESS=$(cat '" + addressFile + "')\n" +
+		"for argument in \"$@\"; do\n" +
+		"  if [ \"$argument\" = config ]; then printf 'remote.origin.url\\n%s\\000' \"$ADDRESS\"; exit 0; fi\n" +
+		"done\n" +
+		"cat >/dev/null\n" +
+		"printf 'error: no DAV locking support on %s/\\n' \"$ADDRESS\" >&2\n" +
+		"exit 1\n"
+	testenv.WriteExecutable(t, fakeGit, []byte(script))
+	repository.gitPath = fakeGit
+
+	batch, err := repository.startObjectBatch(context.Background(), func(writer io.Writer) error {
+		_, err := io.WriteString(writer, strings.Repeat("0", 40)+"\n")
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer batch.Close()
+	err = batch.Finish()
+	if err == nil {
+		t.Fatal("Finish() = nil, want the fake batch's failure")
+	}
+	if strings.Contains(err.Error(), "SECRETTOKEN") || strings.Contains(err.Error(), "deploy-bot") {
+		t.Fatalf("batch error = %q, which still carries the credential", err)
+	}
+	if !strings.Contains(err.Error(), "no DAV locking support on http://127.0.0.1:9/team/repo.git/") {
+		t.Fatalf("batch error = %q, want Git's stderr kept with only the credential removed", err)
+	}
+}
+
+func gitstoreGit(t *testing.T, repository *Repository, args ...string) {
+	t.Helper()
+	if _, err := repository.Git(context.Background(), nil, args...); err != nil {
+		t.Fatal(err)
 	}
 }
