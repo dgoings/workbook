@@ -462,7 +462,7 @@ func (r *Repository) writeCommit(ctx context.Context, tree string, parentHead st
 		args = append(args, "-p", parentHead)
 	}
 	args = append(args, "-m", reason)
-	output, err := r.Git(ctx, nil, args...)
+	output, err := r.gitWithEnv(ctx, commitIdentityEnvironment(ctx), nil, args...)
 	if err != nil {
 		return "", err
 	}
@@ -471,6 +471,30 @@ func (r *Repository) writeCommit(ctx context.Context, tree string, parentHead st
 		return "", core.Wrap(core.CategoryOperational, "Git returned an invalid commit object ID", err)
 	}
 	return commitID, nil
+}
+
+// commitIdentityEnvironment names the author and committer of a commit written
+// for a context that asserts its actor, and nothing for one that does not.
+//
+// Nothing is the whole of the unset case: the commit is then written exactly as
+// it always was, with Git choosing the identity from the checkout's
+// configuration and the process environment. An asserted actor replaces all
+// four values, so the checkout's own `user.name`, `user.email` and any
+// GIT_AUTHOR_* or GIT_COMMITTER_* the server was started with take no part, and
+// a folder with no Git identity of its own can still write. The actor is an
+// email address and nothing else, so it is the display name as well: inventing
+// a name from its local part would put words in the commit nobody gave.
+func commitIdentityEnvironment(ctx context.Context) []string {
+	actor, asserted := core.ActorFrom(ctx)
+	if !asserted {
+		return nil
+	}
+	return []string{
+		"GIT_AUTHOR_NAME=" + actor,
+		"GIT_AUTHOR_EMAIL=" + actor,
+		"GIT_COMMITTER_NAME=" + actor,
+		"GIT_COMMITTER_EMAIL=" + actor,
+	}
 }
 
 func (r *Repository) refValueDiffers(ctx context.Context, ref, expected string) bool {

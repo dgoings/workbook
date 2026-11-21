@@ -161,7 +161,7 @@ func (l *loop) run(ctx context.Context) error {
 	// window would correctly refuse to defer.
 	l.syncOnce(ctx)
 	l.wait(ctx)
-	l.finalSync()
+	l.finalSync(ctx)
 	return nil
 }
 
@@ -205,8 +205,13 @@ func (l *loop) wait(ctx context.Context) {
 	}
 }
 
-func (l *loop) finalSync() {
-	ctx, cancel := context.WithTimeout(context.Background(), l.options.Shutdown)
+// finalSync runs on a context cut loose from the cancellation that ended the
+// loop but not from its values: the run's context is what names the person a
+// replayed commit is recorded under (see core.WithActor), and a final sync on a
+// bare background context would write it under the checkout's own name — or
+// fail outright in a folder that has none.
+func (l *loop) finalSync(parent context.Context) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), l.options.Shutdown)
 	defer cancel()
 	l.syncOnce(ctx)
 }

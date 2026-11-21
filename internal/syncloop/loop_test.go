@@ -153,6 +153,50 @@ func TestFinalSyncRunsOnCancellation(t *testing.T) {
 	}
 }
 
+// The final sync is cut loose from the cancellation that ended the watcher,
+// not from the person the watcher was started as: a replay it writes on the way
+// out is that person's commit, and in a folder with no Git identity of its own
+// a bare context would leave it nobody to write it as.
+func TestFinalSyncKeepsTheActingPerson(t *testing.T) {
+	syncer := &fakeSyncer{origin: true}
+	parent, err := core.WithActor(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(parent)
+	output := &syncBuffer{}
+	finished := make(chan error, 1)
+	go func() {
+		finished <- Run(ctx, Options{
+			CommonGitDir: t.TempDir(),
+			Repository:   syncer,
+			Config:       watcherConfig(),
+			Interval:     time.Hour,
+			Stderr:       output,
+		})
+	}()
+	waitForOutput(t, output, ReadyPrefix)
+	waitForSyncs(t, syncer, 1)
+
+	cancel()
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return after cancellation")
+	}
+	if got := syncer.syncCount(); got != 2 {
+		t.Fatalf("syncs = %d, want 2 (the opening sync and the final one)", got)
+	}
+	syncer.mu.Lock()
+	defer syncer.mu.Unlock()
+	if syncer.lastActor != "alice@example.com" {
+		t.Fatalf("final sync actor = %q, want the person the watcher was started as", syncer.lastActor)
+	}
+}
+
 func TestConflictEntryExpiresWhenTheTaskHeadMoves(t *testing.T) {
 	const taskID = "WB-01K0M6B8A4FTT8C39MXXYTW7D1"
 	syncer := &fakeSyncer{
@@ -479,12 +523,14 @@ type fakeSyncer struct {
 	ignored        []gitstore.IgnoredRef
 	err            error
 	lastContextErr error
+	lastActor      string
 }
 
 func (f *fakeSyncer) Sync(ctx context.Context, _ core.ProjectConfig) (gitstore.SyncRunResult, error) {
 	f.mu.Lock()
 	f.syncs++
 	f.lastContextErr = ctx.Err()
+	f.lastActor, _ = core.ActorFrom(ctx)
 	blocker := f.block
 	conflicts := append([]core.Conflict{}, f.conflicts...)
 	ignored := append([]gitstore.IgnoredRef{}, f.ignored...)
