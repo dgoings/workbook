@@ -379,9 +379,9 @@ func TestBoardRefusesABodyItHasNoRoomForAndLetsTheSenderReadWhy(t *testing.T) {
 	routes := newTransferRoutes()
 	stack, address := startBoardStack(t, routes, WorkLimits{MaxRequests: 4}, bounds)
 
-	// Three chunks of a longer body: the first is let through, the other two
-	// fill the budget.
-	holder := rawRequest(t, address, http.MethodPost, "/write/0", 8*transferChunk, bytes.Repeat([]byte(" "), 3*transferChunk))
+	// Three chunks of a longer body and one byte more: the first chunk is let
+	// through, and the second and third fill the budget.
+	holder := rawRequest(t, address, http.MethodPost, "/write/0", 8*transferChunk, bytes.Repeat([]byte(" "), 2*transferChunk+1))
 	awaitTransfers(t, stack.transfers, "the budget full", func(state transferState) bool {
 		return state.BodyBytes == 2*transferChunk
 	})

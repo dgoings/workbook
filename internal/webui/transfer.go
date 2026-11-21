@@ -274,11 +274,10 @@ func (board *transfers) deliver(inner http.Handler) http.Handler {
 		trade := &exchange{control: control}
 		answer := &heldAnswer{
 			header:    make(http.Header),
-			budget:    &board.answers,
-			free:      int64(limits.chunk),
+			body:      heldBytes{size: limits.chunk, budget: &board.answers},
 			refusable: safeMethod(request.Method),
 		}
-		defer answer.release()
+		defer answer.body.release()
 		inner.ServeHTTP(answer, request.WithContext(context.WithValue(request.Context(), exchangeKey{}, trade)))
 		if hasBody(request) && !trade.bodyRead {
 			// The server reads and discards what is left of a body nothing read
@@ -296,9 +295,11 @@ func (board *transfers) send(writer http.ResponseWriter, control *http.ResponseC
 	board.count(&board.delivering, 1)
 	defer board.count(&board.delivering, -1)
 	limits := &board.limits
-	status, body := answer.status, answer.body
+	status, chunks := answer.status, answer.body.chunks
 	if answer.refused {
-		status, body = busyAnswer(writer.Header(), busyAnswerMessage)
+		var refusal []byte
+		status, refusal = busyAnswer(writer.Header(), busyAnswerMessage)
+		chunks = [][]byte{refusal}
 	} else {
 		for key, values := range answer.header {
 			writer.Header()[key] = values
@@ -307,18 +308,21 @@ func (board *transfers) send(writer http.ResponseWriter, control *http.ResponseC
 	if status == 0 {
 		status = http.StatusOK
 	}
+	length := 0
+	for _, chunk := range chunks {
+		length += len(chunk)
+	}
 	bodyAllowed := status >= http.StatusOK && status != http.StatusNoContent && status != http.StatusNotModified
 	if bodyAllowed && writer.Header().Get("Content-Length") == "" {
-		writer.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		writer.Header().Set("Content-Length", strconv.Itoa(length))
 	}
 	schedule := limits.pace()
-	_ = control.SetWriteDeadline(schedule.deadline(min(limits.chunk, len(body))))
+	_ = control.SetWriteDeadline(schedule.deadline(min(limits.chunk, length)))
 	writer.WriteHeader(status)
 	if bodyAllowed {
-		for offset := 0; offset < len(body); offset += limits.chunk {
-			end := min(offset+limits.chunk, len(body))
-			_ = control.SetWriteDeadline(schedule.deadline(end - offset))
-			if _, err := writer.Write(body[offset:end]); err != nil {
+		for _, chunk := range chunks {
+			_ = control.SetWriteDeadline(schedule.deadline(len(chunk)))
+			if _, err := writer.Write(chunk); err != nil {
 				panic(http.ErrAbortHandler)
 			}
 			// Pushed to the connection under this chunk's deadline rather than
@@ -326,7 +330,7 @@ func (board *transfers) send(writer http.ResponseWriter, control *http.ResponseC
 			if err := control.Flush(); err != nil {
 				panic(http.ErrAbortHandler)
 			}
-			schedule.done = int64(end)
+			schedule.done += int64(len(chunk))
 		}
 	}
 	if err := control.Flush(); err != nil {
@@ -336,16 +340,71 @@ func (board *transfers) send(writer http.ResponseWriter, control *http.ResponseC
 	_ = control.SetWriteDeadline(limits.now().Add(limits.stall))
 }
 
+// heldBytes is a body or an answer held in memory, in chunks of one size. Every
+// chunk but the first is counted against a budget before it is allocated, so
+// what the budget counts is exactly what is held, and the first is what lets a
+// small transfer through whatever the budget holds.
+type heldBytes struct {
+	size     int
+	budget   *byteBudget
+	chunks   [][]byte
+	reserved int64
+}
+
+// space is where the next bytes go: the free end of the last chunk, or a new
+// chunk. It is nil when a new chunk does not fit the budget, unless force says
+// to count it anyway.
+func (held *heldBytes) space(force bool) []byte {
+	if count := len(held.chunks); count > 0 {
+		if last := held.chunks[count-1]; len(last) < cap(last) {
+			return last[len(last):cap(last)]
+		}
+		if !held.budget.take(int64(held.size)) {
+			if !force {
+				return nil
+			}
+			held.budget.force(int64(held.size))
+		}
+		held.reserved += int64(held.size)
+	}
+	chunk := make([]byte, 0, held.size)
+	held.chunks = append(held.chunks, chunk)
+	return chunk[:cap(chunk)]
+}
+
+// full says the chunks held so far have no room left, so the next byte needs a
+// new one.
+func (held *heldBytes) full() bool {
+	count := len(held.chunks)
+	return count > 0 && len(held.chunks[count-1]) == cap(held.chunks[count-1])
+}
+
+// grew records that count bytes were written into the last space handed out.
+func (held *heldBytes) grew(count int) {
+	last := len(held.chunks) - 1
+	held.chunks[last] = held.chunks[last][:len(held.chunks[last])+count]
+}
+
+func (held *heldBytes) reader() io.Reader {
+	readers := make([]io.Reader, len(held.chunks))
+	for index, chunk := range held.chunks {
+		readers[index] = bytes.NewReader(chunk)
+	}
+	return io.MultiReader(readers...)
+}
+
+func (held *heldBytes) release() {
+	held.budget.give(held.reserved)
+	held.reserved = 0
+	held.chunks = nil
+}
+
 // heldAnswer is the answer a handler writes, held in memory and counted
 // against the answer budget until it has been delivered.
 type heldAnswer struct {
-	header   http.Header
-	status   int
-	body     []byte
-	reserved int64
-	budget   *byteBudget
-	// free is how many bytes are held without counting against the budget.
-	free int64
+	header http.Header
+	status int
+	body   heldBytes
 	// refusable says the answer may be thrown away when it does not fit,
 	// which is true of a read: the client can ask again, and nothing was
 	// changed. A write's answer is never thrown away.
@@ -365,36 +424,21 @@ func (answer *heldAnswer) Write(content []byte) (int, error) {
 	if answer.status == 0 {
 		answer.WriteHeader(http.StatusOK)
 	}
-	if answer.refused {
-		return len(content), nil
-	}
-	if need := int64(len(answer.body)+len(content)) - answer.free - answer.reserved; need > 0 {
-		switch {
-		case answer.budget.take(need):
-			answer.reserved += need
-		case answer.refusable:
-			answer.refuse()
-			return len(content), nil
-		default:
-			answer.budget.force(need)
-			answer.reserved += need
+	written := len(content)
+	for len(content) > 0 && !answer.refused {
+		space := answer.body.space(!answer.refusable)
+		if space == nil {
+			// Thrown away for the busy refusal, which is small enough to be
+			// let through without counting.
+			answer.refused = true
+			answer.body.release()
+			break
 		}
+		copied := copy(space, content)
+		answer.body.grew(copied)
+		content = content[copied:]
 	}
-	answer.body = append(answer.body, content...)
-	return len(content), nil
-}
-
-// refuse throws the answer away for the busy refusal, which is small enough
-// to be let through without counting.
-func (answer *heldAnswer) refuse() {
-	answer.refused = true
-	answer.body = nil
-	answer.release()
-}
-
-func (answer *heldAnswer) release() {
-	answer.budget.give(answer.reserved)
-	answer.reserved = 0
+	return written, nil
 }
 
 // receive is the first stage: it reads a request's body whole, at the pace,
@@ -406,10 +450,9 @@ func (board *transfers) receive(inner http.Handler) http.Handler {
 			inner.ServeHTTP(writer, request)
 			return
 		}
-		limit := requestBodyLimit(request.URL.Path)
-		body, reserved, outcome := board.read(trade.control, request.Body, limit)
-		defer board.bodies.give(reserved)
-		switch outcome {
+		body := &heldBytes{size: board.limits.chunk, budget: &board.bodies}
+		defer body.release()
+		switch board.read(trade.control, request.Body, requestBodyLimit(request.URL.Path), body) {
 		case bodyStalled:
 			// The client stopped sending, or sent too slowly, or went away. There
 			// is nobody reading an answer, so the connection is closed.
@@ -432,7 +475,7 @@ func (board *transfers) receive(inner http.Handler) http.Handler {
 			// out: an expired one cancels the request it belongs to.
 			_ = trade.control.SetReadDeadline(time.Time{})
 		}
-		request.Body = io.NopCloser(bytes.NewReader(body))
+		request.Body = io.NopCloser(body.reader())
 		inner.ServeHTTP(writer, request)
 	})
 }
@@ -447,55 +490,82 @@ const (
 	bodyStalled
 )
 
-// read reads at most limit+1 bytes of a body at the pace. It hands back the
-// body and how many of its bytes it holds against the budget, which the
-// caller gives back once the request is done.
+// read reads at most limit+1 bytes of a body into held, at the pace.
 //
 // A body that does not fit in the budget is read on to its end and thrown
 // away, so a client still sending is not cut off mid-request and can read the
-// refusal; what is read past the point it stopped fitting is never held.
-func (board *transfers) read(control *http.ResponseController, source io.Reader, limit int64) ([]byte, int64, bodyOutcome) {
+// refusal; nothing read past the point it stopped fitting is held.
+func (board *transfers) read(control *http.ResponseController, source io.Reader, limit int64, held *heldBytes) bodyOutcome {
 	board.count(&board.receiving, 1)
 	defer board.count(&board.receiving, -1)
 	limits := &board.limits
 	schedule := limits.pace()
-	chunk := make([]byte, limits.chunk)
-	var body []byte
-	var reserved int64
+	var discard []byte
+	var probe [1]byte
 	refused := false
 	for schedule.done <= limit {
-		want := int(min(int64(limits.chunk), limit+1-schedule.done))
-		_ = control.SetReadDeadline(schedule.deadline(want))
-		count, err := source.Read(chunk[:want])
-		if count > 0 && !refused {
-			if need := int64(len(body)+count) - int64(limits.chunk) - reserved; need > 0 {
-				if board.bodies.take(need) {
-					reserved += need
-				} else {
+		if !refused && held.full() {
+			// One byte decides whether the body goes on, so a new chunk is
+			// counted only for a body that has more to hold, and a body that
+			// ends exactly at a chunk's end is not refused for room it never
+			// needed.
+			_ = control.SetReadDeadline(schedule.deadline(1))
+			count, err := source.Read(probe[:])
+			if count > 0 {
+				schedule.done += int64(count)
+				if space := held.space(false); space == nil {
 					refused = true
-					board.bodies.give(reserved)
-					reserved = 0
-					body = nil
+					held.release()
+				} else {
+					space[0] = probe[0]
+					held.grew(1)
 				}
 			}
-			if !refused {
-				body = append(body, chunk[:count]...)
+			if errors.Is(err, io.EOF) {
+				if refused {
+					return bodyRefused
+				}
+				return bodyComplete
 			}
+			if err != nil {
+				held.release()
+				return bodyStalled
+			}
+			continue
+		}
+		var space []byte
+		if !refused {
+			if space = held.space(false); space == nil {
+				refused = true
+				held.release()
+			}
+		}
+		if refused {
+			if discard == nil {
+				discard = make([]byte, limits.chunk)
+			}
+			space = discard
+		}
+		want := int(min(int64(len(space)), limit+1-schedule.done))
+		_ = control.SetReadDeadline(schedule.deadline(want))
+		count, err := source.Read(space[:want])
+		if !refused {
+			held.grew(count)
 		}
 		schedule.done += int64(count)
 		if errors.Is(err, io.EOF) {
 			if refused {
-				return nil, 0, bodyRefused
+				return bodyRefused
 			}
-			return body, reserved, bodyComplete
+			return bodyComplete
 		}
 		if err != nil {
-			board.bodies.give(reserved)
-			return nil, 0, bodyStalled
+			held.release()
+			return bodyStalled
 		}
 	}
 	if refused {
-		return nil, 0, bodyRefusedOverLimit
+		return bodyRefusedOverLimit
 	}
-	return body, reserved, bodyOverLimit
+	return bodyOverLimit
 }

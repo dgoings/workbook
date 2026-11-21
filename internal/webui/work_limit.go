@@ -14,12 +14,18 @@ import (
 
 // The board's cap on how much work it does at once.
 //
-// Every Git process the board starts is started by a request it is answering,
-// and every upload's bytes are held by the request carrying them, so the one
-// thing to bound is how many requests are being worked on at once. Bounding
-// that bounds the other two: Git processes to a small multiple of it, and the
-// upload bytes in memory to that many uploads, because a request waiting for its
-// turn has not had its body read and holds nothing but its connection.
+// A work turn covers the board's own work on a request and nothing else: the
+// request's body is already in memory when it asks for one (transfer.go reads
+// it first, at a pace a stalled sender cannot hold up), and its answer is
+// delivered after the turn is given back. So a client that sends or reads
+// slowly costs a connection and the bytes it is moving, both bounded in
+// transfer.go and connections.go, and never a turn.
+//
+// Every Git process a request starts is started inside its turn, so the turns
+// bound those processes to a small multiple of the cap. The one Git work that
+// is not a request's is the board's own synchronization loop, which runs one
+// synchronization at a time on its interval whatever the requests do, so it
+// adds at most one synchronization's processes to what the cap allows.
 //
 // A board on one person's machine never reaches the cap. It exists for a board
 // several people share, where one person's flood of creates or uploads would
@@ -36,8 +42,9 @@ const (
 	DefaultMaxRequests = 16
 
 	// workQueuePerSlot is how many requests may wait for a turn for every one
-	// the board can work on. A waiting request costs a goroutine and its
-	// connection and nothing more, but that is still not free, so the line is
+	// the board can work on. A waiting request costs a goroutine, its
+	// connection and its body, which the body budget bounds in total, but that
+	// is still not free, so the line is
 	// bounded by length as well as by time: past it a request is refused at
 	// once rather than added to a queue nothing would ever drain in time.
 	workQueuePerSlot = 4
