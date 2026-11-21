@@ -62,9 +62,24 @@ func threadPageProgram(t *testing.T, tasks []core.Task, body string) string {
 	}
 	script := renderedClientScript(t, response.Body.String())
 	document := mustJSON(t, TasksDocument{
-		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: threadPagePresentation(tasks),
 	})
 	return clientDOMHarness("/tasks/"+tasks[0].ID, string(document)) + script + threadPanelHelpers + body
+}
+
+// threadPageReader is who these pages are read as: the author of the oldest
+// comment, and of nothing else in the thread.
+const threadPageReader = "first@example.com"
+
+// threadPagePresentation is the poll's presentation as the server gives it to
+// threadPageReader, which is what decides the comments the page offers an
+// Edit on.
+func threadPagePresentation(tasks []core.Task) []TaskPresentation {
+	presentation := presentationForTasks(tasks)
+	for index, task := range tasks {
+		presentation[index].EditableComments = editableComments(task.Comments, threadPageReader)
+	}
+	return presentation
 }
 
 // The helpers every program that drives a panel reaches for: the panels, their
@@ -491,7 +506,7 @@ func TestHandlerClientKeepsAnOpenCommentEditAcrossAPoll(t *testing.T) {
 	program := threadPageProgram(t, tasks, `
 const arrived = `+string(mustJSON(t, TasksDocument{
 		Format: "workbook.tasks", Version: 1, Tasks: []core.Task{arrived},
-		Presentation: presentationForTasks([]core.Task{arrived}),
+		Presentation: threadPagePresentation([]core.Task{arrived}),
 	}))+`;
 setTimeout(async () => {
   rowControl(panelRows("comments")[0], "Edit").eventListeners.click();
@@ -530,7 +545,7 @@ func TestHandlerClientKeepsAnEditWhoseCommentWasRemovedElsewhere(t *testing.T) {
 	program := threadPageProgram(t, tasks, `
 const shortened = `+string(mustJSON(t, TasksDocument{
 		Format: "workbook.tasks", Version: 1, Tasks: []core.Task{shortened},
-		Presentation: presentationForTasks([]core.Task{shortened}),
+		Presentation: threadPagePresentation([]core.Task{shortened}),
 	}))+`;
 setTimeout(async () => {
   rowControl(panelRows("comments")[0], "Edit").eventListeners.click();

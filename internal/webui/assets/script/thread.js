@@ -666,9 +666,37 @@
           }
         };
       }
-      function commentAttribution(comment) {
+      // A comment's attribution, naming whoever made its latest edit when that
+      // was not its author. Only the author may edit a comment now, but a
+      // history can hold an edit made before that rule, or by a build without
+      // it, and somebody else's words drawn under the author's name have to
+      // say whose they are. The editor comes from the task answer, for the
+      // edit the comment records and no other.
+      function commentAttribution(comment, edit) {
         const written = attribution(comment.author, comment.createdAt);
-        return comment.editedAt ? written + " · edited " + recordedAt(comment.editedAt) : written;
+        if (!comment.editedAt) return written;
+        const edited = written + " · edited " + recordedAt(comment.editedAt);
+        const editor = edit && edit.editedAt === comment.editedAt ? edit.editedBy : "";
+        return editor && editor !== comment.author ? edited + " by " + editor : edited;
+      }
+      // Which of a task's comments the reader may edit, from an answer that
+      // carries it: the poll's presentation or a comment route's answer. It is
+      // the server's answer for the person the request was made as — the page
+      // never decides it by comparing names, because the page does not know
+      // who it is being read as.
+      function editableComments(view) {
+        return new Set(view && Array.isArray(view.editableComments) ? view.editableComments : []);
+      }
+      // The task as `workbook show --json` gives it, which is where what the
+      // history says about the thread comes from: who removed each removed
+      // comment, and who made each comment's latest edit.
+      async function readTaskDetail(taskID) {
+        const response = await fetch("/api/tasks/" + encodeURIComponent(taskID), { cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok || payload.format !== "workbook.task" || payload.version !== 1 || !payload.task) {
+          throw new Error(payload.error && payload.error.message || "This task could not be read.");
+        }
+        return payload.task;
       }
       // The comment thread: oldest first, which is the order the server sends —
       // a comment's identifier is the ULID of the operation that recorded it, so
@@ -703,6 +731,32 @@
         // Rebuilding it would take the sentence they are in the middle of with
         // it, and a poll lands once a second.
         const editing = new Map();
+        // Which comments carry an Edit: see editableComments.
+        let editable = editableComments(latestPresentation.get(taskID));
+        // What the history says beyond the live thread, as of the task answer
+        // last read: the removed comments, and each live comment's latest
+        // editor. Only a change to the task can change either, so it is read
+        // again when the task's head moves and at no other time; traceHead is
+        // the head the latest read was asked for, so an answer that lands
+        // after a newer one was asked for is dropped.
+        let removed = [];
+        let edits = new Map();
+        let traceHead = "";
+        function readTrace(head) {
+          if (!head || head === traceHead) return;
+          traceHead = head;
+          readTaskDetail(taskID).then((detail) => {
+            if (traceHead !== head || !main.contains(panel.section)) return;
+            removed = Array.isArray(detail.removedComments) ? detail.removedComments : [];
+            edits = new Map((Array.isArray(detail.comments) ? detail.comments : [])
+              .filter((comment) => comment.editedBy).map((comment) => [comment.id, comment]));
+            render();
+          }).catch(() => {
+            // Asked again with the next poll. The thread is still drawn; it
+            // only goes without the trace until a read succeeds.
+            if (traceHead === head) traceHead = "";
+          });
+        }
         function commentPath(commentID) {
           return "/api/tasks/" + encodeURIComponent(taskID) + "/comments/" + encodeURIComponent(commentID);
         }
@@ -712,7 +766,7 @@
           row.dataset.commentId = comment.id;
           const written = document.createElement("p");
           written.className = "comment__attribution";
-          text(written, commentAttribution(comment));
+          text(written, commentAttribution(comment, edits.get(comment.id)));
           // A div rather than a paragraph, because what goes in it may be
           // several paragraphs, a list or a fenced block, and none of those may
           // nest inside a <p>. The class and the marker are unchanged.
@@ -727,8 +781,15 @@
           renderMarkdown(bodyText, comment.body || "", { taskID, attachments });
           const rowActions = document.createElement("div");
           rowActions.className = "comment__actions";
-          const edit = panel.claim(threadButton("Edit"));
-          edit.addEventListener("click", () => beginEdit(comment));
+          // Edit only on the reader's own comments, because only a comment's
+          // author may change what it says and the server refuses anybody
+          // else. Remove is on every comment: anybody may remove one, and the
+          // thread then says who did.
+          if (editable.has(comment.id)) {
+            const edit = panel.claim(threadButton("Edit"));
+            edit.addEventListener("click", () => beginEdit(comment));
+            rowActions.append(edit);
+          }
           // Removal is immediate, like every other removal on this page: the
           // Delete beside it, a label chiclet, a relationship row. What makes
           // that safe here is that a comment is history — removing one hides it
@@ -736,8 +797,27 @@
           const remove = panel.claim(threadButton("Remove"));
           remove.addEventListener("click", () => writeThreadChange(
             panel, "DELETE", commentPath(comment.id), headed(head, {}), "that removal"));
-          rowActions.append(edit, remove);
+          rowActions.append(remove);
           row.append(written, bodyText, rowActions);
+          return row;
+        }
+        // A removed comment keeps its place in the thread as one line: whose
+        // it was, when it was written, and who removed it when. What it said
+        // is not drawn — removing a comment takes its words out of the
+        // thread, and the change log below is where the history still holds
+        // them.
+        function removedRow(removal) {
+          const row = document.createElement("li");
+          row.className = "comment comment--removed";
+          row.dataset.commentId = removal.id;
+          row.dataset.commentRemoved = "";
+          const written = document.createElement("p");
+          written.className = "comment__attribution";
+          text(written, attribution(removal.author, removal.createdAt));
+          const note = document.createElement("p");
+          note.className = "comment__removed";
+          text(note, "Removed by " + (removal.removedBy || "somebody") + " · " + recordedAt(removal.removedAt));
+          row.append(written, note);
           return row;
         }
         function beginEdit(comment) {
@@ -748,7 +828,7 @@
           row.dataset.commentEditing = "";
           const written = document.createElement("p");
           written.className = "comment__attribution";
-          text(written, commentAttribution(comment));
+          text(written, commentAttribution(comment, edits.get(comment.id)));
           const editor = document.createElement("div");
           editor.className = "comment__editor";
           const area = document.createElement("textarea");
@@ -787,17 +867,28 @@
         function render() {
           panel.resetControls();
           const known = new Set(comments.map((comment) => comment.id));
-          const rows = comments.map((comment, at) => {
+          // Removed comments go in among the live ones by identifier, which is
+          // creation order. One the reader is still editing is drawn as that
+          // row instead, below, so it is not drawn twice.
+          const traces = removed.filter((removal) => !known.has(removal.id) && !editing.has(removal.id));
+          const rows = [];
+          let next = 0;
+          comments.forEach((comment) => {
+            for (; next < traces.length && traces[next].id < comment.id; next++) rows.push(removedRow(traces[next]));
             const entry = editing.get(comment.id);
-            if (!entry) return commentRow(comment);
+            if (!entry) {
+              rows.push(commentRow(comment));
+              return;
+            }
             // Where this comment stands in the thread, remembered while it is
             // still in it. It is what puts the row back in the same place if it
             // stops being in it, below.
-            entry.at = at;
+            entry.at = rows.length;
             text(entry.note, "");
             entry.buttons.forEach((button) => panel.claim(button));
-            return entry.row;
+            rows.push(entry.row);
           });
+          for (; next < traces.length; next++) rows.push(removedRow(traces[next]));
           // A comment being edited that has left the thread — removed by another
           // clone, or by this reader somewhere else — keeps its row rather than
           // taking the words in it away mid-sentence. It says what happened, and
@@ -831,11 +922,17 @@
             headed(head, { body: body.value }), "your comment");
           if (answer) body.value = "";
         });
-        panel.follow = (held) => {
+        // Followed with the task and, beside it, whatever answer says which
+        // comments the reader may edit: the poll's presentation for this task,
+        // or a comment route's answer. A follow with neither — a refusal
+        // re-reading the board — keeps to the last poll's.
+        panel.follow = (held, view) => {
           comments = (held && held.comments) || [];
           attachments = (held && held.attachments) || [];
+          editable = editableComments(view && Array.isArray(view.editableComments) ? view : latestPresentation.get(taskID));
           render();
+          readTrace(held && held.head);
         };
-        panel.follow(task);
+        panel.follow(task, latestPresentation.get(taskID));
         return panel;
       }

@@ -748,7 +748,7 @@
             // elsewhere therefore appears here within a poll tick — and, like
             // every other panel on this page, it moves nothing the form above it
             // is holding, because no field on that form follows the poll at all.
-            follow: (held, view) => { attachments.follow(held); comments.follow(held); adoptDescriptionAttachments(held); assignments.follow(view); },
+            follow: (held, view) => { attachments.follow(held); comments.follow(held, view); adoptDescriptionAttachments(held); assignments.follow(view); },
             firstAssignmentRetry: () => assignments.firstDraftRetry()
           };
           // Attachments and assignments stand in the sidebar, as they do on a
