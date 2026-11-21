@@ -571,14 +571,17 @@ func TestAttachmentDownloadServesAnImageInline(t *testing.T) {
 // of its own must not become part of the response's headers.
 func TestAttachmentDownloadFormatsAHostileFileName(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{
-		`"; filename="pwned.html`,
-		"report\r\nSet-Cookie: a=b",
-		`back\slash".txt`,
-		"réponse finale.txt",
-		"‮gnp.exe",
-		strings.Repeat("n", core.MaxAttachmentNameBytes),
+	for _, test := range []struct{ name, sent string }{
+		{name: `"; filename="pwned.html`, sent: `"; filename="pwned.html`},
+		// A control character, and a direction control that redraws the name
+		// after it, are sent as underscores; see downloadFileName.
+		{name: "report\r\nSet-Cookie: a=b", sent: "report__Set-Cookie: a=b"},
+		{name: `back\slash".txt`, sent: `back\slash".txt`},
+		{name: "réponse finale.txt", sent: "réponse finale.txt"},
+		{name: "\u202egnp.exe", sent: "_gnp.exe"},
+		{name: strings.Repeat("n", core.MaxAttachmentNameBytes), sent: strings.Repeat("n", core.MaxAttachmentNameBytes)},
 	} {
+		name := test.name
 		var calls threadRouteCalls
 		handler := attachmentHandler(t, &calls, core.Attachment{ID: threadRouteAttachOne, AttachmentData: core.AttachmentData{
 			Name: name, Kind: core.AttachmentFile, Media: "text/plain", Size: 11, Blob: strings.Repeat("a", 40),
@@ -596,7 +599,7 @@ func TestAttachmentDownloadFormatsAHostileFileName(t *testing.T) {
 			t.Errorf("name %q: Content-Disposition carries a line break: %q", name, disposition)
 		}
 		// The header parses back to one disposition carrying one parameter, and
-		// that parameter is the name as stored. A name that broke out of its
+		// that parameter is the name as sent. A name that broke out of its
 		// quoting would arrive as a second parameter, as a different
 		// disposition, or as a header that does not parse at all.
 		parsed, parameters, err := mime.ParseMediaType(disposition)
@@ -604,7 +607,7 @@ func TestAttachmentDownloadFormatsAHostileFileName(t *testing.T) {
 			t.Errorf("name %q: Content-Disposition %q does not parse: %v", name, disposition, err)
 			continue
 		}
-		if parsed != "attachment" || len(parameters) != 1 || parameters["filename"] != name {
+		if parsed != "attachment" || len(parameters) != 1 || parameters["filename"] != test.sent {
 			t.Errorf("name %q: Content-Disposition parsed as %q %#v", name, parsed, parameters)
 		}
 	}

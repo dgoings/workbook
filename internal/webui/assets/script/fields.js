@@ -86,7 +86,7 @@
             remove.className = "label-chip__remove";
             remove.dataset.removeLabel = label;
             // The visible × is not a name, and "button" is not one either.
-            remove.setAttribute("aria-label", "Remove label " + label);
+            remove.setAttribute("aria-label", withoutDirectionControls("Remove label " + label));
             text(remove, "×");
             remove.addEventListener("click", () => removeLabel(label));
             chiclet.append(name, remove);

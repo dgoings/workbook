@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // AttachmentKind names the two things a task can carry.
@@ -397,6 +398,14 @@ func ValidateAttachmentURL(raw string) error {
 			"attachment URL is %d bytes and must not exceed %d",
 			len(raw), MaxAttachmentURLBytes,
 		)
+	}
+	// A control or direction-control character has no business in an address
+	// and every reason to be there for someone hiding where a link goes:
+	// U+202E RIGHT-TO-LEFT OVERRIDE draws "https://evil.example/<U+202E>fdp.exe"
+	// as "https://evil.example/exe.pdf". A stored link is still drawn, with
+	// those characters as spaces; only a new one is refused.
+	if strings.IndexFunc(raw, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) }) >= 0 {
+		return Errorf(CategoryValidation, "attachment URL must not contain control or direction-control characters")
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil {

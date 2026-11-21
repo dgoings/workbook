@@ -25,11 +25,37 @@
       function droppedOn(attachment) {
         return String((attachment.dropped && attachment.dropped.at) || "").slice(0, 10);
       }
+      // A file's name as this board draws it; see shownLine.
+      //
+      // The name is somebody else's text, and the reader decides from it
+      // whether to open the file. U+202E RIGHT-TO-LEFT OVERRIDE draws the rest
+      // of a name backwards, so "invoice<U+202E>fdp.exe" would read here as
+      // "invoiceexe.pdf" while the route hands it back as an .exe. The stored
+      // name is untouched — the download is still named by the server — and
+      // only what is drawn changes.
+      //
+      // A name can also push its extension out of sight with characters that
+      // draw as blank space without being spaces to shownLine: "invoice.pdf"
+      // and seventy-eight U+3164 HANGUL FILLER before ".exe" draws as
+      // "invoice.pdf", a run of blank lines and an ".exe" nobody scrolls to.
+      // The Hangul fillers (U+3164, U+115F, U+1160 and the halfwidth U+FFA0),
+      // U+2800 BRAILLE PATTERN BLANK, and U+180E MONGOLIAN VOWEL SEPARATOR are
+      // read as spaces here, as every Unicode space separator already is, and
+      // the run collapses to one so the extension sits beside the name. That
+      // is only for a file's name: a title or a comment keeps those characters,
+      // which Korean and braille text use as written.
+      function shownFileName(name) {
+        return shownLine(String(name == null ? "" : name).replace(/[\u115F\u1160\u180E\u2800\u3164\uFFA0]/g, " "));
+      }
       // What an attachment's row names it as: a link's label, or its URL when
-      // it has none, and a file's name.
+      // it has none, and a file's name. A link's label and address are drawn
+      // the way a file's name is, for the same reason: the core refuses a
+      // direction control in a new link's address, but a stored one, or one in
+      // its label, would otherwise make "https://evil.example/<U+202E>fdp.exe"
+      // read as ".../exe.pdf".
       function attachmentShownName(attachment) {
-        if (attachment.kind === "link") return attachment.label || attachment.url || "Unnamed link";
-        return attachment.name || "Unnamed file";
+        if (attachment.kind === "link") return shownLine(attachment.label) || shownLine(attachment.url) || "Unnamed link";
+        return shownFileName(attachment.name) || "Unnamed file";
       }
       // An attachment's metadata, as the one line its card draws and as the
       // fuller tooltip on that line. The line is held to what fits a sidebar
@@ -805,7 +831,7 @@
           name.className = "attachment__name";
           if (attachment.kind === "link") {
             const destination = safeLinkURL(attachment.url);
-            const shown = attachment.label || attachment.url || "Unnamed link";
+            const shown = attachmentShownName(attachment);
             if (destination) {
               const link = document.createElement("a");
               link.href = destination;
@@ -814,17 +840,17 @@
               // window or the address the reader is on.
               link.target = "_blank";
               link.rel = "noopener noreferrer nofollow";
-              if (attachment.url) link.title = attachment.url;
+              if (attachment.url) link.title = shownLine(attachment.url);
               text(link, shown);
               name.append(link);
             } else {
-              if (attachment.url) name.title = attachment.url;
+              if (attachment.url) name.title = shownLine(attachment.url);
               text(name, shown);
             }
           } else if (attachment.dropped) {
             // Its bytes are gone, so there is nothing to link to: the route
             // would only answer 410.
-            text(name, attachment.name || "Unnamed file");
+            text(name, attachmentShownName(attachment));
           } else {
             const link = document.createElement("a");
             link.href = attachmentPath(attachment.id);
@@ -832,14 +858,14 @@
             // opens in a tab of its own either way so the task stays where it is.
             link.target = "_blank";
             link.rel = "noopener noreferrer";
-            text(link, attachment.name || "Unnamed file");
+            text(link, attachmentShownName(attachment));
             name.append(link);
           }
           const meta = document.createElement("p");
           meta.className = "attachment__meta";
           const described = attachmentMeta(attachment);
           text(meta, described.line);
-          meta.title = described.full;
+          meta.title = withoutDirectionControls(described.full);
           const remove = panel.claim(rowRemoveButton("Remove " + attachmentShownName(attachment)));
           remove.className += " attachment__remove";
           remove.addEventListener("click", async () => {
@@ -1093,9 +1119,9 @@
           // has no route to download from, and a staged link is a destination
           // this page has not stored yet — offering either as something to
           // follow would be offering a state that does not exist.
-          const shown = item.kind === "link" ? (item.label || item.url) : item.name;
+          const shown = item.kind === "link" ? (shownLine(item.label) || shownLine(item.url)) : shownFileName(item.name);
           text(name, shown);
-          if (item.kind === "link") name.title = item.url;
+          if (item.kind === "link") name.title = shownLine(item.url);
           const meta = document.createElement("p");
           meta.className = "attachment__meta";
           text(meta, item.kind === "link"

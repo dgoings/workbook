@@ -547,6 +547,32 @@ func TestValidateAttachmentURLAcceptsOnlyWebLinks(t *testing.T) {
 	}
 }
 
+// A direction override draws "https://evil.example/<U+202E>fdp.exe" as
+// "https://evil.example/exe.pdf", so a new link may not carry one, nor any
+// other direction-control or control character.
+func TestValidateAttachmentURLRefusesDirectionAndControlCharacters(t *testing.T) {
+	for _, refused := range []string{
+		"https://evil.example/\u202efdp.exe",
+		"https://evil.example/\u2066a\u2069",
+		"https://evil.example/\u200fpath",
+		"https://evil.example/\u061cpath",
+		"https://evil.example/a\x7fb",
+		"https://evil.example/a\u0085b",
+	} {
+		err := ValidateAttachmentURL(refused)
+		if got := CategoryOf(err); got != CategoryValidation {
+			t.Fatalf("ValidateAttachmentURL(%q) category = %q, want %q", refused, got, CategoryValidation)
+		}
+		if !strings.Contains(err.Error(), "direction-control") {
+			t.Fatalf("ValidateAttachmentURL(%q) = %v, want the refusal to name direction-control characters", refused, err)
+		}
+	}
+	// A right-to-left address written in its own script is not a disguise.
+	if err := ValidateAttachmentURL("https://example.test/\u05e9\u05dc\u05d5\u05dd"); err != nil {
+		t.Fatalf("ValidateAttachmentURL(Hebrew path) error = %v", err)
+	}
+}
+
 // The service's half: what a person is told, which is where every ceiling and
 // every missing-subject refusal lives.
 

@@ -34,7 +34,13 @@ import (
 // the same door: an external image in a task description is a tracking beacon
 // fired by every reader of the board, and a policy that named a host, or a
 // scheme, or `data:` would be the way one gets through a bug in the first lock.
-const securityPolicy = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+//
+// `form-action 'self'` is here because it is one of the few directives that
+// does not fall back to `default-src`: without it, a form somebody managed to
+// put in the page could post what a reader types to any address at all. Every
+// form the board draws is submitted by its own script to this origin, so
+// nothing the board does needs more.
+const securityPolicy = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
 // pageFuncs are the derivations the page template reaches for rather than
 // re-deriving in template syntax.
@@ -44,7 +50,38 @@ const securityPolicy = "default-src 'none'; img-src 'self'; style-src 'unsafe-in
 // the poll's presentation carries what this returned, so the card a reader loads
 // and the card the first poll redraws hold the same chips. Every other card fact
 // already arrives on presentation.TaskView for exactly that reason.
-var pageFuncs = template.FuncMap{"cardAssignees": assignmentRow}
+//
+// The other is shown, which every piece of text somebody typed passes through
+// on its way into the page: it is the client's withoutDirectionControls, so a
+// title or a label drawn by the server reads as the client will redraw it.
+var pageFuncs = template.FuncMap{"cardAssignees": assignmentRow, "shown": withoutDirectionControls}
+
+// withoutDirectionControls draws each direction control that opens or closes
+// a run — the overrides, embeddings and isolates — as a space. U+202E
+// RIGHT-TO-LEFT OVERRIDE in a title would otherwise redraw the rest of its
+// line backwards for every reader. Everything else, line breaks included, is
+// kept; html/template escapes the result as it escapes any text.
+//
+// The directional marks U+200E, U+200F and U+061C are kept, as the client
+// keeps them, which is where the board differs from core.DisplayLine: a mark
+// places neighboring punctuation in Hebrew and Arabic text and cannot reverse
+// a run of letters.
+func withoutDirectionControls(value string) string {
+	return strings.Map(func(r rune) rune {
+		if isDirectionOverride(r) {
+			return ' '
+		}
+		return r
+	}, value)
+}
+
+// isDirectionOverride reports the direction controls that redraw the text
+// after them: the embeddings U+202A and U+202B, U+202C POP DIRECTIONAL
+// FORMATTING, the overrides U+202D and U+202E, and the isolates U+2066 to
+// U+2069. It is the Unicode Bidi_Control set less its three marks.
+func isDirectionOverride(r rune) bool {
+	return (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069)
+}
 
 // pageTemplate is the board's page template, parsed and escaped once for the
 // process rather than once per NewHandler call.

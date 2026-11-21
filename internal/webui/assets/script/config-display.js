@@ -77,7 +77,9 @@
         displayBusy = true;
         applyConfigBusy();
         const proposed = {
-          name: displayFields.name.value.trim(),
+          // The name field shows the name as the board draws it, so a field
+          // still reading that sends the stored name back exactly.
+          name: storedUnlessEdited(displayFields.name.value, displaySettings.name).trim(),
           primaryColor: displayFields.primaryColor.value.trim(),
           textColor: displayFields.textColor.value.trim()
         };
@@ -181,7 +183,7 @@
         // rather than naming this board's own blue, which is a literal the
         // stylesheet owns and the script must not keep a second copy of.
         displayFields = {
-          name: displayInput("display-name", "name", displaySettings.name, boardDefaultName),
+          name: displayInput("display-name", "name", shownField(displaySettings.name), boardDefaultName),
           primaryColor: displayInput("display-primary-color", "primaryColor", displaySettings.primaryColor, "#rrggbb"),
           textColor: displayInput("display-text-color", "textColor", displaySettings.textColor, "#rrggbb")
         };

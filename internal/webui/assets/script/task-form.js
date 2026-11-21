@@ -96,7 +96,7 @@
         header.append(headingBlock, close);
 
         const form = document.createElement("form"); form.className = "task-layout";
-        const title = document.createElement("input"); title.id = "task-title"; title.name = "title"; title.required = true; title.value = task.title || "";
+        const title = document.createElement("input"); title.id = "task-title"; title.name = "title"; title.required = true; title.value = shownField(task.title);
         const description = document.createElement("textarea"); description.id = "task-description"; description.name = "description"; description.value = task.description || "";
         // The description has two faces and one value.
         //
@@ -300,7 +300,7 @@
         // that exists rather than against one the server refused.
         function reviseAgainstTask(held) {
           const edited = changedTaskValues(task, controls);
-          if (!("title" in edited)) title.value = held.title || "";
+          if (!("title" in edited)) title.value = shownField(held.title);
           if (!("description" in edited)) description.value = held.description || "";
           // Labels are asked a different question than the rest. A save folds
           // the text still in the input into the set, so changedTaskValues
@@ -317,7 +317,7 @@
           // has ever followed the title field's keystrokes — so they follow the
           // task the board holds even while the field carries an edit.
           text(heading, held.title || "");
-          document.title = (held.title || "") + boardTitleSuffix;
+          document.title = withoutDirectionControls((held.title || "") + boardTitleSuffix);
           if (!("status" in edited)) showStatus(controls.status, held.status);
           // Both vocabulary fields are always showable: each builds a
           // placeholder naming a value this project cannot resolve, so the
@@ -811,7 +811,10 @@
       // that landed in between.
       function changedTaskValues(task, controls) {
         const values = {};
-        if (controls.title.value !== (task.title || "")) values.title = controls.title.value;
+        // The title field holds the title as the board draws it (shownField),
+        // so a field still reading that is a title nobody edited, and the
+        // stored text is left exactly as it is.
+        if (storedUnlessEdited(controls.title.value, task.title) !== (task.title || "")) values.title = controls.title.value;
         if (controls.description.value !== (task.description || "")) values.description = controls.description.value;
         // A status the client does not know renders as an unselected
         // placeholder. Leaving it alone is not a request to clear the status.

@@ -1,4 +1,57 @@
-      function text(element, value) { element.textContent = value || ""; return element; }
+      // Text drawn into the page, without its direction controls.
+      //
+      // Nearly everything this board draws is text somebody else typed — a
+      // title, a label, a comment, an author, a file or link name — and U+202E
+      // RIGHT-TO-LEFT OVERRIDE and the other bidi controls that open a run (the
+      // overrides U+202D and U+202E, the embeddings U+202A and U+202B with
+      // U+202C closing them, and the isolates U+2066 to U+2069) redraw
+      // whatever follows them in its paragraph: "invoice<U+202E>fdp.exe" reads
+      // as "invoiceexe.pdf". Each becomes a space. Line breaks and every other
+      // character are kept, so a multi-line value still draws as written. The
+      // stored text is untouched.
+      //
+      // The three directional marks — U+200E LEFT-TO-RIGHT MARK, U+200F
+      // RIGHT-TO-LEFT MARK and U+061C ARABIC LETTER MARK — are kept, which is
+      // where this differs from the command line's core.DisplayLine. A mark is
+      // an invisible strong letter: it decides which side a neighboring
+      // exclamation mark or digit sits on, which Hebrew and Arabic writers use
+      // it for, and it cannot reverse a run of letters, so a space in its
+      // place would move the punctuation of honest text and stop nothing.
+      //
+      // The pattern is written in the function rather than held in a constant
+      // beside it: boot.js, which runs before this file, cleans the board's
+      // name with it, and a constant declared here would not exist yet.
+      function withoutDirectionControls(value) {
+        return String(value).replace(/[\u202A-\u202E\u2066-\u2069]/g, " ");
+      }
+      // One line of text somebody typed — a file's name, a link's label or
+      // address — as this board draws it: control characters and the
+      // direction controls above become spaces and runs of space collapse.
+      // That is core.DisplayLine but for the directional marks, which are kept
+      // for the reason given above.
+      function shownLine(value) {
+        return String(value == null ? "" : value).replace(/[\p{Cc}\u202A-\u202E\u2066-\u2069]/gu, " ")
+          .split(/\s+/).filter(Boolean).join(" ");
+      }
+      // A one-line field the reader sees before choosing to edit anything — a
+      // task's title, the project's name, a status's or a priority's label —
+      // holds its value as this board draws it, because a field is drawn text
+      // too: a title of "Pay the invoice<U+202E>fdp.exe" would otherwise read
+      // "Pay the invoiceexe.pdf" in the field under a heading that reads it
+      // honestly. Paired with storedUnlessEdited, which is what keeps a save
+      // from rewriting the stored text to this.
+      function shownField(value) {
+        return withoutDirectionControls(value == null ? "" : value);
+      }
+      // What a save sends for a field that shownField filled: the stored text
+      // exactly, when the field still holds what it was shown with, and what
+      // the reader typed otherwise. A save of some other field therefore never
+      // turns the stored text into its drawing.
+      function storedUnlessEdited(fieldValue, stored) {
+        const held = stored == null ? "" : String(stored);
+        return fieldValue === shownField(held) ? held : fieldValue;
+      }
+      function text(element, value) { element.textContent = withoutDirectionControls(value || ""); return element; }
 
       // How long ago the board last read the repository successfully.
       //

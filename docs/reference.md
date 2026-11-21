@@ -389,6 +389,13 @@ workbook update WB-01K --status done --comment "shipped" --attach-url https://ex
 records the status change, the comment and the link together, or records
 nothing at all.
 
+`--attach-url` takes an `http` or `https` address and nothing else, and refuses
+one that holds a control or bidi-control character: U+202E RIGHT-TO-LEFT
+OVERRIDE would draw `https://evil.example/<U+202E>fdp.exe` as
+`https://evil.example/exe.pdf`. The web board refuses the same addresses. A link
+stored before this rule, or by another clone, is kept, and the command line and
+the board draw its control characters and direction overrides as spaces.
+
 A comment or attachment identifier may be typed as any unambiguous prefix of
 the one `workbook show` prints, the way a task ID may be. `show` prints them
 whole rather than shortened, because identifiers minted moments apart share a
@@ -2409,6 +2416,10 @@ they were written. The same rule already shaped Git commit subjects and now
 applies to `list`, `board`, `show`, its history and comparison output, conflict
 detail, and the line a mutation prints.
 
+The web board is less strict about one part of this: it keeps the three
+directional marks and replaces only the overrides, embeddings and isolates. See [Local web board](#local-web-board) for its rule and
+the reason.
+
 The description `workbook show` prints is the one place where structure is worth
 keeping — most descriptions are several paragraphs, and collapsing them makes
 the main human-facing read command hard to read — so it is sanitized a line at a
@@ -2634,6 +2645,46 @@ somebody else's bytes, and its headers are the whole of its security:
   `Content-Disposition: attachment`, so an attached HTML file downloads rather
   than rendering. The file name inside that header is formatted rather than
   concatenated, because an attachment name is text somebody typed.
+- The file name in that header is not quite the stored one: each control
+  character and each direction override, embedding or isolate (U+202A to
+  U+202E and U+2066 to U+2069) is sent as `_`, in the plain `filename=` form
+  and in the RFC 2231 `filename*=` form alike. So `invoice<U+202E>fdp.exe`
+  downloads as `invoice_fdp.exe` in every browser and file manager, rather
+  than relying on each to clean the name itself. The stored name is unchanged.
+- The board draws a file's name with its control characters and direction
+  overrides, embeddings and isolates as spaces. A U+202E RIGHT-TO-LEFT
+  OVERRIDE would otherwise draw `invoice<U+202E>fdp.exe` as `invoiceexe.pdf` for
+  a reader deciding whether to open it. A drawn file name also reads the
+  blank-looking fillers U+3164, U+115F, U+1160, U+FFA0, U+2800 and U+180E, and
+  every Unicode space separator, as a space, and collapses each run of spaces
+  to one, so `invoice.pdf`, seventy-eight U+3164 and `.exe` draws as
+  `invoice.pdf .exe` rather than pushing the extension out of sight. That
+  applies to file names in the attachment list, in references and in the
+  history. A link attachment's label, its address and the address's tooltip
+  are drawn with the same control and direction characters as spaces. The
+  stored name is unchanged.
+- Everything else the board draws from text somebody typed — titles,
+  descriptions, comments, labels, assignees, status and priority labels, the
+  project's name, the history, tooltips, accessible names, an image's `alt` and
+  every route's browser tab title — is drawn with its direction overrides,
+  embeddings and isolates as spaces, on the page the server renders and in what
+  the page's script draws. Line breaks are kept.
+- The board keeps the three directional marks, U+200E LEFT-TO-RIGHT MARK,
+  U+200F RIGHT-TO-LEFT MARK and U+061C ARABIC LETTER MARK, where the command
+  line's `show` and `list` print them as spaces. A mark is an invisible letter
+  with a direction: Hebrew and Arabic writers use it to put an exclamation mark
+  or a digit on the right side of a word. It cannot reverse a run of letters,
+  so a file name's extension reads as stored, but marks placed between groups
+  of digits can swap them: a title stored as `10.99` with marks around the
+  point reads `99.10`. Read an amount or a date that matters from `workbook
+  show`, which prints the marks as spaces.
+- A one-line field shown before anything is edited — a task's Title field, and
+  the configuration page's project name and status and priority label fields —
+  holds the cleaned text. A save treats a field that still holds exactly that
+  as unchanged and sends the stored text back, or nothing, so saving some other
+  change never rewrites the stored title or name to its cleaned form. An editor
+  that opens only when asked, such as the description and comment editors,
+  shows the stored text exactly.
 - `X-Content-Type-Options: nosniff` is set on both paths, so no browser may
   decide for itself that an octet-stream is HTML.
 - The response carries `Content-Security-Policy: default-src 'none'; sandbox`
@@ -2740,6 +2791,114 @@ of whoever opens it — including writes that publish to `origin` and are later
 read as agent instructions — without ever being on the network. `workbook
 serve` says so in the warning it prints for a wildcard bind. Bind the one
 address you mean instead, and the `Host` is pinned to it.
+
+### What anyone who can open the board can do and see
+
+The board has no roles. Whoever can open it — on a person's own machine, that
+person; behind a sign-in proxy, everyone the proxy lets in — can do everything
+below, through the page or by calling the same routes directly. This list is
+the whole of it, so a team deciding whom to let in can read what they are
+granting.
+
+Every write is recorded under the serving checkout's `user.email`, whoever made
+it, and that address is shown in the page (the assignment control names it).
+`workbook serve` has no way to tell people apart, so nothing below is limited
+to the person who wrote something first, with the one exception noted for
+assignments.
+
+Read:
+
+- `GET /`, `/tasks/new`, `/tasks/<id>`, `/config` and `GET /api/tasks`: every
+  task, active and deleted — titles, descriptions, labels, statuses,
+  priorities, dependencies, comments with their authors, attachments with who
+  added them, and assignments with who holds them and who made them.
+- `GET /api/tasks/<id>/history`: every recorded change to a task, each with the
+  email address of whoever recorded it and the old and new values. Text that was
+  edited or removed — an old title, a rewritten comment — stays readable here.
+- `GET /api/tasks/<id>/attachments/<aid>`: the bytes of any attached file still
+  live on its task.
+- `GET /api/vocabulary`: the project's statuses, priorities, keys and display
+  settings, with the configuration head.
+- `GET /api/sync`: whether an `origin` is configured and whether a sync watcher
+  answers. It does not give `origin`'s address.
+- `GET /healthz`: that the board is up.
+
+Write, all of it published to `origin` like any other change:
+
+- Create tasks, and change any task's title, description, status, priority,
+  labels, position and dependencies (`POST /api/tasks`, `PATCH
+  /api/tasks/<id>`, `/status`, `/position`, the dependency routes).
+- Delete any task and restore any deleted one (`DELETE /api/tasks/<id>`,
+  `POST /api/tasks/<id>/restore`). Deleting records a tombstone; nothing is
+  erased.
+- Add a comment, and edit or remove anyone's comment. An edited comment keeps
+  its original author and is marked as edited; the history records the edit
+  under the serving checkout's identity, not the original author's.
+- Attach files and links to any task, and remove anyone's attachment. Removing
+  an attachment does not give back the space its file took.
+- Assign anyone to any task by email address, and withdraw any assignment that
+  names the serving checkout's identity or was recorded by it. An assignment
+  somebody else recorded for somebody else is refused, as it is on the command
+  line.
+- Add, rename, relabel, retag, reorder and remove statuses and priorities,
+  record priority colors, add keys and change which is current or retired, and
+  rename and recolor the project (the `/api/vocabulary` and `/api/display`
+  routes). Removing a status or priority moves its tasks where the request says.
+- Switch the board between publishing inline and handing changes to a watcher
+  (`PUT /api/sync`). The setting is the server's, so it changes what happens to
+  everyone's next change.
+
+What the board reveals about the machine serving it:
+
+- The serving checkout's folder: its last path element is shown in the page
+  header as `Repository: <name>`. The rest of the path is not shown, except
+  inside an error message as described below.
+- The serving checkout's `user.email`, in the page and on every change it
+  records.
+- `origin`'s address: not shown by any route, but a change whose publication
+  fails is answered with a warning carrying the failing Git command, its exit
+  status and Git's message, and that message usually names `origin`'s full URL
+  or path, with the credential removed as described next. For example, a task
+  created while `origin` is unreachable is answered `200` with the warning
+  `the change was recorded locally, but publishing it failed: cannot ask origin
+  which Workbook project it holds before publishing: git ls-remote --refs origin
+  refs/workbook/project failed: exit status 128: fatal: unable to access
+  'http://127.0.0.1:1/team/secret-path/repo.git/': Failed to connect …`, and
+  one whose `origin` is a missing folder names that folder's path on the
+  server. Task, status, priority, key and display changes all answer this way.
+  An operational error carries the failing command and Git's own words in the
+  same way, which can include paths on the server.
+- `origin`'s credential: the user name and password in a remote's address are
+  removed. When a Git command fails and its error output contains an `@`,
+  Workbook looks up the addresses Git is configured with — each
+  `remote.<name>.url` and `pushurl`, each `url.<base>.insteadOf` and
+  `pushInsteadOf`, and the addresses those rewrites produce — and removes each
+  address's credential, by its exact text, from Git's error output and from the
+  command the error names. A failure whose output holds no `@`, and a
+  successful command, cost no extra Git process. Outside its address, a
+  password of eight characters or more is also removed wherever it appears on
+  its own, as `***`. A user name of that length is removed on its own only when
+  its address has no password, or only a placeholder for one (an empty
+  password, one shorter than eight characters, or `x-oauth-basic`), because a
+  token is often sent as the user name (`https://<token>@host/…`); beside a
+  real password, a user name such as
+  `workbook` is removed only inside its address, so `refs/workbook/tasks/*` and
+  a path segment `/workbook/` read as written. A shorter user name or password,
+  such as the user name `git`, is removed only inside its address. Any other
+  `scheme://user@` in Git's output loses its user part too.
+- What is not removed: anything a credential helper, a Git hook or the remote
+  itself prints (a helper that writes `refreshing token <token>` to its error
+  output is reported as written), and a token placed in an address's path or
+  query string, such as `https://git.example/repo.git?access_token=<token>`. A
+  deployment should give the server its credential by a means that keeps it out
+  of the address where it can: a credential helper that prints nothing, or an
+  SSH key, rather than a token in `origin`'s URL.
+
+Two limits a hosted board does not have yet, so whoever deploys one should know
+them: nothing bounds how many tasks, attachments or requests one person may
+send beyond the per-request and per-task ceilings above, so one person can fill
+the server's disk and `origin` and slow the board for everyone; and nothing
+records which person behind the proxy made a change.
 
 Drag a task card within a column to reorder it or into another of the
 project's status columns to change status and position together. Workbook keeps the task's priority
@@ -3110,8 +3269,16 @@ attachment the download route serves inline (`image/gif`, `image/jpeg`,
 `image/png`, `image/webp`) is drawn as an image; anything else it holds — an
 SVG, a PDF, a text file — is drawn as a **link** to the same route, which
 answers those with `Content-Disposition: attachment` and downloads them rather
-than rendering them. A reference that resolves to nothing, to more than one
-attachment, or to a link attachment is drawn as the text it is. Every other
+than rendering them. That link always reads as the file's real name, drawn as
+above; the reference's own text, when it says something the name does not,
+follows the link as a caption in parentheses. So
+`![invoice.pdf](attachment:<id>)` naming a file called `invoice<U+202E>fdp.exe`
+draws as `invoice fdp.exe (invoice.pdf)`, never as a link reading
+`invoice.pdf`. An image's alternative text follows the same rule — the file's
+real name, then the author's text in parentheses — because a browser draws it
+in place of a file that does not decode as an image. A reference that resolves
+to nothing, to more than one attachment, or to a link attachment is drawn as
+the text it is. Every other
 image target — an external URL, a `data:` URI, an address on this board — is
 drawn as text as well: a board that fetched images named in task text would
 report every reader of every card to whoever wrote the task.

@@ -328,6 +328,14 @@ func TestUpdateRefusesBlankAndMissingThreadTargets(t *testing.T) {
 			category: core.CategoryValidation,
 			message:  "attachment URL must use http or https",
 		},
+		{
+			// U+202E would draw this address as https://evil.example/exe.pdf.
+			name:     "link disguised by a direction override",
+			args:     []string{"--attach-url", "https://evil.example/\u202efdp.exe"},
+			code:     5,
+			category: core.CategoryValidation,
+			message:  "attachment URL must not contain control or direction-control characters",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			args := append([]string{"update", task.ID}, test.args...)

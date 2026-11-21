@@ -156,7 +156,7 @@
           main.replaceChildren(routeMessage("Task not found", "No task has the full ID " + current.id + "."));
           return;
         }
-        document.title = task.title + boardTitleSuffix;
+        document.title = withoutDirectionControls(task.title + boardTitleSuffix);
         const detail = taskForm("detail", task);
         const controller = activeDependencyController;
         const relationshipGeneration = relationshipRefreshGeneration;

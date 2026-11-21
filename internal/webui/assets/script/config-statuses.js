@@ -328,7 +328,9 @@
         control.type = "button";
         control.className = modifier ? "admin-button " + modifier : "admin-button";
         text(control, caption);
-        if (description) control.setAttribute("aria-label", description);
+        // A description names a status or priority by its label; see
+        // withoutDirectionControls.
+        if (description) control.setAttribute("aria-label", withoutDirectionControls(description));
         control.addEventListener("click", onClick);
         controls.push(control);
         blockPanelControl(control, blocked);
@@ -348,7 +350,9 @@
         control.type = "submit";
         control.className = modifier ? "admin-button " + modifier : "admin-button";
         text(control, caption);
-        if (description) control.setAttribute("aria-label", description);
+        // A description names a status or priority by its label; see
+        // withoutDirectionControls.
+        if (description) control.setAttribute("aria-label", withoutDirectionControls(description));
         controls.push(control);
         blockPanelControl(control, blocked);
         return control;
@@ -442,7 +446,9 @@
         form.className = "admin-form";
         form.dataset.vocabularyEdit = definition.status;
         const name = panelTextInput("status-name-" + definition.status, definition.status);
-        const label = panelTextInput("status-label-" + definition.status, definition.label);
+        // The label as the board draws it, and sent only when it no longer
+        // reads that; see shownField.
+        const label = panelTextInput("status-label-" + definition.status, shownField(definition.label));
         const tags = panelTagChoices("status-" + definition.status, definition.tags);
         const save = panelSubmitButton("Save", "Save changes to " + definition.label,
           { modifier: "admin-button--primary" });
@@ -460,7 +466,7 @@
           const change = {};
           const renamed = name.value.trim();
           if (renamed !== definition.status) change.name = renamed;
-          if (label.value !== definition.label) change.label = label.value;
+          if (storedUnlessEdited(label.value, definition.label) !== definition.label) change.label = label.value;
           const chosen = tags.values();
           if (!sameTags(chosen, definition.tags)) change.tags = chosen;
           if (Object.keys(change).length === 0) {

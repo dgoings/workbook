@@ -33,7 +33,7 @@
   <header class="app-header">
     <!-- The routes, beside the title and before anything that comes and goes,
          so they are in the same place on every page this board serves. -->
-    <div class="app-header__lead"><div><p class="eyebrow">{{ .Eyebrow }}</p><h1>{{ .ProjectName }}</h1></div><nav class="header-links" aria-label="Primary"><a class="header-link" href="/">Board</a>{{ if .Administrable }}<a class="header-link" href="/config">Config</a>{{ end }}</nav></div>
+    <div class="app-header__lead"><div><p class="eyebrow">{{ .Eyebrow }}</p><h1>{{ shown .ProjectName }}</h1></div><nav class="header-links" aria-label="Primary"><a class="header-link" href="/">Board</a>{{ if .Administrable }}<a class="header-link" href="/config">Config</a>{{ end }}</nav></div>
     <!-- The three settings, and above them the reading of when the board last
          heard from the server.
 
@@ -184,7 +184,7 @@
       <section class="board" data-board aria-label="Task status board">
         {{ range .Board.Columns }}
         <section class="column">
-          <header class="column__header"><h2 class="column__heading">{{ .Label }} <span class="count" data-count="{{ .Status }}">{{ len .Tasks }}</span></h2><a class="new-task-link" href="/tasks/new?status={{ .Status }}">New Task</a></header>
+          <header class="column__header"><h2 class="column__heading">{{ shown .Label }} <span class="count" data-count="{{ .Status }}">{{ len .Tasks }}</span></h2><a class="new-task-link" href="/tasks/new?status={{ .Status }}">New Task</a></header>
           <!-- data-status-label carries the project's own name for this column.
                The client builds its status list out of these nodes rather than
                keeping a copy, so a project that renamed a column renames it in
