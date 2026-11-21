@@ -399,3 +399,70 @@ setTimeout(async () => {
 		t.Fatalf("execute the save of a missing comment: %v\n%s", err, output)
 	}
 }
+
+// Who wrote, edited and removed a comment are asserted names that can hold
+// anything, so the thread draws each the way the board draws every line
+// somebody typed (shownLine): control characters and direction controls
+// become spaces, and a run of them one space. Nothing it draws carries the
+// raw character.
+func TestHandlerClientCleansTheNamesTheThreadDraws(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	task := threadPageTask()
+	task.Comments[1].Author = "second\u0007@example.com"
+	detail := threadPageDetail(task)
+	stamp := task.Comments[0].CreatedAt
+	detail.RemovedComments = []core.RemovedComment{{
+		ID: threadPageRemoved, Author: "second\u0007\u202e@example.com", CreatedAt: stamp.Add(-time.Hour),
+		RemovedBy: "remover\n\t@example.com", RemovedAt: stamp.Add(2 * time.Hour),
+	}}
+	detail.Comments[1].EditedBy = "re\u0007writer\u2066@example.com"
+	gone := task
+	gone.Head = "head-2"
+	gone.Comments = []core.Comment{task.Comments[1]}
+	goneDetail := threadPageDetail(gone)
+	goneDetail.RemovedComments = []core.RemovedComment{{
+		ID: threadPageOldest, Author: threadPageReader, CreatedAt: stamp,
+		RemovedBy: "remover\u202e\u0000@example.com", RemovedAt: stamp.Add(time.Hour),
+	}}
+	tasks := []core.Task{task}
+	program := threadPageProgram(t, tasks, threadDetailStub(t, detail)+`
+const goneDocument = `+string(mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: []core.Task{gone}, Presentation: threadPagePresentation([]core.Task{gone}),
+	}))+`;
+const goneDetail = `+string(mustJSON(t, TaskDocument{Format: "workbook.task", Version: 1, Task: goneDetail}))+`;
+const raw = /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/;
+function clean(said, where) {
+  if (raw.test(said)) throw new Error(where + " draws a raw control: " + JSON.stringify(said));
+}
+setTimeout(async () => {
+  await settle();
+  const rows = panelRows("comments");
+  const removed = rows[0].textContent;
+  clean(removed, "the removed comment's line");
+  if (!removed.includes("second @example.com") || !removed.includes("Removed by remover @example.com")) {
+    throw new Error("the removed comment's line reads " + JSON.stringify(removed));
+  }
+  const edited = findElement(rows[2], (element) => hasClassToken(element, "comment__attribution")).textContent;
+  clean(edited, "the edited comment's attribution");
+  if (!edited.includes(" · second @example.com · ") || !edited.endsWith(" by re writer @example.com")) {
+    throw new Error("the edited comment's attribution reads " + JSON.stringify(edited));
+  }
+
+  rowControl(rows[1], "Edit").eventListeners.click();
+  detailAnswer = goneDetail;
+  taskResponse = goneDocument;
+  await intervalCallback();
+  await settle();
+  const kept = panelRows("comments").find((row) => row.dataset.commentId === `+strconv.Quote(threadPageOldest)+`);
+  const note = findElement(kept, (element) => hasClassToken(element, "comment__note")).textContent;
+  clean(note, "the removed-under-edit note");
+  if (!note.includes("removed by remover @example.com")) {
+    throw new Error("the removed-under-edit note reads " + JSON.stringify(note));
+  }
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the cleaned names: %v\n%s", err, output)
+	}
+}

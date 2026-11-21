@@ -678,22 +678,26 @@
       // edit the comment records and no other. When that answer says the
       // history no longer records who made the edit — it came before the task
       // was compacted — the attribution says so, for the same reason.
+      //
+      // Every name in it is somebody's asserted identity, which can hold
+      // anything, so each is drawn as one clean line (shownLine); the
+      // comparison is between the names as recorded.
       function commentAttribution(comment, edit) {
-        const written = attribution(comment.author, comment.createdAt);
+        const written = attribution(shownLine(comment.author), comment.createdAt);
         if (!comment.editedAt) return written;
         const edited = written + " · edited " + recordedAt(comment.editedAt);
         const traced = edit && edit.editedAt === comment.editedAt ? edit : null;
         if (traced && traced.editorNotRecorded) return edited + " · editor not recorded";
         const editor = traced ? traced.editedBy : "";
-        return editor && editor !== comment.author ? edited + " by " + editor : edited;
+        return editor && editor !== comment.author ? edited + " by " + shownLine(editor) : edited;
       }
       // What an edit form says once the comment under it has been removed:
       // that it was, by whom when the history says, and that the words typed
       // are still there to copy. It invites no retry, because no save of a
       // removed comment can ever succeed.
       function removedUnderEdit(removal) {
-        const by = removal && removal.removedBy
-          ? " by " + removal.removedBy + " · " + recordedAt(removal.removedAt)
+        const by = removal && shownLine(removal.removedBy)
+          ? " by " + shownLine(removal.removedBy) + " · " + recordedAt(removal.removedAt)
           : "";
         return "This comment was removed" + by + ", so this edit cannot be saved. " +
           "Your text is still in the box if you want to copy it.";
@@ -847,10 +851,10 @@
           row.dataset.commentRemoved = "";
           const written = document.createElement("p");
           written.className = "comment__attribution";
-          text(written, attribution(removal.author, removal.createdAt));
+          text(written, attribution(shownLine(removal.author), removal.createdAt));
           const note = document.createElement("p");
           note.className = "comment__removed";
-          text(note, "Removed by " + (removal.removedBy || "somebody") + " · " + recordedAt(removal.removedAt));
+          text(note, "Removed by " + (shownLine(removal.removedBy) || "somebody") + " · " + recordedAt(removal.removedAt));
           row.append(written, note);
           return row;
         }
