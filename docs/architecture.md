@@ -328,11 +328,37 @@ thread at C3:  01K7…A1 · bob · removed by alice at C3's wall time (no text)
 The derivation mirrors the fold. A removal counts only when it took a live
 comment out of the thread, so a second removal of the same comment does not
 rename the remover, and an edit counts only when the comment was live to
-receive it. The latest edit's actor is named only when its wall time is the
+receive it. The editor named is the actor of the edit whose wall time is the
 `editedAt` the checkpoint records. A root `history.checkpoint` starts the
 derivation afresh, because a compacted task's earlier operations are no longer
-on its chain: its thread names nobody for a removal or an edit made before the
-compaction.
+on its chain, and the checkpoint holds only the live thread. So, for what
+happened before the compaction:
+
+- a comment removed then is gone from the thread entirely: the checkpoint does
+  not hold it and no operation left on the chain mentions it;
+- a comment edited then keeps its `editedAt`, but no operation on the chain
+  has that wall time, so readers mark it as edited by somebody the history no
+  longer records (`editorNotRecorded` in JSON, `editor not recorded` in text
+  and on the board) rather than draw it as the author's own words.
+
+```text
+before compaction
+K1  task.create
+C1  comment.add     actor bob    id 01K7…A1   "first take"
+C2  comment.add     actor bob    id 01K7…B2   "second take"
+C3  comment.edit    actor alice  01K7…A1      "alice's words"   ← an older build
+C4  comment.remove  actor alice  01K7…B2
+
+after compaction
+K2  history.checkpoint  (no parent)
+    thread: 01K7…A1 · bob · "alice's words" · editedAt = C3's wall time
+
+thread at K2:  01K7…A1 · bob · "alice's words" · edited, editor not recorded
+               (no line for 01K7…B2)
+```
+
+Recording who removed and edited in the checkpoint itself would need a format
+change, and is left for a later release.
 
 Two clones racing an edit and a removal of the same comment converge on the
 removal in either order. If the removal reaches `origin` first, the edit

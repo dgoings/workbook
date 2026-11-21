@@ -415,7 +415,9 @@ Comments:
 
 A removed comment keeps its place in the thread as that one line — whose it
 was, when it was written, and who removed it when — and its text is not
-printed. The text is still in the history, and `show --history` shows it. A
+printed. Removing a comment takes it out of the thread, and its text remains in
+the task's history, which anyone who can open the board or fetch the repository
+can read; `show --history` shows it. A
 history can also hold an edit somebody other than the author made, before this
 rule existed or from a clone running a build without it. Such an edit stands as
 recorded, on every clone, and the thread names who made it:
@@ -424,8 +426,17 @@ prints as it always has, `(edited …)`.
 
 Who removed a comment and who made an edit come from the operations that
 recorded them, read on every `show`. A task that was
-[compacted](#task-archive-compaction) keeps only its checkpoint, so its thread
-names nobody for a removal or an edit made before the compaction.
+[compacted](#task-archive-compaction) keeps only its checkpoint, which holds
+the live thread and not the operations that changed it, so for anything done
+before the compaction:
+
+- a removed comment is gone from the thread entirely, with no line for it;
+- an edited comment still says when it changed but not who changed it, and
+  says so: `(edited 2026-11-21T11:00:00Z, editor not recorded)`. It never reads
+  as its author's own words, because it may not be.
+
+An edit or a removal made after the compaction is on the task's chain again,
+and names its maker as above.
 
 A comment or attachment identifier may be typed as any unambiguous prefix of
 the one `workbook show` prints, the way a task ID may be. `show` prints them
@@ -437,7 +448,10 @@ long one.
 `--json` carries both in the task document. In `show --json` each entry of
 `comments` also carries `editable`, always present, which says whether the
 person running the command may edit it, and `editedBy` when the history names
-who made the edit `editedAt` records. Removed comments are listed under
+who made the edit `editedAt` records. When the comment was edited and the
+history no longer records who made the edit, because it came before the task
+was compacted, the entry carries `"editorNotRecorded": true` and no `editedBy`;
+the member is absent otherwise. Removed comments are listed under
 `removedComments`, in identifier order, as `id`, `author`, `createdAt`,
 `removedBy` and `removedAt`, and never with a body; the member is absent when
 nothing was removed. One attached file's bytes come back
@@ -2639,7 +2653,8 @@ The poll's `presentation` carries the same `editableComments` for each task,
 leaving it out when there are none. `GET /api/tasks/<id>` answers
 `{"format":"workbook.task","version":1,"task":…}`, where `task` is what
 `workbook show --json` prints for that person, without a change log: each
-comment with `editable` and `editedBy`, and `removedComments`. A board built
+comment with `editable`, `editedBy` and `editorNotRecorded`, and
+`removedComments`. A board built
 without the edit route answers every comment as not editable.
 
 The two assignment mutations are `workbook update --assign` and `--unassign`
@@ -3282,7 +3297,8 @@ reading **Choose files** and **Add**. An empty
 list draws only its heading and controls. The
 thread is drawn oldest first, each comment carrying its author, when it was
 written, and whether it has been edited since — and by whom, when that was not
-its author — with a Remove on each one, an Edit only on your own, and a box for
+its author, or that the history no longer records who, for an edit made before
+the task was compacted — with a Remove on each one, an Edit only on your own, and a box for
 adding another. A removed comment stays in its place as one quieter line naming
 whose it was and who removed it when, without its text. The page reads those
 lines from `GET /api/tasks/<id>`, once when it opens and again whenever the

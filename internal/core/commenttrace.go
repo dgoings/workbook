@@ -47,8 +47,16 @@ type ThreadComment struct {
 	// EditedBy is the person who made the edit EditedAt records. It is empty
 	// for a comment never edited, and for one whose last edit the history read
 	// does not reach — a compacted task's checkpoint keeps the edit time but
-	// not who made it.
+	// not who made it — and then EditorNotRecorded is set.
 	EditedBy string `json:"editedBy,omitempty"`
+	// EditorNotRecorded says the comment was edited and the history read holds
+	// no record of that edit, so nobody can say who made it: the edit came
+	// before the task was compacted, whose checkpoint keeps the edit time and
+	// not the editor. A reader must not show such a comment as reading the way
+	// its author wrote it, because it may be somebody else's words. It is set
+	// only when the history was read; a thread drawn without one says
+	// nothing either way.
+	EditorNotRecorded bool `json:"editorNotRecorded,omitempty"`
 	// Editable is EditableBy for the person reading. It is always present,
 	// true or false, so a client never has to tell "not editable" from "not
 	// said".
@@ -79,7 +87,13 @@ type RemovedComment struct {
 // each comment's latest edit.
 type CommentTrace struct {
 	removed []RemovedComment
-	edits   map[string]commentEdit
+	// edits is every edit each live comment received, in chain order. All of
+	// them rather than the latest, so a thread read from a task snapshot a
+	// little older than the history still finds the edit its text shows.
+	edits map[string][]commentEdit
+	// read is whether this trace came from a history at all. The zero trace,
+	// for a caller that read none, cannot say an edit is unrecorded.
+	read bool
 }
 
 type commentEdit struct {
@@ -107,14 +121,16 @@ type tracedComment struct {
 // not overwrite who removed it, and an edit of a removed comment is not an
 // edit of anything. A root checkpoint replaces the thread wholesale, the way
 // the fold starts from it: a compacted task's earlier removals left the
-// history with the operations that recorded them, and so leave the trace.
+// history with the operations that recorded them, and so leave the trace. Its
+// earlier edits leave it too, and Thread marks a comment they changed as
+// edited by somebody the history no longer records.
 //
 // The chain is the one TaskHistory returns, oldest first. A truncated history
 // is traced as far as it was read.
 func TraceComments(history TaskHistory) CommentTrace {
 	live := map[string]tracedComment{}
 	removed := map[string]RemovedComment{}
-	edits := map[string]commentEdit{}
+	edits := map[string][]commentEdit{}
 	for _, entry := range history.Entries {
 		pack := entry.Operation
 		for _, operation := range pack.Operations {
@@ -125,7 +141,7 @@ func TraceComments(history TaskHistory) CommentTrace {
 				}
 				live = map[string]tracedComment{}
 				removed = map[string]RemovedComment{}
-				edits = map[string]commentEdit{}
+				edits = map[string][]commentEdit{}
 				for _, comment := range operation.Task.Comments {
 					live[comment.ID] = tracedComment{author: comment.Author, createdAt: comment.CreatedAt}
 				}
@@ -140,7 +156,7 @@ func TraceComments(history TaskHistory) CommentTrace {
 				if _, present := live[operation.CommentID]; !present {
 					continue
 				}
-				edits[operation.CommentID] = commentEdit{actor: pack.Actor.ID, at: pack.WallTime}
+				edits[operation.CommentID] = append(edits[operation.CommentID], commentEdit{actor: pack.Actor.ID, at: pack.WallTime})
 			case OperationCommentRemove:
 				comment, present := live[operation.CommentID]
 				if !present {
@@ -158,7 +174,7 @@ func TraceComments(history TaskHistory) CommentTrace {
 			}
 		}
 	}
-	trace := CommentTrace{edits: edits}
+	trace := CommentTrace{edits: edits, read: true}
 	for _, removal := range removed {
 		trace.removed = append(trace.removed, removal)
 	}
@@ -192,9 +208,15 @@ func (trace CommentTrace) Removed(live []Comment) []RemovedComment {
 
 // Thread returns the live comments as actor reads them, in the order given.
 //
-// EditedBy is filled only when the trace's latest edit is the one the comment
-// records — the same instant as its EditedAt — so a trace that somehow
-// disagreed with the checkpoint names nobody rather than the wrong person.
+// EditedBy names whoever made the edit the comment records: the edit at the
+// same instant as its EditedAt, the latest in chain order if two share one.
+// Only that edit, so a trace read a moment after the comments names the
+// person behind the text shown and not whoever edited it since.
+//
+// When the comment was edited and the history read holds no edit at that
+// instant, EditorNotRecorded says so. That is a compacted task's earlier edit:
+// its checkpoint keeps when the comment changed but not who changed it, and a
+// thread that said nothing would show somebody else's words as the author's.
 func (trace CommentTrace) Thread(comments []Comment, actor string) []ThreadComment {
 	if len(comments) == 0 {
 		return nil
@@ -202,8 +224,13 @@ func (trace CommentTrace) Thread(comments []Comment, actor string) []ThreadComme
 	thread := make([]ThreadComment, 0, len(comments))
 	for _, comment := range comments {
 		view := ThreadComment{Comment: comment, Editable: comment.EditableBy(actor)}
-		if edit, found := trace.edits[comment.ID]; found && comment.EditedAt != nil && comment.EditedAt.Equal(edit.at) {
-			view.EditedBy = edit.actor
+		if comment.EditedAt != nil {
+			for _, edit := range trace.edits[comment.ID] {
+				if comment.EditedAt.Equal(edit.at) {
+					view.EditedBy = edit.actor
+				}
+			}
+			view.EditorNotRecorded = trace.read && view.EditedBy == ""
 		}
 		thread = append(thread, view)
 	}

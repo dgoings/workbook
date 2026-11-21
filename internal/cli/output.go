@@ -835,10 +835,15 @@ func writeRemovedComment(output io.Writer, removal core.RemovedComment) {
 // It names the editor only when that was somebody other than the author. Only
 // the author may edit a comment now, but a history can hold an edit made
 // before that rule or by a build without it, and a comment shown under its
-// author's name over somebody else's words has to say so.
+// author's name over somebody else's words has to say so. When the history no
+// longer records who made the edit — it came before the task was compacted —
+// the marker says that instead, for the same reason.
 func editedMarker(comment core.ThreadComment) string {
 	if !comment.Edited() {
 		return ""
+	}
+	if comment.EditorNotRecorded {
+		return "\t(edited " + comment.EditedAt.Format(time.RFC3339) + ", editor not recorded)"
 	}
 	if comment.EditedByOther() {
 		return "\t(edited " + comment.EditedAt.Format(time.RFC3339) + " by " + singleLine(comment.EditedBy) + ")"

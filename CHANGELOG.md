@@ -172,8 +172,11 @@ before anyone runs it; see Compatibility across versions below.
   shape; the poll and the comment routes carry `editableComments`. All of it is
   read from operations every history already holds, so it covers comments
   removed before this release, needs no format change, and leaves the cache as
-  it is. A compacted task names nobody for removals and edits made before it
-  was compacted.
+  it is. Compaction keeps only the live thread: a comment removed before it
+  loses its line entirely, and a comment edited before it reads `(edited
+  <time>, editor not recorded)`, with `"editorNotRecorded": true` in `show
+  --json` and on the board, so somebody else's words never read as the
+  author's own.
 - **Git 2.29 or later is required**, and the README now says so. Workbook's
   fetches already used options from that release.
 - **A commit names the person its edit is recorded under, including when a

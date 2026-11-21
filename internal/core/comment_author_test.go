@@ -291,6 +291,9 @@ func TestTheThreadNamesWhoMadeTheLatestEdit(t *testing.T) {
 	if got := thread[1]; got.EditedBy != commentAuthor || got.EditedByOther() {
 		t.Fatalf("second = %#v, want its latest edit to be the author's", got)
 	}
+	if thread[0].EditorNotRecorded || thread[1].EditorNotRecorded {
+		t.Fatalf("thread = %#v, want no edit marked unrecorded when the history records both", thread)
+	}
 	if other := TraceComments(chain.history).Thread(chain.state.Task.Comments, commentOther); other[0].Editable || other[1].Editable {
 		t.Fatalf("thread for %s = %#v, want nothing editable", commentOther, other)
 	}
@@ -298,9 +301,8 @@ func TestTheThreadNamesWhoMadeTheLatestEdit(t *testing.T) {
 
 // ShowDetail reads the task and then its history, so an edit that lands
 // between the two reads is in the trace but not in the text being shown. The
-// thread names an editor only when their edit is the one the text shows, and
-// otherwise names nobody rather than putting someone's name on words they did
-// not write.
+// thread names the person whose edit the text shows, never a later editor
+// whose words it does not show, and a comment nobody edited names nobody.
 func TestTheThreadNamesNoEditorForAnEditItsTextDoesNotShow(t *testing.T) {
 	chain := newCommentChain(t)
 	chain.record(commentAuthor, comment(traceCommentA, "first"))
@@ -314,16 +316,18 @@ func TestTheThreadNamesNoEditorForAnEditItsTextDoesNotShow(t *testing.T) {
 	if len(thread) != 2 || thread[0].Body != "revised" || thread[1].Body != "second" {
 		t.Fatalf("thread = %#v, want the text as it was first read", thread)
 	}
-	if thread[0].EditedBy != "" {
-		t.Fatalf("revised comment names %q, want nobody: the latest edit in history is not the one shown", thread[0].EditedBy)
+	if thread[0].EditedBy != commentAuthor || thread[0].EditorNotRecorded {
+		t.Fatalf("revised comment = %#v, want it to name %s, whose edit the text shows, and not %s", thread[0], commentAuthor, commentOther)
 	}
-	if thread[1].EditedBy != "" {
-		t.Fatalf("unedited comment names %q, want nobody", thread[1].EditedBy)
+	if thread[1].EditedBy != "" || thread[1].EditorNotRecorded {
+		t.Fatalf("unedited comment = %#v, want nobody named and nothing unrecorded", thread[1])
 	}
 }
 
 // A compacted task starts from its checkpoint, which keeps an edit's time but
-// not who made it, and no removal at all. The trace says only what it knows.
+// not who made it, and no removal at all. The trace says only what it knows,
+// and says that it does not know who made the edit: a comment that silently
+// read as edited would read as its author's own words.
 func TestACheckpointRootStartsTheTraceAfresh(t *testing.T) {
 	editedAt := threadWallTime.Add(time.Hour)
 	task := threadParent(TaskData{}).Task
@@ -343,8 +347,13 @@ func TestACheckpointRootStartsTheTraceAfresh(t *testing.T) {
 	history := TaskHistory{Entries: []HistoryEntry{{Commit: "k", Operation: checkpoint}}}
 
 	thread := TraceComments(history).Thread(task.Comments, commentAuthor)
-	if len(thread) != 1 || thread[0].EditedBy != "" {
-		t.Fatalf("thread = %#v, want the edit with nobody named", thread)
+	if len(thread) != 1 || thread[0].EditedBy != "" || !thread[0].EditorNotRecorded {
+		t.Fatalf("thread = %#v, want the edit with nobody named and its editor marked not recorded", thread)
+	}
+	// A thread drawn with no history read at all knows nothing about any
+	// edit, so it claims nothing about one either.
+	if bare := (CommentTrace{}).Thread(task.Comments, commentAuthor); len(bare) != 1 || bare[0].EditorNotRecorded {
+		t.Fatalf("thread with no history read = %#v, want nothing marked", bare)
 	}
 
 	history.Entries = append(history.Entries, HistoryEntry{Commit: "r", Parent: "k", Operation: remove})

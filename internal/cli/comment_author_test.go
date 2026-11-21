@@ -500,3 +500,108 @@ func TestTheBoardLetsOnlyAnAuthorEditTheirComment(t *testing.T) {
 		t.Fatalf("the task answer carries the removed text: %s", body)
 	}
 }
+
+// commentLine is the line `show` prints for one comment of the thread, live or
+// removed, and empty when the thread has none for it.
+func commentLine(stdout, commentID string) string {
+	for _, line := range strings.Split(stdout, "\n") {
+		if strings.HasPrefix(line, "\t"+commentID+"\t") {
+			return line
+		}
+	}
+	return ""
+}
+
+// The reviewer's reproduction, end to end on two clones. Bob comments twice;
+// alice, on a build without the rule, rewrites his first comment; she removes
+// his second; the task is finished and compacted. Before compaction the thread
+// names alice for both. After it, on both clones, the checkpoint keeps the edit
+// time and not the editor, and the removal is gone with the operations that
+// recorded it. The thread then says the edit's editor is not recorded, so
+// alice's words never read as bob's own, and draws nothing for the removal.
+func TestACompactedThreadSaysItNoLongerRecordsAnEarlierEditor(t *testing.T) {
+	t.Parallel()
+	first, second := cliSyncRepositories(t)
+	task, ids := commentedTask(t, first, "bob's words", "bob's second remark")
+	craftForeignCommentEdit(t, first, task.ID, ids[0], commentAlice, "words alice put there")
+	mustRunAs(t, first, commentAlice, "update", task.ID, "--remove-comment", ids[1])
+	syncClone(t, first)
+	syncClone(t, second)
+
+	for _, clone := range []string{first, second} {
+		code, stdout, stderr := runAs(t, clone, commentBob, "show", task.ID)
+		if code != 0 {
+			t.Fatalf("show before compaction code = %d; stderr = %q", code, stderr)
+		}
+		if edited := commentLine(stdout, ids[0]); !strings.HasSuffix(edited, " by "+commentAlice+")") || !strings.Contains(edited, "(edited ") {
+			t.Fatalf("before compaction the edited comment's line = %q, want it to name alice:\n%s", edited, stdout)
+		}
+		if removed := commentLine(stdout, ids[1]); !strings.Contains(removed, "(removed ") || !strings.HasSuffix(removed, " by "+commentAlice+")") {
+			t.Fatalf("before compaction the removed comment's line = %q, want it to name alice:\n%s", removed, stdout)
+		}
+	}
+
+	mustRunAs(t, first, commentBob, "update", task.ID, "--status", "done")
+	syncClone(t, first)
+	compactRun(t, first, "compact", "--done-only", "--no-backup")
+	syncClone(t, second)
+	compacted := showDetailAs(t, first, commentBob, task.ID)
+	if fetched := showDetailAs(t, second, commentBob, task.ID); fetched.Head != compacted.Head || fetched.HistoryGeneration != compacted.HistoryGeneration {
+		t.Fatalf("second clone at %s (generation %s), want the compacted %s (generation %s)",
+			fetched.Head, fetched.HistoryGeneration, compacted.Head, compacted.HistoryGeneration)
+	}
+	if compacted.HistoryGeneration == task.HistoryGeneration {
+		t.Fatalf("history generation = %s, want compaction to have raised it", compacted.HistoryGeneration)
+	}
+
+	for name, clone := range map[string]string{"first": first, "second": second} {
+		code, stdout, stderr := runAs(t, clone, commentBob, "show", task.ID)
+		if code != 0 {
+			t.Fatalf("%s clone: show code = %d; stderr = %q", name, code, stderr)
+		}
+		edited := commentLine(stdout, ids[0])
+		if !strings.HasPrefix(edited, "\t"+ids[0]+"\t"+commentBob+"\t") || !strings.HasSuffix(edited, ", editor not recorded)") {
+			t.Fatalf("%s clone: the edited comment's line = %q, want it marked as edited by someone the history no longer records:\n%s", name, edited, stdout)
+		}
+		if strings.Contains(stdout, commentAlice) {
+			t.Fatalf("%s clone: show names alice, which the compacted history cannot:\n%s", name, stdout)
+		}
+		if removed := commentLine(stdout, ids[1]); removed != "" || strings.Contains(stdout, "(removed ") {
+			t.Fatalf("%s clone: show still draws the earlier removal as %q, want its line gone:\n%s", name, removed, stdout)
+		}
+		if !strings.Contains(stdout, "words alice put there") {
+			t.Fatalf("%s clone: show lost the edited text:\n%s", name, stdout)
+		}
+
+		_, stdout, _ = runAs(t, clone, commentBob, "show", task.ID, "--json")
+		var raw struct {
+			Data struct {
+				Comments        []map[string]any `json:"comments"`
+				RemovedComments []map[string]any `json:"removedComments"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &raw); err != nil {
+			t.Fatalf("%s clone: decode show --json: %v", name, err)
+		}
+		if raw.Data.RemovedComments != nil {
+			t.Fatalf("%s clone: removedComments = %v, want the member absent", name, raw.Data.RemovedComments)
+		}
+		if len(raw.Data.Comments) != 1 {
+			t.Fatalf("%s clone: comments = %v, want the edited one alone", name, raw.Data.Comments)
+		}
+		entry := raw.Data.Comments[0]
+		if entry["editorNotRecorded"] != true {
+			t.Fatalf("%s clone: comments[0] = %v, want editorNotRecorded: true", name, entry)
+		}
+		if _, has := entry["editedBy"]; has {
+			t.Fatalf("%s clone: comments[0] = %v names an editor the history no longer holds", name, entry)
+		}
+	}
+
+	// An edit made after the compaction is on the chain again, so the thread
+	// names its maker and no longer says the editor is unrecorded.
+	mustRunAs(t, second, commentBob, "update", task.ID, "--edit-comment", ids[0], "--comment", "bob's words again")
+	if after := showDetailAs(t, second, commentBob, task.ID).Comments[0]; after.EditedBy != commentBob || after.EditorNotRecorded {
+		t.Fatalf("after bob's own edit = %#v, want bob named and nothing unrecorded", after)
+	}
+}
