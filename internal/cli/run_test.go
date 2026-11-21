@@ -2266,16 +2266,16 @@ func TestRunServeSaysNothingWhenTheDefaultAddressIsFree(t *testing.T) {
 	}
 }
 
-// waitForHTTP polls until the server answers 200. The budget is a hang guard,
-// not a measurement: a healthy server answers within milliseconds, and a bare
-// whole-tree run keeps this machine's cores saturated by other packages'
-// parallel tests, so a tight budget only turns load into a false failure.
 // boardTestClient is the client every board request in this package's tests
 // goes through. Its timeout is a hang guard, not a stopwatch: a request to a
 // listener nobody serves fails the test in seconds instead of running it into
 // the package timeout.
 var boardTestClient = &http.Client{Timeout: 30 * time.Second}
 
+// waitForHTTP polls until the server answers 200. The budget is a hang guard,
+// not a measurement: a healthy server answers within milliseconds, and a bare
+// whole-tree run keeps this machine's cores saturated by other packages'
+// parallel tests, so a tight budget only turns load into a false failure.
 func waitForHTTP(t *testing.T, url string) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
