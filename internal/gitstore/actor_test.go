@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 // actorContext is a context asserting who is acting, the way the command line
@@ -188,20 +191,88 @@ func TestAnAssertedActorWritesInAFolderWithNoGitIdentity(t *testing.T) {
 	}
 }
 
-// Synchronization writes commits of its own — the replay of a local edit onto
-// history somebody else published — and the background sync of a server folder
-// with no Git identity must still be able to.
-func TestSyncReplaysUnderAnAssertedActorInAFolderWithNoGitIdentity(t *testing.T) {
+// The reviewer's reproduction: a Service built for one person — the way serve
+// builds one at startup and copies it per request — handed a context naming
+// another. The operation and the commit both name the context's person, and
+// so do `self` and the removal rule.
+func TestAServiceBuiltForOnePersonRecordsTheContextsPerson(t *testing.T) {
+	t.Parallel()
+	repo, config := writeRepository(t)
+	syncGit(t, repo.Root, "config", "user.name", "Board Server")
+	syncGit(t, repo.Root, "config", "user.email", "server@example.com")
+	server := actorService(repo, config, "server@example.com")
+	bob := actorContext(t, "bob@example.com")
+
+	created, err := server.CreateMutation(bob, core.CreateInput{Title: "Bob's"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assigned, err := server.UpdateMutation(bob, created.Task.ID, core.UpdateInput{
+		Assignments: []core.AssignmentChange{{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := assigned.Task.Assignments; len(got) != 1 || got[0].Principal != "bob@example.com" || got[0].Creator != "bob@example.com" {
+		t.Fatalf("self as bob assigned %#v, want bob as principal and creator", got)
+	}
+	for _, head := range []string{created.Task.Head, assigned.Task.Head} {
+		author, committer := commitIdentities(t, repo.Root, head)
+		if got := operationActor(t, repo.Root, head); got != "bob@example.com" ||
+			author != "bob@example.com <bob@example.com>" || committer != author {
+			t.Fatalf("commit %s: operation actor %q, author %q, committer %q; want bob throughout", head, got, author, committer)
+		}
+	}
+
+	// The server's own identity may not withdraw what bob holds and recorded,
+	// and bob may, through the same Service.
+	if _, err := server.UpdateMutation(context.Background(), created.Task.ID, core.UpdateInput{
+		Assignments: []core.AssignmentChange{{To: "bob@example.com", Remove: true}},
+	}); err == nil {
+		t.Fatal("the server's own identity withdrew bob's assignment")
+	}
+	if _, err := server.UpdateMutation(bob, created.Task.ID, core.UpdateInput{
+		Assignments: []core.AssignmentChange{{To: "bob@example.com", Remove: true}},
+	}); err != nil {
+		t.Fatalf("bob withdrawing his own assignment: %v", err)
+	}
+}
+
+// Where an operation naming one person meets a context naming another, the
+// write is refused and nothing moves: recording either would put a wrong name
+// on somebody's edit.
+func TestAWriteNamingAnotherPersonThanItsContextIsRefused(t *testing.T) {
+	t.Parallel()
+	repo, config := writeRepository(t)
+	pack := writeCreatePack()
+	state := writeState(t, nil, pack)
+	refsBefore := syncGit(t, repo.Root, "for-each-ref", "refs/workbook/")
+	_, err := repo.Write(actorContext(t, "alice@example.com"), config, nil, pack, state, "create task")
+	if err == nil || !strings.Contains(err.Error(), "nothing was written") {
+		t.Fatalf("Write(pack by %s, context alice) error = %v, want the mismatch refused", pack.Actor.ID, err)
+	}
+	if refsAfter := syncGit(t, repo.Root, "for-each-ref", "refs/workbook/"); refsAfter != refsBefore {
+		t.Fatalf("a refused write moved refs:\nbefore %s\nafter  %s", refsBefore, refsAfter)
+	}
+}
+
+// A replay keeps the operation's actor, so it keeps the commit's too. The
+// folder here has an identity of its own, which a replay on a plain context —
+// a background sync started without WORKBOOK_ACTOR — used to put on sam's edit.
+func TestAReplayNamesItsOperationsActorNotTheSyncingFolder(t *testing.T) {
 	t.Parallel()
 	first, second, config := syncRepositories(t)
-	removeGitIdentity(t, second.Root)
-	alice := actorContext(t, "alice@example.com")
+	syncGit(t, second.Root, "config", "user.name", "Server")
+	syncGit(t, second.Root, "config", "user.email", "server@example.test")
+	second = openSyncCloneAt(t, second.Root)
+	pinCommitDates(t, second)
+	sam := actorContext(t, "sam@example.com")
 
 	divergent := createSyncTask(t, first, config, "Divergent task")
 	if _, err := first.Sync(context.Background(), config); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := second.Fetch(alice, config); err != nil {
+	if _, err := second.Fetch(context.Background(), config); err != nil {
 		t.Fatal(err)
 	}
 	updateSyncTask(t, first, config, divergent.ID, "Remote branch")
@@ -209,75 +280,275 @@ func TestSyncReplaysUnderAnAssertedActorInAFolderWithNoGitIdentity(t *testing.T)
 		t.Fatal(err)
 	}
 	high := core.PriorityHigh
-	if _, err := actorService(second, config, "alice@example.com").UpdateMutation(
-		alice, divergent.ID, core.UpdateInput{Priority: &high}); err != nil {
+	local, err := actorService(second, config, "server@example.test").UpdateMutation(
+		sam, divergent.ID, core.UpdateInput{Priority: &high})
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := second.Sync(alice, config)
+	result, err := second.Sync(context.Background(), config)
 	if err != nil {
-		t.Fatalf("Sync under an asserted actor in a folder with no identity: %v; result = %#v", err, result)
+		t.Fatalf("Sync() error = %v; result = %#v", err, result)
 	}
 	assertSyncOutcome(t, result.Fetch, divergent.ID, SyncReconciled)
 	head := refValue(t, second, taskRefPrefix+divergent.ID)
+	if head == local.Task.Head {
+		t.Fatal("the sync did not replay sam's edit")
+	}
+	if got := remoteRefValue(t, second, taskRefPrefix+divergent.ID); got != head {
+		t.Fatalf("origin holds %s, want the replayed commit %s", got, head)
+	}
 	author, committer := commitIdentities(t, second.Root, head)
-	if author != "alice@example.com <alice@example.com>" || committer != author {
-		t.Fatalf("replayed commit author = %q, committer = %q", author, committer)
+	if got := operationActor(t, second.Root, head); got != "sam@example.com" ||
+		author != "sam@example.com <sam@example.com>" || committer != author {
+		t.Fatalf("replayed commit: operation actor %q, author %q, committer %q; want sam throughout, not the folder", got, author, committer)
+	}
+	// And byte for byte the commit Git writes for sam with nothing else added:
+	// no date or header of the syncing process's leaks into it either.
+	if rebuilt := rebuildCommitUnaided(t, second.Root, head, identityEnvironment("sam@example.com")); rebuilt != head {
+		t.Fatalf("plain git commit-tree as sam rebuilt %s as %s", head, rebuilt)
 	}
 }
 
-// With no actor on the context, the commit behind an edit is the one Git
-// writes unaided from the checkout's own configuration — the commit every
-// build before WORKBOOK_ACTOR wrote. This rebuilds the commit with a plain
-// `git commit-tree` from the same tree, parent, message and timestamps and
-// requires the identical object ID, so any byte the override path could leak
-// into an ordinary write — a name, an email, a header — fails it.
-func TestAPlainContextWritesTheCommitGitWritesUnaided(t *testing.T) {
+// The hosted setup: a folder with no Git identity at all, every edit recorded
+// under an asserted name, and the background sync — which acts for nobody —
+// replaying several people's task and configuration edits in one pass and
+// publishing them.
+func TestABackgroundSyncReplaysEachPersonsEditsInAFolderWithNoGitIdentity(t *testing.T) {
 	t.Parallel()
-	repo, config := writeRepository(t)
-	// A name and an email that differ from each other and from every actor
-	// above, so a commit that took its identity from anywhere but the checkout
-	// cannot reproduce.
-	syncGit(t, repo.Root, "config", "user.name", "Checkout Owner")
-	syncGit(t, repo.Root, "config", "user.email", "owner@example.test")
-	service := syncService(repo, config)
-	service.Actor = "owner@example.test"
+	first, second, config := syncRepositories(t)
+	removeGitIdentity(t, second.Root)
+	second = openSyncCloneAt(t, second.Root)
+	alice, bob := actorContext(t, "alice@example.com"), actorContext(t, "bob@example.com")
 
-	created, err := service.CreateMutation(context.Background(), core.CreateInput{Title: "Ordinary"})
-	if err != nil {
+	alices := createSyncTask(t, first, config, "Alice's")
+	bobs := createSyncTask(t, first, config, "Bob's")
+	writeConfig(t, first, config, configOperations(addOperation("icebox", "Icebox", "7/1"))...)
+	if _, err := first.Sync(context.Background(), config); err != nil {
 		t.Fatal(err)
 	}
-	title := "Ordinary, renamed"
-	updated, err := service.UpdateMutation(context.Background(), created.Task.ID, core.UpdateInput{Title: &title})
-	if err != nil {
+	if _, err := second.Fetch(context.Background(), config); err != nil {
 		t.Fatal(err)
 	}
-	for _, head := range []string{created.Task.Head, updated.Task.Head} {
-		if rebuilt := rebuildCommitUnaided(t, repo.Root, head); rebuilt != head {
-			t.Fatalf("plain git commit-tree rebuilt %s as %s; Workbook's commit is not the one Git writes unaided", head, rebuilt)
+	updateSyncTask(t, first, config, alices.ID, "Alice's, renamed remotely")
+	updateSyncTask(t, first, config, bobs.ID, "Bob's, renamed remotely")
+	writeConfig(t, first, config, configOperations(relabelOperation("icebox", "Ice box"))...)
+	if _, err := first.Sync(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+
+	high := core.PriorityHigh
+	if _, err := actorService(second, config, "").UpdateMutation(alice, alices.ID, core.UpdateInput{Priority: &high}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := actorService(second, config, "").UpdateMutation(bob, bobs.ID, core.UpdateInput{Priority: &high}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.WriteConfigOperation(bob, config, core.CryptoULIDSource{},
+		[]core.ConfigOperation{addOperation("triage", "Triage", "1/2")}, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := second.Sync(context.Background(), config)
+	if err != nil {
+		t.Fatalf("background Sync in a folder with no identity: %v; result = %#v", err, result)
+	}
+	assertSyncOutcome(t, result.Fetch, alices.ID, SyncReconciled)
+	assertSyncOutcome(t, result.Fetch, bobs.ID, SyncReconciled)
+	assertConfigStatus(t, result.Fetch.Config, SyncConfigReconciled)
+	for _, replayed := range []struct {
+		ref, actor string
+	}{
+		{taskRefPrefix + alices.ID, "alice@example.com"},
+		{taskRefPrefix + bobs.ID, "bob@example.com"},
+		{configRef, "bob@example.com"},
+	} {
+		head := refValue(t, second, replayed.ref)
+		if got := remoteRefValue(t, second, replayed.ref); got != head {
+			t.Errorf("%s: origin holds %s, want the replayed commit %s published", replayed.ref, got, head)
 		}
-		author, committer := commitIdentities(t, repo.Root, head)
-		if author != "Checkout Owner <owner@example.test>" || committer != author {
-			t.Fatalf("commit %s author = %q, committer = %q", head, author, committer)
+		author, committer := commitIdentities(t, second.Root, head)
+		want := replayed.actor + " <" + replayed.actor + ">"
+		if got := operationActor(t, second.Root, head); got != replayed.actor || author != want || committer != want {
+			t.Errorf("%s replay: operation actor %q, author %q, committer %q; want %s throughout",
+				replayed.ref, got, author, committer, replayed.actor)
 		}
 	}
 }
 
-// rebuildCommitUnaided writes, with plain Git and no identity of its own, the
-// commit that has commit's tree, parents, message and timestamps, and returns
-// its ID.
-func rebuildCommitUnaided(t *testing.T, directory, commit string) string {
+// pinnedCommitDate is the date every Git process pinCommitDates wraps uses for a
+// commit, unless Workbook itself names one.
+const pinnedCommitDate = "1700000000 +0130"
+
+// pinCommitDates routes repo's Git through a wrapper that supplies the commit
+// dates the process environment would, so a commit is reproducible from its
+// tree, parents, message and identity alone. Workbook's own environment is
+// applied after the process's, so a date Workbook named would still win and
+// show up as a commit the rebuild cannot reproduce.
+func pinCommitDates(t *testing.T, repo *Repository) {
 	t.Helper()
-	format := "%T%x00%P%x00%ad%x00%cd%x00%B"
-	output, err := exec.Command("git", "-C", directory, "show", "--no-patch", "--date=raw", "--format="+format, commit).Output()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("find git: %v", err)
+	}
+	wrapper := filepath.Join(t.TempDir(), "git")
+	testenv.WriteExecutable(t, wrapper, []byte("#!/bin/sh\n"+
+		": \"${GIT_AUTHOR_DATE:="+pinnedCommitDate+"}\"\n"+
+		": \"${GIT_COMMITTER_DATE:="+pinnedCommitDate+"}\"\n"+
+		"export GIT_AUTHOR_DATE GIT_COMMITTER_DATE\n"+
+		"exec '"+git+"' \"$@\"\n"))
+	repo.gitPath = wrapper
+}
+
+// identityEnvironment is the identity Git is given for an actor that is not the
+// checkout's own: the email as name and email, author and committer.
+func identityEnvironment(actor string) []string {
+	return []string{
+		"GIT_AUTHOR_NAME=" + actor, "GIT_AUTHOR_EMAIL=" + actor,
+		"GIT_COMMITTER_NAME=" + actor, "GIT_COMMITTER_EMAIL=" + actor,
+	}
+}
+
+// With the actor the checkout's own user.email, every commit Workbook writes
+// is the one Git writes unaided from the checkout's configuration — the commit
+// every build before WORKBOOK_ACTOR wrote. Each kind is rebuilt with a plain
+// `git commit-tree` from the same tree, parents and message, the checkout's
+// own identity, and the date the process environment supplies, and must come
+// out with the identical object ID. So any byte the override path leaks into
+// an ordinary write — a name, an email, a date, a header — fails it.
+//
+// The recorded clock (what WORKBOOK_NOW sets) is moved years away from the
+// commit date on purpose: it dates the operations inside the trees, never the
+// commits, so a commit dated from it fails here too.
+func TestEveryCommitAnOrdinaryCloneWritesIsTheOneGitWritesUnaided(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+	// A name and an email that differ from each other and from every actor in
+	// this file, so a commit that took its identity from anywhere but the
+	// checkout cannot reproduce.
+	syncGit(t, second.Root, "config", "user.name", "Checkout Owner")
+	syncGit(t, second.Root, "config", "user.email", "owner@example.test")
+	second = openSyncCloneAt(t, second.Root)
+	pinCommitDates(t, second)
+	recorded := time.Date(2019, time.March, 5, 14, 0, 0, 0, time.UTC)
+	second.Now = func() time.Time { return recorded }
+	owner := actorService(second, config, "owner@example.test")
+	owner.Now = func() time.Time { return recorded }
+
+	commits := map[string]string{}
+
+	// The divergence a replay needs: one task and the ledger moved on both
+	// sides.
+	shared := createSyncTask(t, first, config, "Shared")
+	writeConfig(t, first, config, configOperations(addOperation("icebox", "Icebox", "7/1"))...)
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Fetch(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	updateSyncTask(t, first, config, shared.ID, "Shared, renamed remotely")
+	writeConfig(t, first, config, configOperations(relabelOperation("icebox", "Ice box"))...)
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := owner.CreateMutation(ctx, core.CreateInput{Title: "Ordinary"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commits["task create"] = created.Task.Head
+	title := "Ordinary, renamed"
+	updated, err := owner.UpdateMutation(ctx, created.Task.ID, core.UpdateInput{Title: &title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commits["task update"] = updated.Task.Head
+	high := core.PriorityHigh
+	local, err := owner.UpdateMutation(ctx, shared.ID, core.UpdateInput{Priority: &high})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := second.WriteConfigOperation(ctx, config, core.CryptoULIDSource{},
+		[]core.ConfigOperation{addOperation("triage", "Triage", "1/2")}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commits["config-ledger write"] = ledger.Head
+
+	result, err := second.Sync(ctx, config)
+	if err != nil {
+		t.Fatalf("Sync() error = %v; result = %#v", err, result)
+	}
+	assertSyncOutcome(t, result.Fetch, shared.ID, SyncReconciled)
+	assertConfigStatus(t, result.Fetch.Config, SyncConfigReconciled)
+	commits["task replay"] = refValue(t, second, taskRefPrefix+shared.ID)
+	commits["config-ledger replay"] = refValue(t, second, configRef)
+	if commits["task replay"] == local.Task.Head || commits["config-ledger replay"] == ledger.Head {
+		t.Fatalf("the sync replayed nothing: %#v", commits)
+	}
+
+	done := core.StatusDone
+	if _, err := owner.UpdateMutation(ctx, created.Task.ID, core.UpdateInput{Status: &done}); err != nil {
+		t.Fatal(err)
+	}
+	input := checkpointInputFor(t, second, config, currentSnapshot(t, second, config, created.Task.ID), true)
+	input.Actor = "owner@example.test"
+	checkpoint, err := second.BuildCheckpoint(ctx, config, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commits["compaction checkpoint"] = checkpoint.Head
+
+	tip := currentSnapshot(t, second, config, created.Task.ID)
+	bundle := filepath.Join(t.TempDir(), "archive.bundle")
+	if err := second.WriteArchiveBundle(ctx, config, bundle, ArchiveManifest{
+		Format: "workbook.archive-manifest", Version: 1, ProjectID: config.ProjectID,
+		RunID: newCheckpointID(t), CreatedAt: recorded,
+		Tasks: []ArchiveTask{{
+			TaskID: created.Task.ID, Title: tip.State.Task.Title, OldTip: tip.Head,
+			OldGeneration: tip.State.History.Generation, NewGeneration: input.Generation, Commits: 4,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(syncGit(t, second.Root, "bundle", "list-heads", bundle), "\n") {
+		if objectID, ref, found := strings.Cut(line, " "); found && ref == archiveManifestRef {
+			commits["archive manifest"] = objectID
+		}
+	}
+	if commits["archive manifest"] == "" {
+		t.Fatal("the bundle carries no archive manifest")
+	}
+
+	for kind, head := range commits {
+		if rebuilt := rebuildCommitUnaided(t, second.Root, head, nil); rebuilt != head {
+			t.Errorf("%s: plain git commit-tree rebuilt %s as %s; Workbook's commit is not the one Git writes unaided",
+				kind, head, rebuilt)
+		}
+		author, committer := commitIdentities(t, second.Root, head)
+		if author != "Checkout Owner <owner@example.test>" || committer != author {
+			t.Errorf("%s commit %s author = %q, committer = %q", kind, head, author, committer)
+		}
+	}
+}
+
+// rebuildCommitUnaided writes, with plain Git, the commit that has commit's
+// tree, parents and message, the pinned date, and either the checkout's own
+// identity (identity nil) or the one identity names, and returns its ID.
+func rebuildCommitUnaided(t *testing.T, directory, commit string, identity []string) string {
+	t.Helper()
+	format := "%T%x00%P%x00%B"
+	output, err := exec.Command("git", "-C", directory, "show", "--no-patch", "--format="+format, commit).Output()
 	if err != nil {
 		t.Fatalf("read commit %s: %v", commit, err)
 	}
-	fields := strings.SplitN(string(output), "\x00", 5)
-	if len(fields) != 5 {
+	fields := strings.SplitN(string(output), "\x00", 3)
+	if len(fields) != 3 {
 		t.Fatalf("commit %s fields = %q", commit, fields)
 	}
-	tree, parents, authorDate, committerDate, message := fields[0], strings.Fields(fields[1]), fields[2], fields[3], fields[4]
+	tree, parents, message := fields[0], strings.Fields(fields[1]), fields[2]
 	args := []string{"-C", directory, "commit-tree", tree}
 	for _, parent := range parents {
 		args = append(args, "-p", parent)
@@ -286,7 +557,8 @@ func rebuildCommitUnaided(t *testing.T, directory, commit string) string {
 	// appends one more; -m gets the message back without both.
 	args = append(args, "-m", strings.TrimSuffix(strings.TrimSuffix(message, "\n"), "\n"))
 	command := exec.Command("git", args...)
-	command.Env = append(command.Environ(), "GIT_AUTHOR_DATE="+authorDate, "GIT_COMMITTER_DATE="+committerDate)
+	command.Env = append(command.Environ(), "GIT_AUTHOR_DATE="+pinnedCommitDate, "GIT_COMMITTER_DATE="+pinnedCommitDate)
+	command.Env = append(command.Env, identity...)
 	rebuilt, err := command.Output()
 	if err != nil {
 		t.Fatalf("git commit-tree: %v", err)

@@ -51,6 +51,8 @@ func TestValidateActorRefusesAnythingButAnEmailAddress(t *testing.T) {
 		{",alice@example.com", "cannot be recorded as a Git author"},
 		{`\alice@example.com`, "cannot be recorded as a Git author"},
 		{strings.Repeat("a", MaxAssignmentPrincipalBytes) + "@example.com", "must not exceed"},
+		{"s\xffam@example.com", "must be valid UTF-8"},
+		{"sam@example.com\xc3", "must be valid UTF-8"},
 	}
 	for _, tc := range cases {
 		err := ValidateActor(tc.value)
@@ -182,6 +184,21 @@ func TestValidateAssigneeAuthoringRefusesInvalidUTF8Only(t *testing.T) {
 	for _, value := range []string{"sam@example.com", "ä@example.com", "josé@exämple.com/impl-1"} {
 		if err := ValidateAssigneeAuthoring(value); err != nil {
 			t.Errorf("ValidateAssigneeAuthoring(%q) = %v, want accepted", value, err)
+		}
+	}
+}
+
+func TestValidateGitIdentityRefusesWhatGitWouldNotRecordFaithfully(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"sam@example.com", "Sam@Example.com", "ä@example.com", ".sam@example.com."} {
+		if err := ValidateGitIdentity(value); err != nil {
+			t.Errorf("ValidateGitIdentity(%q) = %v, want accepted", value, err)
+		}
+	}
+	for _, value := range []string{"", "s\xffam@example.com", "a<b@example.com", "a>b", " sam@example.com", "sam@example.com ",
+		"sam\n@example.com", "sam\x00@example.com", "sam\x7f@example.com", ",sam@example.com", "sam@example.com;", `"sam`, "sam'", `\sam`, "sam:"} {
+		if err := ValidateGitIdentity(value); err == nil {
+			t.Errorf("ValidateGitIdentity(%q) accepted it", value)
 		}
 	}
 }

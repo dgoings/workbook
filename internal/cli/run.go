@@ -910,7 +910,7 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	// the answer as soon as it is open, and nothing the fetch brings down can
 	// change it.
 	if assignment != nil {
-		change, err := assignment.change(session.service.Actor)
+		change, err := assignment.change(session.service.ActorFor(ctx))
 		if err != nil {
 			return err
 		}
@@ -1148,7 +1148,8 @@ func reconciledSharingWarnings(
 	fetched *gitstore.SyncResult,
 	reported string,
 ) []core.Warning {
-	if fetched == nil || strings.TrimSpace(service.Actor) == "" {
+	actor := service.ActorFor(ctx)
+	if fetched == nil || strings.TrimSpace(actor) == "" {
 		return nil
 	}
 	var warnings []core.Warning
@@ -1160,10 +1161,10 @@ func reconciledSharingWarnings(
 		if err != nil {
 			continue
 		}
-		if !core.HeldBy(task.Assignments, service.Actor) {
+		if !core.HeldBy(task.Assignments, actor) {
 			continue
 		}
-		others := core.AssignmentsHeldByOthers(task.Assignments, service.Actor)
+		others := core.AssignmentsHeldByOthers(task.Assignments, actor)
 		if len(others) == 0 {
 			continue
 		}
@@ -2060,6 +2061,8 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		// has typed anything. A checkout with none configured leaves it empty,
 		// and the board draws no assignment control at all — which is the honest
 		// answer, because core refuses to record an assignment with no creator.
+		// It is the fallback only: a request whose context names a person (see
+		// actingAs) is answered for that person, by the board and by core alike.
 		Identity: service.Actor,
 		Assign: func(requestContext context.Context, id string, input core.AssignInput) (core.MutationResult, error) {
 			writer, err := writerFor(requestContext, id)
@@ -2181,31 +2184,59 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 	return nil
 }
 
-// actingAs hands every request the person this command was started as.
+// actingAs hands every request the person it acts for.
 //
 // A request's context is the HTTP server's, not the command's, so an actor
 // WORKBOOK_ACTOR put on the command's context would otherwise stop at the
-// first request: the service each route builds would still record the person
-// (its Actor was read when serve opened), but the commit behind the edit would
-// fall back to the checkout's Git identity, and in a folder with none it could
-// not be written at all. Putting the actor on each request's context is what
-// keeps the operation and its commit naming the same person.
+// first request, and every route would answer for the checkout's own identity
+// instead. Everything a request decides by identity reads it from the
+// request's context — the operation's actor and the assignee `self` through
+// core.Service.ActorFor, the board's "yours" and "may remove" through the
+// handler's assignIdentity — and the commit behind an edit names that
+// operation's actor, so one name on the request's context is all it takes.
 //
-// It is also the one place a request's person is decided, which is where a
-// per-request name would be given instead: core.WithActor on the request's
-// context, then the service's Actor read back from it (see current, which
-// copies the service per request).
+// That makes this the one place a request's person is decided. Today it is the
+// person serve was started as, for every request. A requestActor on serve's
+// context (see withRequestActor) names a person per request instead, falling
+// back to that one when it names nobody; a name it gives that is not a usable
+// actor is refused with a 400 before any route runs, never replaced by another.
 func actingAs(ctx context.Context, next http.Handler) http.Handler {
 	actor, asserted := core.ActorFrom(ctx)
-	if !asserted {
+	resolve, perRequest := ctx.Value(requestActorKey{}).(requestActor)
+	if !asserted && !perRequest {
 		return next
 	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		// The name was validated when the command's context was built, so this
-		// cannot be refused.
-		requestContext, _ := core.WithActor(request.Context(), actor)
+		name, named := actor, asserted
+		if perRequest {
+			if given, ok := resolve(request); ok {
+				name, named = given, true
+			}
+		}
+		if !named {
+			next.ServeHTTP(writer, request)
+			return
+		}
+		requestContext, err := core.WithActor(request.Context(), name)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
 		next.ServeHTTP(writer, request.WithContext(requestContext))
 	})
+}
+
+// requestActor names the person one board request acts for, and reports false
+// for a request it names nobody for.
+type requestActor func(*http.Request) (string, bool)
+
+type requestActorKey struct{}
+
+// withRequestActor gives serve a per-request person. Nothing in this build sets
+// one except the tests that prove two people can be served at once; it is the
+// seam a deployment that signs people in plugs its header into.
+func withRequestActor(ctx context.Context, resolve requestActor) context.Context {
+	return context.WithValue(ctx, requestActorKey{}, resolve)
 }
 
 // boardPriorityAnswer carries a priority writer's result across to the board's

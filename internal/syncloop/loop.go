@@ -206,10 +206,10 @@ func (l *loop) wait(ctx context.Context) {
 }
 
 // finalSync runs on a context cut loose from the cancellation that ended the
-// loop but not from its values: the run's context is what names the person a
-// replayed commit is recorded under (see core.WithActor), and a final sync on a
-// bare background context would write it under the checkout's own name — or
-// fail outright in a folder that has none.
+// loop but not from its values, so the last sync runs with what every other
+// sync in the loop ran with. Nothing it writes takes a name from them: a
+// replayed commit names its own operation's actor (see
+// gitstore.Repository.commitIdentityEnvironment), whoever started the loop.
 func (l *loop) finalSync(parent context.Context) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), l.options.Shutdown)
 	defer cancel()

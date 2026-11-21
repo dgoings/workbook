@@ -1148,7 +1148,7 @@ func (r *Repository) writeConfigObjects(
 	if err != nil {
 		return "", err
 	}
-	return r.writeCommit(ctx, tree, parentHead, reason)
+	return r.writeCommit(ctx, tree, parentHead, reason, pack.Actor.ID)
 }
 
 // commitConfigRefUpdate compare-and-swaps the configuration ref and retires

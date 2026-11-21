@@ -154,9 +154,8 @@ func TestFinalSyncRunsOnCancellation(t *testing.T) {
 }
 
 // The final sync is cut loose from the cancellation that ended the watcher,
-// not from the person the watcher was started as: a replay it writes on the way
-// out is that person's commit, and in a folder with no Git identity of its own
-// a bare context would leave it nobody to write it as.
+// not from the values it was started with, so it runs with exactly what every
+// earlier sync in the loop ran with.
 func TestFinalSyncKeepsTheActingPerson(t *testing.T) {
 	syncer := &fakeSyncer{origin: true}
 	parent, err := core.WithActor(context.Background(), "alice@example.com")

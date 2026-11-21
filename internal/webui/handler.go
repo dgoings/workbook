@@ -1948,7 +1948,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		AttachmentLabelLimit:  core.MaxAttachmentLabelBytes,
 		AttachmentURLLimit:    core.MaxAttachmentURLBytes,
 		InlineImageMediaTypes: strings.Join(InlineAttachmentMediaTypes(), " "),
-		AssignIdentity:        handler.assignIdentity(),
+		AssignIdentity:        handler.assignIdentity(request),
 		StatusTags:            core.StatusTags(),
 		PriorityTags:          core.PriorityTags(),
 		Administrable:         handler.administrable(),
@@ -2847,7 +2847,7 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 		VocabularyHead:  vocabulary.Head,
 		VocabularyShape: vocabularyShape(vocabulary),
 		Tasks:           tasks,
-		Presentation:    taskPresentation(tasks, vocabulary.Vocabulary, handler.assignIdentity()),
+		Presentation:    taskPresentation(tasks, vocabulary.Vocabulary, handler.assignIdentity(request)),
 	})
 	if err != nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "encode the tasks document: %v", err))

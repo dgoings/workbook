@@ -208,6 +208,7 @@ type ListFilter struct {
 }
 
 func (s Service) CreateMutation(ctx context.Context, input CreateInput) (MutationResult, error) {
+	s = s.acting(ctx)
 	status := input.Status
 	if status == "" {
 		status = s.vocabulary().Default()
@@ -525,6 +526,7 @@ type NextOptions struct {
 // empty rather than nil when nothing is eligible, because a caller that
 // encodes it wants `[]`, not `null`.
 func (s Service) NextCandidates(ctx context.Context, options NextOptions) ([]Task, error) {
+	s = s.acting(ctx)
 	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
 		return nil, err
@@ -699,6 +701,7 @@ func (s Service) stateAtCommit(ctx context.Context, taskID, commit string) (Task
 }
 
 func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input UpdateInput) (MutationResult, error) {
+	s = s.acting(ctx)
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
 		return MutationResult{}, err
@@ -1271,6 +1274,7 @@ func (s Service) resolveSnapshot(ctx context.Context, idOrPrefix string) (Snapsh
 }
 
 func (s Service) writeMutation(ctx context.Context, parent *Snapshot, operations []Operation, reason string) (MutationResult, error) {
+	s = s.acting(ctx)
 	// Every mutation this build authors goes through NewOperationPack, so the
 	// durable header — format, version, and the writer-format marker the
 	// operations imply — has exactly one author.

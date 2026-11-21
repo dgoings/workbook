@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -260,7 +263,7 @@ func TestWorkbookActorRefusesAnEmptyOrUnusableValue(t *testing.T) {
 	existing := createReadyTask(t, repository, "Existing")
 	refsBefore := gitOutput(t, repository, "for-each-ref", "refs/workbook/")
 
-	for _, value := range []string{"", " ", "alice", "alice@example", "alice@example.com/impl-1", "alice@example.com ", "a<b@example.com"} {
+	for _, value := range []string{"", " ", "alice", "alice@example", "alice@example.com/impl-1", "alice@example.com ", "a<b@example.com", "s\xffam@example.com"} {
 		for _, args := range [][]string{
 			{"create", "Refused", "--no-sync", "--json"},
 			{"update", existing.ID, "--title", "Refused", "--no-sync", "--json"},
@@ -316,10 +319,11 @@ func TestWorkbookActorDoesNotGateCommandsThatRecordNothing(t *testing.T) {
 // With the variable unset, every edit is the one this build wrote before the
 // variable existed: recorded under the checkout's user.email, and committed
 // under the checkout's own Git name and email. The gitstore test
-// TestAPlainContextWritesTheCommitGitWritesUnaided proves the commit is
-// byte-for-byte the one plain Git writes; this proves the command line takes
-// that path for every kind of edit, by running the same edits that, with the
-// variable set, are recorded under somebody else.
+// TestEveryCommitAnOrdinaryCloneWritesIsTheOneGitWritesUnaided proves, for
+// every kind of commit Workbook writes, that such a commit is byte for byte
+// the one plain Git writes; this checks only that the command line's edits
+// reach that path with the checkout's identity, by running the same edits that,
+// with the variable set, are recorded under somebody else.
 func TestUnsetWorkbookActorWritesWhatItWroteBefore(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
@@ -419,21 +423,6 @@ func TestServeRecordsBoardEditsUnderWorkbookActor(t *testing.T) {
 	}
 }
 
-// A mistyped command is the first thing wrong with it, so it is what is
-// reported, whatever the environment it would have run under.
-func TestAnUnknownCommandIsReportedBeforeAnUnusableWorkbookActor(t *testing.T) {
-	t.Parallel()
-	repository := initializedRepository(t)
-	code, _, stderr := runAs(t, repository, "not an address", "udpate", "--json")
-	if code != 2 {
-		t.Fatalf("udpate with a bad WORKBOOK_ACTOR code = %d, want 2; stderr = %q", code, stderr)
-	}
-	assertJSONError(t, stderr, core.CategoryInvocation, `unknown command "udpate"`)
-	if strings.Contains(stderr, core.ActorVariable) {
-		t.Fatalf("stderr = %q; an unknown command must not be refused over WORKBOOK_ACTOR", stderr)
-	}
-}
-
 // A value that is not valid UTF-8 would be recorded as somebody else: the
 // operation's JSON turns each bad byte into U+FFFD. It is refused as an
 // assignee exactly as it is refused as the acting person, and nothing moves.
@@ -449,5 +438,227 @@ func TestAssignRefusesAPersonThatIsNotValidUTF8(t *testing.T) {
 	}
 	if refsAfter := gitOutput(t, repository, "for-each-ref", "refs/workbook/"); refsAfter != refsBefore {
 		t.Fatalf("a refused assignment moved refs:\nbefore %s\nafter  %s", refsBefore, refsAfter)
+	}
+}
+
+// A mistyped command is the first thing wrong with it, so it is what is
+// reported, whatever the environment it would have run under.
+func TestAnUnknownCommandIsReportedBeforeAnUnusableWorkbookActor(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	code, _, stderr := runAs(t, repository, "not an address", "udpate", "--json")
+	if code != 2 {
+		t.Fatalf("udpate with a bad WORKBOOK_ACTOR code = %d, want 2; stderr = %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryInvocation, `unknown command "udpate"`)
+	if strings.Contains(stderr, core.ActorVariable) {
+		t.Fatalf("stderr = %q; an unknown command must not be refused over WORKBOOK_ACTOR", stderr)
+	}
+}
+
+// boardRequestAs makes one board request as person, the name a deployment that
+// signs people in would put on the request; see withRequestActor. It returns
+// its failure rather than failing the test, so concurrent requests can make it.
+func boardRequestAs(method, url, body, person string) ([]byte, int, error) {
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	request, err := http.NewRequest(method, url, reader)
+	if err != nil {
+		return nil, 0, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(testActorHeader, person)
+	response, err := boardTestClient.Do(request)
+	if err != nil {
+		return nil, 0, fmt.Errorf("%s %s as %s: %w", method, url, person, err)
+	}
+	defer response.Body.Close()
+	contents, err := io.ReadAll(response.Body)
+	return contents, response.StatusCode, err
+}
+
+const testActorHeader = "X-Workbook-Test-Actor"
+
+// servedReply is one board answer a concurrent request brought back.
+type servedReply struct {
+	body   []byte
+	status int
+	err    error
+}
+
+// concurrently runs one request per person at the same moment and returns each
+// answer, in the order of people.
+func concurrently(people []string, request func(person string) servedReply) []servedReply {
+	replies := make([]servedReply, len(people))
+	start := make(chan struct{})
+	var group sync.WaitGroup
+	for index, person := range people {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			replies[index] = request(person)
+		}()
+	}
+	close(start)
+	group.Wait()
+	return replies
+}
+
+func (reply servedReply) ok(t *testing.T, what string) servedReply {
+	t.Helper()
+	if reply.err != nil {
+		t.Fatalf("%s: %v", what, reply.err)
+	}
+	return reply
+}
+
+// One server, two people at once. The server's folder has an identity of its
+// own, and every request names somebody else: each request's operation, the
+// commit behind it, the assignee `self` resolves to, and the board's answer to
+// which assignments that person may remove are that request's person, never
+// the server's and never the other request's. This is the whole of what the
+// next story needs from this one: a name on each request's context, with
+// nothing else to change.
+func TestServeRecordsEachConcurrentRequestUnderItsOwnPerson(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	gitOutput(t, repository, "config", "user.name", "Board Server")
+	gitOutput(t, repository, "config", "user.email", "server@example.test")
+	people := []string{"alice@example.com", "bob@example.com"}
+
+	ctx, cancel := context.WithCancel(withRequestActor(context.Background(), func(request *http.Request) (string, bool) {
+		person := request.Header.Get(testActorHeader)
+		return person, person != ""
+	}))
+	reserved := reserveListener(t)
+	result := make(chan error, 1)
+	var serveStdout, serveStderr bytes.Buffer
+	go func() {
+		result <- runServeWith(ctx, reserved.listen, []string{"--addr", reserved.addr}, repository, &serveStdout, &serveStderr)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-result; err != nil {
+			t.Errorf("runServeWith() error = %v; stderr = %q", err, serveStderr.String())
+		}
+	})
+	waitForHTTP(t, "http://"+reserved.addr+"/healthz")
+	base := "http://" + reserved.addr
+
+	// Each person files a task and assigns it to `self`, both at once.
+	created := map[string]core.Task{}
+	for index, reply := range concurrently(people, func(person string) servedReply {
+		body, status, err := boardRequestAs(http.MethodPost, base+"/api/tasks",
+			`{"title":"Filed by `+person+`","description":"","status":"ready","priority":"medium","labels":[]}`, person)
+		return servedReply{body, status, err}
+	}) {
+		reply.ok(t, "create as "+people[index])
+		created[people[index]] = decodeServeMutation(t, reply.body, reply.status)
+	}
+	assigned := map[string]core.Task{}
+	for index, reply := range concurrently(people, func(person string) servedReply {
+		task := created[person]
+		body, status, err := boardRequestAs(http.MethodPost, base+"/api/tasks/"+task.ID+"/assignments",
+			`{"to":"","expectedHead":"`+task.Head+`"}`, person)
+		return servedReply{body, status, err}
+	}) {
+		person := people[index]
+		reply.ok(t, "assign self as "+person)
+		task, views := decodeServeAssignment(t, reply.body, reply.status)
+		if len(task.Assignments) != 1 || task.Assignments[0].Principal != person || task.Assignments[0].Creator != person {
+			t.Fatalf("self as %s assigned %#v, want %s as principal and creator", person, task.Assignments, person)
+		}
+		if len(views) != 1 || !views[0].Removable {
+			t.Fatalf("the answer to %s's own assignment = %#v, want it removable by %s", person, views, person)
+		}
+		assigned[person] = task
+	}
+
+	// The board's per-request answers: each person reads the same board, and
+	// sees their own assignment as theirs to remove and the other's as not.
+	for index, reply := range concurrently(people, func(person string) servedReply {
+		body, status, err := boardRequestAs(http.MethodGet, base+"/api/tasks", "", person)
+		return servedReply{body, status, err}
+	}) {
+		person := people[index]
+		reply.ok(t, "list as "+person)
+		if reply.status != http.StatusOK {
+			t.Fatalf("list as %s = %d; body = %s", person, reply.status, reply.body)
+		}
+		var document struct {
+			Presentation []struct {
+				TaskID      string             `json:"taskId"`
+				Assignments []servedAssignment `json:"assignments"`
+			} `json:"presentation"`
+		}
+		if err := json.Unmarshal(reply.body, &document); err != nil {
+			t.Fatalf("decode the board as %s: %v", person, err)
+		}
+		seen := 0
+		for _, row := range document.Presentation {
+			for _, owner := range people {
+				if row.TaskID != created[owner].ID {
+					continue
+				}
+				seen++
+				if len(row.Assignments) != 1 || row.Assignments[0].Principal != owner || row.Assignments[0].Removable != (owner == person) {
+					t.Errorf("as %s, %s's task shows %#v; want %s's assignment, removable only by %s", person, owner, row.Assignments, owner, owner)
+				}
+			}
+		}
+		if seen != len(people) {
+			t.Fatalf("as %s the board shows %d of the %d tasks", person, seen, len(people))
+		}
+	}
+
+	// And the service agrees: each is refused the other's assignment, at once,
+	// and each may withdraw their own.
+	other := map[string]string{people[0]: people[1], people[1]: people[0]}
+	for index, reply := range concurrently(people, func(person string) servedReply {
+		owner := other[person]
+		body, status, err := boardRequestAs(http.MethodDelete, base+"/api/tasks/"+assigned[owner].ID+"/assignments",
+			`{"from":"`+owner+`","expectedHead":"`+assigned[owner].Head+`"}`, person)
+		return servedReply{body, status, err}
+	}) {
+		reply.ok(t, "remove the other's as "+people[index])
+		if reply.status != http.StatusBadRequest || !strings.Contains(string(reply.body), "may be removed only by") {
+			t.Fatalf("%s removing %s's assignment = %d; body = %s; want the removal rule's refusal",
+				people[index], other[people[index]], reply.status, reply.body)
+		}
+	}
+	for index, reply := range concurrently(people, func(person string) servedReply {
+		body, status, err := boardRequestAs(http.MethodDelete, base+"/api/tasks/"+assigned[person].ID+"/assignments",
+			`{"from":"`+person+`","expectedHead":"`+assigned[person].Head+`"}`, person)
+		return servedReply{body, status, err}
+	}) {
+		reply.ok(t, "remove own as "+people[index])
+		if withdrawn, _ := decodeServeAssignment(t, reply.body, reply.status); len(withdrawn.Assignments) != 0 {
+			t.Fatalf("%s withdrawing their own left %#v", people[index], withdrawn.Assignments)
+		}
+	}
+
+	for _, person := range people {
+		want := person + " <" + person + ">"
+		commits := taskCommits(t, repository, created[person].ID)
+		if len(commits) != 3 {
+			t.Fatalf("%s's task has %d commits, want the create, the assignment and the withdrawal", person, len(commits))
+		}
+		for _, commit := range commits {
+			if commit.actor != person || commit.author != want || commit.committer != want {
+				t.Errorf("%s's commit %s: actor %q, author %q, committer %q; want %s throughout",
+					person, commit.commit, commit.actor, commit.author, commit.committer, person)
+			}
+		}
+	}
+
+	// A name that is not a usable actor is refused before any route runs, and
+	// never replaced by the server's own.
+	body, status, err := boardRequestAs(http.MethodPost, base+"/api/tasks",
+		`{"title":"Nobody's","description":"","status":"ready","priority":"medium","labels":[]}`, "not an address")
+	if err != nil || status != http.StatusBadRequest {
+		t.Fatalf("a request as an unusable name = %d, %v; body = %s; want 400", status, err, body)
 	}
 }

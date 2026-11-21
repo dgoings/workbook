@@ -125,6 +125,9 @@ func (r *Repository) writeCanonical(
 	state core.StateDocument,
 	reason string,
 ) (core.Snapshot, error) {
+	if err := refuseActorMismatch(ctx, pack.Actor.ID); err != nil {
+		return core.Snapshot{}, err
+	}
 	parentHead := ""
 	if parent != nil {
 		parentHead = parent.Head
@@ -179,7 +182,7 @@ func (r *Repository) writeTaskObjects(
 	if err != nil {
 		return "", err
 	}
-	return r.writeCommit(ctx, tree, parentHead, reason)
+	return r.writeCommit(ctx, tree, parentHead, reason, pack.Actor.ID)
 }
 
 // StageAttachment writes an attached file's bytes as a Git object and returns
@@ -456,13 +459,21 @@ func (r *Repository) writeTaskTree(
 	return treeID, nil
 }
 
-func (r *Repository) writeCommit(ctx context.Context, tree string, parentHead string, reason string) (string, error) {
+// writeCommit writes a commit of tree onto parentHead. actor is the person the
+// operation inside the tree is recorded under, and empty for the one commit
+// that carries no operation (an archive manifest); see commitIdentityEnvironment
+// for how it names the commit's author and committer.
+func (r *Repository) writeCommit(ctx context.Context, tree, parentHead, reason, actor string) (string, error) {
+	environment, err := r.commitIdentityEnvironment(ctx, actor)
+	if err != nil {
+		return "", err
+	}
 	args := []string{"commit-tree", tree}
 	if parentHead != "" {
 		args = append(args, "-p", parentHead)
 	}
 	args = append(args, "-m", reason)
-	output, err := r.gitWithEnv(ctx, commitIdentityEnvironment(ctx), nil, args...)
+	output, err := r.gitWithEnv(ctx, environment, nil, args...)
 	if err != nil {
 		return "", err
 	}
@@ -473,28 +484,68 @@ func (r *Repository) writeCommit(ctx context.Context, tree string, parentHead st
 	return commitID, nil
 }
 
-// commitIdentityEnvironment names the author and committer of a commit written
-// for a context that asserts its actor, and nothing for one that does not.
+// commitIdentityEnvironment names the author and committer of a commit.
 //
-// Nothing is the whole of the unset case: the commit is then written exactly as
-// it always was, with Git choosing the identity from the checkout's
-// configuration and the process environment. An asserted actor replaces all
-// four values, so the checkout's own `user.name`, `user.email` and any
-// GIT_AUTHOR_* or GIT_COMMITTER_* the server was started with take no part, and
-// a folder with no Git identity of its own can still write. The actor is an
-// email address and nothing else, so it is the display name as well: inventing
-// a name from its local part would put words in the commit nobody gave.
-func commitIdentityEnvironment(ctx context.Context) []string {
-	actor, asserted := core.ActorFrom(ctx)
-	if !asserted {
-		return nil
+// The commit behind an operation names that operation's own actor, whoever
+// writes it and whenever: the command that first records an edit, and the
+// synchronization that later replays it onto somebody else's history, which in
+// a server acting for several people runs on a context naming none of them. So
+// the name comes from the operation, never from the writing process:
+//
+//   - An actor that is the checkout's own `user.email` gets nothing: the commit
+//     is written exactly as it always was, with Git choosing the identity from
+//     the checkout's configuration and the process environment. This is the
+//     whole of an ordinary clone's case.
+//   - Any other actor replaces all four values, so the checkout's own
+//     `user.name` and `user.email`, and any GIT_AUTHOR_* or GIT_COMMITTER_* the
+//     process was started with, take no part, and a folder with no Git identity
+//     of its own can still write. The actor is an email address and nothing
+//     else, so it is the display name as well: inventing a name from its local
+//     part would put words in the commit nobody gave.
+//
+// An actor Git cannot record faithfully is refused rather than written: Git
+// silently drops or trims some characters from an identity, and the commit
+// would then name somebody the operation does not.
+//
+// A commit with no operation (actor empty) names the person the context
+// asserts, when it asserts one, and is otherwise Git's own choice.
+func (r *Repository) commitIdentityEnvironment(ctx context.Context, actor string) ([]string, error) {
+	if actor == "" {
+		asserted, ok := core.ActorFrom(ctx)
+		if !ok {
+			return nil, nil
+		}
+		actor = asserted
+	} else if own, err := r.checkoutEmail(ctx); err == nil && own == actor {
+		// A checkout whose identity Git cannot report has no email to match,
+		// so every actor is somebody else's and is named explicitly.
+		return nil, nil
+	}
+	if err := core.ValidateGitIdentity(actor); err != nil {
+		return nil, core.Wrap(core.CategoryValidation,
+			fmt.Sprintf("cannot write a commit under %q", actor), err)
 	}
 	return []string{
 		"GIT_AUTHOR_NAME=" + actor,
 		"GIT_AUTHOR_EMAIL=" + actor,
 		"GIT_COMMITTER_NAME=" + actor,
 		"GIT_COMMITTER_EMAIL=" + actor,
+	}, nil
+}
+
+// refuseActorMismatch refuses to record an edit under one person while the
+// context it is written for names another.
+//
+// Everything that authors an edit resolves its actor from the context first
+// (see core.Service.ActorFor), so the two agree by construction. This is the
+// check that they did: where two names meet, neither is recorded.
+func refuseActorMismatch(ctx context.Context, recorded string) error {
+	asserted, ok := core.ActorFrom(ctx)
+	if !ok || asserted == recorded {
+		return nil
 	}
+	return core.Errorf(core.CategoryOperational,
+		"refusing to record an edit under %q for a request acting as %q; nothing was written", recorded, asserted)
 }
 
 func (r *Repository) refValueDiffers(ctx context.Context, ref, expected string) bool {
