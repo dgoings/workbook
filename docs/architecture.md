@@ -625,7 +625,7 @@ their refspecs on the command line as they do everywhere else:
 ```text
 tasks-only folder                         origin
   refs/workbook/project          <-----   refs/workbook/project
-  refs/workbook/config           <-----   refs/workbook/config
+  refs/workbook/config           <---->   refs/workbook/config
   refs/workbook/tasks/*          <---->   refs/workbook/tasks/*
   (no refs/heads, no refs/tags)      x    refs/heads/*, refs/tags/*  (code)
 ```
