@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"strconv"
 	"strings"
@@ -123,6 +124,14 @@ func (routes *transferRoutes) ServeHTTP(writer http.ResponseWriter, request *htt
 		_, _ = writer.Write(bytes.Repeat([]byte("a"), size))
 	case request.Method == http.MethodGet && request.URL.Path == "/healthz":
 		_, _ = io.WriteString(writer, "alive")
+	case request.URL.Path == "/patient":
+		_, _ = io.Copy(io.Discard, request.Body)
+		select {
+		case <-request.Context().Done():
+			_, _ = io.WriteString(writer, "cancelled")
+		case <-routes.release:
+			_, _ = io.WriteString(writer, "released")
+		}
 	case request.URL.Path == "/held":
 		_, _ = io.Copy(io.Discard, request.Body)
 		<-routes.release
@@ -406,6 +415,75 @@ func TestAnswerPaceWaitsOutAPauseTheAverageCovers(t *testing.T) {
 	}
 }
 
+// endingReader gives its bytes in one read and its end in the next, as a
+// chunked body does when its last chunk arrives before its terminator.
+type endingReader struct{ rest []byte }
+
+func (reader *endingReader) Read(buffer []byte) (int, error) {
+	if len(reader.rest) == 0 {
+		return 0, io.EOF
+	}
+	count := copy(buffer, reader.rest)
+	reader.rest = reader.rest[count:]
+	return count, nil
+}
+
+func TestBodyEndingAtAChunksEndNeedsNoRoomBeyondIt(t *testing.T) {
+	t.Parallel()
+	// Production mutation: a new chunk counted as soon as the last one is
+	// full. A body of exactly one chunk whose end arrives on its own read —
+	// a chunked upload's terminator — was refused beside a full budget for
+	// room it never needed. A body with a Content-Length does not show it,
+	// because its last bytes arrive with its end.
+	bounds := defaultTransferLimits()
+	bounds.bodyBytes = 0
+	board := newTransfers(bounds)
+	held := &heldBytes{size: transferChunk, budget: &board.bodies}
+	defer held.release()
+	source := &endingReader{rest: bytes.Repeat([]byte("b"), transferChunk)}
+	control := http.NewResponseController(httptest.NewRecorder())
+	if outcome := board.read(control, source, MaxRequestBodyBytes, held); outcome != bodyComplete {
+		t.Fatalf("a one-chunk body beside an empty budget = outcome %d, want it complete", outcome)
+	}
+	if read, _ := io.ReadAll(held.reader()); len(read) != transferChunk {
+		t.Fatalf("held %d bytes, want the whole %d-byte body", len(read), transferChunk)
+	}
+}
+
+func TestBoardLetsWorkOutlastThePaceOnceItsBodyIsIn(t *testing.T) {
+	t.Parallel()
+	// Production mutation: the body's last read deadline left on the
+	// connection. Once a body has been read the server watches the
+	// connection for the client going away, and that watch then times out
+	// and cancels the request: a write publishing to a slow origin was
+	// cancelled ten seconds into its work. Here the pace allows a body a
+	// millisecond, so a deadline left behind passes long before the write
+	// is let go.
+	bounds := defaultTransferLimits()
+	bounds.stall = time.Millisecond
+	routes := newTransferRoutes()
+	_, address := startBoardStack(t, routes, WorkLimits{MaxRequests: 4}, bounds)
+
+	// The head and the body in one write, so the body is in hand with the
+	// head and its reading never waits on the connection.
+	connection := rawRequest(t, address, http.MethodPost, "/patient", 2, []byte(`{}`))
+	if entered := <-routes.entered; entered != "POST /patient" {
+		t.Fatalf("the board started %q, want the write", entered)
+	}
+	// Long past the millisecond, so a deadline left behind has fired.
+	time.Sleep(200 * time.Millisecond)
+	close(routes.release)
+	response, err := http.ReadResponse(bufio.NewReader(connection), nil)
+	if err != nil {
+		t.Fatalf("read the answer: %v", err)
+	}
+	answer, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if string(answer) != "released" {
+		t.Fatalf("the write's work ended %q, want it to have been let go rather than cancelled", answer)
+	}
+}
+
 func TestBoardRefusesABodyItHasNoRoomForAndLetsTheSenderReadWhy(t *testing.T) {
 	t.Parallel()
 	// Production mutation: bodies read with no budget are a memory bound of
@@ -425,8 +503,11 @@ func TestBoardRefusesABodyItHasNoRoomForAndLetsTheSenderReadWhy(t *testing.T) {
 
 	// A body larger than a chunk does not fit. It is read to its end and
 	// thrown away, and its sender reads the refusal on a connection that is
-	// still good for another request.
-	refused := rawRequest(t, address, http.MethodPost, "/write/0", 3*transferChunk, bytes.Repeat([]byte(" "), 3*transferChunk))
+	// still good for another request. It is larger than the 256 KiB the
+	// server would read past on its own, so only the board's reading it to
+	// its end keeps the connection.
+	const refusedSize = 64 * transferChunk
+	refused := rawRequest(t, address, http.MethodPost, "/write/0", refusedSize, bytes.Repeat([]byte(" "), refusedSize))
 	answers := bufio.NewReader(refused)
 	response, err := http.ReadResponse(answers, nil)
 	if err != nil {
