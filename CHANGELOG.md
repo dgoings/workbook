@@ -38,8 +38,8 @@ push URLs, and `insteadOf` and `pushInsteadOf` rewrites) and removes each one's
 credential from Git's error output and from the command the error names, on the
 board and the command line alike; the remote is still named. A password of
 eight characters or more is also removed wherever else it appears, and so is a
-user name of that length when its address has no password, since that user
-name is usually a token; beside a password, a user name such as `workbook` is
+user name of that length when its address has no password or only a
+placeholder for one, since that user name is usually a token; beside a password, a user name such as `workbook` is
 left alone outside its address, so `refs/workbook/tasks/*` still reads as
 written. Output a credential helper or the remote prints, and a token in an
 address's path or query string, are not removed; the

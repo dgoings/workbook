@@ -2673,8 +2673,11 @@ somebody else's bytes, and its headers are the whole of its security:
   U+200F RIGHT-TO-LEFT MARK and U+061C ARABIC LETTER MARK, where the command
   line's `show` and `list` print them as spaces. A mark is an invisible letter
   with a direction: Hebrew and Arabic writers use it to put an exclamation mark
-  or a digit on the right side of a word, and it cannot reverse a run of
-  letters.
+  or a digit on the right side of a word. It cannot reverse a run of letters,
+  so a file name's extension reads as stored, but marks placed between groups
+  of digits can swap them: a title stored as `10.99` with marks around the
+  point reads `99.10`. Read an amount or a date that matters from `workbook
+  show`, which prints the marks as spaces.
 - A one-line field shown before anything is edited — a task's Title field, and
   the configuration page's project name and status and priority label fields —
   holds the cleaned text. A save treats a field that still holds exactly that
@@ -2875,8 +2878,10 @@ What the board reveals about the machine serving it:
   successful command, cost no extra Git process. Outside its address, a
   password of eight characters or more is also removed wherever it appears on
   its own, as `***`. A user name of that length is removed on its own only when
-  its address has no password, because a token is often the whole userinfo
-  (`https://<token>@host/…`); beside a password, a user name such as
+  its address has no password, or only a placeholder for one (an empty
+  password, one shorter than eight characters, or `x-oauth-basic`), because a
+  token is often sent as the user name (`https://<token>@host/…`); beside a
+  real password, a user name such as
   `workbook` is removed only inside its address, so `refs/workbook/tasks/*` and
   a path segment `/workbook/` read as written. A shorter user name or password,
   such as the user name `git`, is removed only inside its address. Any other

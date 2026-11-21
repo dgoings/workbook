@@ -35,7 +35,19 @@ var urlUserinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/\s'"]*@`)
 // messages also spell as a ref prefix (`refs/workbook/tasks/*`) or a path
 // segment (`/workbook/repo.git`), so there only the password is removed on its
 // own and the user name goes only with the rest of its address's userinfo.
+//
+// A password too short to be removed on its own cannot be the secret either,
+// so its user name is treated as one; see passwordIsNotTheSecret.
 const credentialPartMinimum = 8
+
+// passwordIsNotTheSecret reports whether the password beside a user name is a
+// placeholder: empty (`https://<token>:@host/…`), shorter than anything
+// removed on its own, or the fixed word hosts ask for when the token travels
+// as the user name (`https://<token>:x-oauth-basic@github.com/…`). The user
+// name is then the credential and is removed wherever it appears.
+func passwordIsNotTheSecret(password string) bool {
+	return len(password) < credentialPartMinimum || password == "x-oauth-basic"
+}
 
 // credentialRedactionMark stands in for a credential found outside its URL.
 const credentialRedactionMark = "***"
@@ -185,6 +197,9 @@ func newCredentialRedactor(addresses []string) credentialRedactor {
 			// password; on its own it stays, see credentialPartMinimum.
 			add("://"+user+"@", "://")
 			parts = []string{password}
+			if passwordIsNotTheSecret(password) {
+				parts = []string{user, password}
+			}
 		}
 		for _, part := range parts {
 			addPart(part)

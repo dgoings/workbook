@@ -145,6 +145,26 @@ func TestCredentialRedactorRemovesConfiguredCredentialsByTheirText(t *testing.T)
 			want:    "fatal: unable to access 'http://127.0.0.1:7493/team/repo.git/': URL rejected: Bad hostname",
 		},
 		{
+			// A token sent as the user name beside a placeholder password is
+			// still the secret, and goes wherever it is printed.
+			name:    "a token as the user name beside x-oauth-basic",
+			address: "https://ghp_SECRETTOKEN123:x-oauth-basic@github.com/team/repo.git",
+			input:   "remote: ghp_SECRETTOKEN123 expired",
+			want:    "remote: *** expired",
+		},
+		{
+			name:    "a token as the user name beside an empty password",
+			address: "https://ghp_EMPTYPASSTOKEN9:@github.com/team/repo.git",
+			input:   "remote: ghp_EMPTYPASSTOKEN9 bad",
+			want:    "remote: *** bad",
+		},
+		{
+			name:    "a token as the user name beside a one-letter password",
+			address: "https://ghp_SHORTPASSTOKEN9:x@github.com/team/repo.git",
+			input:   "remote: ghp_SHORTPASSTOKEN9 bad",
+			want:    "remote: *** bad",
+		},
+		{
 			// Beside a password, the user name is a name rather than the
 			// secret, and only the password is removed on its own.
 			name:    "a password outside its URL",
