@@ -416,7 +416,7 @@ function submitAssignment() {
   return assignmentForm().eventListeners.submit({ preventDefault() {} });
 }
 function withdrawControl(row) {
-  return findElement(row, (element) => element.tagName === "BUTTON" && element.textContent === "Unassign");
+  return findElement(row, (element) => element.tagName === "BUTTON" && /^Unassign /.test(element.getAttribute("aria-label") || ""));
 }
 function assignmentStatusText() {
   const line = findElement(assignmentsPanel(), (element) => hasDataKey(element, "panelStatus"));
@@ -556,8 +556,13 @@ setTimeout(() => {
   if (!panel) throw new Error("a board that can assign drew no assignments section");
   if (assignmentRows().length !== 0) throw new Error("an unheld task drew a row");
   assignmentForm();
+  // Nothing held is the heading and the form: no count of nothing and no
+  // sentence explaining the empty list.
   const count = findElement(panel, (element) => hasDataKey(element, "panelCount"));
-  if (count.textContent !== "0 assignments") throw new Error("count = " + JSON.stringify(count.textContent));
+  if (count.textContent !== "") throw new Error("an empty section still counts itself: " + JSON.stringify(count.textContent));
+  if (panel.textContent.includes("Nobody is assigned")) throw new Error("an empty section still explains itself");
+  const empty = findElement(panel, (element) => hasDataKey(element, "panelEmpty"));
+  if (empty && (!empty.hidden || empty.textContent)) throw new Error("the empty line is still drawn: " + JSON.stringify(empty.textContent));
 }, 0);
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
@@ -668,15 +673,14 @@ setTimeout(async () => {
 	}
 }
 
-// A tick that changed only the staleness phrasing keeps the rows it drew.
+// A tick that changed only the page's clock keeps the rows it drew, words and
+// all.
 //
-// The phrase is worded from the page's own clock on every tick, so a recent
-// assignment rewords itself about once a minute with nothing about the
-// assignment having changed. While the section was read-only that cost nothing:
-// rebuilding a paragraph is invisible. A row now holds a focusable Unassign
-// button, and replacing it takes a keyboard reader's focus to the document body
-// mid-tab and cancels a click in progress. So the phrase is written into the
-// existing meta line instead, and the row is never rebuilt for it.
+// A row holds a focusable Unassign button, and replacing it takes a keyboard
+// reader's focus to the document body mid-tab and cancels a click in progress.
+// The rows once carried a "assigned 3 days ago" phrase re-worded on every tick;
+// that phrase is gone, and a day passing by the page's clock must now change
+// nothing at all.
 func TestHandlerClientKeepsAssignmentRowsWhenOnlyTheAgeChanged(t *testing.T) {
 	t.Parallel()
 	node := requireNode(t)
@@ -688,9 +692,7 @@ setTimeout(async () => {
   if (before.length !== 3) throw new Error("assignment rows = " + before.length);
   const control = withdrawControl(before[0]);
   if (!control) throw new Error("the first row drew no withdrawal to lose");
-  if (!before[0].textContent.includes("assigned 3 days ago")) {
-    throw new Error("the row did not start three days old: " + before[0].textContent);
-  }
+  const words = before.map((row) => row.textContent);
 
   // A day later, by the page's clock, and the same document from the server.
   const realNow = Date.now;
@@ -705,9 +707,11 @@ setTimeout(async () => {
     }
   }
   if (withdrawControl(after[0]) !== control) throw new Error("the withdrawal button was replaced under the reader");
-  if (!after[0].textContent.includes("assigned 4 days ago")) {
-    throw new Error("the age was not written into the row: " + after[0].textContent);
-  }
+  after.forEach((row, index) => {
+    if (row.textContent !== words[index]) {
+      throw new Error("row " + index + " changed its words on a tick: " + JSON.stringify(row.textContent) + ", was " + JSON.stringify(words[index]));
+    }
+  });
 }, 0);
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {

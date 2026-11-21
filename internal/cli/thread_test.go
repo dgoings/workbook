@@ -7,6 +7,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -957,5 +958,51 @@ func TestUpdateThreadOutcomeSanitizesWhatItEchoes(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "\tComment:\t+benign [2K [1Gwb WB-FAKE00000 [done] Deploy approved\n") {
 		t.Fatalf("update output = %q, want the sanitized body", stdout)
+	}
+}
+
+// A file compaction dropped is still listed, by name and size, and says it was
+// removed and when — so a reader knows the file existed and why there is
+// nothing to download. Nothing on the row offers a download. The JSON carries
+// the drop as stored.
+func TestShowListsDroppedAttachmentAsRemoved(t *testing.T) {
+	t.Parallel()
+	stamp := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	dropAt := time.Date(2026, time.November, 10, 14, 30, 0, 0, time.UTC)
+	attachments := []core.Attachment{
+		{ID: "01K0M6B8A4FTT8C39MXXYTWA01", Author: "author@example.com", AddedAt: stamp, AttachmentData: core.AttachmentData{
+			Name: "trace.log", Kind: core.AttachmentFile, Media: "text/plain", Size: 11, Blob: strings.Repeat("a", 40),
+		}},
+		{ID: "01K0M6B8A4FTT8C39MXXYTWA02", Author: "author@example.com", AddedAt: stamp, AttachmentData: core.AttachmentData{
+			Name: "notes.txt", Kind: core.AttachmentFile, Media: "text/plain", Size: 6, Blob: strings.Repeat("b", 40),
+		}},
+	}
+	_, _, dropped := core.DropFileAttachments(attachments[:1], "01K0M6B8A4FTT8C39MXXYTWD01", dropAt)
+	task := core.Task{TaskData: core.TaskData{Title: "Compacted", Attachments: append(dropped, attachments[1])}}
+
+	var text strings.Builder
+	writeShow(&text, task)
+	rendered := text.String()
+	if want := "\t01K0M6B8A4FTT8C39MXXYTWA01\ttrace.log (removed by compaction on 2026-11-10)\tfile\t11 bytes\n"; !strings.Contains(rendered, want) {
+		t.Fatalf("show output = %q, want the dropped row %q", rendered, want)
+	}
+	if want := "\t01K0M6B8A4FTT8C39MXXYTWA02\tnotes.txt\tfile\t6 bytes\n"; !strings.Contains(rendered, want) {
+		t.Fatalf("show output = %q, want the live row unchanged %q", rendered, want)
+	}
+	if strings.Contains(rendered, "get-attachment") {
+		t.Fatalf("show output = %q, want no download hint", rendered)
+	}
+
+	var encoded strings.Builder
+	writeResultWithWarnings(&encoded, "show", core.TaskDetail{Task: task}, nil)
+	if want := `"dropped":{"runId":"01K0M6B8A4FTT8C39MXXYTWD01","at":"2026-11-10T14:30:00Z"}`; !strings.Contains(encoded.String(), want) {
+		t.Fatalf("show --json = %s, want the drop %s", encoded.String(), want)
+	}
+	var shown core.Task
+	if err := json.Unmarshal(assertJSONResult(t, encoded.String(), "show").Data, &shown); err != nil {
+		t.Fatalf("decode shown task: %v", err)
+	}
+	if !shown.Attachments[0].IsDropped() || shown.Attachments[1].IsDropped() {
+		t.Fatalf("decoded attachments = %#v, want only the first dropped", shown.Attachments)
 	}
 }

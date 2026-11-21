@@ -1,7 +1,7 @@
 /* Workbench adopts the board's design vocabulary so that the shell and the
    board it frames read as one application. Every value here is taken from
-   workbook/internal/webui/assets/index.html: the palette, the two font
-   families, the 3-4px radii, and the #b9c6d8 hairline.
+   the board's stylesheet in workbook/internal/webui/assets/style/: the
+   palette, the two font families, the 3-4px radii, and the #b9c6d8 hairline.
 
    Light is Workbook's palette unchanged. Dark moves only the token values, so
    both modes are the same design lit differently. The boards draw their own
@@ -422,6 +422,19 @@ body {
 .dot.running { background: var(--wb-ok); }
 .dot.failed, .dot.exited { background: var(--wb-danger); }
 
+/* A project whose repository is not where Workbench has it: deleted, moved,
+   or on a drive that is not connected. Muted rather than struck out, because
+   it may well come back; the warning dot is what sets it apart from a board
+   that is merely stopped, and the row's tooltip says where it looked. */
+.dot.missing { background: var(--wb-warn); }
+
+.project-item.missing .project-name,
+.project-item.missing .project-key {
+  color: var(--wb-muted);
+}
+
+.project-item.missing .project-name { font-style: italic; }
+
 /* --- categories and drag ------------------------------------------------ */
 
 /* The "Projects" label carries the New category control at its right end. The
@@ -517,8 +530,10 @@ body {
 
 /* Rename and remove show on hover or keyboard focus, so a list of categories
    does not read as a column of buttons. The confirm step's buttons share the
-   class and are always shown, because nothing else is in that row. */
-.category-action {
+   class and are always shown, because nothing else is in that row. A project
+   row's remove control, and its own confirm step, look and behave the same. */
+.category-action,
+.project-action {
   flex: 0 0 auto;
   padding: .05rem .3rem;
   border: 1px solid transparent;
@@ -528,17 +543,33 @@ body {
   font-size: .74rem;
   cursor: pointer;
   opacity: 0;
+  /* Inside a remove question they sit in its group, which ignores the pointer
+     with the rest of the row's non-button children and would pass that on. */
+  pointer-events: auto;
 }
+
+/* The remove question's group exists to be named to a screen reader when the
+   focus lands on its No; it draws nothing, so the row lays out the question
+   and its buttons as its own children. */
+.remove-confirm { display: contents; }
 
 .category-head:hover .category-action,
 .category-head:focus-within .category-action,
-.category-confirm ~ .category-action {
+.category-confirm ~ .category-action,
+.project-item:hover .project-action,
+.project-item:focus-within .project-action,
+.project-confirm ~ .project-action {
   opacity: 1;
 }
 
-.category-action:hover { color: var(--wb-primary); background: var(--wb-primary-tint-1); }
+.category-action:hover,
+.project-action:hover {
+  color: var(--wb-primary);
+  background: var(--wb-primary-tint-1);
+}
 
-.category-confirm {
+.category-confirm,
+.project-confirm {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -548,8 +579,16 @@ body {
   font-weight: 400;
 }
 
-.category-confirm-yes { color: var(--wb-danger); }
-.category-confirm-yes:hover { color: var(--wb-danger); background: var(--wb-danger-surface); }
+.category-confirm-yes,
+.project-confirm-yes {
+  color: var(--wb-danger);
+}
+
+.category-confirm-yes:hover,
+.project-confirm-yes:hover {
+  color: var(--wb-danger);
+  background: var(--wb-danger-surface);
+}
 
 .category-name-input {
   flex: 1;
@@ -561,6 +600,15 @@ body {
 }
 
 .category-name-input.invalid { border-color: var(--wb-danger); }
+
+/* A sidebar remove that failed: said under the list, until the next remove is
+   asked. */
+.sidebar-error {
+  margin: .3rem 0 0;
+  padding: 4px 9px;
+  color: var(--wb-danger);
+  font-size: .74rem;
+}
 
 .category-projects {
   list-style: none;
@@ -616,12 +664,15 @@ body {
    test/sidebar-tooltips.test.js runs this stylesheet over the sidebar's
    markup and fails on any node that breaks the rule. The Next view keeps the
    same rule, in its own section below. */
+/* A project row's own buttons are the one exception among its children: they
+   are there to be pressed, and each has its own title. */
 .version > *,
 .rail-item > *,
 .icon-button > *,
-.project-item > *,
+.project-item > :not(button),
 .category-toggle > *,
 .category-action > *,
+.project-action > *,
 .category-name,
 .category-confirm {
   pointer-events: none;
@@ -754,7 +805,10 @@ body {
 :root.sidebar-collapsed .category-name,
 :root.sidebar-collapsed .category-action,
 :root.sidebar-collapsed .category-confirm,
-:root.sidebar-collapsed .category-name-input {
+:root.sidebar-collapsed .category-name-input,
+:root.sidebar-collapsed .project-action,
+:root.sidebar-collapsed .project-confirm,
+:root.sidebar-collapsed .sidebar-error {
   display: none;
 }
 
@@ -1312,6 +1366,31 @@ button.ghost:hover { background: var(--wb-primary-tint-1); }
 
 /* An empty status line must not push the identity form down by its padding. */
 .board-state:empty { display: none; }
+
+/* --- missing repository ------------------------------------------------- */
+
+/* Shown in place of a board whose repository is not where Workbench has it,
+   in the identity form's narrow column. */
+.missing-repo {
+  display: flex;
+  flex-direction: column;
+  gap: .9rem;
+  max-width: 34rem;
+  padding-bottom: 1.5rem;
+}
+
+.missing-repo .view-head { margin-bottom: .2rem; }
+
+.missing-repo code {
+  font-size: .76rem;
+  overflow-wrap: anywhere;
+}
+
+.missing-actions { display: flex; align-items: center; gap: .75rem; }
+
+.missing-status { color: var(--wb-muted); font-size: .78rem; }
+
+.missing-note { margin: 0; color: var(--wb-muted); font-size: .78rem; }
 
 /* --- git identity ------------------------------------------------------- */
 

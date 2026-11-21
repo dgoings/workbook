@@ -180,14 +180,14 @@ setTimeout(async () => {
   toggle.checked = true;
   toggle.eventListeners.change();
   findElement(main, (element) => element.id === "task-title").value = ` + strconv.Quote(created.Title) + `;
-  const dependsGroup = findElement(main, (element) => element.textContent === "Depends On").parentElement;
+  const dependsGroup = relationshipGroup(main, "Depends On");
   const combobox = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
   combobox.value = ` + strconv.Quote(prerequisite.Title) + `;
   combobox.eventListeners.input();
   findElement(dependsGroup, (element) => element.attributes.role === "option" &&
     element.dataset.candidateId === prerequisiteID).eventListeners.click();
   await findElement(dependsGroup, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+    element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency").eventListeners.click();
 
   await findElement(main, (element) => element.tagName === "FORM")
     .eventListeners.submit({ preventDefault() {} });

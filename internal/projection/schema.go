@@ -1,8 +1,19 @@
 package projection
 
-// schemaVersion is bumped to 5 because the projection now carries a task's
-// comments and attachments, and the payload of the operations that record
-// them.
+// schemaVersion is bumped to 7 because a task row now keeps the history's
+// compactedFrom, the tip a checkpoint replaced. A mutation folds its parent's
+// history metadata into the state it writes, so an edit built on a cached
+// snapshot that dropped it would write a state.json that replaying the history
+// from Git does not compute, and validation would call the task corrupt. A
+// cache stamped earlier has no column for it, so it is discarded and Git read
+// again.
+//
+// Version 6 was the drop compaction records on an attachment it did not keep:
+// a thread a cache stored without that field would serve a dropped file as one
+// whose bytes can still be downloaded.
+//
+// Version 5 was a task's comments and attachments, and the payload of the
+// operations that record them.
 //
 // A cache written by an earlier build has no column for either, and both are
 // load-bearing rather than decorative. A mutation is folded onto the parent
@@ -19,14 +30,14 @@ package projection
 // checkpoint and every recorded pack, where a missing column reads as
 // generation zero — a claim rather than an absence, and the one claim that must
 // never be made wrongly.
-const schemaVersion = "5"
+const schemaVersion = "7"
 
 const schema = `
 CREATE TABLE projection_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE tasks (
   task_id TEXT PRIMARY KEY, head TEXT NOT NULL, project_id TEXT NOT NULL,
-  history_generation TEXT NOT NULL, logical_clock INTEGER NOT NULL,
-  min_reader INTEGER NOT NULL,
+  history_generation TEXT NOT NULL, compacted_from TEXT NOT NULL,
+  logical_clock INTEGER NOT NULL, min_reader INTEGER NOT NULL,
   title TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL,
   priority TEXT NOT NULL, rank TEXT NOT NULL, created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL, deleted INTEGER NOT NULL,

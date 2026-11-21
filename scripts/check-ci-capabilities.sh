@@ -22,6 +22,44 @@ else
 	report_missing 'node is not on PATH, so the embedded web client behavior tests cannot run'
 fi
 
+# Chrome or Chromium measures the board's layout in a real browser, for the
+# internal/webui tests a fake DOM cannot answer. They look for it in this
+# order: WORKBOOK_TEST_CHROME, then these names on PATH, then the macOS
+# application bundles.
+find_chrome() {
+	if [ -n "${WORKBOOK_TEST_CHROME:-}" ]; then
+		if [ -x "${WORKBOOK_TEST_CHROME}" ]; then
+			printf '%s\n' "${WORKBOOK_TEST_CHROME}"
+			return 0
+		fi
+		return 1
+	fi
+	for candidate in google-chrome google-chrome-stable chromium chromium-browser chrome; do
+		if found=$(command -v "${candidate}" 2>/dev/null); then
+			printf '%s\n' "${found}"
+			return 0
+		fi
+	done
+	if [ "$(uname -s)" = Darwin ]; then
+		for candidate in \
+			'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' \
+			'/Applications/Chromium.app/Contents/MacOS/Chromium'; do
+			if [ -x "${candidate}" ]; then
+				printf '%s\n' "${candidate}"
+				return 0
+			fi
+		done
+	fi
+	return 1
+}
+if chrome_path=$(find_chrome); then
+	printf 'chrome %s\n' "${chrome_path}"
+elif [ -n "${WORKBOOK_TEST_CHROME:-}" ]; then
+	report_missing "WORKBOOK_TEST_CHROME names ${WORKBOOK_TEST_CHROME}, which is not an executable, so the browser layout tests cannot run"
+else
+	report_missing 'Chrome or Chromium is not on PATH, so the browser layout tests cannot run (set WORKBOOK_TEST_CHROME to its path)'
+fi
+
 # Git has to create SHA-256 repositories for the cross-object-format tests in
 # internal/gitstore and internal/perf. Support landed in Git 2.29.
 probe=$(mktemp -d)

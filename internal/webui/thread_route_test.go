@@ -793,3 +793,52 @@ func errorDocumentOf(t *testing.T, body []byte) ErrorBody {
 	}
 	return document.Error
 }
+
+// droppedRouteAttachment is the route task's file as a compaction that dropped
+// it on 2026-11-10 leaves it: everything it was, plus the drop.
+func droppedRouteAttachment() core.Attachment {
+	_, _, dropped := core.DropFileAttachments(threadRouteTask().Attachments[:1],
+		"01K0M6B8A4FTT8C39MXXYTWD01", time.Date(2026, time.November, 10, 14, 30, 0, 0, time.UTC))
+	return dropped[0]
+}
+
+// A file compaction dropped is gone, not missing: the route answers 410 with
+// the message core gives, and never asks for bytes nobody kept. The task the
+// board polls carries the drop, and the page says so on the row instead of
+// offering a download.
+func TestWebServesGoneForDroppedAttachment(t *testing.T) {
+	t.Parallel()
+	var calls threadRouteCalls
+	dropped := droppedRouteAttachment()
+	handler := attachmentHandler(t, &calls, dropped)
+
+	response := request(t, handler, http.MethodGet, "/api/tasks/"+threadRouteTaskID+"/attachments/"+threadRouteAttachOne)
+	if response.Code != http.StatusGone {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusGone, response.Body.String())
+	}
+	body := errorDocumentOf(t, response.Body.Bytes())
+	if want := `attachment "trace.log" was removed when the task was compacted on 2026-11-10`; body.Message != want {
+		t.Fatalf("message = %q, want %q", body.Message, want)
+	}
+	if body.Category != core.CategoryNotFound {
+		t.Fatalf("category = %q, want %q", body.Category, core.CategoryNotFound)
+	}
+	if len(calls.found) != 0 {
+		t.Fatalf("a dropped attachment reached the content reader: %#v", calls.found)
+	}
+
+	task := threadRouteTask()
+	task.Attachments[0] = dropped
+	list := listHandler(t, func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil })
+	tasks := request(t, list, http.MethodGet, "/api/tasks")
+	if tasks.Code != http.StatusOK {
+		t.Fatalf("GET /api/tasks status = %d", tasks.Code)
+	}
+	if want := `"dropped":{"runId":"01K0M6B8A4FTT8C39MXXYTWD01","at":"2026-11-10T14:30:00Z"}`; !strings.Contains(tasks.Body.String(), want) {
+		t.Fatalf("task JSON = %s, want the drop %s", tasks.Body.String(), want)
+	}
+	page := request(t, list, http.MethodGet, "/tasks/"+threadRouteTaskID)
+	if !strings.Contains(renderedClientScript(t, page.Body.String()), `"Removed by compaction on "`) {
+		t.Fatal("the page script does not say a dropped attachment was removed by compaction")
+	}
+}

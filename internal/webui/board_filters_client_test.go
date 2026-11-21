@@ -1173,14 +1173,14 @@ setTimeout(async () => {
     preventDefault() {}
   });
   findElement(main, (element) => element.id === "task-title").value = ` + strconv.Quote(second.Title) + `;
-  const dependsGroup = findElement(main, (element) => element.textContent === "Depends On").parentElement;
+  const dependsGroup = relationshipGroup(main, "Depends On");
   const combobox = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
   combobox.value = ` + strconv.Quote(existing.Title) + `;
   combobox.eventListeners.input();
   findElement(dependsGroup, (element) => element.attributes.role === "option" &&
     element.dataset.candidateId === ` + strconv.Quote(existing.ID) + `).eventListeners.click();
   await findElement(dependsGroup, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+    element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency").eventListeners.click();
   await findElement(main, (element) => element.tagName === "FORM").eventListeners.submit({ preventDefault() {} });
   if (createCalls !== 2) throw new Error("the second Save created " + createCalls + " tasks in total");
   if (historyPaths.at(-1) !== "/?q=sweep") {

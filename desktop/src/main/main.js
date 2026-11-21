@@ -17,7 +17,8 @@ const projectkeys = require('./projectkeys')
 const clipath = require('./clipath')
 const { TITLE_ROW_HEIGHT, TRAFFIC_LIGHT_POSITION, RAIL_WIDTH, boardBounds } = require('./layout')
 const { buildMenuTemplate } = require('./menu')
-const { createSidebarCommands } = require('./sidebarcommands')
+const { createSidebarCommands, object: argumentsObject, string: nonEmptyString } = require('./sidebarcommands')
+const { createPresenceTracker } = require('./presence')
 const { setupUpdater } = require('./updater')
 
 const SIDEBAR_WIDTH = 260
@@ -128,6 +129,9 @@ function createWindow () {
   // `workbook key current` is run from a terminal, so a project's key moving
   // there is noticed when the reader comes back to the window.
   window.on('focus', () => { refreshKeys() })
+  // So is a repository deleted, moved or unmounted while the app was in the
+  // background, and one that has come back.
+  window.on('focus', () => { refreshPresence() })
 
   // The window's views and the project showing in it are module state that
   // outlives the window it describes, and on macOS a closed window is not a
@@ -357,6 +361,23 @@ const menuActions = {
 }
 
 /**
+ * Throw if a project has been removed from Workbench, stopping its server
+ * first.
+ *
+ * Called on either side of supervisor.start by both of the paths that start a
+ * board. Removal stops the server it finds, but a start still waiting — on the
+ * presence check, or on the server binding — can outlast it: before the start,
+ * this keeps `workbook serve` from being spawned for a project that is gone,
+ * and after it, the server a removal could not reach is stopped here rather
+ * than left running for a project nothing will ever stop again.
+ */
+function stillListed (projectId) {
+  if (registry.find(projectId)) return
+  supervisor.stop(projectId)
+  throw new Error('this project was removed from Workbench')
+}
+
+/**
  * Start one project's board server and tell the shell how it went.
  *
  * `supervisor.start` already emits `started` on success; the failure branch
@@ -365,7 +386,17 @@ const menuActions = {
  */
 async function startProjectServer (project) {
   try {
-    return await supervisor.start(project)
+    // Looked for first: `workbook serve` in a working directory that is not
+    // there fails as `spawn .../workbook ENOENT`, which reads as though the CLI
+    // were missing. A missing repository is said as that instead, and nothing
+    // is spawned for it.
+    await presence.refresh([project.id])
+    const found = presence.get(project.id)
+    if (found.missing) throw new Error(found.message)
+    stillListed(project.id)
+    const url = await supervisor.start(project)
+    stillListed(project.id)
+    return url
   } finally {
     toChrome('project:started', { projectId: project.id, ...supervisor.status(project.id) })
     // Every board starts at launch and after an import, which makes this the
@@ -424,7 +455,17 @@ async function openProject (projectId, taskId = null) {
  */
 async function layInBoard (project, taskId, generation) {
   const projectId = project.id
+  // The renderer has usually just asked (project:presence), but a repository
+  // can go between that answer and this start; see startProjectServer.
+  await presence.refresh([projectId])
+  const found = presence.get(projectId)
+  if (found.missing) throw new Error(found.message)
+  // Removed from Workbench while its repository was looked for, or while its
+  // server started; see stillListed. Laying a board in now would show a
+  // project the sidebar no longer has.
+  stillListed(projectId)
   const url = await supervisor.start(project)
+  stillListed(projectId)
   if (generation !== openGeneration) return { url }
   // The board has a route per task, so a row can open the thing it names
   // rather than the board it lives on.
@@ -474,6 +515,12 @@ async function layInBoard (project, taskId, generation) {
     window.contentView.addChildView(view)
     boardViews.set(projectId, view)
     await view.webContents.loadURL(target)
+    // Removed while the page loaded: removal closed the view it found, and this
+    // one must not stay behind in boardViews for a project that is gone.
+    if (!registry.find(projectId)) {
+      closeProject(projectId)
+      throw new Error('this project was removed from Workbench')
+    }
     // Superseded while the page loaded. The view stays in boardViews, parked
     // off-screen by the next layout() and warm for the next time this project
     // is asked for; what it must not do is take the window over now.
@@ -698,10 +745,17 @@ ipcMain.handle('path:notice', async () => {
  * Cmd+N or a Previous/Next step against this one: the two have to agree.
  */
 function listedProjects () {
-  return registry.orderedProjects.map((project) => ({
-    ...project,
-    ...supervisor.status(project.id)
-  }))
+  return registry.orderedProjects.map((project) => {
+    // Whether the repository was there the last time anything looked; see
+    // presence.js. The sidebar marks a missing one, and never drops it.
+    const found = presence.get(project.id)
+    return {
+      ...project,
+      ...supervisor.status(project.id),
+      missing: found.missing,
+      missingMessage: found.message
+    }
+  })
 }
 
 // The layout travels with the list so the sidebar can draw both from one
@@ -735,6 +789,8 @@ ipcMain.handle('discovery:scan', async (_event, { root, maxDepth }) => {
   const repositories = await discovery.scan(root, { maxDepth })
   await registry.rememberScanRoot(root)
 
+  // True as of this scan only. The Import view asks its current project list
+  // instead (isImported in app.js), since a removal after the scan changes it.
   const imported = new Map(registry.projects.map((project) => [project.path, project]))
   for (const repository of repositories) {
     repository.imported = imported.has(repository.path)
@@ -838,12 +894,33 @@ ipcMain.handle('sidebar:toggle', async () => {
 // The sidebar's order and categories. Each edit is validated, applied, saved
 // and announced by sidebarcommands.js, one at a time; the menu is rebuilt after
 // every one because its Cmd+N items follow the sidebar's order.
+//
+// Removing a project is one of them, so it queues behind a drag rather than
+// racing its save. Only Workbench's registry entry and the project's place in
+// the sidebar are dropped: the repository keeps its Workbook refs and its
+// .workbook/config.json, because removing a project from a list is not a
+// reason to destroy its task history. Once the entry is saved away the board
+// is closed — its view let go of and its server stopped, parking the window if
+// it was showing — and what the app knew about the repository is forgotten, so
+// importing the same repository again starts it as new.
 const sidebarCommands = createSidebarCommands({
   registry,
   mintId: () => crypto.randomUUID(),
   listProjects: listedProjects,
   rebuildMenu: () => installMenu(),
-  broadcast: (payload) => toChrome('sidebar:layoutChanged', payload)
+  broadcast: (payload) => toChrome('sidebar:layoutChanged', payload),
+  onRemoved: (projectId) => {
+    closeProject(projectId)
+    presence.forget(projectId)
+  }
+})
+// Whether each repository is still where the registry says. A change is
+// announced on the layout channel, so the sidebar and the rail mark a missing
+// project, and unmark one that has come back, from the same answer as
+// everything else they draw.
+const presence = createPresenceTracker({
+  projects: () => registry.projects,
+  onChanged: () => toChrome('sidebar:layoutChanged', sidebarCommands.layout())
 })
 // Each project's label is its current key, which `workbook key current` or the
 // board's Keys section can move after import; see projectkeys.js. A change is
@@ -869,6 +946,18 @@ const keyRefresher = projectkeys.createKeyRefresher({
 function refreshKeys (ids) {
   keyRefresher.refresh(ids).catch((error) => {
     console.error('workbench: could not refresh project keys', error)
+  })
+}
+
+/**
+ * Look again at whether the named repositories, or every one, are there.
+ * Fire and forget, like refreshKeys.
+ *
+ * @param {string[]} [ids]
+ */
+function refreshPresence (ids) {
+  presence.refresh(ids).catch((error) => {
+    console.error('workbench: could not look for project repositories', error)
   })
 }
 
@@ -947,14 +1036,28 @@ ipcMain.handle('identity:set', async (_event, { projectId, name, email, scope })
 })
 ipcMain.handle('project:close', async (_event, { projectId }) => { closeProject(projectId) })
 
-ipcMain.handle('project:forget', async (_event, { projectId }) => {
-  // Only Workbench's registry entry is dropped. The repository keeps its
-  // refs/workbook/* and its .workbook/config.json: removing a project from a
-  // list is not a reason to destroy its task history.
-  closeProject(projectId)
-  await registry.remove(projectId)
-  // And shrank: the numbered items move up, and the last one goes away.
-  installMenu()
+// Removing a project from Workbench; see sidebarCommands above. Resolves with
+// { layout, projects, removed }, and an id that is not a project any more is a
+// quiet { removed: false }, so a second click never reaches the user as an
+// error. The menu is rebuilt, so the numbered items move up.
+ipcMain.handle('project:forget', (_event, args) => sidebarCommands.removeProject(args))
+
+/**
+ * Whether a project's repository is there, looked at now.
+ *
+ * Asked by the shell before it opens a board, so a missing repository is shown
+ * as missing rather than as a board that would not start, and asked again when
+ * a start fails. An id that is not a project answers rather than throwing: it
+ * was removed a moment ago, and there is nothing to report. Arguments that are
+ * not { projectId: string } are refused the way the sidebar channels refuse
+ * theirs. Settles within presence.js's time limit, however slow the disk.
+ */
+ipcMain.handle('project:presence', async (_event, args) => {
+  const { projectId } = argumentsObject('project:presence', args)
+  nonEmptyString('project:presence', 'projectId', projectId)
+  if (!registry.find(projectId)) return { known: false, missing: false, reason: null, message: null }
+  await presence.refresh([projectId])
+  return { known: true, ...presence.get(projectId) }
 })
 
 // --- lifecycle -------------------------------------------------------------
@@ -966,6 +1069,8 @@ supervisor.on('exited', ({ projectId, wasRunning }) => {
   // for another board, and that open must still arrive.
   if (projectId === activeProjectId) parkBoard()
   toChrome('project:exited', { projectId, ...supervisor.status(projectId) })
+  // A board that stops on its own may have had its repository taken away.
+  refreshPresence([projectId])
 })
 
 nativeTheme.on('updated', () => {

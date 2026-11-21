@@ -447,3 +447,58 @@ test('a setKeys whose save fails leaves every key where it was', async () => {
     assert.equal(registry.find('a').key, 'OLD')
   })
 })
+
+// Removing a project from Workbench: the registry entry and its place in the
+// sidebar go, and nothing else. The repository is never touched, which these
+// cases show by removing projects whose paths do not exist at all.
+
+test('remove answers whether it removed anything, and an unknown id writes nothing', async () => {
+  await withUserData(async (directory) => {
+    await writeRegistry(directory, [project('a'), project('b')])
+    const registry = new Registry(directory)
+    await registry.load()
+    const file = path.join(directory, 'registry.json')
+    const before = (await fs.stat(file)).mtimeMs
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    assert.equal(await registry.remove('nobody'), false)
+    assert.equal((await fs.stat(file)).mtimeMs, before)
+    assert.deepEqual(ids(registry.orderedProjects), ['a', 'b'])
+
+    assert.equal(await registry.remove('a'), true)
+    // Twice is the same as once: the second finds nothing to remove.
+    assert.equal(await registry.remove('a'), false)
+    assert.deepEqual(ids(registry.orderedProjects), ['b'])
+  })
+})
+
+test('a project whose repository is gone is removed like any other', async () => {
+  await withUserData(async (directory) => {
+    const gone = { id: 'g', name: 'G', path: path.join(directory, 'deleted', 'repository') }
+    await writeRegistry(directory, [project('a'), gone])
+    const registry = new Registry(directory)
+    await registry.load()
+    assert.equal(await registry.remove('g'), true)
+    const reloaded = new Registry(directory)
+    await reloaded.load()
+    assert.deepEqual(ids(reloaded.orderedProjects), ['a'])
+    assert.equal(reloaded.find('g'), null)
+  })
+})
+
+test('a remove whose save fails leaves the project and its place where they were', async () => {
+  await withUserData(async (directory) => {
+    const blocked = path.join(directory, 'not-a-directory')
+    await fs.writeFile(blocked, '')
+    const registry = new Registry(path.join(blocked, 'userData'))
+    await registry.load()
+    registry.state.projects.push(project('a'), project('b'))
+    registry.state.sidebarLayout = {
+      items: [{ kind: 'category', id: 'k', name: 'Work', collapsed: false, projects: ['b', 'a'] }]
+    }
+
+    await assert.rejects(registry.remove('a'))
+    assert.deepEqual(ids(registry.projects), ['a', 'b'])
+    assert.deepEqual(registry.sidebarLayout.items[0].projects, ['b', 'a'])
+  })
+})

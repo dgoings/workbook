@@ -140,3 +140,38 @@ func assertThreadMatches(t *testing.T, got, want core.TaskData) {
 		t.Fatalf("attachments = %#v, want %#v", got.Attachments, want.Attachments)
 	}
 }
+
+// A projected chain is replayed, so a checkpoint row has to come back with its
+// compaction summary: without it the fold refuses the checkpoint and the
+// compacted task's history cannot be read from the cache.
+func TestAProjectedCheckpointKeepsItsSummary(t *testing.T) {
+	at := time.Date(2026, time.November, 10, 9, 0, 0, 0, time.UTC)
+	operation := core.Operation{
+		ID:   "01K0M6B8A4FTT8C39MXXYTWK03",
+		Type: core.OperationHistoryCheckpoint,
+		Checkpoint: &core.CheckpointData{
+			RunID:               "01K0M6B8A4FTT8C39MXXYTWK02",
+			CompactedFrom:       "4f6a1d2c9b8e7a6f5e4d3c2b1a0918273645abcd",
+			PreviousGeneration:  "01K0M6B8A4FTT8C39MXXYTWK01",
+			CompactedCommits:    3,
+			FirstWallTime:       at.Add(-time.Hour),
+			LastWallTime:        at,
+			BecameDoneAt:        &at,
+			Attachments:         core.CheckpointAttachmentsDropped,
+			CompactedOperations: []string{"01K0M6B8A4FTT8C39MXXYTWK04", "01K0M6B8A4FTT8C39MXXYTWK05"},
+		},
+	}
+	payload, err := encodeOperationPayload(operation)
+	if err != nil {
+		t.Fatalf("encodeOperationPayload() error = %v", err)
+	}
+	decoded, ok := decodeOperation(operationScan{
+		operationID: operation.ID, operationType: string(operation.Type), payload: payload,
+	})
+	if !ok {
+		t.Fatal("decodeOperation() ok = false")
+	}
+	if !reflect.DeepEqual(decoded.Checkpoint, operation.Checkpoint) {
+		t.Fatalf("decoded checkpoint = %#v, want %#v", decoded.Checkpoint, operation.Checkpoint)
+	}
+}

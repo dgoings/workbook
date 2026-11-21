@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -961,12 +962,20 @@ func TestCommandReferenceDocumentsImplementedCommands(t *testing.T) {
 	// about — every --no-sync and --json the block omitted — passed. Deriving
 	// them means the schema is the one place a new option is declared, and
 	// forgetting the reference is a failure rather than a silent divergence.
-	got := make([]string, len(lines))
+	got := make([]string, 0, len(lines))
 	options := make(map[string][]string, len(lines))
-	for index, line := range lines {
+	for _, line := range lines {
 		path := readmeCommandPath(line)
-		got[index] = path
-		options[path] = readmeCommandOptions(line)
+		// A command with several forms, as compact has, is one line per form
+		// in a row, and its options are those of every form together.
+		if len(got) == 0 || got[len(got)-1] != path {
+			got = append(got, path)
+		}
+		for _, option := range readmeCommandOptions(line) {
+			if !slices.Contains(options[path], option) {
+				options[path] = append(options[path], option)
+			}
+		}
 	}
 	want := schemaCommandPaths()
 	if !reflect.DeepEqual(got, want) {

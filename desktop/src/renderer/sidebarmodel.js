@@ -128,5 +128,20 @@
     return { over: { kind: 'end' }, fraction: 1 }
   }
 
-  return { dropTarget, rowAt, initials, ABOVE_CATEGORY }
+  /**
+   * The project to show once `removedId` is removed from Workbench while it is
+   * the one showing: the one below it in sidebar order, else the one above,
+   * else none (the renderer then shows the empty state).
+   *
+   * @param {string[]} ids every project id in sidebar order, before the removal
+   * @param {string} removedId
+   * @returns {string|null}
+   */
+  function neighborAfterRemoval (ids, removedId) {
+    const at = ids.indexOf(removedId)
+    if (at === -1) return null
+    return ids[at + 1] ?? ids[at - 1] ?? null
+  }
+
+  return { dropTarget, rowAt, initials, neighborAfterRemoval, ABOVE_CATEGORY }
 })

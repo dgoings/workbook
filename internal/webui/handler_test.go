@@ -834,8 +834,12 @@ function assertSharedLayout(expectedMode) {
     (element.className || "").split(/\s+/).includes("form-primary-actions"));
   const save = primaryActions && findElement(primaryActions, (element) =>
     element.tagName === "BUTTON" && element.textContent === "Save");
-  const back = primaryActions && findElement(primaryActions, (element) =>
-    element.tagName === "A" && element.textContent === "Back");
+  // A task's page groups Back with Save. A New Task form groups Create more
+  // with Save and puts its way out, Cancel, in the corner a task's Delete
+  // stands in, apart from the primary group.
+  const leave = expectedMode === "new" ? "Cancel" : "Back";
+  const back = actionBar && findElement(actionBar, (element) =>
+    element.tagName === "A" && element.textContent === leave);
   const danger = actionBar && findElement(actionBar, (element) =>
     (element.className || "").split(/\s+/).includes("form-danger"));
   if (!layout || !editor || !sidebar || !properties || !footer) {
@@ -843,11 +847,21 @@ function assertSharedLayout(expectedMode) {
   }
   if (!actionBar || !primaryActions || !save || !back ||
       primaryActions.parentElement !== actionBar) {
-    throw new Error(expectedMode + " does not left-group Save and Back");
+    throw new Error(expectedMode + " does not left-group Save and find " + leave);
   }
   if (expectedMode === "new") {
     if (danger) throw new Error("new task unexpectedly renders destructive actions");
+    if (findElement(primaryActions, (element) => element.tagName === "A" && element.textContent === "Back")) {
+      throw new Error("new task still offers Back beside Save");
+    }
+    const cancelGroup = back.parentElement;
+    if (primaryActions.contains(back) || !(cancelGroup.className || "").split(/\s+/).includes("form-cancel") ||
+        cancelGroup.parentElement !== actionBar ||
+        actionBar.children.indexOf(cancelGroup) < actionBar.children.indexOf(primaryActions)) {
+      throw new Error("new task does not put Cancel after the primary actions, apart from them");
+    }
   } else {
+    if (!primaryActions.contains(back)) throw new Error("detail no longer groups Back with Save");
     const remove = danger && findElement(danger, (element) =>
       element.tagName === "BUTTON" && element.textContent === "Delete");
     if (!danger || !remove || danger.parentElement !== actionBar ||
@@ -930,37 +944,39 @@ setTimeout(() => {
   if (!form || !editor || !sidebar || !actions) {
     throw new Error("shared task regions did not render");
   }
-  // A New Task form's sidebar holds the attachments the create is carrying as
-  // well, so it says so. A task that already exists draws those in a panel of
-  // their own below the form and its sidebar names the two regions it has.
+  // The sidebar is the same on both pages and holds the relationships,
+  // assignments and attachments as well as the properties, so it says so.
   if (sidebar.getAttribute("aria-label") !==
-      "Task properties, attachments and relationships") {
+      "Task properties, relationships, assignments and attachments") {
     throw new Error("sidebar does not identify its contents: " +
       JSON.stringify(sidebar.getAttribute("aria-label")));
   }
 
-  const groupFor = (headingText) => {
-    const heading = findElement(sidebar, (element) => element.textContent === headingText);
-    if (!heading) throw new Error("missing " + headingText + " group");
-    return heading.parentElement;
-  };
-  const dependsGroup = groupFor("Depends On");
-  const blocksGroup = groupFor("Blocks");
-  const dependsInput = findElement(dependsGroup, (element) => element.tagName === "INPUT");
-  const blocksInput = findElement(blocksGroup, (element) => element.tagName === "INPUT");
-  if (dependsInput.attributes.role !== "combobox" ||
-      blocksInput.attributes.role !== "combobox") {
-    throw new Error("relationship controls lost combobox semantics");
+  // One dependency section, with one picker and one message line, and a
+  // radio group with a name saying which kind the picker adds.
+  const section = relationshipSection(sidebar);
+  if (findElements(section, (element) => element.attributes.role === "combobox").length !== 1) {
+    throw new Error("the dependency section does not have exactly one picker");
   }
-  for (const group of [dependsGroup, blocksGroup]) {
-    const message = findElement(group, (element) =>
-      element.className.split(/\s+/).includes("relationship-message"));
-    if (!message ||
-        message.attributes.role !== "status" ||
-        message.attributes["aria-live"] !== "polite") {
-      throw new Error("relationship group feedback is not announced politely");
-    }
+  const input = findElement(section, (element) => element.tagName === "INPUT" && element.attributes.role === "combobox");
+  if (!input || input.type !== "search") throw new Error("relationship controls lost combobox semantics");
+  const messages = findElements(section, (element) => hasClassToken(element, "relationship-message"));
+  if (messages.length !== 1 ||
+      messages[0].attributes.role !== "status" ||
+      messages[0].attributes["aria-live"] !== "polite") {
+    throw new Error("relationship feedback is not one politely announced line");
   }
+  const kindGroup = findElement(section, (element) => element.attributes.role === "radiogroup");
+  const kindName = kindGroup && findElement(section, (element) => element.id === kindGroup.attributes["aria-labelledby"]);
+  if (!kindGroup || !kindName || !kindName.textContent) throw new Error("the kind toggle is not a named radio group");
+  const radios = relationshipKindRadios(sidebar);
+  if (radios.length !== 2 || radios.some((radio) => !kindGroup.contains(radio) || radio.name !== radios[0].name)) {
+    throw new Error("the kind toggle is not two radios in one group");
+  }
+  radios.forEach((radio) => {
+    const label = findElement(kindGroup, (element) => element.tagName === "LABEL" && element.htmlFor === radio.id);
+    if (!label || !label.textContent) throw new Error("a kind radio has no label");
+  });
   const formMessage = findElement(actions, (element) =>
     element.className.split(/\s+/).includes("form-status"));
   if (!formMessage ||
@@ -1082,15 +1098,11 @@ globalThis.fetch = async (url, options = {}) => {
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   fetchCalls.splice(0);
-  const groupFor = (headingText) => {
-    const heading = findElement(main, (element) => element.textContent === headingText);
-    if (!heading) throw new Error("missing " + headingText + " group");
-    return heading.parentElement;
-  };
+  const groupFor = (headingText) => relationshipGroup(main, headingText);
   const inputFor = (group) => findElement(group, (element) =>
     element.tagName === "INPUT" && element.attributes.role === "combobox");
   const addFor = (group) => findElement(group, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
   const candidateIDs = (group) => findElements(group, (element) =>
     element.attributes.role === "option").map((option) => option.dataset.candidateId);
   const resetCandidates = (group) => {
@@ -1160,7 +1172,7 @@ setTimeout(async () => {
   }
 
   const currentDependsRow = findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(dependsCandidate.ID) + `);
-  const remove = currentDependsRow && findElement(currentDependsRow, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  const remove = currentDependsRow && findElement(currentDependsRow, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   if (!remove || !remove.eventListeners.click) throw new Error("Depends On draft is not removable");
   await remove.eventListeners.click();
   assertFormValues();
@@ -1223,12 +1235,11 @@ func TestHandlerClientRefreshesMountedNewTaskRelationshipCandidates(t *testing.T
 deletedTaskResponse = ` + deletedDocumentJSON([]core.Task{becomesRestored}) + `;
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const groupFor = (headingText) => findElement(main, (element) =>
-    element.textContent === headingText).parentElement;
+  const groupFor = (headingText) => relationshipGroup(main, headingText);
   const inputFor = (group) => findElement(group, (element) =>
     element.tagName === "INPUT" && element.attributes.role === "combobox");
   const addFor = (group) => findElement(group, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
   const selectCandidate = (group, candidateID, query) => {
     const input = inputFor(group);
     input.value = query;
@@ -1249,7 +1260,6 @@ setTimeout(async () => {
   const draftSelection = selectCandidate(dependsGroup, draftID, ` + strconv.Quote(draftCandidate.Title) + `);
   await draftSelection.add.eventListeners.click();
   const deletingSelection = selectCandidate(dependsGroup, deletingID, ` + strconv.Quote(becomesDeleted.Title) + `);
-  const stableSelection = selectCandidate(blocksGroup, stableID, ` + strconv.Quote(stableCandidate.Title) + `);
   const mountedForm = findElement(main, (element) => element.tagName === "FORM");
 
   let activeDocument = ` + documentJSON(afterPollActive) + `;
@@ -1295,6 +1305,10 @@ setTimeout(async () => {
   if (!restoredOption || deletedOption) {
     throw new Error("New Task candidates did not reconcile delete and restore polling");
   }
+  // The one picker holds one selection at a time, so a selection that stays
+  // valid is made and then carried through a poll of its own.
+  const stableSelection = selectCandidate(blocksGroup, stableID, ` + strconv.Quote(stableCandidate.Title) + `);
+  await intervalCallback();
   const stableSelectedOption = findElement(blocksGroup, (element) =>
     element.attributes.role === "option" &&
     element.dataset.candidateId === stableID &&
@@ -1393,11 +1407,7 @@ func TestHandlerClientCreatesTaskWithBothRelationshipDirections(t *testing.T) {
 	program := clientDOMHarness("/tasks/new", documentJSON(initialTasks)) + script + `
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const groupFor = (headingText) => {
-    const heading = findElement(main, (element) => element.textContent === headingText);
-    if (!heading) throw new Error("missing " + headingText + " group");
-    return heading.parentElement;
-  };
+  const groupFor = (headingText) => relationshipGroup(main, headingText);
   const selectAndAdd = (group, candidateID, candidateTitle) => {
     const input = findElement(group, (element) => element.tagName === "INPUT" && element.attributes.role === "combobox");
     input.value = candidateTitle;
@@ -1405,7 +1415,7 @@ setTimeout(async () => {
     const option = findElement(group, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID);
     if (!option) throw new Error("candidate is not selectable: " + candidateID);
     option.eventListeners.click();
-    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
     if (!add || add.disabled) throw new Error("selected candidate did not enable Add dependency");
     return add.eventListeners.click();
   };
@@ -1469,12 +1479,12 @@ setTimeout(async () => {
 	    element.attributes.role === "option" &&
 	    element.dataset.candidateId === lateCandidateID).eventListeners.click();
 	  const lateAdd = findElement(dependsGroup, (element) =>
-	    element.tagName === "BUTTON" && element.textContent === "Add dependency");
+	    element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
 	  const capturedBlocksRow = findElement(blocksGroup, (element) =>
 	    element.dataset.relationshipId === blockedTaskID &&
 	    element.dataset.relationshipDraft !== undefined);
 	  const capturedRemove = capturedBlocksRow && findElement(capturedBlocksRow, (element) =>
-	    element.tagName === "BUTTON" && element.textContent === "Remove");
+	    element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
 	  const form = findElement(main, (element) => element.tagName === "FORM");
 	  if (!form || !form.eventListeners.submit) throw new Error("New Task form did not register submit behavior");
 	  const submission = form.eventListeners.submit({ preventDefault() {} });
@@ -1595,8 +1605,7 @@ func TestHandlerClientPreservesNewTaskRelationshipDraftsWhenCreateFails(t *testi
 	program := clientDOMHarness("/tasks/new", string(document)) + script + `
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const groupFor = (headingText) => findElement(main, (element) =>
-    element.textContent === headingText).parentElement;
+  const groupFor = (headingText) => relationshipGroup(main, headingText);
   const selectAndAdd = (group, candidateID, candidateTitle) => {
     const input = findElement(group, (element) => element.attributes.role === "combobox");
     input.value = candidateTitle;
@@ -1605,7 +1614,7 @@ setTimeout(async () => {
       element.attributes.role === "option" && element.dataset.candidateId === candidateID);
     option.eventListeners.click();
     return findElement(group, (element) =>
-      element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+      element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency").eventListeners.click();
   };
   const dependsGroup = groupFor("Depends On");
   const blocksGroup = groupFor("Blocks");
@@ -1635,14 +1644,11 @@ setTimeout(async () => {
     return {
       input,
       add: findElement(group, (element) =>
-        element.tagName === "BUTTON" && element.textContent === "Add dependency")
+        element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency")
     };
   };
-  const pendingDepends = selectPending(
-    dependsGroup,
-    ` + strconv.Quote(pendingPrerequisite.ID) + `,
-    ` + strconv.Quote(pendingPrerequisite.Title) + `
-  );
+  // The picker holds one selection, made here as a Blocks entry and left
+  // unadded when Save is pressed.
   const pendingBlocks = selectPending(
     blocksGroup,
     ` + strconv.Quote(pendingBlockedTask.ID) + `,
@@ -1671,6 +1677,20 @@ setTimeout(async () => {
 
   const form = findElement(main, (element) => element.tagName === "FORM");
   await form.eventListeners.submit({ preventDefault() {} });
+  // Read before anything below chooses a kind: the toggle is still on the kind
+  // the reader left it on, with the selection still in the picker.
+  const checkedKinds = relationshipKindRadios(main).filter((radio) => radio.checked).map((radio) => radio.value);
+  if (JSON.stringify(checkedKinds) !== '["blocks"]') {
+    throw new Error("the dependency toggle did not stay on Blocks through the create failure: " + JSON.stringify(checkedKinds));
+  }
+  const pendingBlocksOption = findElement(blocksGroup, (element) =>
+    element.attributes.role === "option" &&
+    element.dataset.candidateId === ` + strconv.Quote(pendingBlockedTask.ID) + ` &&
+    element.attributes["aria-selected"] === "true");
+  if (pendingBlocks.input.value !== ` + strconv.Quote(pendingBlockedTask.Title) + ` ||
+      !pendingBlocksOption || pendingBlocks.add.disabled) {
+    throw new Error("relationship queries or valid selections were discarded after create failure");
+  }
   const draftDependsOnRow = findElement(dependsGroup, (element) =>
     element.dataset.relationshipId === ` + strconv.Quote(prerequisite.ID) + ` &&
     element.dataset.relationshipDraft !== undefined);
@@ -1691,20 +1711,6 @@ setTimeout(async () => {
       JSON.stringify(chiclets) !== '["review","recovery"]') {
     throw new Error("task properties were discarded after create failure: " + JSON.stringify(chiclets));
   }
-  const pendingDependsOption = findElement(dependsGroup, (element) =>
-    element.attributes.role === "option" &&
-    element.dataset.candidateId === ` + strconv.Quote(pendingPrerequisite.ID) + ` &&
-    element.attributes["aria-selected"] === "true");
-  const pendingBlocksOption = findElement(blocksGroup, (element) =>
-    element.attributes.role === "option" &&
-    element.dataset.candidateId === ` + strconv.Quote(pendingBlockedTask.ID) + ` &&
-    element.attributes["aria-selected"] === "true");
-  if (pendingDepends.input.value !== ` + strconv.Quote(pendingPrerequisite.Title) + ` ||
-      pendingBlocks.input.value !== ` + strconv.Quote(pendingBlockedTask.Title) + ` ||
-      !pendingDependsOption || !pendingBlocksOption ||
-      pendingDepends.add.disabled || pendingBlocks.add.disabled) {
-    throw new Error("relationship queries or valid selections were discarded after create failure");
-  }
   if (!draftDependsOnRow || !draftBlocksRow) {
     throw new Error("relationship drafts were discarded after create failure");
   }
@@ -1712,7 +1718,7 @@ setTimeout(async () => {
     throw new Error("create failure attempted relationship persistence");
   }
   const removeBlocks = findElement(draftBlocksRow, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Remove");
+    element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   await removeBlocks.eventListeners.click();
   if (!findElement(dependsGroup, (element) =>
       element.dataset.relationshipId === ` + strconv.Quote(prerequisite.ID) + ` &&
@@ -1769,8 +1775,7 @@ func TestHandlerClientRetainsFailedRelationshipDraftsAfterCreate(t *testing.T) {
 deletedTaskResponse = ` + string(emptyDeleted) + `;
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const groupFor = (headingText) => findElement(main, (element) =>
-    element.textContent === headingText).parentElement;
+  const groupFor = (headingText) => relationshipGroup(main, headingText);
   const selectAndAdd = (group, candidateID, candidateTitle) => {
     const input = findElement(group, (element) => element.attributes.role === "combobox");
     input.value = candidateTitle;
@@ -1778,7 +1783,7 @@ setTimeout(async () => {
     findElement(group, (element) =>
       element.attributes.role === "option" && element.dataset.candidateId === candidateID).eventListeners.click();
     return findElement(group, (element) =>
-      element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+      element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency").eventListeners.click();
   };
   const prerequisiteID = ` + strconv.Quote(prerequisite.ID) + `;
   const blockedTaskID = ` + strconv.Quote(blockedTask.ID) + `;
@@ -1876,7 +1881,7 @@ setTimeout(async () => {
 	  const retry = failedBlocksRow && findElement(failedBlocksRow, (element) =>
 	    element.tagName === "BUTTON" && element.textContent === "Retry");
 	  const remove = failedBlocksRow && findElement(failedBlocksRow, (element) =>
-	    element.tagName === "BUTTON" && element.textContent === "Remove");
+	    element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   if (!durableDependsOnRow) throw new Error("durable Depends On relationship was not rendered");
   if (!failedBlocksRow ||
       !failedBlocksRow.textContent.includes("Not saved") ||
@@ -1961,7 +1966,7 @@ setTimeout(async () => {
     throw new Error("canonical refresh did not replace the detached draft with durable state");
   }
   const removeDurableBlock = findElement(retriedBlocksRow, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Remove");
+    element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   await removeDurableBlock.eventListeners.click();
   if (blocksDeletes !== 1 ||
       findElement(groupFor("Blocks"), (element) =>
@@ -2004,8 +2009,7 @@ func TestHandlerClientDoesNotDuplicateCreatedTaskWhenRefreshFails(t *testing.T) 
 	program := clientDOMHarness("/tasks/new", documentJSON(initialTasks)) + script + `
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const groupFor = (headingText) => findElement(main, (element) =>
-    element.textContent === headingText).parentElement;
+  const groupFor = (headingText) => relationshipGroup(main, headingText);
   const selectAndAdd = (group, candidateID, candidateTitle) => {
     const input = findElement(group, (element) => element.attributes.role === "combobox");
     input.value = candidateTitle;
@@ -2013,7 +2017,7 @@ setTimeout(async () => {
     findElement(group, (element) =>
       element.attributes.role === "option" && element.dataset.candidateId === candidateID).eventListeners.click();
     return findElement(group, (element) =>
-      element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+      element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency").eventListeners.click();
   };
   let createCalls = 0;
   let activeRefreshCalls = 0;
@@ -2138,8 +2142,7 @@ func TestHandlerClientCreatedTaskRefreshDoesNotNavigateDetachedRoute(t *testing.
 	program := clientDOMHarness("/tasks/new", documentJSON(initialTasks)) + script + `
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const groupFor = (headingText) => findElement(main, (element) =>
-    element.textContent === headingText).parentElement;
+  const groupFor = (headingText) => relationshipGroup(main, headingText);
   const blocksGroup = groupFor("Blocks");
   const blocksInput = findElement(blocksGroup, (element) =>
     element.tagName === "INPUT" && element.attributes.role === "combobox");
@@ -2151,7 +2154,7 @@ setTimeout(async () => {
   if (!blockedOption) throw new Error("Blocks candidate is not selectable");
   blockedOption.eventListeners.click();
   await findElement(blocksGroup, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+    element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency").eventListeners.click();
 
   const createdID = ` + strconv.Quote(createdID) + `;
   const blockedTaskID = ` + strconv.Quote(blockedTask.ID) + `;
@@ -2372,9 +2375,9 @@ func TestHandlerClientRendersDependencyRelationships(t *testing.T) {
 deletedTaskResponse = ` + string(deletedDocument) + `;
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
-  const blocksHeading = findElement(main, (element) => element.textContent === "Blocks");
-  if (!dependsHeading || !blocksHeading) throw new Error("both relationship groups did not render");
+  if (relationshipKindRadios(main).map((radio) => radio.value).join() !== "depends-on,blocks") {
+    throw new Error("the dependency section does not offer both kinds");
+  }
 
   const activeDependencyLink = findElement(main, (element) =>
     element.tagName === "A" && element.href === "/tasks/" + encodeURIComponent(` + strconv.Quote(activeDependency.ID) + `));
@@ -2387,11 +2390,11 @@ setTimeout(async () => {
 
   const deletedDependency = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedDependency.ID) + `);
   if (!deletedDependency || !deletedDependency.textContent.includes("Deleted") ||
-      !findElement(deletedDependency, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+      !findElement(deletedDependency, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""))) {
     throw new Error("tombstoned prerequisite was not rendered removable");
   }
   const activeBlock = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
-  if (!activeBlock || !findElement(activeBlock, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+  if (!activeBlock || !findElement(activeBlock, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""))) {
     throw new Error("active blocked task was not rendered removable");
   }
 
@@ -2413,13 +2416,12 @@ setTimeout(async () => {
   // A blocked task deleted after the page loaded leaves Blocks. Its edge to
   // this task is inert while it is deleted and is stored on its own record,
   // so there is nothing here to show or to remove.
-  const blocksGroup = blocksHeading.parentElement;
   const blocksAfterDelete = () => findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
   if (blocksAfterDelete()) {
     throw new Error("poll kept a later tombstoned blocked task in Blocks");
   }
-  if (!findElement(blocksGroup, (element) => element.textContent === "No tasks are blocked by this task.")) {
-    throw new Error("Blocks did not say it was empty once its only task was deleted");
+  if (relationshipRowsOfKind(main, "Blocks").length !== 0 || relationshipRowsOfKind(main, "Depends On").length !== 1) {
+    throw new Error("the list did not keep only the Depends On row once the only blocked task was deleted");
   }
   resolveStaleDeleted(` + string(deletedDocument) + `);
   await stalePoll;
@@ -2504,7 +2506,7 @@ setTimeout(async () => {
   const deletedDependency = findElement(region, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedDependency.ID) + `);
   const activeBlock = findElement(region, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
   const deletedBlock = findElement(region, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedBlocked.ID) + `);
-  const hasRemove = (row) => findElement(row, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  const hasRemove = (row) => findElement(row, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   if (!missing || !hasRemove(missing) || !deletedDependency || !hasRemove(deletedDependency)) {
     throw new Error("missing or tombstoned Depends On rows were not removable");
   }
@@ -2556,10 +2558,17 @@ func TestHandlerClientFiltersDependencyComboboxCandidates(t *testing.T) {
 
 	program := clientDOMHarness("/tasks/"+current.ID, string(document)) + script + `
 setTimeout(() => {
-  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
-  const blocksHeading = findElement(main, (element) => element.textContent === "Blocks");
-  const dependsInput = dependsHeading && findElement(dependsHeading.parentElement, (element) => element.tagName === "INPUT");
-  const blocksInput = blocksHeading && findElement(blocksHeading.parentElement, (element) => element.tagName === "INPUT");
+  // One picker, which the kind toggle points at one set or the other.
+  const dependsGroup = relationshipGroup(main, "Depends On");
+  const blocksGroup = relationshipGroup(main, "Blocks");
+  const dependsInput = findElement(dependsGroup, (element) => element.tagName === "INPUT" && element.attributes.role === "combobox");
+  if (!dependsInput || dependsInput.placeholder !== "Prerequisite") {
+    throw new Error("Depends On does not prompt for a prerequisite: " + JSON.stringify(dependsInput && dependsInput.placeholder));
+  }
+  const blocksInput = findElement(blocksGroup, (element) => element.tagName === "INPUT" && element.attributes.role === "combobox");
+  if (blocksInput !== dependsInput || blocksInput.placeholder !== "Task to block") {
+    throw new Error("Blocks does not prompt for a task to block in the same picker");
+  }
   if (!dependsInput || dependsInput.attributes.role !== "combobox" ||
       dependsInput.attributes["aria-autocomplete"] !== "list" ||
       !dependsInput.attributes["aria-controls"]) {
@@ -2571,8 +2580,8 @@ setTimeout(() => {
     throw new Error("Blocks input does not expose the combobox contract");
   }
 
-  const assertOptions = (heading, wantIDs, label) => {
-    const options = heading.parentElement.querySelectorAll('[role="option"]');
+  const assertOptions = (group, wantIDs, label) => {
+    const options = findElements(group, (element) => element.attributes.role === "option");
     const gotIDs = options.map((option) => option.dataset.candidateId);
     if (JSON.stringify(gotIDs) !== JSON.stringify(wantIDs)) {
       throw new Error(label + " candidates = " + JSON.stringify(gotIDs) + ", want " + JSON.stringify(wantIDs));
@@ -2592,16 +2601,21 @@ setTimeout(() => {
     });
   };
 
-  assertOptions(dependsHeading, [
+  const dependsCandidates = [
     ` + strconv.Quote(alreadyBlocked.ID) + `,
     ` + strconv.Quote(firstCandidate.ID) + `,
     ` + strconv.Quote(secondCandidate.ID) + `
-  ], "Depends On");
-  assertOptions(blocksHeading, [
+  ];
+  const blocksCandidates = [
     ` + strconv.Quote(existingDependency.ID) + `,
     ` + strconv.Quote(firstCandidate.ID) + `,
     ` + strconv.Quote(secondCandidate.ID) + `
-  ], "Blocks");
+  ];
+  // Each read of a group flips the toggle, so this is the filter following the
+  // toggle there and back again.
+  assertOptions(dependsGroup, dependsCandidates, "Depends On");
+  assertOptions(blocksGroup, blocksCandidates, "Blocks");
+  assertOptions(dependsGroup, dependsCandidates, "Depends On after Blocks");
 }, 0);
 `
 	command := nodeCommand(node, program)
@@ -2650,26 +2664,24 @@ func TestHandlerClientDependencySnapshotPrefersTombstones(t *testing.T) {
 deletedTaskResponse = ` + string(deletedDocument) + `;
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
-  const blocksHeading = findElement(main, (element) => element.textContent === "Blocks");
-  const dependsGroup = dependsHeading && dependsHeading.parentElement;
-  const blocksGroup = blocksHeading && blocksHeading.parentElement;
+  const dependsGroup = relationshipGroup(main, "Depends On");
+  const blocksGroup = relationshipGroup(main, "Blocks");
   const candidateID = ` + strconv.Quote(activeCandidate.ID) + `;
   if (findElement(dependsGroup, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID) ||
       findElement(blocksGroup, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID)) {
     throw new Error("tombstoned ID remained an editable relationship candidate");
   }
 
-  const dependsRows = dependsGroup.querySelectorAll("[data-relationship-row]")
+  const dependsRows = relationshipRowsOfKind(main, "Depends On")
     .filter((row) => row.dataset.relationshipId === ` + strconv.Quote(activeDependency.ID) + `);
   if (dependsRows.length !== 1 || !dependsRows[0].textContent.includes("Deleted") ||
-      !findElement(dependsRows[0], (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+      !findElement(dependsRows[0], (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""))) {
     throw new Error("tombstoned Depends On ID was not rendered once and removable");
   }
 
   // The same race on the other side of the edge: the tombstone wins here too,
   // and a deleted dependent is not listed in Blocks at all.
-  const blocksRows = blocksGroup.querySelectorAll("[data-relationship-row]")
+  const blocksRows = relationshipRowsOfKind(main, "Blocks")
     .filter((row) => row.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
   if (blocksRows.length !== 0) {
     throw new Error("tombstoned Blocks ID was listed despite its live copy losing to the tombstone");
@@ -2707,7 +2719,7 @@ setTimeout(() => {
     const listbox = findElement(group, (element) => element.attributes.role === "listbox");
     const selected = findElement(group, (element) =>
       element.attributes.role === "option" && element.attributes["aria-selected"] === "true");
-    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
     if (input.value !== candidate.title) {
       throw new Error(label + " did not expose the accepted task as the combobox value");
     }
@@ -2720,8 +2732,7 @@ setTimeout(() => {
     }
   };
 
-  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
-  const dependsGroup = dependsHeading.parentElement;
+  const dependsGroup = relationshipGroup(main, "Depends On");
   const dependsInput = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
   dependsInput.eventListeners.focus();
   const pointerOption = findElement(dependsGroup, (element) =>
@@ -2729,8 +2740,7 @@ setTimeout(() => {
   pointerOption.eventListeners.click();
   assertCollapsedSelection(dependsGroup, dependsInput, taskDocument.tasks[1], "pointer selection from an empty query");
 
-  const blocksHeading = findElement(main, (element) => element.textContent === "Blocks");
-  const blocksGroup = blocksHeading.parentElement;
+  const blocksGroup = relationshipGroup(main, "Blocks");
   const blocksInput = findElement(blocksGroup, (element) => element.attributes.role === "combobox");
   blocksInput.value = "Keyboard";
   blocksInput.eventListeners.input();
@@ -2768,8 +2778,7 @@ func TestHandlerClientDependencyComboboxScrollsKeyboardOptionIntoView(t *testing
 
 	program := clientDOMHarness("/tasks/"+current.ID, string(document)) + script + `
 setTimeout(() => {
-  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
-  const input = findElement(dependsHeading.parentElement, (element) => element.attributes.role === "combobox");
+  const input = findElement(relationshipGroup(main, "Depends On"), (element) => element.attributes.role === "combobox");
   input.eventListeners.focus();
   for (let index = 0; index < 3; index += 1) {
     input.eventListeners.keydown({ key: "ArrowDown", preventDefault() {} });
@@ -2813,12 +2822,10 @@ func TestHandlerClientDependencyComboboxDismissesOnLostFocus(t *testing.T) {
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   const partsFor = (headingText) => {
-    const heading = findElement(main, (element) => element.textContent === headingText);
-    if (!heading) throw new Error("missing " + headingText + " group");
-    const group = heading.parentElement;
+    const group = relationshipGroup(main, headingText);
     const input = findElement(group, (element) => element.tagName === "INPUT" && element.attributes.role === "combobox");
     const listbox = findElement(group, (element) => element.attributes.role === "listbox");
-    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
     return { group, input, listbox, add, region: input.parentElement };
   };
   const assertOpen = (parts, label) => {
@@ -2981,16 +2988,12 @@ func TestHandlerClientDependencyMutationOrientationAndRefresh(t *testing.T) {
 deletedTaskResponse = ` + string(emptyDeleted) + `;
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const groupFor = (headingText) => {
-    const heading = findElement(main, (element) => element.textContent === headingText);
-    if (!heading) throw new Error("missing " + headingText + " group");
-    return heading.parentElement;
-  };
+  const groupFor = (headingText) => relationshipGroup(main, headingText);
   const selectByPointer = (group, candidateID) => {
     const option = findElement(group, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID);
     if (!option || !option.eventListeners.click) throw new Error("candidate option is not pointer selectable: " + candidateID);
     option.eventListeners.click();
-    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
     if (!add || add.disabled || !add.eventListeners.click) throw new Error("selected candidate did not enable Add dependency");
     return add;
   };
@@ -3035,7 +3038,7 @@ setTimeout(async () => {
 
   dependsGroup = groupFor("Depends On");
   const existingDependencyRow = findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingDependency.ID) + `);
-  const dependsRemove = existingDependencyRow && findElement(existingDependencyRow, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  const dependsRemove = existingDependencyRow && findElement(existingDependencyRow, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   if (!dependsRemove || !dependsRemove.eventListeners.click) throw new Error("active Depends On row is not removable");
   let resolveDependsRefresh;
   taskResponse = new Promise((resolve) => { resolveDependsRefresh = resolve; });
@@ -3060,7 +3063,7 @@ setTimeout(async () => {
 
   blocksGroup = groupFor("Blocks");
   const existingBlockedRow = findElement(blocksGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingBlocked.ID) + `);
-  const blocksRemove = existingBlockedRow && findElement(existingBlockedRow, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  const blocksRemove = existingBlockedRow && findElement(existingBlockedRow, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   if (!blocksRemove || !blocksRemove.eventListeners.click) throw new Error("active Blocks row is not removable");
   let resolveBlocksRefresh;
   taskResponse = new Promise((resolve) => { resolveBlocksRefresh = resolve; });
@@ -3123,15 +3126,14 @@ func TestHandlerClientDependencyMutationFollowsSupersedingRefresh(t *testing.T) 
 deletedTaskResponse = ` + string(emptyDeleted) + `;
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
-  const dependsGroup = dependsHeading && dependsHeading.parentElement;
+  const dependsGroup = relationshipGroup(main, "Depends On");
   const input = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
   input.value = "Candidate";
   input.eventListeners.input();
   const option = findElement(dependsGroup, (element) =>
     element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
   option.eventListeners.click();
-  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
 
   let resolveSupersededRefresh;
   let activeGets = 0;
@@ -3219,16 +3221,15 @@ func TestHandlerClientDependencyMutationSettlesAfterControllerSupersession(t *te
 deletedTaskResponse = ` + string(emptyDeleted) + `;
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
-  const dependsGroup = dependsHeading && dependsHeading.parentElement;
-  const relationshipRegion = dependsGroup.parentElement;
+  const dependsGroup = relationshipGroup(main, "Depends On");
+  const relationshipRegion = relationshipSection(main);
   const controllerStatus = relationshipRegion.children.find((element) => element.className === "form-status");
   const input = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
   input.eventListeners.focus();
   const option = findElement(dependsGroup, (element) =>
     element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
   option.eventListeners.click();
-  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
 
   let resolveDeletedContext;
   let activeGets = 0;
@@ -3281,7 +3282,7 @@ setTimeout(async () => {
   if (controllerStatus.textContent !== "detached controller remains untouched") {
     throw new Error("superseded deleted context wrote to the detached controller");
   }
-  const groupMessage = findElement(dependsGroup, (element) => element.className === "relationship-message");
+  const groupMessage = findElement(relationshipRegion, (element) => element.className === "relationship-message");
   if (groupMessage.textContent !== "") {
     throw new Error("settled mutation wrote status into the detached relationship group");
   }
@@ -3355,17 +3356,16 @@ func TestHandlerClientDependencyMutationDoesNotWriteDetachedGroupAfterNewerPoll(
 deletedTaskResponse = ` + string(emptyDeleted) + `;
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
-  const dependsGroup = dependsHeading.parentElement;
-  const relationshipRegion = dependsGroup.parentElement;
+  const dependsGroup = relationshipGroup(main, "Depends On");
+  const relationshipRegion = relationshipSection(main);
   const controllerStatus = relationshipRegion.children.find((element) => element.className === "form-status");
-  const groupMessage = findElement(dependsGroup, (element) => element.className === "relationship-message");
+  const groupMessage = findElement(relationshipRegion, (element) => element.className === "relationship-message");
   const input = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
   input.eventListeners.focus();
   const option = findElement(dependsGroup, (element) =>
     element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
   option.eventListeners.click();
-  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
 
   let resolveDeletedContext;
   let activeGets = 0;
@@ -3477,15 +3477,14 @@ func TestHandlerClientDependencyMutationErrorDoesNotWriteDetachedGroup(t *testin
 deletedTaskResponse = ` + string(emptyDeleted) + `;
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
-  const dependsGroup = dependsHeading.parentElement;
-  const groupMessage = findElement(dependsGroup, (element) => element.className === "relationship-message");
+  const dependsGroup = relationshipGroup(main, "Depends On");
+  const groupMessage = findElement(relationshipSection(main), (element) => element.className === "relationship-message");
   const input = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
   input.eventListeners.focus();
   const option = findElement(dependsGroup, (element) =>
     element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
   option.eventListeners.click();
-  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
 
   let resolveMutationError;
   let activeGets = 0;
@@ -3573,14 +3572,13 @@ func TestHandlerClientDependencyMutationReportsDeletedContextFailure(t *testing.
 deletedTaskResponse = ` + string(emptyDeleted) + `;
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
-  const dependsGroup = dependsHeading && dependsHeading.parentElement;
+  const dependsGroup = relationshipGroup(main, "Depends On");
   const input = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
   input.eventListeners.focus();
   const option = findElement(dependsGroup, (element) =>
     element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
   option.eventListeners.click();
-  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
 
   globalThis.fetch = async (url, options = {}) => {
     fetchCalls.push({ url, options });
@@ -3662,13 +3660,9 @@ func TestHandlerClientDependencyFailureRecoveryAndKeyboard(t *testing.T) {
 deletedTaskResponse = ` + string(emptyDeleted) + `;
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const groupFor = (headingText) => {
-    const heading = findElement(main, (element) => element.textContent === headingText);
-    if (!heading) throw new Error("missing " + headingText + " group");
-    return heading.parentElement;
-  };
+  const groupFor = (headingText) => relationshipGroup(main, headingText);
   const inputFor = (group) => findElement(group, (element) => element.tagName === "INPUT" && element.attributes.role === "combobox");
-  const addFor = (group) => findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const addFor = (group) => findElement(group, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
   const dispatchKey = (input, key) => {
     let prevented = false;
     input.eventListeners.keydown({ key, preventDefault() { prevented = true; } });
@@ -3761,6 +3755,12 @@ setTimeout(async () => {
     throw new Error("successful relationship refresh reconstructed or reset the unsaved task form");
   }
 
+  // The toggle is still on Blocks after the add, so the next Blocks entry
+  // needs no second choice; the reader turns it back to Depends On here.
+  if (!relationshipKindRadios(main).find((radio) => radio.value === "blocks").checked) {
+    throw new Error("the dependency toggle did not stay on Blocks after a Blocks entry was added");
+  }
+  chooseRelationshipKind(main, "Depends On");
   dependsInput.value = "Beta";
   dependsInput.eventListeners.input();
   dispatchKey(dependsInput, "ArrowDown");
@@ -4440,9 +4440,10 @@ func requireNode(t *testing.T) string {
 }
 
 // nodeCommand feeds the program to node over stdin rather than as an argument.
-// The client programs embed assets/index.html, and Linux caps one argv string
-// at 128 KiB (MAX_ARG_STRLEN), a ceiling the largest programs have outgrown;
-// stdin has no such limit and behaves identically on every platform CI runs.
+// The client programs embed the page's whole script, and Linux caps one argv
+// string at 128 KiB (MAX_ARG_STRLEN), a ceiling the largest programs have
+// outgrown; stdin has no such limit and behaves identically on every platform
+// CI runs.
 func nodeCommand(node, program string) *exec.Cmd {
 	command := exec.Command(node, "-")
 	command.Stdin = strings.NewReader(program)
@@ -4552,11 +4553,6 @@ const boardAttachmentURLLimit = ` + strconv.Itoa(core.MaxAttachmentURLBytes) + `
 // image only for one of these, so a harness that invented the list would be
 // testing a rule the server does not have.
 const boardInlineMedia = ` + strconv.Quote(strings.Join(InlineAttachmentMediaTypes(), " ")) + `;
-// How long an assignment has stood is worded by presentation.AssignedAgo's rule,
-// which the server renders into the page as a table. It is written by the
-// encoder the page itself uses, so a harness cannot word an age by a rule the
-// server does not have.
-const boardAssignedAgo = ` + strconv.Quote(pageAssignedAgo()) + `;
 const scrollIntoViewCalls = [];
 function classTokens(element) {
   return (element.className || "").split(/\s+/).filter(Boolean);
@@ -4855,7 +4851,6 @@ boardView.dataset.attachmentNameLimit = String(boardAttachmentNameLimit);
 boardView.dataset.attachmentLabelLimit = String(boardAttachmentLabelLimit);
 boardView.dataset.attachmentUrlLimit = String(boardAttachmentURLLimit);
 boardView.dataset.inlineMedia = boardInlineMedia;
-boardView.dataset.assignedAgo = boardAssignedAgo;
 // The region that holds tasks whose status matches no column. It is always in
 // the document and hidden while empty, because the status that strands a task
 // arrives on a poll rather than on the first paint, and a region the server
@@ -5278,6 +5273,60 @@ function findElements(root, predicate, matches = []) {
 }
 function hasDataKey(element, key) {
   return Object.prototype.hasOwnProperty.call(element.dataset || {}, key);
+}
+// The task form's dependency section, and the kind its one picker adds. The
+// section lists Depends On and Blocks in one list, so a test reaches "the
+// Blocks picker" by choosing Blocks on the toggle, the way a reader does, and
+// then works in the one section.
+function relationshipSection(root) {
+  const section = findElement(root, (element) => hasClassToken(element, "task-relationships"));
+  if (!section) throw new Error("the form has no dependency section");
+  return section;
+}
+function relationshipKindValue(label) {
+  if (label === "Depends On") return "depends-on";
+  if (label === "Blocks") return "blocks";
+  throw new Error("no dependency kind is called " + JSON.stringify(label));
+}
+function relationshipKindRadios(root) {
+  return findElements(relationshipSection(root), (element) => element.tagName === "INPUT" && element.type === "radio");
+}
+// What a browser does when a radio is chosen: the group's other radio clears,
+// and the chosen one raises change. Choosing the radio that is already chosen
+// raises nothing, in a browser and here.
+function chooseRelationshipKind(root, label) {
+  const value = relationshipKindValue(label);
+  const radios = relationshipKindRadios(root);
+  const radio = radios.find((element) => element.value === value);
+  if (!radio) throw new Error("the dependency toggle offers no " + label);
+  if (radio.checked) return relationshipSection(root);
+  radios.forEach((element) => { element.checked = element === radio; });
+  if (!radio.eventListeners.change) throw new Error("the " + label + " radio does not listen for change");
+  radio.eventListeners.change({ target: radio });
+  return relationshipSection(root);
+}
+// The rows listed under one kind, in the order the section draws them.
+function relationshipRowsOfKind(root, label) {
+  const value = relationshipKindValue(label);
+  return findElements(relationshipSection(root), (element) =>
+    hasDataKey(element, "relationshipRow") && element.dataset.relationshipKind === value);
+}
+// The section as one kind sees it: that kind's rows, then the toggle, the
+// picker and the message lines. Every read of it chooses the kind first, so
+// whatever a test types or picks in it adds that kind, exactly as the two
+// separate groups did before they were one section.
+function relationshipGroup(root, label) {
+  relationshipKindValue(label);
+  return {
+    nodeType: 1, tagName: "SECTION", className: "", dataset: {}, attributes: {}, eventListeners: {},
+    get children() {
+      const section = chooseRelationshipKind(root, label);
+      const shared = section.children.filter((child) => !hasClassToken(child, "relationship-list") && child.tagName !== "H3");
+      return [...relationshipRowsOfKind(root, label), ...shared];
+    },
+    get textContent() { return this.children.map((child) => child.textContent).join(""); },
+    contains(element) { return this.children.some((child) => child.contains(element)); }
+  };
 }
 // Every element under a node, in document order. Text nodes are not elements
 // and are skipped, which is what makes this the list a whitelist is asked of.
@@ -7007,16 +7056,12 @@ func TestHandlerClientDetailFormAdoptsTheHeadItsOwnDependencyEditMoved(t *testin
 deletedTaskResponse = ` + emptyDeleted + `;
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const groupFor = (headingText) => {
-    const heading = findElement(main, (element) => element.textContent === headingText);
-    if (!heading) throw new Error("missing " + headingText + " group");
-    return heading.parentElement;
-  };
+  const groupFor = (headingText) => relationshipGroup(main, headingText);
   const addCandidate = (group, candidateID) => {
     const option = findElement(group, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID);
     if (!option || !option.eventListeners.click) throw new Error("candidate option is not selectable: " + candidateID);
     option.eventListeners.click();
-    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Add dependency");
     if (!add || add.disabled) throw new Error("selected candidate did not enable Add dependency");
     return add.eventListeners.click();
   };
@@ -7089,7 +7134,7 @@ setTimeout(async () => {
   title.value = renderedTitle;
 
   const row = findElement(groupFor("Depends On"), (element) => element.dataset.relationshipId === ` + strconv.Quote(prerequisite.ID) + `);
-  const remove = row && findElement(row, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  const remove = row && findElement(row, (element) => element.tagName === "BUTTON" && /^Remove /.test(element.getAttribute("aria-label") || ""));
   if (!remove) throw new Error("the added prerequisite is not removable");
   nextMutation = { format: "workbook.task-mutation", version: 1, task: ` + documentJSON([]core.Task{afterDependsRemove}) + `.tasks[0] };
   taskResponse = ` + documentJSON([]core.Task{afterDependsRemove, prerequisite, blockedAfterAdd}) + `;

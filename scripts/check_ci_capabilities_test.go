@@ -19,13 +19,16 @@ func TestCheckCICapabilitiesAcceptsAFullyProvisionedEnvironment(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		testenv.MissingCapability(t, "node is required to prove the capability preflight accepts a full environment")
 	}
+	if !chromeAvailable() {
+		testenv.MissingCapability(t, "Chrome or Chromium is required to prove the capability preflight accepts a full environment")
+	}
 	_, script := checkCapabilitiesPaths(t)
 
 	output, err := exec.Command(script).CombinedOutput()
 	if err != nil {
 		t.Fatalf("capability preflight rejected this environment: %v\n%s", err, output)
 	}
-	for _, want := range []string{"node ", "--object-format=sha256", "every optional test capability is present"} {
+	for _, want := range []string{"node ", "chrome ", "--object-format=sha256", "every optional test capability is present"} {
 		if !strings.Contains(string(output), want) {
 			t.Errorf("preflight output %q does not report %q", output, want)
 		}
@@ -48,6 +51,52 @@ func TestCheckCICapabilitiesFailsWhenNodeIsMissing(t *testing.T) {
 			t.Errorf("preflight output %q does not report %q", output, want)
 		}
 	}
+}
+
+// Production mutation: passing without Chrome lets every real-browser layout
+// test in internal/webui skip while the job stays green. A configured path is
+// used here because it is the probe's first source, and the only one a test
+// can withdraw on a Mac that has Chrome installed where the probe looks.
+func TestCheckCICapabilitiesFailsWhenChromeIsMissing(t *testing.T) {
+	t.Parallel()
+	_, script := checkCapabilitiesPaths(t)
+	path := capabilityProbePATH(t, map[string]string{"node": "#!/bin/sh\necho v22.0.0\n"})
+	missing := filepath.Join(t.TempDir(), "no-chrome-here")
+
+	output, err := runWithPATH(script, path, "WORKBOOK_TEST_CHROME="+missing)
+	if err == nil {
+		t.Fatalf("preflight accepted an environment without Chrome:\n%s", output)
+	}
+	for _, want := range []string{"missing capability", "WORKBOOK_TEST_CHROME names " + missing, "browser layout tests"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("preflight output %q does not report %q", output, want)
+		}
+	}
+	if strings.Contains(output, "node is not on PATH") {
+		t.Errorf("preflight reported node missing, so this does not isolate Chrome:\n%s", output)
+	}
+}
+
+// chromeAvailable reports whether the preflight would find a Chrome, looking
+// where it looks.
+func chromeAvailable() bool {
+	if configured := os.Getenv("WORKBOOK_TEST_CHROME"); configured != "" {
+		_, err := os.Stat(configured)
+		return err == nil
+	}
+	for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"} {
+		if _, err := exec.LookPath(name); err == nil {
+			return true
+		}
+	}
+	if runtime.GOOS == "darwin" {
+		for _, bundle := range []string{"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium"} {
+			if _, err := os.Stat(bundle); err == nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Production mutation: passing with a Git that cannot create SHA-256
@@ -85,7 +134,7 @@ func TestCheckCICapabilitiesFailsWhenGitCannotCreateSHA256Repositories(t *testin
 func capabilityProbePATH(t *testing.T, stubs map[string]string) string {
 	t.Helper()
 	directory := t.TempDir()
-	for _, tool := range []string{"git", "mktemp", "rm", "node"} {
+	for _, tool := range []string{"git", "mktemp", "rm", "uname", "node"} {
 		target := filepath.Join(directory, tool)
 		if stub, ok := stubs[tool]; ok {
 			testenv.WriteExecutable(t, target, []byte(stub))
@@ -107,13 +156,13 @@ func capabilityProbePATH(t *testing.T, stubs map[string]string) string {
 	return directory
 }
 
-func runWithPATH(script, path string) (string, error) {
+func runWithPATH(script, path string, environment ...string) (string, error) {
 	command := exec.Command(script)
 	// Built from scratch rather than os.Environ(), so the isolated git
 	// configuration TestMain installs has to be threaded in explicitly or the
 	// preflight's real `git init --object-format=sha256` probe would run
 	// against the developer's global config instead.
-	command.Env = append([]string{"PATH=" + path}, isolatedGitConfigValues()...)
+	command.Env = append(append([]string{"PATH=" + path}, isolatedGitConfigValues()...), environment...)
 	output, err := command.CombinedOutput()
 	return string(output), err
 }

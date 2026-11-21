@@ -375,8 +375,21 @@ func (r *Repository) writeBlob(ctx context.Context, contents []byte) (string, er
 // pack onto a fetched tip by handing the same pack back to writeTaskObjects, so
 // the replayed commit carries the same blobs by construction; nothing has to
 // remember to bring them along, and nothing can forget.
+//
+// A checkpoint adds nothing, but it is a root, so it carries every file its
+// task keeps: the blobs of the history it replaced are not reachable from it.
+// A dropped file has no entry, which is what lets its bytes go.
 func attachmentTreeEntries(pack core.OperationPack) []attachmentTreeEntry {
 	var entries []attachmentTreeEntry
+	if _, ok := pack.Checkpoint(); ok && pack.Operations[0].Task != nil {
+		for _, attachment := range keptFileAttachments(pack.Operations[0].Task.Attachments) {
+			entries = append(entries, attachmentTreeEntry{
+				name:     attachmentTreeName(attachment.ID),
+				objectID: attachment.Blob,
+			})
+		}
+		return entries
+	}
 	for _, operation := range pack.Operations {
 		if operation.Type != core.OperationAttachmentAdd || operation.Attachment == nil {
 			continue
@@ -390,6 +403,18 @@ func attachmentTreeEntries(pack core.OperationPack) []attachmentTreeEntry {
 		})
 	}
 	return entries
+}
+
+// keptFileAttachments returns the file attachments whose bytes a checkpoint
+// carries: every file compaction has not dropped.
+func keptFileAttachments(attachments []core.Attachment) []core.Attachment {
+	var kept []core.Attachment
+	for _, attachment := range attachments {
+		if attachment.Kind == core.AttachmentFile && !attachment.IsDropped() {
+			kept = append(kept, attachment)
+		}
+	}
+	return kept
 }
 
 type attachmentTreeEntry struct {

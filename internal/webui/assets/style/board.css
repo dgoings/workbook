@@ -1,0 +1,219 @@
+    .stale { display: none; margin: 0 0 1rem; padding: .55rem .7rem; border-left: 3px solid var(--wb-warning); background: var(--wb-warning-surface); color: var(--wb-warning-ink); font-size: .875rem; }
+    .stale[data-visible="true"] { display: block; }
+    /* Rows are assigned rather than auto-placed, so the board keeps the flexible
+       row whether or not the stale banner and the unknown-status region are
+       showing. Both of those appear only in trouble, and the board must not
+       resize under the reader when they do. */
+    .board-view { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; min-height: 0; }
+    .stale { grid-row: 1; }
+    .board { grid-row: 2; }
+    .unknown-status { grid-row: 3; }
+    /* One track per column the server rendered, and the grid counts them itself.
+       The track list used to name six, which was the number of statuses Workbook
+       shipped; a project defines its own now, and the five in the built-in set
+       left a sixth track standing empty and holding the width the five wanted.
+       That is why the columns sat at their minimum until about 1640px when five
+       of them fill 1371px. grid-auto-flow makes the count the DOM's answer
+       rather than a second copy of it, which is the same reason the client reads
+       its statuses off the columns instead of keeping a list: a project with
+       three columns or eight gets three tracks or eight with nothing to keep in
+       step, a poll that re-renders the cards cannot disturb it, and a corrupt
+       ledger that defines no statuses at all draws no tracks rather than the
+       repeat(0, …) that is not a stylesheet.
+
+       minmax grows the tracks without an fr: the track sizing algorithm hands
+       out free space equally until every track reaches its growth limit, so
+       between min×n and max×n the columns widen together, and past max×n they
+       stop and the board is left-aligned in what is left. Left rather than
+       centred because the unknown-status region below and the header above both
+       run the full width — and because a centred grid puts the first column off
+       the left edge when the board is too wide to fit, where no scroll reaches
+       it. Below min×n nothing has grown and the board scrolls, as before. */
+    .board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(var(--board-column-min), var(--board-column-max)); justify-content: start; gap: .8rem; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: .25rem; }
+    .unknown-status { display: none; margin-top: .8rem; border: 1px solid var(--wb-warning-border); border-top: 3px solid var(--wb-warning); background: var(--wb-warning-surface); }
+    .unknown-status[data-visible="true"] { display: block; }
+    .unknown-status__header { padding: .7rem .75rem .1rem; }
+    .unknown-status__heading { display: flex; align-items: baseline; gap: .5rem; margin: 0; color: var(--wb-warning-ink); font-size: .92rem; }
+    .unknown-status__heading .count { color: var(--wb-warning-ink); }
+    .unknown-status__note { max-width: 62ch; margin: .3rem 0 0; color: var(--wb-warning-ink); font-size: .76rem; line-height: 1.4; }
+    /* The strip draws the same cards the columns do, so it holds them to the
+       same minimum: eight of them in a 1280-wide window fell to 12rem tracks,
+       which is the width the board minimum exists to prevent. It scrolls
+       sideways already, and 18rem stays its maximum so a strip of one or two
+       does not stretch a card across the page. */
+    .unknown-status__list { grid-auto-columns: minmax(var(--board-column-min), 18rem); grid-auto-flow: column; max-height: 15rem; overflow-x: auto; overflow-y: auto; }
+    .column { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: var(--board-column-min); min-height: 0; border: 1px solid var(--wb-border); background: var(--wb-column-ground); }
+    /* No min-height: the header holds a heading and the New Task link, the same
+       two lines in all six columns, so they are the same height without being
+       told to be. The declaration that used to sit here reserved the row the
+       ref path occupied, and once that left it was below the natural height and
+       applied to nothing. A floor could not have squared the headers up anyway
+       — it can only raise a header that is short, never pull five of them up to
+       one that grew. */
+    .column__header { padding: .7rem .75rem .6rem; border-top: 3px solid var(--wb-primary); border-bottom: 1px solid var(--wb-border); background: var(--wb-primary-tint-4); }
+    .column__heading { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin: 0; font-size: .92rem; }
+    .count { color: var(--wb-primary); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .8rem; }
+    .new-task-link { display: inline-block; margin-top: .45rem; color: var(--wb-primary); font-size: .73rem; font-weight: 750; text-decoration-thickness: 1px; text-underline-offset: .18em; }
+    /* overflow-anchor: none guards against browser scroll anchoring walking a scrolled column downward when a render rebuilds its cards. The renderer reconciles by task ID and reuses nodes, so nothing should churn here any more; keep the declaration anyway, so a future code path that rebuilds a column cannot silently reintroduce the drift. */
+    .task-list { display: grid; align-content: start; gap: .55rem; min-height: 0; overflow-anchor: none; overflow-y: auto; padding: .55rem; }
+    /* min-width, because a card is a grid item and a grid item's automatic
+       minimum is its content: without this a card is never allowed to be
+       narrower than the widest unbreakable thing inside it, and it grows out of
+       its column rather than clipping. Measured before it was here: a card
+       whose description held a 46-character identifier in inline code drew
+       374px wide inside a 268px column, over the top of the column beside it.
+       The description under it is already clipped and clamped, so nothing
+       inside a card needs the card to be any wider than the column it is in. */
+    .task-card { min-width: 0; border: 1px solid var(--wb-border); border-radius: 4px; background: var(--wb-surface); padding: .7rem; box-shadow: 0 1px 0 var(--wb-text-shadow-faint); cursor: grab; }
+    .task-card:active { cursor: grabbing; }
+    /* A card whose save is still in flight has no ID to place, so it must not offer the grab cursor a drag would promise. draggable is a reflected attribute, so the selector tracks the property the client sets — and it is now the pending stand-in alone, since an unknown-status card drags out to the column that files it. */
+    .task-card[draggable="false"], .task-card[draggable="false"]:active { cursor: default; }
+    .task-card:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
+    .task-card.is-dragging { opacity: .5; }
+    .task-card[data-pending-create] { border-style: dashed; cursor: default; }
+    .task-card__pending { color: var(--wb-warning-ink); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-weight: 800; }
+    .task-card__meta { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: var(--wb-ink-dim); font-size: .7rem; }
+    .task-card code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .task-id-copy-group { position: relative; display: inline-flex; align-items: baseline; min-width: 0; }
+    .task-id-copy { max-width: 100%; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; padding: 0; }
+    .task-id-copy:hover { color: var(--wb-primary); }
+    .task-id-copy:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
+    .copy-status { position: absolute; left: 100%; top: 50%; margin-left: .35rem; color: var(--wb-primary-edge); font-size: .65rem; font-weight: 800; line-height: 1; pointer-events: none; transform: translateY(-50%); white-space: nowrap; }
+    .copy-status:empty { display: none; }
+    .copy-status[data-kind="error"] { color: var(--wb-danger-ink); }
+    /* A priority is a word, and a badge only where the word alone cannot be
+       read. The geometry is stated here for both: the padding and the 4px
+       radius the rest of this page's boxes carry, which show where a background
+       is drawn behind them and cost nothing where none is.
+
+       Whether one is drawn is per priority and per scheme, and is composed in Go
+       with the ink — see priorityChipFor, which asks the only question the card
+       actually poses, whether this label clears AA where it sits, and answers a
+       No with a background far enough past the bar to look deliberate. Most
+       colors are a Yes and are left as the bare colored word this row has always
+       drawn; a pale yellow on a white card is not, and it gets a deep chip.
+
+       No background is stated here, and none is stated for a priority that needs
+       none. Both leave the card's own surface showing, which is the same answer
+       as before any of this — and is the right one for the case the block below
+       is absent entirely. */
+    .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; border-radius: 4px; padding: .1rem .34rem; }
+    /* The served page carries a third <style> element after the theme block,
+       giving every priority this project defines its own ink and overriding
+       these three by cascade. These stay as the standing answer for the one
+       case that block is absent — no priority with a valid token, which the
+       built-in three cannot produce — so a board is never served with its
+       priorities drawn in body text. */
+    .priority--high { color: var(--wb-priority-high); } .priority--medium { color: var(--wb-priority-medium); } .priority--low { color: var(--wb-priority-low); }
+    /* A priority this project does not define: the token, drawn in the warning
+       family the unknown-status region is drawn in rather than in anything a
+       priority is. No priority has a border, so the dashed one is what tells
+       this chip apart from a live one — including from the amber a medium
+       priority shares with --wb-warning — and the question mark reads as the
+       "unknown" the region's heading says. The mark is empty alt text, because
+       the card's label already says it in words. Two selectors' worth of
+       specificity outrank the served ink block's single class either way, and
+       the padding gives back the border's pixel so the meta row keeps its
+       height whichever chip it holds. */
+    .priority[data-priority-unresolved] { color: var(--wb-warning-ink); background: var(--wb-warning-surface); border: 1px dashed var(--wb-warning); padding: calc(.1rem - 1px) calc(.34rem - 1px); cursor: help; }
+    .priority[data-priority-unresolved]::before { content: "?" / ""; margin-right: .2em; }
+    .task-card h3 { margin: .55rem 0 .3rem; font-size: .9rem; line-height: 1.24; overflow-wrap: anywhere; }
+    /* A card title is a heading, not a link inside a sentence: every card is one
+       link and the whole card is focusable, so nothing here depends on an
+       underline to be told apart from the text around it. It carries none, and
+       hover turns it blue — which the keyboard reaches too, because focus draws
+       the card's own outline. */
+    .task-card h3 a { color: var(--wb-text); text-decoration: none; }
+    .task-card h3 a:hover { color: var(--wb-primary); }
+    .task-card h3 a:focus-visible, .new-task-link:focus-visible, .board-link:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
+    /* A card is an ID, a title, and its labels. The description is the one field
+       with no length the column can rely on, so six clamped lines of it push the
+       next card off the screen; the board hides it and the header setting brings
+       it back. The text stays in the card and only this rule decides whether it
+       is seen, which keeps the setting out of the renderer entirely: showing
+       descriptions flips one attribute on the board instead of rebuilding every
+       card, and the poll that reconciles cards by ID has nothing to reset. */
+    .task-card p { display: none; max-height: calc(1.36em * 6); overflow: hidden; margin: 0; color: var(--wb-ink-muted); font-size: .8rem; line-height: 1.36; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
+    .board-view[data-descriptions="shown"] .task-card p { display: -webkit-box; }
+    /* A card renders the inline half of the subset and nothing that makes a
+       block: the clamp above measures lines of one box, and a heading or a list
+       inside it would either escape the clamp or collapse it. So these three
+       rules are the whole of a card's formatting, and every one of them is a
+       property that cannot change how tall the box is — no margins, no display,
+       no line-height. The renderer takes the other half of that promise by
+       running a card's lines together rather than breaking them, so a card is
+       exactly as tall as it was before any of this existed. Measured at four
+       viewports against the same board on main: every card identical to the
+       pixel. */
+    .task-card p strong { font-weight: 800; }
+    .task-card p em { font-style: italic; }
+    /* The three properties at the front are a reset, not decoration, and this
+       rule is written after the one they undo. `.task-card code` above is the
+       copy control that holds the task's own identifier: it is one token that
+       must stay on one line and end in an ellipsis, and it matches every <code>
+       on a card, including the ones a description is now made of. Left in
+       place, a 46-character identifier in inline code drew 350px wide inside a
+       202px description box — clipped mid-token, where the same characters as
+       plain text wrapped. Measured both ways; this is the difference. */
+    .task-card p code { overflow: visible; text-overflow: clip; white-space: normal; padding: 0 .18rem; border-radius: 3px; background: var(--wb-surface-6); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .95em; }
+    .labels { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .65rem; }
+    .label { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid var(--wb-hairline); border-radius: 3px; color: var(--wb-ink-soft); font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
+    /* The assignee row takes the label row's geometry exactly — same flex wrap,
+       same gap, same top margin — because it is the same kind of thing on the
+       same card and a second geometry would read as a second kind. What differs
+       is colour and the leading @, which is what keeps a chip from being read as
+       a label somebody happened to name after a teammate: no styling of a label,
+       a title or a description produces this box, so a card cannot be made to
+       forge an assignment by typing one.
+
+       `max-width: 100%` and the ellipsis are load-bearing rather than tidy. A
+       principal may be 254 bytes and a label 100, and a column at the 390px
+       viewport is 302px wide: without the clamp one chip drew 1180px and took
+       the whole page into horizontal scroll. Clamped, it ends in an ellipsis
+       inside its column, and the task page below prints the whole value. */
+    .assignees { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .65rem; }
+    .assignee { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid var(--wb-primary-muted); border-radius: 3px; background: var(--wb-primary-tint-1); color: var(--wb-ink); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
+    .assignee--more { border-style: dashed; background: transparent; color: var(--wb-ink-muted); }
+    .dependency-progress { display: grid; gap: .18rem; margin-top: .65rem; color: var(--wb-ink-soft); font-size: .72rem; }
+    .dependency-progress strong { color: var(--wb-danger-ink); font-size: .72rem; }
+    /* A refused board change is reported here, on the card it concerns, and it
+       leaves only when the reader dismisses it. The board-level banner this
+       replaced was cleared by the next successful poll — under a second later —
+       so a conflict report was drawn and erased before anyone could read it.
+       The message is a span rather than a paragraph because .task-card p is the
+       card description, which the board hides by default. */
+    .task-card__failure { display: none; align-items: baseline; gap: .5rem; margin-top: .65rem; padding: .3rem .4rem; border-left: 3px solid currentcolor; background: var(--wb-warning-surface); color: var(--wb-warning-ink); font-size: .72rem; }
+    .task-card__failure[data-visible="true"] { display: flex; }
+    .task-card__failure span { flex: 1 1 auto; line-height: 1.35; overflow-wrap: anywhere; }
+    .task-card__failure button { flex: 0 0 auto; border: 1px solid currentcolor; border-radius: 3px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: .66rem; font-weight: 800; padding: .08rem .32rem; }
+    .task-card__failure button:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
+    .drop-marker { height: 0; margin: -.1rem 0; border-top: 3px solid var(--wb-primary); border-radius: 3px; pointer-events: none; }
+    /* The Deleted column. It is a .column and takes the board's track sizing
+       untouched — no width, no minimum, no maximum of its own — so a project
+       with five statuses and a project with twelve widen and scroll exactly as
+       they did before the column existed, and there is no sizing rule here that
+       could lose to one written above it.
+
+       What is here is colour, and every one of these rules is written after the
+       rules it overrides. Equal-specificity declarations in this file are
+       decided by order, and .column--deleted is exactly as specific as .column;
+       moving this block above the .column rules would silently undo it. */
+    .column--deleted { background: var(--wb-column-ground-deleted); }
+    .column--deleted .column__header { border-top-color: var(--wb-border-quiet); background: var(--wb-surface-5); }
+    .column--deleted .column__heading { color: var(--wb-ink-soft); }
+    .column--deleted .count { color: var(--wb-ink-soft); }
+    .column--deleted .task-card { border-color: var(--wb-border-soft); background: var(--wb-surface-1); }
+    /* A tombstone has no detail page to open, so its heading is an anchor with
+       no href — text, to the reader and to the click handler alike. It is
+       coloured here because the rule that greys it is the muted column's, not
+       the card's. */
+    .column--deleted .task-card h3 a { color: var(--wb-ink-soft); }
+    /* The empty state carries no display of its own, so the hidden attribute
+       the renderer sets is the only thing that decides whether it is seen — and
+       the global [hidden] rule keeps that true even if a display is written here
+       later. */
+    .column__empty { margin: 0; color: var(--wb-ink-muted); font-size: .78rem; line-height: 1.4; }
+    .restore-button { margin-top: .65rem; border: 1px solid var(--wb-border-strong); border-radius: 3px; background: var(--wb-surface); color: var(--wb-ink); cursor: pointer; font: inherit; font-size: .72rem; font-weight: 800; padding: .22rem .5rem; }
+    .restore-button:hover { border-color: var(--wb-primary); color: var(--wb-primary); }
+    .restore-button:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
+    .restore-button:disabled { cursor: default; opacity: .55; }

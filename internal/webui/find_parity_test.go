@@ -24,8 +24,8 @@ var findParityKeys = []string{"WB", "ZZ"}
 // out of the served script between its find:begin/find:end markers, runs it in
 // Node over the same table Go runs, and compares every answer.
 //
-// The script comes from the handler rather than from assets/index.html, the way
-// every other test on this page gets it. What a reader runs is what the handler
+// The script comes from the handler rather than from the files under assets/,
+// the way every other test on this page gets it. What a reader runs is what the handler
 // served; a test that read the file on disk would keep passing if the handler
 // ever stopped shipping this block, or shipped a rewritten one. The markers are
 // string statements rather than comments for exactly that reason: html/template

@@ -58,6 +58,79 @@ type Attachment struct {
 	Author  string    `json:"author"`
 	AddedAt time.Time `json:"addedAt"`
 	AttachmentData
+	// Dropped marks a file whose bytes a compaction did not carry forward. The
+	// entry keeps everything else it was, so a reader still learns that the file
+	// existed, what it was called and how large it was. Only a history.checkpoint
+	// can carry one: attachment.add carries AttachmentData, which has no drop.
+	Dropped *AttachmentDrop `json:"dropped,omitempty"`
+}
+
+// AttachmentDrop records which compaction run dropped a file's bytes, and when.
+// The time is display metadata, the way every wall time in a task is.
+type AttachmentDrop struct {
+	RunID string    `json:"runId"`
+	At    time.Time `json:"at"`
+}
+
+// IsDropped reports a file whose bytes compaction removed.
+func (a Attachment) IsDropped() bool {
+	return a.Dropped != nil
+}
+
+// DropFileAttachments marks every live file attachment as dropped by run at
+// at, and reports how many it marked and the bytes they held. Links store
+// nothing and are left unchanged, and a file an earlier run dropped keeps that
+// run's drop and is not counted again. The input is not modified.
+func DropFileAttachments(attachments []Attachment, runID string, at time.Time) (dropped int, bytes int64, out []Attachment) {
+	out = copyAttachments(attachments)
+	for index := range out {
+		if out[index].Kind != AttachmentFile || out[index].IsDropped() {
+			continue
+		}
+		out[index].Dropped = &AttachmentDrop{RunID: runID, At: at}
+		dropped++
+		bytes += out[index].Size
+	}
+	return dropped, bytes, out
+}
+
+// DroppedAttachmentError is the refusal every surface gives for a dropped
+// file's bytes. It is not-found rather than a validation failure because the
+// caller asked for something real that no longer exists, and it names the day
+// so a reader can find the compaction that removed it. The attachment must be
+// dropped.
+func DroppedAttachmentError(attachment Attachment) error {
+	return Errorf(CategoryNotFound,
+		"attachment %q was removed when the task was compacted on %s",
+		attachment.Name, attachment.Dropped.At.Format("2006-01-02"))
+}
+
+// sameDrop compares two drops by value; the times are compared as instants.
+func sameDrop(left, right *AttachmentDrop) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.RunID == right.RunID && left.At.Equal(right.At)
+}
+
+// validateAttachmentDrops checks the drops a checkpoint carries. Only a file
+// has bytes to drop, and a drop names its run and its time.
+func validateAttachmentDrops(attachments []Attachment) error {
+	for _, attachment := range attachments {
+		if attachment.Dropped == nil {
+			continue
+		}
+		if attachment.Kind != AttachmentFile {
+			return corrupt("attachment %s is a %s and cannot be dropped", attachment.ID, attachment.Kind)
+		}
+		if err := validateCanonicalULID("attachment drop run ID", attachment.Dropped.RunID); err != nil {
+			return err
+		}
+		if attachment.Dropped.At.IsZero() {
+			return corrupt("attachment %s drop requires a time", attachment.ID)
+		}
+	}
+	return nil
 }
 
 // normalizeAttachments orders and shapes the list, for the reasons
@@ -92,7 +165,8 @@ func SameAttachments(left, right []Attachment) bool {
 		if left[index].ID != right[index].ID ||
 			left[index].Author != right[index].Author ||
 			!left[index].AddedAt.Equal(right[index].AddedAt) ||
-			left[index].AttachmentData != right[index].AttachmentData {
+			left[index].AttachmentData != right[index].AttachmentData ||
+			!sameDrop(left[index].Dropped, right[index].Dropped) {
 			return false
 		}
 	}
@@ -109,7 +183,8 @@ func findAttachment(attachments []Attachment, id string) int {
 }
 
 // LiveAttachmentBytes reports how much file storage a task's live attachments
-// account for. Links count nothing, because they store nothing.
+// account for. Links count nothing, because they store nothing, and neither
+// does a file compaction dropped, whose bytes are no longer kept.
 //
 // It is exported because it is the number the mutation boundary prices a new
 // attachment against and the number a reader is entitled to see; deriving it
@@ -117,7 +192,7 @@ func findAttachment(attachments []Attachment, id string) int {
 func LiveAttachmentBytes(attachments []Attachment) int64 {
 	var total int64
 	for _, attachment := range attachments {
-		if attachment.Kind == AttachmentFile {
+		if attachment.Kind == AttachmentFile && !attachment.IsDropped() {
 			total += attachment.Size
 		}
 	}

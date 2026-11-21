@@ -37,7 +37,47 @@ const (
 	SyncUpToDate     SyncStatus = "up-to-date"
 	SyncRejected     SyncStatus = "rejected"
 	SyncLocalChanged SyncStatus = "local-changed"
+	// SyncCompactionPublished reports a compacted task whose checkpoint origin
+	// accepted as a deliberate non-fast-forward, through a lease on the
+	// older-generation tip origin held, which the checkpoint accounts for. See
+	// compactionLease.
+	SyncCompactionPublished SyncStatus = "compaction-published"
+	// SyncAdopted reports a task origin compacted, which this clone took as it
+	// stood: every local operation was already in the checkpoint, so the
+	// canonical ref moved to it with nothing to replay.
+	SyncAdopted SyncStatus = "adopted"
+	// SyncAdoptedReplayed reports a task origin compacted, whose local-only
+	// operations were replayed onto the checkpoint in its generation.
+	SyncAdoptedReplayed SyncStatus = "adopted-replayed"
+	// SyncCompactedOnOrigin reports a task origin compacted whose local-only
+	// operations could not be replayed onto the checkpoint. The canonical ref
+	// stays on the old history, unpublished, until `workbook compact --adopt`.
+	SyncCompactedOnOrigin SyncStatus = "compacted-on-origin"
+	// SyncDiscardedLocal reports a task `workbook compact --adopt
+	// --discard-local` moved to origin's tip, dropping the local history that
+	// could not be combined with it, after saving that history to a bundle
+	// unless told not to.
+	SyncDiscardedLocal SyncStatus = "discarded-local"
 )
+
+// LeavesPreviousHistory reports an outcome that moved the canonical ref onto a
+// history its previous tip is not on: origin's compaction adopted, with or
+// without local operations replayed onto it, or the local history discarded
+// for origin's. Nothing keeps that previous tip alive afterwards, neither a
+// parked ref nor a reflog entry, so whatever last read it, such as the
+// projection, has to read the task again before Git prunes it; once it is
+// gone, no advance from it can be proven.
+//
+// Every other outcome leaves the ref on a descendant of its previous tip, or
+// parks the previous tip, which keeps it reachable.
+func (s SyncStatus) LeavesPreviousHistory() bool {
+	switch s {
+	case SyncAdopted, SyncAdoptedReplayed, SyncDiscardedLocal:
+		return true
+	default:
+		return false
+	}
+}
 
 const (
 	SyncPhaseCompleted SyncPhaseStatus = "completed"
@@ -78,13 +118,19 @@ type fetchState struct {
 	Canonical map[string]core.Snapshot
 	Tracking  map[string]core.Snapshot
 	Outcomes  map[string]SyncTaskResult
-	Identity  *SyncIdentityResult
-	Config    *SyncConfigResult
+	// Withheld names the tasks the push phase must not publish: fetch left
+	// each on a tip origin will not take, or must not be given.
+	Withheld map[string]struct{}
+	Identity *SyncIdentityResult
+	Config   *SyncConfigResult
 }
 
-// Push publishes validated local Workbook task refs to origin without force or
-// deletion. One non-atomic publication preserves per-ref outcomes so a
-// rejection does not prevent unrelated tasks from publishing.
+// Push publishes validated local Workbook task refs to origin without deletion
+// or unconditional force. The one non-fast-forward it makes is a compacted
+// task's checkpoint, leased against the older-generation tip origin holds
+// (compactionLease). One
+// non-atomic publication preserves per-ref outcomes so a rejection does not
+// prevent unrelated tasks from publishing.
 func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncResult, error) {
 	result := SyncResult{Remote: "origin", Tasks: []SyncTaskResult{}}
 	if err := r.verifyIdentity(ctx); err != nil {
@@ -117,7 +163,7 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	}
 	items := make(map[string]SyncTaskResult, len(refs))
 	observed := make(map[string]string, len(refs))
-	valid := make(map[string]struct{}, len(refs))
+	valid := make(map[string]core.Snapshot, len(refs))
 	invalid := 0
 	for _, tip := range partial {
 		observed[tip.Head.TaskID] = tip.Head.ObjectID
@@ -126,7 +172,7 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 			invalid++
 			continue
 		}
-		valid[tip.Head.TaskID] = struct{}{}
+		valid[tip.Head.TaskID] = tip.Snapshot
 	}
 
 	// Both singleton refs ride the listing Push already makes, so establishing
@@ -173,28 +219,28 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}
 	result.Ignored = ignored
-	expected := make(map[string]string, len(valid))
+	candidates := make([]pushCandidate, 0, len(valid))
 	for _, ref := range refs {
-		if _, ok := valid[ref.taskID]; !ok {
+		snapshot, ok := valid[ref.taskID]
+		if !ok {
 			continue
 		}
-		refName := taskRefPrefix + ref.taskID
 		if remoteHeads[ref.taskID] == ref.objectID {
 			items[ref.taskID] = SyncTaskResult{TaskID: ref.taskID, Status: SyncUpToDate}
 			continue
 		}
-		expected[refName] = ref.taskID
-	}
-	if len(expected) != 0 {
-		args := []string{"push", "--porcelain", "origin"}
-		for _, ref := range refs {
-			refName := taskRefPrefix + ref.taskID
-			if _, candidate := expected[refName]; candidate {
-				args = append(args, ref.objectID+":"+refName)
-			}
+		candidate := pushCandidate{TaskID: ref.taskID, Head: ref.objectID}
+		lease, leased, err := r.compactionLease(ctx, config, ref.taskID, snapshot, remoteHeads[ref.taskID])
+		if err != nil {
+			return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 		}
-		push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil, args...)
-		pushed, err := parsePushPorcelain(push.stdout, expected, push.err)
+		if leased {
+			candidate.Lease = &lease
+		}
+		candidates = append(candidates, candidate)
+	}
+	if len(candidates) != 0 {
+		pushed, err := r.pushTaskHeads(ctx, candidates)
 		if err != nil {
 			return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 		}
@@ -217,7 +263,7 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		item := items[ref.taskID]
 		if item.Status == SyncRejected {
 			rejected++
-		} else if (item.Status == SyncPublished || item.Status == SyncUpToDate) && final[ref.taskID] != observed[ref.taskID] {
+		} else if publishedSyncStatus(item.Status) && final[ref.taskID] != observed[ref.taskID] {
 			item.Status = SyncLocalChanged
 			item.Detail = "validated task head was published, but the local ref advanced during push; run workbook push again"
 			items[ref.taskID] = item
@@ -236,6 +282,12 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		return result, core.Errorf(core.CategoryStaleWrite, "%d local task ref(s) changed during push", changed)
 	}
 	return result, nil
+}
+
+// publishedSyncStatus reports an outcome in which origin now holds the tip the
+// push observed.
+func publishedSyncStatus(status SyncStatus) bool {
+	return status == SyncPublished || status == SyncUpToDate || status == SyncCompactionPublished
 }
 
 func failedPushTransport(
@@ -320,16 +372,48 @@ func (r *Repository) PushTask(ctx context.Context, config core.ProjectConfig, ta
 		return result, err
 	}
 
-	refName := taskRefPrefix + taskID
-	expected := map[string]string{refName: taskID}
-	push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil,
-		"push", "--porcelain", "origin", ref.objectID+":"+refName)
-	published, err := parsePushPorcelain(push.stdout, expected, push.err)
+	// A compacted task is leased against the older-generation tip origin
+	// holds. Where origin is expected to be comes from the tracking ref the
+	// fetch before
+	// this push brought up to date, which is a local read, so an ordinary task
+	// still costs nothing beyond the one push.
+	candidate := pushCandidate{TaskID: taskID, Head: ref.objectID}
+	if tips[0].Snapshot.State.History.CompactedFrom != nil {
+		tracking, err := r.TrackingTaskHeads(ctx, config)
+		if err != nil {
+			return result, err
+		}
+		lease, leased, err := r.compactionLease(ctx, config, taskID, tips[0].Snapshot, tracking[taskID])
+		if err != nil {
+			return result, err
+		}
+		if leased {
+			candidate.Lease = &lease
+		}
+	}
+	published, err := r.pushTaskHeads(ctx, []pushCandidate{candidate})
 	if err != nil {
 		return result, err
 	}
 	result = published[taskID]
+	if result.Status == SyncRejected && candidate.Lease != nil {
+		// A refused lease is not replayed by the next fetch the way an
+		// ordinary rejection is; its detail says what happens instead.
+		return result, core.Errorf(core.CategoryOperational, "task ref %s was rejected by origin: %s", taskID, result.Detail)
+	}
 	if result.Status == SyncRejected {
+		compacted, err := r.compactedOnOriginOnly(ctx, config, taskID, tips[0].Snapshot)
+		if err != nil {
+			return result, err
+		}
+		if compacted {
+			// The fetch before this push fell back and kept the task on the
+			// old history, and every later fetch does the same, so the
+			// sentence below would be untrue.
+			return result, core.Errorf(core.CategoryOperational,
+				"task ref %s was rejected by origin: the task was compacted on origin and is kept on the "+
+					"old history here; run \"workbook compact --adopt %s\"", taskID, taskID)
+		}
 		// A rejection means origin moved between this command's fetch and its
 		// push. The change is already durable locally and the next fetch
 		// replays it onto the new tip, so this is an ordinary operational
@@ -444,6 +528,7 @@ func (r *Repository) fetch(
 		Canonical: make(map[string]core.Snapshot),
 		Tracking:  make(map[string]core.Snapshot),
 		Outcomes:  make(map[string]SyncTaskResult),
+		Withheld:  make(map[string]struct{}),
 	}
 	result := SyncResult{Remote: "origin", Tasks: []SyncTaskResult{}}
 	if err := r.verifyIdentity(ctx); err != nil {
@@ -599,6 +684,7 @@ func (r *Repository) fetch(
 	}
 
 	pairs := make([]taskHeadPair, 0, len(state.Tracking))
+	var compacted []reconcileRequest
 	for _, ref := range trackingRefs {
 		remote, valid := state.Tracking[ref.taskID]
 		if !valid {
@@ -609,11 +695,27 @@ func (r *Repository) fetch(
 		}
 		if local, found := state.Canonical[ref.taskID]; found {
 			if local.Operation.HistoryGeneration != remote.Operation.HistoryGeneration {
+				// This clone compacted the task and origin still holds the
+				// tip the checkpoint replaced: local work origin lacks, which
+				// the push phase publishes with a lease. The tracking tip stays
+				// in the state, because that lease is taken against it.
+				if awaitsCheckpointPublication(local, remote) {
+					state.Outcomes[ref.taskID] = SyncTaskResult{TaskID: ref.taskID, Status: SyncLocalAhead}
+					continue
+				}
+				// One side was compacted: origin's checkpoint to adopt, or
+				// origin's older history to replay onto this clone's. Either
+				// way the ancestry classification below, which requires one
+				// generation, never sees the pair.
+				if local.State.History.CompactedFrom != nil || remote.State.History.CompactedFrom != nil {
+					compacted = append(compacted, reconcileRequest{TaskID: ref.taskID, Local: local, Remote: remote})
+					continue
+				}
 				invalidTracking++
 				state.Outcomes[ref.taskID] = SyncTaskResult{
 					TaskID: ref.taskID,
 					Status: SyncInvalid,
-					Detail: "tracking and canonical tips use different history generations",
+					Detail: generationMismatchDetail,
 				}
 				delete(state.Tracking, ref.taskID)
 				continue
@@ -664,7 +766,16 @@ func (r *Repository) fetch(
 		}
 	}
 
-	reconciled, err := r.reconcileDivergentTasks(ctx, config, graph, fetchedDependencies(state, updates, diverged), diverged)
+	// A compacted pair contributes origin's edges, like a divergent one: its
+	// replay is what decides whether a local edge survives.
+	dependencies := fetchedDependencies(state, updates, append(append([]reconcileRequest(nil), diverged...), compacted...))
+	reconciled, err := r.reconcileDivergentTasks(ctx, config, graph, dependencies, diverged)
+	if err != nil {
+		result.Tasks = sortedSyncOutcomes(state.Outcomes)
+		result, err = failedSyncPhase(result, "fetch failed before completion", err)
+		return state, result, err
+	}
+	compactedOutcomes, err := r.reconcileCompactedTasks(ctx, config, dependencies, compacted)
 	if err != nil {
 		result.Tasks = sortedSyncOutcomes(state.Outcomes)
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
@@ -672,6 +783,29 @@ func (r *Repository) fetch(
 	}
 	invalidReconciled := 0
 	newerReconciled := 0
+	for _, outcome := range compactedOutcomes {
+		if outcome.Update != nil {
+			updates = append(updates, *outcome.Update)
+			plannedOutcomes[outcome.TaskID] = outcome.Result
+		} else {
+			state.Outcomes[outcome.TaskID] = outcome.Result
+		}
+		if outcome.Conflict != nil {
+			result.Conflicts = append(result.Conflicts, *outcome.Conflict)
+		}
+		if outcome.Withhold {
+			state.Withheld[outcome.TaskID] = struct{}{}
+		}
+		switch outcome.Kind {
+		case compactedInvalid:
+			invalidTracking++
+			delete(state.Tracking, outcome.TaskID)
+		case compactedNotReplayed:
+			invalidReconciled++
+		case compactedNewerWriter:
+			newerReconciled++
+		}
+	}
 	for index, outcome := range reconciled {
 		if outcome.Err != nil {
 			status := SyncInvalid
@@ -712,6 +846,18 @@ func (r *Repository) fetch(
 	for _, outcome := range reconciled {
 		if outcome.Err == nil {
 			state.Canonical[outcome.TaskID] = outcome.Snapshot
+		}
+	}
+	for _, outcome := range compactedOutcomes {
+		if outcome.Update == nil {
+			continue
+		}
+		state.Canonical[outcome.TaskID] = outcome.Snapshot
+		// The transaction logged the move, naming the old tip, and that entry
+		// would keep the compacted history alive. A failure to expire it is
+		// left alone: the refs are right, and only reclaiming space waits.
+		if outcome.Update.NoPark {
+			_ = r.ExpireTaskReflog(ctx, outcome.TaskID)
 		}
 	}
 	for taskID, outcome := range plannedOutcomes {
@@ -809,7 +955,8 @@ func sortedSyncOutcomes(outcomes map[string]SyncTaskResult) []SyncTaskResult {
 }
 
 // publishFetched publishes only the tips already inspected by fetch. Git's
-// normal non-fast-forward rule remains the remote race guard; a second remote
+// normal non-fast-forward rule remains the remote race guard, and a compacted
+// task's lease is that guard for its checkpoint; a second remote
 // listing would both duplicate work and observe a different synchronization
 // boundary. It therefore reports no ignored refs: the fetch phase of the same
 // run already named every one origin holds, and repeating them would say the
@@ -842,9 +989,16 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 	// only be rejected, and reporting a rejection would describe the fetch
 	// phase's refusal a second time in a word that suggests something went
 	// wrong with the network.
+	//
+	// Fetch withholds the others it settled that way: a task origin compacted
+	// that is still on the old history, and a local checkpoint over a history
+	// it does not account for, or shares nothing with.
 	taskIDs := make([]string, 0, len(state.Canonical))
 	for taskID := range state.Canonical {
 		if state.Outcomes[taskID].Status == SyncNeedsUpgrade {
+			continue
+		}
+		if _, withheld := state.Withheld[taskID]; withheld {
 			continue
 		}
 		taskIDs = append(taskIDs, taskID)
@@ -852,27 +1006,32 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 	sort.Strings(taskIDs)
 	items := make(map[string]SyncTaskResult, len(taskIDs))
 	observed := make(map[string]string, len(taskIDs))
-	expected := make(map[string]string, len(taskIDs))
+	candidates := make([]pushCandidate, 0, len(taskIDs))
 	for _, taskID := range taskIDs {
 		snapshot := state.Canonical[taskID]
 		observed[taskID] = snapshot.Head
 		tracking, tracked := state.Tracking[taskID]
-		if !tracked || tracking.Head != snapshot.Head {
-			expected[taskRefPrefix+taskID] = taskID
+		if tracked && tracking.Head == snapshot.Head {
+			items[taskID] = SyncTaskResult{TaskID: taskID, Status: SyncUpToDate}
 			continue
 		}
-		items[taskID] = SyncTaskResult{TaskID: taskID, Status: SyncUpToDate}
-	}
-	if len(expected) != 0 {
-		args := []string{"push", "--porcelain", "origin"}
-		for _, taskID := range taskIDs {
-			refName := taskRefPrefix + taskID
-			if _, candidate := expected[refName]; candidate {
-				args = append(args, observed[taskID]+":"+refName)
+		// A checkpoint fetch left local-ahead of origin's older-generation
+		// tip, or reconciled onto, is published as a leased non-fast-forward,
+		// against the tracking tip this same run observed.
+		candidate := pushCandidate{TaskID: taskID, Head: snapshot.Head}
+		if tracked {
+			lease, leased, err := r.compactionLease(ctx, config, taskID, snapshot, tracking.Head)
+			if err != nil {
+				return failedSyncPhase(result, "push failed before completion", err)
+			}
+			if leased {
+				candidate.Lease = &lease
 			}
 		}
-		push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil, args...)
-		pushed, err := parsePushPorcelain(push.stdout, expected, push.err)
+		candidates = append(candidates, candidate)
+	}
+	if len(candidates) != 0 {
+		pushed, err := r.pushTaskHeads(ctx, candidates)
 		if err != nil {
 			return failedSyncPhase(result, "push failed before completion", err)
 		}
@@ -895,7 +1054,7 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 		item := items[taskID]
 		if item.Status == SyncRejected {
 			rejected++
-		} else if (item.Status == SyncPublished || item.Status == SyncUpToDate) && final[taskID] != observed[taskID] {
+		} else if publishedSyncStatus(item.Status) && final[taskID] != observed[taskID] {
 			item.Status = SyncLocalChanged
 			item.Detail = "validated task head was published, but the local ref advanced during push; run workbook push again"
 			items[taskID] = item

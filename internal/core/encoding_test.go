@@ -220,7 +220,7 @@ func TestEncodeDocumentRejectsMalformedDurableDocuments(t *testing.T) {
 			state.Task.Labels = []string{"poc", "git"}
 			return state
 		}(),
-		"unsupported compaction metadata": func() StateDocument {
+		"malformed compaction metadata": func() StateDocument {
 			state := validState
 			state.History.CompactedFrom = &compactedFrom
 			return state
@@ -263,7 +263,7 @@ func TestDecodeDocumentsRejectMalformedIdentifiersAndCompactionMetadata(t *testi
 			state.History.Generation = strings.ToLower(generationID)
 			return state
 		}(),
-		"state compaction metadata": func() StateDocument {
+		"malformed state compaction metadata": func() StateDocument {
 			state := validState
 			state.History.CompactedFrom = &compactedFrom
 			return state
@@ -285,6 +285,38 @@ func TestDecodeDocumentsRejectMalformedIdentifiersAndCompactionMetadata(t *testi
 				t.Fatalf("unsupported test document type %T", document)
 			}
 			assertCorrupt(t, err)
+		})
+	}
+}
+
+// A state that names the tip it was compacted from encodes and strictly decodes
+// when the name is a well-formed object ID of either hash length.
+func TestDocumentsAcceptWellFormedCompactedFrom(t *testing.T) {
+	validState, err := Apply(nil, createPack())
+	if err != nil {
+		t.Fatalf("Apply(create) error = %v", err)
+	}
+	for name, compactedFrom := range map[string]string{
+		"sha-1":   compactedTipOID,
+		"sha-256": strings.Repeat("0f", 32),
+	} {
+		t.Run(name, func(t *testing.T) {
+			state := validState
+			value := compactedFrom
+			state.History.CompactedFrom = &value
+			state.MinReader = 4
+
+			encoded, err := EncodeDocument(state)
+			if err != nil {
+				t.Fatalf("EncodeDocument() error = %v", err)
+			}
+			decoded, err := DecodeStateDocument(encoded)
+			if err != nil {
+				t.Fatalf("DecodeStateDocument() error = %v", err)
+			}
+			if decoded.History.CompactedFrom == nil || *decoded.History.CompactedFrom != compactedFrom {
+				t.Fatalf("decoded compactedFrom = %v, want %q", decoded.History.CompactedFrom, compactedFrom)
+			}
 		})
 	}
 }

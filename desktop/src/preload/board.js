@@ -52,7 +52,7 @@ function markEmbedded () {
 if (document.documentElement) markEmbedded()
 else document.addEventListener('DOMContentLoaded', markEmbedded, { once: true })
 
-// The board's own key and values, from internal/webui/assets/index.html.
+// The board's own key and values, from internal/webui/assets/script/preferences.js.
 const PREFERENCE_KEY = 'workbook.board.scheme'
 const SCHEMES = ['', 'light', 'dark']
 

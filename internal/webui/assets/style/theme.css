@@ -1,0 +1,114 @@
+    /* Every color a project is allowed to choose, and the color it is if nobody
+       chooses. The values here are the literals this page was drawn in before
+       any of this existed, so a project that has configured nothing renders
+       exactly what it always rendered — the theming is an override that is
+       simply absent, not a computation the default goes through.
+
+       Three families, and no more. The accent is the board's own blue and the
+       hairline and the ink follow a reader's choice with it; the neutral greys
+       and the semantic red, amber and green stay written out below, because a
+       project that picks a green accent has not thereby decided that its danger
+       colour is green. `.priority--low` keeps its own static blue for the same
+       reason: it sits in a triad with those two, and a red-ish accent must not
+       make "low" read as "high".
+
+       A project that has chosen a colour is served a second `:root` block after
+       this stylesheet, composed in Go from values core has already validated —
+       see boardTheme, which also says why it is composed rather than
+       interpolated. Nothing here changes for it; the later rule simply wins. */
+    :root { --wb-primary: #2457d6; --wb-primary-hover: #1d49b7; --wb-primary-edge: #173f9e; --wb-primary-glow: rgba(36,87,214,.18); --wb-primary-glow-strong: rgba(36,87,214,.28); --wb-primary-tint-1: #edf3ff; --wb-primary-tint-2: #eef3ff; --wb-primary-tint-3: #f3f7ff; --wb-primary-tint-4: #f8faff; --wb-primary-chip: #d3e0fa; --wb-primary-muted: #b7c9ea; --wb-primary-ink: #526b9b; --wb-hairline: #d5deea; --wb-text: #172033; --wb-text-shadow-strong: rgba(23,32,51,.35); --wb-text-shadow: rgba(23,32,51,.12); --wb-text-shadow-soft: rgba(23,32,51,.08); --wb-text-shadow-faint: rgba(23,32,51,.05); }
+    /* The scheme's own palette: the neutral surfaces, rules and ink the
+       board is drawn on, the semantic three, and the priority triad. These are
+       deliberately not in the families internal/webui/display.go derives from a
+       project's chosen colour — picking a green accent does not make your
+       danger colour green — so they are declared once here and read everywhere.
+
+       Three literals are declared more than once, because one value was doing
+       more than one job and the jobs have to be able to part company:
+
+         #fff     --wb-surface is a background, --wb-on-accent is the ink on a
+                  saturated accent fill, and --wb-on-text is the ink on the
+                  derived --wb-text. The surface has to move when the scheme
+                  does; the two inks answer to whatever they are written on.
+         #8496b0  --wb-border-quiet is a rule, --wb-ink-quiet is ink.
+         #2457d6  --wb-primary is the accent a project may replace;
+                  --wb-priority-low is the triad's blue, which no project
+                  reaches. They agree only until an accent is chosen.
+         #8f1d1d  --wb-danger-edge is the border under --wb-danger,
+                  --wb-danger-hover its pressed fill. Both darken in light; in
+                  dark an edge darkens and a press lightens, so they part.
+
+       A scheme that overrides this block is not yet a whole dark mode. The
+       accent and ink families are derived in display.go at fixed near-white
+       lightnesses — --wb-primary-tint-1..4 most of all — and nothing here can
+       move them. Ink from this block is written on those tints in several
+       places (.assignee, .label-chip, .column__header, .task-route__header,
+       .relationship-option, .lifecycle__stop, .change-row__summary:hover), so
+       flipping these properties alone leaves light ink on a near-white chip.
+       The derivation has to gain a dark counterpart in the same change. */
+    :root {
+      --wb-surface: #fff;
+      --wb-on-accent: #fff;
+      --wb-on-text: #fff;
+      --wb-surface-1: #fbfcfe;
+      --wb-surface-2: #fafbfd;
+      --wb-surface-3: #f6f8fc;
+      --wb-surface-4: #f2f5f9;
+      --wb-surface-5: #f1f4f8;
+      --wb-surface-6: #eef2f8;
+      --wb-ground: #e9eef5;
+      --wb-column-ground: rgba(255,255,255,.36);
+      --wb-column-ground-deleted: rgba(232,237,244,.5);
+      --wb-border: #b9c6d8;
+      --wb-border-strong: #9eafc5;
+      --wb-border-firm: #aab8cc;
+      --wb-border-soft: #cbd5e2;
+      --wb-border-muted: #e1e7f0;
+      --wb-border-underline: #a9b7ca;
+      --wb-border-quiet: #8496b0;
+      --wb-ink: #34425a;
+      --wb-ink-muted: #56647a;
+      --wb-ink-soft: #4e5d73;
+      --wb-ink-faint: #5f6c85;
+      --wb-ink-dim: #526075;
+      --wb-ink-quiet: #8496b0;
+      --wb-danger: #b42318;
+      --wb-danger-ink: #9c2f25;
+      --wb-danger-edge: #8f1d1d;
+      --wb-danger-hover: #8f1d1d;
+      --wb-danger-surface: #fdecea;
+      --wb-danger-surface-alt: #fdeceb;
+      --wb-danger-glow: rgba(180,35,24,.28);
+      --wb-warning: #b45309;
+      --wb-warning-ink: #7c3b08;
+      --wb-warning-surface: #fff6e8;
+      --wb-warning-border: #e0b483;
+      --wb-success: #1a7f4b;
+      --wb-success-ink: #14663c;
+      --wb-success-surface: #e8f4ec;
+
+      /* The priority triad, read against each other rather than each on its own,
+         which is why it is a family and not three borrowings from the semantic
+         one. A project's accent does not reach it — see the rule below — and
+         these are scheme properties for the same reason the rest of this block
+         is: nothing here is derived from a colour a project chose. */
+      --wb-priority-high: #b42318;
+      --wb-priority-medium: #b45309;
+      --wb-priority-low: #2457d6;
+    }
+    /* The narrowest a status column is allowed to be drawn. Six columns sharing
+       whatever the window happens to be gave a 1280-wide browser 12rem of card:
+       a title broke over four lines and the labels under it wrapped one per row.
+       The board would rather be scrolled than read like that, so the columns
+       hold this width and the board scrolls sideways once the window cannot
+       give every one of them that much. One custom property, because the track
+       size and the column's own minimum have to be the same number — they
+       disagreed the last time each carried its own copy.
+
+       And the widest. A card is an ID, a title and its labels, so a column that
+       keeps taking every pixel a wide monitor offers turns the title into a line
+       nobody's eye tracks: measured on the page, a 26rem column leaves the title
+       about 53 characters of English inside the card's padding, and fewer where
+       the glyphs are wide, which sits inside the measure text reads comfortably
+       at. Past that the columns stop and the leftover width stays leftover. */
+    :root { --board-column-min: 16rem; --board-column-max: 26rem; color-scheme: light; font-family: ui-rounded, "Avenir Next", system-ui, sans-serif; color: var(--wb-text); background: var(--wb-ground); }

@@ -1,0 +1,67 @@
+    /* Rendered markdown, wherever it is drawn. The container carries no font of
+       its own: a comment body and a description read pane each size their own
+       text, and a .markdown rule that named a size would win over one of them by
+       nothing but its position in this file. What is here is the shape of the
+       blocks and one guarantee — nothing inside may widen its column.
+       overflow-wrap on the container covers prose with a 900-character word in
+       it; the code block below takes the other half, because code must not be
+       re-wrapped and so scrolls inside its own box instead of pushing the page
+       sideways. */
+    .markdown { min-width: 0; overflow-wrap: anywhere; }
+    .markdown > :first-child { margin-top: 0; }
+    .markdown > :last-child { margin-bottom: 0; }
+    .markdown p { margin: 0 0 .55rem; }
+    /* A description's headings start at h3: the page's own title is the h2 above
+       them and the panels beside them are h3s, so a heading somebody typed sizes
+       down from there rather than outranking the page it is on. The renderer
+       maps every markdown level into this range, so these four rules are the
+       whole set — there is no .markdown h1 to be left unstyled. */
+    .markdown h3 { margin: .85rem 0 .3rem; font-size: .95rem; line-height: 1.3; }
+    .markdown h4 { margin: .75rem 0 .3rem; font-size: .88rem; line-height: 1.3; }
+    .markdown h5 { margin: .7rem 0 .28rem; font-size: .83rem; line-height: 1.3; }
+    .markdown h6 { margin: .7rem 0 .28rem; color: var(--wb-ink); font-size: .8rem; line-height: 1.3; }
+    .markdown ul, .markdown ol { margin: 0 0 .55rem; padding-left: 1.35rem; }
+    .markdown li { margin: .12rem 0; }
+    .markdown blockquote { margin: 0 0 .55rem; padding: .12rem .6rem; border-left: 3px solid var(--wb-border); color: var(--wb-ink-soft); }
+    .markdown code { padding: .05rem .22rem; border-radius: 3px; background: var(--wb-surface-6); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .92em; }
+    /* The fenced block. white-space: pre keeps the author's own line breaks and
+       indentation, overflow-x gives the block its own scrollbar, and
+       overflow-wrap is put back to normal here — the container's `anywhere`
+       would otherwise break a line of code at an arbitrary column, which is the
+       one thing a code block must not do. Written after .markdown, which is what
+       makes the reset win. */
+    .markdown pre { margin: 0 0 .55rem; padding: .5rem .6rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface-3); overflow-x: auto; overflow-wrap: normal; white-space: pre; }
+    .markdown pre code { padding: 0; border-radius: 0; background: transparent; font-size: .78rem; }
+    .markdown a { color: var(--wb-primary); text-underline-offset: .16em; }
+    .markdown a:hover { text-decoration-color: currentcolor; }
+    /* An attachment drawn inline. It is bounded by the column it is in rather
+       than by its own pixels, because the image is somebody's upload and a
+       4000-pixel screenshot in a description must not decide how wide this page
+       is. */
+    .markdown img { display: block; max-width: 100%; height: auto; margin: .1rem 0 .55rem; border: 1px solid var(--wb-hairline); border-radius: 4px; }
+    .task-history { display: grid; gap: .8rem; padding: 1.15rem; border-top: 1px solid var(--wb-hairline); background: var(--wb-surface-2); }
+    .task-history h3 { margin: 0; font-size: .88rem; }
+    .lifecycle { display: flex; flex-wrap: wrap; gap: .3rem 1.1rem; margin: 0; padding: 0; list-style: none; }
+    .lifecycle__stop { position: relative; display: grid; gap: .1rem; min-width: 0; padding: .42rem .6rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface); }
+    .lifecycle__stop + .lifecycle__stop::before { position: absolute; top: 50%; left: -.85rem; color: var(--wb-ink-quiet); content: "→"; font-size: .8rem; transform: translateY(-50%); }
+    .lifecycle__stop[data-current="true"] { border-color: var(--wb-primary); background: var(--wb-primary-tint-1); box-shadow: inset 0 0 0 1px var(--wb-primary); }
+    .lifecycle__label { font-size: .78rem; font-weight: 750; }
+    .lifecycle__meta { color: var(--wb-ink-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .65rem; }
+    .history-state { margin: 0; color: var(--wb-ink-muted); font-size: .78rem; }
+    .history-state[data-kind="error"] { color: var(--wb-danger-ink); }
+    .history-truncation { margin: 0; padding: .5rem .62rem; border-left: 3px solid var(--wb-warning); background: var(--wb-warning-surface); color: var(--wb-warning-ink); font-size: .78rem; }
+    .change-summary { margin: 0; color: var(--wb-ink-muted); font-size: .76rem; }
+    .change-list { display: grid; gap: .3rem; margin: 0; padding: 0; list-style: none; }
+    .change-row { border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface); }
+    .change-row__summary { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: baseline; gap: .55rem; width: 100%; padding: .5rem .6rem; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+    .change-row__summary:hover { background: var(--wb-primary-tint-3); }
+    .change-row__summary:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: -1px; }
+    .change-row__when, .change-row__who { color: var(--wb-ink-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .67rem; }
+    .change-row__what { font-size: .8rem; overflow-wrap: anywhere; }
+    .change-comparison { display: grid; gap: .45rem; padding: .6rem; border-top: 1px solid var(--wb-border-muted); }
+    .change-comparison__commit { color: var(--wb-primary-ink); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .66rem; overflow-wrap: anywhere; }
+    .field-change { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: .1rem .5rem; font-size: .78rem; }
+    .field-change__label { color: var(--wb-ink); font-weight: 750; }
+    .field-change__value { min-width: 0; line-height: 1.4; overflow-wrap: anywhere; white-space: pre-wrap; }
+    .field-change del { background: var(--wb-danger-surface-alt); color: var(--wb-danger-ink); text-decoration-thickness: 1px; }
+    .field-change ins { background: var(--wb-success-surface); color: var(--wb-success-ink); text-decoration: none; }

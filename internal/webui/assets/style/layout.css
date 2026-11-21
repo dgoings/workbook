@@ -1,0 +1,55 @@
+    @media (prefers-reduced-motion: no-preference) { .task-list { transition: opacity 120ms ease; } }
+    /* A phone gets a wider column than a desktop, not a narrower one: 18rem of
+       card with the edge of the next one showing beside it, and the reader
+       swipes between them. On a 390px screen that is 288px of column against
+       350px of board. The min() only decides anything below about 328px, where
+       18rem would be wider than the window and the column becomes the page. */
+    @media (max-width: 900px) { :root { --board-column-min: min(18rem, calc(100vw - 2.5rem)); } .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } .header-settings { align-items: flex-start; } .header-switches { justify-content: flex-start; } .admin-status { grid-template-columns: minmax(0, 1fr); } }
+    @media (min-width: 761px) {
+      .task-sidebar { padding: .9rem 1rem; }
+      .task-properties .field { grid-template-columns: 4.5rem minmax(0, 1fr); align-items: center; gap: .45rem; }
+      .task-properties .field input, .task-properties .field select { padding: .5rem .58rem; }
+      /* Status and Priority are one control each, so centring their captions
+         against them is right. Labels is a column — an input with its chiclets,
+         hint, and announcements stacked underneath — and centring left the
+         caption floating halfway down beside the chiclets, naming nothing. It
+         sits on the input's line instead, which is the part it names; the rest
+         of the control is additive and grows downward away from it. */
+      .task-properties .field--labels { align-items: start; }
+      .task-properties .field--labels > label { padding-top: .65rem; }
+    }
+    /* A task's page holds its header and form to the window, as a New Task
+       form is held: the description stays on the screen, a long sidebar
+       scrolls inside the form, and the Save row stays in view, with the thread
+       and the change log below for main to scroll to.
+       The header and the form are at least 100cqh of main, which is a size
+       container, so it is the height main actually has once the app header
+       has taken its share — however many rows that header stacks into —
+       rather than an estimate of the chrome. calc(100dvh - 16rem) was that
+       estimate, and it put Save below the fold whenever the header stacked or
+       the title wrapped. The form grows from nothing into what the header
+       leaves, so a title's lines come out of the form; the floor is on the
+       form itself, so a title long enough to leave less than the floor makes
+       the block taller than main and the page scrolls, rather than folding
+       the description under the Save row.
+       Short and narrow windows keep the one scrolling page below. */
+    @media (min-width: 761px) and (min-height: 701px) {
+      .task-route--history .task-route__screen { flex: none; min-height: 100cqh; }
+      .task-route--history .task-layout { flex: 1 1 0; min-height: 26rem; }
+    }
+    @media (min-width: 761px) and (max-height: 700px) {
+      .task-route { height: auto; min-height: 100%; }
+      .task-layout { grid-template-rows: auto auto; }
+      .task-editor { align-self: start; height: calc(100dvh - 20rem); min-height: 17rem; max-height: 24rem; }
+      .task-sidebar { overflow-y: visible; }
+    }
+    @media (max-width: 760px) {
+      .task-route { height: auto; min-height: 100%; }
+      .task-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; }
+      .task-editor { grid-template-rows: auto auto; }
+      .task-sidebar { overflow-y: visible; border-top: 1px solid var(--wb-hairline); border-left: 0; }
+      .task-actions { grid-column: 1; }
+      .field--description textarea { min-height: 12rem; }
+      .change-row__summary { grid-template-columns: minmax(0, 1fr); gap: .12rem; }
+      .field-change { grid-template-columns: minmax(0, 1fr); }
+    }
