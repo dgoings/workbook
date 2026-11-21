@@ -168,3 +168,17 @@ func TestHandlerPageDrawsTypedTextWithoutDirectionOverrides(t *testing.T) {
 	}
 }
 
+// form-action is one of the directives that does not fall back to default-src,
+// so the page's policy must name it or a form planted in the page could post
+// what a reader types anywhere.
+func TestHandlerPagePolicyKeepsFormSubmissionsOnTheBoard(t *testing.T) {
+	t.Parallel()
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
+	for _, path := range []string{"/", "/tasks/new"} {
+		response := request(t, handler, http.MethodGet, path)
+		policy := response.Header().Get("Content-Security-Policy")
+		if !strings.Contains(policy, "form-action 'self'") {
+			t.Errorf("GET %s Content-Security-Policy = %q, want form-action 'self'", path, policy)
+		}
+	}
+}

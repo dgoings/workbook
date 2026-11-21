@@ -35,7 +35,13 @@ import (
 // the same door: an external image in a task description is a tracking beacon
 // fired by every reader of the board, and a policy that named a host, or a
 // scheme, or `data:` would be the way one gets through a bug in the first lock.
-const securityPolicy = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+//
+// `form-action 'self'` is here because it is one of the few directives that
+// does not fall back to `default-src`: without it, a form somebody managed to
+// put in the page could post what a reader types to any address at all. Every
+// form the board draws is submitted by its own script to this origin, so
+// nothing the board does needs more.
+const securityPolicy = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
 // pageFuncs are the derivations the page template reaches for rather than
 // re-deriving in template syntax.
