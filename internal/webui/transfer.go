@@ -34,15 +34,26 @@ import (
 //     does not fit is answered 503 with Retry-After instead; a write's answer
 //     always fits, because the change it reports has been made.
 //  3. Delivering. The turn has been given back. The answer is written to the
-//     connection at the pace below, and a stalled or too-slow reader is cut
-//     off.
+//     connection at the pace below, and a too-slow reader is cut off.
 //
-// The pace is the same in both directions: no pause longer than
-// transferStall, and after an allowance of transferAllowance, no slower than
-// transferRate on average. That cuts off a connection that stops within ten
-// seconds and one that trickles within about two minutes for a megabyte,
-// while a phone on a 64 kbit/s link — 8 KiB/s — still downloads a 1 MiB
-// attachment in about 138 seconds and uploads one in under three minutes.
+// A body is paced by two rules: no pause longer than transferStall, and after
+// an allowance of transferAllowance, no slower than transferRate on average.
+// That cuts off a sender that stops within ten seconds and one that trickles
+// within about three minutes for the largest upload, while a phone on a
+// 64 kbit/s link — 8 KiB/s — still uploads a 1 MiB attachment in under three
+// minutes.
+//
+// An answer is paced by the average alone, so the whole of it is due within
+// transferAllowance plus one second for every transferRate bytes of it: 138
+// seconds for a 1 MiB attachment. It has no stall rule because a pause in
+// writing is not a pause in reading. The board writes an answer into the
+// connection's buffers far faster than a slow link drains them, and the
+// operating system then holds the next write back for five or ten seconds at a
+// time while the reader keeps taking bytes; a stall rule cut every 1 MiB
+// download below 64 KiB a second short of its end. A reader that takes
+// nothing at all is still cut off when the average runs out: ten seconds plus
+// one for every 8 KiB the operating system took for it, and never later than
+// the whole answer's deadline.
 //
 // The memory that receiving and delivering hold is bounded twice: by the two
 // byte budgets, and by the connection cap, because every body and answer up
@@ -68,7 +79,7 @@ const (
 	// transferChunk is the unit a transfer is paced in, and how much of each
 	// body and each answer is let through without counting against a budget.
 	transferChunk = 8 << 10
-	// transferStall is the longest a transfer may pause.
+	// transferStall is the longest a body may pause.
 	transferStall = 10 * time.Second
 	// transferAllowance is how far a transfer may fall behind transferRate
 	// before it is cut off, which is what gives a connection that starts slowly
@@ -108,29 +119,38 @@ func defaultTransferLimits() transferLimits {
 	}
 }
 
-// pace is one transfer's schedule: when it started and how much of it has
-// moved.
+// pace is one transfer's schedule: when it started, how much of it has
+// moved, and whether a pause cuts it off.
 type pace struct {
 	limits *transferLimits
 	start  time.Time
 	done   int64
+	stalls bool
 }
 
+// pace is a body's schedule, which a pause of transferStall cuts off.
 func (limits *transferLimits) pace() *pace {
+	return &pace{limits: limits, start: limits.now(), stalls: true}
+}
+
+// answerPace is an answer's schedule, which only the average cuts off.
+func (limits *transferLimits) answerPace() *pace {
 	return &pace{limits: limits, start: limits.now()}
 }
 
-// deadline is when the next count bytes must have moved: no later than a
-// stall from now, and no later than the schedule allows for everything up to
-// and including them.
+// deadline is when the next count bytes must have moved: no later than the
+// schedule allows for everything up to and including them, and for a body no
+// later than a stall from now.
 func (pace *pace) deadline(count int) time.Time {
-	stalled := pace.limits.now().Add(pace.limits.stall)
 	behind := time.Duration((pace.done + int64(count)) * int64(time.Second) / pace.limits.rate)
 	scheduled := pace.start.Add(pace.limits.allowance + behind)
-	if scheduled.Before(stalled) {
+	if !pace.stalls {
 		return scheduled
 	}
-	return stalled
+	if stalled := pace.limits.now().Add(pace.limits.stall); stalled.Before(scheduled) {
+		return stalled
+	}
+	return scheduled
 }
 
 // byteBudget counts bytes held against a limit.
@@ -289,8 +309,8 @@ func (board *transfers) deliver(inner http.Handler) http.Handler {
 	})
 }
 
-// send writes a held answer at the pace, and cuts the connection off when the
-// reader falls behind it.
+// send writes a held answer at the answer pace, and cuts the connection off
+// when the reader falls behind it.
 func (board *transfers) send(writer http.ResponseWriter, control *http.ResponseController, answer *heldAnswer) {
 	board.count(&board.delivering, 1)
 	defer board.count(&board.delivering, -1)
@@ -316,7 +336,7 @@ func (board *transfers) send(writer http.ResponseWriter, control *http.ResponseC
 	if bodyAllowed && writer.Header().Get("Content-Length") == "" {
 		writer.Header().Set("Content-Length", strconv.Itoa(length))
 	}
-	schedule := limits.pace()
+	schedule := limits.answerPace()
 	_ = control.SetWriteDeadline(schedule.deadline(min(limits.chunk, length)))
 	writer.WriteHeader(status)
 	if bodyAllowed {
@@ -337,7 +357,7 @@ func (board *transfers) send(writer http.ResponseWriter, control *http.ResponseC
 		panic(http.ErrAbortHandler)
 	}
 	// Whatever the server still writes for this answer is bounded like it.
-	_ = control.SetWriteDeadline(limits.now().Add(limits.stall))
+	_ = control.SetWriteDeadline(schedule.deadline(0))
 }
 
 // heldBytes is a body or an answer held in memory, in chunks of one size. Every

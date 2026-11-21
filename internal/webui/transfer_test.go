@@ -369,6 +369,43 @@ func TestPaceCutsOffAStallAndATrickleButNotAReaderKeepingUp(t *testing.T) {
 	}
 }
 
+func TestAnswerPaceWaitsOutAPauseTheAverageCovers(t *testing.T) {
+	t.Parallel()
+	// Production mutation: an answer cut off after ten seconds with nothing
+	// taken. A reader on a slow link is paused by the operating system's own
+	// flow control — the board wrote a megabyte into the connection's buffers
+	// at once, then waited five and ten seconds at a time for room while the
+	// reader took 16 KiB a second without a break — and every 1 MiB download
+	// below 64 KiB a second was cut short 50 to 76 KB before its end.
+	start := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	now := start
+	limits := defaultTransferLimits()
+	limits.now = func() time.Time { return now }
+	schedule := limits.answerPace()
+	at := func(seconds float64) time.Time { return start.Add(time.Duration(seconds * float64(time.Second))) }
+
+	// A megabyte taken in five seconds, then a long pause: the average still
+	// covers it, so the next chunk has the schedule's deadline, not a stall's.
+	now, schedule.done = at(5), 1<<20
+	if got, want := schedule.deadline(transferChunk), at(139); !got.Equal(want) {
+		t.Fatalf("deadline after a fast megabyte = %v, want the schedule's %v", got, want)
+	}
+	// A trickle is still cut off: a hundred KiB in two minutes is far behind.
+	now, schedule.done = at(120), 100<<10
+	if got := schedule.deadline(transferChunk); !got.Before(now) {
+		t.Fatalf("a trickle's deadline = %v, want it before now %v", got, now)
+	}
+	// However the answer moves, the whole of it is due by ten seconds plus a
+	// second for every 8 KiB of it.
+	const size = 1 << 20
+	for done := int64(0); done < size; done += 64 << 10 {
+		now, schedule.done = at(float64(done)/float64(16<<10)), done
+		if got, want := schedule.deadline(int(size-done)), at(10+size/transferRate); !got.Equal(want) {
+			t.Fatalf("with %d of %d taken the rest is due at %v, want %v", done, size, got, want)
+		}
+	}
+}
+
 func TestBoardRefusesABodyItHasNoRoomForAndLetsTheSenderReadWhy(t *testing.T) {
 	t.Parallel()
 	// Production mutation: bodies read with no budget are a memory bound of
