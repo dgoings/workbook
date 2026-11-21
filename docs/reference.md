@@ -3298,8 +3298,8 @@ list draws only its heading and controls. The
 thread is drawn oldest first, each comment carrying its author, when it was
 written, and whether it has been edited since — and by whom, when that was not
 its author, or that the history no longer records who, for an edit made before
-the task was compacted — with a Remove on each one, an Edit only on your own, and a box for
-adding another. A removed comment stays in its place as one quieter line naming
+the task was compacted — with a Remove on each one, an Edit only on your own,
+and a box for adding another. A removed comment stays in its place as one quieter line naming
 whose it was and who removed it when, without its text. The page reads those
 lines from `GET /api/tasks/<id>`, once when it opens and again whenever the
 task changes. Comment bodies render as markdown, in the
@@ -3311,7 +3311,10 @@ so there is nothing for a client to paint in advance; each change is sent with
 the tip the page read, and the thread the answer carries is what is drawn. A
 refusal is reported in the section it was made in and keeps the text you typed;
 a tip that has moved on is re-based, so saving again applies your change to the
-version the server holds. A file too large to attach is refused before it is
+version the server holds. The one exception is an edit whose comment somebody
+removed while you were editing it: no save can succeed, so the form says it
+was removed and by whom, drops its Save, and keeps what you typed in the box
+for you to copy. A file too large to attach is refused before it is
 read or sent, naming the ceiling, and the server enforces the same one. The
 board's cards say nothing about either section: a card is an identifier, a
 title, and its labels.
