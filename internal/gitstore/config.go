@@ -157,6 +157,34 @@ func (r *Repository) AdoptOriginProject(ctx context.Context, key string) (core.P
 	if _, err := r.Git(ctx, nil, "remote", "get-url", "origin"); err != nil {
 		return core.ProjectConfig{}, false, nil
 	}
+	// A tasks-only folder may join only through the identity ref. The older
+	// probe below fetches origin's default branch, which is the code that
+	// folder exists to leave behind, so it is never run there.
+	tasksOnly, err := r.TasksOnly(ctx)
+	if err != nil {
+		return core.ProjectConfig{}, false, err
+	}
+	if tasksOnly {
+		gitPath, err := r.resolvedGitPath()
+		if err != nil {
+			return core.ProjectConfig{}, false, err
+		}
+		url, err := gitConfigValue(ctx, gitPath, r.Root, "remote.origin.url")
+		if err != nil {
+			return core.ProjectConfig{}, false, err
+		}
+		if url == "" {
+			return core.ProjectConfig{}, false, tasksOnlyFolderWithoutRemote(r.Root)
+		}
+		if _, err := probeTasksOnlyOrigin(ctx, gitPath, r.Root, url); err != nil {
+			return core.ProjectConfig{}, false, err
+		}
+		adopted, err := r.adoptOriginIdentityRef(ctx, key)
+		if err != nil {
+			return core.ProjectConfig{}, false, err
+		}
+		return adopted, true, nil
+	}
 
 	listing, err := r.Git(ctx, nil, "ls-remote", "origin", "HEAD", identityRef, taskRefPrefix+"*")
 	if err != nil {

@@ -26,6 +26,9 @@ Workbook aims for a middle ground:
 
 ## Installation
 
+Workbook runs the `git` command and needs Git 2.29 or later. Its fetches use
+options and refspecs that first shipped in that release.
+
 ### Homebrew
 
 ```sh
@@ -36,7 +39,8 @@ The tap serves macOS and Linux bottles for Apple Silicon and Intel.
 
 ### Building from source
 
-A Go 1.26 (or newer) toolchain and Git are the only requirements:
+A Go 1.26 (or newer) toolchain and Git 2.29 (or newer) are the only
+requirements:
 
 ```sh
 git clone https://github.com/dgoings/workbook.git
@@ -181,6 +185,28 @@ tasks another identity already holds. `--claim` is what assigns and publishes.
 the project so agents learn this loop on their own; see
 [claiming work as an agent](docs/reference.md#claiming-work-as-an-agent) for
 the assignment and contention rules.
+
+### Hosting the board for a team
+
+A server that shows and edits a project's tasks does not need the project's
+code. In an empty folder, one command sets up a folder that holds only the
+project's Workbook refs:
+
+```sh
+mkdir board && cd board
+workbook setup --tasks-only <repository-url>
+git config user.email board@example.com   # who edits made here are recorded as
+workbook serve
+```
+
+The folder has no branch and none of the code, and a stray `git fetch` or `git
+pull` in it downloads none either. Task commands and the web board work there
+as they do in a clone, and changes publish to the same remote. Running the
+command again changes nothing. Agent documentation, the skill and `workbook
+hooks install` are left out, and `workbook docs` and `workbook hooks` say they
+are unavailable there. See
+[Tasks-only folders](docs/reference.md#tasks-only-folders) for exactly what it
+sets up and refuses.
 
 ## Architecture
 

@@ -534,6 +534,12 @@ func runHooks(ctx context.Context, args []string, cwd string, stdout, stderr io.
 	if err != nil {
 		return err
 	}
+	if tasksOnly, err := repository.TasksOnly(ctx); err != nil {
+		return err
+	} else if tasksOnly {
+		return gitstore.TasksOnlyUnavailable("workbook hooks install",
+			"the managed pre-push hook runs when somebody pushes code, and nobody pushes code from this folder")
+	}
 	result, err := repository.InstallHooks(ctx)
 	if err != nil {
 		return err

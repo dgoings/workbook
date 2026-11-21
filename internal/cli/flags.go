@@ -160,9 +160,12 @@ func trimPositionals(metadata commandMetadata, args []string) []string {
 
 var commandSchemas = map[string]commandMetadata{
 	"setup": {
-		Name:        "setup",
-		Synopsis:    "workbook setup [options]",
-		Description: "Bootstrap Workbook in the current Git repository: create or validate\nproject identity, install managed agent documentation, and synchronize\nshared task refs with origin.",
+		Name:     "setup",
+		Synopsis: "workbook setup [options]",
+		Description: "Bootstrap Workbook in the current Git repository: create or validate\nproject identity, install managed agent documentation, and synchronize\nshared task refs with origin.\n\n" +
+			"With --tasks-only <url>, run in an empty folder, set up a folder that holds\n" +
+			"only the project's Workbook refs from that remote: no branches, none of\n" +
+			"the code, and no agent documentation. Running it again changes nothing.",
 		Options: []optionMetadata{
 			{Name: "key", Kind: stringFlag, Value: "<key>", Description: "project key for a new project"},
 			{Name: "no-docs", Kind: boolFlag, Description: "skip managed agent documentation"},
@@ -170,6 +173,7 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "skill-dir", Kind: stringFlag, Value: "<dir>", Description: "install the Workbook skill here"},
 			{Name: "no-skill", Kind: boolFlag, Description: "leave the Workbook skill alone"},
 			{Name: "force", Kind: boolFlag, Description: "overwrite locally modified managed documentation"},
+			{Name: "tasks-only", Kind: stringFlag, Value: "<url>", Description: "set up an empty folder that holds only this remote's tasks"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
