@@ -309,3 +309,31 @@ func TestSetupInATasksOnlyFolderWithoutARemoteNamesTheCommand(t *testing.T) {
 		t.Fatalf("finishing setup = (%d, %q, %q)", code, stdout, stderr)
 	}
 }
+
+// The origin URL a tasks-only folder synchronizes with is the one in its own
+// Git settings. One supplied from outside the folder — here through the
+// environment — does not finish a folder that never got its own.
+//
+// Not parallel: the URL is supplied through this process's environment.
+func TestTasksOnlyFolderIgnoresAnOriginURLFromOutsideIt(t *testing.T) {
+	origin, _, _ := tasksOnlyOriginWithCode(t)
+	folder := t.TempDir()
+	cliGit(t, folder, "init", "--quiet")
+	cliGit(t, folder, "config", "workbook.tasksOnly", "true")
+	before := cliGitOutput(t, folder, "config", "--local", "--list")
+
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "remote.origin.url")
+	t.Setenv("GIT_CONFIG_VALUE_0", origin)
+	if got := cliGitOutput(t, folder, "config", "--get", "remote.origin.url"); got != origin {
+		t.Fatalf("Git reads origin = %q; the fixture supplies no URL", got)
+	}
+
+	code, _, stderr := run(t, folder, "setup")
+	if code != 5 || !strings.Contains(stderr, "is a tasks-only folder with no remote yet") {
+		t.Fatalf("setup = %d; stderr = %q", code, stderr)
+	}
+	if after := cliGitOutput(t, folder, "config", "--local", "--list"); after != before {
+		t.Fatalf("refused setup changed the folder's settings:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
