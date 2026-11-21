@@ -82,6 +82,15 @@ func runWithEnvironment(
 
 	command := args[0]
 	commandArgs := args[1:]
+	// A command that does not exist is the first thing wrong with any
+	// invocation of it, so it is reported before anything about the
+	// environment that command would have run under: somebody who mistyped
+	// `udpate` needs to hear that, not that WORKBOOK_ACTOR is unusable.
+	if _, known := commandSchemas[command]; !known {
+		err := core.Errorf(core.CategoryInvocation, "unknown command %q", command)
+		writeError(stderr, err, jsonMode)
+		return core.ExitCode(err)
+	}
 	// version records nothing, like help above, so neither is refused over a
 	// time it would never have used.
 	if command != "version" {

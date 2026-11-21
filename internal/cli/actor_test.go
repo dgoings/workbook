@@ -418,3 +418,18 @@ func TestServeRecordsBoardEditsUnderWorkbookActor(t *testing.T) {
 		}
 	}
 }
+
+// A mistyped command is the first thing wrong with it, so it is what is
+// reported, whatever the environment it would have run under.
+func TestAnUnknownCommandIsReportedBeforeAnUnusableWorkbookActor(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	code, _, stderr := runAs(t, repository, "not an address", "udpate", "--json")
+	if code != 2 {
+		t.Fatalf("udpate with a bad WORKBOOK_ACTOR code = %d, want 2; stderr = %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryInvocation, `unknown command "udpate"`)
+	if strings.Contains(stderr, core.ActorVariable) {
+		t.Fatalf("stderr = %q; an unknown command must not be refused over WORKBOOK_ACTOR", stderr)
+	}
+}
