@@ -162,6 +162,29 @@ func PrepareTasksOnlyFolder(ctx context.Context, dir, remoteURL, key string) (Ta
 					"%s is a tasks-only folder for %s, not %s; if %s is the same repository under another spelling, or the repository has moved, run git config remote.origin.url %s in this folder and run this again; otherwise set up %s in another empty folder",
 					existing, current, remoteURL, remoteURL, remoteURL, remoteURL)
 			}
+			// The two settings that keep code out are put back before origin
+			// is asked. A folder somebody set back to fetching branches must
+			// not stay that way because origin could not be reached just
+			// now: the next plain git fetch would download the code.
+			for _, setting := range []struct {
+				name  string
+				value string
+				all   bool
+			}{
+				{name: "remote.origin.tagOpt", value: tasksOnlyTagOption},
+				{name: "remote.origin.fetch", value: tasksOnlyFetchRefspec, all: true},
+			} {
+				changed, restored, err := ensureGitSetting(ctx, gitPath, existing, setting.name, setting.value, setting.all)
+				if err != nil {
+					return folder, err
+				}
+				if changed {
+					folder.Changed = append(folder.Changed, setting.name)
+				}
+				if restored {
+					folder.Restored = append(folder.Restored, setting.name)
+				}
+			}
 		} else {
 			pristine, err := pristineGitFolder(ctx, gitPath, existing)
 			if err != nil {

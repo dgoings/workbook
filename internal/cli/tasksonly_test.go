@@ -400,6 +400,40 @@ func TestSetupTasksOnlyRestoresAChangedFetchSetting(t *testing.T) {
 	assertHoldsNoCode(t, folder, origin)
 }
 
+// With origin out of reach the command cannot finish, but it still puts back
+// the settings that keep code out, so the folder is safe by the time the
+// network returns.
+func TestSetupTasksOnlyRestoresAChangedFetchSettingWhenOriginIsUnreachable(t *testing.T) {
+	t.Parallel()
+	origin, _, _ := tasksOnlyOriginWithCode(t)
+	folder := t.TempDir()
+	if code, stdout, stderr := run(t, folder, "setup", "--tasks-only", origin); code != 0 {
+		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
+	}
+	cliGit(t, folder, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*")
+	cliGit(t, folder, "config", "--unset", "remote.origin.tagOpt")
+	away := origin + ".away"
+	if err := os.Rename(origin, away); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, stdout, stderr := run(t, folder, "setup", "--tasks-only", origin); code == 0 {
+		t.Fatalf("setup with origin unreachable = (0, %q, %q)", stdout, stderr)
+	}
+	if got := cliGitOutput(t, folder, "config", "--get-all", "remote.origin.fetch"); got != "^refs/*" {
+		t.Fatalf("fetch refspec = %q after setup with origin unreachable", got)
+	}
+	if got := cliGitOutput(t, folder, "config", "--get", "remote.origin.tagOpt"); got != "--no-tags" {
+		t.Fatalf("tagOpt = %q after setup with origin unreachable", got)
+	}
+
+	if err := os.Rename(away, origin); err != nil {
+		t.Fatal(err)
+	}
+	cliGit(t, folder, "fetch")
+	assertHoldsNoCode(t, folder, origin)
+}
+
 // A folder setup did not make is refused before anything in it changes.
 func TestSetupTasksOnlyRefusesFoldersItDidNotSetUp(t *testing.T) {
 	t.Parallel()
