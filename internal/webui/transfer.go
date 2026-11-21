@@ -511,11 +511,11 @@ func (board *transfers) receive(inner http.Handler) http.Handler {
 			// request. The handler answers the oversized body as it always has.
 			writer.Header().Set("Connection", "close")
 		case bodyComplete:
+			// Reading the body to its end starts the server's watch for the
+			// client going away, which clears the read deadline itself: the
+			// watch is not a transfer, and an expired one would cancel the
+			// request. Nothing here may set a read deadline after it.
 			trade.bodyRead = true
-			// The server watches a connection whose body has been read for the
-			// client going away. That watch is not a transfer and must not time
-			// out: an expired one cancels the request it belongs to.
-			_ = trade.control.SetReadDeadline(time.Time{})
 		}
 		request.Body = io.NopCloser(body.reader())
 		inner.ServeHTTP(writer, request)
