@@ -287,10 +287,18 @@ func TestWorkbookActorRefusesAnEmptyOrUnusableValue(t *testing.T) {
 	}
 
 	// The plain-text refusal says the same, for the person at a terminal.
+	// Both say why, not only that: the reason is what somebody needs to fix the
+	// value.
 	code, _, stderr := runAs(t, repository, "", "create", "Refused", "--no-sync")
-	if code != 5 || !strings.Contains(stderr, "WORKBOOK_ACTOR is set but unusable") {
+	if code != 5 || !strings.Contains(stderr, "WORKBOOK_ACTOR is set but unusable: the acting person must not be blank") {
 		t.Fatalf("plain refusal code = %d, stderr = %q", code, stderr)
 	}
+	code, _, stderr = runAs(t, repository, "alice@example.com/impl-1", "create", "Refused", "--no-sync", "--json")
+	if code != 5 {
+		t.Fatalf("labelled refusal code = %d, stderr = %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryValidation,
+		`WORKBOOK_ACTOR is set but unusable: the acting person "alice@example.com/impl-1" must be an email address with no /label`)
 }
 
 // version and completion open no repository and record nothing, so a bad value

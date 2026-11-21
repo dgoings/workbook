@@ -102,7 +102,10 @@ func WithEnvironmentActor(ctx context.Context, lookup func(string) (string, bool
 	}
 	actorCtx, err := WithActor(ctx, value)
 	if err != nil {
-		return ctx, Wrap(CategoryValidation, ActorVariable+" is set but unusable", err)
+		// One message rather than a wrapped cause: the command line prints a
+		// validation error's own message and not its cause, and the reason is
+		// the half somebody needs to fix the value.
+		return ctx, Errorf(CategoryValidation, "%s is set but unusable: %s", ActorVariable, err.Error())
 	}
 	return actorCtx, nil
 }
