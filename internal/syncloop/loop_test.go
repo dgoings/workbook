@@ -178,6 +178,7 @@ func TestFinalSyncKeepsTheActingPerson(t *testing.T) {
 			Config:       watcherConfig(),
 			Interval:     time.Hour,
 			Stderr:       output,
+			published:    syncer.notePublished,
 		})
 	}()
 	waitForOutput(t, output, ReadyPrefix)
