@@ -254,6 +254,7 @@ setTimeout(async () => {
   const row = panelRows("comments")[0];
   const editor = findElement(row, (element) => hasDataKey(element, "commentEditor"));
   editor.value = "Half a sentence";
+  if (document.activeElement !== editor) throw new Error("Edit did not focus the draft");
   const before = findElement(row, (element) => hasClassToken(element, "comment__attribution")).textContent;
   if (before.includes(" by ")) throw new Error("the form named an editor before the answer said one: " + before);
 
@@ -268,6 +269,11 @@ setTimeout(async () => {
   const still = findElement(after, (element) => hasDataKey(element, "commentEditor"));
   if (still !== editor || still.value !== "Half a sentence") {
     throw new Error("the draft was disturbed: " + JSON.stringify(still && still.value));
+  }
+  // Redrawing the thread moves the open row, and a browser blurs what leaves
+  // the document; the reader keeps typing where they were.
+  if (document.activeElement !== editor) {
+    throw new Error("the redraw took focus from the draft: " + (document.activeElement && document.activeElement.tagName));
   }
 }, 0);
 `)

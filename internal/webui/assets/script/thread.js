@@ -957,7 +957,23 @@
           panel.setCount(comments.length === 1 ? "1 comment" : comments.length + " comments");
           text(panel.empty, "Nothing has been said about this task yet.");
           panel.empty.hidden = rows.length > 0;
+          // Putting the rows back moves an open edit row out of the document
+          // and in again, and a browser blurs whatever is focused inside a
+          // node that leaves it. A redraw while somebody types — the task
+          // answer landing, a teammate's comment arriving — would then drop
+          // their next keystrokes, so the box they were typing in gets its
+          // focus and caret back.
+          const active = document.activeElement;
+          const typing = active && active.dataset && "commentEditor" in active.dataset && panel.list.contains(active)
+            ? { box: active, start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection }
+            : null;
           panel.list.replaceChildren(...rows);
+          if (typing && panel.list.contains(typing.box) && document.activeElement !== typing.box) {
+            typing.box.focus({ preventScroll: true });
+            if (typeof typing.start === "number" && typeof typing.box.setSelectionRange === "function") {
+              typing.box.setSelectionRange(typing.start, typing.end, typing.direction);
+            }
+          }
         }
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
