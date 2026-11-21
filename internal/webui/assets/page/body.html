@@ -116,6 +116,17 @@
        route the user is on, and it is cleared by a person rather than by the
        next poll. -->
   <div class="notice" data-notice role="status" aria-live="polite" hidden></div>
+  <!-- What the board says while a change of the reader's is waiting because
+       the server is too busy to start it. The change is still drawn as made
+       and is sent again on its own, so this says that rather than offering a
+       control: there is nothing for the reader to do but wait or keep working,
+       and it comes down by itself once every waiting change has been sent or
+       reported. -->
+  <div class="notice" data-busy-notice role="status" aria-live="polite" hidden>
+    <div class="notice__report">
+      <p>The board is busy with other requests. Your change is kept and will be sent again in a moment.</p>
+    </div>
+  </div>
   <!-- What the board says when the project's statuses change under a page that
        is already open.
 

@@ -93,7 +93,7 @@
             displayReport("", panelWaitingMessage);
             await settledIntents();
           }
-          const response = await fetch("/api/display", {
+          const response = await sendUnlessBusy("/api/display", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(Object.assign({}, proposed, { expectedHead: panelHead }))

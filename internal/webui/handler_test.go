@@ -4899,6 +4899,9 @@ notice.hidden = true;
 // region is: the change arrives on a poll.
 const vocabularyNotice = new TestElement("div");
 vocabularyNotice.hidden = true;
+// What the board says while a change is waiting out the server's cap.
+const busyNotice = new TestElement("div");
+busyNotice.hidden = true;
 const vocabularyReload = new TestElement("button");
 vocabularyNotice.append(vocabularyReload);
 // The half of a switch that carries no words. It is here so that a test reading
@@ -5084,6 +5087,7 @@ const documentEventListeners = {};
     if (selector === "[data-updated]") return updated;
     if (selector === "[data-notice]") return notice;
     if (selector === "[data-vocabulary-notice]") return vocabularyNotice;
+    if (selector === "[data-busy-notice]") return busyNotice;
     if (selector === "[data-vocabulary-reload]") return vocabularyReload;
     if (selector === "[data-description-toggle]") return descriptionToggle;
     if (selector === "[data-deleted-toggle]") return deletedToggle;

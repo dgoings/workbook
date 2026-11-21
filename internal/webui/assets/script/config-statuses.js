@@ -261,7 +261,7 @@
             section.report("", panelWaitingMessage);
             await settledIntents();
           }
-          const response = await fetch(path, {
+          const response = await sendUnlessBusy(path, {
             method,
             headers: { "Content-Type": "application/json" },
             // The head the panel read, exactly as it read it. An empty one is a

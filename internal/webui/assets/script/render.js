@@ -345,6 +345,41 @@
         const held = tasks.find((candidate) => candidate.id === openThreadPanels.taskID);
         if (held) openThreadPanels.follow(held, presentation ? presentation.get(held.id) : null);
       }
+      // The once-a-second refresh, and how it behaves when the server is too
+      // busy to answer it.
+      //
+      // A tick sends nothing while the read the last tick sent is still out.
+      // On a board that answers in milliseconds that never happens, so the
+      // refresh is exactly what it always was; on one that is struggling, a
+      // read a second piled onto a read that has not come back is the page
+      // adding to the very load it is waiting on.
+      //
+      // A read the server refused as busy holds the ticks off for the time it
+      // asked for, and each refusal in a row doubles that, up to half a
+      // minute, so a page left open on a flooded board steps back rather than
+      // knocking every second. The first read that is answered puts it back
+      // on its one-second beat.
+      let pollBusyStreak = 0;
+      let pollResumeAt = 0;
+      let tickRefresh = null;
+      function pollRefusedBusy(response) {
+        pollBusyStreak += 1;
+        const wait = Math.min(busyRetryDelay(response) * 2 ** (pollBusyStreak - 1), 30000);
+        pollResumeAt = Date.now() + wait;
+      }
+      function pollAnswered() {
+        pollBusyStreak = 0;
+        pollResumeAt = 0;
+      }
+      function pollTick() {
+        if (tickRefresh) return tickRefresh;
+        if (pollResumeAt && Date.now() < pollResumeAt) return Promise.resolve();
+        const tick = refresh();
+        tickRefresh = tick;
+        const clear = () => { if (tickRefresh === tick) tickRefresh = null; };
+        tick.then(clear, clear);
+        return tick;
+      }
       function refresh() {
         const wasLoaded = tasksLoaded;
         const generation = ++taskRefreshGeneration;
@@ -365,6 +400,9 @@
           // what the server holds. So the read reports for itself, and every
           // consumer of the status keeps reading the status.
           let boardRead = false;
+          // Whether the server turned this read away as busy, which is news of
+          // its own: the board is not broken, and it will look again.
+          let refusedBusy = false;
           // What a read that reached the model goes on to do, whether it
           // replaced the model or was told the model already is the server's:
           // draw the route a first read was waiting on, or bring the open task
@@ -388,6 +426,11 @@
             const url = includingDeleted ? "/api/tasks?deleted=include" : "/api/tasks";
             const sentTag = boardValidator && boardValidator.url === url ? boardValidator.etag : null;
             const response = await fetch(url, conditionalRead(sentTag));
+            if (busyRefusal(response)) {
+              refusedBusy = true;
+              pollRefusedBusy(response);
+              throw new Error("board busy");
+            }
             if (response.status === 304) {
               // The server still holds the document the model was read from, so
               // this tick is a sync that changed nothing: no body to parse, no
@@ -403,6 +446,7 @@
               if (!sentTag || !wasLoaded) throw new Error("unrequested 304");
               if (generation !== taskRefreshGeneration) return { status: "superseded", boardRead };
               boardRead = true;
+              pollAnswered();
               stale.dataset.visible = "false"; markSynchronized();
               return await followBoardRead();
             }
@@ -447,6 +491,7 @@
             // break a form the reader is filling in.
             const search = foldedSearch(projected);
             const shown = shownTasks(projected, new Set(document.tasks.map((task) => task.id)), search);
+            pollAnswered();
             render(shown, projectedPresentation, projected, search); stale.dataset.visible = "false"; markSynchronized();
             // The open task page's thread and attachments follow this read in
             // place, the way the relationship sidebar below does. Nothing else
@@ -456,7 +501,10 @@
             return await followBoardRead();
           } catch (_) {
             if (generation !== taskRefreshGeneration) return { status: "superseded", boardRead };
-            text(stale, "Task refresh failed. Showing the last successful board."); stale.dataset.visible = "true";
+            text(stale, refusedBusy
+              ? "The board is busy with other requests. Showing the last board it read; it will look again shortly."
+              : "Task refresh failed. Showing the last successful board.");
+            stale.dataset.visible = "true";
             if (!tasksLoaded) {
               taskLoadFailed = true;
               renderRoute();

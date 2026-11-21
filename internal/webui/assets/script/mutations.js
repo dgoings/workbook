@@ -1,3 +1,60 @@
+      // The server's answer when it had no turn for a request: 503 with a
+      // Retry-After, which the board sends only from its cap on how much work it
+      // does at once and only before it has started on the request. Nothing was
+      // read or recorded, so the very same request may be sent again. A 503
+      // without the header is somebody else's — a proxy with no board behind it
+      // — and says nothing about whether the change was made, so it is not
+      // retried.
+      function busyRefusal(response) {
+        return Boolean(response && response.status === 503 && response.headers &&
+          typeof response.headers.get === "function" && response.headers.get("Retry-After") !== null);
+      }
+      // How long the server asked for, in milliseconds, at least one second.
+      function busyRetryDelay(response) {
+        const seconds = Number(response.headers.get("Retry-After"));
+        return Math.max(1, Number.isFinite(seconds) ? seconds : 2) * 1000;
+      }
+      function pause(milliseconds) {
+        return new Promise((resolve) => { window.setTimeout(resolve, milliseconds); });
+      }
+      // How many of this page's changes are waiting on the server's cap right
+      // now, which is what the busy notice is drawn from.
+      let busyWrites = 0;
+      function renderBusyNotice() {
+        if (busyNotice) busyNotice.hidden = busyWrites === 0;
+      }
+      // How many times a refused change is sent again before the refusal is
+      // reported, each wait twice the one before it: with the board's two
+      // seconds, that is 2, 4 and 8 seconds, so a change is kept for about a
+      // quarter of a minute of somebody else's flood before the reader is told
+      // it did not go.
+      const BUSY_RETRIES = 3;
+      // Every write this page sends goes through here, so a change refused only
+      // because the server was busy is kept and sent again rather than lost.
+      // The card stays drawn as changed while it waits — the intent is still at
+      // the head of its queue — and the notice says why nothing has confirmed
+      // it yet. When the retries run out, the last refusal is handed back like
+      // any other, and the caller reports it where it reports every refusal.
+      async function sendUnlessBusy(path, options) {
+        let waiting = false;
+        try {
+          for (let attempt = 0; ; attempt += 1) {
+            const response = await fetch(path, options);
+            if (!busyRefusal(response) || attempt >= BUSY_RETRIES) return response;
+            if (!waiting) {
+              waiting = true;
+              busyWrites += 1;
+              renderBusyNotice();
+            }
+            await pause(busyRetryDelay(response) * 2 ** attempt);
+          }
+        } finally {
+          if (waiting) {
+            busyWrites -= 1;
+            renderBusyNotice();
+          }
+        }
+      }
       async function mutateTask(method, path, values) {
         // Every mutation names its JSON media type, body or not: the server
         // rejects mutations without it, because an absent or form-safe
@@ -6,7 +63,7 @@
         if (values !== undefined) {
           options.body = JSON.stringify(values);
         }
-        const response = await fetch(path, options);
+        const response = await sendUnlessBusy(path, options);
         const document = await response.json();
         if (!response.ok || document.format !== "workbook.task-mutation" ||
             document.version !== 1 || !document.task) {
@@ -15,6 +72,10 @@
           // "that was not a legal change". Without it every failure looks the
           // same to the caller.
           failure.category = document.error && document.error.category || "";
+          // Still refused by the server's cap once every resend had gone, which
+          // a reporter words as the board being busy rather than as the change
+          // being wrong.
+          failure.busy = busyRefusal(response);
           throw failure;
         }
         return document;
@@ -495,7 +556,7 @@
         const sequence = ++syncStateSequence;
         let written = null;
         try {
-          const response = await fetch("/api/sync", {
+          const response = await sendUnlessBusy("/api/sync", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ mode: wanted }),

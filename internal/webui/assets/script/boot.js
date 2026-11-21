@@ -88,6 +88,8 @@
       const updatedText = document.querySelector("[data-updated-text]");
       const syncDot = document.querySelector("[data-sync-dot]");
       const notice = document.querySelector("[data-notice]");
+      // Shown while a change waits out the server's cap. See sendUnlessBusy.
+      const busyNotice = document.querySelector("[data-busy-notice]");
       // The standing announcement that this page's columns are out of date, and
       // the control that acts on it. See the element itself for why a reload is
       // offered instead of taken.

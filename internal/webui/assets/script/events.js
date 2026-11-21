@@ -341,5 +341,5 @@
       // one scheduled callback to reason about. The poll's promise is
       // returned, not swallowed: callers await this tick to know the refresh
       // has finished.
-      window.setInterval(() => { renderSyncAge(); return refresh(); }, 1000);
+      window.setInterval(() => { renderSyncAge(); return pollTick(); }, 1000);
     })();

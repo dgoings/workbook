@@ -29,12 +29,18 @@
       // longer what the reader is looking at.
       function reportIntentFailure(taskID, subject, error, boardRead) {
         const changedElsewhere = Boolean(error && error.category === "stale-write");
+        // Refused by the server's cap after every resend, which is not the
+        // change's fault and is worth saying so: the reader can make it again
+        // as it was, once the board has room.
+        const busy = Boolean(error && error.busy);
         taskFailureReports.set(taskID, {
           card: changedElsewhere
             ? (boardRead
               ? "This task changed elsewhere. The card shows the version the server holds."
               : "This task changed elsewhere and the board could not be refreshed. The card may be out of date, and changes made here were not applied.")
-            : "Task update failed. The card shows the version the server holds.",
+            : busy
+              ? "The board was too busy to make this change. The card shows the version the server holds; try it again in a moment."
+              : "Task update failed. The card shows the version the server holds.",
           notice: changedElsewhere
             ? "Task " + subject + " changed elsewhere and is no longer on the board. The change made here was not applied."
             : "Task " + subject + " could not be updated and is no longer on the board. The change made here was not applied."
