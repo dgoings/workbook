@@ -77,6 +77,21 @@ before anyone runs it; see Compatibility across versions below.
   `history.compacted`.
 - **Durations accept days.** `sync --interval` and the `compact` cutoffs take a
   leading whole number of days, where a day is 24 hours: `30d`, `1d12h`.
+- **`workbook setup --tasks-only <url>`** sets up an empty folder that holds a
+  project's tasks and none of its code, for a server that only shows and edits
+  tasks. The folder is an ordinary Git folder with nothing checked out, no
+  branch and no tag. Its `origin` fetches through a single negative refspec,
+  `^refs/*`, so a plain `git fetch` or `git pull` in it downloads nothing, and
+  setup never reads the remote's default branch to find the project. It joins
+  a project whose identity the remote already publishes and never creates one.
+  It refuses a folder that holds files or a repository it did not set up, and
+  asks the remote before creating anything. Agent documentation and the skill
+  are skipped, and `workbook docs` and `workbook hooks install` refuse in the
+  folder with exit `5`. The marker is `workbook.tasksOnly` in the folder's own
+  Git settings. Running setup again, with or without `--tasks-only`, changes
+  nothing and reports success, or restores a setting somebody changed and
+  names it. Setup needs no `user.email`; edits made there do. `--json` reports
+  the run in a `tasksOnly` object.
 
 ### Changed
 - **The web board's New Task form can assign.** On a board that can record

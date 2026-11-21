@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/dgoings/workbook/internal/agentdocs"
 	"github.com/dgoings/workbook/internal/core"
@@ -23,7 +24,33 @@ type setupResult struct {
 	Identity   setupIdentity     `json:"identity"`
 	Docs       *agentdocs.Report `json:"docs,omitempty"`
 	Sync       setupSyncResult   `json:"sync"`
+	TasksOnly  *setupTasksOnly   `json:"tasksOnly,omitempty"`
 }
+
+// setupTasksOnly reports a run in a tasks-only folder: one holding a project's
+// Workbook refs and none of its code. It is absent from the report of a setup
+// run in a clone of the code.
+type setupTasksOnly struct {
+	// Remote is the origin URL the folder synchronizes with.
+	Remote string `json:"remote"`
+	// Initialized reports that this run made the folder a Git folder.
+	Initialized bool `json:"initialized"`
+	// Changed names each Git setting this run wrote. A run in a folder that
+	// was already set up reports an empty list.
+	Changed []string `json:"changed"`
+	// Actor is the address later edits in this folder are recorded under, or
+	// empty when none is configured. Setup records nothing itself, so it
+	// needs none; every command that edits a task does.
+	Actor string `json:"actor"`
+	// Unavailable lists the commands that refuse in a tasks-only folder
+	// because what they do needs the project's code.
+	Unavailable []string `json:"unavailable"`
+}
+
+// tasksOnlyUnavailableCommands are the commands a tasks-only folder refuses.
+// Agent documentation and the skill are written for people working in the
+// code, and the managed pre-push hook runs when somebody pushes code.
+var tasksOnlyUnavailableCommands = []string{"docs", "hooks"}
 
 // setupIdentity reports which record answered the question "which project is
 // this". Joining an existing project and minting a new one look identical in a
@@ -92,6 +119,7 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	skillDir := flags.String("skill-dir", "", "install the Workbook skill here")
 	noSkill := flags.Bool("no-skill", false, "leave the Workbook skill alone")
 	force := flags.Bool("force", false, "overwrite locally modified managed documentation")
+	tasksOnlyURL := flags.String("tasks-only", "", "set up an empty folder that holds only this remote's tasks")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -104,13 +132,32 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	// the difference has to be settled before the repository is touched so a
 	// refusal leaves nothing behind.
 	keyRequested := false
+	tasksOnlyRequested := false
 	flags.Visit(func(item *flag.Flag) {
-		if item.Name == "key" {
+		switch item.Name {
+		case "key":
 			keyRequested = true
+		case "tasks-only":
+			tasksOnlyRequested = true
 		}
 	})
 	if keyRequested && *key == "" {
 		return core.ValidateProjectKey("")
+	}
+	if tasksOnlyRequested && strings.TrimSpace(*tasksOnlyURL) == "" {
+		return core.Errorf(core.CategoryInvocation, "--tasks-only needs the URL of the project's remote")
+	}
+
+	var tasksOnly *gitstore.TasksOnlyFolder
+	if tasksOnlyRequested {
+		if err := validateTasksOnlyFlags(*noSync, *skillDir, *force); err != nil {
+			return err
+		}
+		prepared, err := gitstore.PrepareTasksOnlyFolder(ctx, cwd, *tasksOnlyURL)
+		if err != nil {
+			return err
+		}
+		tasksOnly = &prepared
 	}
 
 	repository, err := gitstore.Open(ctx, cwd)
@@ -118,6 +165,31 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 		return err
 	}
 	repository.Now = recordedNow
+	if tasksOnly == nil {
+		// A plain `workbook setup` in a tasks-only folder is still a tasks-only
+		// setup. The marker in the folder's own Git settings says so, and the
+		// run restores any of those settings somebody changed, so the one
+		// bootstrap command never leaves the folder able to fetch code.
+		marked, err := repository.TasksOnly(ctx)
+		if err != nil {
+			return err
+		}
+		if marked {
+			if err := validateTasksOnlyFlags(*noSync, *skillDir, *force); err != nil {
+				return err
+			}
+			restored, err := repository.RestoreTasksOnlySettings(ctx)
+			if err != nil {
+				return err
+			}
+			tasksOnly = &restored
+		}
+	}
+	if tasksOnly != nil {
+		// Agent documentation and the skill are written for people working in
+		// the code, which this folder does not hold.
+		*noDocs = true
+	}
 	// A checkout that predates the project's Workbook adoption carries no
 	// tracked configuration, so Init alone would mint a second identity for a
 	// project origin already has. Ask origin first; --no-sync keeps bootstrap
@@ -128,8 +200,11 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 		}
 	}
 	// Only a project about to be minted needs a key; origin has been asked by
-	// now, so a repository still without an identity is genuinely new.
-	if *key == "" {
+	// now, so a repository still without an identity is genuinely new. A
+	// tasks-only folder never mints: it exists to show a project origin
+	// already has, and adoption above has either joined that project or
+	// refused.
+	if *key == "" && tasksOnly == nil {
 		known, err := repository.HasProjectIdentity(ctx)
 		if err != nil {
 			return err
@@ -181,6 +256,22 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 		Key:        config.Key,
 		UserConfig: setupUserConfig{Path: configPath, Created: created},
 		Config:     setupConfigResult{Version: config.Version, Upgraded: upgraded},
+	}
+	if tasksOnly != nil {
+		// Repository.Actor answers with the address every edit is recorded
+		// under, and fails when there is none. Setup records nothing, so it
+		// reports the gap rather than failing on it.
+		actor, actorErr := repository.Actor(ctx)
+		if actorErr != nil {
+			actor = ""
+		}
+		result.TasksOnly = &setupTasksOnly{
+			Remote:      tasksOnly.Remote,
+			Initialized: tasksOnly.Initialized,
+			Changed:     tasksOnly.Changed,
+			Actor:       actor,
+			Unavailable: append([]string(nil), tasksOnlyUnavailableCommands...),
+		}
 	}
 	if origin, known := repository.IdentityOrigin(); known {
 		result.Identity = setupIdentity{
@@ -267,6 +358,10 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 		return syncErr
 	}
 	fmt.Fprintf(stdout, "Repository:\t%s\n", result.Repository)
+	if result.TasksOnly != nil {
+		fmt.Fprintf(stdout, "Mode:\ttasks-only\t(%s)\n", tasksOnlyModeDescription(*result.TasksOnly))
+		fmt.Fprintf(stdout, "Remote:\t%s\n", result.TasksOnly.Remote)
+	}
 	fmt.Fprintf(stdout, "Project ID:\t%s\t(%s)\n", result.ProjectID, setupIdentityDescription(result.Identity))
 	fmt.Fprintf(stdout, "Key:\t%s\n", result.Key)
 	suffix := ""
@@ -275,13 +370,21 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	}
 	fmt.Fprintf(stdout, "Config:\t%s%s\n", result.UserConfig.Path, suffix)
 	if result.Config.Upgraded {
-		fmt.Fprintf(stdout, "Project:\tupgraded to version %d\t(commit it; older Workbook versions cannot read it)\n", result.Config.Version)
+		// A tasks-only folder commits nothing, so the file is not one to commit.
+		if result.TasksOnly != nil {
+			fmt.Fprintf(stdout, "Project:\tupgraded to version %d\t(older Workbook versions cannot read it)\n", result.Config.Version)
+		} else {
+			fmt.Fprintf(stdout, "Project:\tupgraded to version %d\t(commit it; older Workbook versions cannot read it)\n", result.Config.Version)
+		}
 	}
-	if result.Docs != nil {
+	switch {
+	case result.Docs != nil:
 		for _, artifact := range result.Docs.Artifacts {
 			fmt.Fprintf(stdout, "Docs:\t%s\t%s\n", artifact.Path, artifactAction(artifact))
 		}
-	} else {
+	case result.TasksOnly != nil:
+		fmt.Fprintf(stdout, "Docs:\tskipped\t(tasks-only folder)\n")
+	default:
 		fmt.Fprintf(stdout, "Docs:\tskipped\n")
 	}
 	fmt.Fprintf(stdout, "Sync:\t%s", result.Sync.Status)
@@ -314,9 +417,50 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 		}
 	}
 	fmt.Fprintf(stdout, "Tasks:\t%d\n", result.TaskCount)
+	if result.TasksOnly != nil {
+		if result.TasksOnly.Actor == "" {
+			fmt.Fprintf(stdout, "Author:\tnone configured\t(set one with `git config user.email <address>` in this folder before editing tasks)\n")
+		} else {
+			fmt.Fprintf(stdout, "Author:\t%s\n", result.TasksOnly.Actor)
+		}
+		fmt.Fprintf(stdout, "Unavailable:\t%s\t(they need the project's code)\n", strings.Join(result.TasksOnly.Unavailable, ", "))
+	}
 	writeConflicts(stdout, conflicts)
 	writeConfigConflicts(stdout, configConflicts)
 	return syncErr
+}
+
+// validateTasksOnlyFlags refuses the setup flags that mean nothing, or the
+// wrong thing, in a tasks-only folder.
+//
+// --no-sync is refused because a tasks-only folder joins a project origin
+// already has and never mints one, so a setup that may not ask origin has
+// nothing it could do. --skill-dir and --force are about agent documentation,
+// which a tasks-only folder does not install. --no-docs and --no-skill already
+// describe what a tasks-only setup does, so they are accepted.
+func validateTasksOnlyFlags(noSync bool, skillDir string, force bool) error {
+	switch {
+	case noSync:
+		return core.Errorf(core.CategoryInvocation, "cannot use --no-sync in a tasks-only folder; it joins a project origin already has")
+	case skillDir != "":
+		return core.Errorf(core.CategoryInvocation, "cannot use --skill-dir in a tasks-only folder; it installs no agent documentation or skill")
+	case force:
+		return core.Errorf(core.CategoryInvocation, "cannot use --force in a tasks-only folder; it installs no agent documentation")
+	}
+	return nil
+}
+
+// tasksOnlyModeDescription says in a few words what this run did to the
+// folder, so a rerun that changed nothing reads that way.
+func tasksOnlyModeDescription(report setupTasksOnly) string {
+	switch {
+	case report.Initialized:
+		return "created; branches and code are never fetched"
+	case len(report.Changed) > 0:
+		return "restored " + strings.Join(report.Changed, ", ")
+	default:
+		return "already set up; nothing changed"
+	}
 }
 
 // seedMintedStatuses records this build's default statuses for a project that
@@ -514,6 +658,12 @@ func runDocs(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
 		return err
+	}
+	if tasksOnly, err := repository.TasksOnly(ctx); err != nil {
+		return err
+	} else if tasksOnly {
+		return gitstore.TasksOnlyUnavailable("workbook docs",
+			"agent documentation and the skill are written for people working in the code, which this folder does not hold")
 	}
 	user, err := userconfig.Load()
 	if err != nil {

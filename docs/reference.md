@@ -11,6 +11,7 @@ both human-readable output and a versioned machine-readable result envelope:
 
 ```text
 workbook setup [--key <key>] [--no-docs] [--no-sync] [--skill-dir <dir>] [--no-skill] [--force] [--json]
+workbook setup --tasks-only <url> [--key <key>] [--no-docs] [--no-skill] [--json]
 workbook create <title> [--description <text>] [--status <status>] [--priority <priority>] [--key <key>] [--label <label>] [--no-sync] [--json]
 workbook list [--status <status>] [--priority <priority>] [--key <key>] [--label <label>] [--find <text>] [--all] [--json]
 workbook board [--wide | --narrow] [--json]
@@ -127,6 +128,134 @@ The Workbook skill is installed under the directory named by the user-global
 every project on a machine, `--skill-dir <dir>` overrides it for one project and
 `--no-skill` leaves the skill alone while still managing the guidelines. These
 flags are a stopgap until per-project configuration lands.
+
+### Tasks-only folders
+
+A server that only shows and edits tasks, such as one running `workbook serve`
+for a team, has no use for the project's code. `workbook setup --tasks-only
+<url>`, run in an empty folder, makes that folder hold the project's Workbook
+refs and nothing else:
+
+```sh
+mkdir board && cd board
+workbook setup --tasks-only git@example.com:team/project.git
+git config user.email board@example.com   # the author edits are recorded under
+workbook serve
+```
+
+`<url>` is anything `git` accepts as a remote: an SSH or HTTPS URL, or a path.
+The remote has to hold a Workbook project already, published with its project
+identity `refs/workbook/project`; any clone running a Workbook that publishes
+it (`workbook setup` or `workbook sync`) has done so. A tasks-only setup joins
+that project and never creates one.
+
+The folder is an ordinary Git folder, not a bare one, with nothing checked out.
+It has no branch and no tag, and none of the code's objects. Setup writes
+`.workbook/config.json` into it as it does in a clone, uncommitted, and installs
+no agent documentation or skill. `list`, `show`, `create`, `update`, `board`,
+`serve` and the other task commands work there as they do in a clone, and
+changes publish to the remote the same way.
+
+What makes the folder tasks-only is recorded in its own Git settings, never in
+the shared `.workbook/config.json`:
+
+```ini
+[workbook]
+	tasksOnly = true
+[remote "origin"]
+	tagOpt = --no-tags
+	fetch = ^refs/*
+	url = git@example.com:team/project.git
+```
+
+The fetch refspec is a negative one that matches every ref, so a plain `git
+fetch`, `git fetch --all`, `git remote update` or `git pull` in the folder
+downloads nothing, not even branches pushed after setup ran. Workbook's own
+fetches name the refs they want on the command line and are not narrowed by it.
+Git's default setting would fetch every branch, and leaving the refspec out
+would fetch the default branch into `FETCH_HEAD`, which `git pull` then checks
+out. A Git command that names a branch, such as `git fetch origin main`, still
+downloads it, because it asks for it explicitly. The negative refspec needs Git
+2.29 or later, the same version Workbook's own fetches already need.
+
+Setup accepts three folders:
+
+- an empty folder outside any Git repository, which it makes a Git folder;
+- a folder it already set up for the same URL. Running the command again
+  there, or running a plain `workbook setup`, changes nothing and reports
+  success. If somebody has changed one of the settings above, such as putting
+  the fetch refspec back to Git's default, setup restores it and names it;
+- a Git folder with nothing in it at all (no ref, no remote, and no file beside
+  `.git`), which is what a hand-run `git init` or an interrupted first run
+  leaves. Setup adopts it.
+
+It refuses, before changing anything, a folder that holds files, an existing
+repository it did not set up (a clone of the code, for one), an empty folder
+inside another repository, and a tasks-only folder set up for a different URL.
+Each refusal exits `5`, the same on every retry.
+
+Setup asks the remote before it creates anything, so a wrong URL, an
+unreachable remote or a remote with no Workbook project leaves the empty folder
+empty. An unreachable remote exits `1`. A remote with no project, or one whose
+tasks predate the published project identity, exits `5` and names the clone
+command that fixes it. A clone finds an older project by reading
+`.workbook/config.json` from the remote's default branch, which downloads the
+code, so a tasks-only folder never does that.
+
+A new folder's object format follows the remote's, so a SHA-256 project gets a
+SHA-256 folder.
+
+`--no-sync` is refused, because the folder can only join a project the remote
+already has. `--skill-dir` and `--force` are refused because the folder installs
+no agent documentation. `--no-docs` and `--no-skill` are accepted and change
+nothing, since that is already what a tasks-only setup does. Each refusal exits
+`2`. `--key` is a claim, as in a clone: it has to agree with the project's
+founding key.
+
+Setup records nothing in task history, so it needs no author and succeeds in a
+folder with no `user.email`. Every command that edits a task does need one. The
+report says which author edits will be recorded under, or that none is
+configured; set one with `git config user.email <address>` in the folder before
+editing.
+
+With `--json`, the setup result carries a `tasksOnly` object, which a setup in
+a clone of the code leaves out. `docs` is absent from a tasks-only result
+because no documentation is installed:
+
+```json
+"tasksOnly": {
+  "remote": "git@example.com:team/project.git",
+  "initialized": true,
+  "changed": ["workbook.tasksOnly", "remote.origin.tagOpt", "remote.origin.fetch", "remote.origin.url"],
+  "actor": "",
+  "unavailable": ["docs", "hooks"]
+}
+```
+
+`initialized` is true only for the run that made the folder a Git folder.
+`changed` names each Git setting the run wrote, and is `[]` on a rerun that
+changed nothing. `actor` is the address edits will be recorded under, or `""`.
+`unavailable` lists the commands that refuse in this folder. The text report
+says the same in `Mode:`, `Remote:`, `Author:` and `Unavailable:` lines.
+
+#### What is unavailable without the code
+
+Anything Workbook derives from code history reports that it is unavailable in a
+tasks-only folder, rather than answering from history the folder does not hold.
+Each refusal is a `validation` error (exit `5`) whose message says that the
+command is unavailable in a tasks-only folder:
+
+| Command | Why |
+| --- | --- |
+| `workbook docs install`, `update`, `status`, `remove` | Agent documentation and the skill are written for people working in the code. |
+| `workbook hooks install` | The managed pre-push hook runs when somebody pushes code, and nobody pushes code from this folder. |
+
+Commands that change statuses, priorities or keys still work. They refresh the
+generated guidelines only where those exist, and a tasks-only folder has none.
+Implementation links, branch inclusion and landed state are
+[proposed](architecture.md#relationship-to-code-branches) and not yet
+implemented. When they are, they will report themselves unavailable here in the
+same way.
 
 ## What a task may hold
 

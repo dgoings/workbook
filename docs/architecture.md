@@ -612,6 +612,30 @@ dgoings/tap/workbook`, or `./scripts/install.sh` to build from source.
 Setup deliberately does not install Git hooks. Hooks remain opt-in through
 `workbook hooks install`, because they must never be required for correctness.
 
+`workbook setup --tasks-only <url>` is the same bootstrap for a folder that holds
+a project's tasks and none of its code, such as a server running the web board.
+It makes an empty folder an ordinary non-bare Git folder with nothing checked
+out, and records that it is tasks-only in the folder's own Git settings
+(`workbook.tasksOnly = true`) rather than in the shared `.workbook/config.json`.
+That setting is about this one copy of the project, not about the project. The
+folder's `origin` carries a single negative fetch refspec, `^refs/*`, so a plain
+`git fetch` or `git pull` downloads nothing, while Workbook's own fetches name
+their refspecs on the command line as they do everywhere else:
+
+```text
+tasks-only folder                         origin
+  refs/workbook/project          <-----   refs/workbook/project
+  refs/workbook/config           <-----   refs/workbook/config
+  refs/workbook/tasks/*          <---->   refs/workbook/tasks/*
+  (no refs/heads, no refs/tags)      x    refs/heads/*, refs/tags/*  (code)
+```
+
+The folder joins only through the published identity ref. Step 2's fallback,
+reading `.workbook/config.json` from origin's default branch, would download the
+code, so a tasks-only folder skips it. It skips step 5 too, and never mints.
+Commands that need code history read the marker and report themselves
+unavailable rather than answering from history the folder does not hold.
+
 The default shared backend uses custom refs because they avoid branch switching and per-repository head contention. A conventional `workbook/state` branch may be offered as a compatibility fallback for Git hosts that reject custom refs. A future optional relay may provide strict leases, heartbeats, notifications, or high-concurrency agent coordination while retaining the same operation model.
 
 ## Design principles
