@@ -632,9 +632,9 @@ func (r *Repository) carryConfig(ctx context.Context, config core.ProjectConfig,
 	return true, nil
 }
 
-// refuseUnfitDestination refuses a destination that holds branches, unless
-// the person said they mean it, and one that is the same repository as the
-// old place, however its address is spelled.
+// refuseUnfitDestination refuses a destination that is the same repository
+// as the old place, however its address is spelled, and then one that holds
+// branches, unless the person said they mean it.
 //
 // Sameness is decided by what the two hold, not by their addresses: a ref
 // with a name nobody else could pick is written to the destination and looked
@@ -644,20 +644,6 @@ func (r *Repository) carryConfig(ctx context.Context, config core.ProjectConfig,
 // spelling, link or case of its address. It costs three round trips, and
 // needs the push access to the destination that the move needs anyway.
 func (r *Repository) refuseUnfitDestination(ctx context.Context, from, to string, allowBranches bool) error {
-	branches, err := r.Git(ctx, nil, "ls-remote", "--heads", to)
-	if err != nil {
-		return core.Wrap(core.CategoryOperational, "cannot list "+to+"'s branches", err)
-	}
-	if names := listedRefNames(branches); len(names) > 0 && !allowBranches {
-		shown := names
-		if len(shown) > 3 {
-			shown = append(append([]string(nil), shown[:3]...), fmt.Sprintf("and %d more", len(names)-3))
-		}
-		return core.Errorf(core.CategoryValidation,
-			"%s (%s) holds branches (%s), and a repository for tasks holds only Workbook refs; "+
-				"check that its address is the tasks repository's, or pass --allow-branches if it is",
-			to, redactURLCredentials(r.gitRemoteURL(ctx, to)), strings.Join(shown, ", "))
-	}
 	local, found, err := r.readIdentityRef(ctx, identityRef)
 	if err != nil {
 		return err
@@ -683,21 +669,27 @@ func (r *Repository) refuseUnfitDestination(ctx context.Context, from, to string
 		return core.Wrap(core.CategoryOperational, "cannot list "+from+" to tell it apart from "+to, listErr)
 	}
 	if len(listedRefNames(listing)) > 0 {
-		return core.TasksRemoteError(core.CategoryValidation,
-			core.TasksRemoteRefusal{
-				Reason:  core.TasksRemoteSameRepository,
-				Remote:  to,
-				URL:     redactURLCredentials(r.gitRemoteURL(ctx, to)),
-				Command: "workbook config set " + "tasks-remote " + to + " --url <the tasks repository's address>",
-			},
-			"%s (%s) is the same repository as %s (%s), whatever its address says, so moving the tasks there would mark "+
-				"the only place they are; give tasks-remote the address of a separate, empty repository",
-			to, redactURLCredentials(r.gitRemoteURL(ctx, to)), from, redactURLCredentials(r.gitRemoteURL(ctx, from)))
+		return sameRepositoryRefusal(to, redactURLCredentials(r.gitRemoteURL(ctx, to)),
+			from, redactURLCredentials(r.gitRemoteURL(ctx, from)))
 	}
 	if remove.err != nil {
 		return core.Wrap(core.CategoryOperational,
 			fmt.Sprintf("cannot remove %s from %s after writing it to tell the two repositories apart; remove it by hand", probe, to),
 			gitCommandResultError(remove))
+	}
+	branches, err := r.Git(ctx, nil, "ls-remote", "--heads", to)
+	if err != nil {
+		return core.Wrap(core.CategoryOperational, "cannot list "+to+"'s branches", err)
+	}
+	if names := listedRefNames(branches); len(names) > 0 && !allowBranches {
+		shown := names
+		if len(shown) > 3 {
+			shown = append(append([]string(nil), shown[:3]...), fmt.Sprintf("and %d more", len(names)-3))
+		}
+		return core.Errorf(core.CategoryValidation,
+			"%s (%s) holds branches (%s), and a repository for tasks holds only Workbook refs; "+
+				"check that its address is the tasks repository's, or pass --allow-branches if it is",
+			to, redactURLCredentials(r.gitRemoteURL(ctx, to)), strings.Join(shown, ", "))
 	}
 	return nil
 }

@@ -210,6 +210,9 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 			return err
 		}
 		if tasksRemote != nil && !*noSync {
+			if err := repository.CheckDistinctTasksRemote(ctx); err != nil {
+				return err
+			}
 			if _, err := repository.ProbeTasksRemote(ctx); err != nil {
 				return err
 			}

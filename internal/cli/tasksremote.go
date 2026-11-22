@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -107,10 +108,24 @@ func writeTasksRemoteSetting(
 			return gitstore.TasksOnlyUnavailable("workbook config set "+tasksRemoteSettingName,
 				"a tasks-only folder's origin is the tasks repository already, and its settings are not committed anywhere")
 		}
-		if origin := repository.GitRemoteURL(ctx, core.DefaultTasksRemote); origin != "" && origin == setting.URL {
+		// A first line only: the spelling of an address cannot prove two
+		// repositories differ. move-tasks and setup decide it by what the
+		// two hold (gitstore refuseUnfitDestination, CheckDistinctTasksRemote).
+		if origin := repository.GitRemoteURL(ctx, core.DefaultTasksRemote); origin != "" &&
+			sameAddress(repository.Root, origin, setting.URL) {
 			return core.Errorf(core.CategoryValidation,
 				"%s is origin's address, the code's own repository; give the address of the repository that is to hold the tasks",
 				setting.URL)
+		}
+	} else if before.TasksRemote.Chosen() {
+		// No supported undo: once origin is marked, sharing tasks through it
+		// again would point every checkout at a place they all refuse.
+		moved, err := repository.OriginMarkedMoved(ctx)
+		if err != nil {
+			return err
+		}
+		if moved != nil {
+			return gitstore.MovedForGood(*moved)
 		}
 	}
 	updated, err := repository.SetProjectTasksRemote(ctx, setting)
@@ -202,4 +217,38 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 	}
 	fmt.Fprintf(stdout, "Next:\tcommit .workbook/config.json and push it; everyone else pulls it and runs workbook setup\n")
 	return err
+}
+
+// sameAddress reports two spellings of one address: equal once a trailing
+// slash, a .git suffix and a file:// scheme are dropped, and, for a local
+// path, once it is made absolute against root and its links are resolved. It
+// does not fold case, because two paths that differ only in case are two
+// repositories on most file systems.
+func sameAddress(root, a, b string) bool {
+	return normalizedAddress(root, a) == normalizedAddress(root, b)
+}
+
+func normalizedAddress(root, address string) string {
+	address = strings.TrimSpace(address)
+	local := strings.HasPrefix(address, "file://")
+	address = strings.TrimPrefix(address, "file://")
+	address = strings.TrimRight(address, "/")
+	address = strings.TrimSuffix(address, ".git")
+	address = strings.TrimRight(address, "/")
+	if !local && strings.Contains(address, "://") {
+		return address
+	}
+	if !local && !filepath.IsAbs(address) && !strings.HasPrefix(address, ".") && strings.Contains(address, ":") {
+		// scp-like: host:path
+		return address
+	}
+	if !filepath.IsAbs(address) {
+		address = filepath.Join(root, address)
+	}
+	for _, candidate := range []string{address, address + ".git"} {
+		if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
+			return strings.TrimSuffix(filepath.Clean(resolved), ".git")
+		}
+	}
+	return filepath.Clean(address)
 }
