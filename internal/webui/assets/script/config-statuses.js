@@ -295,16 +295,40 @@
           if ("tags" in body && !sameSet(definition.tags, body.tags)) return false;
           return true;
         };
+        // An addition is in when the name is there, was not there before, and
+        // carries what this request gave it: the label and tags it set, and the
+        // neighbor it asked to stand beside. Without those, a definition another
+        // clone added under the same name with a different label would be taken
+        // for this one and the reader's own label dropped without a word. A
+        // member the request left for the server to derive is not compared.
+        const added = (definition, wasThere, order, token) => {
+          if (!definition || wasThere) return false;
+          if ("label" in body && definition.label !== trimmed(body.label)) return false;
+          if ("tags" in body && !sameSet(definition.tags, body.tags)) return false;
+          if (body.before || body.after) {
+            const at = order.indexOf(token);
+            const anchor = order.indexOf(body.before || body.after);
+            if (at < 0 || anchor < 0) return false;
+            if (body.before ? at !== anchor - 1 : at !== anchor + 1) return false;
+          }
+          return true;
+        };
         if (area === "order" && method === "PUT") {
           return JSON.stringify(statuses(after).map((definition) => definition.status)) === JSON.stringify(body.statuses);
         }
         if (area === "statuses") {
-          if (method === "POST") return Boolean(statusIn(after, body.status)) && !statusIn(before, body.status);
+          if (method === "POST") {
+            return added(statusIn(after, body.status), Boolean(statusIn(before, body.status)),
+              statuses(after).map((definition) => definition.status), body.status);
+          }
           if (method === "DELETE") return !statusIn(after, name);
           if (method === "PATCH") return edited(statusIn(after, body.name || name), Boolean(statusIn(after, name)));
         }
         if (area === "priorities") {
-          if (method === "POST") return Boolean(priorityIn(after, body.priority)) && !priorityIn(before, body.priority);
+          if (method === "POST") {
+            return added(priorityIn(after, body.priority), Boolean(priorityIn(before, body.priority)),
+              priorities(after).map((definition) => definition.priority), body.priority);
+          }
           if (method === "DELETE") return !priorityIn(after, name);
           // The route is matched by its path, not by spelling the aspect as a
           // word the vocabulary owns.

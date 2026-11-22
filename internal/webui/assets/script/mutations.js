@@ -129,7 +129,7 @@
       }
       // What a change whose outcome is unknown says, wherever it is reported.
       function heldChangeDoubt(describe) {
-        return "The server asked this page to wait, then refused " + describe + " when it was sent again, " +
+        return "The server asked this page to wait, and did not accept " + describe + " when it was sent again, " +
           "and the board could not be read to see whether the first attempt was saved. " +
           "Your change may already have been saved; check before making it again.";
       }

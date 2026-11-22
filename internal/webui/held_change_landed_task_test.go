@@ -1,6 +1,8 @@
 package webui
 
 import (
+	"context"
+	"net/http"
 	"strconv"
 	"testing"
 	"time"
@@ -644,4 +646,64 @@ func TestClientDeletesFromTheTaskFormAgainstItsHead(t *testing.T) {
   await remove.eventListeners.click();
   if (writes.length !== 1 || JSON.parse(writes[0].body).expectedHead !== "head-1") throw new Error("Delete sent " + JSON.stringify(writes));
 `))
+}
+
+// identifiedThreadLandingProgram is threadLandingProgram on a board that names
+// its reader, which is what lets the page tell the reader's own attachment
+// from another person's. The identity is set before the page's script reads it.
+func identifiedThreadLandingProgram(t *testing.T, task core.Task, body string) string {
+	t.Helper()
+	tasks := []core.Task{task}
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
+	response := request(t, handler, http.MethodGet, "/tasks/"+task.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET the task page status = %d, want %d", response.Code, http.StatusOK)
+	}
+	return clientDOMHarness("/tasks/"+task.ID, threadDocumentJSON(t, tasks)) + `
+boardView.dataset.assignIdentity = ` + strconv.Quote(threadPageReader) + `;
+` + renderedClientScript(t, response.Body.String()) + threadPanelHelpers + fileHarness + taskLandingProxy + `
+setTimeout(async () => {
+  await landingSettle();
+` + body + `
+}, 0);
+`
+}
+
+func TestClientDoesNotTakeAnotherPersonsAttachmentForItsOwn(t *testing.T) {
+	t.Parallel()
+	// Production mutation: matching an attachment by its name and size alone
+	// (or a link by its address and label alone) takes the file another person
+	// attached meanwhile for the reader's own, answers as if it were saved, and
+	// drops the reader's file without a word.
+	task := threadPageTask()
+	for _, change := range threadChanges() {
+		if change.name != "a file attached" && change.name != "a link attached" {
+			continue
+		}
+		for _, author := range []string{threadPageReader, "other@example.com"} {
+			t.Run(change.name+" by "+author, func(t *testing.T) {
+				t.Parallel()
+				holds := change.land(task)
+				holds.Head = "head-2"
+				holds.Attachments[len(holds.Attachments)-1].Author = author
+				check := `
+  if (said !== "") throw new Error("the reader's own attachment that landed was reported: " + JSON.stringify(said));`
+				if author != threadPageReader {
+					check = `
+  if (!said.startsWith("That task changed elsewhere, so ") || !said.includes(" was not saved.")) {
+    throw new Error("another person's look-alike attachment was taken for the reader's own; the panel said " + JSON.stringify(said));
+  }`
+				}
+				runHeldChangeClient(t, change.name+" by "+author+" meanwhile", identifiedThreadLandingProgram(t, task, `
+  const holds = `+threadDocumentJSON(t, []core.Task{holds})+`;
+  landing.land = () => { taskResponse = holds; };
+`+change.drive+`
+  await releaseTaskHold();
+  await making;
+  sentTwice();
+  const said = panelStatusText("attachments");
+`+check))
+			})
+		}
+	}
 }

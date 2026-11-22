@@ -933,8 +933,12 @@
               // machine — two clones attaching one file have to label it once.
               headed(head, { kind: "file", name: chosen.name, content: encoded }),
               "that attachment", null,
+              // The author is part of the match: another person's file of the
+              // same name and size is not this one, and taking it for this one
+              // would drop the reader's file without a word. A board that names
+              // nobody cannot tell them apart, as with a comment.
               attachmentAdded((attachment) => attachment.kind === "file" && attachment.name === chosen.name.trim() &&
-                attachment.size === chosen.size));
+                attachment.size === chosen.size && (!assignIdentity || attachment.author === assignIdentity)));
             if (!answer) return;
           }
           adder.clearFile();
@@ -947,7 +951,8 @@
             panel, "POST", "/api/tasks/" + encodeURIComponent(taskID) + "/attachments",
             headed(head, values), "that link", null,
             attachmentAdded((attachment) => attachment.kind === "link" && attachment.url === destination &&
-              (attachment.label || "") === (label || "").trim()));
+              (attachment.label || "") === (label || "").trim() &&
+              (!assignIdentity || attachment.author === assignIdentity)));
           if (!answer) return false;
           adder.clearLink();
           return true;

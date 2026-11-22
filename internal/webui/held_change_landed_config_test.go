@@ -331,3 +331,57 @@ func TestClientSettlesBoardSettingsThatLandedBeforeTheirResend(t *testing.T) {
 		})
 	}
 }
+
+func TestClientDoesNotTakeAnotherClonesAdditionForItsOwn(t *testing.T) {
+	t.Parallel()
+	// Production mutation: counting an addition as landed whenever its name is
+	// newly present says "Added triage." for a status another clone added under
+	// the same name with a different label, and the reader's label is dropped
+	// without a word.
+	for _, addition := range []struct {
+		name, land, drive, messages, stale string
+	}{
+		{
+			name: "a status",
+			land: `landed.statuses.push({ status: "triage", label: "Their Label", rank: "4/1", tags: [] });`,
+			drive: `const form = panelAdd();
+  const name = findElement(form, (element) => element.id === "status-new-name");
+  name.value = "triage";
+  name.eventListeners.input();
+  findElement(form, (element) => element.id === "status-new-label").value = "My Triage";
+  await submitPanelForm(form);`,
+			messages: "panelMessages",
+			stale:    "This project's statuses changed in another clone, so this change was not applied.",
+		},
+		{
+			name: "a priority",
+			land: `landed.priorities.priorities.push({ priority: "whenever", label: "Their Label", rank: "4/1", tags: [] });`,
+			drive: `const form = priorityAdd();
+  const name = findElement(form, (element) => element.id === "priority-new-name");
+  name.value = "whenever";
+  name.eventListeners.input();
+  findElement(form, (element) => element.id === "priority-new-label").value = "My Whenever";
+  await submitPriorityForm(form);`,
+			messages: "priorityMessages",
+			stale:    "This project's priorities changed in another clone, so this change was not applied.",
+		},
+	} {
+		t.Run(addition.name, func(t *testing.T) {
+			t.Parallel()
+			runKeyPanelClient(t, addition.name+" another clone added under the same name", "/", projectKeys(t), nil, `
+  vocabularyRead = `+keyPanelVocabularyJSON(t, projectKeys(t), "head-1")+`;
+`+priorityFetchHarness+landingProxy+`
+  await openStatuses();
+  const landed = configurationCopy("head-2");
+  `+addition.land+`
+  proxy.landed = landed;
+  `+addition.drive+`
+  await releaseHold();
+  const said = `+addition.messages+`().join(" ");
+  if (said.indexOf(`+strconv.Quote(addition.stale)+`) < 0 || said.indexOf("Added ") >= 0) {
+    throw new Error("another clone's addition was taken for the reader's own; the section said " + JSON.stringify(said));
+  }
+`)
+		})
+	}
+}

@@ -2887,8 +2887,14 @@ to check before making it again, and never says it was not saved; on a task's
 page, making the same change again from that panel
 reads the board first and sends it only if it is still not there. This check is
 best-effort, not a proof: it compares values, so a change somebody else made to
-the same values meanwhile is taken for the reader's own, and on a board serving
-no identity a new comment by anybody with the same text counts as the reader's.
+the same values meanwhile is taken for the reader's own. A comment or an
+attachment counts only when it is the reader's own, by the name the board
+serves, and an added status or priority only when it carries the label, tags
+and placement the reader gave it. A file is matched by its name, its size and
+who attached it, not by its bytes, so the same person attaching a different
+file of the same name and size from somewhere else at that moment is taken for
+this one; and on a board serving no identity a new comment or attachment by
+anybody that looks the same counts as the reader's.
 
 A waiting change exists only in that browser tab. The notice says so, a task
 form's save says so beside Save as well, and the browser asks before the tab is

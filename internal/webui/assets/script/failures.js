@@ -36,7 +36,7 @@
         const changedElsewhere = Boolean(error && error.category === "stale-write");
         taskFailureReports.set(taskID, {
           card: doubted
-            ? "The server asked this page to wait, then refused this change when it was sent again, and the board could not be read to check it. It may already have been saved; check the card once the board is current before making it again."
+            ? "The server asked this page to wait, and did not accept this change when it was sent again, and the board could not be read to check it. It may already have been saved; check the card once the board is current before making it again."
             : changedElsewhere
             ? (boardRead
               ? "This task changed elsewhere. The card shows the version the server holds."
