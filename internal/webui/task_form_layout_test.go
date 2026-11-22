@@ -582,8 +582,11 @@ const taskPageGeometryScript = pageGeometryHelpers + `
     sidebarOverflowY: overflowY,
     lastSectionAfterScroll: box(last),
     sidebarAfterScroll: box(sidebar),
-    mainScrollHeight: main.scrollHeight,
-    mainClientHeight: main.clientHeight
+    // The page's scroller: main on a wider screen, and the document itself
+    // at a phone's width, where main grows with what it holds so the
+    // column row can stay put against the screen.
+    mainScrollHeight: (getComputedStyle(main).overflowY === "visible" ? document.scrollingElement : main).scrollHeight,
+    mainClientHeight: (getComputedStyle(main).overflowY === "visible" ? document.scrollingElement : main).clientHeight
   };
   // Below the form, main scrolls to the thread and then to the change log.
   const reachable = (element) => {

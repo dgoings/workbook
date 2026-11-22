@@ -53,3 +53,101 @@
       .change-row__summary { grid-template-columns: minmax(0, 1fr); gap: .12rem; }
       .field-change { grid-template-columns: minmax(0, 1fr); }
     }
+    /* A phone. 560px holds every phone held upright — the narrow ones at 360,
+       the wide ones at 430 and 440 — and stops short of the narrowest tablet
+       held upright, at 600, and of any board inside Workbench, whose window
+       is at least 1000px wide beside a sidebar of at most 260px. Everything
+       wider keeps the layout above, rule for rule: phone_desktop_test.go
+       measures each wider route with these rules and without them and holds
+       the two to the pixel, and desktop_layout_test.go holds the board at
+       1280 and 1440 to a recording made before these rules existed, which is
+       what catches a phone rule written outside this query. The number is also in phone.js, which leaves the
+       cards undraggable below it.
+
+       The page scrolls as one document here rather than inside main. A
+       header and a filter row that stayed on screen would leave a phone a
+       third of its height for cards; scrolled away, the whole screen below
+       the row of columns is the column. That row is the one thing held in
+       place — position: sticky against the viewport, which is why nothing
+       between it and the root may be a scroller of its own at this width. */
+    @media (max-width: 560px) {
+      body { height: auto; min-height: 100vh; min-height: 100dvh; overflow: visible; }
+      main { flex: 0 0 auto; overflow: visible; container-type: inline-size; padding: 0 .75rem 1rem; }
+      .app-header { gap: .5rem; padding: .85rem .75rem .6rem; }
+      .filter-row { padding: .5rem .75rem; }
+      .filter-row__search { flex-basis: 100%; max-width: none; min-width: 0; }
+      /* What the board has to say waits at the foot of the screen rather than
+         the head of the page, which a reader working down a column or a
+         task has scrolled away from: drawn after main and held against the
+         bottom edge while there is page below it, and in its own place at
+         the end once the reader gets there, so it never covers the last of
+         the page for good. The status row has the top edge.
+
+         Every notice showing at once is in this one box, stacked, so none is
+         drawn over another. The box is never more than a third of the screen
+         tall — a phone with its keyboard up has little enough left — and
+         scrolls inside itself past that, so every report and every button in
+         it can still be reached. Its height, kept in --wb-notices-height by
+         phone.js, is kept clear at the bottom of the screen whenever focus or a
+         script brings a control into view, so a control never lands under it.
+         The notices inside it neither scroll nor cap themselves: the box does
+         both for all of them. */
+      html { scroll-padding-bottom: var(--wb-notices-height, 0px); }
+      .notices { display: flex; flex-direction: column; order: 1; position: sticky; bottom: 0; z-index: 5; max-height: 33vh; max-height: 33dvh; overflow-y: auto; }
+      .notice { flex: 0 0 auto; max-height: none; overflow: visible; padding: .5rem .75rem; border-top: 1px solid var(--wb-hairline); }
+      .notice__report { flex-wrap: wrap; }
+      .board-view { display: block; height: auto; }
+      /* One column at a time, under the row that switches between them. The
+         row runs edge to edge, scrolls sideways inside itself when the names
+         are wider than the screen, and never takes the page with it. */
+      .status-tabs { position: sticky; top: 0; z-index: 4; display: flex; gap: .4rem; margin: 0 -.75rem .6rem; padding: .5rem .75rem; overflow-x: auto; overscroll-behavior-x: contain; border-bottom: 1px solid var(--wb-border); background: var(--wb-ground); scrollbar-width: none; }
+      .status-tabs::-webkit-scrollbar { display: none; }
+      .status-tab { display: inline-flex; flex: 0 0 auto; align-items: center; gap: .45rem; max-width: calc(100vw - 3rem); padding: 0 .9rem; border: 1px solid var(--wb-border-strong); border-radius: 999px; background: var(--wb-surface); color: var(--wb-ink); cursor: pointer; font: inherit; font-size: .84rem; font-weight: 750; white-space: nowrap; }
+      .status-tab__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+      .status-tab__count { color: var(--wb-primary); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .78rem; }
+      .status-tab[aria-pressed="true"] { border-color: var(--wb-primary-edge); background: var(--wb-primary); color: var(--wb-on-accent); }
+      .status-tab[aria-pressed="true"] .status-tab__count { color: inherit; }
+      .status-tab:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
+      .board { display: block; overflow: visible; padding-bottom: 0; }
+      .column { display: none; min-width: 0; }
+      .column[data-phone-current] { display: grid; }
+      .task-list { overflow: visible; }
+      .unknown-status__list { grid-auto-columns: minmax(0, calc(100vw - 4rem)); }
+      /* A card is opened by its title, so the title is a line as tall as a
+         thumb rather than the height of its text. */
+      .task-card h3 { margin: .25rem 0 .15rem; }
+      .task-card h3 a { display: flex; align-items: center; min-height: 2.75rem; }
+      /* Task pages, which the 760px query above already stacks into one
+         column. */
+      .task-route__header { padding: .8rem .85rem; }
+      .task-route__header h2 { overflow-wrap: anywhere; }
+      .task-editor { padding: .85rem; }
+      /* One track that may be narrower than its widest label chip, which then
+         ends in its ellipsis rather than widening the page. */
+      .task-properties, .field, .label-editor { grid-template-columns: minmax(0, 1fr); }
+      .task-sidebar { padding-left: .85rem; padding-right: .85rem; }
+      .task-actions { padding: .5rem .85rem .6rem; }
+      .task-panel { padding: .85rem; }
+      .set-aside { padding: .75rem .85rem; }
+      .form-actions { flex-wrap: wrap; }
+      .change-row__who { overflow-wrap: anywhere; }
+      /* Every control a thumb has to hit is at least 44 by 44 CSS pixels,
+         which is 2.75rem. A minimum rather than a size, so a control already
+         larger keeps its size, and :root raises the rule over the single class
+         most of these are drawn with. Text that is a link inside a sentence
+         — a description, a comment — is read rather than aimed at, and keeps
+         its line. */
+      :root :is(button, select, input:not([type="checkbox"], [type="radio"], [type="file"]), .header-link, .new-task-link, .filter-row__clear, .board-link, .task-route__close, .notice a, .attachment__name a, .relationship-row h4 a, .relationship-kind__option, .attachment-add__choose, .create-more, .filter-option, .nav-switch) { min-height: 2.75rem; }
+      :root :is(button, .header-link, .new-task-link, .filter-row__clear, .board-link, .task-route__close, .attachment__name a, .relationship-row h4 a, .relationship-kind__option, .attachment-add__choose) { min-width: 2.75rem; }
+      :root :is(.header-link, .new-task-link, .filter-row__clear, .board-link, .task-route__close, .notice a, .attachment__name a, .relationship-row h4 a, .attachment-add__choose) { display: inline-flex; align-items: center; justify-content: center; }
+      .task-id-copy { display: inline-flex; align-items: center; }
+      /* Every field is set in at least 16px, because a phone's browser zooms
+         the page in on a field set smaller as soon as it takes focus — iPhone
+         Safari does — and leaves it zoomed, and so scrollable sideways. The
+         rule names the elements and no class, and is important, so a field
+         added later is covered whatever its own rule says; no field on any
+         page is set larger, so nothing is made smaller by it.
+         phone_fields_test.go measures every field on every page in scope. */
+      :root :is(input, select, textarea, [contenteditable]) { font-size: max(1rem, 16px) !important; }
+      .label-chip { padding-left: .6rem; }
+    }

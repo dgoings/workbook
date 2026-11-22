@@ -205,14 +205,15 @@
        board opened in one draws no line at its left edge.
 
        Everything after the header in body's column takes it: the filter row,
-       the two notices and main, which are the elements that draw below the
-       header. The admin panels after main are hidden until a route moves them
+       the notices and main, which are the elements that draw below the
+       header. The notices are named through their wrapper, which draws no box
+       of its own at any width Workbench gives the board. The admin panels after main are hidden until a route moves them
        into main, and the script draws nothing, so neither shows a line of its
        own. The header's own border-bottom is the same token, so the two meet in
        a clean corner in either scheme. main's side padding takes the pixel, and
        the border sits outside its scrolling area, so the columns scroll as
        before. */
-    :root.in-workbench .app-header ~ * { border-left: 1px solid var(--wb-border); }
+    :root.in-workbench .app-header ~ *, :root.in-workbench .app-header ~ .notices > * { border-left: 1px solid var(--wb-border); }
     /* Inside Workbench the header is also the top of the window beside the app's
        sidebar: the app hides the native title bar, so the window is moved by
        whatever its pages mark as a drag region, and this header shares the
@@ -254,6 +255,11 @@
        rest of behind its own scrollbar — a message nobody can read without
        discovering that the box scrolls. 40vh is the real ceiling, and past it
        the notice does scroll. */
+    /* The notices' wrapper is no box at all above the phone width: each notice
+       is a flex item of body's column, as if the wrapper were not there. See
+       the element in body.html, and the phone rules in layout.css for the one
+       width where it is a box. */
+    .notices { display: contents; }
     .notice { display: grid; flex: 0 0 auto; gap: .4rem; max-height: 40vh; overflow: auto; padding: .6rem 1.25rem; border-bottom: 1px solid var(--wb-hairline); background: var(--wb-surface); font-size: .85rem; }
     .notice__report { display: flex; align-items: baseline; gap: .75rem; padding: .35rem .6rem; border-left: 3px solid currentcolor; background: var(--wb-warning-surface); color: var(--wb-warning-ink); }
     .notice__report[data-kind="error"] { background: var(--wb-danger-surface); color: var(--wb-danger-ink); }

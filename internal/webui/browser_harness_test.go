@@ -85,6 +85,24 @@ type browserPage struct {
 	// Screenshot, when set, is a file a PNG of the viewport is written to
 	// after the script has run.
 	Screenshot string
+	// Phone loads the page the way a phone's own browser does: a mobile
+	// viewport at a phone's pixel density, touch input instead of a mouse, and
+	// a phone browser's user agent. It also gives the page's scripts real
+	// touch input to call on, as touchInput (see phoneInput in the driver).
+	Phone bool
+	// BeforeLoad, when set, is a script run in every document the page loads,
+	// before any of the page's own scripts: a place to watch for what the page
+	// does from its first line, or to take something away from it.
+	BeforeLoad string
+	// Reload loads the page a second time, in the same browser and profile,
+	// after Setup and Keys and before Script, so Script reads what a reader
+	// coming back to the board finds.
+	Reload bool
+	// Manifest asks the browser for the page's web manifest before Script
+	// runs, the way it does when a reader adds the page to a home screen, and
+	// answers what it found beside the script's own result: the result is
+	// then {"page": <the script's value>, "manifest": <Page.getAppManifest>}.
+	Manifest bool
 }
 
 // browserLaunches caps how many Chromes the package runs at once. The layout
@@ -180,6 +198,10 @@ func driveBrowser(node, chrome, profile, base string, page browserPage, deadline
 		"keys":       page.Keys,
 		"expression": page.Script,
 		"screenshot": page.Screenshot,
+		"phone":      page.Phone,
+		"beforeLoad": page.BeforeLoad,
+		"reload":     page.Reload,
+		"manifest":   page.Manifest,
 	})
 	if err != nil {
 		return nil, err
@@ -251,6 +273,28 @@ func TestBrowserDriverStopsAPageThatNeverAnswersAtItsDeadline(t *testing.T) {
 const devtoolsDriver = `
 const fs = require("fs");
 const request = JSON.parse(process.env.WORKBOOK_BROWSER_REQUEST);
+// What a phone page is given to touch with: touchInput({ x, y }) taps there,
+// touchInput({ x, y, dx, dy, steps }) strokes from there by dx, dy, after
+// holding still for press milliseconds when one is given,
+// touchInput({ text }) types into the focused control as a phone's keyboard
+// does, and touchInput({ key: "Enter" }) presses its Enter key. Each resolves
+// once the browser has taken every event of the gesture.
+const phoneInput = ` + "`" + `
+(() => {
+  const waiting = new Map();
+  let next = 0;
+  window.__workbookTouched = (id, failure) => {
+    const settle = waiting.get(id);
+    waiting.delete(id);
+    if (settle) settle(failure);
+  };
+  window.touchInput = (gesture) => new Promise((resolve, reject) => {
+    const id = ++next;
+    waiting.set(id, (failure) => failure ? reject(new Error(failure)) : resolve());
+    window.__workbookTouch(JSON.stringify(Object.assign({ id }, gesture)));
+  });
+})();
+` + "`" + `;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 (async () => {
   if (typeof WebSocket !== "function") throw new Error("this node has no WebSocket client; node 22 or later is needed");
@@ -275,6 +319,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const waiters = [];
   socket.onmessage = (event) => {
     const message = JSON.parse(event.data);
+    if (message.method === "Runtime.bindingCalled" && message.params.name === "__workbookTouch") {
+      touch(JSON.parse(message.params.payload));
+      return;
+    }
     if (message.id && pending.has(message.id)) {
       const { resolve, reject } = pending.get(message.id);
       pending.delete(message.id);
@@ -291,8 +339,58 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     socket.send(JSON.stringify({ id, method, params }));
   });
   const once = (method) => new Promise((resolve) => waiters.push({ method, resolve }));
+  // Real touch input on a page's request: the page names a point, or a
+  // stroke from one point to another, and the browser is handed the touch
+  // events a finger would produce there — which is what decides whether a
+  // stroke scrolls, drags or taps, and which no script can synthesize. The
+  // page is told when the browser has taken all of them.
+  async function touch(request) {
+    let failure = "";
+    try {
+      if (typeof request.text === "string") {
+        // What a phone's keyboard types into the focused control.
+        await send("Input.insertText", { text: request.text });
+        throw null;
+      }
+      if (request.key === "Enter") {
+        const enter = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
+        await send("Input.dispatchKeyEvent", Object.assign({ type: "keyDown", text: "\r" }, enter));
+        await send("Input.dispatchKeyEvent", Object.assign({ type: "keyUp" }, enter));
+        throw null;
+      }
+      const point = (x, y) => [{ x, y, radiusX: 4, radiusY: 4, force: 1, id: 1 }];
+      await send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: point(request.x, request.y) });
+      // A finger held still before it moves: the long press that arms a drag
+      // where the page has made one possible.
+      if (request.press) await sleep(request.press);
+      const steps = request.steps || 0;
+      for (let step = 1; step <= steps; step++) {
+        await sleep(16);
+        await send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: point(request.x + (request.dx || 0) * step / steps, request.y + (request.dy || 0) * step / steps)
+        });
+      }
+      if (request.hold) await sleep(request.hold);
+      await send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    } catch (error) {
+      if (error !== null) failure = String(error && error.message || error);
+    }
+    await send("Runtime.evaluate", { expression: "window.__workbookTouched(" + JSON.stringify(request.id) + ", " + JSON.stringify(failure) + ")" });
+  }
   await send("Page.enable");
-  await send("Emulation.setDeviceMetricsOverride", { width: request.width, height: request.height, deviceScaleFactor: 1, mobile: false });
+  await send("Emulation.setDeviceMetricsOverride", { width: request.width, height: request.height, deviceScaleFactor: request.phone ? 3 : 1, mobile: !!request.phone });
+  if (request.phone) {
+    await send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+    await send("Emulation.setUserAgentOverride", {
+      userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+      platform: "Linux armv8l"
+    });
+    await send("Runtime.enable");
+    await send("Runtime.addBinding", { name: "__workbookTouch" });
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: phoneInput });
+  }
+  if (request.beforeLoad) await send("Page.addScriptToEvaluateOnNewDocument", { source: request.beforeLoad });
   const loaded = once("Page.loadEventFired");
   await send("Page.navigate", { url: request.url });
   await loaded;
@@ -318,12 +416,19 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     await send("Input.dispatchKeyEvent", Object.assign({ type: keyText[key] ? "keyDown" : "rawKeyDown" }, event));
     await send("Input.dispatchKeyEvent", Object.assign({ type: "keyUp" }, event));
   }
+  if (request.reload) {
+    const reloaded = once("Page.loadEventFired");
+    await send("Page.reload", {});
+    await reloaded;
+  }
+  const manifest = request.manifest ? await send("Page.getAppManifest", {}) : null;
   const evaluated = await evaluate(request.expression);
   if (request.screenshot) {
     const shot = await send("Page.captureScreenshot", { format: "png" });
     fs.writeFileSync(request.screenshot, Buffer.from(shot.data, "base64"));
   }
-  process.stdout.write(JSON.stringify(evaluated.result.value === undefined ? null : evaluated.result.value));
+  const value = evaluated.result.value === undefined ? null : evaluated.result.value;
+  process.stdout.write(JSON.stringify(request.manifest ? { page: value, manifest } : value));
   socket.close();
   process.exit(0);
 })().catch((error) => { process.stderr.write(String(error && error.stack || error) + "\n"); process.exit(1); });

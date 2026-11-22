@@ -220,6 +220,17 @@ config set tasks-remote tasks --url <address>`, then `workbook move-tasks`,
 then commit `.workbook/config.json`; everyone else runs `workbook setup` after
 pulling it. See [Keep the tasks in their own repository](docs/hosting.md#keep-the-tasks-in-their-own-repository).
 
+The board works on a phone. On a screen that narrow it shows one column at a
+time, under a row of the columns' names and counts, and a task's page takes
+every change by touch: status, priority, labels, assignment and comments. To
+reach a hosted board from a phone, open its address in the phone's browser and
+sign in as anywhere else. Adding it to the home screen gives a shortcut with
+the board's icon and the project's name. In Chrome on Android choose "Create
+shortcut", which opens the board in a Chrome tab. On an iPhone or iPad from version 26, it opens as a web app in
+its own window with its own sign-in unless "Open as Web App" is switched off
+when adding it; switch it off to have it open in the browser. Neither has been tried
+on a real phone. See [On a phone](docs/reference.md#on-a-phone).
+
 Any board, hosted or not, shows an edit its sync had to set aside because a
 conflicting change reached the remote first: the card says so, and the task's
 page shows the edit until somebody copies it back or dismisses it.

@@ -1,0 +1,265 @@
+body display:flex flex-direction:column overflow-x:hidden overflow-y:hidden height:800px min-width:320px box-sizing:border-box font-size:16px font-weight:400 line-height:normal white-space:normal visibility:visible
+ a.skip-link display:block position:fixed top:-64px left:16px padding-top:8.8px padding-right:12px padding-bottom:8.8px padding-left:12px box-sizing:border-box z-index:2 draggable
+ header.app-header display:flex flex-shrink:0 align-items:end justify-content:space-between row-gap:20px column-gap:20px padding-top:20px padding-right:20px padding-bottom:20px padding-left:20px box-sizing:border-box border-bottom-width:1px
+  div.app-header__lead display:flex flex-wrap:wrap align-items:end row-gap:4.8px column-gap:17.6px min-width:0px box-sizing:border-box
+   div display:block box-sizing:border-box
+    p.eyebrow display:block margin-bottom:3.2px box-sizing:border-box font-size:11.2px font-weight:800
+    h1 display:block box-sizing:border-box font-size:25.6px font-weight:700
+   nav.header-links display:flex flex-wrap:wrap align-items:baseline row-gap:4.8px column-gap:12.8px padding-bottom:1.92px box-sizing:border-box
+    a.header-link display:block box-sizing:border-box font-size:13.12px font-weight:750 draggable
+  div.header-settings display:flex flex-direction:column align-items:flow-end row-gap:8px column-gap:8px min-width:0px box-sizing:border-box
+   p.updated display:block box-sizing:border-box font-size:12px
+    span.sync-dot display:inline-block width:7.2px height:7.2px margin-right:5.6px box-sizing:border-box
+    span display:inline box-sizing:border-box
+   div.header-switches display:flex flex-wrap:wrap align-items:center justify-content:flow-end row-gap:7.2px column-gap:15.2px box-sizing:border-box
+    button.nav-switch display:flex align-items:center row-gap:7.2px column-gap:7.2px box-sizing:border-box font-size:13.12px font-weight:750
+     span.nav-switch__label display:block box-sizing:border-box
+     span.nav-switch__track display:block position:relative flex-shrink:0 width:36px height:19.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px
+      span.nav-switch__knob display:block position:absolute top:50% left:calc(100% - 16.48px) width:14.4px height:14.4px box-sizing:border-box
+    button.nav-switch display:flex align-items:center row-gap:7.2px column-gap:7.2px box-sizing:border-box font-size:13.12px font-weight:750
+     span.nav-switch__label.nav-switch__label--descriptions display:block min-width:132px box-sizing:border-box
+     span.nav-switch__track display:block position:relative flex-shrink:0 width:36px height:19.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px
+      span.nav-switch__knob display:block position:absolute top:50% left:2.08px width:14.4px height:14.4px box-sizing:border-box
+ div.filter-row display:flex flex-wrap:wrap align-items:center row-gap:8px column-gap:15.2px padding-top:8px padding-right:20px padding-bottom:8px padding-left:20px box-sizing:border-box
+  input.filter-row__search display:block flex-grow:1 flex-basis:224px overflow-x:clip overflow-y:clip min-width:160px max-width:416px padding-top:5.6px padding-right:8.8px padding-bottom:5.6px padding-left:8.8px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px font-size:13.44px
+  div.filter-row__choosers display:flex flex-wrap:wrap row-gap:7.2px column-gap:7.2px box-sizing:border-box
+   div.filter-chooser display:block position:relative box-sizing:border-box
+    button.filter-chooser__button display:inline-flex align-items:center row-gap:5.6px column-gap:5.6px padding-top:4.8px padding-right:8.8px padding-bottom:4.8px padding-left:8.8px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px font-size:12.8px
+   div.filter-chooser display:block position:relative box-sizing:border-box
+    button.filter-chooser__button display:inline-flex align-items:center row-gap:5.6px column-gap:5.6px padding-top:4.8px padding-right:8.8px padding-bottom:4.8px padding-left:8.8px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px font-size:12.8px
+  a.nav-switch display:flex align-items:center row-gap:7.2px column-gap:7.2px box-sizing:border-box font-size:13.12px font-weight:750 draggable
+   span.nav-switch__label.nav-switch__label--deleted display:block min-width:100px box-sizing:border-box
+   span.nav-switch__track display:block position:relative flex-shrink:0 width:36px height:19.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px
+    span.nav-switch__knob display:block position:absolute top:50% left:2.08px width:14.4px height:14.4px box-sizing:border-box
+ main display:block flex-grow:1 overflow-x:auto overflow-y:auto min-height:0px padding-right:20px padding-bottom:20px padding-left:20px box-sizing:border-box
+  div.board-view display:grid grid-template-rows:auto minmax(0px, 1fr) auto height:100% min-height:0px box-sizing:border-box
+   section.board display:grid justify-content:start grid-auto-flow:column grid-auto-columns:minmax(256px, 416px) grid-row-start:2 row-gap:12.8px column-gap:12.8px overflow-x:auto overflow-y:hidden min-height:0px padding-bottom:4px box-sizing:border-box
+    section.column display:grid grid-template-columns:minmax(0px, 1fr) grid-template-rows:auto minmax(0px, 1fr) min-width:256px min-height:0px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px
+     header.column__header display:block padding-top:11.2px padding-right:12px padding-bottom:9.6px padding-left:12px box-sizing:border-box border-top-width:3px border-bottom-width:1px
+      h2.column__heading display:flex align-items:baseline justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:14.72px font-weight:700
+       span.count display:block box-sizing:border-box font-size:12.8px
+      a.new-task-link display:inline-block margin-top:7.2px box-sizing:border-box font-size:11.68px font-weight:750 draggable
+     div.task-list display:grid row-gap:8.8px column-gap:8.8px overflow-x:auto overflow-y:auto min-height:0px padding-top:8.8px padding-right:8.8px padding-bottom:8.8px padding-left:8.8px box-sizing:border-box
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--medium display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--medium display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+    section.column display:grid grid-template-columns:minmax(0px, 1fr) grid-template-rows:auto minmax(0px, 1fr) min-width:256px min-height:0px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px
+     header.column__header display:block padding-top:11.2px padding-right:12px padding-bottom:9.6px padding-left:12px box-sizing:border-box border-top-width:3px border-bottom-width:1px
+      h2.column__heading display:flex align-items:baseline justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:14.72px font-weight:700
+       span.count display:block box-sizing:border-box font-size:12.8px
+      a.new-task-link display:inline-block margin-top:7.2px box-sizing:border-box font-size:11.68px font-weight:750 draggable
+     div.task-list display:grid row-gap:8.8px column-gap:8.8px overflow-x:auto overflow-y:auto min-height:0px padding-top:8.8px padding-right:8.8px padding-bottom:8.8px padding-left:8.8px box-sizing:border-box
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--high display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+       div.labels display:flex flex-wrap:wrap row-gap:4px column-gap:4px margin-top:10.4px box-sizing:border-box
+        span.label display:block overflow-x:hidden overflow-y:hidden max-width:100% padding-top:2.24px padding-right:4.48px padding-bottom:2.24px padding-left:4.48px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px font-size:10.24px white-space:nowrap
+        span.label display:block overflow-x:hidden overflow-y:hidden max-width:100% padding-top:2.24px padding-right:4.48px padding-bottom:2.24px padding-left:4.48px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px font-size:10.24px white-space:nowrap
+       div.assignees display:flex flex-wrap:wrap row-gap:4px column-gap:4px margin-top:10.4px box-sizing:border-box
+        span.assignee display:block overflow-x:hidden overflow-y:hidden max-width:100% padding-top:2.24px padding-right:4.48px padding-bottom:2.24px padding-left:4.48px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px font-size:10.24px white-space:nowrap
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--medium display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+       div.labels display:flex flex-wrap:wrap row-gap:4px column-gap:4px margin-top:10.4px box-sizing:border-box
+        span.label display:block overflow-x:hidden overflow-y:hidden max-width:100% padding-top:2.24px padding-right:4.48px padding-bottom:2.24px padding-left:4.48px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px font-size:10.24px white-space:nowrap
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--low display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--low display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--low display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--low display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--low display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--low display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--low display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--low display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--low display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--low display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--low display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--low display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+    section.column display:grid grid-template-columns:minmax(0px, 1fr) grid-template-rows:auto minmax(0px, 1fr) min-width:256px min-height:0px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px
+     header.column__header display:block padding-top:11.2px padding-right:12px padding-bottom:9.6px padding-left:12px box-sizing:border-box border-top-width:3px border-bottom-width:1px
+      h2.column__heading display:flex align-items:baseline justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:14.72px font-weight:700
+       span.count display:block box-sizing:border-box font-size:12.8px
+      a.new-task-link display:inline-block margin-top:7.2px box-sizing:border-box font-size:11.68px font-weight:750 draggable
+     div.task-list display:grid row-gap:8.8px column-gap:8.8px overflow-x:auto overflow-y:auto min-height:0px padding-top:8.8px padding-right:8.8px padding-bottom:8.8px padding-left:8.8px box-sizing:border-box
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--medium display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--medium display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--medium display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+    section.column display:grid grid-template-columns:minmax(0px, 1fr) grid-template-rows:auto minmax(0px, 1fr) min-width:256px min-height:0px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px
+     header.column__header display:block padding-top:11.2px padding-right:12px padding-bottom:9.6px padding-left:12px box-sizing:border-box border-top-width:3px border-bottom-width:1px
+      h2.column__heading display:flex align-items:baseline justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:14.72px font-weight:700
+       span.count display:block box-sizing:border-box font-size:12.8px
+      a.new-task-link display:inline-block margin-top:7.2px box-sizing:border-box font-size:11.68px font-weight:750 draggable
+     div.task-list display:grid row-gap:8.8px column-gap:8.8px overflow-x:auto overflow-y:auto min-height:0px padding-top:8.8px padding-right:8.8px padding-bottom:8.8px padding-left:8.8px box-sizing:border-box
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--medium display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+    section.column display:grid grid-template-columns:minmax(0px, 1fr) grid-template-rows:auto minmax(0px, 1fr) min-width:256px min-height:0px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px
+     header.column__header display:block padding-top:11.2px padding-right:12px padding-bottom:9.6px padding-left:12px box-sizing:border-box border-top-width:3px border-bottom-width:1px
+      h2.column__heading display:flex align-items:baseline justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:14.72px font-weight:700
+       span.count display:block box-sizing:border-box font-size:12.8px
+      a.new-task-link display:inline-block margin-top:7.2px box-sizing:border-box font-size:11.68px font-weight:750 draggable
+     div.task-list display:grid row-gap:8.8px column-gap:8.8px overflow-x:auto overflow-y:auto min-height:0px padding-top:8.8px padding-right:8.8px padding-bottom:8.8px padding-left:8.8px box-sizing:border-box
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--medium display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--medium display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--medium display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable
+      article.task-card display:block min-width:0px padding-top:11.2px padding-right:11.2px padding-bottom:11.2px padding-left:11.2px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px draggable
+       div.task-card__meta display:flex align-items:center justify-content:space-between row-gap:8px column-gap:8px box-sizing:border-box font-size:11.2px
+        span.task-id-copy-group display:flex position:relative align-items:baseline min-width:0px box-sizing:border-box
+         button.task-id-copy display:block max-width:100% box-sizing:border-box
+          code display:inline overflow-x:hidden overflow-y:hidden box-sizing:border-box white-space:nowrap
+        span.priority.priority--medium display:block flex-shrink:0 padding-top:1.6px padding-right:5.44px padding-bottom:1.6px padding-left:5.44px box-sizing:border-box font-size:10.24px font-weight:800
+       h3 display:block margin-top:8.8px margin-bottom:4.8px box-sizing:border-box font-size:14.4px font-weight:700 line-height:1.24
+        a display:inline box-sizing:border-box draggable

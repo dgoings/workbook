@@ -364,6 +364,35 @@ header through: do not use the board this way, and stop the service until you
 know why. Cloudflare's documentation does not say what Access does with an
 email header a visitor sends, which is why this check is here.
 
+## On a phone
+
+Open `https://tasks.example.com` in the phone's browser and sign in as on any
+other machine; the board lays itself out for the screen (see
+[On a phone](reference.md#on-a-phone)). Adding it to the home screen gives a
+shortcut with the Workbench icon and the project's name. The board's manifest
+asks for it to open in an ordinary browser tab. In Chrome on Android choose
+"Create shortcut" rather than "Install app": the shortcut opens in a Chrome
+tab, using the sign-in Chrome already has, and when that sign-in expires it
+shows the Access sign-in page like any other visit.
+
+On an iPhone or iPad from iOS and iPadOS 26 the phone decides instead: a site
+added to the Home Screen opens as a web app of its own, whatever its manifest
+says, unless "Open as Web App" is switched off in the Add to Home Screen sheet,
+where it starts on. A web app has its own window and keeps its own cookies,
+starting from the ones Safari had when it was added, so once its Access
+sign-in expires it has to sign in again inside the web app, and signing in in
+Safari does not help it. Tell readers to switch "Open as Web App" off when they
+add the board; the shortcut then opens it in Safari, signed in as Safari is.
+None of this has been tried on a real phone. The page asks for the manifest that names the shortcut with the
+browser's cookies, so the manifest reaches the board through Access the way the
+page does. Without the sign-in, Access would answer that request with its sign-in
+page and the browser would have no manifest. That much is checked in Chrome,
+behind a proxy that refuses any request without its cookie: the manifest and
+both icons arrived signed in. It has not been checked on a real phone, where
+the home screen may fetch the icon itself. If a shortcut shows a letter or a
+screenshot instead of the icon, the phone asked for the icon without the
+sign-in, and the shortcut still opens the board.
+
 ## What to know before you invite anyone
 
 ### The server's key opens the whole repository
