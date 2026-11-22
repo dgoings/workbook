@@ -18,7 +18,7 @@ func runStatusAdd(ctx context.Context, args []string, cwd string, stdout, stderr
 	after := flags.String("after", "", "place after this status")
 	var tags stringListValue
 	flags.Var(&tags, "tag", "role to give it")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with the tasks remote (origin unless configured)")
 	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {

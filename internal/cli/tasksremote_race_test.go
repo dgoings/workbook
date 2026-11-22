@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,4 +122,49 @@ func TestTasksRemoteEditPublishedAroundTheMarkIsReportedAndCarried(t *testing.T)
 		t.Fatalf("teammate setup after the pull = (%d, %q, %q)", code, stdout, stderr)
 	}
 	requireFreshCloneValidates(t, project.tasks)
+}
+
+// A create in a checkout on the old settings whose watcher last synchronized
+// before the move is refused by the command itself, not only in the
+// watcher's log: handing the change to that watcher would have exited 0.
+func TestTasksRemoteStaleCreateHandedToAWatcherIsRefusedByTheCommand(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA1)
+	stale := cloneCode(t, project)
+	if code, stdout, stderr := run(t, stale, "setup"); code != 0 {
+		t.Fatalf("stale setup = (%d, %q, %q)", code, stdout, stderr)
+	}
+	output := &watcherOutput{}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan int, 1)
+	go func() {
+		finished <- Run(ctx, []string{"sync", "--watch", "--interval", "1h"}, stale, nil, output, output)
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-finished:
+		case <-time.After(20 * time.Second):
+			t.Error("watcher did not stop")
+		}
+	}()
+	waitForWatcherReady(t, output)
+
+	project.moveTasks(t)
+	afterMove := repositoryState(t, project.code)
+	localBefore := refsUnder(t, stale, "refs/workbook/tasks/")
+	code, stdout, stderr := run(t, stale, "create", "Handed to a watcher that predates the move", "--json")
+	if code != 3 {
+		t.Fatalf("stale create with a watcher = (%d, %q, %q), want 3", code, stdout, stderr)
+	}
+	refusal := requireTasksRemoteRefusal(t, stderr, core.CategoryNotInitialized, core.TasksRemoteMoved)
+	if refusal.MovedTo == nil || refusal.MovedTo.URL != project.tasks {
+		t.Fatalf("refusal = %+v", refusal)
+	}
+	if got := refsUnder(t, stale, "refs/workbook/tasks/"); got != localBefore {
+		t.Fatalf("the refused create recorded something:\nbefore %s\nafter  %s", localBefore, got)
+	}
+	if after := repositoryState(t, project.code); after != afterMove {
+		t.Fatalf("origin changed:\nbefore %s\nafter  %s", afterMove, after)
+	}
 }

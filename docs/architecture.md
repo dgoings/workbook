@@ -869,8 +869,9 @@ A project may keep its tasks in a repository of their own, so that access to
 the tasks, such as a hosted board's key, is not access to the code. The choice
 is an optional `tasksRemote` member (`name`, `url`) of the tracked
 `.workbook/config.json`. It needs no new format generation, because it is
-absent for every project that never chose one, and that project's file and Git
-commands are unchanged. Every place that used to say `origin` asks one
+absent for every project that never chose one, and that project's file, refs
+and JSON output are unchanged; its one Git-command difference is that the local
+identity listing also names origin's tracking identity ref. Every place that used to say `origin` asks one
 function, `Repository.remote()`, which returns the remote named for this run
 (`--remote`), else the project's setting, else `origin`. A checkout's own Git
 configuration holds the remote's address; setup adds the remote from the file
@@ -891,9 +892,21 @@ code clone                                        origin (code)
   refs/workbook/remotes/tasks/{project,config,tasks/*}  (tracking)
 ```
 
-Moving the tasks copies every ref with an ordinary synchronization, so the new
-place holds the same commits with the same operation IDs, and then marks the
-old place. The mark is one commit on the old place's identity ref:
+A remote other than the project's tasks remote is only ever read into its
+tracking prefix. Folding it into the canonical task refs, as an ordinary
+synchronization folds origin in, is what made two places unsafe to alternate
+between: once either has replayed the other's edits, the two hold the same
+operations under different commits, and every reconciliation between them
+replayed them again.
+
+Moving the tasks copies every ref with an ordinary synchronization, so a task
+nobody edited elsewhere arrives with the same commits, and then marks the old
+place. What the old place holds and the new place lacks is carried by
+operation identity: an operation already recorded on the history it would be
+replayed onto is skipped whatever its commit, and only a missing one is
+written, once. Every publication also refuses a history that records an
+operation ID twice, wherever it came from. The mark is one commit on the old
+place's identity ref:
 
 ```text
 origin: refs/workbook/project ──> M  "workbook: tasks moved"
@@ -909,8 +922,7 @@ Building on I makes publishing the mark a fast-forward, so no commit changes and
 nothing is force-pushed. Its author, committer and dates are fixed, as I's are,
 so marking the same move twice writes the same commit. Workbook reads M and
 never adopts it: the local identity ref stays on I, and a checkout whose tasks
-remote is marked is refused before it records anything, told where the tasks
-went. Its unpublished edits stay in its own task refs, which the next
+remote is marked is refused, told where the tasks went. Its unpublished edits stay in its own task refs, which the next
 synchronization with the new place publishes. The old place keeps every task
 ref it had. A release from before the marker refuses M as an invalid identity
 (its reader requires a root commit), so it stops rather than writing to the
@@ -918,12 +930,19 @@ old place, though its message does not say where the tasks went.
 
 The procedure is ordered so that an interruption anywhere leaves a state the
 same command finishes: read the old place, publish to the new place, mark, read
-the old place again, publish again, and compare the two places' ref listings. A
-teammate's edit published to the old place before the mark is carried by the
-second read; after the mark, a teammate on the old settings is refused instead
-of publishing there. That ordering is the guarantee. That every checkout picks
-up the new setting is not: it arrives with an ordinary pull of the code, and
-until then a checkout is refused, not silently diverging.
+the old place again, publish again, and compare the two places' operation IDs
+task by task. A teammate's edit published to the old place before the mark is
+carried by the second read; after the mark, a teammate on the old settings is
+refused, because each publication asks the identity ref first.
+
+The mark and other people's pushes cannot be ordered by plain Git, which has no
+compare-and-swap across two refs: a push already past its look at the identity
+ref lands after the mark. That window is made visible rather than closed. Every
+publication lists the identity ref again after its push and reports such an
+edit; `setup` and `sync` on the new settings say when the old place holds
+operations the new one lacks; and `move-tasks`, safe to run at any later time,
+carries them. An edit by a clone that vanished in that instant waits at the old
+place for that rerun.
 
 The default shared backend uses custom refs because they avoid branch switching and per-repository head contention. A conventional `workbook/state` branch may be offered as a compatibility fallback for Git hosts that reject custom refs. A future optional relay may provide strict leases, heartbeats, notifications, or high-concurrency agent coordination while retaining the same operation model.
 

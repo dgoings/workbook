@@ -33,16 +33,27 @@ config set tasks-remote <name> --url <address>` records the remote in
 `.workbook/config.json`, refusing an address that carries a password or an
 `https` user name; `workbook move-tasks` copies every task there, marks the old
 place with one fast-forward commit on its `refs/workbook/project` saying where
-the tasks went, and checks the new place holds every task the old one did. It
-is safe to stop and run again, and the old place keeps its copy. `workbook
+the tasks went, and checks, task by task, that the new place holds every
+operation the old one does. It carries by operation identity, so running it
+again at any time carries an edit that reached the old place since, once, and
+says how many and from whom; a conflicting one is set aside and reported with
+exit 8. It refuses a new place that is the same repository as the old one,
+however its address is spelled, and one holding branches unless
+`--allow-branches` is given. It is safe to stop and run again, and the old
+place keeps its copy. The move is one-way in this version: `config unset
+tasks-remote` is refused afterwards. `workbook
 setup` adds the remote to each checkout from the settings, or keeps the
 checkout's own address for it. Until it runs, task commands refuse and say to
-run it; a checkout still on the old settings is refused before it records
-anything, told where the tasks went; and a setup that cannot read the tasks
-repository says which address and what access is needed. Each refusal carries
+run it; a checkout still on the old settings is refused, told where the tasks
+went, and a command whose edit landed on the old place just as it was marked
+says so and exits 3; `setup` and `sync` say when the old place holds edits the
+new one lacks; a board already running reports every save's refused
+publication as a warning; the pre-push hook lets code pushes through these
+refusals; and a setup that cannot read the tasks repository says which address
+and what access is needed. Each refusal carries
 a `tasksRemote` member in the JSON error. `workbook fetch`, `push` and `sync`
-take `--remote` to name another remote for one run, which reads a marked
-remote and never publishes to it, and each remote's tracking refs are now
+take `--remote` to name another remote for one run, which only reads it into
+its tracking refs and never publishes to it, and each remote's tracking refs are now
 pruned only by a fetch from that remote. A project that never sets the remote
 behaves as before. Older Workbook releases refuse a `.workbook/config.json`
 that names a tasks remote, exiting 7 with `cannot decode Workbook

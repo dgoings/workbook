@@ -102,7 +102,7 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 	noBackup := flags.Bool("no-backup", false, "write no backup bundle")
 	backup := flags.String("backup", "", "write the backup bundle here, or into this directory")
 	dryRun := flags.Bool("dry-run", false, "report what would be compacted and change nothing")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with the tasks remote (origin unless configured)")
 	adopt := flags.String("adopt", "", "settle one task a compaction left stuck, retrying the replay")
 	discardLocal := flags.Bool("discard-local", false, "with --adopt, take origin's version after saving the local history to a bundle")
 	jsonMode := flags.Bool("json", false, "emit JSON")

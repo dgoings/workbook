@@ -660,7 +660,7 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	key := flags.String("key", "", "mint the task under this key")
 	var labels stringListValue
 	flags.Var(&labels, "label", "task label")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with the tasks remote (origin unless configured)")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -918,7 +918,7 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	var unassign stringListValue
 	flags.Var(&unassign, "unassign", "withdraw that assignment")
 	force := flags.Bool("force", false, "assign beside an assignment somebody else holds")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with the tasks remote (origin unless configured)")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -1236,7 +1236,7 @@ func runDelete(ctx context.Context, args []string, cwd string, stdout, stderr io
 		return err
 	}
 	flags := newFlagSet("delete")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with the tasks remote (origin unless configured)")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -1260,7 +1260,7 @@ func runRestore(ctx context.Context, args []string, cwd string, stdout, stderr i
 	}
 	flags := newFlagSet("restore")
 	into := flags.String("into", "", "restore into this status")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with the tasks remote (origin unless configured)")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -1304,7 +1304,7 @@ func runMove(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	flags := newFlagSet("move")
 	before := flags.String("before", "", "move before task ID")
 	after := flags.String("after", "", "move after task ID")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with the tasks remote (origin unless configured)")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -1337,7 +1337,7 @@ func runDependencyMutation(ctx context.Context, command string, args []string, c
 		return err
 	}
 	flags := newFlagSet(command)
-	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with the tasks remote (origin unless configured)")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -1361,7 +1361,7 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	any := flags.Bool("any", false, "include tasks somebody else is assigned to")
 	claim := flags.Bool("claim", false, "assign the chosen task to yourself and publish it")
 	limitText := flags.String("limit", "", "offer up to this many eligible tasks, in next's order")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with the tasks remote (origin unless configured)")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err

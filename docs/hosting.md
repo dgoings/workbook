@@ -71,14 +71,16 @@ somebody who can push to both repositories:
 `move-tasks` copies every task, marks the code repository as the place the
 tasks moved away from, and checks that the new repository holds everything the
 old one did. If it stops partway, run it again. The old repository keeps its
-copy. The full procedure, what it guarantees and what it does not, is in
+copy. Tell the team before you move, and run `workbook move-tasks` once more
+after everyone has pulled: an edit somebody published in the moment of the
+move waits on the old repository until then. The move is one-way. The full procedure, what it guarantees and what it does not, is in
 [A tasks remote other than origin](reference.md#a-tasks-remote-other-than-origin).
 
 A teammate without access to the tasks repository can still clone and push the
 code. Their `workbook setup` says which repository it could not read and that
-reading the tasks needs read access to it and changing them push access. They
-should not install Workbook's optional pre-push hook, which publishes tasks on
-every code push and would fail without that access.
+reading the tasks needs read access to it and changing them push access.
+Workbook's optional pre-push hook, which publishes tasks on every code push,
+says the tasks were not published and lets the code push through.
 
 ## 1. Install Workbook
 

@@ -268,7 +268,7 @@ func runConfigSet(ctx context.Context, args []string, cwd string, stdout, stderr
 		return err
 	}
 	flags := newFlagSet("config", "set")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with the tasks remote (origin unless configured)")
 	address := flags.String("url", "", "the tasks remote's address (tasks-remote only)")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
@@ -310,7 +310,7 @@ func runConfigUnset(ctx context.Context, args []string, cwd string, stdout, stde
 		return err
 	}
 	flags := newFlagSet("config", "unset")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with the tasks remote (origin unless configured)")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err

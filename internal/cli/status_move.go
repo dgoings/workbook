@@ -15,7 +15,7 @@ func runStatusMove(ctx context.Context, args []string, cwd string, stdout, stder
 	flags := newFlagSet("status", "move")
 	before := flags.String("before", "", "move before this status")
 	after := flags.String("after", "", "move after this status")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with the tasks remote (origin unless configured)")
 	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {

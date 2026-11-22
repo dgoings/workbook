@@ -125,7 +125,7 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	flags := newFlagSet("setup")
 	key := flags.String("key", "", "project key for a new project")
 	noDocs := flags.Bool("no-docs", false, "skip managed agent documentation")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with the tasks remote (origin unless configured)")
 	skillDir := flags.String("skill-dir", "", "install the Workbook skill here")
 	noSkill := flags.Bool("no-skill", false, "leave the Workbook skill alone")
 	force := flags.Bool("force", false, "overwrite locally modified managed documentation")

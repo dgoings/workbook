@@ -162,14 +162,14 @@ var commandSchemas = map[string]commandMetadata{
 	"setup": {
 		Name:     "setup",
 		Synopsis: "workbook setup [options]",
-		Description: "Bootstrap Workbook in the current Git repository: create or validate\nproject identity, install managed agent documentation, and synchronize\nshared task refs with origin.\n\n" +
+		Description: "Bootstrap Workbook in the current Git repository: create or validate\nproject identity, install managed agent documentation, and synchronize\nshared task refs with the tasks remote (origin unless configured).\n\n" +
 			"With --tasks-only <url>, run in an empty folder, set up a folder that holds\n" +
 			"only the project's Workbook refs from that remote: no branches, none of\n" +
 			"the code, and no agent documentation. Running it again changes nothing.",
 		Options: []optionMetadata{
 			{Name: "key", Kind: stringFlag, Value: "<key>", Description: "project key for a new project"},
 			{Name: "no-docs", Kind: boolFlag, Description: "skip managed agent documentation"},
-			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with the tasks remote (origin unless configured)"},
 			{Name: "skill-dir", Kind: stringFlag, Value: "<dir>", Description: "install the Workbook skill here"},
 			{Name: "no-skill", Kind: boolFlag, Description: "leave the Workbook skill alone"},
 			{Name: "force", Kind: boolFlag, Description: "overwrite locally modified managed documentation"},
@@ -209,7 +209,7 @@ var commandSchemas = map[string]commandMetadata{
 				Positionals: []string{"<setting>", "<value>"},
 				Options: []optionMetadata{
 					{Name: "url", Kind: stringFlag, Value: "<address>", Description: "the tasks repository's address (tasks-remote only)"},
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin (display settings only)"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured) (display settings only)"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},
@@ -219,7 +219,7 @@ var commandSchemas = map[string]commandMetadata{
 				Description: "Clear a project setting so the default or the user configuration decides.",
 				Positionals: []string{"<setting>"},
 				Options: []optionMetadata{
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin (display settings only)"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured) (display settings only)"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},
@@ -259,7 +259,7 @@ var commandSchemas = map[string]commandMetadata{
 					{Name: "before", Kind: stringFlag, Value: "<status>", Description: "place before this status"},
 					{Name: "after", Kind: stringFlag, Value: "<status>", Description: "place after this status"},
 					{Name: "tag", Kind: stringFlag, Value: "<tag>", Description: "role to give it: default, next, or done (repeatable)"},
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -271,7 +271,7 @@ var commandSchemas = map[string]commandMetadata{
 				Positionals: []string{"<status>", "<new-status>"},
 				Options: []optionMetadata{
 					{Name: "label", Kind: stringFlag, Value: "<label>", Description: "display label to set with the rename"},
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -282,7 +282,7 @@ var commandSchemas = map[string]commandMetadata{
 				Description: "Change a status's display label. Nothing else changes.",
 				Positionals: []string{"<status>", "<display-label>"},
 				Options: []optionMetadata{
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -295,7 +295,7 @@ var commandSchemas = map[string]commandMetadata{
 				Options: []optionMetadata{
 					{Name: "before", Kind: stringFlag, Value: "<status>", Description: "move before this status"},
 					{Name: "after", Kind: stringFlag, Value: "<status>", Description: "move after this status"},
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -308,7 +308,7 @@ var commandSchemas = map[string]commandMetadata{
 				Options: []optionMetadata{
 					{Name: "tag", Kind: stringFlag, Value: "<tag>", Description: "role to give it: default, next, or done (repeatable)"},
 					{Name: "clear-tags", Kind: boolFlag, Description: "replace its roles with an empty set"},
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -319,7 +319,7 @@ var commandSchemas = map[string]commandMetadata{
 				Description: "Take one role away from a status.",
 				Positionals: []string{"<status>", "<tag>"},
 				Options: []optionMetadata{
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -331,7 +331,7 @@ var commandSchemas = map[string]commandMetadata{
 				Positionals: []string{"<status>"},
 				Options: []optionMetadata{
 					{Name: "into", Kind: stringFlag, Value: "<status>", Description: "where the removed status's tasks belong"},
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -381,7 +381,7 @@ var commandSchemas = map[string]commandMetadata{
 					{Name: "label", Kind: stringFlag, Value: "<label>", Description: "display label (default: derived from the priority)"},
 					{Name: "before", Kind: stringFlag, Value: "<priority>", Description: "place before this priority"},
 					{Name: "after", Kind: stringFlag, Value: "<priority>", Description: "place after this priority"},
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -393,7 +393,7 @@ var commandSchemas = map[string]commandMetadata{
 				Positionals: []string{"<priority>", "<new-priority>"},
 				Options: []optionMetadata{
 					{Name: "label", Kind: stringFlag, Value: "<label>", Description: "display label to set with the rename"},
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -404,7 +404,7 @@ var commandSchemas = map[string]commandMetadata{
 				Description: "Change a priority's display label. Nothing else changes.",
 				Positionals: []string{"<priority>", "<display-label>"},
 				Options: []optionMetadata{
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -417,7 +417,7 @@ var commandSchemas = map[string]commandMetadata{
 				Options: []optionMetadata{
 					{Name: "before", Kind: stringFlag, Value: "<priority>", Description: "move before this priority"},
 					{Name: "after", Kind: stringFlag, Value: "<priority>", Description: "move after this priority"},
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -429,7 +429,7 @@ var commandSchemas = map[string]commandMetadata{
 				Positionals: []string{"<priority>"},
 				Options: []optionMetadata{
 					{Name: "tag", Kind: stringFlag, Value: "<tag>", Description: "role to give it: default"},
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -441,7 +441,7 @@ var commandSchemas = map[string]commandMetadata{
 				Positionals: []string{"<priority>"},
 				Options: []optionMetadata{
 					{Name: "into", Kind: stringFlag, Value: "<priority>", Description: "where the removed priority's tasks belong"},
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -452,7 +452,7 @@ var commandSchemas = map[string]commandMetadata{
 				Description: "Choose the color the board draws a priority in.\n\nA color is six hexadecimal digits behind a hash, as in `#b42318`. Giving no\ncolor clears the stored one and returns the priority to the color its position\nimplies; nothing stores a default.",
 				Positionals: []string{"<priority>", "<color>"},
 				Options: []optionMetadata{
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -508,7 +508,7 @@ var commandSchemas = map[string]commandMetadata{
 				Positionals: []string{"<key>"},
 				Options: []optionMetadata{
 					{Name: "current", Kind: boolFlag, Description: "also make it the key new tasks are minted under"},
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -519,7 +519,7 @@ var commandSchemas = map[string]commandMetadata{
 				Description: "Mint new tasks under this key.\n\nThe key that held it gives it up in the same change; exactly one key is current.",
 				Positionals: []string{"<key>"},
 				Options: []optionMetadata{
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -532,7 +532,7 @@ var commandSchemas = map[string]commandMetadata{
 					"active key cannot be retired.",
 				Positionals: []string{"<key>"},
 				Options: []optionMetadata{
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -613,7 +613,7 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "priority", Kind: stringFlag, Value: "<priority>", Description: "task priority"},
 			{Name: "key", Kind: stringFlag, Value: "<key>", Description: "mint the task under this key (default: the current key)"},
 			{Name: "label", Kind: stringFlag, Value: "<label>", Description: "task label"},
-			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with the tasks remote (origin unless configured)"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
@@ -707,7 +707,7 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "assign", Kind: stringFlag, Value: "<who>", Description: "assign to self, an email, or either with /label"},
 			{Name: "unassign", Kind: stringFlag, Value: "<who>", Description: "withdraw that assignment"},
 			{Name: "force", Kind: boolFlag, Description: "assign beside an assignment somebody else holds"},
-			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with the tasks remote (origin unless configured)"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
@@ -717,7 +717,7 @@ var commandSchemas = map[string]commandMetadata{
 		Description: "Delete a task.",
 		Positionals: []string{"<id-or-prefix>"},
 		Options: []optionMetadata{
-			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with the tasks remote (origin unless configured)"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
@@ -728,7 +728,7 @@ var commandSchemas = map[string]commandMetadata{
 		Positionals: []string{"<id-or-prefix>"},
 		Options: []optionMetadata{
 			{Name: "into", Kind: stringFlag, Value: "<status>", Description: "restore into this status"},
-			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with the tasks remote (origin unless configured)"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
@@ -816,7 +816,7 @@ var commandSchemas = map[string]commandMetadata{
 		Options: []optionMetadata{
 			{Name: "before", Kind: stringFlag, Value: "<id-or-prefix>", Description: "move before task ID"},
 			{Name: "after", Kind: stringFlag, Value: "<id-or-prefix>", Description: "move after task ID"},
-			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with the tasks remote (origin unless configured)"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
@@ -826,7 +826,7 @@ var commandSchemas = map[string]commandMetadata{
 		Description: "Add a task dependency.",
 		Positionals: []string{"<id-or-prefix>", "<dependency-id-or-prefix>"},
 		Options: []optionMetadata{
-			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with the tasks remote (origin unless configured)"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
@@ -836,7 +836,7 @@ var commandSchemas = map[string]commandMetadata{
 		Description: "Remove a task dependency.",
 		Positionals: []string{"<id-or-prefix>", "<dependency-id-or-prefix>"},
 		Options: []optionMetadata{
-			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with the tasks remote (origin unless configured)"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
@@ -862,7 +862,7 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "any", Kind: boolFlag, Description: "include tasks somebody else is assigned to"},
 			{Name: "claim", Kind: boolFlag, Description: "assign the chosen task to yourself and publish it"},
 			{Name: "limit", Kind: stringFlag, Value: "<n>", Description: "offer up to this many eligible tasks, in next's order"},
-			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with the tasks remote (origin unless configured)"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
@@ -908,7 +908,7 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "no-backup", Kind: boolFlag, Description: "write no backup bundle"},
 			{Name: "backup", Kind: stringFlag, Value: "<path>", Description: "write the backup bundle here, or into this directory"},
 			{Name: "dry-run", Kind: boolFlag, Description: "report what would be compacted and change nothing"},
-			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with the tasks remote (origin unless configured)"},
 			{Name: "adopt", Kind: stringFlag, Value: "<task>", Description: "settle one task a compaction left stuck, retrying the replay"},
 			{Name: "discard-local", Kind: boolFlag, Description: "with --adopt, take origin's version after saving the local history to a bundle"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
