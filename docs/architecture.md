@@ -870,8 +870,11 @@ the tasks, such as a hosted board's key, is not access to the code. The choice
 is an optional `tasksRemote` member (`name`, `url`) of the tracked
 `.workbook/config.json`. It needs no new format generation, because it is
 absent for every project that never chose one, and that project's file, refs
-and JSON output are unchanged; its one Git-command difference is that the local
-identity listing also names origin's tracking identity ref. Every place that used to say `origin` asks one
+and JSON output are unchanged. Its Git commands differ only by reads: the
+local identity listing also names origin's tracking identity ref, and a
+publication of task refs reads the published histories once to refuse a
+duplicated operation and lists origin's identity ref after origin accepts
+them. Every place that used to say `origin` asks one
 function, `Repository.remote()`, which returns the remote named for this run
 (`--remote`), else the project's setting, else `origin`. A checkout's own Git
 configuration holds the remote's address; setup adds the remote from the file

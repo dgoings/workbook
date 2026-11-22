@@ -1653,13 +1653,7 @@ needs push access to wherever the tasks live.
 
 The choice is recorded in the tracked `.workbook/config.json`, so it travels
 with the code like every other project setting, as an optional `tasksRemote`
-member of the version 2 document. A project that never chose has no such member,
-and its file, its JSON output and every ref it writes, locally and on `origin`,
-are what they were before the setting existed. Its Git commands differ in one
-place: the local listing of identity refs also names
-`refs/workbook/remotes/origin/project`, origin's tracking identity ref, which
-this checkout already held, so a marker published to `origin` is noticed
-without asking `origin` anything:
+member of the version 2 document:
 
 ```json
 {"format":"workbook.project","version":2,"projectId":"01M…","key":"WB","tasksRemote":{"name":"tasks","url":"git@github.com:team/tasks.git"}}
@@ -1670,6 +1664,22 @@ address `workbook setup` adds it from. Each checkout keeps its own address for
 the remote: if a checkout already has a remote of that name, setup leaves its
 address alone and says so, which is how a person uses SSH where the file says
 HTTPS. Setup writes nothing to the committed file.
+
+A project that never chose has no such member, and its file, its JSON output
+and every ref it writes, locally and on `origin`, are what they were before the
+setting existed. Its Git commands differ only by checks that read:
+
+- every command's first local listing of identity refs also names
+  `refs/workbook/remotes/origin/project`, origin's tracking identity ref, which
+  the checkout already holds, so a marker published to `origin` is noticed
+  without asking `origin` anything;
+- a command that publishes task refs reads the histories it is about to publish
+  once more, to refuse one that records an operation twice;
+- after `origin` accepts task refs, that command lists `origin`'s identity ref,
+  one ref, to report an edit that landed just as `origin` was marked as moved.
+
+A test records the Git commands of a scripted session against a build from
+before the setting and fails on any difference beyond these.
 
 ### Choosing the remote and moving the tasks
 

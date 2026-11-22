@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -164,7 +165,68 @@ func TestMoveTasksResumesAfterAnInterruptionAtEveryStep(t *testing.T) {
 					t.Fatalf("CheckTasksRemote after setup = %v", err)
 				}
 			}
+			assertVerifyNamesWhatTheNewPlaceLacks(t, fixture)
 		})
+	}
+}
+
+// assertVerifyNamesWhatTheNewPlaceLacks takes from the new place, just before
+// a run verifies it, the whole of the second task and, when the first task's
+// newest operation is one the old place holds too, that operation, and
+// requires the run to fail naming them; then a rerun puts them back and
+// verifies. A move whose verification passed whatever the new place held
+// fails here.
+func assertVerifyNamesWhatTheNewPlaceLacks(t *testing.T, fixture moveFixture) {
+	t.Helper()
+	ctx := context.Background()
+	rewound, deleted := taskRefPrefix+fixture.ids[0], taskRefPrefix+fixture.ids[1]
+	tip := syncGit(t, fixture.tasks, "rev-parse", rewound)
+	rewind := tip == syncGit(t, fixture.origin, "rev-parse", rewound) &&
+		len(strings.Fields(syncGit(t, fixture.tasks, "rev-list", "--parents", "-n1", tip))) == 2
+	var lost string
+	fixture.first.moveStepHook = func(at string) error {
+		if at != "verify" {
+			return nil
+		}
+		syncGit(t, fixture.tasks, "update-ref", "-d", deleted)
+		if !rewind {
+			return nil
+		}
+		var pack struct {
+			Operations []struct {
+				ID string `json:"id"`
+			} `json:"operations"`
+		}
+		if err := json.Unmarshal([]byte(syncGit(t, fixture.tasks, "cat-file", "blob", tip+":operation.json")), &pack); err != nil {
+			t.Fatal(err)
+		}
+		lost = pack.Operations[0].ID
+		syncGit(t, fixture.tasks, "update-ref", rewound, tip+"^", tip)
+		return nil
+	}
+	_, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
+	fixture.first.moveStepHook = nil
+	if err == nil || core.CategoryOf(err) != core.CategoryConflict {
+		t.Fatalf("MoveTasks() with operations missing at the new place = %v, want the verification to fail", err)
+	}
+	wants := []string{fixture.ids[1] + " (absent)"}
+	if rewind {
+		wants = append(wants, fixture.ids[0]+" (lacks operation(s) "+lost+")")
+	}
+	for _, want := range wants {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("verification error %q does not name %q", err, want)
+		}
+	}
+	result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
+	if err != nil || !result.Verified || result.Tasks != len(fixture.ids) {
+		t.Fatalf("MoveTasks() after the loss = (%+v, %v), want it put back and verified", result, err)
+	}
+	if got := syncGit(t, fixture.tasks, "rev-parse", rewound); got != tip {
+		t.Fatalf("tasks holds %s at %s after the rerun, want %s back", rewound, got, tip)
+	}
+	if got := syncGit(t, fixture.tasks, "rev-parse", deleted); got != syncGit(t, fixture.origin, "rev-parse", deleted) {
+		t.Fatalf("tasks holds %s at %s after the rerun, want origin's commit", deleted, got)
 	}
 }
 
@@ -369,6 +431,12 @@ func TestMoveTasksInSHA256Repositories(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	fixture := newMoveFixture(t, testrepo.FormatSHA256)
+	// A second operation on the first task, so verification has an
+	// operation, not only a task, to find missing.
+	updateSyncTask(t, fixture.second, fixture.stale, fixture.ids[0], "Edited before the move")
+	if _, err := fixture.second.Sync(ctx, fixture.stale); err != nil {
+		t.Fatal(err)
+	}
 	result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -381,4 +449,5 @@ func TestMoveTasksInSHA256Repositories(t *testing.T) {
 	if marker := syncGit(t, fixture.origin, "rev-parse", identityRef); len(marker) != 64 {
 		t.Fatalf("marker %q is not a SHA-256 object ID", marker)
 	}
+	assertVerifyNamesWhatTheNewPlaceLacks(t, fixture)
 }
