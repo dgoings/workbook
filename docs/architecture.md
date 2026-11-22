@@ -430,7 +430,7 @@ as a running maximum over the history so far. That is what lets a reader answer
 **What an older clone does with one.** Scoped to the one task, or the one
 configuration ledger, that carries it:
 
-- **Reads work.** `list`, `board`, `show`, `next` and the web board serve the
+- **Reads work.** `list`, `show`, `next` and the web board serve the
   task from its stored checkpoint, which is where every read gets a task from
   anyway. The projected task carries `newerWriter: true`, and the CLI prints a
   non-fatal advisory beside the answer.
@@ -798,7 +798,7 @@ worktrees use the same projection. It materializes current task state, including
 labels and dependencies; direct SQL writes and arbitrary SQL query support are not
 part of the Workbook interface.
 
-Before normal task reads (`list`, `show`, `board`, `next`, and web `GET
+Before normal task reads (`list`, `show`, `next`, and web `GET
 /api/tasks`), Workbook validates the cache against current Git task heads and
 refreshes changed checkpoints. Create, update, and other mutations continue to
 write Git operations directly. Run `workbook rebuild` to explicitly recreate the

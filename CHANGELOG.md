@@ -354,6 +354,15 @@ before anyone runs it; see Compatibility across versions below.
   It is asserted, like `user.email`, and nothing verifies it.
 
 ### Changed
+- **`workbook board` is removed.** The terminal board was made before the web
+  board, and it never worked well in a terminal. Use `workbook serve`, which
+  opens the board in a browser, or the Workbench desktop app. A script that
+  read `workbook board --json` can read `workbook list --json` instead: it
+  returns the same tasks in the same order, under the command name `list`.
+  Running `workbook board` now is the usage error any unknown command gets
+  (exit `2`), with one sentence saying the command was removed and pointing at
+  `workbook serve`. Its `--wide` and `--narrow` flags and its shell completions
+  are gone with it.
 - **Only a comment's author can edit it.** Editing somebody else's comment,
   with `workbook update --edit-comment` or from the board, is refused with exit
   `5` (a `400` on the board) and nothing is recorded; it used to be accepted

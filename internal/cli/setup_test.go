@@ -76,8 +76,8 @@ func TestSetupMintsTheDefaultVocabularyIntoAGenesis(t *testing.T) {
 		t.Fatalf("minted statuses = %v, want %v", got, want)
 	}
 
-	// The generated guidelines and the board agree with the ledger, because both
-	// read it rather than carrying a list of their own.
+	// The generated guidelines agree with the ledger, because they read it
+	// rather than carrying a list of their own.
 	guidelines := readProjectFile(t, repository, agentdocs.GuidelinesPath)
 	if strings.Contains(guidelines, "`blocked`") {
 		t.Errorf("minted guidelines still document `blocked`:\n%s", guidelines)
@@ -85,14 +85,6 @@ func TestSetupMintsTheDefaultVocabularyIntoAGenesis(t *testing.T) {
 	if !strings.Contains(guidelines, "| 5 | `done` | Done | `done` |") {
 		t.Errorf("minted guidelines do not put done fifth:\n%s", guidelines)
 	}
-	code, board, stderr := run(t, repository, "board", "--narrow")
-	if code != 0 || stderr != "" {
-		t.Fatalf("board = code %d, stderr %q", code, stderr)
-	}
-	if strings.Contains(board, "BLOCKED") {
-		t.Errorf("minted board still draws a Blocked column:\n%s", board)
-	}
-
 	// A task created without --status still lands where it always did.
 	if got := cliCreateTask(t, repository, "Alpha").Status; got != core.StatusBacklog {
 		t.Fatalf("created task status = %q, want %q", got, core.StatusBacklog)
@@ -127,13 +119,6 @@ func TestSetupLeavesAnExistingProjectsStatusesAlone(t *testing.T) {
 	guidelines := readProjectFile(t, repository, agentdocs.GuidelinesPath)
 	if !strings.Contains(guidelines, "| 3 | `blocked` | Blocked | none |") {
 		t.Errorf("the upgrade rewrote the guidelines without `blocked`:\n%s", guidelines)
-	}
-	code, board, stderr := run(t, repository, "board", "--narrow")
-	if code != 0 || stderr != "" {
-		t.Fatalf("board = code %d, stderr %q", code, stderr)
-	}
-	if !strings.Contains(board, "BLOCKED (0)") {
-		t.Errorf("the upgraded board stopped drawing the Blocked column:\n%s", board)
 	}
 	// The status the project defines is still one a caller may supply.
 	if code, _, stderr := run(t, repository, "update", task.ID, "--status", "blocked", "--no-sync"); code != 0 {

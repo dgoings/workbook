@@ -224,10 +224,10 @@ func TestPriorityAddLeavesEveryExistingTaskResolving(t *testing.T) {
 		}
 	}
 
-	// The board and the list read the same vocabulary, so a stranded task would
-	// surface there too.
-	if code, _, stderr := run(t, repository, "board"); code != 0 {
-		t.Fatalf("board after the first add = code %d, stderr %q", code, stderr)
+	// The list reads the same vocabulary, so a stranded task would surface
+	// there too.
+	if code, _, stderr := run(t, repository, "list"); code != 0 {
+		t.Fatalf("list after the first add = code %d, stderr %q", code, stderr)
 	}
 	if code, _, stderr := run(t, repository, "validate"); code != 0 {
 		t.Fatalf("validate after the first add = code %d, stderr %q", code, stderr)

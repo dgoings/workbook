@@ -123,8 +123,7 @@ Then work with tasks from the terminal:
 ```sh
 workbook create "Fix the login redirect" --priority high
 workbook list
-workbook board                 # terminal board, one column per status
-workbook serve                 # local web board
+workbook serve                 # local web board, one column per status
 workbook show <task>
 workbook update <task> --status in-progress
 workbook update <task> --due +3d   # due dates: list --overdue, --due-before, --sort due

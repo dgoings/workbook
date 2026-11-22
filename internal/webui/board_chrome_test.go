@@ -400,7 +400,7 @@ func singleStatusVocabulary(t *testing.T) core.Vocabulary {
 // statuslessVocabulary defines no statuses and forwards one, which is what a
 // hand-edited or foreign ledger tip arrives as. It is not the zero vocabulary,
 // so the handler does not substitute the built-in statuses and the column count
-// is genuinely zero — the same fixture the terminal renderer guards against.
+// is genuinely zero.
 func statuslessVocabulary(t *testing.T) core.Vocabulary {
 	t.Helper()
 	vocabulary, err := core.NewVocabulary(nil, nil, []core.RetiredStatus{{Status: "ghost", Destination: "gone"}})

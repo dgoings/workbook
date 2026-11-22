@@ -104,8 +104,7 @@
         const searching = search || foldedSearch(allTasks);
         const grouped = new Map([...lists.keys()].map((status) => [status, []]));
         // A task whose status matches no column is shown under its own heading
-        // rather than dropped. The terminal board has always printed an UNKNOWN
-        // STATUS section, and the presentation layer computes the set for both;
+        // rather than dropped. The presentation layer computes the set;
         // a task that is invisible reads as a task that was deleted, which is a
         // worse lie than a task that is merely unsorted. Two clones on different
         // Workbook versions produce this on their own. See

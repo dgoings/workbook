@@ -22,7 +22,7 @@ func TestGlobalHelpListsHelpAndTopLevelCommands(t *testing.T) {
 		}
 	}
 	assertInOrder(t, output.String(), []string{
-		"  setup", "  create", "  list", "  board", "  show", "  update", "  delete", "  restore", "  move",
+		"  setup", "  create", "  list", "  show", "  update", "  delete", "  restore", "  move",
 		"  depend", "  free", "  next", "  rebuild", "  validate", "  version", "  fetch", "  push", "  sync", "  docs", "  hooks", "  serve", "  help [command]",
 	})
 }
@@ -233,7 +233,6 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"key":      {},
 		"create":   {"description": stringFlag, "status": stringFlag, "priority": stringFlag, "due": stringFlag, "key": stringFlag, "label": stringFlag, "no-sync": boolFlag, "json": boolFlag},
 		"list":     {"status": stringFlag, "priority": stringFlag, "key": stringFlag, "label": stringFlag, "find": stringFlag, "all": boolFlag, "overdue": boolFlag, "due-before": stringFlag, "sort": stringFlag, "json": boolFlag},
-		"board":    {"wide": boolFlag, "narrow": boolFlag, "json": boolFlag},
 		"show": {
 			"history": boolFlag, "limit": stringFlag, "all": boolFlag, "compare": pairFlag,
 			"get-attachment": stringFlag, "out": stringFlag, "json": boolFlag,

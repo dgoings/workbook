@@ -44,8 +44,7 @@ func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 		"1 of 2 prerequisites complete",
 		"Waiting on dependencies",
 		// A status this build has no column for is named rather than dropped,
-		// under its own heading, matching the terminal board's UNKNOWN STATUS
-		// section. See internal/presentation/parity_test.go for the decision.
+		// under its own heading. See internal/presentation/parity_test.go for the decision.
 		"data-unknown-list",
 		"Unknown status",
 		"Future status task",
@@ -3993,9 +3992,8 @@ setTimeout(async () => {
 }
 
 // A task whose status matches no column is shown under its own heading rather
-// than dropped, which is what the terminal board has always done. See
-// internal/presentation/parity_test.go for why the two boards owe each other
-// that. The region is a display, not a seventh status: it takes no drops, its
+// than dropped. See internal/presentation/parity_test.go for the decision.
+// The region is a display, not a seventh status: it takes no drops, its
 // cards do not drag, and a status the board does know pulls the card back into
 // the column that owns it.
 func TestHandlerClientBoardSurfacesUnknownStatuses(t *testing.T) {

@@ -637,7 +637,6 @@ func TestReadCommandsRefreshCachedProjectionAfterGitTipAdvances(t *testing.T) {
 	for _, command := range [][]string{
 		{"list", "--json"},
 		{"show", created.ID, "--json"},
-		{"board", "--json"},
 		{"next", "--json"},
 	} {
 		code, stdout, stderr = run(t, repository, command...)

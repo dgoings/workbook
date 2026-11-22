@@ -6,14 +6,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/dgoings/workbook/internal/core"
-	"github.com/dgoings/workbook/internal/presentation"
-)
-
-type Layout uint8
-
-const (
-	LayoutWide Layout = iota + 1
-	LayoutNarrow
 )
 
 func RenderList(w io.Writer, tasks []core.Task, width int) error {
@@ -217,17 +209,6 @@ func writePriorityRow(
 	output.WriteByte('\n')
 }
 
-func RenderBoard(w io.Writer, board presentation.Board, layout Layout, width int) error {
-	switch layout {
-	case LayoutWide:
-		return renderWideBoard(w, board, width)
-	case LayoutNarrow:
-		return renderNarrowBoard(w, board, width)
-	default:
-		return renderNarrowBoard(w, board, width)
-	}
-}
-
 func fit(value string, width int) string {
 	if width <= 0 {
 		return ""
@@ -263,96 +244,6 @@ func pad(value string, width int) string {
 	return value + strings.Repeat(" ", max(0, width-len(value)))
 }
 
-func priorityMarker(priority core.Priority) string {
-	switch priority {
-	case core.PriorityHigh:
-		return "H"
-	case core.PriorityMedium:
-		return "M"
-	case core.PriorityLow:
-		return "L"
-	default:
-		return "?"
-	}
-}
-
-func renderWideBoard(w io.Writer, board presentation.Board, width int) error {
-	columns := canonicalColumns(board)
-	columnCount := len(columns)
-	// A board with no columns has no grid to draw, and a grid renderer that
-	// divided the width among zero cells crashed rather than saying so.
-	//
-	// This is reachable from data, which is why it is guarded here rather than
-	// prevented upstream. A configuration checkpoint is decoded and trusted —
-	// only a genesis is re-folded — and nothing in the state document requires
-	// a live status, so a ledger tip written by a hand edit, a corruption, or a
-	// build that allows an empty vocabulary reaches this renderer with zero
-	// columns and its tasks stranded in UnknownTasks. The read path is total
-	// over ledger data by doctrine (see core.Vocabulary.Resolve), and a
-	// renderer is part of the read path.
-	//
-	// The narrow layout is the answer rather than an empty frame: in this state
-	// every task the board holds is in the unknown-status section, which is
-	// exactly what the narrow renderer prints, and a bordered box with nothing
-	// in it would only hide it.
-	if columnCount == 0 {
-		return renderNarrowBoard(w, board, width)
-	}
-	cellWidth := max(3, (width-(columnCount+1))/columnCount)
-	contentWidth := max(1, cellWidth-2)
-
-	border := "+" + strings.Repeat(strings.Repeat("-", cellWidth)+"+", columnCount)
-	var output strings.Builder
-	output.WriteString(border)
-	output.WriteByte('\n')
-	writeWideRow(&output, columns, contentWidth, true, func(column presentation.Column, _ int) string {
-		return column.Label + " (" + itoa(len(column.Tasks)) + ")"
-	})
-	output.WriteString(border)
-	output.WriteByte('\n')
-
-	columnLines := make([][]string, len(columns))
-	rows := 1
-	for index, column := range columns {
-		for _, task := range column.Tasks {
-			columnLines[index] = append(columnLines[index], wideCardLines(task, contentWidth)...)
-		}
-		rows = max(rows, len(columnLines[index]))
-	}
-	for row := 0; row < rows; row++ {
-		writeWideRow(&output, columns, contentWidth, false, func(_ presentation.Column, index int) string {
-			if row >= len(columnLines[index]) {
-				return ""
-			}
-			return columnLines[index][row]
-		})
-	}
-	output.WriteString(border)
-	output.WriteByte('\n')
-	if len(board.UnknownTasks) > 0 {
-		output.WriteByte('\n')
-		writeUnknownSection(&output, board.UnknownTasks, width)
-		output.WriteByte('\n')
-	}
-	_, err := io.WriteString(w, output.String())
-	return err
-}
-
-func renderNarrowBoard(w io.Writer, board presentation.Board, width int) error {
-	columns := canonicalColumns(board)
-	sections := make([]string, 0, len(columns)+1)
-	for _, column := range columns {
-		sections = append(sections, narrowSection(strings.ToUpper(column.Label), column.Tasks, width))
-	}
-	if len(board.UnknownTasks) > 0 {
-		var output strings.Builder
-		writeUnknownSection(&output, board.UnknownTasks, width)
-		sections = append(sections, output.String())
-	}
-	_, err := io.WriteString(w, strings.Join(sections, "\n\n")+"\n")
-	return err
-}
-
 func writeListRow(output *strings.Builder, idWidth, titleWidth, statusWidth, priorityWidth, dueWidth int, id, title, status, priority, due, labels string) {
 	output.WriteString(pad(id, idWidth))
 	output.WriteString("  ")
@@ -368,138 +259,6 @@ func writeListRow(output *strings.Builder, idWidth, titleWidth, statusWidth, pri
 	}
 	output.WriteString(labels)
 	output.WriteByte('\n')
-}
-
-func writeWideRow(output *strings.Builder, columns []presentation.Column, contentWidth int, truncate bool, value func(presentation.Column, int) string) {
-	for index, column := range columns {
-		cell := value(column, index)
-		if truncate {
-			cell = fit(cell, contentWidth)
-		}
-		output.WriteString("| ")
-		output.WriteString(pad(cell, contentWidth))
-		output.WriteByte(' ')
-	}
-	output.WriteString("|\n")
-}
-
-// wideCardLines draws one card. The labels line is drawn whether or not there
-// are labels, because it separates one card from the next; the assignee line is
-// drawn only for a task somebody holds, so an unassigned board keeps the card
-// height it has always had.
-func wideCardLines(task presentation.TaskView, width int) []string {
-	lines := wrapWideMetadata(task.IDPrefix, " ["+priorityMarker(task.Task.Priority)+"]", width)
-	lines = append(
-		lines,
-		fit(core.DisplayLine(task.Task.Title), width),
-		fit(core.DisplayLine(strings.Join(task.Task.Labels, ",")), width),
-	)
-	if chips := presentation.AssignmentChips(task.Task.Assignments); len(chips) > 0 {
-		lines = append(lines, fit(core.DisplayLine("@"+strings.Join(chips, " @")), width))
-	}
-	return lines
-}
-
-func wrapWideMetadata(prefix, marker string, width int) []string {
-	width = max(1, width)
-	lines := splitASCII(prefix, width)
-	if len(lines) == 0 {
-		return splitASCII(marker, width)
-	}
-	last := len(lines) - 1
-	if len(lines[last])+len(marker) <= width {
-		lines[last] += marker
-		return lines
-	}
-	return append(lines, splitASCII(marker, width)...)
-}
-
-func splitASCII(value string, width int) []string {
-	if value == "" {
-		return nil
-	}
-	lines := make([]string, 0, (len(value)+width-1)/width)
-	for len(value) > width {
-		lines = append(lines, value[:width])
-		value = value[width:]
-	}
-	return append(lines, value)
-}
-
-func narrowSection(label string, tasks []presentation.TaskView, width int) string {
-	heading := label + " (" + itoa(len(tasks)) + ")"
-	var output strings.Builder
-	output.WriteString(heading)
-	output.WriteByte('\n')
-	output.WriteString(strings.Repeat("-", len(heading)))
-	output.WriteByte('\n')
-	if len(tasks) == 0 {
-		output.WriteString("(empty)")
-		return output.String()
-	}
-	for index, task := range tasks {
-		if index > 0 {
-			output.WriteByte('\n')
-		}
-		writeNarrowTask(&output, task, width)
-	}
-	return output.String()
-}
-
-// unknownStatusNote says what puts a task in this section, because the answer
-// changed and the old one is the one a reader would assume.
-//
-// It used to hold any status outside the six this build shipped, so "a newer
-// Workbook wrote it" was the usual explanation. A project defines its own
-// statuses now, and a stored status that a rename or a removal forwards to a
-// live one is drawn in that live column. What is left here is a status that
-// forwards nowhere, which no upgrade will fix.
-//
-// The claim is absolute because this renderer can afford it: a board is built
-// and printed inside one command, from the statuses that same command read, so
-// a task in this section really did fail to resolve against the vocabulary the
-// columns came from. The web board cannot say that much — its columns are as
-// old as the page and its tasks are as new as the last poll — so its copy names
-// the other case as well.
-const unknownStatusNote = "(no status this project defines, and no rename or removal leads to one)"
-
-func writeUnknownSection(output *strings.Builder, tasks []presentation.TaskView, width int) {
-	heading := "UNKNOWN STATUS (" + itoa(len(tasks)) + ")"
-	output.WriteString(heading)
-	output.WriteByte('\n')
-	output.WriteString(strings.Repeat("-", len(heading)))
-	output.WriteByte('\n')
-	output.WriteString(fit(unknownStatusNote, max(1, width)))
-	output.WriteByte('\n')
-	for index, task := range tasks {
-		if index > 0 {
-			output.WriteByte('\n')
-		}
-		writeNarrowTask(output, task, width)
-	}
-}
-
-func writeNarrowTask(output *strings.Builder, task presentation.TaskView, width int) {
-	prefix := task.IDPrefix + " [" + string(task.Task.Priority) + "] "
-	output.WriteString(prefix)
-	output.WriteString(fit(core.DisplayLine(task.Task.Title), max(1, width-len(prefix))))
-	if len(task.Task.Labels) > 0 {
-		output.WriteString("\n  labels: ")
-		output.WriteString(fit(core.DisplayLine(strings.Join(task.Task.Labels, ", ")), max(1, width-len("  labels: "))))
-	}
-	// The assignee line follows the labels line's idiom exactly, and appears
-	// only when somebody holds the task: an assignment is a fact about a card
-	// rather than a column of its own, and a board where nobody has claimed
-	// anything should look like the board that has always been printed.
-	if chips := presentation.AssignmentChips(task.Task.Assignments); len(chips) > 0 {
-		const heading = "  assigned: "
-		output.WriteString("\n" + heading)
-		output.WriteString(fit(core.DisplayLine(strings.Join(chips, ", ")), max(1, width-len(heading))))
-	}
-}
-
-func canonicalColumns(board presentation.Board) []presentation.Column {
-	return board.Columns
 }
 
 func itoa(value int) string {
