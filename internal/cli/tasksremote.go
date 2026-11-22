@@ -171,7 +171,7 @@ func writeTasksRemoteSetting(
 func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("move-tasks")
 	from := flags.String("from", "", "the remote the tasks are in now (default origin, or the place origin's moved marker leads to)")
-	allowBranches := flags.Bool("allow-branches", false, "accept a tasks remote that holds branches")
+	allowBranches := flags.Bool("allow-branches", false, "accept a tasks remote that holds branches; never a mirror of the code repository")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testenv"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
 
@@ -152,6 +153,15 @@ func TestMoveTasksRefusesBranchesUnlessAllowedAndAcceptsAPrefilledCopy(t *testin
 	if code != 5 || !strings.Contains(stderr, "holds branches (refs/heads/main)") || !strings.Contains(stderr, "--allow-branches") {
 		t.Fatalf("move-tasks into a repository with branches = (%d, %q, %q)", code, stdout, stderr)
 	}
+	// A mirror of the code repository holds branches too, and the flag must
+	// never be given for one; the refusal and the help both say so.
+	if !strings.Contains(stderr, "Never pass it for a mirror") {
+		t.Fatalf("branches refusal = %q, want the mirror warning", stderr)
+	}
+	if code, help, helpErr := run(t, project.seed, "move-tasks", "--help"); code != 0 || !strings.Contains(help, "never a mirror of the code repository") ||
+		!strings.Contains(help, "Never give it for a mirror") {
+		t.Fatalf("move-tasks --help = (%d, %q, %q), want the mirror warning", code, help, helpErr)
+	}
 	if after := repositoryState(t, project.code); after != before {
 		t.Fatalf("the refused move changed origin:\nbefore %s\nafter  %s", before, after)
 	}
@@ -202,5 +212,67 @@ func TestTasksRemoteCannotGoBackToOriginAfterAMove(t *testing.T) {
 	if code, stdout, stderr := run(t, project.seed, "config", "unset", "tasks-remote"); code != 5 ||
 		strings.Contains(stdout, "shared through origin again") || !strings.Contains(stderr, "one-way") {
 		t.Fatalf("config unset = (%d, %q, %q)", code, stdout, stderr)
+	}
+}
+
+// The refs move-tasks writes under refs/workbook/probes/ to tell the two
+// repositories apart are its own: a run removes those an earlier, stopped run
+// left behind along with its own. A destination that refuses to delete refs
+// is refused once, saying so, and a run after that refusal writes no second
+// probe; once deleting is allowed, the next run clears the one left.
+func TestMoveTasksClearsLeftoverProbesAndRefusesOnceWhereDeletingIsForbidden(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA1)
+	if code, _, stderr := run(t, project.seed, "config", "set", "tasks-remote", "tasks", "--url", project.tasks); code != 0 {
+		t.Fatalf("config set = %d; stderr = %q", code, stderr)
+	}
+	head := cliGitOutput(t, project.seed, "rev-parse", "refs/workbook/project")
+	probes := func() []string {
+		return strings.Fields(cliGitOutput(t, project.tasks, "for-each-ref", "--format=%(refname)", "refs/workbook/probes/"))
+	}
+
+	// The first run's own probe cannot be removed, and it says so; the second
+	// finds that probe still there and stops before writing another.
+	// A hosting service's rule against deleting refs, as a hook that refuses
+	// every deletion while the flag file exists.
+	deny := filepath.ToSlash(filepath.Join(t.TempDir(), "deny-deletes"))
+	testenv.WriteExecutable(t, filepath.Join(project.tasks, "hooks", "pre-receive"), []byte("#!/bin/sh\n"+
+		"[ -f '"+deny+"' ] || exit 0\nwhile read old new ref; do\n"+
+		"  case \"$new\" in *[!0]*) ;; *) echo \"deletion prohibited: $ref\" >&2; exit 1 ;; esac\ndone\nexit 0\n"))
+	if err := os.WriteFile(deny, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	for round := 0; round < 2; round++ {
+		code, stdout, stderr := run(t, project.seed, "move-tasks")
+		if code != 1 || !strings.Contains(stderr, "refuses to delete refs") || !strings.Contains(stderr, "refs/workbook/probes/") {
+			t.Fatalf("move-tasks round %d into a repository that refuses deletions = (%d, %q, %q)", round, code, stdout, stderr)
+		}
+		got := probes()
+		if round == 0 {
+			left = got
+		}
+		if len(got) != 1 || got[0] != left[0] {
+			t.Fatalf("probes after round %d = %v, want the first run's alone", round, got)
+		}
+		if got := cliGitOutputAllowingMissing(t, project.code, "refs/workbook/project"); got != head {
+			t.Fatalf("the refused move marked origin: %s", got)
+		}
+	}
+
+	// Once deleting is allowed, the next run removes that probe and any other
+	// an earlier run left, here two with names drawn long ago.
+	for _, name := range []string{"01AAAAAAAAAAAAAAAAAAAAAAAA", "01BBBBBBBBBBBBBBBBBBBBBBBB"} {
+		cliGit(t, project.seed, "push", "--quiet", "--no-verify", project.tasks, head+":refs/workbook/probes/"+name)
+	}
+	if err := os.Remove(deny); err != nil {
+		t.Fatal(err)
+	}
+	moved := moveTasksAgain(t, project, 0)
+	if moved.Marked != "marked" {
+		t.Fatalf("move-tasks once deleting is allowed = %+v", moved)
+	}
+	if got := refsUnder(t, project.tasks, "refs/workbook/probes/"); got != "" {
+		t.Fatalf("the move left probes behind: %s", got)
 	}
 }

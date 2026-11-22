@@ -3,8 +3,6 @@ package gitstore
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -807,8 +805,16 @@ func (r *Repository) carryConfig(ctx context.Context, config core.ProjectConfig,
 // for at the old place, then removed. A different repository cannot show it,
 // so there is no false refusal for a fresh tasks repository or for one
 // somebody filled beforehand, and the same repository always does, through any
-// spelling, link or case of its address. It costs three round trips, and
-// needs the push access to the destination that the move needs anyway.
+// spelling, link or case of its address. It costs four round trips (a listing
+// of the destination, the write, the look and the removal), and needs the push
+// access to the destination that the move needs anyway.
+//
+// The probe refs are this command's own: a run removes, with its own, every
+// probe an earlier run left behind, which a stopped run or a refused removal
+// does. Probe names are ULIDs, so an earlier run's sorts before this one's,
+// and only those are removed. A destination that refuses to delete refs is
+// refused once, saying so: a run that finds an earlier probe it cannot remove
+// stops before writing another, so at most one is ever left there.
 func (r *Repository) refuseUnfitDestination(ctx context.Context, from, to string, allowBranches bool) error {
 	local, found, err := r.readIdentityRef(ctx, identityRef)
 	if err != nil {
@@ -817,11 +823,29 @@ func (r *Repository) refuseUnfitDestination(ctx context.Context, from, to string
 	if !found {
 		return core.Errorf(core.CategoryCorruptData, "%s is missing; rerun workbook setup", identityRef)
 	}
-	nonce, err := newProbeName()
+	nonce, err := core.CryptoULIDSource{}.New()
 	if err != nil {
 		return err
 	}
 	probe := sameRepositoryProbePrefix + nonce
+	listing, err := r.Git(ctx, nil, "ls-remote", "--refs", to, "refs/heads/*", sameRepositoryProbePrefix+"*")
+	if err != nil {
+		return core.Wrap(core.CategoryOperational, "cannot list "+to, err)
+	}
+	var branches, leftover []string
+	for _, name := range listedRefNames(listing) {
+		switch {
+		case strings.HasPrefix(name, "refs/heads/"):
+			branches = append(branches, name)
+		case strings.HasPrefix(name, sameRepositoryProbePrefix) && name < probe:
+			leftover = append(leftover, name)
+		}
+	}
+	if len(leftover) > 0 {
+		if err := r.removeProbes(ctx, to, leftover); err != nil {
+			return err
+		}
+	}
 	write := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil,
 		"push", "--porcelain", to, local.Head+":"+probe)
 	if write.err != nil {
@@ -829,35 +853,50 @@ func (r *Repository) refuseUnfitDestination(ctx context.Context, from, to string
 			fmt.Sprintf("cannot write to %s, which the move needs: moving the tasks there needs push access to it", to),
 			gitCommandResultError(write))
 	}
-	listing, listErr := r.Git(ctx, nil, "ls-remote", "--refs", from, probe)
-	remove := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil, "push", "--porcelain", to, ":"+probe)
+	looked, listErr := r.Git(ctx, nil, "ls-remote", "--refs", from, probe)
+	removeErr := r.removeProbes(ctx, to, []string{probe})
 	if listErr != nil {
 		return core.Wrap(core.CategoryOperational, "cannot list "+from+" to tell it apart from "+to, listErr)
 	}
-	if len(listedRefNames(listing)) > 0 {
+	if len(listedRefNames(looked)) > 0 {
 		return sameRepositoryRefusal(to, redactURLCredentials(r.gitRemoteURL(ctx, to)),
 			from, redactURLCredentials(r.gitRemoteURL(ctx, from)))
 	}
-	if remove.err != nil {
-		return core.Wrap(core.CategoryOperational,
-			fmt.Sprintf("cannot remove %s from %s after writing it to tell the two repositories apart; remove it by hand", probe, to),
-			gitCommandResultError(remove))
+	if removeErr != nil {
+		return removeErr
 	}
-	branches, err := r.Git(ctx, nil, "ls-remote", "--heads", to)
-	if err != nil {
-		return core.Wrap(core.CategoryOperational, "cannot list "+to+"'s branches", err)
-	}
-	if names := listedRefNames(branches); len(names) > 0 && !allowBranches {
-		shown := names
+	if len(branches) > 0 && !allowBranches {
+		shown := branches
 		if len(shown) > 3 {
-			shown = append(append([]string(nil), shown[:3]...), fmt.Sprintf("and %d more", len(names)-3))
+			shown = append(append([]string(nil), shown[:3]...), fmt.Sprintf("and %d more", len(branches)-3))
 		}
 		return core.Errorf(core.CategoryValidation,
 			"%s (%s) holds branches (%s), and a repository for tasks holds only Workbook refs; "+
-				"check that its address is the tasks repository's, or pass --allow-branches if it is",
+				"check that its address is the tasks repository's, or pass --allow-branches if it is. "+
+				"Never pass it for a mirror, a repository updated from the code repository: "+
+				"whatever updates it would overwrite or delete the tasks",
 			to, redactURLCredentials(r.gitRemoteURL(ctx, to)), strings.Join(shown, ", "))
 	}
 	return nil
+}
+
+// removeProbes deletes probe refs from to in one push, and says plainly when
+// to refuses to delete refs.
+func (r *Repository) removeProbes(ctx context.Context, to string, probes []string) error {
+	args := []string{"push", "--porcelain", to}
+	for _, probe := range probes {
+		args = append(args, ":"+probe)
+	}
+	result := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil, args...)
+	if result.err == nil {
+		return nil
+	}
+	return core.Wrap(core.CategoryOperational,
+		fmt.Sprintf("cannot remove %s from %s: move-tasks writes a ref under %s there to tell it apart from the old place "+
+			"and removes it again, and writes no other while one is left; if %s refuses to delete refs, "+
+			"allow deleting refs under %s there, or remove %s by hand, then run move-tasks again",
+			strings.Join(probes, ", "), to, sameRepositoryProbePrefix, to, sameRepositoryProbePrefix, strings.Join(probes, ", ")),
+		gitCommandResultError(result))
 }
 
 // sameRepositoryProbePrefix holds the refs refuseUnfitDestination writes and
@@ -1122,13 +1161,4 @@ func (r *Repository) moveStep(step string) error {
 		return nil
 	}
 	return r.moveStepHook(step)
-}
-
-// newProbeName returns a ref name component nobody else could pick.
-func newProbeName() (string, error) {
-	var nonce [16]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return "", core.Wrap(core.CategoryOperational, "cannot draw a random name", err)
-	}
-	return hex.EncodeToString(nonce[:]), nil
 }

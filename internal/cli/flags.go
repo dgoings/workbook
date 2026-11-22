@@ -777,7 +777,7 @@ var commandSchemas = map[string]commandMetadata{
 		Synopsis: "workbook move-tasks [--from <remote>] [--allow-branches] [--json]",
 		Description: "Move this project's tasks to the tasks remote its settings name.\n\n" +
 			"Run it after `workbook config set tasks-remote <name> --url <address>`. It copies\n" +
-			"every task from origin (or --from) to the new place, marks the old place so a\n" +
+			"every task from the old place to the new one, marks the old place so a\n" +
 			"checkout still using it is refused and told where the tasks went, copies again\n" +
 			"for edits published before the mark, and checks that the new place holds every\n" +
 			"operation the old place does. Every step is safe to repeat: an interrupted run\n" +
@@ -786,10 +786,13 @@ var commandSchemas = map[string]commandMetadata{
 			".workbook/config.json; everyone else runs `workbook setup` after pulling it.\n\n" +
 			"It refuses a new place that is the same repository as the old one, however its\n" +
 			"address is spelled, and one that holds branches unless --allow-branches is given.\n" +
+			"Never give it for a mirror, a repository something updates from the code\n" +
+			"repository: that update would overwrite or delete the tasks. The old place is\n" +
+			"origin, or, after an earlier move, the place origin's marker leads to.\n" +
 			"The move is one-way: `workbook config unset tasks-remote` is refused afterwards.",
 		Options: []optionMetadata{
-			{Name: "from", Kind: stringFlag, Value: "<remote>", Description: "the Git remote the tasks are in now (default origin)"},
-			{Name: "allow-branches", Kind: boolFlag, Description: "accept a tasks remote that holds branches"},
+			{Name: "from", Kind: stringFlag, Value: "<remote>", Description: "the Git remote the tasks are in now (default origin, or the place origin's marker leads to)"},
+			{Name: "allow-branches", Kind: boolFlag, Description: "accept a tasks remote that holds branches; never a mirror of the code repository"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
