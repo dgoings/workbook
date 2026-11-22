@@ -2844,6 +2844,70 @@ opens a connection and stops talking is closed rather than holding a goroutine
 until `serve` exits. There is no response deadline: a mutation publishing inline
 waits on `origin`, and that has no honest bound.
 
+The board never asks a client to wait, but a proxy in front of it may: past a
+limit it can answer `429 Too Many Requests` or `503 Service Unavailable` with a
+`Retry-After` header. When the page gets one of those for a change that names
+the head it was composed against, it keeps the change drawn as made, shows a
+notice, and sends the same request again after the wait the header names, in
+seconds or as an HTTP date. Each resend waits twice as long as the one before,
+no wait is longer than a minute, and after three resends the last answer is
+reported. These are the changes made on the board and on a task's page —
+moves, edits, deletes (a card dropped on the Deleted column and the Delete
+button on a task's page alike), restores, comments, assignments and
+attachments — and the configuration page's changes. A resend of one of them
+cannot apply twice: if the first attempt did reach the board, the head has
+moved, and the resend is refused as a stale write. The sync switch names no
+head and is resent too, because it sets a mode rather than adding anything:
+the same mode set twice is the mode set once. A create, and any other change
+that names no head (the relationships, assignments and attachments a New Task
+form writes after its create, and a dependency added or removed in the
+sidebar), is sent once and its answer reported, because nothing would stop a
+resend from applying a second time. Reads are never resent this way; the poll
+asks again on its next tick, as it always does.
+
+A stale refusal of a resend does not by itself say the change failed: the
+first attempt may be what moved the head. A proxy that times out a slow board
+can pass the change on and still answer `429`:
+
+```text
+page  -- PATCH, expectedHead: h1 -->  proxy  -- PATCH, expectedHead: h1 -->  board   (recorded; head h1 -> h2)
+page  <-- 429, Retry-After: 1 ------  proxy
+page  -- PATCH, expectedHead: h1 -->  proxy  -- PATCH, expectedHead: h1 -->  board   (stale: head is h2)
+page  <-- 409 stale-write ----------  proxy  <-----------------------------  board
+page  -- GET /api/tasks (or /api/vocabulary) ------------------------------> board   (is the change in h2?)
+```
+
+So before reporting a stale refusal of a change it sent more than once, the
+page reads the task or the configuration again and compares it with what it
+sent. A change that is there is treated as saved: the field it was typed in
+clears, its form closes or returns to the board, and no failure is shown. A
+change that is not there is reported as an ordinary stale refusal. When the
+board cannot be read, the page says the change may already have been saved and
+to check before making it again, and never says it was not saved; on a task's
+page, making the same change again from that panel
+reads the board first and sends it only if it is still not there. This check is
+best-effort, not a proof: it compares values, so a change somebody else made to
+the same values meanwhile is taken for the reader's own. A comment or an
+attachment counts only when it is the reader's own, by the name the board
+serves, and an added status or priority only when it carries the label, tags
+and placement the reader gave it. A file is matched by its name, its size and
+who attached it, not by its bytes, so the same person attaching a different
+file of the same name and size from somewhere else at that moment is taken for
+this one; and on a board serving no identity a new comment or attachment by
+anybody that looks the same counts as the reader's.
+
+A waiting change exists only in that browser tab. The notice says so, a task
+form's save says so beside Save as well, and the browser asks before the tab is
+closed or the page is left while one waits. A save from a task's form that lands after the reader typed more keeps the form
+open with what they typed, says it is not saved yet, and sends only that on
+the next Save. A `429` or `503` without `Retry-After`, or with one the page
+cannot read, is reported as any other refusal, and a refusal whose body is not
+JSON, such as a proxy's HTML error page, is reported in a sentence of the
+page's own that names the status, on the board, a task's page and the
+configuration page alike. The line beside Save that says a save is held is set
+in the board's pending color, the held-change notice's own, not its error
+color.
+
 Binding `--addr` to anything other than a loopback address makes the board
 reachable by whoever shares the network, and those checks cannot tell a
 teammate from a stranger. `workbook serve` prints a warning naming the address

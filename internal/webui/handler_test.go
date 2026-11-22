@@ -3318,8 +3318,7 @@ setTimeout(async () => {
 	// long settling took.
 	commandContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	command := exec.CommandContext(commandContext, node, "-")
-	command.Stdin = strings.NewReader(program)
+	command := nodeCommandContext(commandContext, node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		if commandContext.Err() == context.DeadlineExceeded {
 			t.Fatalf("dependency mutation did not settle after controller-only supersession")
@@ -4451,17 +4450,6 @@ func requireNode(t *testing.T) string {
 	return node
 }
 
-// nodeCommand feeds the program to node over stdin rather than as an argument.
-// The client programs embed the page's whole script, and Linux caps one argv
-// string at 128 KiB (MAX_ARG_STRLEN), a ceiling the largest programs have
-// outgrown; stdin has no such limit and behaves identically on every platform
-// CI runs.
-func nodeCommand(node, program string) *exec.Cmd {
-	command := exec.Command(node, "-")
-	command.Stdin = strings.NewReader(program)
-	return command
-}
-
 func renderedClientScript(t *testing.T, body string) string {
 	t.Helper()
 	const open = "<script>"
@@ -4899,6 +4887,10 @@ notice.hidden = true;
 // region is: the change arrives on a poll.
 const vocabularyNotice = new TestElement("div");
 vocabularyNotice.hidden = true;
+// What the board says while a change waits to be sent again because the server
+// asked the page to send it later.
+const heldChangeNotice = new TestElement("div");
+heldChangeNotice.hidden = true;
 const vocabularyReload = new TestElement("button");
 vocabularyNotice.append(vocabularyReload);
 // The half of a switch that carries no words. It is here so that a test reading
@@ -5084,6 +5076,7 @@ const documentEventListeners = {};
     if (selector === "[data-updated]") return updated;
     if (selector === "[data-notice]") return notice;
     if (selector === "[data-vocabulary-notice]") return vocabularyNotice;
+    if (selector === "[data-held-change-notice]") return heldChangeNotice;
     if (selector === "[data-vocabulary-reload]") return vocabularyReload;
     if (selector === "[data-description-toggle]") return descriptionToggle;
     if (selector === "[data-deleted-toggle]") return deletedToggle;

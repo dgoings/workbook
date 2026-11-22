@@ -247,11 +247,12 @@ setTimeout(async () => {
   }
 
   // The read the toggle starts is held open, so what the column says is what it
-  // says before any answer about the deleted tasks has arrived.
+  // says before any answer about the deleted tasks has arrived. Only that read:
+  // the poll at the end asks the same address and is answered at once.
   let releaseInclude = null;
   const boardFetch = globalThis.fetch;
   globalThis.fetch = async (url, options = {}) => {
-    if (url === "/api/tasks?deleted=include") {
+    if (url === "/api/tasks?deleted=include" && !releaseInclude) {
       await new Promise((resolve) => { releaseInclude = resolve; });
     }
     return boardFetch(url, options);

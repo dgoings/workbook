@@ -27,15 +27,26 @@
       // is left alone: a report is only lifted once a poll has succeeded and
       // stopped drawing the card, and by then the board being unreadable is no
       // longer what the reader is looking at.
-      function reportIntentFailure(taskID, subject, error, boardRead) {
+      //
+      // A refusal that came only after the change was held and sent again, with
+      // a board that could not then be read, is a fourth: the first attempt may
+      // have been saved, so neither "changed elsewhere" nor "failed" is known
+      // to be true, and the card says that instead (see heldChangeOutcome).
+      function reportIntentFailure(taskID, subject, error, boardRead, doubted) {
         const changedElsewhere = Boolean(error && error.category === "stale-write");
         taskFailureReports.set(taskID, {
-          card: changedElsewhere
+          card: doubted
+            ? "The server asked this page to wait, and did not accept this change when it was sent again, and the board could not be read to check it. It may already have been saved; check the card once the board is current before making it again."
+            : changedElsewhere
             ? (boardRead
               ? "This task changed elsewhere. The card shows the version the server holds."
               : "This task changed elsewhere and the board could not be refreshed. The card may be out of date, and changes made here were not applied.")
-            : "Task update failed. The card shows the version the server holds.",
-          notice: changedElsewhere
+            : error && error.waitedOut
+              ? "The server kept asking this page to wait, and this change was not sent again. The card shows the version the server holds; make it again in a moment."
+              : "Task update failed. The card shows the version the server holds.",
+          notice: doubted
+            ? "Task " + subject + " is no longer on the board, and the change made here may or may not have been saved before it went."
+            : changedElsewhere
             ? "Task " + subject + " changed elsewhere and is no longer on the board. The change made here was not applied."
             : "Task " + subject + " could not be updated and is no longer on the board. The change made here was not applied."
         });
@@ -73,7 +84,20 @@
       // on. So the link goes, the report says why it is not there, and the
       // reason names the deletion rather than the vaguer conflict the refusal's
       // own category would have described.
-      function reportDetachedSaveFailure(taskID, error, deleted) {
+      function reportDetachedSaveFailure(taskID, error, deleted, doubted) {
+        if (doubted) {
+          // Refused after the server asked this page to wait, with no board
+          // to read to see whether the first attempt was saved. See
+          // heldChangeOutcome.
+          const said = "A save from this form was still open when you left it. " + heldChangeDoubt("it");
+          const staged = pendingTaskMessages.get(taskID) || [];
+          pendingTaskMessages.set(taskID, staged.concat([said]));
+          const open = document.createElement("a");
+          open.href = taskPath(taskID);
+          text(open, "Open task");
+          showNotice("error", "Task " + nameTask(taskID) + ": " + said, open);
+          return;
+        }
         const reason = deleted
           ? "The task was deleted elsewhere, which is why the save was refused."
           : (error && error.category === "stale-write"
@@ -165,7 +189,7 @@
       // the client treats the last poll as the server's version everywhere else.
       // The outage wording is the falser of the two in that state, because it
       // reports a read that was never attempted.
-      function withdrawFailedIntentFromOpenDetail(taskID, error, boardRead = true) {
+      function withdrawFailedIntentFromOpenDetail(taskID, error, boardRead = true, doubted = false) {
         const open = openDetailForm;
         if (!open || open.taskID !== taskID) return;
         // The same view the detail route renders from, so the form keeps
@@ -173,6 +197,10 @@
         // is projected here exactly as it is drawn there.
         const held = projectTasks(latestTasks).find((candidate) => candidate.id === taskID);
         if (held) open.revise(held);
+        if (doubted) {
+          open.report("The change made on the board may already have been saved: the server refused it only after asking this page to wait, and the board could not be read to check. Your edits are kept; check the board before making that change again.");
+          return;
+        }
         open.report((error && error.category === "stale-write"
           ? "That task changed elsewhere."
           : "Task update failed.") + (held

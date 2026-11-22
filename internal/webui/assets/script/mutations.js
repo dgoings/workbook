@@ -1,4 +1,139 @@
-      async function mutateTask(method, path, values) {
+      // A change the server asked this page to send later.
+      //
+      // The board itself never answers that way. Something in front of it can:
+      // a proxy past its limit answers 429 Too Many Requests, or 503 Service
+      // Unavailable, with a Retry-After saying when to ask again. Without the
+      // header the answer says nothing about when, or about whether the change
+      // went through, so it is reported as it always was.
+      //
+      // Resending is safe only for a change that cannot apply twice, because
+      // nothing in the answer proves the first attempt never reached the board.
+      // A change that names the head it was composed against is one: the board
+      // compares that head before it records anything, so if the first attempt
+      // did land, the resend names a head that has moved and is refused as a
+      // stale write rather than applied again. That refusal is not the end of
+      // it: a stale refusal of a resend may be the first attempt's own doing,
+      // so the caller looks before reporting it (see heldChangeOutcome).
+      // Callers say whether theirs is such a change; a create, or a write that
+      // names no head, is sent once.
+      //
+      // Retry-After is seconds or an HTTP date, and anything else is not a wait
+      // this page can honor. Each resend waits twice as long as the one before
+      // it, and no wait is longer than a minute.
+      const HELD_CHANGE_RESENDS = 3;
+      const HELD_CHANGE_LONGEST_WAIT = 60000;
+      function askedToWait(response) {
+        if (!response || (response.status !== 429 && response.status !== 503)) return null;
+        const header = response.headers && typeof response.headers.get === "function"
+          ? response.headers.get("Retry-After") : null;
+        if (header === null || header === undefined) return null;
+        const value = String(header).trim();
+        let seconds = NaN;
+        if (/^\d+$/.test(value)) seconds = Number(value);
+        else if (/[a-z]/i.test(value)) seconds = (Date.parse(value) - Date.now()) / 1000;
+        if (!Number.isFinite(seconds)) return null;
+        return Math.min(Math.max(1, seconds) * 1000, HELD_CHANGE_LONGEST_WAIT);
+      }
+      // How many changes are waiting to be sent again right now. The notice
+      // and the warning before leaving are drawn from it: a waiting change
+      // exists only in this tab, so closing the tab or leaving the page would
+      // lose it without a word, and while one waits the browser asks first.
+      let heldChanges = 0;
+      let leavingWarned = false;
+      function warnBeforeLeaving(event) {
+        event.preventDefault();
+        // What older browsers need before they ask. The words are the browser's.
+        event.returnValue = "";
+        return "";
+      }
+      function renderHeldChanges() {
+        if (heldChangeNotice) heldChangeNotice.hidden = heldChanges === 0;
+        const warn = heldChanges > 0;
+        if (warn === leavingWarned) return;
+        leavingWarned = warn;
+        if (warn) window.addEventListener("beforeunload", warnBeforeLeaving);
+        else window.removeEventListener("beforeunload", warnBeforeLeaving);
+      }
+      // Sends one change, and sends it again while the answer asks this page
+      // to wait and the change is one that cannot apply twice. What comes back
+      // is the last answer and how many resends it took, for the caller to
+      // report the way it reports every answer. onHold, when given, is told
+      // once that the change is waiting, so a form can say so beside the
+      // control that sent it: on a phone the notice is a scroll away from it.
+      async function sendChange(path, options, resendable, onHold) {
+        let resends = 0;
+        let holding = false;
+        try {
+          for (;;) {
+            const response = await fetch(path, options);
+            const wait = askedToWait(response);
+            if (!resendable || wait === null || resends >= HELD_CHANGE_RESENDS) return { response, resends };
+            if (!holding) {
+              holding = true;
+              heldChanges += 1;
+              renderHeldChanges();
+              if (onHold) onHold();
+            }
+            await new Promise((resolve) => { window.setTimeout(resolve, Math.min(wait * 2 ** resends, HELD_CHANGE_LONGEST_WAIT)); });
+            resends += 1;
+          }
+        } finally {
+          if (holding) {
+            heldChanges -= 1;
+            renderHeldChanges();
+          }
+        }
+      }
+      // A refusal's body, or null when it is not JSON: an HTML error page from
+      // a proxy is the usual case, and its parse error is no sentence to show
+      // anybody.
+      async function answerDocument(response) {
+        try {
+          const document = await response.json();
+          return document && typeof document === "object" ? document : null;
+        } catch (_) {
+          return null;
+        }
+      }
+      // What to say about a refusal that carries no message of the board's own.
+      function unexplainedRefusal(response, resends) {
+        if (askedToWait(response) !== null) {
+          return resends > 0
+            ? "The server was still asking this page to wait after " + resends +
+              (resends === 1 ? " resend" : " resends") + ", so this change was not sent again. Try it again in a moment."
+            : "The server asked this page to wait, and this change was not sent again. Try it again in a moment.";
+        }
+        return "The server answered HTTP " + response.status + " and gave no reason this page can read.";
+      }
+      // Whether a change refused after it was held and sent again is in what
+      // the server now holds anyway.
+      //
+      // A proxy can pass a change to the board and still answer the page 429:
+      // the board records it, the page waits and sends it again, and the
+      // resend names a head the first attempt moved, so it is refused as stale.
+      // Reported as it reads, that refusal says a change that landed did not,
+      // and the reader who makes it again records it twice. So a refusal that
+      // followed a resend is checked against the board before it is reported:
+      // the board is read, and `landed` is asked whether the task it now holds
+      // (null when the board holds none) carries the change.
+      //
+      // "landed" is reported as saved, "absent" as the refusal it was, and
+      // "unknown" — the board could not be read — as a change that may already
+      // be saved, so that nobody is invited to make it again blind. null means
+      // nothing was resent and the refusal is the answer.
+      async function heldChangeOutcome(error, taskID, landed) {
+        if (!error || !error.held || typeof landed !== "function") return null;
+        const rebase = await refreshedTaskHead(taskID);
+        if (!rebase.boardRead) return Object.assign({ outcome: "unknown" }, rebase);
+        return Object.assign({ outcome: landed(rebase.task) ? "landed" : "absent" }, rebase);
+      }
+      // What a change whose outcome is unknown says, wherever it is reported.
+      function heldChangeDoubt(describe) {
+        return "The server asked this page to wait, and did not accept " + describe + " when it was sent again, " +
+          "and the board could not be read to see whether the first attempt was saved. " +
+          "Your change may already have been saved; check before making it again.";
+      }
+      async function mutateTask(method, path, values, onHold) {
         // Every mutation names its JSON media type, body or not: the server
         // rejects mutations without it, because an absent or form-safe
         // Content-Type is what a cross-site request looks like.
@@ -6,15 +141,25 @@
         if (values !== undefined) {
           options.body = JSON.stringify(values);
         }
-        const response = await fetch(path, options);
-        const document = await response.json();
-        if (!response.ok || document.format !== "workbook.task-mutation" ||
+        // Only a change that names the head it was composed against is sent
+        // again. See sendChange.
+        const resendable = Boolean(values && typeof values.expectedHead === "string" && values.expectedHead !== "");
+        const { response, resends } = await sendChange(path, options, resendable, onHold);
+        const document = await answerDocument(response);
+        if (!response.ok || !document || document.format !== "workbook.task-mutation" ||
             document.version !== 1 || !document.task) {
-          const failure = new Error(document.error && document.error.message || "Task update failed.");
+          const said = document && document.error && document.error.message;
+          const failure = new Error(said || (response.ok && document ? "Task update failed." : unexplainedRefusal(response, resends)));
           // The category is what separates "your view was stale, reload" from
           // "that was not a legal change". Without it every failure looks the
           // same to the caller.
-          failure.category = document.error && document.error.category || "";
+          failure.category = document && document.error && document.error.category || "";
+          // Still asked to wait once every resend had gone, which a card
+          // reports as that rather than as the change being wrong.
+          failure.waitedOut = resends > 0 && askedToWait(response) !== null;
+          // Sent more than once, so an earlier attempt may have landed though
+          // this answer refused it. See heldChangeOutcome.
+          failure.held = resends > 0;
           throw failure;
         }
         return document;
@@ -263,6 +408,9 @@
         if (!observed || !observed.deleted) return Promise.resolve();
         return queueIntent(taskID, observed.head, {
           apply: (task) => Object.assign({}, task, { deleted: false }),
+          // Whether the server's task is restored: what a refused resend is
+          // checked against (see heldChangeOutcome).
+          landed: (task) => Boolean(task) && !task.deleted,
           send: (expectedHead) => mutateTask(
             "POST",
             "/api/tasks/" + encodeURIComponent(taskID) + "/restore",
@@ -310,7 +458,26 @@
               // same model and so turn on the same answer: the card, and the
               // detail form if this task's is open.
               let boardRead = true;
-              if (error && error.category === "stale-write") {
+              // Refused only after being held and sent again: the first
+              // attempt may be what moved the head, so the board is read and
+              // asked whether this card's change is in it before anything is
+              // reported. See heldChangeOutcome.
+              const held = await heldChangeOutcome(error, taskID, intent.landed);
+              if (held && held.head) entry.head = held.head;
+              if (held && held.outcome === "landed") {
+                // Saved after all. Nothing is reported and the open form, if
+                // any, keeps what it shows: the board now draws the change
+                // because it is what the server holds.
+                rerender();
+                continue;
+              }
+              if (held && held.outcome === "unknown" && error.category === "stale-write") {
+                // The refusal's own rule, below, for a refresh that read
+                // nothing: the queue stops rather than send against a head it
+                // cannot replace.
+                boardRead = false;
+                entry.queue.length = 0;
+              } else if (!held && error && error.category === "stale-write") {
                 // The refusal means this queue is holding a head the server
                 // has moved past. Waiting for the refresh it forces and
                 // re-basing on it is what lets the intents behind this one
@@ -350,8 +517,9 @@
               // after it: it is held outside the model and drawn on the card,
               // and only a dismissal or the reader's next change to that card
               // takes it away.
-              reportIntentFailure(taskID, subject, error, boardRead);
-              withdrawFailedIntentFromOpenDetail(taskID, error, boardRead);
+              const doubted = Boolean(held && held.outcome === "unknown");
+              reportIntentFailure(taskID, subject, error, boardRead, doubted);
+              withdrawFailedIntentFromOpenDetail(taskID, error, boardRead, doubted);
             }
             rerender();
           }
@@ -383,9 +551,9 @@
       // more" from "this board has not been able to ask".
       async function refreshedTaskHead(taskID) {
         const result = await currentRefreshResult(refresh());
-        if (!result.boardRead) return { boardRead: false, head: "" };
+        if (!result.boardRead) return { boardRead: false, head: "", task: null };
         const refreshed = latestTasks.find((candidate) => candidate.id === taskID);
-        return { boardRead: true, head: refreshed && refreshed.head || "" };
+        return { boardRead: true, head: refreshed && refreshed.head || "", task: refreshed || null };
       }
       // The indicator says what the next mutation will do, which is why it is
       // read from the server rather than assumed: a board set to defer still
@@ -495,11 +663,13 @@
         const sequence = ++syncStateSequence;
         let written = null;
         try {
-          const response = await fetch("/api/sync", {
+          // A mode is set, not added to: the same mode set twice is the mode
+          // set once, so this is a change that may be sent again.
+          const { response } = await sendChange("/api/sync", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ mode: wanted }),
-          });
+          }, true);
           const document = await response.json();
           if (response.ok && document.format === "workbook.sync") written = document.sync;
         } catch (_) {

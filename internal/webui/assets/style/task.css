@@ -104,6 +104,10 @@
     .task-sidebar .label-editor__status:empty { min-height: 0; }
     .form-status { min-height: 1.35rem; margin: 0; color: var(--wb-danger-ink); font-size: .82rem; }
     .form-status:empty { min-height: 0; }
+    /* A save the server asked this page to send later has not failed: it is
+       pending, and is set in the ink the held-change notice and a card's
+       pending mark use rather than in the error ink above. */
+    .form-status[data-tone="pending"] { color: var(--wb-warning-ink); }
     .form-actions { display: flex; align-items: center; justify-content: space-between; gap: .85rem; width: 100%; }
     .form-primary-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem .85rem; }
     /* The far corner of the action bar: a task's Delete, or a New Task form's

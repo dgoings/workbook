@@ -266,9 +266,9 @@ setTimeout(() => {`+check+`}, 0);
 		t.Fatalf("execute the task page's assign form: %v\n%s", err, output)
 	}
 	formProgram := createAssignmentProgram(t, `
-(async () => {
+clientProgram(async () => {
   await openCreateForm();`+check+`
-})().catch((error) => { console.error(error); process.exit(1); });
+}).catch((error) => { console.error(error); process.exit(1); });
 `)
 	if output, err := nodeCommand(node, formProgram).CombinedOutput(); err != nil {
 		t.Fatalf("execute the New Task form's assign form: %v\n%s", err, output)
@@ -309,9 +309,9 @@ setTimeout(() => {`+check+`}, 0);
 		t.Fatalf("execute the task page's link form: %v\n%s", err, output)
 	}
 	formProgram := createAssignmentProgram(t, `
-(async () => {
+clientProgram(async () => {
   await openCreateForm();`+check+`
-})().catch((error) => { console.error(error); process.exit(1); });
+}).catch((error) => { console.error(error); process.exit(1); });
 `)
 	if output, err := nodeCommand(node, formProgram).CombinedOutput(); err != nil {
 		t.Fatalf("execute the New Task form's link form: %v\n%s", err, output)
@@ -408,9 +408,9 @@ setTimeout(() => {`+check+`}, 0);
 	formProgram := createAttachmentProgram(t, `
 const wantChoose = "Choose files";
 const wantMultiple = true;
-(async () => {
+clientProgram(async () => {
   await openCreateForm();`+check+`
-})().catch((error) => { console.error(error); process.exit(1); });
+}).catch((error) => { console.error(error); process.exit(1); });
 `)
 	if output, err := nodeCommand(node, formProgram).CombinedOutput(); err != nil {
 		t.Fatalf("execute the New Task form's chooser: %v\n%s", err, output)
@@ -423,7 +423,7 @@ func TestHandlerClientNamesTheStagedRowsRemoveButtons(t *testing.T) {
 	t.Parallel()
 	node := requireNode(t)
 	program := createAttachmentProgram(t, `
-(async () => {
+clientProgram(async () => {
   await openCreateForm();
   await stageLink("https://example.test/design", "Design doc");
   await stageLink("https://example.test/plain");
@@ -438,7 +438,7 @@ func TestHandlerClientNamesTheStagedRowsRemoveButtons(t *testing.T) {
   if (first.children[0].title !== "https://example.test/design" || first.children[1].textContent !== "link") {
     throw new Error("a staged link reads " + JSON.stringify(first.children[1].textContent) + " with tooltip " + JSON.stringify(first.children[0].title));
   }
-})().catch((error) => { console.error(error); process.exit(1); });
+}).catch((error) => { console.error(error); process.exit(1); });
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute the staged names: %v\n%s", err, output)

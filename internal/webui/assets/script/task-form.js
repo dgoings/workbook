@@ -221,8 +221,42 @@
 		    // the Restore that undoes it on the card. Built rather than written
 		    // out, so the filters the reader had set come along: the column is
 		    // the only thing this landing decides.
-		    try { await mutateTask("DELETE", "/api/tasks/" + encodeURIComponent(task.id)); navigate(boardAddress(true, boardFilters)); }
-		    catch (error) { text(result, error instanceof Error ? error.message : "Task deletion failed."); }
+		    //
+		    // It names the head this form was drawn from, as a card dropped on
+		    // the Deleted column does: a task another clone changed meanwhile is
+		    // refused rather than tombstoned unseen, and a delete the server
+		    // asked this page to send later can be sent again, since a resend of
+		    // one that landed is refused rather than applied twice.
+		    const deleted = (current) => !current || Boolean(current.deleted);
+		    try {
+		      await mutateTask("DELETE", "/api/tasks/" + encodeURIComponent(task.id), expectedHead ? { expectedHead } : undefined);
+		      navigate(boardAddress(true, boardFilters));
+		    } catch (error) {
+		      const held = await heldChangeOutcome(error, task.id, deleted);
+		      if (held && held.outcome === "landed") {
+		        if (main.firstElementChild === section) navigate(boardAddress(true, boardFilters));
+		        return;
+		      }
+		      if (main.firstElementChild !== section) return;
+		      if (held && held.outcome === "unknown") {
+		        text(result, heldChangeDoubt("this delete"));
+		        return;
+		      }
+		      if (error && error.category === "stale-write") {
+		        const rebase = held || await refreshedTaskHead(task.id);
+		        if (main.firstElementChild !== section) return;
+		        if (rebase.boardRead && deleted(rebase.task)) {
+		          navigate(boardAddress(true, boardFilters));
+		          return;
+		        }
+		        if (rebase.head) expectedHead = rebase.head;
+		        text(result, rebase.boardRead
+		          ? "That task changed elsewhere, so it was not deleted. Press Delete again to delete the version the server now holds."
+		          : "That task changed elsewhere, so it was not deleted, and the latest version could not be loaded. Try again once the board is current.");
+		        return;
+		      }
+		      text(result, error instanceof Error ? error.message : "Task deletion failed.");
+		    }
 		    finally { remove.disabled = false; }
 		  });
 		  danger.append(remove); actions.append(danger);
@@ -482,6 +516,42 @@
             }
             if (expectedHead) values.expectedHead = expectedHead;
           }
+          // What this save sends, measured from the version it was composed
+          // against, so that once it lands the form can tell whether the reader
+          // has typed anything since. A save can wait a while: the server may
+          // ask this page to send it later (see sendChange), and the form stays
+          // open and editable meanwhile.
+          const sentFrom = task;
+          const sentEdits = isNew ? null : changedTaskValues(task, controls);
+          // What an accepted save of an existing task does, given the task it
+          // landed as: the server's answer, or the board's read of a save whose
+          // resend was refused after the first attempt had landed.
+          async function landSave(landed) {
+            if (main.firstElementChild !== section) {
+              // The save landed after the reader had gone somewhere else.
+              // Returning them to the board now would take away the route they
+              // deliberately chose while this request was open, and an accepted
+              // save has never been announced in this client anyway: the board
+              // showing the new value is the report. So this only makes sure it
+              // is showing it.
+              await refresh();
+            } else if (!sameTaskValues(changedTaskValues(sentFrom, controls), sentEdits)) {
+              // The reader went on editing while the save was out. Leaving for
+              // the board now would throw away what they typed with no word, so
+              // the form stays, keeps every field as typed, and is re-based on
+              // the version that just landed: the next save sends only what
+              // changed since.
+              reviseAgainstTask(landed);
+              text(result, "Your save landed. What you changed while it was being sent is not saved yet; press Save to send it.");
+              await refresh();
+            } else {
+              // The board the reader came from rather than the bare one: an
+              // accepted save is not a reason to undo the narrowing they were
+              // reading the board through.
+              navigate(boardAddress(deletedColumnShown, boardFilters));
+              await refresh();
+            }
+          }
           // A create that staged nothing beside the task itself is answered by
           // the board rather than by this form, and leaves immediately. One that
           // staged relationships or attachments waits: those writes need the ID
@@ -510,7 +580,11 @@
           if (assignmentDraftPanel) assignmentDraftPanel.setBusy(true);
           text(result, "");
           try {
-            const document = await mutateTask(isNew ? "POST" : "PATCH", isNew ? "/api/tasks" : "/api/tasks/" + encodeURIComponent(task.id), values);
+            // The held line is pending rather than failed, and says so in its
+            // ink; whatever the save ends in is written in the form's own.
+            const document = await mutateTask(isNew ? "POST" : "PATCH", isNew ? "/api/tasks" : "/api/tasks/" + encodeURIComponent(task.id), values,
+              () => { text(result, "The server asked this page to wait. This save is held in this tab and will be sent again shortly."); result.dataset.tone = "pending"; })
+              .finally(() => { delete result.dataset.tone; });
             if (isNew) {
               createdDurably = true;
               taskWasCreated = true;
@@ -596,22 +670,29 @@
                 return;
               }
               finishCreatedTask(recovery);
-            } else if (main.firstElementChild !== section) {
-              // The save landed after the reader had gone somewhere else.
-              // Returning them to the board now would take away the route they
-              // deliberately chose while this request was open, and an accepted
-              // save has never been announced in this client anyway: the board
-              // showing the new value is the report. So this only makes sure it
-              // is showing it.
-              await refresh();
             } else {
-              // The board the reader came from rather than the bare one: an
-              // accepted save is not a reason to undo the narrowing they were
-              // reading the board through.
-              navigate(boardAddress(deletedColumnShown, boardFilters));
-              await refresh();
+              await landSave(document.task);
             }
           } catch (error) {
+            // Refused only after the save was held and sent again, and the
+            // first attempt may be what the refusal is about: the board is read
+            // and asked whether it now carries every value this save sent. If
+            // it does, the save landed and is answered as one; if the board
+            // cannot be read, nobody can say, and the form says that instead of
+            // either. See heldChangeOutcome.
+            const held = isNew ? null : await heldChangeOutcome(error, task.id, (current) => carriesTaskValues(current, sentEdits));
+            if (held && held.outcome === "landed") {
+              await landSave(held.task);
+              return;
+            }
+            if (held && held.outcome === "unknown") {
+              if (main.firstElementChild !== section) {
+                reportDetachedSaveFailure(task.id, error, false, true);
+                return;
+              }
+              text(result, heldChangeDoubt("this save"));
+              return;
+            }
             // A save can outlive the form it was made in: the reader stops
             // waiting on a slow request and goes back to the board, or a
             // restore renders a New Task form over this route. The node this
@@ -637,7 +718,9 @@
               // baseline stays where it was so a retry still sends only the
               // fields this user changed — the concurrent edit that caused the
               // refusal survives it.
-              const rebase = await refreshedTaskHead(task.id);
+              // A refusal that followed a resend has read the board already, to
+              // look for the save, and that read is the re-base.
+              const rebase = held || await refreshedTaskHead(task.id);
               // A refresh that read the board and found no head for this task
               // is the board saying the task is gone: `/api/tasks` carries only
               // tasks that have not been tombstoned, and the likeliest refusal
@@ -826,6 +909,31 @@
         const labels = controls.labels.values();
         if (!sameLabels(labels, task.labels || [])) values.labels = labels;
         return values;
+      }
+      // Whether a task the server holds carries every value a save sent, each
+      // compared as the server stores it: a title trimmed, labels as a set.
+      // It is how a save whose resend was refused is found to have landed (see
+      // heldChangeOutcome), so a value it cannot vouch for counts as missing.
+      function carriesTaskValues(task, values) {
+        if (!task || task.deleted || !values) return false;
+        return Object.keys(values).every((key) => {
+          if (key === "expectedHead") return true;
+          if (key === "labels") return sameLabels(task.labels || [], values.labels || []);
+          if (key === "title") return (task.title || "") === String(values.title).trim();
+          if (key === "description") return (task.description || "") === values.description ||
+            (task.description || "") === String(values.description).trim();
+          if (key === "status" || key === "priority") return task[key] === values[key];
+          return false;
+        });
+      }
+      // Whether two sets of edits are the same edits, labels compared as the
+      // set they are.
+      function sameTaskValues(left, right) {
+        const keys = Object.keys(left);
+        if (keys.length !== Object.keys(right).length) return false;
+        return keys.every((key) => key in right && (key === "labels"
+          ? sameLabels(left[key], right[key])
+          : left[key] === right[key]));
       }
       // Labels are a set: the server sorts and de-duplicates them
       // (normalizeLabels), so retyping "docs, web" as "web, docs" changes

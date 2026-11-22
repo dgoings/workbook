@@ -93,16 +93,21 @@
             displayReport("", panelWaitingMessage);
             await settledIntents();
           }
-          const response = await fetch("/api/display", {
+          // The board compares the head on every configuration change, an
+          // empty one included, so this is a change that may be sent again.
+          const { response, resends } = await sendChange("/api/display", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(Object.assign({}, proposed, { expectedHead: panelHead }))
-          });
-          const payload = await response.json();
+          }, true);
+          // Not JSON is a refusal too: see changeVocabulary.
+          const payload = await answerDocument(response);
           answer = {
-            applied: response.ok && payload.format === "workbook.display-mutation" &&
+            applied: response.ok && Boolean(payload) && payload.format === "workbook.display-mutation" &&
               payload.version === 1,
-            payload
+            payload: payload || {},
+            response,
+            resends
           };
         } catch (_) {
           // Only the exchange is guarded, so a defect in the rendering below
@@ -116,6 +121,28 @@
           return;
         }
         const payload = answer.payload;
+        if (!answer.applied && answer.resends > 0) {
+          // Refused only after a resend, so the first attempt may be what the
+          // refusal is about: the settings as they now stand — the ones a
+          // stale refusal carries, or a fresh read — are asked whether they
+          // are this save's before anything is reported. See changeVocabulary.
+          let current = payload.display ? { settings: payload.display, shape: payload.shape } : null;
+          if (!current) {
+            const read = await currentVocabulary();
+            if (read) current = { settings: read.display || { head: read.head }, shape: read.shape };
+          }
+          if (current && displayCarries(current.settings, proposed)) {
+            adoptDisplayAtHead(current.settings, current.shape);
+            applyConfigBusy();
+            displayReport("", describeDisplaySave(current.settings));
+            return;
+          }
+          if (!current) {
+            applyConfigBusy();
+            displayReport("error", heldChangeDoubt("these board settings"));
+            return;
+          }
+        }
         if (!answer.applied) {
           const stale = payload.error && payload.error.category === "stale-write";
           // A refusal that carries the settings is a stale write, and the
@@ -127,13 +154,23 @@
           applyConfigBusy();
           displayReport("error", stale
             ? "This project's configuration changed in another clone, so these settings were not applied. This page now shows them as they stand; review them and save again."
-            : payload.error && payload.error.message || "These board settings were not applied.");
+            : payload.error && payload.error.message ||
+              (answer.response.ok
+                ? "These board settings were not applied."
+                : "These board settings were not applied. " + unexplainedRefusal(answer.response, answer.resends)));
           return;
         }
         adoptDisplayAtHead(payload.display, payload.shape);
         applyConfigBusy();
         displayReport("", describeDisplaySave(payload.display),
           (payload.warnings || []).map((warning) => warning.message));
+      }
+      // Whether stored settings are the ones a save proposed, compared as the
+      // writer stores them: a name trimmed, colors lowercased.
+      function displayCarries(settings, proposed) {
+        const same = (left, right) => String(left || "").trim().toLowerCase() === String(right || "").trim().toLowerCase();
+        return String(settings.name || "") === String(proposed.name || "").trim() &&
+          same(settings.primaryColor, proposed.primaryColor) && same(settings.textColor, proposed.textColor);
       }
       // What a save says it did. It reports the settings as they now stand
       // rather than what changed, for the reason the statuses panel re-renders

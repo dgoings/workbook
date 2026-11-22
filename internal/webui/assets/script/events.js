@@ -298,6 +298,10 @@
           apply: (task) => Object.assign({}, task, restoring
             ? { deleted: false, status: placement.status }
             : { status: placement.status }),
+          // Whether the server's task is in the column it was dropped on,
+          // which is what a refused resend is checked against (see
+          // heldChangeOutcome). The rank within the column is the server's.
+          landed: (task) => Boolean(task) && !task.deleted && task.status === placement.status,
           // One write either way, and the same body either way: a restore that
           // names a destination is the drop the position route already
           // describes, so the drop position becomes the same before/after and
@@ -324,6 +328,9 @@
         const observed = latestTasks.find((task) => task.id === taskId);
         return queueIntent(taskId, observed && observed.head, {
           apply: (task) => Object.assign({}, task, { deleted: true }),
+          // A board that no longer carries the task has taken it out of the
+          // columns, which is what a delete does.
+          landed: (task) => !task || Boolean(task.deleted),
           send: (expectedHead) => mutateTask(
             "DELETE",
             "/api/tasks/" + encodeURIComponent(taskId),
