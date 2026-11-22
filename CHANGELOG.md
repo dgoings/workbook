@@ -48,8 +48,16 @@ however its address is spelled, and one holding branches unless
 repository. It removes the probe refs an earlier run left on the new place, and
 a new place that refuses to delete refs is refused once, without a probe per
 run. It is safe to stop and run again, and the old place keeps its copy. A
-second move finds the tasks by following the first move's marker. The move is one-way in this version: `config unset
-tasks-remote` is refused afterwards. `workbook
+second move finds the tasks by following the first move's marker. A move can
+go back to a place the tasks left, origin included, with the same two
+commands: `config unset tasks-remote` (or `config set` naming the earlier
+remote), then `move-tasks`, which brings the copies that place kept up to
+date, a task compacted in between included, and records the return as one more
+fast-forward commit on its `refs/workbook/project`, so a checkout whose
+settings name it works again. Moves can go any number of times in any order;
+a checkout on any earlier generation of the settings is told the place the
+tasks are now, by following the markers there, and markers that lead in a
+circle are reported as such. `workbook
 setup` adds the remote to each checkout from the settings, or keeps the
 checkout's own address for it. Until it runs, task commands refuse and say to
 run it; a checkout still on the old settings is refused, told where the tasks

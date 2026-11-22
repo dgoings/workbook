@@ -218,7 +218,8 @@ A board's key can push to whatever repository holds the tasks. To keep it away
 from the code, move the tasks to a repository of their own first: `workbook
 config set tasks-remote tasks --url <address>`, then `workbook move-tasks`,
 then commit `.workbook/config.json`; everyone else runs `workbook setup` after
-pulling it. See [Keep the tasks in their own repository](docs/hosting.md#keep-the-tasks-in-their-own-repository).
+pulling it. The tasks move back the same way, with `workbook config unset
+tasks-remote` and `workbook move-tasks`. See [Keep the tasks in their own repository](docs/hosting.md#keep-the-tasks-in-their-own-repository).
 
 The board works on a phone. On a screen that narrow it shows one column at a
 time, under a row of the columns' names and counts, and a task's page takes

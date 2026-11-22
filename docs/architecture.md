@@ -957,6 +957,71 @@ the new place is reported to whoever runs it, in that clone, and parked there.
 An edit by a clone that
 vanished in that instant waits at the old place for that rerun.
 
+#### Moving the tasks back
+
+The tasks can go back to a place they left, origin or an earlier tasks
+repository, with the same two commands. The returned-to place keeps the copies
+it held when they left, so the ordinary synchronization brings them up to date:
+a task edited only at the newer place fast-forwards, one carried there by
+replay is carried back by operation identity, and one compacted there in
+between arrives through the same leased non-fast-forward push any compaction
+uses, which succeeds only while the place still holds the tip the checkpoint
+accounts for. No other ref moves backwards, and none is deleted.
+
+The return is recorded with one more fast-forward commit on the place's
+identity ref, R, whose tree is I's tree and nothing else, so it needs no new
+document and no new format generation. Leaving the place again builds a new
+marker on R. Each place's identity ref is therefore one line of commits that
+alternates from I:
+
+```text
+origin after origin -> tasks -> origin -> third:
+
+refs/workbook/project ──> M2  "workbook: tasks moved"   tree: project.json, moved.json {"remote":"third",…}
+                          │
+                          R1  "workbook: tasks returned" tree: I's tree
+                          │
+                          M1  "workbook: tasks moved"   tree: project.json, moved.json {"remote":"tasks",…}
+                          │
+                          I   identity commit (root)    tree: project.json
+
+tasks:  refs/workbook/project ──> M  {"remote":"origin",…} ── I
+third:  refs/workbook/project ──> I
+```
+
+A place is read by the shape of its tip and never by a commit message: I or a
+return means the tasks are there, a marker means they went where it says. Every
+commit in the line is checked against its position (a live commit's tree is
+I's, a marker's holds exactly I's `project.json` blob and `moved.json`), and
+the commits carry the same fixed author, committer and dates as I, so the same
+move written twice is the same commit. The local identity ref still never
+leaves I; adopting a remote's copy adopts the root at the bottom of its line.
+
+A move back is ordered so that a single run never leaves both places marked.
+While it copies, the place it returns to is still marked and refuses every
+other checkout; this run alone reads that place as live. Then it records the
+return, then marks the place it leaves:
+
+```text
+               copy to dest      record return     mark source        recopy, verify
+source (live)  ──────────────>   (live)            ──> M(dest)
+dest   M(src)  (refused to       ──> R (live)      (live)
+                others)
+```
+
+Stopped after the return and before the mark, both places are live, so neither
+set of settings is refused and nothing is stranded; the rerun marks the source
+and carries what reached it. Two different moves run at once can still leave
+markers pointing at each other. A checkout refused for being on an old
+generation of the settings follows the markers, through its own remote of each
+name when it has one and at the recorded address otherwise, to name the place
+the tasks are now; the walk stops at a live place, at a place it cannot read,
+at a place it already passed (reported as a circle, which `move-tasks` settles),
+or after 32 places. A checkout whose remote copy shows a marker asks that
+remote again before refusing, so a place the tasks came back to is used again
+without anybody running setup. Both lookups happen only on the way to a
+refusal, so a checkout that is where the tasks are pays nothing for them.
+
 The default shared backend uses custom refs because they avoid branch switching and per-repository head contention. A conventional `workbook/state` branch may be offered as a compatibility fallback for Git hosts that reject custom refs. A future optional relay may provide strict leases, heartbeats, notifications, or high-concurrency agent coordination while retaining the same operation model.
 
 ## Design principles
