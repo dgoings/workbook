@@ -118,6 +118,11 @@ type Result struct {
 type Projection interface {
 	core.ProjectionUpdater
 	Refresh(context.Context) error
+	// Land is Advance reporting true only when the row names the checkpoint
+	// afterwards. A row another update moved to some other head is left as
+	// it is either way, but it is still behind the checkpoint, and a run
+	// cannot leave it there.
+	Land(context.Context, core.ProjectConfig, string, core.Snapshot) (bool, error)
 }
 
 // Deps are what a run reads and writes through.
@@ -508,27 +513,34 @@ func optionalTime(value time.Time) *time.Time {
 // One refresh takes every compacted task in one batch, proving each move
 // against the head the projection held. A task it did not land on its
 // checkpoint, because the refresh failed or the row names some other head, is
-// invalidated and read afresh by a second refresh.
+// invalidated and read afresh by a second refresh. That includes a row another
+// update moved during the first refresh to a head that is neither the old tip
+// nor the checkpoint, such as a slower writer recording an older edit: the
+// refresh leaves such a row alone, so it is still behind its ref, and only the
+// second refresh, made while Git still has the head it names, brings it on.
 func settleProjection(ctx context.Context, deps Deps, moved []movedTask) error {
 	if len(moved) == 0 {
 		return nil
 	}
 	refreshErr := deps.Projection.Refresh(ctx)
-	invalidated := false
+	unsettled := false
 	for _, task := range moved {
-		advanced, err := deps.Projection.Advance(ctx, deps.Config, task.oldTip, task.checkpoint)
+		landed, err := deps.Projection.Land(ctx, deps.Config, task.oldTip, task.checkpoint)
 		if err != nil {
 			return err
 		}
-		if advanced {
+		if landed {
 			continue
 		}
+		// This removes the row only while it names the old tip or the
+		// checkpoint. A row on some other head is left for the refresh below
+		// to move.
 		if err := deps.Projection.Invalidate(ctx, deps.Config, task.taskID, task.oldTip, task.checkpoint.Head); err != nil {
 			return err
 		}
-		invalidated = true
+		unsettled = true
 	}
-	if refreshErr == nil && !invalidated {
+	if refreshErr == nil && !unsettled {
 		return nil
 	}
 	return deps.Projection.Refresh(ctx)

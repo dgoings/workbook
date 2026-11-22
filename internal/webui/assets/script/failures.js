@@ -32,11 +32,24 @@
       // a board that could not then be read, is a fourth: the first attempt may
       // have been saved, so neither "changed elsewhere" nor "failed" is known
       // to be true, and the card says that instead (see heldChangeOutcome).
+      //
+      // A `stale-write` is also what the server answers when its shared cache
+      // stayed busy past a bounded wait — locked by another process, or
+      // replaced by one each time it was opened — and then nobody changed the
+      // task at all. The category is the same because the next step is: send
+      // it again. What tells the two apart is the server's message, which for
+      // a busy cache always names the projection cache and for a changed task
+      // never does (see cacheWasBusy), and the card then says what happened.
       function reportIntentFailure(taskID, subject, error, boardRead, doubted) {
-        const changedElsewhere = Boolean(error && error.category === "stale-write");
+        const busy = cacheWasBusy(error);
+        const changedElsewhere = !busy && Boolean(error && error.category === "stale-write");
         taskFailureReports.set(taskID, {
           card: doubted
             ? "The server asked this page to wait, and did not accept this change when it was sent again, and the board could not be read to check it. It may already have been saved; check the card once the board is current before making it again."
+            : busy
+            ? (boardRead
+              ? "The board was busy; nothing was saved. Try again."
+              : "The board was busy; nothing was saved, and the board could not be refreshed. The card may be out of date, and changes made here were not applied.")
             : changedElsewhere
             ? (boardRead
               ? "This task changed elsewhere. The card shows the version the server holds."
@@ -46,11 +59,21 @@
               : "Task update failed. The card shows the version the server holds.",
           notice: doubted
             ? "Task " + subject + " is no longer on the board, and the change made here may or may not have been saved before it went."
+            : busy
+            ? "Task " + subject + " could not be updated because the board was busy, and it is no longer on the board. The change made here was not applied."
             : changedElsewhere
             ? "Task " + subject + " changed elsewhere and is no longer on the board. The change made here was not applied."
             : "Task " + subject + " could not be updated and is no longer on the board. The change made here was not applied."
         });
         rerender();
+      }
+      // Whether a refusal is the server's shared cache staying busy rather
+      // than the task having changed. Both are a `stale-write`; only the busy
+      // cache's message names the projection cache, which the projection
+      // package's tests hold for every such refusal.
+      function cacheWasBusy(error) {
+        return Boolean(error && error.category === "stale-write" &&
+          typeof error.message === "string" && error.message.includes("the projection cache"));
       }
       // A save from the detail form that was refused after its form left the
       // document. The form is where this belongs and the form is gone, so it is

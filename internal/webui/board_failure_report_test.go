@@ -136,6 +136,62 @@ setTimeout(async () => {
 	}
 }
 
+// The server answers a change it could not get to because its shared cache
+// stayed busy with the same stale-write category a changed task gets, since
+// the next step is the same. Nobody changed the task, though, so the card says
+// the board was busy rather than that the task changed elsewhere. A refusal
+// for a changed task keeps its own wording; the test above holds that.
+func TestHandlerClientReportsABusyCacheRefusalAsBusyRatherThanChangedElsewhere(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	moved := clientPlacementTask(failureReportTaskID, "Moved", core.StatusReady, core.PriorityMedium)
+	moved.Head = "head-1"
+	tasks := []core.Task{moved}
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
+
+	response := request(t, handler, http.MethodGet, "/")
+	script := renderedClientScript(t, response.Body.String())
+	document := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+	// The message the projection cache answers with when another process held
+	// it past the busy timeout.
+	busy := "cannot begin conditional projection advancement: the projection cache stayed locked by another request or process; nothing was changed, try again"
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(async () => {
+  const inProgress = boardLists.find((list) => list.dataset.status === "in-progress");
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+
+  const boardFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      return { ok: false, json: async () => ({
+        format: "workbook.error", version: 1,
+        error: { category: "stale-write", message: ` + strconv.Quote(busy) + ` }
+      }) };
+    }
+    return boardFetch(url, options);
+  };
+
+  const dragged = boardCard(` + strconv.Quote(moved.ID) + `);
+  dragged.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: dragged, dataTransfer });
+  await documentEventListeners.drop({ target: inProgress, clientY: 1, dataTransfer, preventDefault() {} });
+  documentEventListeners.dragend({ target: dragged });
+
+  const reported = cardFailureMessage(boardCard(` + strconv.Quote(moved.ID) + `));
+  if (reported !== "The board was busy; nothing was saved. Try again.") {
+    throw new Error("the busy refusal was not reported as busy: " + JSON.stringify(reported));
+  }
+}, 0);
+`
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute busy cache refusal report behavior: %v\n%s", err, output)
+	}
+}
+
 // A report belongs to a card, and the likeliest reason a change is refused is
 // also a reason the card is about to go: another clone deleted the task. The
 // report moves to the notice rather than leaving with the card, because a

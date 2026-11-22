@@ -583,9 +583,13 @@ func TestStoreAdvanceDoesNotRegressNewerSnapshot(t *testing.T) {
 		t.Fatalf("Rebuild() error = %v", err)
 	}
 
+	// The row names a head another update recorded, so it is not this write's
+	// to replace. That is reported as done rather than declined: a decline is
+	// what puts a rebuild warning on the write, and the row is not stale on
+	// this write's account, since every read compares it with the ref.
 	applied, err := store.Advance(ctx, config, previous.Head, stale)
-	if err != nil || applied {
-		t.Fatalf("Advance(stale) = %t, %v, want false, nil", applied, err)
+	if err != nil || !applied {
+		t.Fatalf("Advance(stale) = %t, %v, want true, nil", applied, err)
 	}
 	got, err := store.Get(ctx, config, newer.State.TaskID)
 	if err != nil || got.Head != newer.Head || got.State.Task.Title != "Newer" {
@@ -1298,8 +1302,139 @@ func TestRebuildRetriesOnceWhenHeadsChangeDuringBuild(t *testing.T) {
 	}
 	source.index = 0
 	source.snapshots[third.Head] = third
-	if _, err := store.Rebuild(ctx); core.CategoryOf(err) != core.CategoryOperational {
-		t.Fatalf("Rebuild() category = %q, want operational; error = %v", core.CategoryOf(err), err)
+	// The refs move through the second build too. That build is installed
+	// anyway: it is every ref as it was listed, which is what any cache is
+	// once somebody writes, and refusing would fail the request that needed a
+	// cache for as long as other processes keep writing.
+	count, err = store.Rebuild(ctx)
+	if err != nil {
+		t.Fatalf("Rebuild() with refs moving through both builds error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("Rebuild() count = %d, want 1", count)
+	}
+	snapshots, err = store.querySnapshots(ctx)
+	if err != nil {
+		t.Fatalf("querySnapshots() error = %v", err)
+	}
+	if len(snapshots) != 1 || snapshots[0].Head != second.Head {
+		t.Fatalf("installed cache = %#v, want the second build's head %s", snapshots, second.Head)
+	}
+	// The next read brings that cache up to the refs, as it would any cache
+	// another process wrote past.
+	listed, err := store.List(ctx, config)
+	if err != nil {
+		t.Fatalf("List() after the lagging rebuild error = %v", err)
+	}
+	if len(listed) != 1 || listed[0].Head != third.Head || listed[0].State.Task.Title != "Third" {
+		t.Fatalf("List() = %#v, want the third head the refs now hold", listed)
+	}
+}
+
+// A rebuild that finds another process has installed a usable cache while it
+// was building opens that cache and discards its own, rather than renaming
+// over a cache other processes have just opened.
+func TestRebuildAdoptsACacheAnotherProcessInstalledMeanwhile(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	config := testConfig()
+	task := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "First")
+	cachePath := filepath.Join(t.TempDir(), "cache.sqlite")
+	heads := []gitstore.TaskHead{{TaskID: task.State.TaskID, ObjectID: task.Head}}
+	snapshots := map[string]core.Snapshot{task.Head: task}
+	other, err := openStoreForTest(t, ctx, &staticHeadSource{heads: heads, snapshots: snapshots}, config, cachePath)
+	if err != nil {
+		t.Fatalf("openStore(other) error = %v", err)
+	}
+	var installed os.FileInfo
+	source := &stormSource{heads: map[string]string{task.State.TaskID: task.Head}, snapshots: snapshots}
+	calls := 0
+	source.onList = func() {
+		// The other process's rebuild lands while this one is building:
+		// between the two listings that bracket the build.
+		calls++
+		if calls != 2 {
+			return
+		}
+		if _, err := other.Rebuild(ctx); err != nil {
+			t.Errorf("other Rebuild() error = %v", err)
+		}
+		installed, _ = os.Stat(cachePath)
+	}
+	store, err := openStoreForTest(t, ctx, source, config, cachePath)
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if installed == nil {
+		t.Fatal("the other process's rebuild never ran")
+	}
+	now, err := os.Stat(cachePath)
+	if err != nil {
+		t.Fatalf("stat cache: %v", err)
+	}
+	if !os.SameFile(installed, now) {
+		t.Fatal("Rebuild() renamed its own build over the cache another process had just installed")
+	}
+	if !store.cacheUsable(ctx) {
+		t.Fatal("Rebuild() left the store unbound from the cache it adopted")
+	}
+	leftovers, err := filepath.Glob(filepath.Join(filepath.Dir(cachePath), ".cache.sqlite-*.tmp"))
+	if err != nil {
+		t.Fatalf("glob temporary caches: %v", err)
+	}
+	if len(leftovers) != 0 {
+		t.Fatalf("Rebuild() left its discarded build behind: %v", leftovers)
+	}
+}
+
+// A file another process left at the cache path while this rebuild was
+// building, but that is no usable projection — an empty cache a process
+// created and never filled — is not adopted. The rebuild installs its own
+// build over it.
+func TestRebuildReplacesAnUnusableFileAnotherProcessLeftMeanwhile(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	config := testConfig()
+	task := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "First")
+	cachePath := filepath.Join(t.TempDir(), "cache.sqlite")
+	source := &stormSource{
+		heads:     map[string]string{task.State.TaskID: task.Head},
+		snapshots: map[string]core.Snapshot{task.Head: task},
+	}
+	calls := 0
+	source.onList = func() {
+		calls++
+		if calls != 2 {
+			return
+		}
+		empty := cachePath + ".empty"
+		if err := os.WriteFile(empty, nil, 0o600); err != nil {
+			t.Errorf("write empty cache: %v", err)
+			return
+		}
+		if err := os.Rename(empty, cachePath); err != nil {
+			t.Errorf("rename empty cache into place: %v", err)
+		}
+	}
+	store, err := openStoreForTest(t, ctx, source, config, cachePath)
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if calls < 2 {
+		t.Fatal("the empty cache was never left in place")
+	}
+	if !store.cacheUsable(ctx) {
+		t.Fatal("Rebuild() adopted an empty cache instead of installing its own build")
+	}
+	snapshots, err := store.querySnapshots(ctx)
+	if err != nil || len(snapshots) != 1 || snapshots[0].Head != task.Head {
+		t.Fatalf("installed cache = %#v, %v, want the one task the rebuild built", snapshots, err)
 	}
 }
 

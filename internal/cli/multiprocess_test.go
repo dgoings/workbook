@@ -205,62 +205,32 @@ type processOutcome struct {
 	stderr string
 }
 
-// projectionContentionMessages are the four ways the shared SQLite projection
-// reports that another process moved task refs, or replaced the cache file,
-// while this one was using it: the rebuild that lost twice
-// (internal/projection/store.go:177), the recovery that could not activate a
-// cache afterwards (:391), the incremental refresh that kept finding the
-// cache changed underneath it (:142), and the write redo that kept finding
-// the cache file replaced underneath its handle (:446).
-var projectionContentionMessages = []string{
-	"task refs changed during projection rebuild",
-	"activate projection cache after rebuild",
-	"refresh projection cache after a concurrent update",
-	"redo a projection write after the cache was replaced",
-}
-
-// assertRefusedUnderContention accepts the ways a process is allowed to lose
-// this race and rejects every other failure. All of them leave the repository
-// untouched and all of them are answered by running the command again:
+// assertRefusedUnderContention accepts the one way a process is allowed to
+// lose this race and rejects every other failure: exit 6, stale-write. It
+// covers the task ref moving between this process's read and its
+// compare-and-swap, which is the designed answer, and the bounded waits on the
+// shared SQLite projection that another process outlasted — the cache locked
+// past its busy timeout, a rebuild whose refs kept changing, or a write whose
+// cache file kept being replaced. All of them leave the repository untouched
+// and are answered by running the command again.
 //
-//   - exit 6, stale-write: the task ref moved between this process's read and
-//     its compare-and-swap. This is the designed answer.
-//   - exit 1, operational, with one of projectionContentionMessages: a mutation
-//     could not read the disposable projection it ranks against, because enough
-//     other processes were writing refs. This is a rough edge rather than a
-//     designed answer. The category blames the environment for something that
-//     is neither the environment's nor the caller's fault; the advice names
-//     `workbook rebuild` when the command that failed was `create`; and the
-//     four separate wordings are one phenomenon. It is pinned here rather than
-//     tolerated silently, so that smoothing it has to change this test, and a
-//     fifth wording fails rather than passing quietly.
+// A read that finds the projection updated by another process is not among
+// them. It used to fail as an operational error advising `workbook rebuild`,
+// in four wordings this test pinned as a rough edge; the refresh now leaves a
+// row another process moved to that process and answers from Git, so that
+// failure cannot happen, and any operational exit here is a regression.
 func assertRefusedUnderContention(t *testing.T, outcome processOutcome, what string) {
 	t.Helper()
 	if outcome.stdout != "" {
 		t.Fatalf("%s failed but wrote to stdout: %q", what, outcome.stdout)
 	}
-	switch outcome.code {
-	case 6:
-		assertJSONError(t, outcome.stderr, core.CategoryStaleWrite, "")
-	case 1:
-		assertJSONError(t, outcome.stderr, core.CategoryOperational, "")
-		if !containsAny(outcome.stderr, projectionContentionMessages) {
-			t.Fatalf("%s failed operationally for a reason that is not projection contention: %q",
-				what, outcome.stderr)
-		}
-	default:
-		t.Fatalf("%s exited %d, want 0, 6, or 1 for projection contention; stderr = %q",
-			what, outcome.code, outcome.stderr)
+	if outcome.code != 6 {
+		t.Fatalf("%s exited %d, want 0 or 6 for a stale write; stderr = %q", what, outcome.code, outcome.stderr)
 	}
-}
-
-func containsAny(value string, candidates []string) bool {
-	for _, candidate := range candidates {
-		if strings.Contains(value, candidate) {
-			return true
-		}
+	assertJSONError(t, outcome.stderr, core.CategoryStaleWrite, "")
+	if strings.Contains(outcome.stderr, "workbook rebuild") {
+		t.Fatalf("%s advises a rebuild for a passing race: %q", what, outcome.stderr)
 	}
-	return false
 }
 
 // taskRefCount counts the task refs actually present, which is what a mutation
