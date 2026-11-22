@@ -616,8 +616,12 @@ checkpoint in a generation the clone does not have:
   in the new generation, keeping their actor, wall time and operation IDs. This
   does not need `compactedFrom` to be present locally.
 - Unlike an ordinary reconcile, the old local tip is not parked, since parking
-  it would keep the history alive. The task's existing parked refs and reflog
-  are dropped too, without a bundle.
+  it would keep the history alive. The task's reflog, and those of its
+  existing parked refs whose edits the checkpoint already carries, are dropped
+  too, without a bundle. A parked ref still holding an edit the task lacks is
+  kept, so the board goes on showing that edit, and the old history stays
+  reachable through it until somebody dismisses it: losing a person's
+  unrecovered text silently costs more than the disk it holds.
 - When two clones compact the same task, origin's checkpoint wins, and the
   second clone adopts it the same way.
 - When the replay cannot run cleanly, the local ref stays on the old history and
@@ -664,6 +668,33 @@ conflicts described in
 [Reconciling divergent histories](reference.md#reconciling-divergent-histories). Concurrent
 `done` and `in-review` status changes are not among them: status is
 last-syncer-wins, and multi-value status conflicts remain proposed.
+
+Every reconciliation parks the old local tip under
+`refs/workbook/reconciled/<id>/<n>`, a local ref that is never pushed. Most hold
+nothing the task lacks; the board judges each one settled or not from Git
+alone, with no record of its own (see
+[Edits the board's sync set aside](reference.md#edits-the-boards-sync-set-aside)).
+Retention follows that verdict: settled parked refs are retired beyond the
+three newest per task, and a parked ref holding an edit the task lacks is kept
+until a person dismisses it. That trades unbounded refs for never dropping a
+person's unrecovered text, and the refs cost little: one per conflict, which a
+person can see and clear.
+
+```text
+origin:  R ── O1 ── O2            (O2 conflicts with L2)
+local:   R ── L1 ── L2 ── L3      parked at refs/workbook/reconciled/<id>/0
+after:   R ── O1 ── O2 ── L1'     L1 replayed; L2, L3 set aside
+                                  L1' has parent O2: where origin stood
+```
+
+When something replayed before the conflict, as `L1'` here, its parent says
+where `origin` stood when the edits were set aside, and any state from there on
+that carried an edit settles it. When the first parked edit conflicted,
+nothing in the graph says where `origin` stood — a replay that skipped a no-op
+looks the same — so only the task's current state can settle an edit, and an
+edit copied back and changed again is shown again until it is dismissed.
+Recording the parking point would close that gap; it is local bookkeeping,
+not a format change, and is not done yet.
 
 Exclusive claims are different. When `--remote-required` is used, a claim succeeds only after the remote accepts a fast-forward update based on the task ref that was fetched. If another agent claimed the task first, Workbook refetches and reports that the claim failed instead of merging two exclusive claims. Offline claims, if supported, must be visibly tentative.
 

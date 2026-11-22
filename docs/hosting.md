@@ -399,9 +399,8 @@ sudo journalctl -u workbook-board | grep 3f9a02c41b7e
 
 The log also has a line for each failure of the board's background sync, the
 round every few seconds that fetches and publishes. It prints Git's own
-message, with any credential in the remote's address removed, once when a
-failure starts, again only when the message changes, and once when a round
-succeeds again:
+message once when a failure starts, again only when the message changes, and
+once when a round succeeds again:
 
 ```text
 workbook: background sync failed: git push failed: … fatal: Could not read from remote repository.
@@ -409,7 +408,26 @@ workbook: background sync is working again
 ```
 
 So a board that has stopped publishing says so once, not every few seconds,
-and a single line after it says it recovered. Two more kinds of line belong
+and a single line after it says it recovered. Before it prints, Workbook
+removes the user name and password from the remote's address, and from every
+address Git is configured to rewrite it to, as
+[the reference](reference.md#what-anyone-who-can-open-the-board-can-do-and-see)
+details. It does not remove a token placed in an address's path or query
+string, such as `https://git.example/repo.git?access_token=<token>`, or
+anything a credential helper, a hook or the remote itself prints; such a token
+is written to the log as it is. Give the server its credential by an SSH key
+or a credential helper, as this guide does, and the line holds none.
+
+A push GitHub refuses, such as one a branch rule or a server hook turns down,
+is a failure too. Its line names up to three refused tasks with Git's own
+short reason for each, and counts the rest:
+
+```text
+workbook: background sync failed: 1 task ref(s) were rejected by origin: WB-01K… [remote rejected] (hook declined)
+```
+
+Git's reason is its summary. Whatever the hook itself printed is not in the
+line. Two more kinds of line belong
 here: `workbook: conflict on <task>: …` when the sync sets an edit aside (see
 [Edits the board's sync sets aside](#edits-the-boards-sync-sets-aside)), and
 `workbook serve: <person> dismissed the set-aside edits of <task> held at <ref>
@@ -444,12 +462,46 @@ To deal with one, either:
 - select **Dismiss this edit** (or **Dismiss these edits**) once nobody needs
   them. Anybody signed in can dismiss, and the log records who did.
 
+The board stops showing an edit by itself only in these cases:
+
+- Any change other than a new comment stops showing once the task holds what
+  it would have done: the same description, the same label added, the same
+  person assigned. It also stays settled when the task held that after the
+  edit was set aside and somebody changed it again since — but only when the
+  board can tell where the task stood when the edit was set aside, which it
+  can when an earlier edit of the same sync went through. When it cannot tell,
+  the edit shows again once the value changes. A value the task held only
+  before the edit was set aside never counts.
+- A comment stops showing once the same person posts the same text again. The
+  same text from anybody else does not count.
+- An edit that went through after all, such as one the sync replayed in a later
+  round, stops showing.
+
+Nothing else settles an edit, however close the task's text comes to it.
+Dismiss is the way to clear everything else, such as an edit somebody decided
+against, or one that shows again after it was dealt with.
+
+Set-aside edits are never dropped by themselves. The server keeps a copy each
+time its sync rearranges a task's history, including the many times nothing
+was set aside; it removes those settled copies itself, keeping the three
+newest per task, but it never removes a copy that holds an edit the board
+shows. Only Dismiss does. When another clone compacts the task and the board
+adopts that compaction, the board keeps every copy that still holds such an
+edit. Running `workbook compact` or `workbook compact --discard-local` in the
+server's own folder still drops all of a task's copies, after saving them to
+the backup bundle that command writes.
+
+A copy the board cannot read, such as one whose objects are missing, is
+skipped: the board shows everything else, and the log gets one line naming it
+and saying why, the first time the board meets it:
+
+```text
+workbook serve: skipped parked ref refs/workbook/reconciled/WB-01K…/0 (commit …) of WB-01K…, which cannot be shown as set-aside edits: its commit … is not in this clone
+```
+
 The command line has no way to list or dismiss set-aside edits; a person
 working from their own clone is told of a conflict once, when their own sync
-meets it. The server keeps a copy each time its sync rearranges a task's
-history, and only the three newest per task, so an edit nobody dealt with is
-dropped once the same task has been rearranged three more times. Compacting a
-task drops its copies too.
+meets it.
 
 ### Do not name a service account with an ordinary word
 
@@ -535,8 +587,10 @@ things:
   waits for its push to GitHub or leaves it to the background sync, until the
   service restarts.
 
-Every one of these is recorded, under the name of whoever did it, except the
-**Push** switch, which records nothing. The
+The changes to tasks and to the board's configuration are recorded in the
+repository, under the name of whoever made them. A dismissal is not: it
+deletes the server's copy and leaves a line in the server's log naming who did
+it, and nothing in the repository. The **Push** switch records nothing at all. The
 [reference](reference.md#what-anyone-who-can-open-the-board-can-do-and-see)
 lists all of it. Let in only people you would trust with all of it.
 
@@ -554,8 +608,8 @@ were:
 - `workbook sync`: `canonical task refs changed during fetch` (exit `6`). Git's
   own message beneath it reads `cannot lock ref … reference already exists`,
   because the board fetched the same task first.
-- `workbook sync`: `1 task ref(s) were rejected by origin` (exit `1`), because
-  the board published first. The next sync replays the change.
+- `workbook sync`: `1 task ref(s) were rejected by origin: <task> [rejected]
+  (fetch first)` (exit `1`), because the board published first. The next sync replays the change.
 - `workbook create`: `cannot refresh projection cache after a concurrent
   update` (exit `1`). Nothing was recorded.
 

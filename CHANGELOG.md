@@ -87,10 +87,23 @@ refs on every listing and shows each edit they hold that the task lacks: the
 card says "1 edit set aside", and the task's page shows who made each one,
 when, the field and the text, with buttons to copy the text and to dismiss.
 An edit stops showing once the task carries it again, such as when somebody
-copies the text back and saves, or when anybody dismisses it, which deletes
-that parked ref. Nothing new is recorded and no format changes, so it survives
-a restart and needs no migration. The command line still has no way to list or
-dismiss parked edits.
+copies the text back and saves, when its author posts a set-aside comment
+again, or when anybody dismisses it, which deletes that parked ref. The
+[reference](docs/reference.md#edits-the-boards-sync-set-aside) lists exactly
+what settles an edit; Dismiss clears anything else. Nothing new is recorded
+and no format changes, so it survives a restart and needs no migration. The
+command line still has no way to list or dismiss parked edits.
+
+A parked ref that holds an edit the task lacks is no longer pruned. Workbook
+used to keep the three newest parked refs per task and retire the rest, and
+every reconciliation parks one, so a task synchronized a few more times lost
+its unrecovered edit without a word. Now only settled parked refs are retired
+beyond the three newest, and adopting another clone's compaction keeps the
+unsettled ones too. Only Dismiss, or a manual `workbook compact` that bundles
+them first, removes them. A parked ref the board cannot read is skipped,
+named once in the server's log with the reason, and hides nothing else.
+Listing cost no longer grows with the number of parked refs: a board with
+2,000 tasks and 2,000 parked refs lists in about the time it takes with none.
 
 For a board started with no options, exactly this changes:
 
@@ -111,7 +124,12 @@ For a board started with no options, exactly this changes:
 
 A push Git refuses without naming a ref, such as one to a remote that cannot be
 reached, now reports Git's own message, credentials removed, on every surface,
-where it used to report `Git returned 0 push outcomes, want 1`. `--public-url`
+where it used to report `Git returned 0 push outcomes, want 1`. A push `origin`
+refuses for some task refs, such as one a server hook declines, now names up to
+three of them with Git's reason for each, as in `1 task ref(s) were rejected
+by origin: WB-01K… [remote rejected] (hook declined)`, where it used to give
+only the count. This is the message of the `workbook push` and `workbook sync`
+error, so a script matching the whole old text must match its start instead. `--public-url`
 now refuses a host a browser could not send, such as `*.example.com` or one
 with an underscore, and a port with a leading zero.
 

@@ -1396,9 +1396,11 @@ Addressing entries by commit object ID works across a reconciliation because
 reconciliation parks the pre-replay tip under
 `refs/workbook/reconciled/<task-id>/<n>` rather than discarding it, so an object
 an earlier listing named usually stays reachable. That reachability is bounded,
-not permanent: Workbook keeps at most three parked tips per task and retires the
-excess inside a later mutation's ref transaction, after which the oldest
-pre-replay chain is collectable. A named object that no longer resolves is an
+not permanent: of the parked tips whose edits the task already carries,
+Workbook keeps the three newest per task and retires the rest inside a later
+mutation's ref transaction, after which those pre-replay chains are
+collectable. A parked tip that holds an edit the task lacks is kept until
+somebody dismisses it on the board. A named object that no longer resolves is an
 ordinary not-found for that argument, exit `4`, naming the commit rather than
 reporting corruption.
 
@@ -1643,7 +1645,14 @@ work is local-only.
 
 The watcher writes to standard error as it goes: a line for each conflict it
 meets, and `workbook: background sync failed: <message>` when a round fails,
-where the message is Git's own with any credential removed. A failure that
+where the message is Git's own with the credentials of configured addresses
+removed, as [the hosted board's exposure list](#what-anyone-who-can-open-the-board-can-do-and-see)
+details. A token in an address's path or query string, and anything a
+credential helper, a hook or the remote prints, are not removed. A push
+`origin` refuses is reported as `<n> task ref(s) were rejected by origin:`
+followed by up to three task IDs, each with Git's porcelain reason such as
+`[rejected] (fetch first)` or `[remote rejected] (hook declined)`, and `; and
+<n> more` for the rest; what a refusing hook printed is not included. A failure that
 repeats is written once, and again only when its message changes; the first
 round that succeeds after it writes `workbook: background sync is working
 again`. `workbook serve` runs the same loop and writes the same lines.
@@ -1709,10 +1718,16 @@ complete without a terminal, so JSON output, hooks, agents, and the web board
 all consume the same list.
 
 Parked refs stay local; they are never pushed, because every enumeration that
-builds a push refspec is scoped to `refs/workbook/tasks/`. The next successful
-mutation of a task retires that task's oldest parked refs inside the same
-`update-ref` transaction, keeping the most recent few. Fetches and reads never
-prune them: a fetch must not delete recoverable work in the command that
+builds a push refspec is scoped to `refs/workbook/tasks/`. Most parked refs hold
+nothing the task lacks, since every reconciliation parks its old tip, clean or
+not. The next successful mutation of a task retires those settled parked refs
+beyond the three newest inside the same `update-ref` transaction, and so does the
+background sync of `workbook serve` and `workbook sync --watch` after each
+round. A parked ref holding an
+edit the task lacks is never retired this way, however many accumulate; it
+goes only when somebody dismisses it on the board, or when a manual
+`workbook compact` or `--discard-local` bundles and drops it. Fetches and reads
+never prune them: a fetch must not delete recoverable work in the command that
 orphaned it.
 
 ## Task archive compaction
@@ -2027,11 +2042,16 @@ conflict is reported, the task is `conflicted`, and the local tip from before
 the sync is parked under `refs/workbook/reconciled/<id>/<n>` so its text can be
 recovered.
 
-**Adopting drops some local data without a backup.** An adopted task's parked
-refs under `refs/workbook/reconciled/<id>/` (text an earlier clash pushed aside)
-and its reflog are deleted, and they are not written to any bundle. Parking or
-keeping them would keep the old history alive. Unpushed changes are replayed,
-not dropped.
+**Adopting drops some local data without a backup.** An adopted task's reflog
+is deleted, and so are those of its parked refs under
+`refs/workbook/reconciled/<id>/` whose edits the adopted checkpoint already
+carries; neither is written to any bundle, since keeping them would keep the
+old history alive. A parked ref that still holds an edit the task lacks — text
+an earlier clash pushed aside that nobody copied back or dismissed — is kept,
+and the board goes on showing it: its operations are not among the
+checkpoint's compacted ones, so they are still the task's to recover. Its old
+history stays reachable through it until it is dismissed. Unpushed changes are
+replayed, not dropped.
 
 ### When a compaction cannot be combined
 
@@ -2968,12 +2988,49 @@ has no command to list or dismiss what was left out.
 
 The board shows it to everyone until it is dealt with. On every listing it
 compares each parked tip with the tip of the task it is listing and reports
-each parked commit whose operations the task's history does not carry — an
-edit replayed under the same operation IDs is not reported, and nor is one
-whose effect the task has carried at any point since the two histories parted,
-such as text a person copied back in. Nothing new is recorded and no format
-changes: the answer is read from the parked refs, so it survives a restart and
-needs no record of its own. A board built without the reader shows nothing.
+each parked commit that is not settled. A parked commit is settled when one of
+these holds, and in no other case:
+
+- Every operation in it is in the task's history under the same operation ID:
+  it was replayed after all, or it is among the operations a compaction
+  checkpoint lists as compacted.
+- The task's current state carries it: applying its operations to that state
+  changes nothing. Text a person copied back in and saved settles this way.
+- A state the task reached after the edit was set aside carried it, and the
+  board knows where `origin` stood when it was set aside. It knows when the
+  same reconciliation replayed some of the parked edits before the conflict:
+  the first replayed commit's parent is that point. A replay that stopped on
+  its first parked edit leaves nothing that says where `origin` stood, so then
+  only the current state counts, and an edit that was copied back and then
+  changed again is shown again. A state from before the edit was set aside
+  never counts, so an edit that restores a value `origin` held only earlier is
+  shown.
+- A `comment.add` counts as carried when the task has a comment, added after
+  the histories parted, by the same actor with the same body. The same text
+  from another actor does not count.
+
+Dismissing is the way to clear anything else. Nothing new is recorded and no
+format changes: the answer is read from the parked refs, so it survives a
+restart and needs no record of its own. A board built without the reader shows
+nothing.
+
+The board keeps, in memory, one verdict per parked ref, keyed by the commit the
+ref names and the task tip it was judged against, and reuses its listing of
+parked refs while no task head and no parked ref changed. A verdict that every
+later state settles too — all its operations replayed or compacted, or carried
+by a state after a known parking point — is kept across tip changes. So a
+listing reads only the parked refs that are new or whose task moved, in a
+fixed number of Git processes however many there are, and the first listing
+after a restart computes every verdict the same way, without waiting on
+anything else.
+
+A parked ref the board cannot read is skipped and hides nothing else: one
+whose commit is missing from the clone or is not a commit, one whose
+`operation.json` does not parse, one whose history shares no root with the
+task's, or one holding another task's commits. `workbook serve` writes
+`workbook serve: skipped parked ref <ref> (commit <commit>) of <task>, which
+cannot be shown as set-aside edits: <reason>` to standard error the first time
+it meets each one, and never prunes it.
 
 The poll's `presentation` carries, for a task with set-aside edits, a
 `setAside` array, oldest first, and leaves it out otherwise:
@@ -3003,13 +3060,18 @@ dismiss.
 an edit it was shown and deletes that parked ref, which removes every edit it
 holds. It deletes only while the ref still points at `parked`: a ref that moved
 is refused with `409` and category `stale-write`, one that is gone with `404`,
-and a ref outside `refs/workbook/reconciled/<id>/` with `400`. It answers
+and a ref outside `refs/workbook/reconciled/<id>/` with `400`. A dismissal that
+races another change to the same ref answers by what that change did, even
+when it lands between the check and the delete: `404` when the ref was
+deleted, such as by a second dismissal, and `409` when it was moved. It answers
 `{"format":"workbook.set-aside-dismissal","version":1,"taskId":…,"parkedRef":…}`
 and writes `workbook serve: <person> dismissed the set-aside edits of <task>
-held at <ref> (commit <commit>)` to the server's standard error. The commits
-stay in the object store until Git collects them. Parked refs are still
-bounded as before — three per task, oldest pruned first, and dropped by
-compaction — so a set-aside edit nobody dismisses can still go that way.
+held at <ref> (commit <commit>)` to the server's standard error; nothing is
+recorded in the repository. The commits stay in the object store until Git
+collects them. A parked ref holding a set-aside edit is never pruned by
+itself, so it stays until dismissed, or until a manual `workbook compact` or
+`workbook compact --discard-local` in the serving checkout bundles and drops
+it.
 
 ### Behind a sign-in proxy
 
