@@ -44,6 +44,18 @@ import (
 // and read the diff of testdata/desktop-layout before committing it. The
 // recording in this commit was made from main before the phone layout
 // existed, and this branch's page matches it line for line.
+//
+// The comparison runs only where WORKBOOK_TEST_DESKTOP_LAYOUT is set, on the
+// machine and browser the recording was made with. Its first run elsewhere
+// showed why: one Chrome writes a computed `align-items` as `flow-end` and
+// another as `flex-end`, and the Push switch's knob sits where the machine's
+// own settings put it. A recording of computed values is exact only for one
+// browser build and one environment, so it is a check to run by hand when a
+// change touches the board's styles, not one for every run:
+//
+//	WORKBOOK_TEST_DESKTOP_LAYOUT=1 go test ./internal/webui -run TestBrowserDesktopLayoutMatchesTheRecording
+//
+// If it differs before your change too, record it again from main first.
 
 // desktopLayoutScript lists every element the page draws, one line each.
 const desktopLayoutScript = pageGeometryHelpers + `
@@ -113,6 +125,9 @@ func desktopLayoutRecording(route string, width, height int) string {
 func TestBrowserDesktopLayoutMatchesTheRecording(t *testing.T) {
 	t.Parallel()
 	record := os.Getenv("WORKBOOK_TEST_RECORD_DESKTOP_LAYOUT") != ""
+	if !record && os.Getenv("WORKBOOK_TEST_DESKTOP_LAYOUT") == "" {
+		t.Skip("compares against a recording made with one browser build; set WORKBOOK_TEST_DESKTOP_LAYOUT=1 to run it")
+	}
 	for _, size := range desktopLayoutSizes {
 		for _, route := range phoneLayoutRoutes {
 			t.Run(fmt.Sprintf("%s-%dx%d", route.name, size.width, size.height), func(t *testing.T) {
