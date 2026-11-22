@@ -18,8 +18,15 @@ func guardedHandler(t *testing.T, boundAddr string) (http.Handler, *int, *int) {
 	t.Helper()
 	lists := new(int)
 	creates := new(int)
+	return GuardSameOrigin(NewHandler(guardedOptions(t, lists, creates)), boundAddr), lists, creates
+}
+
+// guardedOptions is the board guardedHandler wraps, counting into lists and
+// creates.
+func guardedOptions(t *testing.T, lists, creates *int) Options {
+	t.Helper()
 	created := boardTasks()[0]
-	handler := NewHandler(Options{
+	return Options{
 		List: func(context.Context) ([]core.Task, error) {
 			*lists++
 			return boardTasks(), nil
@@ -30,8 +37,7 @@ func guardedHandler(t *testing.T, boundAddr string) (http.Handler, *int, *int) {
 		},
 		Update:       unexpectedTaskUpdate(t),
 		UpdateStatus: unexpectedStatusUpdate(t),
-	})
-	return GuardSameOrigin(handler, boundAddr), lists, creates
+	}
 }
 
 func guardedRequest(t *testing.T, handler http.Handler, method, target, host, origin, contentType, body string) *httptest.ResponseRecorder {

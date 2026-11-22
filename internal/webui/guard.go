@@ -2,6 +2,7 @@ package webui
 
 import (
 	"fmt"
+	"io"
 	"mime"
 	"net"
 	"net/http"
@@ -45,7 +46,24 @@ const defaultHTTPPort = "80"
 // boundAddr is the listener's own address, so a board on an ephemeral port
 // guards the port it actually got.
 func GuardSameOrigin(inner http.Handler, boundAddr string) http.Handler {
+	return GuardSameOriginAt(inner, boundAddr, nil)
+}
+
+// GuardSameOriginAt is GuardSameOrigin for a board that is also opened at a
+// public address, behind a proxy that forwards to boundAddr.
+//
+// Each check then holds for the public address as well as the bound one, and
+// for nothing else. A Host may name either, because a proxy may forward the
+// name the browser addressed or rewrite it to the address it forwards to, and
+// the board cannot know which. An Origin may name either too, whichever Host
+// came with it: a browser at the public address sends the public origin
+// however the proxy rewrote the Host. A page on any other site still cannot
+// send either origin, and a rebound name still arrives with a Host that is
+// neither, so widening the two lists by one entry each widens nothing else.
+// A nil public is GuardSameOrigin exactly.
+func GuardSameOriginAt(inner http.Handler, boundAddr string, public *PublicAddress) http.Handler {
 	guard := newOriginGuard(boundAddr)
+	guard.public = public
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if status, message := guard.reject(request); status != 0 {
 			writeSecurityHeaders(writer)
@@ -57,6 +75,29 @@ func GuardSameOrigin(inner http.Handler, boundAddr string) http.Handler {
 			return
 		}
 		inner.ServeHTTP(writer, request)
+	})
+}
+
+// WriteRefusal answers a request the board refuses before any route sees it,
+// in the board's own error document, with its security headers.
+//
+// A person who opened a page — a browser navigation to anything outside
+// /api/ that asks for HTML — is answered with the message alone, as plain
+// text, because that is what their browser shows them. Everything else, the
+// page's own requests and any other client, gets the versioned workbook.error
+// document every other refusal is answered with, carrying the same sentence.
+func WriteRefusal(writer http.ResponseWriter, request *http.Request, status int, category core.Category, message string) {
+	writeSecurityHeaders(writer)
+	if !strings.HasPrefix(request.URL.Path, "/api/") && strings.Contains(request.Header.Get("Accept"), "text/html") {
+		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		writer.WriteHeader(status)
+		_, _ = io.WriteString(writer, message+"\n")
+		return
+	}
+	writeJSON(writer, status, ErrorDocument{
+		Format:  "workbook.error",
+		Version: 1,
+		Error:   ErrorBody{Category: category, Message: message},
 	})
 }
 
@@ -108,6 +149,9 @@ type originGuard struct {
 	// unusable is set when the bound address could not be parsed at all. The
 	// guard then refuses everything rather than guess which requests are safe.
 	unusable bool
+	// public is the address a proxy in front of the board answers at, or nil
+	// for a board opened only at the address it listens on.
+	public *PublicAddress
 }
 
 func newOriginGuard(boundAddr string) *originGuard {
@@ -134,16 +178,32 @@ func (guard *originGuard) reject(request *http.Request) (int, string) {
 		return http.StatusForbidden, fmt.Sprintf("the board could not read its own address %q, so it refuses every request", guard.address)
 	}
 	host, port, ok := splitAuthority(request.Host)
-	if !ok || port != guard.port || !guard.hostIsBoard(host) {
-		return http.StatusForbidden, fmt.Sprintf("Host %q is not this board at %q", request.Host, guard.address)
+	local := ok && port == guard.port && guard.hostIsBoard(host)
+	if !local && (guard.public == nil || !guard.public.namesHost(request.Host)) {
+		return http.StatusForbidden, fmt.Sprintf("Host %q is not this board at %q", request.Host, guard.named())
 	}
-	if origin := request.Header.Get("Origin"); origin != "" && !guard.originIsBoard(origin, host) {
-		return http.StatusForbidden, fmt.Sprintf("Origin %q is not this board at %q", origin, guard.address)
+	if origin := request.Header.Get("Origin"); origin != "" {
+		// A wildcard bind's Origin test compares with the Host the browser
+		// addressed, which is only meaningful when that Host was the bound one.
+		localOrigin := local && guard.originIsBoard(origin, host)
+		if !localOrigin && (guard.public == nil || !guard.public.namesOrigin(origin)) {
+			return http.StatusForbidden, fmt.Sprintf("Origin %q is not this board at %q", origin, guard.named())
+		}
 	}
 	if mutatingMethod(request.Method) && !jsonRequest(request.Header.Get("Content-Type")) {
 		return http.StatusUnsupportedMediaType, fmt.Sprintf("%s requests must declare Content-Type: %s", request.Method, jsonMediaType)
 	}
 	return 0, ""
+}
+
+// named is how a refusal names the board: its public address when it has one,
+// since that is the address the person refused set out to open, and the bound
+// address otherwise.
+func (guard *originGuard) named() string {
+	if guard.public != nil {
+		return guard.public.Origin()
+	}
+	return guard.address
 }
 
 // hostIsBoard reports whether the host half of an authority names this board.
@@ -192,6 +252,12 @@ func (guard *originGuard) originIsBoard(origin, requestHost string) bool {
 // authority with no port means the scheme's default port, which is what a
 // browser sends when a board is bound to port 80.
 func splitAuthority(authority string) (string, string, bool) {
+	return splitAuthorityFor(authority, defaultHTTPPort)
+}
+
+// splitAuthorityFor is splitAuthority for a scheme whose default port is
+// defaultPort.
+func splitAuthorityFor(authority, defaultPort string) (string, string, bool) {
 	if authority == "" {
 		return "", "", false
 	}
@@ -206,12 +272,12 @@ func splitAuthority(authority string) (string, string, bool) {
 		if host == "" {
 			return "", "", false
 		}
-		return host, defaultHTTPPort, true
+		return host, defaultPort, true
 	}
 	if strings.ContainsAny(authority, ":[]") {
 		return "", "", false
 	}
-	return authority, defaultHTTPPort, true
+	return authority, defaultPort, true
 }
 
 // sameHost reports whether two hosts name the same address. Two IP literals are

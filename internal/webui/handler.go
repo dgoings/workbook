@@ -921,6 +921,10 @@ type HealthDocument struct {
 type ErrorBody struct {
 	Category core.Category `json:"category"`
 	Message  string        `json:"message"`
+	// Reference ties a hosted board's short answer to the line in the
+	// server's log that holds what the answer leaves out. It is absent from
+	// every other answer; see Options.Hosted.
+	Reference string `json:"reference,omitempty"`
 }
 
 type ErrorDocument struct {
@@ -1040,6 +1044,21 @@ type Options struct {
 	History     TaskHistoryReader
 	SyncState   SyncStateReporter
 	SetSyncMode SyncModeSetter
+	// Hosted is set for a board opened at a public address, by people other
+	// than whoever runs the server. Its answers then never carry the
+	// server's folder, its remote's address or Git's own output: a failure
+	// whose words come from the server rather than from Workbook's reading of
+	// the request is answered with a short sentence and a reference, and the
+	// whole detail goes to ServerLog under the same reference. Every answer
+	// is also marked private and not to be stored, because a shared machine
+	// or a cache between the proxy and the person is not theirs alone.
+	//
+	// Left false, every answer is what it always was, detail included: on a
+	// person's own machine the detail is theirs, and it is what they need.
+	Hosted bool
+	// ServerLog is where a hosted board writes what it keeps out of answers.
+	// It must be safe for concurrent writes; serve hands it standard error.
+	ServerLog io.Writer
 }
 
 // handler embeds Options rather than copying it field by field, so there is no
@@ -1604,6 +1623,14 @@ func writeSecurityHeaders(writer http.ResponseWriter) {
 
 func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	writeSecurityHeaders(writer)
+	if handler.Hosted {
+		// Set before any route writes, and left alone by writeTaggedJSON, so
+		// every answer a hosted board gives carries it: the page and a task's
+		// page, which embed task text, the task data, and attachments. The
+		// board has no separate static assets — its styles and scripts are
+		// inside the page — so there is nothing public to let a cache keep.
+		writer.Header().Set("Cache-Control", hostedCacheControl)
+	}
 	// Bounded here rather than at each route so no handler, present or future,
 	// can read an unbounded body by forgetting to ask for a limit. A route that
 	// never reads its body is covered too, and http.MaxBytesReader is given the
@@ -2752,7 +2779,7 @@ func (handler *handler) writeKeyMutation(writer http.ResponseWriter, mutation Vo
 		Format:     "workbook.key-mutation",
 		Version:    1,
 		Vocabulary: vocabularyDocument(mutation.State),
-		Warnings:   mutation.Warnings,
+		Warnings:   handler.disclosed(mutation.Warnings),
 	})
 }
 
@@ -2778,7 +2805,7 @@ func (handler *handler) writePriorityMutation(writer http.ResponseWriter, mutati
 		Version:    1,
 		Vocabulary: vocabularyDocument(mutation.State),
 		Tasks:      mutation.Tasks,
-		Warnings:   mutation.Warnings,
+		Warnings:   handler.disclosed(mutation.Warnings),
 	})
 }
 
@@ -2821,7 +2848,7 @@ func (handler *handler) writeVocabularyMutation(writer http.ResponseWriter, muta
 		Version:    1,
 		Vocabulary: vocabularyDocument(mutation.State),
 		Tasks:      mutation.Tasks,
-		Warnings:   mutation.Warnings,
+		Warnings:   handler.disclosed(mutation.Warnings),
 	})
 }
 
@@ -3273,7 +3300,7 @@ func (handler *handler) writeTaskMutation(writer http.ResponseWriter, result cor
 		Format:   "workbook.task-mutation",
 		Version:  1,
 		Task:     result.Task,
-		Warnings: result.Warnings,
+		Warnings: handler.disclosed(result.Warnings),
 	})
 }
 
@@ -3333,6 +3360,10 @@ func (handler *handler) serveHealth(writer http.ResponseWriter, _ *http.Request)
 
 func (handler *handler) writeError(writer http.ResponseWriter, err error) {
 	body := errorBody(err)
+	if handler.Hosted && serverWords(body.Category) {
+		body.Reference = handler.logDetail(err.Error())
+		body.Message = "The server could not finish this request. Its log has the detail under reference " + body.Reference + "."
+	}
 	writeJSON(writer, statusForError(body.Category), ErrorDocument{
 		Format:  "workbook.error",
 		Version: 1,
@@ -3403,7 +3434,11 @@ func writeTaggedJSON(writer http.ResponseWriter, request *http.Request, value an
 	tag := `"` + hex.EncodeToString(digest[:]) + `"`
 	header := writer.Header()
 	header.Set("ETag", tag)
-	header.Set("Cache-Control", "no-cache")
+	// A hosted board has already said private, no-store, which is stricter and
+	// still lets the page revalidate, since the page sends the tag itself.
+	if header.Get("Cache-Control") == "" {
+		header.Set("Cache-Control", "no-cache")
+	}
 	if ifNoneMatchNames(request.Header.Values("If-None-Match"), tag) {
 		writer.WriteHeader(http.StatusNotModified)
 		return nil

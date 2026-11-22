@@ -188,7 +188,7 @@ func (handler *handler) writeAssignmentMutation(writer http.ResponseWriter, requ
 		Format:      "workbook.task-mutation",
 		Version:     1,
 		Task:        result.Task,
-		Warnings:    result.Warnings,
+		Warnings:    handler.disclosed(result.Warnings),
 		Assignments: &section,
 	})
 }

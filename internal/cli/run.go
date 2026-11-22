@@ -166,7 +166,7 @@ func runWithEnvironment(
 	case "hooks":
 		err = runHooks(ctx, commandArgs, cwd, stdout, stderr)
 	case "serve":
-		err = runServe(ctx, commandArgs, cwd, stdout, stderr)
+		err = runServeWithEnvironment(ctx, lookupEnv, net.Listen, commandArgs, cwd, stdout, stderr)
 	case "completion":
 		err = runCompletion(commandArgs, stdout)
 	default:
@@ -1720,6 +1720,11 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 	return runServeWith(ctx, net.Listen, args, cwd, stdout, stderr)
 }
 
+// noServeEnvironment is an environment that sets none of serve's variables,
+// which is what every test that calls runServe or runServeWith means: the
+// board as it is started with no hosting options at all.
+func noServeEnvironment(string) (string, bool) { return "", false }
+
 // runServeWith takes the bind as a parameter for the same reason
 // openBoardListenerWith does, one step further out: whether serve announces a
 // collision depends on what the bind did, and a test cannot ask the OS for the
@@ -1727,11 +1732,42 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 // no-collision case race every other board on the machine, so a test that
 // wants a free 127.0.0.1:7331 says so here instead.
 func runServeWith(ctx context.Context, listen func(network, address string) (net.Listener, error), args []string, cwd string, stdout io.Writer, stderr io.Writer) error {
+	return runServeWithEnvironment(ctx, noServeEnvironment, listen, args, cwd, stdout, stderr)
+}
+
+// runServeWithEnvironment is runServeWith reading serve's two hosting
+// variables from lookupEnv, as Run does from the process environment.
+func runServeWithEnvironment(
+	ctx context.Context,
+	lookupEnv func(string) (string, bool),
+	listen func(network, address string) (net.Listener, error),
+	args []string,
+	cwd string,
+	stdout io.Writer,
+	stderr io.Writer,
+) error {
 	flags := newFlagSet("serve")
 	addr := flags.String("addr", defaultServeAddr, "listener address (default "+defaultServeAddr+", or a free port when that one is taken)")
+	publicURL := flags.String("public-url", "", "the https address people open the board at, behind a sign-in proxy")
+	actorHeader := flags.String("actor-header", "", "the request header the sign-in proxy names each person in")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
+	// Settled before anything is opened, so a mistyped option costs nothing
+	// and never leaves a board running without what its deployer asked for.
+	hosting, err := readServeHosting(flags, *publicURL, *actorHeader, lookupEnv)
+	if err != nil {
+		return err
+	}
+	if hosting.actorHeader != "" {
+		// The header names the person on every request. It is the seam the
+		// tests' own resolvers use, and a resolver already on the context —
+		// only ever a test's — is replaced rather than consulted.
+		ctx = withRequestActor(ctx, actorFromHeader(hosting.actorHeader))
+	}
+	// One writer for everything serve says on standard error from here on, so
+	// a hosted board's log lines and the sync loop's lines arrive whole.
+	stderr = &syncWriter{writer: stderr}
 	// An address the user typed is a contract; the default is a preference.
 	addrChosen := false
 	flags.Visit(func(visited *flag.Flag) {
@@ -2162,6 +2198,12 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		},
 		SyncState:   publisher.state,
 		SetSyncMode: publisher.setMode,
+		// A board opened at a public address is answering people other than
+		// whoever runs it, so its answers keep the server's own detail to the
+		// server's log. One started without --public-url answers exactly as a
+		// person's own board always has.
+		Hosted:    hosting.public != nil,
+		ServerLog: stderr,
 	})
 	listener, fellBack, err := openBoardListenerWith(listen, *addr, addrChosen)
 	if err != nil {
@@ -2178,6 +2220,15 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 	if warning := boardExposureWarning(listener.Addr().String()); warning != "" {
 		fmt.Fprintln(stderr, warning)
 	}
+	if hosting.public != nil {
+		fmt.Fprintf(stderr, "Public address: %s\n", hosting.public.Origin())
+	}
+	if hosting.actorHeader != "" {
+		fmt.Fprintf(stderr, "Each request's person: the %s header\n", hosting.actorHeader)
+	}
+	if warning := boardActorHeaderWarning(listener.Addr().String(), hosting.actorHeader); warning != "" {
+		fmt.Fprintln(stderr, warning)
+	}
 
 	// The board polls its own API once a second, so a loop running here is all
 	// it takes for a teammate's change to appear: no new endpoint, no client
@@ -2188,7 +2239,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 	// webui.Serve refuses foreign Host headers, cross-origin requests, and
 	// mutations that do not declare JSON. That guard is the board's only access
 	// control, and a non-loopback bind is what the warning above is about.
-	if err := webui.Serve(ctx, listener, actingAs(ctx, handler)); err != nil {
+	if err := webui.ServeWith(ctx, listener, actingAs(ctx, handler), webui.ServeOptions{Public: hosting.public}); err != nil {
 		return core.Wrap(core.CategoryOperational, "serve board", err)
 	}
 	return nil
@@ -2205,11 +2256,12 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 // handler's assignIdentity — and the commit behind an edit names that
 // operation's actor, so one name on the request's context is all it takes.
 //
-// That makes this the one place a request's person is decided. Today it is the
-// person serve was started as, for every request. A requestActor on serve's
-// context (see withRequestActor) names a person per request instead, falling
-// back to that one when it names nobody; a name it gives that is not a usable
-// actor is refused with a 400 before any route runs, never replaced by another.
+// That makes this the one place a request's person is decided. Without
+// --actor-header it is the person serve was started as, for every request. A
+// requestActor on serve's context (see withRequestActor) names a person per
+// request instead, falling back to that one when it names nobody, or refuses
+// the request outright; a name it gives that is not a usable actor is refused
+// with a 400 before any route runs, never replaced by another.
 func actingAs(ctx context.Context, next http.Handler) http.Handler {
 	actor, asserted := core.ActorFrom(ctx)
 	resolve, perRequest := ctx.Value(requestActorKey{}).(requestActor)
@@ -2219,7 +2271,13 @@ func actingAs(ctx context.Context, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		name, named := actor, asserted
 		if perRequest {
-			if given, ok := resolve(request); ok {
+			given, err := resolve(request)
+			var refusal *requestRefusal
+			if errors.As(err, &refusal) {
+				webui.WriteRefusal(writer, request, refusal.status, refusal.category, refusal.message)
+				return
+			}
+			if given != "" {
 				name, named = given, true
 			}
 		}
@@ -2229,22 +2287,27 @@ func actingAs(ctx context.Context, next http.Handler) http.Handler {
 		}
 		requestContext, err := core.WithActor(request.Context(), name)
 		if err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
+			// Never recorded and never replaced by the server's own name: the
+			// request is answered in the board's own error document instead.
+			webui.WriteRefusal(writer, request, http.StatusBadRequest, core.CategoryValidation, err.Error())
 			return
 		}
 		next.ServeHTTP(writer, request.WithContext(requestContext))
 	})
 }
 
-// requestActor names the person one board request acts for, and reports false
-// for a request it names nobody for.
-type requestActor func(*http.Request) (string, bool)
+// requestActor names the person one board request acts for. An empty name
+// with no error names nobody, and the request falls back to the person serve
+// was started as; a *requestRefusal is the answer a request gets instead of
+// being served at all.
+type requestActor func(*http.Request) (string, error)
 
 type requestActorKey struct{}
 
-// withRequestActor gives serve a per-request person. Nothing in this build sets
-// one except the tests that prove two people can be served at once; it is the
-// seam a deployment that signs people in plugs its header into.
+// withRequestActor gives serve a per-request person. `--actor-header` sets one
+// that reads each request's person from the header a sign-in proxy sets (see
+// actorFromHeader), and the tests that prove two people can be served at once
+// set their own.
 func withRequestActor(ctx context.Context, resolve requestActor) context.Context {
 	return context.WithValue(ctx, requestActorKey{}, resolve)
 }

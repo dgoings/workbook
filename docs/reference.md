@@ -62,7 +62,7 @@ workbook docs update [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook docs status [--skill-dir <dir>] [--no-skill] [--json]
 workbook docs remove [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook hooks install [--json]
-workbook serve [--addr <address>]
+workbook serve [--addr <address>] [--public-url <url>] [--actor-header <header>]
 workbook completion <shell>
 workbook help [command]
 ```
