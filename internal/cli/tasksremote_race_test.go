@@ -181,3 +181,48 @@ func TestTasksRemoteStaleCreateHandedToAWatcherIsRefusedByTheCommand(t *testing.
 		t.Fatalf("origin changed:\nbefore %s\nafter  %s", afterMove, after)
 	}
 }
+
+// A push the remote accepted is a success even when listing the remote again
+// afterwards fails, but the command says it could not confirm the remote is
+// still where the tasks live, with Git's reason, in JSON and in text. The
+// remote's hook takes it out of reach as soon as it has accepted a task ref.
+func TestTasksRemotePublicationThatCannotBeCheckedAfterwardsSaysSo(t *testing.T) {
+	t.Parallel()
+	_, clone := cliSyncRepositories(t)
+	if code, stdout, stderr := run(t, clone, "setup"); code != 0 {
+		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
+	}
+	bare := strings.TrimSpace(cliGitOutput(t, clone, "remote", "get-url", "origin"))
+	gone := bare + ".gone"
+	hook := "#!/bin/sh\nmoved=no\nwhile read old new ref; do\n" +
+		"  case \"$ref\" in refs/workbook/tasks/*) moved=yes ;; esac\ndone\n" +
+		"if [ \"$moved\" = yes ]; then mv '" + filepath.ToSlash(bare) + "' '" + filepath.ToSlash(gone) + "'; fi\nexit 0\n"
+	testenv.WriteExecutable(t, filepath.Join(bare, "hooks", "post-receive"), []byte(hook))
+
+	for _, jsonMode := range []bool{true, false} {
+		args := []string{"create", "Accepted, then out of reach"}
+		if jsonMode {
+			args = append(args, "--json")
+		}
+		code, stdout, stderr := run(t, clone, args...)
+		if code != 0 {
+			t.Fatalf("%v = (%d, %q, %q), want success: the push succeeded", args, code, stdout, stderr)
+		}
+		want := "could not confirm that origin is still where this project's tasks live"
+		if jsonMode {
+			warnings := assertJSONResult(t, stdout, "create").Warnings
+			if len(warnings) != 1 || warnings[0].Code != core.WarningPublicationUnconfirmed ||
+				!strings.Contains(warnings[0].Message, want) || !strings.Contains(warnings[0].Message, "origin.git") {
+				t.Fatalf("warnings = %+v, want the unconfirmed publication with Git's reason", warnings)
+			}
+		} else if !strings.Contains(stderr, want) {
+			t.Fatalf("text stderr = %q, want %q", stderr, want)
+		}
+		if refs := cliGitOutput(t, gone, "for-each-ref", "refs/workbook/tasks/"); strings.TrimSpace(refs) == "" {
+			t.Fatalf("the remote holds no task refs after the push: %q", refs)
+		}
+		if err := os.Rename(gone, bare); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

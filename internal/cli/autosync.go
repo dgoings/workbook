@@ -395,11 +395,16 @@ func unsettledWarning(err error) core.Warning {
 
 // unsettledWarnings is unsettledWarning for a session's own fetch, or nothing
 // when its projection took every task the fetch moved.
+//
+// It also carries a warning for each publication the remote accepted that
+// could not be checked afterwards (gitstore.Repository.PublicationWarnings),
+// since every command that publishes task refs reports through here.
 func (session *taskSession) unsettledWarnings() []core.Warning {
+	warnings := session.repository.PublicationWarnings()
 	if session.unsettled == nil {
-		return nil
+		return warnings
 	}
-	return []core.Warning{unsettledWarning(session.unsettled)}
+	return append([]core.Warning{unsettledWarning(session.unsettled)}, warnings...)
 }
 
 // compactedOnOriginWarning says which tasks the fetch kept on the old history,

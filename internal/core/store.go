@@ -76,6 +76,12 @@ const WarningAutoSync = "auto-sync-incomplete"
 // marked. The change stays recorded; the message says what to run.
 const WarningTasksMoved = "tasks-moved"
 
+// WarningPublicationUnconfirmed reports a publication the remote accepted
+// that this command could not check afterwards: listing the remote again, to
+// see whether it had just been marked as the place this project's tasks moved
+// away from, failed. The push succeeded; the message gives Git's reason.
+const WarningPublicationUnconfirmed = "publication-unconfirmed"
+
 // WarningStatusFilter reports that a status filter had to be forwarded through
 // a rename or a removal to select anything.
 //

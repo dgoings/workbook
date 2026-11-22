@@ -166,16 +166,22 @@ func repeatedOperation(chain []OperationCommit) (string, bool) {
 // command says nothing, so this returns the refusal the command reports.
 //
 // The check costs one listing of one ref, and only after a push that changed
-// something on the remote. A listing that fails says nothing either way and is
-// not reported: the push itself just reached the remote.
+// something on the remote. A listing that fails cannot say either way, and the
+// push itself succeeded, so it is reported as a warning beside the success
+// (PublicationWarnings) rather than as a failure.
 func (r *Repository) strandedPublication(ctx context.Context, taskIDs []string) error {
 	remote := r.remote()
 	listing, err := r.Git(ctx, nil, "ls-remote", "--refs", remote, identityRef)
 	if err != nil {
+		r.noteUnconfirmed(remote, taskIDs, err)
 		return nil
 	}
 	head, err := parseRemoteIdentityHead(listing)
-	if err != nil || head == "" {
+	if err != nil {
+		r.noteUnconfirmed(remote, taskIDs, err)
+		return nil
+	}
+	if head == "" {
 		return nil
 	}
 	local, found, err := r.memoizedIdentityRecord()
@@ -183,6 +189,7 @@ func (r *Repository) strandedPublication(ctx context.Context, taskIDs []string) 
 		return nil
 	}
 	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--no-auto-maintenance", remote, r.identityFetchRefspec()); err != nil {
+		r.noteUnconfirmed(remote, taskIDs, err)
 		return nil
 	}
 	record, found, err := r.readIdentityRef(ctx, r.remoteIdentityRef())
@@ -194,6 +201,32 @@ func (r *Repository) strandedPublication(ctx context.Context, taskIDs []string) 
 	r.originMoved = &moved
 	r.metadataMu.Unlock()
 	return r.strandedRefusal(ctx, remote, moved, taskIDs)
+}
+
+// noteUnconfirmed records that remote accepted taskIDs and that the look
+// afterwards failed, with Git's reason and no credential.
+func (r *Repository) noteUnconfirmed(remote string, taskIDs []string, cause error) {
+	warning := core.Warning{
+		Code: core.WarningPublicationUnconfirmed,
+		Message: fmt.Sprintf("%s accepted %s, but listing it again afterwards failed, so this command could not confirm "+
+			"that %s is still where this project's tasks live: %s",
+			remote, strings.Join(taskIDs, ", "), remote, redactURLCredentials(cause.Error())),
+	}
+	r.metadataMu.Lock()
+	r.unconfirmed = append(r.unconfirmed, warning)
+	r.metadataMu.Unlock()
+}
+
+// PublicationWarnings returns, and forgets, a warning for each publication
+// this handle made since it last asked that the remote accepted and that
+// could not be checked afterwards. A command that publishes task refs adds
+// them to its own warnings.
+func (r *Repository) PublicationWarnings() []core.Warning {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	warnings := r.unconfirmed
+	r.unconfirmed = nil
+	return warnings
 }
 
 // strandedRefusal is the report for task refs a remote accepted just as it was

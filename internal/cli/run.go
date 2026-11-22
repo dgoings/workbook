@@ -381,12 +381,14 @@ func runPush(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		return letCodePushContinue(ctx, nil, err, stderr)
 	}
 	result, syncErr := repository.Push(ctx, config)
+	warnings := repository.PublicationWarnings()
 	if *jsonMode {
-		writeResult(stdout, "push", result)
+		writeResultWithWarnings(stdout, "push", result, warnings)
 	} else {
 		writeSyncResult(stdout, result)
 		writeIdentityWarning(stderr, result.Identity)
 		writeConfigWarning(stderr, result.Config)
+		writeWarnings(stderr, warnings)
 	}
 	return letCodePushContinue(ctx, repository, syncErr, stderr)
 }
@@ -469,6 +471,7 @@ func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	result, syncErr := repository.Sync(ctx, config)
 	warnings := settleFetchedHistories(ctx, repository, config, result.Fetch)
 	warnings = append(warnings, fetchSharingWarnings(ctx, repository, config, &result.Fetch)...)
+	warnings = append(warnings, repository.PublicationWarnings()...)
 	writeSyncPhaseResultWithConfig(stdout, "sync", result, result.Fetch.Conflicts, result.Fetch.ConfigConflicts, warnings, *jsonMode,
 		func(output io.Writer) {
 			writeSyncRunResult(output, result)
@@ -2587,6 +2590,7 @@ func (p *boardPublisher) publish(
 	if _, pushErr := p.repository.PushTask(ctx, p.config, result.Task.ID); pushErr != nil {
 		result.Warnings = append(result.Warnings, publicationWarning(pushErr))
 	}
+	result.Warnings = append(result.Warnings, p.repository.PublicationWarnings()...)
 	return result, nil
 }
 

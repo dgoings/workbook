@@ -74,6 +74,10 @@ type Repository struct {
 	// originMoved is the tasks-moved marker this command found on the remote
 	// it synchronizes with, which every publication path then refuses.
 	originMoved *TasksMoved
+	// unconfirmed holds a warning for each publication this handle made that
+	// the remote accepted and that it could not check afterwards
+	// (strandedPublication).
+	unconfirmed []core.Warning
 	// trackedIdentity is where this checkout last saw its tasks remote's
 	// identity ref, as resolving the identity listed it.
 	trackedIdentity trackedIdentityHead
