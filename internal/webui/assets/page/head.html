@@ -4,4 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ shown .ProjectName }}</title>
+  <!-- What a phone saving the board to its home screen shows: the project's
+       name and the Workbench icon (see icon.go). Nothing here asks for the
+       shortcut to open as an app of its own: the manifest's display is
+       browser, and there is no apple-mobile-web-app-capable. Chrome on Android
+       opens a shortcut made with "Create shortcut" in a tab. iOS and iPadOS 26 do not
+       ask the page: every site added to the Home Screen opens as a web app,
+       with its own cookies, unless the reader switches "Open as Web App" off
+       when adding it, and nothing a page can say changes that (see "On a
+       phone" in docs/reference.md). The manifest is asked for with credentials
+       so the cookie a sign-in proxy set reaches it as it reaches the page. -->
+  <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-title" content="{{ shown .ProjectName }}">
   <style>

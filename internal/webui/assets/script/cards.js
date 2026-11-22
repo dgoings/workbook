@@ -224,7 +224,9 @@
         // A page that published no priorities at all — an older server — has
         // nothing to judge a chip against, and marks none.
         const priorityStranded = priorities.size > 0 && !priorities.has(task.priority);
-        article.draggable = !view.pending;
+        // Never at the phone width, where a stroke on a card scrolls; see
+        // cardDraggable.
+        article.draggable = !view.pending && !phoneLayout();
         // The label is where a screen reader hears that the priority is not one
         // of this project's, as it is for the status: the card names itself, so
         // nothing inside it is read on focus. A tombstone's label says it too,

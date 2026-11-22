@@ -362,13 +362,24 @@ func TestServeBehindAProxyRefusesARequestWithoutOneUsableName(t *testing.T) {
 	board := startHostedServe(t, folder, nil, "--public-url", proxyOrigin, "--actor-header", proxyHeader)
 	before := workbookRefs(t, folder)
 
-	for _, path := range []string{"/", "/tasks/new", "/config", "/api/tasks", "/api/vocabulary", "/api/sync"} {
+	// The home-screen icons and the manifest are asked for by a phone's
+	// browser through the same proxy as the page, so they are behind the same
+	// name: a manifest names the project.
+	for _, path := range []string{"/", "/tasks/new", "/config", "/api/tasks", "/api/vocabulary", "/api/sync",
+		"/manifest.webmanifest", "/icons/apple-touch-icon.png", "/icons/icon-192.png"} {
 		body, status, header := board.do(t, proxied{method: http.MethodGet, path: path})
 		if status != http.StatusUnauthorized {
 			t.Fatalf("GET %s with no name = %d; body = %s; want 401", path, status, body)
 		}
 		assertBoardRefusal(t, body, header, core.CategoryInvocation, "came without one")
 		assertAnsweredPrivately(t, "GET "+path+" with no name", header)
+	}
+	// Through the proxy, with the name it adds, the same phone gets them.
+	for _, path := range []string{"/manifest.webmanifest", "/icons/apple-touch-icon.png"} {
+		body, status, _ := board.do(t, proxied{method: http.MethodGet, path: path, person: "alice@client.example"})
+		if status != http.StatusOK {
+			t.Fatalf("GET %s with a name = %d; body = %s", path, status, body)
+		}
 	}
 	// A person's browser opening the page with no name sees one sentence.
 	body, status, header := board.do(t, proxied{method: http.MethodGet, path: "/", header: func(h http.Header) {

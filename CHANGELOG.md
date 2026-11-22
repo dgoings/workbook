@@ -27,6 +27,26 @@ release counts as no entry, so it never blocks the next release. See
 
 ## Unreleased
 
+The web board works on a phone. A screen 560 CSS pixels wide or narrower shows
+one column at a time, under a row of the columns' names and task counts that
+stays at the top while the cards scroll; tapping a name switches to that
+column. A phone opens on the column `workbook next` draws from, and after that
+on the one it last showed. Cards do not drag at that width, so a finger on one
+scrolls, and a status is changed from the task's own page. The task page, new
+task, comments and the change log fit the screen with no sideways scrolling and
+controls at least 44 pixels each way, except links inside the text of a
+description or a comment, which keep the height of their line; fields are set
+in at least 16 pixels so the phone does not zoom in on them, and the board's
+notices stack in one box at the bottom of the screen. The configuration page is
+not laid out for a phone. The column a phone remembers is kept for each project.
+Saving the board to a home screen gives it the Workbench icon and the project's
+name, and its manifest asks for the shortcut to open in the browser, which
+"Create shortcut" in Chrome on Android does. On iOS and iPadOS 26 a shortcut opens as a web app with
+its own sign-in unless "Open as Web App" is switched off when adding it. None of
+this was tried on a real phone. The page's
+content policy gains `manifest-src 'self'` so the board's own manifest loads.
+Wider screens and the Workbench app lay the board out as before.
+
 The web board keeps a change that a proxy in front of it asked to send later.
 A `429` or `503` that carries `Retry-After` no longer loses the change: the
 page keeps it drawn as made, says it is held in that tab, asks before the tab

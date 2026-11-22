@@ -79,6 +79,9 @@
           deletedEmpty = null;
         }
         renderDeletedToggle();
+        // The phone's row of columns gains or loses the Deleted column's
+        // button with it, before the first poll has drawn anything into it.
+        syncStatusTabs();
         // The model still holds whatever the last poll read. Drawing it now
         // fills a column that was just shown with the deleted tasks a queued
         // intent has already put there, and empties nothing that was hidden:
