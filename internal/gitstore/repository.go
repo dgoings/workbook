@@ -127,8 +127,12 @@ type Repository struct {
 	configRemoteNeedsUpgrade bool
 	// configReport carries what publication established about origin's copy of
 	// the ledger, for a caller whose own result is task shaped.
-	configReport    *SyncConfigResult
-	objectIDBytes   int
+	configReport  *SyncConfigResult
+	objectIDBytes int
+	// setAsideMemo remembers SetAsideEdits' answer for a parked tip and a
+	// task tip, which is a function of the two commits. See SetAsideEdits.
+	setAsideMu      sync.Mutex
+	setAsideMemo    map[string][]core.SetAsideEdit
 	actorOnce       sync.Once
 	actor           string
 	actorErr        error

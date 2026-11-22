@@ -2198,6 +2198,16 @@ func runServeWithEnvironment(
 		},
 		SyncState:   publisher.state,
 		SetSyncMode: publisher.setMode,
+		// The edits this folder's sync set aside on a conflict, read from the
+		// parked refs on every request so they outlive the process, and shown
+		// to everyone who opens the board. The command line has no view of
+		// them; on a board nobody else would ever see them.
+		SetAside: func(requestContext context.Context, heads map[string]string) (map[string][]core.SetAsideEdit, error) {
+			return repository.SetAsideEdits(requestContext, service.Config, heads)
+		},
+		DismissSetAside: func(requestContext context.Context, taskID, parkedRef, parked string) error {
+			return repository.DismissSetAside(requestContext, service.Config, taskID, parkedRef, parked)
+		},
 		// A board opened at a public address is answering people other than
 		// whoever runs it, so its answers keep the server's own detail to the
 		// server's log. One started without --public-url answers exactly as a

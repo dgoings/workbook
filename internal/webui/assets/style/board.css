@@ -187,6 +187,10 @@
     .task-card__failure span { flex: 1 1 auto; line-height: 1.35; overflow-wrap: anywhere; }
     .task-card__failure button { flex: 0 0 auto; border: 1px solid currentcolor; border-radius: 3px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: .66rem; font-weight: 800; padding: .08rem .32rem; }
     .task-card__failure button:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
+    /* A task whose edits the server's sync set aside. The task's page shows
+       them; the card only says they are there, in the warning family the
+       failure report uses, since both are news about a change. */
+    .task-card__set-aside { margin-top: .5rem; padding: .2rem .4rem; border-left: 3px solid currentcolor; background: var(--wb-warning-surface); color: var(--wb-warning-ink); font-size: .72rem; font-weight: 700; line-height: 1.35; }
     .drop-marker { height: 0; margin: -.1rem 0; border-top: 3px solid var(--wb-primary); border-radius: 3px; pointer-events: none; }
     /* The Deleted column. It is a .column and takes the board's track sizing
        untouched — no width, no minimum, no maximum of its own — so a project

@@ -785,6 +785,11 @@ type TaskPresentation struct {
 	// service would accept one. Absent when there are none, which is every
 	// task on a board that cannot edit comments.
 	EditableComments []string `json:"editableComments,omitempty"`
+	// SetAside is the edits to this task that the server's background sync
+	// set aside because a different change to the task reached origin first,
+	// oldest first, read from the parked tips that hold them. Absent when
+	// there are none, which is almost every task.
+	SetAside []core.SetAsideEdit `json:"setAside,omitempty"`
 }
 
 // AssignmentPresentation is one assignment as the task page draws it: who holds
@@ -1044,6 +1049,12 @@ type Options struct {
 	History     TaskHistoryReader
 	SyncState   SyncStateReporter
 	SetSyncMode SyncModeSetter
+	// SetAside reads the edits this server's background sync set aside on a
+	// conflict, and DismissSetAside removes them once a person has dealt with
+	// them. A board given SetAside shows them on the task's card and page and
+	// in each task's presentation; one given neither shows none.
+	SetAside        SetAsideReader
+	DismissSetAside SetAsideDismisser
 	// Hosted is set for a board opened at a public address, by people other
 	// than whoever runs the server. Its answers then never carry the
 	// server's folder, its remote's address or Git's own output: a failure
@@ -1608,6 +1619,7 @@ func NewHandler(options Options) http.Handler {
 	handler.mux.HandleFunc("POST /api/tasks/{id}/attachments", handler.addTaskAttachment)
 	handler.mux.HandleFunc("GET /api/tasks/{id}/attachments/{attachment}", handler.serveTaskAttachment)
 	handler.mux.HandleFunc("DELETE /api/tasks/{id}/attachments/{attachment}", handler.removeTaskAttachment)
+	handler.mux.HandleFunc("DELETE /api/tasks/{id}/set-aside", handler.dismissSetAside)
 	handler.mux.HandleFunc("GET /api/sync", handler.serveSyncState)
 	handler.mux.HandleFunc("PUT /api/sync", handler.updateSyncMode)
 	handler.mux.HandleFunc("GET /healthz", handler.serveHealth)
@@ -1757,6 +1769,9 @@ func allowedMethod(path string) (string, bool) {
 		}
 		if taskCommentsPathID(path) != "" || taskAttachmentsPathID(path) != "" {
 			return http.MethodPost, true
+		}
+		if taskSetAsidePathID(path) != "" {
+			return http.MethodDelete, true
 		}
 		if taskPositionPathID(path) != "" {
 			return http.MethodPatch, true
@@ -2025,9 +2040,14 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		handler.writeError(writer, err)
 		return
 	}
+	setAside, err := handler.setAsideEdits(request, tasks)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := handler.page.Execute(writer, pageData{
-		Board:                 presentation.MarkUnresolvedPriorities(presentation.NewBoard(activeTasks(tasks), vocabulary.Vocabulary), vocabulary.Priorities),
+		Board:                 markSetAside(presentation.MarkUnresolvedPriorities(presentation.NewBoard(activeTasks(tasks), vocabulary.Vocabulary), vocabulary.Priorities), setAside),
 		ProjectName:           projectName(vocabulary.Display),
 		TitleSuffix:           boardTitleSuffix(vocabulary.Display),
 		DefaultProjectName:    core.DefaultProjectName,
@@ -2908,6 +2928,11 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 		handler.writeError(writer, err)
 		return
 	}
+	setAside, err := handler.setAsideEdits(request, tasks)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
 	// Which tasks this poll is for, asked as one parameter with three answers
 	// rather than as two parameters that could disagree. `true` is the deleted
 	// tasks alone and keeps meaning exactly that: the relationship picker still
@@ -2944,7 +2969,7 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 		VocabularyHead:  vocabulary.Head,
 		VocabularyShape: vocabularyShape(vocabulary),
 		Tasks:           tasks,
-		Presentation:    taskPresentation(tasks, vocabulary.Vocabulary, handler.assignIdentity(request), handler.commentIdentity(request)),
+		Presentation:    taskPresentation(tasks, vocabulary.Vocabulary, handler.assignIdentity(request), handler.commentIdentity(request), setAside),
 	})
 	if err != nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "encode the tasks document: %v", err))
@@ -3304,7 +3329,7 @@ func (handler *handler) writeTaskMutation(writer http.ResponseWriter, result cor
 	})
 }
 
-func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary, actor, commenter string) []TaskPresentation {
+func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary, actor, commenter string, setAside map[string][]core.SetAsideEdit) []TaskPresentation {
 	views := presentation.TaskViews(tasks, vocabulary)
 	result := make([]TaskPresentation, len(views))
 	for index, view := range views {
@@ -3319,9 +3344,29 @@ func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary, actor, comm
 			MoreAssignments:       row.More,
 			Assignments:           assignmentPresentation(view.Task.Assignments, actor),
 			EditableComments:      editableComments(view.Task.Comments, commenter),
+			SetAside:              setAside[view.Task.ID],
 		}
 	}
 	return result
+}
+
+// markSetAside gives each card the count of its task's set-aside edits, which
+// is what the card template flags.
+func markSetAside(board presentation.Board, setAside map[string][]core.SetAsideEdit) presentation.Board {
+	if len(setAside) == 0 {
+		return board
+	}
+	for column := range board.Columns {
+		for index := range board.Columns[column].Tasks {
+			view := &board.Columns[column].Tasks[index]
+			view.SetAsideEdits = len(setAside[view.Task.ID])
+		}
+	}
+	for index := range board.UnknownTasks {
+		view := &board.UnknownTasks[index]
+		view.SetAsideEdits = len(setAside[view.Task.ID])
+	}
+	return board
 }
 
 func (handler *handler) serveSyncState(writer http.ResponseWriter, request *http.Request) {

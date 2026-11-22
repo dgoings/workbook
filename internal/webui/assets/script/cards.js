@@ -96,6 +96,7 @@
           // redraws exactly the card it names on the next poll and no other.
           view.assignmentChips || [],
           view.moreAssignments || 0,
+          Array.isArray(view.setAside) ? view.setAside.length : 0,
           report || ""
         ]);
       }
@@ -297,6 +298,10 @@
         // start depending on what somebody typed. So bold, italic and code are
         // drawn, a link is drawn as its words, and everything else is drawn as
         // the characters it is — which is exactly what a card drew before.
+        // The flag for edits the server's sync set aside, first so it is the
+        // first thing read after the title. The task's page shows them.
+        const setAside = Array.isArray(view.setAside) ? view.setAside.length : 0;
+        if (setAside > 0) { const flag = document.createElement("div"); flag.className = "task-card__set-aside"; flag.dataset.setAsideFlag = ""; text(flag, setAsideCount(setAside)); article.insertBefore(flag, parts.restore); }
         if (task.description) { const description = document.createElement("p"); renderInlineMarkdown(description, task.description); article.insertBefore(description, parts.restore); }
         if (task.labels && task.labels.length) { const labels = document.createElement("div"); labels.className = "labels"; task.labels.forEach((label) => { const item = document.createElement("span"); item.className = "label"; text(item, label); labels.append(item); }); article.insertBefore(labels, parts.restore); }
         // The chip row, drawn only for a task somebody holds — so a board where

@@ -11,10 +11,12 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/webui"
 )
 
 // What a sign-in proxy in front of the board looks like from the board's side:
@@ -31,6 +33,8 @@ const (
 type hostedServe struct {
 	addr   string
 	stderr *lockedWriter
+	// stop ends serve and waits for it, once; the test's cleanup calls it too.
+	stop func()
 }
 
 // startHostedServe runs serve in folder with the environment env and the extra
@@ -60,20 +64,24 @@ func startHostedServeOn(t *testing.T, folder string, reserved *reservedListener,
 	go func() {
 		result <- runServeWithEnvironment(ctx, lookup, reserved.listen, append([]string{"--addr", reserved.addr}, args...), folder, stdout, board.stderr)
 	}()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case err := <-result:
-			if err != nil {
-				t.Errorf("serve error = %v; stderr = %q", err, board.stderr.String())
+	var stopping sync.Once
+	board.stop = func() {
+		stopping.Do(func() {
+			cancel()
+			select {
+			case err := <-result:
+				if err != nil {
+					t.Errorf("serve error = %v; stderr = %q", err, board.stderr.String())
+				}
+			case <-time.After(30 * time.Second):
+				t.Error("serve did not stop")
 			}
-		case <-time.After(30 * time.Second):
-			t.Error("serve did not stop")
-		}
-		if stdout.String() != "" {
-			t.Errorf("serve stdout = %q, want empty", stdout.String())
-		}
-	})
+			if stdout.String() != "" {
+				t.Errorf("serve stdout = %q, want empty", stdout.String())
+			}
+		})
+	}
+	t.Cleanup(board.stop)
 	waitForHTTP(t, "http://"+reserved.addr+"/healthz")
 	return board
 }
@@ -708,6 +716,33 @@ func TestHostedServeKeepsGitOutputInTheServerLog(t *testing.T) {
 	}
 }
 
+// boardSetAside reads the board's task data as person and returns the task
+// and the set-aside edits its presentation carries.
+func boardSetAside(t *testing.T, board *hostedServe, person, taskID string) (core.Task, []core.SetAsideEdit) {
+	t.Helper()
+	body, status, _ := board.do(t, proxied{method: http.MethodGet, path: "/api/tasks", person: person})
+	if status != http.StatusOK {
+		t.Fatalf("GET /api/tasks = %d; body = %s", status, body)
+	}
+	var document webui.TasksDocument
+	if err := json.Unmarshal(body, &document); err != nil {
+		t.Fatalf("decode tasks: %v; body = %s", err, body)
+	}
+	var task core.Task
+	for _, candidate := range document.Tasks {
+		if candidate.ID == taskID {
+			task = candidate
+		}
+	}
+	for _, view := range document.Presentation {
+		if view.TaskID == taskID {
+			return task, view.SetAside
+		}
+	}
+	t.Fatalf("task data has no presentation for %s: %s", taskID, body)
+	return task, nil
+}
+
 // An edit on the hosted board and a different edit to the same field from a
 // contributor's CLI, made at the same moment, both survive as a visible
 // conflict, whichever reaches origin first. The description is the field: it
@@ -716,17 +751,19 @@ func TestHostedServeKeepsGitOutputInTheServerLog(t *testing.T) {
 //
 // When the board's edit lands first, the contributor's push is rejected and
 // their next sync stops with exit 8 and the conflict, both texts in it, while
-// the board's text is on origin. When the contributor's lands first, the
-// board's sync loop reports the conflict on serve's standard error and keeps
-// the board's edit in the server's folder, parked where reconciliation parks a
-// local tip.
+// the board's text is on origin and the board sets nothing aside. When the
+// contributor's lands first, the board's sync loop keeps origin's text and
+// parks the board's edit, and the board shows it — to everyone who opens it,
+// on the task's data, its card and its page, and again after a restart —
+// until it is saved again or somebody dismisses it.
 func TestHostedAndCLIEditsToOneDescriptionSurviveAsAConflict(t *testing.T) {
 	t.Parallel()
-	const alice = "alice@client.example"
+	const alice, bob = "alice@client.example", "bob@client.example"
 	const boardText, cliText = "Alice's text from the board", "The contributor's text"
+	args := []string{"--public-url", proxyOrigin, "--actor-header", proxyHeader}
 	setup := func(t *testing.T) (*hostedServe, string, string, string, core.Task) {
 		folder, origin, contributor := hostedFolder(t)
-		board := startHostedServe(t, folder, nil, "--public-url", proxyOrigin, "--actor-header", proxyHeader)
+		board := startHostedServe(t, folder, nil, args...)
 		body, status, _ := board.do(t, proxied{method: http.MethodPost, path: "/api/tasks",
 			body: `{"title":"Contested","description":"Base text"}`, person: alice})
 		task := decodeServeMutation(t, body, status)
@@ -736,14 +773,15 @@ func TestHostedAndCLIEditsToOneDescriptionSurviveAsAConflict(t *testing.T) {
 		}
 		return board, folder, origin, contributor, task
 	}
-	boardEdit := func(t *testing.T, board *hostedServe, task core.Task) ([]byte, int) {
+	boardEdit := func(t *testing.T, board *hostedServe, task core.Task, text string) ([]byte, int) {
 		body, status, _ := board.do(t, proxied{method: http.MethodPatch, path: "/api/tasks/" + task.ID,
-			body: `{"description":"` + boardText + `","expectedHead":"` + task.Head + `"}`, person: alice})
+			body: `{"description":"` + text + `","expectedHead":"` + task.Head + `"}`, person: alice})
 		return body, status
 	}
 	// contributorTold is the order in which the board's edit reached origin
-	// first: the contributor's next sync stops on the conflict.
-	contributorTold := func(t *testing.T, contributor string) {
+	// first: the contributor's next sync stops on the conflict, and the board
+	// has nothing set aside, because nothing of its own was.
+	contributorTold := func(t *testing.T, board *hostedServe, folder, contributor string, task core.Task) {
 		code, stdout, stderr := run(t, contributor, "sync", "--json")
 		if code != 8 {
 			t.Fatalf("contributor sync = (%d, %q, %q), want exit 8", code, stdout, stderr)
@@ -753,27 +791,76 @@ func TestHostedAndCLIEditsToOneDescriptionSurviveAsAConflict(t *testing.T) {
 		if len(document.Conflict) != 1 || document.Conflict[0].Description == nil || *document.Conflict[0].Description != want {
 			t.Fatalf("contributor's conflict = %#v, want %#v", document.Conflict, want)
 		}
+		shown, edits := boardSetAside(t, board, bob, task.ID)
+		if shown.Description != boardText || len(edits) != 0 {
+			t.Fatalf("board shows %q with set-aside edits %#v, want the board's text and none", shown.Description, edits)
+		}
+		if parked := strings.TrimSpace(cliGitOutput(t, folder, "for-each-ref", "refs/workbook/reconciled/"+task.ID+"/")); parked != "" {
+			t.Fatalf("the board parked %s, want nothing", parked)
+		}
 	}
-	// boardReported is the other order: the board's sync loop reports the
-	// conflict and parks the board's edit, and origin holds the contributor's.
-	boardReported := func(t *testing.T, board *hostedServe, folder, contributor string, task core.Task) {
+	// boardShows is the other order: the board's sync loop parks the board's
+	// edit, origin holds the contributor's, and the board shows what it set
+	// aside to somebody other than the person who made it. It returns the edit.
+	boardShows := func(t *testing.T, board *hostedServe, folder, contributor string, task core.Task) core.SetAsideEdit {
 		deadline := time.Now().Add(30 * time.Second)
-		for !strings.Contains(board.stderr.String(), "conflict on "+task.ID) {
-			if time.Now().After(deadline) {
-				t.Fatalf("serve never reported the conflict; stderr = %s", board.stderr.String())
+		var shown core.Task
+		var edits []core.SetAsideEdit
+		for {
+			shown, edits = boardSetAside(t, board, bob, task.ID)
+			if len(edits) > 0 {
+				break
 			}
-			time.Sleep(50 * time.Millisecond)
+			if time.Now().After(deadline) {
+				t.Fatalf("the board never showed a set-aside edit; stderr = %s", board.stderr.String())
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
-		parked := strings.Fields(cliGitOutput(t, folder, "for-each-ref", "--format=%(objectname)", "refs/workbook/reconciled/"+task.ID+"/"))
-		if len(parked) == 0 {
-			t.Fatalf("the board's edit was not parked; refs = %s", workbookRefs(t, folder))
+		if len(edits) != 1 || edits[0].Actor != alice || edits[0].WallTime.IsZero() ||
+			len(edits[0].Operations) != 1 || edits[0].Operations[0].Field != "description" || edits[0].Operations[0].Value != boardText {
+			t.Fatalf("set-aside edits = %#v, want alice's one description edit", edits)
 		}
-		if got := cliGitOutput(t, folder, "cat-file", "-p", parked[0]+":operation.json"); !strings.Contains(got, boardText) || !strings.Contains(got, alice) {
-			t.Fatalf("the parked tip holds %s, want alice's text", got)
+		if shown.Description != cliText {
+			t.Fatalf("the board shows %q, want the contributor's text, which reached origin first", shown.Description)
+		}
+		// The card says so on the page the server draws, for anyone.
+		page, status, _ := board.do(t, proxied{method: http.MethodGet, path: "/tasks/" + task.ID, person: bob})
+		card := regexp.MustCompile(`(?s)<article class="task-card"[^>]*data-task-id="` + task.ID + `".*?</article>`).Find(page)
+		if status != http.StatusOK || !strings.Contains(string(card), `data-set-aside-flag>1 edit set aside<`) {
+			t.Fatalf("task page = %d with card %s, want the set-aside flag", status, card)
+		}
+		// Nothing is lost: the parked tip holds alice's edit, origin the
+		// contributor's.
+		if got := cliGitOutput(t, folder, "cat-file", "-p", edits[0].Commit+":operation.json"); !strings.Contains(got, boardText) || !strings.Contains(got, alice) {
+			t.Fatalf("the parked commit holds %s, want alice's text", got)
+		}
+		if got := cliGitOutput(t, folder, "rev-parse", edits[0].ParkedRef); strings.TrimSpace(got) != edits[0].Parked {
+			t.Fatalf("%s = %s, want %s", edits[0].ParkedRef, got, edits[0].Parked)
 		}
 		code, stdout, stderr := run(t, contributor, "show", task.ID, "--json")
 		if code != 0 || !strings.Contains(stdout, cliText) {
 			t.Fatalf("contributor's show = (%d, %q, %q), want its own text on origin", code, stdout, stderr)
+		}
+		return edits[0]
+	}
+	// contributorFirst makes the contributor's edit reach origin before the
+	// board's. The board's own sync loop fetches every few seconds, and a
+	// fetch between the contributor's push and the board's edit makes the edit
+	// a refused stale write rather than a concurrent one. That is a
+	// different, already visible outcome, so the attempt is made again.
+	contributorFirst := func(t *testing.T) (*hostedServe, string, string, core.Task, core.SetAsideEdit) {
+		for attempt := 1; ; attempt++ {
+			board, folder, _, contributor, task := setup(t)
+			if code, _, stderr := run(t, contributor, "update", task.ID, "--description", cliText); code != 0 {
+				t.Fatalf("contributor update code = %d; stderr = %q", code, stderr)
+			}
+			body, status := boardEdit(t, board, task, boardText)
+			if status == http.StatusConflict && attempt < 4 {
+				t.Logf("attempt %d: the board had fetched first and refused a stale write; trying again", attempt)
+				continue
+			}
+			decodeServeMutation(t, body, status)
+			return board, folder, contributor, task, boardShows(t, board, folder, contributor, task)
 		}
 	}
 
@@ -788,7 +875,7 @@ func TestHostedAndCLIEditsToOneDescriptionSurviveAsAConflict(t *testing.T) {
 			cliDone <- [3]string{fmt.Sprint(code), stdout, stderr}
 		}()
 		close(start)
-		body, status := boardEdit(t, board, task)
+		body, status := boardEdit(t, board, task, boardText)
 		cli := <-cliDone
 		if cli[0] != "0" {
 			t.Fatalf("contributor update = %v", cli)
@@ -799,31 +886,74 @@ func TestHostedAndCLIEditsToOneDescriptionSurviveAsAConflict(t *testing.T) {
 		edited := decodeServeMutation(t, body, status)
 		if strings.Contains(cli[1], `"status":"rejected"`) {
 			waitForOrigin(t, origin, task.ID, edited.Head)
-			contributorTold(t, contributor)
+			contributorTold(t, board, folder, contributor, task)
 			return
 		}
-		boardReported(t, board, folder, contributor, task)
+		boardShows(t, board, folder, contributor, task)
 	})
 
-	t.Run("the contributor first", func(t *testing.T) {
+	t.Run("the board first", func(t *testing.T) {
 		t.Parallel()
-		// The board's own sync loop fetches every few seconds, and a fetch
-		// between the contributor's push and the board's edit makes the edit
-		// a refused stale write rather than a concurrent one. That is a
-		// different, already visible outcome, so the attempt is made again.
-		for attempt := 1; ; attempt++ {
-			board, folder, _, contributor, task := setup(t)
-			if code, _, stderr := run(t, contributor, "update", task.ID, "--description", cliText); code != 0 {
-				t.Fatalf("contributor update code = %d; stderr = %q", code, stderr)
+		board, folder, origin, contributor, task := setup(t)
+		// The contributor edits without synchronizing, as one offline does,
+		// so the two edits are concurrent rather than one on top of the other.
+		if code, _, stderr := run(t, contributor, "update", task.ID, "--description", cliText, "--no-sync"); code != 0 {
+			t.Fatalf("contributor update code = %d; stderr = %q", code, stderr)
+		}
+		body, status := boardEdit(t, board, task, boardText)
+		edited := decodeServeMutation(t, body, status)
+		waitForOrigin(t, origin, task.ID, edited.Head)
+		contributorTold(t, board, folder, contributor, task)
+	})
+
+	t.Run("the contributor first, shown after a restart, then dismissed", func(t *testing.T) {
+		t.Parallel()
+		board, folder, _, task, shown := contributorFirst(t)
+		board.stop()
+		restarted := startHostedServe(t, folder, nil, args...)
+		if _, edits := boardSetAside(t, restarted, bob, task.ID); len(edits) != 1 || !reflect.DeepEqual(edits[0], shown) {
+			t.Fatalf("after a restart the board shows %#v, want %#v", edits, shown)
+		}
+		const carol = "carol@client.example"
+		body, status, _ := restarted.do(t, proxied{method: http.MethodDelete, path: "/api/tasks/" + task.ID + "/set-aside",
+			body: `{"parkedRef":"` + shown.ParkedRef + `","parked":"` + shown.Parked + `"}`, person: carol})
+		if status != http.StatusOK || !strings.Contains(string(body), `"format":"workbook.set-aside-dismissal"`) {
+			t.Fatalf("dismissal = %d; body = %s", status, body)
+		}
+		if _, edits := boardSetAside(t, restarted, bob, task.ID); len(edits) != 0 {
+			t.Fatalf("after the dismissal the board shows %#v, want none", edits)
+		}
+		if logged := restarted.stderr.String(); !strings.Contains(logged, carol+" dismissed the set-aside edits of "+task.ID) ||
+			!strings.Contains(logged, shown.Parked) {
+			t.Fatalf("server log = %q, want carol's dismissal naming the commit", logged)
+		}
+	})
+
+	t.Run("the contributor first, then saved again", func(t *testing.T) {
+		t.Parallel()
+		board, _, contributor, task, _ := contributorFirst(t)
+		current, _ := boardSetAside(t, board, alice, task.ID)
+		// Alice copies her text back and saves it: an ordinary edit on top of
+		// the contributor's, which settles what was set aside.
+		body, status := boardEdit(t, board, current, boardText)
+		saved := decodeServeMutation(t, body, status)
+		if saved.Description != boardText {
+			t.Fatalf("saved description = %q", saved.Description)
+		}
+		if _, edits := boardSetAside(t, board, bob, task.ID); len(edits) != 0 {
+			t.Fatalf("after the text was saved again the board shows %#v, want none", edits)
+		}
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			if code, _, _ := run(t, contributor, "sync"); code == 0 {
+				if _, stdout, _ := run(t, contributor, "show", task.ID, "--json"); strings.Contains(stdout, boardText) {
+					break
+				}
 			}
-			body, status := boardEdit(t, board, task)
-			if status == http.StatusConflict && attempt < 4 {
-				t.Logf("attempt %d: the board had fetched first and refused a stale write; trying again", attempt)
-				continue
+			if time.Now().After(deadline) {
+				t.Fatal("the saved text never reached the contributor")
 			}
-			decodeServeMutation(t, body, status)
-			boardReported(t, board, folder, contributor, task)
-			return
+			time.Sleep(200 * time.Millisecond)
 		}
 	})
 }
