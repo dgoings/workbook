@@ -75,6 +75,23 @@
       main { flex: 0 0 auto; overflow: visible; container-type: inline-size; padding: 0 .75rem 1rem; }
       .app-header { gap: .5rem; padding: .85rem .75rem .6rem; }
       .filter-row { padding: .5rem .75rem; }
+      /* One setting is offered here, and it shares a line with the board's
+         freshness: the dot and its words at the left edge, Dark Mode at the
+         right.
+         Descriptions stay off. A phone shows one column at a time and a card's
+         description would spend most of the screen on a few cards, so the
+         switch is not drawn and a preference for descriptions remembered in
+         this browser at a wider width is not applied; it is still there when
+         the window is wide again.
+         The publishing switch is not drawn either. A board reached from a
+         phone is a hosted one, whose whole purpose is the shared copy, and
+         there is nothing to gain from a control that stops it publishing.
+         The two are named by their labels' classes: the page's tests find each
+         switch by the first mention of its data attribute, which has to stay
+         the element. */
+      .header-settings { align-self: stretch; flex-direction: row; align-items: center; justify-content: space-between; }
+      .header-switches .nav-switch:has(.nav-switch__label--descriptions, .nav-switch__label--sync) { display: none; }
+      :root .board-view[data-descriptions="shown"] .task-card p { display: none; }
       .filter-row__search { flex-basis: 100%; max-width: none; min-width: 0; }
       /* What the board has to say waits at the foot of the screen rather than
          the head of the page, which a reader working down a column or a
