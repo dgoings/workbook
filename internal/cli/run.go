@@ -378,7 +378,7 @@ func runPush(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	}
 	repository, config, err := openRepositoryFor(ctx, cwd, stderr, *remote, true)
 	if err != nil {
-		return err
+		return letCodePushContinue(ctx, nil, err, stderr)
 	}
 	result, syncErr := repository.Push(ctx, config)
 	if *jsonMode {
@@ -388,7 +388,51 @@ func runPush(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		writeIdentityWarning(stderr, result.Identity)
 		writeConfigWarning(stderr, result.Config)
 	}
-	return syncErr
+	return letCodePushContinue(ctx, repository, syncErr, stderr)
+}
+
+// prePushHookActive reports a `workbook push` run by the managed pre-push
+// hook, which sets this before it runs it (gitstore.managedPrePushHook).
+func prePushHookActive() bool { return os.Getenv("WORKBOOK_PRE_PUSH_ACTIVE") == "1" }
+
+// letCodePushContinue turns a refusal about where the tasks live into a
+// notice when the managed pre-push hook ran this push. A hook is never needed
+// for correctness, and a code push must not fail because this checkout has
+// not picked up a move, has no access to the tasks repository, or publishes
+// to a place the tasks have left: the tasks stay recorded here either way, and
+// the notice says what to run. Every other failure still stops the hook, as
+// it always has.
+func letCodePushContinue(ctx context.Context, repository *gitstore.Repository, err error, stderr io.Writer) error {
+	if err == nil || !prePushHookActive() {
+		return err
+	}
+	refusal, found := core.TasksRemoteRefusalOf(err)
+	if !found && repository != nil && core.CategoryOf(err) == core.CategoryOperational &&
+		repository.TasksRemoteName() != core.DefaultTasksRemote {
+		// A tasks repository this checkout cannot reach fails the push with
+		// Git's own words; the probe says which repository and what access.
+		if _, probeErr := repository.ProbeTasksRemote(ctx); probeErr != nil {
+			if probed, ok := core.TasksRemoteRefusalOf(probeErr); ok {
+				err, refusal, found = probeErr, probed, true
+			}
+		}
+	}
+	if !found {
+		return err
+	}
+	switch refusal.Reason {
+	case core.TasksRemoteMoved, core.TasksRemoteMissing, core.TasksRemoteNotRead, core.TasksRemoteUnreachable,
+		core.TasksRemoteNotMoved, core.TasksRemotePublishedAfterMove:
+	default:
+		return err
+	}
+	fmt.Fprintf(stderr, "workbook: %s\n", err.Error())
+	next := "the tasks were not published"
+	if refusal.Command != "" {
+		next += "; run " + refusal.Command + ", then workbook push"
+	}
+	fmt.Fprintf(stderr, "workbook: the code push goes ahead; %s\n", next)
+	return nil
 }
 
 func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
