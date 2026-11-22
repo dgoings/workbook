@@ -434,7 +434,7 @@ func runKeyAdd(ctx context.Context, args []string, cwd string, stdout, stderr io
 	}
 	flags := newFlagSet("key", "add")
 	makeCurrent := flags.Bool("current", false, "also make it the key new tasks are minted under")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with the tasks remote (origin unless configured)")
 	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
@@ -454,7 +454,7 @@ func runKeyCurrent(ctx context.Context, args []string, cwd string, stdout, stder
 		return err
 	}
 	flags := newFlagSet("key", "current")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with the tasks remote (origin unless configured)")
 	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
@@ -474,7 +474,7 @@ func runKeyRetire(ctx context.Context, args []string, cwd string, stdout, stderr
 		return err
 	}
 	flags := newFlagSet("key", "retire")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with the tasks remote (origin unless configured)")
 	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
@@ -535,7 +535,9 @@ func runKeyMutation(
 		return err
 	}
 	defer session.Close()
-	session.fetchBefore(ctx)
+	if err := session.fetchBefore(ctx); err != nil {
+		return err
+	}
 	if err := session.refreshConfiguration(ctx); err != nil {
 		return err
 	}
@@ -551,6 +553,9 @@ func runKeyMutation(
 		return keyWriteError(err)
 	}
 	session.publishConfig(ctx)
+	if err := session.publicationRefusal(); err != nil {
+		return err
+	}
 
 	after := written.KeySet(session.config.Key)
 	result := keyMutationResult{

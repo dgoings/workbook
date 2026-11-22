@@ -229,7 +229,7 @@ func fetchConfigBefore(
 	config core.ProjectConfig,
 	publisher *boardPublisher,
 ) {
-	if publisher.watcherAnswers() || !repository.HasOrigin(ctx) {
+	if publisher.watcherAnswers() || !repository.HasTasksRemote(ctx) {
 		return
 	}
 	_, _ = repository.Fetch(ctx, config)

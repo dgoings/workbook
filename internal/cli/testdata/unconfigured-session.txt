@@ -1,0 +1,190 @@
+== workbook setup --json
+git -c commit.gpgsign=false commit-tree <oid> -m workbook: project identity
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch
+git config --local --type=bool --get workbook.tasksOnly
+git fetch --no-tags --prune --no-auto-maintenance origin +refs/workbook/tasks/*:refs/workbook/remotes/origin/tasks/* +refs/workbook/project*:refs/workbook/remotes/origin/project* +refs/workbook/config*:refs/workbook/remotes/origin/config*
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config refs/workbook/remotes/origin/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project refs/workbook/remotes/origin/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/remotes/origin/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git hash-object -w --stdin
+git ls-remote origin refs/workbook/config refs/workbook/tasks/*
+git mktree
+git remote get-url origin
+git remote get-url origin
+git rev-parse --show-toplevel --path-format=absolute --git-common-dir
+git update-ref --no-deref --create-reflog -m workbook: fetch origin --stdin
+git update-ref --no-deref --create-reflog -m workbook: project configuration --stdin
+git update-ref --no-deref --create-reflog -m workbook: publish project identity --stdin
+== workbook create Unconfigured --json
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch-check
+git commit-tree <oid> -m workbook: create <task> Unconfigured
+git config --get user.email
+git fetch --no-tags --prune --no-auto-maintenance origin +refs/workbook/tasks/*:refs/workbook/remotes/origin/tasks/* +refs/workbook/project*:refs/workbook/remotes/origin/project* +refs/workbook/config*:refs/workbook/remotes/origin/config*
+git for-each-ref --format=%(refname)%00%(objectname) refs/workbook/reconciled/<task>/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config refs/workbook/remotes/origin/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project refs/workbook/remotes/origin/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/remotes/origin/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/<task>
+git hash-object -w --stdin
+git hash-object -w --stdin
+git mktree
+git push --porcelain origin <oid>:refs/workbook/tasks/<task>
+git remote get-url origin
+git rev-list --reverse --topo-order --parents --stdin
+git rev-parse --show-toplevel --path-format=absolute --git-common-dir
+git update-ref --no-deref --create-reflog -m workbook: create <task> Unconfigured --stdin
+== workbook next --claim --json
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch
+git commit-tree <oid> -p <oid> -m workbook: update <task> assign teammate@example.test
+git config --get user.email
+git fetch --no-tags --prune --no-auto-maintenance origin +refs/workbook/tasks/*:refs/workbook/remotes/origin/tasks/* +refs/workbook/project*:refs/workbook/remotes/origin/project* +refs/workbook/config*:refs/workbook/remotes/origin/config*
+git for-each-ref --format=%(refname)%00%(objectname) refs/workbook/reconciled/<task>/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config refs/workbook/remotes/origin/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project refs/workbook/remotes/origin/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/remotes/origin/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/remotes/origin/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/<task>
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/<task>
+git hash-object -w --stdin
+git hash-object -w --stdin
+git mktree
+git push --porcelain origin <oid>:refs/workbook/tasks/<task>
+git remote get-url origin
+git rev-parse --show-toplevel --path-format=absolute --git-common-dir
+git update-ref --no-deref --create-reflog -m workbook: update <task> assign teammate@example.test --stdin
+== workbook fetch --json
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch
+git fetch --no-tags --prune --no-auto-maintenance origin +refs/workbook/tasks/*:refs/workbook/remotes/origin/tasks/* +refs/workbook/project*:refs/workbook/remotes/origin/project* +refs/workbook/config*:refs/workbook/remotes/origin/config*
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config refs/workbook/remotes/origin/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project refs/workbook/remotes/origin/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/remotes/origin/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git rev-parse --show-toplevel --path-format=absolute --git-common-dir
+== workbook push --json
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config refs/workbook/remotes/origin/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git ls-remote --refs origin refs/workbook/tasks/* refs/workbook/project refs/workbook/config
+git rev-parse --show-toplevel --path-format=absolute --git-common-dir
+== workbook sync --json
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch
+git cat-file --batch
+git fetch --no-tags --prune --no-auto-maintenance origin +refs/workbook/tasks/*:refs/workbook/remotes/origin/tasks/* +refs/workbook/project*:refs/workbook/remotes/origin/project* +refs/workbook/config*:refs/workbook/remotes/origin/config*
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config refs/workbook/remotes/origin/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project refs/workbook/remotes/origin/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/remotes/origin/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git rev-parse --show-toplevel --path-format=absolute --git-common-dir
+== workbook config show --json
+git cat-file --batch
+git cat-file --batch
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project
+git rev-parse --show-toplevel --path-format=absolute --git-common-dir
+== workbook list --json
+git cat-file --batch
+git cat-file --batch
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git rev-parse --show-toplevel --path-format=absolute --git-common-dir
+== workbook create Handed to the watcher --json
+git cat-file --batch
+git cat-file --batch
+git commit-tree <oid> -m workbook: create <task> Handed to the watcher
+git config --get user.email
+git for-each-ref --format=%(refname)%00%(objectname) refs/workbook/reconciled/<task>/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git hash-object -w --stdin
+git hash-object -w --stdin
+git mktree
+git rev-parse --show-toplevel --path-format=absolute --git-common-dir
+git update-ref --no-deref --create-reflog -m workbook: create <task> Handed to the watcher --stdin
+== refs in the clone
+refs/heads/main
+refs/remotes/origin/HEAD
+refs/remotes/origin/main
+refs/workbook/config
+refs/workbook/project
+refs/workbook/remotes/origin/config
+refs/workbook/remotes/origin/project
+refs/workbook/remotes/origin/tasks/<task>
+refs/workbook/remotes/origin/tasks/<task>
+refs/workbook/remotes/origin/tasks/<task>
+refs/workbook/tasks/<task>
+refs/workbook/tasks/<task>
+refs/workbook/tasks/<task>
+refs/workbook/tasks/<task>
+== refs on origin
+refs/heads/main
+refs/workbook/config
+refs/workbook/project
+refs/workbook/tasks/<task>
+refs/workbook/tasks/<task>
+refs/workbook/tasks/<task>
+refs/workbook/tasks/<task>
+== refs on the remote named tasks
+

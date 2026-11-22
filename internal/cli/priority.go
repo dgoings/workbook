@@ -333,7 +333,9 @@ func runPriorityMutation(
 		return err
 	}
 	defer session.Close()
-	session.fetchBefore(ctx)
+	if err := session.fetchBefore(ctx); err != nil {
+		return err
+	}
 	if err := session.refreshConfiguration(ctx); err != nil {
 		return err
 	}
@@ -349,6 +351,9 @@ func runPriorityMutation(
 		return priorityWriteError(err)
 	}
 	session.publishConfig(ctx)
+	if err := session.publicationRefusal(); err != nil {
+		return err
+	}
 
 	after := written.PriorityVocabulary()
 	result := priorityMutationResult{

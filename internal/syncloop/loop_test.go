@@ -159,6 +159,48 @@ func TestFinalSyncRunsOnCancellation(t *testing.T) {
 	}
 }
 
+// A round has no command behind it, so a publication it could not check
+// afterwards is written to the watcher's terminal, once, and taken from the
+// repository so it reaches nothing else.
+func TestRoundWritesAPublicationItCouldNotCheckAfterwards(t *testing.T) {
+	syncer := &fakeSyncer{origin: true, warnings: []core.Warning{{
+		Code:    core.WarningPublicationUnconfirmed,
+		Message: "origin accepted WB-1, but listing it again afterwards failed",
+	}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	output := &syncBuffer{}
+	finished := make(chan error, 1)
+	go func() {
+		finished <- Run(ctx, Options{
+			CommonGitDir: t.TempDir(),
+			Repository:   syncer,
+			Config:       watcherConfig(),
+			Interval:     time.Hour,
+			Stderr:       output,
+			published:    syncer.notePublished,
+		})
+	}()
+	waitForOutput(t, output, ReadyPrefix)
+	waitForSyncs(t, syncer, 1)
+	cancel()
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return after cancellation")
+	}
+
+	line := "workbook: publication-unconfirmed: origin accepted WB-1, but listing it again afterwards failed"
+	if got := strings.Count(output.String(), line); got != 1 {
+		t.Fatalf("the watcher wrote the warning %d times, want once:\n%s", got, output.String())
+	}
+	if left := syncer.PublicationWarnings(); len(left) != 0 {
+		t.Fatalf("warnings left with the repository = %v, want none", left)
+	}
+}
+
 // The final sync is cut loose from the cancellation that ended the watcher,
 // not from the values it was started with, so it runs with exactly what every
 // earlier sync in the loop ran with.
@@ -573,6 +615,15 @@ type fakeSyncer struct {
 	err            error
 	lastContextErr error
 	lastActor      string
+	warnings       []core.Warning
+}
+
+func (f *fakeSyncer) PublicationWarnings() []core.Warning {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	warnings := f.warnings
+	f.warnings = nil
+	return warnings
 }
 
 func (f *fakeSyncer) Sync(ctx context.Context, _ core.ProjectConfig) (gitstore.SyncRunResult, error) {
@@ -639,7 +690,7 @@ func (f *fakeSyncer) InspectTaskHead(_ context.Context, _ core.ProjectConfig, ta
 	return gitstore.TaskHead{TaskID: taskID, ObjectID: head}, true, nil
 }
 
-func (f *fakeSyncer) HasOrigin(context.Context) bool {
+func (f *fakeSyncer) HasTasksRemote(context.Context) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.origin

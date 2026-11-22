@@ -40,6 +40,7 @@ const (
 // here plus the code that reads it; nothing else in this file names a setting.
 var configSettings = map[string]configSettingKind{
 	autoSyncSettingName:      trackedFileSetting,
+	tasksRemoteSettingName:   trackedFileSetting,
 	core.DisplayProjectName:  ledgerSetting,
 	core.DisplayPrimaryColor: ledgerSetting,
 	core.DisplayTextColor:    ledgerSetting,
@@ -47,7 +48,7 @@ var configSettings = map[string]configSettingKind{
 
 // configSettingOrder lists them the way `config show` prints them and the way
 // a refusal lists them, so the two never drift apart.
-var configSettingOrder = append([]string{autoSyncSettingName}, core.DisplaySettingNames...)
+var configSettingOrder = append([]string{autoSyncSettingName, tasksRemoteSettingName}, core.DisplaySettingNames...)
 
 // settingKind resolves a word somebody typed, and refuses one that names no
 // setting with the list.
@@ -107,6 +108,9 @@ type configShowResult struct {
 	// Display is added beside the existing members rather than replacing any of
 	// them, so a caller already parsing this document keeps working.
 	Display displayView `json:"display"`
+	// TasksRemote is present only for a project that chose a remote other
+	// than origin for its tasks.
+	TasksRemote *tasksRemoteView `json:"tasksRemote,omitempty"`
 }
 
 type configWriteResult struct {
@@ -115,6 +119,8 @@ type configWriteResult struct {
 	Setting  string `json:"setting"`
 	Value    string `json:"value"`
 	Upgraded bool   `json:"upgraded"`
+	// URL is the tasks remote's address, for tasks-remote only.
+	URL string `json:"url,omitempty"`
 }
 
 // configDisplayChange is what one display command did, in the shape statusChange
@@ -161,7 +167,7 @@ func runConfigShow(ctx context.Context, args []string, cwd string, stdout, stder
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	repository, config, err := openRepository(ctx, cwd, stderr)
+	repository, config, err := openRepositoryFor(ctx, cwd, stderr, "", false)
 	if err != nil {
 		return err
 	}
@@ -190,7 +196,8 @@ func runConfigShow(ctx context.Context, args []string, cwd string, stdout, stder
 			Project: settingDisplay(config.AutoSync),
 			User:    userSettingDisplay(user),
 		},
-		Display: newDisplayView(state.Head, state.Seeded, state.Display),
+		Display:     newDisplayView(state.Head, state.Seeded, state.Display),
+		TasksRemote: newTasksRemoteView(ctx, repository, config),
 	}
 	if *jsonMode {
 		writeResult(stdout, "config show", result)
@@ -202,6 +209,7 @@ func runConfigShow(ctx context.Context, args []string, cwd string, stdout, stder
 	fmt.Fprintf(stdout, "  project:\t%s\n", result.AutoSync.Project)
 	fmt.Fprintf(stdout, "  user:\t%s\n", result.AutoSync.User)
 	writeDisplayView(stdout, result.Display)
+	writeTasksRemoteView(stdout, result.TasksRemote)
 	return nil
 }
 
@@ -260,7 +268,8 @@ func runConfigSet(ctx context.Context, args []string, cwd string, stdout, stderr
 		return err
 	}
 	flags := newFlagSet("config", "set")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with the tasks remote (origin unless configured)")
+	address := flags.String("url", "", "the tasks remote's address (tasks-remote only)")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -268,6 +277,12 @@ func runConfigSet(ctx context.Context, args []string, cwd string, stdout, stderr
 	kind, err := settingKind(values[0])
 	if err != nil {
 		return err
+	}
+	if values[0] == tasksRemoteSettingName {
+		return runConfigSetTasksRemote(ctx, cwd, stdout, stderr, values[1], *address, *jsonMode)
+	}
+	if *address != "" {
+		return core.Errorf(core.CategoryInvocation, "--url is for tasks-remote only")
 	}
 	if kind == ledgerSetting {
 		return runDisplayMutation(ctx, cwd, displayMutation{
@@ -295,7 +310,7 @@ func runConfigUnset(ctx context.Context, args []string, cwd string, stdout, stde
 		return err
 	}
 	flags := newFlagSet("config", "unset")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with the tasks remote (origin unless configured)")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -303,6 +318,9 @@ func runConfigUnset(ctx context.Context, args []string, cwd string, stdout, stde
 	kind, err := settingKind(values[0])
 	if err != nil {
 		return err
+	}
+	if values[0] == tasksRemoteSettingName {
+		return writeTasksRemoteSetting(ctx, cwd, stdout, stderr, configUnsetCommand, core.TasksRemoteSetting{}, *jsonMode)
 	}
 	if kind == ledgerSetting {
 		return runDisplayMutation(ctx, cwd, displayMutation{
@@ -360,7 +378,9 @@ func runDisplayMutation(ctx context.Context, cwd string, mutation displayMutatio
 		return err
 	}
 	defer session.Close()
-	session.fetchBefore(ctx)
+	if err := session.fetchBefore(ctx); err != nil {
+		return err
+	}
 	// Read after the fetch, exactly as the status verbs refresh the vocabulary
 	// after theirs: the previous value this reports and inverts is the one the
 	// write is about to replace, not the one this clone opened with.
@@ -393,6 +413,9 @@ func runDisplayMutation(ctx context.Context, cwd string, mutation displayMutatio
 		return displayWriteError(err)
 	}
 	session.publishConfig(ctx)
+	if err := session.publicationRefusal(); err != nil {
+		return err
+	}
 
 	result := configDisplayResult{
 		Change:  change,
@@ -531,7 +554,7 @@ func writeProjectSetting(
 	display string,
 	jsonMode bool,
 ) error {
-	repository, before, err := openRepository(ctx, cwd, stderr)
+	repository, before, err := openRepositoryFor(ctx, cwd, stderr, "", false)
 	if err != nil {
 		return err
 	}

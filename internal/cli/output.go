@@ -34,9 +34,10 @@ Commands:
   compact [--done-only [<duration>] | --deleted-only [<duration>]] [--since <duration>] [--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--json]
   compact --adopt <task> [--discard-local] [--no-backup | --backup <path>] [--json]
   version [--json]
-  fetch [--json]
-  push [--json]
-  sync [--watch [--interval <duration>]] [--status] [--json]
+  fetch [--remote <remote>] [--json]
+  push [--remote <remote>] [--json]
+  sync [--watch [--interval <duration>]] [--status] [--remote <remote>] [--json]
+  move-tasks [--from <remote>] [--allow-branches] [--json]
   status <command> [options]
   priority <command> [options]
   key <command> [options]
@@ -135,6 +136,9 @@ type ResultEnvelope struct {
 type ErrorBody struct {
 	Category core.Category `json:"category"`
 	Message  string        `json:"message"`
+	// TasksRemote is present only on a refusal about the remote a project
+	// shares its tasks through: which remote, why, and the command to run.
+	TasksRemote *core.TasksRemoteRefusal `json:"tasksRemote,omitempty"`
 }
 
 type ErrorEnvelope struct {
@@ -461,8 +465,9 @@ func writeError(output io.Writer, err error, jsonMode bool) {
 			Format:  "workbook.error",
 			Version: 1,
 			Error: ErrorBody{
-				Category: core.CategoryOf(err),
-				Message:  publicErrorMessage(err),
+				Category:    core.CategoryOf(err),
+				Message:     publicErrorMessage(err),
+				TasksRemote: tasksRemoteRefusal(err),
 			},
 		})
 		return
@@ -474,7 +479,26 @@ func writeError(output io.Writer, err error, jsonMode bool) {
 	}
 }
 
+func tasksRemoteRefusal(err error) *core.TasksRemoteRefusal {
+	refusal, found := core.TasksRemoteRefusalOf(err)
+	if !found {
+		return nil
+	}
+	return refusal
+}
+
 func publicErrorMessage(err error) string {
+	// A refusal about the tasks remote is a complete sentence written for the
+	// person reading it, so it is said as written however deep the command
+	// that met it wrapped it.
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if typed, ok := current.(*core.Error); ok && typed.TasksRemote != nil {
+			if typed.Category == core.CategoryOperational {
+				return typed.Error()
+			}
+			return typed.Message
+		}
+	}
 	var typed *core.Error
 	if errors.As(err, &typed) {
 		if core.CategoryOf(err) == core.CategoryOperational {

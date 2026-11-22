@@ -213,7 +213,7 @@ func (r *Repository) TrackingTaskHeads(ctx context.Context, config core.ProjectC
 	if err := r.validateRepositoryConfig(config); err != nil {
 		return nil, err
 	}
-	refs, _, err := r.listOwnedTaskRefs(ctx, config, remoteTaskRefPrefix)
+	refs, _, err := r.listOwnedTaskRefs(ctx, config, r.remoteTaskRefPrefix())
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +269,7 @@ func (r *Repository) CompactionReclaimableBytes(ctx context.Context, config core
 	}
 	args = append(args, "--not",
 		"--exclude="+taskRefPrefix+taskID,
-		"--exclude="+remoteTaskRefPrefix+taskID,
+		"--exclude="+r.remoteTaskRefPrefix()+taskID,
 		"--exclude="+parkedPrefix+"*",
 		"--all",
 	)

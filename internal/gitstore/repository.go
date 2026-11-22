@@ -66,6 +66,25 @@ type Repository struct {
 	// not achieve, for a caller whose own result is task shaped.
 	identityReport *SyncIdentityResult
 	identityDrift  string
+	// remoteOverride names the remote one command named with --remote, and
+	// remoteName memoizes the remote the project's settings name. See
+	// remote() in tasksremote.go.
+	remoteOverride string
+	remoteName     string
+	// originMoved is the tasks-moved marker this command found on the remote
+	// it synchronizes with, which every publication path then refuses.
+	originMoved *TasksMoved
+	// unconfirmed holds a warning for each publication this handle made that
+	// the remote accepted and that it could not check afterwards
+	// (strandedPublication).
+	unconfirmed []core.Warning
+	// trackedIdentity is where this checkout last saw its tasks remote's
+	// identity ref, as resolving the identity listed it.
+	trackedIdentity trackedIdentityHead
+	// moveStepHook, set only by tests, runs before each step of MoveTasks and
+	// stops the run where it returns an error, standing in for a process
+	// killed at that point.
+	moveStepHook func(step string) error
 	// vocabularyLoaded and the two fields below memoize the project's status
 	// configuration, exactly as configLoaded does for the tracked file. Reading
 	// it costs a ref enumeration and, for a project that has one, an object
@@ -297,17 +316,6 @@ func (r *Repository) observeGitCommand(args []string) {
 	if r.commandObserver != nil {
 		r.commandObserver(append([]string(nil), args...))
 	}
-}
-
-// HasOrigin reports whether an origin remote is configured.
-//
-// Any failure reads as "not configured" because that is the only actionable
-// distinction: a caller consults this to decide whether attempting the network
-// is worth a timeout, and a repository too broken to answer has nothing to
-// synchronize with either.
-func (r *Repository) HasOrigin(ctx context.Context) bool {
-	_, err := r.Git(ctx, nil, "remote", "get-url", "origin")
-	return err == nil
 }
 
 // Actor returns the person this context's edits are recorded under.

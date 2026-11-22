@@ -122,6 +122,10 @@ func (r *Repository) reconcileDivergentTasks(
 	if err != nil {
 		return nil, err
 	}
+	held, err := r.remoteOnlyOperations(ctx, graph, requests, spans)
+	if err != nil {
+		return nil, err
+	}
 
 	position := 0
 	for index, request := range requests {
@@ -156,6 +160,8 @@ func (r *Repository) reconcileDivergentTasks(
 			parent:       request.Remote,
 			dependencies: taskDependencyGraph(dependencies, request.TaskID, request.Remote.State.Task),
 			subjects:     subjects,
+			held:         held[index],
+			remote:       core.ConflictRemote(r.remote()),
 		}
 		for _, tip := range read[1:] {
 			done, err := replay.next(ctx, r, tip.Snapshot)
@@ -175,6 +181,54 @@ func (r *Repository) reconcileDivergentTasks(
 		outcomes[index].ParkedRef = fmt.Sprintf("%s%s/%d", reconciledRefPrefix, request.TaskID, parked[request.TaskID])
 	}
 	return outcomes, nil
+}
+
+// remoteOnlyOperations reads, for each request, the operations on the fetched
+// side after the shared base: the history its local-only packs are replayed
+// onto, beyond what both sides share. A local-only pack can only repeat one of
+// those, since anything before the base is on its own chain too. One batch of
+// operation blobs serves every request.
+func (r *Repository) remoteOnlyOperations(
+	ctx context.Context,
+	graph map[string][]string,
+	requests []reconcileRequest,
+	spans [][]string,
+) ([]heldOperations, error) {
+	held := make([]heldOperations, len(requests))
+	var heads []TaskHead
+	owners := make([]int, 0)
+	for index, request := range requests {
+		if spans[index] == nil {
+			continue
+		}
+		base := spans[index][0]
+		chain, err := commitChain(graph, request.Remote.Head)
+		if err != nil {
+			return nil, core.Wrap(core.CategoryCorruptData,
+				fmt.Sprintf("cannot walk fetched history for task %s", request.TaskID), err)
+		}
+		held[index] = heldOperations{}
+		for _, objectID := range chain {
+			if objectID == base {
+				break
+			}
+			heads = append(heads, TaskHead{TaskID: request.TaskID, ObjectID: objectID})
+			owners = append(owners, index)
+		}
+	}
+	packs, err := r.readOperationPacks(ctx, heads)
+	if err != nil {
+		return nil, err
+	}
+	for position, pack := range packs {
+		if pack.err != nil {
+			return nil, pack.err
+		}
+		if err := held[owners[position]].record(heads[position].ObjectID, pack.pack); err != nil {
+			return nil, err
+		}
+	}
+	return held, nil
 }
 
 // refuseNewerWriterReplay reports a divergence this build must not resolve.
@@ -229,16 +283,49 @@ type taskReplay struct {
 	// stops: a pack cannot be applied to a deleted task.
 	originWins bool
 	overridden *core.Conflict
-	replayed   int
-	skipped    int
-	conflict   *core.Conflict
+	// held is every operation the history being replayed onto already
+	// records, as far as the caller read it. A pack all of whose operations
+	// are held with the same content is skipped, whatever its commit ID, and
+	// one only some of whose operations are held is refused: writing it would
+	// record an operation ID twice in one history, which no reader can fold.
+	// Without this, two places that each hold the other's operations under
+	// different commits replayed them into each other on every round trip. A
+	// pack that reuses a held ID for other content is refused as corrupt
+	// (heldOperations.match): skipping it would take the other value silently.
+	held heldOperations
+	// remote is what a conflict's Remote member records: the remote whose
+	// history is replayed onto, or nothing for origin (core.ConflictRemote).
+	remote   string
+	replayed int
+	skipped  int
+	// carried counts the packs whose operations held already recorded.
+	carried  int
+	conflict *core.Conflict
 }
 
 // next replays one local operation pack. It reports done when replay must stop,
 // which happens only for a conflict; every other concurrent change is silent
 // last-syncer-wins.
 func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Snapshot) (bool, error) {
+	if replay.held != nil {
+		recorded, err := replay.held.match(replay.taskID, local.Head, local.Operation)
+		if err != nil {
+			return false, err
+		}
+		switch {
+		case recorded == len(local.Operation.Operations):
+			replay.skipped++
+			replay.carried++
+			return false, nil
+		case recorded > 0:
+			return false, core.Errorf(core.CategoryCorruptData,
+				"cannot replay task %s commit %s: some of its operations are already in the history it would be "+
+					"replayed onto and some are not, so replaying it would record an operation twice",
+				replay.taskID, local.Head)
+		}
+	}
 	if conflict := replay.classify(local.Operation); conflict != nil {
+		conflict.Remote = replay.remote
 		if !replay.originWins || conflict.Type == core.ConflictTombstone {
 			replay.conflict = conflict
 			return true, nil
@@ -293,6 +380,11 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 	}
 	replay.parent = core.Snapshot{Head: head, Operation: pack, State: state}
 	replay.replayed++
+	if replay.held != nil {
+		if err := replay.held.record(head, pack); err != nil {
+			return false, err
+		}
+	}
 	replay.dependencies[replay.taskID] = append([]string(nil), state.Task.Dependencies...)
 	return false, nil
 }

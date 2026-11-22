@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=d8dad1e sha256=73d44057f1c75f8579ce05200d95ea7d1e50c1cccd9e973b802d4c4c47c2e0c7 -->
+<!-- workbook:begin generator=4a133bd sha256=7fc29a798fc82ef77945d39769f732e2b133a7d80d18b02e022aa53d807b2d87 -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`.
@@ -140,10 +140,11 @@ Check the result of every mutation; do not assume it succeeded.
 
 ## Publication is automatic
 
-Commands that create or update a task fetch shared task refs from `origin`,
-apply the change to the refreshed tip, then publish the single ref they
-changed. `workbook next` fetches before answering. A repository with no
-`origin` synchronizes nothing.
+Commands that create or update a task fetch shared task refs from the
+project's tasks remote (`origin` unless configured), apply the change to the
+refreshed tip, then publish the single ref they changed. `workbook next`
+fetches before answering. A repository with no such remote synchronizes
+nothing.
 
 Disable it for one command with `--no-sync`, for this project with
 `workbook config set auto-sync false`, or for every project with
@@ -155,14 +156,14 @@ Record a project policy with that command rather than editing
 
 The `sync` member of a result envelope reports what happened. A `failed`
 status still means the change was recorded locally and the command exits 0.
-Local work that `origin` does not have is replayed onto the fetched tip and
+Local work that the tasks remote does not have is replayed onto the fetched tip and
 published, so a divergent task needs no separate reconciliation step.
 
 ## Conflicts
 
 Concurrent edits to different fields are applied silently. Exactly three
 situations stop a replay and exit `8`: both sides changed the description, a
-replayed dependency would close a cycle, and `origin` tombstoned a task a
+replayed dependency would close a cycle, and the tasks remote tombstoned a task a
 local operation still edits.
 
 They are reported in the result envelope's `conflict` list, which names each

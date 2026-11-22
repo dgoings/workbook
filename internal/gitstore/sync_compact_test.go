@@ -514,7 +514,7 @@ func TestPushRejectsPlusFlagForOrdinaryRefs(t *testing.T) {
 	expected := map[string]string{leasedRef: "task-leased", plainRef: "task-plain"}
 	forced := map[string]bool{leasedRef: true}
 
-	if _, err := parsePushPorcelain([]byte(
+	if _, err := parsePushPorcelain("origin", []byte(
 		"=\tabc:"+leasedRef+"\t[up to date]\n"+
 			"+\tdef:"+plainRef+"\tabc...def (forced update)\n",
 	), expected, forced, nil); err == nil {
@@ -567,7 +567,7 @@ func TestPushRejectsPlusFlagForOrdinaryRefs(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := parsePushPorcelain([]byte(test.output), expected, forced, nil)
+			got, err := parsePushPorcelain("origin", []byte(test.output), expected, forced, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -886,7 +886,7 @@ func TestFetchAdoptionFallbackCountsOnlyOperationsAPersonMade(t *testing.T) {
 	want := SyncTaskResult{
 		TaskID: task.ID,
 		Status: SyncCompactedOnOrigin,
-		Detail: compactedOnOriginDetail("Title after the checkpoint", task.ID, 1),
+		Detail: compactedOnOriginDetail("origin", "Title after the checkpoint", task.ID, 1),
 	}
 	if item := syncOutcome(t, result.Fetch, task.ID); item != want {
 		t.Fatalf("fetch outcome = %#v, want %#v", item, want)
@@ -1431,7 +1431,7 @@ func TestCompactedOnOriginDetailCountsChanges(t *testing.T) {
 		{1, "you have 1 unpushed change on the old history."},
 		{2, "you have 2 unpushed changes on the old history."},
 	} {
-		if got := compactedOnOriginDetail("Title", "WB-1", test.unpushed); !strings.Contains(got, test.want) {
+		if got := compactedOnOriginDetail("origin", "Title", "WB-1", test.unpushed); !strings.Contains(got, test.want) {
 			t.Fatalf("compactedOnOriginDetail(%d) = %q, want it to say %q", test.unpushed, got, test.want)
 		}
 	}

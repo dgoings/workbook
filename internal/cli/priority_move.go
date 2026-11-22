@@ -20,7 +20,7 @@ func runPriorityMove(ctx context.Context, args []string, cwd string, stdout, std
 	flags := newFlagSet("priority", "move")
 	before := flags.String("before", "", "move before this priority")
 	after := flags.String("after", "", "move after this priority")
-	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with the tasks remote (origin unless configured)")
 	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {

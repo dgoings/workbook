@@ -351,7 +351,7 @@ func (r *Repository) classifyConfigRoots(
 	if err != nil {
 		return nil, err
 	}
-	remoteRecords, err := r.readConfigRecords(ctx, config, remoteConfigRef, []string{remoteRoot})
+	remoteRecords, err := r.readConfigRecords(ctx, config, r.remoteConfigRef(), []string{remoteRoot})
 	if err != nil {
 		return nil, err
 	}

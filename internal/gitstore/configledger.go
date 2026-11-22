@@ -30,25 +30,21 @@ const (
 	// this ref.
 	configRef = "refs/workbook/config"
 
-	// remoteConfigRef mirrors origin's configuration ledger. It parallels the
+	// The tasks remote's configuration ledger is mirrored at
+	// refs/workbook/remotes/<remote>/config (remoteConfigRefFor), beside the
 	// task and identity tracking namespaces so one fetch populates all three.
 	//
 	// It is permanently childless for the same directory/file reason, but the
-	// verdict on a name found beneath it differs: origin's namespace is not
-	// under this tool's control, and a stray ref there is skipped and reported
-	// rather than treated as corruption. See listConfigRefs.
-	remoteConfigRef = "refs/workbook/remotes/origin/config"
-
-	// configFetchRefspec brings origin's configuration ref into the tracking
-	// name above.
+	// verdict on a name found beneath it differs: the remote's namespace is
+	// not under this tool's control, and a stray ref there is skipped and
+	// reported rather than treated as corruption. See listConfigRefs.
 	//
-	// The trailing glob is load-bearing, and is the lesson the identity ref
-	// already paid for: Git fails a whole fetch when an explicitly named source
-	// ref is missing, so a plain `+refs/workbook/config:...` refspec would
-	// break every fetch against an origin that has no ledger — which is every
-	// project until somebody changes a status. A pattern refspec matches
-	// nothing silently instead.
-	configFetchRefspec = "+" + configRef + "*:" + remoteConfigRef + "*"
+	// Its fetch refspec (configFetchRefspecFor) ends in a glob, and the glob is
+	// load-bearing, the lesson the identity ref already paid for: Git fails a
+	// whole fetch when an explicitly named source ref is missing, so a plain
+	// `+refs/workbook/config:...` refspec would break every fetch against a
+	// remote that has no ledger — which is every project until somebody changes
+	// a status. A pattern refspec matches nothing silently instead.
 
 	// parkedConfigRefPrefix retains the orphaned configuration tips that
 	// reconciliation replaced.
@@ -1225,8 +1221,8 @@ func parseConfigRefRecords(refs []string, contents []byte) (configRefListing, er
 			}
 		}
 		if requested == "" {
-			if strings.HasPrefix(refName, remoteConfigRef+"/") {
-				listing.Ignored = append(listing.Ignored, originConfigRefName(refName))
+			if name, mirrored := mirroredConfigChild(refName); mirrored {
+				listing.Ignored = append(listing.Ignored, name)
 				continue
 			}
 			return configRefListing{}, configRefChildError(configRefAncestorOf(refs, refName))
@@ -1242,11 +1238,19 @@ func parseConfigRefRecords(refs []string, contents []byte) (configRefListing, er
 	return listing, nil
 }
 
-// originConfigRefName restates a mirrored name under the ref origin holds it
-// at. The local mirror is rebuilt by every fetch, so naming it would name a ref
-// the user cannot usefully remove.
-func originConfigRefName(refName string) string {
-	return configRef + strings.TrimPrefix(refName, remoteConfigRef)
+// mirroredConfigChild recognizes a name some remote holds under its
+// configuration ref, as a fetch mirrored it, and restates it under the ref the
+// remote holds it at. The local mirror is rebuilt by every fetch, so naming it
+// would name a ref the user cannot usefully remove.
+func mirroredConfigChild(refName string) (string, bool) {
+	if !strings.HasPrefix(refName, remoteTrackingRoot) {
+		return "", false
+	}
+	_, tail, found := strings.Cut(strings.TrimPrefix(refName, remoteTrackingRoot), "/")
+	if !found || !strings.HasPrefix(tail, "config/") {
+		return "", false
+	}
+	return configRef + strings.TrimPrefix(tail, "config"), true
 }
 
 func configRefAncestorOf(refs []string, refName string) string {

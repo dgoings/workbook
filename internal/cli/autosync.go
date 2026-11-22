@@ -87,7 +87,9 @@ type taskSession struct {
 	// deferred reports that a trustworthy watcher answered, so this command
 	// writes locally and hands publication to it.
 	deferred bool
-	watcher  syncloop.Status
+	// refusal is a publication refusal the command fails on; see noteRefusal.
+	refusal error
+	watcher syncloop.Status
 	// releaseProjection closes the projection the session reads and writes
 	// through; see openProjection for why it has to be given back.
 	releaseProjection func()
@@ -259,23 +261,37 @@ func (session *taskSession) acknowledge(conflict core.Conflict) {
 // other ref, so one task's malformed object is no reason to deny publication to
 // a mutation that did not touch it. What the fetch could not validate is
 // carried as a warning instead.
-func (session *taskSession) fetchBefore(ctx context.Context) {
+//
+// It returns an error only for a tasks remote marked as moved: the edit would
+// otherwise be recorded here and published to the place the tasks left, or to
+// nowhere, so the command stops with the refusal saying where they went.
+func (session *taskSession) fetchBefore(ctx context.Context) error {
 	if !session.report.Enabled {
-		return
+		return nil
 	}
 	if session.deferred {
 		// The watcher fetched within its staleness window, so the tip this
 		// mutation applies to is current enough. Reconciliation makes a
 		// slightly stale tip a case the fetch path already handles rather than
 		// one worth a network round trip to prevent.
+		//
+		// A tasks remote marked as the place the tasks moved away from is
+		// refused here too, from this checkout's copy of its identity ref,
+		// which the watcher's own fetches keep current: a change recorded now
+		// would be handed to a watcher that is refused, and this command would
+		// exit as if it had been published. Nothing is asked of the remote, so
+		// a move reaches this check within one watcher interval.
+		if err := session.repository.CheckRemoteNotMoved(ctx, false); err != nil {
+			return err
+		}
 		session.report.Status = syncStatusDeferred
 		session.report.Detail = fmt.Sprintf("handed to the sync watcher (pid %d)", session.watcher.PID)
-		return
+		return nil
 	}
-	if !session.repository.HasOrigin(ctx) {
+	if !session.repository.HasTasksRemote(ctx) {
 		session.report.Status = syncStatusSkipped
-		session.report.Detail = "no origin remote configured"
-		return
+		session.report.Detail = "no " + session.repository.TasksRemoteName() + " remote configured"
+		return nil
 	}
 	result, err := session.repository.Fetch(ctx, session.config)
 	session.report.Fetch = &result
@@ -286,10 +302,13 @@ func (session *taskSession) fetchBefore(ctx context.Context) {
 	// carried to the caller rather than raised in their way.
 	session.report.configConflicts = result.ConfigConflicts
 	session.conflicts = result.Conflicts
+	if refusal, found := core.TasksRemoteRefusalOf(err); found && refusal.Reason == core.TasksRemoteMoved {
+		return err
+	}
 	if err != nil && result.Status != gitstore.SyncPhaseCompleted {
 		session.report.Status = syncStatusFailed
 		session.report.Detail = "fetch failed: " + err.Error()
-		return
+		return nil
 	}
 	session.fetched = &result
 	session.report.Status = syncStatusCompleted
@@ -302,6 +321,7 @@ func (session *taskSession) fetchBefore(ctx context.Context) {
 		}
 	}
 	session.unsettled = settleMovedHistories(ctx, session.store, session.config, result)
+	return nil
 }
 
 // settleMovedHistories reads, through the projection, every task a fetch moved
@@ -375,11 +395,16 @@ func unsettledWarning(err error) core.Warning {
 
 // unsettledWarnings is unsettledWarning for a session's own fetch, or nothing
 // when its projection took every task the fetch moved.
+//
+// It also carries a warning for each publication the remote accepted that
+// could not be checked afterwards (gitstore.Repository.PublicationWarnings),
+// since every command that publishes task refs reports through here.
 func (session *taskSession) unsettledWarnings() []core.Warning {
+	warnings := session.repository.PublicationWarnings()
 	if session.unsettled == nil {
-		return nil
+		return warnings
 	}
-	return []core.Warning{unsettledWarning(session.unsettled)}
+	return append([]core.Warning{unsettledWarning(session.unsettled)}, warnings...)
 }
 
 // compactedOnOriginWarning says which tasks the fetch kept on the old history,
@@ -390,7 +415,7 @@ func (session *taskSession) compactedOnOriginWarning(prefix string) (core.Warnin
 	}
 	return core.Warning{
 		Code: core.WarningAutoSync,
-		Message: prefix + "origin compacted tasks this clone keeps on the old history (" +
+		Message: prefix + session.repository.TasksRemoteName() + " compacted tasks this clone keeps on the old history (" +
 			strings.Join(session.compactedOnOrigin, ", ") + `); run "workbook sync" for details`,
 	}, true
 }
@@ -459,7 +484,11 @@ func (session *taskSession) publishConfig(ctx context.Context) {
 }
 
 func (session *taskSession) pushConfigInline(ctx context.Context) {
-	published, err := session.repository.PushConfig(ctx, session.config)
+	push := session.repository.PushConfig
+	if session.fetched != nil {
+		push = session.repository.PushConfigAfterFetch
+	}
+	published, err := push(ctx, session.config)
 	session.report.Identity, _ = session.repository.IdentityReport()
 	if published != nil {
 		session.report.Config = published
@@ -467,6 +496,7 @@ func (session *taskSession) pushConfigInline(ctx context.Context) {
 	if err != nil {
 		session.report.Status = syncStatusFailed
 		session.report.Detail = "push failed: " + err.Error()
+		session.noteRefusal(err)
 		return
 	}
 	session.report.Status = syncStatusCompleted
@@ -511,13 +541,21 @@ func (session *taskSession) pushTasksInline(ctx context.Context, taskIDs []strin
 	if err != nil {
 		session.report.Status = syncStatusFailed
 		session.report.Detail = "push failed: " + err.Error()
+		session.noteRefusal(err)
 		return
 	}
 	session.report.Status = syncStatusCompleted
 }
 
 func (session *taskSession) pushInline(ctx context.Context, taskID string) {
-	pushed, err := session.repository.PushTask(ctx, session.config, taskID)
+	// This command's own fetch compared the identity refs moments ago, so the
+	// push need not ask again. A command that handed off to a watcher which
+	// then vanished did not fetch, and asks.
+	push := session.repository.PushTask
+	if session.fetched != nil {
+		push = session.repository.PushTaskAfterFetch
+	}
+	pushed, err := push(ctx, session.config, taskID)
 	session.report.Push = &pushed
 	session.report.Identity, _ = session.repository.IdentityReport()
 	if published, found := session.repository.ConfigReport(); found {
@@ -526,9 +564,35 @@ func (session *taskSession) pushInline(ctx context.Context, taskID string) {
 	if err != nil {
 		session.report.Status = syncStatusFailed
 		session.report.Detail = "push failed: " + err.Error()
+		session.noteRefusal(err)
 		return
 	}
 	session.report.Status = syncStatusCompleted
+}
+
+// noteRefusal keeps a publication's refusal that the command has to fail on
+// rather than carry as a warning: the tasks remote was marked as the place the
+// tasks moved away from, either before the push (nothing was published) or
+// just after it (the change reached a place nobody reads any more). The change
+// is recorded either way, and both refusals say so; what they must not be is
+// a warning beside an exit status that says all was well.
+func (session *taskSession) noteRefusal(err error) {
+	refusal, found := core.TasksRemoteRefusalOf(err)
+	if !found {
+		return
+	}
+	switch refusal.Reason {
+	case core.TasksRemoteMoved, core.TasksRemotePublishedAfterMove:
+		session.refusal = err
+	}
+}
+
+// publicationRefusal is the refusal noteRefusal kept, if any. Every command
+// that records a change and then publishes it returns this after writing
+// nothing else, so its exit status and its JSON error envelope say what
+// happened to the change.
+func (session *taskSession) publicationRefusal() error {
+	return session.refusal
 }
 
 // refreshConfiguration re-reads the project's statuses, priorities and keys
@@ -660,7 +724,9 @@ func (session *taskSession) mutate(
 	target string,
 	apply func(context.Context) (core.MutationResult, error),
 ) (core.MutationResult, error) {
-	session.fetchBefore(ctx)
+	if err := session.fetchBefore(ctx); err != nil {
+		return core.MutationResult{}, err
+	}
 	if err := session.refreshConfiguration(ctx); err != nil {
 		return core.MutationResult{}, err
 	}
@@ -679,6 +745,9 @@ func (session *taskSession) mutate(
 		return core.MutationResult{}, err
 	}
 	session.publish(ctx, result.Task.ID)
+	if err := session.publicationRefusal(); err != nil {
+		return core.MutationResult{}, err
+	}
 	switch {
 	case session.report.Status == syncStatusFailed:
 		result.Warnings = append(result.Warnings, core.Warning{

@@ -1010,9 +1010,15 @@ func measureLocalBareSyncAgainstNewOrigin(
 // the default 500-task fixture, sync-initial-local-bare averaged 647 ms cleared
 // against 807 ms uncleared; an independent reproduction that also controlled
 // for presence alone split that inflation roughly evenly between the two.
+//
+// Only origin's tracking namespace is cleared, because that is the one the
+// measured command fetches and prunes: each remote is mirrored under its own
+// refs/workbook/remotes/<remote>/, and a fetch from one leaves the others as
+// they are, so clearing every remote's would measure a topology the product
+// never sees.
 func deleteTrackingTaskRefs(ctx context.Context, commandTimeout time.Duration, fixtureRoot string) error {
 	output, _, err := runRepositoryGit(
-		ctx, commandTimeout, fixtureRoot, "for-each-ref", "--format=delete %(refname)", "refs/workbook/remotes/",
+		ctx, commandTimeout, fixtureRoot, "for-each-ref", "--format=delete %(refname)", "refs/workbook/remotes/origin/",
 	)
 	if err != nil {
 		return err

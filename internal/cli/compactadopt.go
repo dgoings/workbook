@@ -50,12 +50,14 @@ func runCompactAdopt(ctx context.Context, request compactAdoptRequest, cwd strin
 	session.deferred = false
 	session.report.Enabled = true
 	session.report.Detail = ""
-	if !session.repository.HasOrigin(ctx) {
-		return core.Errorf(core.CategoryValidation, "compact --adopt needs an origin remote to fetch from")
+	if !session.repository.HasTasksRemote(ctx) {
+		return core.Errorf(core.CategoryValidation, "compact --adopt needs an %s remote to fetch from", session.repository.TasksRemoteName())
 	}
-	session.fetchBefore(ctx)
+	if err := session.fetchBefore(ctx); err != nil {
+		return err
+	}
 	if session.report.Status == syncStatusFailed {
-		return core.Errorf(core.CategoryOperational, "compact --adopt needs origin's current tip, but %s", session.report.Detail)
+		return core.Errorf(core.CategoryOperational, "compact --adopt needs %s's current tip, but %s", session.repository.TasksRemoteName(), session.report.Detail)
 	}
 	if err := session.refreshConfiguration(ctx); err != nil {
 		return err
@@ -98,6 +100,9 @@ func runCompactAdopt(ctx context.Context, request compactAdoptRequest, cwd strin
 	if result.Status != gitstore.SyncDiscardedLocal {
 		session.publish(ctx, taskID)
 	}
+	if err := session.publicationRefusal(); err != nil {
+		return err
+	}
 	if session.report.Status == syncStatusFailed {
 		warnings = append(warnings, core.Warning{
 			Code:    core.WarningAutoSync,
@@ -114,7 +119,7 @@ func runCompactAdopt(ctx context.Context, request compactAdoptRequest, cwd strin
 		writeSyncedResult(stdout, "compact", result, &session.report, conflicts, warnings)
 		return nil
 	}
-	fmt.Fprintln(stdout, compactAdoptLine(result))
+	fmt.Fprintln(stdout, compactAdoptLine(result, session.repository.TasksRemoteName()))
 	writeSyncReport(stdout, &session.report)
 	writeConflicts(stdout, conflicts)
 	writeConfigConflicts(stdout, session.report.configConflicts)
@@ -181,7 +186,7 @@ func settleDiscardProjection(ctx context.Context, session *taskSession, adoption
 	}
 	return core.Warning{
 		Code: core.WarningProjectionUpdate,
-		Message: "origin's version was taken, but the SQLite cache could not be updated; run " +
+		Message: session.repository.TasksRemoteName() + "'s version was taken, but the SQLite cache could not be updated; run " +
 			"`workbook rebuild`: " + err.Error(),
 	}, true
 }
@@ -208,17 +213,17 @@ func taskRefHead(ctx context.Context, session *taskSession, taskID string) (stri
 	return head.ObjectID, true
 }
 
-func compactAdoptLine(result compactAdoptResult) string {
+func compactAdoptLine(result compactAdoptResult, remote string) string {
 	switch result.Status {
 	case gitstore.SyncDiscardedLocal:
 		if result.Bundle == "" {
-			return fmt.Sprintf("Took origin's version of %s; the local history was discarded without a backup.", result.TaskID)
+			return fmt.Sprintf("Took %s's version of %s; the local history was discarded without a backup.", remote, result.TaskID)
 		}
-		return fmt.Sprintf("Took origin's version of %s; the local history is saved in %s.", result.TaskID, result.Bundle)
+		return fmt.Sprintf("Took %s's version of %s; the local history is saved in %s.", remote, result.TaskID, result.Bundle)
 	case gitstore.SyncAdopted:
-		return fmt.Sprintf("Adopted origin's compaction of %s.", result.TaskID)
+		return fmt.Sprintf("Adopted %s's compaction of %s.", remote, result.TaskID)
 	case gitstore.SyncAdoptedReplayed:
-		return fmt.Sprintf("Adopted origin's compaction of %s; %s.", result.TaskID, result.Detail)
+		return fmt.Sprintf("Adopted %s's compaction of %s; %s.", remote, result.TaskID, result.Detail)
 	default:
 		line := fmt.Sprintf("Settled %s: %s", result.TaskID, result.Status)
 		if result.Detail != "" {

@@ -7,7 +7,9 @@ address. It is written for somebody doing this for the first time. It uses:
 - a Linux machine that keeps its disk across restarts;
 - a [tasks-only folder](reference.md#tasks-only-folders) holding the project's
   tasks and none of its code;
-- a GitHub deploy key with write access, so the board can publish;
+- a GitHub deploy key with write access, so the board can publish, on a
+  repository that holds the tasks and nothing else if you follow
+  [Keep the tasks in their own repository](#keep-the-tasks-in-their-own-repository);
 - `workbook serve` listening on this machine only;
 - [Cloudflare Tunnel](https://developers.cloudflare.com/tunnel/), so nothing
   on the machine has to accept connections from the internet;
@@ -37,8 +39,65 @@ before you share the address.
   ([seat management](https://developers.cloudflare.com/cloudflare-one/team-and-resources/users/seat-management/)).
 
 The examples use `tasks.example.com` for the board's address,
-`OWNER/REPO` for the repository, and `board@example.com` for the server's own
-address. Replace each with yours.
+`OWNER/REPO` for the repository that holds the tasks, and `board@example.com`
+for the server's own address. Replace each with yours. If the project keeps its
+tasks in their own repository, `OWNER/REPO` is that one, never the code's.
+
+## Keep the tasks in their own repository
+
+A deploy key with write access opens its whole repository, not only Workbook's
+refs (see [The server's key opens the whole repository](#the-servers-key-opens-the-whole-repository)).
+If the tasks live in the code's repository, the board's key can push to the
+code. Moving them to a repository of their own first leaves the key nothing
+else to open. It is optional, and done once, from a clone of the code, by
+somebody who can push to both repositories:
+
+1. Create an empty private repository on GitHub, such as `OWNER/REPO-tasks`.
+2. Once every teammate runs a Workbook version with this command, in the
+   clone of the code:
+
+   ```sh
+   workbook config set tasks-remote tasks --url git@github.com:OWNER/REPO-tasks.git
+   workbook move-tasks
+   git add .workbook/config.json
+   git commit -m "Keep tasks in their own repository"
+   git push
+   ```
+
+3. Everyone else pulls that commit and runs `workbook setup`, which adds the
+   `tasks` remote to their clone. Until they do, their task commands refuse and
+   say so; nothing is lost.
+
+`move-tasks` copies every task, marks the code repository as the place the
+tasks moved away from, and checks that the new repository holds everything the
+old one did. If it stops partway, run it again. The old repository keeps its
+copy. Tell the team before you move, and run `workbook move-tasks` once more
+after everyone has pulled: an edit somebody published in the moment of the
+move waits on the old repository until then. If such an edit conflicts with
+what happened to its task at the new repository, the command reports it to
+whoever runs it, in the clone they run it from, by task title and ID, and keeps
+its text in that clone; nobody else is told. The move is one-way. The full
+procedure, what it guarantees and what it does not, is in
+[A tasks remote other than origin](reference.md#a-tasks-remote-other-than-origin).
+
+The tasks repository must be a repository of its own, never a mirror: not one
+GitHub or another host keeps updated from the code repository, and not one a
+job pushes the code to with `git push --mirror`. Each update would delete or
+overwrite the tasks' refs, because the code repository does not have them.
+`move-tasks` refuses a repository holding branches unless given
+`--allow-branches`, and a mirror holds branches; do not pass the flag for one.
+
+If a board already serves a tasks-only folder set up from the code's address,
+its saves are refused once the move is made: each is kept in the folder and
+answered with a warning that the tasks moved. Repoint the folder, as
+[Updating and retiring](#updating-and-retiring) shows; its refusal names the
+command.
+
+A teammate without access to the tasks repository can still clone and push the
+code. Their `workbook setup` says which repository it could not read and that
+reading the tasks needs read access to it and changing them push access.
+Workbook's optional pre-push hook, which publishes tasks on every code push,
+says the tasks were not published and lets the code push through.
 
 ## 1. Install Workbook
 
@@ -113,8 +172,8 @@ sudo -u workbook ssh-keygen -t ed25519 -N "" -C "workbook board" \
 sudo cat /var/lib/workbook/.ssh/board_deploy_key.pub
 ```
 
-On GitHub, open the repository's **Settings**, then **Deploy keys**, then
-**Add deploy key**. Give it a title, paste the public key, select **Allow
+On GitHub, open the repository that holds the tasks, then its **Settings**,
+then **Deploy keys**, then **Add deploy key**. Give it a title, paste the public key, select **Allow
 write access**, and select **Add key**.
 
 Tell SSH to use that key for GitHub, and record GitHub's host key:
@@ -144,6 +203,12 @@ sudo -u workbook -H sh -c '
   git config user.email board@example.com
 '
 ```
+
+The address is the repository that holds the tasks: the tasks repository if
+you followed [Keep the tasks in their own repository](#keep-the-tasks-in-their-own-repository),
+otherwise the code's. A tasks-only folder set up from the code's address is
+refused after the move, and the refusal names the one command that points it at
+the new address; see [Updating and retiring](#updating-and-retiring).
 
 The folder holds the project's Workbook refs and none of its code. The
 `user.email` is the server's own name. With the setup below, people's edits
@@ -335,10 +400,12 @@ where it starts on. A web app has its own window and keeps its own cookies,
 starting from the ones Safari had when it was added, so once its Access
 sign-in expires it has to sign in again inside the web app, and signing in in
 Safari does not help it. Tell readers to switch "Open as Web App" off when they
-add the board; the shortcut then opens it in Safari, signed in as Safari is.
-None of this has been tried on a real phone. The page asks for the manifest that names the shortcut with the
-browser's cookies, so the manifest reaches the board through Access the way the
-page does. Without the sign-in, Access would answer that request with its sign-in
+add the board; the shortcut then opens it in the browser, signed in as the
+browser is. None of this has been tried on a real phone.
+
+The page asks for the manifest that names the shortcut with the browser's
+cookies, so the manifest reaches the board through Access the way the page
+does. Without the sign-in, Access would answer that request with its sign-in
 page and the browser would have no manifest. That much is checked in Chrome,
 behind a proxy that refuses any request without its cookie: the manifest and
 both icons arrived signed in. It has not been checked on a real phone, where
@@ -360,10 +427,24 @@ passphrase and no expiry date. Keep the machine's other users and services away
 from that folder, and remove the key on GitHub the day the board is retired.
 
 The exposure comes from the tasks living in the same repository as the code.
-Keeping them in a repository of their own, which holds tasks and nothing else,
-would leave the key nothing else to open, but every clone shares tasks through
-its `origin`, so this version cannot. Sharing tasks through a remote other than
-`origin` is planned, not available.
+[Keeping them in a repository of their own](#keep-the-tasks-in-their-own-repository),
+which holds tasks and nothing else, leaves the key nothing else to open. GitHub
+attaches a deploy key to one repository and refuses to add the same key to a
+second ([Key already in use](https://docs.github.com/en/authentication/troubleshooting-ssh/error-key-already-in-use)).
+To confirm from the server what the key opens:
+
+```sh
+sudo -u workbook ssh -T git@github.com
+sudo -u workbook git ls-remote git@github.com:OWNER/REPO-tasks.git refs/workbook/project
+sudo -u workbook git ls-remote git@github.com:OWNER/REPO.git
+```
+
+The first greets the key by the repository it is attached to, `Hi
+OWNER/REPO-tasks!`, rather than by a person's name. The second prints one line.
+The third, the code's repository, must fail with `Repository not found` or
+`Permission denied`; if it lists the code's branches, the key opens the code
+too. The key still opens everything in the tasks repository, so anything else
+kept there is as exposed as the tasks.
 
 ### The board trusts the name header
 
@@ -652,6 +733,31 @@ To update Workbook, install the new version and restart the service with
 `sudo systemctl restart workbook-board`. On a stop, `workbook serve` finishes
 its last synchronization before it exits, so changes saved just before the
 restart are published.
+
+After the tasks move to a repository of their own, a board on a tasks-only
+folder set up from the code's address keeps saving each edit in the folder and
+publishes none of them; each save is answered with a warning that the tasks
+moved, and the board's log says so once. Once it has, repoint the folder:
+
+```sh
+sudo systemctl stop workbook-board
+# On GitHub: delete the deploy key from the code repository, then add the same
+# public key to the tasks repository with Allow write access, as in step 3.
+sudo -u workbook -H sh -c '
+  cd /var/lib/workbook/board &&
+  workbook setup --tasks-only git@github.com:OWNER/REPO-tasks.git
+'
+sudo systemctl start workbook-board
+```
+
+Stopping first lets the board finish its last synchronization and keeps it
+from publishing while the folder changes. The key moves rather than being
+added twice, because GitHub attaches a deploy key to one repository only, and
+the code repository is the one it should no longer open. Setup accepts the new
+address because the code repository's marker names it: the folder already
+holds the marker, since the board's log reported it. Setup points the folder at
+the new address, reads the tasks from there, publishes the edits the folder
+kept, and is safe to run again; any other address is refused.
 
 To retire the board, stop and disable the service, delete the tunnel and the
 Access application in the Cloudflare dashboard, and remove the deploy key in

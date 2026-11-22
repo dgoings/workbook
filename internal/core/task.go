@@ -19,6 +19,42 @@ type ProjectConfig struct {
 	// policy defers to the user configuration and then to the built-in
 	// default.
 	AutoSync AutoSyncSetting `json:"autoSync,omitempty"`
+	// TasksRemote names the Git remote this project shares its tasks through,
+	// and the address a checkout adds it from. The zero value means origin,
+	// which is every project that never chose, and it is left out of the file
+	// entirely so such a project's document is byte for byte what it was.
+	TasksRemote TasksRemoteSetting `json:"tasksRemote,omitzero"`
+}
+
+// DefaultTasksRemote is the remote a project shares its tasks through when it
+// names none.
+const DefaultTasksRemote = "origin"
+
+// TasksRemoteSetting is the project's choice of tasks remote, as the tracked
+// configuration records it. Both members are plain strings so ProjectConfig
+// stays comparable.
+type TasksRemoteSetting struct {
+	// Name is the Git remote name every checkout uses for the tasks.
+	Name string `json:"name"`
+	// URL is the address `workbook setup` adds that remote from when a checkout
+	// does not have it yet. A checkout that already has a remote of this name
+	// keeps its own address, which is how one contributor uses SSH where the
+	// file says HTTPS.
+	URL string `json:"url,omitempty"`
+}
+
+// Chosen reports whether the project names a tasks remote other than origin.
+// A setting that names origin itself changes nothing and reads as no choice.
+func (setting TasksRemoteSetting) Chosen() bool {
+	return setting.Name != "" && setting.Name != DefaultTasksRemote
+}
+
+// RemoteName is the remote the setting resolves to.
+func (setting TasksRemoteSetting) RemoteName() string {
+	if setting.Name == "" {
+		return DefaultTasksRemote
+	}
+	return setting.Name
 }
 
 // SameIdentity reports whether two configurations name the same project.

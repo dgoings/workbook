@@ -427,6 +427,38 @@ func TestWebMutationPublishesWithoutWaitingForATick(t *testing.T) {
 	t.Fatalf("origin never received %s; the board waited for a tick instead of nudging", created)
 }
 
+// In deferred mode a board save is handed to a trustworthy watcher rather
+// than published inline. Origin is made unreachable once the watcher has
+// synchronized, so a save published inline answers with a publication
+// warning, and only a save the watcher accepted answers without one. The
+// watcher answers one request per connection, so asking its status and
+// handing it the save are two connections.
+func TestBoardDeferredModeHandsTheSaveToTheWatcher(t *testing.T) {
+	t.Parallel()
+	_, second := cliSyncRepositories(t)
+	startCLIWatcher(t, second, "1h")
+	address, _, stopServe := startServeCapturing(t, second)
+	defer stopServe()
+	if mode := boardSyncMode(t, address); mode != "deferred" {
+		t.Fatalf("initial publication mode = %q, want deferred", mode)
+	}
+	cliGit(t, second, "config", "remote.origin.url", filepath.Join(t.TempDir(), "unreachable.git"))
+
+	body, status := boardRequest(t, http.MethodPost, "http://"+address+"/api/tasks", `{"title":"Handed to the watcher"}`)
+	if status != http.StatusOK {
+		t.Fatalf("board save = %d; body = %s", status, body)
+	}
+	var saved struct {
+		Warnings []core.Warning `json:"warnings"`
+	}
+	if err := json.Unmarshal(body, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Warnings) != 0 {
+		t.Fatalf("save warnings = %+v, want none: the save was published inline instead of handed over", saved.Warnings)
+	}
+}
+
 // The toggle has to change what actually happens, not just what is reported.
 // Inline means the response returns only after origin has the change, so a
 // watcher that refuses to publish cannot hide behind a receipt.

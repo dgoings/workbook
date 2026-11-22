@@ -26,22 +26,21 @@ const (
 	// name is corruption rather than something to skip.
 	identityRef = "refs/workbook/project"
 
-	// remoteIdentityRef mirrors origin's identity ref. It parallels the task
-	// tracking namespace so one fetch can populate both.
-	remoteIdentityRef = "refs/workbook/remotes/origin/project"
-
-	// identityFetchRefspec brings origin's identity ref into the tracking name
-	// above.
+	// The remote's identity ref is mirrored at
+	// refs/workbook/remotes/<remote>/project, beside its task tracking
+	// namespace, so one fetch can populate both (remoteIdentityRefFor).
 	//
-	// The trailing glob is load-bearing. Git fails a whole fetch when an
-	// explicitly named source ref is missing, so a plain
-	// `+refs/workbook/project:...` refspec would break every fetch against an
-	// origin that has not published the ref yet — which is every project until
-	// the first v0.5.0 clone publishes one. A pattern refspec matches nothing
-	// silently instead, so one fetch serves both worlds.
-	identityFetchRefspec = "+" + identityRef + "*:" + remoteIdentityRef + "*"
+	// Its fetch refspec (identityFetchRefspecFor) ends in a glob, and the glob
+	// is load-bearing. Git fails a whole fetch when an explicitly named source
+	// ref is missing, so a plain `+refs/workbook/project:...` refspec would
+	// break every fetch against a remote that has not published the ref yet —
+	// which was every project until the first v0.5.0 clone published one. A
+	// pattern refspec matches nothing silently instead, so one fetch serves
+	// both worlds.
 
-	// identityDocumentPath is the only entry the identity tree may contain.
+	// identityDocumentPath is the only entry an identity root's tree may
+	// contain. A tasks-moved marker commit on top of it adds one more
+	// (tasksMovedDocumentPath); see tasksmoved.go.
 	identityDocumentPath = "project.json"
 
 	// The identity commit is built with a fixed author, committer, date and
@@ -87,6 +86,9 @@ type identityRecord struct {
 	Head     string
 	Identity core.ProjectIdentity
 	Document []byte
+	// Moved is set when Head is a tasks-moved marker commit rather than the
+	// identity root: the project is the same, and its tasks live elsewhere.
+	Moved *TasksMoved
 }
 
 // identityResolution is the outcome of walking the precedence chain once.
@@ -215,14 +217,26 @@ func (r *Repository) resolveIdentity(
 	ctx context.Context,
 	mint func() (core.ProjectIdentity, error),
 ) (identityResolution, error) {
-	record, found, err := r.readIdentityRef(ctx, identityRef)
-	if err != nil {
-		return identityResolution{}, err
-	}
 	tracked, trackedExists, err := r.readConfig()
 	if err != nil {
 		return identityResolution{}, err
 	}
+	// The tasks remote's tracking identity ref rides the same listing, so
+	// the check every command makes before using its tasks (CheckTasksRemote)
+	// costs no Git process of its own.
+	remote := core.DefaultTasksRemote
+	if trackedExists {
+		remote = tracked.TasksRemote.RemoteName()
+	}
+	tracking := remoteIdentityRefFor(remote)
+	record, found, listing, err := r.readIdentityRefListing(ctx, identityRef, tracking)
+	if err != nil {
+		return identityResolution{}, err
+	}
+	trackingHead, trackingFound := listing.Heads[tracking]
+	r.metadataMu.Lock()
+	r.trackedIdentity = trackedIdentityHead{known: true, remote: remote, head: trackingHead, found: trackingFound}
+	r.metadataMu.Unlock()
 	guard, guardExists, err := r.readProjectGuard()
 	if err != nil {
 		return identityResolution{}, err
@@ -536,10 +550,22 @@ func (r *Repository) replaceRef(ctx context.Context, ref, head, expected string)
 // MaxObjectBytes bounds them too: a hand-built commit pushed by a collaborator
 // cannot make a clone that fetches it allocate without limit.
 func (r *Repository) readIdentityRef(ctx context.Context, ref string) (identityRecord, bool, error) {
-	listing, err := r.listIdentityRefs(ctx, ref)
+	record, found, _, err := r.readIdentityRefListing(ctx, ref)
+	return record, found, err
+}
+
+// readIdentityRefListing is readIdentityRef that also lists the refs named in
+// also, in the same Git process, and returns that listing.
+func (r *Repository) readIdentityRefListing(ctx context.Context, ref string, also ...string) (identityRecord, bool, identityRefListing, error) {
+	listing, err := r.listIdentityRefs(ctx, append([]string{ref}, also...)...)
 	if err != nil {
-		return identityRecord{}, false, err
+		return identityRecord{}, false, identityRefListing{}, err
 	}
+	record, found, err := r.readListedIdentityRef(ctx, ref, listing)
+	return record, found, listing, err
+}
+
+func (r *Repository) readListedIdentityRef(ctx context.Context, ref string, listing identityRefListing) (identityRecord, bool, error) {
 	head, found := listing.Heads[ref]
 	if !found {
 		return identityRecord{}, false, nil
@@ -554,6 +580,12 @@ func (r *Repository) readIdentityRef(ctx context.Context, ref string) (identityR
 	record, err := r.readIdentityObjects(ctx, ref, head, len(decoded))
 	if err != nil {
 		return identityRecord{}, false, err
+	}
+	if ref == identityRef && record.Moved != nil {
+		return identityRecord{}, false, core.Errorf(core.CategoryCorruptData,
+			"%s carries a tasks-moved marker, which only a remote's copy of it may carry; "+
+				"point it back at its parent, the identity commit, with git update-ref %s %s^1",
+			identityRef, identityRef, head)
 	}
 	return record, true, nil
 }
@@ -612,8 +644,8 @@ func parseIdentityRefRecords(refs []string, contents []byte) (identityRefListing
 			}
 		}
 		if requested == "" {
-			if strings.HasPrefix(refName, remoteIdentityRef+"/") {
-				listing.Ignored = append(listing.Ignored, originIdentityRefName(refName))
+			if name, mirrored := mirroredIdentityChild(refName); mirrored {
+				listing.Ignored = append(listing.Ignored, name)
 				continue
 			}
 			return identityRefListing{}, identityRefChildError(identityRefAncestorOf(refs, refName))
@@ -629,11 +661,19 @@ func parseIdentityRefRecords(refs []string, contents []byte) (identityRefListing
 	return listing, nil
 }
 
-// originIdentityRefName restates a mirrored name under the ref origin holds it
-// at. The local mirror is rebuilt by every fetch, so naming it would name a ref
-// the user cannot usefully remove.
-func originIdentityRefName(refName string) string {
-	return identityRef + strings.TrimPrefix(refName, remoteIdentityRef)
+// mirroredIdentityChild recognizes a name some remote holds under its
+// identity ref, as a fetch mirrored it, and restates it under the ref the
+// remote holds it at. The local mirror is rebuilt by every fetch, so naming it
+// would name a ref the user cannot usefully remove.
+func mirroredIdentityChild(refName string) (string, bool) {
+	if !strings.HasPrefix(refName, remoteTrackingRoot) {
+		return "", false
+	}
+	_, tail, found := strings.Cut(strings.TrimPrefix(refName, remoteTrackingRoot), "/")
+	if !found || !strings.HasPrefix(tail, "project/") {
+		return "", false
+	}
+	return identityRef + strings.TrimPrefix(tail, "project"), true
 }
 
 // identityRefAncestorOf names the requested ref a listed child hangs from, so
@@ -670,82 +710,97 @@ func (r *Repository) readIdentityObjects(ctx context.Context, ref, head string, 
 		}
 		objects[i] = object
 	}
-	record, err := validateIdentityObjects(objects, ref, head, objectIDBytes)
+	record, markerBlob, err := validateIdentityObjects(objects, ref, head, objectIDBytes)
 	if err != nil {
 		return identityRecord{}, err
 	}
 	if err := batch.Finish(); err != nil {
 		return identityRecord{}, err
 	}
+	if markerBlob != "" {
+		moved, err := r.readTasksMovedObjects(ctx, ref, head, objects[2].objectID, markerBlob)
+		if err != nil {
+			return identityRecord{}, err
+		}
+		if moved.ProjectID != record.Identity.ProjectID {
+			return identityRecord{}, core.Errorf(core.CategoryCorruptData,
+				"%s carries a tasks-moved marker for project %s, but its identity is project %s",
+				ref, moved.ProjectID, record.Identity.ProjectID)
+		}
+		record.Moved = &moved
+	}
 	return record, nil
 }
 
 // validateIdentityObjects enforces the shape of the identity ref: a root commit
-// with no parents whose tree holds exactly one document.
+// with no parents whose tree holds exactly one document, or a tasks-moved
+// marker commit on top of one, whose tree holds that same document and the
+// marker. It returns the marker's blob for the second shape.
 //
-// The structure is the invariant, not a convention. A tip with parents would
-// mean the identity had a history to disagree about, and a second tree entry
-// would mean the ref had grown a second authority.
-func validateIdentityObjects(objects [3]batchObject, ref, head string, objectIDBytes int) (identityRecord, error) {
+// The structure is the invariant, not a convention. A root with parents would
+// mean the identity had a history to disagree about, and a further tree entry
+// would mean the ref had grown a second authority. The marker is the one
+// addition, and it changes nothing about which project this is.
+func validateIdentityObjects(objects [3]batchObject, ref, head string, objectIDBytes int) (identityRecord, string, error) {
 	commit, tree, document := objects[0], objects[1], objects[2]
 	for _, object := range objects {
 		if object.refused != nil {
-			return identityRecord{}, object.refused
+			return identityRecord{}, "", object.refused
 		}
 		if object.missing {
-			return identityRecord{}, core.Errorf(core.CategoryCorruptData,
+			return identityRecord{}, "", core.Errorf(core.CategoryCorruptData,
 				"requested Workbook project identity object %q is missing", object.objectID)
 		}
 	}
 	if commit.objectID != head || commit.kind != "commit" {
-		return identityRecord{}, core.Errorf(core.CategoryCorruptData, "%s does not point directly to a commit", ref)
+		return identityRecord{}, "", core.Errorf(core.CategoryCorruptData, "%s does not point directly to a commit", ref)
 	}
 	if tree.kind != "tree" {
-		return identityRecord{}, core.Errorf(core.CategoryCorruptData, "the Workbook project identity commit does not point to a tree")
+		return identityRecord{}, "", core.Errorf(core.CategoryCorruptData, "the Workbook project identity commit does not point to a tree")
 	}
 	if document.kind != "blob" {
-		return identityRecord{}, core.Errorf(core.CategoryCorruptData, "the Workbook project identity document is not a blob")
+		return identityRecord{}, "", core.Errorf(core.CategoryCorruptData, "the Workbook project identity document is not a blob")
 	}
 
 	commitTree, err := commitTreeObjectID(commit.contents, "the Workbook project identity commit")
 	if err != nil {
-		return identityRecord{}, err
+		return identityRecord{}, "", err
 	}
 	if tree.objectID != commitTree {
-		return identityRecord{}, core.Errorf(core.CategoryCorruptData,
+		return identityRecord{}, "", core.Errorf(core.CategoryCorruptData,
 			"the Workbook project identity commit tree does not match its batch object")
 	}
 	parents, err := commitParentCount(commit.contents, "the Workbook project identity commit")
 	if err != nil {
-		return identityRecord{}, err
+		return identityRecord{}, "", err
 	}
-	if parents != 0 {
-		return identityRecord{}, core.Errorf(core.CategoryCorruptData,
+	if parents > 1 {
+		return identityRecord{}, "", core.Errorf(core.CategoryCorruptData,
 			"the Workbook project identity commit must have no parents; identity is immutable, so the ref carries one root commit")
 	}
-	entries, err := parseRawIdentityTree(tree.contents, objectIDBytes)
+	entries, err := parseRawIdentityTree(tree.contents, objectIDBytes, parents == 1)
 	if err != nil {
-		return identityRecord{}, err
+		return identityRecord{}, "", err
 	}
 	if entries[identityDocumentPath] != document.objectID {
-		return identityRecord{}, core.Errorf(core.CategoryCorruptData,
+		return identityRecord{}, "", core.Errorf(core.CategoryCorruptData,
 			"the Workbook project identity tree entry does not match its batch object")
 	}
 	identity, err := decodeCanonicalIdentity(document.contents)
 	if err != nil {
-		return identityRecord{}, err
+		return identityRecord{}, "", err
 	}
-	return identityRecord{Head: head, Identity: identity, Document: document.contents}, nil
+	return identityRecord{Head: head, Identity: identity, Document: document.contents}, entries[tasksMovedDocumentPath], nil
 }
 
-func parseRawIdentityTree(contents []byte, objectIDBytes int) (map[string]string, error) {
-	entries := make(map[string]string, 1)
+func parseRawIdentityTree(contents []byte, objectIDBytes int, moved bool) (map[string]string, error) {
+	entries := make(map[string]string, 2)
 	err := scanRawTreeEntries(contents, objectIDBytes, "project identity tree",
 		func(mode, name, objectID string) error {
 			if mode != "100644" {
 				return core.Errorf(core.CategoryCorruptData, "project identity tree entry %q is not a regular blob", name)
 			}
-			if name != identityDocumentPath {
+			if name != identityDocumentPath && !(moved && name == tasksMovedDocumentPath) {
 				return core.Errorf(core.CategoryCorruptData, "project identity tree has an unexpected entry %q", name)
 			}
 			if _, duplicate := entries[name]; duplicate {
@@ -757,8 +812,13 @@ func parseRawIdentityTree(contents []byte, objectIDBytes int) (map[string]string
 	if err != nil {
 		return nil, err
 	}
-	if len(entries) != 1 {
+	if !moved && len(entries) != 1 {
 		return nil, core.Errorf(core.CategoryCorruptData, "project identity tree must contain exactly %s", identityDocumentPath)
+	}
+	if moved && len(entries) != 2 {
+		return nil, core.Errorf(core.CategoryCorruptData,
+			"a project identity commit with a parent must be a tasks-moved marker holding exactly %s and %s",
+			identityDocumentPath, tasksMovedDocumentPath)
 	}
 	return entries, nil
 }

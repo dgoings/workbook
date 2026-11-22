@@ -496,7 +496,7 @@ func zshCaseOptions(t *testing.T, script, function, path string) []string {
 	return nil
 }
 
-var fishRulePattern = regexp.MustCompile(`^complete -c workbook -n (__fish_workbook_at|'__fish_workbook_at [a-z ]+') (-a|-l) '([^']*)'( -r -f)? -d '`)
+var fishRulePattern = regexp.MustCompile(`^complete -c workbook -n (__fish_workbook_at|'__fish_workbook_at [a-z -]+') (-a|-l) '([^']*)'( -r -f)? -d '`)
 
 // fishRuleNames returns the candidates one fish condition offers: the words it
 // adds with -a, or the options it adds with -l, optionally only those that take
