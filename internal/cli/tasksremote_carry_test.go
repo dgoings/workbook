@@ -173,6 +173,13 @@ func TestMoveTasksCarriesAStragglerOnceHoweverOftenItRuns(t *testing.T) {
 	// new place holds rewritten onto the seed's edit. Picking up the move and
 	// synchronizing, again and again, adds nothing there: the teammate's copy
 	// of the operation is recognized as the one the new place already holds.
+	// The seed edits the same field afterwards, so replaying the teammate's
+	// copy would not be a no-op: it would record the operation a second time.
+	if code, _, stderr := run(t, project.seed, "update", edited, "--description", "Rewritten at the new place after the carry"); code != 0 {
+		t.Fatalf("seed update = %d; stderr = %q", code, stderr)
+	}
+	commits = taskCommitCount(t, project.tasks, edited)
+	totals = requireEachOperationOnce(t, project.tasks)
 	cliGit(t, teammate, "pull", "--quiet", "--ff-only", "origin", "main")
 	if code, stdout, stderr := run(t, teammate, "setup"); code != 0 {
 		t.Fatalf("teammate setup after the pull = (%d, %q, %q)", code, stdout, stderr)
@@ -190,6 +197,9 @@ func TestMoveTasksCarriesAStragglerOnceHoweverOftenItRuns(t *testing.T) {
 	}
 	if code, stdout, stderr := run(t, teammate, "validate", "--full", "--json"); code != 0 {
 		t.Fatalf("teammate validate = (%d, %q, %q)", code, stdout, stderr)
+	}
+	if shown := cliShowTask(t, teammate, edited); shown.Description != "Rewritten at the new place after the carry" {
+		t.Fatalf("teammate's task after the syncs = %+v", shown)
 	}
 	requireFreshCloneValidates(t, project.tasks)
 }
