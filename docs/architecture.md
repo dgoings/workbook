@@ -407,6 +407,11 @@ than per release:
 | 2 | `display.set`, `display.unset` |
 | 3 | `priority.add`, `priority.rename`, `priority.relabel`, `priority.remove`, `priority.reorder`, `priority.tag`, `priority.untag`, `priority.recolor`, `key.add`, `key.current`, `key.retire` |
 | 4 | `history.checkpoint` |
+| 5 | `field.set` of `due`, and a `task.create` or `history.checkpoint` whose task carries a due date |
+
+Generation 5 is the one row decided by an operation's payload rather than its
+type: a `field.set` of any other field is still generation 0, and so is a create
+with no due date. See [Due dates](#due-dates) for why.
 
 Generation 0 is every operation type Workbook shipped before assignments, and it
 is the only generation that writes no marker. So a create, a field change, a
@@ -521,6 +526,68 @@ The marker is a claim made by whoever wrote the pack, and it is trusted for the
 same reason every other field in a fetched ref is: anyone with push access can
 already write a ref this clone refuses. What the marker changes is which message
 that produces, not who is trusted.
+
+### Due dates
+
+A task may carry a due date: a calendar date, `YYYY-MM-DD`, with no time and no
+zone. It is an ordinary scalar member of the task, `due`, set and cleared with
+`field.set`, the same operation that sets a title or a priority:
+
+```json
+{"format":"workbook.operation-pack","version":1,"minReader":5,
+ "operations":[{"id":"01K…","type":"field.set","field":"due","value":"2026-12-01"}], …}
+```
+
+An empty `value` clears the date. A create that sets one carries it in the
+task document (`"due":"2026-12-01"`), and the stored checkpoint, `state.json`,
+carries the member only while the task has a date. Every operation records an
+absolute date: `today`, `tomorrow` and `+3d` are resolved against the writer's
+local calendar when the command runs, and only the result is stored, so
+replaying the operation next month means what it meant when it was written.
+
+**Overdue is a reading, not a fact.** Nothing about it is stored. A task is
+*overdue* when its date is before the reader's local today and *due soon* when
+it falls on today or one of the next three days, and a task in a status tagged
+`done`, or deleted, is neither. Each reader judges against their own calendar,
+so two people in different timezones can disagree about a task for up to a day
+around midnight. That is a difference in what they are shown, never in the
+task: both hold the same date.
+
+**Why generation 5, and why per payload.** A date had to reach an older build as
+"a newer Workbook wrote this" and never as corruption, and a task that never had
+a date had to stay readable by that build. Both candidate shapes were measured
+against v0.6.0 and the build before this change, each in its own repository:
+
+| Shape | Older build's `list`, `show`, `rebuild` | `update` | `validate` | `push`, fresh clone |
+| --- | --- | --- | --- | --- |
+| `field.set` of `due`, no marker | `corrupt-data` (exit `7`): "field.set does not support field \"due\"", and the whole project's `list` fails with it | exit `7` | invalid | `push` exit `7` |
+| a new `due.set` type, no marker | `corrupt-data`: "unsupported operation type \"due.set\"", same breadth | exit `7` | invalid | `push` exit `7` |
+| either shape with `minReader: 5` | works; the task is served from its checkpoint with `newerWriter: true` and the advisory "written by a newer workbook" | refused, `newer-writer` (exit `9`) | exit `9`, "upgrade workbook to validate them" | both fine |
+
+Without the marker both shapes are reported as damage, and one dated task
+breaks every listing of the project. With it both behave the way
+[Mixed Workbook versions](#mixed-workbook-versions) promises, so the choice
+between them came down to the model: a due date is a scalar like a title, and
+`field.set` is how a scalar is set. The marker is attached to the payload so
+that only the tasks that ever had a date leave an older build's reach; a
+project that never uses due dates writes byte for byte what it wrote before.
+
+What an older build shows of a dated task is its checkpoint *without* the date,
+because the member is one it has no field for. It shows the task, says it was
+written by a newer Workbook, and refuses to change it. The watermark is a
+running maximum, so a task whose date was cleared stays at generation 5 until
+it is compacted: a checkpoint of a task with no date declares generation 4 again.
+This build refuses a pack or a checkpoint that records a date beneath generation
+5, as `corrupt-data`, because an older build would take it for damage.
+
+**Concurrent edits** follow the scalar rule: two clones that set different dates
+reconcile by replay, and the clone that synchronizes last has its date replayed
+onto the other's, so its date stands. Wall-clock time never decides. Two clones
+that set the same date are not in conflict either. Neither case is reported as
+a conflict; a due date is not prose, and no one loses text.
+
+**Compaction** keeps the date: the checkpoint's task document carries it, and a
+checkpoint holding one declares generation 5.
 
 ### Compaction
 
@@ -667,7 +734,8 @@ contradictions are surfaced rather than silently hidden, through the three
 conflicts described in
 [Reconciling divergent histories](reference.md#reconciling-divergent-histories). Concurrent
 `done` and `in-review` status changes are not among them: status is
-last-syncer-wins, and multi-value status conflicts remain proposed.
+last-syncer-wins, and multi-value status conflicts remain proposed. Due dates are last-syncer-wins the same way, and the same date set on two
+clones is no conflict at all; see [Due dates](#due-dates).
 
 Every reconciliation parks the old local tip under
 `refs/workbook/reconciled/<id>/<n>`, a local ref that is never pushed. Most hold
@@ -743,7 +811,9 @@ another process installed a usable cache while it was building opens that cache
 and discards its own, so processes that all found no cache at once, such as a
 fresh clone's first commands, stop replacing each other's. The same rebuild
 runs, without being asked, whenever a command finds the cache missing, from
-another Workbook version, or for another project. With
+another Workbook version, or for another project. A cache written before due
+dates, which has no column for one, is such a cache: the first command run by
+this build replaces it, with no step for anyone to take. With
 `--json`, the normal result envelope contains `taskCount` and `cachePath`.
 
 An `operations` table alongside the task tables materializes each task's recorded
