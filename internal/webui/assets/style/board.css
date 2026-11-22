@@ -225,3 +225,12 @@
     .restore-button:hover { border-color: var(--wb-primary); color: var(--wb-primary); }
     .restore-button:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
     .restore-button:disabled { cursor: default; opacity: .55; }
+    /* A card's due date. The word — Due, Due soon, Overdue — is the mark, and
+       the ink and the rule beside it only repeat it, so nothing is said by color
+       alone. Overdue takes the danger family and due soon the warning family the
+       set-aside flag uses; a date with neither is drawn quietly. */
+    .task-card__due { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem; margin-top: .5rem; padding: .16rem .4rem; border-left: 3px solid var(--wb-border-soft); color: var(--wb-ink-soft); font-size: .72rem; line-height: 1.35; }
+    .task-card__due time { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    .task-card__due-word { font-weight: 700; }
+    .task-card__due--soon { border-left-color: currentcolor; background: var(--wb-warning-surface); color: var(--wb-warning-ink); }
+    .task-card__due--overdue { border-left-color: currentcolor; background: var(--wb-danger-surface); color: var(--wb-danger-ink); }

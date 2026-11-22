@@ -797,6 +797,12 @@ type TaskPresentation struct {
 	// oldest first, read from the parked tips that hold them. Absent when
 	// there are none, which is almost every task.
 	SetAside []core.SetAsideEdit `json:"setAside,omitempty"`
+	// DueFinished marks a task with a due date that is in a status the project
+	// tags done, or deleted, so the board never calls it overdue or due soon.
+	// The board judges the date itself, against the reader's own today, but
+	// which statuses are finished is the vocabulary's answer and is asked here.
+	// Absent for every task with no due date and every unfinished one.
+	DueFinished bool `json:"dueFinished,omitempty"`
 }
 
 // AssignmentPresentation is one assignment as the task page draws it: who holds
@@ -1203,6 +1209,11 @@ type pageData struct {
 	// are the only place the reader can hear about them in time.
 	AttachmentLabelLimit int
 	AttachmentURLLimit   int
+	// DueSoonDays is how far ahead core counts a task as due soon, rendered
+	// into the page for the reason the ceilings above are: the board judges a
+	// due date against the reader's own date, which only the browser knows, and
+	// the window is core's to set rather than a number this script keeps.
+	DueSoonDays int
 	// InlineImageMediaTypes are the media types the attachment route serves
 	// inline, space separated, rendered into the page for the reason the ceiling
 	// above is: the markdown renderer draws an attachment reference as an <img>
@@ -1350,6 +1361,10 @@ type createTaskRequest struct {
 	// Key mints the task under one of this project's active keys. Empty is the
 	// current key, which is what every client that predates several keys sends.
 	Key string `json:"key"`
+	// Due is the due date as YYYY-MM-DD, or empty for none. The board's date
+	// field sends only that form; the relative forms the CLI takes are resolved
+	// on the writer's machine, which for a browser is the browser.
+	Due string `json:"due"`
 }
 
 // input maps the request onto the service input field by field.
@@ -1366,6 +1381,7 @@ func (body createTaskRequest) input() core.CreateInput {
 		Priority:    body.Priority,
 		Labels:      body.Labels,
 		Key:         body.Key,
+		Due:         body.Due,
 	}
 }
 
@@ -1492,12 +1508,15 @@ func countKeyIntents(body editKeyRequest) int {
 // carries the comment and attachment intents an update may ride with, which
 // this endpoint does not accept; see input below.
 type updateTaskRequest struct {
-	Title        *string        `json:"title"`
-	Description  *string        `json:"description"`
-	Status       *core.Status   `json:"status"`
-	Priority     *core.Priority `json:"priority"`
-	Labels       *[]string      `json:"labels"`
-	ExpectedHead string         `json:"expectedHead"`
+	Title       *string        `json:"title"`
+	Description *string        `json:"description"`
+	Status      *core.Status   `json:"status"`
+	Priority    *core.Priority `json:"priority"`
+	Labels      *[]string      `json:"labels"`
+	// Due sets the due date as YYYY-MM-DD, or clears it when it is the empty
+	// string. Absent, or null, leaves it alone.
+	Due          *string `json:"due"`
+	ExpectedHead string  `json:"expectedHead"`
 }
 
 // input maps the request onto the service input field by field.
@@ -1514,6 +1533,7 @@ func (body updateTaskRequest) input() core.UpdateInput {
 		Status:       body.Status,
 		Priority:     body.Priority,
 		Labels:       body.Labels,
+		Due:          body.Due,
 		ExpectedHead: body.ExpectedHead,
 	}
 }
@@ -2096,6 +2116,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		AttachmentNameLimit:   core.MaxAttachmentNameBytes,
 		AttachmentLabelLimit:  core.MaxAttachmentLabelBytes,
 		AttachmentURLLimit:    core.MaxAttachmentURLBytes,
+		DueSoonDays:           core.DueSoonDays,
 		InlineImageMediaTypes: strings.Join(InlineAttachmentMediaTypes(), " "),
 		AssignIdentity:        handler.assignIdentity(request),
 		StatusTags:            core.StatusTags(),
@@ -3421,6 +3442,7 @@ func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary, actor, comm
 			Assignments:           assignmentPresentation(view.Task.Assignments, actor),
 			EditableComments:      editableComments(view.Task.Comments, commenter),
 			SetAside:              setAside[view.Task.ID],
+			DueFinished:           view.Task.Due != "" && view.DueFinished,
 		}
 	}
 	return result

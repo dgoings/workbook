@@ -41,6 +41,12 @@ type TaskView struct {
 	// is read from Git refs no board split has — so it is zero until a
 	// renderer that reads them sets it, and a card flags it when it is not.
 	SetAsideEdits int
+	// DueFinished reports a task no due date can make overdue or due soon: one
+	// in a status the vocabulary tags done, or deleted. It is the half of the
+	// due-date judgment that belongs to the project, carried on the view so a
+	// renderer that judges the date against its own reader's today asks the
+	// vocabulary nothing.
+	DueFinished bool
 }
 
 type Column struct {
@@ -130,6 +136,7 @@ func TaskViews(tasks []core.Task, vocabulary core.Vocabulary) []TaskView {
 			DependenciesComplete:  complete,
 			DependenciesTotal:     total,
 			WaitingOnDependencies: live && vocabulary.IsNext(resolved) && complete < total,
+			DueFinished:           task.Deleted || (live && vocabulary.IsDone(resolved)),
 		}
 	}
 	return views

@@ -1,3 +1,38 @@
+      // Due dates are judged here, against the reader's own calendar, rather
+      // than by the server: a board served from a machine in another timezone
+      // would otherwise call a task overdue a day early or late for the person
+      // looking at it. What the server owns is published to the page — how far
+      // ahead "due soon" reaches, and which tasks are finished (view.dueFinished)
+      // — so the only rule kept here is the comparison itself, the same one
+      // core.DueStateOf makes.
+      const dueSoonDays = Number(boardView.dataset.dueSoonDays || 0);
+      function localDate(at) {
+        const pad = (value) => String(value).padStart(2, "0");
+        return at.getFullYear() + "-" + pad(at.getMonth() + 1) + "-" + pad(at.getDate());
+      }
+      function dueState(task, view) {
+        if (!task || !task.due || task.deleted || (view && view.dueFinished)) return "";
+        const now = new Date();
+        const today = localDate(now);
+        if (task.due < today) return "overdue";
+        const horizon = localDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() + dueSoonDays));
+        return task.due <= horizon ? "due-soon" : "";
+      }
+      // The word is the mark. Color only repeats it, so a reader who cannot
+      // tell the two inks apart reads exactly what everyone else does.
+      function dueWord(state) {
+        return state === "overdue" ? "Overdue" : state === "due-soon" ? "Due soon" : "Due";
+      }
+      // The card's due line, drawn the way the server's card template draws it.
+      function dueLine(task, state, className) {
+        const line = document.createElement("div");
+        line.className = className + (state === "overdue" ? " " + className + "--overdue" : state === "due-soon" ? " " + className + "--soon" : "");
+        line.dataset.due = state;
+        const word = document.createElement("span"); word.className = className + "-word"; text(word, dueWord(state));
+        const when = document.createElement("time"); when.dateTime = task.due; text(when, task.due);
+        line.append(word, document.createTextNode(" "), when);
+        return line;
+      }
       // The visible ID inside a copy control, so a card that survives a render
       // can have a shortened prefix rewritten without rebuilding the control.
       const copyIDText = new WeakMap();
@@ -97,6 +132,8 @@
           view.assignmentChips || [],
           view.moreAssignments || 0,
           Array.isArray(view.setAside) ? view.setAside.length : 0,
+          task.due || "",
+          dueState(task, view),
           report || ""
         ]);
       }
@@ -304,6 +341,9 @@
         // first thing read after the title. The task's page shows them.
         const setAside = Array.isArray(view.setAside) ? view.setAside.length : 0;
         if (setAside > 0) { const flag = document.createElement("div"); flag.className = "task-card__set-aside"; flag.dataset.setAsideFlag = ""; text(flag, setAsideCount(setAside)); article.insertBefore(flag, parts.restore); }
+        // The due date, next, because "this is late" is the second thing a
+        // reader scanning a column needs after what the task is.
+        if (task.due) article.insertBefore(dueLine(task, dueState(task, view), "task-card__due"), parts.restore);
         if (task.description) { const description = document.createElement("p"); renderInlineMarkdown(description, task.description); article.insertBefore(description, parts.restore); }
         if (task.labels && task.labels.length) { const labels = document.createElement("div"); labels.className = "labels"; task.labels.forEach((label) => { const item = document.createElement("span"); item.className = "label"; text(item, label); labels.append(item); }); article.insertBefore(labels, parts.restore); }
         // The chip row, drawn only for a task somebody holds — so a board where

@@ -460,3 +460,9 @@
     .set-aside button:focus-visible, .set-aside__list:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
     .set-aside__status { margin: .35rem 0 0; font-size: .78rem; }
     .set-aside__status:empty { display: none; }
+    /* The due field and the word beside it. The word is drawn only when there
+       is something to say, in the family the card uses for the same state. */
+    .due-field { display: grid; gap: .3rem; }
+    .due-state { margin: 0; padding: .16rem .4rem; border-left: 3px solid currentcolor; font-size: .74rem; font-weight: 700; }
+    .due-state[data-due-state="due-soon"] { background: var(--wb-warning-surface); color: var(--wb-warning-ink); }
+    .due-state[data-due-state="overdue"] { background: var(--wb-danger-surface); color: var(--wb-danger-ink); }
