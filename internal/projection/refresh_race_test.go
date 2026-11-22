@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
@@ -359,5 +360,131 @@ func TestCacheErrorCallsALockedCacheRetryable(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "workbook rebuild") {
 		t.Fatalf("cacheError(locked) = %v, must not advise a rebuild", err)
+	}
+}
+
+// A row can also disappear while a read is in Git: a writer whose own advance
+// was declined invalidates the row it found. The read still listed that
+// task's ref, so the task is in its answer, from the checkpoint it read,
+// rather than missing from the board or unknown to a prefix lookup.
+func TestStoreListAndResolveAnswerATaskWhoseRowWasRemovedDuringTheRefresh(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	taskID := stormTaskID(1)
+	source := newStormSource()
+	source.move(stormSnapshot(taskID, "head-1", "Edit 1"))
+	store := stormStore(t, source)
+
+	edits := 1
+	previous, current := "", "head-1"
+	source.onList = func() {
+		edits++
+		previous, current = current, fmt.Sprintf("head-%d", edits)
+		source.move(stormSnapshot(taskID, current, fmt.Sprintf("Edit %d", edits)))
+	}
+	source.onRead = func([]gitstore.TaskHead) {
+		if err := store.Invalidate(ctx, testConfig(), taskID, previous, current); err != nil {
+			t.Errorf("Invalidate() error = %v", err)
+		}
+	}
+
+	listed, err := store.List(ctx, testConfig())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(listed) != 1 || listed[0].State.TaskID != taskID || listed[0].Head != current {
+		t.Fatalf("List() = %#v, want %s at the head it listed, %s", listed, taskID, current)
+	}
+	if _, found, err := store.querySnapshot(ctx, taskID); err != nil || found {
+		t.Fatalf("cache row found %t, %v, want it left removed by the writer that removed it", found, err)
+	}
+
+	// Projected again, and removed again while a prefix lookup is in Git.
+	if applied, err := store.Advance(ctx, testConfig(), "", source.snapshots[current]); err != nil || !applied {
+		t.Fatalf("Advance(reproject) = %t, %v, want true, nil", applied, err)
+	}
+	resolved, err := store.Resolve(ctx, testConfig(), strings.ToLower(taskID[:14]))
+	if err != nil || resolved != taskID {
+		t.Fatalf("Resolve() = %q, %v, want %q", resolved, err, taskID)
+	}
+}
+
+// hookedRepositorySource reads a real repository and runs onRead after each
+// checkpoint read, numbered from one.
+type hookedRepositorySource struct {
+	repositorySource
+	reads  int
+	onRead func(read int)
+}
+
+func (s *hookedRepositorySource) ReadTaskHeads(ctx context.Context, config core.ProjectConfig, heads []gitstore.TaskHead) ([]core.Snapshot, error) {
+	snapshots, err := s.repositorySource.ReadTaskHeads(ctx, config, heads)
+	s.reads++
+	if err == nil && s.onRead != nil {
+		s.onRead(s.reads)
+	}
+	return snapshots, err
+}
+
+// A task's history read answers the task from its ref, and when both of its
+// attempts to project that ref find the row moved by a slower writer, it
+// answers from Git with the row left behind the ref. The history then has to
+// end where that answer does, not where the lagging row's operations end.
+func TestStoreTaskHistoryEndsAtTheHeadItReadWhenTheRowLags(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository, config := initializeWorkbook(t)
+	created := createTask(t, repository, config, "History raced")
+	store, err := openForTest(t, ctx, repository, config)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+
+	heads := []string{created.Head}
+	for index, id := range []string{"01K0M6B8A4FTT8C39MXXYTW7E1", "01K0M6B8A4FTT8C39MXXYTW7E2", "01K0M6B8A4FTT8C39MXXYTW7E3"} {
+		title := fmt.Sprintf("History raced, edit %d", index+1)
+		service := core.Service{Config: config, Reader: repository, Writer: repository, Actor: "test@example.test",
+			Now: func() time.Time { return time.Date(2026, time.July, 26, 12, 1+index, 0, 0, time.UTC) },
+			IDs: core.IDSourceFunc(func() (string, error) { return id, nil })}
+		result, err := service.UpdateMutation(ctx, created.ID, core.UpdateInput{Title: &title})
+		if err != nil {
+			t.Fatalf("UpdateMutation(%d) error = %v", index+1, err)
+		}
+		heads = append(heads, result.Task.Head)
+	}
+	snapshots, err := repository.ReadTaskHeads(ctx, config, []gitstore.TaskHead{
+		{TaskID: created.ID, ObjectID: heads[1]}, {TaskID: created.ID, ObjectID: heads[2]},
+	})
+	if err != nil {
+		t.Fatalf("ReadTaskHeads() error = %v", err)
+	}
+
+	// The cache holds the creation; the ref is three edits on. While each of
+	// the read's two attempts is in Git, the writer of the next older edit
+	// records it, so the row moves to the second edit and stops there.
+	store.source = &hookedRepositorySource{
+		repositorySource: repositorySource{repository: repository},
+		onRead: func(read int) {
+			if read > 2 {
+				return
+			}
+			if applied, err := store.Advance(ctx, config, heads[read-1], snapshots[read-1]); err != nil || !applied {
+				t.Errorf("slow writer's Advance(%d) = %t, %v, want true, nil", read, applied, err)
+			}
+		},
+	}
+	history, err := store.TaskHistory(ctx, config, created.ID)
+	if err != nil {
+		t.Fatalf("TaskHistory() error = %v", err)
+	}
+	if cached, _, _ := store.querySnapshot(ctx, created.ID); cached.Head != heads[2] {
+		t.Fatalf("cache row = %s, want it left at the slow writer's %s", cached.Head, heads[2])
+	}
+	if len(history.Entries) != len(heads) || history.Entries[len(history.Entries)-1].Commit != heads[3] {
+		t.Fatalf("TaskHistory() = %d entries ending at %s, want %d ending at the ref's %s",
+			len(history.Entries), history.Entries[len(history.Entries)-1].Commit, len(heads), heads[3])
 	}
 }
