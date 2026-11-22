@@ -48,7 +48,13 @@ func startHostedServeOn(t *testing.T, folder string, reserved *reservedListener,
 		return value, ok
 	}
 	board := &hostedServe{addr: reserved.addr, stderr: &lockedWriter{}}
-	ctx, cancel := context.WithCancel(context.Background())
+	// WORKBOOK_ACTOR goes on the context the way Run puts it there, so a test
+	// that sets it is about the variable and not about a context without it.
+	actorCtx, err := core.WithEnvironmentActor(context.Background(), lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(actorCtx)
 	result := make(chan error, 1)
 	stdout := &lockedWriter{}
 	go func() {
@@ -378,28 +384,31 @@ func TestServeBehindAProxyRefusesARequestWithoutOneUsableName(t *testing.T) {
 		t.Fatalf("health check with no name = %d", status)
 	}
 
-	for name, header := range map[string]func(http.Header){
-		"sent twice": func(h http.Header) {
+	// Each refusal names its own reason, so a list is refused as a list
+	// rather than only because a list happens not to be an email address.
+	for name, refused := range map[string]struct {
+		header func(http.Header)
+		says   string
+	}{
+		"sent twice": {func(h http.Header) {
 			h.Add(proxyHeader, "alice@client.example")
 			h.Add(proxyHeader, "mallory@client.example")
-		},
-		"a list": func(h http.Header) { h.Set(proxyHeader, "alice@client.example,mallory@client.example") },
-		"a list with a space": func(h http.Header) {
-			h.Set(proxyHeader, "alice@client.example, mallory@client.example")
-		},
-		"not an address": func(h http.Header) { h.Set(proxyHeader, "not an address") },
-		"with a label":   func(h http.Header) { h.Set(proxyHeader, "alice@client.example/agent") },
-		"angle brackets": func(h http.Header) { h.Set(proxyHeader, "<alice@client.example>") },
+		}, "was sent more than once"},
+		"a list":              {func(h http.Header) { h.Set(proxyHeader, "alice@client.example,mallory@client.example") }, "carries several values"},
+		"a list with a space": {func(h http.Header) { h.Set(proxyHeader, "alice@client.example, mallory@client.example") }, "carries several values"},
+		"not an address":      {func(h http.Header) { h.Set(proxyHeader, "not an address") }, "must be an email address"},
+		"with a label":        {func(h http.Header) { h.Set(proxyHeader, "alice@client.example/agent") }, "with no /label"},
+		"angle brackets":      {func(h http.Header) { h.Set(proxyHeader, "<alice@client.example>") }, "acting person"},
 	} {
 		for _, request := range []proxied{
-			{method: http.MethodGet, path: "/api/tasks", header: header},
-			{method: http.MethodPost, path: "/api/tasks", body: `{"title":"Chosen name"}`, header: header},
+			{method: http.MethodGet, path: "/api/tasks", header: refused.header},
+			{method: http.MethodPost, path: "/api/tasks", body: `{"title":"Chosen name"}`, header: refused.header},
 		} {
 			body, status, response := board.do(t, request)
 			if status != http.StatusBadRequest {
 				t.Fatalf("%s %s with a name %s = %d; body = %s; want 400", request.method, request.path, name, status, body)
 			}
-			assertBoardRefusal(t, body, response, core.CategoryValidation, "")
+			assertBoardRefusal(t, body, response, core.CategoryValidation, refused.says)
 		}
 	}
 	if after := workbookRefs(t, folder); after != before {
