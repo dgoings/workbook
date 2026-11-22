@@ -70,6 +70,12 @@ const WarningProjectionUpdate = "projection-update-failed"
 // behind, such as a ref on origin it could not validate.
 const WarningAutoSync = "auto-sync-incomplete"
 
+// WarningTasksMoved reports a change recorded locally whose publication was
+// refused because the remote it would go to is marked as the place this
+// project's tasks moved away from, or that a remote accepted just as it was
+// marked. The change stays recorded; the message says what to run.
+const WarningTasksMoved = "tasks-moved"
+
 // WarningStatusFilter reports that a status filter had to be forwarded through
 // a rename or a removal to select anything.
 //

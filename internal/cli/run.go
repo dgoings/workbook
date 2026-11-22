@@ -2578,16 +2578,39 @@ func (p *boardPublisher) publish(
 	if !p.repository.HasTasksRemote(ctx) {
 		return result, nil
 	}
-	if !p.inline.Load() && p.handOff(result.Task.ID) {
-		return result, nil
+	if !p.inline.Load() {
+		// A watcher's last synchronization may predate a move, and one handed
+		// this change would be refused in its own log while the page said
+		// nothing. One listing of one ref asks first (CheckRemoteNotMoved).
+		if movedErr := p.repository.CheckRemoteNotMoved(ctx); movedErr != nil {
+			result.Warnings = append(result.Warnings, publicationWarning(movedErr))
+			return result, nil
+		}
+		if p.handOff(result.Task.ID) {
+			return result, nil
+		}
 	}
 	if _, pushErr := p.repository.PushTask(ctx, p.config, result.Task.ID); pushErr != nil {
-		result.Warnings = append(result.Warnings, core.Warning{
-			Code:    core.WarningAutoSync,
-			Message: "the change was recorded locally, but publishing it failed: " + pushErr.Error(),
-		})
+		result.Warnings = append(result.Warnings, publicationWarning(pushErr))
 	}
 	return result, nil
+}
+
+// publicationWarning is the warning beside a recorded change whose
+// publication failed. A refusal because the tasks moved gets its own code, so
+// a hosted board can say so without disclosing the server's paths.
+func publicationWarning(err error) core.Warning {
+	if refusal, found := core.TasksRemoteRefusalOf(err); found &&
+		(refusal.Reason == core.TasksRemoteMoved || refusal.Reason == core.TasksRemotePublishedAfterMove) {
+		return core.Warning{
+			Code:    core.WarningTasksMoved,
+			Message: "the change was recorded locally, but this project's tasks have moved: " + err.Error(),
+		}
+	}
+	return core.Warning{
+		Code:    core.WarningAutoSync,
+		Message: "the change was recorded locally, but publishing it failed: " + err.Error(),
+	}
 }
 
 // publishConfig sends the configuration ledger a status change just moved.
@@ -2611,15 +2634,17 @@ func (p *boardPublisher) publishConfig(ctx context.Context) []core.Warning {
 	if !p.repository.HasTasksRemote(ctx) {
 		return nil
 	}
-	if !p.inline.Load() && p.handOff("") {
-		return nil
+	if !p.inline.Load() {
+		if movedErr := p.repository.CheckRemoteNotMoved(ctx); movedErr != nil {
+			return []core.Warning{publicationWarning(movedErr)}
+		}
+		if p.handOff("") {
+			return nil
+		}
 	}
 	published, err := p.repository.PushConfig(ctx, p.config)
 	if err != nil {
-		return []core.Warning{{
-			Code:    core.WarningAutoSync,
-			Message: "the change was recorded locally, but publishing it failed: " + err.Error(),
-		}}
+		return []core.Warning{publicationWarning(err)}
 	}
 	if published == nil {
 		return nil

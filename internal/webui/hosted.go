@@ -52,7 +52,9 @@ func serverWords(category core.Category) bool {
 // what happened to the change, because a warning sits beside a change that
 // was recorded and the person needs to know whether it was.
 var disclosedWarnings = map[string]string{
-	core.WarningAutoSync:         "The change was recorded on the server, but publishing it to the shared repository did not finish.",
+	core.WarningAutoSync: "The change was recorded on the server, but publishing it to the shared repository did not finish.",
+	core.WarningTasksMoved: "The change was recorded on the server, but this project's tasks have moved to another repository, " +
+		"so it was not published there; whoever runs this board has to set it up again from the new repository.",
 	core.WarningProjectionUpdate: "The change was recorded, but the server's local index of tasks could not be updated.",
 	core.WarningDocsRefresh:      "The change was recorded, but the project's generated guidelines could not be refreshed.",
 }
