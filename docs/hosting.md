@@ -323,8 +323,9 @@ Open `https://tasks.example.com` in the phone's browser and sign in as on any
 other machine; the board lays itself out for the screen (see
 [On a phone](reference.md#on-a-phone)). Adding it to the home screen gives a
 shortcut with the Workbench icon and the project's name. The board's manifest
-asks for it to open in an ordinary browser tab, and on Android Chrome it does,
-using the sign-in Chrome already has; when that sign-in expires, the shortcut
+asks for it to open in an ordinary browser tab. In Chrome on Android choose
+"Create shortcut" rather than "Install app": the shortcut opens in a Chrome
+tab, using the sign-in Chrome already has, and when that sign-in expires it
 shows the Access sign-in page like any other visit.
 
 On an iPhone or iPad from iOS and iPadOS 26 the phone decides instead: a site

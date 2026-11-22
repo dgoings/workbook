@@ -26,9 +26,9 @@ import (
 // size, weight, line height and white space. Computed values, read through the
 // Typed OM (computedStyleMap), are what the stylesheet says once lengths are
 // in pixels: `auto` stays `auto` and a percentage stays a percentage, so none
-// of it depends on the fonts a machine has, which differ between the Ubuntu,
-// macOS and Windows machines this runs on. Rectangles, which do depend on
-// them, are not recorded.
+// of it is a measured rectangle. A few values still follow the machine: a
+// length in container units follows the rendered height of the header, and
+// so the fonts.
 //
 // So this catches a changed display, position, flex or grid setup, overflow,
 // size or limit, padding, margin or border, a font size, an element drawn or
@@ -48,8 +48,8 @@ import (
 // The comparison runs only where WORKBOOK_TEST_DESKTOP_LAYOUT is set, on the
 // machine and browser the recording was made with. Its first run elsewhere
 // showed why: one Chrome writes a computed `align-items` as `flow-end` and
-// another as `flex-end`, and the Push switch's knob sits where the machine's
-// own settings put it. A recording of computed values is exact only for one
+// another as `flex-end`, the Dark Mode switch's knob follows the machine's
+// light or dark setting, and a `100cqh` resolves by the machine's fonts. A recording of computed values is exact only for one
 // browser build and one environment, so it is a check to run by hand when a
 // change touches the board's styles, not one for every run:
 //

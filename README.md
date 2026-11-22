@@ -219,10 +219,10 @@ time, under a row of the columns' names and counts, and a task's page takes
 every change by touch: status, priority, labels, assignment and comments. To
 reach a hosted board from a phone, open its address in the phone's browser and
 sign in as anywhere else. Adding it to the home screen gives a shortcut with
-the board's icon and the project's name. On Android the shortcut opens the
-board in Chrome. On an iPhone or iPad from version 26, it opens as a web app in
+the board's icon and the project's name. In Chrome on Android choose "Create
+shortcut", which opens the board in a Chrome tab. On an iPhone or iPad from version 26, it opens as a web app in
 its own window with its own sign-in unless "Open as Web App" is switched off
-when adding it; switch it off to have it open in Safari. Neither has been tried
+when adding it; switch it off to have it open in the browser. Neither has been tried
 on a real phone. See [On a phone](docs/reference.md#on-a-phone).
 
 Any board, hosted or not, shows an edit its sync had to set aside because a

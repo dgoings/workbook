@@ -208,10 +208,15 @@
         if (typeof phoneWidth.addEventListener === "function") phoneWidth.addEventListener("change", phoneWidthChanged);
         else if (typeof phoneWidth.addListener === "function") phoneWidth.addListener(phoneWidthChanged);
       }
-      armCardDrags();
-      syncStatusTabs();
-      // The rule the page's opening script added to show a remembered column
-      // from the first frame (see body.html) has done its work: the column
-      // shown is now the one data-phone-current marks.
-      if (typeof document.querySelectorAll === "function") document.querySelectorAll("style[data-phone-opening]").forEach((rule) => rule.remove());
+      try {
+        armCardDrags();
+        syncStatusTabs();
+      } finally {
+        // The rule the page's opening script added to show a remembered
+        // column from the first frame (see body.html) has done its work: the
+        // column shown is now the one data-phone-current marks. It goes even
+        // when the lines above fail, or the board would stay on that column
+        // whatever was tapped.
+        if (typeof document.querySelectorAll === "function") document.querySelectorAll("style[data-phone-opening]").forEach((rule) => rule.remove());
+      }
       measureNotices();

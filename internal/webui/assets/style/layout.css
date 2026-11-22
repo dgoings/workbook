@@ -93,7 +93,7 @@
          The notices inside it neither scroll nor cap themselves: the box does
          both for all of them. */
       html { scroll-padding-bottom: var(--wb-notices-height, 0px); }
-      .notices { display: flex; flex-direction: column; order: 1; position: sticky; bottom: 0; z-index: 5; max-height: 33vh; max-height: 33dvh; overflow-y: auto; overscroll-behavior: contain; }
+      .notices { display: flex; flex-direction: column; order: 1; position: sticky; bottom: 0; z-index: 5; max-height: 33vh; max-height: 33dvh; overflow-y: auto; }
       .notice { flex: 0 0 auto; max-height: none; overflow: visible; padding: .5rem .75rem; border-top: 1px solid var(--wb-hairline); }
       .notice__report { flex-wrap: wrap; }
       .board-view { display: block; height: auto; }

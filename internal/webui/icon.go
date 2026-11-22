@@ -14,8 +14,8 @@ import (
 // about how a shortcut opens: a shortcut that opened as an app window of its
 // own would keep a sign-in of its own, apart from the phone's browser, which
 // is the reason there is no wrapper app around the board either. Chrome on
-// Android follows it and opens the shortcut in a tab, signed in the way Chrome
-// is. iOS and iPadOS 26 do not consult it: a site added to the Home Screen
+// Android opens a shortcut made with "Create shortcut" in a tab, signed in the
+// way Chrome is; its "Install app" is offered whatever a manifest says. iOS and iPadOS 26 do not consult it: a site added to the Home Screen
 // opens as a web app with its own cookies unless the reader switches "Open as
 // Web App" off when adding it, which the documentation tells them to do.
 //

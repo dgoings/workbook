@@ -41,7 +41,7 @@ notices stack in one box at the bottom of the screen. The configuration page is
 not laid out for a phone. The column a phone remembers is kept for each project.
 Saving the board to a home screen gives it the Workbench icon and the project's
 name, and its manifest asks for the shortcut to open in the browser, which
-Chrome on Android does. On iOS and iPadOS 26 a shortcut opens as a web app with
+"Create shortcut" in Chrome on Android does. On iOS and iPadOS 26 a shortcut opens as a web app with
 its own sign-in unless "Open as Web App" is switched off when adding it. None of
 this was tried on a real phone. The page's
 content policy gains `manifest-src 'self'` so the board's own manifest loads.

@@ -87,6 +87,10 @@ type phoneNoticeReading struct {
 	FailureText   string
 	HeldText      string
 	SaveUnderAtGo bool
+	// PageRoom is how far the page could scroll with the notices up, and
+	// SwipeScrolled how far two strokes of a finger on the notices moved it.
+	PageRoom      float64
+	SwipeScrolled float64
 }
 
 const phoneNoticeScript = phoneHelpers + `
@@ -177,6 +181,20 @@ const phoneNoticeScript = phoneHelpers + `
       if (at.top < -0.5 || at.bottom > innerHeight + 0.5 || !hits(control)) reading.Unreachable.push(describe(control) + " at " + at.top.toFixed(1) + "-" + at.bottom.toFixed(1));
     }
     reading.Sideways = sideways();
+    // A finger on the notices still scrolls the page: once, which may only
+    // scroll the box to its end, and again.
+    window.scrollTo(0, 0);
+    box.scrollTop = 0;
+    await settle();
+    reading.PageRoom = document.documentElement.scrollHeight - innerHeight;
+    for (let stroke = 0; stroke < 2; stroke++) {
+      const on = box.getBoundingClientRect();
+      await touchInput({ x: on.left + on.width / 2, y: on.top + Math.min(on.height / 2, 40), dy: -Math.min(200, on.top - 20), steps: 12 });
+      await pause(400);
+    }
+    reading.SwipeScrolled = scrollY;
+    window.scrollTo(0, 0);
+    await settle();
     const dismiss = [...failure.querySelectorAll("button")].find((button) => button.textContent === "Dismiss");
     await tap(dismiss);
     reading.Dismissed = failure.hidden;
@@ -240,6 +258,9 @@ func TestBrowserPhoneNoticesShowTogetherAndCoverNothing(t *testing.T) {
 			}
 			if !reading.SaveTapped {
 				t.Errorf("a tap on Save with the held notice up sent nothing")
+			}
+			if reading.PageRoom > 60 && reading.SwipeScrolled < 20 {
+				t.Errorf("two strokes of a finger on the notices scrolled the page by %.1fpx of the %.1fpx it could scroll; the notices swallow the page's scrolling", reading.SwipeScrolled, reading.PageRoom)
 			}
 			if !reading.Dismissed {
 				t.Errorf("a tap on the failure notice's Dismiss left it showing")

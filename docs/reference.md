@@ -3032,9 +3032,10 @@ and the project's name. The page links a web manifest whose `display` is
 Apple touch icon, and it has no `apple-mobile-web-app-capable` tag. What the
 shortcut then does is the phone's to decide:
 
-- Chrome on Android offers to install only a page whose manifest asks for an
-  app window of its own, so for this one it makes a shortcut, which opens the
-  board in a Chrome tab signed in the way Chrome is.
+- Chrome on Android offers two things under "Add to home screen". "Create
+  shortcut" opens the board in a Chrome tab, signed in the way Chrome is, and
+  is the one to choose. "Install app" is offered for any page, whatever its
+  manifest says, and opens the board in a window of its own.
 - On an iPhone or iPad from iOS and iPadOS 26, every site added to the Home
   Screen opens as a web app of its own unless "Open as Web App" is switched
   off in the Add to Home Screen sheet, where it starts on. Nothing a page says
@@ -3042,7 +3043,7 @@ shortcut then does is the phone's to decide:
   starts with the cookies Safari had when it was added, and keeps its own after
   that, so a sign-in that expires has to be done again inside it, and signing
   in again in Safari does not sign it in. Switch "Open as Web App" off when
-  adding the board, and the shortcut opens the board in Safari instead.
+  adding the board, and the shortcut opens the board in the browser instead.
 
 None of this has been tried on a real phone. The Android behavior follows from
 Chrome's install rules and the manifest's own definition of `browser`, and the
