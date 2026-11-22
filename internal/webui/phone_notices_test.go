@@ -141,10 +141,14 @@ const phoneNoticeScript = phoneHelpers + `
 
     // Tapped where it is, it sends the save; the reader leaves before the
     // answer, which is a refusal.
+    const sent = () => save.disabled || Boolean(document.querySelector("[data-save-status]") && document.querySelector("[data-save-status]").textContent.trim() !== "");
     const r = save.getBoundingClientRect();
     await touchInput({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
-    await waitFor(() => save.disabled || document.querySelector("[data-save-status]") && document.querySelector("[data-save-status]").textContent.trim() !== "", "the save to be sent");
-    reading.SaveTapped = true;
+    for (let waited = 0; waited < 2000 && !sent(); waited += 50) await pause(50);
+    reading.SaveTapped = sent();
+    // A tap that missed is reported, and the save sent another way, so the
+    // rest of what is checked still is.
+    if (!reading.SaveTapped) save.click();
     await tap(document.querySelector(".task-route__close"));
     await waitFor(() => !failure.hidden && failure.textContent.includes("was not saved"), "the failure notice");
     await pause(300);
