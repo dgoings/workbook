@@ -202,8 +202,26 @@ func (s *Store) Rebuild(ctx context.Context) (int, error) {
 	return s.rebuildLocked(ctx)
 }
 
+// rebuildLocked builds a cache from the task refs and installs it, with
+// rebuildMu held exclusively.
+//
+// A build whose refs moved before it finished is built once more, so the cache
+// it installs is usually exactly the refs. If they moved through the second
+// build too, that build is installed anyway. It is a consistent projection of
+// every ref as it was listed, which is what any cache is once somebody writes
+// a task, and every read and write brings the cache up to the refs before it
+// answers. Refusing instead would fail reads for as long as other processes
+// keep writing, which is exactly when a fresh clone's first commands all
+// rebuild at once. Two builds is the whole bound.
+//
+// Before it renames its build into place, a rebuild that finds another
+// process has already installed a usable cache opens that one and discards
+// its own. Renaming over it would pull a valid cache out from under every
+// process that just opened it, each of which would then rebuild or redo in
+// turn.
 func (s *Store) rebuildLocked(ctx context.Context) (int, error) {
-	for attempt := 0; attempt < 2; attempt++ {
+	const attempts = 2
+	for attempt := 1; ; attempt++ {
 		heads, err := s.source.ListTaskHeads(ctx, s.config)
 		if err != nil {
 			return 0, err
@@ -217,16 +235,41 @@ func (s *Store) rebuildLocked(ctx context.Context) (int, error) {
 			_ = os.Remove(temporary)
 			return 0, err
 		}
-		if equalHeads(heads, current) {
-			if err := s.replaceAtomically(ctx, temporary); err != nil {
-				_ = os.Remove(temporary)
-				return 0, err
-			}
+		if !equalHeads(heads, current) && attempt < attempts {
+			_ = os.Remove(temporary)
+			continue
+		}
+		adopted, err := s.adoptReplacementLocked(ctx)
+		if err != nil {
+			_ = os.Remove(temporary)
+			return 0, err
+		}
+		if adopted {
+			_ = os.Remove(temporary)
 			return len(heads), nil
 		}
-		_ = os.Remove(temporary)
+		if err := s.replaceAtomically(ctx, temporary); err != nil {
+			_ = os.Remove(temporary)
+			return 0, err
+		}
+		return len(heads), nil
 	}
-	return 0, errCacheBusy("task refs kept changing while the projection cache was rebuilt")
+}
+
+// adoptReplacementLocked opens the cache another process installed at the
+// cache path since this store last opened it, and reports whether that cache
+// is usable. A file this store is still open on, or none at all, is not a
+// replacement; neither is one that is not a usable projection, which the
+// caller's own build then replaces.
+func (s *Store) adoptReplacementLocked(ctx context.Context) (bool, error) {
+	info, ok := s.cacheStat()
+	if !ok || s.boundTo(info) {
+		return false, nil
+	}
+	if err := s.reopenDatabase(ctx); err != nil {
+		return false, err
+	}
+	return s.cacheUsable(ctx), nil
 }
 
 // List returns task checkpoints from SQLite after refreshing against Git ref tips.
@@ -491,35 +534,45 @@ func (s *Store) lockActiveDatabase(ctx context.Context) error {
 	}
 	s.rebuildMu.RUnlock()
 
-	s.rebuildMu.Lock()
-	// Rechecked under the exclusive lock: a Close that landed in the window
-	// above must not be followed by a rebuild, which would reopen the cache
-	// behind the caller that closed it.
-	if s.closed {
-		s.rebuildMu.Unlock()
-		return errStoreClosed()
-	}
-	if !s.cacheUsable(ctx) {
-		if err := s.recoverLocked(ctx); err != nil {
+	// A cache recovered a moment ago and unusable again already is another
+	// process replacing it in between, which happens while several processes
+	// that each found no cache rebuild at once. The next round reopens that
+	// replacement rather than building another, because a rebuild adopts a
+	// usable cache it finds in place, so the rounds settle as soon as the
+	// rebuilds stop landing. Three rounds bound a machine where they do not.
+	const rounds = 3
+	for round := 1; ; round++ {
+		s.rebuildMu.Lock()
+		// Rechecked under the exclusive lock: a Close that landed in the
+		// window above must not be followed by a rebuild, which would reopen
+		// the cache behind the caller that closed it.
+		if s.closed {
 			s.rebuildMu.Unlock()
-			return err
+			return errStoreClosed()
+		}
+		if !s.cacheUsable(ctx) {
+			if err := s.recoverLocked(ctx); err != nil {
+				s.rebuildMu.Unlock()
+				return err
+			}
+		}
+		s.rebuildMu.Unlock()
+
+		s.rebuildMu.RLock()
+		if s.closed {
+			s.rebuildMu.RUnlock()
+			return errStoreClosed()
+		}
+		if s.cacheUsable(ctx) {
+			return nil
+		}
+		s.rebuildMu.RUnlock()
+		if round == rounds {
+			// What this request would read is in Git either way, so it is
+			// sent again.
+			return errCacheBusy("the projection cache changed again while it was being activated")
 		}
 	}
-	s.rebuildMu.Unlock()
-
-	s.rebuildMu.RLock()
-	if s.closed {
-		s.rebuildMu.RUnlock()
-		return errStoreClosed()
-	}
-	if s.cacheUsable(ctx) {
-		return nil
-	}
-	s.rebuildMu.RUnlock()
-	// The cache was rebuilt, or reopened, a moment ago and is unusable again
-	// already, which is another process replacing it in between. What this
-	// request would read is in Git either way, so it is sent again.
-	return errCacheBusy("the projection cache changed again while it was being activated")
 }
 
 // errStoreClosed names the refusal a closed store answers with. It is built

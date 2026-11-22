@@ -488,3 +488,54 @@ func TestStoreTaskHistoryEndsAtTheHeadItReadWhenTheRowLags(t *testing.T) {
 			len(history.Entries), history.Entries[len(history.Entries)-1].Commit, len(heads), heads[3])
 	}
 }
+
+// The first commands in a fresh clone find no cache and each rebuild one, while
+// other commands are filing tasks. A rebuild whose refs moved through both of
+// its builds used to refuse with "task refs kept changing", which failed the
+// read that only needed a cache to answer from. The second build is installed
+// instead, and the read brings it up to the refs like any cache that is behind.
+func TestStoreListAnswersWhileRefsMoveThroughEveryRebuild(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	source := newStormSource()
+	source.move(stormSnapshot(stormTaskID(1), "head-1-1", "Task 1"))
+	// No Rebuild first: the read finds no cache at all.
+	store, err := openStoreForTest(t, ctx, source, testConfig(), filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	// Every listing finds one more task filed and one task edited since the
+	// last, so no build ever matches the refs it is checked against.
+	listings := 0
+	source.onList = func() {
+		listings++
+		source.move(stormSnapshot(stormTaskID(1), fmt.Sprintf("head-1-%d", listings+1), "Task 1"))
+		taskID := stormTaskID(listings + 1)
+		source.move(stormSnapshot(taskID, fmt.Sprintf("head-%d-1", listings+1), fmt.Sprintf("Task %d", listings+1)))
+	}
+
+	listed, err := store.List(ctx, testConfig())
+	if err != nil {
+		t.Fatalf("List() while the refs kept moving error = %v", err)
+	}
+	if listings < 5 {
+		t.Fatalf("the refs were listed %d times, want both builds bracketed and a refresh after them", listings)
+	}
+	// The read answers every task its last listing found, at the head it
+	// found, which is every ref as it stands now: the hook moves the refs
+	// before each listing is taken, never after.
+	source.onList = nil
+	if len(listed) != listings+1 {
+		t.Fatalf("List() answered %d tasks, want the %d its last listing found", len(listed), listings+1)
+	}
+	for _, snapshot := range listed {
+		if want := source.head(snapshot.State.TaskID); snapshot.Head != want {
+			t.Fatalf("List() answered %s at %s, want the head its last listing found, %s", snapshot.State.TaskID, snapshot.Head, want)
+		}
+	}
+	// And the cache it left behind serves the next read with nothing moving.
+	again, err := store.List(ctx, testConfig())
+	if err != nil || len(again) != len(listed) {
+		t.Fatalf("List() once the refs settled = %d tasks, %v, want %d", len(again), err, len(listed))
+	}
+}
