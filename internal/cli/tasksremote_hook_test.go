@@ -105,6 +105,11 @@ func TestPrePushHookLetsCodePushesThroughTasksRemoteRefusals(t *testing.T) {
 		if !strings.Contains(output, "no-access.git") || !strings.Contains(output, "the code push goes ahead") {
 			t.Fatalf("hook output lacks the repository and the notice:\n%s", output)
 		}
+		// This checkout read the tasks at setup; what is true now is that the
+		// repository could not be reached.
+		if strings.Contains(output, "has not read them yet") || !strings.Contains(output, "could not be reached") {
+			t.Fatalf("hook output does not say the tasks repository could not be reached:\n%s", output)
+		}
 		if got := strings.TrimSpace(cliGitOutput(t, project.code, "rev-parse", "refs/heads/main")); got != head {
 			t.Fatalf("origin main = %s, want %s", got, head)
 		}

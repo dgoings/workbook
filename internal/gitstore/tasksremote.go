@@ -338,11 +338,19 @@ func tasksRemoteNotRead(name, address string) error {
 	}
 	return core.TasksRemoteError(core.CategoryNotInitialized,
 		core.TasksRemoteRefusal{Reason: core.TasksRemoteNotRead, Remote: name, URL: address, Command: "workbook setup"},
-		"%s", tasksRemoteAccessSentence(where))
+		"%s", tasksRemoteAccessSentence(where, false))
 }
 
-func tasksRemoteAccessSentence(where string) string {
-	return "this project's tasks are in " + where + ", and this checkout has not read them yet: " +
+// tasksRemoteAccessSentence says where the tasks are and what access they
+// need. unreachable is for a listing that just failed, which says nothing
+// about whether this checkout read the tasks before; otherwise the checkout
+// has never read them.
+func tasksRemoteAccessSentence(where string, unreachable bool) string {
+	state := ", and this checkout has not read them yet: "
+	if unreachable {
+		state = ", which could not be reached just now: "
+	}
+	return "this project's tasks are in " + where + state +
 		"seeing them needs read access to that repository, and changing them needs push access to it; " +
 		"once this checkout has that access, run workbook setup"
 }
@@ -417,7 +425,7 @@ func (r *Repository) ProbeTasksRemote(ctx context.Context) (TasksRemoteProbe, er
 		}
 		return TasksRemoteProbe{}, &core.Error{
 			Category:    core.CategoryOperational,
-			Message:     tasksRemoteAccessSentence(where),
+			Message:     tasksRemoteAccessSentence(where, true),
 			Cause:       err,
 			TasksRemote: &core.TasksRemoteRefusal{Reason: core.TasksRemoteUnreachable, Remote: name, URL: address, Command: "workbook setup"},
 		}
