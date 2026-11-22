@@ -322,10 +322,20 @@ email header a visitor sends, which is why this check is here.
 Open `https://tasks.example.com` in the phone's browser and sign in as on any
 other machine; the board lays itself out for the screen (see
 [On a phone](reference.md#on-a-phone)). Adding it to the home screen gives a
-shortcut with the Workbench icon and the project's name, and the shortcut opens
-the board in that same browser, so it uses the sign-in the browser already has.
-When that sign-in expires, the shortcut shows the Access sign-in page like any
-other visit. The page asks for the manifest that names the shortcut with the
+shortcut with the Workbench icon and the project's name. The board's manifest
+asks for it to open in an ordinary browser tab, and on Android Chrome it does,
+using the sign-in Chrome already has; when that sign-in expires, the shortcut
+shows the Access sign-in page like any other visit.
+
+On an iPhone or iPad from iOS and iPadOS 26 the phone decides instead: a site
+added to the Home Screen opens as a web app of its own, whatever its manifest
+says, unless "Open as Web App" is switched off in the Add to Home Screen sheet,
+where it starts on. A web app has its own window and keeps its own cookies,
+starting from the ones Safari had when it was added, so once its Access
+sign-in expires it has to sign in again inside the web app, and signing in in
+Safari does not help it. Tell readers to switch "Open as Web App" off when they
+add the board; the shortcut then opens it in Safari, signed in as Safari is.
+None of this has been tried on a real phone. The page asks for the manifest that names the shortcut with the
 browser's cookies, so the manifest reaches the board through Access the way the
 page does. Without the sign-in, Access would answer that request with its sign-in
 page and the browser would have no manifest. That much is checked in Chrome,

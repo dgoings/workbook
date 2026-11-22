@@ -2997,26 +2997,59 @@ the screen while the cards scroll; the header and the filters scroll away with
 the page. Tapping a name shows that column and slides the row to bring the name
 into view. There is no swiping between columns. A phone opens the board on the
 column `workbook next` draws from — the status the project tagged `next`,
-whatever it is called — and after that on the column it was last looking at.
-That column is remembered in the browser's own storage on that phone, never
-sent anywhere, and a phone whose browser keeps no storage, or whose remembered
-column no longer exists, opens on the `next` column instead.
+whatever it is called — and after that on the column it was last looking at,
+from the first frame it draws, with that column's name slid into view in the
+row. That column is remembered in the browser's own storage on that phone,
+never sent anywhere, and kept for each project apart: under the key the
+project's first tasks were minted with and the project's name, so two boards a
+phone opens at the same address, as every local `workbook serve` is, each keep
+their own. A project that is renamed, or two projects that share both their
+first key and their name, are the limits of that: the renamed one opens once on
+its `next` column, and the two share one remembered column. A phone whose
+browser keeps no storage, or whose remembered column no longer exists, opens on
+the `next` column instead, and so does one that was looking at a status since
+renamed, because the page knows a status only by its name.
 
 Cards cannot be dragged at that width, so a finger on a card scrolls the page.
 A task's status is changed from its own page, which a tap on the card opens.
 The task page, a new task, comments, assignments and the change log are laid
 out for the width: no page scrolls sideways, a wide code block scrolls inside
-its own box, and every control is at least 44 CSS pixels each way. The
-configuration page, where the project's statuses, priorities and keys are
-changed, is not laid out for a phone. The board's notices, such as a change
-held because a proxy asked the page to wait, stay at the bottom of the screen
-while there is page below them.
+its own box, and every control is at least 44 CSS pixels each way. Links inside
+the text of a description or a comment are the exception: they keep the height
+of the line they sit in, about 18 pixels, because they are read rather than
+aimed at. Every field is set in at least 16 pixels, so a phone's browser does
+not zoom the page in when one takes focus. The configuration page, where the
+project's statuses, priorities and keys are changed, is not laid out for a
+phone. The board's notices, such as a change held because a proxy asked the
+page to wait, are stacked in one box held at the bottom of the screen while
+there is page below it. The box is never taller than a third of the screen
+and scrolls inside itself past that, and a control brought into view by focus
+is kept clear of it.
 
 Saving the board to a phone's home screen gives the shortcut the Workbench icon
 and the project's name. The page links a web manifest whose `display` is
-`browser` and an Apple touch icon, and says nothing that asks for an app window
-of its own, so the shortcut opens the board in the phone's browser, signed in
-the way that browser is. The page's content policy carries `manifest-src
+`browser`, which asks for the board to open in an ordinary browser tab, and an
+Apple touch icon, and it has no `apple-mobile-web-app-capable` tag. What the
+shortcut then does is the phone's to decide:
+
+- Chrome on Android offers to install only a page whose manifest asks for an
+  app window of its own, so for this one it makes a shortcut, which opens the
+  board in a Chrome tab signed in the way Chrome is.
+- On an iPhone or iPad from iOS and iPadOS 26, every site added to the Home
+  Screen opens as a web app of its own unless "Open as Web App" is switched
+  off in the Add to Home Screen sheet, where it starts on. Nothing a page says
+  changes that. A web app has its own window and its own website data: it
+  starts with the cookies Safari had when it was added, and keeps its own after
+  that, so a sign-in that expires has to be done again inside it, and signing
+  in again in Safari does not sign it in. Switch "Open as Web App" off when
+  adding the board, and the shortcut opens the board in Safari instead.
+
+None of this has been tried on a real phone. The Android behavior follows from
+Chrome's install rules and the manifest's own definition of `browser`, and the
+iPhone behavior from Apple's description of iOS 26; the board itself was
+checked only in Chrome with a phone's screen, touch input and user agent.
+
+The page's content policy carries `manifest-src
 'self'` for this: a manifest falls under that directive alone, which falls back
 to `default-src 'none'`, so without it the browser refuses the board's own
 file. The icons are kept by a browser for a day (`Cache-Control:
