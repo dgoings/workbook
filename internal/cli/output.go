@@ -20,7 +20,6 @@ Commands:
   setup [options]
   create <title> [options]
   list [options]
-  board [--wide | --narrow] [--json]
   show <id-or-prefix> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--get-attachment <id-or-prefix> [--out <path>]] [--json]
   update <id-or-prefix> [options]
   delete <id-or-prefix> [--json]
@@ -69,7 +68,7 @@ func renderCommandHelp(output io.Writer, helpTarget []string) error {
 
 	metadata, exists := commandSchemas[helpTarget[0]]
 	if !exists {
-		return core.Errorf(core.CategoryInvocation, "unknown command %q", helpTarget[0])
+		return unknownCommandError(helpTarget[0])
 	}
 	if len(helpTarget) > 2 {
 		return core.Errorf(core.CategoryInvocation, "unknown %s command %q", metadata.Name, helpTarget[2])

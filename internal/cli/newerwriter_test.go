@@ -265,12 +265,7 @@ func TestANewerWritersHistoryIsServedRefusedAndNeverWedged(t *testing.T) {
 	}
 	assertNewerWriterWarning(t, envelope.Warnings, fetched.ID)
 
-	// The board and show carry the same advisory, and the board still renders.
-	code, stdout, stderr = run(t, local, "board", "--json")
-	if code != 0 {
-		t.Fatalf("board code = %d, want 0; stderr = %q", code, stderr)
-	}
-	assertNewerWriterWarning(t, assertJSONResult(t, stdout, "board").Warnings, fetched.ID)
+	// Show carries the same advisory.
 	code, stdout, stderr = run(t, local, "show", fetched.ID, "--json")
 	if code != 0 {
 		t.Fatalf("show code = %d, want 0; stderr = %q", code, stderr)
