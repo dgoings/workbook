@@ -183,6 +183,10 @@ func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, o
 	if err := r.moveReadSource(ctx, config, from); err != nil {
 		return result, err
 	}
+	// Before the mark, carrying is the copy itself. Once the old place is
+	// marked, whatever is carried from it reached it afterwards, or in the
+	// moment around the mark, and is reported as such.
+	carried.counting = r.observedMove() != nil
 	if err := r.moveStep("copy"); err != nil {
 		return result, err
 	}
@@ -207,6 +211,7 @@ func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, o
 	if err := r.moveReadSource(ctx, config, from); err != nil {
 		return result, err
 	}
+	carried.counting = true
 	if err := r.moveStep("recopy"); err != nil {
 		return result, err
 	}
@@ -292,6 +297,8 @@ func (r *Repository) moveCopy(
 
 // moveCarry accumulates what a run carried by operation identity.
 type moveCarry struct {
+	// counting says whether what is carried now is reported as stragglers.
+	counting   bool
 	operations int
 	tasks      map[string]struct{}
 	actors     map[string]struct{}
@@ -300,6 +307,43 @@ type moveCarry struct {
 
 func newMoveCarry() *moveCarry {
 	return &moveCarry{tasks: map[string]struct{}{}, actors: map[string]struct{}{}}
+}
+
+// add records one carried commit, when what is carried now is reported.
+func (carry *moveCarry) add(taskID string, commit OperationCommit) {
+	if !carry.counting {
+		return
+	}
+	carry.tasks[taskID] = struct{}{}
+	carry.actors[commit.Operation.Actor.ID] = struct{}{}
+	carry.operations += len(commit.Operation.Operations)
+}
+
+// countTaken records what taking the old place's commits for one task
+// carries: every operation on its history from head that this checkout's
+// history to local, if any, does not hold.
+func (r *Repository) countTaken(ctx context.Context, config core.ProjectConfig, carry *moveCarry, taskID, head, local string) error {
+	if !carry.counting {
+		return nil
+	}
+	if local == "" {
+		chains, err := r.completeTaskChains(ctx, config, []TaskHead{{TaskID: taskID, ObjectID: head}})
+		if err != nil {
+			return err
+		}
+		for _, commit := range chains[0] {
+			carry.add(taskID, commit)
+		}
+		return nil
+	}
+	missing, err := r.operationsNotIn(ctx, config, taskID, head, local, nil)
+	if err != nil {
+		return err
+	}
+	for _, commit := range missing {
+		carry.add(taskID, commit)
+	}
+	return nil
 }
 
 func (carry *moveCarry) report() *MoveStragglers {
@@ -390,6 +434,9 @@ func (r *Repository) carryFromTracking(
 			// The old place's own commits, so the new place gets the same
 			// commit IDs, not only the same operation IDs.
 			updates = append(updates, canonicalRefUpdate{TaskID: ref.taskID, Next: remote.Head})
+			if err := r.countTaken(ctx, config, carried, ref.taskID, remote.Head, ""); err != nil {
+				return false, err
+			}
 		case head == remote.Head:
 		default:
 			mine, readable := canonical[ref.taskID]
@@ -414,6 +461,10 @@ func (r *Repository) carryFromTracking(
 			updates = append(updates, canonicalRefUpdate{
 				TaskID: relationship.TaskID, Next: source[relationship.TaskID].Head, Expected: local[relationship.TaskID],
 			})
+			if err := r.countTaken(ctx, config, carried, relationship.TaskID,
+				source[relationship.TaskID].Head, local[relationship.TaskID]); err != nil {
+				return false, err
+			}
 		case taskHeadsDiverged:
 			byIdentity = append(byIdentity, relationship.TaskID)
 		}
@@ -530,12 +581,9 @@ func (r *Repository) carryTask(
 	}
 	processed := replay.replayed + replay.skipped
 	for _, commit := range pending[:processed] {
-		if before.covers(commit) {
-			continue
+		if !before.covers(commit) {
+			carried.add(taskID, commit)
 		}
-		carried.tasks[taskID] = struct{}{}
-		carried.actors[commit.Operation.Actor.ID] = struct{}{}
-		carried.operations += len(commit.Operation.Operations)
 	}
 	update := &canonicalRefUpdate{TaskID: taskID, Next: replay.parent.Head, Expected: mine.Head}
 	if replay.conflict != nil {
