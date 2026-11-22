@@ -46,8 +46,17 @@ func TestSetAsideEditsCostDoesNotGrowWithParkedRefs(t *testing.T) {
 		if coldProcesses > 8 {
 			t.Errorf("%d parked refs: the first read ran %d Git processes, want at most 8 however many there are", want, coldProcesses)
 		}
-		if warmProcesses > 0 {
-			t.Errorf("%d parked refs: a read with nothing changed ran %d Git processes, want none", want, warmProcesses)
+		// The listing of parked refs is reused for ten seconds. On a machine
+		// so loaded that the first read takes a good part of that, the repeat
+		// may list them once more, which is the documented behavior and not
+		// growth with the number of parked refs. The bound is written out
+		// here so that shortening the reuse in the code still fails this.
+		allowed := 0
+		if cold >= 5*time.Second {
+			allowed = 1
+		}
+		if warmProcesses > allowed {
+			t.Errorf("%d parked refs: a read with nothing changed ran %d Git processes after a first read of %v, want at most %d", want, warmProcesses, cold, allowed)
 		}
 		if cold > time.Minute || warm > 10*time.Second {
 			t.Errorf("%d parked refs: the first read took %v and a repeat %v", want, cold, warm)
