@@ -994,7 +994,9 @@ func runStatusMutation(
 		return err
 	}
 	defer session.Close()
-	session.fetchBefore(ctx)
+	if err := session.fetchBefore(ctx); err != nil {
+		return err
+	}
 	// The configuration the fetch settled on is the one this change is authored
 	// against, which is what makes `status rename` land on a teammate's newer
 	// name rather than on the one this clone opened with. It refreshes the

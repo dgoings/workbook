@@ -312,17 +312,17 @@ func TestPruneParkedRefsKeepsTheRefTheFetchJustCreated(t *testing.T) {
 	}
 }
 
-func TestHasOriginReportsWhetherAnOriginIsConfigured(t *testing.T) {
+func TestHasTasksRemoteReportsWhetherOriginIsConfigured(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	_, second, _ := syncRepositories(t)
-	if !second.HasOrigin(ctx) {
-		t.Fatal("HasOrigin(clone) = false, want true")
+	if !second.HasTasksRemote(ctx) {
+		t.Fatal("HasTasksRemote(clone) = false, want true")
 	}
 
 	syncGit(t, second.Root, "remote", "remove", "origin")
-	if second.HasOrigin(ctx) {
-		t.Fatal("HasOrigin(no remote) = true, want false")
+	if second.HasTasksRemote(ctx) {
+		t.Fatal("HasTasksRemote(no remote) = true, want false")
 	}
 }
 

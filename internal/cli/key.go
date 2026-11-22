@@ -535,7 +535,9 @@ func runKeyMutation(
 		return err
 	}
 	defer session.Close()
-	session.fetchBefore(ctx)
+	if err := session.fetchBefore(ctx); err != nil {
+		return err
+	}
 	if err := session.refreshConfiguration(ctx); err != nil {
 		return err
 	}

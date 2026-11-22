@@ -259,9 +259,13 @@ func (session *taskSession) acknowledge(conflict core.Conflict) {
 // other ref, so one task's malformed object is no reason to deny publication to
 // a mutation that did not touch it. What the fetch could not validate is
 // carried as a warning instead.
-func (session *taskSession) fetchBefore(ctx context.Context) {
+//
+// It returns an error only for a tasks remote marked as moved: the edit would
+// otherwise be recorded here and published to the place the tasks left, or to
+// nowhere, so the command stops with the refusal saying where they went.
+func (session *taskSession) fetchBefore(ctx context.Context) error {
 	if !session.report.Enabled {
-		return
+		return nil
 	}
 	if session.deferred {
 		// The watcher fetched within its staleness window, so the tip this
@@ -270,12 +274,12 @@ func (session *taskSession) fetchBefore(ctx context.Context) {
 		// one worth a network round trip to prevent.
 		session.report.Status = syncStatusDeferred
 		session.report.Detail = fmt.Sprintf("handed to the sync watcher (pid %d)", session.watcher.PID)
-		return
+		return nil
 	}
-	if !session.repository.HasOrigin(ctx) {
+	if !session.repository.HasTasksRemote(ctx) {
 		session.report.Status = syncStatusSkipped
-		session.report.Detail = "no origin remote configured"
-		return
+		session.report.Detail = "no " + session.repository.TasksRemoteName() + " remote configured"
+		return nil
 	}
 	result, err := session.repository.Fetch(ctx, session.config)
 	session.report.Fetch = &result
@@ -286,10 +290,13 @@ func (session *taskSession) fetchBefore(ctx context.Context) {
 	// carried to the caller rather than raised in their way.
 	session.report.configConflicts = result.ConfigConflicts
 	session.conflicts = result.Conflicts
+	if refusal, found := core.TasksRemoteRefusalOf(err); found && refusal.Reason == core.TasksRemoteMoved {
+		return err
+	}
 	if err != nil && result.Status != gitstore.SyncPhaseCompleted {
 		session.report.Status = syncStatusFailed
 		session.report.Detail = "fetch failed: " + err.Error()
-		return
+		return nil
 	}
 	session.fetched = &result
 	session.report.Status = syncStatusCompleted
@@ -302,6 +309,7 @@ func (session *taskSession) fetchBefore(ctx context.Context) {
 		}
 	}
 	session.unsettled = settleMovedHistories(ctx, session.store, session.config, result)
+	return nil
 }
 
 // settleMovedHistories reads, through the projection, every task a fetch moved
@@ -660,7 +668,9 @@ func (session *taskSession) mutate(
 	target string,
 	apply func(context.Context) (core.MutationResult, error),
 ) (core.MutationResult, error) {
-	session.fetchBefore(ctx)
+	if err := session.fetchBefore(ctx); err != nil {
+		return core.MutationResult{}, err
+	}
 	if err := session.refreshConfiguration(ctx); err != nil {
 		return core.MutationResult{}, err
 	}

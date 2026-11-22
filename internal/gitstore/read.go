@@ -20,8 +20,6 @@ type TaskHead struct {
 
 const taskRefFormat = "%(refname)%00%(objectname)%00%(symref)"
 
-const trackingTaskRefPrefix = "refs/workbook/remotes/origin/tasks/"
-
 // ListTaskHeads returns every Workbook task ref tip, ordered by task ID. It
 // uses Git's ref enumeration so packed and loose refs behave the same way.
 func (r *Repository) ListTaskHeads(ctx context.Context, config core.ProjectConfig) ([]TaskHead, error) {
@@ -271,10 +269,11 @@ func (r *Repository) parseOwnedRefRecords(
 	contents []byte,
 	expectedTaskID string,
 ) ([]taskRefRecord, []IgnoredRef, error) {
-	if prefix != taskRefPrefix && prefix != trackingTaskRefPrefix {
+	tracking := isTrackingTaskRefPrefix(prefix)
+	if prefix != taskRefPrefix && !tracking {
 		return nil, nil, core.Errorf(core.CategoryCorruptData, "unsupported Workbook task ref namespace %q", prefix)
 	}
-	tolerateUnrecognizedNames := prefix == trackingTaskRefPrefix
+	tolerateUnrecognizedNames := tracking
 	if len(contents) == 0 {
 		return nil, nil, nil
 	}
@@ -361,12 +360,13 @@ func ignoredTaskRef(keys core.KeySet, prefix, refName, reason string) IgnoredRef
 // is — under the canonical prefix origin holds it at, and with the flag that
 // stands between a ref and advice to delete it. That flag is true here for the
 // most literal possible reason: the ref is another Workbook's task.
-func ignoredForeignProjectRef(keys core.KeySet, config core.ProjectConfig, taskID, projectID string) IgnoredRef {
+func (r *Repository) ignoredForeignProjectRef(keys core.KeySet, config core.ProjectConfig, taskID, projectID string) IgnoredRef {
 	reason := fmt.Sprintf(
 		"task ID %q carries this project's key, but its documents carry project ID %s rather than this project's %s, "+
 			"so the ref belongs to another project sharing this origin",
 		taskID, projectID, config.ProjectID)
-	return ignoredTaskRef(keys, remoteTaskRefPrefix, remoteTaskRefPrefix+taskID, reason)
+	prefix := r.remoteTaskRefPrefix()
+	return ignoredTaskRef(keys, prefix, prefix+taskID, reason)
 }
 
 // readTip reads one tip through the batch reader, which is deliberately the

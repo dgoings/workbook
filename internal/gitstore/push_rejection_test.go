@@ -47,7 +47,8 @@ func TestPushRejectionNamesTheFirstThree(t *testing.T) {
 	}
 	rejected[1].Detail = ""
 	want := "5 task ref(s) were rejected by origin: WB-1 [rejected] (fetch first); WB-2; WB-3 [rejected] (fetch first); and 2 more"
-	if got := rejectedByOrigin(rejected).Error(); got != want {
-		t.Fatalf("rejectedByOrigin() = %q, want %q", got, want)
+	repository := &Repository{remoteName: "origin"}
+	if got := repository.rejectedByRemote(rejected).Error(); got != want {
+		t.Fatalf("rejectedByRemote() = %q, want %q", got, want)
 	}
 }

@@ -639,7 +639,7 @@ func (f *fakeSyncer) InspectTaskHead(_ context.Context, _ core.ProjectConfig, ta
 	return gitstore.TaskHead{TaskID: taskID, ObjectID: head}, true, nil
 }
 
-func (f *fakeSyncer) HasOrigin(context.Context) bool {
+func (f *fakeSyncer) HasTasksRemote(context.Context) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.origin

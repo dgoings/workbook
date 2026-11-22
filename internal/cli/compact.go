@@ -198,11 +198,13 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 	// Compaction starts from a tip origin already holds, so with sync on the
 	// tracking refs are brought up to date first. A real run publishes the
 	// checkpoints at the end, as every mutation publishes what it changed.
-	session.fetchBefore(ctx)
+	if err := session.fetchBefore(ctx); err != nil {
+		return err
+	}
 	if err := session.refreshConfiguration(ctx); err != nil {
 		return err
 	}
-	options.RequirePushed = session.report.Enabled && session.repository.HasOrigin(ctx)
+	options.RequirePushed = session.report.Enabled && session.repository.HasTasksRemote(ctx)
 
 	service := session.service
 	service.History = session.store

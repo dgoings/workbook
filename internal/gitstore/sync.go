@@ -9,8 +9,6 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 )
 
-const remoteTaskRefPrefix = "refs/workbook/remotes/origin/tasks/"
-
 type SyncStatus string
 type SyncPhaseStatus string
 
@@ -133,7 +131,7 @@ type fetchState struct {
 // non-atomic publication preserves per-ref outcomes so a rejection does not
 // prevent unrelated tasks from publishing.
 func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncResult, error) {
-	result := SyncResult{Remote: "origin", Tasks: []SyncTaskResult{}}
+	result := SyncResult{Remote: r.remote(), Tasks: []SyncTaskResult{}}
 	if err := r.verifyIdentity(ctx); err != nil {
 		return failedSyncPhase(result, "push failed before completion", err)
 	}
@@ -179,7 +177,7 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	// Both singleton refs ride the listing Push already makes, so establishing
 	// that origin is this project, and whether it holds this project's
 	// configuration, costs no round trip of its own.
-	remoteOutput, err := r.Git(ctx, nil, "ls-remote", "--refs", "origin", taskRefPrefix+"*", identityRef, configRef)
+	remoteOutput, err := r.Git(ctx, nil, "ls-remote", "--refs", r.remote(), taskRefPrefix+"*", identityRef, configRef)
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}
@@ -277,7 +275,7 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		return result, core.Errorf(core.CategoryCorruptData, "%d local task ref(s) failed validation", invalid)
 	}
 	if len(rejected) > 0 {
-		return result, rejectedByOrigin(rejected)
+		return result, r.rejectedByRemote(rejected)
 	}
 	if changed > 0 {
 		return result, core.Errorf(core.CategoryStaleWrite, "%d local task ref(s) changed during push", changed)
@@ -471,9 +469,9 @@ type SyncResult struct {
 // skips the push phase, because there is then no validated view to publish.
 func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncRunResult, error) {
 	result := SyncRunResult{
-		Remote: "origin",
-		Fetch:  skippedSyncPhase("fetch not run"),
-		Push:   skippedSyncPhase("push not run"),
+		Remote: r.remote(),
+		Fetch:  r.skippedSyncPhase("fetch not run"),
+		Push:   r.skippedSyncPhase("push not run"),
 	}
 
 	state, fetched, fetchErr := r.fetch(ctx, config, true, true)
@@ -481,7 +479,7 @@ func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncR
 	result.Identity = state.Identity
 	result.Config = state.Config
 	if fetchErr != nil && fetched.Status != SyncPhaseCompleted {
-		result.Push = skippedSyncPhase("push skipped because fetch failed")
+		result.Push = r.skippedSyncPhase("push skipped because fetch failed")
 		return result, fetchErr
 	}
 
@@ -494,8 +492,8 @@ func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncR
 	return result, pushErr
 }
 
-func skippedSyncPhase(detail string) SyncResult {
-	return SyncResult{Remote: "origin", Status: SyncPhaseSkipped, Detail: detail, Tasks: []SyncTaskResult{}}
+func (r *Repository) skippedSyncPhase(detail string) SyncResult {
+	return SyncResult{Remote: r.remote(), Status: SyncPhaseSkipped, Detail: detail, Tasks: []SyncTaskResult{}}
 }
 
 func failedSyncPhase(result SyncResult, detail string, err error) (SyncResult, error) {
@@ -531,7 +529,7 @@ func (r *Repository) fetch(
 		Outcomes:  make(map[string]SyncTaskResult),
 		Withheld:  make(map[string]struct{}),
 	}
-	result := SyncResult{Remote: "origin", Tasks: []SyncTaskResult{}}
+	result := SyncResult{Remote: r.remote(), Tasks: []SyncTaskResult{}}
 	if err := r.verifyIdentity(ctx); err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
 		return state, result, err
@@ -547,14 +545,17 @@ func (r *Repository) fetch(
 	// moment than the tasks it is supposed to describe. Both singleton refspecs
 	// are globs, because Git fails a whole fetch when an explicitly named source
 	// ref is missing and most origins have neither ref yet.
-	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", "origin",
-		"+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*",
-		identityFetchRefspec,
-		configFetchRefspec,
+	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", r.remote(),
+		"+"+taskRefPrefix+"*:"+r.remoteTaskRefPrefix()+"*",
+		r.identityFetchRefspec(),
+		r.configFetchRefspec(),
 	); err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
 		return state, result, err
 	}
+	r.metadataMu.Lock()
+	r.trackedIdentity = trackedIdentityHead{}
+	r.metadataMu.Unlock()
 
 	// Identity is settled before any task is looked at: every task document
 	// names a project, and there is no point validating them against a project
@@ -614,7 +615,7 @@ func (r *Repository) fetch(
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
 		return state, result, err
 	}
-	trackingRefs, ignored, err := r.listOwnedTaskRefs(ctx, config, remoteTaskRefPrefix)
+	trackingRefs, ignored, err := r.listOwnedTaskRefs(ctx, config, r.remoteTaskRefPrefix())
 	if err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
 		return state, result, err
@@ -667,7 +668,7 @@ func (r *Repository) fetch(
 			// which is the report that already exists for a name on origin this
 			// clone will not read, and the run completes.
 			if projectID, foreign := foreignProjectOf(tip.Err); foreign {
-				foreignIgnored = append(foreignIgnored, ignoredForeignProjectRef(keys, config, tip.Head.TaskID, projectID))
+				foreignIgnored = append(foreignIgnored, r.ignoredForeignProjectRef(keys, config, tip.Head.TaskID, projectID))
 				continue
 			}
 			invalidTracking++
@@ -963,12 +964,18 @@ func sortedSyncOutcomes(outcomes map[string]SyncTaskResult) []SyncTaskResult {
 // run already named every one origin holds, and repeating them would say the
 // same thing twice about the same namespace.
 func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConfig, state fetchState) (SyncResult, error) {
-	result := SyncResult{Remote: "origin", Tasks: []SyncTaskResult{}}
+	result := SyncResult{Remote: r.remote(), Tasks: []SyncTaskResult{}}
 	if err := r.verifyIdentity(ctx); err != nil {
 		return failedSyncPhase(result, "push failed before completion", err)
 	}
 	if err := r.validateRepositoryConfig(config); err != nil {
 		return failedSyncPhase(result, "push failed before completion", err)
+	}
+	// A remote marked as the place the tasks moved away from can be read and
+	// nothing more: the fetch phase of this run read it because --remote named
+	// it, and nothing is published to it.
+	if moved := r.observedMove(); moved != nil {
+		return failedSyncPhase(result, "push refused", movedRemotePublication(r.remote(), *moved))
 	}
 	// The configuration ledger is published before the task refs it explains,
 	// from the observation the fetch phase of this same run already made.
@@ -1065,7 +1072,7 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 	}
 	result.Status = SyncPhaseCompleted
 	if len(rejected) > 0 {
-		return result, rejectedByOrigin(rejected)
+		return result, r.rejectedByRemote(rejected)
 	}
 	if changed > 0 {
 		return result, core.Errorf(core.CategoryStaleWrite, "%d local task ref(s) changed during push", changed)
@@ -1079,7 +1086,7 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 // "[remote rejected] (hook declined)" when a server hook refused it — so the
 // one line a server logs says which it was. Git's reason is its summary, not
 // what a hook printed: that text reaches only Git's own output.
-func rejectedByOrigin(rejected []SyncTaskResult) error {
+func (r *Repository) rejectedByRemote(rejected []SyncTaskResult) error {
 	const named = 3
 	reasons := make([]string, 0, named)
 	for _, item := range rejected {

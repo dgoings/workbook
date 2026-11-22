@@ -50,10 +50,12 @@ func runCompactAdopt(ctx context.Context, request compactAdoptRequest, cwd strin
 	session.deferred = false
 	session.report.Enabled = true
 	session.report.Detail = ""
-	if !session.repository.HasOrigin(ctx) {
-		return core.Errorf(core.CategoryValidation, "compact --adopt needs an origin remote to fetch from")
+	if !session.repository.HasTasksRemote(ctx) {
+		return core.Errorf(core.CategoryValidation, "compact --adopt needs an %s remote to fetch from", session.repository.TasksRemoteName())
 	}
-	session.fetchBefore(ctx)
+	if err := session.fetchBefore(ctx); err != nil {
+		return err
+	}
 	if session.report.Status == syncStatusFailed {
 		return core.Errorf(core.CategoryOperational, "compact --adopt needs origin's current tip, but %s", session.report.Detail)
 	}

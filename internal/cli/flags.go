@@ -183,6 +183,11 @@ var commandSchemas = map[string]commandMetadata{
 		Description: "Inspect and record this project's Workbook settings.\n\n" +
 			"`auto-sync` is a policy recorded in the tracked `.workbook/config.json`, so\n" +
 			"it travels with the branch it is committed on.\n\n" +
+			"`tasks-remote` is recorded there too. It names the Git remote, and with --url\n" +
+			"its address, of a repository that holds the project's tasks in place of\n" +
+			"origin; `workbook move-tasks` moves them there, and every checkout runs\n" +
+			"`workbook setup` to add the remote. Unsetting it shares tasks through origin\n" +
+			"again.\n\n" +
 			"`project-name`, `primary-color` and `text-color` are display settings\n" +
 			"recorded in the shared configuration history beside the statuses, so they\n" +
 			"synchronize with everyone who fetches. A color is six hexadecimal digits\n" +
@@ -199,10 +204,11 @@ var commandSchemas = map[string]commandMetadata{
 			},
 			"set": {
 				Name:        "set",
-				Synopsis:    "workbook config set <setting> <value> [--no-sync] [--json]",
+				Synopsis:    "workbook config set <setting> <value> [--url <address>] [--no-sync] [--json]",
 				Description: "Record a project setting.",
 				Positionals: []string{"<setting>", "<value>"},
 				Options: []optionMetadata{
+					{Name: "url", Kind: stringFlag, Value: "<address>", Description: "the tasks repository's address (tasks-remote only)"},
 					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin (display settings only)"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -738,24 +744,47 @@ var commandSchemas = map[string]commandMetadata{
 	},
 	"fetch": {
 		Name:        "fetch",
-		Synopsis:    "workbook fetch [--json]",
-		Description: "Fetch shared task refs from origin.",
-		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+		Synopsis:    "workbook fetch [--remote <remote>] [--json]",
+		Description: "Fetch shared task refs from the project's tasks remote, which is origin unless\nthe project's settings name another. --remote names a different Git remote\nfor this run, which is how a checkout reads one it has not set up.",
+		Options: []optionMetadata{
+			{Name: "remote", Kind: stringFlag, Value: "<remote>", Description: "fetch from this Git remote instead of the project's tasks remote"},
+			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+		},
 	},
 	"push": {
 		Name:        "push",
-		Synopsis:    "workbook push [--json]",
-		Description: "Push local task refs to origin.",
-		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+		Synopsis:    "workbook push [--remote <remote>] [--json]",
+		Description: "Push local task refs to the project's tasks remote, which is origin unless the\nproject's settings name another. --remote names a different Git remote for\nthis run; a remote marked as the place the tasks moved away from is refused.",
+		Options: []optionMetadata{
+			{Name: "remote", Kind: stringFlag, Value: "<remote>", Description: "push to this Git remote instead of the project's tasks remote"},
+			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+		},
 	},
 	"sync": {
 		Name:        "sync",
-		Synopsis:    "workbook sync [--watch [--interval <duration>]] [--status] [--json]",
-		Description: "Fetch then push shared task refs, once or continuously.",
+		Synopsis:    "workbook sync [--watch [--interval <duration>]] [--status] [--remote <remote>] [--json]",
+		Description: "Fetch then push shared task refs, once or continuously, with the project's\ntasks remote, which is origin unless the project's settings name another.\n--remote names a different Git remote for one run; a watcher always uses the\nproject's tasks remote.",
 		Options: []optionMetadata{
 			{Name: "watch", Kind: boolFlag, Description: "synchronize continuously until interrupted"},
 			{Name: "interval", Kind: stringFlag, Value: "<duration>", Description: "time between synchronizations while watching, such as 30s, 2m or 1d (default 5s)"},
 			{Name: "status", Kind: boolFlag, Description: "report whether a watcher is running for this repository"},
+			{Name: "remote", Kind: stringFlag, Value: "<remote>", Description: "synchronize once with this Git remote instead of the project's tasks remote"},
+			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+		},
+	},
+	"move-tasks": {
+		Name:     "move-tasks",
+		Synopsis: "workbook move-tasks [--from <remote>] [--json]",
+		Description: "Move this project's tasks to the tasks remote its settings name.\n\n" +
+			"Run it after `workbook config set tasks-remote <name> --url <address>`. It copies\n" +
+			"every task from origin (or --from) to the new place, marks the old place so a\n" +
+			"checkout still using it is refused and told where the tasks went, copies again\n" +
+			"for edits published before the mark, and checks that the new place holds every\n" +
+			"task. Every step is safe to repeat: an interrupted run is finished by running it\n" +
+			"again. Then commit .workbook/config.json; everyone else runs `workbook setup`\n" +
+			"after pulling it.",
+		Options: []optionMetadata{
+			{Name: "from", Kind: stringFlag, Value: "<remote>", Description: "the Git remote the tasks are in now (default origin)"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
@@ -901,7 +930,7 @@ var commandSchemas = map[string]commandMetadata{
 }
 
 var commandOrder = []string{
-	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "compact", "version", "fetch", "push", "sync", "status", "priority", "key", "config", "docs", "hooks", "serve", "completion",
+	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "compact", "version", "fetch", "push", "sync", "move-tasks", "status", "priority", "key", "config", "docs", "hooks", "serve", "completion",
 }
 
 type commandFlagSet struct {

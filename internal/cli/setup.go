@@ -25,6 +25,9 @@ type setupResult struct {
 	Docs       *agentdocs.Report `json:"docs,omitempty"`
 	Sync       setupSyncResult   `json:"sync"`
 	TasksOnly  *setupTasksOnly   `json:"tasksOnly,omitempty"`
+	// TasksRemote is present only for a project whose settings name a remote
+	// other than origin for its tasks: what this run did about it.
+	TasksRemote *gitstore.TasksRemoteSetup `json:"tasksRemote,omitempty"`
 }
 
 // setupTasksOnly reports a run in a tasks-only folder: one holding a project's
@@ -194,6 +197,24 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 		// the code, which this folder does not hold.
 		*noDocs = true
 	}
+	// A project whose settings name a tasks remote gets it added here, the
+	// one place Workbook adds a remote, and it is asked before anything else
+	// so a checkout without access to it stops with a sentence saying so.
+	var tasksRemote *gitstore.TasksRemoteSetup
+	if tasksOnly == nil {
+		tasksRemote, err = repository.EnsureTasksRemote(ctx)
+		if err != nil {
+			return err
+		}
+		if tasksRemote != nil && !*noSync {
+			if _, err := repository.ProbeTasksRemote(ctx); err != nil {
+				return err
+			}
+			if err := repository.CheckMoveDone(ctx); err != nil {
+				return err
+			}
+		}
+	}
 	// A checkout that predates the project's Workbook adoption carries no
 	// tracked configuration, so Init alone would mint a second identity for a
 	// project origin already has. Ask origin first; --no-sync keeps bootstrap
@@ -255,11 +276,12 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	}
 
 	result := setupResult{
-		Repository: repository.Root,
-		ProjectID:  config.ProjectID,
-		Key:        config.Key,
-		UserConfig: setupUserConfig{Path: configPath, Created: created},
-		Config:     setupConfigResult{Version: config.Version, Upgraded: upgraded},
+		Repository:  repository.Root,
+		ProjectID:   config.ProjectID,
+		Key:         config.Key,
+		UserConfig:  setupUserConfig{Path: configPath, Created: created},
+		Config:      setupConfigResult{Version: config.Version, Upgraded: upgraded},
+		TasksRemote: tasksRemote,
 	}
 	if tasksOnly != nil {
 		// Repository.Actor answers with the address every edit is recorded
@@ -366,6 +388,10 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	if result.TasksOnly != nil {
 		fmt.Fprintf(stdout, "Mode:\ttasks-only\t(%s)\n", tasksOnlyModeDescription(*result.TasksOnly))
 		fmt.Fprintf(stdout, "Remote:\t%s\n", result.TasksOnly.Remote)
+	}
+	if result.TasksRemote != nil {
+		fmt.Fprintf(stdout, "Tasks remote:\t%s\t%s\t(%s)\n", result.TasksRemote.Name, result.TasksRemote.URL,
+			tasksRemoteSetupDescription(*result.TasksRemote))
 	}
 	fmt.Fprintf(stdout, "Project ID:\t%s\t(%s)\n", result.ProjectID, setupIdentityDescription(result.Identity))
 	fmt.Fprintf(stdout, "Key:\t%s\n", result.Key)
@@ -626,8 +652,8 @@ func setupSync(
 	if skip {
 		return setupSyncResult{Status: "skipped", Detail: "--no-sync"}, nil
 	}
-	if _, err := repository.Git(ctx, nil, "remote", "get-url", "origin"); err != nil {
-		return setupSyncResult{Status: "skipped", Detail: "no origin remote configured"}, nil
+	if !repository.HasTasksRemote(ctx) {
+		return setupSyncResult{Status: "skipped", Detail: "no " + repository.TasksRemoteName() + " remote configured"}, nil
 	}
 	run, err := repository.Sync(ctx, config)
 	// Re-running setup on a clone that already has a projection can adopt a
@@ -774,4 +800,15 @@ func artifactAction(artifact agentdocs.Artifact) string {
 	default:
 		return "unchanged"
 	}
+}
+
+// tasksRemoteSetupDescription says where the tasks remote's address came from.
+func tasksRemoteSetupDescription(setup gitstore.TasksRemoteSetup) string {
+	if setup.Status == "added" {
+		return "added from .workbook/config.json"
+	}
+	if setup.SettingsURL != "" && setup.SettingsURL != setup.URL {
+		return "this checkout's own address, kept; the settings give " + setup.SettingsURL
+	}
+	return "already added"
 }

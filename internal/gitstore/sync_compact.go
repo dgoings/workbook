@@ -196,7 +196,7 @@ func (r *Repository) pushTaskHeads(ctx context.Context, candidates []pushCandida
 			args = append(args, "--force-with-lease="+refName+":"+candidate.Lease.ExpectedRemote)
 		}
 	}
-	args = append(args, "origin")
+	args = append(args, r.remote())
 	for _, candidate := range candidates {
 		args = append(args, candidate.Head+":"+taskRefPrefix+candidate.TaskID)
 	}
@@ -225,7 +225,7 @@ func (r *Repository) pushTaskHeads(ctx context.Context, candidates []pushCandida
 // `always` keeps a reflog for the tracking ref, and that reflog holds the old
 // history until it expires.
 func (r *Repository) advanceTrackingRef(ctx context.Context, taskID, expected, next string) error {
-	ref := remoteTaskRefPrefix + taskID
+	ref := r.remoteTaskRefPrefix() + taskID
 	output, err := r.Git(ctx, nil, "for-each-ref", "--format=%(objectname)", ref)
 	if err != nil {
 		return err
@@ -273,7 +273,7 @@ func awaitsCheckpointPublication(local, remote core.Snapshot) bool {
 // Only the named tips are validated, so an unrelated malformed ref cannot
 // block publishing them.
 func (r *Repository) PushTasks(ctx context.Context, config core.ProjectConfig, taskIDs []string) (SyncResult, error) {
-	result := SyncResult{Remote: "origin", Tasks: []SyncTaskResult{}}
+	result := SyncResult{Remote: r.remote(), Tasks: []SyncTaskResult{}}
 	if err := r.verifyIdentity(ctx); err != nil {
 		return failedSyncPhase(result, "push failed before completion", err)
 	}
@@ -380,7 +380,7 @@ func (r *Repository) PushTasks(ctx context.Context, config core.ProjectConfig, t
 		return result, core.Errorf(core.CategoryCorruptData, "%d local task ref(s) failed validation", invalid)
 	}
 	if len(rejected) > 0 {
-		return result, rejectedByOrigin(rejected)
+		return result, r.rejectedByRemote(rejected)
 	}
 	return result, nil
 }
@@ -929,7 +929,7 @@ func (r *Repository) StuckCompactions(ctx context.Context, config core.ProjectCo
 	if err != nil {
 		return nil, err
 	}
-	trackingRefs, _, err := r.listOwnedTaskRefs(ctx, config, remoteTaskRefPrefix)
+	trackingRefs, _, err := r.listOwnedTaskRefs(ctx, config, r.remoteTaskRefPrefix())
 	if err != nil {
 		return nil, err
 	}

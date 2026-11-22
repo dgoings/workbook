@@ -480,10 +480,10 @@ func checkTasksOnlyKey(ctx context.Context, gitPath, remoteURL, format, key stri
 		return err
 	}
 	if _, err := probe.Git(ctx, nil,
-		"fetch", "--no-tags", "--no-auto-maintenance", remoteURL, identityFetchRefspec); err != nil {
+		"fetch", "--no-tags", "--no-auto-maintenance", remoteURL, identityFetchRefspecFor(core.DefaultTasksRemote)); err != nil {
 		return core.Wrap(core.CategoryOperational, "cannot fetch origin's Workbook project identity", err)
 	}
-	record, found, err := probe.readIdentityRef(ctx, remoteIdentityRef)
+	record, found, err := probe.readIdentityRef(ctx, remoteIdentityRefFor(core.DefaultTasksRemote))
 	if err != nil {
 		return err
 	}

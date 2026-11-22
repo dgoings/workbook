@@ -145,6 +145,8 @@ func runWithEnvironment(
 		err = runValidate(ctx, commandArgs, cwd, stdout, stderr)
 	case "compact":
 		err = runCompact(ctx, commandArgs, cwd, stdout, stderr)
+	case "move-tasks":
+		err = runMoveTasks(ctx, commandArgs, cwd, stdout, stderr)
 	case "version":
 		err = runVersion(commandArgs, stdout)
 	case "fetch":
@@ -280,11 +282,12 @@ func parseExplicitHelpRequest(args []string) (helpRequest, bool, error) {
 
 func runFetch(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("fetch")
+	remote := flags.String("remote", "", "fetch from this Git remote instead of the project's tasks remote")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	repository, config, err := openRepository(ctx, cwd, stderr)
+	repository, config, err := openRepositoryFor(ctx, cwd, stderr, *remote, true)
 	if err != nil {
 		return err
 	}
@@ -368,11 +371,12 @@ func fetchSharingWarnings(
 
 func runPush(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("push")
+	remote := flags.String("remote", "", "push to this Git remote instead of the project's tasks remote")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	repository, config, err := openRepository(ctx, cwd, stderr)
+	repository, config, err := openRepositoryFor(ctx, cwd, stderr, *remote, true)
 	if err != nil {
 		return err
 	}
@@ -393,6 +397,7 @@ func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	watch := flags.Bool("watch", false, "synchronize continuously until interrupted")
 	interval := flags.String("interval", "", "time between synchronizations while watching")
 	status := flags.Bool("status", false, "report whether a watcher is running for this repository")
+	remote := flags.String("remote", "", "synchronize with this Git remote instead of the project's tasks remote")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
@@ -402,7 +407,11 @@ func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if *interval != "" && !*watch {
 		return core.Errorf(core.CategoryInvocation, "sync --interval requires --watch")
 	}
-	repository, config, err := openRepository(ctx, cwd, stderr)
+	if *remote != "" && (*watch || *status) {
+		return core.Errorf(core.CategoryInvocation,
+			"sync --remote synchronizes once; a watcher always uses the project's tasks remote")
+	}
+	repository, config, err := openRepositoryFor(ctx, cwd, stderr, *remote, true)
 	if err != nil {
 		return err
 	}
@@ -425,11 +434,6 @@ func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		})
 	return syncErr
 }
-
-// watcherRemote names the remote a watcher synchronizes with. Its status
-// carries the refs it skipped but no remote of its own, and the collaborative
-// POC supports only origin.
-const watcherRemote = "origin"
 
 // watcherStatusResult reports what `sync --status` found. It answers even when
 // no watcher is running, because "nothing is running" is the ordinary state and
@@ -484,7 +488,9 @@ func runSyncStatus(repository *gitstore.Repository, stdout io.Writer, jsonMode b
 	// What the watcher skipped is reported the way a foreground fetch reports
 	// it, because asking a watcher what it has been doing is the only way to
 	// hear about a poisoned namespace nobody was present for.
-	writeIgnoredRefs(stdout, watcherRemote, result.IgnoredRefs)
+	// A watcher synchronizes with the project's tasks remote, which this
+	// handle names too. Its status carries the refs it skipped but no remote.
+	writeIgnoredRefs(stdout, repository.TasksRemoteName(), result.IgnoredRefs)
 	if len(result.Conflicts) > 0 {
 		writeConflicts(stdout, result.Conflicts)
 	}
@@ -1356,7 +1362,9 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		return runNextClaim(ctx, session, options, stdout, stderr, *jsonMode)
 	}
 
-	session.fetchBefore(ctx)
+	if err := session.fetchBefore(ctx); err != nil {
+		return err
+	}
 	if err := session.refreshConfiguration(ctx); err != nil {
 		return err
 	}
@@ -2448,11 +2456,11 @@ type boardPublisher struct {
 // probed rather than remembered, so the indicator describes the next mutation
 // instead of a cached opinion that may have gone stale.
 func (p *boardPublisher) state(ctx context.Context) webui.SyncState {
-	if !p.repository.HasOrigin(ctx) {
+	if !p.repository.HasTasksRemote(ctx) {
 		return webui.SyncState{
 			Mode:   p.mode(),
 			Reason: webui.SyncReasonNoOrigin,
-			Detail: "no origin is configured, so nothing is published",
+			Detail: "no " + p.repository.TasksRemoteName() + " is configured, so nothing is published",
 		}
 	}
 	// "answering" rather than "running", because a watcher that is running and
@@ -2516,7 +2524,7 @@ func (p *boardPublisher) publish(
 	if err != nil {
 		return result, err
 	}
-	if !p.repository.HasOrigin(ctx) {
+	if !p.repository.HasTasksRemote(ctx) {
 		return result, nil
 	}
 	if !p.inline.Load() && p.handOff(result.Task.ID) {
@@ -2549,7 +2557,7 @@ func (p *boardPublisher) publish(
 // carve-out was written to avoid. The detail is the sentence the CLI prints for
 // the same condition.
 func (p *boardPublisher) publishConfig(ctx context.Context) []core.Warning {
-	if !p.repository.HasOrigin(ctx) {
+	if !p.repository.HasTasksRemote(ctx) {
 		return nil
 	}
 	if !p.inline.Load() && p.handOff("") {
@@ -2862,6 +2870,19 @@ func openReadServiceWithRepository(ctx context.Context, cwd string, stderr io.Wr
 // should be silent either. Every command funnels through here, so saying it
 // once here says it once per command.
 func openRepository(ctx context.Context, cwd string, stderr io.Writer) (*gitstore.Repository, core.ProjectConfig, error) {
+	return openRepositoryFor(ctx, cwd, stderr, "", true)
+}
+
+// openRepositoryFor opens the project, and refuses it until `workbook setup`
+// has run again when the project's tasks remote says so (see
+// gitstore.CheckTasksRemote). remote, from fetch, push and sync --remote,
+// points the handle at another remote, and skips that check: naming the
+// remote is how a checkout reads a remote it has not set up.
+//
+// check is false only for the commands that are how a checkout gets out of
+// those states: the settings commands and move-tasks. Setup opens the
+// repository itself.
+func openRepositoryFor(ctx context.Context, cwd string, stderr io.Writer, remote string, check bool) (*gitstore.Repository, core.ProjectConfig, error) {
 	repository, err := gitstore.Open(ctx, cwd)
 	if err != nil {
 		return nil, core.ProjectConfig{}, err
@@ -2873,6 +2894,17 @@ func openRepository(ctx context.Context, cwd string, stderr io.Writer) (*gitstor
 	}
 	if drift, found := repository.IdentityDrift(); found && stderr != nil {
 		fmt.Fprintf(stderr, "workbook: warning: %s\n", drift.Detail)
+	}
+	if remote != "" {
+		if err := repository.UseRemote(ctx, remote); err != nil {
+			return nil, core.ProjectConfig{}, err
+		}
+		return repository, config, nil
+	}
+	if check {
+		if err := repository.CheckTasksRemote(ctx); err != nil {
+			return nil, core.ProjectConfig{}, err
+		}
 	}
 	return repository, config, nil
 }

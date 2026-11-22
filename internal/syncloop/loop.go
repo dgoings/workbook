@@ -45,7 +45,7 @@ type Syncer interface {
 	PruneParkedRefs(context.Context, core.ProjectConfig) (int, error)
 	PruneParkedConfigRefs(context.Context) (int, error)
 	InspectTaskHead(context.Context, core.ProjectConfig, string) (gitstore.TaskHead, bool, error)
-	HasOrigin(context.Context) bool
+	HasTasksRemote(context.Context) bool
 }
 
 // Refresher warms the read projection after refs move.
@@ -230,7 +230,7 @@ func (l *loop) syncOnce(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	if !l.options.Repository.HasOrigin(ctx) {
+	if !l.options.Repository.HasTasksRemote(ctx) {
 		// Nothing to synchronize with. This is the ordinary state of a clone
 		// with no remote, so it reports success and stays silent rather than
 		// printing an error every tick.

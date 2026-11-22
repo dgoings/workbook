@@ -124,6 +124,7 @@ type configStageOutcome struct {
 // The steady state — both refs at the same commit, or neither ref existing —
 // reads no objects at all and reports nothing.
 func (r *Repository) reconcileConfig(ctx context.Context, config core.ProjectConfig) configStageOutcome {
+	remoteConfigRef := r.remoteConfigRef()
 	listing, err := r.listConfigRefs(ctx, configRef, remoteConfigRef)
 	if err != nil {
 		return configStageOutcome{
@@ -179,7 +180,7 @@ func (r *Repository) reconcileObservedConfig(
 		return configStageOutcome{Result: &SyncConfigResult{Status: SyncConfigLocalAhead, Head: localHead}}
 	}
 
-	remote, err := r.readConfigRecordAt(ctx, config, remoteConfigRef, remoteHead)
+	remote, err := r.readConfigRecordAt(ctx, config, r.remoteConfigRef(), remoteHead)
 	if err != nil {
 		return r.configStageFailure(err)
 	}
@@ -447,13 +448,13 @@ func (r *Repository) publishConfigLedger(ctx context.Context) (*SyncConfigResult
 		return nil, nil
 	}
 	push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil,
-		"push", "--porcelain", "origin", head+":"+configRef)
+		"push", "--porcelain", r.remote(), head+":"+configRef)
 	if push.err == nil {
 		r.rememberConfigRemoteHead(head)
 		result := &SyncConfigResult{
 			Status: SyncConfigPublished,
 			Head:   head,
-			Detail: "published " + configRef + " to origin",
+			Detail: "published " + configRef + " to " + r.remote(),
 		}
 		r.recordConfigReport(result)
 		return result, nil
@@ -462,8 +463,8 @@ func (r *Repository) publishConfigLedger(ctx context.Context) (*SyncConfigResult
 		Status:      SyncConfigLocalAhead,
 		Head:        head,
 		Unpublished: true,
-		Detail: fmt.Sprintf("could not publish %s to origin: %s",
-			configRef, pushRefusalReason(push)),
+		Detail: fmt.Sprintf("could not publish %s to %s: %s",
+			configRef, r.remote(), pushRefusalReason(push)),
 	}
 	r.recordConfigReport(result)
 	return result, nil
@@ -504,7 +505,7 @@ func (r *Repository) PushConfig(ctx context.Context, config core.ProjectConfig) 
 // nothing else to ask about and a listing would be a round trip spent on
 // nothing.
 func (r *Repository) pushConfigOnly(ctx context.Context, result SyncResult) (SyncResult, error) {
-	if !r.HasOrigin(ctx) {
+	if !r.HasTasksRemote(ctx) {
 		result.Status = SyncPhaseCompleted
 		return result, nil
 	}
@@ -565,6 +566,7 @@ func (r *Repository) configPublicationCandidate(ctx context.Context) (string, bo
 	remoteKnown, remote := r.configRemoteKnown, r.configRemoteHead
 	r.metadataMu.RUnlock()
 	if !localKnown || !remoteKnown {
+		remoteConfigRef := r.remoteConfigRef()
 		listing, err := r.listConfigRefs(ctx, configRef, remoteConfigRef)
 		if err != nil {
 			return "", false, err

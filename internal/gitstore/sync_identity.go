@@ -27,6 +27,10 @@ const (
 	// SyncIdentityMismatched reports two different projects. It always travels
 	// with an error.
 	SyncIdentityMismatched SyncIdentityStatus = "mismatched"
+	// SyncIdentityMoved reports a remote marked as the place this project's
+	// tasks moved away from. A run reaches it only by naming that remote with
+	// --remote, reads it, and publishes nothing to it.
+	SyncIdentityMoved SyncIdentityStatus = "moved"
 )
 
 // SyncIdentityResult is the identity stage's account of one run.
@@ -59,7 +63,7 @@ func (result SyncIdentityResult) Warning() (string, bool) {
 	if result.Detail == "" {
 		return "", false
 	}
-	if result.Unpublished || result.Status == SyncIdentityMatched {
+	if result.Unpublished || result.Status == SyncIdentityMatched || result.Status == SyncIdentityMoved {
 		return result.Detail, true
 	}
 	return "", false
@@ -117,6 +121,9 @@ func (r *Repository) observedOriginIdentity() originIdentityState {
 // refs on origin now imply an identity ref beside them, so a fresh clone always
 // has something authoritative to adopt.
 func (r *Repository) ensureOriginIdentityAgreement(ctx context.Context, observed map[string]string) error {
+	if moved := r.observedMove(); moved != nil {
+		return r.remoteMarkedMoved(ctx, *moved, true)
+	}
 	switch r.observedOriginIdentity() {
 	case originIdentityAgreed, originIdentityUnavailable:
 		return nil
@@ -130,10 +137,10 @@ func (r *Repository) ensureOriginIdentityAgreement(ctx context.Context, observed
 		probed = true
 	}
 	if !probed {
-		listing, err := r.Git(ctx, nil, "ls-remote", "--refs", "origin", identityRef)
+		listing, err := r.Git(ctx, nil, "ls-remote", "--refs", r.remote(), identityRef)
 		if err != nil {
 			return core.Wrap(core.CategoryOperational,
-				"cannot ask origin which Workbook project it holds before publishing", err)
+				"cannot ask "+r.remote()+" which Workbook project it holds before publishing", err)
 		}
 		remoteHead, err = parseRemoteIdentityHead(listing)
 		if err != nil {
@@ -161,8 +168,8 @@ func (r *Repository) publishIdentityBeforeTasks(ctx context.Context, remoteHead 
 	}
 	if !found {
 		return core.Errorf(core.CategoryCorruptData,
-			"%s is missing, so this clone cannot say which project it is publishing to origin; rerun workbook setup",
-			identityRef)
+			"%s is missing, so this clone cannot say which project it is publishing to %s; rerun workbook setup",
+			identityRef, r.remote())
 	}
 	if remoteHead == local.Head {
 		r.rememberOriginIdentity(originIdentityAgreed)
@@ -192,19 +199,22 @@ func (r *Repository) publishIdentityBeforeTasks(ctx context.Context, remoteHead 
 	// Origin holds a different commit. Only its document decides whether that is
 	// this project written differently or another project entirely.
 	if _, err := r.Git(ctx, nil,
-		"fetch", "--no-tags", "--no-auto-maintenance", "origin", identityFetchRefspec); err != nil {
-		return core.Wrap(core.CategoryOperational, "cannot fetch origin's Workbook project identity", err)
+		"fetch", "--no-tags", "--no-auto-maintenance", r.remote(), r.identityFetchRefspec()); err != nil {
+		return core.Wrap(core.CategoryOperational, "cannot fetch "+r.remote()+"'s Workbook project identity", err)
 	}
-	remote, found, err := r.readIdentityRef(ctx, remoteIdentityRef)
+	remote, found, err := r.readIdentityRef(ctx, r.remoteIdentityRef())
 	if err != nil {
 		return err
 	}
 	if !found {
 		return core.Errorf(core.CategoryOperational,
-			"origin listed %s but did not deliver it; rerun the command", identityRef)
+			"%s listed %s but did not deliver it; rerun the command", r.remote(), identityRef)
 	}
 	if !bytes.Equal(remote.Document, local.Document) {
 		return r.originIdentityMismatch(local, remote)
+	}
+	if remote.Moved != nil {
+		return r.remoteMarkedMoved(ctx, *remote.Moved, true)
 	}
 	result := &SyncIdentityResult{Status: SyncIdentityMatched, Head: local.Head}
 	if err := r.adoptOriginIdentityCommit(ctx, local, remote, result); err != nil {
@@ -292,6 +302,7 @@ func (r *Repository) reconcileIdentity(ctx context.Context, publish, announce bo
 	// Both refs are enumerated together. Synchronization is on the hot path of
 	// every automatically synchronizing mutation, so the stage costs one ref
 	// listing plus, at most, one object read of origin's document.
+	remoteIdentityRef := r.remoteIdentityRef()
 	listing, err := r.listIdentityRefs(ctx, identityRef, remoteIdentityRef)
 	if err != nil {
 		return nil, err
@@ -331,9 +342,21 @@ func (r *Repository) reconcileIdentity(ctx context.Context, publish, announce bo
 		}
 		if !bytes.Equal(remote.Document, local.Document) {
 			result.Status = SyncIdentityMismatched
-			result.Detail = fmt.Sprintf("this clone is project %s (key %s); origin is project %s (key %s)",
-				local.Identity.ProjectID, local.Identity.Key, remote.Identity.ProjectID, remote.Identity.Key)
+			result.Detail = fmt.Sprintf("this clone is project %s (key %s); %s is project %s (key %s)",
+				local.Identity.ProjectID, local.Identity.Key, r.remote(), remote.Identity.ProjectID, remote.Identity.Key)
 			return result, r.originIdentityMismatch(local, remote)
+		}
+		if remote.Moved != nil {
+			// The marker is read and never adopted: the local identity ref
+			// stays on the identity commit, and the refusal or the read-only
+			// report says where the tasks went.
+			if err := r.remoteMarkedMoved(ctx, *remote.Moved, false); err != nil {
+				return result, err
+			}
+			result.Status = SyncIdentityMoved
+			result.Detail = fmt.Sprintf("%s is marked as the place this project's tasks moved away from, to %s (remote %q); "+
+				"it was read, and nothing is published to it", r.remote(), remote.Moved.URL, remote.Moved.Remote)
+			return result, nil
 		}
 		if err := r.adoptOriginIdentityCommit(ctx, local, remote, result); err != nil {
 			return result, err
@@ -366,8 +389,8 @@ func (r *Repository) reconcileIdentity(ctx context.Context, publish, announce bo
 	if len(listing.Ignored) > 0 {
 		result.Ignored = listing.Ignored
 		if result.Detail == "" {
-			result.Detail = fmt.Sprintf("origin holds %d ref(s) under %s that this version does not read",
-				len(listing.Ignored), identityRef)
+			result.Detail = fmt.Sprintf("%s holds %d ref(s) under %s that this version does not read",
+				r.remote(), len(listing.Ignored), identityRef)
 		}
 	}
 	if result.Status == SyncIdentityMatched && result.Detail == "" && !result.Unpublished && len(result.Ignored) == 0 {
@@ -409,42 +432,46 @@ func identityOriginNoun(source identitySource) string {
 // the identity is already durable locally, and refusing to synchronize tasks
 // over it would take a working repository away from a user who cannot fix it.
 func (r *Repository) publishIdentityToOrigin(ctx context.Context, local identityRecord, result *SyncIdentityResult) error {
+	remoteName := r.remote()
 	push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil,
-		"push", "--porcelain", "origin", local.Head+":"+identityRef)
+		"push", "--porcelain", remoteName, local.Head+":"+identityRef)
 	if push.err == nil {
 		result.Status = SyncIdentityPublished
-		result.Detail = fmt.Sprintf("published %s to origin", identityRef)
+		result.Detail = fmt.Sprintf("published %s to %s", identityRef, remoteName)
 		r.rememberOriginIdentity(originIdentityAgreed)
-		return nil
+		return r.recordPublishedIdentity(ctx, local.Head)
 	}
 	pushErr := gitCommandResultError(push)
 
 	if _, err := r.Git(ctx, nil,
-		"fetch", "--no-tags", "--no-auto-maintenance", "origin", identityFetchRefspec); err != nil {
-		result.Detail = fmt.Sprintf("could not publish %s to origin: %s", identityRef, oneLine(pushErr.Error()))
+		"fetch", "--no-tags", "--no-auto-maintenance", remoteName, r.identityFetchRefspec()); err != nil {
+		result.Detail = fmt.Sprintf("could not publish %s to %s: %s", identityRef, remoteName, oneLine(pushErr.Error()))
 		result.Unpublished = true
 		r.rememberOriginIdentity(originIdentityAbsent)
 		return nil
 	}
-	remote, found, err := r.readIdentityRef(ctx, remoteIdentityRef)
+	remote, found, err := r.readIdentityRef(ctx, r.remoteIdentityRef())
 	if err != nil {
 		return err
 	}
 	if !found {
-		result.Detail = fmt.Sprintf("could not publish %s to origin: %s", identityRef, oneLine(pushErr.Error()))
+		result.Detail = fmt.Sprintf("could not publish %s to %s: %s", identityRef, remoteName, oneLine(pushErr.Error()))
 		result.Unpublished = true
 		r.rememberOriginIdentity(originIdentityAbsent)
 		return nil
 	}
 	if !bytes.Equal(remote.Document, local.Document) {
 		result.Status = SyncIdentityMismatched
-		result.Detail = fmt.Sprintf("this clone is project %s (key %s); origin is project %s (key %s)",
-			local.Identity.ProjectID, local.Identity.Key, remote.Identity.ProjectID, remote.Identity.Key)
+		result.Detail = fmt.Sprintf("this clone is project %s (key %s); %s is project %s (key %s)",
+			local.Identity.ProjectID, local.Identity.Key, remoteName, remote.Identity.ProjectID, remote.Identity.Key)
 		return r.originIdentityMismatch(local, remote)
+	}
+	if remote.Moved != nil {
+		return r.remoteMarkedMoved(ctx, *remote.Moved, true)
 	}
 	if remote.Head == local.Head {
 		result.Status = SyncIdentityPublished
-		result.Detail = fmt.Sprintf("%s was already published to origin", identityRef)
+		result.Detail = fmt.Sprintf("%s was already published to %s", identityRef, remoteName)
 		r.rememberOriginIdentity(originIdentityAgreed)
 		return nil
 	}
@@ -470,6 +497,11 @@ func (r *Repository) adoptOriginIdentityCommit(
 	local, remote identityRecord,
 	result *SyncIdentityResult,
 ) error {
+	if remote.Moved != nil {
+		// Every caller decides about a marker before reaching here; this is
+		// the guard that keeps the local identity ref off one regardless.
+		return r.remoteMarkedMoved(ctx, *remote.Moved, true)
+	}
 	if err := r.replaceRef(ctx, identityRef, remote.Head, local.Head); err != nil {
 		return core.Wrap(core.CategoryStaleWrite,
 			"cannot adopt origin's Workbook project identity commit", err)
@@ -478,17 +510,17 @@ func (r *Repository) adoptOriginIdentityCommit(
 	result.Status = SyncIdentityAdopted
 	result.Head = remote.Head
 	result.Detail = fmt.Sprintf(
-		"adopted origin's identity commit for project %s; both commits carry the same document",
-		remote.Identity.ProjectID)
+		"adopted %s's identity commit for project %s; both commits carry the same document",
+		r.remote(), remote.Identity.ProjectID)
 	return nil
 }
 
 func (r *Repository) originIdentityMismatch(local, remote identityRecord) error {
 	return core.Errorf(core.CategoryCorruptData,
-		"this repository and origin are different Workbook projects: %s names project %s (key %s) but origin's %s names project %s (key %s); "+
+		"this repository and %s are different Workbook projects: %s names project %s (key %s) but %s's %s names project %s (key %s); "+
 			"a project identity is immutable, so one of these clones is pointed at the wrong remote — check `git remote -v` before synchronizing again",
-		identityRef, local.Identity.ProjectID, local.Identity.Key,
-		identityRef, remote.Identity.ProjectID, remote.Identity.Key)
+		r.remote(), identityRef, local.Identity.ProjectID, local.Identity.Key,
+		r.remote(), identityRef, remote.Identity.ProjectID, remote.Identity.Key)
 }
 
 // memoizedIdentityRecord returns the identity this process already resolved and

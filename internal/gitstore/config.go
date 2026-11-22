@@ -77,6 +77,7 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 	} else {
 		config.Version = tracked.Version
 		config.AutoSync = tracked.AutoSync
+		config.TasksRemote = tracked.TasksRemote
 	}
 	r.rememberIdentity(resolution)
 	return r.rememberConfig(config), resolution.Minted, nil
@@ -154,7 +155,7 @@ func (r *Repository) AdoptOriginProject(ctx context.Context, key string) (core.P
 	} else if hasIdentity {
 		return core.ProjectConfig{}, false, nil
 	}
-	if _, err := r.Git(ctx, nil, "remote", "get-url", "origin"); err != nil {
+	if !r.HasTasksRemote(ctx) {
 		return core.ProjectConfig{}, false, nil
 	}
 	// A tasks-only folder may join only through the identity ref. The older
@@ -186,7 +187,7 @@ func (r *Repository) AdoptOriginProject(ctx context.Context, key string) (core.P
 		return adopted, true, nil
 	}
 
-	listing, err := r.Git(ctx, nil, "ls-remote", "origin", "HEAD", identityRef, taskRefPrefix+"*")
+	listing, err := r.Git(ctx, nil, "ls-remote", r.remote(), "HEAD", identityRef, taskRefPrefix+"*")
 	if err != nil {
 		return core.ProjectConfig{}, false, core.Wrap(core.CategoryOperational,
 			"cannot ask origin whether a Workbook project already exists; use --no-sync to bootstrap without consulting origin", err)
@@ -248,17 +249,22 @@ func foundingKeyMismatch(founding string) error {
 // v0.4.x teammate reading this branch still finds the project.
 func (r *Repository) adoptOriginIdentityRef(ctx context.Context, key string) (core.ProjectConfig, error) {
 	if _, err := r.Git(ctx, nil,
-		"fetch", "--no-tags", "--no-auto-maintenance", "origin", identityFetchRefspec); err != nil {
+		"fetch", "--no-tags", "--no-auto-maintenance", r.remote(), r.identityFetchRefspec()); err != nil {
 		return core.ProjectConfig{}, core.Wrap(core.CategoryOperational,
 			"cannot fetch origin's Workbook project identity", err)
 	}
-	record, found, err := r.readIdentityRef(ctx, remoteIdentityRef)
+	record, found, err := r.readIdentityRef(ctx, r.remoteIdentityRef())
 	if err != nil {
 		return core.ProjectConfig{}, err
 	}
 	if !found {
 		return core.ProjectConfig{}, core.Errorf(core.CategoryOperational,
 			"origin listed %s but did not deliver it; rerun workbook setup", identityRef)
+	}
+	if record.Moved != nil {
+		// A clone of the code made after the move, on a branch that predates
+		// the settings change: there is nothing here to join.
+		return core.ProjectConfig{}, r.tasksMovedRefusalHere(ctx, *record.Moved)
 	}
 	if key != "" && record.Identity.Key != key {
 		return core.ProjectConfig{}, foundingKeyMismatch(record.Identity.Key)
@@ -301,10 +307,15 @@ func (r *Repository) adoptOriginIdentityRef(ctx context.Context, key string) (co
 // "origin might have history and I could not look" is not the same answer as
 // "origin has none", and the caller must not treat it as one.
 func (r *Repository) OriginHasNoWorkbookHistory(ctx context.Context) (bool, error) {
-	if _, err := r.Git(ctx, nil, "remote", "get-url", "origin"); err != nil {
+	return r.remoteHasNoWorkbookHistory(ctx, r.remote())
+}
+
+// remoteHasNoWorkbookHistory is OriginHasNoWorkbookHistory for a named remote.
+func (r *Repository) remoteHasNoWorkbookHistory(ctx context.Context, remote string) (bool, error) {
+	if !r.hasGitRemote(ctx, remote) {
 		return true, nil
 	}
-	listing, err := r.Git(ctx, nil, "ls-remote", "origin", configRef, taskRefPrefix+"*")
+	listing, err := r.Git(ctx, nil, "ls-remote", remote, configRef, taskRefPrefix+"*")
 	if err != nil {
 		return false, core.Wrap(core.CategoryOperational,
 			"cannot ask origin whether this project already has Workbook history", err)
@@ -412,6 +423,7 @@ func (r *Repository) LoadConfig() (core.ProjectConfig, error) {
 		}
 		resolved.Version = tracked.Version
 		resolved.AutoSync = tracked.AutoSync
+		resolved.TasksRemote = tracked.TasksRemote
 	}
 	return r.rememberConfig(resolved), nil
 }
@@ -470,6 +482,70 @@ func (r *Repository) SetProjectAutoSync(ctx context.Context, setting core.AutoSy
 	}
 	r.replaceConfig(updated)
 	return updated, nil
+}
+
+// SetProjectTasksRemote records the remote the project shares its tasks
+// through, writing the configuration at the current document version. The
+// zero setting clears the choice, so the project shares through origin again
+// and its document goes back to what it was before anybody chose.
+//
+// Only the tracked file changes. This checkout's own Git remotes are left
+// alone: `workbook setup` adds the remote, for this checkout as for every
+// other, and until then this checkout's task commands say to run it.
+func (r *Repository) SetProjectTasksRemote(ctx context.Context, setting core.TasksRemoteSetting) (core.ProjectConfig, error) {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return core.ProjectConfig{}, err
+	}
+	tracked, exists, err := r.readConfig()
+	if err != nil {
+		return core.ProjectConfig{}, err
+	}
+	if !exists {
+		return core.ProjectConfig{}, core.Errorf(core.CategoryNotInitialized, "Workbook is not initialized")
+	}
+	updated := tracked
+	updated.TasksRemote = setting
+	if setting != (core.TasksRemoteSetting{}) {
+		// A version 1 document cannot carry the member, exactly as it cannot
+		// carry a synchronization policy. Clearing writes back whatever version
+		// the file had, so an unset leaves an untouched legacy file untouched.
+		updated.Version = projectVersion
+	}
+	if err := validateTasksRemoteSetting(updated); err != nil {
+		return core.ProjectConfig{}, err
+	}
+	if err := r.writeConfig(updated); err != nil {
+		return core.ProjectConfig{}, err
+	}
+	r.replaceConfig(updated)
+	r.forgetTasksRemote()
+	return updated, nil
+}
+
+// validateTasksRemoteSetting checks the tasks remote member of a project
+// document: a single-component remote name, an address that carries no
+// credential, and no address beside origin, whose address is the code's own.
+func validateTasksRemoteSetting(config core.ProjectConfig) error {
+	setting := config.TasksRemote
+	if setting == (core.TasksRemoteSetting{}) {
+		return nil
+	}
+	if config.Version == legacyProjectVersion {
+		return core.Errorf(core.CategoryValidation,
+			"Workbook configuration version %d cannot carry a tasks remote", legacyProjectVersion)
+	}
+	if err := core.ValidateTasksRemoteName(setting.Name); err != nil {
+		return err
+	}
+	if setting.URL == "" {
+		return nil
+	}
+	if setting.Name == core.DefaultTasksRemote {
+		return core.Errorf(core.CategoryValidation,
+			"the tasks remote cannot be %s with an address of its own: %s is the code's remote, so name another remote for the tasks",
+			core.DefaultTasksRemote, core.DefaultTasksRemote)
+	}
+	return core.ValidateTasksRemoteURL(setting.URL)
 }
 
 // replaceConfig updates the memoized configuration after this process rewrote
@@ -721,6 +797,9 @@ func decodeConfig(contents []byte) (core.ProjectConfig, error) {
 	if config.Version == legacyProjectVersion && config.AutoSync != core.AutoSyncUnset {
 		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData,
 			"Workbook configuration version %d cannot carry an automatic synchronization policy", legacyProjectVersion)
+	}
+	if err := validateTasksRemoteSetting(config); err != nil {
+		return core.ProjectConfig{}, core.Wrap(core.CategoryCorruptData, "Workbook configuration tasks remote is invalid", err)
 	}
 	if err := validateProjectID(config.ProjectID); err != nil {
 		return core.ProjectConfig{}, core.Wrap(core.CategoryCorruptData, "Workbook configuration project ID is invalid", err)

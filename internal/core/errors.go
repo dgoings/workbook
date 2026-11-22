@@ -63,6 +63,62 @@ type Error struct {
 	Category Category
 	Message  string
 	Cause    error
+	// TasksRemote, when set, says which remote a refusal is about and what to
+	// do, for a caller reading JSON rather than the message.
+	TasksRemote *TasksRemoteRefusal
+}
+
+// TasksRemoteRefusal is the machine-readable half of a refusal about the
+// remote a project's tasks are shared through.
+type TasksRemoteRefusal struct {
+	// Reason is one of the TasksRemote* reasons below.
+	Reason string `json:"reason"`
+	// Remote is the Git remote the refusal is about.
+	Remote string `json:"remote"`
+	// URL is that remote's address, when one is known.
+	URL string `json:"url,omitempty"`
+	// MovedTo is where the tasks went, for a remote marked as moved.
+	MovedTo *TasksRemoteTarget `json:"movedTo,omitempty"`
+	// Command is what to run next, when one command is the answer.
+	Command string `json:"command,omitempty"`
+}
+
+// TasksRemoteTarget names a remote and its address.
+type TasksRemoteTarget struct {
+	Remote string `json:"remote"`
+	URL    string `json:"url"`
+}
+
+const (
+	// TasksRemoteMissing: the project's settings name a remote this checkout
+	// has not added.
+	TasksRemoteMissing = "remote-missing"
+	// TasksRemoteNotRead: this checkout has never read the tasks from the
+	// remote its settings name.
+	TasksRemoteNotRead = "not-read"
+	// TasksRemoteUnreachable: the remote could not be read just now.
+	TasksRemoteUnreachable = "unreachable"
+	// TasksRemoteMoved: the remote is marked as one the tasks moved away from.
+	TasksRemoteMoved = "tasks-moved"
+	// TasksRemoteNotMoved: the settings name a tasks remote that holds nothing
+	// yet while the tasks are still on the remote they are moving from.
+	TasksRemoteNotMoved = "move-not-done"
+)
+
+// TasksRemoteError builds a refusal that carries its remote detail.
+func TasksRemoteError(category Category, refusal TasksRemoteRefusal, format string, args ...any) error {
+	return &Error{Category: category, Message: fmt.Sprintf(format, args...), TasksRemote: &refusal}
+}
+
+// TasksRemoteRefusalOf finds the remote detail anywhere in err's chain.
+func TasksRemoteRefusalOf(err error) (*TasksRemoteRefusal, bool) {
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if typed, ok := current.(*Error); ok && typed.TasksRemote != nil {
+			refusal := *typed.TasksRemote
+			return &refusal, true
+		}
+	}
+	return nil, false
 }
 
 func (e *Error) Error() string {
