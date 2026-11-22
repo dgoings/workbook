@@ -59,6 +59,28 @@ whose save lands after the reader typed more stays open with what they typed
 instead of leaving for the board without it, and the line beside Save that says
 a save is held is set in the board's pending color rather than its error color.
 
+`workbook serve` can now run behind a sign-in proxy for a team.
+`--public-url <url>` names the address people open the board at, and the board
+accepts it beside its own bind address while still refusing every other site.
+`--actor-header <header>` names the header the proxy sets to the signed-in
+person's email address, and each request acts for that person: their edits,
+comments and assignments are recorded under their own name, and the board
+answers which comments and assignments are theirs. A request without exactly
+one usable name is refused, `401` or `400`, and never recorded under anybody
+else's. Both options can be set by `WORKBOOK_SERVE_PUBLIC_URL` and
+`WORKBOOK_SERVE_ACTOR_HEADER`. A board given a public address keeps Git's
+output, the server's folder and the remote's address out of its answers,
+giving a short sentence and a reference whose detail is in the server's log,
+and marks every answer `Cache-Control: private, no-store`. With neither option
+the board behaves exactly as before. The new [hosting guide](docs/hosting.md)
+sets one up with Cloudflare Tunnel and Cloudflare Access, and says plainly
+what it trusts: the board takes the proxy's header on its word, so only the
+proxy may reach its port.
+
+Synchronization no longer stops on a commit another tool wrote with an
+identity Git will not write again, such as an empty name. The replay takes the
+commit's email as its name, or `unknown`, so the task still synchronizes.
+
 Workbook no longer repeats the user name and password of a remote's address.
 Git leaves them in some failure messages, such as the one for a remote that
 answers a push with something other than Git, and in every message naming an

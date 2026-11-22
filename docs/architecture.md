@@ -133,7 +133,9 @@ assignment, who may edit a comment, which tasks `next` skips, and the board's
 answers about which assignments are the reader's, which they may remove, and
 which comments they may edit. So one long-running
 process can serve each request as its own person by putting that person on the
-request's context, and nothing else. A pack written for a context that names a
+request's context, and nothing else. `workbook serve --actor-header` is that
+process: it reads each request's person from a header a sign-in proxy sets and
+puts it on the request's context. A pack written for a context that names a
 different person is refused rather than recorded.
 
 The commit holding a pack takes its author and committer from the pack's own
@@ -161,9 +163,16 @@ would not store byte for byte (it drops `<` and `>`, trims some characters from
 the ends, and stores bytes where the pack's JSON cannot hold invalid UTF-8) is
 refused for a first write. A replay is never refused for it, because the name
 is already in history and nobody can change it: the replayed commit takes the
-author and committer recorded on the commit it replays instead. Either way the
+author and committer recorded on the commit it replays instead. When that commit
+came from some other tool and records a name Git will not write again — an
+empty one, one made only of characters Git strips, or no email at all — the
+replay takes the recorded email as the name, or `unknown` when the email will
+not do either, so it names nobody rather than somebody else. Either way the
 actor is asserted, not verified; see [the assignment value](#assignments)
-below.
+below. A name a sign-in proxy passed to `workbook serve` is asserted the same
+way: the board takes the proxy's word for it and checks nothing beyond its
+form, so it is exactly as strong as whatever keeps anybody but the proxy from
+reaching the board's port.
 
 Operation IDs are globally unique and independent of Git object IDs. Git commit ancestry provides causal ordering; a logical clock assists validation and deterministic presentation. Wall-clock time is for display only and must not decide semantic conflicts.
 
