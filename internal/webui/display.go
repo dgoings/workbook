@@ -193,7 +193,7 @@ func (handler *handler) updateDisplay(writer http.ResponseWriter, request *http.
 		Version:  1,
 		Display:  displayDocument(mutation.State),
 		Shape:    vocabularyShape(mutation.State),
-		Warnings: mutation.Warnings,
+		Warnings: handler.disclosed(mutation.Warnings),
 	})
 }
 

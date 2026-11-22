@@ -290,6 +290,40 @@ func TestWatcherReportsEachConflictToItsTerminalOnce(t *testing.T) {
 	}
 }
 
+// A failed synchronization reaches the watcher's terminal, which for a board is
+// serve's log: once when it starts failing, again when the failure changes,
+// and once more when it clears. It is not repeated on every tick, which would
+// bury everything else the log says.
+func TestWatcherReportsEachDistinctSyncFailureToItsTerminalOnce(t *testing.T) {
+	syncer := &fakeSyncer{origin: true, err: errors.New("fatal: origin unreachable")}
+	directory, output := startWatcher(t, syncer, func(options *Options) {
+		options.Interval = time.Hour
+		options.Quiet = 10 * time.Millisecond
+	})
+	waitForOutput(t, output, ReadyPrefix)
+	waitForOutput(t, output, "fatal: origin unreachable")
+	nudge(t, directory)
+	waitForSyncs(t, syncer, 2)
+	waitForPublished(t, syncer, 2)
+	if got := strings.Count(output.String(), "fatal: origin unreachable"); got != 1 {
+		t.Fatalf("the same failure was reported %d times, want once; output = %q", got, output.String())
+	}
+
+	syncer.setErr(errors.New("fatal: credential refused"))
+	nudge(t, directory)
+	waitForOutput(t, output, "workbook: background sync failed: fatal: credential refused")
+
+	syncer.setErr(nil)
+	nudge(t, directory)
+	waitForOutput(t, output, "workbook: background sync is working again")
+	nudge(t, directory)
+	waitForSyncs(t, syncer, 5)
+	waitForPublished(t, syncer, 5)
+	if got := strings.Count(output.String(), "working again"); got != 1 {
+		t.Fatalf("the recovery was reported %d times, want once; output = %q", got, output.String())
+	}
+}
+
 // A ref origin holds that this build cannot read is skipped on every tick, and
 // the watcher recorded nothing about it, so `sync --status` reported a healthy
 // watcher and no reason to look. The set is the one the last synchronization
@@ -636,6 +670,23 @@ func (f *fakeSyncer) setConflicts(conflicts []core.Conflict) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.conflicts = conflicts
+}
+
+func (f *fakeSyncer) setErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+}
+
+func waitForPublished(t *testing.T, syncer *fakeSyncer, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for syncer.publishedSyncCount() < want {
+		if time.Now().After(deadline) {
+			t.Fatalf("published syncs = %d, want %d", syncer.publishedSyncCount(), want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func (f *fakeSyncer) setIgnored(ignored []gitstore.IgnoredRef) {

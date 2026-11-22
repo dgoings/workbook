@@ -43,7 +43,7 @@ Commands:
   config <command> [options]
   docs <command> [options]
   hooks install [--json]
-  serve [--addr 127.0.0.1:7331]
+  serve [--addr 127.0.0.1:7331] [--public-url <url>] [--actor-header <header>]
   completion <shell>
 `
 

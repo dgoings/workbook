@@ -18,8 +18,15 @@ func guardedHandler(t *testing.T, boundAddr string) (http.Handler, *int, *int) {
 	t.Helper()
 	lists := new(int)
 	creates := new(int)
+	return GuardSameOrigin(NewHandler(guardedOptions(t, lists, creates)), boundAddr), lists, creates
+}
+
+// guardedOptions is the board guardedHandler wraps, counting into lists and
+// creates.
+func guardedOptions(t *testing.T, lists, creates *int) Options {
+	t.Helper()
 	created := boardTasks()[0]
-	handler := NewHandler(Options{
+	return Options{
 		List: func(context.Context) ([]core.Task, error) {
 			*lists++
 			return boardTasks(), nil
@@ -30,8 +37,7 @@ func guardedHandler(t *testing.T, boundAddr string) (http.Handler, *int, *int) {
 		},
 		Update:       unexpectedTaskUpdate(t),
 		UpdateStatus: unexpectedStatusUpdate(t),
-	})
-	return GuardSameOrigin(handler, boundAddr), lists, creates
+	}
 }
 
 func guardedRequest(t *testing.T, handler http.Handler, method, target, host, origin, contentType, body string) *httptest.ResponseRecorder {
@@ -406,5 +412,45 @@ func TestGuardOnWildcardBindPinsOnlyThePort(t *testing.T) {
 				t.Fatalf("rebound-origin status/creates = %d/%d, want %d/2; a wildcard bind cannot pin a host, so document the change if this now refuses", reboundWrite.Code, *creates, http.StatusOK)
 			}
 		})
+	}
+}
+
+// A browser sends at most one Origin header, so a request carrying two is not
+// a browser's, and reading only the first would let a good one shield a bad
+// one. It is refused whichever comes first, read or write, on a board with a
+// public address and on one without.
+func TestGuardRefusesMoreThanOneOriginHeader(t *testing.T) {
+	t.Parallel()
+	const bound = "127.0.0.1:7331"
+	local, _, _ := guardedHandler(t, bound)
+	public, _, _ := publicGuardedHandler(t, bound, "https://tasks.example.com")
+	for _, test := range []struct {
+		name    string
+		handler http.Handler
+		host    string
+		origins []string
+	}{
+		{"local, good then bad", local, bound, []string{"http://" + bound, "https://evil.example"}},
+		{"local, bad then good", local, bound, []string{"https://evil.example", "http://" + bound}},
+		{"local, the same twice", local, bound, []string{"http://" + bound, "http://" + bound}},
+		{"public, good then bad", public, "tasks.example.com", []string{"https://tasks.example.com", "https://evil.example"}},
+		{"public, the same twice", public, "tasks.example.com", []string{"https://tasks.example.com", "https://tasks.example.com"}},
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			t.Run(test.name+"/"+method, func(t *testing.T) {
+				request := httptest.NewRequest(method, "/api/tasks", strings.NewReader(`{"title":"Two origins"}`))
+				request.Host = test.host
+				for _, origin := range test.origins {
+					request.Header.Add("Origin", origin)
+				}
+				request.Header.Set("Content-Type", "application/json")
+				response := httptest.NewRecorder()
+				test.handler.ServeHTTP(response, request)
+				assertGuardRejection(t, response, http.StatusForbidden)
+				if !strings.Contains(response.Body.String(), "more than one Origin") {
+					t.Fatalf("refusal = %s, want it to say why", response.Body.String())
+				}
+			})
+		}
 	}
 }

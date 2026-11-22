@@ -221,6 +221,29 @@ func TestSetupTasksOnlyHoldsNoBranchesOrCodeFromAnOriginWithCode(t *testing.T) {
 	assertHoldsNoCode(t, folder, origin)
 }
 
+// The hint a folder with no author prints names both ways to give one, and
+// the second, WORKBOOK_ACTOR, is enough on its own for an edit to be recorded
+// and published under its person.
+func TestSetupTasksOnlyWithoutAnAuthorAcceptsWorkbookActor(t *testing.T) {
+	t.Parallel()
+	origin, _, _ := tasksOnlyOriginWithCode(t)
+	folder := t.TempDir()
+	if code, stdout, stderr := run(t, folder, "setup", "--tasks-only", origin); code != 0 || !strings.Contains(stdout, "or name the person each command acts for with WORKBOOK_ACTOR") {
+		t.Fatalf("setup --tasks-only = (%d, %q, %q), want the hint to name WORKBOOK_ACTOR", code, stdout, stderr)
+	}
+	code, stdout, stderr := runAs(t, folder, "agent@example.test", "create", "Filed as the variable's person", "--json")
+	if code != 0 {
+		t.Fatalf("create with only WORKBOOK_ACTOR = (%d, %q, %q)", code, stdout, stderr)
+	}
+	created := decodeMutationTask(t, stdout, "create")
+	if !remoteHasTaskRef(t, folder, created.ID) {
+		t.Fatalf("origin does not hold task %s created with only WORKBOOK_ACTOR", created.ID)
+	}
+	if got := cliGitOutput(t, origin, "log", "-1", "--format=%ae", "refs/workbook/tasks/"+created.ID); got != "agent@example.test" {
+		t.Fatalf("published author = %q, want the variable's person", got)
+	}
+}
+
 // Every command the story names works in the folder and its changes reach
 // origin, against both shapes of remote. Setup itself records nothing, so it
 // succeeds in a folder with no author configured and says what edits need.
@@ -247,7 +270,7 @@ func TestSetupTasksOnlySupportsEverydayCommandsAndPublishes(t *testing.T) {
 				"Mode:\ttasks-only\t(created; branches and code are never fetched)",
 				"Remote:\t" + origin,
 				"Docs:\tskipped\t(tasks-only folder)",
-				"Author:\tnone configured",
+				"Author:\tnone configured\t(set one with `git config user.email <address>` in this folder, or name the person each command acts for with WORKBOOK_ACTOR, before editing tasks)\n",
 				"Unavailable:\tdocs, hooks",
 			} {
 				if !strings.Contains(stdout, want) {

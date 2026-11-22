@@ -785,6 +785,11 @@ type TaskPresentation struct {
 	// service would accept one. Absent when there are none, which is every
 	// task on a board that cannot edit comments.
 	EditableComments []string `json:"editableComments,omitempty"`
+	// SetAside is the edits to this task that the server's background sync
+	// set aside because a different change to the task reached origin first,
+	// oldest first, read from the parked tips that hold them. Absent when
+	// there are none, which is almost every task.
+	SetAside []core.SetAsideEdit `json:"setAside,omitempty"`
 }
 
 // AssignmentPresentation is one assignment as the task page draws it: who holds
@@ -921,6 +926,10 @@ type HealthDocument struct {
 type ErrorBody struct {
 	Category core.Category `json:"category"`
 	Message  string        `json:"message"`
+	// Reference ties a hosted board's short answer to the line in the
+	// server's log that holds what the answer leaves out. It is absent from
+	// every other answer; see Options.Hosted.
+	Reference string `json:"reference,omitempty"`
 }
 
 type ErrorDocument struct {
@@ -1040,6 +1049,27 @@ type Options struct {
 	History     TaskHistoryReader
 	SyncState   SyncStateReporter
 	SetSyncMode SyncModeSetter
+	// SetAside reads the edits this server's background sync set aside on a
+	// conflict, and DismissSetAside removes them once a person has dealt with
+	// them. A board given SetAside shows them on the task's card and page and
+	// in each task's presentation; one given neither shows none.
+	SetAside        SetAsideReader
+	DismissSetAside SetAsideDismisser
+	// Hosted is set for a board opened at a public address, by people other
+	// than whoever runs the server. Its answers then never carry the
+	// server's folder, its remote's address or Git's own output: a failure
+	// whose words come from the server rather than from Workbook's reading of
+	// the request is answered with a short sentence and a reference, and the
+	// whole detail goes to ServerLog under the same reference. Every answer
+	// is also marked private and not to be stored, because a shared machine
+	// or a cache between the proxy and the person is not theirs alone.
+	//
+	// Left false, every answer is what it always was, detail included: on a
+	// person's own machine the detail is theirs, and it is what they need.
+	Hosted bool
+	// ServerLog is where a hosted board writes what it keeps out of answers.
+	// It must be safe for concurrent writes; serve hands it standard error.
+	ServerLog io.Writer
 }
 
 // handler embeds Options rather than copying it field by field, so there is no
@@ -1589,6 +1619,7 @@ func NewHandler(options Options) http.Handler {
 	handler.mux.HandleFunc("POST /api/tasks/{id}/attachments", handler.addTaskAttachment)
 	handler.mux.HandleFunc("GET /api/tasks/{id}/attachments/{attachment}", handler.serveTaskAttachment)
 	handler.mux.HandleFunc("DELETE /api/tasks/{id}/attachments/{attachment}", handler.removeTaskAttachment)
+	handler.mux.HandleFunc("DELETE /api/tasks/{id}/set-aside", handler.dismissSetAside)
 	handler.mux.HandleFunc("GET /api/sync", handler.serveSyncState)
 	handler.mux.HandleFunc("PUT /api/sync", handler.updateSyncMode)
 	handler.mux.HandleFunc("GET /healthz", handler.serveHealth)
@@ -1604,6 +1635,14 @@ func writeSecurityHeaders(writer http.ResponseWriter) {
 
 func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	writeSecurityHeaders(writer)
+	if handler.Hosted {
+		// Set before any route writes, and left alone by writeTaggedJSON, so
+		// every answer a hosted board gives carries it: the page and a task's
+		// page, which embed task text, the task data, and attachments. The
+		// board has no separate static assets — its styles and scripts are
+		// inside the page — so there is nothing public to let a cache keep.
+		writer.Header().Set("Cache-Control", hostedCacheControl)
+	}
 	// Bounded here rather than at each route so no handler, present or future,
 	// can read an unbounded body by forgetting to ask for a limit. A route that
 	// never reads its body is covered too, and http.MaxBytesReader is given the
@@ -1730,6 +1769,9 @@ func allowedMethod(path string) (string, bool) {
 		}
 		if taskCommentsPathID(path) != "" || taskAttachmentsPathID(path) != "" {
 			return http.MethodPost, true
+		}
+		if taskSetAsidePathID(path) != "" {
+			return http.MethodDelete, true
 		}
 		if taskPositionPathID(path) != "" {
 			return http.MethodPatch, true
@@ -1998,9 +2040,14 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		handler.writeError(writer, err)
 		return
 	}
+	setAside, err := handler.setAsideEdits(request, tasks)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := handler.page.Execute(writer, pageData{
-		Board:                 presentation.MarkUnresolvedPriorities(presentation.NewBoard(activeTasks(tasks), vocabulary.Vocabulary), vocabulary.Priorities),
+		Board:                 markSetAside(presentation.MarkUnresolvedPriorities(presentation.NewBoard(activeTasks(tasks), vocabulary.Vocabulary), vocabulary.Priorities), setAside),
 		ProjectName:           projectName(vocabulary.Display),
 		TitleSuffix:           boardTitleSuffix(vocabulary.Display),
 		DefaultProjectName:    core.DefaultProjectName,
@@ -2752,7 +2799,7 @@ func (handler *handler) writeKeyMutation(writer http.ResponseWriter, mutation Vo
 		Format:     "workbook.key-mutation",
 		Version:    1,
 		Vocabulary: vocabularyDocument(mutation.State),
-		Warnings:   mutation.Warnings,
+		Warnings:   handler.disclosed(mutation.Warnings),
 	})
 }
 
@@ -2778,7 +2825,7 @@ func (handler *handler) writePriorityMutation(writer http.ResponseWriter, mutati
 		Version:    1,
 		Vocabulary: vocabularyDocument(mutation.State),
 		Tasks:      mutation.Tasks,
-		Warnings:   mutation.Warnings,
+		Warnings:   handler.disclosed(mutation.Warnings),
 	})
 }
 
@@ -2821,7 +2868,7 @@ func (handler *handler) writeVocabularyMutation(writer http.ResponseWriter, muta
 		Version:    1,
 		Vocabulary: vocabularyDocument(mutation.State),
 		Tasks:      mutation.Tasks,
-		Warnings:   mutation.Warnings,
+		Warnings:   handler.disclosed(mutation.Warnings),
 	})
 }
 
@@ -2881,6 +2928,11 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 		handler.writeError(writer, err)
 		return
 	}
+	setAside, err := handler.setAsideEdits(request, tasks)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
 	// Which tasks this poll is for, asked as one parameter with three answers
 	// rather than as two parameters that could disagree. `true` is the deleted
 	// tasks alone and keeps meaning exactly that: the relationship picker still
@@ -2917,7 +2969,7 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 		VocabularyHead:  vocabulary.Head,
 		VocabularyShape: vocabularyShape(vocabulary),
 		Tasks:           tasks,
-		Presentation:    taskPresentation(tasks, vocabulary.Vocabulary, handler.assignIdentity(request), handler.commentIdentity(request)),
+		Presentation:    taskPresentation(tasks, vocabulary.Vocabulary, handler.assignIdentity(request), handler.commentIdentity(request), setAside),
 	})
 	if err != nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "encode the tasks document: %v", err))
@@ -3273,11 +3325,11 @@ func (handler *handler) writeTaskMutation(writer http.ResponseWriter, result cor
 		Format:   "workbook.task-mutation",
 		Version:  1,
 		Task:     result.Task,
-		Warnings: result.Warnings,
+		Warnings: handler.disclosed(result.Warnings),
 	})
 }
 
-func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary, actor, commenter string) []TaskPresentation {
+func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary, actor, commenter string, setAside map[string][]core.SetAsideEdit) []TaskPresentation {
 	views := presentation.TaskViews(tasks, vocabulary)
 	result := make([]TaskPresentation, len(views))
 	for index, view := range views {
@@ -3292,9 +3344,29 @@ func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary, actor, comm
 			MoreAssignments:       row.More,
 			Assignments:           assignmentPresentation(view.Task.Assignments, actor),
 			EditableComments:      editableComments(view.Task.Comments, commenter),
+			SetAside:              setAside[view.Task.ID],
 		}
 	}
 	return result
+}
+
+// markSetAside gives each card the count of its task's set-aside edits, which
+// is what the card template flags.
+func markSetAside(board presentation.Board, setAside map[string][]core.SetAsideEdit) presentation.Board {
+	if len(setAside) == 0 {
+		return board
+	}
+	for column := range board.Columns {
+		for index := range board.Columns[column].Tasks {
+			view := &board.Columns[column].Tasks[index]
+			view.SetAsideEdits = len(setAside[view.Task.ID])
+		}
+	}
+	for index := range board.UnknownTasks {
+		view := &board.UnknownTasks[index]
+		view.SetAsideEdits = len(setAside[view.Task.ID])
+	}
+	return board
 }
 
 func (handler *handler) serveSyncState(writer http.ResponseWriter, request *http.Request) {
@@ -3333,6 +3405,10 @@ func (handler *handler) serveHealth(writer http.ResponseWriter, _ *http.Request)
 
 func (handler *handler) writeError(writer http.ResponseWriter, err error) {
 	body := errorBody(err)
+	if handler.Hosted && serverWords(body.Category) {
+		body.Reference = handler.logDetail(err.Error())
+		body.Message = "The server could not finish this request. Its log has the detail under reference " + body.Reference + "."
+	}
 	writeJSON(writer, statusForError(body.Category), ErrorDocument{
 		Format:  "workbook.error",
 		Version: 1,
@@ -3403,7 +3479,11 @@ func writeTaggedJSON(writer http.ResponseWriter, request *http.Request, value an
 	tag := `"` + hex.EncodeToString(digest[:]) + `"`
 	header := writer.Header()
 	header.Set("ETag", tag)
-	header.Set("Cache-Control", "no-cache")
+	// A hosted board has already said private, no-store, which is stricter and
+	// still lets the page revalidate, since the page sends the tag itself.
+	if header.Get("Cache-Control") == "" {
+		header.Set("Cache-Control", "no-cache")
+	}
 	if ifNoneMatchNames(request.Header.Values("If-None-Match"), tag) {
 		writer.WriteHeader(http.StatusNotModified)
 		return nil

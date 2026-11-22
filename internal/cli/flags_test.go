@@ -157,8 +157,8 @@ var usageSynopsisExceptions = map[string]struct{ synopsis, line string }{
 	// serve prints the address it will try rather than <address>, because the
 	// port is the thing a reader of the usage wants to know.
 	"serve": {
-		synopsis: "workbook serve [--addr <address>]",
-		line:     "  serve [--addr 127.0.0.1:7331]",
+		synopsis: "workbook serve [--addr <address>] [--public-url <url>] [--actor-header <header>]",
+		line:     "  serve [--addr 127.0.0.1:7331] [--public-url <url>] [--actor-header <header>]",
 	},
 	// hooks names its one subcommand, because <command> would tell a reader
 	// nothing about a verb that has exactly one.
@@ -249,7 +249,7 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		},
 		"delete":   {"no-sync": boolFlag, "json": boolFlag},
 		"restore":  {"into": stringFlag, "no-sync": boolFlag, "json": boolFlag},
-		"serve":    {"addr": stringFlag},
+		"serve":    {"addr": stringFlag, "public-url": stringFlag, "actor-header": stringFlag},
 		"fetch":    {"json": boolFlag},
 		"push":     {"json": boolFlag},
 		"sync":     {"json": boolFlag, "watch": boolFlag, "interval": stringFlag, "status": boolFlag},

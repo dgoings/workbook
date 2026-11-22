@@ -68,6 +68,7 @@ var pageFragments = []string{
 	"script/thread.js",
 	"script/attachments.js",
 	"script/history.js",
+	"script/set-aside.js",
 	"script/task-form.js",
 	"script/mutations.js",
 	"script/config-statuses.js",

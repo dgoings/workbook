@@ -201,7 +201,7 @@ func (r *Repository) pushTaskHeads(ctx context.Context, candidates []pushCandida
 		args = append(args, candidate.Head+":"+taskRefPrefix+candidate.TaskID)
 	}
 	push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil, args...)
-	pushed, err := parsePushPorcelain(push.stdout, expected, forced, push.err)
+	pushed, err := parsePushPorcelain(push.stdout, expected, forced, gitCommandResultError(push))
 	if err != nil {
 		return nil, err
 	}
@@ -368,10 +368,10 @@ func (r *Repository) PushTasks(ctx context.Context, config core.ProjectConfig, t
 		}
 	}
 
-	rejected := 0
+	var rejected []SyncTaskResult
 	for _, taskID := range ordered {
 		if items[taskID].Status == SyncRejected {
-			rejected++
+			rejected = append(rejected, items[taskID])
 		}
 		result.Tasks = append(result.Tasks, items[taskID])
 	}
@@ -379,8 +379,8 @@ func (r *Repository) PushTasks(ctx context.Context, config core.ProjectConfig, t
 	if invalid > 0 {
 		return result, core.Errorf(core.CategoryCorruptData, "%d local task ref(s) failed validation", invalid)
 	}
-	if rejected > 0 {
-		return result, core.Errorf(core.CategoryOperational, "%d task ref(s) were rejected by origin", rejected)
+	if len(rejected) > 0 {
+		return result, rejectedByOrigin(rejected)
 	}
 	return result, nil
 }
@@ -542,7 +542,10 @@ func compactedSides(localChain, remoteChain []OperationCommit, remoteGeneration 
 // checkpoint's list nor on origin's chain; with none, the ref moves to origin's
 // tip, and otherwise they are replayed onto it in its generation. The old tip
 // is neither parked nor left in the reflog, since either would keep the
-// compacted history alive. A replay that cannot run cleanly leaves the ref
+// compacted history alive. Parked tips from earlier reconciliations go too,
+// except one that still holds an edit the task lacks: that is somebody's work
+// that only this clone holds, and it is kept, and shown, until a person
+// dismisses it. A replay that cannot run cleanly leaves the ref
 // where it is, on the old history, and says how to adopt by hand.
 func (r *Repository) adoptRemoteCheckpoint(
 	ctx context.Context,
@@ -558,11 +561,11 @@ func (r *Repository) adoptRemoteCheckpoint(
 		return outcome, err
 	}
 	update := canonicalRefUpdate{
-		TaskID:     request.TaskID,
-		Next:       request.Remote.Head,
-		Expected:   request.Local.Head,
-		NoPark:     true,
-		DropParked: true,
+		TaskID:            request.TaskID,
+		Next:              request.Remote.Head,
+		Expected:          request.Local.Head,
+		NoPark:            true,
+		DropSettledParked: true,
 	}
 	if len(localOnly) == 0 {
 		outcome.Update = &update

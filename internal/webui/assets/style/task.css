@@ -440,3 +440,23 @@
     .row-remove:hover:enabled { background: var(--wb-danger-surface); color: var(--wb-danger); }
     .row-remove:focus-visible { outline: 2px solid var(--wb-danger-ink); outline-offset: 1px; }
     .row-remove:disabled { cursor: default; opacity: .45; }
+    /* The edits the server's sync set aside, between a task's heading and its
+       form. The list scrolls inside a bounded height so a long description
+       set aside never takes the form's room away. */
+    .set-aside { flex: 0 0 auto; padding: .75rem 1.15rem; border-bottom: 1px solid var(--wb-warning-border); border-left: 4px solid var(--wb-warning); background: var(--wb-warning-surface); color: var(--wb-warning-ink); }
+    .set-aside h3 { margin: 0; font-size: .95rem; }
+    .set-aside__summary { margin: .25rem 0 .5rem; font-size: .82rem; line-height: 1.4; }
+    .set-aside__list { display: grid; gap: .6rem; max-height: min(16rem, 35vh); overflow-y: auto; }
+    .set-aside__group { display: grid; gap: .4rem; justify-items: start; }
+    .set-aside__edit { display: grid; gap: .3rem; width: 100%; }
+    .set-aside__by { margin: 0; font-size: .8rem; overflow-wrap: anywhere; }
+    .set-aside__change { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .5rem; font-size: .82rem; }
+    .set-aside__label { font-weight: 700; }
+    .set-aside__value { overflow-wrap: anywhere; }
+    .set-aside__note { flex: 1 1 12rem; font-size: .76rem; }
+    .set-aside__text { flex: 1 1 100%; margin: 0; padding: .45rem .55rem; border: 1px solid var(--wb-warning-border); border-radius: 4px; background: var(--wb-surface); color: var(--wb-ink); font-size: .82rem; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .set-aside button { min-height: 2rem; padding: .2rem .65rem; border: 1px solid currentcolor; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 700; }
+    .set-aside button:hover { background: var(--wb-surface); }
+    .set-aside button:focus-visible, .set-aside__list:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
+    .set-aside__status { margin: .35rem 0 0; font-size: .78rem; }
+    .set-aside__status:empty { display: none; }
