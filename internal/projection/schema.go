@@ -1,6 +1,13 @@
 package projection
 
-// schemaVersion is bumped to 7 because a task row now keeps the history's
+// schemaVersion is bumped to 8 because a task row now keeps the task's due
+// date. A cache stamped earlier has no column for it, and a mutation folded
+// onto a snapshot that dropped it would write a state.json without the date —
+// silently clearing it for every clone — so the cache is discarded and Git read
+// again, which is the same answer every earlier bump gave. A task with no due
+// date stores the empty string.
+//
+// Version 7 was bumped because a task row now keeps the history's
 // compactedFrom, the tip a checkpoint replaced. A mutation folds its parent's
 // history metadata into the state it writes, so an edit built on a cached
 // snapshot that dropped it would write a state.json that replaying the history
@@ -30,7 +37,7 @@ package projection
 // checkpoint and every recorded pack, where a missing column reads as
 // generation zero — a claim rather than an absence, and the one claim that must
 // never be made wrongly.
-const schemaVersion = "7"
+const schemaVersion = "8"
 
 const schema = `
 CREATE TABLE projection_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -41,7 +48,7 @@ CREATE TABLE tasks (
   title TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL,
   priority TEXT NOT NULL, rank TEXT NOT NULL, created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL, deleted INTEGER NOT NULL,
-  thread TEXT NOT NULL
+  thread TEXT NOT NULL, due TEXT NOT NULL
 );
 CREATE TABLE task_labels (
   task_id TEXT NOT NULL, label TEXT NOT NULL, PRIMARY KEY (task_id, label)

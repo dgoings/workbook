@@ -769,7 +769,7 @@ func (s *Store) metaMatches(ctx context.Context) bool {
 func (s *Store) requiredSchemaExists(ctx context.Context) bool {
 	for _, query := range []string{
 		`SELECT key, value FROM projection_meta LIMIT 0`,
-		`SELECT task_id, head, project_id, history_generation, compacted_from, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread FROM tasks LIMIT 0`,
+		`SELECT task_id, head, project_id, history_generation, compacted_from, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread, due FROM tasks LIMIT 0`,
 		`SELECT task_id, label FROM task_labels LIMIT 0`,
 		`SELECT task_id, dependency_id FROM task_dependencies LIMIT 0`,
 		`SELECT task_id, principal, label, creator, created_at FROM task_assignments LIMIT 0`,
@@ -1322,11 +1322,11 @@ func upsertSnapshot(ctx context.Context, transaction *sql.Tx, snapshot core.Snap
 		compactedFrom = *state.History.CompactedFrom
 	}
 	_, err = transaction.ExecContext(ctx, `
-		INSERT INTO tasks (task_id, head, project_id, history_generation, compacted_from, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO tasks (task_id, head, project_id, history_generation, compacted_from, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread, due)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		state.TaskID, snapshot.Head, state.ProjectID, state.History.Generation, compactedFrom, int64(state.LogicalClock),
 		int64(state.MinReader), state.Task.Title, state.Task.Description,
-		string(state.Task.Status), string(state.Task.Priority), state.Task.Rank, formatTime(state.Task.CreatedAt), formatTime(state.Task.UpdatedAt), deleted, thread)
+		string(state.Task.Status), string(state.Task.Priority), state.Task.Rank, formatTime(state.Task.CreatedAt), formatTime(state.Task.UpdatedAt), deleted, thread, state.Task.Due)
 	if err != nil {
 		return cacheError("insert projected task", err)
 	}
@@ -1388,7 +1388,7 @@ func (s *Store) querySnapshots(ctx context.Context) ([]core.Snapshot, error) {
 	defer transaction.Rollback()
 
 	rows, err := transaction.QueryContext(ctx, `
-		SELECT task_id, head, project_id, history_generation, compacted_from, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread
+		SELECT task_id, head, project_id, history_generation, compacted_from, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread, due
 		FROM tasks ORDER BY task_id`)
 	if err != nil {
 		return nil, s.databaseError("query projected tasks", err)
@@ -1524,7 +1524,7 @@ func scanSnapshotScalars(scanner rowScanner) (core.Snapshot, error) {
 	if err := scanner.Scan(
 		&state.TaskID, &snapshot.Head, &state.ProjectID, &state.History.Generation, &compactedFrom, &clock, &minReader,
 		&state.Task.Title, &state.Task.Description,
-		&status, &priority, &state.Task.Rank, &created, &updated, &deleted, &thread,
+		&status, &priority, &state.Task.Rank, &created, &updated, &deleted, &thread, &state.Task.Due,
 	); err != nil {
 		return core.Snapshot{}, err
 	}
@@ -1611,7 +1611,7 @@ func (s *Store) querySnapshot(ctx context.Context, taskID string) (core.Snapshot
 	defer transaction.Rollback()
 
 	snapshot, err := scanSnapshotScalars(transaction.QueryRowContext(ctx, `
-			SELECT task_id, head, project_id, history_generation, compacted_from, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread
+			SELECT task_id, head, project_id, history_generation, compacted_from, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread, due
 			FROM tasks WHERE task_id = ?`, taskID))
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := transaction.Commit(); err != nil {
