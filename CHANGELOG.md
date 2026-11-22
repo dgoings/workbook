@@ -31,14 +31,33 @@ The web board keeps a change that a proxy in front of it asked to send later.
 A `429` or `503` that carries `Retry-After` no longer loses the change: the
 page keeps it drawn as made, says it is held in that tab, asks before the tab
 is closed or left, and sends it again after the wait the proxy named — up to
-three times, each wait twice the last and none longer than a minute. Only a
-change that names the head it was made against is resent, since the board
-refuses such a resend as stale if the first attempt landed after all; a
-create, a change that names no head, and every read are sent once as before. A
-refusal whose body is not JSON, such as nginx's HTML error page, is now reported
-in a plain sentence naming the status instead of as a JSON parse error, and a
-task form whose save lands after the reader typed more stays open with what
-they typed instead of leaving for the board without it.
+three times, each wait twice the last and none longer than a minute. A change
+that names the head it was made against is resent, since the board refuses
+such a resend as stale if the first attempt landed after all, and so is the
+sync switch, which names no head but sets a mode: setting it twice is setting
+it once. A create, any other change that names no head, and every read are sent
+once as before. The Delete button on a task's page now names the head the form
+was drawn from, as dropping a card on the Deleted column already did, so it is
+resent like the rest; a task changed since is no longer deleted unseen, and the
+form says so and offers Delete again against the version the server holds.
+
+A resend refused as stale may be the first attempt's own doing: a proxy can
+pass a change to the board and still tell the page to wait. So the page reads
+the task or the configuration again before it reports such a refusal. A change
+that is there is treated as saved: the comment box clears, the form closes or
+returns to the board, and nothing says it failed. A change that is not there is
+reported as the stale refusal it is. If the board cannot be read, the page says
+the change may already have been saved and to check before making it again,
+rather than saying it was not saved, and making the same change again from
+that panel on a task's page reads the board first instead of sending a second
+copy.
+
+A refusal whose body is not JSON, such as nginx's HTML error page, is now
+reported in a plain sentence naming the status, on the board, a task's page and
+the configuration page alike, instead of as a JSON parse error. A task form
+whose save lands after the reader typed more stays open with what they typed
+instead of leaving for the board without it, and the line beside Save that says
+a save is held is set in the board's pending color rather than its error color.
 
 Workbook no longer repeats the user name and password of a remote's address.
 Git leaves them in some failure messages, such as the one for a remote that

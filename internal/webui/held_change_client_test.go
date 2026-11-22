@@ -546,3 +546,42 @@ func TestClientResendsBoardSettingsAProxyAskedToWaitFor(t *testing.T) {
   if (!heldChangeNotice.hidden) throw new Error("the notice stayed up after the settings landed");
 `)
 }
+
+func TestClientReportsAConfigurationRefusalThatIsNotJSONInAPlainSentence(t *testing.T) {
+	t.Parallel()
+	// Production mutation: the configuration page's refusal of an HTML
+	// answer said only that the change was not applied, though the reference
+	// says every surface names the status the server answered.
+	vocabulary := handlerVocabulary(t)
+	state := VocabularyState{Vocabulary: vocabulary, Head: "head-1", Display: core.DisplaySettings{Name: "Atlas"}}
+	runClientOverHandler(t, configurableHandler(vocabulary, "head-1", nil),
+		"plain sentences for unreadable configuration refusals", "/", "", vocabulary, "head-1", nil, `
+  vocabularyRead = `+string(mustJSON(t, vocabularyDocument(state)))+`;
+  const panelFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if ((url.startsWith("/api/vocabulary") || url === "/api/display") && (options.method || "GET") !== "GET") {
+      return { ok: false, status: 502, headers: { get: () => null },
+        json: async () => JSON.parse("<html><head><title>502 Bad Gateway</title></head></html>") };
+    }
+    return panelFetch(url, options);
+  };
+  await openStatuses();
+  const form = panelAdd();
+  const name = findElement(form, (element) => element.id === "status-new-name");
+  name.value = "triage";
+  name.eventListeners.input();
+  await submitPanelForm(form);
+  const said = panelMessages().join(" ");
+  if (!said.includes("The server answered HTTP 502 and gave no reason this page can read.")) {
+    throw new Error("an HTML 502 to a status change reads " + JSON.stringify(said));
+  }
+  displayField("primaryColor").value = "#123abc";
+  await saveDisplay();
+  await settle();
+  const settings = displayPanelStatus.textContent;
+  if (!settings.includes("These board settings were not applied. The server answered HTTP 502 and gave no reason this page can read.")) {
+    throw new Error("an HTML 502 to the board settings reads " + JSON.stringify(settings));
+  }
+  if (/JSON|Unexpected token/.test(said + settings)) throw new Error("a refusal reports a parse error: " + JSON.stringify(said + settings));
+`)
+}
