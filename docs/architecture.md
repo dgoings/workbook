@@ -562,7 +562,7 @@ against v0.6.0 and the build before this change, each in its own repository:
 | --- | --- | --- | --- | --- |
 | `field.set` of `due`, no marker | `corrupt-data` (exit `7`): "field.set does not support field \"due\"", and the whole project's `list` fails with it | exit `7` | invalid | `push` exit `7` |
 | a new `due.set` type, no marker | `corrupt-data`: "unsupported operation type \"due.set\"", same breadth | exit `7` | invalid | `push` exit `7` |
-| either shape with `minReader: 5` | works; the task is served from its checkpoint with `newerWriter: true` and the advisory "written by a newer workbook" | refused, `newer-writer` (exit `9`) | exit `9`, "upgrade workbook to validate them" | both fine |
+| either shape with `minReader: 5` | works; the task is served from its checkpoint with `newerWriter: true` and the advisory "written by a newer workbook" | refused, `newer-writer` (exit `9`) | exit `9`, saying to upgrade | both fine |
 
 Without the marker both shapes are reported as damage, and one dated task
 breaks every listing of the project. With it both behave the way
