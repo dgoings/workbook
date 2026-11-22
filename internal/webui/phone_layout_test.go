@@ -359,6 +359,7 @@ func TestBrowserPhoneBoardReturnsToTheLastColumnViewed(t *testing.T) {
 }
 
 type phoneTaskReading struct {
+	Unfinished    string
 	Sideways      []float64
 	Small         []string
 	Smallest      float64
@@ -377,6 +378,10 @@ const phoneTaskScript = phoneHelpers + `
   await waitFor(() => document.querySelector(".task-sidebar") && document.querySelector("[data-change-list]") && document.querySelector(".comment") && document.querySelector("#assignment-to"), "the task page");
   await settle();
   const reading = { Sideways: [sideways()], Small: smallTargets(document), Smallest: smallest(document) };
+  // A step that cannot be finished — a control off the edge of a page wider
+  // than the screen is one a tap misses — ends the run with what was
+  // measured so far, so the test reports the width as well as the step.
+  try {
   const choose = async (select, value) => {
     await tap(select);
     select.value = value;
@@ -424,6 +429,9 @@ const phoneTaskScript = phoneHelpers + `
   reading.Sideways.push(sideways());
   reading.Small = reading.Small.concat(smallTargets(document).filter((problem) => !reading.Small.includes(problem)));
   reading.Smallest = Math.min(reading.Smallest, smallest(document));
+  } catch (error) {
+    reading.Unfinished = String(error && error.message || error);
+  }
   reading.Refused = window.__refused;
   reading.Errors = window.__errors;
   return reading;
@@ -452,6 +460,9 @@ func TestBrowserPhoneTaskPageTakesEveryChangeByTouch(t *testing.T) {
 					t.Errorf("step %d of the task page scrolls sideways by %.1fpx", step, over)
 				}
 			}
+			if reading.Unfinished != "" {
+				t.Errorf("the reader could not finish on the task page: %s", reading.Unfinished)
+			}
 			if len(reading.Small) > 0 {
 				t.Errorf("controls a thumb cannot hit on the task page:\n%s", strings.Join(reading.Small, "\n"))
 			}
@@ -477,11 +488,12 @@ func TestBrowserPhoneTaskPageTakesEveryChangeByTouch(t *testing.T) {
 }
 
 type phoneCreateReading struct {
-	Path     string
-	Sideways []float64
-	Small    []string
-	Smallest float64
-	Errors   []string
+	Unfinished string
+	Path       string
+	Sideways   []float64
+	Small      []string
+	Smallest   float64
+	Errors     []string
 }
 
 const phoneCreateScript = phoneHelpers + `
@@ -492,12 +504,16 @@ const phoneCreateScript = phoneHelpers + `
   await waitFor(() => document.querySelector("#task-title"), "the new task form");
   await settle();
   const reading = { Path: location.pathname + location.search, Sideways: [sideways()], Small: smallTargets(document), Smallest: smallest(document) };
+  try {
   await tap(document.querySelector("#task-title"));
   await type("Captured on a phone");
   await tap(document.querySelector(".task-actions .save-button"));
   await waitFor(() => location.pathname === "/" || /\/tasks\/WB-/.test(location.pathname) || document.querySelector("[data-open-created-task]"), "the task to be created");
   await pause(300);
   reading.Sideways.push(sideways());
+  } catch (error) {
+    reading.Unfinished = String(error && error.message || error);
+  }
   reading.Errors = window.__errors;
   return reading;
 })()
@@ -524,6 +540,9 @@ func TestBrowserPhoneCreatesATask(t *testing.T) {
 				if over > 0 {
 					t.Errorf("step %d of creating a task scrolls sideways by %.1fpx", step, over)
 				}
+			}
+			if reading.Unfinished != "" {
+				t.Errorf("the reader could not finish creating a task: %s", reading.Unfinished)
 			}
 			if len(reading.Small) > 0 {
 				t.Errorf("controls a thumb cannot hit on the new task form:\n%s", strings.Join(reading.Small, "\n"))
