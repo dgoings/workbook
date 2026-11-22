@@ -359,3 +359,59 @@ func containsString(values []string, want string) bool {
 	}
 	return false
 }
+
+// (R3 c) A set-up checkout is told, by setup and by sync, when the old place
+// holds an edit the new place lacks, with the task, the count and the command
+// that carries it; once move-tasks has run again, neither says anything.
+func TestTasksRemoteSetupAndSyncSayWhatTheOldPlaceStillHolds(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA1)
+	teammate := cloneCode(t, project)
+	if code, stdout, stderr := run(t, teammate, "setup"); code != 0 {
+		t.Fatalf("teammate setup = (%d, %q, %q)", code, stdout, stderr)
+	}
+	edited := project.ids[0]
+	straggler(t, teammate, edited, "--description", "Published to the old place after the move")
+	project.moveTasks(t)
+	publishStraggler(t, teammate, edited)
+	want := "origin, which the tasks moved away from, holds 1 operation on " + edited + " that tasks lacks; run workbook move-tasks"
+
+	code, stdout, stderr := run(t, project.seed, "setup", "--json")
+	if code != 0 {
+		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
+	}
+	var setup struct {
+		LeftBehind *struct {
+			Remote     string   `json:"remote"`
+			Operations int      `json:"operations"`
+			Tasks      []string `json:"tasks"`
+		} `json:"leftBehind"`
+	}
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "setup").Data, &setup); err != nil {
+		t.Fatal(err)
+	}
+	if setup.LeftBehind == nil || setup.LeftBehind.Remote != "origin" || setup.LeftBehind.Operations != 1 ||
+		strings.Join(setup.LeftBehind.Tasks, ",") != edited {
+		t.Fatalf("setup leftBehind = %+v, want the one operation on %s", setup.LeftBehind, edited)
+	}
+	if code, stdout, stderr := run(t, project.seed, "setup"); code != 0 || !strings.Contains(stdout, "Left behind:\t"+want) {
+		t.Fatalf("setup text = (%d, %q, %q), want the left-behind line", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = run(t, project.seed, "sync", "--json")
+	if code != 0 {
+		t.Fatalf("sync = (%d, %q, %q)", code, stdout, stderr)
+	}
+	if warnings := assertJSONResult(t, stdout, "sync").Warnings; len(warnings) != 1 ||
+		warnings[0].Code != "tasks-left-behind" || !strings.HasPrefix(warnings[0].Message, want) {
+		t.Fatalf("sync warnings = %+v, want the left-behind notice", warnings)
+	}
+
+	moveTasksAgain(t, project, 0)
+	if code, stdout, stderr := run(t, project.seed, "sync", "--json"); code != 0 || len(assertJSONResult(t, stdout, "sync").Warnings) != 0 {
+		t.Fatalf("sync after the carry = (%d, %q, %q), want no notice", code, stdout, stderr)
+	}
+	if code, stdout, stderr := run(t, project.seed, "setup"); code != 0 || strings.Contains(stdout, "Left behind") {
+		t.Fatalf("setup after the carry = (%d, %q, %q), want no notice", code, stdout, stderr)
+	}
+}
