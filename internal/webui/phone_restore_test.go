@@ -28,8 +28,9 @@ type phoneRestoreReading struct {
 	PageScroll  float64
 	// Kept is what the browser holds under window.__keptKey, when a test
 	// names one.
-	Kept   string
-	Errors []string
+	Kept    string
+	Refused []string
+	Errors  []string
 }
 
 // phoneRestoreScript reads the board a phone came back to: which column is
@@ -51,6 +52,7 @@ const phoneRestoreScript = phoneHelpers + `
     RowScrolled: row.scrollLeft,
     PageScroll: window.scrollY,
     Kept: (() => { if (!window.__keptKey) return ""; try { return localStorage.getItem(window.__keptKey) || ""; } catch (_) { return "unreadable"; } })(),
+    Refused: window.__refused,
     Errors: window.__errors,
   };
   if (pressed.length) {
@@ -99,8 +101,8 @@ func TestBrowserPhoneBoardSlidesARememberedColumnIntoView(t *testing.T) {
 				if reading.PageScroll != 0 {
 					t.Errorf("putting the column back scrolled the page by %.1fpx", reading.PageScroll)
 				}
-				if len(reading.Errors) > 0 {
-					t.Errorf("the page threw %v", reading.Errors)
+				if len(reading.Refused) > 0 || len(reading.Errors) > 0 {
+					t.Errorf("the page had things refused by its policy %v, or threw %v", reading.Refused, reading.Errors)
 				}
 			})
 		}
@@ -118,6 +120,8 @@ type phoneFirstFrameReading struct {
 	Pressed     []string
 	RowScrolled float64
 	Final       []string
+	Refused     []string
+	Errors      []string
 }
 
 // phoneFirstFrameWatch records, from the page's first line, each card as it
@@ -151,6 +155,8 @@ const phoneFirstFrameScript = phoneHelpers + `
     Pressed: window.__row ? window.__row.pressed : [],
     RowScrolled: window.__row ? window.__row.scrolled : 0,
     Final: [...document.querySelectorAll(".column")].filter((column) => getComputedStyle(column).display !== "none").map((column) => column.dataset.phoneColumn),
+    Refused: window.__refused,
+    Errors: window.__errors,
   };
 })()
 `
@@ -185,6 +191,9 @@ func TestBrowserPhoneBoardChoosesTheRememberedColumnBeforeItsCards(t *testing.T)
 			}
 			if !slices.Equal(reading.Final, []string{"archived"}) {
 				t.Errorf("once loaded the phone shows %v, want archived", reading.Final)
+			}
+			if len(reading.Refused) > 0 || len(reading.Errors) > 0 {
+				t.Errorf("the page had things refused by its policy %v, or threw %v", reading.Refused, reading.Errors)
 			}
 		})
 	}
@@ -246,6 +255,9 @@ func TestBrowserPhoneBoardKeepsAColumnPerProject(t *testing.T) {
 			}
 			if reading.Kept != "status:doing" {
 				t.Errorf("the first project's column is kept as %q, want status:doing", reading.Kept)
+			}
+			if len(reading.Refused) > 0 || len(reading.Errors) > 0 {
+				t.Errorf("the page had things refused by its policy %v, or threw %v", reading.Refused, reading.Errors)
 			}
 		})
 	}
