@@ -15,7 +15,9 @@ import (
 // went stale: origin moved since this clone looked, and Git refused the push
 // without touching origin. Git's own text ("[rejected] (stale info)")
 // describes the mechanism, not what happened to the compaction.
-const compactionStaleDetail = "origin changed since the compaction; the next sync reconciles it"
+func compactionStaleDetail(remote string) string {
+	return remote + " changed since the compaction; the next sync reconciles it"
+}
 
 // compactionRefusedDetail is what a push says when origin refused a leased
 // checkpoint for any other reason: a server-side hook, a ruleset, or a host
@@ -23,38 +25,40 @@ const compactionStaleDetail = "origin changed since the compaction; the next syn
 // parentheses, since it is the only account of origin's policy. Nothing
 // settles this from this clone except undoing the compaction, which the text
 // names: every later sync and push would meet the same refusal.
-func compactionRefusedDetail(taskID, reason string) string {
-	return fmt.Sprintf(`origin refused the compacted checkpoint (%s); the compacted task stays local. `+
+func compactionRefusedDetail(remote, taskID, reason string) string {
+	return fmt.Sprintf(`%s refused the compacted checkpoint (%s); the compacted task stays local. `+
 		`Run "workbook compact --adopt %s --discard-local" to undo the compaction on this clone.`,
-		reason, taskID)
+		remote, reason, taskID)
 }
 
 // unrelatedHistoryDetail reports a local checkpoint whose task origin holds a
 // history it shares nothing with. Publishing would replace that history, so
 // the checkpoint stays local.
-const unrelatedHistoryDetail = "origin has an unrelated history for this task; it was not published"
+func unrelatedHistoryDetail(remote string) string {
+	return remote + " has an unrelated history for this task; it was not published"
+}
 
 // compactedOnOriginDetail is what fetch says about a task origin compacted
 // whose local-only changes it could not replay onto the checkpoint.
-func compactedOnOriginDetail(title, taskID string, unpushed int) string {
+func compactedOnOriginDetail(remote, title, taskID string, unpushed int) string {
 	changes := fmt.Sprintf("%d unpushed changes", unpushed)
 	if unpushed == 1 {
 		changes = "1 unpushed change"
 	}
-	return fmt.Sprintf(`"%s" was compacted on origin; you have %s on the old history. `+
+	return fmt.Sprintf(`"%s" was compacted on %s; you have %s on the old history. `+
 		`Run "workbook compact --adopt %s" to retry, `+
-		`or add --discard-local to take origin's version after saving yours to a bundle.`,
-		title, changes, taskID)
+		`or add --discard-local to take %s's version after saving yours to a bundle.`,
+		title, remote, changes, taskID, remote)
 }
 
 // cannotCombineDetail is what fetch says about a task this clone deleted on
 // its checkpoint while origin changed the old history: nothing applies to a
 // deleted task, so origin's change cannot win the way an edit's does.
-func cannotCombineDetail(title, taskID string) string {
-	return fmt.Sprintf(`"%s" changed on origin after you compacted it, and the two can't be combined. `+
-		`Run "workbook compact --adopt %s --discard-local" to take origin's version `+
+func cannotCombineDetail(remote, title, taskID string) string {
+	return fmt.Sprintf(`"%s" changed on %s after you compacted it, and the two can't be combined. `+
+		`Run "workbook compact --adopt %s --discard-local" to take %s's version `+
 		`after saving yours to a bundle; then compact it again.`,
-		title, taskID)
+		title, remote, taskID, remote)
 }
 
 // leasedPush describes one ref pushed as a deliberate non-fast-forward.
@@ -203,12 +207,12 @@ func (r *Repository) advanceTrackingRef(ctx context.Context, taskID, expected, n
 	return err
 }
 
-// leasedRejectionDetail translates Git's refusal of taskID's leased ref.
-func leasedRejectionDetail(taskID, detail string) string {
+// leasedRejectionDetail translates remote's refusal of taskID's leased ref.
+func leasedRejectionDetail(remote, taskID, detail string) string {
 	if strings.Contains(detail, "stale info") {
-		return compactionStaleDetail
+		return compactionStaleDetail(remote)
 	}
-	return compactionRefusedDetail(taskID, detail)
+	return compactionRefusedDetail(remote, taskID, detail)
 }
 
 // awaitsCheckpointPublication reports a fetched pair whose generations differ
@@ -550,7 +554,7 @@ func (r *Repository) adoptRemoteCheckpoint(
 		outcome.Result = SyncTaskResult{
 			TaskID: request.TaskID,
 			Status: SyncCompactedOnOrigin,
-			Detail: compactedOnOriginDetail(request.Local.State.Task.Title, request.TaskID, unpushed),
+			Detail: compactedOnOriginDetail(r.remote(), request.Local.State.Task.Title, request.TaskID, unpushed),
 		}
 		// The task's own state, reported on its line every run, rather
 		// than a failed synchronization: everything else fetched and
@@ -588,7 +592,7 @@ func (r *Repository) adoptRemoteCheckpoint(
 	outcome.Result = SyncTaskResult{
 		TaskID: request.TaskID,
 		Status: SyncAdoptedReplayed,
-		Detail: fmt.Sprintf("replayed %d local operation(s) onto origin's checkpoint", replay.replayed),
+		Detail: fmt.Sprintf("replayed %d local operation(s) onto %s's checkpoint", replay.replayed, r.remote()),
 	}
 	return outcome, nil
 }
@@ -620,7 +624,7 @@ func (r *Repository) replayOntoLocalCheckpoint(
 	outcome := compactedOutcome{TaskID: request.TaskID, Snapshot: request.Local}
 	exclude := operationIDSet(checkpoint.CompactedOperations)
 	if !newOperationAccount(checkpoint.CompactedOperations, nil).covers(remoteChain[0]) {
-		outcome.Result = SyncTaskResult{TaskID: request.TaskID, Status: SyncInvalid, Detail: unrelatedHistoryDetail}
+		outcome.Result = SyncTaskResult{TaskID: request.TaskID, Status: SyncInvalid, Detail: unrelatedHistoryDetail(r.remote())}
 		outcome.Withhold = true
 		outcome.Kind = compactedInvalid
 		return outcome, nil
@@ -658,7 +662,7 @@ func (r *Repository) replayOntoLocalCheckpoint(
 		outcome.Result = SyncTaskResult{
 			TaskID: request.TaskID,
 			Status: SyncConflicted,
-			Detail: cannotCombineDetail(request.Local.State.Task.Title, request.TaskID),
+			Detail: cannotCombineDetail(r.remote(), request.Local.State.Task.Title, request.TaskID),
 		}
 	case replay.overridden != nil:
 		conflict := fromLocalSide(*replay.overridden)
@@ -678,7 +682,7 @@ func (r *Repository) replayOntoLocalCheckpoint(
 		outcome.Result = SyncTaskResult{
 			TaskID: request.TaskID,
 			Status: SyncReconciled,
-			Detail: fmt.Sprintf("replayed %d operation(s) from origin onto the local checkpoint", replay.replayed),
+			Detail: fmt.Sprintf("replayed %d operation(s) from %s onto the local checkpoint", replay.replayed, r.remote()),
 		}
 	}
 	return outcome, nil
@@ -986,7 +990,7 @@ func (r *Repository) classifyStuck(
 		entry.Kind = StuckCompactedOnOrigin
 		entry.checkpoint = adopt
 		entry.Category = core.CategoryConflict
-		entry.Detail = compactedOnOriginDetail(local.State.Task.Title, taskID, unpushed)
+		entry.Detail = compactedOnOriginDetail(r.remote(), local.State.Task.Title, taskID, unpushed)
 		// What fetch reported instead for a checkpoint this build cannot
 		// fold (adoptRemoteCheckpoint): an upgrade, not --adopt, moves it.
 		if refusal := refuseNewerWriterReplay(reconcileRequest{TaskID: taskID, Local: local, Remote: remote}); refusal != nil {
@@ -1010,7 +1014,7 @@ func (r *Repository) classifyStuck(
 		entry.Kind = StuckCannotCombine
 		entry.checkpoint = onto
 		entry.Category = core.CategoryConflict
-		entry.Detail = cannotCombineDetail(local.State.Task.Title, taskID)
+		entry.Detail = cannotCombineDetail(r.remote(), local.State.Task.Title, taskID)
 		return entry, true, nil
 	}
 	return StuckCompaction{}, false, nil
@@ -1253,9 +1257,9 @@ func (r *Repository) discardLocalHistory(
 	}
 	_ = r.ExpireTaskReflog(ctx, entry.TaskID)
 	adoption.Head = entry.remote.Head
-	detail := "took origin's version without saving the local history"
+	detail := "took " + r.remote() + "'s version without saving the local history"
 	if adoption.Bundle != "" {
-		detail = "took origin's version; the local history is saved in " + adoption.Bundle
+		detail = "took " + r.remote() + "'s version; the local history is saved in " + adoption.Bundle
 	}
 	adoption.Result = SyncTaskResult{TaskID: entry.TaskID, Status: SyncDiscardedLocal, Detail: detail}
 	return adoption, nil

@@ -104,7 +104,7 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 	dryRun := flags.Bool("dry-run", false, "report what would be compacted and change nothing")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with the tasks remote (origin unless configured)")
 	adopt := flags.String("adopt", "", "settle one task a compaction left stuck, retrying the replay")
-	discardLocal := flags.Bool("discard-local", false, "with --adopt, take origin's version after saving the local history to a bundle")
+	discardLocal := flags.Bool("discard-local", false, "with --adopt, take the tasks remote's version after saving the local history to a bundle")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -268,7 +268,7 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 	writeSyncReport(stdout, &session.report)
 	writeConflicts(stdout, session.conflicts)
 	writeConfigConflicts(stdout, session.report.configConflicts)
-	writeCompactHints(stdout, summary)
+	writeCompactHints(stdout, summary, session.repository.TasksRemoteName())
 	writeWarnings(stderr, warnings)
 	writeIdentityWarning(stderr, session.report.Identity)
 	writeConfigWarning(stderr, session.report.Config)
@@ -315,7 +315,7 @@ func fetchSyncWarnings(session *taskSession, compacted int) []core.Warning {
 		}
 		return []core.Warning{{Code: core.WarningAutoSync, Message: message}}
 	case session.report.Status == syncStatusFailed:
-		message := "the run used this clone's last view of origin, because " + session.report.Detail
+		message := "the run used this clone's last view of " + session.repository.TasksRemoteName() + ", because " + session.report.Detail
 		if compacted > 0 {
 			message += "; the compacted tasks stay local (unpublished) until the next successful sync"
 		}
@@ -323,7 +323,7 @@ func fetchSyncWarnings(session *taskSession, compacted int) []core.Warning {
 	case session.defects != "":
 		return []core.Warning{{
 			Code:    core.WarningAutoSync,
-			Message: "origin holds task refs this fetch could not validate: " + session.defects,
+			Message: session.repository.TasksRemoteName() + " holds task refs this fetch could not validate: " + session.defects,
 		}}
 	}
 	return nil
@@ -406,7 +406,7 @@ func writeCompactSummary(output io.Writer, summary compactSummary, shortID func(
 
 // writeCompactHints ends the text output: the estimate, the bundle, the
 // upgrade requirement, and how to reclaim the space.
-func writeCompactHints(output io.Writer, summary compactSummary) {
+func writeCompactHints(output io.Writer, summary compactSummary, remote string) {
 	fmt.Fprintf(output, "Estimated space saved: %s (applies once Git cleans up unreachable objects)\n",
 		humanBytes(summary.Totals.EstimatedSavedBytes))
 	if summary.Bundle != "" {
@@ -414,7 +414,7 @@ func writeCompactHints(output io.Writer, summary compactSummary) {
 	}
 	fmt.Fprintln(output, summary.Notice)
 	if !summary.DryRun {
-		fmt.Fprintln(output, `Run "git gc" to reclaim the space locally; origin cleans up on its own schedule.`)
+		fmt.Fprintf(output, "Run \"git gc\" to reclaim the space locally; %s cleans up on its own schedule.\n", remote)
 	}
 }
 

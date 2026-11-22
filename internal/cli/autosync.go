@@ -409,7 +409,7 @@ func (session *taskSession) compactedOnOriginWarning(prefix string) (core.Warnin
 	}
 	return core.Warning{
 		Code: core.WarningAutoSync,
-		Message: prefix + "origin compacted tasks this clone keeps on the old history (" +
+		Message: prefix + session.repository.TasksRemoteName() + " compacted tasks this clone keeps on the old history (" +
 			strings.Join(session.compactedOnOrigin, ", ") + `); run "workbook sync" for details`,
 	}, true
 }

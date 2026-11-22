@@ -910,7 +910,7 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "dry-run", Kind: boolFlag, Description: "report what would be compacted and change nothing"},
 			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with the tasks remote (origin unless configured)"},
 			{Name: "adopt", Kind: stringFlag, Value: "<task>", Description: "settle one task a compaction left stuck, retrying the replay"},
-			{Name: "discard-local", Kind: boolFlag, Description: "with --adopt, take origin's version after saving the local history to a bundle"},
+			{Name: "discard-local", Kind: boolFlag, Description: "with --adopt, take the tasks remote's version after saving the local history to a bundle"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},

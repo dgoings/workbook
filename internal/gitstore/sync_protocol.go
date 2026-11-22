@@ -95,6 +95,7 @@ func isPublicationSingletonRef(refName string) bool {
 // come back as a forced update, and their rejections are reported in the words
 // of compactionStaleDetail and compactionRefusedDetail.
 func parsePushPorcelain(
+	remote string,
 	output []byte,
 	expected map[string]string,
 	forced map[string]bool,
@@ -141,7 +142,7 @@ func parsePushPorcelain(
 			result.Status = SyncRejected
 			result.Detail = fields[2]
 			if forced[destination] {
-				result.Detail = leasedRejectionDetail(taskID, fields[2])
+				result.Detail = leasedRejectionDetail(remote, taskID, fields[2])
 			}
 			hasRejected = true
 		case '+':

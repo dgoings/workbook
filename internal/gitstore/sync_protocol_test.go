@@ -133,7 +133,7 @@ func TestParsePushPorcelainAccountsForEachExpectedDestination(t *testing.T) {
 		"!\tjkl:refs/workbook/tasks/task-rejected\t[rejected] (fetch first)\n" +
 		"Done\n")
 
-	got, err := parsePushPorcelain(output, expected, nil, errors.New("exit status 1"))
+	got, err := parsePushPorcelain("origin", output, expected, nil, errors.New("exit status 1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestParsePushPorcelainRejectsIncompleteOrUnsafeAccounting(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := parsePushPorcelain([]byte(test.output), expected, nil, test.commandErr); err == nil {
+			if _, err := parsePushPorcelain("origin", []byte(test.output), expected, nil, test.commandErr); err == nil {
 				t.Fatalf("parsePushPorcelain(%q) error = nil", test.output)
 			}
 		})

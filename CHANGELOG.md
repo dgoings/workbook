@@ -54,7 +54,9 @@ and what access is needed. Each refusal carries
 a `tasksRemote` member in the JSON error. `workbook fetch`, `push` and `sync`
 take `--remote` to name another remote for one run, which only reads it into
 its tracking refs and never publishes to it, and each remote's tracking refs are now
-pruned only by a fetch from that remote. A project that never sets the remote
+pruned only by a fetch from that remote. Compaction and `compact --adopt`
+publish to and adopt from the tasks remote, and their messages name it where
+they said `origin`. A project that never sets the remote
 behaves as before. Older Workbook releases refuse a `.workbook/config.json`
 that names a tasks remote, exiting 7 with `cannot decode Workbook
 configuration`, so upgrade every checkout before committing the setting. See

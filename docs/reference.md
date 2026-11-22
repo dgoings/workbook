@@ -2288,6 +2288,14 @@ replaced commits, the bundle is this clone's only copy of the old history.
 
 ### Publishing a compaction
 
+Compaction publishes to, adopts from and leases against the project's tasks
+remote, which is `origin` unless the project
+[chose another](#a-tasks-remote-other-than-origin). Where this section and the messages it
+quotes say `origin`, a project with a tasks remote reads that remote's name:
+`"<title>" was compacted on tasks; …` for a remote named `tasks`. The status
+values, such as `compacted-on-origin`, are machine values and keep their
+names.
+
 A checkpoint does not build on the tip it replaced, so Git sees publishing it
 as a forced update. Workbook publishes it with a lease instead of a force-push:
 the push uses a plain refspec with
