@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -631,8 +632,17 @@ func TestTasksRemoteFlagReadsAMovedRemoteAndRefusesToPublishThere(t *testing.T) 
 	if code, _, stderr := run(t, project.seed, "fetch", "--remote", "nosuch", "--json"); code != 4 {
 		t.Fatalf("fetch --remote nosuch exit = %d, want 4; stderr = %q", code, stderr)
 	}
-	if code, _, stderr := run(t, project.seed, "sync", "--watch", "--remote", "origin"); code != 2 {
-		t.Fatalf("sync --watch --remote exit = %d, want 2; stderr = %q", code, stderr)
+	// Bounded, so a watcher that starts instead of being refused fails the
+	// test rather than running until the package's deadline.
+	watchCtx, cancelWatch := context.WithTimeout(context.Background(), 10*time.Second)
+	var watchOut, watchErr bytes.Buffer
+	code := Run(watchCtx, []string{"sync", "--watch", "--remote", "origin"}, project.seed, strings.NewReader(""), &watchOut, &watchErr)
+	cancelWatch()
+	if code != 2 {
+		t.Fatalf("sync --watch --remote exit = %d, want 2; stderr = %q", code, watchErr.String())
+	}
+	if code, _, stderr := run(t, project.seed, "sync", "--status", "--remote", "origin"); code != 2 {
+		t.Fatalf("sync --status --remote exit = %d, want 2; stderr = %q", code, stderr)
 	}
 	if code, stdout, stderr := run(t, project.seed, "fetch", "--remote", "origin", "--json"); code != 0 {
 		t.Fatalf("fetch --remote origin = (%d, %q, %q), want a read", code, stdout, stderr)
