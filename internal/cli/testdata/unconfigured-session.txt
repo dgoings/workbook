@@ -147,6 +147,22 @@ git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/c
 git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project
 git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
 git rev-parse --show-toplevel --path-format=absolute --git-common-dir
+== workbook create Handed to the watcher --json
+git cat-file --batch
+git cat-file --batch
+git commit-tree <oid> -m workbook: create <task> Handed to the watcher
+git config --get user.email
+git for-each-ref --format=%(refname)%00%(objectname) refs/workbook/reconciled/<task>/
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/config
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/project
+git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/tasks/
+git hash-object -w --stdin
+git hash-object -w --stdin
+git mktree
+git rev-parse --show-toplevel --path-format=absolute --git-common-dir
+git update-ref --no-deref --create-reflog -m workbook: create <task> Handed to the watcher --stdin
 == refs in the clone
 refs/heads/main
 refs/remotes/origin/HEAD
@@ -161,10 +177,12 @@ refs/workbook/remotes/origin/tasks/<task>
 refs/workbook/tasks/<task>
 refs/workbook/tasks/<task>
 refs/workbook/tasks/<task>
+refs/workbook/tasks/<task>
 == refs on origin
 refs/heads/main
 refs/workbook/config
 refs/workbook/project
+refs/workbook/tasks/<task>
 refs/workbook/tasks/<task>
 refs/workbook/tasks/<task>
 refs/workbook/tasks/<task>

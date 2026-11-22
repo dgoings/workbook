@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/testrepo"
 )
@@ -32,6 +33,11 @@ var unconfiguredSessionCommands = [][]string{
 	{"config", "show", "--json"},
 	{"list", "--json"},
 }
+
+// watcherHandedCommand runs after the session above, with a watcher running
+// from the same binary, and is handed to it: on the release before the
+// setting it touched no network, and it must not here either.
+var watcherHandedCommand = []string{"create", "Handed to the watcher", "--json"}
 
 // The Git commands this branch runs differently in a project that never
 // chose a tasks remote, which docs/reference.md lists. Every command's first
@@ -70,49 +76,119 @@ func runTracedSession(t *testing.T, binary, clone string, replacements map[strin
 	t.Helper()
 	var report strings.Builder
 	for _, args := range unconfiguredSessionCommands {
-		events := filepath.Join(t.TempDir(), "trace2.json")
-		command := exec.Command(binary, args...)
-		command.Dir = clone
-		command.Env = append(os.Environ(), "GIT_TRACE2_EVENT="+events)
-		if output, err := command.CombinedOutput(); err != nil {
-			t.Fatalf("%v: %v\n%s", args, err, output)
-		}
-		var lines []string
-		file, err := os.Open(events)
-		if err != nil {
-			t.Fatal(err)
-		}
-		scanner := bufio.NewScanner(file)
-		scanner.Buffer(make([]byte, 1<<20), 1<<24)
-		for scanner.Scan() {
-			var event struct {
-				Event string   `json:"event"`
-				SID   string   `json:"sid"`
-				Argv  []string `json:"argv"`
-			}
-			if json.Unmarshal(scanner.Bytes(), &event) != nil || event.Event != "start" || strings.Contains(event.SID, "/") {
-				continue
-			}
-			argv := event.Argv
-			// Workbook names its folder with -C; the folder is the same for
-			// every command, so it is dropped rather than compared.
-			if len(argv) > 2 && argv[1] == "-C" {
-				argv = append([]string{argv[0]}, argv[3:]...)
-			}
-			argv[0] = "git"
-			lines = append(lines, normalizeSessionText(strings.Join(argv, " "), replacements))
-		}
-		file.Close()
-		if err := scanner.Err(); err != nil {
-			t.Fatal(err)
-		}
-		sort.Strings(lines)
-		report.WriteString("== workbook " + strings.Join(args, " ") + "\n")
-		for _, line := range lines {
-			report.WriteString(line + "\n")
+		traceSessionCommand(t, binary, clone, args, replacements, &report)
+	}
+	runWatcherHandedCommand(t, binary, clone, replacements, &report)
+	return report.String()
+}
+
+// runWatcherHandedCommand starts a watcher in clone, runs the handed command
+// traced once the watcher has synchronized, requires it to report its
+// publication deferred, and waits for the watcher to publish it to origin
+// before stopping it, so the refs compared afterwards do not depend on timing.
+func runWatcherHandedCommand(t *testing.T, binary, clone string, replacements map[string]string, report *strings.Builder) {
+	t.Helper()
+	watcher := exec.Command(binary, "sync", "--watch", "--interval", "1h")
+	watcher.Dir = clone
+	var watcherOutput strings.Builder
+	watcher.Stdout, watcher.Stderr = &watcherOutput, &watcherOutput
+	if err := watcher.Start(); err != nil {
+		t.Fatal(err)
+	}
+	stopped := false
+	stop := func() {
+		if !stopped {
+			stopped = true
+			_ = watcher.Process.Kill()
+			_ = watcher.Wait()
 		}
 	}
-	return report.String()
+	defer stop()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		status := exec.Command(binary, "sync", "--status", "--json")
+		status.Dir = clone
+		output, _ := status.Output()
+		if strings.Contains(string(output), `"lastSyncOk":true`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the watcher never synchronized; it wrote %q", watcherOutput.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	output := traceSessionCommand(t, binary, clone, watcherHandedCommand, replacements, report)
+	var created struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+		Sync struct {
+			Status string `json:"status"`
+		} `json:"sync"`
+	}
+	if err := json.Unmarshal(output, &created); err != nil || created.Sync.Status != "deferred" || created.Data.ID == "" {
+		t.Fatalf("%v was not handed to the watcher: %v; output %s", watcherHandedCommand, err, output)
+	}
+	origin := strings.TrimSpace(cliGitOutput(t, clone, "remote", "get-url", "origin"))
+	for strings.TrimSpace(cliGitOutputAllowingMissing(t, origin, "refs/workbook/tasks/"+created.Data.ID)) == "" {
+		if time.Now().After(deadline) {
+			t.Fatalf("the watcher never published %s; it wrote %q", created.Data.ID, watcherOutput.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	stop()
+}
+
+// traceSessionCommand runs one command traced and appends its sorted,
+// normalized top-level Git commands to report. It returns the command's
+// standard output.
+func traceSessionCommand(t *testing.T, binary, clone string, args []string, replacements map[string]string, report *strings.Builder) []byte {
+	t.Helper()
+	events := filepath.Join(t.TempDir(), "trace2.json")
+	command := exec.Command(binary, args...)
+	command.Dir = clone
+	command.Env = append(os.Environ(), "GIT_TRACE2_EVENT="+events)
+	var stderr strings.Builder
+	command.Stderr = &stderr
+	stdout, err := command.Output()
+	if err != nil {
+		t.Fatalf("%v: %v\n%s%s", args, err, stdout, stderr.String())
+	}
+	var lines []string
+	file, err := os.Open(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1<<20), 1<<24)
+	for scanner.Scan() {
+		var event struct {
+			Event string   `json:"event"`
+			SID   string   `json:"sid"`
+			Argv  []string `json:"argv"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &event) != nil || event.Event != "start" || strings.Contains(event.SID, "/") {
+			continue
+		}
+		argv := event.Argv
+		// Workbook names its folder with -C; the folder is the same for
+		// every command, so it is dropped rather than compared.
+		if len(argv) > 2 && argv[1] == "-C" {
+			argv = append([]string{argv[0]}, argv[3:]...)
+		}
+		argv[0] = "git"
+		lines = append(lines, normalizeSessionText(strings.Join(argv, " "), replacements))
+	}
+	file.Close()
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(lines)
+	report.WriteString("== workbook " + strings.Join(args, " ") + "\n")
+	for _, line := range lines {
+		report.WriteString(line + "\n")
+	}
+	return stdout
 }
 
 func normalizeSessionText(text string, replacements map[string]string) string {

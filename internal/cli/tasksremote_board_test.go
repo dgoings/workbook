@@ -128,3 +128,50 @@ func TestTasksRemoteHostedBoardAcrossAMoveSaysSoWithoutServerDetail(t *testing.T
 		t.Fatalf("the hosted board published to the marked old place:\nbefore %s\nafter  %s", afterMove, after)
 	}
 }
+
+// A board handing saves to a watcher reads this checkout's copy of the
+// remote's identity ref before each hand-off. The watcher here last
+// synchronized before the move and waits an hour, so it still counts as
+// trustworthy; the marker reaches the copy through another command's fetch.
+// Without the read, the save would be handed over and answered with no
+// warning, and the watcher would be refused in its own log an hour later.
+func TestTasksRemoteBoardHandOffReadsTheMarkerAnotherCommandFetched(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA1)
+	stale := cloneCode(t, project)
+	if code, stdout, stderr := run(t, stale, "setup"); code != 0 {
+		t.Fatalf("stale setup = (%d, %q, %q)", code, stdout, stderr)
+	}
+	startCLIWatcher(t, stale, "1h")
+	address, output, stop := startServeCapturing(t, stale)
+	defer stop()
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(output.String(), "external sync watcher") {
+		if time.Now().After(deadline) {
+			t.Fatalf("board never deferred to the external watcher; wrote %q", output.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	base := "http://" + address
+	if body, status := boardRequest(t, http.MethodPut, base+"/api/sync", `{"mode":"deferred"}`); status != http.StatusOK {
+		t.Fatalf("PUT /api/sync deferred = %d; body = %s", status, body)
+	}
+
+	project.moveTasks(t)
+	afterMove := repositoryState(t, project.code)
+	if code, _, stderr := run(t, stale, "fetch", "--json"); code != 3 {
+		t.Fatalf("stale fetch after the move = %d, want the moved refusal; stderr = %q", code, stderr)
+	}
+
+	saved := boardSave(t, http.MethodPost, base+"/api/tasks", `{"title":"Saved after the move"}`)
+	if len(saved.Warnings) != 1 || saved.Warnings[0].Code != core.WarningTasksMoved ||
+		!strings.Contains(saved.Warnings[0].Message, project.tasks) {
+		t.Fatalf("save warnings = %+v, want the moved refusal naming %s", saved.Warnings, project.tasks)
+	}
+	if got := localTaskRef(t, stale, saved.Task.ID); got == "" {
+		t.Fatalf("save %s was not recorded", saved.Task.ID)
+	}
+	if after := repositoryState(t, project.code); after != afterMove {
+		t.Fatalf("the board published to the marked old place:\nbefore %s\nafter  %s", afterMove, after)
+	}
+}

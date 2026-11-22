@@ -2572,10 +2572,11 @@ func (p *boardPublisher) publish(
 		return result, nil
 	}
 	if !p.inline.Load() {
-		// A watcher's last synchronization may predate a move, and one handed
-		// this change would be refused in its own log while the page said
-		// nothing. One listing of one ref asks first (CheckRemoteNotMoved).
-		if movedErr := p.repository.CheckRemoteNotMoved(ctx); movedErr != nil {
+		// A watcher handed this change after a move would be refused in its
+		// own log while the page said nothing, so this checkout's copy of the
+		// remote's identity ref, which the watcher keeps current, is read
+		// again first: a local read, never a network one (CheckRemoteNotMoved).
+		if movedErr := p.repository.CheckRemoteNotMoved(ctx, true); movedErr != nil {
 			result.Warnings = append(result.Warnings, publicationWarning(movedErr))
 			return result, nil
 		}
@@ -2628,7 +2629,7 @@ func (p *boardPublisher) publishConfig(ctx context.Context) []core.Warning {
 		return nil
 	}
 	if !p.inline.Load() {
-		if movedErr := p.repository.CheckRemoteNotMoved(ctx); movedErr != nil {
+		if movedErr := p.repository.CheckRemoteNotMoved(ctx, true); movedErr != nil {
 			return []core.Warning{publicationWarning(movedErr)}
 		}
 		if p.handOff("") {

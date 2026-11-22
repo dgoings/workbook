@@ -275,12 +275,13 @@ func (session *taskSession) fetchBefore(ctx context.Context) error {
 		// slightly stale tip a case the fetch path already handles rather than
 		// one worth a network round trip to prevent.
 		//
-		// The one thing the watcher's last look cannot vouch for is whether
-		// the tasks remote has since been marked as the place the tasks moved
-		// away from: a change recorded now would be handed to a watcher that
-		// is about to be refused, and this command would exit as if it had
-		// been published. One listing of one ref answers that.
-		if err := session.repository.CheckRemoteNotMoved(ctx); err != nil {
+		// A tasks remote marked as the place the tasks moved away from is
+		// refused here too, from this checkout's copy of its identity ref,
+		// which the watcher's own fetches keep current: a change recorded now
+		// would be handed to a watcher that is refused, and this command would
+		// exit as if it had been published. Nothing is asked of the remote, so
+		// a move reaches this check within one watcher interval.
+		if err := session.repository.CheckRemoteNotMoved(ctx, false); err != nil {
 			return err
 		}
 		session.report.Status = syncStatusDeferred

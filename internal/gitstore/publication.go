@@ -219,38 +219,38 @@ func (r *Repository) strandedRefusal(ctx context.Context, remote string, moved T
 		remote, strings.Join(taskIDs, ", "), moved.URL, moved.Remote, next, remote)
 }
 
-// CheckRemoteNotMoved asks the tasks remote, with one listing of one ref,
-// whether it has been marked as the place the tasks moved away from since this
-// checkout last looked, and returns the moved refusal when it has.
+// CheckRemoteNotMoved reads, without asking the remote anything, whether this
+// checkout's copy of the tasks remote's identity ref carries the tasks-moved
+// marker, and returns the moved refusal when it does.
 //
 // It is for a command that is about to record a change and hand its
-// publication to a watcher. The watcher's last synchronization may predate the
-// mark, and without asking, such a command would record the change, exit as if
-// all were well, and leave the refusal to the watcher's own log. A listing
-// that fails says nothing either way: the watcher is still there to try.
-func (r *Repository) CheckRemoteNotMoved(ctx context.Context) error {
+// publication to a watcher. The watcher fetches the remote's identity ref into
+// that copy on every round, so a marker published to the remote reaches the
+// copy within one watcher interval, and this check refuses from then on; the
+// watcher itself is refused publishing there and logs it once. Asking the
+// remote instead would put a network round trip back on the path a watcher
+// exists to keep it off.
+//
+// reread reads the ref again, for a long-lived handle such as a board's;
+// otherwise the listing this command made when it opened the project serves,
+// which costs nothing more (CheckTasksRemote read the same ref then).
+func (r *Repository) CheckRemoteNotMoved(ctx context.Context, reread bool) error {
 	if moved := r.observedMove(); moved != nil {
 		return r.remoteMarkedMoved(ctx, *moved, true)
 	}
+	if reread {
+		r.metadataMu.Lock()
+		r.trackedIdentity = trackedIdentityHead{}
+		r.metadataMu.Unlock()
+	}
 	remote := r.remote()
-	listing, err := r.Git(ctx, nil, "ls-remote", "--refs", remote, identityRef)
-	if err != nil {
+	head, found, err := r.trackingIdentityHead(ctx, remote)
+	if err != nil || !found {
 		return nil
 	}
-	head, err := parseRemoteIdentityHead(listing)
-	if err != nil || head == "" {
+	moved, found, err := r.trackedMoveMarker(ctx, remote, head)
+	if err != nil || !found {
 		return nil
 	}
-	local, found, err := r.memoizedIdentityRecord()
-	if err != nil || (found && local.Head == head) {
-		return nil
-	}
-	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--no-auto-maintenance", remote, r.identityFetchRefspec()); err != nil {
-		return nil
-	}
-	record, found, err := r.readIdentityRef(ctx, r.remoteIdentityRef())
-	if err != nil || !found || record.Moved == nil {
-		return nil
-	}
-	return r.remoteMarkedMoved(ctx, *record.Moved, true)
+	return r.remoteMarkedMoved(ctx, moved, true)
 }
