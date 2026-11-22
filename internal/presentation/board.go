@@ -36,6 +36,11 @@ type TaskView struct {
 	DependenciesComplete  int
 	DependenciesTotal     int
 	WaitingOnDependencies bool
+	// SetAsideEdits is how many of this task's edits a reconciliation set
+	// aside on a conflict (core.SetAsideEdit). Nothing here computes it — it
+	// is read from Git refs no board split has — so it is zero until a
+	// renderer that reads them sets it, and a card flags it when it is not.
+	SetAsideEdits int
 }
 
 type Column struct {

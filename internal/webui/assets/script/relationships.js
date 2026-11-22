@@ -114,7 +114,9 @@
           state.selectedID = candidate.id;
           state.query = candidate.title;
           state.activeIndex = -1;
-          input.value = candidate.title;
+          // The box is drawn text: it holds the title as the picked option
+          // drew it, not the stored one with its direction controls.
+          input.value = shownField(candidate.title);
           hideListbox();
           renderOptions();
         }

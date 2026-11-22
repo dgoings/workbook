@@ -141,14 +141,16 @@ func (r *Repository) writeCanonical(
 	// certainly acting on this task and already writing a ref, so it is where
 	// superseded parked tips are retired. Reads and fetches leave them alone:
 	// pruning during a fetch would delete recoverable local work in the same
-	// command that orphaned it.
-	pruned, err := r.prunableParkedRefs(ctx, config, pack.TaskID)
+	// command that orphaned it. Only settled ones go, judged against the head
+	// this mutation builds on.
+	pruned, err := r.prunableParkedRefs(ctx, config, pack.TaskID, parentHead)
 	if err != nil {
 		return core.Snapshot{}, err
 	}
 	if err := r.commitTaskRefUpdate(ctx, ref, head, parentHead, pruned, reason); err != nil {
 		return core.Snapshot{}, err
 	}
+	r.forgetVerdicts(pruned)
 	return core.Snapshot{Head: head, Operation: pack, State: state}, nil
 }
 
@@ -561,9 +563,15 @@ func (r *Repository) commitIdentityEnvironment(ctx context.Context, actor, repla
 // display setting changes them. The dates are left to Git, as for every other
 // commit Workbook writes.
 //
-// A recorded identity is one Git already normalized, so writing it again
-// stores it unchanged. Git refuses an empty name, which only a commit written
-// by some other tool can carry; the email stands in for it then.
+// An identity Git wrote itself is already normalized, so writing it again
+// stores it unchanged. A commit written by some other tool can carry one Git
+// refuses to write: an empty name, a name of nothing but the characters Git
+// strips, or an identity line with no email in angle brackets at all. A replay
+// is never refused for that, because the commit is already in history and
+// nobody can change it. The email stands in for a name Git would refuse, and
+// unrecordedName stands in when the email cannot either, so the replay names
+// nobody rather than somebody else. A commit missing one of the two lines
+// takes the other's identity for it.
 func (r *Repository) recordedIdentityEnvironment(ctx context.Context, commit string) ([]string, error) {
 	output, err := r.Git(ctx, nil, "cat-file", "commit", commit)
 	if err != nil {
@@ -582,21 +590,29 @@ func (r *Repository) recordedIdentityEnvironment(ctx context.Context, commit str
 		open := strings.IndexByte(ident, '<')
 		closing := strings.LastIndexByte(ident, '>')
 		if open < 0 || closing < open {
-			return nil, core.Errorf(core.CategoryCorruptData,
-				"commit %s records an unreadable %s identity", commit, role)
+			identities[role] = [2]string{unrecordedName, ""}
+			continue
 		}
 		name := strings.TrimSpace(ident[:open])
 		email := ident[open+1 : closing]
-		if name == "" {
+		if !gitKeepsSomethingOf(name) {
 			name = email
+		}
+		if !gitKeepsSomethingOf(name) {
+			name = unrecordedName
 		}
 		identities[role] = [2]string{name, email}
 	}
 	author, haveAuthor := identities["author"]
 	committer, haveCommitter := identities["committer"]
-	if !haveAuthor || !haveCommitter {
-		return nil, core.Errorf(core.CategoryCorruptData,
-			"commit %s records no author or committer to replay it under", commit)
+	switch {
+	case !haveAuthor && !haveCommitter:
+		author = [2]string{unrecordedName, ""}
+		committer = author
+	case !haveAuthor:
+		author = committer
+	case !haveCommitter:
+		committer = author
 	}
 	return []string{
 		"GIT_AUTHOR_NAME=" + author[0],
@@ -604,6 +620,21 @@ func (r *Repository) recordedIdentityEnvironment(ctx context.Context, commit str
 		"GIT_COMMITTER_NAME=" + committer[0],
 		"GIT_COMMITTER_EMAIL=" + committer[1],
 	}, nil
+}
+
+// unrecordedName is the name a replay is written under when the commit it
+// replays records no name or email Git will write again. It is nobody's
+// address, so it can never be mistaken for a person's.
+const unrecordedName = "unknown"
+
+// gitKeepsSomethingOf reports whether Git would write value as an identity
+// name rather than refuse it: Git strips its "crud" characters — anything at
+// or below a space, and , : ; < > " \ ' — from either end of a name and
+// refuses one with nothing left.
+func gitKeepsSomethingOf(value string) bool {
+	return strings.TrimFunc(value, func(r rune) bool {
+		return r <= ' ' || strings.ContainsRune(`,:;<>"\'`, r)
+	}) != ""
 }
 
 // refuseActorMismatch refuses to record an edit under one person while the

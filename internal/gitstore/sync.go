@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -257,12 +258,12 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	for _, ref := range finalRefs {
 		final[ref.taskID] = ref.objectID
 	}
-	rejected := 0
+	var rejected []SyncTaskResult
 	changed := 0
 	for _, ref := range refs {
 		item := items[ref.taskID]
 		if item.Status == SyncRejected {
-			rejected++
+			rejected = append(rejected, item)
 		} else if publishedSyncStatus(item.Status) && final[ref.taskID] != observed[ref.taskID] {
 			item.Status = SyncLocalChanged
 			item.Detail = "validated task head was published, but the local ref advanced during push; run workbook push again"
@@ -275,8 +276,8 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	if invalid > 0 {
 		return result, core.Errorf(core.CategoryCorruptData, "%d local task ref(s) failed validation", invalid)
 	}
-	if rejected > 0 {
-		return result, core.Errorf(core.CategoryOperational, "%d task ref(s) were rejected by origin", rejected)
+	if len(rejected) > 0 {
+		return result, rejectedByOrigin(rejected)
 	}
 	if changed > 0 {
 		return result, core.Errorf(core.CategoryStaleWrite, "%d local task ref(s) changed during push", changed)
@@ -1048,12 +1049,12 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 	for _, ref := range finalRefs {
 		final[ref.taskID] = ref.objectID
 	}
-	rejected := 0
+	var rejected []SyncTaskResult
 	changed := 0
 	for _, taskID := range taskIDs {
 		item := items[taskID]
 		if item.Status == SyncRejected {
-			rejected++
+			rejected = append(rejected, item)
 		} else if publishedSyncStatus(item.Status) && final[taskID] != observed[taskID] {
 			item.Status = SyncLocalChanged
 			item.Detail = "validated task head was published, but the local ref advanced during push; run workbook push again"
@@ -1063,11 +1064,37 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 		result.Tasks = append(result.Tasks, items[taskID])
 	}
 	result.Status = SyncPhaseCompleted
-	if rejected > 0 {
-		return result, core.Errorf(core.CategoryOperational, "%d task ref(s) were rejected by origin", rejected)
+	if len(rejected) > 0 {
+		return result, rejectedByOrigin(rejected)
 	}
 	if changed > 0 {
 		return result, core.Errorf(core.CategoryStaleWrite, "%d local task ref(s) changed during push", changed)
 	}
 	return result, nil
+}
+
+// rejectedByOrigin is the error for a push origin refused some task refs of.
+// It names the first few with Git's own reason for each, as push --porcelain
+// reports it — "[rejected] (fetch first)" when somebody else published first,
+// "[remote rejected] (hook declined)" when a server hook refused it — so the
+// one line a server logs says which it was. Git's reason is its summary, not
+// what a hook printed: that text reaches only Git's own output.
+func rejectedByOrigin(rejected []SyncTaskResult) error {
+	const named = 3
+	reasons := make([]string, 0, named)
+	for _, item := range rejected {
+		if len(reasons) == named {
+			break
+		}
+		reason := item.TaskID
+		if item.Detail != "" {
+			reason += " " + item.Detail
+		}
+		reasons = append(reasons, reason)
+	}
+	message := fmt.Sprintf("%d task ref(s) were rejected by origin: %s", len(rejected), strings.Join(reasons, "; "))
+	if more := len(rejected) - len(reasons); more > 0 {
+		message += fmt.Sprintf("; and %d more", more)
+	}
+	return core.Errorf(core.CategoryOperational, "%s", message)
 }

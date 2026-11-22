@@ -62,7 +62,7 @@ workbook docs update [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook docs status [--skill-dir <dir>] [--no-skill] [--json]
 workbook docs remove [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook hooks install [--json]
-workbook serve [--addr <address>]
+workbook serve [--addr <address>] [--public-url <url>] [--actor-header <header>]
 workbook completion <shell>
 workbook help [command]
 ```
@@ -264,7 +264,10 @@ changed nothing. `actor` is the address edits will be recorded under, or `""`.
 `unavailable` lists the commands that refuse in this folder. The text report
 says the same in `Mode:`, `Remote:`, `Author:` and `Unavailable:` lines. Its
 `Mode:` line also tells a setting the folder lacked, which it says it `set`,
-from one somebody had changed, which it says it `restored`.
+from one somebody had changed, which it says it `restored`. With no address to
+record edits under, the `Author:` line reads `none configured` and says how to
+give one: `git config user.email <address>` in the folder, or `WORKBOOK_ACTOR`,
+which is enough on its own.
 
 #### What is unavailable without the code
 
@@ -653,9 +656,14 @@ When a replayed edit's name is not the checkout's `user.email` and Git could
 not store it exactly, such as a `user.email` somebody configured with angle
 brackets around it, which Git quietly drops, the replayed commit takes its
 author and committer from the commit being replayed: the identity Git recorded
-when the edit was made. So no other person's name is attached, and the task or
-the configuration still synchronizes. Only a new edit is refused for such a
-name, and only when `WORKBOOK_ACTOR` gives it, as below.
+when the edit was made. A commit some other tool wrote can record an identity
+Git will not write again: an empty name, a name made only of the characters Git
+strips, or no email at all. The replay then takes the recorded email as its
+name, or the name `unknown` when the email will not do either, and a commit
+missing its author or committer line takes the other one. So no other person's
+name is attached, and the task or the configuration still synchronizes. Only
+a new edit is refused for such a name, and only when `WORKBOOK_ACTOR` gives it,
+as below.
 
 The name must be an email address, by the same rule `--assign` applies to a
 person, with no `/label` part. It also must be valid UTF-8, must not contain
@@ -1388,9 +1396,11 @@ Addressing entries by commit object ID works across a reconciliation because
 reconciliation parks the pre-replay tip under
 `refs/workbook/reconciled/<task-id>/<n>` rather than discarding it, so an object
 an earlier listing named usually stays reachable. That reachability is bounded,
-not permanent: Workbook keeps at most three parked tips per task and retires the
-excess inside a later mutation's ref transaction, after which the oldest
-pre-replay chain is collectable. A named object that no longer resolves is an
+not permanent: of the parked tips whose edits the task already carries,
+Workbook keeps the three newest per task and retires the rest inside a later
+mutation's ref transaction, after which those pre-replay chains are
+collectable. A parked tip that holds an edit the task lacks is kept until
+somebody dismisses it on the board. A named object that no longer resolves is an
 ordinary not-found for that argument, exit `4`, naming the commit rather than
 reporting corruption.
 
@@ -1633,6 +1643,20 @@ synchronization failed — that last case matters, because a watcher that cannot
 reach `origin` knows it, and deferring would swallow the warning that says the
 work is local-only.
 
+The watcher writes to standard error as it goes: a line for each conflict it
+meets, and `workbook: background sync failed: <message>` when a round fails,
+where the message is Git's own with the credentials of configured addresses
+removed, as [the hosted board's exposure list](#what-anyone-who-can-open-the-board-can-do-and-see)
+details. A token in an address's path or query string, and anything a
+credential helper, a hook or the remote prints, are not removed. A push
+`origin` refuses is reported as `<n> task ref(s) were rejected by origin:`
+followed by up to three task IDs, each with Git's porcelain reason such as
+`[rejected] (fetch first)` or `[remote rejected] (hook declined)`, and `; and
+<n> more` for the rest; what a refusing hook printed is not included. A failure that
+repeats is written once, and again only when its message changes; the first
+round that succeeds after it writes `workbook: background sync is working
+again`. `workbook serve` runs the same loop and writes the same lines.
+
 `workbook sync --status` reports whether a watcher is running, what it last did,
 any conflicts it is holding, and the refs its last synchronization skipped under
 `origin`'s task namespace. That last set is what the watcher observed rather
@@ -1656,6 +1680,11 @@ compare-and-swap transaction, and every replayed pack keeps its actor, wall
 time, and operation IDs, rewriting only its logical clock. Replayed commits have
 exactly one parent; Workbook writes no merge commits, never rebases a shared ref,
 and never force-pushes one unconditionally.
+
+The command line reports a conflict once, on the run that meets it, and has no
+command that lists or removes parked tips. `workbook serve` shows every edit a
+parked tip holds that the task lacks, until somebody copies it back or
+dismisses it; see [Edits the board's sync set aside](#edits-the-boards-sync-set-aside).
 
 Most concurrent edits touch different fields, commute, and replay silently, so a
 mutation that loses a push race and a fetch that finds week-old local work both
@@ -1689,10 +1718,17 @@ complete without a terminal, so JSON output, hooks, agents, and the web board
 all consume the same list.
 
 Parked refs stay local; they are never pushed, because every enumeration that
-builds a push refspec is scoped to `refs/workbook/tasks/`. The next successful
-mutation of a task retires that task's oldest parked refs inside the same
-`update-ref` transaction, keeping the most recent few. Fetches and reads never
-prune them: a fetch must not delete recoverable work in the command that
+builds a push refspec is scoped to `refs/workbook/tasks/`. Most parked refs hold
+nothing the task lacks, since every reconciliation parks its old tip, clean or
+not. The next successful mutation of a task retires those settled parked refs
+beyond the three newest inside the same `update-ref` transaction, and so does the
+background sync of `workbook serve` and `workbook sync --watch` after each
+round. A parked ref holding an
+edit the task lacks is never retired this way, however many accumulate; it
+goes only when somebody dismisses it on the board, or when a manual
+`workbook compact` or `workbook compact --adopt <id> --discard-local` drops it,
+after writing it to the backup bundle unless told `--no-backup`. Fetches and reads
+never prune them: a fetch must not delete recoverable work in the command that
 orphaned it.
 
 ## Task archive compaction
@@ -2007,11 +2043,16 @@ conflict is reported, the task is `conflicted`, and the local tip from before
 the sync is parked under `refs/workbook/reconciled/<id>/<n>` so its text can be
 recovered.
 
-**Adopting drops some local data without a backup.** An adopted task's parked
-refs under `refs/workbook/reconciled/<id>/` (text an earlier clash pushed aside)
-and its reflog are deleted, and they are not written to any bundle. Parking or
-keeping them would keep the old history alive. Unpushed changes are replayed,
-not dropped.
+**Adopting drops some local data without a backup.** An adopted task's reflog
+is deleted, and so are those of its parked refs under
+`refs/workbook/reconciled/<id>/` whose edits the adopted checkpoint already
+carries; neither is written to any bundle, since keeping them would keep the
+old history alive. A parked ref that still holds an edit the task lacks — text
+an earlier clash pushed aside that nobody copied back or dismissed — is kept,
+and the board goes on showing it: its operations are not among the
+checkpoint's compacted ones, so they are still the task's to recover. Its old
+history stays reachable through it until it is dismissed. Unpushed changes are
+replayed, not dropped.
 
 ### When a compaction cannot be combined
 
@@ -2613,9 +2654,12 @@ GET /api/tasks/<id>/attachments/<aid>     download an attached file's bytes
 DELETE /api/tasks/<id>/attachments/<aid>  remove an attachment
 POST /api/tasks/<id>/assignments          assign, naming the assignee in the
                                           body as `to`; an empty value is the
-                                          serving checkout's own identity
+                                          request's person
 DELETE /api/tasks/<id>/assignments        withdraw, naming the assignment in
                                           the body as `from`
+DELETE /api/tasks/<id>/set-aside          dismiss edits the board's sync set
+                                          aside, naming the `parkedRef` and
+                                          `parked` commit that were shown
 GET /api/sync                 versioned publication-mode JSON, reporting the
                               mode, whether a watcher answers, and a `reason` of
                               `no-watcher` or `no-origin` when none does
@@ -2644,7 +2688,8 @@ the bare verb. An edit of somebody else's comment is refused with a `400` and
 category `validation`, and nothing is recorded.
 
 Whether a comment is yours is a question about the reader, so the board answers
-it on the server for the person each request acts for — the person
+it on the server for the person each request acts for — the person the
+`--actor-header` header names, when `serve` honors one, or else the person
 `WORKBOOK_ACTOR` named when `serve` started, or else the serving checkout's
 `user.email` — and never from anything the page decides. The three comment
 routes answer with an `editableComments` array beside the task: the
@@ -2823,6 +2868,9 @@ checks stand in for them and every route is subject to all three:
   the name.
 - An `Origin` header, when a browser sends one, must name the board itself. A
   cross-site request that carries one is refused whatever its method.
+  `--public-url` adds the public address to what names the board, for both
+  this check and the `Host` check; see
+  [Behind a sign-in proxy](#behind-a-sign-in-proxy).
 - `POST`, `PUT`, `PATCH`, and `DELETE` must send `Content-Type: application/json`,
   with or without a body. The three media types a cross-site HTML form can send
   need no preflight, so refusing them is what keeps a drive-by page from creating
@@ -2926,6 +2974,226 @@ read as agent instructions — without ever being on the network. `workbook
 serve` says so in the warning it prints for a wildcard bind. Bind the one
 address you mean instead, and the `Host` is pinned to it.
 
+### Edits the board's sync set aside
+
+When the board's own background sync fetches a task that changed on `origin`
+while the board had unpublished edits to it, it replays those edits onto
+`origin`'s history. A replay that meets a conflict — a description both sides
+rewrote, an edit to a task `origin` deleted, a dependency that would close a
+cycle — stops there: `origin`'s side is kept, and the edit, with every later
+unpublished edit to that task, is left out. This is the same reconciliation
+`workbook sync` runs, and as there the old local tip is kept under
+`refs/workbook/reconciled/<task>/<n>` in the serving checkout and is never
+pushed. The CLI reports such a conflict once, on the run that meets it, and
+has no command to list or dismiss what was left out.
+
+The board shows it to everyone until it is dealt with. On every listing it
+compares each parked tip with the tip of the task it is listing and reports
+each parked commit that is not settled. A parked commit is settled when one of
+these holds, and in no other case:
+
+- Every operation in it is in the task's history under the same operation ID:
+  it was replayed after all, or it is among the operations a compaction
+  checkpoint lists as compacted.
+- The task's current state carries it: applying its operations to that state
+  changes nothing. Text a person copied back in and saved settles this way.
+- A state the task reached after the edit was set aside carried it, and the
+  board knows where `origin` stood when it was set aside. It knows when the
+  same reconciliation replayed some of the parked edits before the conflict:
+  the first replayed commit's parent is that point. A replay that stopped on
+  its first parked edit leaves nothing that says where `origin` stood, so then
+  only the current state counts, and an edit that was copied back and then
+  changed again is shown again. A state from before the edit was set aside
+  never counts, so an edit that restores a value `origin` held only earlier is
+  shown.
+- A `comment.add` counts as carried when the task has a comment, added after
+  the histories parted, by the same actor with the same body. The same text
+  from another actor does not count. Once the task has been compacted since,
+  nothing says which comments were added after the histories parted, and no
+  comment counts as carried this way: it is shown until dismissed.
+
+Dismissing is the way to clear anything else. Nothing new is recorded and no
+format changes: the answer is read from the parked refs, so it survives a
+restart and needs no record of its own. A board built without the reader shows
+nothing.
+
+The board keeps, in memory, one verdict per parked ref, keyed by the commit the
+ref names and the task tip it was judged against, and reuses its listing of
+parked refs for up to ten seconds while no task head changed and it moved no
+parked ref itself. A verdict that every
+later state settles too — all its operations replayed or compacted, or carried
+by a state after a known parking point — is kept across tip changes. So a
+listing reads only the parked refs that are new or whose task moved, in a
+fixed number of Git processes however many there are, and the first listing
+after a restart computes every verdict the same way, without waiting on
+anything else.
+
+A parked ref the board cannot read is skipped and hides nothing else: one
+whose commit is missing from the clone or is not a commit, one whose
+`operation.json` does not parse, one whose history shares no root with the
+task's, or one holding another task's commits. `workbook serve` writes
+`workbook serve: skipped parked ref <ref> (commit <commit>) of <task>, which
+cannot be shown as set-aside edits: <reason>` to standard error the first time
+it meets each one, and never prunes it.
+
+The poll's `presentation` carries, for a task with set-aside edits, a
+`setAside` array, oldest first, and leaves it out otherwise:
+
+```json
+"setAside": [
+  {
+    "parkedRef": "refs/workbook/reconciled/WB-01K…/0",
+    "parked": "<the commit the parked ref holds>",
+    "commit": "<the commit that recorded this edit>",
+    "actor": "alice@example.com",
+    "wallTime": "2026-11-21T14:03:00Z",
+    "operations": [
+      {"id": "01K…", "type": "field.set", "field": "description", "value": "…"}
+    ]
+  }
+]
+```
+
+`operations` are the edit's operations as `operation.json` records them. The
+board's card says how many edits are set aside, and the task page shows each
+one — who, when, the field and the value, drawn through the same cleaning as
+every other text — with a button to copy a description or comment and one to
+dismiss.
+
+`DELETE /api/tasks/<id>/set-aside` takes `{"parkedRef": …, "parked": …}` from
+an edit it was shown and deletes that parked ref, which removes every edit it
+holds. It deletes only while the ref still points at `parked`: a ref that moved
+is refused with `409` and category `stale-write`, one that is gone with `404`,
+and a ref outside `refs/workbook/reconciled/<id>/` with `400`. A dismissal that
+races another change to the same ref answers by what that change did, even
+when it lands between the check and the delete: `404` when the ref was
+deleted, such as by a second dismissal, and `409` when it was moved. It answers
+`{"format":"workbook.set-aside-dismissal","version":1,"taskId":…,"parkedRef":…}`
+and writes `workbook serve: <person> dismissed the set-aside edits of <task>
+held at <ref> (commit <commit>)` to the server's standard error; nothing is
+recorded in the repository. The commits stay in the object store until Git
+collects them. A parked ref holding a set-aside edit is never pruned by
+itself, so it stays until dismissed, or until a manual `workbook compact` or
+`workbook compact --adopt <id> --discard-local` in the serving checkout drops
+it, after writing it to the backup bundle unless told `--no-backup`.
+
+### Behind a sign-in proxy
+
+Two options let one board serve a team from behind a sign-in proxy such as
+Cloudflare Access. [Hosting the board](hosting.md) walks through a complete
+setup; this section is what the options do.
+
+```sh
+workbook serve --addr 127.0.0.1:7331 \
+  --public-url https://tasks.example.com \
+  --actor-header Cf-Access-Authenticated-User-Email
+```
+
+Each option can be set by an environment variable instead, for a service
+manager that sets a process's environment more easily than its arguments:
+`WORKBOOK_SERVE_PUBLIC_URL` and `WORKBOOK_SERVE_ACTOR_HEADER`. A flag given on
+the command line wins over its variable. A value that is set, by either, and
+unusable stops `serve` before it listens, with exit `2`, an invalid-invocation
+error naming the flag or variable, and a sentence saying what is accepted. A
+blank value is refused the same way rather than read as the option being off.
+With neither option and neither variable, `serve` behaves exactly as it did
+before the options existed, byte for byte.
+
+`--public-url <url>` is the address people open the board at. It must be an
+`https://` address such as `https://tasks.example.com`, or `http://` only for a
+host that names this machine (`localhost` or a loopback address), with no path
+beyond `/`, no query and no user name. The board then answers requests whose
+`Host` names the public address as well as those naming its own bind address,
+and no other host; an `Origin`, when sent, must name one or the other. The
+other two checks above apply unchanged. A browser at the public address is the
+board's own page, and a page on any other site is refused at both addresses.
+`serve` prints `Public address: <url>` after the board's own address.
+
+`--public-url` also makes the board *hosted*, and a hosted board keeps the
+server's own words out of what it answers:
+
+- An error whose words are the server's — an operational failure, which
+  carries the failing Git command and Git's output, and corrupt data, which
+  names the objects and files it could not read — is answered with
+  `The server could not finish this request. Its log has the detail under
+  reference <id>.` and a `reference` member in the error document beside the
+  message. The status code and category are unchanged. Every other refusal is
+  Workbook's own sentence about the request, such as a title that is too long
+  or a task that changed elsewhere, and is answered as it always is.
+- A warning whose words are the server's says what happened to the change
+  instead, with a reference: `auto-sync-incomplete` reads `The change was
+  recorded on the server, but publishing it to the shared repository did not
+  finish. The server's log has the detail under reference <id>.`, and
+  `projection-update-failed` and `docs-refresh-incomplete` read the same way
+  for the server's index of tasks and the generated guidelines.
+- The detail goes to `serve`'s standard error as one line,
+  `workbook serve: reference <id>: <detail>`, so whoever runs the server finds
+  it from the reference a person reports. The reference is twelve random
+  hexadecimal digits.
+- Every answer carries `Cache-Control: private, no-store`, refusals included,
+  so a task page, the task data or an attachment is never kept by a cache
+  between the proxy and the person or left on a shared machine's disk. The board has no separate static
+  files to cache: its styles and script are inside the page, which carries the
+  same header. That costs a page download on each navigation, which is small.
+  The page's own once-a-second poll still sends `If-None-Match` and is still
+  answered `304 Not Modified` when nothing changed, because the page sends that
+  header itself rather than relying on the browser's cache.
+
+`--actor-header <header>` names the request header the proxy sets to the
+signed-in person's email address, and each request then acts for that person:
+its edits are recorded under the name, its commits are authored by it, and the
+board's answers about which assignments are yours, which you may withdraw and
+which comments you may edit are answered for it. The header's name is matched
+without regard to case, as HTTP matches header names; its value is used exactly
+as sent, case included, and is held to the rule `WORKBOOK_ACTOR` is held to.
+That makes the name the proxy sends the name in history, so a person's proxy
+name must equal the `user.email` their own clone records, exactly and in the
+same case, for the board and their clone to agree that a comment or an
+assignment is theirs. `serve` prints `Each request's person: the <header>
+header`.
+
+With the header honored, a request must name exactly one person:
+
+- A request with no value, or an empty one, is refused `401` with category
+  `invalid-invocation` and `This board takes each person's name from the
+  <header> header its sign-in proxy sets, and this request came without one;
+  open the board through the sign-in proxy.` That includes reads and the page
+  itself. `GET /healthz` is the one exception, because a hosting platform calls
+  it directly rather than through the proxy, and it reads and changes nothing.
+- A header sent more than once, or one whose value carries a comma, is refused
+  `400` with category `validation`, `The <header> header was sent more than
+  once; it must name exactly one person.` or `… carries several values; …`. A
+  proxy that appended its value to one the visitor sent, rather than replacing
+  it, would otherwise let the visitor choose their name.
+- A value that is not a usable person — not an email address, one with a
+  `/label`, one with `<` or `>` — is refused `400` with category `validation`
+  and the reason, and is never recorded or replaced by another name.
+
+Each refusal is a `workbook.error` document, except that a browser opening a
+page (a path outside `/api/` whose `Accept` names `text/html`) is answered the
+same sentence as plain text, which is what a browser draws. Nothing refused is
+recorded.
+
+Without `--actor-header`, a request carrying such a header is treated like any
+other: every edit is recorded under the person `serve` was started as.
+
+`WORKBOOK_ACTOR` still governs what no request makes. With the header honored,
+each request's person is the header's, even when `WORKBOOK_ACTOR` is set, and a
+request without one is refused rather than given the variable's name. The
+background sync `serve` runs makes no edits of its own: it publishes and
+replays the edits people made, each under the name it was recorded under, so
+`WORKBOOK_ACTOR` names nobody in it either. `serve` still needs the checkout's
+`user.email` or `WORKBOOK_ACTOR` to start, as it always has.
+
+The board does not check that a request came through the proxy. Proxies have
+no common way to prove it, and this version does not verify the signed token
+Cloudflare Access sends. Whoever reaches the board's port directly can send the
+header and act as anyone, so it must be reachable only by the proxy: bind
+`127.0.0.1` with the proxy on the same machine. When the header is honored and
+the bind is not a loopback address, `serve` prints a warning to standard error
+naming the address. It does not stop the board, because a deployment may close
+the port by other means, such as a firewall, which `serve` cannot see.
+
 ### What anyone who can open the board can do and see
 
 The board has no roles. Whoever can open it — on a person's own machine, that
@@ -2934,11 +3202,13 @@ below, through the page or by calling the same routes directly. This list is
 the whole of it, so a team deciding whom to let in can read what they are
 granting.
 
-Every write is recorded under the serving checkout's `user.email`, whoever made
-it, and that address is shown in the page (the assignment control names it).
-`workbook serve` has no way to tell people apart, so nothing below is limited
-to the person who wrote something first, with the one exception noted for
-assignments.
+Without `--actor-header`, every write is recorded under the person `serve`
+was started as — the serving checkout's `user.email`, or `WORKBOOK_ACTOR` —
+whoever made it, and that address is shown in the page (the assignment control
+names it). With `--actor-header`, each write is recorded under the person the
+proxy named for that request, and the page names them instead. Either way the
+board has no roles, so nothing below is limited to the person who wrote
+something first, with the exceptions noted for comments and assignments.
 
 Read:
 
@@ -2965,19 +3235,25 @@ Write, all of it published to `origin` like any other change:
 - Delete any task and restore any deleted one (`DELETE /api/tasks/<id>`,
   `POST /api/tasks/<id>/restore`). Deleting records a tombstone; nothing is
   erased.
-- Add a comment, and edit or remove anyone's comment. An edited comment keeps
-  its original author and is marked as edited; the history records the edit
-  under the serving checkout's identity, not the original author's.
+- Add a comment, edit your own, and remove anyone's. An edit of somebody
+  else's comment is refused. Without `--actor-header` every comment is the
+  serving checkout's, so whoever opens the board may edit any comment written
+  there. A removed or edited comment's earlier text stays readable in the
+  task's history.
 - Attach files and links to any task, and remove anyone's attachment. Removing
   an attachment does not give back the space its file took.
 - Assign anyone to any task by email address, and withdraw any assignment that
-  names the serving checkout's identity or was recorded by it. An assignment
+  names the request's person or was recorded by them — the serving checkout's
+  identity, without `--actor-header`. An assignment
   somebody else recorded for somebody else is refused, as it is on the command
   line.
 - Add, rename, relabel, retag, reorder and remove statuses and priorities,
   record priority colors, add keys and change which is current or retired, and
   rename and recolor the project (the `/api/vocabulary` and `/api/display`
   routes). Removing a status or priority moves its tasks where the request says.
+- Dismiss the edits the board's sync set aside on any task (`DELETE
+  /api/tasks/<id>/set-aside`), which deletes the serving checkout's only copy
+  of them. Reading them is part of `GET /api/tasks`.
 - Switch the board between publishing inline and handing changes to a watcher
   (`PUT /api/sync`). The setting is the server's, so it changes what happens to
   everyone's next change.
@@ -2988,7 +3264,8 @@ What the board reveals about the machine serving it:
   header as `Repository: <name>`. The rest of the path is not shown, except
   inside an error message as described below.
 - The serving checkout's `user.email`, in the page and on every change it
-  records.
+  records, without `--actor-header`. With it, the page names the reader, and
+  the serving checkout's address appears only on what it records itself.
 - `origin`'s address: not shown by any route, but a change whose publication
   fails is answered with a warning carrying the failing Git command, its exit
   status and Git's message, and that message usually names `origin`'s full URL
@@ -3001,7 +3278,12 @@ What the board reveals about the machine serving it:
   one whose `origin` is a missing folder names that folder's path on the
   server. Task, status, priority, key and display changes all answer this way.
   An operational error carries the failing command and Git's own words in the
-  same way, which can include paths on the server.
+  same way, which can include paths on the server. A hosted board — one started
+  with `--public-url` — answers neither: it gives a short sentence and a
+  reference instead and writes the detail to its log, as
+  [Behind a sign-in proxy](#behind-a-sign-in-proxy) describes, so the server's
+  folder, `origin`'s address and Git's output reach only whoever can read that
+  log.
 - `origin`'s credential: the user name and password in a remote's address are
   removed. When a Git command fails and its error output contains an `@`,
   Workbook looks up the addresses Git is configured with — each
@@ -3028,11 +3310,11 @@ What the board reveals about the machine serving it:
   of the address where it can: a credential helper that prints nothing, or an
   SSH key, rather than a token in `origin`'s URL.
 
-Two limits a hosted board does not have yet, so whoever deploys one should know
-them: nothing bounds how many tasks, attachments or requests one person may
-send beyond the per-request and per-task ceilings above, so one person can fill
-the server's disk and `origin` and slow the board for everyone; and nothing
-records which person behind the proxy made a change.
+One limit a hosted board does not have yet, so whoever deploys one should know
+it: nothing bounds how many tasks, attachments or requests one person may send
+beyond the per-request and per-task ceilings above, so one person can fill the
+server's disk and `origin` and slow the board for everyone. Which person behind
+the proxy made a change is recorded when `--actor-header` is given.
 
 Drag a task card within a column to reorder it or into another of the
 project's status columns to change status and position together. Workbook keeps the task's priority

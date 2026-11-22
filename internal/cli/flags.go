@@ -728,9 +728,13 @@ var commandSchemas = map[string]commandMetadata{
 	},
 	"serve": {
 		Name:        "serve",
-		Synopsis:    "workbook serve [--addr <address>]",
-		Description: "Serve the local web board.\n\nThe default address is a preference, not a requirement: when 127.0.0.1:7331 is\nalready taken, by another project's board on the same machine for instance,\nserve says so, binds a free port instead, and prints the address it chose. An\naddress given with --addr is a contract and fails rather than moving.\n\nA name given with --addr binds the address it resolves to, and the board pins\nits Host header to that address rather than to the name. Open the board at the\naddress serve prints; a request naming the host instead is refused.",
-		Options:     []optionMetadata{{Name: "addr", Kind: stringFlag, Value: "<address>", Description: "listener address (default 127.0.0.1:7331, or a free port when that one is taken)"}},
+		Synopsis:    "workbook serve [--addr <address>] [--public-url <url>] [--actor-header <header>]",
+		Description: "Serve the local web board.\n\nThe default address is a preference, not a requirement: when 127.0.0.1:7331 is\nalready taken, by another project's board on the same machine for instance,\nserve says so, binds a free port instead, and prints the address it chose. An\naddress given with --addr is a contract and fails rather than moving.\n\nA name given with --addr binds the address it resolves to, and the board pins\nits Host header to that address rather than to the name. Open the board at the\naddress serve prints; a request naming the host instead is refused.\n\nBehind a sign-in proxy, --public-url names the https address people open the\nboard at, and --actor-header names the request header the proxy puts each\nsigned-in person's email address in. With the header on, a request that\ncarries no name is refused, and the board must be reachable only through the\nproxy. WORKBOOK_SERVE_PUBLIC_URL and WORKBOOK_SERVE_ACTOR_HEADER set the same\ntwo options; a flag wins over its variable. See docs/hosting.md.",
+		Options: []optionMetadata{
+			{Name: "addr", Kind: stringFlag, Value: "<address>", Description: "listener address (default 127.0.0.1:7331, or a free port when that one is taken)"},
+			{Name: "public-url", Kind: stringFlag, Value: "<url>", Description: "the https address people open the board at, behind a sign-in proxy"},
+			{Name: "actor-header", Kind: stringFlag, Value: "<header>", Description: "the request header the sign-in proxy names each person in"},
+		},
 	},
 	"fetch": {
 		Name:        "fetch",

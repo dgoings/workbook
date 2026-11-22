@@ -73,7 +73,25 @@ func newBoardServer(handler http.Handler) *http.Server {
 // answer, and whatever is still going after that is dropped too and reported as
 // a clean exit, because being told to stop is not a failure to serve.
 func Serve(ctx context.Context, listener net.Listener, handler http.Handler) error {
-	server := newBoardServer(GuardSameOrigin(handler, listener.Addr().String()))
+	return ServeWith(ctx, listener, handler, ServeOptions{})
+}
+
+// ServeOptions is what a board served behind a proxy adds to Serve.
+type ServeOptions struct {
+	// Public is the address people open the board at, when a proxy in front
+	// of it answers somewhere other than the listener. The same-origin guard
+	// then accepts it beside the bound address; see GuardSameOriginAt.
+	Public *PublicAddress
+}
+
+// ServeWith is Serve for a board that may also be opened at a public address.
+// The zero ServeOptions is Serve exactly.
+func ServeWith(ctx context.Context, listener net.Listener, handler http.Handler, options ServeOptions) error {
+	served := GuardSameOriginAt(handler, listener.Addr().String(), options.Public)
+	if options.Public != nil {
+		served = answerPrivately(served)
+	}
+	server := newBoardServer(served)
 	awaited := &awaitedConnections{}
 	server.ConnState = awaited.track
 	result := make(chan error, 1)

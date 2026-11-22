@@ -175,6 +175,7 @@ func (r *Repository) CompactTaskRef(ctx context.Context, config core.ProjectConf
 	if err := r.commitTaskRefUpdate(ctx, ref, checkpoint, expected, names, "compact"); err != nil {
 		return err
 	}
+	r.forgetVerdicts(names)
 	return r.ExpireTaskReflog(ctx, taskID)
 }
 

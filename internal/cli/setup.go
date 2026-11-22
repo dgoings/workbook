@@ -424,7 +424,7 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	fmt.Fprintf(stdout, "Tasks:\t%d\n", result.TaskCount)
 	if result.TasksOnly != nil {
 		if result.TasksOnly.Actor == "" {
-			fmt.Fprintf(stdout, "Author:\tnone configured\t(set one with `git config user.email <address>` in this folder before editing tasks)\n")
+			fmt.Fprintf(stdout, "Author:\tnone configured\t(set one with `git config user.email <address>` in this folder, or name the person each command acts for with WORKBOOK_ACTOR, before editing tasks)\n")
 		} else {
 			fmt.Fprintf(stdout, "Author:\t%s\n", result.TasksOnly.Actor)
 		}

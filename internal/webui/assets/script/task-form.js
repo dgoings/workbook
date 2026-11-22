@@ -797,7 +797,16 @@
         // the form takes whatever the header leaves — however many lines the
         // title wraps to — and the Save row stays on the screen.
         const screen = document.createElement("div"); screen.className = "task-route__screen";
-        screen.append(header, form);
+        // The edits the server's sync set aside sit between the heading and
+        // the form, where nobody opening the task can miss them. A page with
+        // none draws nothing there.
+        const setAside = isNew ? null : setAsideNotice(task.id);
+        if (setAside) {
+          screen.append(header, setAside.region, form);
+          setAside.follow(latestPresentation.get(task.id));
+        } else {
+          screen.append(header, form);
+        }
         section.append(screen);
         if (!isNew) {
           section.className = "task-route task-route--history";
@@ -831,7 +840,7 @@
             // elsewhere therefore appears here within a poll tick — and, like
             // every other panel on this page, it moves nothing the form above it
             // is holding, because no field on that form follows the poll at all.
-            follow: (held, view) => { attachments.follow(held); comments.follow(held, view); adoptDescriptionAttachments(held); assignments.follow(view); },
+            follow: (held, view) => { attachments.follow(held); comments.follow(held, view); adoptDescriptionAttachments(held); assignments.follow(view); setAside.follow(view); },
             firstAssignmentRetry: () => assignments.firstDraftRetry()
           };
           // Attachments and assignments stand in the sidebar, as they do on a

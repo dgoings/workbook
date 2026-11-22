@@ -529,9 +529,8 @@ func TestServeRecordsEachConcurrentRequestUnderItsOwnPerson(t *testing.T) {
 	gitOutput(t, repository, "config", "user.email", "server@example.test")
 	people := []string{"alice@example.com", "bob@example.com"}
 
-	ctx, cancel := context.WithCancel(withRequestActor(context.Background(), func(request *http.Request) (string, bool) {
-		person := request.Header.Get(testActorHeader)
-		return person, person != ""
+	ctx, cancel := context.WithCancel(withRequestActor(context.Background(), func(request *http.Request) (string, error) {
+		return request.Header.Get(testActorHeader), nil
 	}))
 	reserved := reserveListener(t)
 	result := make(chan error, 1)

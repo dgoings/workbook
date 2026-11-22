@@ -4013,7 +4013,7 @@ func TestHandlerClientBoardSurfacesUnknownStatuses(t *testing.T) {
 		Format:       "workbook.tasks",
 		Version:      1,
 		Tasks:        tasks,
-		Presentation: taskPresentation(tasks, core.LegacyVocabulary(), "", ""),
+		Presentation: taskPresentation(tasks, core.LegacyVocabulary(), "", "", nil),
 	}
 	documentJSON, err := json.Marshal(document)
 	if err != nil {
@@ -4125,7 +4125,7 @@ func TestHandlerClientDragsOnlyOutOfRenderedColumns(t *testing.T) {
 		Format:       "workbook.tasks",
 		Version:      1,
 		Tasks:        tasks,
-		Presentation: taskPresentation(tasks, core.LegacyVocabulary(), "", ""),
+		Presentation: taskPresentation(tasks, core.LegacyVocabulary(), "", "", nil),
 	})
 	if err != nil {
 		t.Fatal(err)

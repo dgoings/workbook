@@ -59,6 +59,85 @@ whose save lands after the reader typed more stays open with what they typed
 instead of leaving for the board without it, and the line beside Save that says
 a save is held is set in the board's pending color rather than its error color.
 
+`workbook serve` can now run behind a sign-in proxy for a team.
+`--public-url <url>` names the address people open the board at, and the board
+accepts it beside its own bind address while still refusing every other site.
+`--actor-header <header>` names the header the proxy sets to the signed-in
+person's email address, and each request acts for that person: their edits,
+comments and assignments are recorded under their own name, and the board
+answers which comments and assignments are theirs. A request without exactly
+one usable name is refused, `401` or `400`, and never recorded under anybody
+else's. Both options can be set by `WORKBOOK_SERVE_PUBLIC_URL` and
+`WORKBOOK_SERVE_ACTOR_HEADER`. A board given a public address keeps Git's
+output, the server's folder and the remote's address out of its answers,
+giving a short sentence and a reference whose detail is in the server's log,
+and marks every answer `Cache-Control: private, no-store`. With neither option
+the board behaves exactly as before. The new [hosting guide](docs/hosting.md)
+sets one up with Cloudflare Tunnel and Cloudflare Access, and says plainly
+what it trusts: the board takes the proxy's header on its word, so only the
+proxy may reach its port.
+
+The board now shows the edits its own sync sets aside. When its background
+sync replays the board's unpublished edits onto a task that changed on `origin`
+and meets a conflict, it keeps `origin`'s side and parks the old local tip
+under `refs/workbook/reconciled/`, as `workbook sync` always has; until now
+that was reported only on the server's terminal, so the people using a hosted
+board never learned their edit had not been kept. The board reads the parked
+refs on every listing and shows each edit they hold that the task lacks: the
+card says "1 edit set aside", and the task's page shows who made each one,
+when, the field and the text, with buttons to copy the text and to dismiss.
+An edit stops showing once the task carries it again, such as when somebody
+copies the text back and saves, when its author posts a set-aside comment
+again, or when anybody dismisses it, which deletes that parked ref. The
+[reference](docs/reference.md#edits-the-boards-sync-set-aside) lists exactly
+what settles an edit; Dismiss clears anything else. Nothing new is recorded
+and no format changes, so it survives a restart and needs no migration. The
+command line still has no way to list or dismiss parked edits.
+
+A parked ref that holds an edit the task lacks is no longer pruned. Workbook
+used to keep the three newest parked refs per task and retire the rest, and
+every reconciliation parks one, so a task synchronized a few more times lost
+its unrecovered edit without a word. Now only settled parked refs are retired
+beyond the three newest, and adopting another clone's compaction keeps the
+unsettled ones too. Only Dismiss, or a manual `workbook compact` that bundles
+them first, removes them. A parked ref the board cannot read is skipped,
+named once in the server's log with the reason, and hides nothing else.
+Listing no longer slows as parked refs accumulate: with 2,000 tasks, a repeat
+listing takes about as long with 2,000 parked refs as with none, and the first
+listing after a restart adds about half a second on an idle machine.
+
+For a board started with no options, exactly this changes:
+
+- Its cards and task pages show the notice above for any parked tip in the
+  serving checkout that holds edits the task lacks, including tips left by
+  `workbook sync` in that checkout, and by earlier versions, before the
+  upgrade.
+- `GET /api/tasks` carries a `setAside` array in a task's `presentation` when
+  it has such edits, and leaves it out otherwise.
+- `DELETE /api/tasks/<id>/set-aside` dismisses them, and its use is written to
+  standard error.
+- The background sync writes `workbook: background sync failed: <Git's
+  message>` to standard error when a round fails, again only when the message
+  changes, and `workbook: background sync is working again` when one succeeds.
+  It used to write nothing. `workbook sync --watch` writes the same lines.
+- A request carrying more than one `Origin` header is refused with `403`. No
+  browser sends one.
+
+A push Git refuses without naming a ref, such as one to a remote that cannot be
+reached, now reports Git's own message, credentials removed, on every surface,
+where it used to report `Git returned 0 push outcomes, want 1`. A push `origin`
+refuses for some task refs, such as one a server hook declines, now names up to
+three of them with Git's reason for each, as in `1 task ref(s) were rejected
+by origin: WB-01K… [remote rejected] (hook declined)`, where it used to give
+only the count. This is the message of the `workbook push` and `workbook sync`
+error, so a script matching the whole old text must match its start instead. `--public-url`
+now refuses a host a browser could not send, such as `*.example.com` or one
+with an underscore, and a port with a leading zero.
+
+Synchronization no longer stops on a commit another tool wrote with an
+identity Git will not write again, such as an empty name. The replay takes the
+commit's email as its name, or `unknown`, so the task still synchronizes.
+
 Workbook no longer repeats the user name and password of a remote's address.
 Git leaves them in some failure messages, such as the one for a remote that
 answers a push with something other than Git, and in every message naming an

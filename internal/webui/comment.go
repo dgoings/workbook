@@ -47,7 +47,7 @@ func (handler *handler) writeCommentMutation(writer http.ResponseWriter, request
 		Format:           "workbook.task-mutation",
 		Version:          1,
 		Task:             result.Task,
-		Warnings:         result.Warnings,
+		Warnings:         handler.disclosed(result.Warnings),
 		EditableComments: &editable,
 	})
 }

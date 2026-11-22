@@ -139,6 +139,16 @@ func TestCredentialRedactorRemovesConfiguredCredentialsByTheirText(t *testing.T)
 			want:    "fatal: unable to access 'http://127.0.0.1:7493/team/repo.git/': URL rejected: Port number was not a decimal number",
 		},
 		{
+			// Git drops the password and prints the user name alone as the
+			// address's userinfo. A quote in the user name is a userinfo the
+			// pattern cannot see the end of, so only its configured text
+			// removes it.
+			name:    "a user name holding an apostrophe, printed without its password",
+			address: "http://o'brien:SECRETPASSWORD@127.0.0.1:7493/team/repo.git",
+			input:   "fatal: unable to access 'http://o'brien@127.0.0.1:7493/team/repo.git/': The requested URL returned error: 401",
+			want:    "fatal: unable to access 'http://127.0.0.1:7493/team/repo.git/': The requested URL returned error: 401",
+		},
+		{
 			name:    "a password holding an @, as Git anonymizes it",
 			address: "http://reviewer:p@ss'SECRETG@127.0.0.1:7493/team/repo.git",
 			input:   "fatal: unable to access 'http://ss'SECRETG@127.0.0.1:7493/team/repo.git/': URL rejected: Bad hostname",

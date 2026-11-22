@@ -64,9 +64,10 @@ type Options struct {
 	Interval   time.Duration
 	Quiet      time.Duration
 	Shutdown   time.Duration
-	// Stderr carries the readiness line and conflict reports. A watcher is a
-	// foreground process, and its terminal is the only channel by which a
-	// person learns about a conflict nobody was present for.
+	// Stderr carries the readiness line, conflict reports and failed
+	// synchronizations. A watcher is a foreground process, and its terminal is
+	// the only channel by which a person learns about a conflict or a failure
+	// nobody was present for.
 	Stderr io.Writer
 	Now    func() time.Time
 
@@ -97,6 +98,9 @@ type loop struct {
 	snapshot  atomic.Pointer[Status]
 	nudges    chan struct{}
 	started   time.Time
+	// reported is the failure last written to Stderr, empty while the last
+	// synchronization succeeded. Only the synchronizing goroutine touches it.
+	reported string
 }
 
 func newLoop(options Options) (*loop, error) {
@@ -272,10 +276,30 @@ func (l *loop) syncOnce(ctx context.Context) {
 	}
 
 	if failure != nil {
+		l.reportFailure(failure.Error())
 		l.publish(false, failure.Error(), ignored)
 		return
 	}
+	l.reportFailure("")
 	l.publish(true, "", ignored)
+}
+
+// reportFailure writes a failed synchronization to the watcher's terminal when
+// it differs from the one last written, and says so once when synchronizing
+// works again. A board's terminal is its server's log, and nobody watching a
+// hosted board sees anything else of a failure with no request behind it.
+// Repeating an unchanged failure on every tick would bury everything else the
+// log says, so it is written once.
+func (l *loop) reportFailure(message string) {
+	if message == l.reported {
+		return
+	}
+	if message == "" {
+		fmt.Fprintln(l.options.Stderr, "workbook: background sync is working again")
+	} else {
+		fmt.Fprintf(l.options.Stderr, "workbook: background sync failed: %s\n", message)
+	}
+	l.reported = message
 }
 
 // recordConflicts remembers each conflict against the task's current tip and
