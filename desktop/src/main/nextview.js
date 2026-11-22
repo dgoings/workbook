@@ -29,7 +29,12 @@ function shapeTask (task) {
     assignees: Array.isArray(task.assignments)
       ? task.assignments.map((assignment) => String(assignment?.principal ?? '')).filter(Boolean)
       : [],
-    updatedAt: String(task.updatedAt ?? '')
+    updatedAt: String(task.updatedAt ?? ''),
+    // The due date and what it means today, as the CLI judged it: the CLI runs
+    // on this machine, so its today is the reader's, and which statuses are
+    // finished is its question to answer, not this view's.
+    due: typeof task.due === 'string' ? task.due : '',
+    dueState: task.overdue === true ? 'overdue' : task.dueSoon === true ? 'due-soon' : ''
   }
 }
 

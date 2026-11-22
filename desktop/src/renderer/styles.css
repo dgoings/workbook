@@ -1278,6 +1278,10 @@ button.ghost.inline { width: auto; }
 .next-row__age { display: flex; }
 /* .label ellipsizes; here the span inside does, below. */
 .next-row__assignee { color: var(--wb-primary); text-overflow: clip; }
+/* A due date: the word inside it is the mark, and the ink repeats it. */
+.next-row__due { white-space: nowrap; }
+.next-row__due--overdue { color: var(--wb-danger); border-color: var(--wb-danger); background: var(--wb-danger-surface); }
+.next-row__due--soon { color: var(--wb-warn); border-color: var(--wb-warn-edge); background: var(--wb-warn-surface); }
 
 /* The sidebar's rule, "One node under the pointer", for the Next view's
    tooltips: the heading's status, a failed footer's whole error, and each
