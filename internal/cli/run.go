@@ -654,6 +654,7 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	status := flags.String("status", "", "task status")
 	priority := flags.String("priority", "", "task priority")
 	key := flags.String("key", "", "mint the task under this key")
+	due := flags.String("due", "", "due date: YYYY-MM-DD, today, tomorrow, or +Nd")
 	var labels stringListValue
 	flags.Var(&labels, "label", "task label")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with the tasks remote (origin unless configured)")
@@ -664,6 +665,13 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io
 
 	if strings.TrimSpace(title) == "" {
 		return core.Errorf(core.CategoryValidation, "title is required")
+	}
+	// Resolved before anything is opened, against the day the change is
+	// recorded on — today, or WORKBOOK_NOW's day when a migration sets it: the
+	// operation records only the absolute date, and the confirmation names it.
+	dueDate, changes, err := createDue(flags, *due)
+	if err != nil {
+		return err
 	}
 	session, err := openTaskSession(ctx, cwd, *noSync, true, stderr)
 	if err != nil {
@@ -678,9 +686,34 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io
 			Priority:    core.Priority(*priority),
 			Labels:      labels.values,
 			Key:         namedProjectKey(*key),
+			Due:         dueDate,
 		})
 	})
-	return writeMutationOutcome(stdout, stderr, "create", session, result, err, *jsonMode)
+	return writeThreadMutationOutcome(stdout, stderr, "create", session, result, err, *jsonMode, changes)
+}
+
+// createDue resolves create's --due, when it was given, and the line the
+// confirmation reports it with.
+func createDue(flags *commandFlagSet, value string) (string, []core.FieldChange, error) {
+	if !flagGiven(flags, "due") {
+		return "", nil, nil
+	}
+	resolved, err := core.ResolveDueDate(value, recordedNow())
+	if err != nil {
+		return "", nil, err
+	}
+	return resolved, []core.FieldChange{{Field: "due", Kind: core.ChangeSet, To: resolved}}, nil
+}
+
+// flagGiven reports whether a flag was given at all, empty value included.
+func flagGiven(flags *commandFlagSet, name string) bool {
+	given := false
+	flags.Visit(func(visited *flag.Flag) {
+		if visited.Name == name {
+			given = true
+		}
+	})
+	return given
 }
 
 func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
@@ -691,6 +724,9 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	label := flags.String("label", "", "task label")
 	find := flags.String("find", "", "only tasks whose title or description contains every word, or whose ID one starts")
 	all := flags.Bool("all", false, "include tombstoned tasks")
+	overdue := flags.Bool("overdue", false, "only overdue tasks")
+	dueBefore := flags.String("due-before", "", "only tasks due before this date")
+	order := flags.String("sort", "", "order the list: due")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -715,7 +751,21 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		return err
 	}
 	defer releaseProjection()
-	filter := core.ListFilter{Label: *label, Find: *find, All: *all, Key: namedProjectKey(*key)}
+	filter := core.ListFilter{Label: *label, Find: *find, All: *all, Key: namedProjectKey(*key),
+		Overdue: *overdue, Sort: core.ListSort(*order)}
+	if flagGiven(flags, "sort") && filter.Sort == core.ListSortBoard {
+		return core.Errorf(core.CategoryInvocation, "list --sort needs an order: due")
+	}
+	// --due-before takes every form --due does, resolved against this
+	// machine's real today, as overdue is, so `--due-before +7d` is the coming
+	// week. It is a reading, so WORKBOOK_NOW does not move it.
+	if flagGiven(flags, "due-before") {
+		resolved, err := core.ResolveDueDate(*dueBefore, time.Now())
+		if err != nil {
+			return err
+		}
+		filter.DueBefore = resolved
+	}
 	if *status != "" {
 		value := core.Status(*status)
 		filter.Status = &value
@@ -908,6 +958,8 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	var labels stringListValue
 	flags.Var(&labels, "label", "replacement task label")
 	clearLabels := flags.Bool("clear-labels", false, "replace labels with an empty set")
+	due := flags.String("due", "", "due date: YYYY-MM-DD, today, tomorrow, or +Nd")
+	clearDue := flags.Bool("clear-due", false, "remove the due date")
 	thread := registerThreadFlags(flags)
 	var assign stringListValue
 	flags.Var(&assign, "assign", "assign to self, an email, or either with /label")
@@ -921,6 +973,10 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	}
 	if labels.set && *clearLabels {
 		return core.Errorf(core.CategoryInvocation, "cannot use --label with --clear-labels")
+	}
+	dueGiven := flagGiven(flags, "due")
+	if dueGiven && *clearDue {
+		return core.Errorf(core.CategoryInvocation, "cannot use --due with --clear-due")
 	}
 	request, err := thread.read(flags)
 	if err != nil {
@@ -952,6 +1008,19 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 		empty := []string{}
 		input.Labels = &empty
 	}
+	// Resolved before the repository is opened, against the day the change is
+	// recorded on, as create's is, so the operation records only an absolute
+	// date.
+	if dueGiven {
+		resolved, err := core.ResolveDueDate(*due, recordedNow())
+		if err != nil {
+			return err
+		}
+		input.Due = &resolved
+	} else if *clearDue {
+		cleared := ""
+		input.Due = &cleared
+	}
 
 	session, err := openTaskSession(ctx, cwd, *noSync, true, stderr)
 	if err != nil {
@@ -982,6 +1051,17 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 		changes = described
 		input.Comments = resolved.comments
 		input.Attachments = resolved.attachments
+		// The confirmation names the date the update resolved to, and what it
+		// replaced, the way the change log will.
+		if input.Due != nil {
+			before, err := session.service.Show(ctx, id)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			if before.Due != *input.Due {
+				changes = append(changes, core.FieldChange{Field: "due", Kind: core.ChangeSet, From: before.Due, To: *input.Due})
+			}
+		}
 		return session.service.UpdateMutation(ctx, id, input)
 	})
 	if err != nil {

@@ -20,26 +20,65 @@ func RenderList(w io.Writer, tasks []core.Task, width int) error {
 	idWidth := len("ID")
 	statusWidth := len("STATUS")
 	priorityWidth := len("PRIORITY")
-	for _, task := range tasks {
+	// The DUE column is drawn only when some listed task has a due date, so a
+	// project that never uses them reads exactly the table it always has.
+	dueWidth := 0
+	dues := make([]string, len(tasks))
+	for index, task := range tasks {
 		idWidth = max(idWidth, len(task.ID))
 		statusWidth = max(statusWidth, len(task.Status))
 		priorityWidth = max(priorityWidth, len(task.Priority))
+		dues[index] = DueCell(task)
+		if dues[index] != "" {
+			dueWidth = max(dueWidth, len("DUE"), len(dues[index]))
+		}
 	}
 
-	humanWidth := max(3, (width-idWidth-statusWidth-priorityWidth-8)/2)
+	dueColumns := 0
+	if dueWidth > 0 {
+		dueColumns = dueWidth + 2
+	}
+	humanWidth := max(3, (width-idWidth-statusWidth-priorityWidth-dueColumns-8)/2)
 	var output strings.Builder
-	writeListRow(&output, idWidth, humanWidth, statusWidth, priorityWidth, "ID", "TITLE", "STATUS", "PRIORITY", "LABELS")
-	for _, task := range tasks {
-		writeListRow(&output, idWidth, humanWidth, statusWidth, priorityWidth,
+	writeListRow(&output, idWidth, humanWidth, statusWidth, priorityWidth, dueWidth, "ID", "TITLE", "STATUS", "PRIORITY", "DUE", "LABELS")
+	for index, task := range tasks {
+		writeListRow(&output, idWidth, humanWidth, statusWidth, priorityWidth, dueWidth,
 			task.ID,
 			fit(core.DisplayLine(task.Title), humanWidth),
 			string(task.Status),
 			string(task.Priority),
+			dues[index],
 			fit(core.DisplayLine(strings.Join(task.Labels, ",")), humanWidth),
 		)
 	}
 	_, err := io.WriteString(w, output.String())
 	return err
+}
+
+// DueCell is a task's due date as one line of text: the date, followed by the
+// word for what it means to this reader today when that is anything. The word
+// is the whole marking — a terminal table has no color to lean on, and the
+// mark must read the same whether or not one is drawn.
+func DueCell(task core.Task) string {
+	if task.Due == "" {
+		return ""
+	}
+	if word := DueWord(task.DueState()); word != "" {
+		return task.Due + " " + word
+	}
+	return task.Due
+}
+
+// DueWord is the word a due state is marked with wherever Workbook prints one.
+func DueWord(state core.DueState) string {
+	switch state {
+	case core.DueStateOverdue:
+		return "overdue"
+	case core.DueStateSoon:
+		return "due soon"
+	default:
+		return ""
+	}
 }
 
 // StatusRow is one line of the status table: a project's status as `workbook
@@ -314,7 +353,7 @@ func renderNarrowBoard(w io.Writer, board presentation.Board, width int) error {
 	return err
 }
 
-func writeListRow(output *strings.Builder, idWidth, titleWidth, statusWidth, priorityWidth int, id, title, status, priority, labels string) {
+func writeListRow(output *strings.Builder, idWidth, titleWidth, statusWidth, priorityWidth, dueWidth int, id, title, status, priority, due, labels string) {
 	output.WriteString(pad(id, idWidth))
 	output.WriteString("  ")
 	output.WriteString(pad(title, titleWidth))
@@ -323,6 +362,10 @@ func writeListRow(output *strings.Builder, idWidth, titleWidth, statusWidth, pri
 	output.WriteString("  ")
 	output.WriteString(pad(priority, priorityWidth))
 	output.WriteString("  ")
+	if dueWidth > 0 {
+		output.WriteString(pad(due, dueWidth))
+		output.WriteString("  ")
+	}
 	output.WriteString(labels)
 	output.WriteByte('\n')
 }

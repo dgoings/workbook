@@ -603,14 +603,18 @@ var commandSchemas = map[string]commandMetadata{
 		},
 	},
 	"create": {
-		Name:        "create",
-		Synopsis:    "workbook create <title> [options]",
-		Description: "Create a task.",
+		Name:     "create",
+		Synopsis: "workbook create <title> [options]",
+		Description: "Create a task.\n\n" +
+			"--due takes a date as YYYY-MM-DD, or today, tomorrow, or +Nd for N days\n" +
+			"from today on this machine. A relative date is resolved when the command\n" +
+			"runs, the task records the date it resolved to, and the output names it.",
 		Positionals: []string{"<title>"},
 		Options: []optionMetadata{
 			{Name: "description", Kind: stringFlag, Value: "<text>", Description: "task description"},
 			{Name: "status", Kind: stringFlag, Value: "<status>", Description: "task status"},
 			{Name: "priority", Kind: stringFlag, Value: "<priority>", Description: "task priority"},
+			{Name: "due", Kind: stringFlag, Value: "<date>", Description: "due date: YYYY-MM-DD, today, tomorrow, or +Nd"},
 			{Name: "key", Kind: stringFlag, Value: "<key>", Description: "mint the task under this key (default: the current key)"},
 			{Name: "label", Kind: stringFlag, Value: "<label>", Description: "task label"},
 			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with the tasks remote (origin unless configured)"},
@@ -618,9 +622,14 @@ var commandSchemas = map[string]commandMetadata{
 		},
 	},
 	"list": {
-		Name:        "list",
-		Synopsis:    "workbook list [options]",
-		Description: "List tasks.",
+		Name:     "list",
+		Synopsis: "workbook list [options]",
+		Description: "List tasks.\n\n" +
+			"A task is overdue when its due date is before today on this machine, and due\n" +
+			"soon when it is due today or within the next 3 days. A task in a status\n" +
+			"tagged done, or deleted, is neither. --due-before takes the forms create's\n" +
+			"--due does and keeps tasks due strictly before that date. --sort due lists\n" +
+			"the earliest due date first and tasks with no due date last.",
 		Options: []optionMetadata{
 			{Name: "status", Kind: stringFlag, Value: "<status>", Description: "task status"},
 			{Name: "priority", Kind: stringFlag, Value: "<priority>", Description: "task priority"},
@@ -628,6 +637,9 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "label", Kind: stringFlag, Value: "<label>", Description: "task label"},
 			{Name: "find", Kind: stringFlag, Value: "<text>", Description: "only tasks whose title or description contains every word, or whose ID one starts"},
 			{Name: "all", Kind: boolFlag, Description: "include tombstoned tasks"},
+			{Name: "overdue", Kind: boolFlag, Description: "only tasks past their due date and not done"},
+			{Name: "due-before", Kind: stringFlag, Value: "<date>", Description: "only tasks due before this date"},
+			{Name: "sort", Kind: stringFlag, Value: "<order>", Description: "order the list: due"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
@@ -688,7 +700,9 @@ var commandSchemas = map[string]commandMetadata{
 			"only by the person it names or the person who recorded it.\n\n" +
 			"--assign exits 10 and records nothing when somebody else holds the task\n" +
 			"and you do not; --force records yours beside theirs instead. Assigning\n" +
-			"yourself something your identity already holds changes nothing and says so.",
+			"yourself something your identity already holds changes nothing and says so.\n\n" +
+			"--due takes the forms create's does and replaces the due date; --clear-due\n" +
+			"removes it.",
 		Positionals: []string{"<id-or-prefix>"},
 		Options: []optionMetadata{
 			{Name: "title", Kind: stringFlag, Value: "<title>", Description: "task title"},
@@ -697,6 +711,8 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "priority", Kind: stringFlag, Value: "<priority>", Description: "task priority"},
 			{Name: "label", Kind: stringFlag, Value: "<label>", Description: "replacement task label"},
 			{Name: "clear-labels", Kind: boolFlag, Description: "replace labels with an empty set"},
+			{Name: "due", Kind: stringFlag, Value: "<date>", Description: "due date: YYYY-MM-DD, today, tomorrow, or +Nd"},
+			{Name: "clear-due", Kind: boolFlag, Description: "remove the due date"},
 			{Name: "comment", Kind: stringFlag, Value: "<body>", Description: "comment to add, or the new body with --edit-comment"},
 			{Name: "edit-comment", Kind: stringFlag, Value: "<id-or-prefix>", Description: "replace this comment's body with --comment"},
 			{Name: "remove-comment", Kind: stringFlag, Value: "<id-or-prefix>", Description: "remove this comment"},
