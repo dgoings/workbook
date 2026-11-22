@@ -307,13 +307,21 @@ before anyone runs it; see Compatibility across versions below.
   loses the race to the task's ref is still refused as `stale-write`, exactly
   as before. The few bounded waits on the cache that can still run out — the
   cache locked by another process past its five-second timeout, a cache file
-  another process replaced during each of three attempts, task refs that kept
-  changing through both attempts of a rebuild — now answer `stale-write`
+  another process replaced during each of three attempts, or again each time
+  it was recovered — now answer `stale-write`
   (exit `6`, `409` on the board) with "try again" instead of `500` with
   rebuild advice, because nothing was written and the same request is the
   right next step. A write that succeeded no longer carries a warning to run
   `workbook rebuild` when another write to the same task landed beside it.
   `workbook rebuild` is still advised when the cache itself cannot be read.
+- **`workbook rebuild`, and the rebuild a command runs when it finds no
+  cache, no longer refuse while tasks are being written.** A rebuild whose task
+  refs moved during both of its builds used to exit `6` without installing
+  anything, which also failed the read that had needed the cache, so several
+  commands started at once in a fresh clone could refuse each other. The
+  second build is now installed, and the next read brings it up to the refs. A
+  rebuild that finds another process has already installed a usable cache
+  opens that cache instead of replacing it.
 
 ### Compatibility across versions
 

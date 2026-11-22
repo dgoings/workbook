@@ -524,8 +524,8 @@ tip the task has moved past all surface as `stale-write` rather than as silent
 overwriting. So do the three bounded waits on the shared SQLite cache, when
 another process outlasts them: the cache locked past its five-second busy
 timeout, the cache file replaced by another process during each of three
-attempts at one write, and task refs that kept changing through both attempts
-of a rebuild. A read that finds the cache updated by somebody else at the same
+attempts at one write, and the cache replaced by another process again each
+time it was recovered, three rounds running. A read that finds the cache updated by somebody else at the same
 moment is not among them and is never refused; see
 [Simultaneous requests](#simultaneous-requests).
 
@@ -2955,8 +2955,8 @@ None of that is a reason to refuse a request:
 - A bounded wait that runs out is answered `409` `stale-write` too, with
   "try again" in its message: the cache locked by another process past the
   five-second busy timeout, the cache file replaced by another process during
-  each of three attempts at one write, or task refs that kept changing through
-  both attempts of a rebuild. Nothing was written, and the identical request is
+  each of three attempts at one write, or replaced again each time it was
+  recovered, three rounds running. Nothing was written, and the identical request is
   the right thing to send next. Each wait has a fixed number of attempts or a
   fixed time, so a request under sustained load still gets an answer.
 

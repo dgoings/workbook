@@ -695,9 +695,15 @@ Before normal task reads (`list`, `show`, `board`, `next`, and web `GET
 refreshes changed checkpoints. Create, update, and other mutations continue to
 write Git operations directly. Run `workbook rebuild` to explicitly recreate the
 cache; it builds a temporary database, checks task heads again, retries once if
-they changed during the build, and atomically installs a stable result. If they
-changed during the retry too, it exits `6` (`stale-write`) without installing
-anything, and running it again is the remedy. With
+they changed during the build, and atomically installs the result. If they
+changed during the retry too, the retry's build is installed anyway: it is
+every task as its ref was listed, which is what any cache is once somebody
+writes a task, and the next read brings it up to the refs. A rebuild that finds
+another process installed a usable cache while it was building opens that cache
+and discards its own, so processes that all found no cache at once, such as a
+fresh clone's first commands, stop replacing each other's. The same rebuild
+runs, without being asked, whenever a command finds the cache missing, from
+another Workbook version, or for another project. With
 `--json`, the normal result envelope contains `taskCount` and `cachePath`.
 
 An `operations` table alongside the task tables materializes each task's recorded
@@ -749,8 +755,10 @@ row is not stale on that write's account.
 Concurrency limits that remain are bounded and answered as `stale-write`, which
 means nothing was written and the identical request should be sent again: the
 SQLite busy timeout of five seconds, three attempts at a write whose cache file
-another process keeps replacing, and two attempts at a rebuild whose task refs
-keep changing. A refresh holds no lock while it reads Git, only the short write
+another process keeps replacing, and three rounds of opening a cache that
+another process replaces again each time it has just been recovered. A
+rebuild is not among them: it builds at most twice and then installs what it
+built. A refresh holds no lock while it reads Git, only the short write
 transaction at the end of its pass, so reads are not serialized behind writes.
 The advice to run `workbook rebuild` is reserved for a cache SQLite cannot read
 or write.

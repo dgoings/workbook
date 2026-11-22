@@ -1390,6 +1390,54 @@ func TestRebuildAdoptsACacheAnotherProcessInstalledMeanwhile(t *testing.T) {
 	}
 }
 
+// A file another process left at the cache path while this rebuild was
+// building, but that is no usable projection — an empty cache a process
+// created and never filled — is not adopted. The rebuild installs its own
+// build over it.
+func TestRebuildReplacesAnUnusableFileAnotherProcessLeftMeanwhile(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	config := testConfig()
+	task := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "First")
+	cachePath := filepath.Join(t.TempDir(), "cache.sqlite")
+	source := &stormSource{
+		heads:     map[string]string{task.State.TaskID: task.Head},
+		snapshots: map[string]core.Snapshot{task.Head: task},
+	}
+	calls := 0
+	source.onList = func() {
+		calls++
+		if calls != 2 {
+			return
+		}
+		empty := cachePath + ".empty"
+		if err := os.WriteFile(empty, nil, 0o600); err != nil {
+			t.Errorf("write empty cache: %v", err)
+			return
+		}
+		if err := os.Rename(empty, cachePath); err != nil {
+			t.Errorf("rename empty cache into place: %v", err)
+		}
+	}
+	store, err := openStoreForTest(t, ctx, source, config, cachePath)
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if calls < 2 {
+		t.Fatal("the empty cache was never left in place")
+	}
+	if !store.cacheUsable(ctx) {
+		t.Fatal("Rebuild() adopted an empty cache instead of installing its own build")
+	}
+	snapshots, err := store.querySnapshots(ctx)
+	if err != nil || len(snapshots) != 1 || snapshots[0].Head != task.Head {
+		t.Fatalf("installed cache = %#v, %v, want the one task the rebuild built", snapshots, err)
+	}
+}
+
 func TestStoreQueries(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
