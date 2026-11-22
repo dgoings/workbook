@@ -201,6 +201,15 @@ func editJob(base, taskID, head, title string) raceReply {
 	return reply
 }
 
+// moveJob moves one task on the board at base to the end of another column,
+// on the head the caller saw.
+func moveJob(base, taskID, head string, status core.Status) raceReply {
+	reply := raceRequest(http.MethodPatch, base+"/api/tasks/"+taskID+"/status",
+		fmt.Sprintf(`{"status":%q,"expectedHead":%q}`, status, head))
+	reply.sentHead = head
+	return reply
+}
+
 // readHead reads one task's detail on the board at base and returns its head,
 // with the read's own answer for judging.
 func readHead(base, taskID string) (raceReply, string) {
@@ -324,9 +333,13 @@ func TestServeSimultaneousCreatesAreWrittenOrRefusedRetryably(t *testing.T) {
 }
 
 // Thirty-two tasks, each edited eight times in a row by its own request
-// stream, all streams at once. No two requests touch the same task, so no
-// edit has a reason to be refused, and each task ends at its stream's last
-// edit with exactly its stream's edits in its history.
+// stream, all streams at once. The edits alternate a retitle with a move to
+// the other column, and after each one the stream reads the board the way the
+// page's poll does: a move ranks the card against its new column and the poll
+// lists every task, so both read the whole board, and those reads race every
+// other stream's writes. No two requests touch the same task, so no edit has a
+// reason to be refused, every read is answered, and each task ends at its
+// stream's last edit with exactly its stream's edits in its history.
 func TestServeSimultaneousEditsToDifferentTasksAreWrittenOrRefusedRetryably(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
@@ -338,9 +351,14 @@ func TestServeSimultaneousEditsToDifferentTasksAreWrittenOrRefusedRetryably(t *t
 	for index, task := range tasks {
 		jobs[index] = func() []raceReply {
 			head := task.Head
-			replies := make([]raceReply, 0, editsPerTask)
+			replies := make([]raceReply, 0, 2*editsPerTask)
 			for edit := range editsPerTask {
-				reply := editJob(base, task.ID, head, fmt.Sprintf("%s, edit %d", task.Title, edit))
+				var reply raceReply
+				if edit%2 == 0 {
+					reply = editJob(base, task.ID, head, fmt.Sprintf("%s, edit %d", task.Title, edit))
+				} else {
+					reply = moveJob(base, task.ID, head, []core.Status{core.StatusInProgress, core.StatusReady}[(edit/2)%2])
+				}
 				if reply.err == nil && reply.status == http.StatusOK {
 					var document struct {
 						Task core.Task `json:"task"`
@@ -349,7 +367,7 @@ func TestServeSimultaneousEditsToDifferentTasksAreWrittenOrRefusedRetryably(t *t
 						head = document.Task.Head
 					}
 				}
-				replies = append(replies, reply)
+				replies = append(replies, reply, raceRequest(http.MethodGet, base+"/api/tasks", ""))
 			}
 			return replies
 		}
@@ -360,10 +378,13 @@ func TestServeSimultaneousEditsToDifferentTasksAreWrittenOrRefusedRetryably(t *t
 	for index, task := range tasks {
 		var written []raceReply
 		var last string
-		for offset := range editsPerTask {
-			position := index*editsPerTask + offset
-			if succeeded[position] {
-				written = append(written, replies[position])
+		for edit := range editsPerTask {
+			position := (index*editsPerTask + edit) * 2
+			if !succeeded[position] {
+				continue
+			}
+			written = append(written, replies[position])
+			if edit%2 == 0 {
 				var document struct {
 					Task core.Task `json:"task"`
 				}
@@ -379,16 +400,17 @@ func TestServeSimultaneousEditsToDifferentTasksAreWrittenOrRefusedRetryably(t *t
 		}
 		reply, _ := readHead(base, task.ID)
 		if !strings.Contains(string(reply.body), fmt.Sprintf("%q", last)) {
-			t.Fatalf("%s reads back as %s, want its last succeeded edit %q", task.ID, reply.body, last)
+			t.Fatalf("%s reads back as %.300s, want its last succeeded edit %q", task.ID, reply.body, last)
 		}
 	}
 }
 
-// Two hundred and forty edits to one task, each a read of the task and an
-// edit on the head that read returned, sixteen at a time. Most lose the race
-// to the ref, which is the board's stale-write answer today; none may be
-// answered anything else, and the ones that won are the whole of the task's
-// history after its creation, each written on the head it named.
+// Two hundred and forty edits to one task, each a read of the task, an edit
+// on the head that read returned, and a read of the board the way the page's
+// poll follows a write, sixteen at a time. Most edits lose the race to the
+// ref, which is the board's stale-write answer today; none may be answered
+// anything else, every read is answered, and the edits that won are the whole
+// of the task's history after its creation, each written on the head it named.
 func TestServeSimultaneousEditsToOneTaskAreWrittenOrRefusedAsStale(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
@@ -403,7 +425,11 @@ func TestServeSimultaneousEditsToOneTaskAreWrittenOrRefusedAsStale(t *testing.T)
 			if head == "" {
 				return []raceReply{read}
 			}
-			return []raceReply{read, editJob(base, task.ID, head, fmt.Sprintf("Contested edit %03d", index))}
+			return []raceReply{
+				read,
+				editJob(base, task.ID, head, fmt.Sprintf("Contested edit %03d", index)),
+				raceRequest(http.MethodGet, base+"/api/tasks", ""),
+			}
 		}
 	}
 	replies := race(t, jobs)
