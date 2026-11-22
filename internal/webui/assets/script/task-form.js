@@ -517,7 +517,8 @@
           if (assignmentDraftPanel) assignmentDraftPanel.setBusy(true);
           text(result, "");
           try {
-            const document = await mutateTask(isNew ? "POST" : "PATCH", isNew ? "/api/tasks" : "/api/tasks/" + encodeURIComponent(task.id), values);
+            const document = await mutateTask(isNew ? "POST" : "PATCH", isNew ? "/api/tasks" : "/api/tasks/" + encodeURIComponent(task.id), values,
+              () => text(result, "The server asked this page to wait. This save is held in this tab and will be sent again shortly."));
             if (isNew) {
               createdDurably = true;
               taskWasCreated = true;

@@ -54,8 +54,10 @@
       // Sends one change, and sends it again while the answer asks this page
       // to wait and the change is one that cannot apply twice. What comes back
       // is the last answer and how many resends it took, for the caller to
-      // report the way it reports every answer.
-      async function sendChange(path, options, resendable) {
+      // report the way it reports every answer. onHold, when given, is told
+      // once that the change is waiting, so a form can say so beside the
+      // control that sent it: on a phone the notice is a scroll away from it.
+      async function sendChange(path, options, resendable, onHold) {
         let resends = 0;
         let holding = false;
         try {
@@ -67,6 +69,7 @@
               holding = true;
               heldChanges += 1;
               renderHeldChanges();
+              if (onHold) onHold();
             }
             await new Promise((resolve) => { window.setTimeout(resolve, Math.min(wait * 2 ** resends, HELD_CHANGE_LONGEST_WAIT)); });
             resends += 1;
@@ -99,7 +102,7 @@
         }
         return "The server answered HTTP " + response.status + " and gave no reason this page can read.";
       }
-      async function mutateTask(method, path, values) {
+      async function mutateTask(method, path, values, onHold) {
         // Every mutation names its JSON media type, body or not: the server
         // rejects mutations without it, because an absent or form-safe
         // Content-Type is what a cross-site request looks like.
@@ -110,7 +113,7 @@
         // Only a change that names the head it was composed against is sent
         // again. See sendChange.
         const resendable = Boolean(values && typeof values.expectedHead === "string" && values.expectedHead !== "");
-        const { response, resends } = await sendChange(path, options, resendable);
+        const { response, resends } = await sendChange(path, options, resendable, onHold);
         const document = await answerDocument(response);
         if (!response.ok || !document || document.format !== "workbook.task-mutation" ||
             document.version !== 1 || !document.task) {

@@ -420,6 +420,9 @@ func TestClientKeepsWhatWasTypedWhileASaveWaited(t *testing.T) {
   const saving = form.eventListeners.submit({ preventDefault() {} });
   const wait = await nextWait();
   if (!save.disabled) throw new Error("Save stayed live while its change waited");
+  // Said beside Save too, where the reader is: on a phone the notice is a
+  // scroll away from it.
+  if (!saveStatus().includes("held in this tab")) throw new Error("the form says " + JSON.stringify(saveStatus()) + " beside Save while the save waits");
   // The reader keeps working while the save waits.
   description.value = "Typed while the save waited.";
   taskResponse = confirmedDocument;
