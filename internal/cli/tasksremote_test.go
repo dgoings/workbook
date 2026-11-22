@@ -736,3 +736,41 @@ func TestTasksRemoteUnconfiguredProjectIsUnchanged(t *testing.T) {
 		t.Fatalf("show unknown = (%d, %q)", code, stderr)
 	}
 }
+
+// A tasks-only folder serving the old place is refused once the tasks move,
+// and told to set up a new folder from the new address, since its origin is
+// the only remote it has and its settings are not committed anywhere. A new
+// tasks-only folder set up from the old address is refused the same way.
+func TestTasksRemoteTasksOnlyFolderOnTheOldPlaceIsSentToTheNewOne(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA1)
+	old := t.TempDir()
+	if code, stdout, stderr := run(t, old, "setup", "--tasks-only", project.code); code != 0 {
+		t.Fatalf("setup --tasks-only before the move = (%d, %q, %q)", code, stdout, stderr)
+	}
+	project.moveTasks(t)
+
+	want := "workbook setup --tasks-only " + project.tasks
+	code, _, stderr := run(t, old, "fetch", "--json")
+	if code != 3 {
+		t.Fatalf("old folder fetch exit = %d, want 3; stderr = %q", code, stderr)
+	}
+	refusal := requireTasksRemoteRefusal(t, stderr, core.CategoryNotInitialized, core.TasksRemoteMoved)
+	if refusal.Command != want || refusal.MovedTo == nil || refusal.MovedTo.URL != project.tasks {
+		t.Fatalf("old folder refusal = %+v, want command %q", refusal, want)
+	}
+
+	fresh := t.TempDir()
+	code, _, stderr = run(t, fresh, "setup", "--tasks-only", project.code, "--json")
+	if code != 3 {
+		t.Fatalf("setup --tasks-only from the old place exit = %d, want 3; stderr = %q", code, stderr)
+	}
+	refusal = requireTasksRemoteRefusal(t, stderr, core.CategoryNotInitialized, core.TasksRemoteMoved)
+	if refusal.Command != want {
+		t.Fatalf("new folder refusal = %+v, want command %q", refusal, want)
+	}
+
+	if code, stdout, stderr := run(t, t.TempDir(), "setup", "--tasks-only", project.tasks); code != 0 {
+		t.Fatalf("setup --tasks-only from the new place = (%d, %q, %q)", code, stdout, stderr)
+	}
+}
