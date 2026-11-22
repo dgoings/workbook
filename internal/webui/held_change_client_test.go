@@ -455,3 +455,94 @@ func TestClientKeepsWhatWasTypedWhileASaveWaited(t *testing.T) {
   if (!historyPaths.includes("/")) throw new Error("a held save with nothing typed after it did not return to the board: " + JSON.stringify(historyPaths));
 `))
 }
+
+func TestClientResendsAConfigurationChangeAProxyAskedToWaitFor(t *testing.T) {
+	t.Parallel()
+	// Production mutation: the configuration page sends its changes without
+	// the resend, and a status a proxy asked to wait on is reported as not
+	// sent, though the proxy said when it would take it.
+	vocabulary := handlerVocabulary(t)
+	runPanelClient(t, "resend a status change", vocabulary, "head-7", nil, `
+  vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
+  vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
+  let refused = 0;
+  const panelFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if (url.startsWith("/api/vocabulary") && (options.method || "GET") !== "GET" && refused === 0) {
+      refused += 1;
+      vocabularyCalls.push({ url, method: options.method, body: JSON.parse(options.body) });
+      return { ok: false, status: 429, headers: { get: (name) => (name.toLowerCase() === "retry-after" ? "2" : null) },
+        json: async () => JSON.parse("<html><head><title>429 Too Many Requests</title></head></html>") };
+    }
+    return panelFetch(url, options);
+  };
+  await openStatuses();
+  const form = panelAdd();
+  const name = findElement(form, (element) => element.id === "status-new-name");
+  name.value = "triage";
+  name.eventListeners.input();
+  const submitted = submitPanelForm(form);
+  let wait = null;
+  for (let turn = 0; turn < 200 && !wait; turn += 1) {
+    wait = windowTimeouts.find((timer) => !timer.canceled && !timer.ran && timer.delay === 2000) || null;
+    if (!wait) await settle();
+  }
+  if (!wait) throw new Error("the status change a proxy asked to wait on was not held to be sent again");
+  if (heldChangeNotice.hidden) throw new Error("nothing said the status change was waiting");
+  wait.ran = true;
+  wait.callback();
+  await submitted;
+  await settle();
+  const sent = vocabularyCalls.filter((call) => call.method !== "GET");
+  if (sent.length !== 2 || JSON.stringify(sent[0].body) !== JSON.stringify(sent[1].body)) {
+    throw new Error("the status change was sent as " + JSON.stringify(sent) + ", want the same change twice");
+  }
+  if (panelStatuses().indexOf("triage") < 0) throw new Error("the resent status change is not drawn: " + panelStatuses().join(","));
+  if (!heldChangeNotice.hidden) throw new Error("the notice stayed up after the status change landed");
+`)
+}
+
+func TestClientResendsBoardSettingsAProxyAskedToWaitFor(t *testing.T) {
+	t.Parallel()
+	// Production mutation: the board settings are sent without the resend,
+	// and a save a proxy asked to wait on is reported as not sent.
+	vocabulary := handlerVocabulary(t)
+	state := VocabularyState{Vocabulary: vocabulary, Head: "head-1", Display: core.DisplaySettings{Name: "Atlas"}}
+	saved := state
+	saved.Head = "head-2"
+	saved.Display.PrimaryColor = "#123abc"
+	runClientOverHandler(t, configurableHandler(vocabulary, "head-1", nil),
+		"resend the board settings", "/", "", vocabulary, "head-1", nil, `
+  vocabularyRead = `+string(mustJSON(t, vocabularyDocument(state)))+`;
+  displayAnswer = { body: `+displayMutationJSON(t, saved)+` };
+  let refused = 0;
+  const panelFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if (url === "/api/display" && refused === 0) {
+      refused += 1;
+      displayCalls.push({ url, method: options.method, body: JSON.parse(options.body) });
+      return { ok: false, status: 503, headers: { get: (name) => (name.toLowerCase() === "retry-after" ? "2" : null) },
+        json: async () => JSON.parse("<html><head><title>503 Service Unavailable</title></head></html>") };
+    }
+    return panelFetch(url, options);
+  };
+  await openStatuses();
+  displayField("primaryColor").value = "#123abc";
+  const saving = saveDisplay();
+  let wait = null;
+  for (let turn = 0; turn < 200 && !wait; turn += 1) {
+    wait = windowTimeouts.find((timer) => !timer.canceled && !timer.ran && timer.delay === 2000) || null;
+    if (!wait) await settle();
+  }
+  if (!wait) throw new Error("the settings a proxy asked to wait on were not held to be sent again");
+  if (heldChangeNotice.hidden) throw new Error("nothing said the settings were waiting");
+  wait.ran = true;
+  wait.callback();
+  await saving;
+  await settle();
+  if (displayCalls.length !== 2 || JSON.stringify(displayCalls[0].body) !== JSON.stringify(displayCalls[1].body)) {
+    throw new Error("the settings were sent as " + JSON.stringify(displayCalls) + ", want the same save twice");
+  }
+  if (!heldChangeNotice.hidden) throw new Error("the notice stayed up after the settings landed");
+`)
+}

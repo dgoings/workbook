@@ -2862,9 +2862,9 @@ sent once and its answer reported, because nothing would stop a resend from
 applying a second time. Reads are never resent this way; the poll asks again
 on its next tick, as it always does.
 
-A waiting change exists only in that browser tab. The notice says so, and the
-browser asks before the tab is closed or the page is left while one waits. A
-save from a task's form that lands after the reader typed more keeps the form
+A waiting change exists only in that browser tab. The notice says so, a task
+form's save says so beside Save as well, and the browser asks before the tab is
+closed or the page is left while one waits. A save from a task's form that lands after the reader typed more keeps the form
 open with what they typed, says it is not saved yet, and sends only that on
 the next Save. A `429` or `503` without `Retry-After`, or with one the page
 cannot read, is reported as any other refusal, and a refusal whose body is not
