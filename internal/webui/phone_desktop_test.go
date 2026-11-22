@@ -15,8 +15,11 @@ import (
 // tests hold that line from both sides: at every width above the breakpoint,
 // and at one pixel past it, the page is measured, the phone rules are taken
 // out of the stylesheet, and the page is measured again, and the two must be
-// the same to the pixel. A rule written outside the query, or a query that
-// reaches too far, changes the first measurement and not the second.
+// the same to the pixel. A query that reaches too far changes the first
+// measurement and not the second. A rule meant for a phone but written outside
+// the query is in both, so this cannot see it; desktop_layout_test.go, which
+// holds the desktop sizes to a recording made before the phone layout existed,
+// is what catches that.
 
 // phoneBreakpoint is the widest viewport, in CSS pixels, that gets the phone
 // layout. It is the number in the stylesheet's query, and the tests check
