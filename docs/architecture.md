@@ -695,7 +695,9 @@ Before normal task reads (`list`, `show`, `board`, `next`, and web `GET
 refreshes changed checkpoints. Create, update, and other mutations continue to
 write Git operations directly. Run `workbook rebuild` to explicitly recreate the
 cache; it builds a temporary database, checks task heads again, retries once if
-they changed during the build, and atomically installs a stable result. With
+they changed during the build, and atomically installs a stable result. If they
+changed during the retry too, it exits `6` (`stale-write`) without installing
+anything, and running it again is the remedy. With
 `--json`, the normal result envelope contains `taskCount` and `cachePath`.
 
 An `operations` table alongside the task tables materializes each task's recorded
@@ -717,6 +719,41 @@ logical-clock chain a root-first replay depends on. Workbook deletes that task's
 operation rows and reprojects the returned chain instead. Refresh and rebuild
 therefore scale with operation count rather than task count, as the
 projection-refresh benchmark family measures.
+
+Several readers refresh one cache at once: the requests a board is answering
+together, a command-line user beside it, a board in another worktree, and a
+background synchronization. A refresh reads the rows it holds, lists the task
+refs, reads the changed checkpoints from Git, and then writes each changed task
+in one transaction with a compare-and-swap against the row it read first:
+
+```text
+row before   ref listed   row at write   refresh writes   read answers
+-----------  -----------  -------------  ---------------  ------------------
+A            B            A              B                B (from the cache)
+(none)       B            B              nothing          B (from the cache)
+A            B            C              nothing          B (from Git)
+```
+
+The second line is a create projecting its own new task while a read projects
+the same one; the third is another write moving the task again, or a slower
+writer recording an older head, while the read was in Git. A row somebody else
+moved belongs to them, so it is left alone, and the read answers that task from
+the checkpoint it took from Git, which is the task as its ref stood after the
+request began. The next refresh compares the row with the ref again, whichever
+was newer. A refresh therefore makes one pass and cannot fail because the cache
+moved underneath it. An exact read of one task works the same way, trying a
+moved row once more before answering from Git. A mutation's conditional advance
+after its Git write leaves a moved row alone too, without warning, because the
+row is not stale on that write's account.
+
+Concurrency limits that remain are bounded and answered as `stale-write`, which
+means nothing was written and the identical request should be sent again: the
+SQLite busy timeout of five seconds, three attempts at a write whose cache file
+another process keeps replacing, and two attempts at a rebuild whose task refs
+keep changing. A refresh holds no lock while it reads Git, only the short write
+transaction at the end of its pass, so reads are not serialized behind writes.
+The advice to run `workbook rebuild` is reserved for a cache SQLite cannot read
+or write.
 
 The cache can be deleted at any time and rebuilt entirely from Workbook refs.
 Semantic validation results live in a separate `validation.sqlite` beside it, so

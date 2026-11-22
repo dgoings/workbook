@@ -501,7 +501,7 @@ without parsing a message:
 | 3 | `not-initialized` | This repository has no Workbook project. Run `workbook setup`. |
 | 4 | `not-found` | No such task, commit, or setting. |
 | 5 | `validation` | The input is well-formed but not allowed, such as an unknown status or restoring an active task. It fails the same way on every retry. |
-| 6 | `stale-write` | The task ref moved between read and write, so the compare-and-swap was refused. Retrying the identical command usually succeeds. |
+| 6 | `stale-write` | The task ref moved between read and write, so the compare-and-swap was refused, or a bounded wait on the shared SQLite cache ran out while another process held or replaced it. Nothing was written. Retrying the identical command usually succeeds. |
 | 7 | `corrupt-data` | Stored data could not be read as Workbook wrote it. Read the message; repair or rebuild before continuing. |
 | 8 | `conflict` | Reconciliation stopped on a decision Workbook will not make. See [Reconciling divergent histories](#reconciling-divergent-histories). |
 | 9 | `newer-writer` | A newer Workbook wrote this history and this build cannot fold it. Nothing is damaged; upgrade Workbook. See [Mixed Workbook versions](architecture.md#mixed-workbook-versions). |
@@ -519,9 +519,15 @@ warning instead. `workbook next --claim` does not produce exit `10`; see
 [Claiming work as an agent](#claiming-work-as-an-agent).
 
 Exit `6` is what a concurrent writer sees: two processes mutating one task, a
-push whose remote ref changed underneath it, a projection whose head drifted
-while it was being read, and a web save proposed against a tip the task has
-moved past all surface as `stale-write` rather than as silent overwriting.
+push whose remote ref changed underneath it, and a web save proposed against a
+tip the task has moved past all surface as `stale-write` rather than as silent
+overwriting. So do the three bounded waits on the shared SQLite cache, when
+another process outlasts them: the cache locked past its five-second busy
+timeout, the cache file replaced by another process during each of three
+attempts at one write, and task refs that kept changing through both attempts
+of a rebuild. A read that finds the cache updated by somebody else at the same
+moment is not among them and is never refused; see
+[Simultaneous requests](#simultaneous-requests).
 
 Reporting a conflict and failing over one are separate things. `workbook next`
 exits `0` while listing conflicts in its envelope, because a caller asking which
@@ -2925,6 +2931,39 @@ of whoever opens it — including writes that publish to `origin` and are later
 read as agent instructions — without ever being on the network. `workbook
 serve` says so in the warning it prints for a wildcard bind. Bind the one
 address you mean instead, and the `Host` is pinned to it.
+
+### Simultaneous requests
+
+Every request to the board reads the task refs and brings the shared SQLite
+cache up to them before it answers, so requests that arrive together, a
+command-line user in the same repository, a board in another worktree, and the
+board's own background synchronization all update one cache at the same moment.
+None of that is a reason to refuse a request:
+
+- A read is always answered. Each task is written to the cache with a
+  compare-and-swap against the row the read saw first; a row somebody else
+  moved in the meantime is left as they wrote it, and that task is answered
+  from the checkpoint the read took from its Git ref, which is the task as it
+  stood after the request arrived.
+- A write reads the task from its ref the same way and records its change with
+  a compare-and-swap on that ref. A write that loses the race to another change
+  of the same task is answered `409` with a `stale-write` document, as is one
+  whose `expectedHead` the task has moved past. Nothing was written; read the
+  task again and send the change against its new head. A write is never
+  recorded twice, and never on a head other than the one it was composed
+  against.
+- A bounded wait that runs out is answered `409` `stale-write` too, with
+  "try again" in its message: the cache locked by another process past the
+  five-second busy timeout, the cache file replaced by another process during
+  each of three attempts at one write, or task refs that kept changing through
+  both attempts of a rebuild. Nothing was written, and the identical request is
+  the right thing to send next. Each wait has a fixed number of attempts or a
+  fixed time, so a request under sustained load still gets an answer.
+
+A `500` naming `workbook rebuild` means SQLite could not read or write the
+cache itself — a disk error, or a page it reports malformed — which a rebuild
+repairs. A cache that is missing, from another Workbook version, or for another
+project is rebuilt without being asked.
 
 ### What anyone who can open the board can do and see
 

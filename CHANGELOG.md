@@ -294,6 +294,27 @@ before anyone runs it; see Compatibility across versions below.
   writes raises the generation, so a task nobody has compacted is unchanged,
   byte for byte.
 
+### Fixed
+- **Simultaneous requests to the board no longer fail with a rebuild error.**
+  When many requests reached `workbook serve` at once — tasks filed together,
+  a busy page, a hosted board — some were answered `500` with "cannot refresh
+  projection cache after a concurrent update; run `workbook rebuild`". The
+  cache was fine and nothing was lost: the request had found the cache updated
+  by another request, or by another process using the same repository, and
+  gave up. A read now leaves a cache row somebody else moved to them and
+  answers that task from the checkpoint it read from Git, so it is never
+  refused for that reason, on the board or the command line; a write that
+  loses the race to the task's ref is still refused as `stale-write`, exactly
+  as before. The few bounded waits on the cache that can still run out — the
+  cache locked by another process past its five-second timeout, a cache file
+  another process replaced during each of three attempts, task refs that kept
+  changing through both attempts of a rebuild — now answer `stale-write`
+  (exit `6`, `409` on the board) with "try again" instead of `500` with
+  rebuild advice, because nothing was written and the same request is the
+  right next step. A write that succeeded no longer carries a warning to run
+  `workbook rebuild` when another write to the same task landed beside it.
+  `workbook rebuild` is still advised when the cache itself cannot be read.
+
 ### Compatibility across versions
 
 - **An older clone can still edit somebody else's comment.** The refusal is
