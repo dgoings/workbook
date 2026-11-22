@@ -158,10 +158,35 @@
       // refusal, when given, may put its own words in place of a refusal's:
       // it is asked once the panel has redrawn from the task the server
       // holds, and a non-empty answer is reported instead.
-      async function writeThreadChange(panel, method, path, values, describe, refusal) {
+      //
+      // landed, when given, says whether a task the server holds carries this
+      // change, measured against the task as it stood when the change was
+      // sent. It is asked when a refusal came only after the change was held
+      // and sent again, because then the first attempt may have been saved
+      // (see heldChangeOutcome). A change that is there is drawn and answered
+      // as saved. One whose fate the board could not be read to settle is
+      // reported as possibly saved, and the panel remembers it: sending the
+      // same change again from that panel first reads the board, so the press
+      // that would have recorded it twice records it at most once.
+      async function writeThreadChange(panel, method, path, values, describe, refusal, landed) {
+        const sent = projectTasks(latestTasks).find((candidate) => candidate.id === panel.taskID) || null;
+        const key = method + " " + path + " " + JSON.stringify(Object.assign({}, values, { expectedHead: undefined }));
         panel.setBusy(true);
         panel.report("");
         try {
+          const doubt = panel.doubt && panel.doubt.key === key ? panel.doubt : null;
+          panel.doubt = null;
+          if (doubt) {
+            const rebase = await refreshedTaskHead(panel.taskID);
+            if (rebase.head) panel.adoptHead(rebase.head);
+            if (!rebase.boardRead) {
+              panel.doubt = doubt;
+              if (panel.owns()) panel.report(heldChangeDoubt(describe));
+              return null;
+            }
+            if (doubt.landed(rebase.task, doubt.sent)) return settledThreadChange(panel, rebase.task, describe);
+            values = Object.assign({}, values, rebase.head && values && "expectedHead" in values ? { expectedHead: rebase.head } : {});
+          }
           // Named `answer` rather than `document`, which is what the older call
           // sites in this file call it: a const by that name shadows the global
           // `document` for the whole function body, so any later — or textually
@@ -185,19 +210,33 @@
           if (warnings.length) panel.report("Saved durably. " + warnings.join(" "));
           return answer;
         } catch (error) {
+          const held = await heldChangeOutcome(error, panel.taskID, landed && ((task) => landed(task, sent)));
+          if (held && held.head) panel.adoptHead(held.head);
+          if (held && held.outcome === "landed") return settledThreadChange(panel, held.task, describe);
+          if (held && held.outcome === "unknown") {
+            panel.doubt = { key, sent, landed };
+            if (!panel.owns()) {
+              reportDetachedThreadFailure(panel.taskID, describe, error, true);
+              return null;
+            }
+            panel.report(heldChangeDoubt(describe));
+            return null;
+          }
           if (!panel.owns()) {
             reportDetachedThreadFailure(panel.taskID, describe, error);
             return null;
           }
           if (error && error.category === "stale-write") {
-            const rebase = await refreshedTaskHead(panel.taskID);
+            // Read once: a refusal that followed a resend has just read the
+            // board to look for the change, and that read is the re-base.
+            const rebase = held || await refreshedTaskHead(panel.taskID);
             if (rebase.head) panel.adoptHead(rebase.head);
             if (!panel.owns()) {
               reportDetachedThreadFailure(panel.taskID, describe, error);
               return null;
             }
-            const held = projectTasks(latestTasks).find((candidate) => candidate.id === panel.taskID);
-            if (held) panel.follow(held);
+            const current = projectTasks(latestTasks).find((candidate) => candidate.id === panel.taskID);
+            if (current) panel.follow(current);
             panel.report((refusal && refusal(error)) || (rebase.boardRead
               ? "That task changed elsewhere, so " + describe + " was not saved. This list now shows the version the server holds; try again."
               : "That task changed elsewhere and the board could not be refreshed, so " + describe + " was not saved. Try again once the board is current."));
@@ -209,14 +248,72 @@
           panel.setBusy(false);
         }
       }
+      // A thread change that was refused and is in the task the server holds
+      // anyway: the first attempt was saved before the refused resend. It is
+      // answered the way a saved change is, so the caller clears its field or
+      // closes its form, and the panel draws the task as read. Nothing comes
+      // back from a route here, so a panel that draws from one falls back to
+      // the poll's view, as a refusal's redraw does.
+      function settledThreadChange(panel, task, describe) {
+        const current = projectTasks(latestTasks).find((candidate) => candidate.id === panel.taskID) || task;
+        if (panel.owns() && current) panel.follow(current);
+        return { task: current, warnings: [], settled: describe };
+      }
+      // What each kind of thread change looks like once it is in a task, for
+      // writeThreadChange's landed. Each is handed the task the server now
+      // holds (null when there is none) and the task as it stood when the
+      // change was sent, and is written against what the server stores: a
+      // comment body and a link label trimmed, a file named as it was chosen.
+      function commentAdded(body) {
+        const stored = String(body).trim();
+        return (task, sent) => {
+          const known = new Set(((sent && sent.comments) || []).map((comment) => comment.id));
+          // This person's newest comment, which is the one a resend would have
+          // made: the board's identity when it has one, and anybody's when it
+          // does not, since a comment cannot then be told apart by its author.
+          const theirs = ((task && task.comments) || [])
+            .filter((comment) => !assignIdentity || comment.author === assignIdentity)
+            .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+          const newest = theirs[theirs.length - 1];
+          return Boolean(newest) && !known.has(newest.id) && newest.body === stored;
+        };
+      }
+      function commentEdited(commentID, body) {
+        const stored = String(body).trim();
+        return (task) => ((task && task.comments) || []).some((comment) => comment.id === commentID && comment.body === stored);
+      }
+      function commentRemoved(commentID) {
+        return (task) => Boolean(task) && !(task.comments || []).some((comment) => comment.id === commentID);
+      }
+      function assignmentHeld(value) {
+        return (task) => ((task && task.assignments) || []).some((held) =>
+          held.principal + (held.label ? "/" + held.label : "") === stagedAssignmentHolder(value).value);
+      }
+      function assignmentWithdrawn(value) {
+        return (task) => Boolean(task) && !(task.assignments || []).some((held) =>
+          held.principal + (held.label ? "/" + held.label : "") === value);
+      }
+      function attachmentAdded(matches) {
+        return (task, sent) => {
+          const known = new Set(((sent && sent.attachments) || []).map((attachment) => attachment.id));
+          return ((task && task.attachments) || []).some((attachment) => !known.has(attachment.id) && matches(attachment));
+        };
+      }
+      function attachmentRemoved(attachmentID) {
+        return (task) => Boolean(task) && !(task.attachments || []).some((attachment) => attachment.id === attachmentID);
+      }
       // A thread change can outlive the panel it was made in, the way a save can
       // outlive its form: the reader leaves the task while the request is open.
       // The panel it would report into is gone by then, so the outcome follows
       // them to the notice, which outlives every route.
-      function reportDetachedThreadFailure(taskID, describe, error) {
+      function reportDetachedThreadFailure(taskID, describe, error, doubted) {
         const open = document.createElement("a");
         open.href = taskPath(taskID);
         text(open, "Open task");
+        if (doubted) {
+          showNotice("error", "On task " + nameTask(taskID) + ", " + heldChangeDoubt(describe).replace(/^The/, "the"), open);
+          return;
+        }
         showNotice("error",
           "On task " + nameTask(taskID) + ", " + describe + " was not saved. The request was still open " +
             "when you left the task, and anything it carried is gone. " +
@@ -490,7 +587,8 @@
             // pre-judged one would be a second copy of a grammar that can only
             // drift from the one that decides.
             const answer = await writeThreadChange(
-              panel, "POST", path, headed(head, { to: field.value.trim() }), "your assignment");
+              panel, "POST", path, headed(head, { to: field.value.trim() }), "your assignment", null,
+              assignmentHeld(field.value.trim()));
             if (answer) field.value = "";
           });
         }
@@ -516,7 +614,8 @@
           if (panel.busy || !panel.owns()) return;
           const settle = holdSidebarFocus(row.retryButton, panel.list, row, field);
           const answer = await writeThreadChange(
-            panel, "POST", path, headed(head, { to: draft.value }), "that assignment");
+            panel, "POST", path, headed(head, { to: draft.value }), "that assignment", null,
+            assignmentHeld(draft.value));
           if (answer) {
             retireDraft(draft);
             settle(true);
@@ -633,7 +732,8 @@
             withdraw.addEventListener("click", async () => {
               const settle = holdSidebarFocus(withdraw, panel.list, item, field);
               settle(Boolean(await writeThreadChange(
-                panel, "DELETE", path, headed(head, { from: assignment.value }), "that withdrawal")));
+                panel, "DELETE", path, headed(head, { from: assignment.value }), "that withdrawal", null,
+                assignmentWithdrawn(assignment.value))));
             });
             item.removeButton = withdraw;
             actions.append(withdraw);
@@ -834,7 +934,8 @@
           // from the thread and the change log still holds what it said.
           const remove = panel.claim(threadButton("Remove"));
           remove.addEventListener("click", () => writeThreadChange(
-            panel, "DELETE", commentPath(comment.id), headed(head, {}), "that removal"));
+            panel, "DELETE", commentPath(comment.id), headed(head, {}), "that removal", null,
+            commentRemoved(comment.id)));
           rowActions.append(remove);
           row.append(written, bodyText, rowActions);
           return row;
@@ -892,7 +993,8 @@
               // underneath the form, and no retry can save it.
               (error) => removedSince(comment.id) || (error && error.category === "not-found")
                 ? removedUnderEdit(removalOf(comment.id))
-                : "");
+                : "",
+              commentEdited(comment.id, area.value));
             if (!answer) return;
             editing.delete(comment.id);
             render();
@@ -988,7 +1090,7 @@
           }
           const answer = await writeThreadChange(
             panel, "POST", "/api/tasks/" + encodeURIComponent(taskID) + "/comments",
-            headed(head, { body: body.value }), "your comment");
+            headed(head, { body: body.value }), "your comment", null, commentAdded(body.value));
           if (answer) body.value = "";
         });
         // Followed with the task and, beside it, whatever answer says which

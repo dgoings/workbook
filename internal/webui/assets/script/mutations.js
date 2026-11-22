@@ -11,8 +11,11 @@
       // A change that names the head it was composed against is one: the board
       // compares that head before it records anything, so if the first attempt
       // did land, the resend names a head that has moved and is refused as a
-      // stale write rather than applied again. Callers say whether theirs is
-      // such a change; a create, or a write that names no head, is sent once.
+      // stale write rather than applied again. That refusal is not the end of
+      // it: a stale refusal of a resend may be the first attempt's own doing,
+      // so the caller looks before reporting it (see heldChangeOutcome).
+      // Callers say whether theirs is such a change; a create, or a write that
+      // names no head, is sent once.
       //
       // Retry-After is seconds or an HTTP date, and anything else is not a wait
       // this page can honor. Each resend waits twice as long as the one before
@@ -102,6 +105,34 @@
         }
         return "The server answered HTTP " + response.status + " and gave no reason this page can read.";
       }
+      // Whether a change refused after it was held and sent again is in what
+      // the server now holds anyway.
+      //
+      // A proxy can pass a change to the board and still answer the page 429:
+      // the board records it, the page waits and sends it again, and the
+      // resend names a head the first attempt moved, so it is refused as stale.
+      // Reported as it reads, that refusal says a change that landed did not,
+      // and the reader who makes it again records it twice. So a refusal that
+      // followed a resend is checked against the board before it is reported:
+      // the board is read, and `landed` is asked whether the task it now holds
+      // (null when the board holds none) carries the change.
+      //
+      // "landed" is reported as saved, "absent" as the refusal it was, and
+      // "unknown" — the board could not be read — as a change that may already
+      // be saved, so that nobody is invited to make it again blind. null means
+      // nothing was resent and the refusal is the answer.
+      async function heldChangeOutcome(error, taskID, landed) {
+        if (!error || !error.held || typeof landed !== "function") return null;
+        const rebase = await refreshedTaskHead(taskID);
+        if (!rebase.boardRead) return Object.assign({ outcome: "unknown" }, rebase);
+        return Object.assign({ outcome: landed(rebase.task) ? "landed" : "absent" }, rebase);
+      }
+      // What a change whose outcome is unknown says, wherever it is reported.
+      function heldChangeDoubt(describe) {
+        return "The server asked this page to wait, then refused " + describe + " when it was sent again, " +
+          "and the board could not be read to see whether the first attempt was saved. " +
+          "Your change may already have been saved; check before making it again.";
+      }
       async function mutateTask(method, path, values, onHold) {
         // Every mutation names its JSON media type, body or not: the server
         // rejects mutations without it, because an absent or form-safe
@@ -126,6 +157,9 @@
           // Still asked to wait once every resend had gone, which a card
           // reports as that rather than as the change being wrong.
           failure.waitedOut = resends > 0 && askedToWait(response) !== null;
+          // Sent more than once, so an earlier attempt may have landed though
+          // this answer refused it. See heldChangeOutcome.
+          failure.held = resends > 0;
           throw failure;
         }
         return document;
@@ -374,6 +408,9 @@
         if (!observed || !observed.deleted) return Promise.resolve();
         return queueIntent(taskID, observed.head, {
           apply: (task) => Object.assign({}, task, { deleted: false }),
+          // Whether the server's task is restored: what a refused resend is
+          // checked against (see heldChangeOutcome).
+          landed: (task) => Boolean(task) && !task.deleted,
           send: (expectedHead) => mutateTask(
             "POST",
             "/api/tasks/" + encodeURIComponent(taskID) + "/restore",
@@ -421,7 +458,26 @@
               // same model and so turn on the same answer: the card, and the
               // detail form if this task's is open.
               let boardRead = true;
-              if (error && error.category === "stale-write") {
+              // Refused only after being held and sent again: the first
+              // attempt may be what moved the head, so the board is read and
+              // asked whether this card's change is in it before anything is
+              // reported. See heldChangeOutcome.
+              const held = await heldChangeOutcome(error, taskID, intent.landed);
+              if (held && held.head) entry.head = held.head;
+              if (held && held.outcome === "landed") {
+                // Saved after all. Nothing is reported and the open form, if
+                // any, keeps what it shows: the board now draws the change
+                // because it is what the server holds.
+                rerender();
+                continue;
+              }
+              if (held && held.outcome === "unknown" && error.category === "stale-write") {
+                // The refusal's own rule, below, for a refresh that read
+                // nothing: the queue stops rather than send against a head it
+                // cannot replace.
+                boardRead = false;
+                entry.queue.length = 0;
+              } else if (!held && error && error.category === "stale-write") {
                 // The refusal means this queue is holding a head the server
                 // has moved past. Waiting for the refresh it forces and
                 // re-basing on it is what lets the intents behind this one
@@ -461,8 +517,9 @@
               // after it: it is held outside the model and drawn on the card,
               // and only a dismissal or the reader's next change to that card
               // takes it away.
-              reportIntentFailure(taskID, subject, error, boardRead);
-              withdrawFailedIntentFromOpenDetail(taskID, error, boardRead);
+              const doubted = Boolean(held && held.outcome === "unknown");
+              reportIntentFailure(taskID, subject, error, boardRead, doubted);
+              withdrawFailedIntentFromOpenDetail(taskID, error, boardRead, doubted);
             }
             rerender();
           }
@@ -494,9 +551,9 @@
       // more" from "this board has not been able to ask".
       async function refreshedTaskHead(taskID) {
         const result = await currentRefreshResult(refresh());
-        if (!result.boardRead) return { boardRead: false, head: "" };
+        if (!result.boardRead) return { boardRead: false, head: "", task: null };
         const refreshed = latestTasks.find((candidate) => candidate.id === taskID);
-        return { boardRead: true, head: refreshed && refreshed.head || "" };
+        return { boardRead: true, head: refreshed && refreshed.head || "", task: refreshed || null };
       }
       // The indicator says what the next mutation will do, which is why it is
       // read from the server rather than assumed: a board set to defer still

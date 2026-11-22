@@ -212,7 +212,13 @@
         closeForm: () => { panelForm = null; },
         unsent: "This status change could not be sent. Nothing about this project's statuses has changed.",
         stale: "This project's statuses changed in another clone, so this change was not applied. This page now shows them as they stand; review them and make the change again.",
-        refused: "This status change was not applied."
+        refused: "This status change was not applied.",
+        // What a change that landed before a refused resend says when its own
+        // sentence would need numbers only the refused answer carried: a
+        // removal's count of the tasks it moved. See changeVocabulary.
+        saved: "This status change was saved.",
+        // How a sentence of the held-change doubt names this change.
+        named: "this status change"
       };
       const priorityChanges = {
         format: "workbook.priority-mutation",
@@ -221,7 +227,13 @@
         closeForm: () => { priorityForm = null; },
         unsent: "This priority change could not be sent. Nothing about this project's priorities has changed.",
         stale: "This project's priorities changed in another clone, so this change was not applied. This page now shows them as they stand; review them and make the change again.",
-        refused: "This priority change was not applied."
+        refused: "This priority change was not applied.",
+        // What a change that landed before a refused resend says when its own
+        // sentence would need numbers only the refused answer carried: a
+        // removal's count of the tasks it moved. See changeVocabulary.
+        saved: "This priority change was saved.",
+        // How a sentence of the held-change doubt names this change.
+        named: "this priority change"
       };
       // The keys are the third, and the only difference is that it has no form
       // to close: a key row holds no editor, because there is nothing about a
@@ -234,8 +246,97 @@
         closeForm: () => {},
         unsent: "This key change could not be sent. Nothing about this project's keys has changed.",
         stale: "This project's keys changed in another clone, so this change was not applied. This page now shows them as they stand; review them and make the change again.",
-        refused: "This key change was not applied."
+        refused: "This key change was not applied.",
+        // What a change that landed before a refused resend says when its own
+        // sentence would need numbers only the refused answer carried: a
+        // removal's count of the tasks it moved. See changeVocabulary.
+        saved: "This key change was saved.",
+        // How a sentence of the held-change doubt names this change.
+        named: "this key change"
       };
+      // The configuration as the server now holds it, or null when it cannot
+      // be read. It is what a change refused after a resend is checked
+      // against when the refusal carried none of its own.
+      async function currentVocabulary() {
+        try {
+          const response = await fetch("/api/vocabulary", { cache: "no-store" });
+          const payload = await response.json();
+          return response.ok && payload && payload.format === "workbook.vocabulary" &&
+            payload.version === 1 && Array.isArray(payload.statuses) ? payload : null;
+        } catch (_) {
+          return null;
+        }
+      }
+      // Whether a configuration change is in `after`, the configuration the
+      // server now holds, given `before`, the one it was sent against: true,
+      // false, or null for a change this cannot judge. Each route's change is
+      // compared as the writer stores it — labels trimmed, colors lowercased,
+      // tags as a set — and an addition counts only if it was not there
+      // before, so a status somebody else added under the same name is not
+      // taken for this one. See changeVocabulary.
+      function configurationChangeLanded(method, path, body, before, after) {
+        const route = path.replace(/^\/api\/vocabulary\/?/, "").split("/").map(decodeURIComponent);
+        const [area, name, aspect] = route;
+        const statuses = (v) => (v && Array.isArray(v.statuses) ? v.statuses : []);
+        const priorities = (v) => (v && v.priorities && Array.isArray(v.priorities.priorities) ? v.priorities.priorities : []);
+        const keys = (v) => (v && v.keys && Array.isArray(v.keys.keys) ? v.keys.keys : []);
+        const statusIn = (v, token) => statuses(v).find((definition) => definition.status === token);
+        const priorityIn = (v, token) => priorities(v).find((definition) => definition.priority === token);
+        const keyIn = (v, token) => keys(v).find((entry) => entry.key === token);
+        const sameSet = (left, right) => JSON.stringify([...new Set(left || [])].sort()) === JSON.stringify([...new Set(right || [])].sort());
+        const trimmed = (value) => String(value === undefined || value === null ? "" : value).trim();
+        // An edit is in when the definition under the name it gave carries
+        // every member it set, and a rename has forwarded the old name out of
+        // the live list.
+        const edited = (definition, stillUnderOldName) => {
+          if (!definition) return false;
+          if (body.name && body.name !== name && stillUnderOldName) return false;
+          if ("label" in body && definition.label !== trimmed(body.label)) return false;
+          if ("tags" in body && !sameSet(definition.tags, body.tags)) return false;
+          return true;
+        };
+        if (area === "order" && method === "PUT") {
+          return JSON.stringify(statuses(after).map((definition) => definition.status)) === JSON.stringify(body.statuses);
+        }
+        if (area === "statuses") {
+          if (method === "POST") return Boolean(statusIn(after, body.status)) && !statusIn(before, body.status);
+          if (method === "DELETE") return !statusIn(after, name);
+          if (method === "PATCH") return edited(statusIn(after, body.name || name), Boolean(statusIn(after, name)));
+        }
+        if (area === "priorities") {
+          if (method === "POST") return Boolean(priorityIn(after, body.priority)) && !priorityIn(before, body.priority);
+          if (method === "DELETE") return !priorityIn(after, name);
+          // The route is matched by its path, not by spelling the aspect as a
+          // word the vocabulary owns.
+          if (aspect && path.endsWith("/" + aspect) && path === priorityPath(name) + "/default") {
+            return Boolean(after.priorities) && after.priorities.default === name;
+          }
+          if (aspect === "color") {
+            const definition = priorityIn(after, name);
+            return Boolean(definition) && (definition.color || "").toLowerCase() === trimmed(body.color).toLowerCase();
+          }
+          if (aspect === "position") {
+            const order = priorities(after).map((definition) => definition.priority);
+            const at = order.indexOf(name);
+            const anchor = order.indexOf(body.before || body.after);
+            if (at < 0 || anchor < 0) return false;
+            return body.before ? at === anchor - 1 : at === anchor + 1;
+          }
+          if (method === "PATCH" && !aspect) return edited(priorityIn(after, body.name || name), Boolean(priorityIn(after, name)));
+        }
+        if (area === "keys") {
+          const current = after.keys && after.keys.current;
+          if (method === "POST") {
+            return Boolean(keyIn(after, body.key)) && !keyIn(before, body.key) && (!body.current || current === body.key);
+          }
+          const entry = keyIn(after, name);
+          if (!entry) return false;
+          if (body.current) return current === name;
+          if (body.retire) return entry.state === "retired";
+          if (body.reactivate) return entry.state === "active";
+        }
+        return null;
+      }
       // The one path every change either panel makes takes.
       //
       // `describe` is called with the answer rather than composed before the
@@ -253,6 +354,7 @@
         section.busy(true);
         applyConfigBusy();
         let answer = null;
+        let sentAgainst = panelVocabulary;
         try {
           // Quiescence. A pending intent may be carrying the very status this
           // change retires, so the change waits for the board to be settled and
@@ -265,7 +367,8 @@
           // compares this head before it changes anything, so a resend of a
           // change that already landed is refused as stale rather than made
           // twice. See sendChange.
-          const { response } = await sendChange(path, {
+          sentAgainst = panelVocabulary;
+          const { response, resends } = await sendChange(path, {
             method,
             headers: { "Content-Type": "application/json" },
             // The head the panel read, exactly as it read it. An empty one is a
@@ -274,11 +377,16 @@
             // than withheld.
             body: JSON.stringify(Object.assign({}, body, { expectedHead: panelHead }))
           }, true);
-          const payload = await response.json();
+          // A refusal whose body is not JSON — a proxy's HTML error page — is
+          // a refusal all the same, and is reported in a sentence naming what
+          // it was rather than as a request that never went.
+          const payload = await answerDocument(response);
           answer = {
-            applied: response.ok && payload.format === section.format &&
+            applied: response.ok && Boolean(payload) && payload.format === section.format &&
               payload.version === 1,
-            payload
+            payload: payload || {},
+            response,
+            resends
           };
         } catch (_) {
           // Only the exchange is guarded, so a defect in the rendering below
@@ -292,6 +400,33 @@
           return { applied: false, payload: null, message: section.unsent };
         }
         const payload = answer.payload;
+        if (!answer.applied && answer.resends > 0) {
+          // Refused only after the change was held and sent again. A proxy may
+          // have passed the first attempt to the board and answered this page
+          // with a wait anyway, and then the resend is refused as stale for
+          // the change it was carrying. So the configuration as it now stands
+          // is asked whether the change is in it — the one a stale refusal
+          // carries, or a fresh read — before anything is reported.
+          const current = payload.vocabulary || await currentVocabulary();
+          const landed = current ? configurationChangeLanded(method, path, body, sentAgainst, current) : null;
+          if (landed === true) {
+            section.closeForm();
+            adoptVocabulary(current);
+            applyConfigBusy();
+            // A removal's sentence counts the tasks it moved, which only the
+            // answer to the attempt that landed carried.
+            const said = method === "DELETE" ? section.saved : describe({ vocabulary: current });
+            section.report("", said);
+            return { applied: true, payload: { vocabulary: current }, message: said };
+          }
+          if (landed === null) {
+            if (current) adoptVocabulary(current);
+            applyConfigBusy();
+            const said = heldChangeDoubt(section.named);
+            section.report("error", said);
+            return { applied: false, payload, message: said };
+          }
+        }
         if (!answer.applied) {
           const stale = payload.error && payload.error.category === "stale-write";
           // A refusal that carries the vocabulary is a stale write, and the
@@ -310,7 +445,8 @@
           // is quoted exactly as the command would have printed it.
           const message = stale
             ? section.stale
-            : payload.error && payload.error.message || section.refused;
+            : payload.error && payload.error.message ||
+              (answer.response.ok ? section.refused : section.refused + " " + unexplainedRefusal(answer.response, answer.resends));
           section.report("error", message);
           return { applied: false, payload, message };
         }

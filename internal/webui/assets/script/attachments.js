@@ -871,7 +871,8 @@
           remove.addEventListener("click", async () => {
             const settle = holdSidebarFocus(remove, panel.list, row, adder.url);
             settle(Boolean(await writeThreadChange(
-              panel, "DELETE", attachmentPath(attachment.id), headed(head, {}), "that removal")));
+              panel, "DELETE", attachmentPath(attachment.id), headed(head, {}), "that removal", null,
+              attachmentRemoved(attachment.id))));
           });
           row.removeButton = remove;
           row.append(name, meta, remove);
@@ -931,7 +932,9 @@
               // the browser's guess for the same bytes differs from machine to
               // machine — two clones attaching one file have to label it once.
               headed(head, { kind: "file", name: chosen.name, content: encoded }),
-              "that attachment");
+              "that attachment", null,
+              attachmentAdded((attachment) => attachment.kind === "file" && attachment.name === chosen.name.trim() &&
+                attachment.size === chosen.size));
             if (!answer) return;
           }
           adder.clearFile();
@@ -942,7 +945,9 @@
           if (label) values.label = label;
           const answer = await writeThreadChange(
             panel, "POST", "/api/tasks/" + encodeURIComponent(taskID) + "/attachments",
-            headed(head, values), "that link");
+            headed(head, values), "that link", null,
+            attachmentAdded((attachment) => attachment.kind === "link" && attachment.url === destination &&
+              (attachment.label || "") === (label || "").trim()));
           if (!answer) return false;
           adder.clearLink();
           return true;
