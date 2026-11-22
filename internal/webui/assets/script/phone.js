@@ -19,12 +19,24 @@
       // browser's own storage: it is a fact about one phone, not about the
       // project, so it is never sent anywhere. A status is kept with a prefix
       // and the Deleted column as a word of its own, because a project may
-      // name a status anything, deleted included.
-      const phoneColumnKey = "workbook.board.phoneColumn";
+      // name a status anything, deleted included. The name it is kept under is
+      // the server's, and names the project (see phoneColumnStorageKey in
+      // handler.go): every local board is served at the same address, and one
+      // project's column is no answer for another's.
+      const phoneColumnKey = boardView.dataset.phoneColumnKey || "workbook.board.phoneColumn";
       // The column a phone opens on before it has one of its own: the first
       // column `workbook next` draws from, which only the server can name.
       const openingColumn = "status:" + (boardView.dataset.openingStatus || (statusDefinitions.length ? statusDefinitions[0][0] : ""));
       let phoneColumn = null;
+      // The column whose button the row was last slid to, so the row is slid
+      // once each time the column shown changes — chosen, or put back on
+      // opening — and never again by a render, which would undo a reader
+      // drawing the row along to look at the other names.
+      let revealedPhoneColumn = null;
+      // Whether the reader has picked a column on this page, and the column
+      // this phone remembered when the page opened.
+      let phoneColumnPicked = false;
+      const openingRemembered = rememberedPhoneColumn();
       function rememberedPhoneColumn() {
         try {
           return window.localStorage ? window.localStorage.getItem(phoneColumnKey) : null;
@@ -93,18 +105,24 @@
         });
         const keys = new Set(columns.map((column) => column.key));
         let wanted = phoneColumn;
-        if (!wanted || !keys.has(wanted)) {
-          const remembered = rememberedPhoneColumn();
-          wanted = remembered && keys.has(remembered) ? remembered : openingColumn;
-        }
+        // Until the reader picks a column on this page, the one this phone
+        // remembered is put back as soon as the board draws it. The Deleted
+        // column is drawn by this script after the page's first render, so a
+        // phone that was last looking at it comes back to it a moment after
+        // the page opens rather than not at all.
+        if (!phoneColumnPicked && openingRemembered && keys.has(openingRemembered)) wanted = openingRemembered;
+        if (!wanted || !keys.has(wanted)) wanted = openingColumn;
         if (!keys.has(wanted) && columns.length) wanted = columns[0].key;
         showPhoneColumn(wanted, false);
       }
       // Shows one column on a phone and presses its button. Every column but
       // that one is hidden by the phone rules alone, through the attribute,
       // so a wider screen — which never reads it — is untouched by any of it.
-      // When the reader chose it, it is remembered, the row slides to bring
-      // its button into view, and a page scrolled down the last column is
+      // The row slides to bring its button into view whenever the column
+      // shown changes: smoothly when the reader chose it, unless they asked
+      // for less motion, and at once when the board put a remembered column
+      // back, which moves the row and never the page. When the reader chose
+      // it, it is also remembered, and a page scrolled down the last column is
       // taken back to the top of this one.
       function showPhoneColumn(key, chosen) {
         phoneColumn = key;
@@ -124,12 +142,16 @@
             if (button.getAttribute("aria-pressed") !== value) button.setAttribute("aria-pressed", value);
           });
         }
+        if (chosen) rememberPhoneColumn(key);
+        if (!phoneLayout() || !pressed) return;
+        if (chosen || revealedPhoneColumn !== key) {
+          revealedPhoneColumn = key;
+          const left = Math.max(0, pressed.offsetLeft - (statusTabs.clientWidth - pressed.offsetWidth) / 2);
+          const still = !chosen || (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+          if (still || typeof statusTabs.scrollTo !== "function") statusTabs.scrollLeft = left;
+          else statusTabs.scrollTo({ left, behavior: "smooth" });
+        }
         if (!chosen) return;
-        rememberPhoneColumn(key);
-        if (!phoneLayout() || !pressed || typeof statusTabs.scrollTo !== "function") return;
-        const still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        const left = pressed.offsetLeft - (statusTabs.clientWidth - pressed.offsetWidth) / 2;
-        statusTabs.scrollTo({ left: Math.max(0, left), behavior: still ? "auto" : "smooth" });
         const top = board.getBoundingClientRect().top + window.scrollY - statusTabs.offsetHeight;
         if (window.scrollY > top) window.scrollTo(0, top);
       }
@@ -137,6 +159,7 @@
         statusTabs.addEventListener("click", (event) => {
           const button = event.target && event.target.closest && event.target.closest(".status-tab");
           if (!button || !statusTabs.contains(button)) return;
+          phoneColumnPicked = true;
           showPhoneColumn(statusTabKey(button), true);
         });
       }
@@ -158,9 +181,37 @@
           });
         });
       }
+      // The notices' box on a phone is held against the bottom of the screen,
+      // and the page keeps that much clear at the bottom whenever focus or a
+      // script brings a control into view (scroll-padding-bottom, in the phone
+      // rules): this keeps the number the same as the box's real height as
+      // reports come and go and their text wraps. Wider than a phone the box
+      // is no box at all and the number is left unset.
+      const notices = document.querySelector("[data-notices]");
+      function measureNotices() {
+        if (!notices) return;
+        const root = document.documentElement;
+        if (!root || !root.style || typeof root.style.setProperty !== "function") return;
+        const height = phoneLayout() ? Math.ceil(notices.getBoundingClientRect().height) : 0;
+        if (height > 0) root.style.setProperty("--wb-notices-height", height + "px");
+        else root.style.removeProperty("--wb-notices-height");
+      }
+      if (notices && typeof ResizeObserver === "function") new ResizeObserver(measureNotices).observe(notices);
+      function phoneWidthChanged() {
+        armCardDrags();
+        // A row that was not drawn could not be slid; it is now.
+        revealedPhoneColumn = null;
+        syncStatusTabs();
+        measureNotices();
+      }
       if (phoneWidth) {
-        if (typeof phoneWidth.addEventListener === "function") phoneWidth.addEventListener("change", armCardDrags);
-        else if (typeof phoneWidth.addListener === "function") phoneWidth.addListener(armCardDrags);
+        if (typeof phoneWidth.addEventListener === "function") phoneWidth.addEventListener("change", phoneWidthChanged);
+        else if (typeof phoneWidth.addListener === "function") phoneWidth.addListener(phoneWidthChanged);
       }
       armCardDrags();
       syncStatusTabs();
+      // The rule the page's opening script added to show a remembered column
+      // from the first frame (see body.html) has done its work: the column
+      // shown is now the one data-phone-current marks.
+      if (typeof document.querySelectorAll === "function") document.querySelectorAll("style[data-phone-opening]").forEach((rule) => rule.remove());
+      measureNotices();

@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"net/url"
 	pathpkg "path"
 	"strings"
 	"sync"
@@ -1142,6 +1143,12 @@ type pageData struct {
 	// column called ready would open a project that renamed it on the wrong
 	// one. See openingStatus.
 	OpeningStatus core.Status
+	// PhoneColumnKey is the name, in a phone browser's own storage, the column
+	// that phone was last looking at is kept under. It names the project, so
+	// two boards a phone opens at the same address — every local `workbook
+	// serve` uses the same default one — keep a column each. See
+	// phoneColumnStorageKey for what it is made of.
+	PhoneColumnKey string
 	// VocabularyHead is the ledger tip these columns were built from, so the
 	// poll can tell that the columns it is looking at have been superseded.
 	VocabularyHead string
@@ -2079,6 +2086,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		PriorityInk:           priorityInk(vocabulary.Priorities),
 		DefaultStatus:         vocabulary.Vocabulary.Default(),
 		OpeningStatus:         openingStatus(vocabulary.Vocabulary),
+		PhoneColumnKey:        phoneColumnStorageKey(vocabulary.Keys, projectName(vocabulary.Display)),
 		VocabularyHead:        vocabulary.Head,
 		VocabularyShape:       vocabularyShape(vocabulary),
 		Priorities:            pagePriorities(vocabulary.Priorities),
@@ -2123,6 +2131,31 @@ func openingStatus(vocabulary core.Vocabulary) core.Status {
 		return definitions[0].Status
 	}
 	return ""
+}
+
+// phoneColumnStorageKey is where a phone keeps the column it was last looking
+// at on this project's board. It names the project by the two things the page
+// already carries about it: the key the project's first tasks were minted
+// under, which no later change renames or removes (a key is only ever added,
+// and retiring it keeps it in the list, first), and the project's name. The
+// checkout's folder is not part of it: two worktrees of one project are one
+// project, and a hosted board's folder is nothing a reader knows about.
+//
+// The name can be changed, and a phone then opens the renamed project once on
+// the column `workbook next` draws from before it remembers again; two
+// projects that share both a first key and a name — two unnamed projects with
+// the default key — still share one remembered column. The page carries no
+// identity for a project that is both stable and unique, and these two are
+// the nearest it has.
+func phoneColumnStorageKey(keys core.KeySet, name string) string {
+	founding := keys.Current()
+	if definitions := keys.Keys(); len(definitions) > 0 {
+		founding = definitions[0].Key
+	}
+	if founding == "" {
+		founding = core.DefaultProjectKey
+	}
+	return "workbook.board.phoneColumn:" + url.QueryEscape(founding) + ":" + url.QueryEscape(name)
 }
 
 // serveConfig answers the configuration route, which is the board's page under

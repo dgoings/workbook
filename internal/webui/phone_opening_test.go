@@ -54,8 +54,8 @@ func TestHandlerOpensAPhoneOnTheColumnNextDrawsFrom(t *testing.T) {
 			if !strings.Contains(body, `data-opening-status="`+string(test.want)+`"`) {
 				t.Errorf("the page does not name %q as the column a phone opens on", test.want)
 			}
-			if count := strings.Count(body, `<section class="column" data-phone-current>`); count != 1 {
-				t.Errorf("the page marks %d columns as the one a phone shows first, want 1", count)
+			if count := strings.Count(body, ` data-phone-current>`); count != 1 || !strings.Contains(body, `<section class="column" data-phone-column="`+string(test.want)+`" data-phone-current>`) {
+				t.Errorf("the page marks %d columns as the one a phone shows first, want %q alone", count, test.want)
 			}
 			if !strings.Contains(body, `data-status-tab="`+string(test.want)+`" aria-pressed="true"`) || strings.Count(body, `" aria-pressed="true"><span class="status-tab__label">`) != 1 {
 				t.Errorf("the page does not press %q alone in the row of columns", test.want)

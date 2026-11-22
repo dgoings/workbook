@@ -110,48 +110,61 @@
     <a class="nav-switch" href="/?deleted=1" role="switch" aria-checked="false" data-deleted-toggle><span class="nav-switch__label nav-switch__label--deleted" data-deleted-label>Show Deleted</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></a>
     <a class="filter-row__clear" href="/" data-filter-clear hidden>Clear filters</a>
   </div>
-  <!-- What the board has to say to a reader who has moved on: a save that
-       already returned, or a refused change whose card the board has since
-       stopped drawing. It sits outside main so it is readable from whatever
-       route the user is on, and it is cleared by a person rather than by the
-       next poll. -->
-  <div class="notice" data-notice role="status" aria-live="polite" hidden></div>
-  <!-- What the board says while a change of the reader's waits because the
-       server asked this page to send it later: a proxy in front of the board
-       answered 429 or 503 with a Retry-After. The change is still drawn as made
-       and is sent again on its own, so this offers no control; there is nothing
-       to do but wait or keep working. It says the one thing that would lose
-       the change, because until it is sent it exists only in this tab, and the
-       browser asks before the tab is closed or left meanwhile. It comes down
-       by itself once every waiting change has been sent or reported. -->
-  <div class="notice" data-held-change-notice role="status" aria-live="polite" hidden>
-    <div class="notice__report">
-      <p>The server asked this page to wait before sending your change. It is held in this tab and will be sent again shortly; closing or leaving the tab before then loses it.</p>
+  <!-- The board's notices, in one place. Wider than a phone, this element
+       draws nothing of its own — it is display: contents there, so each notice
+       is laid out in body's column exactly as it was before the wrapper existed.
+       On a phone it is the one box held against the bottom of the screen: the
+       notices stack inside it in this order, newest report last and so nearest
+       the thumb, it is never taller than a third of the screen and scrolls
+       inside itself past that, and its height is what the page keeps clear at
+       the bottom when focus or a script scrolls a control into view (see the
+       phone rules in layout.css and watchNotices in phone.js). One box rather
+       than three, because three boxes each held to the same bottom edge are
+       drawn on top of one another. -->
+  <div class="notices" data-notices>
+    <!-- What the board has to say to a reader who has moved on: a save that
+         already returned, or a refused change whose card the board has since
+         stopped drawing. It sits outside main so it is readable from whatever
+         route the user is on, and it is cleared by a person rather than by the
+         next poll. -->
+    <div class="notice" data-notice role="status" aria-live="polite" hidden></div>
+    <!-- What the board says while a change of the reader's waits because the
+         server asked this page to send it later: a proxy in front of the board
+         answered 429 or 503 with a Retry-After. The change is still drawn as made
+         and is sent again on its own, so this offers no control; there is nothing
+         to do but wait or keep working. It says the one thing that would lose
+         the change, because until it is sent it exists only in this tab, and the
+         browser asks before the tab is closed or left meanwhile. It comes down
+         by itself once every waiting change has been sent or reported. -->
+    <div class="notice" data-held-change-notice role="status" aria-live="polite" hidden>
+      <div class="notice__report">
+        <p>The server asked this page to wait before sending your change. It is held in this tab and will be sent again shortly; closing or leaving the tab before then loses it.</p>
+      </div>
     </div>
-  </div>
-  <!-- What the board says when the project's statuses change under a page that
-       is already open.
+    <!-- What the board says when the project's statuses change under a page that
+         is already open.
 
-       It offers a reload rather than doing one, and it never rebuilds the
-       columns in place. A card node is the anchor for everything the reader has
-       in flight — an open edit form, a staged change waiting on a confirmation,
-       a refusal banner they have not read — and rebuilding the board to add a
-       column would destroy all of it to show a column they may not care about.
-       So the page keeps drawing the vocabulary it was served with, says plainly
-       that it is out of date, and lets the reader choose the moment.
+         It offers a reload rather than doing one, and it never rebuilds the
+         columns in place. A card node is the anchor for everything the reader has
+         in flight — an open edit form, a staged change waiting on a confirmation,
+         a refusal banner they have not read — and rebuilding the board to add a
+         column would destroy all of it to show a column they may not care about.
+         So the page keeps drawing the vocabulary it was served with, says plainly
+         that it is out of date, and lets the reader choose the moment.
 
-       Colors are no longer among the things it says that about, whoever
-       changed them: one set on this page is drawn at once, because a
-       configuration answer carries the stylesheet the server composed and the
-       page swaps it without touching a card, and one another clone set is a
-       difference nobody loses work over. So what raises this is the columns or
-       the priorities differing from the ones the page is drawing — see
-       noteVocabularyChange — and the sentence below says exactly that rather
-       than naming where a change came from. -->
-  <div class="notice" data-vocabulary-notice role="status" aria-live="polite" hidden>
-    <div class="notice__report">
-      <p>This project's columns or priorities have changed. The board is still drawing the ones it was opened with.</p>
-      <button type="button" data-vocabulary-reload>Reload the board</button>
+         Colors are no longer among the things it says that about, whoever
+         changed them: one set on this page is drawn at once, because a
+         configuration answer carries the stylesheet the server composed and the
+         page swaps it without touching a card, and one another clone set is a
+         difference nobody loses work over. So what raises this is the columns or
+         the priorities differing from the ones the page is drawing — see
+         noteVocabularyChange — and the sentence below says exactly that rather
+         than naming where a change came from. -->
+    <div class="notice" data-vocabulary-notice role="status" aria-live="polite" hidden>
+      <div class="notice__report">
+        <p>This project's columns or priorities have changed. The board is still drawing the ones it was opened with.</p>
+        <button type="button" data-vocabulary-reload>Reload the board</button>
+      </div>
     </div>
   </div>
   <main id="board" tabindex="-1">
@@ -187,7 +200,7 @@
          reason: which key that is belongs to the server, and a client
          re-deriving it from the list could disagree about where the task it
          just created went. -->
-    <div class="board-view" data-board-view data-priorities="{{ .Priorities }}" data-default-priority="{{ .DefaultPriority }}" data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-opening-status="{{ .OpeningStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-vocabulary-shape="{{ .VocabularyShape }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}" data-keys="{{ .Keys }}" data-current-key="{{ .CurrentKey }}">
+    <div class="board-view" data-board-view data-priorities="{{ .Priorities }}" data-default-priority="{{ .DefaultPriority }}" data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-opening-status="{{ .OpeningStatus }}" data-phone-column-key="{{ .PhoneColumnKey }}" data-vocabulary-head="{{ .VocabularyHead }}" data-vocabulary-shape="{{ .VocabularyShape }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}" data-keys="{{ .Keys }}" data-current-key="{{ .CurrentKey }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <!-- The row of statuses a phone-sized screen switches columns with. That
            screen shows one column at a time, and this row is how a reader gets
@@ -207,6 +220,48 @@
            project's statuses off every [data-status] in the board, and these
            buttons are not columns. -->
       <nav class="status-tabs" data-status-tabs aria-label="Columns">{{ range .Board.Columns }}<button type="button" class="status-tab" data-status-tab="{{ .Status }}" aria-pressed="{{ if eq .Status $.OpeningStatus }}true{{ else }}false{{ end }}"><span class="status-tab__label">{{ shown .Label }}</span> <span class="status-tab__count" data-status-tab-count>{{ len .Tasks }}</span></button>{{ end }}</nav>
+      <!-- A phone that was last looking at another column opens on it from the
+           first frame it draws, not on the column above and then on its own a
+           moment later, which on a slow connection is long enough to see: the
+           page's main script is at its very end, and runs only once every card
+           has arrived. So this runs here, after the row and before any column
+           or card, and does the one thing that cannot wait — it reads the
+           column this phone remembers for this project, presses that column's
+           button, slides the row to it, and adds a rule that shows that column
+           in place of the one the server marked, under the same phone width
+           query. Everything else, the check that the column still exists
+           included, is phone.js's, which takes over with the rest of the
+           script, moves data-phone-current to the column shown and removes
+           this rule (data-phone-opening). A remembered column this row does not
+           offer is left to phone.js. It is an inline script for the reason the
+           main one is: the board's policy allows the page's own inline scripts
+           and nothing else, and this is one of them. -->
+      <script>
+        (() => {
+          const view = document.querySelector("[data-board-view]");
+          const row = view && view.querySelector("[data-status-tabs]");
+          if (!row || !window.matchMedia || !window.matchMedia("(max-width: 560px)").matches) return;
+          if (!window.CSS || typeof window.CSS.escape !== "function") return;
+          let remembered = null;
+          try {
+            remembered = window.localStorage ? window.localStorage.getItem(view.dataset.phoneColumnKey) : null;
+          } catch (_) {
+            return;
+          }
+          if (!remembered || remembered.indexOf("status:") !== 0) return;
+          const status = remembered.slice("status:".length);
+          const buttons = [...row.querySelectorAll("[data-status-tab]")];
+          const chosen = buttons.find((button) => button.dataset.statusTab === status);
+          if (!chosen) return;
+          buttons.forEach((button) => button.setAttribute("aria-pressed", button === chosen ? "true" : "false"));
+          const column = "[data-phone-column=\"" + window.CSS.escape(status) + "\"]";
+          const rule = document.createElement("style");
+          rule.setAttribute("data-phone-opening", "");
+          rule.textContent = "@media (max-width: 560px) { .column[data-phone-current]:not(" + column + ") { display: none; } .column" + column + " { display: grid; } }";
+          document.head.append(rule);
+          row.scrollLeft = Math.max(0, chosen.offsetLeft - (row.clientWidth - chosen.offsetWidth) / 2);
+        })();
+      </script>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built
            column because it is the one column that is not a status: the server
@@ -214,7 +269,7 @@
            the vocabulary no longer holds. -->
       <section class="board" data-board aria-label="Task status board">
         {{ range .Board.Columns }}
-        <section class="column"{{ if eq .Status $.OpeningStatus }} data-phone-current{{ end }}>
+        <section class="column" data-phone-column="{{ .Status }}"{{ if eq .Status $.OpeningStatus }} data-phone-current{{ end }}>
           <header class="column__header"><h2 class="column__heading">{{ shown .Label }} <span class="count" data-count="{{ .Status }}">{{ len .Tasks }}</span></h2><a class="new-task-link" href="/tasks/new?status={{ .Status }}">New Task</a></header>
           <!-- data-status-label carries the project's own name for this column.
                The client builds its status list out of these nodes rather than

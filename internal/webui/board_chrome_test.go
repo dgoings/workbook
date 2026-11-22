@@ -214,6 +214,11 @@ func TestHandlerBoardDrawsOneColumnPerConfiguredStatus(t *testing.T) {
 // checked by this one function: the served page's markup walked by
 // boardChildren, and the client's live board reported by the DOM harness in
 // deleted_column_client_test.go.
+// boardColumnTag is the opening tag of one status column: the class, the
+// status a phone's opening script finds it by, and the mark of the column a
+// phone opens on. The client's fake DOM draws the class alone.
+var boardColumnTag = regexp.MustCompile(`^<section class="column"(?: data-phone-column="[^"]+")?(?: data-phone-current)?>$`)
+
 func assertBoardTracks(t *testing.T, subject string, children []string, columns int, deletedShown bool) {
 	t.Helper()
 	want := columns
@@ -230,10 +235,10 @@ func assertBoardTracks(t *testing.T, subject string, children []string, columns 
 			}
 			continue
 		}
-		// The column a phone opens on is marked by the server, so a phone
-		// shows it before the script runs; the mark is an attribute of a
-		// column and makes it no less one.
-		if child != `<section class="column">` && child != `<section class="column" data-phone-current>` {
+		// Each column names its status for a phone, and the one a phone opens
+		// on is marked by the server, so a phone shows it before the script
+		// runs; both are attributes of a column and make it no less one.
+		if !boardColumnTag.MatchString(child) {
 			t.Errorf("%s drew a board track that is not a column at %d: %q", subject, index, child)
 		}
 	}

@@ -59,7 +59,9 @@
        is at least 1000px wide beside a sidebar of at most 260px. Everything
        wider keeps the layout above, rule for rule: phone_desktop_test.go
        measures each wider route with these rules and without them and holds
-       the two to the pixel. The number is also in phone.js, which leaves the
+       the two to the pixel, and desktop_layout_test.go holds the board at
+       1280 and 1440 to a recording made before these rules existed, which is
+       what catches a phone rule written outside this query. The number is also in phone.js, which leaves the
        cards undraggable below it.
 
        The page scrolls as one document here rather than inside main. A
@@ -79,8 +81,20 @@
          task has scrolled away from: drawn after main and held against the
          bottom edge while there is page below it, and in its own place at
          the end once the reader gets there, so it never covers the last of
-         the page for good. The status row has the top edge. */
-      .notice { order: 1; position: sticky; bottom: 0; z-index: 5; padding: .5rem .75rem; border-top: 1px solid var(--wb-hairline); }
+         the page for good. The status row has the top edge.
+
+         Every notice showing at once is in this one box, stacked, so none is
+         drawn over another. The box is never more than a third of the screen
+         tall — a phone with its keyboard up has little enough left — and
+         scrolls inside itself past that, so every report and every button in
+         it can still be reached. Its height, kept in --wb-notices-height by
+         phone.js, is kept clear at the bottom of the screen whenever focus or a
+         script brings a control into view, so a control never lands under it.
+         The notices inside it neither scroll nor cap themselves: the box does
+         both for all of them. */
+      html { scroll-padding-bottom: var(--wb-notices-height, 0px); }
+      .notices { display: flex; flex-direction: column; order: 1; position: sticky; bottom: 0; z-index: 5; max-height: 33vh; max-height: 33dvh; overflow-y: auto; overscroll-behavior: contain; }
+      .notice { flex: 0 0 auto; max-height: none; overflow: visible; padding: .5rem .75rem; border-top: 1px solid var(--wb-hairline); }
       .notice__report { flex-wrap: wrap; }
       .board-view { display: block; height: auto; }
       /* One column at a time, under the row that switches between them. The
@@ -127,5 +141,13 @@
       :root :is(button, .header-link, .new-task-link, .filter-row__clear, .board-link, .task-route__close, .attachment__name a, .relationship-row h4 a, .relationship-kind__option, .attachment-add__choose) { min-width: 2.75rem; }
       :root :is(.header-link, .new-task-link, .filter-row__clear, .board-link, .task-route__close, .notice a, .attachment__name a, .relationship-row h4 a, .attachment-add__choose) { display: inline-flex; align-items: center; justify-content: center; }
       .task-id-copy { display: inline-flex; align-items: center; }
+      /* Every field is set in at least 16px, because a phone's browser zooms
+         the page in on a field set smaller as soon as it takes focus — iPhone
+         Safari does — and leaves it zoomed, and so scrollable sideways. The
+         rule names the elements and no class, and is important, so a field
+         added later is covered whatever its own rule says; no field on any
+         page is set larger, so nothing is made smaller by it.
+         phone_fields_test.go measures every field on every page in scope. */
+      :root :is(input, select, textarea, [contenteditable]) { font-size: max(1rem, 16px) !important; }
       .label-chip { padding-left: .6rem; }
     }

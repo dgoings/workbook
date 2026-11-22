@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -32,6 +33,12 @@ type phoneBoard struct {
 	tasks   []core.Task
 	created int
 	edits   int
+	// statuses are the board's columns, phoneStatuses unless a test asks for
+	// others; project is what the project is called, and key the key its
+	// first tasks were minted under, "" for the default one.
+	statuses []phoneStatus
+	project  string
+	key      string
 }
 
 const (
@@ -40,15 +47,27 @@ const (
 	phoneIdentity  = "dylan@example.com"
 	phoneLongLabel = "a-label-long-enough-to-run-past-the-edge-of-a-narrow-phone-screen"
 	phoneLongName  = "someone.with.a.remarkably.long.address.that.has.no.spaces@a-long-subdomain.example.com"
+	// phoneProjectName is what the phone board's project is called.
+	phoneProjectName = "Atlas"
 )
 
-// phoneStatuses are the board's columns in order. queued is the one tagged
-// next.
-var phoneStatuses = []struct {
+// rememberPhoneColumn is a script, for BeforeLoad, that leaves column in the
+// browser's storage as the one a phone was last looking at on the board of a
+// project called name whose keys are the default ones.
+func rememberPhoneColumn(name, column string) string {
+	return "try { localStorage.setItem(" + strconv.Quote(phoneColumnStorageKey(core.KeySet{}, name)) + ", " + strconv.Quote(column) + "); } catch (_) {}"
+}
+
+// phoneStatus is one of a phone board's columns.
+type phoneStatus struct {
 	status core.Status
 	label  string
 	tags   []core.StatusTag
-}{
+}
+
+// phoneStatuses are the board's columns in order. queued is the one tagged
+// next.
+var phoneStatuses = []phoneStatus{
 	{"inbox", "Inbox", []core.StatusTag{core.StatusTagDefault}},
 	{"queued", "Up next", []core.StatusTag{core.StatusTagNext}},
 	{"doing", "Doing", nil},
@@ -56,10 +75,16 @@ var phoneStatuses = []struct {
 	{"shipped", "Shipped", []core.StatusTag{core.StatusTagDone}},
 }
 
-func phoneVocabulary(t *testing.T) core.Vocabulary {
+// sevenPhoneStatuses are phoneStatuses and two more, which with their names
+// make a row wider than any phone.
+var sevenPhoneStatuses = append(append([]phoneStatus{}, phoneStatuses...),
+	phoneStatus{"waiting", "Waiting on someone", nil},
+	phoneStatus{"archived", "Archived for good", []core.StatusTag{core.StatusTagDone}})
+
+func phoneVocabulary(t *testing.T, statuses []phoneStatus) core.Vocabulary {
 	t.Helper()
-	definitions := make([]core.StatusDefinition, len(phoneStatuses))
-	for index, status := range phoneStatuses {
+	definitions := make([]core.StatusDefinition, len(statuses))
+	for index, status := range statuses {
 		definitions[index] = core.StatusDefinition{Status: status.status, Label: status.label, Rank: fmt.Sprintf("%d/1", index+1), Tags: status.tags}
 	}
 	vocabulary, err := core.NewVocabulary(definitions, nil, nil)
@@ -72,6 +97,12 @@ func phoneVocabulary(t *testing.T) core.Vocabulary {
 var phoneStamp = time.Date(2026, time.November, 20, 9, 30, 0, 0, time.UTC)
 
 func newPhoneBoard() *phoneBoard {
+	return newPhoneBoardWith(phoneStatuses)
+}
+
+// newPhoneBoardWith is the phone board with other columns. queued, which
+// holds the cards a stroke scrolls, has to be among them.
+func newPhoneBoardWith(statuses []phoneStatus) *phoneBoard {
 	wideCode := "```\n" + strings.Repeat("wide_identifier_", 12) + "= compute(" + strings.Repeat("argument, ", 10) + ")\n```"
 	task := func(id, title string, status core.Status, priority core.Priority, rank string) core.Task {
 		made := clientPlacementTask(id, title, status, priority)
@@ -99,15 +130,15 @@ func newPhoneBoard() *phoneBoard {
 	for index := 3; index <= 14; index++ {
 		tasks = append(tasks, task(fmt.Sprintf("WB-01J0000000000000000000PH%02d", index), fmt.Sprintf("Queued task %d", index), "queued", core.PriorityLow, fmt.Sprintf("%d/1", index)))
 	}
-	statusTasks := map[core.Status]int{"inbox": 2, "doing": 3, "review": 1, "shipped": 4}
+	statusTasks := map[core.Status]int{"inbox": 2, "doing": 3, "review": 1, "shipped": 4, "waiting": 1, "archived": 2}
 	next := 20
-	for _, status := range phoneStatuses {
+	for _, status := range statuses {
 		for count := 0; count < statusTasks[status.status]; count++ {
 			tasks = append(tasks, task(fmt.Sprintf("WB-01J0000000000000000000PH%02d", next), fmt.Sprintf("%s task %d", status.label, count+1), status.status, core.PriorityMedium, fmt.Sprintf("%d/1", count+1)))
 			next++
 		}
 	}
-	return &phoneBoard{tasks: tasks}
+	return &phoneBoard{tasks: tasks, statuses: statuses, project: phoneProjectName}
 }
 
 func (board *phoneBoard) find(id string) (int, error) {
@@ -141,7 +172,11 @@ func (board *phoneBoard) task(id string) core.Task {
 
 func (board *phoneBoard) options(t *testing.T) Options {
 	t.Helper()
-	vocabulary := phoneVocabulary(t)
+	vocabulary := phoneVocabulary(t, board.statuses)
+	keys := core.KeySet{}
+	if board.key != "" {
+		keys = core.FoundingKeySet(board.key)
+	}
 	detail := func(_ context.Context, id string) (core.TaskDetail, error) {
 		board.mu.Lock()
 		defer board.mu.Unlock()
@@ -158,7 +193,7 @@ func (board *phoneBoard) options(t *testing.T) Options {
 	}
 	return Options{
 		Vocabulary: func(context.Context) (VocabularyState, error) {
-			return VocabularyState{Vocabulary: vocabulary, Head: "phone-head", Display: core.DisplaySettings{Name: "Atlas"}}, nil
+			return VocabularyState{Vocabulary: vocabulary, Head: "phone-head", Display: core.DisplaySettings{Name: board.project}, Keys: keys}, nil
 		},
 		Identity: phoneIdentity,
 		List: func(context.Context) ([]core.Task, error) {

@@ -204,7 +204,7 @@ const phoneBoardScript = phoneHelpers + `
   reading.TabInRow = tabRect.left >= rowRect.left - 0.5 && tabRect.right <= rowRect.right + 0.5;
   reading.RowScrolled = row.scrollLeft;
   reading.ColumnUnderRow = document.querySelector(".column[data-phone-current]").getBoundingClientRect().top - rowRect.bottom;
-  try { reading.Remembered = localStorage.getItem("workbook.board.phoneColumn") || ""; } catch (_) { reading.Remembered = "unreadable"; }
+  try { reading.Remembered = localStorage.getItem(document.querySelector("[data-board-view]").dataset.phoneColumnKey) || ""; } catch (_) { reading.Remembered = "unreadable"; }
 
   // A chooser's menu opened over the row stays inside the screen.
   window.scrollTo(0, 0);
@@ -329,8 +329,8 @@ func TestBrowserPhoneBoardReturnsToTheLastColumnViewed(t *testing.T) {
   await waitFor(() => document.querySelector('[data-status-tab="doing"]'), "the row");
   await tap(document.querySelector('[data-status-tab="doing"]'));
 })()`, want: "doing"},
-		{name: "gone", beforeLoad: `try { localStorage.setItem("workbook.board.phoneColumn", "status:ready"); } catch (_) {}`, want: "queued"},
-		{name: "deleted column not shown", beforeLoad: `try { localStorage.setItem("workbook.board.phoneColumn", "deleted"); } catch (_) {}`, want: "queued"},
+		{name: "gone", beforeLoad: rememberPhoneColumn(phoneProjectName, "status:ready"), want: "queued"},
+		{name: "deleted column not shown", beforeLoad: rememberPhoneColumn(phoneProjectName, "deleted"), want: "queued"},
 		{name: "no storage", beforeLoad: `Object.defineProperty(window, "localStorage", { configurable: true, get() { throw new DOMException("The operation is insecure.", "SecurityError"); } });`, setup: phoneHelpers + `(async () => {
   await waitFor(() => document.querySelector('[data-status-tab="doing"]'), "the row");
   await tap(document.querySelector('[data-status-tab="doing"]'));
