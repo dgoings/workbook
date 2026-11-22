@@ -1697,13 +1697,22 @@ are all of them:
 - after `origin` accepts task refs, that publication lists `origin`'s identity
   ref, one ref, to report an edit that landed just as `origin` was marked as
   moved;
+- a board save published inline lists `origin`'s identity ref before its push,
+  one ref, every time; the release before asked once, at the board's first
+  publication, and trusted that answer for as long as the board ran, which
+  would let a board running across a move go on publishing to the old place;
 - a board save handed to a watcher first lists origin's tracking identity ref
   locally once more, one local Git process, because the board's last listing
   can be older than the watcher's last fetch.
 
 A test records the Git commands of a scripted session, including one command
 handed to a watcher, against a build from before the setting and fails on any
-difference beyond the first three; the board's is covered by its own test.
+difference beyond the first three; the board's two are covered by their own
+tests. Measured against a local remote, an inline `workbook update` goes from
+two connections to the remote to three (the listing after the push), and an
+inline board save from one to three (the listings before and after); a command
+or board save handed to a watcher opens none, and the watcher's round goes
+from two to three.
 Comparing operations by content as well as ID, below, runs no Git command.
 
 ### Choosing the remote and moving the tasks
