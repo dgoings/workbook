@@ -760,3 +760,84 @@ func TestAReplayOfANameGitCannotStoreTakesTheReplayedCommitsIdentity(t *testing.
 		}
 	}
 }
+
+// A replay is never refused for the form of a name already in history, even
+// when the commit it replays was written by some other tool under an identity
+// Git will not write again: an empty name, a name of nothing but the
+// characters Git strips, or an identity line with no email at all. The replay
+// still synchronizes, under a name that is nobody's rather than anybody
+// else's, and the operation keeps the actor it was recorded under.
+func TestAReplayOfACommitWithAnIdentityGitWillNotWriteStillSynchronizes(t *testing.T) {
+	t.Parallel()
+	for name, identity := range map[string]string{
+		"an empty name and email":    " <>",
+		"only characters Git strips": ` ";" <;>`,
+		"no email at all":            " written-by-another-tool",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			first, second, config := syncRepositories(t)
+			syncGit(t, second.Root, "config", "user.email", "<bob@example.test>")
+			second = openSyncCloneAt(t, second.Root)
+			bob := actorService(second, config, "<bob@example.test>")
+
+			shared := createSyncTask(t, first, config, "Shared")
+			if _, err := first.Sync(context.Background(), config); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := second.Fetch(context.Background(), config); err != nil {
+				t.Fatal(err)
+			}
+			updateSyncTask(t, first, config, shared.ID, "Shared, renamed remotely")
+			if _, err := first.Sync(context.Background(), config); err != nil {
+				t.Fatal(err)
+			}
+			high := core.PriorityHigh
+			local, err := bob.UpdateMutation(context.Background(), shared.ID, core.UpdateInput{Priority: &high})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Another tool rewrites the unpublished edit's commit under an
+			// identity Git would refuse to write.
+			ref := taskRefPrefix + shared.ID
+			raw := syncGit(t, second.Root, "cat-file", "commit", local.Task.Head)
+			header, message, _ := strings.Cut(raw, "\n\n")
+			var rewritten []string
+			for _, line := range strings.Split(header, "\n") {
+				if role, _, _ := strings.Cut(line, " "); role == "author" || role == "committer" {
+					line = role + identity + " 1700000000 +0000"
+				}
+				rewritten = append(rewritten, line)
+			}
+			forged := strings.TrimSpace(syncGitInput(t, second.Root,
+				[]byte(strings.Join(rewritten, "\n")+"\n\n"+message),
+				"hash-object", "-t", "commit", "-w", "--literally", "--stdin"))
+			syncGit(t, second.Root, "update-ref", ref, forged, local.Task.Head)
+
+			syncGit(t, second.Root, "config", "user.email", "bob@example.test")
+			second = openSyncCloneAt(t, second.Root)
+			result, err := second.Sync(context.Background(), config)
+			if err != nil {
+				t.Fatalf("Sync() error = %v; result = %#v", err, result)
+			}
+			assertSyncOutcome(t, result.Fetch, shared.ID, SyncReconciled)
+			head := refValue(t, second, ref)
+			if head == forged {
+				t.Fatalf("the sync did not replay %s", forged)
+			}
+			if got := remoteRefValue(t, second, ref); got != head {
+				t.Fatalf("origin holds %s, want the replayed commit %s published", got, head)
+			}
+			author, committer := commitIdentities(t, second.Root, head)
+			for _, recorded := range []string{author, committer} {
+				if !strings.HasPrefix(recorded, "unknown <") {
+					t.Errorf("replay identity %q, want a name that is nobody's", recorded)
+				}
+			}
+			if got := operationActor(t, second.Root, head); got != "<bob@example.test>" {
+				t.Errorf("operation actor %q, want the name it was recorded under", got)
+			}
+		})
+	}
+}

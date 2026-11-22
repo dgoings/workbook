@@ -653,9 +653,14 @@ When a replayed edit's name is not the checkout's `user.email` and Git could
 not store it exactly, such as a `user.email` somebody configured with angle
 brackets around it, which Git quietly drops, the replayed commit takes its
 author and committer from the commit being replayed: the identity Git recorded
-when the edit was made. So no other person's name is attached, and the task or
-the configuration still synchronizes. Only a new edit is refused for such a
-name, and only when `WORKBOOK_ACTOR` gives it, as below.
+when the edit was made. A commit some other tool wrote can record an identity
+Git will not write again: an empty name, a name made only of the characters Git
+strips, or no email at all. The replay then takes the recorded email as its
+name, or the name `unknown` when the email will not do either, and a commit
+missing its author or committer line takes the other one. So no other person's
+name is attached, and the task or the configuration still synchronizes. Only
+a new edit is refused for such a name, and only when `WORKBOOK_ACTOR` gives it,
+as below.
 
 The name must be an email address, by the same rule `--assign` applies to a
 person, with no `/label` part. It also must be valid UTF-8, must not contain
