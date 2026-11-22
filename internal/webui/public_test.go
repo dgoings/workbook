@@ -22,6 +22,11 @@ func TestParsePublicURLAcceptsAnHTTPSOriginOrALocalHTTPOne(t *testing.T) {
 		{"http://localhost:8080", "http://localhost:8080"},
 		{"http://127.0.0.1:9000/", "http://127.0.0.1:9000"},
 		{"http://[::1]:9000", "http://[::1]:9000"},
+		{"https://xn--bcher-kva.example", "https://xn--bcher-kva.example"},
+		{"https://my-board.example.com.", "https://my-board.example.com"},
+		{"https://203.0.113.7", "https://203.0.113.7"},
+		{"https://[2001:db8::1]:8443", "https://[2001:db8::1]:8443"},
+		{"https://tasks.example.com:65535", "https://tasks.example.com:65535"},
 	}
 	for _, test := range tests {
 		public, err := ParsePublicURL(test.raw)
@@ -58,6 +63,21 @@ func TestParsePublicURLRefusesAnythingButAnOrigin(t *testing.T) {
 		"https://tasks.example.com:https",
 		"mailto:sam@example.com",
 		" https://tasks.example.com",
+		// A host no browser can send, and a port no browser writes that
+		// way: each would start a board that refuses every request.
+		"https://*.example.com",
+		"https://tasks_example.com",
+		"https://-tasks.example.com",
+		"https://tasks-.example.com",
+		"https://tasks..example.com",
+		"https://bücher.example",
+		"https://" + strings.Repeat("a", 64) + ".example.com",
+		"https://" + strings.Repeat("abcdefghi.", 26) + "com",
+		"https://10.0.0.010",
+		"https://127.1",
+		"https://tasks.example.com:0443",
+		"https://tasks.example.com:00",
+		"https://tasks.example.com:+443",
 	} {
 		_, err := ParsePublicURL(raw)
 		if err == nil {
@@ -68,7 +88,8 @@ func TestParsePublicURLRefusesAnythingButAnOrigin(t *testing.T) {
 			t.Errorf("ParsePublicURL(%q) category = %q, want %q", raw, core.CategoryOf(err), core.CategoryInvocation)
 		}
 		message := err.Error()
-		if !strings.Contains(message, "https://") || !strings.Contains(message, "path") {
+		if !strings.Contains(message, "https://") || !strings.Contains(message, "path") ||
+			!strings.Contains(message, "letters, digits and hyphens") || !strings.Contains(message, "no leading zero") {
 			t.Errorf("ParsePublicURL(%q) error = %q, want a sentence saying what is accepted", raw, message)
 		}
 	}

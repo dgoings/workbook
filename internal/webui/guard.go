@@ -39,7 +39,8 @@ const defaultHTTPPort = "80"
 //     any loopback host and an explicit bind by that address alone; a wildcard
 //     bind is the one case with no host to pin, and pins only the port.
 //   - An Origin header, when the browser sends one, must name the board itself.
-//     Cross-site requests that carry one are refused whatever their method.
+//     Cross-site requests that carry one are refused whatever their method, and
+//     so is a request carrying more than one, which no browser sends.
 //   - A mutating request must declare application/json, which no cross-site
 //     form can send without a preflight.
 //
@@ -181,6 +182,11 @@ func (guard *originGuard) reject(request *http.Request) (int, string) {
 	local := ok && port == guard.port && guard.hostIsBoard(host)
 	if !local && (guard.public == nil || !guard.public.namesHost(request.Host)) {
 		return http.StatusForbidden, fmt.Sprintf("Host %q is not this board at %q", request.Host, guard.named())
+	}
+	// A browser sends one Origin header at most. Two are not a browser's,
+	// and reading only the first would let a good one shield a bad one.
+	if len(request.Header.Values("Origin")) > 1 {
+		return http.StatusForbidden, fmt.Sprintf("the request carries more than one Origin header, which no browser sends, so it is not from this board at %q", guard.named())
 	}
 	if origin := request.Header.Get("Origin"); origin != "" {
 		// A wildcard bind's Origin test compares with the Host the browser

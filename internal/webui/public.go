@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -28,7 +29,9 @@ type PublicAddress struct {
 
 // publicURLRule is the sentence every refusal of a public address carries, so
 // whoever typed one learns what is accepted rather than only what was wrong.
-const publicURLRule = "the public address must be an https:// address such as https://tasks.example.com, or http:// only for this machine (localhost or a loopback address), with no path beyond /, no query and no user name"
+const publicURLRule = "the public address must be an https:// address such as https://tasks.example.com, or http:// only for this machine (localhost or a loopback address), with no path beyond /, no query and no user name; " +
+	"its host is an IP address or a name of letters, digits and hyphens between dots (the xn-- form for other scripts), " +
+	"and a port, when given, is a number from 1 to 65535 with no leading zero"
 
 // ParsePublicURL reads the address a hosted board is opened at.
 //
@@ -36,7 +39,9 @@ const publicURLRule = "the public address must be an https:// address such as ht
 // names this machine, because a browser treats an http:// page on any other
 // host as reachable by whoever is on the network path. Anything beyond the
 // origin — a path other than /, a query, a fragment, a user name or password —
-// is refused, and so is a port that is not a number in range. The error is an
+// is refused, and so is a host that is neither an IP address nor a name a
+// browser can send, and a port that is not a number in range written without
+// a leading zero: a board started with any of them would refuse every request. The error is an
 // invocation error: the value was given to `workbook serve` at startup, and
 // nothing about the repository is wrong.
 func ParsePublicURL(raw string) (PublicAddress, error) {
@@ -66,19 +71,50 @@ func ParsePublicURL(raw string) (PublicAddress, error) {
 	if host == "" {
 		return refuse("it names no host")
 	}
+	if net.ParseIP(host) == nil && !validHostName(host) {
+		return refuse("its host is not a host name a browser can send")
+	}
 	port := parsed.Port()
 	if port == "" {
 		if strings.HasSuffix(parsed.Host, ":") {
 			return refuse("its port is empty")
 		}
 		port = defaultPort(parsed.Scheme)
-	} else if number, err := strconv.Atoi(port); err != nil || number < 1 || number > 65535 {
-		return refuse("its port is not a number from 1 to 65535")
+	} else if number, err := strconv.Atoi(port); err != nil || number < 1 || number > 65535 || port[0] == '0' {
+		// A browser writes a port without leading zeros, so 0443 would
+		// never match the Host and Origin a request carries.
+		return refuse("its port is not a number from 1 to 65535 with no leading zero")
 	}
 	if parsed.Scheme == "http" && !loopbackHost(host) {
 		return refuse("http:// is accepted only for this machine")
 	}
 	return PublicAddress{scheme: parsed.Scheme, host: host, port: port}, nil
+}
+
+// validHostName reports whether host is a name a browser sends in a Host or
+// Origin header as it is: dot-separated labels of 1 to 63 letters, digits and
+// hyphens, no label beginning or ending with a hyphen, 253 characters at most,
+// and a last label that is not all digits (a browser reads such a name as an
+// IPv4 address and rewrites it). A name in another script reaches the board in
+// its xn-- form, so that is the form accepted. host is already lowercased and
+// has no root dot.
+func validHostName(host string) bool {
+	if len(host) > 253 {
+		return false
+	}
+	labels := strings.Split(host, ".")
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
+				return false
+			}
+		}
+	}
+	last := labels[len(labels)-1]
+	return strings.Trim(last, "0123456789") != ""
 }
 
 // Origin is the address as a browser names it in an Origin header: the

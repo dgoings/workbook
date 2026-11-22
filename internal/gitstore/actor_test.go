@@ -766,14 +766,18 @@ func TestAReplayOfANameGitCannotStoreTakesTheReplayedCommitsIdentity(t *testing.
 // Git will not write again: an empty name, a name of nothing but the
 // characters Git strips, or an identity line with no email at all. The replay
 // still synchronizes, under a name that is nobody's rather than anybody
-// else's, and the operation keeps the actor it was recorded under.
+// else's, and the operation keeps the actor it was recorded under. A name Git
+// would strip to nothing beside an email it can write takes that email as its
+// name, so the replay still names the person the commit did.
 func TestAReplayOfACommitWithAnIdentityGitWillNotWriteStillSynchronizes(t *testing.T) {
 	t.Parallel()
-	for name, identity := range map[string]string{
-		"an empty name and email":    " <>",
-		"only characters Git strips": ` ";" <;>`,
-		"no email at all":            " written-by-another-tool",
+	for name, test := range map[string]struct{ identity, want string }{
+		"an empty name and email":            {" <>", "unknown <"},
+		"only characters Git strips":         {` ";" <;>`, "unknown <"},
+		"no email at all":                    {" written-by-another-tool", "unknown <"},
+		"a stripped name and a usable email": {` ";," <sam@example.test>`, "sam@example.test <sam@example.test>"},
 	} {
+		identity := test.identity
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			first, second, config := syncRepositories(t)
@@ -831,8 +835,8 @@ func TestAReplayOfACommitWithAnIdentityGitWillNotWriteStillSynchronizes(t *testi
 			}
 			author, committer := commitIdentities(t, second.Root, head)
 			for _, recorded := range []string{author, committer} {
-				if !strings.HasPrefix(recorded, "unknown <") {
-					t.Errorf("replay identity %q, want a name that is nobody's", recorded)
+				if !strings.HasPrefix(recorded, test.want) {
+					t.Errorf("replay identity %q, want one beginning %q", recorded, test.want)
 				}
 			}
 			if got := operationActor(t, second.Root, head); got != "<bob@example.test>" {
