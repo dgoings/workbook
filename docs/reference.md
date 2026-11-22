@@ -522,12 +522,12 @@ Exit `6` is what a concurrent writer sees: two processes mutating one task, a
 push whose remote ref changed underneath it, and a web save proposed against a
 tip the task has moved past all surface as `stale-write` rather than as silent
 overwriting. So do the three bounded waits on the shared SQLite cache, when
-another process outlasts them: the cache locked past its five-second busy
-timeout, the cache file replaced by another process during each of three
-attempts at one write, and the cache replaced by another process again each
-time it was recovered, three rounds running. A read that finds the cache updated by somebody else at the same
-moment is not among them and is never refused; see
-[Simultaneous requests](#simultaneous-requests).
+another process outlasts them, for a read as much as for a write: the cache
+locked past its five-second busy timeout, the cache file replaced by another
+process during each of three attempts at one command, and the cache replaced by
+another process again each time it was recovered, three rounds running. A read
+is never refused because somebody else updated the cache's rows at the same
+moment; see [Simultaneous requests](#simultaneous-requests).
 
 Reporting a conflict and failing over one are separate things. `workbook next`
 exits `0` while listing conflicts in its envelope, because a caller asking which
@@ -2938,13 +2938,15 @@ Every request to the board reads the task refs and brings the shared SQLite
 cache up to them before it answers, so requests that arrive together, a
 command-line user in the same repository, a board in another worktree, and the
 board's own background synchronization all update one cache at the same moment.
-None of that is a reason to refuse a request:
+This is how each request is answered while that happens:
 
-- A read is always answered. Each task is written to the cache with a
-  compare-and-swap against the row the read saw first; a row somebody else
-  moved in the meantime is left as they wrote it, and that task is answered
-  from the checkpoint the read took from its Git ref, which is the task as it
-  stood after the request arrived.
+- A read is never refused because another update moved its rows. Each task
+  is written to the cache with a compare-and-swap against the row the read saw
+  first; a row somebody else moved in the meantime is left as they wrote it,
+  and that task is answered from the checkpoint the read took from its Git
+  ref, which is the task as it stood after the request arrived. The bounded
+  waits in the third item apply to a read as well, and a read that outlasts
+  one is answered as that item says.
 - A write reads the task from its ref the same way and records its change with
   a compare-and-swap on that ref. A write that loses the race to another change
   of the same task is answered `409` with a `stale-write` document, as is one
@@ -2953,12 +2955,16 @@ None of that is a reason to refuse a request:
   recorded twice, and never on a head other than the one it was composed
   against.
 - A bounded wait that runs out is answered `409` `stale-write` too, with
-  "try again" in its message: the cache locked by another process past the
-  five-second busy timeout, the cache file replaced by another process during
-  each of three attempts at one write, or replaced again each time it was
-  recovered, three rounds running. Nothing was written, and the identical request is
-  the right thing to send next. Each wait has a fixed number of attempts or a
-  fixed time, so a request under sustained load still gets an answer.
+  "try again" in its message, whether the request was a read or a write: the
+  cache locked by another process past the five-second busy timeout, the cache
+  file replaced by another process during each of three attempts at one
+  request, or replaced again each time it was recovered, three rounds running.
+  Nothing was written, and the identical request is the right thing to send
+  next. The message names the projection cache, which no refusal of a changed
+  task does, and a card refused this way says the board was busy rather than
+  that the task changed elsewhere. Each wait has a fixed number of attempts or a fixed time, so a request
+  under sustained load still gets an answer, though that answer can be this
+  refusal.
 
 A `500` naming `workbook rebuild` means SQLite could not read or write the
 cache itself — a disk error, or a page it reports malformed — which a rebuild

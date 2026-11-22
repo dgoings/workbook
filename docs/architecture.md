@@ -746,20 +746,21 @@ writer recording an older head, while the read was in Git. A row somebody else
 moved belongs to them, so it is left alone, and the read answers that task from
 the checkpoint it took from Git, which is the task as its ref stood after the
 request began. The next refresh compares the row with the ref again, whichever
-was newer. A refresh therefore makes one pass and cannot fail because the cache
-moved underneath it. An exact read of one task works the same way, trying a
+was newer. A refresh therefore makes one pass and cannot fail because another
+update moved a row underneath it. An exact read of one task works the same way, trying a
 moved row once more before answering from Git. A mutation's conditional advance
 after its Git write leaves a moved row alone too, without warning, because the
 row is not stale on that write's account.
 
 Concurrency limits that remain are bounded and answered as `stale-write`, which
-means nothing was written and the identical request should be sent again: the
-SQLite busy timeout of five seconds, three attempts at a write whose cache file
-another process keeps replacing, and three rounds of opening a cache that
-another process replaces again each time it has just been recovered. A
-rebuild is not among them: it builds at most twice and then installs what it
-built. A refresh holds no lock while it reads Git, only the short write
-transaction at the end of its pass, so reads are not serialized behind writes.
+means nothing was written and the identical request should be sent again. They
+apply to reads and writes alike: the SQLite busy timeout of five seconds, three
+attempts at a request whose cache file another process keeps replacing, and
+three rounds of opening a cache that another process replaces again each time it
+has just been recovered. A rebuild is not among them: it builds at most twice
+and then installs what it built. A refresh holds no write lock on the cache
+while it reads Git, only the short write transaction at the end of its pass, so
+reads are not serialized behind writes.
 The advice to run `workbook rebuild` is reserved for a cache SQLite cannot read
 or write.
 

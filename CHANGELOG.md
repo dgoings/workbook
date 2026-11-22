@@ -305,13 +305,14 @@ before anyone runs it; see Compatibility across versions below.
   answers that task from the checkpoint it read from Git, so it is never
   refused for that reason, on the board or the command line; a write that
   loses the race to the task's ref is still refused as `stale-write`, exactly
-  as before. The few bounded waits on the cache that can still run out — the
-  cache locked by another process past its five-second timeout, a cache file
-  another process replaced during each of three attempts, or again each time
-  it was recovered — now answer `stale-write`
-  (exit `6`, `409` on the board) with "try again" instead of `500` with
-  rebuild advice, because nothing was written and the same request is the
-  right next step. A write that succeeded no longer carries a warning to run
+  as before. The few bounded waits on the cache that can still run out, for a
+  read as for a write — the cache locked by another process past its
+  five-second timeout, a cache file another process replaced during each of
+  three attempts, or again each time it was recovered — now answer
+  `stale-write` (exit `6`, `409` on the board) with "try again" instead of
+  `500` with rebuild advice, because nothing was written and the same request
+  is the right next step. A board card refused this way says the board was
+  busy, not that the task changed elsewhere. A write that succeeded no longer carries a warning to run
   `workbook rebuild` when another write to the same task landed beside it.
   `workbook rebuild` is still advised when the cache itself cannot be read.
 - **`workbook rebuild`, and the rebuild a command runs when it finds no
