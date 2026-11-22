@@ -2665,6 +2665,10 @@ GET /api/sync                 versioned publication-mode JSON, reporting the
                               `no-watcher` or `no-origin` when none does
 PUT /api/sync                 change this board's publication mode
 GET /healthz                  versioned health JSON
+GET /manifest.webmanifest     web manifest naming the board for a home-screen
+                              shortcut; see On a phone
+GET /icons/<name>.png         the home-screen icons: `apple-touch-icon.png`
+                              (180 pixels), `icon-192.png` and `icon-512.png`
 ```
 
 The delete and restore routes take an optional JSON body, and a request with no
@@ -2974,6 +2978,45 @@ read as agent instructions — without ever being on the network. `workbook
 serve` says so in the warning it prints for a wildcard bind. Bind the one
 address you mean instead, and the `Host` is pinned to it.
 
+### On a phone
+
+A screen 560 CSS pixels wide or narrower gets a layout of its own: every phone
+held upright, the largest included, is under 450, the narrowest tablet held
+upright is 600, and the Workbench app never gives the board less than 740. Above
+560 the board is laid out exactly as it was before this layout existed.
+
+At that width the board shows one column at a time. A row of the columns'
+names, each with its task count, sits under the header and stays at the top of
+the screen while the cards scroll; the header and the filters scroll away with
+the page. Tapping a name shows that column and slides the row to bring the name
+into view. There is no swiping between columns. A phone opens the board on the
+column `workbook next` draws from — the status the project tagged `next`,
+whatever it is called — and after that on the column it was last looking at.
+That column is remembered in the browser's own storage on that phone, never
+sent anywhere, and a phone whose browser keeps no storage, or whose remembered
+column no longer exists, opens on the `next` column instead.
+
+Cards cannot be dragged at that width, so a finger on a card scrolls the page.
+A task's status is changed from its own page, which a tap on the card opens.
+The task page, a new task, comments, assignments and the change log are laid
+out for the width: no page scrolls sideways, a wide code block scrolls inside
+its own box, and every control is at least 44 CSS pixels each way. The
+configuration page, where the project's statuses, priorities and keys are
+changed, is not laid out for a phone. The board's notices, such as a change
+held because a proxy asked the page to wait, stay at the bottom of the screen
+while there is page below them.
+
+Saving the board to a phone's home screen gives the shortcut the Workbench icon
+and the project's name. The page links a web manifest whose `display` is
+`browser` and an Apple touch icon, and says nothing that asks for an app window
+of its own, so the shortcut opens the board in the phone's browser, signed in
+the way that browser is. The page's content policy carries `manifest-src
+'self'` for this: a manifest falls under that directive alone, which falls back
+to `default-src 'none'`, so without it the browser refuses the board's own
+file. The icons are kept by a browser for a day (`Cache-Control:
+max-age=86400`); the manifest names the project, which can be renamed, so a
+browser checks it again each time (`no-cache`).
+
 ### Edits the board's sync set aside
 
 When the board's own background sync fetches a task that changed on `origin`
@@ -3132,9 +3175,13 @@ server's own words out of what it answers:
   hexadecimal digits.
 - Every answer carries `Cache-Control: private, no-store`, refusals included,
   so a task page, the task data or an attachment is never kept by a cache
-  between the proxy and the person or left on a shared machine's disk. The board has no separate static
-  files to cache: its styles and script are inside the page, which carries the
-  same header. That costs a page download on each navigation, which is small.
+  between the proxy and the person or left on a shared machine's disk. The
+  board's styles and script are inside the page, which carries the same
+  header. That costs a page download on each navigation, which is small. The
+  one exception is the home-screen icons, which are the same for every board
+  and say nothing about the project: they carry `Cache-Control: private,
+  max-age=86400`, so the phone's browser keeps them for a day and a shared
+  cache keeps nothing. The manifest names the project and is not kept.
   The page's own once-a-second poll still sends `If-None-Match` and is still
   answered `304 Not Modified` when nothing changed, because the page sends that
   header itself rather than relying on the browser's cache.
@@ -3158,8 +3205,10 @@ With the header honored, a request must name exactly one person:
   `invalid-invocation` and `This board takes each person's name from the
   <header> header its sign-in proxy sets, and this request came without one;
   open the board through the sign-in proxy.` That includes reads and the page
-  itself. `GET /healthz` is the one exception, because a hosting platform calls
-  it directly rather than through the proxy, and it reads and changes nothing.
+  itself, and the home-screen manifest and icons, which a phone's browser asks
+  for through the proxy as it does the page. `GET /healthz` is the one
+  exception, because a hosting platform calls it directly rather than through
+  the proxy, and it reads and changes nothing.
 - A header sent more than once, or one whose value carries a comma, is refused
   `400` with category `validation`, `The <header> header was sent more than
   once; it must name exactly one person.` or `… carries several values; …`. A
@@ -3226,6 +3275,8 @@ Read:
 - `GET /api/sync`: whether an `origin` is configured and whether a sync watcher
   answers. It does not give `origin`'s address.
 - `GET /healthz`: that the board is up.
+- `GET /manifest.webmanifest`: the project's display name. The icons it names
+  are the same for every board.
 
 Write, all of it published to `origin` like any other change:
 

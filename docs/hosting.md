@@ -317,6 +317,24 @@ header through: do not use the board this way, and stop the service until you
 know why. Cloudflare's documentation does not say what Access does with an
 email header a visitor sends, which is why this check is here.
 
+## On a phone
+
+Open `https://tasks.example.com` in the phone's browser and sign in as on any
+other machine; the board lays itself out for the screen (see
+[On a phone](reference.md#on-a-phone)). Adding it to the home screen gives a
+shortcut with the Workbench icon and the project's name, and the shortcut opens
+the board in that same browser, so it uses the sign-in the browser already has.
+When that sign-in expires, the shortcut shows the Access sign-in page like any
+other visit. The page asks for the manifest that names the shortcut with the
+browser's cookies, so the manifest reaches the board through Access the way the
+page does. Without the sign-in, Access would answer that request with its sign-in
+page and the browser would have no manifest. That much is checked in Chrome,
+behind a proxy that refuses any request without its cookie: the manifest and
+both icons arrived signed in. It has not been checked on a real phone, where
+the home screen may fetch the icon itself. If a shortcut shows a letter or a
+screenshot instead of the icon, the phone asked for the icon without the
+sign-in, and the shortcut still opens the board.
+
 ## What to know before you invite anyone
 
 ### The server's key opens the whole repository

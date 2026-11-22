@@ -214,6 +214,15 @@ recorded under their own email address, run it behind a sign-in proxy with
 through a complete setup with Cloudflare Tunnel and Cloudflare Access, and says
 what such a board does and does not protect.
 
+The board works on a phone. On a screen that narrow it shows one column at a
+time, under a row of the columns' names and counts, and a task's page takes
+every change by touch: status, priority, labels, assignment and comments. To
+reach a hosted board from a phone, open its address in the phone's browser and
+sign in as anywhere else. Adding it to the home screen gives a shortcut with
+the board's icon and the project's name, and the shortcut opens the board in
+that browser rather than as an app of its own. See
+[On a phone](docs/reference.md#on-a-phone).
+
 Any board, hosted or not, shows an edit its sync had to set aside because a
 conflicting change reached the remote first: the card says so, and the task's
 page shows the edit until somebody copies it back or dismisses it.
