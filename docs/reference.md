@@ -3010,9 +3010,9 @@ This is how each request is answered while that happens:
   Nothing was written, and the identical request is the right thing to send
   next. The message names the projection cache, which no refusal of a changed
   task does, and a card refused this way says the board was busy rather than
-  that the task changed elsewhere. Each wait has a fixed number of attempts or a fixed time, so a request
-  under sustained load still gets an answer, though that answer can be this
-  refusal.
+  that the task changed elsewhere. Each wait has a fixed number of attempts or
+  a fixed time, so a request under sustained load still gets an answer, though
+  that answer can be this refusal.
 
 A `500` naming `workbook rebuild` means SQLite could not read or write the
 cache itself — a disk error, or a page it reports malformed — which a rebuild

@@ -171,8 +171,9 @@ func TestStoreListSucceedsWhileEachCreateProjectsItsOwnTask(t *testing.T) {
 // the read lists the ref, another write moves both the ref and the row past
 // what the read is about to project. The read leaves that row to the write
 // that moved it and answers the task from the checkpoint it read from Git,
-// which is the head its own listing found. It never fails and never puts the
-// older checkpoint over the newer row.
+// which is the head its own listing found. It never fails, never puts the
+// older checkpoint over the newer row, and never answers a head older than
+// the one it listed; the newer head the row then holds would be right too.
 func TestStoreListAnswersFromGitWhenAnotherWriteMovesTheRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -183,7 +184,7 @@ func TestStoreListAnswersFromGitWhenAnotherWriteMovesTheRow(t *testing.T) {
 
 	edits := 1
 	row := "head-1"
-	listedHead := ""
+	listedHead, writtenHead := "", ""
 	edit := func() core.Snapshot {
 		edits++
 		snapshot := stormSnapshot(taskID, fmt.Sprintf("head-%d", edits), fmt.Sprintf("Edit %d", edits))
@@ -197,6 +198,7 @@ func TestStoreListAnswersFromGitWhenAnotherWriteMovesTheRow(t *testing.T) {
 	// the checkpoint it listed.
 	source.onRead = func([]gitstore.TaskHead) {
 		written := edit()
+		writtenHead = written.Head
 		if applied, err := store.Advance(ctx, testConfig(), row, written); err != nil || !applied {
 			t.Errorf("writer's Advance(%s → %s) = %t, %v, want true, nil", row, written.Head, applied, err)
 		}
@@ -208,8 +210,8 @@ func TestStoreListAnswersFromGitWhenAnotherWriteMovesTheRow(t *testing.T) {
 		if err != nil {
 			t.Fatalf("List() round %d error = %v", round, err)
 		}
-		if len(listed) != 1 || listed[0].Head != listedHead {
-			t.Fatalf("List() round %d = %#v, want the one task at the head its listing found, %s", round, listed, listedHead)
+		if len(listed) != 1 || (listed[0].Head != listedHead && listed[0].Head != writtenHead) {
+			t.Fatalf("List() round %d = %#v, want the one task at the head its listing found, %s, or the one written since, %s", round, listed, listedHead, writtenHead)
 		}
 		cached, found, err := store.querySnapshot(ctx, taskID)
 		if err != nil || !found || cached.Head != row {
