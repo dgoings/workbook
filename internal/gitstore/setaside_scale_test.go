@@ -14,9 +14,10 @@ import (
 )
 
 // Reading set-aside edits costs a fixed number of Git processes however many
-// parked refs a clone holds, and a second read with nothing changed costs one:
-// a board polling every second must not slow down, or stall, as parked refs
-// accumulate. The bounds are on processes, which do not depend on the
+// parked refs a clone holds, and a second read with nothing changed, as a
+// board polling every second makes, costs none: listing thousands of loose
+// parked refs alone takes a noticeable part of a second, so the listing is
+// reused while no task head and no parked ref changed. The bounds are on processes, which do not depend on the
 // machine; the times are logged for comparison and bounded only loosely.
 func TestSetAsideEditsCostDoesNotGrowWithParkedRefs(t *testing.T) {
 	t.Parallel()
@@ -42,8 +43,8 @@ func TestSetAsideEditsCostDoesNotGrowWithParkedRefs(t *testing.T) {
 		if coldProcesses > 8 {
 			t.Errorf("%d parked refs: the first read ran %d Git processes, want at most 8 however many there are", want, coldProcesses)
 		}
-		if warmProcesses > 1 {
-			t.Errorf("%d parked refs: a read with nothing changed ran %d Git processes, want 1", want, warmProcesses)
+		if warmProcesses > 0 {
+			t.Errorf("%d parked refs: a read with nothing changed ran %d Git processes, want none", want, warmProcesses)
 		}
 		if cold > 10*time.Second || warm > 2*time.Second {
 			t.Errorf("%d parked refs: the first read took %v and a repeat %v", want, cold, warm)
