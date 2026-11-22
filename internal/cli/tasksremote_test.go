@@ -891,3 +891,81 @@ func TestTasksRemoteTasksOnlyBoardOnTheOldPlaceIsRepointedWithWhatItSaved(t *tes
 		t.Fatalf("repointing wrote to the old place:\nbefore %s\nafter  %s", afterMove, after)
 	}
 }
+
+// A second move, from the tasks repository to a third one, is the same
+// procedure: config set names the place the tasks are now as the source,
+// move-tasks with no --from finds them by following origin's marker, and a
+// checkout on either earlier generation of the settings is refused naming the
+// place its own tasks remote's marker names, until it pulls and sets up.
+func TestTasksRemoteSecondMoveFollowsTheMarkers(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA1)
+	onOrigin := cloneCode(t, project)
+	if code, stdout, stderr := run(t, onOrigin, "setup"); code != 0 {
+		t.Fatalf("setup on origin = (%d, %q, %q)", code, stdout, stderr)
+	}
+	project.moveTasks(t)
+	onTasks := cloneCode(t, project)
+	if code, stdout, stderr := run(t, onTasks, "setup"); code != 0 {
+		t.Fatalf("setup on tasks = (%d, %q, %q)", code, stdout, stderr)
+	}
+	third := newBareRepository(t, testrepo.FormatSHA1)
+
+	code, stdout, stderr := run(t, project.seed, "config", "set", "tasks-remote", "third", "--url", third)
+	if code != 0 || !strings.Contains(stdout, "run workbook move-tasks to copy the tasks from tasks to third and mark tasks") {
+		t.Fatalf("config set tasks-remote third = (%d, %q, %q), want the source named tasks", code, stdout, stderr)
+	}
+	for round, wantMarked := range []string{"marked", "already"} {
+		code, stdout, stderr := run(t, project.seed, "move-tasks", "--json")
+		if code != 0 {
+			t.Fatalf("second move-tasks round %d = (%d, %q, %q)", round, code, stdout, stderr)
+		}
+		var moved struct {
+			From     core.TasksRemoteTarget `json:"from"`
+			To       core.TasksRemoteTarget `json:"to"`
+			Marked   string                 `json:"marked"`
+			Tasks    int                    `json:"tasks"`
+			Verified bool                   `json:"verified"`
+		}
+		if err := json.Unmarshal(assertJSONResult(t, stdout, "move-tasks").Data, &moved); err != nil {
+			t.Fatal(err)
+		}
+		if moved.From.Remote != "tasks" || moved.To.Remote != "third" || moved.Marked != wantMarked ||
+			moved.Tasks != len(project.ids) || !moved.Verified {
+			t.Fatalf("second move-tasks round %d = %+v, want tasks to third, %s", round, moved, wantMarked)
+		}
+	}
+	cliGit(t, project.seed, "add", ".workbook/config.json")
+	cliGit(t, project.seed, "commit", "--quiet", "-m", "Move the tasks again")
+	cliGit(t, project.seed, "push", "--quiet", "origin", "main")
+
+	for _, stale := range []struct {
+		name, clone, movedTo string
+	}{
+		{"on origin's settings", onOrigin, project.tasks},
+		{"on the first tasks remote's settings", onTasks, third},
+	} {
+		code, _, stderr := run(t, stale.clone, "fetch", "--json")
+		if code != 3 {
+			t.Fatalf("fetch %s = %d, want 3; stderr = %q", stale.name, code, stderr)
+		}
+		refusal := requireTasksRemoteRefusal(t, stderr, core.CategoryNotInitialized, core.TasksRemoteMoved)
+		if refusal.MovedTo == nil || refusal.MovedTo.URL != stale.movedTo || refusal.Command != "workbook setup" {
+			t.Fatalf("refusal %s = %+v, want moved to %s", stale.name, refusal, stale.movedTo)
+		}
+		cliGit(t, stale.clone, "pull", "--quiet", "--ff-only", "origin", "main")
+		if code, stdout, stderr := run(t, stale.clone, "setup"); code != 0 {
+			t.Fatalf("setup %s after the pull = (%d, %q, %q)", stale.name, code, stdout, stderr)
+		}
+		for _, id := range project.ids {
+			if shown := cliShowTask(t, stale.clone, id); shown.ID != id {
+				t.Fatalf("%s shows %+v for %s after setup", stale.name, shown, id)
+			}
+		}
+	}
+	if code, _, stderr := run(t, project.seed, "config", "set", "tasks-remote", "origin", "--json"); code != 5 {
+		t.Fatalf("config set tasks-remote origin after two moves = %d, want 5; stderr = %q", code, stderr)
+	}
+	requireEachOperationOnce(t, third)
+	requireFreshCloneValidates(t, third)
+}

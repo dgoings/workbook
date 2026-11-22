@@ -146,9 +146,18 @@ func writeTasksRemoteSetting(
 	}
 	fmt.Fprintf(stdout, "%s\t%s\t%s\n", result.Setting, result.Value, result.Path)
 	if result.URL != "" {
+		// Where the tasks are now: origin, or, once they have moved away from
+		// it, the tasks remote the settings named until this change.
+		source := core.DefaultTasksRemote
+		if before.TasksRemote.Chosen() && before.TasksRemote.Name != setting.Name {
+			if moved, err := repository.OriginMarkedMoved(ctx); err == nil && moved != nil {
+				source = before.TasksRemote.Name
+			}
+		}
 		fmt.Fprintf(stdout, "Address:\t%s\n", result.URL)
-		fmt.Fprintf(stdout, "Next:\trun workbook move-tasks to copy the tasks there and mark origin, "+
-			"then commit %s; everyone else runs workbook setup after pulling it\n", ".workbook/config.json")
+		fmt.Fprintf(stdout, "Next:\trun workbook move-tasks to copy the tasks from %s to %s and mark %s, "+
+			"then commit %s; everyone else runs workbook setup after pulling it\n",
+			source, setting.Name, source, ".workbook/config.json")
 	} else if before.TasksRemote.Chosen() {
 		fmt.Fprintf(stdout, "Next:\tcommit %s; tasks are shared through origin again, "+
 			"and %s keeps the copy it holds\n", ".workbook/config.json", before.TasksRemote.Name)
@@ -161,7 +170,7 @@ func writeTasksRemoteSetting(
 
 func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("move-tasks")
-	from := flags.String("from", "", "the remote the tasks are in now (default origin)")
+	from := flags.String("from", "", "the remote the tasks are in now (default origin, or the place origin's moved marker leads to)")
 	allowBranches := flags.Bool("allow-branches", false, "accept a tasks remote that holds branches")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {

@@ -138,7 +138,10 @@ func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, o
 	to := tracked.TasksRemote
 	from := options.From
 	if from == "" {
-		from = core.DefaultTasksRemote
+		from, err = r.defaultMoveSource(ctx, to.Name)
+		if err != nil {
+			return MoveTasksResult{}, err
+		}
 	}
 	if err := core.ValidateTasksRemoteName(from); err != nil {
 		return MoveTasksResult{}, core.Wrap(core.CategoryInvocation, "--from must name a Git remote", err)
@@ -279,6 +282,63 @@ func moveConflictReason(conflict core.Conflict, from, to string) string {
 	default:
 		return string(conflict.Type)
 	}
+}
+
+// defaultMoveSource is where the tasks are now, for a move whose --from was
+// left out: origin, or, when origin is marked as moved to some other remote,
+// the place its marker names, and so on along the markers. That is how a
+// second move (origin to tasks, then tasks to third) finds the tasks without
+// being told: origin's marker names tasks, and tasks is not marked yet. A
+// marker naming the destination itself is a first move run again, whose
+// source is still the marked place.
+//
+// Each hop costs one listing of that remote, and a fetch of its identity ref
+// when it changed. A remote that cannot be listed ends the walk there, and the
+// probe that follows says what it needs. A marker naming a remote this
+// checkout does not have is refused with the --from that would work.
+func (r *Repository) defaultMoveSource(ctx context.Context, to string) (string, error) {
+	from := core.DefaultTasksRemote
+	seen := map[string]bool{}
+	for !seen[from] && r.hasGitRemote(ctx, from) {
+		seen[from] = true
+		moved, err := r.remoteMoveMarker(ctx, from)
+		if err != nil || moved == nil || moved.Remote == to {
+			return from, nil
+		}
+		if !r.hasGitRemote(ctx, moved.Remote) {
+			return "", core.Errorf(core.CategoryValidation,
+				"%s is marked as moved to %s (remote %q), which this checkout does not have, so the tasks are there or further on; "+
+					"run workbook move-tasks --from <remote> naming this checkout's remote for %s",
+				from, moved.URL, moved.Remote, moved.URL)
+		}
+		from = moved.Remote
+	}
+	return from, nil
+}
+
+// remoteMoveMarker reads the tasks-moved marker on remote's identity ref,
+// asking remote, or nil when it carries none.
+func (r *Repository) remoteMoveMarker(ctx context.Context, remote string) (*TasksMoved, error) {
+	tracking := remoteIdentityRefFor(remote)
+	listing, err := r.Git(ctx, nil, "ls-remote", "--refs", remote, identityRef)
+	if err != nil {
+		return nil, err
+	}
+	head, err := parseRemoteIdentityHead(listing)
+	if err != nil || head == "" {
+		return nil, err
+	}
+	current, _ := r.Git(ctx, nil, "rev-parse", "--verify", "--quiet", tracking)
+	if strings.TrimSpace(string(current)) != head {
+		if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--no-auto-maintenance", remote, identityFetchRefspecFor(remote)); err != nil {
+			return nil, err
+		}
+	}
+	record, found, err := r.readIdentityRef(ctx, tracking)
+	if err != nil || !found {
+		return nil, err
+	}
+	return record.Moved, nil
 }
 
 // forgetAddedRemote removes the tasks remote again when this run added it and
