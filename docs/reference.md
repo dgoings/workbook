@@ -759,8 +759,8 @@ instead of removing each other's claims forever.
 `workbook show` prints each assignment with the identity, when it was recorded,
 and how long ago that was. Staleness is displayed and never enforced: "assigned
 9 days ago" on a task nobody has touched is a fact for people to settle between
-themselves. Both boards show a compact chip — the local part of the address plus
-the agent label — beside each card's labels.
+themselves. The web board shows a compact chip — the local part of the address
+plus the agent label — beside each card's labels.
 
 On `workbook serve`'s board the chip row is drawn only on a card somebody holds,
 so an unassigned board is exactly the board it has always been, and it is capped
@@ -2832,7 +2832,8 @@ That is what a clone whose configuration this checkout has not fetched produces
 on its own. The web board shows that task rather than dropping it, under a
 heading that says the status was not recognized: an "Unknown status" region
 below its columns. On the command line, `workbook list` shows the task with the
-status it stores, and `workbook status list` counts it among the unresolved. A task that is invisible reads as a task that was
+status it stores, and `workbook status list` counts it among the unresolved. A
+task that is invisible reads as a task that was
 deleted, which is a worse report than a task that is merely unsorted.
 
 A stored status that a rename or a removal does forward is not in this region.
@@ -2920,11 +2921,11 @@ mutation boundary, replay — checks the shape first. A repair verb is deferred 
 that likelihood alone, not on the cost of hitting it, which is a whole project.
 If anybody does hit it, that judgment should be revisited rather than defended.
 
-Both boards read the unknown/known split from one place — `presentation.Board`
+The web board reads the unknown/known split from one place — `presentation.Board`
 separates `Columns` from `UnknownTasks` — so a renderer that consumes only
 `Columns` silently deletes tasks from the reader's view.
-`internal/presentation/parity_test.go` asserts both boards against the same task
-set and is what keeps them aligned.
+`internal/presentation/parity_test.go` holds the web board to that model for
+one task set.
 
 ## Text-mode output safety
 

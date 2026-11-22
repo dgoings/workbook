@@ -66,9 +66,9 @@ func assignedBoardTasks() []core.Task {
 	return []core.Task{held, free, crowded}
 }
 
-// The chip is the short form the terminal board prints — the local part of the
-// address and the agent label — and it is derived here rather than by the client,
-// so the two boards and `workbook show` cannot drift.
+// The chip is the short form — the local part of the address and the agent
+// label — and it is derived here rather than by the client, so the rule has
+// one copy.
 func TestTasksDocumentCarriesTheAssignmentsACardDraws(t *testing.T) {
 	t.Parallel()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return assignedBoardTasks(), nil })

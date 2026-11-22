@@ -258,8 +258,8 @@ func AssignmentChip(assignment core.Assignment) string {
 }
 
 // AssignmentChips renders a task's assignments in stored order, which is by
-// principal and then label, so two boards drawn from one task agree about which
-// chip comes first.
+// principal and then label, so every surface drawn from one task agrees about
+// which chip comes first.
 func AssignmentChips(assignments []core.Assignment) []string {
 	if len(assignments) == 0 {
 		return nil
