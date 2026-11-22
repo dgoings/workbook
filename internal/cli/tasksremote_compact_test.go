@@ -17,7 +17,9 @@ func tasksTip(t *testing.T, bare, taskID string) string {
 // Compaction runs against the project's tasks remote: a compaction from a
 // code clone and one from a tasks-only folder are published there and nowhere
 // else, a teammate whose unpushed edit conflicts with one is told so under
-// the remote's name, and compact --adopt then takes the checkpoint from there.
+// the remote's name, and compact --adopt then takes the checkpoint from there,
+// in a second code clone by replaying and in a tasks-only folder by
+// discarding its own edit.
 func TestTasksRemoteCompactionAndAdoptionUseTheTasksRemote(t *testing.T) {
 	t.Parallel()
 	project := codeProject(t, testrepo.FormatSHA1)
@@ -34,6 +36,8 @@ func TestTasksRemoteCompactionAndAdoptionUseTheTasksRemote(t *testing.T) {
 	compactRun(t, project.seed, "update", task, "--status", "done")
 	compactRun(t, teammate, "sync")
 	compactRun(t, teammate, "update", task, "--description", "Our text", "--no-sync")
+	compactRun(t, folder, "sync")
+	compactRun(t, folder, "update", task, "--description", "Folder text", "--no-sync")
 	compactRun(t, project.seed, "update", task, "--description", "Their text")
 	compactRun(t, project.seed, "compact", "--no-backup")
 	checkpoint := localTaskRef(t, project.seed, task)
@@ -74,9 +78,19 @@ func TestTasksRemoteCompactionAndAdoptionUseTheTasksRemote(t *testing.T) {
 		t.Fatalf("tasks remote holds %s, want the adopted tip %s", got, localTaskRef(t, teammate, task))
 	}
 
+	// The tasks-only folder's conflicting edit keeps the task on the old
+	// history there too, and it takes the tasks repository's version. That
+	// folder's own remote for it is origin, so origin is the name it reads.
+	discarded, _ := adoptJSON(t, folder, task, "--discard-local", "--no-backup")
+	if discarded.Status != gitstore.SyncDiscardedLocal || discarded.Detail != "took origin's version without saving the local history" {
+		t.Fatalf("folder adopt = %+v", discarded)
+	}
+	if got := localTaskRef(t, folder, task); got != tasksTip(t, project.tasks, task) {
+		t.Fatalf("folder holds %s at %s, want the tasks remote's %s", task, got, tasksTip(t, project.tasks, task))
+	}
+
 	// A tasks-only folder compacts too, and the code clone adopts it on sync.
 	other := project.ids[1]
-	compactRun(t, folder, "sync")
 	compactRun(t, folder, "update", other, "--status", "done")
 	compactRun(t, folder, "compact", "--no-backup")
 	folded := localTaskRef(t, folder, other)
