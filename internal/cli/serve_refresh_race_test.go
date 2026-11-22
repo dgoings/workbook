@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os/exec"
 	"path/filepath"
@@ -59,10 +60,37 @@ type raceReply struct {
 	sentHead string
 }
 
-// raceRequest sends one request the way the board's own page does.
+// raceClient waits as long as the test does. The package's board client
+// gives up after thirty seconds, which is a hang guard for one request on an
+// idle machine; a race loads the machine on purpose, and under -race with its
+// siblings running beside it a healthy request can take longer than that. A
+// request that never comes back still fails, at raceGuard.
+var raceClient = &http.Client{Timeout: raceGuard}
+
+// raceRequest sends one request the way the board's own page does: every
+// mutation declares JSON, because the same-origin guard refuses one that does
+// not.
 func raceRequest(method, url, body string) raceReply {
-	contents, status, err := boardRequestAs(method, url, body, "")
-	return raceReply{what: method + " " + url, body: contents, status: status, err: err, read: method == http.MethodGet}
+	reply := raceReply{what: method + " " + url, read: method == http.MethodGet}
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	request, err := http.NewRequest(method, url, reader)
+	if err != nil {
+		reply.err = err
+		return reply
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := raceClient.Do(request)
+	if err != nil {
+		reply.err = err
+		return reply
+	}
+	defer response.Body.Close()
+	reply.status = response.StatusCode
+	reply.body, reply.err = io.ReadAll(response.Body)
+	return reply
 }
 
 // race runs jobs from raceWorkers goroutines that all start at once and
