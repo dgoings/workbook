@@ -73,11 +73,14 @@ configuration`, so upgrade every checkout before committing the setting. See
 [A tasks remote other than origin](docs/reference.md#a-tasks-remote-other-than-origin)
 and [Keep the tasks in their own repository](docs/hosting.md#keep-the-tasks-in-their-own-repository).
 
-A board set to hand its saves to a running `workbook sync --watch` now does.
-It asked the watcher's status and then for the hand-off on one connection,
-which the watcher answers once, so every save was published by the board
-itself. The save was published either way; it now returns without waiting for
-the network.
+A board now hands its saves to a watcher, as it was meant to: its own
+background loop, or a running `workbook sync --watch`. It asked the watcher's
+status and then for the hand-off on one connection, which the watcher answers
+once, so every save was published by the board itself. The save is published
+either way; it now returns without waiting for the network and reaches the
+remote a few seconds later. A save that conflicts with a teammate's edit no
+longer says so in its response; the task page shows the set-aside edit as
+before.
 
 The web board works on a phone. A screen 560 CSS pixels wide or narrower shows
 one column at a time, under a row of the columns' names and task counts that

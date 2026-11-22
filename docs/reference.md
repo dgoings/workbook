@@ -1705,14 +1705,26 @@ are all of them:
   locally once more, one local Git process, because the board's last listing
   can be older than the watcher's last fetch.
 
+One difference is not a check. A board hands its saves to a watcher, its own
+background loop unless a `workbook sync --watch` is already running, and in
+the release before that hand-off was never accepted, so the board published
+every save itself before answering. It is accepted now. A save's response
+returns before the edit is on `origin`, which holds it a few seconds later; if
+the watcher's last round failed the board publishes inline as before, and if
+an outside watcher dies the board's own loop publishes instead. A save that meets a teammate's conflicting edit no longer carries an
+`auto-sync-incomplete` warning on its response, because the conflict is found
+by the round that follows: the outcome is the same, the teammate's text kept
+and the board's shown on the task page as a set-aside edit.
+
 A test records the Git commands of a scripted session, including one command
 handed to a watcher, against a build from before the setting and fails on any
 difference beyond the first three; the board's two are covered by their own
 tests. Measured against a local remote, an inline `workbook update` goes from
 two connections to the remote to three (the listing after the push), and an
-inline board save from one to three (the listings before and after); a command
-or board save handed to a watcher opens none, and the watcher's round goes
-from two to three.
+inline board save from one to three (the listings before and after). A command
+handed to a watcher opens none, as before; a board save handed to one goes
+from one connection, its own push, to none; and the watcher's round goes from
+two to three.
 Comparing operations by content as well as ID, below, runs no Git command.
 
 ### Choosing the remote and moving the tasks
@@ -1825,8 +1837,10 @@ edit again, meets the same conflict, parks and reports it once more, and is
 quiet after that.
 
 A conflicting edit that reaches the old place late is reported only to whoever
-runs `workbook move-tasks`, in the clone they run it from: setup and sync look
-only at the tasks remote, and never read the old place. A teammate's clone
+runs `workbook move-tasks`, in the clone they run it from: setup and sync read
+no task history from the old place. Sync does not contact it at all. Setup
+lists its identity and task refs and fetches its identity commit, to refuse a
+move that was never finished, and looks no further. A teammate's clone
 learns of it only by running `workbook move-tasks` there, which reports it the
 same way.
 
@@ -1874,12 +1888,16 @@ What is guaranteed and what is not:
   fails, the command cannot tell, and says so: it succeeds with a
   `publication-unconfirmed` warning, in text and in JSON, naming the remote and
   the tasks and giving Git's reason with the credentials of configured
-  addresses removed. A board save carries the same warning. An edit published
+  addresses removed. A board save published inline carries the same warning.
+  A watcher round, which publishes what commands and board saves hand to it,
+  has no command to carry one, so it writes the warning to its terminal (a
+  board's server log) instead. An edit published
   in that instant by a clone that then disappears, such as an ephemeral agent,
   sits at the old place until somebody runs `workbook move-tasks` again. So:
   announce the move before making it, and run `workbook move-tasks` once more
-  after everyone has pulled the setting. Nothing else looks at the old place:
-  `workbook setup` and `workbook sync` on the new settings never read it.
+  after everyone has pulled the setting. Nothing else looks for edits at the
+  old place: `workbook sync` on the new settings never contacts it, and
+  `workbook setup` only lists its refs to check the move was finished.
 - As optional hardening, a host that can make refs outside branches and tags
   read-only can close the window on the old repository by refusing pushes to
   `refs/workbook/tasks/*` there after the move. GitHub does not document a way

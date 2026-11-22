@@ -949,9 +949,12 @@ compare-and-swap across two refs: a push already past its look at the identity
 ref lands after the mark. That window is made visible rather than closed. Every
 publication lists the identity ref again after its push and reports such an
 edit, or warns when that listing fails and it cannot tell; and `move-tasks`,
-safe to run at any later time, carries them. It is the only command that reads
-the old place: a late edit that conflicts at the new place is reported to
-whoever runs it, in that clone, and parked there. An edit by a clone that
+safe to run at any later time, carries them. A watcher round writes that
+warning to its terminal, having no command to carry it. `move-tasks` is the
+only command that reads task history from the old place (setup lists its refs
+to check the move was finished, and no more): a late edit that conflicts at
+the new place is reported to whoever runs it, in that clone, and parked there.
+An edit by a clone that
 vanished in that instant waits at the old place for that rerun.
 
 The default shared backend uses custom refs because they avoid branch switching and per-repository head contention. A conventional `workbook/state` branch may be offered as a compatibility fallback for Git hosts that reject custom refs. A future optional relay may provide strict leases, heartbeats, notifications, or high-concurrency agent coordination while retaining the same operation model.

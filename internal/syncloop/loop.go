@@ -46,6 +46,7 @@ type Syncer interface {
 	PruneParkedConfigRefs(context.Context) (int, error)
 	InspectTaskHead(context.Context, core.ProjectConfig, string) (gitstore.TaskHead, bool, error)
 	HasTasksRemote(context.Context) bool
+	PublicationWarnings() []core.Warning
 }
 
 // Refresher warms the read projection after refs move.
@@ -241,6 +242,13 @@ func (l *loop) syncOnce(ctx context.Context) {
 	result, err := l.options.Repository.Sync(ctx, l.options.Config)
 	conflicts := append(append([]core.Conflict{}, result.Fetch.Conflicts...), result.Push.Conflicts...)
 	l.recordConflicts(ctx, conflicts)
+	// A round has no command to carry a warning, so one about a publication
+	// that could not be checked afterwards is written here. Taking them every
+	// round also keeps them from collecting in a long-lived watcher, and from
+	// reaching an unrelated save on a board that shares this repository.
+	for _, warning := range l.options.Repository.PublicationWarnings() {
+		fmt.Fprintf(l.options.Stderr, "workbook: %s: %s\n", warning.Code, warning.Message)
+	}
 	// The fetch phase is the whole report: it lists origin's namespace, and the
 	// push phase that follows it repeats none of that. It is bounded before it
 	// is announced or published so the terminal and the status always agree, and
