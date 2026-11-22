@@ -360,6 +360,7 @@ func TestServeBehindAProxyRefusesARequestWithoutOneUsableName(t *testing.T) {
 			t.Fatalf("GET %s with no name = %d; body = %s; want 401", path, status, body)
 		}
 		assertBoardRefusal(t, body, header, core.CategoryInvocation, "came without one")
+		assertAnsweredPrivately(t, "GET "+path+" with no name", header)
 	}
 	// A person's browser opening the page with no name sees one sentence.
 	body, status, header := board.do(t, proxied{method: http.MethodGet, path: "/", header: func(h http.Header) {
@@ -369,6 +370,7 @@ func TestServeBehindAProxyRefusesARequestWithoutOneUsableName(t *testing.T) {
 		strings.Count(strings.TrimSpace(string(body)), "\n") != 0 || !strings.Contains(string(body), "sign-in proxy") {
 		t.Fatalf("browser with no name = %d %q; body = %q, want one plain sentence", status, header.Get("Content-Type"), body)
 	}
+	assertAnsweredPrivately(t, "browser with no name", header)
 	body, status, _ = board.do(t, proxied{method: http.MethodPost, path: "/api/tasks", body: `{"title":"Nobody's"}`})
 	if status != http.StatusUnauthorized {
 		t.Fatalf("create with no name = %d; body = %s", status, body)
@@ -409,10 +411,21 @@ func TestServeBehindAProxyRefusesARequestWithoutOneUsableName(t *testing.T) {
 				t.Fatalf("%s %s with a name %s = %d; body = %s; want 400", request.method, request.path, name, status, body)
 			}
 			assertBoardRefusal(t, body, response, core.CategoryValidation, refused.says)
+			assertAnsweredPrivately(t, request.method+" with a name "+name, response)
 		}
 	}
 	if after := workbookRefs(t, folder); after != before {
 		t.Fatalf("a refused request moved refs:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+// assertAnsweredPrivately requires a hosted board's answer to tell every
+// cache to keep no copy, the refusals given before the board's own handler
+// runs among them.
+func assertAnsweredPrivately(t *testing.T, what string, header http.Header) {
+	t.Helper()
+	if got := header.Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("%s Cache-Control = %q, want private, no-store", what, got)
 	}
 }
 
@@ -496,13 +509,15 @@ func TestServeBehindAProxyRefusesOtherWebsites(t *testing.T) {
 			t.Fatalf("%s %s from Host %q Origin %q = %d; body = %s; want 403", request.method, request.path, request.host, request.origin, status, body)
 		}
 		assertBoardRefusal(t, body, header, core.CategoryValidation, proxyOrigin)
+		assertAnsweredPrivately(t, request.method+" from another website", header)
 	}
 	// The plain-form request a cross-site page can send without asking first.
-	body, status, _ := board.do(t, proxied{method: http.MethodPost, path: "/api/tasks", body: `{"title":"Form"}`,
+	body, status, header := board.do(t, proxied{method: http.MethodPost, path: "/api/tasks", body: `{"title":"Form"}`,
 		person: "alice@client.example", header: func(h http.Header) { h.Set("Content-Type", "text/plain") }})
 	if status != http.StatusUnsupportedMediaType {
 		t.Fatalf("form post = %d; body = %s; want 415", status, body)
 	}
+	assertAnsweredPrivately(t, "form post", header)
 	if after := workbookRefs(t, folder); after != before {
 		t.Fatalf("a refused request moved refs:\nbefore %s\nafter  %s", before, after)
 	}

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -15,6 +16,17 @@ import (
 // machine's disk, or in a cache between the proxy and the person, outlives the
 // person's access to it.
 const hostedCacheControl = "private, no-store"
+
+// answerPrivately sets hostedCacheControl before anything inside it runs, so
+// the answers given before the board's own handler — the same-origin guard's
+// refusals, and a refusal of a request that names no usable person — carry it
+// as well as the board's pages and data do.
+func answerPrivately(inner http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Cache-Control", hostedCacheControl)
+		inner.ServeHTTP(writer, request)
+	})
+}
 
 // serverWords reports whether an error of this category is worded by the
 // server rather than by Workbook's reading of the request.

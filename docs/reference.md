@@ -2991,9 +2991,9 @@ server's own words out of what it answers:
   `workbook serve: reference <id>: <detail>`, so whoever runs the server finds
   it from the reference a person reports. The reference is twelve random
   hexadecimal digits.
-- Every answer carries `Cache-Control: private, no-store`, so a task page, the
-  task data or an attachment is never kept by a cache between the proxy and the
-  person or left on a shared machine's disk. The board has no separate static
+- Every answer carries `Cache-Control: private, no-store`, refusals included,
+  so a task page, the task data or an attachment is never kept by a cache
+  between the proxy and the person or left on a shared machine's disk. The board has no separate static
   files to cache: its styles and script are inside the page, which carries the
   same header. That costs a page download on each navigation, which is small.
   The page's own once-a-second poll still sends `If-None-Match` and is still

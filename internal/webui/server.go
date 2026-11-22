@@ -87,7 +87,11 @@ type ServeOptions struct {
 // ServeWith is Serve for a board that may also be opened at a public address.
 // The zero ServeOptions is Serve exactly.
 func ServeWith(ctx context.Context, listener net.Listener, handler http.Handler, options ServeOptions) error {
-	server := newBoardServer(GuardSameOriginAt(handler, listener.Addr().String(), options.Public))
+	served := GuardSameOriginAt(handler, listener.Addr().String(), options.Public)
+	if options.Public != nil {
+		served = answerPrivately(served)
+	}
+	server := newBoardServer(served)
 	awaited := &awaitedConnections{}
 	server.ConnState = awaited.track
 	result := make(chan error, 1)
