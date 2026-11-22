@@ -453,7 +453,7 @@ func (r *Repository) followMoved(ctx context.Context, moved TasksMoved) movedPat
 	}
 	seen := map[TasksMoved]bool{}
 	next := moved
-	for {
+	for hops := 1; ; hops++ {
 		key := TasksMoved{Remote: next.Remote, URL: next.URL}
 		if seen[key] {
 			path.Loop = true
@@ -462,7 +462,7 @@ func (r *Repository) followMoved(ctx context.Context, moved TasksMoved) movedPat
 		seen[key] = true
 		path.Current = next
 		path.Places = append(path.Places, next.URL)
-		if len(seen) > movedFollowLimit {
+		if hops > movedFollowLimit {
 			path.Unverified = true
 			break
 		}

@@ -573,7 +573,11 @@ func TestIdentityHistoryOfMovesAndReturns(t *testing.T) {
 		return syncGit(t, repository.Root, args...)
 	}
 	identityTree := syncGit(t, repository.Root, "rev-parse", identity.Head+"^{tree}")
+	movedTree := syncGit(t, repository.Root, "rev-parse", moved+"^{tree}")
 	for name, head := range map[string]string{
+		// The tip is a well-formed marker; the return under it is not,
+		// because its tree still holds the marker it should have replaced.
+		"a return that kept its marker's tree": commitTree(movedTree, commitTree(movedTree, moved)),
 		"a return where nothing left":          commitTree(identityTree, identity.Head),
 		"a marker on a marker":                 marker(left, "third"),
 		"a return on a return":                 commitTree(identityTree, returnedHead),

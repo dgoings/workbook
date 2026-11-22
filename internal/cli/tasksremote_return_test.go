@@ -121,6 +121,14 @@ func TestTasksRemoteMovesBackToOriginWithTheTwoCommands(t *testing.T) {
 	if code, _, stderr := run(t, onOrigin, "update", project.ids[1], "--title", "Kept by the first settings", "--no-sync"); code != 0 {
 		t.Fatalf("update on the first settings = %d; stderr = %q", code, stderr)
 	}
+	// The first-settings checkout learns of the move: its fetch is refused,
+	// and its copy of origin's identity ref now carries the marker.
+	if code, _, stderr := run(t, onOrigin, "fetch", "--json"); code != 3 {
+		t.Fatalf("fetch on the first settings after the move = %d, want 3; stderr = %q", code, stderr)
+	}
+	if got := strings.TrimSpace(cliGitOutput(t, onOrigin, "log", "-1", "--format=%s", "refs/workbook/remotes/origin/project")); got != "workbook: tasks moved" {
+		t.Fatalf("the first settings' copy of origin's identity ref = %q, want the marker", got)
+	}
 	codeBefore, tasksBefore := refTips(t, project.code), refTips(t, project.tasks)
 
 	code, stdout, stderr := run(t, project.seed, "config", "unset", "tasks-remote")
