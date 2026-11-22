@@ -129,14 +129,20 @@ type Repository struct {
 	// the ledger, for a caller whose own result is task shaped.
 	configReport  *SyncConfigResult
 	objectIDBytes int
-	// setAsideMemo remembers SetAsideEdits' answer for a parked tip and a
-	// task tip, which is a function of the two commits. See SetAsideEdits.
-	setAsideMu      sync.Mutex
-	setAsideMemo    map[string][]core.SetAsideEdit
-	actorOnce       sync.Once
-	actor           string
-	actorErr        error
-	commandObserver gitCommandObserver
+	// setAsideMemo remembers, by parked ref name, what each parked tip holds
+	// against the task tip it was last compared with. It holds one entry per
+	// parked ref that exists. See SetAsideEdits.
+	setAsideMu   sync.Mutex
+	setAsideMemo map[string]parkedVerdict
+	// parkedListed is the parked refs SetAsideEdits last listed, and
+	// parkedGeneration counts this process's changes to them. See
+	// parkedListing.
+	parkedListed     *parkedListingMemo
+	parkedGeneration uint64
+	actorOnce        sync.Once
+	actor            string
+	actorErr         error
+	commandObserver  gitCommandObserver
 }
 
 // Open discovers the repository containing startDir without changing the

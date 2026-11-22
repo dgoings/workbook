@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -62,7 +63,7 @@ func TestSetAsideEditsReportsWhatAConflictParked(t *testing.T) {
 
 	// A fresh handle, as a restarted server opens one: nothing is remembered.
 	reopened := openSyncCloneAt(t, board.Root)
-	edits, err := reopened.SetAsideEdits(ctx, config, taskHeads(t, reopened))
+	edits, err := setAsideEditsOf(reopened, config, taskHeads(t, reopened))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,20 +93,24 @@ func TestSetAsideEditsReportsWhatAConflictParked(t *testing.T) {
 	// Copying the text back in is an ordinary edit on top, and the task then
 	// carries what was set aside.
 	describeSyncTask(t, reopened, config, alice, contested.ID, "Alice's text")
-	if edits, err := reopened.SetAsideEdits(ctx, config, taskHeads(t, reopened)); err != nil || len(edits[contested.ID]) != 1 || edits[contested.ID][0].Operations[0].Field != "priority" {
+	if edits, err := setAsideEditsOf(reopened, config, taskHeads(t, reopened)); err != nil || len(edits[contested.ID]) != 1 || edits[contested.ID][0].Operations[0].Field != "priority" {
 		t.Fatalf("set-aside edits after the text was copied back = %#v, %v; want the priority alone", edits, err)
 	}
 	if _, err := actorService(reopened, config, alice).UpdateMutation(actorContext(t, alice), contested.ID, core.UpdateInput{Priority: &high}); err != nil {
 		t.Fatal(err)
 	}
-	if edits, err := reopened.SetAsideEdits(ctx, config, taskHeads(t, reopened)); err != nil || len(edits) != 0 {
+	if edits, err := setAsideEditsOf(reopened, config, taskHeads(t, reopened)); err != nil || len(edits) != 0 {
 		t.Fatalf("set-aside edits after the text was copied back = %#v, %v; want none", edits, err)
 	}
-	// Settled for good: a later change to the field is an ordinary edit, and
-	// the set-aside text does not come back.
+	// Nothing was replayed before the conflict, so the parked tip does not say
+	// where origin stood when it was parked, and only the task's current state
+	// can show an edit carried. Once the text changes again the set-aside text
+	// is shown again: an edit somebody already dealt with may come back, which
+	// Dismiss clears, but one nobody dealt with is never hidden.
 	describeSyncTask(t, reopened, config, contributor, contested.ID, "Something else again")
-	if edits, err := reopened.SetAsideEdits(ctx, config, taskHeads(t, reopened)); err != nil || len(edits) != 0 {
-		t.Fatalf("set-aside edits once the text changed again = %#v, %v; want none", edits, err)
+	if edits, err := setAsideEditsOf(reopened, config, taskHeads(t, reopened)); err != nil ||
+		len(edits[contested.ID]) != 1 || edits[contested.ID][0].Operations[0].Value != "Alice's text" {
+		t.Fatalf("set-aside edits once the text changed again = %#v, %v; want alice's text again", edits, err)
 	}
 }
 
@@ -132,7 +137,7 @@ func TestDismissSetAsideRemovesOnlyTheTipThatWasShown(t *testing.T) {
 	if _, err := board.Sync(ctx, config); core.CategoryOf(err) != core.CategoryConflict {
 		t.Fatalf("Sync() error = %v, want the conflict", err)
 	}
-	edits, err := board.SetAsideEdits(ctx, config, taskHeads(t, board))
+	edits, err := setAsideEditsOf(board, config, taskHeads(t, board))
 	if err != nil || len(edits[task.ID]) != 1 {
 		t.Fatalf("set-aside edits = %#v, %v", edits, err)
 	}
@@ -158,7 +163,7 @@ func TestDismissSetAsideRemovesOnlyTheTipThatWasShown(t *testing.T) {
 	if err := board.DismissSetAside(ctx, config, task.ID, shown.ParkedRef, shown.Parked); err != nil {
 		t.Fatal(err)
 	}
-	if edits, err := board.SetAsideEdits(ctx, config, taskHeads(t, board)); err != nil || len(edits) != 0 {
+	if edits, err := setAsideEditsOf(board, config, taskHeads(t, board)); err != nil || len(edits) != 0 {
 		t.Fatalf("set-aside edits after dismissal = %#v, %v; want none", edits, err)
 	}
 	if got := strings.TrimSpace(syncGit(t, board.Root, "for-each-ref", reconciledRefPrefix+task.ID+"/")); got != "" {
@@ -181,4 +186,14 @@ func taskHeads(t *testing.T, repo *Repository) map[string]string {
 		}
 	}
 	return heads
+}
+
+// setAsideEditsOf is SetAsideEdits' edits alone, for a test that expects every
+// parked ref to be readable: it fails on one that is not.
+func setAsideEditsOf(repo *Repository, config core.ProjectConfig, heads map[string]string) (map[string][]core.SetAsideEdit, error) {
+	report, err := repo.SetAsideEdits(context.Background(), config, heads)
+	if err == nil && len(report.Unreadable) > 0 {
+		return report.Edits, fmt.Errorf("unreadable parked refs: %#v", report.Unreadable)
+	}
+	return report.Edits, err
 }

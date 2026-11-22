@@ -1924,6 +1924,7 @@ func runServeWithEnvironment(
 		config:     service.Config,
 		publisher:  publisher,
 	}
+	unreadable := &unreadableParkedLog{out: stderr}
 	handler := webui.NewHandler(webui.Options{
 		Vocabulary:    readVocabulary,
 		AddStatus:     statuses.add,
@@ -2201,9 +2202,16 @@ func runServeWithEnvironment(
 		// The edits this folder's sync set aside on a conflict, read from the
 		// parked refs on every request so they outlive the process, and shown
 		// to everyone who opens the board. The command line has no view of
-		// them; on a board nobody else would ever see them.
+		// them; on a board nobody else would ever see them. A parked ref that
+		// cannot be read is left out of the answer, and named in the server's
+		// log once, since the answer may be going to somebody else's browser.
 		SetAside: func(requestContext context.Context, heads map[string]string) (map[string][]core.SetAsideEdit, error) {
-			return repository.SetAsideEdits(requestContext, service.Config, heads)
+			report, err := repository.SetAsideEdits(requestContext, service.Config, heads)
+			if err != nil {
+				return nil, err
+			}
+			unreadable.note(report.Unreadable)
+			return report.Edits, nil
 		},
 		DismissSetAside: func(requestContext context.Context, taskID, parkedRef, parked string) error {
 			return repository.DismissSetAside(requestContext, service.Config, taskID, parkedRef, parked)
@@ -2867,4 +2875,33 @@ func openRepository(ctx context.Context, cwd string, stderr io.Writer) (*gitstor
 		fmt.Fprintf(stderr, "workbook: warning: %s\n", drift.Detail)
 	}
 	return repository, config, nil
+}
+
+// unreadableParkedLog names each parked ref the board skipped because it
+// cannot be read, once for each commit and reason, so a board polling every
+// second does not repeat it.
+type unreadableParkedLog struct {
+	mu     sync.Mutex
+	out    io.Writer
+	logged map[string]struct{}
+}
+
+func (log *unreadableParkedLog) note(refs []gitstore.UnreadableParkedRef) {
+	if len(refs) == 0 || log.out == nil {
+		return
+	}
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if log.logged == nil {
+		log.logged = make(map[string]struct{})
+	}
+	for _, ref := range refs {
+		key := ref.Ref + "\x00" + ref.Commit + "\x00" + ref.Reason
+		if _, done := log.logged[key]; done {
+			continue
+		}
+		log.logged[key] = struct{}{}
+		fmt.Fprintf(log.out, "workbook serve: skipped parked ref %s (commit %s) of %s, which cannot be shown as set-aside edits: %s\n",
+			ref.Ref, ref.Commit, ref.TaskID, ref.Reason)
+	}
 }

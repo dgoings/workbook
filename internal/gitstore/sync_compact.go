@@ -542,7 +542,10 @@ func compactedSides(localChain, remoteChain []OperationCommit, remoteGeneration 
 // checkpoint's list nor on origin's chain; with none, the ref moves to origin's
 // tip, and otherwise they are replayed onto it in its generation. The old tip
 // is neither parked nor left in the reflog, since either would keep the
-// compacted history alive. A replay that cannot run cleanly leaves the ref
+// compacted history alive. Parked tips from earlier reconciliations go too,
+// except one that still holds an edit the task lacks: that is somebody's work
+// that only this clone holds, and it is kept, and shown, until a person
+// dismisses it. A replay that cannot run cleanly leaves the ref
 // where it is, on the old history, and says how to adopt by hand.
 func (r *Repository) adoptRemoteCheckpoint(
 	ctx context.Context,
@@ -558,11 +561,11 @@ func (r *Repository) adoptRemoteCheckpoint(
 		return outcome, err
 	}
 	update := canonicalRefUpdate{
-		TaskID:     request.TaskID,
-		Next:       request.Remote.Head,
-		Expected:   request.Local.Head,
-		NoPark:     true,
-		DropParked: true,
+		TaskID:            request.TaskID,
+		Next:              request.Remote.Head,
+		Expected:          request.Local.Head,
+		NoPark:            true,
+		DropSettledParked: true,
 	}
 	if len(localOnly) == 0 {
 		outcome.Update = &update

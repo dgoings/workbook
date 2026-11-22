@@ -141,14 +141,16 @@ func (r *Repository) writeCanonical(
 	// certainly acting on this task and already writing a ref, so it is where
 	// superseded parked tips are retired. Reads and fetches leave them alone:
 	// pruning during a fetch would delete recoverable local work in the same
-	// command that orphaned it.
-	pruned, err := r.prunableParkedRefs(ctx, config, pack.TaskID)
+	// command that orphaned it. Only settled ones go, judged against the head
+	// this mutation builds on.
+	pruned, err := r.prunableParkedRefs(ctx, config, pack.TaskID, parentHead)
 	if err != nil {
 		return core.Snapshot{}, err
 	}
 	if err := r.commitTaskRefUpdate(ctx, ref, head, parentHead, pruned, reason); err != nil {
 		return core.Snapshot{}, err
 	}
+	r.forgetVerdicts(pruned)
 	return core.Snapshot{Head: head, Operation: pack, State: state}, nil
 }
 

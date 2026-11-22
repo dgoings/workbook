@@ -44,8 +44,15 @@ type canonicalRefUpdate struct {
 	// transaction lands.
 	NoPark bool
 	// DropParked deletes every refs/workbook/reconciled/<id>/* in the same
-	// transaction, for the same reason.
+	// transaction, for the same reason. A person asks for that by hand, after
+	// the parked tips have been saved to a bundle unless they declined it.
 	DropParked bool
+	// DropSettledParked deletes, in the same transaction, only the parked
+	// tips whose every edit the task carries at Next: adopting origin's
+	// compaction automatically keeps any parked tip that still holds an edit
+	// the task lacks, so the edit stays on show until a person dismisses it,
+	// at the cost of keeping that much of the compacted history alive.
+	DropSettledParked bool
 }
 
 // classifyTaskHeadRelationships classifies validated canonical and tracking
@@ -241,7 +248,7 @@ func (r *Repository) updateCanonicalRefsFromValidated(
 				return core.Wrap(core.CategoryCorruptData, "canonical task ref expected target is invalid", err)
 			}
 		}
-		if update.ParkedRef != "" && (update.NoPark || update.DropParked) {
+		if update.ParkedRef != "" && (update.NoPark || update.DropParked || update.DropSettledParked) {
 			return core.Errorf(core.CategoryCorruptData, "canonical ref update for task %q both parks and drops its old tip", update.TaskID)
 		}
 		if update.ParkedRef != "" {
@@ -268,10 +275,23 @@ func (r *Repository) updateCanonicalRefsFromValidated(
 		if update.ParkedRef != "" {
 			fmt.Fprintf(&input, "create %s %s\n", update.ParkedRef, update.ParkedHead)
 		}
-		if update.DropParked {
+		if update.DropParked || update.DropSettledParked {
 			parked, err := r.listParkedRefs(ctx, config, reconciledRefPrefix+update.TaskID+"/")
 			if err != nil {
 				return err
+			}
+			if update.DropSettledParked && len(parked) > 0 {
+				verdicts, err := r.parkedVerdicts(ctx, config, parked, map[string]string{update.TaskID: update.Next})
+				if err != nil {
+					return err
+				}
+				settled := parked[:0:0]
+				for _, entry := range parked {
+					if verdict, found := verdicts[entry.name]; found && verdict.settled() {
+						settled = append(settled, entry)
+					}
+				}
+				parked = settled
 			}
 			for _, entry := range parked {
 				if !validParkedRefName(update.TaskID, entry.name) {
@@ -298,6 +318,12 @@ func (r *Repository) updateCanonicalRefsFromValidated(
 		"--stdin",
 	); err != nil {
 		return core.Wrap(core.CategoryStaleWrite, "canonical task refs changed during fetch", err)
+	}
+	for _, update := range updates {
+		if update.ParkedRef != "" || update.DropParked || update.DropSettledParked {
+			r.parkedRefsChanged()
+			break
+		}
 	}
 	return nil
 }

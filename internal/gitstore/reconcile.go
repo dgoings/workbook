@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -18,9 +17,13 @@ import (
 // parked history stays local without a second exclusion rule.
 const reconciledRefPrefix = "refs/workbook/reconciled/"
 
-// maxParkedRefsPerTask bounds retained orphaned tips. Parked commits exist so a
-// person can recover text a conflict dropped, which is a short-lived need; the
-// canonical history is the durable record.
+// maxParkedRefsPerTask bounds the settled parked tips kept per task: those
+// whose every edit the task carries or replayed, which a reconciliation that
+// stopped on nothing parks too. Keeping a few lets a person look at what a
+// recent reconciliation replaced. A parked tip holding an edit the task lacks
+// is not counted and never retired automatically, however many a task has:
+// it is a person's work that only this clone holds, and it goes when a person
+// dismisses it (see DismissSetAside and settledParkedRefs).
 const maxParkedRefsPerTask = 3
 
 // reconcileRequest is one divergent task: a validated local tip that origin
@@ -602,8 +605,9 @@ func (r *Repository) nextParkedRefIndexes(ctx context.Context, config core.Proje
 	return next, nil
 }
 
-// PruneParkedRefs retires orphaned tips past the retention bound across every
-// task and reports how many refs it deleted.
+// PruneParkedRefs retires settled parked tips past the retention bound across
+// every task and reports how many refs it deleted. A parked tip that holds an
+// edit its task lacks, or that cannot be read, is kept (see settledParkedRefs).
 //
 // Pruning inside a mutation bounds retention only for tasks this clone still
 // mutates. A clone that fetches and reconciles but never mutates a task again
@@ -623,36 +627,40 @@ func (r *Repository) PruneParkedRefs(ctx context.Context, config core.ProjectCon
 	if err != nil {
 		return 0, err
 	}
-
-	byTask := make(map[string][]parkedRef, len(refs))
+	r.forgetVanishedVerdicts(refs)
+	counts := make(map[string]int, len(refs))
 	for _, ref := range refs {
-		byTask[ref.taskID] = append(byTask[ref.taskID], ref)
+		counts[ref.taskID]++
 	}
-	taskIDs := make([]string, 0, len(byTask))
-	for taskID := range byTask {
-		taskIDs = append(taskIDs, taskID)
-	}
-	sort.Strings(taskIDs)
-
-	names := make([]string, 0, len(refs))
-	for _, taskID := range taskIDs {
-		group := byTask[taskID]
-		if len(group) <= maxParkedRefsPerTask {
-			continue
-		}
-		sort.Slice(group, func(i, j int) bool { return group[i].index < group[j].index })
-		for _, ref := range group[:len(group)-maxParkedRefsPerTask] {
-			names = append(names, ref.name)
+	crowded := false
+	for _, count := range counts {
+		if count > maxParkedRefsPerTask {
+			crowded = true
+			break
 		}
 	}
-	if len(names) == 0 {
+	if !crowded {
 		return 0, nil
+	}
+	tasks, _, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
+	if err != nil {
+		return 0, err
+	}
+	tips := make(map[string]string, len(tasks))
+	for _, task := range tasks {
+		tips[task.taskID] = task.objectID
+	}
+	retired, err := r.settledParkedRefs(ctx, config, refs, tips)
+	if err != nil || len(retired) == 0 {
+		return 0, err
 	}
 
 	var input bytes.Buffer
 	input.WriteString("start\noption no-deref\n")
-	for _, name := range names {
-		fmt.Fprintf(&input, "delete %s\n", name)
+	names := make([]string, 0, len(retired))
+	for _, ref := range retired {
+		fmt.Fprintf(&input, "delete %s %s\n", ref.name, ref.objectID)
+		names = append(names, ref.name)
 	}
 	input.WriteString("prepare\ncommit\n")
 	if _, err := r.Git(
@@ -662,22 +670,28 @@ func (r *Repository) PruneParkedRefs(ctx context.Context, config core.ProjectCon
 	); err != nil {
 		return 0, err
 	}
+	r.forgetVerdicts(names)
 	return len(names), nil
 }
 
-// prunableParkedRefs returns the parked refs for one task that exceed the
-// retention bound, oldest first.
-func (r *Repository) prunableParkedRefs(ctx context.Context, config core.ProjectConfig, taskID string) ([]string, error) {
+// prunableParkedRefs returns the settled parked refs for one task past the
+// retention bound, oldest first, judged against tip, the task's head. Nothing
+// is returned when they cannot be judged: retiring a parked tip is never worth
+// failing the mutation that would have done it.
+func (r *Repository) prunableParkedRefs(ctx context.Context, config core.ProjectConfig, taskID, tip string) ([]string, error) {
 	refs, err := r.listParkedRefs(ctx, config, reconciledRefPrefix+taskID+"/")
 	if err != nil {
 		return nil, err
 	}
-	if len(refs) <= maxParkedRefsPerTask {
+	if len(refs) <= maxParkedRefsPerTask || tip == "" {
 		return nil, nil
 	}
-	sort.Slice(refs, func(i, j int) bool { return refs[i].index < refs[j].index })
-	names := make([]string, 0, len(refs)-maxParkedRefsPerTask)
-	for _, ref := range refs[:len(refs)-maxParkedRefsPerTask] {
+	retired, err := r.settledParkedRefs(ctx, config, refs, map[string]string{taskID: tip})
+	if err != nil {
+		return nil, nil
+	}
+	names := make([]string, 0, len(retired))
+	for _, ref := range retired {
 		names = append(names, ref.name)
 	}
 	return names, nil
