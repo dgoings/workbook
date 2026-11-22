@@ -583,9 +583,13 @@ func TestStoreAdvanceDoesNotRegressNewerSnapshot(t *testing.T) {
 		t.Fatalf("Rebuild() error = %v", err)
 	}
 
+	// The row names a head another update recorded, so it is not this write's
+	// to replace. That is reported as done rather than declined: a decline is
+	// what puts a rebuild warning on the write, and the row is not stale on
+	// this write's account, since every read compares it with the ref.
 	applied, err := store.Advance(ctx, config, previous.Head, stale)
-	if err != nil || applied {
-		t.Fatalf("Advance(stale) = %t, %v, want false, nil", applied, err)
+	if err != nil || !applied {
+		t.Fatalf("Advance(stale) = %t, %v, want true, nil", applied, err)
 	}
 	got, err := store.Get(ctx, config, newer.State.TaskID)
 	if err != nil || got.Head != newer.Head || got.State.Task.Title != "Newer" {
@@ -1298,8 +1302,16 @@ func TestRebuildRetriesOnceWhenHeadsChangeDuringBuild(t *testing.T) {
 	}
 	source.index = 0
 	source.snapshots[third.Head] = third
-	if _, err := store.Rebuild(ctx); core.CategoryOf(err) != core.CategoryOperational {
-		t.Fatalf("Rebuild() category = %q, want operational; error = %v", core.CategoryOf(err), err)
+	// The bound is reached, and the answer is the retryable one: the refs
+	// moving is nobody's fault, nothing was written, and the identical command
+	// is what to send next. It does not advise a rebuild, because a rebuild is
+	// what just lost the race.
+	_, err = store.Rebuild(ctx)
+	if core.CategoryOf(err) != core.CategoryStaleWrite {
+		t.Fatalf("Rebuild() category = %q, want stale-write; error = %v", core.CategoryOf(err), err)
+	}
+	if strings.Contains(err.Error(), "workbook rebuild") {
+		t.Fatalf("Rebuild() error = %v, must not advise a rebuild", err)
 	}
 }
 

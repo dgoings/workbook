@@ -27,8 +27,6 @@ const (
 	cacheRecoveryHint = "run `workbook rebuild` to recreate the SQLite cache"
 )
 
-var errStaleProjectionRefresh = errors.New("projection cache changed during refresh")
-
 type taskHeadSource interface {
 	ListTaskHeads(context.Context, core.ProjectConfig) ([]gitstore.TaskHead, error)
 	InspectTaskHead(context.Context, core.ProjectConfig, string) (gitstore.TaskHead, bool, error)
@@ -156,25 +154,41 @@ func (s *Store) Close() error {
 // Refresh validates task-ref tips, applying only changed tip checkpoints to
 // the cache. Git remains the canonical source for every changed task.
 func (s *Store) Refresh(ctx context.Context) error {
-	return s.withActiveDatabase(ctx, s.refreshActive)
+	return s.withActiveDatabase(ctx, func(ctx context.Context) error {
+		_, err := s.refreshActive(ctx)
+		return err
+	})
 }
 
-func (s *Store) refreshActive(ctx context.Context) error {
-	for attempt := 0; attempt < 2; attempt++ {
-		cached, err := s.cachedTaskHeads(ctx)
-		if err != nil {
-			return err
-		}
-		heads, err := s.source.ListTaskHeads(ctx, s.config)
-		if err != nil {
-			return err
-		}
-		err = s.refreshChangedHeads(ctx, cached, heads)
-		if !errors.Is(err, errStaleProjectionRefresh) {
-			return err
-		}
+// refreshActive brings the cache up to the task refs as they stand once it
+// has listed them, in a single pass that another request or process updating
+// the same cache at the same moment cannot fail.
+//
+// Each changed task is written with a compare-and-swap against the row this
+// pass read before it listed the refs. A row somebody else moved in the
+// meantime is theirs: it is left as they wrote it, and the checkpoint this
+// pass read from Git for that task is returned instead, keyed by task ID, for
+// the caller to answer from. That checkpoint is the task's ref as it stood
+// after the caller's request began, which is all a read promises, and the
+// next refresh compares the row with the ref again whichever of the two was
+// newer. Nothing here is retried, so there is no bound to reach: the pass
+// costs one cache read, one ref listing, and one read of the tasks that
+// changed, however busy the cache is.
+//
+// It used to treat any moved row as a failure of the whole pass and give up
+// after two, which under a board's ordinary load — every create projecting
+// its own task while every concurrent read projected the same one — answered
+// 500 and advised a rebuild that would have changed nothing.
+func (s *Store) refreshActive(ctx context.Context) (map[string]core.Snapshot, error) {
+	cached, err := s.cachedTaskHeads(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return cacheError("refresh projection cache after a concurrent update", errStaleProjectionRefresh)
+	heads, err := s.source.ListTaskHeads(ctx, s.config)
+	if err != nil {
+		return nil, err
+	}
+	return s.refreshChangedHeads(ctx, cached, heads)
 }
 
 // Rebuild recreates the projection from all currently visible Git task heads.
@@ -212,7 +226,7 @@ func (s *Store) rebuildLocked(ctx context.Context) (int, error) {
 		}
 		_ = os.Remove(temporary)
 	}
-	return 0, core.Errorf(core.CategoryOperational, "task refs changed during projection rebuild; retry workbook rebuild")
+	return 0, errCacheBusy("task refs kept changing while the projection cache was rebuilt")
 }
 
 // List returns task checkpoints from SQLite after refreshing against Git ref tips.
@@ -222,17 +236,45 @@ func (s *Store) List(ctx context.Context, config core.ProjectConfig) ([]core.Sna
 	}
 	var snapshots []core.Snapshot
 	err := s.withActiveDatabase(ctx, func(ctx context.Context) error {
-		if err := s.refreshActive(ctx); err != nil {
+		superseded, err := s.refreshActive(ctx)
+		if err != nil {
 			return err
 		}
 		listed, err := s.querySnapshots(ctx)
 		if err != nil {
 			return err
 		}
-		snapshots = listed
+		snapshots = answerFromGit(listed, superseded)
 		return nil
 	})
 	return snapshots, err
+}
+
+// answerFromGit replaces each listed task another update moved during the
+// refresh with the checkpoint the refresh read from Git for it, and adds any
+// such task the cache holds no row for at all, keeping the listing's task-ID
+// order. See refreshActive for why the Git checkpoint is the answer.
+func answerFromGit(listed []core.Snapshot, superseded map[string]core.Snapshot) []core.Snapshot {
+	if len(superseded) == 0 {
+		return listed
+	}
+	answered := make(map[string]bool, len(superseded))
+	for index := range listed {
+		if snapshot, found := superseded[listed[index].State.TaskID]; found {
+			listed[index] = snapshot
+			answered[snapshot.State.TaskID] = true
+		}
+	}
+	if len(answered) == len(superseded) {
+		return listed
+	}
+	for taskID, snapshot := range superseded {
+		if !answered[taskID] {
+			listed = append(listed, snapshot)
+		}
+	}
+	sort.Slice(listed, func(i, j int) bool { return listed[i].State.TaskID < listed[j].State.TaskID })
+	return listed
 }
 
 // Get returns one SQLite-projected checkpoint after inspecting its exact Git ref.
@@ -275,7 +317,11 @@ func (s *Store) TaskHistory(ctx context.Context, config core.ProjectConfig, task
 		if err != nil {
 			return err
 		}
-		projected, found, err := s.readProjectedHistory(ctx, taskID, "")
+		// Through the head just read rather than through whatever the row now
+		// names: getExactActive may have answered from Git because another
+		// update moved the row, and the history has to end where the task it
+		// describes does.
+		projected, found, err := s.readProjectedHistory(ctx, taskID, snapshot.Head)
 		if err != nil {
 			return err
 		}
@@ -335,7 +381,8 @@ func (s *Store) Resolve(ctx context.Context, config core.ProjectConfig, prefix s
 	}
 	var matches []string
 	err := s.withActiveDatabase(ctx, func(ctx context.Context) error {
-		if err := s.refreshActive(ctx); err != nil {
+		superseded, err := s.refreshActive(ctx)
+		if err != nil {
 			return err
 		}
 		rows, err := s.db.QueryContext(ctx, `SELECT task_id FROM tasks ORDER BY task_id`)
@@ -346,11 +393,13 @@ func (s *Store) Resolve(ctx context.Context, config core.ProjectConfig, prefix s
 
 		needle := strings.ToLower(prefix)
 		matches = nil
+		seen := make(map[string]bool)
 		for rows.Next() {
 			var taskID string
 			if err := rows.Scan(&taskID); err != nil {
 				return s.databaseError("read projected task ID", err)
 			}
+			seen[taskID] = true
 			if strings.HasPrefix(strings.ToLower(taskID), needle) {
 				matches = append(matches, taskID)
 			}
@@ -358,6 +407,14 @@ func (s *Store) Resolve(ctx context.Context, config core.ProjectConfig, prefix s
 		if err := rows.Err(); err != nil {
 			return s.databaseError("read projected task IDs", err)
 		}
+		// A task whose row another update removed while the refresh ran is
+		// still a task: its ref was just listed.
+		for taskID := range superseded {
+			if !seen[taskID] && strings.HasPrefix(strings.ToLower(taskID), needle) {
+				matches = append(matches, taskID)
+			}
+		}
+		sort.Strings(matches)
 		return nil
 	})
 	if err != nil {
@@ -373,18 +430,31 @@ func (s *Store) Resolve(ctx context.Context, config core.ProjectConfig, prefix s
 	}
 }
 
-// Advance conditionally replaces one projected task checkpoint.
+// Advance conditionally replaces one projected task checkpoint: the row moves
+// to snapshot only while it still names expectedParent, the head the write
+// was made on.
+//
+// It reports false only when the row still names expectedParent but cannot
+// take snapshot, which is a history-generation change nobody proved, and the
+// caller's invalidation is what clears it. A row that already names snapshot,
+// or names a head another update recorded there — newer than this write, or
+// older because that update had not reached it yet — reports true and is left
+// as it is. It is not this write's to replace, and nothing about it is stale
+// on this write's account: every read compares a row with its task's ref
+// before it uses it. Reporting false there used to put a warning to run
+// `workbook rebuild` on a write that had succeeded, whenever two writes to
+// one task landed close together.
 func (s *Store) Advance(ctx context.Context, config core.ProjectConfig, expectedParent string, snapshot core.Snapshot) (bool, error) {
 	if err := s.validateConfig(config); err != nil {
 		return false, err
 	}
 	var advanced bool
 	err := s.withActiveDatabase(ctx, func(ctx context.Context) error {
-		applied, err := s.advanceActive(ctx, expectedParent, snapshot, nil, false)
+		outcome, err := s.advanceActive(ctx, expectedParent, snapshot, nil, false)
 		if err != nil {
 			return err
 		}
-		advanced = applied
+		advanced = outcome != advanceRefused
 		return nil
 	})
 	return advanced, err
@@ -446,7 +516,10 @@ func (s *Store) lockActiveDatabase(ctx context.Context) error {
 		return nil
 	}
 	s.rebuildMu.RUnlock()
-	return cacheError("activate projection cache after rebuild", errors.New("projection cache is unavailable"))
+	// The cache was rebuilt, or reopened, a moment ago and is unusable again
+	// already, which is another process replacing it in between. What this
+	// request would read is in Git either way, so it is sent again.
+	return errCacheBusy("the projection cache changed again while it was being activated")
 }
 
 // errStoreClosed names the refusal a closed store answers with. It is built
@@ -508,7 +581,12 @@ func (s *Store) withActiveDatabase(ctx context.Context, body func(context.Contex
 			return err
 		}
 		if attempt == attempts {
-			return cacheError("redo a projection write after the cache was replaced", err)
+			// Another process replaced the cache inside every redo's window.
+			// The replacements are valid caches and this request wrote
+			// nothing to any of them, so the answer is to send it again, not
+			// to rebuild a cache that is fine.
+			return core.Wrap(core.CategoryStaleWrite,
+				"the projection cache was replaced by another process each time this request used it; nothing was changed, try again", err)
 		}
 		if recoverErr := func() error {
 			s.rebuildMu.Lock()
@@ -629,8 +707,19 @@ func (s *Store) requiredSchemaExists(ctx context.Context) bool {
 	return true
 }
 
+// getExactActive answers one task from its exact ref, projecting the ref's
+// checkpoint when the row is behind it.
+//
+// The projection is a compare-and-swap against the row read first, so a row
+// another update moved in between is left to that update, and the read is
+// tried once more against the newer row. If that row moves too, the answer is
+// the checkpoint the second attempt read from Git, which is the task's ref as
+// it stood after this request began. Two attempts is the whole bound, and
+// reaching it is an answer rather than a failure: every exit returns either a
+// checkpoint or an error that has nothing to do with the race.
 func (s *Store) getExactActive(ctx context.Context, taskID string) (core.Snapshot, error) {
-	for attempt := 0; attempt < 2; attempt++ {
+	const attempts = 2
+	for attempt := 1; ; attempt++ {
 		cached, cachedFound, err := s.querySnapshot(ctx, taskID)
 		if err != nil {
 			return core.Snapshot{}, err
@@ -690,18 +779,17 @@ func (s *Store) getExactActive(ctx context.Context, taskID string) (core.Snapsho
 		if err != nil {
 			return core.Snapshot{}, err
 		}
-		applied, err := s.advanceActive(ctx, expectedParent, snapshot, &chains[0], compacted)
+		outcome, err := s.advanceActive(ctx, expectedParent, snapshot, &chains[0], compacted)
 		if err != nil {
 			return core.Snapshot{}, err
 		}
-		if applied {
+		if outcome == advanceApplied || attempt == attempts {
 			return snapshot, nil
 		}
 	}
-	return core.Snapshot{}, cacheError("refresh exact projected task after a concurrent update", errStaleProjectionRefresh)
 }
 
-func (s *Store) refreshChangedHeads(ctx context.Context, cached map[string]cachedTaskHead, heads []gitstore.TaskHead) error {
+func (s *Store) refreshChangedHeads(ctx context.Context, cached map[string]cachedTaskHead, heads []gitstore.TaskHead) (map[string]core.Snapshot, error) {
 	expectedHeads := make(map[string]string, len(cached))
 	for taskID, previous := range cached {
 		expectedHeads[taskID] = previous.head
@@ -727,10 +815,10 @@ func (s *Store) refreshChangedHeads(ctx context.Context, cached map[string]cache
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
-		return core.Errorf(core.CategoryCorruptData, "task %q ref disappeared after it was projected", missing[0])
+		return nil, core.Errorf(core.CategoryCorruptData, "task %q ref disappeared after it was projected", missing[0])
 	}
 	if len(changed) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	var compactions map[string]struct{}
@@ -738,25 +826,25 @@ func (s *Store) refreshChangedHeads(ctx context.Context, cached map[string]cache
 		var err error
 		compactions, err = s.source.ValidateTaskHeadAdvancesWithCompactions(ctx, s.config, advances)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	snapshots, err := s.source.ReadTaskHeads(ctx, s.config, changed)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(snapshots) != len(changed) {
-		return core.Errorf(core.CategoryCorruptData, "task head batch returned %d snapshots, want %d", len(snapshots), len(changed))
+		return nil, core.Errorf(core.CategoryCorruptData, "task head batch returned %d snapshots, want %d", len(snapshots), len(changed))
 	}
 	for i, snapshot := range snapshots {
 		head := changed[i]
 		if err := validateReadSnapshot(head, snapshot); err != nil {
-			return err
+			return nil, err
 		}
 		if previous, found := cached[head.TaskID]; found &&
 			snapshot.State.History.Generation != previous.historyGeneration {
 			if err := requireCompaction(compactions, head.TaskID); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
@@ -766,7 +854,7 @@ func (s *Store) refreshChangedHeads(ctx context.Context, cached map[string]cache
 	// changed task from its projected head to its new one reads exactly those.
 	chains, err := s.readOperationChains(ctx, changed, cached)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	return s.applyChanges(ctx, expectedHeads, snapshots, chains)
 }
@@ -884,6 +972,22 @@ func requireCompaction(compactions map[string]struct{}, taskID string) error {
 	return nil
 }
 
+// advanceOutcome is what a conditional advance found the row naming.
+type advanceOutcome int
+
+const (
+	// advanceApplied: the row names snapshot now, by this advance or by one
+	// that got there first.
+	advanceApplied advanceOutcome = iota
+	// advanceMoved: the row names a head another update recorded, and was
+	// left as that update wrote it.
+	advanceMoved
+	// advanceRefused: the row still names the expected parent but cannot take
+	// snapshot, because its history generation changed without a proven
+	// compaction.
+	advanceRefused
+)
+
 // advanceActive conditionally replaces one projected task. chain carries the
 // commits a multi-commit advance crossed; a nil chain means the caller just
 // wrote exactly one commit onto expectedParent and the snapshot's own pack is
@@ -896,10 +1000,10 @@ func (s *Store) advanceActive(
 	snapshot core.Snapshot,
 	chain *gitstore.TaskOperationsResult,
 	compacted bool,
-) (bool, error) {
+) (advanceOutcome, error) {
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, s.databaseError("begin conditional projection advancement", err)
+		return advanceRefused, s.databaseError("begin conditional projection advancement", err)
 	}
 	defer transaction.Rollback()
 
@@ -914,41 +1018,34 @@ func (s *Store) advanceActive(
 		actualHead = ""
 		actualHistoryGeneration = ""
 	case err != nil:
-		return false, s.databaseError("read conditional projected task head", err)
+		return advanceRefused, s.databaseError("read conditional projected task head", err)
 	}
+	// None of the three early answers has written anything, so each leaves
+	// by the deferred rollback rather than a commit.
 	if actualHead == snapshot.Head {
-		if err := transaction.Commit(); err != nil {
-			return false, s.databaseError("commit conditional projection advancement", err)
-		}
-		return true, nil
+		return advanceApplied, nil
 	}
 	if actualHead != expectedParent {
-		if err := transaction.Commit(); err != nil {
-			return false, s.databaseError("commit conditional projection advancement", err)
-		}
-		return false, nil
+		return advanceMoved, nil
 	}
 	if actualHead != "" && actualHistoryGeneration != snapshot.State.History.Generation && !compacted {
-		if err := transaction.Commit(); err != nil {
-			return false, s.databaseError("commit conditional projection advancement", err)
-		}
-		return false, nil
+		return advanceRefused, nil
 	}
 	if actualHead != "" {
 		if err := deleteTask(ctx, transaction, snapshot.State.TaskID); err != nil {
-			return false, err
+			return advanceRefused, err
 		}
 	}
 	if err := upsertSnapshot(ctx, transaction, snapshot); err != nil {
-		return false, err
+		return advanceRefused, err
 	}
 	if err := s.advanceOperations(ctx, transaction, expectedParent, snapshot, chain); err != nil {
-		return false, err
+		return advanceRefused, err
 	}
 	if err := transaction.Commit(); err != nil {
-		return false, s.databaseError("commit conditional projection advancement", err)
+		return advanceRefused, s.databaseError("commit conditional projection advancement", err)
 	}
-	return true, nil
+	return advanceApplied, nil
 }
 
 func (s *Store) advanceOperations(
@@ -1043,65 +1140,78 @@ func replaceSnapshots(
 	return nil
 }
 
+// applyChanges writes each changed task whose row still names the head the
+// refresh read before listing the refs, in one transaction. It returns the
+// checkpoints of the tasks whose rows another update moved in the meantime,
+// which it leaves alone; see refreshActive.
 func (s *Store) applyChanges(
 	ctx context.Context,
 	expectedHeads map[string]string,
 	snapshots []core.Snapshot,
 	chains []gitstore.TaskOperationsResult,
-) error {
+) (map[string]core.Snapshot, error) {
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return s.databaseError("begin projection refresh", err)
+		return nil, s.databaseError("begin projection refresh", err)
 	}
 	defer transaction.Rollback()
-	for _, snapshot := range snapshots {
-		matches, err := cachedHeadMatches(ctx, transaction, snapshot.State.TaskID, expectedHeads[snapshot.State.TaskID])
-		if err != nil {
-			return err
-		}
-		if !matches {
-			return errStaleProjectionRefresh
-		}
-	}
 	byTaskID := make(map[string]gitstore.TaskOperationsResult, len(chains))
 	for _, chain := range chains {
 		byTaskID[chain.TaskID] = chain
 	}
+	var superseded map[string]core.Snapshot
 	for _, snapshot := range snapshots {
 		taskID := snapshot.State.TaskID
+		actualHead, err := projectedHead(ctx, transaction, taskID)
+		if err != nil {
+			return nil, err
+		}
+		// Somebody else projected exactly this checkpoint first: a create
+		// recording its own task, or a concurrent read of the same refs.
+		if actualHead == snapshot.Head {
+			continue
+		}
+		if actualHead != expectedHeads[taskID] {
+			if superseded == nil {
+				superseded = make(map[string]core.Snapshot)
+			}
+			superseded[taskID] = snapshot
+			continue
+		}
 		if err := deleteTask(ctx, transaction, taskID); err != nil {
-			return err
+			return nil, err
 		}
 		if err := upsertSnapshot(ctx, transaction, snapshot); err != nil {
-			return err
+			return nil, err
 		}
 		chain, found := byTaskID[taskID]
 		if !found {
 			if err := deleteOperations(ctx, transaction, taskID); err != nil {
-				return err
+				return nil, err
 			}
 			continue
 		}
 		if err := projectChain(ctx, transaction, chain, expectedHeads[taskID]); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if err := transaction.Commit(); err != nil {
-		return s.databaseError("commit projection refresh", err)
+		return nil, s.databaseError("commit projection refresh", err)
 	}
-	return nil
+	return superseded, nil
 }
 
-func cachedHeadMatches(ctx context.Context, transaction *sql.Tx, taskID, expectedHead string) (bool, error) {
+// projectedHead returns the head one task's row names, or "" for no row.
+func projectedHead(ctx context.Context, transaction *sql.Tx, taskID string) (string, error) {
 	var actualHead string
 	err := transaction.QueryRowContext(ctx, `SELECT head FROM tasks WHERE task_id = ?`, taskID).Scan(&actualHead)
 	if errors.Is(err, sql.ErrNoRows) {
-		return expectedHead == "", nil
+		return "", nil
 	}
 	if err != nil {
-		return false, cacheError("read projected task head during refresh", err)
+		return "", cacheError("read projected task head during refresh", err)
 	}
-	return actualHead == expectedHead, nil
+	return actualHead, nil
 }
 
 func deleteTask(ctx context.Context, transaction *sql.Tx, taskID string) error {
@@ -1646,8 +1756,38 @@ func (s *Store) databaseError(action string, err error) error {
 	return cacheError(action, err)
 }
 
+// cacheError reports a failure of the cache itself, which a rebuild repairs,
+// with the advice to run one. The exception is SQLite reporting the cache
+// locked: that is another connection holding it past the busy timeout, the
+// cache is fine, and a rebuild would only queue behind the same lock, so it is
+// the retryable answer instead.
 func cacheError(action string, err error) error {
+	if databaseBusy(err) {
+		return core.Wrap(core.CategoryStaleWrite,
+			fmt.Sprintf("cannot %s: the projection cache stayed locked by another request or process; nothing was changed, try again", action), err)
+	}
 	return core.Wrap(core.CategoryOperational, fmt.Sprintf("cannot %s; %s", action, cacheRecoveryHint), err)
+}
+
+// errCacheBusy reports a race over the cache that a bounded retry inside this
+// package did not outlast. Nothing was written, and the identical request is
+// expected to succeed, which is what the stale-write category promises.
+func errCacheBusy(what string) error {
+	return core.Errorf(core.CategoryStaleWrite, "%s; nothing was changed, try again", what)
+}
+
+// databaseBusy reports SQLite's verdicts for a lock another connection held
+// past the busy timeout.
+func databaseBusy(err error) bool {
+	var sqliteError *sqlite.Error
+	if !errors.As(err, &sqliteError) {
+		return false
+	}
+	switch sqliteError.Code() & 0xff {
+	case sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED:
+		return true
+	}
+	return false
 }
 
 func formatTime(value time.Time) string {
