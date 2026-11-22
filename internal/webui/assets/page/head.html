@@ -4,4 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ shown .ProjectName }}</title>
+  <!-- What a phone saving the board to its home screen shows: the project's
+       name and the Workbench icon (see icon.go). Nothing here asks for the
+       shortcut to open as an app of its own, on either kind of phone, so it
+       opens in the phone's browser, signed in the way the browser is. The
+       manifest is asked for with credentials so the cookie a sign-in proxy
+       set reaches it as it reaches the page. -->
+  <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-title" content="{{ shown .ProjectName }}">
   <style>

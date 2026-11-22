@@ -40,7 +40,13 @@ import (
 // put in the page could post what a reader types to any address at all. Every
 // form the board draws is submitted by its own script to this origin, so
 // nothing the board does needs more.
-const securityPolicy = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+//
+// `manifest-src 'self'` lets the browser read the board's own web manifest,
+// the name and icon a phone gives a shortcut saved to its home screen (see
+// icon.go). A manifest is fetched under that directive alone, which falls back
+// to `default-src 'none'`, so without it the browser refuses the board's own
+// file; it names this origin and nothing else, as connect-src does.
+const securityPolicy = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
 // pageFuncs are the derivations the page template reaches for rather than
 // re-deriving in template syntax.
@@ -1127,6 +1133,15 @@ type pageData struct {
 	// DefaultStatus is where a new task lands, rendered as an attribute because
 	// the client needs it before it has fetched anything and must not guess.
 	DefaultStatus core.Status
+	// OpeningStatus is the column a phone-sized screen, which shows one column
+	// at a time, opens on when it has none of its own to remember: the first
+	// column, in board order, of the statuses `workbook next` draws from, and
+	// the first column of all when no status is tagged next. It is the
+	// server's answer for the reason DefaultStatus is — which statuses carry
+	// the next tag is the vocabulary's to say, and a script that looked for a
+	// column called ready would open a project that renamed it on the wrong
+	// one. See openingStatus.
+	OpeningStatus core.Status
 	// VocabularyHead is the ledger tip these columns were built from, so the
 	// poll can tell that the columns it is looking at have been superseded.
 	VocabularyHead string
@@ -1623,6 +1638,10 @@ func NewHandler(options Options) http.Handler {
 	handler.mux.HandleFunc("GET /api/sync", handler.serveSyncState)
 	handler.mux.HandleFunc("PUT /api/sync", handler.updateSyncMode)
 	handler.mux.HandleFunc("GET /healthz", handler.serveHealth)
+	handler.mux.HandleFunc("GET "+manifestPath, handler.serveManifest)
+	for path := range iconFiles {
+		handler.mux.HandleFunc("GET "+path, handler.serveIcon)
+	}
 	return http.HandlerFunc(handler.serveHTTP)
 }
 
@@ -1639,8 +1658,9 @@ func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Requ
 		// Set before any route writes, and left alone by writeTaggedJSON, so
 		// every answer a hosted board gives carries it: the page and a task's
 		// page, which embed task text, the task data, and attachments. The
-		// board has no separate static assets — its styles and scripts are
-		// inside the page — so there is nothing public to let a cache keep.
+		// board's styles and scripts are inside the page, so its only files of
+		// their own are the home-screen icons, which serveIcon lets this
+		// browser alone keep for a day: they are the same for every board.
 		writer.Header().Set("Cache-Control", hostedCacheControl)
 	}
 	// Bounded here rather than at each route so no handler, present or future,
@@ -1713,7 +1733,7 @@ func hasPathSegment(path, marker string) bool {
 
 func allowedMethod(path string) (string, bool) {
 	switch path {
-	case "/", "/healthz", "/config", "/tasks/new":
+	case "/", "/healthz", "/config", "/tasks/new", manifestPath:
 		return http.MethodGet, true
 	case "/api/tasks":
 		return http.MethodGet + ", " + http.MethodPost, true
@@ -1732,6 +1752,9 @@ func allowedMethod(path string) (string, bool) {
 	case "/api/sync":
 		return http.MethodGet + ", " + http.MethodPut, true
 	default:
+		if _, icon := iconFiles[path]; icon {
+			return http.MethodGet, true
+		}
 		if vocabularyStatusPathName(path) != "" {
 			return http.MethodPatch + ", " + http.MethodDelete, true
 		}
@@ -2055,6 +2078,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		Theme:                 boardTheme(vocabulary.Display),
 		PriorityInk:           priorityInk(vocabulary.Priorities),
 		DefaultStatus:         vocabulary.Vocabulary.Default(),
+		OpeningStatus:         openingStatus(vocabulary.Vocabulary),
 		VocabularyHead:        vocabulary.Head,
 		VocabularyShape:       vocabularyShape(vocabulary),
 		Priorities:            pagePriorities(vocabulary.Priorities),
@@ -2080,6 +2104,25 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 	}); err != nil {
 		return
 	}
+}
+
+// openingStatus is the column a phone opens the board on before it has one of
+// its own to go back to: the first status in board order whose tasks
+// `workbook next` draws from, which is the same tag Service.NextCandidates
+// asks of a task's status. A project that tags none — normalization gives
+// every project one, so only a vocabulary from outside it can — opens on its
+// first column, and an empty vocabulary on nothing.
+func openingStatus(vocabulary core.Vocabulary) core.Status {
+	definitions := vocabulary.Definitions()
+	for _, definition := range definitions {
+		if vocabulary.IsNext(definition.Status) {
+			return definition.Status
+		}
+	}
+	if len(definitions) > 0 {
+		return definitions[0].Status
+	}
+	return ""
 }
 
 // serveConfig answers the configuration route, which is the board's page under

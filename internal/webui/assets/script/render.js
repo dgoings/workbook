@@ -275,6 +275,9 @@
         // comes through here, so neither the poll nor a navigation can draw
         // cards the choosers have not been told about.
         renderChoosers(allTasks, searching);
+        // The phone's row of columns shows each column's count, so it is
+        // brought up to date with them.
+        syncStatusTabs();
       }
       // The outcome of the newest refresh that has superseded the one this
       // caller started, which is what waiting on your own refresh is actually

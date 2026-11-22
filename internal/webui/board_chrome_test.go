@@ -230,7 +230,10 @@ func assertBoardTracks(t *testing.T, subject string, children []string, columns 
 			}
 			continue
 		}
-		if child != `<section class="column">` {
+		// The column a phone opens on is marked by the server, so a phone
+		// shows it before the script runs; the mark is an attribute of a
+		// column and makes it no less one.
+		if child != `<section class="column">` && child != `<section class="column" data-phone-current>` {
 			t.Errorf("%s drew a board track that is not a column at %d: %q", subject, index, child)
 		}
 	}

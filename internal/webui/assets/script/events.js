@@ -61,6 +61,9 @@
       document.addEventListener("dragstart", (event) => {
         const item = event.target.closest(".task-card");
         if (!item) return;
+        // No card is draggable at the phone width (see cardDraggable), so a
+        // drag that starts there anyway is refused rather than carried out.
+        if (phoneLayout()) { event.preventDefault(); return; }
         // A card drags out of a column or out of the unknown-status region, and
         // out of nothing else. The region has no data-status of its own — it is
         // a display rather than a seventh column, and giving it one would make

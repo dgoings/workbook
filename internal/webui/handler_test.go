@@ -18,7 +18,7 @@ import (
 	"github.com/dgoings/workbook/internal/testenv"
 )
 
-const contentSecurityPolicy = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+const contentSecurityPolicy = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
 func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 	t.Parallel()

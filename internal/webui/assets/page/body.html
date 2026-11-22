@@ -187,8 +187,26 @@
          reason: which key that is belongs to the server, and a client
          re-deriving it from the list could disagree about where the task it
          just created went. -->
-    <div class="board-view" data-board-view data-priorities="{{ .Priorities }}" data-default-priority="{{ .DefaultPriority }}" data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-vocabulary-shape="{{ .VocabularyShape }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}" data-keys="{{ .Keys }}" data-current-key="{{ .CurrentKey }}">
+    <div class="board-view" data-board-view data-priorities="{{ .Priorities }}" data-default-priority="{{ .DefaultPriority }}" data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-opening-status="{{ .OpeningStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-vocabulary-shape="{{ .VocabularyShape }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}" data-keys="{{ .Keys }}" data-current-key="{{ .CurrentKey }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
+      <!-- The row of statuses a phone-sized screen switches columns with. That
+           screen shows one column at a time, and this row is how a reader gets
+           to the others: one button per column, with the column's own count,
+           held under the header while the cards scroll. Wider screens show
+           every column and never draw it — it is display: none outside the
+           phone width query, so it takes no room and changes nothing there.
+
+           It is served with the columns rather than built by the script, so a
+           phone's first paint already shows it, and the column a phone opens on
+           is marked here too: data-phone-current on the column, aria-pressed on
+           its button. The script then puts the reader back on the column they
+           last looked at, adds the Deleted column's button while that column
+           is shown, and keeps every count the same as its column's.
+
+           data-status-tab rather than data-status: the script reads the
+           project's statuses off every [data-status] in the board, and these
+           buttons are not columns. -->
+      <nav class="status-tabs" data-status-tabs aria-label="Columns">{{ range .Board.Columns }}<button type="button" class="status-tab" data-status-tab="{{ .Status }}" aria-pressed="{{ if eq .Status $.OpeningStatus }}true{{ else }}false{{ end }}"><span class="status-tab__label">{{ shown .Label }}</span> <span class="status-tab__count" data-status-tab-count>{{ len .Tasks }}</span></button>{{ end }}</nav>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built
            column because it is the one column that is not a status: the server
@@ -196,7 +214,7 @@
            the vocabulary no longer holds. -->
       <section class="board" data-board aria-label="Task status board">
         {{ range .Board.Columns }}
-        <section class="column">
+        <section class="column"{{ if eq .Status $.OpeningStatus }} data-phone-current{{ end }}>
           <header class="column__header"><h2 class="column__heading">{{ shown .Label }} <span class="count" data-count="{{ .Status }}">{{ len .Tasks }}</span></h2><a class="new-task-link" href="/tasks/new?status={{ .Status }}">New Task</a></header>
           <!-- data-status-label carries the project's own name for this column.
                The client builds its status list out of these nodes rather than

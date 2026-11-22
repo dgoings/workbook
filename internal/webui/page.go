@@ -79,6 +79,7 @@ var pageFragments = []string{
 	"script/toolbar.js",
 	"script/route.js",
 	"script/drag.js",
+	"script/phone.js",
 	"script/render.js",
 	"script/events.js",
 	// The closing </script>, </body> and </html>.
