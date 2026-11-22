@@ -2,7 +2,6 @@ package gitstore
 
 import (
 	"bytes"
-	"fmt"
 	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -89,7 +88,8 @@ func isPublicationSingletonRef(refName string) bool {
 
 // parsePushPorcelain produces one exact task outcome for each expected
 // destination. Git can return useful porcelain records for partial rejections
-// even when the overall push command exits nonzero.
+// even when the overall push command exits nonzero. commandErr is the push's
+// failure with Git's own words in it (gitCommandResultError).
 //
 // forced names the destinations pushed under a compaction lease. Only those may
 // come back as a forced update, and their rejections are reported in the words
@@ -159,11 +159,15 @@ func parsePushPorcelain(
 		}
 		results[taskID] = result
 	}
+	// Git's own error comes first. A push Git refused outright — an address
+	// that is not a repository, a credential it would not accept — prints no
+	// porcelain at all, and a count of the outcomes it did not print says
+	// nothing about why.
+	if commandErr != nil && (!hasRejected || len(results) != len(expected)) {
+		return nil, core.Wrap(core.CategoryOperational, "git push failed", commandErr)
+	}
 	if len(results) != len(expected) {
 		return nil, core.Errorf(core.CategoryOperational, "Git returned %d push outcomes, want %d", len(results), len(expected))
-	}
-	if commandErr != nil && !hasRejected {
-		return nil, fmt.Errorf("git push failed without a rejected porcelain outcome: %w", commandErr)
 	}
 	return results, nil
 }

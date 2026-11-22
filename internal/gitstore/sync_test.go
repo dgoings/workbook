@@ -2158,3 +2158,41 @@ func TestPushTaskRejectsMalformedTargetBeforePublishing(t *testing.T) {
 		t.Fatal("remote ref exists, want absent after refusing to publish a malformed tip")
 	}
 }
+
+// A push that Git refuses outright prints no porcelain at all, and the error
+// it is reported under carries Git's own words rather than a count of the
+// outcomes it did not print. Origin's push address is one the push cannot
+// use, so the listing reaches origin and only the push fails. A credential in
+// that address is still removed from the words.
+func TestPushReportsGitsOwnErrorWhenThePushPrintsNoOutcome(t *testing.T) {
+	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "missing.git")
+	for _, test := range []struct{ name, pushURL, want string }{
+		{name: "missing folder", pushURL: missing, want: "does not appear to be a git repository"},
+		{name: "credential in the address", pushURL: "http://deploy-bot:s3cr3t-token@127.0.0.1:1/team/repo.git", want: "127.0.0.1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			repository, _, config := syncRepositories(t)
+			createSyncTask(t, repository, config, "Unpublishable")
+			syncGit(t, repository.Root, "config", "remote.origin.pushurl", test.pushURL)
+
+			result, err := repository.Push(context.Background(), config)
+			if err == nil {
+				t.Fatalf("Push() error = nil; result = %#v", result)
+			}
+			if strings.Contains(err.Error(), "push outcomes") {
+				t.Fatalf("Push() error = %q, want Git's error rather than a count of outcomes", err)
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Push() error = %q, want Git's own words containing %q", err, test.want)
+			}
+			if strings.Contains(err.Error(), "s3cr3t-token") || strings.Contains(err.Error(), "deploy-bot") {
+				t.Fatalf("Push() error = %q, which still carries the credential", err)
+			}
+			if got := core.CategoryOf(err); got != core.CategoryOperational {
+				t.Fatalf("Push() category = %q, want %q", got, core.CategoryOperational)
+			}
+		})
+	}
+}

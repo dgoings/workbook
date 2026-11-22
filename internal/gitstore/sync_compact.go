@@ -201,7 +201,7 @@ func (r *Repository) pushTaskHeads(ctx context.Context, candidates []pushCandida
 		args = append(args, candidate.Head+":"+taskRefPrefix+candidate.TaskID)
 	}
 	push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil, args...)
-	pushed, err := parsePushPorcelain(push.stdout, expected, forced, push.err)
+	pushed, err := parsePushPorcelain(push.stdout, expected, forced, gitCommandResultError(push))
 	if err != nil {
 		return nil, err
 	}
