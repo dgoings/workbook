@@ -270,7 +270,7 @@ func (r *Repository) adoptOriginIdentityRef(ctx context.Context, key string) (co
 		return core.ProjectConfig{}, foundingKeyMismatch(record.Identity.Key)
 	}
 
-	if err := r.createRef(ctx, identityRef, record.Head); err != nil {
+	if err := r.createRef(ctx, identityRef, record.Root); err != nil {
 		local, exists, readErr := r.readIdentityRef(ctx, identityRef)
 		if readErr != nil {
 			return core.ProjectConfig{}, readErr

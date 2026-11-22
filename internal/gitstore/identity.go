@@ -89,6 +89,23 @@ type identityRecord struct {
 	// Moved is set when Head is a tasks-moved marker commit rather than the
 	// identity root: the project is the same, and its tasks live elsewhere.
 	Moved *TasksMoved
+	// Root is the identity commit at the bottom of the ref's history: Head
+	// itself for an identity commit, and the commit every move and return
+	// was built on for a place the tasks left or came back to.
+	Root string
+	// Departed is the newest move recorded on the ref: Moved for a place the
+	// tasks left, the move a return came back over for a place they returned
+	// to, and nil for a place they never left.
+	Departed *TasksMoved
+	// hidden is the marker a move back read past (see returningRemote): the
+	// tip is still that marker, though Moved reads as live.
+	hidden *TasksMoved
+}
+
+// Returned reports a place the tasks left and then came back to: its tip
+// records the return, so the place is live.
+func (record identityRecord) Returned() bool {
+	return record.Moved == nil && record.Departed != nil
 }
 
 // identityResolution is the outcome of walking the precedence chain once.
@@ -581,11 +598,11 @@ func (r *Repository) readListedIdentityRef(ctx context.Context, ref string, list
 	if err != nil {
 		return identityRecord{}, false, err
 	}
-	if ref == identityRef && record.Moved != nil {
+	if ref == identityRef && record.Root != record.Head {
 		return identityRecord{}, false, core.Errorf(core.CategoryCorruptData,
-			"%s carries a tasks-moved marker, which only a remote's copy of it may carry; "+
-				"point it back at its parent, the identity commit, with git update-ref %s %s^1",
-			identityRef, identityRef, head)
+			"%s carries a tasks-moved marker or a record of the tasks' return, which only a remote's copy of it may carry; "+
+				"point it back at the identity commit at the bottom of its history, with git update-ref %s %s",
+			identityRef, identityRef, record.Root)
 	}
 	return record, true, nil
 }
@@ -710,90 +727,103 @@ func (r *Repository) readIdentityObjects(ctx context.Context, ref, head string, 
 		}
 		objects[i] = object
 	}
-	record, markerBlob, err := validateIdentityObjects(objects, ref, head, objectIDBytes)
+	record, markerBlob, parents, err := validateIdentityObjects(objects, ref, head, objectIDBytes)
 	if err != nil {
 		return identityRecord{}, err
 	}
 	if err := batch.Finish(); err != nil {
 		return identityRecord{}, err
 	}
-	if markerBlob != "" {
-		moved, err := r.readTasksMovedObjects(ctx, ref, head, objects[2].objectID, markerBlob)
-		if err != nil {
-			return identityRecord{}, err
-		}
-		if moved.ProjectID != record.Identity.ProjectID {
-			return identityRecord{}, core.Errorf(core.CategoryCorruptData,
-				"%s carries a tasks-moved marker for project %s, but its identity is project %s",
-				ref, moved.ProjectID, record.Identity.ProjectID)
-		}
-		record.Moved = &moved
+	record.Root = head
+	if parents == 0 {
+		return record, nil
+	}
+	chain, err := r.readIdentityChain(ctx, ref, head, objectIDBytes, objects[2].objectID, markerBlob)
+	if err != nil {
+		return identityRecord{}, err
+	}
+	if chain.departed != nil && chain.departed.ProjectID != record.Identity.ProjectID {
+		return identityRecord{}, core.Errorf(core.CategoryCorruptData,
+			"%s carries a tasks-moved marker for project %s, but its identity is project %s",
+			ref, chain.departed.ProjectID, record.Identity.ProjectID)
+	}
+	record.Root, record.Moved, record.Departed = chain.root, chain.moved, chain.departed
+	if ref == remoteIdentityRefFor(r.returningRemote()) && record.Moved != nil {
+		// The place a move is bringing the tasks back to is read as live for
+		// the length of that move, so it can be brought up to date before
+		// its return is recorded; see MoveTasks.
+		record.hidden, record.Moved = record.Moved, nil
 	}
 	return record, nil
 }
 
-// validateIdentityObjects enforces the shape of the identity ref: a root commit
-// with no parents whose tree holds exactly one document, or a tasks-moved
-// marker commit on top of one, whose tree holds that same document and the
-// marker. It returns the marker's blob for the second shape.
+// validateIdentityObjects enforces the shape of the identity ref's tip: a root
+// commit with no parents whose tree holds exactly one document, or a commit
+// with one parent that records the tasks moving away (its tree holds that same
+// document and the marker) or coming back (its tree is the identity tree).
+// It returns the marker's blob for a move, and the tip's parent count; the
+// history below a tip with a parent is readIdentityChain's.
 //
-// The structure is the invariant, not a convention. A root with parents would
-// mean the identity had a history to disagree about, and a further tree entry
-// would mean the ref had grown a second authority. The marker is the one
-// addition, and it changes nothing about which project this is.
-func validateIdentityObjects(objects [3]batchObject, ref, head string, objectIDBytes int) (identityRecord, string, error) {
+// The structure is the invariant, not a convention. A further tree entry would
+// mean the ref had grown a second authority. The marker is the one addition,
+// and neither it nor a return changes anything about which project this is.
+func validateIdentityObjects(objects [3]batchObject, ref, head string, objectIDBytes int) (identityRecord, string, int, error) {
 	commit, tree, document := objects[0], objects[1], objects[2]
 	for _, object := range objects {
 		if object.refused != nil {
-			return identityRecord{}, "", object.refused
+			return identityRecord{}, "", 0, object.refused
 		}
 		if object.missing {
-			return identityRecord{}, "", core.Errorf(core.CategoryCorruptData,
+			return identityRecord{}, "", 0, core.Errorf(core.CategoryCorruptData,
 				"requested Workbook project identity object %q is missing", object.objectID)
 		}
 	}
 	if commit.objectID != head || commit.kind != "commit" {
-		return identityRecord{}, "", core.Errorf(core.CategoryCorruptData, "%s does not point directly to a commit", ref)
+		return identityRecord{}, "", 0, core.Errorf(core.CategoryCorruptData, "%s does not point directly to a commit", ref)
 	}
 	if tree.kind != "tree" {
-		return identityRecord{}, "", core.Errorf(core.CategoryCorruptData, "the Workbook project identity commit does not point to a tree")
+		return identityRecord{}, "", 0, core.Errorf(core.CategoryCorruptData, "the Workbook project identity commit does not point to a tree")
 	}
 	if document.kind != "blob" {
-		return identityRecord{}, "", core.Errorf(core.CategoryCorruptData, "the Workbook project identity document is not a blob")
+		return identityRecord{}, "", 0, core.Errorf(core.CategoryCorruptData, "the Workbook project identity document is not a blob")
 	}
 
 	commitTree, err := commitTreeObjectID(commit.contents, "the Workbook project identity commit")
 	if err != nil {
-		return identityRecord{}, "", err
+		return identityRecord{}, "", 0, err
 	}
 	if tree.objectID != commitTree {
-		return identityRecord{}, "", core.Errorf(core.CategoryCorruptData,
+		return identityRecord{}, "", 0, core.Errorf(core.CategoryCorruptData,
 			"the Workbook project identity commit tree does not match its batch object")
 	}
 	parents, err := commitParentCount(commit.contents, "the Workbook project identity commit")
 	if err != nil {
-		return identityRecord{}, "", err
+		return identityRecord{}, "", 0, err
 	}
 	if parents > 1 {
-		return identityRecord{}, "", core.Errorf(core.CategoryCorruptData,
-			"the Workbook project identity commit must have no parents; identity is immutable, so the ref carries one root commit")
+		return identityRecord{}, "", 0, core.Errorf(core.CategoryCorruptData,
+			"the Workbook project identity commit must have no parents; identity is immutable, so the ref carries one root commit "+
+				"and at most a line of moves and returns on top of it")
 	}
 	entries, err := parseRawIdentityTree(tree.contents, objectIDBytes, parents == 1)
 	if err != nil {
-		return identityRecord{}, "", err
+		return identityRecord{}, "", 0, err
 	}
 	if entries[identityDocumentPath] != document.objectID {
-		return identityRecord{}, "", core.Errorf(core.CategoryCorruptData,
+		return identityRecord{}, "", 0, core.Errorf(core.CategoryCorruptData,
 			"the Workbook project identity tree entry does not match its batch object")
 	}
 	identity, err := decodeCanonicalIdentity(document.contents)
 	if err != nil {
-		return identityRecord{}, "", err
+		return identityRecord{}, "", 0, err
 	}
-	return identityRecord{Head: head, Identity: identity, Document: document.contents}, entries[tasksMovedDocumentPath], nil
+	return identityRecord{Head: head, Identity: identity, Document: document.contents}, entries[tasksMovedDocumentPath], parents, nil
 }
 
-func parseRawIdentityTree(contents []byte, objectIDBytes int, moved bool) (map[string]string, error) {
+// parseRawIdentityTree reads an identity tree. withParent is for a commit
+// above the identity commit, whose tree may also hold the tasks-moved marker.
+func parseRawIdentityTree(contents []byte, objectIDBytes int, withParent bool) (map[string]string, error) {
+	moved := withParent
 	entries := make(map[string]string, 2)
 	err := scanRawTreeEntries(contents, objectIDBytes, "project identity tree",
 		func(mode, name, objectID string) error {
@@ -812,13 +842,8 @@ func parseRawIdentityTree(contents []byte, objectIDBytes int, moved bool) (map[s
 	if err != nil {
 		return nil, err
 	}
-	if !moved && len(entries) != 1 {
-		return nil, core.Errorf(core.CategoryCorruptData, "project identity tree must contain exactly %s", identityDocumentPath)
-	}
-	if moved && len(entries) != 2 {
-		return nil, core.Errorf(core.CategoryCorruptData,
-			"a project identity commit with a parent must be a tasks-moved marker holding exactly %s and %s",
-			identityDocumentPath, tasksMovedDocumentPath)
+	if _, found := entries[identityDocumentPath]; !found || (!moved && len(entries) != 1) {
+		return nil, core.Errorf(core.CategoryCorruptData, "project identity tree must contain %s", identityDocumentPath)
 	}
 	return entries, nil
 }

@@ -181,40 +181,6 @@ func TestMoveTasksRefusesBranchesUnlessAllowedAndAcceptsAPrefilledCopy(t *testin
 	}
 }
 
-// A move is one-way in this version: once origin is marked, neither way of
-// going back to origin is accepted, and the file is left as it was.
-func TestTasksRemoteCannotGoBackToOriginAfterAMove(t *testing.T) {
-	t.Parallel()
-	project := movedProject(t, testrepo.FormatSHA1)
-	path := filepath.Join(project.seed, ".workbook", "config.json")
-	original, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][]string{{"config", "unset", "tasks-remote", "--json"}, {"config", "set", "tasks-remote", "origin", "--json"}} {
-		code, stdout, stderr := run(t, project.seed, args...)
-		if code != 5 {
-			t.Fatalf("%v = (%d, %q, %q), want 5", args, code, stdout, stderr)
-		}
-		refusal := requireTasksRemoteRefusal(t, stderr, core.CategoryValidation, core.TasksRemoteMovedForGood)
-		if refusal.MovedTo == nil || refusal.MovedTo.URL != project.tasks {
-			t.Fatalf("refusal = %+v", refusal)
-		}
-		message := errorDocumentOf(t, stderr).Error.Message
-		if !strings.Contains(message, "cannot move them back") || strings.Contains(message, "shared through origin again") {
-			t.Fatalf("refusal message = %q", message)
-		}
-		if got, _ := os.ReadFile(path); string(got) != string(original) {
-			t.Fatalf("%v changed the file:\n%s", args, got)
-		}
-	}
-	// Human output says the same.
-	if code, stdout, stderr := run(t, project.seed, "config", "unset", "tasks-remote"); code != 5 ||
-		strings.Contains(stdout, "shared through origin again") || !strings.Contains(stderr, "one-way") {
-		t.Fatalf("config unset = (%d, %q, %q)", code, stdout, stderr)
-	}
-}
-
 // The refs move-tasks writes under refs/workbook/probes/ to tell the two
 // repositories apart are its own: a run removes those an earlier, stopped run
 // left behind along with its own. A destination that refuses to delete refs

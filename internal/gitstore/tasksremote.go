@@ -231,7 +231,36 @@ func (r *Repository) CheckTasksRemote(ctx context.Context) error {
 	if err != nil || !found {
 		return err
 	}
+	moved, found = r.stillMoved(ctx, name, moved)
+	if !found {
+		return nil
+	}
 	return r.tasksMovedRefusalHere(ctx, moved)
+}
+
+// stillMoved asks remote, whose copy here carries the marker stale, whether
+// it is marked still: the tasks may have been moved back to it since this
+// checkout last read it, and then it is live again and this checkout's copy
+// is brought up to date. It returns the marker the remote carries now, or
+// stale when the remote cannot be asked, and false when it is live.
+//
+// It runs only on the way to a refusal, so a checkout that has not been
+// refused asks nothing more than before.
+func (r *Repository) stillMoved(ctx context.Context, remote string, stale TasksMoved) (TasksMoved, bool) {
+	record, found, err := r.remoteIdentityRecord(ctx, remote)
+	if err != nil || !found {
+		return stale, true
+	}
+	if record.Moved != nil {
+		return *record.Moved, true
+	}
+	r.metadataMu.Lock()
+	if r.trackedIdentity.known && r.trackedIdentity.remote == remote {
+		r.trackedIdentity.head, r.trackedIdentity.found = record.Head, true
+	}
+	r.originMoved = nil
+	r.metadataMu.Unlock()
+	return TasksMoved{}, false
 }
 
 // trackedIdentityHead is one observation of a remote's tracking identity ref.

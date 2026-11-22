@@ -22,6 +22,10 @@ type MoveTasksResult struct {
 	// Marked is "marked" when this run marked the old place, and "already"
 	// when an earlier run had.
 	Marked string `json:"marked"`
+	// Returned is present only for a move back to a place the tasks left
+	// earlier: "returned" when this run recorded their return there, and
+	// "already" when an earlier run had.
+	Returned string `json:"returned,omitempty"`
 	// Tasks is the number of task refs the old place holds.
 	Tasks int `json:"tasks"`
 	// Identical counts those the new place holds at exactly the same commit.
@@ -128,54 +132,85 @@ func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, o
 	if err != nil {
 		return MoveTasksResult{}, err
 	}
-	if !exists || !tracked.TasksRemote.Chosen() {
-		return MoveTasksResult{}, core.Errorf(core.CategoryValidation,
-			"this project's settings name no tasks remote to move to; "+
-				"run workbook config set tasks-remote <name> --url <address> first")
+	noDestination := core.Errorf(core.CategoryValidation,
+		"this project's settings name no tasks remote to move to; "+
+			"run workbook config set tasks-remote <name> --url <address> first")
+	if !exists {
+		return MoveTasksResult{}, noDestination
 	}
 	to := tracked.TasksRemote
-	from := options.From
-	if from == "" {
-		from, err = r.defaultMoveSource(ctx, to.Name)
+	if !to.Chosen() {
+		// Settings that name no tasks remote share the tasks through origin,
+		// which is somewhere to move them only when they left it earlier.
+		to, err = r.originAsDestination(ctx)
 		if err != nil {
 			return MoveTasksResult{}, err
 		}
-	}
-	if err := core.ValidateTasksRemoteName(from); err != nil {
-		return MoveTasksResult{}, core.Wrap(core.CategoryInvocation, "--from must name a Git remote", err)
-	}
-	if from == to.Name {
-		return MoveTasksResult{}, core.Errorf(core.CategoryInvocation,
-			"--from names %s, which is already this project's tasks remote", from)
-	}
-	if !r.hasGitRemote(ctx, from) {
-		return MoveTasksResult{}, core.Errorf(core.CategoryNotFound,
-			"this checkout has no Git remote named %q to move the tasks from", from)
+		if to.Name == "" {
+			return MoveTasksResult{}, noDestination
+		}
 	}
 	setup, err := r.EnsureTasksRemote(ctx)
 	if err != nil {
 		return MoveTasksResult{}, err
 	}
-	result := MoveTasksResult{
-		From:   core.TasksRemoteTarget{Remote: from, URL: redactURLCredentials(r.gitRemoteURL(ctx, from))},
-		To:     core.TasksRemoteTarget{Remote: to.Name, URL: to.URL},
-		Remote: setup.Status,
+	remoteStatus := "kept"
+	if setup != nil {
+		remoteStatus = setup.Status
 	}
 	defer r.switchRemote("")
+	defer r.setReturning("")
 
 	// Both places are asked before anything is written, so a run without
 	// access to one of them, or pointed at the wrong repository, stops having
 	// changed nothing.
 	r.switchRemote(to.Name)
 	if _, err := r.ProbeTasksRemote(ctx); err != nil {
-		return result, r.forgetAddedRemote(ctx, setup, err)
+		return MoveTasksResult{}, r.forgetAddedRemote(ctx, setup, err)
+	}
+	destination, _, err := r.remoteIdentityRecord(ctx, to.Name)
+	if err != nil {
+		return MoveTasksResult{}, r.forgetAddedRemote(ctx, setup,
+			wrapKeepingCategory("cannot read the project identity "+to.Name+" holds", err))
+	}
+	from := options.From
+	if from == "" {
+		from, err = r.defaultMoveSource(ctx, to.Name, destination.Departed)
+		if err != nil {
+			return MoveTasksResult{}, r.forgetAddedRemote(ctx, setup, err)
+		}
+	}
+	if err := core.ValidateTasksRemoteName(from); err != nil {
+		return MoveTasksResult{}, r.forgetAddedRemote(ctx, setup, core.Wrap(core.CategoryInvocation, "--from must name a Git remote", err))
+	}
+	if from == to.Name {
+		return MoveTasksResult{}, r.forgetAddedRemote(ctx, setup, core.Errorf(core.CategoryInvocation,
+			"--from names %s, which is already this project's tasks remote", from))
+	}
+	if !r.hasGitRemote(ctx, from) {
+		return MoveTasksResult{}, r.forgetAddedRemote(ctx, setup, core.Errorf(core.CategoryNotFound,
+			"this checkout has no Git remote named %q to move the tasks from", from))
+	}
+	result := MoveTasksResult{
+		From:   core.TasksRemoteTarget{Remote: from, URL: redactURLCredentials(r.gitRemoteURL(ctx, from))},
+		To:     core.TasksRemoteTarget{Remote: to.Name, URL: to.URL},
+		Remote: remoteStatus,
 	}
 	r.switchRemote(from)
 	if _, err := r.ProbeTasksRemote(ctx); err != nil {
 		return result, r.forgetAddedRemote(ctx, setup, err)
 	}
-	if err := r.refuseUnfitDestination(ctx, from, to.Name, options.AllowBranches); err != nil {
+	// A place the tasks lived at before was accepted as their home then;
+	// origin, the code's own repository, is one, and holds branches.
+	returning := destination.Departed != nil
+	if err := r.refuseUnfitDestination(ctx, from, to.Name, options.AllowBranches || returning); err != nil {
 		return result, r.forgetAddedRemote(ctx, setup, err)
+	}
+	if returning {
+		// Until its return is recorded, the place the tasks are coming back to
+		// is read as live by this run alone, so it can be brought up to date
+		// while every other checkout is still refused there.
+		r.setReturning(to.Name)
 	}
 
 	carried := newMoveCarry()
@@ -197,6 +232,16 @@ func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, o
 		return result, err
 	}
 
+	if returning {
+		if err := r.moveStep("return"); err != nil {
+			return result, err
+		}
+		r.switchRemote(to.Name)
+		result.Returned, err = r.markTasksReturned(ctx, to.Name, from)
+		if err != nil {
+			return result, err
+		}
+	}
 	if err := r.moveStep("mark"); err != nil {
 		return result, err
 	}
@@ -283,56 +328,102 @@ func moveConflictReason(conflict core.Conflict, from, to string) string {
 }
 
 // defaultMoveSource is where the tasks are now, for a move whose --from was
-// left out: origin, or, when origin is marked as moved to some other remote,
-// the place its marker names, and so on along the markers. That is how a
-// second move (origin to tasks, then tasks to third) finds the tasks without
-// being told: origin's marker names tasks, and tasks is not marked yet. A
-// marker naming the destination itself is a first move run again, whose
-// source is still the marked place.
+// left out.
+//
+// For a destination the tasks never left, it is origin, or, when origin is
+// marked as moved to some other remote, the place its marker names, and so on
+// along the markers. That is how a second move (origin to tasks, then tasks to
+// third) finds the tasks without being told: origin's marker names tasks, and
+// tasks is not marked yet. A marker naming the destination itself is a first
+// move run again, whose source is still the marked place.
+//
+// For a destination the tasks left earlier, departed is the newest marker
+// there, and the walk starts from the place it names instead: the tasks went
+// there when they left, and every place they went since is marked with the
+// next, so the walk ends at the place that still holds them, or, on a run
+// that is finishing a move back, at the place already marked as moved to the
+// destination. A walk that comes back to a place it passed stops and says so.
 //
 // Each hop costs one listing of that remote, and a fetch of its identity ref
 // when it changed. A remote that cannot be listed ends the walk there, and the
 // probe that follows says what it needs. A marker naming a remote this
 // checkout does not have is refused with the --from that would work.
-func (r *Repository) defaultMoveSource(ctx context.Context, to string) (string, error) {
+func (r *Repository) defaultMoveSource(ctx context.Context, to string, departed *TasksMoved) (string, error) {
 	from := core.DefaultTasksRemote
 	seen := map[string]bool{}
-	for !seen[from] && r.hasGitRemote(ctx, from) {
+	if departed != nil {
+		from = departed.Remote
+		seen[to] = true
+		if !r.hasGitRemote(ctx, from) {
+			return "", missingMoveHop(to, *departed)
+		}
+	}
+	var path []string
+	for r.hasGitRemote(ctx, from) {
+		if seen[from] {
+			return "", core.Errorf(core.CategoryConflict,
+				"following the moved markers from %s leads back to %s (%s), so no place says it holds the tasks: "+
+					"two moves ran at once, or one was stopped partway; name the place that holds them with workbook move-tasks --from <remote>",
+				to, from, strings.Join(append(path, from), " -> "))
+		}
 		seen[from] = true
+		path = append(path, from)
 		moved, err := r.remoteMoveMarker(ctx, from)
 		if err != nil || moved == nil || moved.Remote == to {
 			return from, nil
 		}
 		if !r.hasGitRemote(ctx, moved.Remote) {
-			return "", core.Errorf(core.CategoryValidation,
-				"%s is marked as moved to %s (remote %q), which this checkout does not have, so the tasks are there or further on; "+
-					"run workbook move-tasks --from <remote> naming this checkout's remote for %s",
-				from, moved.URL, moved.Remote, moved.URL)
+			return "", missingMoveHop(from, *moved)
 		}
 		from = moved.Remote
 	}
 	return from, nil
 }
 
+// missingMoveHop refuses a walk that reached a marker naming a remote this
+// checkout does not have.
+func missingMoveHop(from string, moved TasksMoved) error {
+	return core.Errorf(core.CategoryValidation,
+		"%s is marked as moved to %s (remote %q), which this checkout does not have, so the tasks are there or further on; "+
+			"run workbook move-tasks --from <remote> naming this checkout's remote for %s",
+		from, moved.URL, moved.Remote, moved.URL)
+}
+
+// originAsDestination is origin as the place to move the tasks back to, for
+// settings that name no tasks remote: its name and its address in this
+// checkout, without credentials. It is empty when origin is not somewhere the
+// tasks left, which a move to it cannot be about.
+func (r *Repository) originAsDestination(ctx context.Context) (core.TasksRemoteSetting, error) {
+	const origin = core.DefaultTasksRemote
+	if !r.hasGitRemote(ctx, origin) {
+		return core.TasksRemoteSetting{}, nil
+	}
+	record, found, err := r.remoteIdentityRecord(ctx, origin)
+	if err != nil || !found || record.Departed == nil {
+		return core.TasksRemoteSetting{}, nil
+	}
+	address := redactURLCredentials(r.gitRemoteURL(ctx, origin))
+	if err := core.ValidateTasksRemoteURL(address); err != nil {
+		return core.TasksRemoteSetting{}, core.Wrap(core.CategoryValidation,
+			"origin's address cannot be recorded as where the tasks moved to", err)
+	}
+	return core.TasksRemoteSetting{Name: origin, URL: address}, nil
+}
+
+// setReturning names the remote this handle's move is bringing the tasks back
+// to, or clears it.
+func (r *Repository) setReturning(name string) {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	r.returningTo = name
+	r.originIdentity = originIdentityUnknown
+	r.originMoved = nil
+}
+
 // remoteMoveMarker reads the tasks-moved marker on remote's identity ref,
 // asking remote, or nil when it carries none.
 func (r *Repository) remoteMoveMarker(ctx context.Context, remote string) (*TasksMoved, error) {
-	tracking := remoteIdentityRefFor(remote)
-	listing, err := r.Git(ctx, nil, "ls-remote", "--refs", remote, identityRef)
-	if err != nil {
-		return nil, err
-	}
-	head, err := parseRemoteIdentityHead(listing)
-	if err != nil || head == "" {
-		return nil, err
-	}
-	current, _ := r.Git(ctx, nil, "rev-parse", "--verify", "--quiet", tracking)
-	if strings.TrimSpace(string(current)) != head {
-		if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--no-auto-maintenance", remote, identityFetchRefspecFor(remote)); err != nil {
-			return nil, err
-		}
-	}
-	record, found, err := r.readIdentityRef(ctx, tracking)
+	record, found, err := r.remoteIdentityRecord(ctx, remote)
 	if err != nil || !found {
 		return nil, err
 	}
@@ -913,9 +1004,11 @@ func listedRefNames(listing []byte) []string {
 	return names
 }
 
-// markTasksMoved publishes the marker on from's identity ref. The marker
-// commit is deterministic, so a repeated run pushes the same commit and Git
-// reports it up to date.
+// markTasksMoved publishes the marker on from's identity ref, on top of the
+// commit it holds now: the identity commit, or the return recorded when the
+// tasks came back there earlier. The marker commit is deterministic, so a
+// repeated run pushes the same commit and Git reports it up to date, and a
+// run that finds the marker already there reports it so.
 func (r *Repository) markTasksMoved(ctx context.Context, from string, to core.TasksRemoteSetting) (string, error) {
 	local, found, err := r.readIdentityRef(ctx, identityRef)
 	if err != nil {
@@ -931,17 +1024,29 @@ func (r *Repository) markTasksMoved(ctx context.Context, from string, to core.Ta
 		Remote:    to.Name,
 		URL:       to.URL,
 	}
-	marker, err := r.writeTasksMovedCommit(ctx, local, moved)
-	if err != nil {
-		return "", err
-	}
 	tracking := remoteIdentityRefFor(from)
-	listing, err := r.listIdentityRefs(ctx, tracking)
+	base := local
+	current, found, err := r.remoteIdentityRecord(ctx, from)
+	if err != nil {
+		return "", core.Wrap(core.CategoryOperational,
+			fmt.Sprintf("cannot read %s's identity ref to mark it; the tasks are copied to %s, "+
+				"and running workbook move-tasks again finishes the move", from, to.Name), err)
+	}
+	if found {
+		if current.Moved != nil {
+			if *current.Moved == moved {
+				return "already", nil
+			}
+			return "", core.Errorf(core.CategoryConflict,
+				"%s is marked as moved to %s (remote %q) already, not to %s; "+
+					"run workbook move-tasks --from <remote> naming the place that holds the tasks now",
+				from, current.Moved.URL, current.Moved.Remote, to.Name)
+		}
+		base = current
+	}
+	marker, err := r.writeTasksMovedCommit(ctx, base, moved)
 	if err != nil {
 		return "", err
-	}
-	if listing.Heads[tracking] == marker {
-		return "already", nil
 	}
 	push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil,
 		"push", "--porcelain", from, marker+":"+identityRef)
@@ -955,6 +1060,39 @@ func (r *Repository) markTasksMoved(ctx context.Context, from string, to core.Ta
 		return "", core.Wrap(core.CategoryOperational, "cannot record the published marker", err)
 	}
 	return "marked", nil
+}
+
+// markTasksReturned records on to's identity ref that the tasks came back:
+// one commit on top of the marker it carries, whose tree is the identity
+// commit's own. Like the marker, it is a fast-forward with fixed inputs, so a
+// repeated run pushes the same commit, and a run that finds to live already
+// reports "already".
+func (r *Repository) markTasksReturned(ctx context.Context, to, from string) (string, error) {
+	record, found, err := r.remoteIdentityRecord(ctx, to)
+	if err != nil {
+		return "", core.Wrap(core.CategoryOperational,
+			fmt.Sprintf("cannot read %s's identity ref to record that the tasks are back; "+
+				"running workbook move-tasks again finishes the move", to), err)
+	}
+	if !found || record.hidden == nil {
+		return "already", nil
+	}
+	commit, err := r.writeTasksReturnedCommit(ctx, record)
+	if err != nil {
+		return "", err
+	}
+	push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil,
+		"push", "--porcelain", to, commit+":"+identityRef)
+	if push.err != nil {
+		return "", core.Wrap(core.CategoryOperational,
+			fmt.Sprintf("cannot record on %s that the tasks are back; they are copied there, %s is not marked yet, "+
+				"and running workbook move-tasks again finishes the move", to, from),
+			gitCommandResultError(push))
+	}
+	if _, err := r.Git(ctx, nil, "update-ref", "--no-deref", remoteIdentityRefFor(to), commit); err != nil {
+		return "", core.Wrap(core.CategoryOperational, "cannot record the published return", err)
+	}
+	return "returned", nil
 }
 
 // verifyMovedTasks lists both places afresh and requires the new place to
@@ -1092,48 +1230,44 @@ func (r *Repository) trackingRefHeads(ctx context.Context, prefix string) (map[s
 }
 
 // CheckMoveDone refuses setup in a checkout whose project chose a tasks remote
-// while origin, the code's remote, still holds task refs and is not marked as
-// moved: the person who chose the remote has not run move-tasks, or it was
+// while the place the tasks were in still holds task refs and is not marked
+// as moved: the person who chose the remote has not run move-tasks, or it was
 // interrupted before the mark, and joining now would publish to one place
 // while teammates publish to the other.
 //
-// It is best effort. A checkout that cannot reach origin, or a project that
-// shares its tasks through origin, is not checked.
+// The place the tasks were in is found as move-tasks finds it: origin, or
+// where its markers lead, for a remote the tasks never left; and for one they
+// came back to, the place they went when they left it, or where its markers
+// lead. A tasks remote marked as moved itself is not this check's: every
+// command refuses it with the place the tasks are now.
+//
+// It is best effort. A checkout that cannot reach those places, or a project
+// that shares its tasks through origin, is not checked.
 func (r *Repository) CheckMoveDone(ctx context.Context) error {
 	tracked, exists, err := r.readConfig()
 	if err != nil || !exists || !tracked.TasksRemote.Chosen() {
 		return err
 	}
-	from := core.DefaultTasksRemote
-	if !r.hasGitRemote(ctx, from) {
+	to := tracked.TasksRemote
+	destination, _, err := r.remoteIdentityRecord(ctx, to.Name)
+	if err != nil || destination.Moved != nil {
 		return nil
 	}
-	listing, err := r.Git(ctx, nil, "ls-remote", "--refs", from, identityRef, taskRefPrefix+"*")
+	from, err := r.defaultMoveSource(ctx, to.Name, destination.Departed)
+	if err != nil || from == to.Name || !r.hasGitRemote(ctx, from) {
+		return nil
+	}
+	listing, err := r.Git(ctx, nil, "ls-remote", "--refs", from, taskRefPrefix+"*")
+	if err != nil || len(listedRefNames(listing)) == 0 {
+		return nil
+	}
+	record, found, err := r.remoteIdentityRecord(ctx, from)
 	if err != nil {
 		return nil
-	}
-	tasks := false
-	for _, line := range strings.Split(string(listing), "\n") {
-		if _, refName, found := strings.Cut(line, "\t"); found && strings.HasPrefix(refName, taskRefPrefix) {
-			tasks = true
-			break
-		}
-	}
-	if !tasks {
-		return nil
-	}
-	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--no-auto-maintenance", from,
-		identityFetchRefspecFor(from)); err != nil {
-		return nil
-	}
-	record, found, err := r.readIdentityRef(ctx, remoteIdentityRefFor(from))
-	if err != nil {
-		return err
 	}
 	if found && record.Moved != nil {
 		return nil
 	}
-	to := tracked.TasksRemote
 	return core.TasksRemoteError(core.CategoryNotInitialized,
 		core.TasksRemoteRefusal{
 			Reason:  core.TasksRemoteNotMoved,
@@ -1142,9 +1276,9 @@ func (r *Repository) CheckMoveDone(ctx context.Context) error {
 			MovedTo: &core.TasksRemoteTarget{Remote: to.Name, URL: to.URL},
 			Command: "workbook move-tasks",
 		},
-		"this project's settings say its tasks are in %s (remote %q), but origin still holds them and is not marked as moved, "+
+		"this project's settings say its tasks are in %s (remote %q), but %s still holds them and is not marked as moved, "+
 			"so the move has not finished; whoever set tasks-remote runs workbook move-tasks, and this checkout runs workbook setup after that",
-		to.URL, to.Name)
+		to.URL, to.Name, from)
 }
 
 // wrapKeepingCategory adds context to err without changing its exit code.

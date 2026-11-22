@@ -71,6 +71,14 @@ type Repository struct {
 	// remote() in tasksremote.go.
 	remoteOverride string
 	remoteName     string
+	// returningTo names the remote a move is bringing the tasks back to,
+	// whose marker is read as live for the length of that move; see
+	// MoveTasks.
+	returningTo string
+	// identityChains memoizes readIdentityChain by tip commit.
+	identityChains map[string]identityChain
+	// followed memoizes followMoved by the marker it started from.
+	followed map[TasksMoved]movedPath
 	// originMoved is the tasks-moved marker this command found on the remote
 	// it synchronizes with, which every publication path then refuses.
 	originMoved *TasksMoved

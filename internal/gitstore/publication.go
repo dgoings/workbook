@@ -232,6 +232,9 @@ func (r *Repository) PublicationWarnings() []core.Warning {
 // strandedRefusal is the report for task refs a remote accepted just as it was
 // marked as moved.
 func (r *Repository) strandedRefusal(ctx context.Context, remote string, moved TasksMoved, taskIDs []string) error {
+	if path := r.followMoved(ctx, moved); !path.Loop {
+		moved = path.Current
+	}
 	command := "workbook setup"
 	next := "pull the commit that sets tasks-remote in " + configPath + " and run workbook setup, which publishes it there"
 	if tasksOnly, err := r.TasksOnly(ctx); err == nil && tasksOnly {
@@ -283,6 +286,9 @@ func (r *Repository) CheckRemoteNotMoved(ctx context.Context, reread bool) error
 	}
 	moved, found, err := r.trackedMoveMarker(ctx, remote, head)
 	if err != nil || !found {
+		return nil
+	}
+	if moved, found = r.stillMoved(ctx, remote, moved); !found {
 		return nil
 	}
 	return r.remoteMarkedMoved(ctx, moved, true)

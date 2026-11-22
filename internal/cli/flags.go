@@ -776,22 +776,25 @@ var commandSchemas = map[string]commandMetadata{
 		Name:     "move-tasks",
 		Synopsis: "workbook move-tasks [--from <remote>] [--allow-branches] [--json]",
 		Description: "Move this project's tasks to the tasks remote its settings name.\n\n" +
-			"Run it after `workbook config set tasks-remote <name> --url <address>`. It copies\n" +
+			"Run it after `workbook config set tasks-remote <name> --url <address>`, or after\n" +
+			"`workbook config unset tasks-remote` to move the tasks back to origin. It copies\n" +
 			"every task from the old place to the new one, marks the old place so a\n" +
-			"checkout still using it is refused and told where the tasks went, copies again\n" +
+			"checkout still using it is refused and told where the tasks are, copies again\n" +
 			"for edits published before the mark, and checks that the new place holds every\n" +
 			"operation the old place does. Every step is safe to repeat: an interrupted run\n" +
 			"is finished by running it again, and a later run carries any edit that reached\n" +
 			"the old place after the move, applying each operation once. Then commit\n" +
 			".workbook/config.json; everyone else runs `workbook setup` after pulling it.\n\n" +
+			"The new place can be one the tasks left earlier, origin included: the copies it\n" +
+			"still holds are brought up to date, and it records that the tasks are back.\n\n" +
 			"It refuses a new place that is the same repository as the old one, however its\n" +
-			"address is spelled, and one that holds branches unless --allow-branches is given.\n" +
-			"Never give it for a mirror, a repository something updates from the code\n" +
-			"repository: that update would overwrite or delete the tasks. The old place is\n" +
-			"origin, or, after an earlier move, the place origin's marker leads to.\n" +
-			"The move is one-way: `workbook config unset tasks-remote` is refused afterwards.",
+			"address is spelled, and one that holds branches unless --allow-branches is given\n" +
+			"or the tasks lived there before. Never give it for a mirror, a repository\n" +
+			"something updates from the code repository: that update would overwrite or\n" +
+			"delete the tasks. The old place is the one that holds the tasks now, found by\n" +
+			"following the moved markers.",
 		Options: []optionMetadata{
-			{Name: "from", Kind: stringFlag, Value: "<remote>", Description: "the Git remote the tasks are in now (default origin, or the place origin's marker leads to)"},
+			{Name: "from", Kind: stringFlag, Value: "<remote>", Description: "the Git remote the tasks are in now (default: the place the moved markers lead to)"},
 			{Name: "allow-branches", Kind: boolFlag, Description: "accept a tasks remote that holds branches; never a mirror of the code repository"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},

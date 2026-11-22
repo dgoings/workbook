@@ -63,8 +63,8 @@ type TasksOnlyFolder struct {
 	// were absent and this run set them for the first time.
 	Restored []string
 	// MovedFrom is the origin URL this run repointed the folder from, because
-	// the tasks moved from there to Remote (tasksOnlyMoveTarget). It is empty
-	// for every other run.
+	// the markers lead from there to Remote, however many moves on
+	// (tasksOnlyMoveTargets). It is empty for every other run.
 	MovedFrom string
 }
 
@@ -162,13 +162,16 @@ func PrepareTasksOnlyFolder(ctx context.Context, dir, remoteURL, key string) (Ta
 			// and guessing wrong would point this folder's tasks at another
 			// project. The person who knows says so by changing the URL.
 			if current != "" && current != remoteURL {
-				moved, err := tasksOnlyMoveTarget(ctx, existing)
+				places, err := tasksOnlyMoveTargets(ctx, existing)
 				if err != nil {
 					return folder, err
 				}
-				if moved != nil && moved.URL == remoteURL {
-					folder.MovedFrom = current
-					current = remoteURL
+				for _, place := range places {
+					if place == remoteURL {
+						folder.MovedFrom = current
+						current = remoteURL
+						break
+					}
 				}
 			}
 			if current != "" && current != remoteURL {
@@ -251,17 +254,19 @@ func PrepareTasksOnlyFolder(ctx context.Context, dir, remoteURL, key string) (Ta
 	return folder, nil
 }
 
-// tasksOnlyMoveTarget reads, in a tasks-only folder, the tasks-moved marker on
-// its origin's identity ref: asked of origin when it answers, and otherwise
-// as the folder last read it. It returns nil when origin is not marked.
+// tasksOnlyMoveTargets reads, in a tasks-only folder, the tasks-moved marker
+// on its origin's identity ref, asked of origin when it answers and otherwise
+// as the folder last read it, and follows the markers from there. It returns
+// the address of every place they lead through, the place the tasks are now
+// last, or nothing when origin is not marked.
 //
-// It is what lets setup repoint a folder on the place the tasks moved away
-// from at the place they moved to, and only there: the marker names the new
-// place, so a folder is never pointed by this at a repository nobody chose.
+// It is what lets setup repoint a folder on a place the tasks moved away from
+// at a place they moved to, and only there: each address is one a marker
+// names, so a folder is never pointed by this at a repository nobody chose.
 // Repointing changes the one setting remote.origin.url. The folder's own task
 // refs, which hold every edit it saved, are not touched, and the
 // synchronization setup runs next publishes those the new place lacks.
-func tasksOnlyMoveTarget(ctx context.Context, root string) (*TasksMoved, error) {
+func tasksOnlyMoveTargets(ctx context.Context, root string) ([]string, error) {
 	repository, err := Open(ctx, root)
 	if err != nil {
 		return nil, err
@@ -271,10 +276,11 @@ func tasksOnlyMoveTarget(ctx context.Context, root string) (*TasksMoved, error) 
 	// answer as there is with origin out of reach.
 	_, _ = repository.Git(ctx, nil, "fetch", "--no-tags", "--no-auto-maintenance", origin, identityFetchRefspecFor(origin))
 	record, found, err := repository.readIdentityRef(ctx, remoteIdentityRefFor(origin))
-	if err != nil || !found {
+	if err != nil || !found || record.Moved == nil {
 		return nil, err
 	}
-	return record.Moved, nil
+	path := repository.followMoved(ctx, *record.Moved)
+	return path.Places, nil
 }
 
 // RestoreTasksOnlySettings puts back any tasks-only setting somebody changed

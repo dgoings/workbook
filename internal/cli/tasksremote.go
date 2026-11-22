@@ -117,16 +117,6 @@ func writeTasksRemoteSetting(
 				"%s is origin's address, the code's own repository; give the address of the repository that is to hold the tasks",
 				setting.URL)
 		}
-	} else if before.TasksRemote.Chosen() {
-		// No supported undo: once origin is marked, sharing tasks through it
-		// again would point every checkout at a place they all refuse.
-		moved, err := repository.OriginMarkedMoved(ctx)
-		if err != nil {
-			return err
-		}
-		if moved != nil {
-			return gitstore.MovedForGood(*moved)
-		}
 	}
 	updated, err := repository.SetProjectTasksRemote(ctx, setting)
 	if err != nil {
@@ -145,22 +135,27 @@ func writeTasksRemoteSetting(
 		return nil
 	}
 	fmt.Fprintf(stdout, "%s\t%s\t%s\n", result.Setting, result.Value, result.Path)
+	// Where the tasks are now, by the settings this change replaced: origin,
+	// or the tasks remote they named.
+	source := before.TasksRemote.RemoteName()
 	if result.URL != "" {
-		// Where the tasks are now: origin, or, once they have moved away from
-		// it, the tasks remote the settings named until this change.
-		source := core.DefaultTasksRemote
-		if before.TasksRemote.Chosen() && before.TasksRemote.Name != setting.Name {
-			if moved, err := repository.OriginMarkedMoved(ctx); err == nil && moved != nil {
-				source = before.TasksRemote.Name
-			}
-		}
 		fmt.Fprintf(stdout, "Address:\t%s\n", result.URL)
-		fmt.Fprintf(stdout, "Next:\trun workbook move-tasks to copy the tasks from %s to %s and mark %s, "+
-			"then commit %s; everyone else runs workbook setup after pulling it\n",
-			source, setting.Name, source, ".workbook/config.json")
+		if source != setting.Name {
+			fmt.Fprintf(stdout, "Next:\trun workbook move-tasks to copy the tasks from %s to %s and mark %s, "+
+				"then commit %s; everyone else runs workbook setup after pulling it\n",
+				source, setting.Name, source, ".workbook/config.json")
+		}
 	} else if before.TasksRemote.Chosen() {
-		fmt.Fprintf(stdout, "Next:\tcommit %s; tasks are shared through origin again, "+
-			"and %s keeps the copy it holds\n", ".workbook/config.json", before.TasksRemote.Name)
+		// Origin is somewhere to move the tasks back to when they left it;
+		// otherwise they never left, and only the setting changes.
+		if moved, err := repository.OriginMarkedMoved(ctx); err == nil && moved != nil {
+			fmt.Fprintf(stdout, "Next:\trun workbook move-tasks to move the tasks back from %s to origin and mark %s, "+
+				"then commit %s; everyone else runs workbook setup after pulling it\n",
+				source, source, ".workbook/config.json")
+		} else {
+			fmt.Fprintf(stdout, "Next:\tcommit %s; tasks are shared through origin again, "+
+				"and %s keeps the copy it holds\n", ".workbook/config.json", before.TasksRemote.Name)
+		}
 	}
 	if result.Upgraded {
 		fmt.Fprintf(stdout, "Upgraded the project configuration to version %d; commit it, and note that older Workbook versions cannot read it.\n", result.Version)
@@ -170,7 +165,7 @@ func writeTasksRemoteSetting(
 
 func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("move-tasks")
-	from := flags.String("from", "", "the remote the tasks are in now (default origin, or the place origin's moved marker leads to)")
+	from := flags.String("from", "", "the remote the tasks are in now (default: the place the moved markers lead to)")
 	allowBranches := flags.Bool("allow-branches", false, "accept a tasks remote that holds branches; never a mirror of the code repository")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
