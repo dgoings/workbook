@@ -34,7 +34,9 @@
             ? (boardRead
               ? "This task changed elsewhere. The card shows the version the server holds."
               : "This task changed elsewhere and the board could not be refreshed. The card may be out of date, and changes made here were not applied.")
-            : "Task update failed. The card shows the version the server holds.",
+            : error && error.waitedOut
+              ? "The server kept asking this page to wait, and this change was not sent again. The card shows the version the server holds; make it again in a moment."
+              : "Task update failed. The card shows the version the server holds.",
           notice: changedElsewhere
             ? "Task " + subject + " changed elsewhere and is no longer on the board. The change made here was not applied."
             : "Task " + subject + " could not be updated and is no longer on the board. The change made here was not applied."

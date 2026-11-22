@@ -1,3 +1,104 @@
+      // A change the server asked this page to send later.
+      //
+      // The board itself never answers that way. Something in front of it can:
+      // a proxy past its limit answers 429 Too Many Requests, or 503 Service
+      // Unavailable, with a Retry-After saying when to ask again. Without the
+      // header the answer says nothing about when, or about whether the change
+      // went through, so it is reported as it always was.
+      //
+      // Resending is safe only for a change that cannot apply twice, because
+      // nothing in the answer proves the first attempt never reached the board.
+      // A change that names the head it was composed against is one: the board
+      // compares that head before it records anything, so if the first attempt
+      // did land, the resend names a head that has moved and is refused as a
+      // stale write rather than applied again. Callers say whether theirs is
+      // such a change; a create, or a write that names no head, is sent once.
+      //
+      // Retry-After is seconds or an HTTP date, and anything else is not a wait
+      // this page can honor. Each resend waits twice as long as the one before
+      // it, and no wait is longer than a minute.
+      const HELD_CHANGE_RESENDS = 3;
+      const HELD_CHANGE_LONGEST_WAIT = 60000;
+      function askedToWait(response) {
+        if (!response || (response.status !== 429 && response.status !== 503)) return null;
+        const header = response.headers && typeof response.headers.get === "function"
+          ? response.headers.get("Retry-After") : null;
+        if (header === null || header === undefined) return null;
+        const value = String(header).trim();
+        let seconds = NaN;
+        if (/^\d+$/.test(value)) seconds = Number(value);
+        else if (/[a-z]/i.test(value)) seconds = (Date.parse(value) - Date.now()) / 1000;
+        if (!Number.isFinite(seconds)) return null;
+        return Math.min(Math.max(1, seconds) * 1000, HELD_CHANGE_LONGEST_WAIT);
+      }
+      // How many changes are waiting to be sent again right now. The notice
+      // and the warning before leaving are drawn from it: a waiting change
+      // exists only in this tab, so closing the tab or leaving the page would
+      // lose it without a word, and while one waits the browser asks first.
+      let heldChanges = 0;
+      let leavingWarned = false;
+      function warnBeforeLeaving(event) {
+        event.preventDefault();
+        // What older browsers need before they ask. The words are the browser's.
+        event.returnValue = "";
+        return "";
+      }
+      function renderHeldChanges() {
+        if (heldChangeNotice) heldChangeNotice.hidden = heldChanges === 0;
+        const warn = heldChanges > 0;
+        if (warn === leavingWarned) return;
+        leavingWarned = warn;
+        if (warn) window.addEventListener("beforeunload", warnBeforeLeaving);
+        else window.removeEventListener("beforeunload", warnBeforeLeaving);
+      }
+      // Sends one change, and sends it again while the answer asks this page
+      // to wait and the change is one that cannot apply twice. What comes back
+      // is the last answer and how many resends it took, for the caller to
+      // report the way it reports every answer.
+      async function sendChange(path, options, resendable) {
+        let resends = 0;
+        let holding = false;
+        try {
+          for (;;) {
+            const response = await fetch(path, options);
+            const wait = askedToWait(response);
+            if (!resendable || wait === null || resends >= HELD_CHANGE_RESENDS) return { response, resends };
+            if (!holding) {
+              holding = true;
+              heldChanges += 1;
+              renderHeldChanges();
+            }
+            await new Promise((resolve) => { window.setTimeout(resolve, Math.min(wait * 2 ** resends, HELD_CHANGE_LONGEST_WAIT)); });
+            resends += 1;
+          }
+        } finally {
+          if (holding) {
+            heldChanges -= 1;
+            renderHeldChanges();
+          }
+        }
+      }
+      // A refusal's body, or null when it is not JSON: an HTML error page from
+      // a proxy is the usual case, and its parse error is no sentence to show
+      // anybody.
+      async function answerDocument(response) {
+        try {
+          const document = await response.json();
+          return document && typeof document === "object" ? document : null;
+        } catch (_) {
+          return null;
+        }
+      }
+      // What to say about a refusal that carries no message of the board's own.
+      function unexplainedRefusal(response, resends) {
+        if (askedToWait(response) !== null) {
+          return resends > 0
+            ? "The server was still asking this page to wait after " + resends +
+              (resends === 1 ? " resend" : " resends") + ", so this change was not sent again. Try it again in a moment."
+            : "The server asked this page to wait, and this change was not sent again. Try it again in a moment.";
+        }
+        return "The server answered HTTP " + response.status + " and gave no reason this page can read.";
+      }
       async function mutateTask(method, path, values) {
         // Every mutation names its JSON media type, body or not: the server
         // rejects mutations without it, because an absent or form-safe
@@ -6,15 +107,22 @@
         if (values !== undefined) {
           options.body = JSON.stringify(values);
         }
-        const response = await fetch(path, options);
-        const document = await response.json();
-        if (!response.ok || document.format !== "workbook.task-mutation" ||
+        // Only a change that names the head it was composed against is sent
+        // again. See sendChange.
+        const resendable = Boolean(values && typeof values.expectedHead === "string" && values.expectedHead !== "");
+        const { response, resends } = await sendChange(path, options, resendable);
+        const document = await answerDocument(response);
+        if (!response.ok || !document || document.format !== "workbook.task-mutation" ||
             document.version !== 1 || !document.task) {
-          const failure = new Error(document.error && document.error.message || "Task update failed.");
+          const said = document && document.error && document.error.message;
+          const failure = new Error(said || (response.ok && document ? "Task update failed." : unexplainedRefusal(response, resends)));
           // The category is what separates "your view was stale, reload" from
           // "that was not a legal change". Without it every failure looks the
           // same to the caller.
-          failure.category = document.error && document.error.category || "";
+          failure.category = document && document.error && document.error.category || "";
+          // Still asked to wait once every resend had gone, which a card
+          // reports as that rather than as the change being wrong.
+          failure.waitedOut = resends > 0 && askedToWait(response) !== null;
           throw failure;
         }
         return document;
@@ -495,11 +603,13 @@
         const sequence = ++syncStateSequence;
         let written = null;
         try {
-          const response = await fetch("/api/sync", {
+          // A mode is set, not added to: the same mode set twice is the mode
+          // set once, so this is a change that may be sent again.
+          const { response } = await sendChange("/api/sync", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ mode: wanted }),
-          });
+          }, true);
           const document = await response.json();
           if (response.ok && document.format === "workbook.sync") written = document.sync;
         } catch (_) {

@@ -261,7 +261,11 @@
             section.report("", panelWaitingMessage);
             await settledIntents();
           }
-          const response = await fetch(path, {
+          // Sent again if the server asks this page to wait: the board
+          // compares this head before it changes anything, so a resend of a
+          // change that already landed is refused as stale rather than made
+          // twice. See sendChange.
+          const { response } = await sendChange(path, {
             method,
             headers: { "Content-Type": "application/json" },
             // The head the panel read, exactly as it read it. An empty one is a
@@ -269,7 +273,7 @@
             // is a real state and an administrable one, so it is sent rather
             // than withheld.
             body: JSON.stringify(Object.assign({}, body, { expectedHead: panelHead }))
-          });
+          }, true);
           const payload = await response.json();
           answer = {
             applied: response.ok && payload.format === section.format &&

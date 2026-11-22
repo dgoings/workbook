@@ -482,6 +482,13 @@
             }
             if (expectedHead) values.expectedHead = expectedHead;
           }
+          // What this save sends, measured from the version it was composed
+          // against, so that once it lands the form can tell whether the reader
+          // has typed anything since. A save can wait a while: the server may
+          // ask this page to send it later (see sendChange), and the form stays
+          // open and editable meanwhile.
+          const sentFrom = task;
+          const sentEdits = isNew ? null : changedTaskValues(task, controls);
           // A create that staged nothing beside the task itself is answered by
           // the board rather than by this form, and leaves immediately. One that
           // staged relationships or attachments waits: those writes need the ID
@@ -603,6 +610,15 @@
               // save has never been announced in this client anyway: the board
               // showing the new value is the report. So this only makes sure it
               // is showing it.
+              await refresh();
+            } else if (!sameTaskValues(changedTaskValues(sentFrom, controls), sentEdits)) {
+              // The reader went on editing while the save was out. Leaving for
+              // the board now would throw away what they typed with no word, so
+              // the form stays, keeps every field as typed, and is re-based on
+              // the version that just landed: the next save sends only what
+              // changed since.
+              reviseAgainstTask(document.task);
+              text(result, "Your save landed. What you changed while it was being sent is not saved yet; press Save to send it.");
               await refresh();
             } else {
               // The board the reader came from rather than the bare one: an
@@ -826,6 +842,15 @@
         const labels = controls.labels.values();
         if (!sameLabels(labels, task.labels || [])) values.labels = labels;
         return values;
+      }
+      // Whether two sets of edits are the same edits, labels compared as the
+      // set they are.
+      function sameTaskValues(left, right) {
+        const keys = Object.keys(left);
+        if (keys.length !== Object.keys(right).length) return false;
+        return keys.every((key) => key in right && (key === "labels"
+          ? sameLabels(left[key], right[key])
+          : left[key] === right[key]));
       }
       // Labels are a set: the server sorts and de-duplicates them
       // (normalizeLabels), so retyping "docs, web" as "web, docs" changes

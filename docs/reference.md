@@ -2844,6 +2844,33 @@ opens a connection and stops talking is closed rather than holding a goroutine
 until `serve` exits. There is no response deadline: a mutation publishing inline
 waits on `origin`, and that has no honest bound.
 
+The board never asks a client to wait, but a proxy in front of it may: past a
+limit it can answer `429 Too Many Requests` or `503 Service Unavailable` with a
+`Retry-After` header. When the page gets one of those for a change that names
+the head it was composed against, it keeps the change drawn as made, shows a
+notice, and sends the same request again after the wait the header names, in
+seconds or as an HTTP date. Each resend waits twice as long as the one before,
+no wait is longer than a minute, and after three resends the last answer is
+reported. These are the changes made on the board and on a task's page —
+moves, edits, deletes, restores, comments, assignments and attachments — the
+configuration page's changes, and the sync switch. A resend of one of them
+cannot apply twice: if the first attempt did reach the board, the head has
+moved, and the resend is refused as a stale write. A create, and a change that
+names no head (the relationships, assignments and attachments a New Task form
+writes after its create, and a dependency added or removed in the sidebar), is
+sent once and its answer reported, because nothing would stop a resend from
+applying a second time. Reads are never resent this way; the poll asks again
+on its next tick, as it always does.
+
+A waiting change exists only in that browser tab. The notice says so, and the
+browser asks before the tab is closed or the page is left while one waits. A
+save from a task's form that lands after the reader typed more keeps the form
+open with what they typed, says it is not saved yet, and sends only that on
+the next Save. A `429` or `503` without `Retry-After`, or with one the page
+cannot read, is reported as any other refusal, and a refusal whose body is not
+JSON, such as a proxy's HTML error page, is reported in a sentence of the
+page's own that names the status.
+
 Binding `--addr` to anything other than a loopback address makes the board
 reachable by whoever shares the network, and those checks cannot tell a
 teammate from a stranger. `workbook serve` prints a warning naming the address

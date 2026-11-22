@@ -4936,6 +4936,10 @@ notice.hidden = true;
 // region is: the change arrives on a poll.
 const vocabularyNotice = new TestElement("div");
 vocabularyNotice.hidden = true;
+// What the board says while a change waits to be sent again because the server
+// asked the page to send it later.
+const heldChangeNotice = new TestElement("div");
+heldChangeNotice.hidden = true;
 const vocabularyReload = new TestElement("button");
 vocabularyNotice.append(vocabularyReload);
 // The half of a switch that carries no words. It is here so that a test reading
@@ -5121,6 +5125,7 @@ const documentEventListeners = {};
     if (selector === "[data-updated]") return updated;
     if (selector === "[data-notice]") return notice;
     if (selector === "[data-vocabulary-notice]") return vocabularyNotice;
+    if (selector === "[data-held-change-notice]") return heldChangeNotice;
     if (selector === "[data-vocabulary-reload]") return vocabularyReload;
     if (selector === "[data-description-toggle]") return descriptionToggle;
     if (selector === "[data-deleted-toggle]") return deletedToggle;
