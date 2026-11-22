@@ -75,6 +75,18 @@
       main { flex: 0 0 auto; overflow: visible; container-type: inline-size; padding: 0 .75rem 1rem; }
       .app-header { gap: .5rem; padding: .85rem .75rem .6rem; }
       .filter-row { padding: .5rem .75rem; }
+      /* The settings are a list here, one to a line, each with its words at
+         the left edge and its switch at the right. Wrapped as a row they
+         staggered: every label reserves the width of its widest reading and
+         sets its words to the right of it, which holds a row still on a wide
+         window and, on a phone, left a different gap before each label and a
+         lone switch on a line of its own. In a list the switches share an
+         edge whatever the words say, so nothing moves when one is flipped and
+         the reserved widths are not needed. */
+      .header-settings { align-self: stretch; align-items: stretch; gap: .15rem; }
+      .header-switches { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0; }
+      .header-switches .nav-switch { justify-content: space-between; }
+      .header-switches .nav-switch__label { min-width: 0; text-align: left; }
       .filter-row__search { flex-basis: 100%; max-width: none; min-width: 0; }
       /* What the board has to say waits at the foot of the screen rather than
          the head of the page, which a reader working down a column or a
