@@ -643,7 +643,15 @@ func TestServeRacesItsOwnBackgroundSynchronization(t *testing.T) {
 				code := Run(context.Background(), []string{"create", fmt.Sprintf("Published elsewhere %03d", index), "--json"},
 					other, strings.NewReader(""), &stdout, &stderr)
 				reply := raceReply{what: "other clone: workbook create", status: http.StatusOK, body: stdout.Bytes()}
-				if code != 0 {
+				switch code {
+				case 0:
+				case 6:
+					// The command line's stale-write answer, which a
+					// rebuild that keeps seeing this clone's own creates
+					// and fetches land on can give: the 409 of a process.
+					reply.status, reply.body = http.StatusConflict, stderr.Bytes()
+					return reply
+				default:
 					reply.status, reply.body = 1000+code, stderr.Bytes()
 					return reply
 				}
