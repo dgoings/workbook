@@ -107,7 +107,9 @@ func TestHandlerPresentationNamesFinishedDatedTasks(t *testing.T) {
 	tasks = append(tasks, deleted, undatedDone)
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 	var document TasksDocument
-	if err := json.Unmarshal(request(t, handler, http.MethodGet, "/api/tasks").Body.Bytes(), &document); err != nil {
+	// The whole board, deleted tasks included, as the board asks for it when
+	// its Deleted column is shown.
+	if err := json.Unmarshal(request(t, handler, http.MethodGet, "/api/tasks?deleted=include").Body.Bytes(), &document); err != nil {
 		t.Fatal(err)
 	}
 	finished := map[string]bool{}

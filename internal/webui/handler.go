@@ -3060,6 +3060,12 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 	// phrase in here, the tag would move each time a fresh assignment's age
 	// crossed a minute, hour or day, and every open board would read the whole
 	// document again with no task having changed.
+	//
+	// The one exception is a dated task's overdue and dueSoon, which every task
+	// object carries and core judges against the server's date. They change at
+	// most once a day, at the server's midnight, so an idle board reads the
+	// whole document once a day rather than once a second. The board draws from
+	// its own date and dueFinished in the presentation, never from these two.
 	err = writeTaggedJSON(writer, request, TasksDocument{
 		Format:          "workbook.tasks",
 		Version:         1,
