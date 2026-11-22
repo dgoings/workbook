@@ -2,7 +2,7 @@ package core
 
 import "strings"
 
-// FindTerms splits a search query the way both boards and the CLI agree to:
+// FindTerms splits a search query the way the web board and the CLI agree to:
 // case-folded, on whitespace, empty terms dropped. It is exported because the
 // web board reimplements the same rule in JavaScript and a parity test holds
 // the two together.

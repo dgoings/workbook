@@ -59,19 +59,14 @@ func TestStatusDeleteBlockedMigratesAPreLedgerProject(t *testing.T) {
 	if backlog.Status != "backlog" || backlog.Tasks == nil || *backlog.Tasks != 3 {
 		t.Fatalf("backlog = %#v, want all three tasks resolving there", backlog)
 	}
-
-	code, board, stderr := run(t, repository, "board", "--narrow")
-	if code != 0 || stderr != "" {
-		t.Fatalf("board = code %d, stderr %q", code, stderr)
-	}
-	if strings.Contains(board, "BLOCKED") {
-		t.Errorf("the board still draws a Blocked column after the removal:\n%s", board)
+	if got := cliStatusNames(t, repository); containsString(got, "blocked") {
+		t.Errorf("statuses = %v, want no Blocked column after the removal", got)
 	}
 
 	// Naming the removed value afterwards is answered with what became of it and
 	// when, which is the whole reason a removal leaves a forwarding pointer.
 	today := time.Now().UTC().Format("2006-01-02")
-	code, _, stderr = run(t, repository, "status", "label", "blocked", "Blocked Again", "--json")
+	code, _, stderr := run(t, repository, "status", "label", "blocked", "Blocked Again", "--json")
 	if code != 4 {
 		t.Fatalf("status label blocked = code %d, want 4; stderr = %q", code, stderr)
 	}

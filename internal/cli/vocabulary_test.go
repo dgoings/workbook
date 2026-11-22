@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -368,20 +369,18 @@ func TestAnUnresolvableStatusIsShownAndStillEditable(t *testing.T) {
 	repository, _ := cliSyncRepositories(t)
 	stranded := writeTaskInAForeignStatus(t, repository, "Written by a clone we have not fetched", "ghost")
 
-	code, stdout, stderr := run(t, repository, "board")
-	if code != 0 || stderr != "" {
-		t.Fatalf("board = code %d, stderr %q", code, stderr)
+	listed := cliListTasks(t, repository)
+	if len(listed) != 1 || listed[0].ID != stranded.ID || listed[0].Status != "ghost" {
+		t.Fatalf("list = %#v, want the stranded task shown under its stored status", listed)
 	}
-	if !strings.Contains(stdout, "UNKNOWN STATUS (1)") {
-		t.Fatalf("board = %q, want the stranded task under the unknown-status heading", stdout)
-	}
+	assertUnresolvedTasks(t, repository, "ghost", stranded.ID)
 
 	// The edits that do not name a status go through.
-	code, _, stderr = run(t, repository, "update", stranded.ID, "--title", "Renamed while stranded", "--no-sync")
+	code, _, stderr := run(t, repository, "update", stranded.ID, "--title", "Renamed while stranded", "--no-sync")
 	if code != 0 {
 		t.Fatalf("update --title = code %d, want 0; stderr = %q", code, stderr)
 	}
-	code, stdout, stderr = run(t, repository, "show", stranded.ID, "--json")
+	code, stdout, stderr := run(t, repository, "show", stranded.ID, "--json")
 	if code != 0 || stderr != "" {
 		t.Fatalf("show = code %d, stderr %q", code, stderr)
 	}
@@ -412,13 +411,7 @@ func TestAnUnresolvableStatusIsShownAndStillEditable(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("update --status ready = code %d, want 0; stderr = %q", code, stderr)
 	}
-	code, stdout, stderr = run(t, repository, "board")
-	if code != 0 || stderr != "" {
-		t.Fatalf("board = code %d, stderr %q", code, stderr)
-	}
-	if strings.Contains(stdout, "UNKNOWN STATUS") {
-		t.Fatalf("board = %q, want the filed task out of the unknown-status region", stdout)
-	}
+	assertUnresolvedTasks(t, repository, "")
 }
 
 // Two tasks stranded under one unresolvable token share a bucket, so `move`
@@ -437,61 +430,49 @@ func TestMoveReordersWithinAnUnresolvableBucket(t *testing.T) {
 		t.Fatalf("move within the stranded bucket = code %d, want 0; stderr = %q", code, stderr)
 	}
 
-	code, stdout, stderr := run(t, repository, "board")
-	if code != 0 || stderr != "" {
-		t.Fatalf("board = code %d, stderr %q", code, stderr)
+	listed := cliListTasks(t, repository)
+	if len(listed) != 2 || listed[0].ID != second.ID || listed[1].ID != first.ID {
+		t.Fatalf("list = %#v, want the moved task listed first", listed)
 	}
-	if !strings.Contains(stdout, "UNKNOWN STATUS (2)") {
-		t.Fatalf("board = %q, want both stranded tasks still in the region", stdout)
-	}
-	if strings.Index(stdout, "Second stranded") > strings.Index(stdout, "First stranded") {
-		t.Fatalf("board = %q, want the moved task drawn first", stdout)
-	}
+	assertUnresolvedTasks(t, repository, "ghost", second.ID, first.ID)
 }
 
-// The terminal board draws the project's columns, under the project's labels,
-// and puts a task still stored under a retired token in the column that token
-// now means.
-//
-// This is the last surface that was still reading the built-in six. Everything
-// else about a rename was already honest — show, list, next, create — while the
-// board a person actually looks at printed a READY column for a project that no
-// longer has one, with the task missing from it.
-func TestBoardRendersTheProjectsOwnColumns(t *testing.T) {
-	t.Parallel()
-	repository, _ := cliSyncRepositories(t)
-	task := cliCreateTask(t, repository, "Renamed column")
-	if code, _, stderr := run(t, repository, "update", task.ID, "--status", "ready", "--no-sync"); code != 0 {
-		t.Fatalf("update --status ready = code %d; stderr = %q", code, stderr)
-	}
-	// Through the verb rather than through the ledger API, so the label the
-	// board prints is the one a person renaming a column would actually get.
-	if code, _, stderr := run(t, repository, "status", "rename", "ready", "todo", "--no-sync"); code != 0 {
-		t.Fatalf("status rename = code %d; stderr = %q", code, stderr)
-	}
-	if code, _, stderr := run(t, repository, "status", "delete", "in-review", "--into", "done", "--no-sync"); code != 0 {
-		t.Fatalf("status delete = code %d; stderr = %q", code, stderr)
-	}
-
-	code, stdout, stderr := run(t, repository, "board")
+// cliListTasks is `workbook list --json`, decoded.
+func cliListTasks(t *testing.T, repository string) []core.Task {
+	t.Helper()
+	code, stdout, stderr := run(t, repository, "list", "--json")
 	if code != 0 || stderr != "" {
-		t.Fatalf("board = code %d, stderr %q", code, stderr)
+		t.Fatalf("list = code %d, stderr %q", code, stderr)
 	}
-	if !strings.Contains(stdout, "TODO (1)") {
-		t.Fatalf("board = %q, want a TODO column holding the renamed task", stdout)
+	var tasks []core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "list").Data, &tasks); err != nil {
+		t.Fatalf("decode list: %v; output = %s", err, stdout)
 	}
-	if strings.Contains(stdout, "READY (") {
-		t.Fatalf("board = %q, want no column for the retired status", stdout)
+	return tasks
+}
+
+// assertUnresolvedTasks checks what `workbook status list` reports as stored
+// under a status this project cannot resolve: nothing when status is empty,
+// otherwise exactly the named tasks under that one status. It is the command
+// line's account of the tasks the web board draws in its unknown-status region.
+func assertUnresolvedTasks(t *testing.T, repository string, status string, ids ...string) {
+	t.Helper()
+	unresolved := cliStatusList(t, repository).Unresolved
+	if status == "" {
+		if len(unresolved) != 0 {
+			t.Fatalf("unresolved = %#v, want none", unresolved)
+		}
+		return
 	}
-	// A removed status loses its column too, rather than being drawn empty.
-	if strings.Contains(stdout, "IN REVIEW (") {
-		t.Fatalf("board = %q, want no column for the removed status", stdout)
+	if len(unresolved) != 1 || unresolved[0].Status != status || unresolved[0].Tasks != len(ids) {
+		t.Fatalf("unresolved = %#v, want %d task(s) under %q", unresolved, len(ids), status)
 	}
-	if strings.Contains(stdout, "UNKNOWN STATUS") {
-		t.Fatalf("board = %q, want the stored token resolved rather than stranded", stdout)
-	}
-	if !strings.Contains(stdout, "Renamed column") {
-		t.Fatalf("board = %q, want the task drawn", stdout)
+	got := append([]string(nil), unresolved[0].TaskIDs...)
+	want := append([]string(nil), ids...)
+	sort.Strings(got)
+	sort.Strings(want)
+	if !equalStrings(got, want) {
+		t.Fatalf("unresolved task IDs = %v, want %v", unresolved[0].TaskIDs, ids)
 	}
 }
 
@@ -531,13 +512,7 @@ func TestUnresolvedStatusRecovery(t *testing.T) {
 		t.Fatalf("appended operation = %#v, want one field.set of status to ready", operation)
 	}
 
-	code, stdout, stderr := run(t, repository, "board")
-	if code != 0 || stderr != "" {
-		t.Fatalf("board = code %d, stderr %q", code, stderr)
-	}
-	if strings.Contains(stdout, "UNKNOWN STATUS") {
-		t.Fatalf("board = %q, want the corrected task filed into a column", stdout)
-	}
+	assertUnresolvedTasks(t, repository, "")
 
 	// (b) The residue. A stored status that is not a status token at all cannot
 	// be reached by the same recovery: it fails the structural rule every read
@@ -545,7 +520,7 @@ func TestUnresolvedStatusRecovery(t *testing.T) {
 	// status. Only a hand edit or a hostile ref produces it, which is why the
 	// repair is a documented gap rather than a verb.
 	overwriteStoredTask(t, repository, stranded.ID, `"status":"ready"`, `"status":"Not A Token"`)
-	code, stdout, stderr = run(t, repository, "update", stranded.ID, "--status", "backlog", "--no-sync", "--json")
+	code, stdout, stderr := run(t, repository, "update", stranded.ID, "--status", "backlog", "--no-sync", "--json")
 	if code != 7 {
 		t.Fatalf("update on a malformed stored status = code %d, want 7; stderr = %q", code, stderr)
 	}

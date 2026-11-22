@@ -88,7 +88,7 @@ const (
 	// typeable rather than where storage starts to hurt.
 	MaxStatusNameBytes = 40
 	// MaxStatusLabelBytes bounds one status display label. A label is a column
-	// heading; anything longer stops fitting a terminal board column.
+	// heading; anything longer stops fitting a board column.
 	MaxStatusLabelBytes = 60
 	// MaxStatusCount bounds how many live statuses one project may define.
 	//

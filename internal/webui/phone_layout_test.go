@@ -173,6 +173,14 @@ const phoneBoardScript = phoneHelpers + `
   const before = window.scrollY;
   await touchInput({ x: start.left + 10, y: Math.min(start.top + 10, innerHeight - 20), dy: -Math.min(300, innerHeight / 2), steps: 12, press: 600 });
   await pause(400);
+  // A stroke can leave the page coasting, and a touch that lands on a page
+  // still coasting stops it and is not a tap: on a loaded machine the tap on
+  // the row below was lost that way. Wait until the page has stood still for
+  // ten frames, or three seconds, before reading or touching anything.
+  for (let still = 0, last = window.scrollY, waited = 0; still < 10 && waited < 180; waited++) {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    if (window.scrollY === last) still++; else { still = 0; last = window.scrollY; }
+  }
   reading.ScrolledBy = window.scrollY - before;
   reading.CardMovedBy = cardTop - card.getBoundingClientRect().top;
   reading.RowTopAfter = row.getBoundingClientRect().top;

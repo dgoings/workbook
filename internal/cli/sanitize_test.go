@@ -97,20 +97,18 @@ func TestShowIndentsMultiLineDescriptionsSoTheyCannotForgeFields(t *testing.T) {
 	}
 }
 
-func TestListAndBoardSanitizeControlCharactersInTextMode(t *testing.T) {
+func TestListSanitizesControlCharactersInTextMode(t *testing.T) {
 	t.Parallel()
-	// Mutation caught: list or board rendering stored control bytes verbatim.
-	// Each command is its own subtest so one raw sink cannot hide behind
-	// another's failure. Both layouts truncate the title to the column width,
-	// so the positive assertion checks the sanitized prefix rather than the
-	// whole line.
+	// Mutation caught: list rendering stored control bytes verbatim. Each
+	// command is its own subtest so one raw sink cannot hide behind another's
+	// failure. The table truncates the title to the column width, so the
+	// positive assertion checks the sanitized prefix rather than the whole
+	// line.
 	repository := initializedRepository(t)
 	createForgedTask(t, repository, forgedTitle, "")
 
 	commands := map[string][]string{
-		"list":         {"list"},
-		"board narrow": {"board", "--narrow"},
-		"board wide":   {"board", "--wide"},
+		"list": {"list"},
 	}
 	for name, command := range commands {
 		t.Run(name, func(t *testing.T) {
