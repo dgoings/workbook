@@ -170,6 +170,40 @@ func TestMoveTasksResumesAfterAnInterruptionAtEveryStep(t *testing.T) {
 
 // assertSameRefs requires the two places to hold the same task refs and the
 // same configuration ledger, name for name and commit for commit.
+// An edit a teammate on the old settings publishes to the old place while one
+// uninterrupted move is under way, after the move read it and before the mark,
+// reaches the new place in that same run: the move reads the old place again
+// after marking it, so nothing published before the mark is left behind.
+func TestMoveTasksCarriesAnEditPublishedBeforeTheMarkInTheSameRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newMoveFixture(t, testrepo.FormatSHA1)
+
+	fixture.first.moveStepHook = func(at string) error {
+		if at != "mark" {
+			return nil
+		}
+		updateSyncTask(t, fixture.second, fixture.stale, fixture.ids[0], "Edited by the teammate while the move runs")
+		if _, err := fixture.second.Sync(ctx, fixture.stale); err != nil {
+			t.Fatalf("teammate sync before the mark = %v, want it published to the old place", err)
+		}
+		return nil
+	}
+	result, err := fixture.first.MoveTasks(ctx, fixture.config, "")
+	if err != nil {
+		t.Fatalf("MoveTasks() = %v, want the teammate's edit carried across", err)
+	}
+	if result.Marked != "marked" || result.Identical != len(fixture.ids) {
+		t.Fatalf("MoveTasks() result = %+v, want %d identical tasks and origin marked", result, len(fixture.ids))
+	}
+	head := syncGit(t, fixture.origin, "rev-parse", taskRefPrefix+fixture.ids[0])
+	if got := syncGit(t, fixture.tasks, "rev-parse", taskRefPrefix+fixture.ids[0]); got != head {
+		t.Fatalf("tasks holds %s at %s, want the teammate's edit %s", fixture.ids[0], got, head)
+	}
+	assertSameRefs(t, fixture)
+	assertOriginMarked(t, fixture)
+}
+
 func assertSameRefs(t *testing.T, fixture moveFixture) {
 	t.Helper()
 	for _, prefix := range []string{taskRefPrefix, configRef} {
