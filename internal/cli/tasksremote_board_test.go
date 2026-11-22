@@ -35,9 +35,10 @@ func decodeBoardMutationWarnings(t *testing.T, body []byte, status int) boardMut
 }
 
 // A board already running when the tasks move away from its origin keeps
-// recording every save, and publishes none of them to the marked place: each
-// answer carries the moved refusal as a warning, in both publication modes,
-// and the board's own background synchronization says so once in its log.
+// recording every save, and publishes none of them to the marked place: once
+// its background synchronization has met the marker, which it says once in
+// its log, each answer carries the moved refusal as a warning, in both
+// publication modes.
 // The same handle that published before the move is the one asked after it,
 // which is the case a remembered identity agreement used to get wrong.
 func TestTasksRemoteBoardRunningAcrossAMovePublishesNothingToTheOldPlace(t *testing.T) {
@@ -64,6 +65,17 @@ func TestTasksRemoteBoardRunningAcrossAMovePublishesNothingToTheOldPlace(t *test
 	project.moveTasks(t)
 	afterMove := repositoryState(t, project.code)
 
+	// A save handed to the watcher learns of the move from this checkout's
+	// copy of origin's identity ref, which the watcher's next round brings:
+	// within one interval, not at once. The round reports the refusal.
+	deadline = time.Now().Add(30 * time.Second)
+	for !strings.Contains(output.String(), project.tasks) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the board's synchronization never reported the move; it wrote:\n%s", output.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
 	for _, mode := range []string{"deferred", "inline"} {
 		if body, status := boardRequest(t, http.MethodPut, base+"/api/sync", `{"mode":"`+mode+`"}`); status != http.StatusOK {
 			t.Fatalf("PUT /api/sync %s = %d; body = %s", mode, status, body)
@@ -83,13 +95,6 @@ func TestTasksRemoteBoardRunningAcrossAMovePublishesNothingToTheOldPlace(t *test
 
 	// The background synchronization reports the refusal once, however many
 	// intervals pass.
-	deadline = time.Now().Add(30 * time.Second)
-	for !strings.Contains(output.String(), project.tasks) {
-		if time.Now().After(deadline) {
-			t.Fatalf("the board's synchronization never reported the move; it wrote:\n%s", output.String())
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
 	time.Sleep(12 * time.Second)
 	if count := strings.Count(output.String(), "tasks moved from origin to "+project.tasks); count != 1 {
 		t.Fatalf("the board logged the move %d times, want once:\n%s", count, output.String())

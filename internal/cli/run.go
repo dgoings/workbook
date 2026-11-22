@@ -2661,16 +2661,24 @@ func (p *boardPublisher) publishConfig(ctx context.Context) []core.Warning {
 // An untrustworthy watcher is refused for the same reason the CLI refuses one:
 // a watcher whose last synchronization failed knows origin is unreachable, and
 // accepting its receipt would swallow the warning that says so.
+//
+// The watcher answers one request per connection, so the status and the nudge
+// are asked on two, as the CLI's probe and nudge are.
 func (p *boardPublisher) handOff(taskID string) bool {
 	client, err := syncloop.Dial(p.repository.CommonGitDir, watcherProbeDeadline)
 	if err != nil {
 		return false
 	}
-	defer client.Close()
 	status, err := client.Status()
+	_ = client.Close()
 	if err != nil || !status.Trustworthy(time.Now()) {
 		return false
 	}
+	client, err = syncloop.Dial(p.repository.CommonGitDir, watcherProbeDeadline)
+	if err != nil {
+		return false
+	}
+	defer client.Close()
 	return client.Nudge(taskID) == nil
 }
 
