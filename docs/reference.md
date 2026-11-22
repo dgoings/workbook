@@ -78,8 +78,10 @@ and an empty `--find` is refused.
 validates the tracked `.workbook/config.json` holding the project ID and key,
 writes the user-global configuration file when it is missing, installs or
 refreshes managed agent documentation, and synchronizes shared task refs with
-`origin`. It skips synchronization when no `origin` remote is configured, so a
-solo local project needs no remote. Use `--no-sync` to bootstrap without
+`origin`, or with the remote the project's settings name for its tasks (see
+[A tasks remote other than origin](#a-tasks-remote-other-than-origin)), which
+setup adds to the checkout first. It skips synchronization when no such remote
+is configured, so a solo local project needs no remote. Use `--no-sync` to bootstrap without
 exchanging refs and `--no-docs` to create project identity alone.
 
 The project key, the prefix a task ID carries, is asked for only when setup
@@ -493,6 +495,10 @@ and failure is a single compact line on standard error:
 {"format":"workbook.result","version":1,"command":"create","data":{...}}
 {"format":"workbook.error","version":1,"error":{"category":"validation","message":"..."}}
 ```
+
+A refusal about the remote a project shares its tasks through adds a
+`tasksRemote` member to `error`; see
+[Setup and the refusals](#setup-and-the-refusals). No other error carries it.
 
 The exit code names the error's category, so a caller can decide what to do
 without parsing a message:
@@ -1604,10 +1610,16 @@ an ordinary `git push origin`. The managed pre-push hook is recursion-safe and
 blocks the code push when Workbook task publication fails. Installation is
 idempotent for Workbook-managed hooks. An existing non-Workbook pre-push hook is
 never overwritten; Workbook instead prints manual chaining guidance. Hooks are
-optional convenience only and are not required for correctness.
+optional convenience only and are not required for correctness. The hook
+watches for a push to `origin`, the code's remote, whatever the tasks remote is;
+the `workbook push` it runs publishes to the project's tasks remote. With the
+tasks in a repository of their own, a person without push access to it should
+not install the hook, because each of their code pushes would be blocked.
 
-The collaborative POC supports only the remote named `origin`. Multiple named
-remotes remain future work.
+Everything else in this section says `origin` because that is where a project
+shares its tasks unless its settings name another remote; with one named, read
+that remote for `origin` throughout. See
+[A tasks remote other than origin](#a-tasks-remote-other-than-origin).
 
 `workbook sync` runs the full sequence against `origin`: fetch Workbook task
 refs into the isolated tracking namespace, validate and fast-forward/create
@@ -1622,6 +1634,192 @@ nonzero while every other task is still published. The command does not replay e
 checkpoint during ordinary synchronization; that is reserved for the explicit
 `workbook validate` audit. The command never fetches or pushes code branches and
 does not create a hidden tasks branch.
+
+## A tasks remote other than origin
+
+A project shares its tasks through `origin` unless its settings name another
+Git remote. Keeping the tasks in a repository of their own, one that holds
+tasks and nothing else, means a key or a person given access to it is given
+nothing of the code. That is the reason to do it: a [hosted board](hosting.md)
+needs push access to wherever the tasks live.
+
+The choice is recorded in the tracked `.workbook/config.json`, so it travels
+with the code like every other project setting, as an optional `tasksRemote`
+member of the version 2 document. A project that never chose has no such member,
+and its file, its Git commands and its JSON output are what they were before the
+setting existed:
+
+```json
+{"format":"workbook.project","version":2,"projectId":"01M…","key":"WB","tasksRemote":{"name":"tasks","url":"git@github.com:team/tasks.git"}}
+```
+
+`name` is the Git remote every checkout uses for the tasks, and `url` is the
+address `workbook setup` adds it from. Each checkout keeps its own address for
+the remote: if a checkout already has a remote of that name, setup leaves its
+address alone and says so, which is how a person uses SSH where the file says
+HTTPS. Setup writes nothing to the committed file.
+
+### Choosing the remote and moving the tasks
+
+The move is one procedure, run once by one person from a clone of the code:
+
+```sh
+# 1. An empty repository for the tasks, created on your host.
+# 2. Record it, then move the tasks there:
+workbook config set tasks-remote tasks --url git@github.com:team/tasks.git
+workbook move-tasks
+# 3. Publish the setting with the code:
+git add .workbook/config.json && git commit -m "Keep tasks in their own repository" && git push
+# 4. Everyone else, after pulling that commit:
+workbook setup
+```
+
+`config set tasks-remote <name> --url <address>` refuses a name that is not a
+single-component Git remote name (letters, digits, `.`, `_` and `-`), `origin`
+with an address, a missing `--url`, an address that begins with `-` or holds
+white space, an address carrying a password, any user name in an `http` or
+`https` address (which is how tokens are usually passed), and origin's own
+address. An SSH user name such as `git@` is kept. `config set tasks-remote
+origin` with no address and `config unset tasks-remote` both go back to
+sharing through `origin` by removing the member; the tasks repository keeps
+the copy it holds. The command changes only the file:
+until setup runs, this checkout's task commands say to run it.
+
+`workbook move-tasks [--from <remote>]` moves the tasks from `origin`, or from
+the remote `--from` names, to the remote the settings name, adding that remote
+to this checkout first. It asks both remotes before writing anything, then:
+
+1. reads the old place into this checkout;
+2. synchronizes with the new place, which publishes every task, the
+   configuration ledger and the identity ref there;
+3. marks the old place (see [The moved marker](#the-moved-marker));
+4. reads the old place again, for edits published there before the mark;
+5. synchronizes with the new place again, publishing those;
+6. lists both places afresh and requires the new place to hold every task ref
+   the old place holds, at the same commit or at a descendant of it.
+
+A commit ID names the whole history below it, so an equal commit is the same
+operations with the same operation IDs. Every step is safe to repeat: an
+interrupted run, wherever it stopped, is finished by running the command again,
+and a run whose marker is already published reports `"marked":"already"`.
+
+```json
+{"format":"workbook.result","version":1,"command":"move-tasks","data":{"from":{"remote":"origin","url":"git@github.com:team/code.git"},"to":{"remote":"tasks","url":"git@github.com:team/tasks.git"},"remote":"added","marked":"marked","tasks":42,"identical":42,"ahead":0,"copy":{…},"recopy":{…}}}
+```
+
+`remote` is `added` or `kept`, as setup reports it. `identical` counts the
+tasks the new place holds at the old place's commit, and `ahead` those it holds
+at a later one, edited there after the copy. `copy` and `recopy` are the two
+synchronizations, in the shape `workbook sync --json` reports. A run that stops
+reports only its error; the old place keeps every ref it had, and nothing is
+deleted anywhere.
+
+What is guaranteed and what is not:
+
+- No history is lost. The old place keeps every ref it held; the new place ends
+  holding all of them. A teammate's edit recorded but not yet published stays
+  in their checkout's own refs and is published to the new place by their next
+  `workbook setup`.
+- Before step 3, a checkout still on the old settings goes on publishing to the
+  old place, and steps 4 and 5 carry that across. After step 3, such a checkout
+  is refused before it records anything, so the two places cannot keep
+  diverging unseen.
+- If the move is never finished (stopped before step 3 and not run again), the
+  old place is unmarked and checkouts on the old settings keep using it. A new
+  checkout's setup refuses that state instead of joining one half of it; see
+  `move-not-done` below.
+- A board that was already running when the old place was marked keeps saving
+  edits locally, and each save's publication fails with the moved refusal as a
+  warning. Restart it from a folder set up for the new place. A new `workbook
+  serve` refuses to start.
+- A repository marked as the place the tasks moved away from cannot be made the
+  tasks remote again by this version.
+
+### Setup and the refusals
+
+`workbook setup` in a project whose settings name a tasks remote adds the
+remote when the checkout lacks it (`git remote add --no-tags`, with a fetch
+refspec of `^refs/*` so a plain `git fetch` downloads nothing from it), lists
+its Workbook refs, and then synchronizes with it. Its result gains a
+`tasksRemote` member, absent for a project that never chose:
+
+```json
+"tasksRemote":{"name":"tasks","url":"git@github.com:team/tasks.git","settingsUrl":"git@github.com:team/tasks.git","status":"added"}
+```
+
+`status` is `added` when this run added the remote from the settings and `kept`
+when the checkout already had one of that name; `url` is the address the
+checkout uses, with any credential removed. Text output prints it as a
+`Tasks remote:` line.
+
+Every command that opens the project, except `setup`, `config` and
+`move-tasks`, refuses a checkout that has to run setup first. Each refusal
+is a plain sentence and carries a `tasksRemote` member in the JSON error
+envelope, saying which remote, why, and the command that gets out of it:
+
+```json
+{"format":"workbook.error","version":1,"error":{"category":"not-initialized","message":"…","tasksRemote":{"reason":"tasks-moved","remote":"origin","movedTo":{"remote":"tasks","url":"git@github.com:team/tasks.git"},"command":"workbook setup"}}}
+```
+
+| `reason` | Exit | When |
+| --- | --- | --- |
+| `remote-missing` | 3 | The settings name a remote this checkout does not have: what an ordinary pull of the settings change leaves. `url` is the address setup will add. |
+| `not-read` | 3 | The checkout has the remote and has never read the tasks from it: what a setup without access leaves. The message names the address and the access needed. |
+| `unreachable` | 1 | Setup could not list the tasks remote. The message says which address, that seeing the tasks needs read access to it and changing them needs push access, and Git's own reason. |
+| `tasks-moved` | 3 | This checkout's tasks remote is marked as moved, so its settings predate the move. `movedTo` names the new place. The message says to pull the commit that sets `tasks-remote` and run setup, and that unpublished edits are kept. In a [tasks-only folder](#tasks-only-folders) it says to set up a new folder for the new address instead. Exit 5, category `validation`, when the marked remote was named with `--remote` and the command would publish to it. |
+| `move-not-done` | 3 | Setup, in a checkout whose settings name a tasks remote, found `origin` still holding task refs with no marker: the move was never run or never finished. `command` is `workbook move-tasks`. |
+
+The member's fields are `reason`, `remote`, and, where they apply, `url`,
+`movedTo` (`remote` and `url`) and `command`. An error that is not about the
+tasks remote has no such member.
+
+### Naming another remote for one run
+
+`workbook fetch`, `push` and `sync` take `--remote <remote>`, which names a Git
+remote this checkout has for that one run instead of the project's tasks remote.
+No other command takes it, and a watcher (`sync --watch`) always uses the
+project's tasks remote, so `sync --remote` refuses `--watch` and `--status`. A
+run that names a remote skips the setup check above, because naming a remote is
+how a checkout reads one it has not set up. A remote marked as the place the
+tasks moved away from is read as usual and never published to: `push` and the
+push phase of `sync` refuse with the `tasks-moved` reason and exit 5, and
+`sync`'s `identity` member reports `"status":"moved"`.
+
+Each remote's copy of the Workbook namespace is mirrored under its own
+`refs/workbook/remotes/<remote>/` (`tasks/*`, `project`, `config`), and a fetch
+prunes only the namespace of the remote it fetched from.
+
+### The moved marker
+
+The old place is marked on its `refs/workbook/project`, by one commit on top of
+the identity commit. It keeps the identity's `project.json` byte for byte and
+adds `moved.json`, a versioned document saying where the tasks went:
+
+```json
+{"format":"workbook.tasks-moved","version":1,"projectId":"01M…","remote":"tasks","url":"git@github.com:team/tasks.git"}
+```
+
+Publishing it is an ordinary fast-forward of that one ref, and its inputs are
+fixed, so a repeated move pushes the same commit. Workbook reads it and never
+adopts it: the local `refs/workbook/project` stays on the identity commit, and
+a local identity ref moved onto a marker by hand is refused as corrupt-data. See
+[architecture.md](architecture.md#a-tasks-remote-other-than-origin) for the
+object graph.
+
+### Older Workbook versions
+
+A Workbook release from before the setting (v0.6.1 and earlier) refuses a
+`.workbook/config.json` that carries `tasksRemote`, as it refuses any member it
+does not know: every command exits 7 with `cannot decode Workbook
+configuration`. It never quietly uses `origin`. Upgrade every checkout before
+committing the setting.
+
+Such a release in a checkout still on the old settings, meeting a marked
+`origin`, refuses the marker as an invalid identity: `fetch`, `sync` and `push`
+exit 7 with `the Workbook project identity commit must have no parents`, and an
+edit is recorded locally with a warning that its fetch failed and is never
+published. It does not say where the tasks went, but it writes nothing to the
+old place. Measured with Homebrew 0.6.0 and a build of the v0.6.1 tag.
 
 ## Continuous synchronization
 
@@ -3966,5 +4164,8 @@ stage did under an `identity` member — `created`, `published`, `adopted`, or
 agree and there is nothing else to note. The remaining status, `matched`, appears
 only alongside such a note: refs `origin` holds under the identity ref's name,
 which this version skips and lists under `ignoredRefs` rather than refusing to
-run. A `mismatched` identity stops the run before any task is fetched.
+run. A `mismatched` identity stops the run before any task is fetched. A
+`moved` identity appears only when `--remote` names a remote marked as the
+place the tasks moved away from: the run reads it and publishes nothing there;
+see [The moved marker](#the-moved-marker).
 

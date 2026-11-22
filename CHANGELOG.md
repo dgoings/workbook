@@ -27,6 +27,29 @@ release counts as no entry, so it never blocks the next release. See
 
 ## Unreleased
 
+A project can keep its tasks in a repository of their own, so that access to
+them, such as a hosted board's deploy key, is not access to the code. `workbook
+config set tasks-remote <name> --url <address>` records the remote in
+`.workbook/config.json`, refusing an address that carries a password or an
+`https` user name; `workbook move-tasks` copies every task there, marks the old
+place with one fast-forward commit on its `refs/workbook/project` saying where
+the tasks went, and checks the new place holds every task the old one did. It
+is safe to stop and run again, and the old place keeps its copy. `workbook
+setup` adds the remote to each checkout from the settings, or keeps the
+checkout's own address for it. Until it runs, task commands refuse and say to
+run it; a checkout still on the old settings is refused before it records
+anything, told where the tasks went; and a setup that cannot read the tasks
+repository says which address and what access is needed. Each refusal carries
+a `tasksRemote` member in the JSON error. `workbook fetch`, `push` and `sync`
+take `--remote` to name another remote for one run, which reads a marked
+remote and never publishes to it, and each remote's tracking refs are now
+pruned only by a fetch from that remote. A project that never sets the remote
+behaves as before. Older Workbook releases refuse a `.workbook/config.json`
+that names a tasks remote, exiting 7 with `cannot decode Workbook
+configuration`, so upgrade every checkout before committing the setting. See
+[A tasks remote other than origin](docs/reference.md#a-tasks-remote-other-than-origin)
+and [Keep the tasks in their own repository](docs/hosting.md#keep-the-tasks-in-their-own-repository).
+
 The web board keeps a change that a proxy in front of it asked to send later.
 A `429` or `503` that carries `Retry-After` no longer loses the change: the
 page keeps it drawn as made, says it is held in that tab, asks before the tab

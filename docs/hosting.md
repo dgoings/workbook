@@ -7,7 +7,9 @@ address. It is written for somebody doing this for the first time. It uses:
 - a Linux machine that keeps its disk across restarts;
 - a [tasks-only folder](reference.md#tasks-only-folders) holding the project's
   tasks and none of its code;
-- a GitHub deploy key with write access, so the board can publish;
+- a GitHub deploy key with write access, so the board can publish, on a
+  repository that holds the tasks and nothing else if you follow
+  [Keep the tasks in their own repository](#keep-the-tasks-in-their-own-repository);
 - `workbook serve` listening on this machine only;
 - [Cloudflare Tunnel](https://developers.cloudflare.com/tunnel/), so nothing
   on the machine has to accept connections from the internet;
@@ -37,8 +39,46 @@ before you share the address.
   ([seat management](https://developers.cloudflare.com/cloudflare-one/team-and-resources/users/seat-management/)).
 
 The examples use `tasks.example.com` for the board's address,
-`OWNER/REPO` for the repository, and `board@example.com` for the server's own
-address. Replace each with yours.
+`OWNER/REPO` for the repository that holds the tasks, and `board@example.com`
+for the server's own address. Replace each with yours. If the project keeps its
+tasks in their own repository, `OWNER/REPO` is that one, never the code's.
+
+## Keep the tasks in their own repository
+
+A deploy key with write access opens its whole repository, not only Workbook's
+refs (see [The server's key opens the whole repository](#the-servers-key-opens-the-whole-repository)).
+If the tasks live in the code's repository, the board's key can push to the
+code. Moving them to a repository of their own first leaves the key nothing
+else to open. It is optional, and done once, from a clone of the code, by
+somebody who can push to both repositories:
+
+1. Create an empty private repository on GitHub, such as `OWNER/REPO-tasks`.
+2. Once every teammate runs a Workbook version with this command, in the
+   clone of the code:
+
+   ```sh
+   workbook config set tasks-remote tasks --url git@github.com:OWNER/REPO-tasks.git
+   workbook move-tasks
+   git add .workbook/config.json
+   git commit -m "Keep tasks in their own repository"
+   git push
+   ```
+
+3. Everyone else pulls that commit and runs `workbook setup`, which adds the
+   `tasks` remote to their clone. Until they do, their task commands refuse and
+   say so; nothing is lost.
+
+`move-tasks` copies every task, marks the code repository as the place the
+tasks moved away from, and checks that the new repository holds everything the
+old one did. If it stops partway, run it again. The old repository keeps its
+copy. The full procedure, what it guarantees and what it does not, is in
+[A tasks remote other than origin](reference.md#a-tasks-remote-other-than-origin).
+
+A teammate without access to the tasks repository can still clone and push the
+code. Their `workbook setup` says which repository it could not read and that
+reading the tasks needs read access to it and changing them push access. They
+should not install Workbook's optional pre-push hook, which publishes tasks on
+every code push and would fail without that access.
 
 ## 1. Install Workbook
 
@@ -113,8 +153,8 @@ sudo -u workbook ssh-keygen -t ed25519 -N "" -C "workbook board" \
 sudo cat /var/lib/workbook/.ssh/board_deploy_key.pub
 ```
 
-On GitHub, open the repository's **Settings**, then **Deploy keys**, then
-**Add deploy key**. Give it a title, paste the public key, select **Allow
+On GitHub, open the repository that holds the tasks, then its **Settings**,
+then **Deploy keys**, then **Add deploy key**. Give it a title, paste the public key, select **Allow
 write access**, and select **Add key**.
 
 Tell SSH to use that key for GitHub, and record GitHub's host key:
@@ -144,6 +184,11 @@ sudo -u workbook -H sh -c '
   git config user.email board@example.com
 '
 ```
+
+The address is the repository that holds the tasks: the tasks repository if
+you followed [Keep the tasks in their own repository](#keep-the-tasks-in-their-own-repository),
+otherwise the code's. A tasks-only folder set up from the code's address after
+the move is refused, with the new address to set up from instead.
 
 The folder holds the project's Workbook refs and none of its code. The
 `user.email` is the server's own name. With the setup below, people's edits
@@ -331,10 +376,24 @@ passphrase and no expiry date. Keep the machine's other users and services away
 from that folder, and remove the key on GitHub the day the board is retired.
 
 The exposure comes from the tasks living in the same repository as the code.
-Keeping them in a repository of their own, which holds tasks and nothing else,
-would leave the key nothing else to open, but every clone shares tasks through
-its `origin`, so this version cannot. Sharing tasks through a remote other than
-`origin` is planned, not available.
+[Keeping them in a repository of their own](#keep-the-tasks-in-their-own-repository),
+which holds tasks and nothing else, leaves the key nothing else to open. GitHub
+attaches a deploy key to one repository and refuses to add the same key to a
+second ([Key already in use](https://docs.github.com/en/authentication/troubleshooting-ssh/error-key-already-in-use)).
+To confirm from the server what the key opens:
+
+```sh
+sudo -u workbook ssh -T git@github.com
+sudo -u workbook git ls-remote git@github.com:OWNER/REPO-tasks.git refs/workbook/project
+sudo -u workbook git ls-remote git@github.com:OWNER/REPO.git
+```
+
+The first greets the key by the repository it is attached to, `Hi
+OWNER/REPO-tasks!`, rather than by a person's name. The second prints one line.
+The third, the code's repository, must fail with `Repository not found` or
+`Permission denied`; if it lists the code's branches, the key opens the code
+too. The key still opens everything in the tasks repository, so anything else
+kept there is as exposed as the tasks.
 
 ### The board trusts the name header
 

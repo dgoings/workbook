@@ -214,6 +214,12 @@ recorded under their own email address, run it behind a sign-in proxy with
 through a complete setup with Cloudflare Tunnel and Cloudflare Access, and says
 what such a board does and does not protect.
 
+A board's key can push to whatever repository holds the tasks. To keep it away
+from the code, move the tasks to a repository of their own first: `workbook
+config set tasks-remote tasks --url <address>`, then `workbook move-tasks`,
+then commit `.workbook/config.json`; everyone else runs `workbook setup` after
+pulling it. See [Keep the tasks in their own repository](docs/hosting.md#keep-the-tasks-in-their-own-repository).
+
 Any board, hosted or not, shows an edit its sync had to set aside because a
 conflicting change reached the remote first: the card says so, and the task's
 page shows the edit until somebody copies it back or dismisses it.

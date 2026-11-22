@@ -830,8 +830,10 @@ dgoings/tap/workbook`, or `./scripts/install.sh` to build from source.
 4. write the user-global configuration file when it is missing;
 5. install or refresh managed agent documentation and the project-local Workbook skill;
 6. explicitly fetch and publish `refs/workbook/project` and `refs/workbook/tasks/*`
-   through `origin`, or report that synchronization was skipped when no remote is
-   configured;
+   through the project's tasks remote, `origin` unless its settings name another
+   (see [A tasks remote other than origin](#a-tasks-remote-other-than-origin)),
+   adding that remote first when the checkout lacks it, or report that
+   synchronization was skipped when no remote is configured;
 7. report which record the identity came from, and the resulting task count.
 
 Setup deliberately does not install Git hooks. Hooks remain opt-in through
@@ -860,6 +862,68 @@ reading `.workbook/config.json` from origin's default branch, would download the
 code, so a tasks-only folder skips it. It skips step 5 too, and never mints.
 Commands that need code history read the marker and report themselves
 unavailable rather than answering from history the folder does not hold.
+
+### A tasks remote other than origin
+
+A project may keep its tasks in a repository of their own, so that access to
+the tasks, such as a hosted board's key, is not access to the code. The choice
+is an optional `tasksRemote` member (`name`, `url`) of the tracked
+`.workbook/config.json`. It needs no new format generation, because it is
+absent for every project that never chose one, and that project's file and Git
+commands are unchanged. Every place that used to say `origin` asks one
+function, `Repository.remote()`, which returns the remote named for this run
+(`--remote`), else the project's setting, else `origin`. A checkout's own Git
+configuration holds the remote's address; setup adds the remote from the file
+when the checkout lacks it and otherwise leaves it alone.
+
+Each remote's copy of the Workbook namespace is mirrored under its own prefix,
+and a fetch with `--prune` names only that prefix, so reading one remote never
+deletes another's tracking refs:
+
+```text
+code clone                                        origin (code)
+  refs/heads/*, refs/tags/*             <---->      refs/heads/*, refs/tags/*
+  refs/workbook/remotes/origin/project  <-----      refs/workbook/project ──> M
+                                                  tasks (tasks only)
+  refs/workbook/project ──> I           <---->      refs/workbook/project ──> I
+  refs/workbook/config                  <---->      refs/workbook/config
+  refs/workbook/tasks/*                 <---->      refs/workbook/tasks/*
+  refs/workbook/remotes/tasks/{project,config,tasks/*}  (tracking)
+```
+
+Moving the tasks copies every ref with an ordinary synchronization, so the new
+place holds the same commits with the same operation IDs, and then marks the
+old place. The mark is one commit on the old place's identity ref:
+
+```text
+origin: refs/workbook/project ──> M  "workbook: tasks moved"
+                                  ├── parent: I  (the identity commit, unchanged)
+                                  └── tree
+                                       ├── project.json  (I's blob, byte for byte)
+                                       └── moved.json    {"format":"workbook.tasks-moved","version":1,
+                                                          "projectId":"01M…","remote":"tasks",
+                                                          "url":"git@github.com:team/tasks.git"}
+```
+
+Building on I makes publishing the mark a fast-forward, so no commit changes and
+nothing is force-pushed. Its author, committer and dates are fixed, as I's are,
+so marking the same move twice writes the same commit. Workbook reads M and
+never adopts it: the local identity ref stays on I, and a checkout whose tasks
+remote is marked is refused before it records anything, told where the tasks
+went. Its unpublished edits stay in its own task refs, which the next
+synchronization with the new place publishes. The old place keeps every task
+ref it had. A release from before the marker refuses M as an invalid identity
+(its reader requires a root commit), so it stops rather than writing to the
+old place, though its message does not say where the tasks went.
+
+The procedure is ordered so that an interruption anywhere leaves a state the
+same command finishes: read the old place, publish to the new place, mark, read
+the old place again, publish again, and compare the two places' ref listings. A
+teammate's edit published to the old place before the mark is carried by the
+second read; after the mark, a teammate on the old settings is refused instead
+of publishing there. That ordering is the guarantee. That every checkout picks
+up the new setting is not: it arrives with an ordinary pull of the code, and
+until then a checkout is refused, not silently diverging.
 
 The default shared backend uses custom refs because they avoid branch switching and per-repository head contention. A conventional `workbook/state` branch may be offered as a compatibility fallback for Git hosts that reject custom refs. A future optional relay may provide strict leases, heartbeats, notifications, or high-concurrency agent coordination while retaining the same operation model.
 
