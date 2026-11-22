@@ -197,3 +197,58 @@ func setAsideEditsOf(repo *Repository, config core.ProjectConfig, heads map[stri
 	}
 	return report.Edits, err
 }
+
+// A dismissal that loses a race to another one is told the edits are gone
+// (not-found, 404), and one that loses to a ref that moved is told they changed
+// (stale-write, 409), as the reference says, however late the other change
+// lands.
+func TestDismissSetAsideRaceAnswersByWhatTheOtherSideDid(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const alice, contributor = "alice@client.example", "sam@client.example"
+	for _, race := range []struct {
+		name string
+		do   func(t *testing.T, root, ref string)
+		want core.Category
+	}{
+		{"deleted", func(t *testing.T, root, ref string) { syncGit(t, root, "update-ref", "-d", ref) }, core.CategoryNotFound},
+		{"moved", func(t *testing.T, root, ref string) {
+			syncGit(t, root, "update-ref", ref, ref+"^")
+		}, core.CategoryStaleWrite},
+	} {
+		t.Run(race.name, func(t *testing.T) {
+			t.Parallel()
+			board, cli, config := syncRepositories(t)
+			task := createSyncTask(t, board, config, "Contested")
+			if _, err := board.Sync(ctx, config); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := cli.Fetch(ctx, config); err != nil {
+				t.Fatal(err)
+			}
+			describeSyncTask(t, cli, config, contributor, task.ID, "The contributor's text")
+			if _, err := cli.Push(ctx, config); err != nil {
+				t.Fatal(err)
+			}
+			describeSyncTask(t, board, config, alice, task.ID, "Alice's text")
+			if _, err := board.Sync(ctx, config); core.CategoryOf(err) != core.CategoryConflict {
+				t.Fatalf("Sync() error = %v, want the conflict", err)
+			}
+			edits, err := setAsideEditsOf(board, config, taskHeads(t, board))
+			if err != nil || len(edits[task.ID]) != 1 {
+				t.Fatalf("set-aside edits = %#v, %v", edits, err)
+			}
+			shown := edits[task.ID][0]
+			board.commandObserver = func(args []string) {
+				if len(args) > 0 && args[0] == "update-ref" && strings.Contains(strings.Join(args, " "), "dismiss") {
+					board.commandObserver = nil
+					race.do(t, board.Root, shown.ParkedRef)
+				}
+			}
+			err = board.DismissSetAside(ctx, config, task.ID, shown.ParkedRef, shown.Parked)
+			if core.CategoryOf(err) != race.want {
+				t.Fatalf("a dismissal that lost the race to a ref that was %s: error = %v (%s), want %s", race.name, err, core.CategoryOf(err), race.want)
+			}
+		})
+	}
+}

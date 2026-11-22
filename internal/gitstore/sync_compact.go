@@ -368,10 +368,10 @@ func (r *Repository) PushTasks(ctx context.Context, config core.ProjectConfig, t
 		}
 	}
 
-	rejected := 0
+	var rejected []SyncTaskResult
 	for _, taskID := range ordered {
 		if items[taskID].Status == SyncRejected {
-			rejected++
+			rejected = append(rejected, items[taskID])
 		}
 		result.Tasks = append(result.Tasks, items[taskID])
 	}
@@ -379,8 +379,8 @@ func (r *Repository) PushTasks(ctx context.Context, config core.ProjectConfig, t
 	if invalid > 0 {
 		return result, core.Errorf(core.CategoryCorruptData, "%d local task ref(s) failed validation", invalid)
 	}
-	if rejected > 0 {
-		return result, core.Errorf(core.CategoryOperational, "%d task ref(s) were rejected by origin", rejected)
+	if len(rejected) > 0 {
+		return result, rejectedByOrigin(rejected)
 	}
 	return result, nil
 }

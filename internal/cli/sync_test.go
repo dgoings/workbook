@@ -455,7 +455,7 @@ func TestRunPushReportsPartialRejectionAndNonzeroJSONError(t *testing.T) {
 	result := decodeSyncResult(t, stdout, "push")
 	assertCLISyncStatus(t, result, conflicting.ID, gitstore.SyncRejected)
 	assertCLISyncStatus(t, result, unrelated.ID, gitstore.SyncPublished)
-	assertJSONError(t, stderr, core.CategoryOperational, "1 task ref(s) were rejected by origin")
+	assertJSONError(t, stderr, core.CategoryOperational, "1 task ref(s) were rejected by origin: "+conflicting.ID+" [rejected] (fetch first)")
 }
 
 func TestRunHooksInstallIsIdempotentAndRefusesUnmanagedHook(t *testing.T) {
