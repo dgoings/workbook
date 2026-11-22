@@ -52,6 +52,9 @@ type setupTasksOnly struct {
 	// Unavailable lists the commands that refuse in a tasks-only folder
 	// because what they do needs the project's code.
 	Unavailable []string `json:"unavailable"`
+	// MovedFrom is the address this run repointed the folder from, because
+	// the project's tasks moved from there to Remote. It is absent otherwise.
+	MovedFrom string `json:"movedFrom,omitempty"`
 }
 
 // tasksOnlyUnavailableCommands are the commands a tasks-only folder refuses.
@@ -301,6 +304,7 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 			restored:    tasksOnly.Restored,
 			Actor:       actor,
 			Unavailable: append([]string(nil), tasksOnlyUnavailableCommands...),
+			MovedFrom:   tasksOnly.MovedFrom,
 		}
 	}
 	if origin, known := repository.IdentityOrigin(); known {
@@ -488,6 +492,8 @@ func validateTasksOnlyFlags(noSync bool, skillDir string, force bool) error {
 // folder, so a rerun that changed nothing reads that way.
 func tasksOnlyModeDescription(report setupTasksOnly) string {
 	switch {
+	case report.MovedFrom != "":
+		return "repointed from " + report.MovedFrom + ", which the tasks moved away from; edits saved here are published to the new place"
 	case report.Initialized:
 		return "created; branches and code are never fetched"
 	case len(report.Changed) > 0:

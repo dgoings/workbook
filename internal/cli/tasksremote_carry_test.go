@@ -258,9 +258,9 @@ func TestMoveTasksSetsAsideAConflictingStragglerOnce(t *testing.T) {
 
 // (b) A set-up teammate who reads the old place with fetch --remote and then
 // synchronizes, over and over, changes nothing at the new place: reading the
-// old place moves no task ref. Their sync says the old place holds an edit
-// the new place lacks and names the command that carries it, and that command
-// carries it once.
+// old place moves no task ref. Neither setup nor sync looks at the old place
+// for edits the new place lacks; move-tasks run again carries the edit, once,
+// and the teammate's next sync brings it.
 func TestTasksRemoteReadingTheOldPlaceNeverWritesTheNewOne(t *testing.T) {
 	t.Parallel()
 	project := codeProject(t, testrepo.FormatSHA1)
@@ -279,8 +279,8 @@ func TestTasksRemoteReadingTheOldPlaceNeverWritesTheNewOne(t *testing.T) {
 	teammate := cloneCode(t, project)
 	if code, stdout, stderr := run(t, teammate, "setup"); code != 0 {
 		t.Fatalf("teammate setup = (%d, %q, %q)", code, stdout, stderr)
-	} else if !strings.Contains(stdout, "workbook move-tasks") {
-		t.Fatalf("setup did not say the old place holds an edit the new place lacks:\n%s", stdout)
+	} else if strings.Contains(stdout, "workbook move-tasks") {
+		t.Fatalf("setup looked at the old place, which only move-tasks does:\n%s", stdout)
 	}
 	before := repositoryState(t, project.tasks)
 	localBefore := refsUnder(t, teammate, "refs/workbook/tasks/")
@@ -298,8 +298,8 @@ func TestTasksRemoteReadingTheOldPlaceNeverWritesTheNewOne(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("sync round %d = (%d, %q, %q)", round, code, stdout, stderr)
 		}
-		if !strings.Contains(stdout+stderr, "workbook move-tasks") || !strings.Contains(stdout+stderr, edited) {
-			t.Fatalf("sync round %d did not report the straggler on %s:\nstdout %s\nstderr %s", round, edited, stdout, stderr)
+		if strings.Contains(stdout+stderr, "workbook move-tasks") {
+			t.Fatalf("sync round %d looked at the old place, which only move-tasks does:\nstdout %s\nstderr %s", round, stdout, stderr)
 		}
 	}
 	if after := repositoryState(t, project.tasks); after != before {
@@ -311,8 +311,11 @@ func TestTasksRemoteReadingTheOldPlaceNeverWritesTheNewOne(t *testing.T) {
 	if moved.Stragglers == nil || moved.Stragglers.Operations != 1 {
 		t.Fatalf("move-tasks = %+v, want the one straggler carried", moved)
 	}
-	if code, stdout, stderr := run(t, teammate, "sync"); code != 0 || strings.Contains(stdout+stderr, "workbook move-tasks") {
-		t.Fatalf("sync after the carry = (%d, %q, %q), want no straggler notice", code, stdout, stderr)
+	if code, stdout, stderr := run(t, teammate, "sync"); code != 0 {
+		t.Fatalf("sync after the carry = (%d, %q, %q)", code, stdout, stderr)
+	}
+	if shown := cliShowTask(t, teammate, edited); shown.Title != "Retitled by a checkout on the old settings" {
+		t.Fatalf("teammate's task after the carry = %+v, want the straggler", shown)
 	}
 	requireFreshCloneValidates(t, project.tasks)
 }

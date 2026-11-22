@@ -791,3 +791,103 @@ func TestTasksRemoteTasksOnlyFolderOnTheOldPlaceIsSentToTheNewOne(t *testing.T) 
 		t.Fatalf("setup --tasks-only from the new place = (%d, %q, %q)", code, stdout, stderr)
 	}
 }
+
+// A board serving a tasks-only folder on the old place keeps saving after the
+// move, and the command its refusal prints repoints that same folder at the
+// new place: stop the board, run it, start the board again. Every edit the
+// folder saved after the move is then at the new place, each operation once,
+// and a fresh folder there validates. The command refuses an address the
+// marker does not name, and running it again changes nothing.
+func TestTasksRemoteTasksOnlyBoardOnTheOldPlaceIsRepointedWithWhatItSaved(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA1)
+	folder := t.TempDir()
+	if code, stdout, stderr := run(t, folder, "setup", "--tasks-only", project.code); code != 0 {
+		t.Fatalf("setup --tasks-only before the move = (%d, %q, %q)", code, stdout, stderr)
+	}
+	cliGit(t, folder, "config", "user.name", "Board Server")
+	cliGit(t, folder, "config", "user.email", "board@example.test")
+	address, _, stop := startServeCapturing(t, folder)
+	base := "http://" + address
+	project.moveTasks(t)
+	afterMove := repositoryState(t, project.code)
+	if body, status := boardRequest(t, http.MethodPut, base+"/api/sync", `{"mode":"inline"}`); status != http.StatusOK {
+		t.Fatalf("PUT /api/sync inline = %d; body = %s", status, body)
+	}
+	var saved []string
+	for _, title := range []string{"Saved on the old place after the move", "Also saved there after the move"} {
+		answer := boardSave(t, http.MethodPost, base+"/api/tasks", `{"title":"`+title+`"}`)
+		if len(answer.Warnings) != 1 || answer.Warnings[0].Code != core.WarningTasksMoved {
+			t.Fatalf("save warnings = %+v, want the moved warning", answer.Warnings)
+		}
+		saved = append(saved, answer.Task.ID)
+	}
+	stop()
+	if after := repositoryState(t, project.code); after != afterMove {
+		t.Fatalf("the board published to the marked old place:\nbefore %s\nafter  %s", afterMove, after)
+	}
+
+	code, _, stderr := run(t, folder, "fetch", "--json")
+	if code != 3 {
+		t.Fatalf("fetch in the old folder = %d, want 3; stderr = %q", code, stderr)
+	}
+	refusal := requireTasksRemoteRefusal(t, stderr, core.CategoryNotInitialized, core.TasksRemoteMoved)
+	want := "workbook setup --tasks-only " + project.tasks
+	if refusal.Command != want {
+		t.Fatalf("refusal command = %q, want %q", refusal.Command, want)
+	}
+	if !strings.Contains(stderr, "in this folder") {
+		t.Fatalf("refusal %q does not say to run it in this folder", stderr)
+	}
+
+	elsewhere := newBareRepository(t, testrepo.FormatSHA1)
+	if code, stdout, stderr := run(t, folder, "setup", "--tasks-only", elsewhere); code != 5 {
+		t.Fatalf("setup --tasks-only with an address the marker does not name = (%d, %q, %q), want 5", code, stdout, stderr)
+	}
+	if got := strings.TrimSpace(cliGitOutput(t, folder, "config", "remote.origin.url")); got != project.code {
+		t.Fatalf("origin after the refusal = %q, want it left at %q", got, project.code)
+	}
+
+	args := strings.Fields(strings.TrimPrefix(want, "workbook "))
+	code, stdout, stderr := run(t, folder, append(args, "--json")...)
+	if code != 0 {
+		t.Fatalf("%s = (%d, %q, %q)", want, code, stdout, stderr)
+	}
+	var setup struct {
+		TasksOnly struct {
+			Remote    string `json:"remote"`
+			MovedFrom string `json:"movedFrom"`
+		} `json:"tasksOnly"`
+	}
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "setup").Data, &setup); err != nil {
+		t.Fatal(err)
+	}
+	if setup.TasksOnly.Remote != project.tasks || setup.TasksOnly.MovedFrom != project.code {
+		t.Fatalf("setup tasksOnly = %+v, want repointed from %s to %s", setup.TasksOnly, project.code, project.tasks)
+	}
+	code, stdout, stderr = run(t, folder, args...)
+	if code != 0 || !strings.Contains(stdout, "already set up; nothing changed") {
+		t.Fatalf("%s again = (%d, %q, %q), want nothing changed", want, code, stdout, stderr)
+	}
+	// The board starts again from the repointed folder.
+	_, _, stop = startServeCapturing(t, folder)
+	stop()
+
+	fresh := t.TempDir()
+	if code, stdout, stderr := run(t, fresh, "setup", "--tasks-only", project.tasks); code != 0 {
+		t.Fatalf("setup --tasks-only from the new place = (%d, %q, %q)", code, stdout, stderr)
+	}
+	for _, id := range saved {
+		if cliGitOutputAllowingMissing(t, project.tasks, "refs/workbook/tasks/"+id) == "" {
+			t.Fatalf("the new place lacks %s, saved on the old place after the move", id)
+		}
+		if shown := cliShowTask(t, fresh, id); shown.ID != id {
+			t.Fatalf("fresh folder shows %+v for %s", shown, id)
+		}
+	}
+	requireEachOperationOnce(t, project.tasks)
+	requireFreshCloneValidates(t, project.tasks)
+	if after := repositoryState(t, project.code); after != afterMove {
+		t.Fatalf("repointing wrote to the old place:\nbefore %s\nafter  %s", afterMove, after)
+	}
+}

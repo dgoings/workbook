@@ -228,7 +228,8 @@ func (r *Repository) tasksMovedRefusalHere(ctx context.Context, moved TasksMoved
 				Command: "workbook setup --tasks-only " + moved.URL,
 			},
 			"this project's tasks moved from this folder's origin to %s, so nothing is read from or saved to origin any more; "+
-				"run workbook setup --tasks-only %s in a new, empty folder and serve the board from there",
+				"run workbook setup --tasks-only %s in this folder, which points it at the new place and publishes there "+
+				"every edit saved here that has not been published, then serve the board from here again",
 			moved.URL, moved.URL)
 	}
 	return tasksMovedRefusal(r.remote(), moved)

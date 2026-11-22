@@ -62,6 +62,10 @@ type TasksOnlyFolder struct {
 	// a different value, which is to say somebody changed them. The others
 	// were absent and this run set them for the first time.
 	Restored []string
+	// MovedFrom is the origin URL this run repointed the folder from, because
+	// the tasks moved from there to Remote (tasksOnlyMoveTarget). It is empty
+	// for every other run.
+	MovedFrom string
 }
 
 // PrepareTasksOnlyFolder makes dir a tasks-only folder whose origin is
@@ -158,6 +162,16 @@ func PrepareTasksOnlyFolder(ctx context.Context, dir, remoteURL, key string) (Ta
 			// and guessing wrong would point this folder's tasks at another
 			// project. The person who knows says so by changing the URL.
 			if current != "" && current != remoteURL {
+				moved, err := tasksOnlyMoveTarget(ctx, existing)
+				if err != nil {
+					return folder, err
+				}
+				if moved != nil && moved.URL == remoteURL {
+					folder.MovedFrom = current
+					current = remoteURL
+				}
+			}
+			if current != "" && current != remoteURL {
 				return folder, core.Errorf(core.CategoryValidation,
 					"%s is a tasks-only folder for %s, not %s; if %s is the same repository under another spelling, or the repository has moved, run git config remote.origin.url %s in this folder and run this again; otherwise set up %s in another empty folder",
 					existing, current, remoteURL, remoteURL, remoteURL, remoteURL)
@@ -235,6 +249,32 @@ func PrepareTasksOnlyFolder(ctx context.Context, dir, remoteURL, key string) (Ta
 		}
 	}
 	return folder, nil
+}
+
+// tasksOnlyMoveTarget reads, in a tasks-only folder, the tasks-moved marker on
+// its origin's identity ref: asked of origin when it answers, and otherwise
+// as the folder last read it. It returns nil when origin is not marked.
+//
+// It is what lets setup repoint a folder on the place the tasks moved away
+// from at the place they moved to, and only there: the marker names the new
+// place, so a folder is never pointed by this at a repository nobody chose.
+// Repointing changes the one setting remote.origin.url. The folder's own task
+// refs, which hold every edit it saved, are not touched, and the
+// synchronization setup runs next publishes those the new place lacks.
+func tasksOnlyMoveTarget(ctx context.Context, root string) (*TasksMoved, error) {
+	repository, err := Open(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	const origin = core.DefaultTasksRemote
+	// A failed fetch leaves what the folder last read, which is as good an
+	// answer as there is with origin out of reach.
+	_, _ = repository.Git(ctx, nil, "fetch", "--no-tags", "--no-auto-maintenance", origin, identityFetchRefspecFor(origin))
+	record, found, err := repository.readIdentityRef(ctx, remoteIdentityRefFor(origin))
+	if err != nil || !found {
+		return nil, err
+	}
+	return record.Moved, nil
 }
 
 // RestoreTasksOnlySettings puts back any tasks-only setting somebody changed

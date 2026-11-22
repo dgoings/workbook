@@ -203,7 +203,7 @@ func (r *Repository) strandedRefusal(ctx context.Context, remote string, moved T
 	next := "pull the commit that sets tasks-remote in " + configPath + " and run workbook setup, which publishes it there"
 	if tasksOnly, err := r.TasksOnly(ctx); err == nil && tasksOnly {
 		command = "workbook setup --tasks-only " + moved.URL
-		next = "set up a new folder with " + command + " and serve the board from there"
+		next = "run " + command + " in this folder, which points it at the new place and publishes it there"
 	}
 	return core.TasksRemoteError(core.CategoryNotInitialized,
 		core.TasksRemoteRefusal{

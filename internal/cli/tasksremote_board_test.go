@@ -119,6 +119,15 @@ func TestTasksRemoteHostedBoardAcrossAMoveSaysSoWithoutServerDetail(t *testing.T
 	board := startHostedServe(t, folder, nil, "--public-url", proxyOrigin, "--actor-header", proxyHeader)
 	project.moveTasks(t)
 	afterMove := repositoryState(t, project.code)
+	// The board's background synchronization brings the marker within one
+	// interval, and says so in the server's log.
+	deadline := time.Now().Add(30 * time.Second)
+	for !strings.Contains(board.stderr.String(), "tasks moved from this folder's origin to "+project.tasks) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the board's synchronization never reported the move; it wrote:\n%s", board.stderr.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	body, status, _ := board.do(t, proxied{method: http.MethodPost, path: "/api/tasks", body: `{"title":"Saved after the move"}`, person: "sam@example.com"})
 	saved := decodeBoardMutationWarnings(t, body, status)

@@ -124,9 +124,12 @@ func TestTasksRemoteEditPublishedAroundTheMarkIsReportedAndCarried(t *testing.T)
 	requireFreshCloneValidates(t, project.tasks)
 }
 
-// A create in a checkout on the old settings whose watcher last synchronized
-// before the move is refused by the command itself, not only in the
-// watcher's log: handing the change to that watcher would have exited 0.
+// A create in a checkout on the old settings with a watcher running is
+// refused by the command itself, not only in the watcher's log, once the
+// watcher's round after the move has brought the marker into this checkout's
+// copy of origin's identity ref: within one interval, and without the command
+// asking origin anything. Handing the change to that watcher would have
+// exited 0.
 func TestTasksRemoteStaleCreateHandedToAWatcherIsRefusedByTheCommand(t *testing.T) {
 	t.Parallel()
 	project := codeProject(t, testrepo.FormatSHA1)
@@ -138,7 +141,7 @@ func TestTasksRemoteStaleCreateHandedToAWatcherIsRefusedByTheCommand(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	finished := make(chan int, 1)
 	go func() {
-		finished <- Run(ctx, []string{"sync", "--watch", "--interval", "1h"}, stale, nil, output, output)
+		finished <- Run(ctx, []string{"sync", "--watch", "--interval", "1s"}, stale, nil, output, output)
 	}()
 	defer func() {
 		cancel()
@@ -152,6 +155,16 @@ func TestTasksRemoteStaleCreateHandedToAWatcherIsRefusedByTheCommand(t *testing.
 
 	project.moveTasks(t)
 	afterMove := repositoryState(t, project.code)
+	deadline := time.Now().Add(30 * time.Second)
+	for !strings.Contains(output.String(), "tasks moved from origin to "+project.tasks) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the watcher never reported the move; it wrote:\n%s", output.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if count := strings.Count(output.String(), "tasks moved from origin to "+project.tasks); count != 1 {
+		t.Fatalf("the watcher logged the move %d times, want once:\n%s", count, output.String())
+	}
 	localBefore := refsUnder(t, stale, "refs/workbook/tasks/")
 	code, stdout, stderr := run(t, stale, "create", "Handed to a watcher that predates the move", "--json")
 	if code != 3 {
