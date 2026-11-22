@@ -493,19 +493,37 @@ func (s *Store) Resolve(ctx context.Context, config core.ProjectConfig, prefix s
 // `workbook rebuild` on a write that had succeeded, whenever two writes to
 // one task landed close together.
 func (s *Store) Advance(ctx context.Context, config core.ProjectConfig, expectedParent string, snapshot core.Snapshot) (bool, error) {
+	outcome, err := s.advance(ctx, config, expectedParent, snapshot)
+	return outcome != advanceRefused, err
+}
+
+// Land is Advance for a caller that needs the row on snapshot itself, not
+// only not stale on its own account. It moves the row exactly as Advance does
+// and leaves a row another update moved as that update wrote it, but it
+// reports true only when the row names snapshot afterwards.
+//
+// Compaction is that caller. A row left on any other head is behind a
+// checkpoint whose replaced history Git is about to prune, and once it does,
+// no refresh can prove that row's move to the checkpoint is a compaction.
+func (s *Store) Land(ctx context.Context, config core.ProjectConfig, expectedParent string, snapshot core.Snapshot) (bool, error) {
+	outcome, err := s.advance(ctx, config, expectedParent, snapshot)
+	return outcome == advanceApplied, err
+}
+
+func (s *Store) advance(ctx context.Context, config core.ProjectConfig, expectedParent string, snapshot core.Snapshot) (advanceOutcome, error) {
 	if err := s.validateConfig(config); err != nil {
-		return false, err
+		return advanceRefused, err
 	}
-	var advanced bool
+	outcome := advanceRefused
 	err := s.withActiveDatabase(ctx, func(ctx context.Context) error {
-		outcome, err := s.advanceActive(ctx, expectedParent, snapshot, nil, false)
-		if err != nil {
-			return err
-		}
-		advanced = outcome != advanceRefused
-		return nil
+		var err error
+		outcome, err = s.advanceActive(ctx, expectedParent, snapshot, nil, false)
+		return err
 	})
-	return advanced, err
+	if err != nil {
+		return advanceRefused, err
+	}
+	return outcome, nil
 }
 
 // Invalidate removes one projected task only when it still names an expected head.
