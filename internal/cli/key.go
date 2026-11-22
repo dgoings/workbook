@@ -553,6 +553,9 @@ func runKeyMutation(
 		return keyWriteError(err)
 	}
 	session.publishConfig(ctx)
+	if err := session.publicationRefusal(); err != nil {
+		return err
+	}
 
 	after := written.KeySet(session.config.Key)
 	result := keyMutationResult{

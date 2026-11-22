@@ -57,6 +57,12 @@ const (
 	// could not be combined with it, after saving that history to a bundle
 	// unless told not to.
 	SyncDiscardedLocal SyncStatus = "discarded-local"
+	// SyncTracked reports a task read from a remote named with --remote that
+	// is not the project's tasks remote. Its tip went into that remote's
+	// tracking ref and nowhere else: this checkout's own task ref is exactly
+	// where it was, because only `workbook move-tasks` carries tasks from one
+	// remote to another (see fetchTracking).
+	SyncTracked SyncStatus = "tracked"
 )
 
 // LeavesPreviousHistory reports an outcome that moved the canonical ref onto a
@@ -138,6 +144,9 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	if err := r.validateRepositoryConfig(config); err != nil {
 		return failedSyncPhase(result, "push failed before completion", err)
 	}
+	if r.readOnlyRemote() {
+		return failedSyncPhase(result, "push refused", readOnlyRemotePublication(r.remote(), r.configuredRemote()))
+	}
 	refs, err := r.listTaskRefs(ctx)
 	if err != nil {
 		return failedSyncPhase(result, "push failed before completion", err)
@@ -185,7 +194,7 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}
-	if err := r.ensureOriginIdentityAgreement(ctx, map[string]string{identityRef: remoteIdentityHead}); err != nil {
+	if err := r.ensureOriginIdentityAgreement(ctx, map[string]string{identityRef: remoteIdentityHead}, false); err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push stopped before publishing any task ref", err)
 	}
 	result.Identity, _ = r.IdentityReport()
@@ -238,14 +247,17 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		}
 		candidates = append(candidates, candidate)
 	}
+	var stranded error
 	if len(candidates) != 0 {
-		pushed, err := r.pushTaskHeads(ctx, candidates)
+		pushed, err := r.pushTaskHeads(ctx, config, candidates)
 		if err != nil {
 			return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 		}
-		for taskID, item := range pushed {
+		for taskID, item := range pushed.Tasks {
 			items[taskID] = item
 		}
+		invalid += pushed.Duplicated
+		stranded = pushed.Stranded
 	}
 
 	finalRefs, err := r.listTaskRefs(ctx)
@@ -271,6 +283,9 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		result.Tasks = append(result.Tasks, items[ref.taskID])
 	}
 	result.Status = SyncPhaseCompleted
+	if stranded != nil {
+		return result, stranded
+	}
 	if invalid > 0 {
 		return result, core.Errorf(core.CategoryCorruptData, "%d local task ref(s) failed validation", invalid)
 	}
@@ -327,7 +342,24 @@ func failedPushTransport(
 //
 // Only the named tip is validated, so an unrelated malformed ref cannot block
 // an unrelated mutation. The full validation sweep remains in Push.
+//
+// Before the push it asks the remote which project its identity ref names,
+// which costs one listing of one ref; PushTaskAfterFetch is the one caller
+// allowed to skip that. After the push it lists that ref again (see
+// strandedPublication).
 func (r *Repository) PushTask(ctx context.Context, config core.ProjectConfig, taskID string) (SyncTaskResult, error) {
+	return r.pushTask(ctx, config, taskID, false)
+}
+
+// PushTaskAfterFetch is PushTask for a short-lived command that fetched from
+// the tasks remote on this handle moments before, as the CLI's mutation path
+// does: that fetch compared the identity refs, so the push asks nothing first.
+// A long-lived process never calls it.
+func (r *Repository) PushTaskAfterFetch(ctx context.Context, config core.ProjectConfig, taskID string) (SyncTaskResult, error) {
+	return r.pushTask(ctx, config, taskID, true)
+}
+
+func (r *Repository) pushTask(ctx context.Context, config core.ProjectConfig, taskID string, afterFetch bool) (SyncTaskResult, error) {
 	result := SyncTaskResult{TaskID: taskID}
 	if err := r.verifyIdentity(ctx); err != nil {
 		return result, err
@@ -359,7 +391,7 @@ func (r *Repository) PushTask(ctx context.Context, config core.ProjectConfig, ta
 	// another project would write into a history it does not belong to, so the
 	// identity is settled first — for free on the mutation path, where the
 	// fetch this command already ran compared the two refs.
-	if err := r.ensureOriginIdentityAgreement(ctx, nil); err != nil {
+	if err := r.ensureOriginIdentityAgreement(ctx, nil, afterFetch); err != nil {
 		return result, err
 	}
 	// The vocabulary this task's status is written against goes out with it.
@@ -390,15 +422,21 @@ func (r *Repository) PushTask(ctx context.Context, config core.ProjectConfig, ta
 			candidate.Lease = &lease
 		}
 	}
-	published, err := r.pushTaskHeads(ctx, []pushCandidate{candidate})
+	published, err := r.pushTaskHeads(ctx, config, []pushCandidate{candidate})
 	if err != nil {
 		return result, err
 	}
-	result = published[taskID]
+	result = published.Tasks[taskID]
+	if published.Stranded != nil {
+		return result, published.Stranded
+	}
+	if published.Duplicated > 0 {
+		return result, core.Errorf(core.CategoryCorruptData, "local task ref %s was not published: %s", taskID, result.Detail)
+	}
 	if result.Status == SyncRejected && candidate.Lease != nil {
 		// A refused lease is not replayed by the next fetch the way an
 		// ordinary rejection is; its detail says what happens instead.
-		return result, core.Errorf(core.CategoryOperational, "task ref %s was rejected by origin: %s", taskID, result.Detail)
+		return result, core.Errorf(core.CategoryOperational, "task ref %s was rejected by %s: %s", taskID, r.remote(), result.Detail)
 	}
 	if result.Status == SyncRejected {
 		compacted, err := r.compactedOnOriginOnly(ctx, config, taskID, tips[0].Snapshot)
@@ -410,15 +448,15 @@ func (r *Repository) PushTask(ctx context.Context, config core.ProjectConfig, ta
 			// old history, and every later fetch does the same, so the
 			// sentence below would be untrue.
 			return result, core.Errorf(core.CategoryOperational,
-				"task ref %s was rejected by origin: the task was compacted on origin and is kept on the "+
-					"old history here; run \"workbook compact --adopt %s\"", taskID, taskID)
+				"task ref %s was rejected by %s: the task was compacted on %s and is kept on the "+
+					"old history here; run \"workbook compact --adopt %s\"", taskID, r.remote(), r.remote(), taskID)
 		}
 		// A rejection means origin moved between this command's fetch and its
 		// push. The change is already durable locally and the next fetch
 		// replays it onto the new tip, so this is an ordinary operational
 		// outcome rather than something the caller must act on.
 		return result, core.Errorf(core.CategoryOperational,
-			"task ref %s was rejected by origin; the next fetch replays it onto origin's tip", taskID)
+			"task ref %s was rejected by %s; the next fetch replays it onto %s's tip", taskID, r.remote(), r.remote())
 	}
 	return result, nil
 }
@@ -482,6 +520,10 @@ func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncR
 		result.Push = r.skippedSyncPhase("push skipped because fetch failed")
 		return result, fetchErr
 	}
+	if r.readOnlyRemote() {
+		result.Push = r.skippedSyncPhase(readOnlyRemoteDetail(r.remote()))
+		return result, fetchErr
+	}
 
 	pushed, pushErr := r.publishFetched(ctx, config, state)
 	result.Push = pushed
@@ -536,6 +578,11 @@ func (r *Repository) fetch(
 	}
 	if err := r.validateRepositoryConfig(config); err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
+		return state, result, err
+	}
+	if r.readOnlyRemote() {
+		result, err := r.fetchTracking(ctx, config)
+		state.Identity = result.Identity
 		return state, result, err
 	}
 
@@ -1038,14 +1085,17 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 		}
 		candidates = append(candidates, candidate)
 	}
+	var stranded error
+	duplicated := 0
 	if len(candidates) != 0 {
-		pushed, err := r.pushTaskHeads(ctx, candidates)
+		pushed, err := r.pushTaskHeads(ctx, config, candidates)
 		if err != nil {
 			return failedSyncPhase(result, "push failed before completion", err)
 		}
-		for taskID, item := range pushed {
+		for taskID, item := range pushed.Tasks {
 			items[taskID] = item
 		}
+		stranded, duplicated = pushed.Stranded, pushed.Duplicated
 	}
 
 	finalRefs, _, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
@@ -1071,6 +1121,13 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 		result.Tasks = append(result.Tasks, items[taskID])
 	}
 	result.Status = SyncPhaseCompleted
+	if stranded != nil {
+		return result, stranded
+	}
+	if duplicated > 0 {
+		return result, core.Errorf(core.CategoryCorruptData,
+			"%d local task ref(s) record an operation twice and were not published", duplicated)
+	}
 	if len(rejected) > 0 {
 		return result, r.rejectedByRemote(rejected)
 	}
@@ -1080,7 +1137,7 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 	return result, nil
 }
 
-// rejectedByOrigin is the error for a push origin refused some task refs of.
+// rejectedByRemote is the error for a push origin refused some task refs of.
 // It names the first few with Git's own reason for each, as push --porcelain
 // reports it — "[rejected] (fetch first)" when somebody else published first,
 // "[remote rejected] (hook declined)" when a server hook refused it — so the
@@ -1099,7 +1156,7 @@ func (r *Repository) rejectedByRemote(rejected []SyncTaskResult) error {
 		}
 		reasons = append(reasons, reason)
 	}
-	message := fmt.Sprintf("%d task ref(s) were rejected by origin: %s", len(rejected), strings.Join(reasons, "; "))
+	message := fmt.Sprintf("%d task ref(s) were rejected by %s: %s", len(rejected), r.remote(), strings.Join(reasons, "; "))
 	if more := len(rejected) - len(reasons); more > 0 {
 		message += fmt.Sprintf("; and %d more", more)
 	}

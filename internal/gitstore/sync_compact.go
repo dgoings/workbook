@@ -171,48 +171,6 @@ type pushCandidate struct {
 	Lease  *leasedPush
 }
 
-// pushTaskHeads publishes candidates in one non-atomic push and returns one
-// outcome per task. Every refspec is plain. A leased ref is also named in
-// --force-with-lease=<ref>:<expected>, which is what lets Git move it backward,
-// and only while origin still holds expected.
-//
-// The refspec must not carry `+`. A forcing refspec overrides the lease: Git
-// (2.54 checked) then updates the ref whatever origin holds, which is exactly
-// the unconditional force-push this path exists to avoid.
-//
-// After origin accepts a leased ref, its tracking ref is moved to the
-// checkpoint. No other push path touches tracking refs, but a stale one here
-// would keep the compacted history reachable in this clone. A failure to move
-// it is left for the next fetch, which overwrites tracking refs anyway.
-func (r *Repository) pushTaskHeads(ctx context.Context, candidates []pushCandidate) (map[string]SyncTaskResult, error) {
-	expected := make(map[string]string, len(candidates))
-	forced := make(map[string]bool)
-	args := []string{"push", "--porcelain"}
-	for _, candidate := range candidates {
-		refName := taskRefPrefix + candidate.TaskID
-		expected[refName] = candidate.TaskID
-		if candidate.Lease != nil {
-			forced[refName] = true
-			args = append(args, "--force-with-lease="+refName+":"+candidate.Lease.ExpectedRemote)
-		}
-	}
-	args = append(args, r.remote())
-	for _, candidate := range candidates {
-		args = append(args, candidate.Head+":"+taskRefPrefix+candidate.TaskID)
-	}
-	push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil, args...)
-	pushed, err := parsePushPorcelain(push.stdout, expected, forced, gitCommandResultError(push))
-	if err != nil {
-		return nil, err
-	}
-	for _, candidate := range candidates {
-		if candidate.Lease != nil && pushed[candidate.TaskID].Status == SyncCompactionPublished {
-			_ = r.advanceTrackingRef(ctx, candidate.TaskID, candidate.Lease.ExpectedRemote, candidate.Lease.Local)
-		}
-	}
-	return pushed, nil
-}
-
 // advanceTrackingRef compare-and-swaps a task's tracking ref from expected, the
 // tip the lease was taken against, to next. A tracking ref that does not exist
 // is created. One holding anything else was moved by a fetch that ran beside
@@ -324,7 +282,7 @@ func (r *Repository) PushTasks(ctx context.Context, config core.ProjectConfig, t
 
 	// The same two settlements PushTask makes before writing a task ref: the
 	// project origin holds, and the vocabulary these tasks are written against.
-	if err := r.ensureOriginIdentityAgreement(ctx, nil); err != nil {
+	if err := r.ensureOriginIdentityAgreement(ctx, nil, false); err != nil {
 		return failedPushTasks(result, ordered, items, "push stopped before publishing any task ref", err)
 	}
 	result.Identity, _ = r.IdentityReport()
@@ -358,14 +316,17 @@ func (r *Repository) PushTasks(ctx context.Context, config core.ProjectConfig, t
 		}
 		candidates = append(candidates, candidate)
 	}
+	var stranded error
 	if len(candidates) != 0 {
-		pushed, err := r.pushTaskHeads(ctx, candidates)
+		pushed, err := r.pushTaskHeads(ctx, config, candidates)
 		if err != nil {
 			return failedPushTasks(result, ordered, items, "push failed before completion", err)
 		}
-		for taskID, item := range pushed {
+		for taskID, item := range pushed.Tasks {
 			items[taskID] = item
 		}
+		invalid += pushed.Duplicated
+		stranded = pushed.Stranded
 	}
 
 	var rejected []SyncTaskResult
@@ -376,6 +337,9 @@ func (r *Repository) PushTasks(ctx context.Context, config core.ProjectConfig, t
 		result.Tasks = append(result.Tasks, items[taskID])
 	}
 	result.Status = SyncPhaseCompleted
+	if stranded != nil {
+		return result, stranded
+	}
 	if invalid > 0 {
 		return result, core.Errorf(core.CategoryCorruptData, "%d local task ref(s) failed validation", invalid)
 	}
@@ -608,7 +572,7 @@ func (r *Repository) adoptRemoteCheckpoint(
 		return needsUpgrade(refusal)
 	}
 	replay, failure, err := r.replayOperations(ctx, config, request.TaskID, request.Remote, localOnly, false,
-		request.Remote.Operation.HistoryGeneration, dependencies)
+		request.Remote.Operation.HistoryGeneration, dependencies, nil)
 	if err != nil {
 		return outcome, err
 	}
@@ -672,7 +636,7 @@ func (r *Repository) replayOntoLocalCheckpoint(
 	}
 
 	replay, failure, err := r.replayOperations(ctx, config, request.TaskID, request.Local, remoteOnly, true,
-		request.Local.Operation.HistoryGeneration, dependencies)
+		request.Local.Operation.HistoryGeneration, dependencies, nil)
 	if err != nil {
 		return outcome, err
 	}
@@ -822,6 +786,7 @@ func (r *Repository) replayOperations(
 	originWins bool,
 	generation string,
 	dependencies map[string][]string,
+	held operationAccount,
 ) (replay taskReplay, failure error, err error) {
 	if commits[0].Parent == "" {
 		return replay, core.Errorf(core.CategoryCorruptData,
@@ -855,6 +820,7 @@ func (r *Repository) replayOperations(
 		subjects:     subjects,
 		generation:   generation,
 		originWins:   originWins,
+		held:         held,
 	}
 	for _, tip := range tips[1:] {
 		done, err := replay.next(ctx, r, tip.Snapshot)

@@ -351,6 +351,9 @@ func runPriorityMutation(
 		return priorityWriteError(err)
 	}
 	session.publishConfig(ctx)
+	if err := session.publicationRefusal(); err != nil {
+		return err
+	}
 
 	after := written.PriorityVocabulary()
 	result := priorityMutationResult{

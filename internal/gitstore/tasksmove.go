@@ -3,6 +3,8 @@ package gitstore
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -24,16 +26,58 @@ type MoveTasksResult struct {
 	Marked string `json:"marked"`
 	// Tasks is the number of task refs the old place holds.
 	Tasks int `json:"tasks"`
-	// Identical counts those the new place holds at exactly the same commit,
-	// and Ahead those it holds at a descendant: edits made at the new place
-	// after they were copied. Every task ref is one or the other, or the run
-	// fails.
+	// Identical counts those the new place holds at exactly the same commit.
+	// Carried counts the rest: the new place holds every one of their
+	// operations, under other commits, because it was edited there after the
+	// copy or because an edit published to the old place was carried onto
+	// its history. Every task ref is one or the other, or the run fails.
 	Identical int `json:"identical"`
-	Ahead     int `json:"ahead"`
+	Carried   int `json:"carried"`
+	// Stragglers reports the operations this run found at the old place that
+	// the new place lacked and carried across, and who made them. It is
+	// absent when there were none.
+	Stragglers *MoveStragglers `json:"stragglers,omitempty"`
+	// SetAside names the tasks whose operations from the old place could not
+	// be applied onto the new place's history because they conflict with it.
+	// They are parked in this checkout for a person to look at and are not
+	// tried again by a later run here.
+	SetAside []MoveSetAside `json:"setAside,omitempty"`
+	// Config says what became of the old place's configuration ledger:
+	// "unchanged" when this checkout already held it, "carried" when this run
+	// took it, and "not-carried" when it holds a change this checkout's own
+	// ledger has diverged from, which a move does not combine.
+	Config string `json:"config"`
 	// Copy and Recopy are the two synchronizations with the new place, before
 	// and after the old place was marked.
 	Copy   SyncRunResult `json:"copy"`
 	Recopy SyncRunResult `json:"recopy"`
+	// Verified is set once the new place has been shown to hold every
+	// operation the old place does, or to have it set aside here.
+	Verified bool `json:"verified"`
+}
+
+// MoveStragglers is what one run carried by operation identity.
+type MoveStragglers struct {
+	Operations int      `json:"operations"`
+	Tasks      []string `json:"tasks"`
+	Actors     []string `json:"actors"`
+}
+
+// MoveSetAside is one task whose operations from the old place were set aside.
+type MoveSetAside struct {
+	TaskID     string   `json:"taskId"`
+	Operations []string `json:"operations"`
+	// ParkedRef holds the old place's history for the task, when this run
+	// parked it. A task set aside by an earlier run has none here.
+	ParkedRef string `json:"parkedRef,omitempty"`
+}
+
+// MoveTasksOptions are the choices a person makes for one move.
+type MoveTasksOptions struct {
+	// From names the remote the tasks are in now; origin when empty.
+	From string
+	// AllowBranches accepts a destination that holds branches.
+	AllowBranches bool
 }
 
 // switchRemote points this handle at name for the next synchronization and
@@ -48,26 +92,36 @@ func (r *Repository) switchRemote(name string) {
 	r.identityReport = nil
 }
 
-// MoveTasks copies this project's tasks from the remote named from (origin
-// when empty) to the tasks remote its settings name, marks the old place so
-// every checkout that has not picked up the settings is refused there with a
-// message saying where the tasks went, and proves that the new place holds
-// every task ref the old place does.
+// MoveTasks copies this project's tasks from the remote options.From names
+// (origin when empty) to the tasks remote its settings name, marks the old
+// place so a checkout that has not picked up the settings is refused there,
+// and proves that the new place holds every operation the old place does.
 //
 // Every step is safe to repeat, so an interrupted run is finished by running
-// it again:
+// it again, and so is a run made at any later time:
 //
-//  1. read the old place, folding its tasks into this checkout's;
-//  2. synchronize with the new place, which publishes them there;
+//  1. read the old place into its tracking refs, and nothing else;
+//  2. synchronize with the new place, carry onto this checkout's tasks every
+//     operation the old place holds that they lack, and synchronize again,
+//     which publishes them there;
 //  3. mark the old place: one fast-forward of its refs/workbook/project;
-//  4. read the old place again, for edits published there before the mark;
-//  5. synchronize with the new place again, publishing those;
-//  6. compare every task ref of the two places.
+//  4. and 5. read the old place again and carry what was published there
+//     before the mark, or since;
+//  6. compare, task by task, the operation IDs the two places hold.
 //
-// Until step 3 the old place is unmarked, and a checkout still on the old
-// settings goes on publishing there; step 4 is what carries those edits
-// across. After it, such a checkout is refused before it records anything.
-func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, from string) (MoveTasksResult, error) {
+// Carrying is by operation identity. A task whose every operation this
+// checkout holds is carried, whatever its commits; one the old place holds at
+// a descendant of this checkout's tip is fast-forwarded, so its commits are
+// the old place's own; and an operation this checkout lacks is applied once
+// onto its history by the ordinary replay. A conflict stops that task's
+// replay, parks the old place's history beside it, and is reported; a later
+// run finds it parked and does not try it again.
+//
+// The mark cannot be made atomic with the edits that other checkouts publish:
+// Git has no compare-and-swap across two refs. A checkout still on the old
+// settings that publishes in the moment around the mark is told so by its own
+// command (strandedPublication), and running this again carries the edit.
+func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, options MoveTasksOptions) (MoveTasksResult, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return MoveTasksResult{}, err
 	}
@@ -81,6 +135,7 @@ func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, f
 				"run workbook config set tasks-remote <name> --url <address> first")
 	}
 	to := tracked.TasksRemote
+	from := options.From
 	if from == "" {
 		from = core.DefaultTasksRemote
 	}
@@ -107,29 +162,33 @@ func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, f
 	defer r.switchRemote("")
 
 	// Both places are asked before anything is written, so a run without
-	// access to one of them stops having changed nothing.
+	// access to one of them, or pointed at the wrong repository, stops having
+	// changed nothing.
 	r.switchRemote(to.Name)
 	if _, err := r.ProbeTasksRemote(ctx); err != nil {
-		return result, err
+		return result, r.forgetAddedRemote(ctx, setup, err)
 	}
 	r.switchRemote(from)
 	if _, err := r.ProbeTasksRemote(ctx); err != nil {
-		return result, err
+		return result, r.forgetAddedRemote(ctx, setup, err)
+	}
+	if err := r.refuseUnfitDestination(ctx, from, to.Name, options.AllowBranches); err != nil {
+		return result, r.forgetAddedRemote(ctx, setup, err)
 	}
 
+	carried := newMoveCarry()
 	if err := r.moveStep("read"); err != nil {
 		return result, err
 	}
-	if err := r.moveReadSource(ctx, config); err != nil {
+	if err := r.moveReadSource(ctx, config, from); err != nil {
 		return result, err
 	}
 	if err := r.moveStep("copy"); err != nil {
 		return result, err
 	}
-	r.switchRemote(to.Name)
-	result.Copy, err = r.Sync(ctx, config)
-	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
-		return result, wrapKeepingCategory("cannot copy the tasks to "+to.Name, err)
+	result.Copy, err = r.moveCopy(ctx, config, from, to.Name, carried, &result)
+	if err != nil {
+		return result, err
 	}
 
 	if err := r.moveStep("mark"); err != nil {
@@ -145,36 +204,516 @@ func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, f
 	if err := r.moveStep("reread"); err != nil {
 		return result, err
 	}
-	if err := r.moveReadSource(ctx, config); err != nil {
+	if err := r.moveReadSource(ctx, config, from); err != nil {
 		return result, err
 	}
 	if err := r.moveStep("recopy"); err != nil {
 		return result, err
 	}
-	r.switchRemote(to.Name)
-	result.Recopy, err = r.Sync(ctx, config)
-	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
-		return result, wrapKeepingCategory("cannot copy the tasks to "+to.Name, err)
+	result.Recopy, err = r.moveCopy(ctx, config, from, to.Name, carried, &result)
+	if err != nil {
+		return result, err
 	}
 
 	if err := r.moveStep("verify"); err != nil {
 		return result, err
 	}
-	if err := r.verifyMovedTasks(ctx, from, to.Name, &result); err != nil {
+	if err := r.verifyMovedTasks(ctx, config, from, to.Name, &result); err != nil {
 		return result, err
+	}
+	result.Verified = true
+	result.Stragglers = carried.report()
+	if len(carried.conflicts) > 0 {
+		names := make([]string, 0, len(carried.conflicts))
+		for _, conflict := range carried.conflicts {
+			names = append(names, fmt.Sprintf("%s (%s)", conflict.TaskID, core.ConflictDetail(conflict)))
+		}
+		return result, core.Errorf(core.CategoryConflict,
+			"the move is finished, but %s held operations for %d task(s) that conflict with their history at %s, "+
+				"so they were set aside rather than applied: %s; a later run does not try them again",
+			from, len(names), to.Name, strings.Join(names, "; "))
 	}
 	return result, nil
 }
 
-// moveReadSource reads the old place into this checkout. Once the old place
-// is marked the identity stage reports it as moved and reads it all the same,
-// because --from named it rather than the settings.
-func (r *Repository) moveReadSource(ctx context.Context, config core.ProjectConfig) error {
+// forgetAddedRemote removes the tasks remote again when this run added it and
+// then refused, so a refusal leaves the checkout as it found it.
+func (r *Repository) forgetAddedRemote(ctx context.Context, setup *TasksRemoteSetup, refusal error) error {
+	if setup != nil && setup.Status == "added" {
+		_, _ = r.Git(ctx, nil, "remote", "remove", setup.Name)
+		r.forgetTasksRemote()
+	}
+	return refusal
+}
+
+// moveReadSource reads the old place into its tracking refs. Nothing local
+// moves: the old place is not the project's tasks remote, so the fetch is a
+// read-only one (fetchTracking), and carrying is moveCopy's.
+func (r *Repository) moveReadSource(ctx context.Context, config core.ProjectConfig, from string) error {
+	r.switchRemote(from)
 	_, err := r.Fetch(ctx, config)
-	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
-		return wrapKeepingCategory("cannot read the tasks from "+r.remote(), err)
+	if err != nil {
+		return wrapKeepingCategory("cannot read the tasks from "+from, err)
 	}
 	return nil
+}
+
+// moveCopy synchronizes with the new place, carries what the old place holds
+// and this checkout lacks, and synchronizes again when that changed anything.
+// Synchronizing first is what makes the carry safe to repeat: this checkout
+// then holds everything the new place does, so an operation an earlier run or
+// another checkout already carried there is found held and not carried again.
+func (r *Repository) moveCopy(
+	ctx context.Context,
+	config core.ProjectConfig,
+	from, to string,
+	carried *moveCarry,
+	result *MoveTasksResult,
+) (SyncRunResult, error) {
+	r.switchRemote(to)
+	run, err := r.Sync(ctx, config)
+	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
+		return run, wrapKeepingCategory("cannot copy the tasks to "+to, err)
+	}
+	changed, err := r.carryFromTracking(ctx, config, from, carried, result)
+	if err != nil {
+		return run, err
+	}
+	if !changed {
+		return run, nil
+	}
+	r.switchRemote(to)
+	run, err = r.Sync(ctx, config)
+	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
+		return run, wrapKeepingCategory("cannot copy the tasks to "+to, err)
+	}
+	return run, nil
+}
+
+// moveCarry accumulates what a run carried by operation identity.
+type moveCarry struct {
+	operations int
+	tasks      map[string]struct{}
+	actors     map[string]struct{}
+	conflicts  []core.Conflict
+}
+
+func newMoveCarry() *moveCarry {
+	return &moveCarry{tasks: map[string]struct{}{}, actors: map[string]struct{}{}}
+}
+
+func (carry *moveCarry) report() *MoveStragglers {
+	if carry.operations == 0 {
+		return nil
+	}
+	report := &MoveStragglers{Operations: carry.operations}
+	for taskID := range carry.tasks {
+		report.Tasks = append(report.Tasks, taskID)
+	}
+	for actor := range carry.actors {
+		report.Actors = append(report.Actors, actor)
+	}
+	sort.Strings(report.Tasks)
+	sort.Strings(report.Actors)
+	return report
+}
+
+// carryFromTracking brings into this checkout's task refs what the old
+// place's tracking refs hold and they lack, in one compare-and-swap
+// transaction, and reports whether it moved anything. See MoveTasks for the
+// rule; the configuration ledger is carried only by fast-forward (carryConfig).
+func (r *Repository) carryFromTracking(
+	ctx context.Context,
+	config core.ProjectConfig,
+	from string,
+	carried *moveCarry,
+	result *MoveTasksResult,
+) (bool, error) {
+	configChanged, err := r.carryConfig(ctx, config, from, result)
+	if err != nil {
+		return false, err
+	}
+	trackingRefs, _, err := r.listOwnedTaskRefs(ctx, config, remoteTaskRefPrefixFor(from))
+	if err != nil {
+		return false, err
+	}
+	canonicalRefs, _, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
+	if err != nil {
+		return false, err
+	}
+	local := make(map[string]string, len(canonicalRefs))
+	for _, ref := range canonicalRefs {
+		local[ref.taskID] = ref.objectID
+	}
+	heads := make([]TaskHead, 0, len(trackingRefs)+len(canonicalRefs))
+	for _, ref := range trackingRefs {
+		heads = append(heads, TaskHead{TaskID: ref.taskID, ObjectID: ref.objectID})
+	}
+	for _, ref := range canonicalRefs {
+		heads = append(heads, TaskHead{TaskID: ref.taskID, ObjectID: ref.objectID})
+	}
+	tips, err := r.readTaskHeadsPartial(ctx, config, heads)
+	if err != nil {
+		return false, err
+	}
+	source := make(map[string]core.Snapshot, len(trackingRefs))
+	canonical := make(map[string]core.Snapshot, len(canonicalRefs))
+	for index, tip := range tips {
+		if index < len(trackingRefs) {
+			if tip.Err != nil {
+				return false, core.Wrap(core.CategoryOf(tip.Err),
+					fmt.Sprintf("%s holds task %s at a commit this checkout cannot read, so it was not carried", from, tip.Head.TaskID),
+					tip.Err)
+			}
+			source[tip.Head.TaskID] = tip.Snapshot
+			continue
+		}
+		if tip.Err == nil {
+			canonical[tip.Head.TaskID] = tip.Snapshot
+		}
+	}
+
+	dependencies := make(map[string][]string, len(canonical))
+	for taskID, snapshot := range canonical {
+		if !snapshot.State.Task.Deleted {
+			dependencies[taskID] = snapshot.State.Task.Dependencies
+		}
+	}
+	var updates []canonicalRefUpdate
+	var pairs []taskHeadPair
+	var byIdentity []string
+	for _, ref := range trackingRefs {
+		remote := source[ref.taskID]
+		head, found := local[ref.taskID]
+		switch {
+		case !found:
+			// The old place's own commits, so the new place gets the same
+			// commit IDs, not only the same operation IDs.
+			updates = append(updates, canonicalRefUpdate{TaskID: ref.taskID, Next: remote.Head})
+		case head == remote.Head:
+		default:
+			mine, readable := canonical[ref.taskID]
+			if !readable {
+				return false, core.Errorf(core.CategoryCorruptData,
+					"this checkout's task ref %s cannot be read, so %s's copy of it was not carried", ref.taskID, from)
+			}
+			if mine.Operation.HistoryGeneration != remote.Operation.HistoryGeneration {
+				byIdentity = append(byIdentity, ref.taskID)
+				continue
+			}
+			pairs = append(pairs, taskHeadPair{TaskID: ref.taskID, Local: mine, Remote: remote})
+		}
+	}
+	relationships, _, err := r.classifyTaskHeadRelationships(ctx, config, pairs)
+	if err != nil {
+		return false, err
+	}
+	for _, relationship := range relationships {
+		switch relationship.Relationship {
+		case taskHeadsRemoteAhead:
+			updates = append(updates, canonicalRefUpdate{
+				TaskID: relationship.TaskID, Next: source[relationship.TaskID].Head, Expected: local[relationship.TaskID],
+			})
+		case taskHeadsDiverged:
+			byIdentity = append(byIdentity, relationship.TaskID)
+		}
+	}
+	sort.Strings(byIdentity)
+
+	parkedIndexes, err := r.nextParkedRefIndexes(ctx, config)
+	if err != nil {
+		return false, err
+	}
+	parked, err := r.parkedTaskHeads(ctx, config)
+	if err != nil {
+		return false, err
+	}
+	for _, taskID := range byIdentity {
+		update, err := r.carryTask(ctx, config, from, taskID, canonical[taskID], source[taskID], parked[taskID],
+			parkedIndexes[taskID], dependencies, carried, result)
+		if err != nil {
+			return false, err
+		}
+		if update != nil {
+			updates = append(updates, *update)
+		}
+	}
+	if len(updates) == 0 {
+		return configChanged, nil
+	}
+	if err := r.updateCanonicalRefsFromValidated(ctx, config, canonicalRefs, updates); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// carryTask applies onto this checkout's history of one task the operations
+// the old place holds for it and this checkout lacks, skipping those already
+// set aside here. It returns the canonical ref update to make, if any.
+func (r *Repository) carryTask(
+	ctx context.Context,
+	config core.ProjectConfig,
+	from, taskID string,
+	mine, theirs core.Snapshot,
+	parkedHeads map[string]struct{},
+	parkedIndex int,
+	dependencies map[string][]string,
+	carried *moveCarry,
+	result *MoveTasksResult,
+) (*canonicalRefUpdate, error) {
+	chains, err := r.completeTaskChains(ctx, config, []TaskHead{{TaskID: taskID, ObjectID: mine.Head}})
+	if err != nil {
+		return nil, err
+	}
+	if chains[0] == nil {
+		return nil, core.Errorf(core.CategoryCorruptData,
+			"this checkout cannot read the whole history of task %s, so %s's copy of it was not carried", taskID, from)
+	}
+	var exclude map[string]struct{}
+	if checkpoint, ok := chains[0][0].Operation.Checkpoint(); ok {
+		exclude = operationIDSet(checkpoint.CompactedOperations)
+	}
+	held := newOperationAccount(nil, chains[0])
+	for id := range exclude {
+		held[id] = struct{}{}
+	}
+	missing, err := r.operationsNotIn(ctx, config, taskID, theirs.Head, mine.Head, exclude)
+	if err != nil {
+		return nil, err
+	}
+	if len(missing) == 0 {
+		return nil, nil
+	}
+
+	// What this checkout parked earlier is set aside, not missing: a person
+	// was shown it, and trying it again on every run would show it again as
+	// if it were new.
+	setAside, err := r.parkedAccount(ctx, config, taskID, parkedHeads)
+	if err != nil {
+		return nil, err
+	}
+	var pending []OperationCommit
+	var aside []string
+	for _, commit := range missing {
+		if setAside.covers(commit) {
+			for _, operation := range commit.Operation.Operations {
+				aside = append(aside, operation.ID)
+			}
+			continue
+		}
+		pending = append(pending, commit)
+	}
+	if len(pending) == 0 {
+		// The second copy of a run finds what its first one parked.
+		for _, earlier := range result.SetAside {
+			if earlier.TaskID == taskID {
+				return nil, nil
+			}
+		}
+		result.SetAside = append(result.SetAside, MoveSetAside{TaskID: taskID, Operations: aside})
+		return nil, nil
+	}
+
+	// The replay adds what it writes to held, so whether a pack was carried
+	// or found already recorded is decided against a copy taken before it.
+	before := make(operationAccount, len(held))
+	for id := range held {
+		before[id] = struct{}{}
+	}
+	replay, failure, err := r.replayOperations(ctx, config, taskID, mine, pending, false,
+		mine.Operation.HistoryGeneration, dependencies, held)
+	if err != nil {
+		return nil, err
+	}
+	if failure != nil {
+		return nil, wrapKeepingCategory(fmt.Sprintf("cannot carry task %s from %s", taskID, from), failure)
+	}
+	processed := replay.replayed + replay.skipped
+	for _, commit := range pending[:processed] {
+		if before.covers(commit) {
+			continue
+		}
+		carried.tasks[taskID] = struct{}{}
+		carried.actors[commit.Operation.Actor.ID] = struct{}{}
+		carried.operations += len(commit.Operation.Operations)
+	}
+	update := &canonicalRefUpdate{TaskID: taskID, Next: replay.parent.Head, Expected: mine.Head}
+	if replay.conflict != nil {
+		parkedRef := fmt.Sprintf("%s%s/%d", reconciledRefPrefix, taskID, parkedIndex)
+		update.ParkedRef = parkedRef
+		update.ParkedHead = theirs.Head
+		var operations []string
+		for _, commit := range pending[processed:] {
+			if before.covers(commit) {
+				continue
+			}
+			for _, operation := range commit.Operation.Operations {
+				operations = append(operations, operation.ID)
+			}
+		}
+		result.SetAside = append(result.SetAside, MoveSetAside{TaskID: taskID, Operations: operations, ParkedRef: parkedRef})
+		carried.conflicts = append(carried.conflicts, *replay.conflict)
+	}
+	if update.Next == update.Expected && update.ParkedRef == "" {
+		return nil, nil
+	}
+	return update, nil
+}
+
+// parkedAccount is the operations this checkout holds parked for one task.
+func (r *Repository) parkedAccount(ctx context.Context, config core.ProjectConfig, taskID string, heads map[string]struct{}) (operationAccount, error) {
+	account := operationAccount{}
+	if len(heads) == 0 {
+		return account, nil
+	}
+	requests := make([]TaskHistoryRequest, 0, len(heads))
+	for head := range heads {
+		requests = append(requests, TaskHistoryRequest{Head: TaskHead{TaskID: taskID, ObjectID: head}})
+	}
+	sort.Slice(requests, func(i, j int) bool { return requests[i].Head.ObjectID < requests[j].Head.ObjectID })
+	// One request per call: the reader takes each task once.
+	for _, request := range requests {
+		results, err := r.ReadTaskOperations(ctx, config, []TaskHistoryRequest{request})
+		if err != nil {
+			return nil, err
+		}
+		for _, commit := range results[0].Commits {
+			for _, operation := range commit.Operation.Operations {
+				account[operation.ID] = struct{}{}
+			}
+		}
+	}
+	return account, nil
+}
+
+// carryConfig takes the old place's configuration ledger when it is ahead of
+// this checkout's, by fast-forward only. A ledger replay between two places
+// would have the same trouble a task replay had (see tasksread.go), and the
+// ledger has no replay by operation identity, so a divergence is reported
+// rather than combined.
+func (r *Repository) carryConfig(ctx context.Context, config core.ProjectConfig, from string, result *MoveTasksResult) (bool, error) {
+	tracking := remoteConfigRefFor(from)
+	listing, err := r.listConfigRefs(ctx, configRef, tracking)
+	if err != nil {
+		return false, err
+	}
+	localHead, localFound := listing.Heads[configRef]
+	remoteHead, remoteFound := listing.Heads[tracking]
+	switch {
+	case !remoteFound || localHead == remoteHead:
+		if result.Config == "" {
+			result.Config = "unchanged"
+		}
+		return false, nil
+	case localFound:
+		if _, err := r.Git(ctx, nil, "merge-base", "--is-ancestor", remoteHead, localHead); err == nil {
+			if result.Config == "" {
+				result.Config = "unchanged"
+			}
+			return false, nil
+		}
+		if _, err := r.Git(ctx, nil, "merge-base", "--is-ancestor", localHead, remoteHead); err != nil {
+			result.Config = "not-carried"
+			return false, nil
+		}
+	}
+	// The ordinary configuration stage, pointed at the old place, creates or
+	// fast-forwards the ledger with all its checks; the cases above are the
+	// only ones it would replay in, and they never reach it.
+	r.switchRemote(from)
+	outcome := r.reconcileConfig(ctx, config)
+	if outcome.Fatal != nil {
+		return false, outcome.Fatal
+	}
+	if outcome.Deferred != nil {
+		return false, outcome.Deferred
+	}
+	result.Config = "carried"
+	return true, nil
+}
+
+// refuseUnfitDestination refuses a destination that holds branches, unless
+// the person said they mean it, and one that is the same repository as the
+// old place, however its address is spelled.
+//
+// Sameness is decided by what the two hold, not by their addresses: a ref
+// with a name nobody else could pick is written to the destination and looked
+// for at the old place, then removed. A different repository cannot show it,
+// so there is no false refusal for a fresh tasks repository or for one
+// somebody filled beforehand, and the same repository always does, through any
+// spelling, link or case of its address. It costs three round trips, and
+// needs the push access to the destination that the move needs anyway.
+func (r *Repository) refuseUnfitDestination(ctx context.Context, from, to string, allowBranches bool) error {
+	branches, err := r.Git(ctx, nil, "ls-remote", "--heads", to)
+	if err != nil {
+		return core.Wrap(core.CategoryOperational, "cannot list "+to+"'s branches", err)
+	}
+	if names := listedRefNames(branches); len(names) > 0 && !allowBranches {
+		shown := names
+		if len(shown) > 3 {
+			shown = append(append([]string(nil), shown[:3]...), fmt.Sprintf("and %d more", len(names)-3))
+		}
+		return core.Errorf(core.CategoryValidation,
+			"%s (%s) holds branches (%s), and a repository for tasks holds only Workbook refs; "+
+				"check that its address is the tasks repository's, or pass --allow-branches if it is",
+			to, redactURLCredentials(r.gitRemoteURL(ctx, to)), strings.Join(shown, ", "))
+	}
+	local, found, err := r.readIdentityRef(ctx, identityRef)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return core.Errorf(core.CategoryCorruptData, "%s is missing; rerun workbook setup", identityRef)
+	}
+	nonce, err := newProbeName()
+	if err != nil {
+		return err
+	}
+	probe := sameRepositoryProbePrefix + nonce
+	write := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil,
+		"push", "--porcelain", to, local.Head+":"+probe)
+	if write.err != nil {
+		return core.Wrap(core.CategoryOperational,
+			fmt.Sprintf("cannot write to %s, which the move needs: moving the tasks there needs push access to it", to),
+			gitCommandResultError(write))
+	}
+	listing, listErr := r.Git(ctx, nil, "ls-remote", "--refs", from, probe)
+	remove := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil, "push", "--porcelain", to, ":"+probe)
+	if listErr != nil {
+		return core.Wrap(core.CategoryOperational, "cannot list "+from+" to tell it apart from "+to, listErr)
+	}
+	if len(listedRefNames(listing)) > 0 {
+		return core.TasksRemoteError(core.CategoryValidation,
+			core.TasksRemoteRefusal{
+				Reason:  core.TasksRemoteSameRepository,
+				Remote:  to,
+				URL:     redactURLCredentials(r.gitRemoteURL(ctx, to)),
+				Command: "workbook config set " + "tasks-remote " + to + " --url <the tasks repository's address>",
+			},
+			"%s (%s) is the same repository as %s (%s), whatever its address says, so moving the tasks there would mark "+
+				"the only place they are; give tasks-remote the address of a separate, empty repository",
+			to, redactURLCredentials(r.gitRemoteURL(ctx, to)), from, redactURLCredentials(r.gitRemoteURL(ctx, from)))
+	}
+	if remove.err != nil {
+		return core.Wrap(core.CategoryOperational,
+			fmt.Sprintf("cannot remove %s from %s after writing it to tell the two repositories apart; remove it by hand", probe, to),
+			gitCommandResultError(remove))
+	}
+	return nil
+}
+
+// sameRepositoryProbePrefix holds the refs refuseUnfitDestination writes and
+// removes. Nothing reads this namespace.
+const sameRepositoryProbePrefix = "refs/workbook/probes/"
+
+func listedRefNames(listing []byte) []string {
+	var names []string
+	for _, line := range strings.Split(string(listing), "\n") {
+		if _, name, found := strings.Cut(line, "\t"); found {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // markTasksMoved publishes the marker on from's identity ref. The marker
@@ -221,12 +760,14 @@ func (r *Repository) markTasksMoved(ctx context.Context, from string, to core.Ta
 	return "marked", nil
 }
 
-// verifyMovedTasks lists both places' task refs afresh and requires the new
-// place to hold every task the old place holds, at the same commit or at one
-// built on it. Commit IDs name the whole history below them, so an equal
-// commit is the same operations with the same IDs, and a descendant is those
-// operations and more.
-func (r *Repository) verifyMovedTasks(ctx context.Context, from, to string, result *MoveTasksResult) error {
+// verifyMovedTasks lists both places afresh and requires the new place to
+// hold, for every task the old place holds, every one of its operation IDs,
+// or to have it set aside in this checkout. Equal commits are counted without
+// reading anything: a commit ID names the whole history below it. Everything
+// else is compared by operation ID, because a task carried by replay holds
+// the same operations under other commits. A history at the new place that
+// records an operation twice fails the run too.
+func (r *Repository) verifyMovedTasks(ctx context.Context, config core.ProjectConfig, from, to string, result *MoveTasksResult) error {
 	for _, remote := range []string{from, to} {
 		if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", remote,
 			"+"+taskRefPrefix+"*:"+remoteTaskRefPrefixFor(remote)+"*"); err != nil {
@@ -246,6 +787,10 @@ func (r *Repository) verifyMovedTasks(ctx context.Context, from, to string, resu
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	result.Tasks = len(source)
+	result.Identical, result.Carried = 0, 0
+
+	var differing []string
 	var missing []string
 	for _, name := range names {
 		have, found := destination[name]
@@ -255,18 +800,67 @@ func (r *Repository) verifyMovedTasks(ctx context.Context, from, to string, resu
 		case have == source[name]:
 			result.Identical++
 		default:
-			if _, err := r.Git(ctx, nil, "merge-base", "--is-ancestor", source[name], have); err != nil {
-				missing = append(missing, name+" (holds a different history)")
-				continue
-			}
-			result.Ahead++
+			differing = append(differing, name)
 		}
 	}
-	result.Tasks = len(source)
+	if len(differing) > 0 {
+		sourceHeads := make([]TaskHead, 0, len(differing))
+		destinationHeads := make([]TaskHead, 0, len(differing))
+		for _, name := range differing {
+			sourceHeads = append(sourceHeads, TaskHead{TaskID: name, ObjectID: source[name]})
+			destinationHeads = append(destinationHeads, TaskHead{TaskID: name, ObjectID: destination[name]})
+		}
+		sourceChains, err := r.completeTaskChains(ctx, config, sourceHeads)
+		if err != nil {
+			return err
+		}
+		destinationChains, err := r.completeTaskChains(ctx, config, destinationHeads)
+		if err != nil {
+			return err
+		}
+		parked, err := r.parkedTaskHeads(ctx, config)
+		if err != nil {
+			return err
+		}
+		for index, name := range differing {
+			theirs, ours := sourceChains[index], destinationChains[index]
+			if theirs == nil || ours == nil {
+				missing = append(missing, name+" (a history this checkout cannot read in full)")
+				continue
+			}
+			if detail, repeated := repeatedOperation(ours); repeated {
+				missing = append(missing, name+" ("+detail+")")
+				continue
+			}
+			var compacted []string
+			if checkpoint, ok := ours[0].Operation.Checkpoint(); ok {
+				compacted = checkpoint.CompactedOperations
+			}
+			account := newOperationAccount(compacted, ours)
+			aside, err := r.parkedAccount(ctx, config, name, parked[name])
+			if err != nil {
+				return err
+			}
+			var lacking []string
+			for _, commit := range theirs {
+				if account.covers(commit) || aside.covers(commit) {
+					continue
+				}
+				for _, operation := range commit.Operation.Operations {
+					lacking = append(lacking, operation.ID)
+				}
+			}
+			if len(lacking) > 0 {
+				missing = append(missing, fmt.Sprintf("%s (lacks operation(s) %s)", name, strings.Join(lacking, ", ")))
+				continue
+			}
+			result.Carried++
+		}
+	}
 	if len(missing) > 0 {
 		return core.Errorf(core.CategoryConflict,
-			"%s does not hold every task %s holds: %s; run workbook move-tasks again",
-			to, from, strings.Join(missing, ", "))
+			"%s does not hold everything %s holds: %s; run workbook move-tasks again",
+			to, from, strings.Join(missing, "; "))
 	}
 	return nil
 }
@@ -359,4 +953,13 @@ func (r *Repository) moveStep(step string) error {
 		return nil
 	}
 	return r.moveStepHook(step)
+}
+
+// newProbeName returns a ref name component nobody else could pick.
+func newProbeName() (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", core.Wrap(core.CategoryOperational, "cannot draw a random name", err)
+	}
+	return hex.EncodeToString(nonce[:]), nil
 }

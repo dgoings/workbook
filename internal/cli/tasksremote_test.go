@@ -91,14 +91,14 @@ func (project *tasksRemoteProject) moveTasks(t *testing.T) {
 		Marked    string                 `json:"marked"`
 		Tasks     int                    `json:"tasks"`
 		Identical int                    `json:"identical"`
-		Ahead     int                    `json:"ahead"`
+		Carried   int                    `json:"carried"`
 	}
 	if err := json.Unmarshal(assertJSONResult(t, stdout, "move-tasks").Data, &moved); err != nil {
 		t.Fatal(err)
 	}
 	if moved.From.Remote != "origin" || moved.To.Remote != "tasks" || moved.To.URL != project.tasks ||
 		moved.Remote != "added" || moved.Marked != "marked" || moved.Tasks != len(project.ids) ||
-		moved.Identical != len(project.ids) || moved.Ahead != 0 {
+		moved.Identical != len(project.ids) || moved.Carried != 0 {
 		t.Fatalf("move-tasks result = %+v", moved)
 	}
 	cliGit(t, project.seed, "add", ".workbook/config.json")
@@ -660,12 +660,29 @@ func TestTasksRemoteFlagReadsAMovedRemoteAndRefusesToPublishThere(t *testing.T) 
 	if code != 5 {
 		t.Fatalf("push --remote origin exit = %d, want 5; stderr = %q", code, stderr)
 	}
-	refusal := requireTasksRemoteRefusal(t, stderr, core.CategoryValidation, core.TasksRemoteMoved)
-	if refusal.Remote != "origin" || refusal.MovedTo == nil || refusal.MovedTo.URL != project.tasks {
+	refusal := requireTasksRemoteRefusal(t, stderr, core.CategoryValidation, core.TasksRemoteReadOnly)
+	if refusal.Remote != "origin" || refusal.Command != "workbook push" {
 		t.Fatalf("refusal = %+v", refusal)
 	}
-	if code, _, stderr := run(t, project.seed, "sync", "--remote", "origin", "--json"); code != 5 {
-		t.Fatalf("sync --remote origin exit = %d, want 5; stderr = %q", code, stderr)
+	// sync --remote reads the other remote, says it is marked, and
+	// publishes nothing.
+	if code, stdout, stderr := run(t, project.seed, "sync", "--remote", "origin", "--json"); code != 0 {
+		t.Fatalf("sync --remote origin exit = %d, want a read; stderr = %q", code, stderr)
+	} else {
+		var synced struct {
+			Identity *struct {
+				Status string `json:"status"`
+			} `json:"identity"`
+			Push struct {
+				Status string `json:"status"`
+			} `json:"push"`
+		}
+		if err := json.Unmarshal(assertJSONResult(t, stdout, "sync").Data, &synced); err != nil {
+			t.Fatal(err)
+		}
+		if synced.Identity == nil || synced.Identity.Status != "moved" || synced.Push.Status != "skipped" {
+			t.Fatalf("sync --remote origin = %s, want the identity reported moved and the push skipped", stdout)
+		}
 	}
 	if after := repositoryState(t, project.code); after != before {
 		t.Fatalf("origin changed:\nbefore %s\nafter  %s", before, after)

@@ -425,6 +425,13 @@ func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	result, syncErr := repository.Sync(ctx, config)
 	warnings := settleFetchedHistories(ctx, repository, config, result.Fetch)
 	warnings = append(warnings, fetchSharingWarnings(ctx, repository, config, &result.Fetch)...)
+	// A checkout whose tasks moved is told when the old place holds edits the
+	// new one lacks. Only a person's own sync asks; the watcher does not.
+	if *remote == "" && syncErr == nil {
+		if left := repository.FindLeftBehind(ctx, config); left != nil {
+			warnings = append(warnings, left.Warning(repository.TasksRemoteName()))
+		}
+	}
 	writeSyncPhaseResultWithConfig(stdout, "sync", result, result.Fetch.Conflicts, result.Fetch.ConfigConflicts, warnings, *jsonMode,
 		func(output io.Writer) {
 			writeSyncRunResult(output, result)

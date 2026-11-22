@@ -87,7 +87,7 @@ func TestMoveTasksResumesAfterAnInterruptionAtEveryStep(t *testing.T) {
 				}
 				return nil
 			}
-			if _, err := fixture.first.MoveTasks(ctx, fixture.config, ""); !errors.Is(err, errMoveInterrupted) {
+			if _, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{}); !errors.Is(err, errMoveInterrupted) {
 				t.Fatalf("MoveTasks() error = %v, want the interruption at %s", err, step)
 			}
 			fixture.first.moveStepHook = nil
@@ -110,11 +110,11 @@ func TestMoveTasksResumesAfterAnInterruptionAtEveryStep(t *testing.T) {
 				t.Fatalf("teammate sync before the mark = %v, want it published to the old place", pushErr)
 			}
 
-			result, err := fixture.first.MoveTasks(ctx, fixture.config, "")
+			result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
 			if err != nil {
 				t.Fatalf("resumed MoveTasks() = %v", err)
 			}
-			if result.Tasks != len(fixture.ids) || result.Identical != len(fixture.ids) || result.Ahead != 0 {
+			if result.Tasks != len(fixture.ids) || result.Identical != len(fixture.ids) || result.Carried != 0 {
 				t.Fatalf("resumed result = %+v, want %d identical tasks", result, len(fixture.ids))
 			}
 			wantMarked := "marked"
@@ -189,7 +189,7 @@ func TestMoveTasksCarriesAnEditPublishedBeforeTheMarkInTheSameRun(t *testing.T) 
 		}
 		return nil
 	}
-	result, err := fixture.first.MoveTasks(ctx, fixture.config, "")
+	result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
 	if err != nil {
 		t.Fatalf("MoveTasks() = %v, want the teammate's edit carried across", err)
 	}
@@ -245,7 +245,7 @@ func TestMoveMarkerIsNeverAdoptedLocally(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	fixture := newMoveFixture(t, testrepo.FormatSHA1)
-	if _, err := fixture.first.MoveTasks(ctx, fixture.config, ""); err != nil {
+	if _, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	before := syncGit(t, fixture.second.Root, "rev-parse", identityRef)
@@ -273,7 +273,7 @@ func TestMovedRemoteNamedExplicitlyIsReadOnly(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	fixture := newMoveFixture(t, testrepo.FormatSHA1)
-	if _, err := fixture.first.MoveTasks(ctx, fixture.config, ""); err != nil {
+	if _, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(ctx, fixture.first.Root)
@@ -297,16 +297,18 @@ func TestMovedRemoteNamedExplicitlyIsReadOnly(t *testing.T) {
 	before := refListing(t, fixture.origin, "refs/")
 	createSyncTask(t, reopened, config, "Not for the old place")
 	_, err = reopened.Push(ctx, config)
-	if refusal, found := core.TasksRemoteRefusalOf(err); !found || refusal.Reason != core.TasksRemoteMoved ||
-		core.CategoryOf(err) != core.CategoryValidation {
-		t.Fatalf("Push(--remote origin) = %v, want the validation refusal for a moved remote", err)
+	if core.CategoryOf(err) != core.CategoryValidation || !strings.Contains(err.Error(), "is not this project's tasks remote") {
+		t.Fatalf("Push(--remote origin) = %v, want the validation refusal to publish to another remote", err)
 	}
 	run, err := reopened.Sync(ctx, config)
-	if refusal, found := core.TasksRemoteRefusalOf(err); !found || refusal.Reason != core.TasksRemoteMoved {
-		t.Fatalf("Sync(--remote origin) = %v, want the moved refusal", err)
+	if err != nil {
+		t.Fatalf("Sync(--remote origin) = %v, want a read that publishes nothing", err)
 	}
 	if run.Identity == nil || run.Identity.Status != SyncIdentityMoved {
 		t.Fatalf("Sync identity = %+v, want moved", run.Identity)
+	}
+	if run.Push.Status != SyncPhaseSkipped {
+		t.Fatalf("Sync push = %+v, want skipped", run.Push)
 	}
 	if after := refListing(t, fixture.origin, "refs/"); after != before {
 		t.Fatalf("origin changed after the refused publications:\nbefore %s\nafter  %s", before, after)
@@ -318,7 +320,7 @@ func TestFetchPrunesOnlyItsOwnRemotesTrackingRefs(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	fixture := newMoveFixture(t, testrepo.FormatSHA1)
-	if _, err := fixture.first.MoveTasks(ctx, fixture.config, ""); err != nil {
+	if _, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(ctx, fixture.first.Root)
@@ -367,7 +369,7 @@ func TestMoveTasksInSHA256Repositories(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	fixture := newMoveFixture(t, testrepo.FormatSHA256)
-	result, err := fixture.first.MoveTasks(ctx, fixture.config, "")
+	result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

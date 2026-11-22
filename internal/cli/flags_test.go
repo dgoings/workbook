@@ -253,7 +253,7 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"fetch":      {"remote": stringFlag, "json": boolFlag},
 		"push":       {"remote": stringFlag, "json": boolFlag},
 		"sync":       {"json": boolFlag, "watch": boolFlag, "interval": stringFlag, "status": boolFlag, "remote": stringFlag},
-		"move-tasks": {"from": stringFlag, "json": boolFlag},
+		"move-tasks": {"from": stringFlag, "allow-branches": boolFlag, "json": boolFlag},
 		"hooks":      {},
 		"move":       {"before": stringFlag, "after": stringFlag, "no-sync": boolFlag, "json": boolFlag},
 		"depend":     {"no-sync": boolFlag, "json": boolFlag},

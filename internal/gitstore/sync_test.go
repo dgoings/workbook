@@ -882,8 +882,11 @@ func TestPushUsesOneBoundedPublication(t *testing.T) {
 	if got := countCommand(commands, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", taskRefPrefix); got != 2 {
 		t.Fatalf("canonical ref enumerations = %d, want planning plus final snapshot; commands = %v", got, commands)
 	}
-	if got := countCommand(commands, "cat-file", "--batch"); got != 1 {
-		t.Fatalf("tip batches = %d, want 1; commands = %v", got, commands)
+	// One batch reads the tips, and one reads the histories being published,
+	// whatever their number, to refuse one that records an operation twice
+	// (duplicatedOperations).
+	if got := countCommand(commands, "cat-file", "--batch"); got != 2 {
+		t.Fatalf("object batches = %d, want the tips and the published histories; commands = %v", got, commands)
 	}
 	// One listing answers all three questions Push has to ask origin: which
 	// task tips it already holds, which project it is, and whether it has this
@@ -891,11 +894,22 @@ func TestPushUsesOneBoundedPublication(t *testing.T) {
 	if got := countCommand(commands, "ls-remote", "--refs", "origin", taskRefPrefix+"*", identityRef, configRef); got != 1 {
 		t.Fatalf("wildcard remote probes = %d, want 1; commands = %v", got, commands)
 	}
+	// The only other listing is the one after the push: origin's identity ref
+	// alone, which is how an edit accepted just as origin was marked as moved
+	// is reported (strandedPublication). It is one listing however many tasks
+	// the push carried.
 	for _, command := range commands {
-		if len(command) > 0 && command[0] == "ls-remote" &&
-			(len(command) != 6 || command[3] != taskRefPrefix+"*" || command[4] != identityRef || command[5] != configRef) {
+		if len(command) == 0 || command[0] != "ls-remote" {
+			continue
+		}
+		wildcard := len(command) == 6 && command[3] == taskRefPrefix+"*" && command[4] == identityRef && command[5] == configRef
+		identityOnly := len(command) == 4 && command[3] == identityRef
+		if !wildcard && !identityOnly {
 			t.Fatalf("Push() ran a per-task remote probe: %v", command)
 		}
+	}
+	if got := countCommand(commands, "ls-remote", "--refs", "origin", identityRef); got != 1 {
+		t.Fatalf("identity listings after the push = %d, want 1; commands = %v", got, commands)
 	}
 	// Push learns origin's ledger head from that listing and its own from one
 	// local enumeration. A project with no ledger publishes nothing, so this is
@@ -1118,8 +1132,11 @@ func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
 			if got := countCommand(commands, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", configRef, remoteConfigRef); got != 1 {
 				t.Fatalf("configuration ref enumerations = %d, want 1; commands = %v", got, commands)
 			}
-			if got := countCommand(commands, "cat-file", "--batch"); got != 1 {
-				t.Fatalf("tip batches = %d, want 1; commands = %v", got, commands)
+			// One batch reads the fetched tips, reused by the push phase, and
+			// one reads the histories being published, to refuse one that
+			// records an operation twice (duplicatedOperations).
+			if got := countCommand(commands, "cat-file", "--batch"); got != 2 {
+				t.Fatalf("object batches = %d, want the tips and the published histories; commands = %v", got, commands)
 			}
 			if got := countCommand(commands, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", taskRefPrefix); got != 2 {
 				t.Fatalf("canonical ref enumerations = %d, want fetch planning plus final snapshot; commands = %v", got, commands)
@@ -2073,10 +2090,15 @@ func TestPushTaskReportsRejectionWhenRemoteAdvanced(t *testing.T) {
 }
 
 // PushTask stays constant in the number of tasks a project holds: it names no
-// task but its own, and asks origin nothing per task. Establishing which project
-// origin is costs one listing the first time and nothing afterwards — including
-// nothing at all on the path every mutation takes, where the fetch in the same
-// command already compared the two identity refs.
+// task but its own, and asks origin nothing per task. What it does ask is
+// origin's identity ref, twice on every publication: once before the push, so
+// a remote marked as the place the tasks moved away from is refused before
+// anything reaches it, and once after an accepted push, so a mark that landed
+// in between is reported (strandedPublication). Neither is remembered from an
+// earlier publication on the same handle: a long-lived process such as
+// `workbook serve` holds one handle for hours, and what it remembered is what
+// let it publish to a marked remote. Only PushTaskAfterFetch, used by a command
+// whose own fetch compared the identity refs moments earlier, skips the first.
 func TestPushTaskListsNoPerTaskRemoteRefsAndPublishesOnce(t *testing.T) {
 	t.Parallel()
 	repository, _, config := syncRepositories(t)
@@ -2097,24 +2119,41 @@ func TestPushTaskListsNoPerTaskRemoteRefsAndPublishesOnce(t *testing.T) {
 			t.Fatalf("PushTask() ran a remote probe beyond the identity check: %v", command)
 		}
 	}
-	if got := countCommandPrefix(commands, "ls-remote"); got != 1 {
-		t.Fatalf("ls-remote invocations = %d, want the single identity check; commands = %v", got, commands)
+	if got := countCommandPrefix(commands, "ls-remote"); got != 2 {
+		t.Fatalf("ls-remote invocations = %d, want the identity check before and after the push; commands = %v", got, commands)
 	}
 	if got := countTaskPushes(commands); got != 1 {
 		t.Fatalf("task push invocations = %d, want 1; commands = %v", got, commands)
 	}
 
-	// A second publication in the same command has nothing left to establish.
+	// A second publication on the same handle asks again, and publishes
+	// nothing but the task: the identity is not pushed twice.
 	second := createSyncTask(t, repository, config, "Second bounded task")
 	commands = nil
 	if _, err := repository.PushTask(context.Background(), config, second.ID); err != nil {
 		t.Fatal(err)
 	}
-	if got := countCommandPrefix(commands, "ls-remote"); got != 0 {
-		t.Fatalf("ls-remote invocations = %d, want none once origin is known; commands = %v", got, commands)
+	if got := countCommandPrefix(commands, "ls-remote"); got != 2 {
+		t.Fatalf("ls-remote invocations = %d, want the identity check before and after the push; commands = %v", got, commands)
 	}
 	if got := countIdentityPushes(commands); got != 0 {
 		t.Fatalf("identity push invocations = %d, want none once origin is known; commands = %v", got, commands)
+	}
+	if got := countTaskPushes(commands); got != 1 {
+		t.Fatalf("task push invocations = %d, want 1; commands = %v", got, commands)
+	}
+
+	// After a fetch in the same command, only the check after the push runs.
+	third := createSyncTask(t, repository, config, "Third bounded task")
+	if _, err := repository.Fetch(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	commands = nil
+	if _, err := repository.PushTaskAfterFetch(context.Background(), config, third.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := countCommandPrefix(commands, "ls-remote"); got != 1 {
+		t.Fatalf("ls-remote invocations after a fetch = %d, want only the check after the push; commands = %v", got, commands)
 	}
 	if got := countTaskPushes(commands); got != 1 {
 		t.Fatalf("task push invocations = %d, want 1; commands = %v", got, commands)

@@ -81,6 +81,9 @@ type TasksRemoteRefusal struct {
 	MovedTo *TasksRemoteTarget `json:"movedTo,omitempty"`
 	// Command is what to run next, when one command is the answer.
 	Command string `json:"command,omitempty"`
+	// Tasks names the tasks a refusal is about, when it is about some: the
+	// task refs a published-after-move report says reached the old place.
+	Tasks []string `json:"tasks,omitempty"`
 }
 
 // TasksRemoteTarget names a remote and its address.
@@ -103,6 +106,19 @@ const (
 	// TasksRemoteNotMoved: the settings name a tasks remote that holds nothing
 	// yet while the tasks are still on the remote they are moving from.
 	TasksRemoteNotMoved = "move-not-done"
+	// TasksRemotePublishedAfterMove: the remote accepted task refs from this
+	// checkout and, listed again straight after, was marked as moved. The
+	// edits are kept locally, and a later move-tasks carries them across.
+	TasksRemotePublishedAfterMove = "published-after-move"
+	// TasksRemoteSameRepository: the tasks remote is the same repository as
+	// the one the tasks would move from, whatever its address says.
+	TasksRemoteSameRepository = "same-repository"
+	// TasksRemoteMovedForGood: the settings would share tasks through a
+	// remote marked as moved, which this version cannot move them back to.
+	TasksRemoteMovedForGood = "moved-for-good"
+	// TasksRemoteReadOnly: --remote named a remote other than the project's
+	// tasks remote for a command that publishes. Such a remote is only read.
+	TasksRemoteReadOnly = "read-only-remote"
 )
 
 // TasksRemoteError builds a refusal that carries its remote detail.

@@ -87,7 +87,9 @@ type taskSession struct {
 	// deferred reports that a trustworthy watcher answered, so this command
 	// writes locally and hands publication to it.
 	deferred bool
-	watcher  syncloop.Status
+	// refusal is a publication refusal the command fails on; see noteRefusal.
+	refusal error
+	watcher syncloop.Status
 	// releaseProjection closes the projection the session reads and writes
 	// through; see openProjection for why it has to be given back.
 	releaseProjection func()
@@ -272,6 +274,15 @@ func (session *taskSession) fetchBefore(ctx context.Context) error {
 		// mutation applies to is current enough. Reconciliation makes a
 		// slightly stale tip a case the fetch path already handles rather than
 		// one worth a network round trip to prevent.
+		//
+		// The one thing the watcher's last look cannot vouch for is whether
+		// the tasks remote has since been marked as the place the tasks moved
+		// away from: a change recorded now would be handed to a watcher that
+		// is about to be refused, and this command would exit as if it had
+		// been published. One listing of one ref answers that.
+		if err := session.repository.CheckRemoteNotMoved(ctx); err != nil {
+			return err
+		}
 		session.report.Status = syncStatusDeferred
 		session.report.Detail = fmt.Sprintf("handed to the sync watcher (pid %d)", session.watcher.PID)
 		return nil
@@ -467,7 +478,11 @@ func (session *taskSession) publishConfig(ctx context.Context) {
 }
 
 func (session *taskSession) pushConfigInline(ctx context.Context) {
-	published, err := session.repository.PushConfig(ctx, session.config)
+	push := session.repository.PushConfig
+	if session.fetched != nil {
+		push = session.repository.PushConfigAfterFetch
+	}
+	published, err := push(ctx, session.config)
 	session.report.Identity, _ = session.repository.IdentityReport()
 	if published != nil {
 		session.report.Config = published
@@ -475,6 +490,7 @@ func (session *taskSession) pushConfigInline(ctx context.Context) {
 	if err != nil {
 		session.report.Status = syncStatusFailed
 		session.report.Detail = "push failed: " + err.Error()
+		session.noteRefusal(err)
 		return
 	}
 	session.report.Status = syncStatusCompleted
@@ -519,13 +535,21 @@ func (session *taskSession) pushTasksInline(ctx context.Context, taskIDs []strin
 	if err != nil {
 		session.report.Status = syncStatusFailed
 		session.report.Detail = "push failed: " + err.Error()
+		session.noteRefusal(err)
 		return
 	}
 	session.report.Status = syncStatusCompleted
 }
 
 func (session *taskSession) pushInline(ctx context.Context, taskID string) {
-	pushed, err := session.repository.PushTask(ctx, session.config, taskID)
+	// This command's own fetch compared the identity refs moments ago, so the
+	// push need not ask again. A command that handed off to a watcher which
+	// then vanished did not fetch, and asks.
+	push := session.repository.PushTask
+	if session.fetched != nil {
+		push = session.repository.PushTaskAfterFetch
+	}
+	pushed, err := push(ctx, session.config, taskID)
 	session.report.Push = &pushed
 	session.report.Identity, _ = session.repository.IdentityReport()
 	if published, found := session.repository.ConfigReport(); found {
@@ -534,9 +558,35 @@ func (session *taskSession) pushInline(ctx context.Context, taskID string) {
 	if err != nil {
 		session.report.Status = syncStatusFailed
 		session.report.Detail = "push failed: " + err.Error()
+		session.noteRefusal(err)
 		return
 	}
 	session.report.Status = syncStatusCompleted
+}
+
+// noteRefusal keeps a publication's refusal that the command has to fail on
+// rather than carry as a warning: the tasks remote was marked as the place the
+// tasks moved away from, either before the push (nothing was published) or
+// just after it (the change reached a place nobody reads any more). The change
+// is recorded either way, and both refusals say so; what they must not be is
+// a warning beside an exit status that says all was well.
+func (session *taskSession) noteRefusal(err error) {
+	refusal, found := core.TasksRemoteRefusalOf(err)
+	if !found {
+		return
+	}
+	switch refusal.Reason {
+	case core.TasksRemoteMoved, core.TasksRemotePublishedAfterMove:
+		session.refusal = err
+	}
+}
+
+// publicationRefusal is the refusal noteRefusal kept, if any. Every command
+// that records a change and then publishes it returns this after writing
+// nothing else, so its exit status and its JSON error envelope say what
+// happened to the change.
+func (session *taskSession) publicationRefusal() error {
+	return session.refusal
 }
 
 // refreshConfiguration re-reads the project's statuses, priorities and keys
@@ -689,6 +739,9 @@ func (session *taskSession) mutate(
 		return core.MutationResult{}, err
 	}
 	session.publish(ctx, result.Task.ID)
+	if err := session.publicationRefusal(); err != nil {
+		return core.MutationResult{}, err
+	}
 	switch {
 	case session.report.Status == syncStatusFailed:
 		result.Warnings = append(result.Warnings, core.Warning{

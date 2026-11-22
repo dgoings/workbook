@@ -413,6 +413,9 @@ func runDisplayMutation(ctx context.Context, cwd string, mutation displayMutatio
 		return displayWriteError(err)
 	}
 	session.publishConfig(ctx)
+	if err := session.publicationRefusal(); err != nil {
+		return err
+	}
 
 	result := configDisplayResult{
 		Change:  change,

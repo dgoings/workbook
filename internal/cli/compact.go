@@ -246,6 +246,9 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 			taskIDs = append(taskIDs, candidate.TaskID)
 		}
 		session.publishTasks(ctx, taskIDs)
+		if err := session.publicationRefusal(); err != nil {
+			return err
+		}
 	}
 	summary.Tasks, summary.Totals = compactTasks(compacted)
 	if summary.Skipped == nil {

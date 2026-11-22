@@ -1018,6 +1018,9 @@ func runStatusMutation(
 		return statusWriteError(err)
 	}
 	session.publishConfig(ctx)
+	if err := session.publicationRefusal(); err != nil {
+		return err
+	}
 
 	after := written.Vocabulary()
 	result := statusMutationResult{

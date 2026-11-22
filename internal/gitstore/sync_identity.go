@@ -120,15 +120,27 @@ func (r *Repository) observedOriginIdentity() originIdentityState {
 // which is also what makes the bare-branch bootstrap structurally sound: task
 // refs on origin now imply an identity ref beside them, so a fresh clone always
 // has something authoritative to adopt.
-func (r *Repository) ensureOriginIdentityAgreement(ctx context.Context, observed map[string]string) error {
+//
+// reuse says whether what this handle established earlier may stand for this
+// publication. Only a caller that fetched from the remote moments ago, in the
+// same short-lived command, passes true: the CLI's mutation path, whose fetch
+// compared the two identity refs just before. Everything else passes false
+// and the remote is asked again, because a long-lived process — the board,
+// its background sync, a watcher — would otherwise publish on the strength of
+// an agreement made before the remote was marked as moved, and publish to a
+// place the tasks have left. Asking costs one listing of one ref.
+func (r *Repository) ensureOriginIdentityAgreement(ctx context.Context, observed map[string]string, reuse bool) error {
 	if moved := r.observedMove(); moved != nil {
 		return r.remoteMarkedMoved(ctx, *moved, true)
 	}
-	switch r.observedOriginIdentity() {
-	case originIdentityAgreed, originIdentityUnavailable:
-		return nil
-	case originIdentityAbsent:
-		return r.publishIdentityBeforeTasks(ctx, "")
+	remembered := r.observedOriginIdentity()
+	if reuse || observed != nil {
+		switch remembered {
+		case originIdentityAgreed, originIdentityUnavailable:
+			return nil
+		case originIdentityAbsent:
+			return r.publishIdentityBeforeTasks(ctx, "")
+		}
 	}
 
 	remoteHead, probed := "", false
@@ -146,6 +158,11 @@ func (r *Repository) ensureOriginIdentityAgreement(ctx context.Context, observed
 		if err != nil {
 			return err
 		}
+	}
+	if remoteHead == "" && remembered == originIdentityUnavailable {
+		// Still nothing there, and this handle already learned that the
+		// remote will not take one: publication goes on as it did then.
+		return nil
 	}
 	return r.publishIdentityBeforeTasks(ctx, remoteHead)
 }

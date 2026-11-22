@@ -100,6 +100,9 @@ func runCompactAdopt(ctx context.Context, request compactAdoptRequest, cwd strin
 	if result.Status != gitstore.SyncDiscardedLocal {
 		session.publish(ctx, taskID)
 	}
+	if err := session.publicationRefusal(); err != nil {
+		return err
+	}
 	if session.report.Status == syncStatusFailed {
 		warnings = append(warnings, core.Warning{
 			Code:    core.WarningAutoSync,

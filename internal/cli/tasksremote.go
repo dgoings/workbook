@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
@@ -146,6 +147,7 @@ func writeTasksRemoteSetting(
 func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("move-tasks")
 	from := flags.String("from", "", "the remote the tasks are in now (default origin)")
+	allowBranches := flags.Bool("allow-branches", false, "accept a tasks remote that holds branches")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -161,24 +163,43 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 			"the move is made from a clone of the code, whose committed settings name the new place")
 	}
 	// A run that stops partway reports only its error: every step is safe to
-	// repeat, and the error says to run the command again.
-	result, err := repository.MoveTasks(ctx, config, *from)
-	if err != nil {
+	// repeat, and the error says to run the command again. A run that set
+	// operations aside for a conflict did finish, so it reports what it did
+	// and then the conflict.
+	result, err := repository.MoveTasks(ctx, config, gitstore.MoveTasksOptions{From: *from, AllowBranches: *allowBranches})
+	if err != nil && !result.Verified {
 		return err
 	}
 	if *jsonMode {
 		writeResult(stdout, "move-tasks", result)
-		return nil
+		return err
 	}
 	fmt.Fprintf(stdout, "Moved:\t%s (%s)\t->\t%s (%s)\n", result.From.Remote, result.From.URL, result.To.Remote, result.To.URL)
-	fmt.Fprintf(stdout, "Tasks:\t%d\t(%d identical, %d with newer edits at %s)\n",
-		result.Tasks, result.Identical, result.Ahead, result.To.Remote)
+	fmt.Fprintf(stdout, "Tasks:\t%d\t(%d at the same commit, %d holding every operation under other commits)\n",
+		result.Tasks, result.Identical, result.Carried)
 	switch result.Marked {
 	case "marked":
 		fmt.Fprintf(stdout, "Marked:\t%s\t(checkouts still using it are refused and told where the tasks went)\n", result.From.Remote)
 	case "already":
 		fmt.Fprintf(stdout, "Marked:\t%s\t(already marked by an earlier run)\n", result.From.Remote)
 	}
+	if stragglers := result.Stragglers; stragglers != nil {
+		fmt.Fprintf(stdout, "Carried:\t%d operation(s) on %s by %s\t(found at %s and missing at %s)\n",
+			stragglers.Operations, strings.Join(stragglers.Tasks, ", "), strings.Join(stragglers.Actors, ", "),
+			result.From.Remote, result.To.Remote)
+	}
+	for _, aside := range result.SetAside {
+		where := "parked earlier in this checkout"
+		if aside.ParkedRef != "" {
+			where = "parked at " + aside.ParkedRef
+		}
+		fmt.Fprintf(stdout, "Set aside:\t%s\t%d operation(s) that conflict with its history at %s, %s\n",
+			aside.TaskID, len(aside.Operations), result.To.Remote, where)
+	}
+	if result.Config == "not-carried" {
+		fmt.Fprintf(stdout, "Config:\tnot carried\t(%s holds configuration changes this checkout's have diverged from; "+
+			"make them again with workbook config set)\n", result.From.Remote)
+	}
 	fmt.Fprintf(stdout, "Next:\tcommit .workbook/config.json and push it; everyone else pulls it and runs workbook setup\n")
-	return nil
+	return err
 }

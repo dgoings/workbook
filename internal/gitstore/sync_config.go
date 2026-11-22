@@ -484,13 +484,26 @@ func (r *Repository) publishConfigLedger(ctx context.Context) (*SyncConfigResult
 // origin is reported through the result rather than raised, which is the
 // carve-out publishConfigLedger documents.
 func (r *Repository) PushConfig(ctx context.Context, config core.ProjectConfig) (*SyncConfigResult, error) {
+	return r.pushConfig(ctx, config, false)
+}
+
+// PushConfigAfterFetch is PushConfig for a short-lived command that fetched
+// from the tasks remote on this handle moments before; see PushTaskAfterFetch.
+func (r *Repository) PushConfigAfterFetch(ctx context.Context, config core.ProjectConfig) (*SyncConfigResult, error) {
+	return r.pushConfig(ctx, config, true)
+}
+
+func (r *Repository) pushConfig(ctx context.Context, config core.ProjectConfig, afterFetch bool) (*SyncConfigResult, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return nil, err
 	}
 	if err := r.validateRepositoryConfig(config); err != nil {
 		return nil, err
 	}
-	if err := r.ensureOriginIdentityAgreement(ctx, nil); err != nil {
+	if r.readOnlyRemote() {
+		return nil, readOnlyRemotePublication(r.remote(), r.configuredRemote())
+	}
+	if err := r.ensureOriginIdentityAgreement(ctx, nil, afterFetch); err != nil {
 		return nil, err
 	}
 	return r.publishConfigLedger(ctx)
@@ -509,7 +522,7 @@ func (r *Repository) pushConfigOnly(ctx context.Context, result SyncResult) (Syn
 		result.Status = SyncPhaseCompleted
 		return result, nil
 	}
-	if err := r.ensureOriginIdentityAgreement(ctx, nil); err != nil {
+	if err := r.ensureOriginIdentityAgreement(ctx, nil, false); err != nil {
 		return failedSyncPhase(result, "push stopped before publishing the configuration ledger", err)
 	}
 	result.Identity, _ = r.IdentityReport()

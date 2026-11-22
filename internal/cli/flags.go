@@ -774,17 +774,22 @@ var commandSchemas = map[string]commandMetadata{
 	},
 	"move-tasks": {
 		Name:     "move-tasks",
-		Synopsis: "workbook move-tasks [--from <remote>] [--json]",
+		Synopsis: "workbook move-tasks [--from <remote>] [--allow-branches] [--json]",
 		Description: "Move this project's tasks to the tasks remote its settings name.\n\n" +
 			"Run it after `workbook config set tasks-remote <name> --url <address>`. It copies\n" +
 			"every task from origin (or --from) to the new place, marks the old place so a\n" +
 			"checkout still using it is refused and told where the tasks went, copies again\n" +
 			"for edits published before the mark, and checks that the new place holds every\n" +
-			"task. Every step is safe to repeat: an interrupted run is finished by running it\n" +
-			"again. Then commit .workbook/config.json; everyone else runs `workbook setup`\n" +
-			"after pulling it.",
+			"operation the old place does. Every step is safe to repeat: an interrupted run\n" +
+			"is finished by running it again, and a later run carries any edit that reached\n" +
+			"the old place after the move, applying each operation once. Then commit\n" +
+			".workbook/config.json; everyone else runs `workbook setup` after pulling it.\n\n" +
+			"It refuses a new place that is the same repository as the old one, however its\n" +
+			"address is spelled, and one that holds branches unless --allow-branches is given.\n" +
+			"The move is one-way: `workbook config unset tasks-remote` is refused afterwards.",
 		Options: []optionMetadata{
 			{Name: "from", Kind: stringFlag, Value: "<remote>", Description: "the Git remote the tasks are in now (default origin)"},
+			{Name: "allow-branches", Kind: boolFlag, Description: "accept a tasks remote that holds branches"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
