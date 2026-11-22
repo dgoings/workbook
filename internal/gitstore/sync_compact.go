@@ -790,7 +790,7 @@ func (r *Repository) replayOperations(
 	originWins bool,
 	generation string,
 	dependencies map[string][]string,
-	held operationAccount,
+	held heldOperations,
 ) (replay taskReplay, failure error, err error) {
 	if commits[0].Parent == "" {
 		return replay, core.Errorf(core.CategoryCorruptData,
@@ -825,6 +825,7 @@ func (r *Repository) replayOperations(
 		generation:   generation,
 		originWins:   originWins,
 		held:         held,
+		remote:       core.ConflictRemote(r.remote()),
 	}
 	for _, tip := range tips[1:] {
 		done, err := replay.next(ctx, r, tip.Snapshot)

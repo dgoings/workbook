@@ -161,6 +161,7 @@ func (r *Repository) reconcileDivergentTasks(
 			dependencies: taskDependencyGraph(dependencies, request.TaskID, request.Remote.State.Task),
 			subjects:     subjects,
 			held:         held[index],
+			remote:       core.ConflictRemote(r.remote()),
 		}
 		for _, tip := range read[1:] {
 			done, err := replay.next(ctx, r, tip.Snapshot)
@@ -192,8 +193,8 @@ func (r *Repository) remoteOnlyOperations(
 	graph map[string][]string,
 	requests []reconcileRequest,
 	spans [][]string,
-) ([]operationAccount, error) {
-	held := make([]operationAccount, len(requests))
+) ([]heldOperations, error) {
+	held := make([]heldOperations, len(requests))
 	var heads []TaskHead
 	owners := make([]int, 0)
 	for index, request := range requests {
@@ -206,7 +207,7 @@ func (r *Repository) remoteOnlyOperations(
 			return nil, core.Wrap(core.CategoryCorruptData,
 				fmt.Sprintf("cannot walk fetched history for task %s", request.TaskID), err)
 		}
-		held[index] = operationAccount{}
+		held[index] = heldOperations{}
 		for _, objectID := range chain {
 			if objectID == base {
 				break
@@ -223,8 +224,8 @@ func (r *Repository) remoteOnlyOperations(
 		if pack.err != nil {
 			return nil, pack.err
 		}
-		for _, operation := range pack.pack.Operations {
-			held[owners[position]][operation.ID] = struct{}{}
+		if err := held[owners[position]].record(heads[position].ObjectID, pack.pack); err != nil {
+			return nil, err
 		}
 	}
 	return held, nil
@@ -282,14 +283,19 @@ type taskReplay struct {
 	// stops: a pack cannot be applied to a deleted task.
 	originWins bool
 	overridden *core.Conflict
-	// held is every operation ID the history being replayed onto already
+	// held is every operation the history being replayed onto already
 	// records, as far as the caller read it. A pack all of whose operations
-	// are held is skipped, whatever its commit ID, and one only some of whose
-	// operations are held is refused: writing it would record an operation ID
-	// twice in one history, which no reader can fold. Without this, two
-	// places that each hold the other's operations under different commits
-	// replayed them into each other on every round trip.
-	held     operationAccount
+	// are held with the same content is skipped, whatever its commit ID, and
+	// one only some of whose operations are held is refused: writing it would
+	// record an operation ID twice in one history, which no reader can fold.
+	// Without this, two places that each hold the other's operations under
+	// different commits replayed them into each other on every round trip. A
+	// pack that reuses a held ID for other content is refused as corrupt
+	// (heldOperations.match): skipping it would take the other value silently.
+	held heldOperations
+	// remote is what a conflict's Remote member records: the remote whose
+	// history is replayed onto, or nothing for origin (core.ConflictRemote).
+	remote   string
 	replayed int
 	skipped  int
 	// carried counts the packs whose operations held already recorded.
@@ -302,11 +308,9 @@ type taskReplay struct {
 // last-syncer-wins.
 func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Snapshot) (bool, error) {
 	if replay.held != nil {
-		recorded := 0
-		for _, operation := range local.Operation.Operations {
-			if _, found := replay.held[operation.ID]; found {
-				recorded++
-			}
+		recorded, err := replay.held.match(replay.taskID, local.Head, local.Operation)
+		if err != nil {
+			return false, err
 		}
 		switch {
 		case recorded == len(local.Operation.Operations):
@@ -321,6 +325,7 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 		}
 	}
 	if conflict := replay.classify(local.Operation); conflict != nil {
+		conflict.Remote = replay.remote
 		if !replay.originWins || conflict.Type == core.ConflictTombstone {
 			replay.conflict = conflict
 			return true, nil
@@ -376,8 +381,8 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 	replay.parent = core.Snapshot{Head: head, Operation: pack, State: state}
 	replay.replayed++
 	if replay.held != nil {
-		for _, operation := range pack.Operations {
-			replay.held[operation.ID] = struct{}{}
+		if err := replay.held.record(head, pack); err != nil {
+			return false, err
 		}
 	}
 	replay.dependencies[replay.taskID] = append([]string(nil), state.Task.Dependencies...)

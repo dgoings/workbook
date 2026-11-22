@@ -66,6 +66,7 @@ type MoveStragglers struct {
 // MoveSetAside is one task whose operations from the old place were set aside.
 type MoveSetAside struct {
 	TaskID     string   `json:"taskId"`
+	Title      string   `json:"title"`
 	Operations []string `json:"operations"`
 	// ParkedRef holds the old place's history for the task, when this run
 	// parked it. A task set aside by an earlier run has none here.
@@ -229,16 +230,55 @@ func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, o
 	result.Verified = true
 	result.Stragglers = carried.report()
 	if len(carried.conflicts) > 0 {
-		names := make([]string, 0, len(carried.conflicts))
-		for _, conflict := range carried.conflicts {
-			names = append(names, fmt.Sprintf("%s (%s)", conflict.TaskID, core.ConflictDetail(conflict)))
-		}
-		return result, core.Errorf(core.CategoryConflict,
-			"the move is finished, but %s held operations for %d task(s) that conflict with their history at %s, "+
-				"so they were set aside rather than applied: %s; a later run does not try them again",
-			from, len(names), to.Name, strings.Join(names, "; "))
+		return result, setAsideRefusal(from, to.Name, carried.conflicts)
 	}
 	return result, nil
+}
+
+// moveConflict is one task whose edits from the old place were set aside.
+type moveConflict struct {
+	conflict  core.Conflict
+	title     string
+	parkedRef string
+}
+
+// setAsideRefusal is the exit-8 report of a run that set edits aside: which
+// tasks, why each could not be applied, where its text is kept and what the
+// person does about it. The old place's edits are the ones that could not
+// apply, and the new place's history is what they met.
+func setAsideRefusal(from, to string, conflicts []moveConflict) error {
+	lines := make([]string, 0, len(conflicts))
+	refs := make([]string, 0, len(conflicts))
+	for _, item := range conflicts {
+		lines = append(lines, fmt.Sprintf("%q (%s): %s", item.title, item.conflict.TaskID, moveConflictReason(item.conflict, from, to)))
+		refs = append(refs, item.parkedRef)
+	}
+	return core.Errorf(core.CategoryConflict,
+		"the move is finished, but edits made at %s to %d task(s) could not be applied at %s, "+
+			"because each conflicts with what happened to its task there: %s. "+
+			"They are set aside, not lost: each one's text is kept in this clone under %s, "+
+			"and workbook serve run from this clone shows it on its task as a set-aside edit; "+
+			"apply what you want of it by hand. Running workbook move-tasks again from this clone does not report them again",
+		from, len(conflicts), to, strings.Join(lines, "; "), strings.Join(refs, ", "))
+}
+
+// moveConflictReason says why one of the old place's edits could not apply
+// onto the new place's history.
+func moveConflictReason(conflict core.Conflict, from, to string) string {
+	switch conflict.Type {
+	case core.ConflictDescription:
+		return "its description was changed both at " + from + " and at " + to
+	case core.ConflictTombstone:
+		edit := "the edit (" + string(conflict.Tombstone.Operation) + ")"
+		if conflict.Tombstone.Field != "" {
+			edit = "the change to its " + conflict.Tombstone.Field
+		}
+		return "it was deleted at " + to + ", so " + edit + " made at " + from + " cannot apply to it"
+	case core.ConflictDependencyCycle:
+		return "the dependency on " + conflict.Dependency.To + " made at " + from + " would close a dependency cycle at " + to
+	default:
+		return string(conflict.Type)
+	}
 }
 
 // forgetAddedRemote removes the tasks remote again when this run added it and
@@ -302,7 +342,7 @@ type moveCarry struct {
 	operations int
 	tasks      map[string]struct{}
 	actors     map[string]struct{}
-	conflicts  []core.Conflict
+	conflicts  []moveConflict
 }
 
 func newMoveCarry() *moveCarry {
@@ -521,12 +561,26 @@ func (r *Repository) carryTask(
 			"this checkout cannot read the whole history of task %s, so %s's copy of it was not carried", taskID, from)
 	}
 	var exclude map[string]struct{}
+	held := heldOperations{}
+	if err := held.recordChain(chains[0]); err != nil {
+		return nil, err
+	}
 	if checkpoint, ok := chains[0][0].Operation.Checkpoint(); ok {
 		exclude = operationIDSet(checkpoint.CompactedOperations)
+		held.recordIDs(checkpoint.CompactedOperations)
 	}
-	held := newOperationAccount(nil, chains[0])
-	for id := range exclude {
-		held[id] = struct{}{}
+	// An operation the old place holds under an ID this history records is
+	// the same operation or a forgery, and only content tells them apart:
+	// carrying is by operation identity, so a forgery would otherwise be
+	// counted as held and its task reported carried.
+	sourceChains, err := r.completeTaskChains(ctx, config, []TaskHead{{TaskID: taskID, ObjectID: theirs.Head}})
+	if err != nil {
+		return nil, err
+	}
+	for _, commit := range sourceChains[0] {
+		if _, err := held.match(taskID, commit.ObjectID, commit.Operation); err != nil {
+			return nil, err
+		}
 	}
 	missing, err := r.operationsNotIn(ctx, config, taskID, theirs.Head, mine.Head, exclude)
 	if err != nil {
@@ -561,7 +615,7 @@ func (r *Repository) carryTask(
 				return nil, nil
 			}
 		}
-		result.SetAside = append(result.SetAside, MoveSetAside{TaskID: taskID, Operations: aside})
+		result.SetAside = append(result.SetAside, MoveSetAside{TaskID: taskID, Title: mine.State.Task.Title, Operations: aside})
 		return nil, nil
 	}
 
@@ -599,8 +653,12 @@ func (r *Repository) carryTask(
 				operations = append(operations, operation.ID)
 			}
 		}
-		result.SetAside = append(result.SetAside, MoveSetAside{TaskID: taskID, Operations: operations, ParkedRef: parkedRef})
-		carried.conflicts = append(carried.conflicts, *replay.conflict)
+		result.SetAside = append(result.SetAside, MoveSetAside{
+			TaskID: taskID, Title: mine.State.Task.Title, Operations: operations, ParkedRef: parkedRef,
+		})
+		carried.conflicts = append(carried.conflicts, moveConflict{
+			conflict: *replay.conflict, title: mine.State.Task.Title, parkedRef: parkedRef,
+		})
 	}
 	if update.Next == update.Expected && update.ParkedRef == "" {
 		return nil, nil
@@ -877,12 +935,23 @@ func (r *Repository) verifyMovedTasks(ctx context.Context, config core.ProjectCo
 				compacted = checkpoint.CompactedOperations
 			}
 			account := newOperationAccount(compacted, ours)
+			// Held by ID is not enough: the same ID with other content is a
+			// forgery on one side, and counting it as held would report the
+			// task carried while the two places disagree about it.
+			held := heldOperations{}
+			if err := held.recordChain(ours); err != nil {
+				return err
+			}
+			held.recordIDs(compacted)
 			aside, err := r.parkedAccount(ctx, config, name, parked[name])
 			if err != nil {
 				return err
 			}
 			var lacking []string
 			for _, commit := range theirs {
+				if _, err := held.match(name, commit.ObjectID, commit.Operation); err != nil {
+					return wrapKeepingCategory(fmt.Sprintf("%s and %s disagree about task %s", from, to, name), err)
+				}
 				if account.covers(commit) || aside.covers(commit) {
 					continue
 				}

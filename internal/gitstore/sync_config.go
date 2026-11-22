@@ -244,6 +244,9 @@ func (r *Repository) reconcileObservedConfig(
 	if err != nil {
 		return r.configStageFailure(err)
 	}
+	for index := range outcome.Conflicts {
+		outcome.Conflicts[index].Remote = core.ConflictRemote(r.remote())
+	}
 	if err := r.replaceConfigRef(ctx, outcome.Head, localHead, &outcome); err != nil {
 		return r.configStageFailure(err)
 	}

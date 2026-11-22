@@ -394,58 +394,99 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-// (R3 c) A set-up checkout is told, by setup and by sync, when the old place
-// holds an edit the new place lacks, with the task, the count and the command
-// that carries it; once move-tasks has run again, neither says anything.
-func TestTasksRemoteSetupAndSyncSayWhatTheOldPlaceStillHolds(t *testing.T) {
+// Edits published to the old place after the move that conflict with the new
+// place are reported to whoever runs move-tasks, in the clone they run it
+// from, and nowhere else: setup and sync in other checkouts do not look at the
+// old place and say nothing. The report names each task by title and ID, says
+// which place did what, and where the text is kept; a rerun in the same clone
+// is quiet, and one in another clone reports them there, once. A parked ref
+// dismissed on the board is tried again by the next run, which parks it again
+// and reports it once more.
+func TestMoveTasksSetAsideEditsAreReportedWhereMoveTasksRuns(t *testing.T) {
 	t.Parallel()
 	project := codeProject(t, testrepo.FormatSHA1)
 	teammate := cloneCode(t, project)
 	if code, stdout, stderr := run(t, teammate, "setup"); code != 0 {
 		t.Fatalf("teammate setup = (%d, %q, %q)", code, stdout, stderr)
 	}
-	edited := project.ids[0]
-	straggler(t, teammate, edited, "--description", "Published to the old place after the move")
+	described, deleted := project.ids[0], project.ids[1]
+	straggler(t, teammate, described, "--description", "The teammate's description")
+	straggler(t, teammate, deleted, "--title", "Renamed by the teammate")
 	project.moveTasks(t)
-	publishStraggler(t, teammate, edited)
-	want := "origin, which the tasks moved away from, holds 1 operation on " + edited + " that tasks lacks; run workbook move-tasks"
+	if code, _, stderr := run(t, project.seed, "update", described, "--description", "The seed's description"); code != 0 {
+		t.Fatalf("seed update = %d; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, project.seed, "delete", deleted); code != 0 {
+		t.Fatalf("seed delete = %d; stderr = %q", code, stderr)
+	}
+	publishStraggler(t, teammate, described)
+	publishStraggler(t, teammate, deleted)
 
-	code, stdout, stderr := run(t, project.seed, "setup", "--json")
-	if code != 0 {
-		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
+	requireSetAsideReport := func(t *testing.T, clone string) {
+		t.Helper()
+		code, stdout, stderr := run(t, clone, "move-tasks")
+		if code != 8 {
+			t.Fatalf("move-tasks = (%d, %q, %q), want 8", code, stdout, stderr)
+		}
+		for _, want := range []string{
+			`"Shared before the move" (` + described + `): its description was changed both at origin and at tasks`,
+			`"Also shared before the move" (` + deleted + `): it was deleted at tasks, so the change to its title made at origin cannot apply to it`,
+			"refs/workbook/reconciled/" + described + "/",
+			"refs/workbook/reconciled/" + deleted + "/",
+			"workbook serve run from this clone shows it on its task as a set-aside edit",
+			"apply what you want of it by hand",
+		} {
+			if !strings.Contains(stderr, want) {
+				t.Fatalf("move-tasks report %q lacks %q", stderr, want)
+			}
+		}
+		if strings.Contains(stderr, "tombstoned") {
+			t.Fatalf("move-tasks report %q names the roles the wrong way round", stderr)
+		}
+		for round := 0; round < 2; round++ {
+			if code, stdout, stderr := run(t, clone, "move-tasks"); code != 0 {
+				t.Fatalf("rerun %d in the same clone = (%d, %q, %q), want quiet success", round, code, stdout, stderr)
+			}
+		}
 	}
-	var setup struct {
-		LeftBehind *struct {
-			Remote     string   `json:"remote"`
-			Operations int      `json:"operations"`
-			Tasks      []string `json:"tasks"`
-		} `json:"leftBehind"`
-	}
-	if err := json.Unmarshal(assertJSONResult(t, stdout, "setup").Data, &setup); err != nil {
-		t.Fatal(err)
-	}
-	if setup.LeftBehind == nil || setup.LeftBehind.Remote != "origin" || setup.LeftBehind.Operations != 1 ||
-		strings.Join(setup.LeftBehind.Tasks, ",") != edited {
-		t.Fatalf("setup leftBehind = %+v, want the one operation on %s", setup.LeftBehind, edited)
-	}
-	if code, stdout, stderr := run(t, project.seed, "setup"); code != 0 || !strings.Contains(stdout, "Left behind:\t"+want) {
-		t.Fatalf("setup text = (%d, %q, %q), want the left-behind line", code, stdout, stderr)
-	}
+	requireSetAsideReport(t, project.seed)
 
-	code, stdout, stderr = run(t, project.seed, "sync", "--json")
-	if code != 0 {
-		t.Fatalf("sync = (%d, %q, %q)", code, stdout, stderr)
+	// Another checkout on the new settings hears nothing from setup or sync.
+	other := cloneCode(t, project)
+	code, stdout, stderr := run(t, other, "setup", "--json")
+	if code != 0 || strings.Contains(stdout, "leftBehind") {
+		t.Fatalf("other setup = (%d, %q, %q), want no left-behind report", code, stdout, stderr)
 	}
-	if warnings := assertJSONResult(t, stdout, "sync").Warnings; len(warnings) != 1 ||
-		warnings[0].Code != "tasks-left-behind" || !strings.HasPrefix(warnings[0].Message, want) {
-		t.Fatalf("sync warnings = %+v, want the left-behind notice", warnings)
+	if code, stdout, stderr := run(t, other, "setup"); code != 0 || strings.Contains(stdout, "Left behind") {
+		t.Fatalf("other setup text = (%d, %q, %q), want no left-behind line", code, stdout, stderr)
 	}
+	for round := 0; round < 2; round++ {
+		code, stdout, stderr := run(t, other, "sync", "--json")
+		if code != 0 || len(assertJSONResult(t, stdout, "sync").Warnings) != 0 {
+			t.Fatalf("other sync %d = (%d, %q, %q), want no warning", round, code, stdout, stderr)
+		}
+	}
+	// Run from there, move-tasks reports them there, once.
+	requireSetAsideReport(t, other)
 
-	moveTasksAgain(t, project, 0)
-	if code, stdout, stderr := run(t, project.seed, "sync", "--json"); code != 0 || len(assertJSONResult(t, stdout, "sync").Warnings) != 0 {
-		t.Fatalf("sync after the carry = (%d, %q, %q), want no notice", code, stdout, stderr)
+	// Dismissing the parked ref, as the board does, lets the next run try the
+	// edit again: it conflicts again, is parked again and reported once more.
+	parked := strings.Fields(cliGitOutput(t, project.seed, "for-each-ref", "--format=%(refname)",
+		"refs/workbook/reconciled/"+described+"/"))
+	if len(parked) != 1 {
+		t.Fatalf("parked refs for %s = %v, want one", described, parked)
 	}
-	if code, stdout, stderr := run(t, project.seed, "setup"); code != 0 || strings.Contains(stdout, "Left behind") {
-		t.Fatalf("setup after the carry = (%d, %q, %q), want no notice", code, stdout, stderr)
+	cliGit(t, project.seed, "update-ref", "-d", parked[0])
+	code, _, stderr = run(t, project.seed, "move-tasks")
+	if code != 8 || !strings.Contains(stderr, described) || strings.Contains(stderr, deleted) {
+		t.Fatalf("move-tasks after the dismissal = (%d, %q), want %s alone reported again", code, stderr, described)
 	}
+	if code, stdout, stderr := run(t, project.seed, "move-tasks"); code != 0 {
+		t.Fatalf("move-tasks after the report = (%d, %q, %q), want quiet success", code, stdout, stderr)
+	}
+	if shown := cliShowTask(t, project.seed, described); shown.Description != "The seed's description" {
+		t.Fatalf("description = %q, want the new place's, never the set-aside one", shown.Description)
+	}
+	requireEachOperationOnce(t, project.tasks)
+	requireFreshCloneValidates(t, project.tasks)
 }

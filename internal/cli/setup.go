@@ -28,9 +28,6 @@ type setupResult struct {
 	// TasksRemote is present only for a project whose settings name a remote
 	// other than origin for its tasks: what this run did about it.
 	TasksRemote *gitstore.TasksRemoteSetup `json:"tasksRemote,omitempty"`
-	// LeftBehind is present when origin, which the tasks moved away from,
-	// holds operations this checkout lacks (gitstore.FindLeftBehind).
-	LeftBehind *gitstore.LeftBehind `json:"leftBehind,omitempty"`
 }
 
 // setupTasksOnly reports a run in a tasks-only folder: one holding a project's
@@ -369,10 +366,6 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 		}
 	}
 
-	if tasksRemote != nil && !*noSync && syncErr == nil {
-		result.LeftBehind = repository.FindLeftBehind(ctx, config)
-	}
-
 	tasks, err := repository.List(ctx, config)
 	if err != nil {
 		return err
@@ -402,9 +395,6 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	if result.TasksRemote != nil {
 		fmt.Fprintf(stdout, "Tasks remote:\t%s\t%s\t(%s)\n", result.TasksRemote.Name, result.TasksRemote.URL,
 			tasksRemoteSetupDescription(*result.TasksRemote))
-	}
-	if result.LeftBehind != nil {
-		fmt.Fprintf(stdout, "Left behind:\t%s\n", result.LeftBehind.Warning(result.TasksRemote.Name).Message)
 	}
 	fmt.Fprintf(stdout, "Project ID:\t%s\t(%s)\n", result.ProjectID, setupIdentityDescription(result.Identity))
 	fmt.Fprintf(stdout, "Key:\t%s\n", result.Key)

@@ -28,6 +28,27 @@ type Conflict struct {
 	Description *DescriptionConflict `json:"description,omitempty"`
 	Dependency  *DependencyConflict  `json:"dependency,omitempty"`
 	Tombstone   *TombstoneConflict   `json:"tombstone,omitempty"`
+	// Remote names the remote whose history the conflict was met against,
+	// when that is not origin. It is empty for origin, so a project that
+	// shares its tasks through origin reports exactly what it always did.
+	Remote string `json:"remote,omitempty"`
+}
+
+// conflictRemote is the remote a conflict's wording names.
+func conflictRemote(remote string) string {
+	if remote == "" {
+		return DefaultTasksRemote
+	}
+	return remote
+}
+
+// ConflictRemote is what a conflict's Remote member holds for remote: the
+// name, or nothing for origin.
+func ConflictRemote(remote string) string {
+	if remote == DefaultTasksRemote {
+		return ""
+	}
+	return remote
 }
 
 // DescriptionConflict presents the three descriptions a caller needs to write
@@ -75,11 +96,11 @@ func ConflictError(conflicts []Conflict) error {
 func ConflictDetail(conflict Conflict) string {
 	switch conflict.Type {
 	case ConflictDescription:
-		return "the description changed here and on origin; reapply the wanted text"
+		return "the description changed here and on " + conflictRemote(conflict.Remote) + "; reapply the wanted text"
 	case ConflictDependencyCycle:
 		return "the dependency on " + conflict.Dependency.To + " would close a cycle against the fetched graph"
 	case ConflictTombstone:
-		return "origin tombstoned this task, so the local " +
+		return conflictRemote(conflict.Remote) + " tombstoned this task, so the local " +
 			string(conflict.Tombstone.Operation) + " operation cannot apply"
 	default:
 		return string(conflict.Type)
@@ -206,6 +227,9 @@ type ConfigConflict struct {
 	Ours     string   `json:"ours,omitempty"`
 	Theirs   string   `json:"theirs,omitempty"`
 	Detail   string   `json:"detail,omitempty"`
+	// Remote names the remote whose ledger the conflict was met against, when
+	// that is not origin, as Conflict.Remote does.
+	Remote string `json:"remote,omitempty"`
 }
 
 // ConfigConflictError summarizes a configuration conflict list as the command's
@@ -238,29 +262,30 @@ func ConfigConflictDetail(conflict ConfigConflict) string {
 	if conflict.Detail != "" {
 		return conflict.Detail
 	}
+	remote := conflictRemote(conflict.Remote)
 	switch conflict.Type {
 	case ConfigConflictStatusRename:
-		return "this status was renamed to " + conflict.Ours + " here and to " + conflict.Theirs + " on origin"
+		return "this status was renamed to " + conflict.Ours + " here and to " + conflict.Theirs + " on " + remote
 	case ConfigConflictStatusRetired:
-		return "this status was removed into " + conflict.Ours + " here and into " + conflict.Theirs + " on origin"
+		return "this status was removed into " + conflict.Ours + " here and into " + conflict.Theirs + " on " + remote
 	case ConfigConflictStatusDefinition:
-		return "this status was defined as " + conflict.Ours + " here and as " + conflict.Theirs + " on origin"
+		return "this status was defined as " + conflict.Ours + " here and as " + conflict.Theirs + " on " + remote
 	case ConfigConflictStatusArity:
 		return "replaying this change left the project without a required status role"
 	case ConfigConflictRootVocabulary:
 		return "this project's configuration started from " + conflict.Ours +
-			" here and from " + conflict.Theirs + " on origin"
+			" here and from " + conflict.Theirs + " on " + remote
 	case ConfigConflictDisplaySetting:
 		// Reached only by a conflict somebody built without a detail line; the
 		// classifier always writes one, because the setting's name is the whole
 		// subject and this union has no member to put it in.
-		return "this display setting was changed here and on origin"
+		return "this display setting was changed here and on " + remote
 	case ConfigConflictPriorityRename:
-		return "this priority was renamed to " + conflict.Ours + " here and to " + conflict.Theirs + " on origin"
+		return "this priority was renamed to " + conflict.Ours + " here and to " + conflict.Theirs + " on " + remote
 	case ConfigConflictPriorityRetired:
-		return "this priority was removed into " + conflict.Ours + " here and into " + conflict.Theirs + " on origin"
+		return "this priority was removed into " + conflict.Ours + " here and into " + conflict.Theirs + " on " + remote
 	case ConfigConflictPriorityDefinition:
-		return "this priority was defined as " + conflict.Ours + " here and as " + conflict.Theirs + " on origin"
+		return "this priority was defined as " + conflict.Ours + " here and as " + conflict.Theirs + " on " + remote
 	case ConfigConflictPriorityArity:
 		return "replaying this change left the project without a required priority role"
 	default:
