@@ -735,7 +735,15 @@ Before normal task reads (`list`, `show`, `board`, `next`, and web `GET
 refreshes changed checkpoints. Create, update, and other mutations continue to
 write Git operations directly. Run `workbook rebuild` to explicitly recreate the
 cache; it builds a temporary database, checks task heads again, retries once if
-they changed during the build, and atomically installs a stable result. With
+they changed during the build, and atomically installs the result. If they
+changed during the retry too, the retry's build is installed anyway: it is
+every task as its ref was listed, which is what any cache is once somebody
+writes a task, and the next read brings it up to the refs. A rebuild that finds
+another process installed a usable cache while it was building opens that cache
+and discards its own, so processes that all found no cache at once, such as a
+fresh clone's first commands, stop replacing each other's. The same rebuild
+runs, without being asked, whenever a command finds the cache missing, from
+another Workbook version, or for another project. With
 `--json`, the normal result envelope contains `taskCount` and `cachePath`.
 
 An `operations` table alongside the task tables materializes each task's recorded
@@ -757,6 +765,44 @@ logical-clock chain a root-first replay depends on. Workbook deletes that task's
 operation rows and reprojects the returned chain instead. Refresh and rebuild
 therefore scale with operation count rather than task count, as the
 projection-refresh benchmark family measures.
+
+Several readers refresh one cache at once: the requests a board is answering
+together, a command-line user beside it, a board in another worktree, and a
+background synchronization. A refresh reads the rows it holds, lists the task
+refs, reads the changed checkpoints from Git, and then writes each changed task
+in one transaction with a compare-and-swap against the row it read first:
+
+```text
+row before   ref listed   row at write   refresh writes   read answers
+-----------  -----------  -------------  ---------------  ------------------
+A            B            A              B                B (from the cache)
+(none)       B            B              nothing          B (from the cache)
+A            B            C              nothing          B (from Git)
+```
+
+The second line is a create projecting its own new task while a read projects
+the same one; the third is another write moving the task again, or a slower
+writer recording an older head, while the read was in Git. A row somebody else
+moved belongs to them, so it is left alone, and the read answers that task from
+the checkpoint it took from Git, which is the task as its ref stood after the
+request began. The next refresh compares the row with the ref again, whichever
+was newer. A refresh therefore makes one pass and cannot fail because another
+update moved a row underneath it. An exact read of one task works the same way, trying a
+moved row once more before answering from Git. A mutation's conditional advance
+after its Git write leaves a moved row alone too, without warning, because the
+row is not stale on that write's account.
+
+Concurrency limits that remain are bounded and answered as `stale-write`, which
+means nothing was written and the identical request should be sent again. They
+apply to reads and writes alike: the SQLite busy timeout of five seconds, three
+attempts at a request whose cache file another process keeps replacing, and
+three rounds of opening a cache that another process replaces again each time it
+has just been recovered. A rebuild is not among them: it builds at most twice
+and then installs what it built. A refresh holds no write lock on the cache
+while it reads Git, only the short write transaction at the end of its pass, so
+reads are not serialized behind writes.
+The advice to run `workbook rebuild` is reserved for a cache SQLite cannot read
+or write.
 
 The cache can be deleted at any time and rebuilt entirely from Workbook refs.
 Semantic validation results live in a separate `validation.sqlite` beside it, so

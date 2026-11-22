@@ -857,6 +857,10 @@ func (brokenProjection) Advance(context.Context, core.ProjectConfig, string, cor
 	return false, errors.New("cache advance broke")
 }
 
+func (brokenProjection) Land(context.Context, core.ProjectConfig, string, core.Snapshot) (bool, error) {
+	return false, errors.New("cache advance broke")
+}
+
 // A projection that cannot be settled after the refs moved is a
 // ProjectionError, so the command can report a finished compaction with a
 // rebuild warning. A failure before any ref moved is not one.
@@ -896,6 +900,82 @@ func TestExecuteReportsProjectionFailureAfterRefsMoved(t *testing.T) {
 	plan = f.prepare(options)
 	if _, err := Execute(context.Background(), f.deps(), plan, options); err == nil || errors.As(err, &projectionErr) {
 		t.Fatalf("Execute() onto an existing bundle error = %v, want an error that is not a *ProjectionError", err)
+	}
+}
+
+// overtakenProjection stands for the settle's first refresh losing a task's
+// row to a slower writer: while that refresh is in Git, the writer of an older
+// edit records it over the head the refresh read first, so the refresh writes
+// nothing for that task and succeeds, as a refresh that finds a row moved
+// does. The interleaving is staged as its end state, through the store's own
+// conditional advance, because the store's source hooks are not reachable
+// from this package; the projection package's race tests hold the refresh's
+// half of it.
+type overtakenProjection struct {
+	Projection
+	config   core.ProjectConfig
+	behind   string
+	recorded core.Snapshot
+	once     bool
+}
+
+func (p *overtakenProjection) Refresh(ctx context.Context) error {
+	if p.once {
+		return p.Projection.Refresh(ctx)
+	}
+	p.once = true
+	applied, err := p.Projection.Advance(ctx, p.config, p.behind, p.recorded)
+	if err != nil || !applied {
+		return fmt.Errorf("slower writer's advance = %t, %v, want true, nil", applied, err)
+	}
+	return nil
+}
+
+// A row another update left on some head other than the old tip or the
+// checkpoint is still behind its ref when the run ends, and Git is about to
+// prune the head it names: the command's own last line suggests `git gc`.
+// The run has to bring that row to the checkpoint too, or the first read after
+// the prune cannot prove the move and is refused as corrupt data.
+func TestExecuteSettlesARowAnotherUpdateLeftBehindTheCheckpoint(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newFixture(t)
+	task := f.create("Done, edited by a slow writer")
+	created := f.tip(task)
+	f.comment(task, "an edit whose writer is slow to record it")
+	edited := f.tip(task)
+	f.status(task, core.StatusDone)
+	options := Options{Criteria: everything(), Backup: "-", Now: f.now}
+	plan := f.prepare(options)
+	oldTip := candidateFor(t, plan, task).Tip.Head
+
+	// The row is behind the ref, at the creation, as a read that lost its row
+	// to another update leaves it; the edit's writer has not recorded it yet.
+	if err := f.store.Invalidate(ctx, f.config, task, oldTip, oldTip); err != nil {
+		t.Fatalf("Invalidate() error = %v", err)
+	}
+	if applied, err := f.store.Advance(ctx, f.config, "", created); err != nil || !applied {
+		t.Fatalf("Advance(creation) = %t, %v, want true, nil", applied, err)
+	}
+	deps := f.deps()
+	deps.Projection = &overtakenProjection{Projection: f.store, config: f.config, behind: created.Head, recorded: edited}
+
+	if _, err := Execute(ctx, deps, plan, options); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	f.git("reflog", "expire", "--expire=now", "--all")
+	f.git("gc", "--quiet", "--prune=now")
+	if _, err := f.repository.Git(ctx, nil, "cat-file", "-e", edited.Head); err == nil {
+		t.Fatalf("the edit %s survived gc; the fixture proves nothing", edited.Head)
+	}
+	listed, err := f.store.List(ctx, f.config)
+	if err != nil {
+		t.Fatalf("projection List() after gc error = %v", err)
+	}
+	checkpoint := f.tip(task).Head
+	if len(listed) != 1 || listed[0].Head != checkpoint || checkpoint == oldTip {
+		t.Fatalf("projection List() after gc = %+v, want %s at its checkpoint %s", listed, task, checkpoint)
 	}
 }
 
