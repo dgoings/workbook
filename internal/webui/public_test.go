@@ -187,3 +187,26 @@ func TestGuardWithoutAPublicAddressStillRefusesItsName(t *testing.T) {
 		t.Fatalf("list calls = %d, want 0", *lists)
 	}
 }
+
+// An address is compared by value, not by spelling: a browser writes the
+// IPv4-mapped address ::ffff:127.0.0.1 as [::ffff:7f00:1] in the Host and
+// Origin it sends, and that is the board given with either spelling. Another
+// address is still not.
+func TestGuardComparesThePublicAddressByValue(t *testing.T) {
+	t.Parallel()
+	const bound = "127.0.0.1:7331"
+	for _, public := range []string{"https://[::ffff:127.0.0.1]", "https://[::ffff:7f00:1]"} {
+		for _, host := range []string{"[::ffff:7f00:1]", "[::FFFF:7F00:1]", "[::ffff:127.0.0.1]", "[0:0:0:0:0:ffff:7f00:1]:443"} {
+			handler, _, creates := publicGuardedHandler(t, bound, public)
+			response := guardedRequest(t, handler, http.MethodPost, "/api/tasks", host, "https://"+host, "application/json", `{"title":"By value"}`)
+			if response.Code != http.StatusOK || *creates != 1 {
+				t.Errorf("public %s, Host and Origin %s: status = %d with %d creates, want 200 and 1; body = %s", public, host, response.Code, *creates, response.Body.String())
+			}
+		}
+		handler, _, creates := publicGuardedHandler(t, bound, public)
+		response := guardedRequest(t, handler, http.MethodPost, "/api/tasks", "[::ffff:7f00:2]", "https://[::ffff:7f00:2]", "application/json", `{"title":"Elsewhere"}`)
+		if response.Code != http.StatusForbidden || *creates != 0 {
+			t.Errorf("public %s, another address: status = %d with %d creates, want 403 and none", public, response.Code, *creates)
+		}
+	}
+}

@@ -224,3 +224,66 @@ func TestHandlerDismissesSetAsideEditsByTheTipShown(t *testing.T) {
 		t.Fatalf("GET %s = %d, Allow %q", path, response.Code, response.Header().Get("Allow"))
 	}
 }
+
+// Each kind of value in the notice is drawn with the helper the board draws
+// that kind with everywhere else: a one-line value and the author through
+// shownLine, a file's name through shownFileName, a link by its label through
+// attachmentShownName. Prose keeps its lines, and Copy puts it on the
+// clipboard exactly as it was saved, saying so beside the button when that
+// differs from what is drawn.
+func TestHandlerClientDrawsEachSetAsideValueAsTheBoardDoes(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	tasks := []core.Task{threadPageTask()}
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
+	script := renderedClientScript(t, request(t, handler, http.MethodGet, "/tasks/"+tasks[0].ID).Body.String())
+	edit := setAsideEdit()
+	edit.Actor = "alice\u001b[31m@client.example"
+	edit.Operations = []core.Operation{
+		{ID: "01K0M6B8A4FTT8C39MXXYTWD01", Type: core.OperationFieldSet, Field: "title", Value: "Ship\u0007 the\u001b[2J   release"},
+		{ID: "01K0M6B8A4FTT8C39MXXYTWD02", Type: core.OperationSetAdd, Field: "labels", Value: "urgent\u0007‮now"},
+		{ID: "01K0M6B8A4FTT8C39MXXYTWD03", Type: core.OperationAttachmentAdd, Attachment: &core.AttachmentData{Kind: core.AttachmentFile, Name: "reportㅤ‮fdp.exe"}},
+		{ID: "01K0M6B8A4FTT8C39MXXYTWD04", Type: core.OperationAttachmentAdd, Attachment: &core.AttachmentData{Kind: core.AttachmentLink, URL: "https://example.com/plan", Label: "The\u0007 plan"}},
+		{ID: "01K0M6B8A4FTT8C39MXXYTWD05", Type: core.OperationFieldSet, Field: "description", Value: "First line\nSecond ‮line"},
+		{ID: "01K0M6B8A4FTT8C39MXXYTWD06", Type: core.OperationCommentAdd, Body: "Plain comment"},
+	}
+	with := mustJSON(t, TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: setAsidePresentation(tasks, []core.SetAsideEdit{edit})})
+	program := clientDOMHarness("/tasks/"+tasks[0].ID, string(with)) + script + threadPanelHelpers + `
+setTimeout(async () => {
+  for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setTimeout(resolve, 0));
+  const notice = findElement(main, (element) => hasDataKey(element, "setAside"));
+  if (!notice || notice.hidden) throw new Error("the task page shows no set-aside notice");
+  const rows = [];
+  (function walk(element) {
+    if (element.className === "set-aside__change") rows.push(element);
+    (element.children || []).forEach(walk);
+  })(notice);
+  const drawn = rows.map((row) => row.children.filter((child) => child.className !== "set-aside__copy" && child.className !== "set-aside__note").map((child) => child.textContent));
+  const want = [
+    ["Title", "Ship the [2J release"],
+    ["Label added", "urgent now"],
+    ["Attachment added", "report fdp.exe"],
+    ["Attachment added", "The plan"],
+    ["Description", "First line\nSecond  line"],
+    ["Comment", "Plain comment"]
+  ];
+  if (JSON.stringify(drawn) !== JSON.stringify(want)) throw new Error("the notice draws " + JSON.stringify(drawn));
+  const by = findElement(notice, (element) => element.className === "set-aside__by");
+  if (!by.textContent.startsWith("alice [31m@client.example")) throw new Error("the author is drawn " + JSON.stringify(by.textContent));
+
+  const copies = rows.map((row) => row.children.find((child) => child.className === "set-aside__copy")).filter(Boolean);
+  if (copies.length !== 2) throw new Error("copy buttons: " + copies.length + ", want one per prose value");
+  for (const copy of copies) await copy.eventListeners.click();
+  if (JSON.stringify(clipboardWrites) !== JSON.stringify(["First line\nSecond ‮line", "Plain comment"])) {
+    throw new Error("Copy put " + JSON.stringify(clipboardWrites) + " on the clipboard, want the text as it was saved");
+  }
+  const notes = rows.map((row) => row.children.some((child) => child.className === "set-aside__note"));
+  if (JSON.stringify(notes) !== JSON.stringify([false, false, false, false, true, false])) {
+    throw new Error("notes beside Copy: " + JSON.stringify(notes) + ", want one beside the description alone");
+  }
+}, 0);
+`
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the set-aside notice's drawing: %v\n%s", err, output)
+	}
+}

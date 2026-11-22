@@ -453,9 +453,10 @@
     .set-aside__change { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .5rem; font-size: .82rem; }
     .set-aside__label { font-weight: 700; }
     .set-aside__value { overflow-wrap: anywhere; }
-    .set-aside__text { flex: 1 1 100%; margin: 0; padding: .45rem .55rem; border: 1px solid var(--wb-warning-border); border-radius: 4px; background: var(--wb-surface); color: var(--wb-ink); font-size: .82rem; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9rem; overflow-y: auto; }
+    .set-aside__note { flex: 1 1 12rem; font-size: .76rem; }
+    .set-aside__text { flex: 1 1 100%; margin: 0; padding: .45rem .55rem; border: 1px solid var(--wb-warning-border); border-radius: 4px; background: var(--wb-surface); color: var(--wb-ink); font-size: .82rem; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
     .set-aside button { min-height: 2rem; padding: .2rem .65rem; border: 1px solid currentcolor; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 700; }
     .set-aside button:hover { background: var(--wb-surface); }
-    .set-aside button:focus-visible, .set-aside__text:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
+    .set-aside button:focus-visible, .set-aside__list:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
     .set-aside__status { margin: .35rem 0 0; font-size: .78rem; }
     .set-aside__status:empty { display: none; }

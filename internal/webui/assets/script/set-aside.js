@@ -22,37 +22,46 @@
         return count === 1 ? "1 edit set aside" : count + " edits set aside";
       }
       // One operation of a set-aside edit as words: what changed, and the
-      // value it would have had. A value that is prose — a description or a
-      // comment — is drawn as a block a reader can copy from.
+      // value it would have had, drawn with the helper the board draws that
+      // kind of value with everywhere else — a one-line value through
+      // shownLine, a file's name through shownFileName, a link by its label
+      // through attachmentShownName — so the notice shows nothing the rest
+      // of the board would not. A value that is prose — a description or a
+      // comment — is drawn as a block a reader can copy from, and keeps the
+      // text exactly as it was saved in raw, which is what Copy puts on the
+      // clipboard: copying the drawn text instead would save something that
+      // never matches the set-aside edit.
       function setAsideChange(operation) {
-        const field = setAsideFields[operation.field] || operation.field || "";
+        const field = setAsideFields[operation.field] || shownLine(operation.field) || "";
+        const line = (label, value) => ({ label, value: shownLine(value), block: false });
+        const prose = (label, value) => ({ label, value: value || "", raw: value || "", block: true });
         switch (operation.type) {
           case "field.set":
-            return { label: field, value: operation.value || "", block: operation.field === "description" };
+            return operation.field === "description" ? prose(field, operation.value) : line(field, operation.value);
           case "set.add":
-            return { label: field + " added", value: operation.value || "", block: false };
+            return line(field + " added", operation.value);
           case "set.remove":
-            return { label: field + " removed", value: operation.value || "", block: false };
+            return line(field + " removed", operation.value);
           case "comment.add":
-            return { label: "Comment", value: operation.body || "", block: true };
+            return prose("Comment", operation.body);
           case "comment.edit":
-            return { label: "Comment edited", value: operation.body || "", block: true };
+            return prose("Comment edited", operation.body);
           case "comment.remove":
-            return { label: "Comment removed", value: "", block: false };
+            return line("Comment removed", "");
           case "assign.add":
-            return { label: "Assigned", value: operation.value || "", block: false };
+            return line("Assigned", operation.value);
           case "assign.remove":
-            return { label: "Unassigned", value: operation.value || "", block: false };
+            return line("Unassigned", operation.value);
           case "attachment.add":
-            return { label: "Attachment added", value: operation.attachment ? (operation.attachment.name || operation.attachment.url || "") : "", block: false };
+            return { label: "Attachment added", value: operation.attachment ? attachmentShownName(operation.attachment) : "", block: false };
           case "attachment.remove":
-            return { label: "Attachment removed", value: "", block: false };
+            return line("Attachment removed", "");
           case "task.tombstone":
-            return { label: "Deleted the task", value: "", block: false };
+            return line("Deleted the task", "");
           case "task.restore":
-            return { label: "Restored the task", value: "", block: false };
+            return line("Restored the task", "");
           default:
-            return { label: operation.type || "Change", value: operation.value || "", block: false };
+            return line(shownLine(operation.type) || "Change", operation.value);
         }
       }
       function setAsideTime(value) {
@@ -71,7 +80,11 @@
         const heading = document.createElement("h3"); heading.id = "set-aside-title";
         const summary = document.createElement("p"); summary.className = "set-aside__summary";
         text(summary, "A different change to this task reached the shared repository first, so these edits were kept aside rather than applied. Copy back what you want to keep and save it, then dismiss them.");
-        const list = document.createElement("div"); list.className = "set-aside__list";
+        // The list is the notice's one scrolling region: each edit's text is
+        // drawn whole inside it, so nothing scrolls within something else that
+        // scrolls. It takes focus, so a keyboard can scroll it too.
+        const list = document.createElement("div"); list.className = "set-aside__list"; list.tabIndex = 0;
+        list.setAttribute("role", "region"); list.setAttribute("aria-label", "Set-aside edits");
         const status = document.createElement("p"); status.className = "set-aside__status"; status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
         region.append(heading, summary, list, status);
         let signature = null;
@@ -116,7 +129,7 @@
             group.edits.forEach((edit) => {
               const item = document.createElement("article"); item.className = "set-aside__edit"; item.dataset.setAsideEdit = edit.commit || "";
               const by = document.createElement("p"); by.className = "set-aside__by";
-              const who = document.createElement("strong"); text(who, edit.actor || "Someone");
+              const who = document.createElement("strong"); text(who, shownLine(edit.actor) || "Someone");
               by.append(who);
               const when = setAsideTime(edit.wallTime);
               if (when) { const at = document.createElement("span"); text(at, " · " + when); by.append(at); }
@@ -127,7 +140,7 @@
                 const label = document.createElement("span"); label.className = "set-aside__label"; text(label, change.label);
                 row.append(label);
                 if (change.block) {
-                  const value = document.createElement("pre"); value.className = "set-aside__text"; value.tabIndex = 0;
+                  const value = document.createElement("pre"); value.className = "set-aside__text";
                   value.dataset.setAsideText = operation.field || operation.type || "";
                   text(value, change.value);
                   const copy = document.createElement("button"); copy.type = "button"; copy.className = "set-aside__copy";
@@ -136,13 +149,22 @@
                   copy.addEventListener("click", async () => {
                     try {
                       if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error("clipboard unavailable");
-                      await navigator.clipboard.writeText(shownField(change.value));
+                      await navigator.clipboard.writeText(change.raw);
                       text(status, "Copied.");
                     } catch (_) {
                       text(status, "Could not copy. Select the text and copy it instead.");
                     }
                   });
-                  row.append(copy, value);
+                  row.append(copy);
+                  // The text holds direction controls, which every board draws
+                  // as spaces. Copy carries the text as it was saved, so the
+                  // drawing and the clipboard differ, and the reader is told.
+                  if (shownField(change.raw) !== change.raw) {
+                    const note = document.createElement("span"); note.className = "set-aside__note"; note.dataset.setAsideNote = "";
+                    text(note, "Copy takes the text exactly as it was saved, including the direction controls drawn here as spaces.");
+                    row.append(note);
+                  }
+                  row.append(value);
                 } else if (change.value) {
                   const value = document.createElement("span"); value.className = "set-aside__value"; text(value, change.value);
                   row.append(value);

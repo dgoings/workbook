@@ -15,10 +15,11 @@ import (
 )
 
 // setAsideBoard serves one task with two sets of edits set aside — a long
-// description and a priority from one conflict, a comment from another — and
-// dismisses either. It records how many Origin headers each request that
-// changes something arrived with, and answers /origin-probe with the Origin
-// values of the request itself, so a page can ask what its browser sent.
+// description and a long comment from one conflict, another long comment from
+// a second — and dismisses either. It records how many Origin headers each
+// request that changes something arrived with, and answers /origin-probe with
+// the Origin values of the request itself, so a page can ask what its browser
+// sent.
 type setAsideBoard struct {
 	mu      sync.Mutex
 	edits   []core.SetAsideEdit
@@ -26,19 +27,21 @@ type setAsideBoard struct {
 }
 
 func newSetAsideBoard() *setAsideBoard {
-	long := strings.Repeat("The board's sync kept origin's text, and this paragraph is what it set aside. ", 6) +
-		"\n\n" + strings.Repeat("unbroken", 24)
+	long := func(what string) string {
+		return strings.Repeat("The board's sync kept origin's text, and this paragraph is the "+what+" it set aside. ", 8) +
+			"\n\n" + strings.Repeat("unbroken", 24)
+	}
 	description := setAsideEdit()
-	description.Operations[0].Value = long
-	priority := setAsideEdit()
-	priority.Commit = "parked-tip-2"
-	priority.Operations = []core.Operation{{ID: "01K0M6B8A4FTT8C39MXXYTWD01", Type: core.OperationFieldSet, Field: "priority", Value: "high"}}
+	description.Operations[0].Value = long("description")
+	remark := setAsideEdit()
+	remark.Commit = "parked-tip-2"
+	remark.Operations = []core.Operation{{ID: "01K0M6B8A4FTT8C39MXXYTWD01", Type: core.OperationCommentAdd, Body: long("comment")}}
 	comment := setAsideEdit()
 	comment.ParkedRef = "refs/workbook/reconciled/" + threadPageTaskID + "/1"
 	comment.Parked, comment.Commit = "parked-other", "parked-other"
 	comment.Actor = "bob@client.example"
-	comment.Operations = []core.Operation{{ID: "01K0M6B8A4FTT8C39MXXYTWD02", Type: core.OperationCommentAdd, CommentID: "01K0M6B8A4FTT8C39MXXYTWD03", Body: "A remark made while the other change was on its way."}}
-	return &setAsideBoard{edits: []core.SetAsideEdit{description, priority, comment}}
+	comment.Operations = []core.Operation{{ID: "01K0M6B8A4FTT8C39MXXYTWD02", Type: core.OperationCommentAdd, Body: long("second comment")}}
+	return &setAsideBoard{edits: []core.SetAsideEdit{description, remark, comment}}
 }
 
 func (board *setAsideBoard) handler(t *testing.T) http.Handler {
@@ -87,8 +90,10 @@ func (board *setAsideBoard) handler(t *testing.T) http.Handler {
 
 // The notice a set-aside edit draws on the task page fits every screen the
 // board is read on: it sits above the form, its text wraps rather than
-// widening the page, its list scrolls rather than pushing the form away, and
-// its buttons are a finger's height. Dismissing one set takes it away and
+// widening the page, its list scrolls rather than pushing the form away, the
+// list is the one thing in it that scrolls — every text is drawn whole within
+// it, and the last Dismiss can be scrolled to — and its buttons are a
+// finger's height. Dismissing one set takes it away and
 // leaves the other. The card on the board says the same in one line inside
 // its own width.
 //
@@ -123,6 +128,10 @@ func TestBrowserShowsSetAsideEditsOnEveryScreen(t *testing.T) {
 				HeadingAfter                      string
 				ProbeOrigins                      []string
 				Copy                              string
+				Scrollers                         int
+				ListScroll                        float64
+				TextHeights                       []float64
+				TextsWhole, LastDismissReachable  bool
 			}
 			openInBrowser(t, board.handler(t), browserPage{
 				Width: size.width, Height: size.height,
@@ -157,8 +166,24 @@ func TestBrowserShowsSetAsideEditsOnEveryScreen(t *testing.T) {
     textWidth: text.getBoundingClientRect().width, textClient: list.getBoundingClientRect().width,
     smallestButton: Math.min(...buttons.map((button) => button.getBoundingClientRect().height)),
     buttonsInside: buttons.every((button) => { const b = button.getBoundingClientRect(); return b.left >= box.left - 0.5 && b.right <= box.right + 0.5; }),
-    groups: region.querySelectorAll(".set-aside__group").length
+    groups: region.querySelectorAll(".set-aside__group").length,
+    // Everything in the notice that scrolls its own content: the list, and
+    // nothing inside it.
+    scrollers: [region, ...region.querySelectorAll("*")].filter((element) => {
+      const overflow = getComputedStyle(element).overflowY;
+      return (overflow === "auto" || overflow === "scroll") && element.scrollHeight > element.clientHeight + 1;
+    }).length,
+    listScroll: list.scrollHeight,
+    textHeights: Array.from(region.querySelectorAll("[data-set-aside-text]")).map((block) => block.getBoundingClientRect().height),
+    textsWhole: Array.from(region.querySelectorAll("[data-set-aside-text]")).every((block) => block.scrollHeight <= block.clientHeight + 1)
   };
+  list.scrollTop = list.scrollHeight;
+  await frames();
+  const last = Array.from(region.querySelectorAll("[data-set-aside-dismiss]")).pop().getBoundingClientRect();
+  const shown = list.getBoundingClientRect();
+  result.lastDismissReachable = last.top >= shown.top - 0.5 && last.bottom <= shown.bottom + 0.5;
+  list.scrollTop = 0;
+  await frames();
   const probe = await fetch("/origin-probe", { method: "POST", headers: { "Origin": "https://elsewhere.example" }, body: "{}" });
   result.probeOrigins = await probe.json();
   region.querySelector("[data-set-aside-dismiss]").click();
@@ -186,6 +211,13 @@ func TestBrowserShowsSetAsideEditsOnEveryScreen(t *testing.T) {
 			if limit := float64(size.height) * 0.35; page.ListHeight > limit+1 && page.ListHeight > 16*16+1 {
 				t.Errorf("the list of set-aside edits is %.0f tall, want it scrolling within %.0f", page.ListHeight, limit)
 			}
+			if page.Scrollers != 1 || !page.TextsWhole {
+				t.Errorf("%d regions of the notice scroll (want the list alone), and every text drawn whole = %t; text heights %v",
+					page.Scrollers, page.TextsWhole, page.TextHeights)
+			}
+			if !page.LastDismissReachable {
+				t.Errorf("scrolled to its end, the list does not show the last Dismiss")
+			}
 			if page.FormTop > float64(size.height) {
 				t.Errorf("the form starts at %.0f, below a %d-tall screen", page.FormTop, size.height)
 			}
@@ -206,8 +238,8 @@ func TestBrowserShowsSetAsideEditsOnEveryScreen(t *testing.T) {
 					t.Errorf("a request that changes something arrived with %d Origin headers, want one: %v", count, origins)
 				}
 			}
-			t.Logf("%dx%d: notice %.0f–%.0f × %.0f tall, list %.0f, form top %.0f, smallest button %.0f, text %.0f in list %.0f, origins per write %v, probe %q",
-				size.width, size.height, page.NoticeLeft, page.NoticeRight, page.NoticeHeight, page.ListHeight, page.FormTop, page.SmallestButton, page.TextWidth, page.TextClient, origins, page.ProbeOrigins)
+			t.Logf("%dx%d: notice %.0f–%.0f × %.0f tall, list %.0f showing %.0f of content, texts %v tall, %d scrolling region(s), form top %.0f, smallest button %.0f, text %.0f in list %.0f, origins per write %v, probe %q",
+				size.width, size.height, page.NoticeLeft, page.NoticeRight, page.NoticeHeight, page.ListHeight, page.ListScroll, page.TextHeights, page.Scrollers, page.FormTop, page.SmallestButton, page.TextWidth, page.TextClient, origins, page.ProbeOrigins)
 
 			var card struct {
 				Flag                            string
