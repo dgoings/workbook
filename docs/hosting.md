@@ -485,11 +485,12 @@ Set-aside edits are never dropped by themselves. The server keeps a copy each
 time its sync rearranges a task's history, including the many times nothing
 was set aside; it removes those settled copies itself, keeping the three
 newest per task, but it never removes a copy that holds an edit the board
-shows. Only Dismiss does. When another clone compacts the task and the board
-adopts that compaction, the board keeps every copy that still holds such an
-edit. Running `workbook compact` or `workbook compact --discard-local` in the
-server's own folder still drops all of a task's copies, after saving them to
-the backup bundle that command writes.
+shows. When another clone compacts the task and the board adopts that
+compaction, the board keeps every copy that still holds such an edit. Only
+Dismiss removes one, and a person running `workbook compact` or `workbook
+compact --adopt <task> --discard-local` by hand in the server's own folder,
+which drops all of a task's copies after saving them to the backup bundle that
+command writes, unless told `--no-backup`.
 
 A copy the board cannot read, such as one whose objects are missing, is
 skipped: the board shows everything else, and the log gets one line naming it

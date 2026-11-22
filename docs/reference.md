@@ -1726,7 +1726,8 @@ background sync of `workbook serve` and `workbook sync --watch` after each
 round. A parked ref holding an
 edit the task lacks is never retired this way, however many accumulate; it
 goes only when somebody dismisses it on the board, or when a manual
-`workbook compact` or `--discard-local` bundles and drops it. Fetches and reads
+`workbook compact` or `workbook compact --adopt <id> --discard-local` drops it,
+after writing it to the backup bundle unless told `--no-backup`. Fetches and reads
 never prune them: a fetch must not delete recoverable work in the command that
 orphaned it.
 
@@ -3016,7 +3017,8 @@ nothing.
 
 The board keeps, in memory, one verdict per parked ref, keyed by the commit the
 ref names and the task tip it was judged against, and reuses its listing of
-parked refs while no task head and no parked ref changed. A verdict that every
+parked refs for up to ten seconds while no task head changed and it moved no
+parked ref itself. A verdict that every
 later state settles too — all its operations replayed or compacted, or carried
 by a state after a known parking point — is kept across tip changes. So a
 listing reads only the parked refs that are new or whose task moved, in a
@@ -3070,8 +3072,8 @@ held at <ref> (commit <commit>)` to the server's standard error; nothing is
 recorded in the repository. The commits stay in the object store until Git
 collects them. A parked ref holding a set-aside edit is never pruned by
 itself, so it stays until dismissed, or until a manual `workbook compact` or
-`workbook compact --discard-local` in the serving checkout bundles and drops
-it.
+`workbook compact --adopt <id> --discard-local` in the serving checkout drops
+it, after writing it to the backup bundle unless told `--no-backup`.
 
 ### Behind a sign-in proxy
 
