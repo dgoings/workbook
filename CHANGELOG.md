@@ -77,6 +77,44 @@ sets one up with Cloudflare Tunnel and Cloudflare Access, and says plainly
 what it trusts: the board takes the proxy's header on its word, so only the
 proxy may reach its port.
 
+The board now shows the edits its own sync sets aside. When its background
+sync replays the board's unpublished edits onto a task that changed on `origin`
+and meets a conflict, it keeps `origin`'s side and parks the old local tip
+under `refs/workbook/reconciled/`, as `workbook sync` always has; until now
+that was reported only on the server's terminal, so the people using a hosted
+board never learned their edit had not been kept. The board reads the parked
+refs on every listing and shows each edit they hold that the task lacks: the
+card says "1 edit set aside", and the task's page shows who made each one,
+when, the field and the text, with buttons to copy the text and to dismiss.
+An edit stops showing once the task carries it again, such as when somebody
+copies the text back and saves, or when anybody dismisses it, which deletes
+that parked ref. Nothing new is recorded and no format changes, so it survives
+a restart and needs no migration. The command line still has no way to list or
+dismiss parked edits.
+
+For a board started with no options, exactly this changes:
+
+- Its cards and task pages show the notice above for any parked tip in the
+  serving checkout that holds edits the task lacks, including tips left by
+  `workbook sync` in that checkout, and by earlier versions, before the
+  upgrade.
+- `GET /api/tasks` carries a `setAside` array in a task's `presentation` when
+  it has such edits, and leaves it out otherwise.
+- `DELETE /api/tasks/<id>/set-aside` dismisses them, and its use is written to
+  standard error.
+- The background sync writes `workbook: background sync failed: <Git's
+  message>` to standard error when a round fails, again only when the message
+  changes, and `workbook: background sync is working again` when one succeeds.
+  It used to write nothing. `workbook sync --watch` writes the same lines.
+- A request carrying more than one `Origin` header is refused with `403`. No
+  browser sends one.
+
+A push Git refuses without naming a ref, such as one to a remote that cannot be
+reached, now reports Git's own message, credentials removed, on every surface,
+where it used to report `Git returned 0 push outcomes, want 1`. `--public-url`
+now refuses a host a browser could not send, such as `*.example.com` or one
+with an underscore, and a port with a leading zero.
+
 Synchronization no longer stops on a commit another tool wrote with an
 identity Git will not write again, such as an empty name. The replay takes the
 commit's email as its name, or `unknown`, so the task still synchronizes.

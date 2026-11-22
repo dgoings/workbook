@@ -24,30 +24,80 @@ before you share the address.
 
 - A Linux machine with a disk that survives a restart, such as a small virtual
   machine with an ordinary persistent disk, and a shell on it with `sudo`.
-- `workbook` installed on it; see [Installation](../README.md#installation).
+- Git 2.29 or later on it. Ubuntu 24.04 ships Git 2.43.
 - The project's repository on GitHub, already holding a Workbook project: any
   clone that has run `workbook setup` and `workbook sync` has published one.
 - A domain on Cloudflare. Tunnel publishes an application under a domain you
   have [added to Cloudflare](https://developers.cloudflare.com/fundamentals/manage-domains/add-site/).
-- A Cloudflare Zero Trust organization. The Free plan covers up to 50 users at
-  no cost ([plans](https://www.cloudflare.com/plans/zero-trust-services/)). A
-  person takes a seat the first time they sign in to an Access application
+- A Cloudflare Zero Trust organization. Check the current plan limits, including
+  how many people the Free plan admits
+  ([plans](https://www.cloudflare.com/plans/zero-trust-services/)). A person
+  takes a seat the first time they sign in, and once every seat is taken,
+  anybody new who signs in is blocked
   ([seat management](https://developers.cloudflare.com/cloudflare-one/team-and-resources/users/seat-management/)).
 
 The examples use `tasks.example.com` for the board's address,
 `OWNER/REPO` for the repository, and `board@example.com` for the server's own
 address. Replace each with yours.
 
-## 1. A user and a folder for the board
+## 1. Install Workbook
+
+The board needs a Workbook release whose `workbook serve --help` lists
+`--public-url` and `--actor-header`, and whose `workbook setup --help` lists
+`--tasks-only`. v0.6.1, the newest release when this guide was written, has
+none of them, so until a release does, build from source.
+
+Install it in `/usr/local/bin`, where the service below runs it from and where
+`sudo` finds it. Both ways below need Git, SSH and curl; on Ubuntu or Debian:
+
+```sh
+sudo apt-get install -y git openssh-client curl ca-certificates
+```
+
+From a release:
+
+```sh
+version=X.Y.Z          # the release, without its leading v
+arch=$(dpkg --print-architecture)   # amd64 or arm64
+cd "$(mktemp -d)"
+curl -fsSLO "https://github.com/dgoings/workbook/releases/download/v${version}/workbook_${version}_linux_${arch}.tar.gz"
+curl -fsSLO "https://github.com/dgoings/workbook/releases/download/v${version}/checksums.txt"
+sha256sum --check --ignore-missing checksums.txt
+tar -xzf "workbook_${version}_linux_${arch}.tar.gz" workbook
+sudo install -m 0755 workbook /usr/local/bin/workbook
+```
+
+`sha256sum` must print `OK` for the archive before you go on.
+
+From source, with Go 1.26 or later from [go.dev/dl](https://go.dev/dl/)
+(Ubuntu 24.04's own `golang` package is older):
+
+```sh
+git clone https://github.com/dgoings/workbook.git
+cd workbook
+./scripts/install.sh "$PWD/bin"
+sudo install -m 0755 bin/workbook /usr/local/bin/workbook
+```
+
+`scripts/install.sh` builds into the folder it is given; it prints an
+`export PATH=…` line when that folder is not on your `PATH`, which you can
+ignore here. Build as yourself and copy the result, rather than running the
+script with `sudo`, because `sudo` usually does not find Go.
+
+## 2. A user and a folder for the board
 
 Run the board as its own system user, so its key and its folder belong to
 nothing else:
 
 ```sh
 sudo useradd --system --create-home --home-dir /var/lib/workbook --shell /usr/sbin/nologin workbook
+sudo -u workbook workbook version
 ```
 
-## 2. A deploy key with write access
+The second command must print the version you installed. If it says the
+command was not found, `workbook` is not in `/usr/local/bin`.
+
+## 3. A deploy key with write access
 
 The board publishes every change to the repository, so it needs a key that can
 push. A [deploy key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys#deploy-keys)
@@ -85,7 +135,7 @@ if the fingerprint it shows is one of
 Read [The server's key opens the whole repository](#the-servers-key-opens-the-whole-repository)
 before you go on.
 
-## 3. The tasks-only folder
+## 4. The tasks-only folder
 
 ```sh
 sudo -u workbook -H sh -c '
@@ -100,7 +150,7 @@ The folder holds the project's Workbook refs and none of its code. The
 are recorded under their own names, not this one, but `workbook serve` still
 needs a name of its own to start.
 
-## 4. Run the board as a service
+## 5. Run the board as a service
 
 Write `/etc/systemd/system/workbook-board.service`:
 
@@ -122,7 +172,8 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
-Use the path `command -v workbook` prints for `ExecStart`. Then:
+`ExecStart` names `/usr/local/bin/workbook`, where step 1 installed it.
+Then:
 
 ```sh
 sudo systemctl daemon-reload
@@ -136,7 +187,10 @@ The log should show:
 Workbook board: http://127.0.0.1:7331
 Public address: https://tasks.example.com
 Each request's person: the Cf-Access-Authenticated-User-Email header
+Workbook sync watcher: 5s interval, socket /tmp/workbook-…/wb-….sock
 ```
+
+The last line is the board's background sync starting.
 
 `--addr 127.0.0.1:7331` is what keeps the board unreachable from anywhere but
 this machine. Do not change it to `0.0.0.0`. See
@@ -150,7 +204,7 @@ curl -s http://127.0.0.1:7331/healthz   # answers
 curl -s http://127.0.0.1:7331/api/tasks # refused with 401
 ```
 
-## 5. An Access application with one-time PIN sign-in
+## 6. An Access application with one-time PIN sign-in
 
 Create the sign-in before the tunnel's route, so the board is never on the
 internet without it. Cloudflare's guide says the same: a published application
@@ -192,7 +246,7 @@ application and find it under **Additional settings**
 ([get your AUD tag](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/#get-your-aud-tag)).
 You need it in the next step, with your team name.
 
-## 6. A Cloudflare Tunnel
+## 7. A Cloudflare Tunnel
 
 Create a remotely managed tunnel and install `cloudflared` as a service
 ([create a tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel/)):
@@ -228,7 +282,7 @@ then, after the code, the board. Make a change, and its history names you:
 workbook show <task-id> --history
 ```
 
-## 7. Check what the example promises
+## 8. Check what the example promises
 
 Run these before you invite anyone.
 
@@ -276,6 +330,12 @@ that repository, from anywhere, until the key is removed. The key has no
 passphrase and no expiry date. Keep the machine's other users and services away
 from that folder, and remove the key on GitHub the day the board is retired.
 
+The exposure comes from the tasks living in the same repository as the code.
+Keeping them in a repository of their own, which holds tasks and nothing else,
+would leave the key nothing else to open, but every clone shares tasks through
+its `origin`, so this version cannot. Sharing tasks through a remote other than
+`origin` is planned, not available.
+
 ### The board trusts the name header
 
 The board takes each person's name from the `Cf-Access-Authenticated-User-Email`
@@ -289,7 +349,7 @@ through Access can send the header and act as anyone.
 The example closes that two ways. The board listens on `127.0.0.1`, so only
 programs on the server can reach it, and `cloudflared` runs on the same
 machine. **Protect with Access** makes `cloudflared` itself refuse a request
-without a valid Access token. Step 7 shows how to check both. It follows that
+without a valid Access token. Step 8 shows how to check both. It follows that
 everybody with a shell on the server can act as anyone on the board.
 `workbook serve` prints a warning when the header is on and it listens beyond
 the machine.
@@ -337,8 +397,59 @@ as `3f9a02c41b7e`, and the server's log has the whole message under it:
 sudo journalctl -u workbook-board | grep 3f9a02c41b7e
 ```
 
+The log also has a line for each failure of the board's background sync, the
+round every few seconds that fetches and publishes. It prints Git's own
+message, with any credential in the remote's address removed, once when a
+failure starts, again only when the message changes, and once when a round
+succeeds again:
+
+```text
+workbook: background sync failed: git push failed: … fatal: Could not read from remote repository.
+workbook: background sync is working again
+```
+
+So a board that has stopped publishing says so once, not every few seconds,
+and a single line after it says it recovered. Two more kinds of line belong
+here: `workbook: conflict on <task>: …` when the sync sets an edit aside (see
+[Edits the board's sync sets aside](#edits-the-boards-sync-sets-aside)), and
+`workbook serve: <person> dismissed the set-aside edits of <task> held at <ref>
+(commit <commit>)` when somebody dismisses one.
+
 Whoever can read that log can read those details: on most systems, root and
 members of the `adm` or `systemd-journal` groups.
+
+### Edits the board's sync sets aside
+
+Sometimes a change saved on the board and a change on its way to GitHub from
+somebody's clone cannot both stand: the same description rewritten two ways,
+an edit to a task the other side deleted, or a dependency that would close a
+loop with one the other side added. Whichever reaches GitHub first wins. When
+the clone's wins, the board's background sync keeps it, and sets aside the
+board's edit, and every later edit to the same task saved on the board before
+the sync ran, rather than apply them over it. Nothing is lost at that moment:
+the set-aside edits are kept in the server's folder.
+
+Everybody who opens the board sees them, and goes on seeing them after the
+service restarts:
+
+- The task's card says **1 edit set aside**, or how many.
+- The task's page shows a notice above the form: who made each set-aside edit
+  and when, which field it changed, and the text it would have saved, with a
+  **Copy text** button beside a description or a comment.
+
+To deal with one, either:
+
+- copy back what should be kept and save it. Once the task carries what an
+  edit would have done, the board stops showing that edit; or
+- select **Dismiss this edit** (or **Dismiss these edits**) once nobody needs
+  them. Anybody signed in can dismiss, and the log records who did.
+
+The command line has no way to list or dismiss set-aside edits; a person
+working from their own clone is told of a conflict once, when their own sync
+meets it. The server keeps a copy each time its sync rearranges a task's
+history, and only the three newest per task, so an edit nobody dealt with is
+dropped once the same task has been rearranged three more times. Compacting a
+task drops its copies too.
 
 ### Do not name a service account with an ordinary word
 
@@ -364,30 +475,70 @@ Arabic writers rely on them; marks placed between digits can still make
 
 ### The board has no per-person limit
 
-Nothing in the board limits how much one signed-in person can send: how many
-tasks, comments or attachments, or how fast. One person, or one script with
-their session, can fill the server's disk and the repository and slow the
-board for everyone. These are the limits Cloudflare itself applies on the Free
-plan, which are all there is in front of the board:
+Nothing in the board counts what one signed-in person sends: how many tasks,
+comments or attachments, or how fast. One person, or one script with their
+session, can fill the server's disk and the repository, and can stall the
+board for everyone, by flooding it with requests or by holding many slow
+connections open. These are the limits the board itself has, each per request
+or per task, never per person:
 
-- A request body over 100 MB is refused with `413`
+- A request's headers must arrive within 10 seconds, the whole request within
+  30 seconds, and an idle connection is closed after 2 minutes. There is no
+  limit on how long an answer may take to send, because a save may wait on a
+  push to GitHub.
+- A request body may be 1 MiB, except an attachment upload, which may be about
+  1.4 MiB because the file travels base64-encoded.
+- One attached file may be 1 MiB, a task's live attached files 10 MiB together,
+  and a task 50 attachments, 500 comments of up to 16 KiB each, and a
+  description of up to 64 KiB.
+
+These are the limits Cloudflare applies on the Free plan, which are all there
+is in front of the board:
+
+- An upload may be 100 MB
   ([upload limits](https://developers.cloudflare.com/cache/concepts/default-cache-behavior/#upload-limits)).
-  The board's own attachment ceiling is far below that, so this never decides
-  anything.
+  The board's own ceilings are far below that, so this never decides anything.
 - Cloudflare waits 125 seconds for the board to answer before it answers `524`
   ([connection limits](https://developers.cloudflare.com/fundamentals/reference/connection-limits/)).
-- A Free plan zone can have one rate limiting rule, counting requests by IP
-  address over 10 seconds and blocking for 10 seconds
-  ([rate limiting rules](https://developers.cloudflare.com/waf/rate-limiting-rules/#availability),
-  [an example on the Free plan](https://developers.cloudflare.com/use-cases/solutions/protect-sensitive-forms-fraud-abuse/)).
+- A Free plan zone can have one rate limiting rule. It counts requests by IP
+  address only, over 10 seconds, and blocks for 10 seconds
+  ([rate limiting rules](https://developers.cloudflare.com/waf/rate-limiting-rules/#availability)).
+  Counting by a header or a cookie, which is what would count per person,
+  needs an Enterprise plan.
 
-If you add that one rule, match only the writes, such as requests whose path
-starts with `/api/` and whose method is not `GET`, and set a threshold well
-above what a person clicking produces. The board's page polls once a second,
-so a rule that counts reads will block people for doing nothing. Remember that
-people behind one office's network share an IP address and share the limit.
-When the board's page is refused with `429` and a `Retry-After` header, it
-waits as long as the header says before trying again.
+So on the Free plan you can limit an address, not a person. If you add that
+one rule, match only the writes, such as requests whose path starts with
+`/api/` and whose method is not `GET`, and set a threshold well above what a
+person clicking produces. The board's page polls once a second, so a rule that
+counts reads will block people for doing nothing. People behind one office's
+network share an address and share the limit, and one person on several
+networks gets the limit several times. When the board's page is refused with
+`429` and a `Retry-After` header, it waits as long as the header says before
+trying again. Beyond that, the remedy for somebody abusing the board is to
+remove them from the Access policy and, if they filled the repository, to
+compact or restore it by hand.
+
+### Everyone signed in can do everything
+
+The board has no roles. Everybody the Access policy lets in can, among other
+things:
+
+- delete any task, and restore it;
+- remove anybody's comment and anybody's attachment (only a comment's author
+  can edit it);
+- assign anybody to any task;
+- add, rename, reorder and remove statuses and priorities, rename and recolor
+  the board, and add project keys or change which one new tasks are numbered
+  under (a key cannot be renamed);
+- dismiss edits the sync set aside, which deletes the server's copy of them;
+- flip the board's **Push** switch, which decides for everybody whether a save
+  waits for its push to GitHub or leaves it to the background sync, until the
+  service restarts.
+
+Every one of these is recorded, under the name of whoever did it, except the
+**Push** switch, which records nothing. The
+[reference](reference.md#what-anyone-who-can-open-the-board-can-do-and-see)
+lists all of it. Let in only people you would trust with all of it.
 
 ### Running the command line beside the board
 

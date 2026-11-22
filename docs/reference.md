@@ -1641,6 +1641,13 @@ synchronization failed — that last case matters, because a watcher that cannot
 reach `origin` knows it, and deferring would swallow the warning that says the
 work is local-only.
 
+The watcher writes to standard error as it goes: a line for each conflict it
+meets, and `workbook: background sync failed: <message>` when a round fails,
+where the message is Git's own with any credential removed. A failure that
+repeats is written once, and again only when its message changes; the first
+round that succeeds after it writes `workbook: background sync is working
+again`. `workbook serve` runs the same loop and writes the same lines.
+
 `workbook sync --status` reports whether a watcher is running, what it last did,
 any conflicts it is holding, and the refs its last synchronization skipped under
 `origin`'s task namespace. That last set is what the watcher observed rather
@@ -1664,6 +1671,11 @@ compare-and-swap transaction, and every replayed pack keeps its actor, wall
 time, and operation IDs, rewriting only its logical clock. Replayed commits have
 exactly one parent; Workbook writes no merge commits, never rebases a shared ref,
 and never force-pushes one unconditionally.
+
+The command line reports a conflict once, on the run that meets it, and has no
+command that lists or removes parked tips. `workbook serve` shows every edit a
+parked tip holds that the task lacks, until somebody copies it back or
+dismisses it; see [Edits the board's sync set aside](#edits-the-boards-sync-set-aside).
 
 Most concurrent edits touch different fields, commute, and replay silently, so a
 mutation that loses a push race and a fetch that finds week-old local work both
@@ -2624,6 +2636,9 @@ POST /api/tasks/<id>/assignments          assign, naming the assignee in the
                                           request's person
 DELETE /api/tasks/<id>/assignments        withdraw, naming the assignment in
                                           the body as `from`
+DELETE /api/tasks/<id>/set-aside          dismiss edits the board's sync set
+                                          aside, naming the `parkedRef` and
+                                          `parked` commit that were shown
 GET /api/sync                 versioned publication-mode JSON, reporting the
                               mode, whether a watcher answers, and a `reason` of
                               `no-watcher` or `no-origin` when none does
@@ -2938,6 +2953,64 @@ read as agent instructions — without ever being on the network. `workbook
 serve` says so in the warning it prints for a wildcard bind. Bind the one
 address you mean instead, and the `Host` is pinned to it.
 
+### Edits the board's sync set aside
+
+When the board's own background sync fetches a task that changed on `origin`
+while the board had unpublished edits to it, it replays those edits onto
+`origin`'s history. A replay that meets a conflict — a description both sides
+rewrote, an edit to a task `origin` deleted, a dependency that would close a
+cycle — stops there: `origin`'s side is kept, and the edit, with every later
+unpublished edit to that task, is left out. This is the same reconciliation
+`workbook sync` runs, and as there the old local tip is kept under
+`refs/workbook/reconciled/<task>/<n>` in the serving checkout and is never
+pushed. The CLI reports such a conflict once, on the run that meets it, and
+has no command to list or dismiss what was left out.
+
+The board shows it to everyone until it is dealt with. On every listing it
+compares each parked tip with the tip of the task it is listing and reports
+each parked commit whose operations the task's history does not carry — an
+edit replayed under the same operation IDs is not reported, and nor is one
+whose effect the task has carried at any point since the two histories parted,
+such as text a person copied back in. Nothing new is recorded and no format
+changes: the answer is read from the parked refs, so it survives a restart and
+needs no record of its own. A board built without the reader shows nothing.
+
+The poll's `presentation` carries, for a task with set-aside edits, a
+`setAside` array, oldest first, and leaves it out otherwise:
+
+```json
+"setAside": [
+  {
+    "parkedRef": "refs/workbook/reconciled/WB-01K…/0",
+    "parked": "<the commit the parked ref holds>",
+    "commit": "<the commit that recorded this edit>",
+    "actor": "alice@example.com",
+    "wallTime": "2026-11-21T14:03:00Z",
+    "operations": [
+      {"id": "01K…", "type": "field.set", "field": "description", "value": "…"}
+    ]
+  }
+]
+```
+
+`operations` are the edit's operations as `operation.json` records them. The
+board's card says how many edits are set aside, and the task page shows each
+one — who, when, the field and the value, drawn through the same cleaning as
+every other text — with a button to copy a description or comment and one to
+dismiss.
+
+`DELETE /api/tasks/<id>/set-aside` takes `{"parkedRef": …, "parked": …}` from
+an edit it was shown and deletes that parked ref, which removes every edit it
+holds. It deletes only while the ref still points at `parked`: a ref that moved
+is refused with `409` and category `stale-write`, one that is gone with `404`,
+and a ref outside `refs/workbook/reconciled/<id>/` with `400`. It answers
+`{"format":"workbook.set-aside-dismissal","version":1,"taskId":…,"parkedRef":…}`
+and writes `workbook serve: <person> dismissed the set-aside edits of <task>
+held at <ref> (commit <commit>)` to the server's standard error. The commits
+stay in the object store until Git collects them. Parked refs are still
+bounded as before — three per task, oldest pruned first, and dropped by
+compaction — so a set-aside edit nobody dismisses can still go that way.
+
 ### Behind a sign-in proxy
 
 Two options let one board serve a team from behind a sign-in proxy such as
@@ -3112,6 +3185,9 @@ Write, all of it published to `origin` like any other change:
   record priority colors, add keys and change which is current or retired, and
   rename and recolor the project (the `/api/vocabulary` and `/api/display`
   routes). Removing a status or priority moves its tasks where the request says.
+- Dismiss the edits the board's sync set aside on any task (`DELETE
+  /api/tasks/<id>/set-aside`), which deletes the serving checkout's only copy
+  of them. Reading them is part of `GET /api/tasks`.
 - Switch the board between publishing inline and handing changes to a watcher
   (`PUT /api/sync`). The setting is the server's, so it changes what happens to
   everyone's next change.

@@ -214,6 +214,10 @@ recorded under their own email address, run it behind a sign-in proxy with
 through a complete setup with Cloudflare Tunnel and Cloudflare Access, and says
 what such a board does and does not protect.
 
+Any board, hosted or not, shows an edit its sync had to set aside because a
+conflicting change reached the remote first: the card says so, and the task's
+page shows the edit until somebody copies it back or dismisses it.
+
 ## Architecture
 
 Workbook separates its data model, transport, and query engine:
