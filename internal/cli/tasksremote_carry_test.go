@@ -168,6 +168,30 @@ func TestMoveTasksCarriesAStragglerOnceHoweverOftenItRuns(t *testing.T) {
 		t.Fatalf("task after the carry = %+v", shown)
 	}
 	requireFreshCloneValidates(t, project.tasks)
+
+	// The teammate still holds the straggler under its own commit, which the
+	// new place holds rewritten onto the seed's edit. Picking up the move and
+	// synchronizing, again and again, adds nothing there: the teammate's copy
+	// of the operation is recognized as the one the new place already holds.
+	cliGit(t, teammate, "pull", "--quiet", "--ff-only", "origin", "main")
+	if code, stdout, stderr := run(t, teammate, "setup"); code != 0 {
+		t.Fatalf("teammate setup after the pull = (%d, %q, %q)", code, stdout, stderr)
+	}
+	for round := 0; round < 3; round++ {
+		if code, stdout, stderr := run(t, teammate, "sync"); code != 0 {
+			t.Fatalf("teammate sync %d = (%d, %q, %q)", round, code, stdout, stderr)
+		}
+	}
+	if got := taskCommitCount(t, project.tasks, edited); got != commits {
+		t.Fatalf("tasks holds %d commits for %s after the teammate synchronized, want %d", got, edited, commits)
+	}
+	if got := requireEachOperationOnce(t, project.tasks); fmt.Sprint(got) != fmt.Sprint(totals) {
+		t.Fatalf("operations per task after the teammate synchronized = %v, want %v", got, totals)
+	}
+	if code, stdout, stderr := run(t, teammate, "validate", "--full", "--json"); code != 0 {
+		t.Fatalf("teammate validate = (%d, %q, %q)", code, stdout, stderr)
+	}
+	requireFreshCloneValidates(t, project.tasks)
 }
 
 // A straggler that conflicts with the new place's history is set aside once,

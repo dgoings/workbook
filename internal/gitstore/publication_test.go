@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testrepo"
 )
 
 // repeatOperation makes the task's ref a commit that records the operation
@@ -97,4 +100,31 @@ func taskResult(t *testing.T, result SyncResult, taskID string) SyncTaskResult {
 	}
 	t.Fatalf("result has no task %s: %#v", taskID, result)
 	return SyncTaskResult{}
+}
+
+// A long-lived handle that published to origin before the move, as a running
+// board's does, asks origin again before its next publication instead of
+// trusting what it saw then, and publishes nothing to the marked old place.
+func TestPushTaskOnAHandleThatPublishedBeforeTheMoveAsksAgain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newMoveFixture(t, testrepo.FormatSHA1)
+	task := createSyncTask(t, fixture.second, fixture.stale, "Published before the move")
+	if _, err := fixture.second.PushTask(ctx, fixture.stale, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	before := syncGit(t, fixture.origin, "for-each-ref", "--format=%(refname) %(objectname)", taskRefPrefix)
+
+	updateSyncTask(t, fixture.second, fixture.stale, task.ID, "Saved after the move")
+	_, err := fixture.second.PushTask(ctx, fixture.stale, task.ID)
+	refusal, found := core.TasksRemoteRefusalOf(err)
+	if !found || refusal.Reason != core.TasksRemoteMoved {
+		t.Fatalf("PushTask after the move = %v, want the moved refusal", err)
+	}
+	if after := syncGit(t, fixture.origin, "for-each-ref", "--format=%(refname) %(objectname)", taskRefPrefix); after != before {
+		t.Fatalf("the handle published to the marked old place:\nbefore %s\nafter  %s", before, after)
+	}
 }
