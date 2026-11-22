@@ -102,8 +102,9 @@ beyond the three newest, and adopting another clone's compaction keeps the
 unsettled ones too. Only Dismiss, or a manual `workbook compact` that bundles
 them first, removes them. A parked ref the board cannot read is skipped,
 named once in the server's log with the reason, and hides nothing else.
-Listing cost no longer grows with the number of parked refs: a board with
-2,000 tasks and 2,000 parked refs lists in about the time it takes with none.
+Listing no longer slows as parked refs accumulate: with 2,000 tasks, a repeat
+listing takes about as long with 2,000 parked refs as with none, and the first
+listing after a restart adds well under a second.
 
 For a board started with no options, exactly this changes:
 
