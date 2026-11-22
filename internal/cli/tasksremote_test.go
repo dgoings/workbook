@@ -848,10 +848,19 @@ func TestTasksRemoteTasksOnlyBoardOnTheOldPlaceIsRepointedWithWhatItSaved(t *tes
 		t.Fatalf("origin after the refusal = %q, want it left at %q", got, project.code)
 	}
 
+	// The old place out of reach, as it is once the server's deploy key has
+	// moved to the new one: the folder already holds the marker.
+	away := project.code + ".away"
+	if err := os.Rename(project.code, away); err != nil {
+		t.Fatal(err)
+	}
 	args := strings.Fields(strings.TrimPrefix(want, "workbook "))
 	code, stdout, stderr := run(t, folder, append(args, "--json")...)
+	if err := os.Rename(away, project.code); err != nil {
+		t.Fatal(err)
+	}
 	if code != 0 {
-		t.Fatalf("%s = (%d, %q, %q)", want, code, stdout, stderr)
+		t.Fatalf("%s with the old place out of reach = (%d, %q, %q)", want, code, stdout, stderr)
 	}
 	var setup struct {
 		TasksOnly struct {

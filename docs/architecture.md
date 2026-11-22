@@ -907,8 +907,11 @@ nobody edited elsewhere arrives with the same commits, and then marks the old
 place. What the old place holds and the new place lacks is carried by
 operation identity: an operation already recorded on the history it would be
 replayed onto is skipped whatever its commit, and only a missing one is
-written, once. Every publication also refuses a history that records an
-operation ID twice, wherever it came from. The mark is one commit on the old
+written, once. Identity is checked by content as well as ID: a pack that
+reuses a recorded ID for a different change is refused as corrupt, naming both
+commits, because skipping it would take one value silently. Every publication
+also refuses a history that records an operation ID twice, wherever it came
+from. The mark is one commit on the old
 place's identity ref:
 
 ```text
@@ -936,16 +939,20 @@ same command finishes: read the old place, publish to the new place, mark, read
 the old place again, publish again, and compare the two places' operation IDs
 task by task. A teammate's edit published to the old place before the mark is
 carried by the second read; after the mark, a teammate on the old settings is
-refused, because each publication asks the identity ref first.
+refused, because each publication looks at the identity ref first. A command
+publishing inline asks the remote; one handed to a watcher, and a board,
+read this checkout's tracking copy of it, which every fetch updates, so they
+learn of the mark within one synchronization interval.
 
 The mark and other people's pushes cannot be ordered by plain Git, which has no
 compare-and-swap across two refs: a push already past its look at the identity
 ref lands after the mark. That window is made visible rather than closed. Every
 publication lists the identity ref again after its push and reports such an
-edit; `setup` and `sync` on the new settings say when the old place holds
-operations the new one lacks; and `move-tasks`, safe to run at any later time,
-carries them. An edit by a clone that vanished in that instant waits at the old
-place for that rerun.
+edit, or warns when that listing fails and it cannot tell; and `move-tasks`,
+safe to run at any later time, carries them. It is the only command that reads
+the old place: a late edit that conflicts at the new place is reported to
+whoever runs it, in that clone, and parked there. An edit by a clone that
+vanished in that instant waits at the old place for that rerun.
 
 The default shared backend uses custom refs because they avoid branch switching and per-repository head contention. A conventional `workbook/state` branch may be offered as a compatibility fallback for Git hosts that reject custom refs. A future optional relay may provide strict leases, heartbeats, notifications, or high-concurrency agent coordination while retaining the same operation model.
 

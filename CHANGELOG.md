@@ -36,21 +36,31 @@ place with one fast-forward commit on its `refs/workbook/project` saying where
 the tasks went, and checks, task by task, that the new place holds every
 operation the old one does. It carries by operation identity, so running it
 again at any time carries an edit that reached the old place since, once, and
-says how many and from whom; a conflicting one is set aside and reported with
-exit 8. It refuses a new place that is the same repository as the old one,
+says how many and from whom. A carried edit that conflicts with what happened to
+its task at the new place is set aside and reported with exit 8, by task title
+and ID, saying why and that its text is kept in that clone for the board to
+show. It is the only command that reads the old place, so such an edit is
+reported only to whoever runs it. An operation ID reused at either place for a
+different change is refused as corrupt, naming both commits, rather than
+skipped. It refuses a new place that is the same repository as the old one,
 however its address is spelled, and one holding branches unless
-`--allow-branches` is given. It is safe to stop and run again, and the old
-place keeps its copy. The move is one-way in this version: `config unset
+`--allow-branches` is given, which must never be given for a mirror of the code
+repository. It removes the probe refs an earlier run left on the new place, and
+a new place that refuses to delete refs is refused once, without a probe per
+run. It is safe to stop and run again, and the old place keeps its copy. A
+second move finds the tasks by following the first move's marker. The move is one-way in this version: `config unset
 tasks-remote` is refused afterwards. `workbook
 setup` adds the remote to each checkout from the settings, or keeps the
 checkout's own address for it. Until it runs, task commands refuse and say to
 run it; a checkout still on the old settings is refused, told where the tasks
 went, and a command whose edit landed on the old place just as it was marked
-says so and exits 3; `setup` and `sync` say when the old place holds edits the
-new one lacks; a board already running reports every save's refused
-publication as a warning; the pre-push hook lets code pushes through these
-refusals; and a setup that cannot read the tasks repository says which address
-and what access is needed. Each refusal carries
+says so and exits 3, or warns with `publication-unconfirmed` when it cannot
+check; a board already running reports every save's refused publication as a
+warning; a tasks-only folder on the old place is repointed by the one command
+its refusal names, `workbook setup --tasks-only <new address>`, which keeps the
+edits it saved; the pre-push hook lets code pushes through these refusals; and
+a setup that cannot read the tasks repository says which address and what
+access is needed. A conflict met with a tasks remote names that remote. Each refusal carries
 a `tasksRemote` member in the JSON error. `workbook fetch`, `push` and `sync`
 take `--remote` to name another remote for one run, which only reads it into
 its tracking refs and never publishes to it, and each remote's tracking refs are now
@@ -62,6 +72,12 @@ that names a tasks remote, exiting 7 with `cannot decode Workbook
 configuration`, so upgrade every checkout before committing the setting. See
 [A tasks remote other than origin](docs/reference.md#a-tasks-remote-other-than-origin)
 and [Keep the tasks in their own repository](docs/hosting.md#keep-the-tasks-in-their-own-repository).
+
+A board set to hand its saves to a running `workbook sync --watch` now does.
+It asked the watcher's status and then for the hand-off on one connection,
+which the watcher answers once, so every save was published by the board
+itself. The save was published either way; it now returns without waiting for
+the network.
 
 The web board works on a phone. A screen 560 CSS pixels wide or narrower shows
 one column at a time, under a row of the columns' names and task counts that
