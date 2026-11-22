@@ -473,7 +473,8 @@ The board stops showing an edit by itself only in these cases:
   the edit shows again once the value changes. A value the task held only
   before the edit was set aside never counts.
 - A comment stops showing once the same person posts the same text again. The
-  same text from anybody else does not count.
+  same text from anybody else does not count. On a task that has been compacted
+  since, a set-aside comment stays until someone dismisses it.
 - An edit that went through after all, such as one the sync replayed in a later
   round, stops showing.
 

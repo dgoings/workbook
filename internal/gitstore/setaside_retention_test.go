@@ -365,3 +365,67 @@ func TestUnreadableParkedRefHidesNothingElse(t *testing.T) {
 		t.Fatalf("parked refs after the sweep = %v, want all %d kept", got, len(bad))
 	}
 }
+
+// After the board adopts another clone's compaction nothing says which
+// comments were there before the two sides parted. A set-aside comment whose
+// text its author also wrote long before the conflict is then still shown,
+// and its parked ref kept: nobody copied it back.
+func TestAdoptingACompactionKeepsASetAsideCommentItsAuthorWroteBefore(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	compactor, board, config := syncRepositories(t)
+	task := sharedSyncTask(t, compactor, board, config, "Old comment")
+	comment := func(body string) {
+		t.Helper()
+		if _, err := actorService(board, config, setAsideAlice).CommentAddMutation(actorContext(t, setAsideAlice), task.ID, core.CommentAddInput{Body: body}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	comment("Done")
+	if _, err := board.Sync(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := compactor.Fetch(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	describeSyncTask(t, compactor, config, setAsideContributor, task.ID, "Compactor text")
+	if _, err := compactor.Push(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	describeSyncTask(t, board, config, setAsideAlice, task.ID, "Alice text")
+	comment("Done")
+	if _, err := board.Sync(ctx, config); core.CategoryOf(err) != core.CategoryConflict {
+		t.Fatalf("Sync() error = %v, want a conflict", err)
+	}
+	// Alice deals with the description alone.
+	describeSyncTask(t, board, config, setAsideAlice, task.ID, "Alice text")
+	if _, err := board.Sync(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	if got := setAsideTexts(t, board, config, task.ID); len(got) != 1 || got[0] != "=Done" {
+		t.Fatalf("before the compaction the board shows %q set aside, want the comment alone", got)
+	}
+
+	done := core.Status("done")
+	if _, err := compactor.Fetch(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := syncService(compactor, config).UpdateMutation(ctx, task.ID, core.UpdateInput{Status: &done}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := compactor.Sync(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	compacted := compactLocally(t, compactor, config, task.ID)
+	publishCheckpoint(t, compactor, config, compacted)
+	if result, err := board.Sync(ctx, config); err != nil {
+		t.Fatalf("Sync() error = %v; result = %#v", err, result)
+	}
+	sweepParked(t, board, config)
+	if got := setAsideTexts(t, board, config, task.ID); len(got) != 1 || got[0] != "=Done" {
+		t.Fatalf("after adopting the compaction the board shows %q set aside, want the comment nobody copied back", got)
+	}
+	if got := parkedRefNames(t, board, task.ID); len(got) != 1 {
+		t.Fatalf("parked refs = %v, want the one holding the comment", got)
+	}
+}

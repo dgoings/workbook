@@ -92,7 +92,7 @@ func (board *setAsideBoard) handler(t *testing.T) http.Handler {
 // board is read on: it sits above the form, its text wraps rather than
 // widening the page, its list scrolls rather than pushing the form away, the
 // list is the one thing in it that scrolls — every text is drawn whole within
-// it, and the last Dismiss can be scrolled to — and its buttons are a
+// it, and each Dismiss sits above the edits it removes — and its buttons are a
 // finger's height. Dismissing one set takes it away and
 // leaves the other. The card on the board says the same in one line inside
 // its own width.
@@ -177,11 +177,18 @@ func TestBrowserShowsSetAsideEditsOnEveryScreen(t *testing.T) {
     textHeights: Array.from(region.querySelectorAll("[data-set-aside-text]")).map((block) => block.getBoundingClientRect().height),
     textsWhole: Array.from(region.querySelectorAll("[data-set-aside-text]")).every((block) => block.scrollHeight <= block.clientHeight + 1)
   };
-  list.scrollTop = list.scrollHeight;
+  // Each Dismiss sits above the edits it removes: the first shows with the
+  // list unscrolled, and the last comes into view once its set is scrolled to.
+  const dismissals = Array.from(region.querySelectorAll("[data-set-aside-dismiss]"));
+  const within = (button) => {
+    const box = button.getBoundingClientRect(), shown = list.getBoundingClientRect();
+    return box.top >= shown.top - 0.5 && box.bottom <= shown.bottom + 0.5;
+  };
+  const firstShown = within(dismissals[0]);
+  const lastButton = dismissals[dismissals.length - 1];
+  list.scrollTop += lastButton.getBoundingClientRect().top - list.getBoundingClientRect().top;
   await frames();
-  const last = Array.from(region.querySelectorAll("[data-set-aside-dismiss]")).pop().getBoundingClientRect();
-  const shown = list.getBoundingClientRect();
-  result.lastDismissReachable = last.top >= shown.top - 0.5 && last.bottom <= shown.bottom + 0.5;
+  result.lastDismissReachable = firstShown && within(lastButton);
   list.scrollTop = 0;
   await frames();
   const probe = await fetch("/origin-probe", { method: "POST", headers: { "Origin": "https://elsewhere.example" }, body: "{}" });
@@ -216,7 +223,7 @@ func TestBrowserShowsSetAsideEditsOnEveryScreen(t *testing.T) {
 					page.Scrollers, page.TextsWhole, page.TextHeights)
 			}
 			if !page.LastDismissReachable {
-				t.Errorf("scrolled to its end, the list does not show the last Dismiss")
+				t.Errorf("the first Dismiss does not show in the unscrolled list, or the last does not once its set is scrolled to")
 			}
 			if page.FormTop > float64(size.height) {
 				t.Errorf("the form starts at %.0f, below a %d-tall screen", page.FormTop, size.height)

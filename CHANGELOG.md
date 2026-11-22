@@ -104,7 +104,7 @@ them first, removes them. A parked ref the board cannot read is skipped,
 named once in the server's log with the reason, and hides nothing else.
 Listing no longer slows as parked refs accumulate: with 2,000 tasks, a repeat
 listing takes about as long with 2,000 parked refs as with none, and the first
-listing after a restart adds well under a second.
+listing after a restart adds about half a second on an idle machine.
 
 For a board started with no options, exactly this changes:
 

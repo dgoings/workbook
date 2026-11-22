@@ -126,6 +126,13 @@
           });
           groups.forEach((group) => {
             const block = document.createElement("div"); block.className = "set-aside__group";
+            // Above the edits it removes, so a long text set aside never puts
+            // it far down the list's own scroll.
+            const dismissal = document.createElement("button"); dismissal.type = "button"; dismissal.className = "set-aside__dismiss";
+            dismissal.dataset.setAsideDismiss = group.parkedRef;
+            text(dismissal, group.edits.length === 1 ? "Dismiss this edit" : "Dismiss these edits");
+            dismissal.addEventListener("click", () => dismiss(group.parkedRef, group.parked, dismissal));
+            block.append(dismissal);
             group.edits.forEach((edit) => {
               const item = document.createElement("article"); item.className = "set-aside__edit"; item.dataset.setAsideEdit = edit.commit || "";
               const by = document.createElement("p"); by.className = "set-aside__by";
@@ -173,11 +180,6 @@
               });
               block.append(item);
             });
-            const dismissal = document.createElement("button"); dismissal.type = "button"; dismissal.className = "set-aside__dismiss";
-            dismissal.dataset.setAsideDismiss = group.parkedRef;
-            text(dismissal, group.edits.length === 1 ? "Dismiss this edit" : "Dismiss these edits");
-            dismissal.addEventListener("click", () => dismiss(group.parkedRef, group.parked, dismissal));
-            block.append(dismissal);
             list.append(block);
           });
         }

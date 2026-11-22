@@ -614,8 +614,10 @@ func carriedBy(states []core.StateDocument, pack core.OperationPack) bool {
 
 // withoutCopiedComments returns pack without the comment additions whose text
 // task holds again under a new ID, by the same person, in a comment that was
-// not there before the two sides parted (before; nil when that is unknown),
-// and whether it removed any.
+// not there before the two sides parted (before), and whether it removed any.
+// When before is nil, which comments were there is unknown (the task was
+// compacted since), and none counts as a copy: an older comment with the same
+// text by the same person would otherwise settle one nobody dealt with.
 func withoutCopiedComments(pack core.OperationPack, task core.TaskData, before map[string]struct{}) (core.OperationPack, bool) {
 	kept := make([]core.Operation, 0, len(pack.Operations))
 	for _, operation := range pack.Operations {
@@ -630,6 +632,9 @@ func withoutCopiedComments(pack core.OperationPack, task core.TaskData, before m
 }
 
 func commentCopied(operation core.Operation, author string, task core.TaskData, before map[string]struct{}) bool {
+	if before == nil {
+		return false
+	}
 	for _, comment := range task.Comments {
 		if comment.ID == operation.ID || comment.Author != author || comment.Body != operation.Body {
 			continue

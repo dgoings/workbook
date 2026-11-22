@@ -3008,7 +3008,9 @@ these holds, and in no other case:
   shown.
 - A `comment.add` counts as carried when the task has a comment, added after
   the histories parted, by the same actor with the same body. The same text
-  from another actor does not count.
+  from another actor does not count. Once the task has been compacted since,
+  nothing says which comments were added after the histories parted, and no
+  comment counts as carried this way: it is shown until dismissed.
 
 Dismissing is the way to clear anything else. Nothing new is recorded and no
 format changes: the answer is read from the parked refs, so it survives a
