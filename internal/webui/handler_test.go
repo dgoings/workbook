@@ -4450,55 +4450,6 @@ func requireNode(t *testing.T) string {
 	return node
 }
 
-// nodeCommand feeds the program to node over stdin rather than as an argument.
-// The client programs embed the page's whole script, and Linux caps one argv
-// string at 128 KiB (MAX_ARG_STRLEN), a ceiling the largest programs have
-// outgrown; stdin has no such limit and behaves identically on every platform
-// CI runs.
-//
-// It also puts clientProgramGuard in front of every program, so a program
-// whose checks never finish fails rather than exiting cleanly.
-func nodeCommand(node, program string) *exec.Cmd {
-	return nodeCommandContext(context.Background(), node, program)
-}
-
-// nodeCommandContext is nodeCommand for a program that needs a hang guard of
-// its own: the command is killed when ctx is done. It is the one place in this
-// package that starts node for a client program, which
-// TestEveryClientProgramStartsBehindTheGuard holds every test to.
-func nodeCommandContext(ctx context.Context, node, program string) *exec.Cmd {
-	command := exec.CommandContext(ctx, node, "-")
-	command.Stdin = strings.NewReader(clientProgramGuard + program)
-	return command
-}
-
-// clientProgramGuard fails a client program that ends without reaching the end
-// of its checks.
-//
-// Node exits cleanly once nothing is left scheduled, so a check that awaits a
-// promise nobody ever settles does not fail: the event loop simply runs dry
-// with the rest of the checks unrun, and the program exits 0. Every program in
-// this package runs its checks in an async callback handed to Node's
-// setTimeout, or in an async function handed to clientProgram, so the guard
-// counts those that have started and those that have finished, and at exit
-// fails the program if any started and never finished. A check that throws
-// still fails the way it always did, as an unhandled rejection.
-//
-// It wraps Node's own setTimeout, which only the program's checks call; the
-// page's script schedules through the fake window's, which this leaves alone.
-// It is one line so the line numbers in a failing program's stack are off by
-// exactly one.
-const clientProgramGuard = `(() => { const realSetTimeout = globalThis.setTimeout; let unfinished = 0; ` +
-	`const follow = (result) => { if (!result || typeof result.then !== "function") return result; unfinished += 1; ` +
-	`result.then(() => { unfinished -= 1; }, (error) => { unfinished -= 1; throw error; }); return result; }; ` +
-	`const guarded = function setTimeout(callback, ...rest) { if (typeof callback !== "function") return realSetTimeout(callback, ...rest); ` +
-	`return realSetTimeout(function (...args) { return follow(callback.apply(this, args)); }, ...rest); }; ` +
-	`guarded[require("util").promisify.custom] = realSetTimeout[require("util").promisify.custom]; globalThis.setTimeout = guarded; ` +
-	`globalThis.clientProgram = (body) => follow(body()); ` +
-	`process.on("exit", (code) => { if (code === 0 && unfinished > 0) { ` +
-	`process.stderr.write("client program ended with " + unfinished + " of its checks unfinished: something they awaited never settled\n"); ` +
-	`process.exitCode = 1; } }); })();` + "\n"
-
 func renderedClientScript(t *testing.T, body string) string {
 	t.Helper()
 	const open = "<script>"

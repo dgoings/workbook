@@ -22,6 +22,7 @@ func TestClientProgramGuardFailsAProgramThatStopsShortOfItsChecks(t *testing.T) 
 	t.Parallel()
 	node := requireNode(t)
 	const stalled = "client program ended with 1 of its checks unfinished"
+	const unsettled = "promise(s) its checks started still unsettled"
 	for _, scenario := range []struct {
 		name    string
 		program string
@@ -74,6 +75,109 @@ func TestClientProgramGuardFailsAProgramThatStopsShortOfItsChecks(t *testing.T) 
   process.stdout.write("reached the end\n");
 }, 0);`,
 		},
+		{
+			name: "checks that never schedule anything",
+			program: `if (1 + 1 !== 2) throw new Error("arithmetic");
+process.stdout.write("reached the end\n");`,
+		},
+		{
+			name: "an async function started and not awaited inside a timeout",
+			program: `async function checks() { await new Promise(() => {}); }
+setTimeout(() => { checks(); }, 0);`,
+			fails: unsettled,
+		},
+		{
+			name:    "a promise chain started in a timeout that returns nothing",
+			program: `setTimeout(() => { new Promise(() => {}).then(() => { process.stdout.write("checked\n"); }); }, 0);`,
+			fails:   unsettled,
+		},
+		{
+			name:    "checks stalled in require(\"timers\").setTimeout",
+			program: `require("timers").setTimeout(async () => { await new Promise(() => {}); }, 0);`,
+			fails:   stalled,
+		},
+		{
+			name:    "checks stalled in setImmediate",
+			program: `setImmediate(async () => { await new Promise(() => {}); });`,
+			fails:   stalled,
+		},
+		{
+			name:    "checks stalled in require(\"timers\").setImmediate",
+			program: `require("timers").setImmediate(async () => { await new Promise(() => {}); });`,
+			fails:   stalled,
+		},
+		{
+			name:    "checks stalled in queueMicrotask",
+			program: `queueMicrotask(async () => { await new Promise(() => {}); });`,
+			fails:   stalled,
+		},
+		{
+			name:    "checks stalled in process.nextTick",
+			program: `process.nextTick(async () => { await new Promise(() => {}); });`,
+			fails:   stalled,
+		},
+		{
+			name:    "a bare async function stalled at the top level",
+			program: `(async () => { await new Promise(() => {}); process.stdout.write("checked\n"); })();`,
+			fails:   unsettled,
+		},
+		{
+			name: "process.exit(0) before the checks' first await",
+			program: `setTimeout(async () => {
+  process.exit(0);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  throw new Error("the check failed");
+}, 0);`,
+			fails: "client program called process.exit(0) before it was finished",
+		},
+		{
+			name: "process.exit(0) at the top level before the program's last line",
+			program: `process.exit(0);
+throw new Error("never reached");`,
+			fails: "client program ended before its last line ran",
+		},
+		{
+			// An exit that names a failure is the program's own answer, and the
+			// guard leaves it alone.
+			name:    "process.exit(1) from a check",
+			program: `setTimeout(async () => { console.error("the check failed"); process.exit(1); }, 0);`,
+			fails:   "the check failed",
+		},
+		{
+			// What nodeCommand's caller requires is the marker, not a clean exit:
+			// a program that takes the guard's listeners away exits 0 and still
+			// fails.
+			name: "a program that silences the guard",
+			program: `process.removeAllListeners("beforeExit"); process.removeAllListeners("exit");
+setTimeout(async () => { await new Promise(() => {}); }, 0);`,
+			fails: "client program exited 0 without reaching its own end",
+		},
+		{
+			// A test holds a request open by handing the page a promise that
+			// never settles. The page waiting on it is not a stalled check, and
+			// neither is a promise the page itself made and left pending.
+			name: "a request the checks hold open for the page",
+			program: pageShapedProgram(`
+  globalThis.pageWaits = (answer) => { answer.then(() => { throw new Error("never answered"); }); };
+  globalThis.pageHangs = async () => { await new Promise(() => {}); };
+`, `setTimeout(async () => {
+  pageWaits(new Promise(() => {}));
+  pageHangs();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  process.stdout.write("reached the end\n");
+}, 0);`),
+		},
+		{
+			// But the same promise awaited by the checks themselves is a stall.
+			name: "checks awaiting the page's request that never answers",
+			program: pageShapedProgram(`
+  globalThis.pageHangs = async () => { await new Promise(() => {}); };
+`, `setTimeout(async () => {
+  await pageHangs();
+  process.stdout.write("reached the end\n");
+}, 0);`),
+			fails: stalled,
+		},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			t.Parallel()
@@ -87,18 +191,35 @@ func TestClientProgramGuardFailsAProgramThatStopsShortOfItsChecks(t *testing.T) 
 			if err == nil {
 				t.Fatalf("a program that %s exited cleanly\n%s", scenario.name, output)
 			}
-			if !strings.Contains(string(output), scenario.fails) {
-				t.Fatalf("output does not say %q\n%s", scenario.fails, output)
+			// The guard's verdict is in the output; the caller's own, for a
+			// program that never let the guard give one, is in the error.
+			if said := string(output) + "\n" + err.Error(); !strings.Contains(said, scenario.fails) {
+				t.Fatalf("output does not say %q\n%s", scenario.fails, said)
 			}
 		})
 	}
 }
 
+// pageShapedProgram is a program with page code in it where the guard looks
+// for the page's script: between the first lines of boot.js and the last lines
+// of events.js, with just enough of a document and a window for those lines to
+// run. page is the page's own code and checks follow it, as in every client
+// test.
+func pageShapedProgram(page, checks string) string {
+	head, tail := pageScriptBounds()
+	return `globalThis.document = { createElement: () => ({ setAttribute() {} }), querySelector: () => null };
+globalThis.window = { setInterval() {} };
+globalThis.renderSyncAge = () => {}; globalThis.refresh = () => {};
+` + head + "\n" + page + "\n" + tail + "\n" + checks
+}
+
 // The guard holds only for a program that reaches node through
 // nodeCommandContext. A test that starts node on its own runs its program
 // unguarded, and a check stalled on a promise nobody settles passes again
-// without a word. These tests read the module's Go sources so that a new test
-// cannot start a client program any other way without being told.
+// without a word. These tests read the module's Go sources for the ways a
+// test could plausibly do that by accident, listed at scanNodeLaunches. It is
+// a tripwire, not a proof: it reads syntax one file at a time and follows no
+// value between functions, so a launch written to get past it gets past it.
 
 // nodeLaunch is one call that starts a process where the guard cannot see it.
 type nodeLaunch struct {
@@ -161,7 +282,7 @@ func TestSample(t *testing.T) {
 	command := exec.CommandContext(context.Background(), node, "-")
 	command.Stdin = strings.NewReader("program")
 }`,
-			want: []string{"TestSample"},
+			want: []string{"TestSample", "TestSample"},
 		},
 		{
 			name: "a webui test with exec imported under another name",
@@ -170,6 +291,76 @@ func TestSample(t *testing.T) {
 import (run "os/exec"; "testing")
 func TestSample(t *testing.T) { _ = run.Command(requireNode(t), "-") }`,
 			want: []string{"TestSample"},
+		},
+		{
+			name: "an exec.Cmd built as a literal",
+			file: "internal/webui/sample_test.go",
+			source: `package webui
+import ("os/exec"; "testing")
+func TestValue(t *testing.T) { _ = exec.Cmd{Path: requireNode(t)} }
+func TestPointer(t *testing.T) { _ = &exec.Cmd{Path: requireNode(t)} }
+func TestNew(t *testing.T) { command := new(exec.Cmd); _ = command }`,
+			want: []string{"TestValue", "TestPointer", "TestNew"},
+		},
+		{
+			name: "exec.Command taken as a value",
+			file: "internal/webui/sample_test.go",
+			source: `package webui
+import ("os/exec"; "testing")
+func TestSample(t *testing.T) { run := exec.Command; _ = run(requireNode(t), "-") }`,
+			want: []string{"TestSample"},
+		},
+		{
+			name: "a package-level function literal",
+			file: "internal/webui/sample_test.go",
+			source: `package webui
+import "os/exec"
+var startNode = func(node string) *exec.Cmd { return exec.Command(node, "-") }`,
+			want: []string{"package-level startNode"},
+		},
+		{
+			name: "os.StartProcess and its syscall kin",
+			file: "internal/webui/sample_test.go",
+			source: `package webui
+import ("os"; "syscall"; "testing")
+func TestOS(t *testing.T) { _, _ = os.StartProcess(requireNode(t), nil, nil) }
+func TestSyscall(t *testing.T) { _ = syscall.Exec(requireNode(t), nil, nil) }`,
+			want: []string{"TestOS", "TestSyscall"},
+		},
+		{
+			name: "a method that shares a guarded launcher's name",
+			file: "internal/webui/sample_test.go",
+			source: `package webui
+import "os/exec"
+type browser struct{}
+func (browser) driveBrowser(node string) { _ = exec.Command(node, "-") }`,
+			want: []string{"method driveBrowser"},
+		},
+		{
+			name: "a command pointed at another program",
+			file: "internal/webui/sample_test.go",
+			source: `package webui
+import ("os/exec"; "strings"; "testing")
+func repoint(command *exec.Cmd, node string) {
+	command.Stdin = strings.NewReader("program")
+	command.Args = []string{node, "-"}
+}
+func TestPath(t *testing.T) {
+	command := nodeCommand(requireNode(t), "")
+	command.Path = "/usr/bin/node"
+}
+func TestURL(t *testing.T) { request := newRequest(); request.URL.Path = "/x"; request.Path = "/y" }`,
+			want: []string{"repoint", "repoint", "TestPath"},
+		},
+		{
+			name: "another package naming node through a variable or a shell",
+			file: "internal/other/sample_test.go",
+			source: `package other
+import ("os/exec"; "testing")
+func TestVariable(t *testing.T) { name := "node"; _ = exec.Command(name, "-e", "1") }
+func TestShell(t *testing.T) { _ = exec.Command("sh", "-c", "node -e 1") }
+func TestElse(t *testing.T) { _ = exec.Command("sh", "-c", "nodes are fine") }`,
+			want: []string{"TestVariable", "TestShell"},
 		},
 		{
 			name: "the guarded launchers",
@@ -274,88 +465,203 @@ func scanModuleForNodeLaunches(t *testing.T) ([]nodeLaunch, []string) {
 	return found, files
 }
 
-// scanNodeLaunches reports the calls in one source file that start a client
-// program where clientProgramGuard cannot see it.
+// scanNodeLaunches reports the places in one source file that could start a
+// client program where clientProgramGuard cannot see it.
 //
-// In this package every exec.Command and exec.CommandContext outside
-// guardedLaunchers counts, whatever it starts: the package's programs are
-// handed around as strings, so the only line that can be held is the one that
-// starts the process. Elsewhere in the module, where no client program has ever
-// been run, a call counts when it starts node by name or starts a path the same
-// function resolved with exec.LookPath("node"); a function that only probes for
-// node, as the capability preflight's test does, is left alone.
+// It is a tripwire against an accident, not a proof: it reads one file's
+// syntax, follows no value across functions or files, and someone set on
+// starting node around the guard can. What it catches is the ways a person
+// writing a test here could plausibly reach for a process without meaning to
+// go around nodeCommand:
+//
+// In this package, wherever it appears outside the two top-level functions
+// guardedLaunchers names (a method of the same name does not count), and in a
+// package-level variable's initializer as well as in a function:
+//
+//   - a call of exec.Command or exec.CommandContext, under any name os/exec is
+//     imported as, whatever it starts — the package's programs are handed
+//     around as strings, so the only line that can be held is the one that
+//     starts the process;
+//   - either of those taken as a value rather than called, as in
+//     `run := exec.Command`, since the call it makes later is out of sight;
+//   - an exec.Cmd built directly, as `exec.Cmd{...}`, `&exec.Cmd{...}` or
+//     `new(exec.Cmd)`;
+//   - os.StartProcess, and syscall's StartProcess, ForkExec and Exec;
+//   - an assignment to a Stdin or Args field, or to the Path of a name bound
+//     to a command, which is how a command would be pointed at another
+//     program. nodeCommand's own result has no such field to assign: it is a
+//     clientCommand, which exposes only CombinedOutput and Output, so that
+//     accident does not compile.
+//
+// Elsewhere in the module, where no client program has ever been run, a call
+// of exec.Command or exec.CommandContext counts when what it starts is node by
+// name, a name the same function bound to "node" or to exec.LookPath("node"),
+// or a shell whose command line runs node as a word. A function that only
+// probes for node, as the capability preflight's test does, is left alone. A
+// helper that resolves node in one function and starts it in another is not
+// followed.
 func scanNodeLaunches(fileSet *token.FileSet, name string, source []byte) ([]nodeLaunch, error) {
 	file, err := parser.ParseFile(fileSet, name, source, parser.SkipObjectResolution)
 	if err != nil {
 		return nil, err
 	}
-	execNames := map[string]bool{}
-	for _, specification := range file.Imports {
-		if specification.Path.Value != strconv.Quote("os/exec") {
-			continue
+	imported := func(path string) map[string]bool {
+		names := map[string]bool{}
+		for _, specification := range file.Imports {
+			if specification.Path.Value != strconv.Quote(path) {
+				continue
+			}
+			if specification.Name != nil {
+				names[specification.Name.Name] = true
+			} else {
+				names[path[strings.LastIndex(path, "/")+1:]] = true
+			}
 		}
-		if specification.Name != nil {
-			execNames[specification.Name.Name] = true
-		} else {
-			execNames["exec"] = true
-		}
+		return names
 	}
-	if len(execNames) == 0 {
+	execNames, osNames, syscallNames := imported("os/exec"), imported("os"), imported("syscall")
+	inThisPackage := strings.HasPrefix(name, "internal/webui/")
+	if len(execNames) == 0 && !(inThisPackage && (len(osNames) > 0 || len(syscallNames) > 0)) {
 		return nil, nil
 	}
-	inThisPackage := strings.HasPrefix(name, "internal/webui/")
+	// What a selector names, as "exec.Command", when its receiver is one of
+	// the import names given.
+	qualified := func(expression ast.Expr, receivers map[string]bool, names ...string) string {
+		selector, ok := expression.(*ast.SelectorExpr)
+		if !ok {
+			return ""
+		}
+		receiver, ok := selector.X.(*ast.Ident)
+		if !ok || !receivers[receiver.Name] || !slices.Contains(names, selector.Sel.Name) {
+			return ""
+		}
+		return receiver.Name + "." + selector.Sel.Name
+	}
 	execCall := func(node ast.Node, names ...string) (*ast.CallExpr, string) {
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
 			return nil, ""
 		}
-		selector, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
+		called := qualified(call.Fun, execNames, names...)
+		if called == "" {
 			return nil, ""
 		}
-		receiver, ok := selector.X.(*ast.Ident)
-		if !ok || !execNames[receiver.Name] || !slices.Contains(names, selector.Sel.Name) {
-			return nil, ""
-		}
-		return call, receiver.Name + "." + selector.Sel.Name
+		return call, called
 	}
 	var found []nodeLaunch
-	for _, declaration := range file.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if !ok || function.Body == nil {
-			continue
-		}
-		// The names this function bound to exec.LookPath("node").
+	report := func(function string, at ast.Node, what string) {
+		found = append(found, nodeLaunch{name, function, fileSet.Position(at.Pos()).Line, what})
+	}
+	// scanThisPackage reports every way in this package to start a process,
+	// inside one function body or initializer.
+	scanThisPackage := func(function string, body ast.Node) {
+		called := map[ast.Expr]bool{}
+		// The names bound to a command: what exec or one of the guarded
+		// helpers returned. A Path assigned on one of these is a command
+		// pointed at another binary; a Path assigned on anything else is
+		// usually a URL's.
+		commands := map[string]bool{}
+		ast.Inspect(body, func(node ast.Node) bool {
+			assignment, ok := node.(*ast.AssignStmt)
+			if !ok || len(assignment.Rhs) != 1 || len(assignment.Lhs) != 1 {
+				return true
+			}
+			target, ok := assignment.Lhs[0].(*ast.Ident)
+			call, isCall := assignment.Rhs[0].(*ast.CallExpr)
+			if !ok || !isCall {
+				return true
+			}
+			if helper, ok := call.Fun.(*ast.Ident); ok && guardedLaunchers[helper.Name] || ok && helper.Name == "nodeCommand" {
+				commands[target.Name] = true
+			}
+			if qualified(call.Fun, execNames, "Command", "CommandContext") != "" {
+				commands[target.Name] = true
+			}
+			return true
+		})
+		ast.Inspect(body, func(node ast.Node) bool {
+			switch node := node.(type) {
+			case *ast.CallExpr:
+				called[node.Fun] = true
+				if what := qualified(node.Fun, execNames, "Command", "CommandContext"); what != "" {
+					report(function, node, what)
+				}
+				if what := qualified(node.Fun, osNames, "StartProcess"); what != "" {
+					report(function, node, what)
+				}
+				if what := qualified(node.Fun, syscallNames, "StartProcess", "ForkExec", "Exec"); what != "" {
+					report(function, node, what)
+				}
+				if identifier, ok := node.Fun.(*ast.Ident); ok && identifier.Name == "new" && len(node.Args) == 1 {
+					if what := qualified(node.Args[0], execNames, "Cmd"); what != "" {
+						report(function, node, "new("+what+")")
+					}
+				}
+			case *ast.SelectorExpr:
+				if called[node] {
+					return true
+				}
+				if what := qualified(node, execNames, "Command", "CommandContext"); what != "" {
+					report(function, node, what+" taken as a value")
+				}
+				if what := qualified(node, osNames, "StartProcess"); what != "" {
+					report(function, node, what+" taken as a value")
+				}
+				if what := qualified(node, syscallNames, "StartProcess", "ForkExec", "Exec"); what != "" {
+					report(function, node, what+" taken as a value")
+				}
+			case *ast.CompositeLit:
+				if what := qualified(node.Type, execNames, "Cmd"); what != "" {
+					report(function, node, "an "+what+" literal")
+				}
+			case *ast.AssignStmt:
+				for _, target := range node.Lhs {
+					selector, ok := target.(*ast.SelectorExpr)
+					if !ok {
+						continue
+					}
+					receiver, _ := selector.X.(*ast.Ident)
+					if slices.Contains([]string{"Stdin", "Args"}, selector.Sel.Name) ||
+						selector.Sel.Name == "Path" && receiver != nil && commands[receiver.Name] {
+						report(function, selector, "an assignment to ."+selector.Sel.Name)
+					}
+				}
+			}
+			return true
+		})
+	}
+	// scanElsewhere reports, in another package, a call that starts node.
+	scanElsewhere := func(function string, body ast.Node) {
+		// The names this function bound to "node" or to exec.LookPath("node").
 		resolved := map[string]bool{}
-		ast.Inspect(function.Body, func(node ast.Node) bool {
+		ast.Inspect(body, func(node ast.Node) bool {
 			assignment, ok := node.(*ast.AssignStmt)
 			if !ok || len(assignment.Rhs) != 1 || len(assignment.Lhs) == 0 {
 				return true
+			}
+			target, ok := assignment.Lhs[0].(*ast.Ident)
+			if !ok || target.Name == "_" {
+				return true
+			}
+			if literal, ok := assignment.Rhs[0].(*ast.BasicLit); ok && literal.Value == strconv.Quote("node") {
+				resolved[target.Name] = true
 			}
 			call, _ := execCall(assignment.Rhs[0], "LookPath")
 			if call == nil || len(call.Args) != 1 {
 				return true
 			}
 			if literal, ok := call.Args[0].(*ast.BasicLit); ok && literal.Value == strconv.Quote("node") {
-				if target, ok := assignment.Lhs[0].(*ast.Ident); ok && target.Name != "_" {
-					resolved[target.Name] = true
-				}
+				resolved[target.Name] = true
 			}
 			return true
 		})
-		ast.Inspect(function.Body, func(node ast.Node) bool {
+		ast.Inspect(body, func(node ast.Node) bool {
 			call, called := execCall(node, "Command", "CommandContext")
 			if call == nil {
 				return true
 			}
-			if inThisPackage {
-				if !guardedLaunchers[function.Name.Name] {
-					found = append(found, nodeLaunch{name, function.Name.Name, fileSet.Position(call.Pos()).Line, called})
-				}
-				return true
-			}
 			program := 0
-			if called == "exec.CommandContext" || strings.HasSuffix(called, ".CommandContext") {
+			if strings.HasSuffix(called, ".CommandContext") {
 				program = 1
 			}
 			if len(call.Args) <= program {
@@ -364,15 +670,70 @@ func scanNodeLaunches(fileSet *token.FileSet, name string, source []byte) ([]nod
 			switch argument := call.Args[program].(type) {
 			case *ast.BasicLit:
 				if argument.Value == strconv.Quote("node") {
-					found = append(found, nodeLaunch{name, function.Name.Name, fileSet.Position(call.Pos()).Line, called})
+					report(function, call, called)
+					return true
 				}
 			case *ast.Ident:
 				if resolved[argument.Name] {
-					found = append(found, nodeLaunch{name, function.Name.Name, fileSet.Position(call.Pos()).Line, called})
+					report(function, call, called)
+					return true
+				}
+			}
+			// A shell told to run node: any later argument whose words
+			// include node.
+			for _, argument := range call.Args[program+1:] {
+				literal, ok := argument.(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					continue
+				}
+				text, err := strconv.Unquote(literal.Value)
+				if err == nil && slices.Contains(strings.Fields(text), "node") {
+					report(function, call, called+" running a shell command that names node")
+					return true
 				}
 			}
 			return true
 		})
+	}
+	for _, declaration := range file.Decls {
+		switch declaration := declaration.(type) {
+		case *ast.FuncDecl:
+			if declaration.Body == nil {
+				continue
+			}
+			function := declaration.Name.Name
+			if declaration.Recv != nil {
+				function = "method " + function
+			}
+			if inThisPackage {
+				// Only the top-level functions by these names are the guarded
+				// ones; a method that shares a name is not one of them.
+				if declaration.Recv == nil && guardedLaunchers[declaration.Name.Name] {
+					continue
+				}
+				scanThisPackage(function, declaration.Body)
+			} else {
+				scanElsewhere(function, declaration.Body)
+			}
+		case *ast.GenDecl:
+			for _, specification := range declaration.Specs {
+				values, ok := specification.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for at, value := range values.Values {
+					function := "a package-level initializer"
+					if at < len(values.Names) {
+						function = "package-level " + values.Names[at].Name
+					}
+					if inThisPackage {
+						scanThisPackage(function, value)
+					} else {
+						scanElsewhere(function, value)
+					}
+				}
+			}
+		}
 	}
 	return found, nil
 }
