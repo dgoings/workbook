@@ -87,6 +87,11 @@ type Store struct {
 	// owns. It is guarded by rebuildMu, like db and dbInfo.
 	closed bool
 	rename func(string, string) error
+	// afterRecovery runs in lockActiveDatabase each time a recovery round
+	// releases the exclusive lock, before the round checks the cache again.
+	// It is a test seam standing for another process replacing the cache in
+	// that window, and nil otherwise.
+	afterRecovery func()
 }
 
 var _ core.TaskReader = (*Store)(nil)
@@ -557,6 +562,9 @@ func (s *Store) lockActiveDatabase(ctx context.Context) error {
 			}
 		}
 		s.rebuildMu.Unlock()
+		if s.afterRecovery != nil {
+			s.afterRecovery()
+		}
 
 		s.rebuildMu.RLock()
 		if s.closed {

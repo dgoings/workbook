@@ -3,6 +3,7 @@ package projection
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -170,9 +171,8 @@ func TestStoreListSucceedsWhileEachCreateProjectsItsOwnTask(t *testing.T) {
 // the read lists the ref, another write moves both the ref and the row past
 // what the read is about to project. The read leaves that row to the write
 // that moved it and answers the task from the checkpoint it read from Git,
-// which is the task as it stood after the read began. It never fails, never
-// puts the older checkpoint over the newer row, and never answers a head the
-// ref did not hold during the read.
+// which is the head its own listing found. It never fails and never puts the
+// older checkpoint over the newer row.
 func TestStoreListAnswersFromGitWhenAnotherWriteMovesTheRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -183,7 +183,7 @@ func TestStoreListAnswersFromGitWhenAnotherWriteMovesTheRow(t *testing.T) {
 
 	edits := 1
 	row := "head-1"
-	held := map[string]bool{}
+	listedHead := ""
 	edit := func() core.Snapshot {
 		edits++
 		snapshot := stormSnapshot(taskID, fmt.Sprintf("head-%d", edits), fmt.Sprintf("Edit %d", edits))
@@ -192,12 +192,11 @@ func TestStoreListAnswersFromGitWhenAnotherWriteMovesTheRow(t *testing.T) {
 	}
 	// A write lands between the read's cache scan and its ref listing, so
 	// every listing finds the task changed.
-	source.onList = func() { held[edit().Head] = true }
+	source.onList = func() { listedHead = edit().Head }
 	// And another lands, with its own projection, while the read is reading
 	// the checkpoint it listed.
 	source.onRead = func([]gitstore.TaskHead) {
 		written := edit()
-		held[written.Head] = true
 		if applied, err := store.Advance(ctx, testConfig(), row, written); err != nil || !applied {
 			t.Errorf("writer's Advance(%s → %s) = %t, %v, want true, nil", row, written.Head, applied, err)
 		}
@@ -209,8 +208,8 @@ func TestStoreListAnswersFromGitWhenAnotherWriteMovesTheRow(t *testing.T) {
 		if err != nil {
 			t.Fatalf("List() round %d error = %v", round, err)
 		}
-		if len(listed) != 1 || !held[listed[0].Head] {
-			t.Fatalf("List() round %d = %#v, want the one task at a head its ref held during the read", round, listed)
+		if len(listed) != 1 || listed[0].Head != listedHead {
+			t.Fatalf("List() round %d = %#v, want the one task at the head its listing found, %s", round, listed, listedHead)
 		}
 		cached, found, err := store.querySnapshot(ctx, taskID)
 		if err != nil || !found || cached.Head != row {
@@ -221,6 +220,50 @@ func TestStoreListAnswersFromGitWhenAnotherWriteMovesTheRow(t *testing.T) {
 	resolved, err := store.Resolve(ctx, testConfig(), taskID[:12])
 	if err != nil || resolved != taskID {
 		t.Fatalf("Resolve() = %q, %v, want %q", resolved, err, taskID)
+	}
+}
+
+// A slower writer can move a row forward during a read without reaching the
+// ref: the cache holds head-1, the ref is already at head-3, and while the
+// read is in Git the writer of head-2 records it. The read leaves head-2 to
+// that writer, and answers the task at head-3, the head it listed. Answering
+// the row instead would report head-2 after the write of head-3 had finished,
+// an older task than the ref held for the whole of the read.
+func TestStoreListAnswersTheListedHeadWhenASlowerWriterMovesTheRowBehindIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	taskID := stormTaskID(1)
+	source := newStormSource()
+	source.move(stormSnapshot(taskID, "head-1", "Edit 1"))
+	store := stormStore(t, source)
+	second := stormSnapshot(taskID, "head-2", "Edit 2")
+	source.move(second)
+	source.move(stormSnapshot(taskID, "head-3", "Edit 3"))
+
+	slow := true
+	source.onRead = func([]gitstore.TaskHead) {
+		if !slow {
+			return
+		}
+		slow = false
+		if applied, err := store.Advance(ctx, testConfig(), "head-1", second); err != nil || !applied {
+			t.Errorf("slower writer's Advance(head-1 → head-2) = %t, %v, want true, nil", applied, err)
+		}
+	}
+
+	listed, err := store.List(ctx, testConfig())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if slow {
+		t.Fatal("the read never reached Git, so the slower writer never ran")
+	}
+	if len(listed) != 1 || listed[0].Head != "head-3" || listed[0].State.Task.Title != "Edit 3" {
+		t.Fatalf("List() = %#v, want the one task at head-3, \"Edit 3\", the head its ref held throughout", listed)
+	}
+	cached, found, err := store.querySnapshot(ctx, taskID)
+	if err != nil || !found || cached.Head != "head-2" {
+		t.Fatalf("cache row = %q (found %t, %v), want head-2, left to the writer that recorded it", cached.Head, found, err)
 	}
 }
 
@@ -313,6 +356,7 @@ func TestStoreWriteRedoGivesUpRetryablyWhenTheCacheKeepsBeingReplaced(t *testing
 	if strings.Contains(err.Error(), "workbook rebuild") {
 		t.Fatalf("withActiveDatabase() = %v, must not advise a rebuild", err)
 	}
+	requireBusyCacheWording(t, err)
 }
 
 // SQLite reporting the cache locked past its busy timeout is another
@@ -360,6 +404,20 @@ func TestCacheErrorCallsALockedCacheRetryable(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "workbook rebuild") {
 		t.Fatalf("cacheError(locked) = %v, must not advise a rebuild", err)
+	}
+	requireBusyCacheWording(t, err)
+}
+
+// requireBusyCacheWording holds the phrase the board tells a busy cache from a
+// changed task by. Both are refused as stale-write, and the board's card says
+// "The board was busy" only for a message that names the projection cache
+// (cacheWasBusy in the web UI's failures.js). The board is sent the outermost
+// message, which is the one checked.
+func requireBusyCacheWording(t *testing.T, err error) {
+	t.Helper()
+	var typed *core.Error
+	if !errors.As(err, &typed) || !strings.Contains(typed.Message, "the projection cache") {
+		t.Fatalf("busy cache refusal %q does not name the projection cache, so the board would report it as the task changing elsewhere", err)
 	}
 }
 
@@ -537,5 +595,78 @@ func TestStoreListAnswersWhileRefsMoveThroughEveryRebuild(t *testing.T) {
 	again, err := store.List(ctx, testConfig())
 	if err != nil || len(again) != len(listed) {
 		t.Fatalf("List() once the refs settled = %d tasks, %v, want %d", len(again), err, len(listed))
+	}
+}
+
+// A cache another process replaces again right after each time this store
+// recovers it is bounded too: three rounds of opening the replacement, and
+// then the request is refused as one to send again, with nothing written.
+// Each replacement is a valid cache, so the refusal does not advise a
+// rebuild; it used to be a 500 that did.
+func TestStoreActivationGivesUpRetryablyWhenTheCacheIsReplacedAfterEveryRecovery(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	taskID := stormTaskID(1)
+	source := newStormSource()
+	source.move(stormSnapshot(taskID, "head-1", "Before"))
+	store := stormStore(t, source)
+	pristine, err := os.ReadFile(store.cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacements := 0
+	replace := func() {
+		replacements++
+		replacement := filepath.Join(filepath.Dir(store.cachePath), fmt.Sprintf("replacement-%d.sqlite", replacements))
+		if err := os.WriteFile(replacement, pristine, 0o600); err != nil {
+			t.Errorf("write replacement cache: %v", err)
+			return
+		}
+		if err := os.Rename(replacement, store.cachePath); err != nil {
+			t.Errorf("install replacement cache: %v", err)
+		}
+	}
+
+	// Replaced once before the write arrives, and again after every recovery.
+	replace()
+	recoveries := 0
+	store.afterRecovery = func() {
+		recoveries++
+		replace()
+	}
+	written := stormSnapshot(taskID, "head-2", "After")
+	advanced, err := store.Advance(ctx, testConfig(), "head-1", written)
+	store.afterRecovery = nil
+
+	if recoveries != 3 {
+		t.Fatalf("recovered %d times, want the bound of 3; Advance() = %t, %v", recoveries, advanced, err)
+	}
+	if core.CategoryOf(err) != core.CategoryStaleWrite {
+		t.Fatalf("Advance() = %t, %v (%q), want a stale-write refusal", advanced, err, core.CategoryOf(err))
+	}
+	for _, want := range []string{"changed again while it was being activated", "nothing was changed, try again"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Advance() error = %q, want it to say %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "workbook rebuild") {
+		t.Fatalf("Advance() error = %q, must not advise a rebuild", err)
+	}
+	requireBusyCacheWording(t, err)
+
+	// Nothing was written: the cache now in place, which the next request
+	// opens, still holds the task as it was. It is read directly, because a
+	// read through the store would bring the row up to the ref either way.
+	reader, err := sql.Open("sqlite", "file:"+store.cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	var head string
+	if err := reader.QueryRowContext(ctx, `SELECT head FROM tasks WHERE task_id = ?`, taskID).Scan(&head); err != nil {
+		t.Fatalf("read the cache in place: %v", err)
+	}
+	if head != "head-1" {
+		t.Fatalf("cache in place holds %s, want head-1, untouched by the refused write", head)
 	}
 }
