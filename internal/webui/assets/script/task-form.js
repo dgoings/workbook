@@ -580,8 +580,11 @@
           if (assignmentDraftPanel) assignmentDraftPanel.setBusy(true);
           text(result, "");
           try {
+            // The held line is pending rather than failed, and says so in its
+            // ink; whatever the save ends in is written in the form's own.
             const document = await mutateTask(isNew ? "POST" : "PATCH", isNew ? "/api/tasks" : "/api/tasks/" + encodeURIComponent(task.id), values,
-              () => text(result, "The server asked this page to wait. This save is held in this tab and will be sent again shortly."));
+              () => { text(result, "The server asked this page to wait. This save is held in this tab and will be sent again shortly."); result.dataset.tone = "pending"; })
+              .finally(() => { delete result.dataset.tone; });
             if (isNew) {
               createdDurably = true;
               taskWasCreated = true;

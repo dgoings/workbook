@@ -127,7 +127,31 @@ const heldBrowserScript = `(async () => {
   const save = document.querySelector(".save-button");
   const said = document.querySelector("[data-save-status]");
   await until(() => said.textContent.trim() !== "", "said the save is held beside Save");
+  // The held line's ink and what it stands on, in each scheme: a held save
+  // is pending, not failed, so it is set in the board's pending ink — the
+  // held-change notice's own — and never in the form's error ink.
+  const inks = (scheme) => {
+    const root = document.documentElement;
+    const before = root.getAttribute("data-scheme");
+    root.setAttribute("data-scheme", scheme);
+    const probe = document.createElement("span");
+    said.parentElement.append(probe);
+    probe.style.color = "var(--wb-warning-ink)";
+    const pending = getComputedStyle(probe).color;
+    probe.style.color = "var(--wb-danger-ink)";
+    const error = getComputedStyle(probe).color;
+    probe.remove();
+    let ground = "";
+    for (let node = said; node && !ground; node = node.parentElement) {
+      const color = getComputedStyle(node).backgroundColor;
+      if (color && color !== "transparent" && !/^rgba\(.*,\s*0\)$/.test(color)) ground = color;
+    }
+    const result = { color: getComputedStyle(said).color, ground, pending, error };
+    if (before === null) root.removeAttribute("data-scheme"); else root.setAttribute("data-scheme", before);
+    return result;
+  };
   const waiting = {
+    inks: { light: inks("light"), dark: inks("dark") },
     leaveWarned: leaving(),
     notice: box(notice),
     noticeText: notice.textContent.trim(),
@@ -155,12 +179,28 @@ const heldBrowserScript = `(async () => {
     path: location.pathname,
     titleAfter: document.querySelector("#task-title") ? document.querySelector("#task-title").value : null,
     statusText: status ? status.textContent.trim() : "",
+    statusTone: status ? status.getAttribute("data-tone") : null,
     status: status ? box(status) : null,
     saveDisabledAfter: document.querySelector(".save-button") ? document.querySelector(".save-button").disabled : null,
   };
 })()`
 
 type heldBrowserBox struct{ Top, Left, Width, Height float64 }
+
+// heldBrowserInk is the held line's computed color in one scheme, the
+// background it stands on, and the two inks it could be set in.
+type heldBrowserInk struct{ Color, Ground, Pending, Error string }
+
+// computedHex is a computed CSS color, as a browser reports it ("rgb(r, g,
+// b)"), written as #rrggbb for contrastRatio.
+func computedHex(t *testing.T, color string) string {
+	t.Helper()
+	var r, g, b int
+	if _, err := fmt.Sscanf(strings.Replace(color, "rgba(", "rgb(", 1), "rgb(%d, %d, %d", &r, &g, &b); err != nil {
+		t.Fatalf("the browser reported a color %q this cannot read: %v", color, err)
+	}
+	return fmt.Sprintf("#%02x%02x%02x", r, g, b)
+}
 
 type heldBrowserResult struct {
 	Viewport          struct{ Width, Height float64 }
@@ -175,12 +215,14 @@ type heldBrowserResult struct {
 		StatusText           string
 		Status               heldBrowserBox
 		ScrollWidth          float64
+		Inks                 struct{ Light, Dark heldBrowserInk }
 	}
 	NoticeDisplayAfter string
 	LeaveWarnedAfter   bool
 	Path               string
 	TitleAfter         *string
 	StatusText         string
+	StatusTone         *string
 	Status             *heldBrowserBox
 	SaveDisabledAfter  *bool
 }
@@ -250,6 +292,16 @@ func TestBrowserHoldsAChangeAProxyAskedToWaitFor(t *testing.T) {
 				if !strings.Contains(waiting.StatusText, "held in this tab") {
 					t.Errorf("the form says %q beside Save while the save waits", waiting.StatusText)
 				}
+				for scheme, ink := range map[string]heldBrowserInk{"light": waiting.Inks.Light, "dark": waiting.Inks.Dark} {
+					if ink.Color != ink.Pending || ink.Color == ink.Error {
+						t.Errorf("in the %s scheme the held line is set in %s, want the pending ink %s rather than the error ink %s", scheme, ink.Color, ink.Pending, ink.Error)
+					}
+					if ratio := contrastRatio(t, computedHex(t, ink.Color), computedHex(t, ink.Ground)); ratio < 4.5 {
+						t.Errorf("in the %s scheme the held line's %s on %s has contrast %.2f, under 4.5", scheme, ink.Color, ink.Ground, ratio)
+					} else {
+						t.Logf("%s scheme: held line %s on %s, contrast %.2f", scheme, ink.Color, ink.Ground, ratio)
+					}
+				}
 				status := waiting.Status
 				if status.Top < 0 || status.Top+status.Height > result.Viewport.Height || status.Left < 0 || status.Left+status.Width > result.Viewport.Width+0.5 {
 					t.Errorf("the form's status at %+v is not on screen in the %vx%v viewport", status, result.Viewport.Width, result.Viewport.Height)
@@ -274,6 +326,11 @@ func TestBrowserHoldsAChangeAProxyAskedToWaitFor(t *testing.T) {
 				}
 				if result.SaveDisabledAfter == nil || *result.SaveDisabledAfter {
 					t.Error("Save is not live again once the save settled")
+				}
+				// What the save ends in is the form's own word, not the held
+				// line's pending ink carried past it.
+				if result.StatusTone != nil {
+					t.Errorf("the form's status kept the tone %q once the save settled", *result.StatusTone)
 				}
 				proxy.mutex.Lock()
 				refused, saved := proxy.refused, proxy.saved
