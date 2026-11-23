@@ -598,3 +598,18 @@ func hasGitRemote(t *testing.T, repository, name string) bool {
 	t.Helper()
 	return exec.Command("git", "-C", repository, "remote", "get-url", name).Run() == nil
 }
+
+// A checkout reset first holds no task to publish back, so wiping the remote
+// from it does not tell it to reset again.
+func TestResetRemoteFromAResetCheckoutSuggestsNothingMore(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA256)
+	resetJSON(t, project.seed)
+	summary := resetJSON(t, project.seed, "--remote", "origin", "--confirm", "origin")
+	if summary.Tasks != len(project.ids) || len(summary.Next) != 0 {
+		t.Fatalf("reset --remote from a reset checkout = %+v, want no next step", summary)
+	}
+	if got := refsUnder(t, project.code, "refs/workbook/"); got != "" {
+		t.Fatalf("origin still holds:\n%s", got)
+	}
+}

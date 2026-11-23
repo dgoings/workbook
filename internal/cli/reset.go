@@ -247,7 +247,7 @@ func resetRemote(
 	if result.Bundle != "" {
 		summary.Restore = gitstore.RemoteRestoreCommand(result.Bundle, plan.Remote)
 	}
-	if plan.Live() && plan.Remote == resetTasksRemote(repository) && len(plan.Refs) > 0 {
+	if plan.Live() && plan.Remote == resetTasksRemote(repository) && len(plan.Refs) > 0 && holdsTasks(ctx, repository) {
 		summary.Next = append(summary.Next, "workbook reset")
 	}
 	return summary, nil
@@ -408,6 +408,14 @@ func stopResetWatcher(commonGitDir string, dryRun bool) (*resetWatcher, error) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return nil, refuse(fmt.Sprintf("did not stop within %s", resetWatcherWait))
+}
+
+// holdsTasks reports whether this checkout still holds a task ref, which its
+// next sync would publish back to a wiped remote. A checkout that cannot tell
+// is told to reset, which is harmless where it holds nothing.
+func holdsTasks(ctx context.Context, repository *gitstore.Repository) bool {
+	output, err := repository.Git(ctx, nil, "for-each-ref", "--count=1", "--format=%(refname)", "refs/workbook/tasks/")
+	return err != nil || strings.TrimSpace(string(output)) != ""
 }
 
 // resetTasksRemote is the tasks remote the settings name, origin by default.
