@@ -114,10 +114,53 @@ func (r *Repository) compactionLease(
 	// holds their change, which local does not have.
 	accounted, err := r.CompactionAccountsFor(ctx, config,
 		core.Snapshot{Head: remoteHead}, TaskHead{TaskID: taskID, ObjectID: local.Head})
-	if err != nil || !accounted {
+	if err != nil {
 		return leasedPush{}, false, err
 	}
+	if !accounted && r.activeMoveBackup(r.remote()) != nil {
+		// A move back accounts, too, for a tip it set aside in this clone:
+		// the parked ref holds every operation the copy there holds
+		// (replayOntoLocalCheckpoint), and the copy is backed up before the
+		// push.
+		if accounted, err = r.parkedAsideAt(ctx, config, taskID, remoteHead); err != nil {
+			return leasedPush{}, false, err
+		}
+	}
+	if !accounted {
+		return leasedPush{}, false, nil
+	}
 	return lease, true, nil
+}
+
+// parkedAsideAt reports whether this clone parks head for taskID.
+func (r *Repository) parkedAsideAt(ctx context.Context, config core.ProjectConfig, taskID, head string) (bool, error) {
+	name, err := r.parkedRefHolding(ctx, config, taskID, head)
+	return name != "", err
+}
+
+// parkedRefHolding is the name of a parked ref of taskID's at head, or "".
+func (r *Repository) parkedRefHolding(ctx context.Context, config core.ProjectConfig, taskID, head string) (string, error) {
+	refs, err := r.listParkedRefs(ctx, config, reconciledRefPrefix+taskID+"/")
+	if err != nil {
+		return "", err
+	}
+	for _, ref := range refs {
+		if ref.taskID == taskID && ref.objectID == head {
+			return ref.name, nil
+		}
+	}
+	return "", nil
+}
+
+// operationIDsOf is every operation ID the commits hold, in order.
+func operationIDsOf(commits []OperationCommit) []string {
+	var ids []string
+	for _, commit := range commits {
+		for _, operation := range commit.Operation.Operations {
+			ids = append(ids, operation.ID)
+		}
+	}
+	return ids
 }
 
 // compactedOnOriginOnly reports whether the tip the tracking ref names for
@@ -638,11 +681,55 @@ func (r *Repository) replayOntoLocalCheckpoint(
 		outcome.Result = SyncTaskResult{TaskID: request.TaskID, Status: SyncLocalAhead}
 		return outcome, nil
 	}
+	backup := r.activeMoveBackup(r.remote())
 
 	replay, failure, err := r.replayOperations(ctx, config, request.TaskID, request.Local, remoteOnly, true,
 		request.Local.Operation.HistoryGeneration, dependencies, nil)
 	if err != nil {
 		return outcome, err
+	}
+	if backup != nil && failure == nil && replay.conflict != nil && replay.conflict.Type == core.ConflictTombstone {
+		// A move back meets, at the place the tasks return to, an edit made
+		// there to a task deleted and compacted at the place they leave. It
+		// is resolved as a move resolves an edit to a task deleted at its new
+		// place: the edit is set aside, parked in this clone and reported once
+		// by the move, and the task stays deleted and compacted. The parked
+		// tip is what lets the checkpoint be leased over the copy holding it
+		// (compactionLease), after the copy is backed up.
+		//
+		// The copy is reported by the run that replaces it, so a run stopped
+		// after parking it and before the push parks nothing again and
+		// reports it under the ref it parked; once the copy is replaced, a
+		// later run never meets it.
+		parkedRef, err := r.parkedRefHolding(ctx, config, request.TaskID, request.Remote.Head)
+		if err != nil {
+			return outcome, err
+		}
+		if parkedRef == "" {
+			parkedRef = fmt.Sprintf("%s%s/%d", reconciledRefPrefix, request.TaskID, parkedIndex)
+			outcome.Update = &canonicalRefUpdate{
+				TaskID:     request.TaskID,
+				Next:       replay.parent.Head,
+				Expected:   request.Local.Head,
+				ParkedRef:  parkedRef,
+				ParkedHead: request.Remote.Head,
+			}
+			outcome.Snapshot = replay.parent
+		} else if replay.parent.Head != request.Local.Head {
+			outcome.Update = &canonicalRefUpdate{TaskID: request.TaskID, Next: replay.parent.Head, Expected: request.Local.Head}
+			outcome.Snapshot = replay.parent
+		}
+		processed := replay.replayed + replay.skipped
+		r.noteMoveSetAside(backup, moveSetAsideAt{
+			taskID: request.TaskID, title: request.Local.State.Task.Title,
+			operations: operationIDsOf(remoteOnly[processed:]), parkedRef: parkedRef, conflict: replay.conflict,
+		})
+		outcome.Result = SyncTaskResult{
+			TaskID: request.TaskID,
+			Status: SyncReconciled,
+			Detail: fmt.Sprintf("set aside %s's edit to this deleted, compacted task under %s", r.remote(), parkedRef),
+		}
+		return outcome, nil
 	}
 	outcome.Withhold = failure != nil || replay.conflict != nil
 	switch {

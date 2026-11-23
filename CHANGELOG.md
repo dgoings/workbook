@@ -60,7 +60,10 @@ teammate's late edit to that copy is replayed onto it and after the copy is
 written to a backup bundle the way `compact` writes one, at the same default
 place or `--backup <path>`, skipped with `--no-backup`; the bundle's path is
 printed and reported in `bundles`, and a copy that changes before the push is
-read again and bundled again rather than pushed over. Moves can go any number of times in any order;
+read again and bundled again rather than pushed over. A late edit there to a
+task deleted and compacted in between is set aside in the mover's clone and
+reported once with exit 8, by title and ID, and the task stays deleted and
+compacted, where it used to make the move exit 8 on every run. Moves can go any number of times in any order;
 a checkout on any earlier generation of the settings is told the place the
 tasks are now, by following the markers there, and markers that lead in a
 circle are reported as such. `workbook

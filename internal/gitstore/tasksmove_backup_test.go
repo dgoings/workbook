@@ -99,3 +99,58 @@ func TestMoveTasksBackRebundlesATipThatMovesBeforeItsPush(t *testing.T) {
 		t.Fatalf("origin holds %s at %s, want this clone's %s", task, got, want)
 	}
 }
+
+// A move back stopped after it parked a late edit to a deleted, compacted
+// task and before the push that replaces the copy holding it is finished by
+// running it again, which parks nothing more and reports the edit once, under
+// the ref it parked, with the conflict refusal; the run after that is quiet.
+func TestMoveTasksBackStoppedBeforeReplacingASetAsideCopyReportsItOnce(t *testing.T) {
+	t.Parallel()
+	fixture := newMoveFixture(t, testrepo.FormatSHA1)
+	task := fixture.ids[0]
+	first, config := moveTo(t, fixture.first, core.TasksRemoteSetting{Name: "tasks", URL: fixture.tasks})
+	deleteSyncTask(t, first, config, task)
+	compactLocally(t, first, config, task)
+	if _, err := first.Sync(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	ref := taskRefPrefix + task
+	updateSyncTask(t, fixture.second, fixture.stale, task, "Late edit before the move back")
+	syncGit(t, fixture.second.Root, "push", "--quiet", "--no-verify", "origin", ref+":"+ref)
+	stale := syncGit(t, fixture.origin, "rev-parse", ref)
+
+	first, config = pullSettings(t, first, core.TasksRemoteSetting{})
+	ctx, cancel := context.WithCancel(context.Background())
+	first.leasedPushHook = cancel
+	if _, err := first.MoveTasks(ctx, config, MoveTasksOptions{}); err == nil {
+		t.Fatal("MoveTasks() stopped before its push = nil, want the stop")
+	}
+	first.leasedPushHook = nil
+	parked := syncGit(t, first.Root, "for-each-ref", "--format=%(refname) %(objectname)", reconciledRefPrefix+task+"/")
+	if parked != reconciledRefPrefix+task+"/0 "+stale {
+		t.Fatalf("parked refs after the stop = %q, want the stale copy parked once", parked)
+	}
+	if got := syncGit(t, fixture.origin, "rev-parse", ref); got != stale {
+		t.Fatalf("origin holds %s at %s after the stop, want the copy it had", task, got)
+	}
+
+	result, err := first.MoveTasks(context.Background(), config, MoveTasksOptions{})
+	if core.CategoryOf(err) != core.CategoryConflict || !strings.Contains(err.Error(), "it was deleted and compacted at tasks") ||
+		!strings.Contains(err.Error(), reconciledRefPrefix+task+"/0") {
+		t.Fatalf("MoveTasks() rerun = %v, want the set-aside refusal naming the parked ref", err)
+	}
+	if !result.Verified || len(result.SetAside) != 1 || result.SetAside[0].ParkedRef != reconciledRefPrefix+task+"/0" ||
+		len(result.Replaced) != 1 {
+		t.Fatalf("MoveTasks() rerun = %+v", result)
+	}
+	if got := syncGit(t, first.Root, "for-each-ref", "--format=%(refname) %(objectname)", reconciledRefPrefix+task+"/"); got != parked {
+		t.Fatalf("parked refs after the rerun = %q, want %q", got, parked)
+	}
+	if got, want := syncGit(t, fixture.origin, "rev-parse", ref), syncGit(t, first.Root, "rev-parse", ref); got != want {
+		t.Fatalf("origin holds %s at %s, want the checkpoint %s", task, got, want)
+	}
+	result, err = first.MoveTasks(context.Background(), config, MoveTasksOptions{})
+	if err != nil || len(result.SetAside) != 0 || len(result.Bundles) != 0 {
+		t.Fatalf("MoveTasks() third run = %+v, %v, want quiet", result, err)
+	}
+}

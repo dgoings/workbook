@@ -320,6 +320,16 @@ func (r *Repository) moveTasks(ctx context.Context, config core.ProjectConfig, o
 	}
 	result.Verified = true
 	result.Stragglers = carried.report()
+	for _, item := range r.takeMoveSetAside() {
+		result.SetAside = append(result.SetAside, MoveSetAside{
+			TaskID: item.taskID, Title: item.title, Operations: item.operations, ParkedRef: item.parkedRef,
+		})
+		if item.conflict != nil {
+			carried.conflicts = append(carried.conflicts, moveConflict{
+				conflict: *item.conflict, title: item.title, parkedRef: item.parkedRef, madeAtDestination: true,
+			})
+		}
+	}
 	if len(carried.conflicts) > 0 {
 		return result, setAsideRefusal(from, to.Name, carried.conflicts)
 	}
@@ -331,6 +341,10 @@ type moveConflict struct {
 	conflict  core.Conflict
 	title     string
 	parkedRef string
+	// madeAtDestination says the edit was made at the place the tasks return
+	// to, to a task deleted and compacted at the place they leave, rather
+	// than at the old place.
+	madeAtDestination bool
 }
 
 // setAsideRefusal is the exit-8 report of a run that set edits aside: which
@@ -340,17 +354,42 @@ type moveConflict struct {
 func setAsideRefusal(from, to string, conflicts []moveConflict) error {
 	lines := make([]string, 0, len(conflicts))
 	refs := make([]string, 0, len(conflicts))
+	atDestination := 0
 	for _, item := range conflicts {
-		lines = append(lines, fmt.Sprintf("%q (%s): %s", item.title, item.conflict.TaskID, moveConflictReason(item.conflict, from, to)))
+		reason := moveConflictReason(item.conflict, from, to)
+		if item.madeAtDestination {
+			reason = destinationConflictReason(item.conflict, from, to)
+			atDestination++
+		}
+		lines = append(lines, fmt.Sprintf("%q (%s): %s", item.title, item.conflict.TaskID, reason))
 		refs = append(refs, item.parkedRef)
 	}
+	lead := fmt.Sprintf("edits made at %s to %d task(s) could not be applied at %s, "+
+		"because each conflicts with what happened to its task there", from, len(conflicts), to)
+	if atDestination > 0 {
+		lead = fmt.Sprintf("edits to %d task(s) could not be applied, "+
+			"because each conflicts with what happened to its task at the other place", len(conflicts))
+	}
 	return core.Errorf(core.CategoryConflict,
-		"the move is finished, but edits made at %s to %d task(s) could not be applied at %s, "+
-			"because each conflicts with what happened to its task there: %s. "+
+		"the move is finished, but %s: %s. "+
 			"They are set aside, not lost: each one's text is kept in this clone under %s, "+
 			"and workbook serve run from this clone shows it on its task as a set-aside edit; "+
 			"apply what you want of it by hand. Running workbook move-tasks again from this clone does not report them again",
-		from, len(conflicts), to, strings.Join(lines, "; "), strings.Join(refs, ", "))
+		lead, strings.Join(lines, "; "), strings.Join(refs, ", "))
+}
+
+// destinationConflictReason says why an edit made at the place the tasks
+// return to could not apply: its task was deleted and compacted at the place
+// they leave.
+func destinationConflictReason(conflict core.Conflict, from, to string) string {
+	edit := "the edit"
+	if conflict.Tombstone != nil {
+		edit = "the edit (" + string(conflict.Tombstone.Operation) + ")"
+		if conflict.Tombstone.Field != "" {
+			edit = "the change to its " + conflict.Tombstone.Field
+		}
+	}
+	return "it was deleted and compacted at " + from + ", so " + edit + " made at " + to + " cannot apply to it"
 }
 
 // moveConflictReason says why one of the old place's edits could not apply

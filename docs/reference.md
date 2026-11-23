@@ -1787,9 +1787,17 @@ returned-to place kept for it the way any [compaction](#publishing-a-compaction)
 published: a non-fast-forward push of that one task ref that succeeds only while
 the place still holds exactly the tip this run read there. An edit a teammate
 published to that older copy after the tasks left is replayed onto the
-checkpoint first, so it arrives with the rest. No other ref moves backwards,
-and none is deleted. Removing the old copies is not part of a move, and a move
-works whether they are there, stale, compacted or gone.
+checkpoint first, so it arrives with the rest. One that cannot apply, because
+the task was deleted and compacted, is set aside the way a move sets aside an
+old place's edit to a task deleted at the new place: the copy holding it is
+parked in this clone under `refs/workbook/reconciled/<task>/<n>`, the run
+replaces it with the checkpoint and exits 8 naming the task by title and ID
+and saying it was deleted and compacted at the place left, so the change made
+at the returned-to place cannot apply, and the task stays deleted and
+compacted. A run stopped before that replacement reports it when run again,
+under the ref it parked; after it, no run meets it again. No other ref moves
+backwards, and none is deleted. Removing the old copies is not part of a move,
+and a move works whether they are there, stale, compacted or gone.
 
 Before the first such push in a run, `move-tasks` writes a Git bundle of every
 tip it is about to replace, as [`compact`](#the-backup-bundle) does: at

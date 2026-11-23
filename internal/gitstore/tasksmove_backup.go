@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -50,6 +51,48 @@ type moveBackup struct {
 	// bundle found the tracking ref moved, so the synchronization is run
 	// again.
 	stale bool
+	// setAside is the edits made at remote, to tasks deleted and compacted
+	// at the place the tasks leave, that the run set aside, by task.
+	setAside map[string]moveSetAsideAt
+}
+
+// moveSetAsideAt is one task whose edits made at the place the tasks return
+// to were set aside, because it was deleted and compacted at the place they
+// leave.
+type moveSetAsideAt struct {
+	taskID, title string
+	operations    []string
+	parkedRef     string
+	conflict      *core.Conflict
+}
+
+// noteMoveSetAside records a set-aside edit for the move's report. A later
+// synchronization in the same run that parks the task again, because the
+// copy changed before the push, replaces the entry, so each task is reported
+// once, under the newest parked ref.
+func (r *Repository) noteMoveSetAside(backup *moveBackup, item moveSetAsideAt) {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	if backup.setAside == nil {
+		backup.setAside = map[string]moveSetAsideAt{}
+	}
+	backup.setAside[item.taskID] = item
+}
+
+// takeMoveSetAside returns, sorted by task, what the run set aside at the
+// place the tasks return to so far.
+func (r *Repository) takeMoveSetAside() []moveSetAsideAt {
+	r.metadataMu.RLock()
+	defer r.metadataMu.RUnlock()
+	if r.moveBackup == nil {
+		return nil
+	}
+	items := make([]moveSetAsideAt, 0, len(r.moveBackup.setAside))
+	for _, item := range r.moveBackup.setAside {
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].taskID < items[j].taskID })
+	return items
 }
 
 // errReplacedTipMoved is a bundle that found a tip it was to hold changed
