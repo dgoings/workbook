@@ -40,13 +40,16 @@ func TestResolveDueDateTurnsEveryInputFormIntoAnAbsoluteDate(t *testing.T) {
 		"+3d":        "2027-01-03",
 		"+60d":       "2027-03-01",
 		" +1d ":      "2027-01-01",
+		"+03d":       "2027-01-03",
+		"+001d":      "2027-01-01",
+		"+036500d":   "2126-12-07",
 	} {
 		got, err := ResolveDueDate(input, today)
 		if err != nil || got != want {
 			t.Errorf("ResolveDueDate(%q) = %q, %v; want %q", input, got, err, want)
 		}
 	}
-	for _, invalid := range []string{"", "yesterday", "fri", "+d", "+-1d", "+3", "3d", "+03d", "+1w", "+999999d", "2026-13-01"} {
+	for _, invalid := range []string{"", "yesterday", "fri", "+d", "+-1d", "++1d", "+ 1d", "+1 d", "+3", "3d", "+1w", "+36501d", "+999999d", "2026-13-01"} {
 		if _, err := ResolveDueDate(invalid, today); CategoryOf(err) != CategoryValidation {
 			t.Errorf("ResolveDueDate(%q) error = %v, want a validation error", invalid, err)
 		}

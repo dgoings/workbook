@@ -69,8 +69,10 @@ func shortDueValue(value string) string {
 // stored.
 //
 // It accepts an ISO date (2026-12-01), `today`, `tomorrow`, and `+Nd` for N
-// days after today. The relative forms are resolved here, once, against the
-// writer's local date — today is the caller's — so the operation that is
+// days after today, N in decimal digits from 0 to maxRelativeDueDays. The
+// relative forms are resolved here, once, against the writer's date — the
+// calendar day of today in today's own location, so a caller passes an instant
+// in the writer's zone — so the operation that is
 // recorded only ever holds an absolute date: a history that stored `+3d` would
 // mean a different day to every reader who replayed it. Anything else is a
 // validation error that lists the forms.
@@ -84,10 +86,14 @@ func ResolveDueDate(input string, today time.Time) (string, error) {
 		return base.AddDate(0, 0, 1).Format(DueDateLayout), nil
 	}
 	if strings.HasPrefix(value, "+") && strings.HasSuffix(strings.ToLower(value), "d") && len(value) > 2 {
+		// N is decimal digits and nothing else, leading zeros included, so
+		// `+01d` is `+1d`; a sign, a space or a second plus is not a number of
+		// days anyone typed on purpose.
 		digits := value[1 : len(value)-1]
-		days, err := strconv.Atoi(digits)
-		if err == nil && digits == strconv.Itoa(days) && days >= 0 && days <= maxRelativeDueDays {
-			return base.AddDate(0, 0, days).Format(DueDateLayout), nil
+		if strings.Trim(digits, "0123456789") == "" {
+			if days, err := strconv.Atoi(digits); err == nil && days <= maxRelativeDueDays {
+				return base.AddDate(0, 0, days).Format(DueDateLayout), nil
+			}
 		}
 	}
 	if err := ValidateDueDate(value); err != nil {

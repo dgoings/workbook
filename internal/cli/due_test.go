@@ -3,7 +3,9 @@ package cli
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -524,5 +526,77 @@ func TestWorkbookNowMovesWhatARelativeDueDateMeansButNotOverdue(t *testing.T) {
 	}
 	if !created.Data.Overdue {
 		t.Fatal("a task due in 2001 is not overdue today")
+	}
+}
+
+// runBinaryWithEnvironment runs binary with extra environment variables.
+func runBinaryWithEnvironment(t *testing.T, binary, repository string, environment []string, args ...string) string {
+	t.Helper()
+	command := exec.Command(binary, args...)
+	command.Dir = repository
+	command.Env = append(os.Environ(), environment...)
+	output, err := command.Output()
+	if err != nil {
+		stderr := ""
+		var exit *exec.ExitError
+		if asExitError(err, &exit) {
+			stderr = string(exit.Stderr)
+		}
+		t.Fatalf("%v %v: %v; stdout = %q, stderr = %q", environment, args, err, output, stderr)
+	}
+	return string(output)
+}
+
+// WORKBOOK_NOW names an instant, and a relative due date is resolved against
+// that instant's local date — the rule the system clock follows — rather than
+// against the calendar day in whatever offset the value happens to be written
+// with. The instant is written in an offset whose calendar day differs from
+// this machine's local day for it, whatever zone the machine is in, so a
+// resolver that took the written day would record the other date. Where the
+// zone can be set by TZ, the New York case is played exactly: 02:00 UTC on
+// March 1 is still February 28 there.
+func TestWorkbookNowResolvesARelativeDueDateOnTheLocalDateOfThatInstant(t *testing.T) {
+	t.Parallel()
+	binary := buildWorkbookBinary(t)
+	repository := testrepo.New(t)
+	mustRunBinaryAt(t, binary, repository, "2026-03-01T02:00:00Z", "setup", "--key", "WB", "--no-sync")
+
+	instant := time.Date(2026, time.March, 1, 2, 0, 0, 0, time.UTC)
+	local := core.LocalDate(instant)
+	written := instant.In(time.FixedZone("UTC+14", 14*60*60))
+	if written.Format(core.DueDateLayout) == local {
+		written = instant.In(time.FixedZone("UTC-12", -12*60*60))
+	}
+	if written.Format(core.DueDateLayout) == local {
+		t.Fatalf("no offset puts %s on a calendar day other than the local %s", instant, local)
+	}
+	cases := []struct {
+		name        string
+		environment []string
+		want        string
+	}{{
+		name:        "this machine's zone",
+		environment: []string{"WORKBOOK_NOW=" + written.Format(time.RFC3339)},
+		want:        local,
+	}}
+	if runtime.GOOS != "windows" {
+		// Go reads TZ for the local zone everywhere but Windows.
+		cases = append(cases, struct {
+			name        string
+			environment []string
+			want        string
+		}{"New York", []string{"WORKBOOK_NOW=2026-03-01T02:00:00Z", "TZ=America/New_York"}, "2026-02-28"})
+	}
+	for _, test := range cases {
+		var created struct {
+			Data struct {
+				Due *string `json:"due"`
+			} `json:"data"`
+		}
+		decodeClockJSON(t, runBinaryWithEnvironment(t, binary, repository, test.environment,
+			"create", "Dated during a migration", "--due", "today", "--no-sync", "--json"), &created)
+		if created.Data.Due == nil || *created.Data.Due != test.want {
+			t.Errorf("%s: %v --due today recorded %v, want the local date %s", test.name, test.environment, created.Data.Due, test.want)
+		}
 	}
 }

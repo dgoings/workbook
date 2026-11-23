@@ -714,7 +714,7 @@ func createDue(flags *commandFlagSet, value string) (string, []core.FieldChange,
 	if !flagGiven(flags, "due") {
 		return "", nil, nil
 	}
-	resolved, err := core.ResolveDueDate(value, recordedNow())
+	resolved, err := core.ResolveDueDate(value, recordedToday())
 	if err != nil {
 		return "", nil, err
 	}
@@ -1028,7 +1028,7 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	// recorded on, as create's is, so the operation records only an absolute
 	// date.
 	if dueGiven {
-		resolved, err := core.ResolveDueDate(*due, recordedNow())
+		resolved, err := core.ResolveDueDate(*due, recordedToday())
 		if err != nil {
 			return err
 		}
