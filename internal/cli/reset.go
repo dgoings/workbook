@@ -145,10 +145,12 @@ func runResetCheckout(
 			"or reset without --no-backup to keep it in a bundle, or add --discard-unpublished to lose it",
 			remote, lacks(plan), describeLocalOnly(plan))
 	}
-	tasksOnly, _ := repository.TasksOnly(ctx)
-	if tasksOnly {
+	// A checkout with no project settings left, as leaving Workbook makes
+	// it, has nothing to set up again.
+	summary.Next = []string{}
+	if tasksOnly, _ := repository.TasksOnly(ctx); tasksOnly {
 		summary.Next = []string{"workbook setup --tasks-only " + summary.URL}
-	} else {
+	} else if projectID != "" {
 		summary.Next = []string{"workbook setup", "workbook sync"}
 	}
 	if !dryRun {

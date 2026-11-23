@@ -613,3 +613,15 @@ func TestResetRemoteFromAResetCheckoutSuggestsNothingMore(t *testing.T) {
 		t.Fatalf("origin still holds:\n%s", got)
 	}
 }
+
+// A checkout whose project settings were removed, as leaving Workbook does,
+// is not told to set Workbook up again.
+func TestResetAfterTheSettingsWereRemovedSuggestsNothingMore(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA256)
+	cliGit(t, project.seed, "rm", "--quiet", "-r", ".workbook")
+	summary := resetJSON(t, project.seed)
+	if summary.Tasks != len(project.ids) || len(summary.Next) != 0 {
+		t.Fatalf("reset without settings = %+v, want no next step", summary)
+	}
+}
