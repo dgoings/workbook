@@ -348,8 +348,9 @@
       // One timer, not two. The sync age is redrawn on the poll's own tick
       // rather than on a second interval of its own, so a board left alone
       // still ages visibly, whatever the poll answers, and there is only ever
-      // one scheduled callback to reason about. The poll's promise is
+      // one scheduled callback to reason about. The due marks are judged again
+      // on the same tick, for the same reason, once the reader's date moves. The poll's promise is
       // returned, not swallowed: callers await this tick to know the refresh
       // has finished.
-      window.setInterval(() => { renderSyncAge(); return refresh(); }, 1000);
+      window.setInterval(() => { renderSyncAge(); rejudgeDueDates(); return refresh(); }, 1000);
     })();

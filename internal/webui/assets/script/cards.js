@@ -18,6 +18,23 @@
         const horizon = localDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() + dueSoonDays));
         return task.due <= horizon ? "due-soon" : "";
       }
+      // The reader's date the marks on screen were judged on. A board left open
+      // across the reader's midnight holds a document the server has no reason
+      // to change — its polls are answered 304, and nothing is redrawn — so the
+      // poll's own tick asks whether the date has moved and, when it has,
+      // redraws the board and the open task page from what they already hold.
+      // No timer of its own: a hidden tab the browser has slowed is judged
+      // again on its next tick, which is the next time anyone can see it.
+      let dueJudgedOn = localDate(new Date());
+      function rejudgeDueDates() {
+        const today = localDate(new Date());
+        if (today === dueJudgedOn) return;
+        dueJudgedOn = today;
+        if (!tasksLoaded) return;
+        rerender();
+        const projected = projectTasks(latestTasks);
+        followOpenThreadPanels(projected, projectPresentation(latestPresentation, projected));
+      }
       // The word is the mark. Color only repeats it, so a reader who cannot
       // tell the two inks apart reads exactly what everyone else does.
       function dueWord(state) {

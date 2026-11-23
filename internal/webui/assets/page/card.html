@@ -3,7 +3,12 @@
   <div class="task-card__meta"><span class="task-id-copy-group"><button type="button" class="task-id-copy" data-copy-task-id="{{ .Task.ID }}" aria-label="Copy full task ID {{ .Task.ID }}"><code>{{ .IDPrefix }}</code></button><span class="copy-status" data-copy-status role="status" aria-live="polite" aria-atomic="true"></span></span><span class="priority priority--{{ .Task.Priority }}"{{ if .PriorityUnresolved }} data-priority-unresolved title="Priority {{ .Task.Priority }} is not one of this project's"{{ end }}>{{ .Task.Priority }}</span></div>
   <h3><a href="/tasks/{{ .Task.ID }}">{{ shown .Task.Title }}</a></h3>
   {{ if .SetAsideEdits }}<div class="task-card__set-aside" data-set-aside-flag>{{ if eq .SetAsideEdits 1 }}1 edit{{ else }}{{ .SetAsideEdits }} edits{{ end }} set aside</div>{{ end }}
-  {{ if .Task.Due }}<div class="task-card__due{{ if .Task.Overdue }} task-card__due--overdue{{ else if .Task.DueSoon }} task-card__due--soon{{ end }}" data-due="{{ if .Task.Overdue }}overdue{{ else if .Task.DueSoon }}due-soon{{ end }}"><span class="task-card__due-word">{{ if .Task.Overdue }}Overdue{{ else if .Task.DueSoon }}Due soon{{ else }}Due{{ end }}</span> <time datetime="{{ .Task.Due }}">{{ .Task.Due }}</time></div>{{ end }}
+  {{/* The date only, with no word for what it means. Overdue and due soon
+       are judged against the reader's own date, which only the browser knows;
+       the script draws the word when it adopts the card, and a word drawn here
+       from the server's date would be wrong for a reader in another timezone,
+       and stay wrong with scripts off. */}}
+  {{ if .Task.Due }}<div class="task-card__due" data-due=""><span class="task-card__due-word">Due</span> <time datetime="{{ .Task.Due }}">{{ .Task.Due }}</time></div>{{ end }}
   {{ if .Task.Description }}<p>{{ shown .Task.Description }}</p>{{ end }}
   {{ if .Task.Labels }}<div class="labels">{{ range .Task.Labels }}<span class="label">{{ shown . }}</span>{{ end }}</div>{{ end }}
   {{ if .Task.Assignments }}{{ $assignees := cardAssignees .Task.Assignments }}<div class="assignees" data-assignees role="group" aria-label="Assignees">{{ range $assignees.Chips }}<span class="assignee">@{{ shown . }}</span>{{ end }}{{ if $assignees.More }}<span class="assignee assignee--more">+{{ $assignees.More }} more</span>{{ end }}</div>{{ end }}

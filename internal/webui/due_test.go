@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,12 @@ const (
 	dueDoneID    = "WB-01J00000000000000000000D04"
 	dueNoneID    = "WB-01J00000000000000000000D05"
 	dueEdgeID    = "WB-01J00000000000000000000D06"
+	// Two tasks whose server flags contradict the date: the server's judgment
+	// is what a board in another timezone, or one left open past midnight,
+	// would hold. A board that drew its marks from the flags rather than from
+	// the date would draw these two wrong, and only these two.
+	dueClaimedOverdueID = "WB-01J00000000000000000000D09"
+	dueClaimedNoneID    = "WB-01J00000000000000000000D10"
 )
 
 // dueTasks are dated around the machine's own today, which is the reader's
@@ -48,6 +55,8 @@ func dueTasks() []core.Task {
 		datedTask(dueLaterID, "Later", core.StatusBacklog, day(core.DueSoonDays+1), core.DueStateNone),
 		datedTask(dueDoneID, "Shipped late", core.StatusDone, day(-5), core.DueStateNone),
 		datedTask(dueNoneID, "Undated", core.StatusBacklog, "", core.DueStateNone),
+		datedTask(dueClaimedOverdueID, "Server says overdue", core.StatusBacklog, day(core.DueSoonDays+5), core.DueStateOverdue),
+		datedTask(dueClaimedNoneID, "Server says nothing", core.StatusReady, day(-2), core.DueStateNone),
 	}
 }
 
@@ -63,9 +72,11 @@ func servedTasks(t *testing.T, handler http.Handler) string {
 	return string(mustJSON(t, TasksDocument{Format: document.Format, Version: document.Version, Tasks: document.Tasks, Presentation: document.Presentation}))
 }
 
-// The server's card says what the date means in words, beside the date, and a
-// card for a task with no date draws no due line at all.
-func TestHandlerServersCardMarksDueDatesInWords(t *testing.T) {
+// The server's card draws the date alone, with no word for what it means and
+// whatever the server judged: overdue and due soon are the reader's to judge,
+// against the reader's own date, and the script adds the word. A card for a
+// task with no date draws no due line at all.
+func TestHandlerServersCardDrawsTheDateWithoutJudgingIt(t *testing.T) {
 	t.Parallel()
 	tasks := dueTasks()
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
@@ -81,14 +92,19 @@ func TestHandlerServersCardMarksDueDatesInWords(t *testing.T) {
 		end := strings.Index(body[start:], "</article>")
 		return body[start : start+end]
 	}
-	for id, want := range map[string]string{
-		dueOverdueID: `task-card__due--overdue" data-due="overdue"><span class="task-card__due-word">Overdue</span> <time datetime="` + tasks[0].Due + `">`,
-		dueSoonID:    `task-card__due--soon" data-due="due-soon"><span class="task-card__due-word">Due soon</span>`,
-		dueLaterID:   `class="task-card__due" data-due=""><span class="task-card__due-word">Due</span>`,
-		dueDoneID:    `class="task-card__due" data-due=""><span class="task-card__due-word">Due</span>`,
-	} {
-		if got := card(id); !strings.Contains(got, want) {
-			t.Errorf("card %s = %s\nwant it to contain %s", id, got, want)
+	for _, task := range tasks {
+		if task.Due == "" {
+			continue
+		}
+		want := `<div class="task-card__due" data-due=""><span class="task-card__due-word">Due</span> <time datetime="` + task.Due + `">` + task.Due + `</time></div>`
+		got := card(task.ID)
+		if !strings.Contains(got, want) {
+			t.Errorf("card %s = %s\nwant it to contain %s", task.ID, got, want)
+		}
+		for _, judged := range []string{"Overdue", "Due soon", "task-card__due--", `data-due="overdue"`, `data-due="due-soon"`} {
+			if strings.Contains(got, judged) {
+				t.Errorf("card %s draws the server's judgment %q: %s", task.ID, judged, got)
+			}
 		}
 	}
 	if strings.Contains(card(dueNoneID), "task-card__due") {
@@ -163,6 +179,8 @@ setTimeout(async () => {
   expect("` + dueEdgeID + `", "due-soon", "task-card__due task-card__due--soon", "Due soon");
   expect("` + dueLaterID + `", "", "task-card__due", "Due ` + tasks[3].Due + `");
   expect("` + dueDoneID + `", "", "task-card__due", "Due ` + tasks[4].Due + `");
+  expect("` + dueClaimedOverdueID + `", "", "task-card__due", "Due ` + tasks[6].Due + `");
+  expect("` + dueClaimedNoneID + `", "overdue", "task-card__due task-card__due--overdue", "Overdue ` + tasks[7].Due + `");
   if (drawn["` + dueNoneID + `"] !== null) throw new Error("an undated card draws " + JSON.stringify(drawn["` + dueNoneID + `"]));
 
   taskResponse = ` + second + `;
@@ -300,4 +318,87 @@ func TestHandlerPassesTheDueDateToCreateAndUpdate(t *testing.T) {
 		updated[1].Due == nil || *updated[1].Due != "" || updated[2].Due != nil {
 		t.Fatalf("update inputs = %#v", updated)
 	}
+}
+
+// dueClockShim replaces the page's Date with one the test can move forward,
+// so a test can carry the reader's own clock past local midnight. Only a Date
+// made with no arguments — "now" — is moved; one made from a value is that
+// value, as it is in a browser. Date.now is left to whoever set it.
+const dueClockShim = `
+const RealDate = Date;
+let dateShift = 0;
+globalThis.Date = class extends RealDate {
+  constructor(...args) {
+    if (args.length) super(...args);
+    else { super(); this.setTime(this.getTime() + dateShift); }
+  }
+};
+// Moves "now" to one minute past the reader's next local midnight.
+function runPastMidnight() {
+  const now = new Date();
+  const next = new RealDate(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 1);
+  dateShift += next.getTime() - now.getTime();
+}
+`
+
+// A board left open across the reader's midnight judges its due dates again
+// on the poll tick that finds the date has moved, although every poll is
+// answered 304 and the server's document never changes. Before that tick the
+// card says what it said yesterday; after it, a task due yesterday is overdue
+// and one that just came into reach is due soon. The open task page's mark
+// follows on the same tick.
+func TestClientRejudgesDueDatesWhenTheReadersDateChanges(t *testing.T) {
+	t.Parallel()
+	tasks := dueTasks()
+	today, later := tasks[1], tasks[3]
+	check := `
+function pollMark() {
+  if (reads.length !== answers.length) throw new Error("a read is still in flight");
+  return answers.length;
+}
+async function tick() { await intervalCallback(); await settle(); await settle(); }
+function notModifiedSince(from) {
+  // The board's own poll; a task page also reads its task and the deleted
+  // tasks for its sidebars. Each read is answered in the order it was made.
+  const since = answers.slice(from).filter((_, index) => reads[from + index].url === "/api/tasks");
+  if (!since.length || since.some((answer) => answer.status !== 304)) {
+    throw new Error("the polls answered " + JSON.stringify(since.map((answer) => answer.status)) + ", want only 304");
+  }
+}
+`
+	board := conditionalPollProgram(t, "/", tasks, dueClockShim+check, `
+  function dueOf(id) {
+    const card = boardCard(id);
+    const line = card && findElement(card, (element) => hasDataKey(element, "due"));
+    return line ? line.dataset.due + " " + line.textContent : null;
+  }
+  await tick();
+  const expect = (id, want, when) => {
+    if (dueOf(id) !== want) throw new Error(when + ": " + id + " draws " + JSON.stringify(dueOf(id)) + ", want " + JSON.stringify(want));
+  };
+  expect(`+strconv.Quote(today.ID)+`, "due-soon Due soon `+today.Due+`", "before midnight");
+  expect(`+strconv.Quote(later.ID)+`, " Due `+later.Due+`", "before midnight");
+  const from = pollMark();
+  runPastMidnight();
+  await tick();
+  notModifiedSince(from);
+  expect(`+strconv.Quote(today.ID)+`, "overdue Overdue `+today.Due+`", "after midnight");
+  expect(`+strconv.Quote(later.ID)+`, "due-soon Due soon `+later.Due+`", "after midnight");
+`)
+	runConditionalPollClient(t, "the board's due marks across midnight", board)
+
+	page := conditionalPollProgram(t, "/tasks/"+today.ID, tasks, dueClockShim+check, `
+  const mark = () => {
+    const element = findElement(main, (candidate) => candidate.id === "task-due-state");
+    return element ? [element.hidden, element.dataset.dueState, element.textContent] : null;
+  };
+  await tick();
+  if (JSON.stringify(mark()) !== JSON.stringify([false, "due-soon", "Due soon"])) throw new Error("before midnight the task page reads " + JSON.stringify(mark()));
+  const from = pollMark();
+  runPastMidnight();
+  await tick();
+  notModifiedSince(from);
+  if (JSON.stringify(mark()) !== JSON.stringify([false, "overdue", "Overdue"])) throw new Error("after midnight the task page reads " + JSON.stringify(mark()));
+`)
+	runConditionalPollClient(t, "the task page's due mark across midnight", page)
 }
