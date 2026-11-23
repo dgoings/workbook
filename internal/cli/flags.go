@@ -787,8 +787,8 @@ var commandSchemas = map[string]commandMetadata{
 			"It refuses a new place that is the same repository as the old one, however its\n" +
 			"address is spelled, and one that holds branches unless --allow-branches is given\n" +
 			"or it is the remote named origin and holds this checkout's code; a moved\n" +
-			"marker at the new place never counts, since a mirror carries it too. Never\n" +
-			"give it for a mirror, a repository something updates from the code\n" +
+			"marker at the new place never counts, since a mirror carries it too.\n" +
+			"Never give it for a mirror, a repository something updates from the code\n" +
 			"repository: that update would overwrite or delete the tasks. The old place is\n" +
 			"the one that holds the tasks now, found by following the moved markers.",
 		Options: []optionMetadata{
