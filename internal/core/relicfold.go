@@ -1,0 +1,358 @@
+package core
+
+import (
+	"bytes"
+	"encoding/json"
+	"sort"
+)
+
+// refuseNewerRelicWriter refuses a relic whose parent state or pack needs a
+// newer reader. Both sides are checked, as for tasks: a newer pack further back
+// leaves its watermark in every state after it.
+func refuseNewerRelicWriter(parent *RelicRecord, pack RelicOperationPack) error {
+	if parent != nil && parent.State.RequiresNewerReader() {
+		return newerWriterRelic(parent.State.RelicID)
+	}
+	if pack.RequiresNewerReader() {
+		return newerWriterRelic(pack.RelicID)
+	}
+	return nil
+}
+
+// foldedRelicMinReader carries the history's generation watermark forward: it
+// is the larger of the parent's and the pack's, never lower than either.
+func foldedRelicMinReader(parent *RelicRecord, pack RelicOperationPack) int {
+	generation := pack.MinReader
+	if parent != nil && parent.State.MinReader > generation {
+		generation = parent.State.MinReader
+	}
+	return generation
+}
+
+// ApplyRelic validates one relic operation pack and folds it onto its parent's
+// state, or starts a relic when there is no parent.
+//
+// The fold is tolerant where an operation can only be stale: a body edit from
+// a base that is not the part's current version, an operation naming a part
+// the relic does not have, a second part.add with the same ID, removing a
+// removed part, restoring a live part and clearing an absent name all change
+// nothing, and the operation stays in history. Tombstone and restore keep the
+// task rules and are corrupt data when misused.
+func ApplyRelic(parent *RelicRecord, pack RelicOperationPack) (RelicRecord, error) {
+	// The generation gate runs before anything else, so a newer document is
+	// reported as newer rather than judged by rules this build may not know.
+	if err := refuseNewerRelicWriter(parent, pack); err != nil {
+		return RelicRecord{}, err
+	}
+	if err := validateRelicOperationPackDocument(pack); err != nil {
+		return RelicRecord{}, err
+	}
+
+	var (
+		relic      RelicData
+		history    History
+		operations []RelicOperation
+	)
+	if parent == nil {
+		root, err := startRelic(pack)
+		if err != nil {
+			return RelicRecord{}, err
+		}
+		relic = root
+		history = History{Generation: pack.HistoryGeneration}
+		operations = pack.Operations[1:]
+	} else {
+		if err := checkRelicChild(parent.State, pack); err != nil {
+			return RelicRecord{}, err
+		}
+		relic = copyRelicData(parent.State.Relic)
+		history = parent.State.History
+		operations = pack.Operations
+	}
+
+	for _, operation := range operations {
+		if relic.Deleted && operation.Type != RelicOperationRestore {
+			return RelicRecord{}, corrupt("cannot change a deleted relic")
+		}
+		applyRelicOperation(&relic, operation)
+	}
+
+	if err := sortRelicParts(relic.Parts); err != nil {
+		return RelicRecord{}, Wrap(CategoryCorruptData, "relic operation pack produced an invalid relic", err)
+	}
+	relic.UpdatedAt = pack.WallTime
+	state := RelicStateDocument{
+		Format:       relicStateFormat,
+		Version:      documentVersion,
+		MinReader:    foldedRelicMinReader(parent, pack),
+		ProjectID:    pack.ProjectID,
+		RelicID:      pack.RelicID,
+		History:      history,
+		LogicalClock: pack.LogicalClock,
+		Relic:        relic,
+	}
+	if err := validateRelicStateDocument(state); err != nil {
+		return RelicRecord{}, Wrap(CategoryCorruptData, "relic operation pack produced an invalid relic", err)
+	}
+	return RelicRecord{State: state, Links: EmptyRelicLinks()}, nil
+}
+
+// startRelic checks a root pack and builds the relic its relic.create
+// describes, before the rest of the pack applies.
+func startRelic(pack RelicOperationPack) (RelicData, error) {
+	if pack.LogicalClock != 1 {
+		return RelicData{}, corrupt("root relic operation pack logical clock must be 1")
+	}
+	if pack.Operations[0].Type != RelicOperationCreate {
+		return RelicData{}, corrupt("root relic operation pack must open with relic.create")
+	}
+	for _, operation := range pack.Operations[1:] {
+		switch operation.Type {
+		case RelicOperationCreate:
+			return RelicData{}, corrupt("a relic operation pack must contain only one relic.create")
+		case RelicOperationTombstone, RelicOperationRestore:
+			return RelicData{}, corrupt("root relic operation pack must not contain %s", operation.Type)
+		}
+	}
+	create := pack.Operations[0]
+	return RelicData{
+		Title:      create.Relic.Title,
+		Type:       create.Relic.Type,
+		Author:     pack.Actor.ID,
+		CreatedAt:  create.Relic.CreatedAt,
+		Properties: map[string]json.RawMessage{},
+		Parts:      []RelicPart{},
+	}, nil
+}
+
+// checkRelicChild checks a pack against its parent's state: the same relic and
+// history, the next clock, and the task rules for tombstone and restore.
+func checkRelicChild(parent RelicStateDocument, pack RelicOperationPack) error {
+	if err := validateRelicStateDocument(parent); err != nil {
+		return err
+	}
+	if parent.ProjectID != pack.ProjectID {
+		return corrupt("relic operation pack project ID does not match parent")
+	}
+	if parent.RelicID != pack.RelicID {
+		return corrupt("relic operation pack relic ID does not match parent")
+	}
+	if parent.History.Generation != pack.HistoryGeneration {
+		return corrupt("relic operation pack history generation does not match parent")
+	}
+	if pack.LogicalClock != parent.LogicalClock+1 {
+		return corrupt("relic operation pack logical clock must advance parent by one")
+	}
+	for index, operation := range pack.Operations {
+		switch operation.Type {
+		case RelicOperationCreate:
+			return corrupt("relic.create requires no parent")
+		case RelicOperationRestore:
+			if !parent.Relic.Deleted {
+				return corrupt("relic.restore requires a deleted relic")
+			}
+			if index != 0 {
+				return corrupt("relic.restore must be the first operation in its pack")
+			}
+		}
+	}
+	// A pack against a deleted relic restores it first and may then edit it,
+	// but a pack restores or deletes, never both.
+	if parent.Relic.Deleted {
+		if pack.Operations[0].Type != RelicOperationRestore {
+			return corrupt("cannot change a deleted relic")
+		}
+		for _, operation := range pack.Operations[1:] {
+			if operation.Type == RelicOperationTombstone {
+				return corrupt("relic.restore must not be followed by relic.tombstone")
+			}
+		}
+	}
+	return nil
+}
+
+// applyRelicOperation folds one validated operation. Operations on a removed
+// part apply as on a live one; field operations change only the tree.
+func applyRelicOperation(relic *RelicData, operation RelicOperation) {
+	switch operation.Type {
+	case RelicOperationTitleSet:
+		relic.Title = operation.Title
+	case RelicOperationTombstone:
+		relic.Deleted = true
+	case RelicOperationRestore:
+		relic.Deleted = false
+	case RelicOperationPropertySet:
+		relic.Properties[operation.Name] = operation.Value
+	case RelicOperationPropertyClear:
+		delete(relic.Properties, operation.Name)
+	case RelicOperationPartAdd:
+		if _, exists := relic.Part(operation.ID); exists {
+			return
+		}
+		part := RelicPart{ID: operation.ID, Type: operation.PartType, Position: operation.Position}
+		if operation.Body != nil {
+			part.Body = &RelicBody{Format: operation.Body.Format, Version: operation.ID, Bytes: operation.Body.Bytes}
+		}
+		relic.Parts = append(relic.Parts, part)
+	case RelicOperationPartBodySet:
+		part := relicPartRef(relic, operation.Part)
+		if part == nil {
+			return
+		}
+		current := ""
+		if part.Body != nil {
+			current = part.Body.Version
+		}
+		// An edit made from a version that is no longer current changes
+		// nothing; it stays in history, and the newer body stands.
+		if operation.Body.Base != current {
+			return
+		}
+		part.Body = &RelicBody{Format: operation.Body.Format, Version: operation.ID, Bytes: operation.Body.Bytes}
+	case RelicOperationPartMove:
+		if part := relicPartRef(relic, operation.Part); part != nil {
+			part.Position = operation.Position
+		}
+	case RelicOperationPartRemove:
+		if part := relicPartRef(relic, operation.Part); part != nil {
+			part.Removed = true
+		}
+	case RelicOperationPartRestore:
+		if part := relicPartRef(relic, operation.Part); part != nil {
+			part.Removed = false
+		}
+	case RelicOperationPartFieldSet, RelicOperationPartFieldClear:
+		// Fields live in the commit's tree; see ApplyRelicFields.
+	}
+}
+
+// relicPartRef returns the part with the ID for changing in place, or nil.
+func relicPartRef(relic *RelicData, id string) *RelicPart {
+	for index := range relic.Parts {
+		if relic.Parts[index].ID == id {
+			return &relic.Parts[index]
+		}
+	}
+	return nil
+}
+
+// sortRelicParts orders parts by position, then ID.
+func sortRelicParts(parts []RelicPart) error {
+	placements := make([]PartPlacement, len(parts))
+	byID := make(map[string]RelicPart, len(parts))
+	for index, part := range parts {
+		placements[index] = PartPlacement{ID: part.ID, Position: part.Position}
+		byID[part.ID] = part
+	}
+	if err := SortPartPlacements(placements); err != nil {
+		return err
+	}
+	for index, placement := range placements {
+		parts[index] = byID[placement.ID]
+	}
+	return nil
+}
+
+// copyRelicData copies relic data deeply enough that folding onto the copy
+// leaves the original untouched.
+func copyRelicData(data RelicData) RelicData {
+	copied := data
+	copied.Properties = make(map[string]json.RawMessage, len(data.Properties))
+	for name, value := range data.Properties {
+		copied.Properties[name] = value
+	}
+	copied.Parts = make([]RelicPart, len(data.Parts))
+	for index, part := range data.Parts {
+		copied.Parts[index] = part
+		if part.Body != nil {
+			body := *part.Body
+			copied.Parts[index].Body = &body
+		}
+	}
+	return copied
+}
+
+// ValidateRelicCheckpoint verifies that a stored record is exactly what
+// folding the pack onto the parent computes, byte for byte.
+func ValidateRelicCheckpoint(parent *RelicRecord, pack RelicOperationPack, stored RelicRecord) error {
+	computed, err := ApplyRelic(parent, pack)
+	if err != nil {
+		return err
+	}
+	computedState, err := EncodeDocument(computed.State)
+	if err != nil {
+		return Wrap(CategoryCorruptData, "cannot encode computed relic state", err)
+	}
+	computedLinks, err := EncodeDocument(computed.Links)
+	if err != nil {
+		return Wrap(CategoryCorruptData, "cannot encode computed relic links", err)
+	}
+	storedState, err := EncodeDocument(stored.State)
+	if err != nil {
+		return Wrap(CategoryCorruptData, "cannot encode stored relic state", err)
+	}
+	storedLinks, err := EncodeDocument(stored.Links)
+	if err != nil {
+		return Wrap(CategoryCorruptData, "cannot encode stored relic links", err)
+	}
+	if !bytes.Equal(computedState, storedState) || !bytes.Equal(computedLinks, storedLinks) {
+		return corrupt("stored checkpoint differs from computed state")
+	}
+	return nil
+}
+
+// ApplyRelicFields applies the pack's part.field.set and part.field.clear
+// operations for one part, in order. It returns a new map and never changes
+// before; operations for other parts are ignored.
+func ApplyRelicFields(before map[string]json.RawMessage, partID string, operations []RelicOperation) map[string]json.RawMessage {
+	fields := make(map[string]json.RawMessage, len(before))
+	for name, value := range before {
+		fields[name] = value
+	}
+	for _, operation := range operations {
+		if operation.Part != partID {
+			continue
+		}
+		switch operation.Type {
+		case RelicOperationPartFieldSet:
+			fields[operation.Name] = operation.Value
+		case RelicOperationPartFieldClear:
+			delete(fields, operation.Name)
+		}
+	}
+	return fields
+}
+
+// RelicBodySavedBy reports whether the record's body version for the part is
+// the ID of an operation in the pack.
+func RelicBodySavedBy(pack RelicOperationPack, record RelicRecord, partID string) bool {
+	part, ok := record.State.Relic.Part(partID)
+	if !ok || part.Body == nil {
+		return false
+	}
+	for _, operation := range pack.Operations {
+		if operation.ID == part.Body.Version {
+			return true
+		}
+	}
+	return false
+}
+
+// RelicPartsNamedBy returns the IDs of parts the pack adds or names, sorted.
+func RelicPartsNamedBy(pack RelicOperationPack) []string {
+	named := map[string]struct{}{}
+	for _, operation := range pack.Operations {
+		if operation.Type == RelicOperationPartAdd {
+			named[operation.ID] = struct{}{}
+		}
+		if operation.Part != "" {
+			named[operation.Part] = struct{}{}
+		}
+	}
+	ids := make([]string, 0, len(named))
+	for id := range named {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
