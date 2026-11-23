@@ -71,6 +71,25 @@ type Repository struct {
 	// remote() in tasksremote.go.
 	remoteOverride string
 	remoteName     string
+	// moveBackup is set for the length of a move-tasks run, and backs up
+	// every task tip a leased push replaces at its destination
+	// (tasksmove_backup.go).
+	moveBackup *moveBackup
+	// requireFinishedMove makes synchronization check a remote the tasks
+	// came back to (RequireFinishedMove).
+	requireFinishedMove bool
+	// returningTo names the remote a move is bringing the tasks back to,
+	// whose marker is read as live for the length of that move; see
+	// MoveTasks.
+	returningTo string
+	// identityChains memoizes readIdentityChain by tip commit.
+	identityChains map[string]identityChain
+	// liveIdentities are identity ref tips this handle has read to be live
+	// with this clone's project, other than the identity commit itself: a
+	// return recorded on a place the tasks came back to (liveIdentityAt).
+	liveIdentities map[string]struct{}
+	// followed memoizes followMoved by the marker it started from.
+	followed map[TasksMoved]movedPath
 	// originMoved is the tasks-moved marker this command found on the remote
 	// it synchronizes with, which every publication path then refuses.
 	originMoved *TasksMoved
@@ -85,6 +104,10 @@ type Repository struct {
 	// stops the run where it returns an error, standing in for a process
 	// killed at that point.
 	moveStepHook func(step string) error
+	// leasedPushHook, set only by tests, runs after a move's backup of the
+	// copies a leased push replaces and before that push, standing in for a
+	// teammate who publishes in between.
+	leasedPushHook func()
 	// vocabularyLoaded and the two fields below memoize the project's status
 	// configuration, exactly as configLoaded does for the tracked file. Reading
 	// it costs a ref enumeration and, for a project that has one, an object

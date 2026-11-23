@@ -48,8 +48,43 @@ however its address is spelled, and one holding branches unless
 repository. It removes the probe refs an earlier run left on the new place, and
 a new place that refuses to delete refs is refused once, without a probe per
 run. It is safe to stop and run again, and the old place keeps its copy. A
-second move finds the tasks by following the first move's marker. The move is one-way in this version: `config unset
-tasks-remote` is refused afterwards. `workbook
+second move finds the tasks by following the first move's marker. A move can
+go back to a place the tasks left, origin included, with the same two
+commands: `config unset tasks-remote` (or `config set` naming the earlier
+remote), then `move-tasks`, which brings the copies that place kept up to
+date, a task compacted in between included, and records the return as one more
+fast-forward commit on its `refs/workbook/project`, so a checkout whose
+settings name it works again. A task compacted in between replaces the older
+copy that place kept by the same leased push a compaction makes, after a
+teammate's late edit to that copy is replayed onto it and after the copy is
+written to a backup bundle the way `compact` writes one, at the same default
+place or `--backup <path>`, skipped with `--no-backup`; the bundle's path is
+printed and reported in `bundles`, and a copy that changes before the push is
+read again and bundled again rather than pushed over. A late edit there to a
+task deleted and compacted in between is set aside in the mover's clone and
+reported once with exit 8, by title and ID, and the task stays deleted and
+compacted, where it used to make the move exit 8 on every run. A move back
+marks the place it leaves before it records the return, so a run stopped
+between the two leaves both places refusing every publication, with the
+circle refusal and `workbook move-tasks` as its command, instead of two live
+places; the rerun finishes it from any checkout. A walk along the markers
+that meets a remote this clone lacks says to add it with `git remote add`.
+Setup on a place the tasks came back to, or with no tasks remote named,
+refuses while the place they came back from still holds them unmarked. A
+teammate who pulls a tasks-remote change committed before its move ran is
+told to run `workbook move-tasks`, not to pull again, when no recorded move
+ever took the tasks to the place it names; a checkout on stale settings is
+never told to, since running it there would undo a finished move.
+`move-tasks` from a place marked as moved elsewhere is refused before it
+writes anything to the destination, and the circle refusal names the
+unfinished move to finish first rather than `--from`. `move-tasks` refuses a
+mirror of a marked origin as it refuses any repository holding branches; only
+the remote named origin in a checkout of its code is excused. A
+moved-and-back project's publications cost the connections a never-moved
+project's do. Moves can go any number of times in any order;
+a checkout on any earlier generation of the settings is told the place the
+tasks are now, by following the markers there, and markers that lead in a
+circle are reported as such. `workbook
 setup` adds the remote to each checkout from the settings, or keeps the
 checkout's own address for it. Until it runs, task commands refuse and say to
 run it; a checkout still on the old settings is refused, told where the tasks

@@ -70,13 +70,19 @@ somebody who can push to both repositories:
 
 `move-tasks` copies every task, marks the code repository as the place the
 tasks moved away from, and checks that the new repository holds everything the
-old one did. If it stops partway, run it again. The old repository keeps its
-copy. Tell the team before you move, and run `workbook move-tasks` once more
+old one did. If it stops partway, run it again; a move back stopped partway
+leaves both repositories refusing every publication until it is run again,
+from any clone. The old repository keeps its copy. Commit and push the setting
+after `move-tasks` finishes, as above; committing it first is safe too, since
+a teammate who pulls it before the move ran is refused and publishes nothing
+until the move has run. Tell the team before you move, and run `workbook move-tasks` once more
 after everyone has pulled: an edit somebody published in the moment of the
 move waits on the old repository until then. If such an edit conflicts with
 what happened to its task at the new repository, the command reports it to
 whoever runs it, in the clone they run it from, by task title and ID, and keeps
-its text in that clone; nobody else is told. The move is one-way. The full
+its text in that clone; nobody else is told. The tasks can be moved back the
+same way, later, to the code repository (`workbook config unset tasks-remote`,
+then `workbook move-tasks`) or to any repository they left. The full
 procedure, what it guarantees and what it does not, is in
 [A tasks remote other than origin](reference.md#a-tasks-remote-other-than-origin).
 
@@ -758,6 +764,12 @@ address because the code repository's marker names it: the folder already
 holds the marker, since the board's log reported it. Setup points the folder at
 the new address, reads the tasks from there, publishes the edits the folder
 kept, and is safe to run again; any other address is refused.
+
+The same holds for every later move, back to the code repository included:
+the board's refusal names the place the tasks are now, following the markers
+however many moves away it is, and setup accepts that address, or any address
+on the way there, in the same folder. Move the deploy key to the repository the
+command names, as above.
 
 To retire the board, stop and disable the service, delete the tunnel and the
 Access application in the Cloudflare dashboard, and remove the deploy key in

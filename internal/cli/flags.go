@@ -780,25 +780,40 @@ var commandSchemas = map[string]commandMetadata{
 	},
 	"move-tasks": {
 		Name:     "move-tasks",
-		Synopsis: "workbook move-tasks [--from <remote>] [--allow-branches] [--json]",
+		Synopsis: "workbook move-tasks [--from <remote>] [--allow-branches] [--no-backup | --backup <path>] [--json]",
 		Description: "Move this project's tasks to the tasks remote its settings name.\n\n" +
-			"Run it after `workbook config set tasks-remote <name> --url <address>`. It copies\n" +
+			"Run it after `workbook config set tasks-remote <name> --url <address>`, or after\n" +
+			"`workbook config unset tasks-remote` to move the tasks back to origin. It copies\n" +
 			"every task from the old place to the new one, marks the old place so a\n" +
-			"checkout still using it is refused and told where the tasks went, copies again\n" +
+			"checkout still using it is refused and told where the tasks are, copies again\n" +
 			"for edits published before the mark, and checks that the new place holds every\n" +
 			"operation the old place does. Every step is safe to repeat: an interrupted run\n" +
 			"is finished by running it again, and a later run carries any edit that reached\n" +
-			"the old place after the move, applying each operation once. Then commit\n" +
-			".workbook/config.json; everyone else runs `workbook setup` after pulling it.\n\n" +
+			"the old place after the move, applying each operation once. Then commit and\n" +
+			"push .workbook/config.json; everyone else runs `workbook setup` after pulling it.\n" +
+			"Committing and pushing the settings before running this is safe too: a\n" +
+			"checkout that pulls them before the move ran is refused and publishes nothing\n" +
+			"until it has; its unpublished edits are kept. It is told to run\n" +
+			"`workbook move-tasks` when no move ever took the tasks to the place the settings\n" +
+			"name, and otherwise to pull and run setup, since its settings may be stale,\n" +
+			"with a sentence saying that whoever changed tasks-remote runs move-tasks first.\n\n" +
+			"The new place can be one the tasks left earlier, origin included: the copies it\n" +
+			"still holds are brought up to date, and it records that the tasks are back. A\n" +
+			"copy there of a task compacted since the tasks left is replaced with its\n" +
+			"checkpoint, after a backup bundle of the copy is written, as compact writes one;\n" +
+			"--no-backup and --backup <path> work as they do for compact.\n\n" +
 			"It refuses a new place that is the same repository as the old one, however its\n" +
-			"address is spelled, and one that holds branches unless --allow-branches is given.\n" +
+			"address is spelled, and one that holds branches unless --allow-branches is given\n" +
+			"or it is the remote named origin and holds this checkout's code; a moved\n" +
+			"marker at the new place never counts, since a mirror carries it too.\n" +
 			"Never give it for a mirror, a repository something updates from the code\n" +
 			"repository: that update would overwrite or delete the tasks. The old place is\n" +
-			"origin, or, after an earlier move, the place origin's marker leads to.\n" +
-			"The move is one-way: `workbook config unset tasks-remote` is refused afterwards.",
+			"the one that holds the tasks now, found by following the moved markers.",
 		Options: []optionMetadata{
-			{Name: "from", Kind: stringFlag, Value: "<remote>", Description: "the Git remote the tasks are in now (default origin, or the place origin's marker leads to)"},
+			{Name: "from", Kind: stringFlag, Value: "<remote>", Description: "the Git remote the tasks are in now (default: the place the moved markers lead to)"},
 			{Name: "allow-branches", Kind: boolFlag, Description: "accept a tasks remote that holds branches; never a mirror of the code repository"},
+			{Name: "no-backup", Kind: boolFlag, Description: "write no backup bundle of the copies a move back replaces"},
+			{Name: "backup", Kind: stringFlag, Value: "<path>", Description: "write the backup bundle here, or into this directory"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},

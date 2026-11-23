@@ -1031,6 +1031,120 @@ the new place is reported to whoever runs it, in that clone, and parked there.
 An edit by a clone that
 vanished in that instant waits at the old place for that rerun.
 
+#### Moving the tasks back
+
+The tasks can go back to a place they left, origin or an earlier tasks
+repository, with the same two commands. The returned-to place keeps the copies
+it held when they left, so the ordinary synchronization brings them up to date:
+a task edited only at the newer place fast-forwards, one carried there by
+replay is carried back by operation identity, and one compacted there in
+between arrives through the same leased non-fast-forward push any compaction
+uses, which succeeds only while the place still holds the tip this run read
+there. An edit a teammate published to that older copy after the tasks left is
+replayed onto the checkpoint first, or, when it cannot apply because the task
+was deleted and compacted, set aside in the mover's clone, so the push loses no
+operation unreported. No other
+ref moves backwards, and none is deleted.
+
+That push is the only other time a task ref moves anywhere but forward, and
+it only ever replaces an older copy of a task already compacted by hand. Before
+the first such push in a run, `move-tasks` writes a Git bundle of every tip it
+is about to replace, with compact's manifest, default location and
+`--no-backup` / `--backup <path>` flags, and prints and reports where it is.
+The bundle holds each replaced tip under the name the mover's clone tracks it
+by, `refs/workbook/remotes/<remote>/tasks/<task-id>`, not
+`refs/workbook/tasks/<task-id>`, so fetching from it never overwrites a live
+task ref. A lease that finds the tip changed since it was bundled pushes
+nothing: the run reads the place again, writes another bundle of what it holds
+now, and tries again, up to three times.
+
+```text
+returned-to place, before:   refs/workbook/tasks/T ──> E (late edit) ── C ── … ── create
+place left, compacted:       refs/workbook/tasks/T ──> K (checkpoint, lists C … create)
+returned-to place, after:    refs/workbook/tasks/T ──> E' (E replayed) ── K
+bundle in the mover's clone: refs/workbook/remotes/origin/tasks/T ──> E, and refs/workbook/archive/manifest
+```
+
+The return is recorded with one more fast-forward commit on the place's
+identity ref, R, whose tree is I's tree and nothing else, so it needs no new
+document and no new format generation. Leaving the place again builds a new
+marker on R. Each place's identity ref is therefore one line of commits that
+alternates from I:
+
+```text
+origin after origin -> tasks -> origin -> third:
+
+refs/workbook/project ──> M2  "workbook: tasks moved"   tree: project.json, moved.json {"remote":"third",…}
+                          │
+                          R1  "workbook: tasks returned" tree: I's tree
+                          │
+                          M1  "workbook: tasks moved"   tree: project.json, moved.json {"remote":"tasks",…}
+                          │
+                          I   identity commit (root)    tree: project.json
+
+tasks:  refs/workbook/project ──> M  {"remote":"origin",…} ── I
+third:  refs/workbook/project ──> I
+```
+
+A place is read by the shape of its tip and never by a commit message: I or a
+return means the tasks are there, a marker means they went where it says. Every
+commit in the line is checked against its position (a live commit's tree is
+I's, a marker's holds exactly I's `project.json` blob and `moved.json`), and
+the commits carry the same fixed author, committer and dates as I, so the same
+move written twice is the same commit. The local identity ref still never
+leaves I; adopting a remote's copy adopts the root at the bottom of its line.
+
+A move back is ordered so that no stop leaves two places live at once. While
+it copies, the place it returns to is still marked and refuses every other
+checkout; this run alone reads that place as live. Then it marks the place it
+leaves, copies again whatever was published there before the mark, and only
+then records the return:
+
+```text
+               copy to dest      mark source       recopy            record return     verify
+source (live)  ──────────────>   ──> M(dest)       (refused)         (refused)
+dest   M(src)  (refused to       (refused to       (refused to       ──> R (live)
+                others)           others)           others)
+```
+
+Stopped between the mark and the return, both places are marked, each naming
+the other. Every checkout, on any generation of the settings and freshly set
+up, is refused at both with the circle refusal, whose command is `workbook
+move-tasks`, so nothing is published to either and nothing is split between
+them; the rerun, from any checkout, finishes the move to the place that
+checkout's settings name. The cost is that until somebody reruns it nobody
+can publish, which is the visible failure a stopped move should have. A move
+is a coordinated team action: one person runs `move-tasks` at a time, and two
+runs at the same moment can leave two places live until `move-tasks` is run
+again. Setup in a clone whose settings name a
+place the tasks came back to, or name no tasks remote at all, follows the
+markers from that place's newest departure and refuses, with `move-not-done`,
+while any place along them still holds the tasks unmarked; a place along them
+it cannot read, or names a remote it lacks, is refused with what to do rather
+than skipped.
+
+A checkout refused for being on an old
+generation of the settings follows the markers, through its own remote of each
+name when it has one and at the recorded address otherwise, to name the place
+the tasks are now; the walk stops at a live place, at a place it cannot read,
+at a place it already passed (reported as a circle, which `move-tasks` settles),
+or after 32 places. A checkout whose remote copy shows a marker asks that
+remote again before refusing, so a place the tasks came back to is used again
+without anybody running setup. Both lookups happen only on the way to a
+refusal, so a checkout that is where the tasks are pays nothing for them.
+
+A refused checkout whose committed settings name the marked place, where an
+earlier committed version named the place the tasks are now, may be stale or
+may hold a change of `tasks-remote` committed before its move ran; the
+settings alone cannot say which. It is told to run `move-tasks` only when no
+marker at the place it names, at the place the tasks are, or at any place
+those markers lead to records a move to the place it names: then the tasks
+never went there, and the settings are a move not yet run. Every other case is
+told to pull and run setup, with a sentence for the person who did mean to
+move. Telling a stale checkout to run `move-tasks` would undo a finished move,
+and telling a teammate of a committed-first move to pull and set up only
+repeats the refusal until the move runs, so the doubt goes to setup.
+
 The default shared backend uses custom refs because they avoid branch switching and per-repository head contention. A conventional `workbook/state` branch may be offered as a compatibility fallback for Git hosts that reject custom refs. A future optional relay may provide strict leases, heartbeats, notifications, or high-concurrency agent coordination while retaining the same operation model.
 
 ## Design principles
@@ -1043,7 +1157,9 @@ The default shared backend uses custom refs because they avoid branch switching 
 - **Derived when possible:** do not duplicate facts already represented by Git.
 - **No hidden rewrites:** shared history is append-only and never force-pushed
   unconditionally. The one exception, `workbook compact`, is visible and manual,
-  and adds a checkpoint commit rather than changing any commit.
+  and adds a checkpoint commit rather than changing any commit. Moving the
+  tasks back publishes such a checkpoint over the older copy the returned-to
+  place kept, the same way and only after bundling that copy.
 - **Progressive complexity:** no service is required for the default workflow; stronger coordination can be optional.
 
 ## Non-goals

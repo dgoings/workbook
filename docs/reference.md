@@ -30,7 +30,7 @@ workbook version [--json]
 workbook fetch [--remote <remote>] [--json]
 workbook push [--remote <remote>] [--json]
 workbook sync [--watch [--interval <duration>]] [--status] [--remote <remote>] [--json]
-workbook move-tasks [--from <remote>] [--allow-branches] [--json]
+workbook move-tasks [--from <remote>] [--allow-branches] [--no-backup | --backup <path>] [--json]
 workbook status list [--json]
 workbook status add <status> [--label <label>] [--before <status> | --after <status>] [--tag <tag>]... [--no-sync] [--no-docs] [--json]
 workbook status rename <status> <new-status> [--label <label>] [--no-sync] [--no-docs] [--json]
@@ -215,14 +215,17 @@ workbook setup --tasks-only git@example.com:team/moved.git
 
 After `workbook move-tasks`, a tasks-only folder on the old place is refused
 with the `tasks-moved` reason, and the refusal names the one command that fixes
-it: `workbook setup --tasks-only <new address>`, run in that folder. Setup
-accepts that address without the `git config` step, because the old place's
-marker names it: it reads the marker (fetching the folder's origin identity ref
-first, when it can), points `origin` at the new address, reads the tasks from
-there and publishes the edits saved in the folder that the old place refused.
-Nothing is lost and the command is safe to run again. Any other address is
-still refused as a different remote, and the `git config` step above is the way
-to insist on one. The result's `tasksOnly` object gains `movedFrom`, the old
+it: `workbook setup --tasks-only <new address>`, run in that folder, where the
+new address is the place the tasks are now, however many moves ago the folder
+was set up. Setup accepts that address without the `git config` step, because
+the markers name it: it reads the folder's own place (fetching the folder's
+origin identity ref first, when it can) and follows each marker by the address
+it records, accepting any address on the way, so a folder can also be pointed
+at a place it was on before and the tasks have come back to. It points `origin`
+at the new address, reads the tasks from there and publishes the edits saved in
+the folder that the old place refused. Nothing is lost and the command is safe
+to run again. Any address the markers do not name is still refused as a
+different remote, and the `git config` step above is the way to insist on one. The result's `tasksOnly` object gains `movedFrom`, the old
 address, and the text report's `Mode:` line says the folder was repointed. A
 board served from the folder has to be stopped before and started after; see
 [hosting](hosting.md#updating-and-retiring).
@@ -1814,6 +1817,23 @@ inline board save from one to three (the listings before and after). A command
 handed to a watcher opens none, as before; a board save handed to one goes
 from one connection, its own push, to none; and the watcher's round goes from
 two to three.
+
+A project whose tasks moved to their own repository and came back to `origin`
+costs the same connections as one that never moved them: measured the same
+way, an inline `workbook update` makes three (fetch, push, the listing after
+it), an inline board save three (the listing before, the push, the listing
+after), an update handed to a watcher none, the watcher's round three, and a
+board save handed to a watcher none itself, that watcher's round three, in
+both kinds of project. A board's own loop runs the same round, on a timer that
+adds a fetch whenever it falls due, which is why the test hands the board's
+save to a watcher that waits an hour between scheduled rounds. `origin`
+lists the return recorded on its identity ref rather than the identity commit
+itself; a checkout that has read that return to be live, in this command or
+by an earlier fetch into its tracking ref, takes it as agreement without
+fetching it again. What it does cost is local: reading the return's commits
+adds a few Git processes to a command (21 rather than 17 for a handed update,
+42 rather than 38 inline, when measured). A test measures every one of these,
+logs the processes and fails only on a difference in connections.
 Comparing operations by content as well as ID, below, runs no Git command.
 
 ### Choosing the remote and moving the tasks
@@ -1831,6 +1851,23 @@ git add .workbook/config.json && git commit -m "Keep tasks in their own reposito
 workbook setup
 ```
 
+The order of steps 2 and 3 is the one to follow: run `move-tasks`, then commit
+and push the setting, so a teammate's setup after pulling works straight away.
+Committing and pushing the setting first is safe too, for a first move and for
+a move back. A teammate who pulls it before `move-tasks` has run is refused,
+exit 3, publishes nothing to either place, and keeps every edit not yet
+published: for a first move, setup says the move was never finished
+(`move-not-done`); for a move back, the place the setting names is still
+marked. When no move recorded in the markers ever took the tasks to that
+place, every command and setup there say that the change of `tasks-remote` is
+committed and its move has not been run, with `command` `workbook move-tasks`,
+since pulling and running setup cannot help. When some move did, as for a move
+back to a tasks repository the tasks went to before, the teammate's settings
+cannot be told apart from stale ones, so they are told to pull and run setup,
+`command` `workbook setup`, with a sentence saying that whoever changed
+`tasks-remote` runs `workbook move-tasks` first. Once `move-tasks` has run,
+their setup works with nothing more to pull.
+
 `config set tasks-remote <name> --url <address>` refuses a name that is not a
 single-component Git remote name (letters, digits, `.`, `_` and `-`), `origin`
 with an address, a missing `--url`, an address that begins with `-` or holds
@@ -1840,33 +1877,100 @@ address, spelled with or without a trailing `/`, a `.git` suffix or a `file://`
 scheme, as a relative path, or through a symbolic link. That last check is a
 first line only: the spelling of an address cannot prove two repositories
 differ, so `move-tasks` and `setup` decide it by what the repositories hold (see
-below). An SSH user name such as `git@` is kept. Before a move, `config set
-tasks-remote origin` with no address and `config unset tasks-remote` both go
-back to sharing through `origin` by removing the member; the tasks repository
-keeps the copy it holds. The command changes only the file: until setup runs,
-this checkout's task commands say to run it.
+below). An SSH user name such as `git@` is kept. `config set tasks-remote
+origin` with no address and `config unset tasks-remote` both go back to sharing
+through `origin` by removing the member. The command changes only the file:
+until setup runs, this checkout's task commands say to run it. Its `Next:` line
+says what is left to do, from the settings it replaced: before a move, only to
+commit the file, since the tasks never left `origin` and the tasks repository
+keeps the copy it holds; after one, to run `workbook move-tasks`, which moves
+them back, then to commit and push the file, and that committing it first is
+safe too.
 
-A move is one-way in this version. Once `origin` is marked, both of those
-commands are refused with the `moved-for-good` reason, exit 5, and the file is
-left as it was. Going back would point every checkout at a place they all
-refuse. A maintainer who has to undo a move does it by hand, with every
-checkout stopped: copy every ref under `refs/workbook/` from the tasks
-repository back to `origin` (`git push origin 'refs/workbook/tasks/*:refs/workbook/tasks/*'
-'refs/workbook/config:refs/workbook/config'` from a checkout holding them),
-then move `origin`'s `refs/workbook/project` back from the marker to its parent,
-the identity commit, which is a non-fast-forward push the host must allow
-(`git push --force-with-lease=refs/workbook/project:<marker> origin
-<identity>:refs/workbook/project`), remove `tasksRemote` from
-`.workbook/config.json` by hand and commit it, and have everyone pull and run
-`workbook setup`. Workbook does not do this, and does not check it was done
-right.
+### Moving the tasks back
+
+The tasks can move back: to `origin`, or to any repository they
+left, with the same two commands that moved them away:
+
+```sh
+workbook config unset tasks-remote         # back to origin, or:
+workbook config set tasks-remote tasks --url git@github.com:team/tasks.git
+workbook move-tasks
+git add .workbook/config.json && git commit -m "Move the tasks back" && git push
+# Everyone else, after pulling that commit:
+workbook setup
+```
+
+A place the tasks left keeps the copies of their refs it held when they left,
+and a move back starts from those. They are brought up to date by the same
+synchronizations a first move makes, so each operation made at the newer place
+since arrives once: a task nobody edited there is already identical, one edited
+there is fast-forwarded, one an earlier move carried by replay is carried by
+operation identity, and one the returned-to place no longer holds, because
+somebody removed it, is published afresh. A task compacted at the newer place in
+between arrives as its checkpoint, which replaces the older history the
+returned-to place kept for it the way any [compaction](#publishing-a-compaction) is
+published: a non-fast-forward push of that one task ref that succeeds only while
+the place still holds exactly the tip this run read there. An edit a teammate
+published to that older copy after the tasks left is replayed onto the
+checkpoint first, so it arrives with the rest. One that cannot apply, because
+the task was deleted and compacted, is set aside the way a move sets aside an
+old place's edit to a task deleted at the new place: the copy holding it is
+parked in this clone under `refs/workbook/reconciled/<task>/<n>`, the run
+replaces it with the checkpoint and exits 8 naming the task by title and ID
+and saying it was deleted and compacted at the place left, so the change made
+at the returned-to place cannot apply, and the task stays deleted and
+compacted. A run stopped before that replacement reports it when run again,
+under the ref it parked; after it, no run meets it again. With `--no-backup`,
+no bundle holds the replaced copy, so a set-aside edit survives only in the
+mover's parked ref and in the clone of whoever made it. No other ref moves
+backwards, and none is deleted. Removing the old copies is not part of a move,
+and a move works whether they are there, stale, compacted or gone.
+
+Before the first such push in a run, `move-tasks` writes a Git bundle of every
+tip it is about to replace, as [`compact`](#the-backup-bundle) does: at
+`<git-common-dir>/workbook-archive/<run-id>.bundle` by default, elsewhere with
+`--backup <path>`, and not at all with `--no-backup`; the two cannot be
+combined, and a path that already exists is refused. The bundle holds each
+replaced tip under the name this clone tracks it by,
+`refs/workbook/remotes/<remote>/tasks/<id>` (not `refs/workbook/tasks/<id>`,
+so fetching from it never overwrites a live task), and the same manifest, with
+`move-tasks` first among its flags. It is verified before the push. The push is
+leased on exactly the tip that was bundled: if the place changed since, nothing
+is pushed over it, and the run reads the place again, writes another bundle
+(the run ID with `-2`, `-3` appended, or beside the `--backup` file) and tries
+again, up to three times. Each path is printed as a `Backup:` line, also when
+the run then stops with an error, and the tasks it replaced as a `Replaced:`
+line. A run that replaces nothing writes no bundle.
+
+The place the tasks come back to records it with one commit on top of its
+marker, a fast-forward (see [The moved marker](#the-moved-marker)). The place
+they leave is marked as any old place is. Moves can follow each other any number
+of times in any order (`origin` to `tasks`, back to `origin`, then to a third
+repository, and so on), and each place's identity ref says by its tip alone
+whether the tasks are there or where to look next.
 
 `workbook move-tasks [--from <remote>] [--allow-branches]` moves the tasks
 from the old place to the remote the settings name, adding that remote to this
-checkout first. The old place is the remote `--from` names or, without it,
-`origin`, followed through its marker when an earlier move left one: after a
-second move it is the place the first move went to, which is the remote `config
-set` names in the command it prints. Before it writes anything it lists both
+checkout first, or to `origin` when the settings name none and `origin` is a
+place the tasks left; with neither, it is refused, exit 5, saying the settings
+name no tasks remote to move to. The old place is the remote `--from` names or,
+without it, the place that holds the tasks now, found by following markers by
+the remote names they record. For a new place the tasks never left, the walk
+starts at `origin`: after a second move it is the place the first move went to,
+which is the remote `config set` names in the command it prints. For a place
+they left, it starts at the place they went when they left it, so it ends at
+the place they are in now or, on a run finishing a move back, at the place
+already marked as moved to the new one. A marker naming a remote this checkout
+does not have is refused, exit 5, saying to add it with `git remote add <name>
+<url>`, which the message spells out, and run the command again, or to name
+this checkout's own remote for that address with `--from`; a walk
+that comes back to a place it passed is refused, exit 8, saying the markers form
+a circle, that the move between the places on it is unfinished, and to finish
+that move first with `workbook move-tasks` from a clone whose settings name
+where it was taking the tasks. An old place, named or found, that is already
+marked as moved somewhere other than the new place is refused, exit 8, before
+anything is written to the new place. Before it writes anything it lists both
 remotes, and refuses a new place that is the same repository as the old one,
 with the `same-repository` reason, exit 5, however its address is spelled. It
 tells the two apart by what they hold: it writes a ref named by a fresh ULID
@@ -1884,8 +1988,14 @@ must be allowed there or the probe removed by hand. A run that then finds that
 probe still there stops before writing another, so at most one is ever left.
 
 Then it refuses a new place that holds branches, exit 5, unless
-`--allow-branches` says that is meant, because a repository for tasks holds
-only Workbook refs. Never give it for a mirror, a repository something updates
+`--allow-branches` says that is meant or the new place is the code's own
+repository, because a repository for tasks holds only Workbook refs. The code's
+own repository is the remote named `origin`, and only in a checkout whose
+`HEAD` is one of the branches `origin` lists, or an ancestor or descendant of
+one this checkout holds: settings can never name `origin` as a tasks remote,
+so no other repository can pass for it, and what the destination's own refs
+say, a moved marker included, never excuses the check, since a mirror of a
+marked `origin` carries that marker too. Never give it for a mirror, a repository something updates
 from the code repository, such as a host's mirroring feature or a job running
 `git push --mirror`: that update would delete or overwrite the tasks' refs at
 each run, because they are not in the code repository's copy. The refusal and
@@ -1894,12 +2004,18 @@ the command's help say the same. Then:
 1. reads the old place into its tracking refs, and nothing else;
 2. synchronizes with the new place, carries onto this checkout's tasks every
    operation the old place holds that they lack, and synchronizes again, which
-   publishes every task, the configuration ledger and the identity ref there;
-3. marks the old place (see [The moved marker](#the-moved-marker));
+   publishes every task, the configuration ledger and the identity ref there.
+   A new place the tasks left earlier is still marked then, and every other
+   checkout is still refused there; this run alone treats it as live, so it is
+   brought up to date before anybody uses it;
+3. marks the old place;
 4. reads the old place again, for edits published there before the mark or
    since;
 5. carries and publishes those the same way;
-6. lists both places afresh and requires the new place to hold, task by task,
+6. for a new place the tasks left earlier, records their return there (see
+   [The moved marker](#the-moved-marker)), after which checkouts whose
+   settings name it use it again;
+7. lists both places afresh and requires the new place to hold, task by task,
    every operation ID the old place holds, or to have it set aside in this
    checkout. A difference is reported by naming each task and the operations
    it lacks.
@@ -1935,14 +2051,34 @@ same way.
 
 Every step is safe to repeat: an interrupted run, wherever it stopped, is
 finished by running the command again, a run whose marker is already published
-reports `"marked":"already"`, and a run at any later time carries whatever
-reached the old place since.
+reports `"marked":"already"`, one whose return is already recorded reports
+`"returned":"already"`, and a run at any later time carries whatever reached
+the old place since. The old place is marked before the new place's return is
+recorded, so no interruption leaves two places live at once: stopped between
+the two, both places are marked, each naming the other, and every checkout,
+on either generation of the settings or freshly set up, is refused at both
+with the circle refusal (`command` `workbook move-tasks`) and publishes
+nothing anywhere. Running `workbook move-tasks` again finishes the move from
+any checkout: it moves the tasks to the place that checkout's settings name,
+following the markers to find them, and asks for `git remote add <name> <url>`
+first when a marker names a remote the checkout lacks. Edits recorded but not
+published in the meantime stay in each checkout and go to the live place at its
+next publication.
+
+A move is a coordinated team action: one person runs `workbook move-tasks` at
+a time. Two runs at the same moment can leave two places live until
+`workbook move-tasks` is run again.
 
 ```json
 {"format":"workbook.result","version":1,"command":"move-tasks","data":{"from":{"remote":"origin","url":"git@github.com:team/code.git"},"to":{"remote":"tasks","url":"git@github.com:team/tasks.git"},"remote":"added","marked":"already","tasks":42,"identical":41,"carried":1,"stragglers":{"operations":1,"tasks":["WB-01M…"],"actors":["sam@example.com"]},"config":"unchanged","copy":{…},"recopy":{…},"verified":true}}
 ```
 
-`remote` is `added` or `kept`, as setup reports it. `stragglers`, present only
+`remote` is `added` or `kept`, as setup reports it. `returned`, present only
+for a move to a place the tasks left earlier, is `returned` when this run
+recorded their return there and `already` when an earlier run had. `replaced`,
+present only when there were some, names the tasks whose older copy there this
+run replaced with their checkpoint, and `bundles` the backups it wrote first.
+`stragglers`, present only
 when there were some, counts the operations this run carried from a place that
 was already marked, names their tasks and who made them. The count covers only
 the run that reports it: operations an earlier run carried before it was
@@ -1954,7 +2090,7 @@ when this run took the old place's configuration ledger, or `not-carried` when
 it holds changes this checkout's ledger has diverged from, which a move does not
 combine; make those changes again with `workbook config set`. `copy` and
 `recopy` are the two synchronizations, in the shape `workbook sync --json`
-reports, and `verified` says step 6 passed. A run that stops reports only its
+reports, and `verified` says step 7 passed. A run that stops reports only its
 error; the old place keeps every ref it had, and nothing is deleted anywhere.
 
 What is guaranteed and what is not:
@@ -2007,7 +2143,9 @@ What is guaranteed and what is not:
   It learns of the move from this checkout's copy of the remote's identity ref,
   `refs/workbook/remotes/<remote>/project`, which every fetch updates, the
   board's and a watcher's own rounds included: before handing a save to a
-  watcher the board reads that copy locally, with no network. So a board, and a
+  watcher the board reads that copy locally, with no network; when that copy
+  carries a marker, it asks the remote once before refusing, because the tasks
+  may have moved back there since. So a board, and a
   command handed to a watcher, learns of a move within one interval of the
   synchronization that fetches it, or at once when another command here fetched
   it first; a save handed over before then is refused by the watcher, which
@@ -2015,8 +2153,28 @@ What is guaranteed and what is not:
   without the server's paths, and the board's background synchronization logs
   the refusal once. Restart it from a folder set up for the new place. A new
   `workbook serve` refuses to start.
-- A repository marked as the place the tasks moved away from cannot be made the
-  tasks remote again by this version.
+- A checkout on any earlier generation of the settings is refused and told the
+  place the tasks are now. Its refusal follows the markers from its own tasks
+  remote, through this checkout's remote of each name when it has one and at
+  the address the marker records otherwise (always by address in a tasks-only
+  folder), up to 32 places; that costs one listing per place, and only on the
+  way to a refusal. A walk that cannot read a place names the last place a
+  marker named. One that meets a place twice says the markers lead back to a
+  place already passed, which a move back stopped between marking the place it
+  leaves and recording the return leaves, and names `workbook move-tasks`,
+  which finishes it. A checkout whose settings name a
+  place the tasks came back to is not refused: before refusing, it asks that
+  remote again, and finding it live, uses it and publishes the edits it kept.
+- A checkout whose committed settings name a marked place, where an earlier
+  committed version named the place the tasks are now, is either on stale
+  settings or on a change of `tasks-remote` committed before its move ran.
+  Workbook tells it to run `workbook move-tasks` only when that is certain: the
+  place the tasks are is unmarked, and no marker recorded at the place the
+  settings name, at the place the tasks are, or at any place those markers lead
+  to names the place the settings name as where the tasks went. Otherwise it is
+  told to pull and run setup, and the message adds that whoever changed the
+  settings runs `workbook move-tasks` first. The checks read each of those
+  places once, and only on the way to a refusal.
 
 ### Setup and the refusals
 
@@ -2049,11 +2207,10 @@ envelope, saying which remote, why, and the command that gets out of it:
 | `remote-missing` | 3 | The settings name a remote this checkout does not have: what an ordinary pull of the settings change leaves. `url` is the address setup will add. |
 | `not-read` | 3 | The checkout has the remote and has never read the tasks from it: what a setup without access leaves. The message names the address and the access needed. |
 | `unreachable` | 1 | Setup could not list the tasks remote. The message says which address, that seeing the tasks needs read access to it and changing them needs push access, and Git's own reason. |
-| `tasks-moved` | 3 | This checkout's tasks remote is marked as moved, so its settings predate the move. `movedTo` names the new place. The message says to pull the commit that sets `tasks-remote` and run setup, and that unpublished edits are kept. In a [tasks-only folder](#tasks-only-folders) it gives one command instead, `workbook setup --tasks-only <new address>`, which repoints that folder at the new place and keeps its unpublished edits; `command` holds it. Exit 5, category `validation`, when the marked remote was named with `--remote` and the command would publish to it. |
-| `move-not-done` | 3 | Setup, in a checkout whose settings name a tasks remote, found `origin` still holding task refs with no marker: the move was never run or never finished. `command` is `workbook move-tasks`. |
+| `tasks-moved` | 3 | This checkout's tasks remote is marked as moved, so its settings predate the move. `movedTo` names the new place. The message says to pull the commit that sets `tasks-remote` and run setup, and that unpublished edits are kept; `command` is `workbook setup`. When the settings committed at `HEAD` name the marked place, an earlier committed version named the place the tasks are now, that place is unmarked, and no marker recorded at either place or at any place their markers lead to names the marked place as where the tasks went, the change of `tasks-remote` was committed before its move ran: the message says so, and that pulling and running setup cannot finish it, and `command` is `workbook move-tasks`. Any other case keeps `command` `workbook setup`. When the markers lead in a circle, because a move was stopped between marking the old place and recording the return, the message says so and `command` is `workbook move-tasks` too. In a [tasks-only folder](#tasks-only-folders) it gives one command instead, `workbook setup --tasks-only <new address>`, which repoints that folder at the new place and keeps its unpublished edits; `command` holds it. Exit 5, category `validation`, when the marked remote was named with `--remote` and the command would publish to it. |
+| `move-not-done` | 3 | Setup found the place the tasks came from still holding task refs with no marker: the move was never run or never finished. That place is `origin` for a first move and, for a move back, the place the markers lead to from the newest departure recorded at the place the settings name, which is `origin` when they name no tasks remote. Setup follows those markers whether or not a tasks remote is named, and costs nothing more when `origin` lists the identity commit this checkout already holds. A place along them that cannot be read is refused, exit 3 with this reason, naming it and saying to run setup again or, if that repository no longer exists, and you know the move finished, `workbook setup --no-sync` and then `workbook sync`, which skip that check; a marker naming a remote this checkout lacks says to add it with `git remote add`. `command` is `workbook move-tasks`. |
 | `published-after-move` | 3 | The remote accepted this command's task refs and, listed again straight after, was marked as moved: the edit went to a place the tasks have left. `tasks` names them; the edit is kept in this checkout, and the message says to pull the setting and run setup, and that `workbook move-tasks` run again carries it. |
 | `same-repository` | 5 | `move-tasks` or `setup` found the tasks remote to be the same repository as the place the tasks are in, whatever its address says. `command` is the `config set` to correct it. |
-| `moved-for-good` | 5 | `config unset tasks-remote`, or setting it back to `origin`, after the tasks moved away from `origin`. `movedTo` names where they are. |
 | `read-only-remote` | 5 | `push`, or a publication, named with `--remote` a remote other than the project's tasks remote. `command` is `workbook push`. |
 
 The member's fields are `reason`, `remote`, and, where they apply, `url`,
@@ -2099,8 +2256,22 @@ adds `moved.json`, a versioned document saying where the tasks went:
 Publishing it is an ordinary fast-forward of that one ref, and its inputs are
 fixed, so a repeated move pushes the same commit. Workbook reads it and never
 adopts it: the local `refs/workbook/project` stays on the identity commit, and
-a local identity ref moved onto a marker by hand is refused as corrupt-data. See
-[architecture.md](architecture.md#a-tasks-remote-other-than-origin) for the
+a local identity ref moved onto a marker by hand is refused as corrupt-data,
+with the `git update-ref` that puts it back.
+
+A place the tasks come back to records the return with one more commit, on top
+of its marker, whose tree is the identity commit's own tree and nothing else:
+there is no new document, and its message, `workbook: tasks returned`, is for
+people only. Publishing it is a fast-forward too. A place that is left again
+gets a new marker on top of that, so its identity ref is a single line of
+commits that starts at the identity commit and alternates, marker, return,
+marker, and so on. Workbook reads each place by the shape of its tip: the
+identity commit or a return means the tasks are there, a marker means they
+went where it says. Any other shape is refused as corrupt-data: two markers or
+two returns in a row, a return directly on the identity commit, a merge, a
+commit whose tree differs from what its place in the line requires, or a
+marker for another project. A line longer than 512 commits is refused too.
+See [architecture.md](architecture.md#a-tasks-remote-other-than-origin) for the
 object graph.
 
 ### Older Workbook versions
@@ -2117,6 +2288,23 @@ exit 7 with `the Workbook project identity commit must have no parents`, and an
 edit is recorded locally with a warning that its fetch failed and is never
 published. It does not say where the tasks went, but it writes nothing to the
 old place. Measured with Homebrew 0.6.0 and a build of the v0.6.1 tag.
+
+After a move back to `origin`, such a release in a checkout whose settings never
+named a tasks remote meets the same refusal on the return commit: `list` still
+shows what it holds, `fetch` and `sync` exit 7 with the same message, and an
+edit is recorded locally and never published. Measured with Homebrew 0.6.0.
+
+A development build from after the setting and before moves back meets a
+return commit, or a marker on top of one, and stops: `fetch`, `sync`, `create`
+and `update` exit 7 with `a project identity commit with a parent must be a
+tasks-moved marker holding exactly project.json and moved.json` and record
+nothing, and after that first refusal `list` exits 7 too; a fresh clone's
+`setup`, and `setup --tasks-only`, exit 7 the same way. In a checkout whose
+settings name the place the tasks left, it gives the ordinary `tasks-moved`
+refusal, exit 3, naming the place they went back to. It writes nothing to
+either place. Neither kind of build can say that an upgrade is what is needed,
+which is one more reason a team upgrades together before moving its tasks
+back.
 
 ## Continuous synchronization
 

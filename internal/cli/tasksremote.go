@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -117,16 +118,6 @@ func writeTasksRemoteSetting(
 				"%s is origin's address, the code's own repository; give the address of the repository that is to hold the tasks",
 				setting.URL)
 		}
-	} else if before.TasksRemote.Chosen() {
-		// No supported undo: once origin is marked, sharing tasks through it
-		// again would point every checkout at a place they all refuse.
-		moved, err := repository.OriginMarkedMoved(ctx)
-		if err != nil {
-			return err
-		}
-		if moved != nil {
-			return gitstore.MovedForGood(*moved)
-		}
 	}
 	updated, err := repository.SetProjectTasksRemote(ctx, setting)
 	if err != nil {
@@ -145,22 +136,31 @@ func writeTasksRemoteSetting(
 		return nil
 	}
 	fmt.Fprintf(stdout, "%s\t%s\t%s\n", result.Setting, result.Value, result.Path)
+	// Where the tasks are now, by the settings this change replaced: origin,
+	// or the tasks remote they named.
+	source := before.TasksRemote.RemoteName()
 	if result.URL != "" {
-		// Where the tasks are now: origin, or, once they have moved away from
-		// it, the tasks remote the settings named until this change.
-		source := core.DefaultTasksRemote
-		if before.TasksRemote.Chosen() && before.TasksRemote.Name != setting.Name {
-			if moved, err := repository.OriginMarkedMoved(ctx); err == nil && moved != nil {
-				source = before.TasksRemote.Name
-			}
-		}
 		fmt.Fprintf(stdout, "Address:\t%s\n", result.URL)
-		fmt.Fprintf(stdout, "Next:\trun workbook move-tasks to copy the tasks from %s to %s and mark %s, "+
-			"then commit %s; everyone else runs workbook setup after pulling it\n",
-			source, setting.Name, source, ".workbook/config.json")
+		if source != setting.Name {
+			fmt.Fprintf(stdout, "Next:\trun workbook move-tasks to copy the tasks from %s to %s and mark %s, "+
+				"then commit and push %s; everyone else runs workbook setup after pulling it. "+
+				"Committing it first is safe too: a checkout that pulls it before the move ran is refused "+
+				"and publishes nothing until the move has run\n",
+				source, setting.Name, source, ".workbook/config.json")
+		}
 	} else if before.TasksRemote.Chosen() {
-		fmt.Fprintf(stdout, "Next:\tcommit %s; tasks are shared through origin again, "+
-			"and %s keeps the copy it holds\n", ".workbook/config.json", before.TasksRemote.Name)
+		// Origin is somewhere to move the tasks back to when they left it;
+		// otherwise they never left, and only the setting changes.
+		if moved, err := repository.OriginMarkedMoved(ctx); err == nil && moved != nil {
+			fmt.Fprintf(stdout, "Next:\trun workbook move-tasks to move the tasks back from %s to origin and mark %s, "+
+				"then commit and push %s; everyone else runs workbook setup after pulling it. "+
+				"Committing it first is safe too: a checkout that pulls it before the move ran is refused "+
+				"and publishes nothing until the move has run\n",
+				source, source, ".workbook/config.json")
+		} else {
+			fmt.Fprintf(stdout, "Next:\tcommit %s; tasks are shared through origin again, "+
+				"and %s keeps the copy it holds\n", ".workbook/config.json", before.TasksRemote.Name)
+		}
 	}
 	if result.Upgraded {
 		fmt.Fprintf(stdout, "Upgraded the project configuration to version %d; commit it, and note that older Workbook versions cannot read it.\n", result.Version)
@@ -169,12 +169,27 @@ func writeTasksRemoteSetting(
 }
 
 func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
+	given := append([]string{}, args...)
 	flags := newFlagSet("move-tasks")
-	from := flags.String("from", "", "the remote the tasks are in now (default origin, or the place origin's moved marker leads to)")
+	from := flags.String("from", "", "the remote the tasks are in now (default: the place the moved markers lead to)")
 	allowBranches := flags.Bool("allow-branches", false, "accept a tasks remote that holds branches; never a mirror of the code repository")
+	noBackup := flags.Bool("no-backup", false, "write no backup bundle of the copies a move back replaces")
+	backup := flags.String("backup", "", "write the backup bundle here, or into this directory")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
+	}
+	typed := map[string]bool{}
+	flags.Visit(func(visited *flag.Flag) { typed[visited.Name] = true })
+	if *noBackup && typed["backup"] {
+		return core.Errorf(core.CategoryInvocation, "--no-backup and --backup cannot be combined")
+	}
+	if typed["backup"] && *backup == "" {
+		return core.Errorf(core.CategoryInvocation, "move-tasks --backup requires a path")
+	}
+	if *backup == "-" {
+		// As for compact: typed as a path, "-" is a file of that name.
+		*backup = "./-"
 	}
 	repository, config, err := openRepositoryFor(ctx, cwd, stderr, "", false)
 	if err != nil {
@@ -190,8 +205,15 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 	// repeat, and the error says to run the command again. A run that set
 	// operations aside for a conflict did finish, so it reports what it did
 	// and then the conflict.
-	result, err := repository.MoveTasks(ctx, config, gitstore.MoveTasksOptions{From: *from, AllowBranches: *allowBranches})
+	result, err := repository.MoveTasks(ctx, config, gitstore.MoveTasksOptions{
+		From: *from, AllowBranches: *allowBranches, NoBackup: *noBackup, Backup: *backup, Flags: given,
+	})
 	if err != nil && !result.Verified {
+		// A bundle written before the run stopped is said where it is, on
+		// standard error beside the error, since nothing else names it.
+		for _, bundle := range result.Bundles {
+			fmt.Fprintf(stderr, "Backup:\t%s\n", bundle)
+		}
 		return err
 	}
 	if *jsonMode {
@@ -206,6 +228,19 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 		fmt.Fprintf(stdout, "Marked:\t%s\t(checkouts still using it are refused and told where the tasks went)\n", result.From.Remote)
 	case "already":
 		fmt.Fprintf(stdout, "Marked:\t%s\t(already marked by an earlier run)\n", result.From.Remote)
+	}
+	switch result.Returned {
+	case "returned":
+		fmt.Fprintf(stdout, "Returned:\t%s\t(the tasks are back at a place they left; checkouts whose settings name it use it again)\n", result.To.Remote)
+	case "already":
+		fmt.Fprintf(stdout, "Returned:\t%s\t(already recorded by an earlier run)\n", result.To.Remote)
+	}
+	if len(result.Replaced) > 0 {
+		fmt.Fprintf(stdout, "Replaced:\t%s\t(the older copies %s kept, replaced with the checkpoints they were compacted to)\n",
+			strings.Join(result.Replaced, ", "), result.To.Remote)
+	}
+	for _, bundle := range result.Bundles {
+		fmt.Fprintf(stdout, "Backup:\t%s\n", bundle)
 	}
 	if stragglers := result.Stragglers; stragglers != nil {
 		fmt.Fprintf(stdout, "Carried:\t%d operation(s) on %s by %s\t(found at %s and missing at %s)\n",
@@ -224,7 +259,7 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 		fmt.Fprintf(stdout, "Config:\tnot carried\t(%s holds configuration changes this checkout's have diverged from; "+
 			"make them again with workbook config set)\n", result.From.Remote)
 	}
-	fmt.Fprintf(stdout, "Next:\tcommit .workbook/config.json and push it; everyone else pulls it and runs workbook setup\n")
+	fmt.Fprintf(stdout, "Next:\tcommit .workbook/config.json and push it, if that is not done yet; everyone else pulls it and runs workbook setup\n")
 	return err
 }
 

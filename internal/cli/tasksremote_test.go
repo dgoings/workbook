@@ -905,7 +905,8 @@ func TestTasksRemoteTasksOnlyBoardOnTheOldPlaceIsRepointedWithWhatItSaved(t *tes
 // procedure: config set names the place the tasks are now as the source,
 // move-tasks with no --from finds them by following origin's marker, and a
 // checkout on either earlier generation of the settings is refused naming the
-// place its own tasks remote's marker names, until it pulls and sets up.
+// place the tasks are now, however many markers away, until it pulls and sets
+// up. A third move takes them back to origin.
 func TestTasksRemoteSecondMoveFollowsTheMarkers(t *testing.T) {
 	t.Parallel()
 	project := codeProject(t, testrepo.FormatSHA1)
@@ -951,7 +952,7 @@ func TestTasksRemoteSecondMoveFollowsTheMarkers(t *testing.T) {
 	for _, stale := range []struct {
 		name, clone, movedTo string
 	}{
-		{"on origin's settings", onOrigin, project.tasks},
+		{"on origin's settings", onOrigin, third},
 		{"on the first tasks remote's settings", onTasks, third},
 	} {
 		code, _, stderr := run(t, stale.clone, "fetch", "--json")
@@ -972,9 +973,27 @@ func TestTasksRemoteSecondMoveFollowsTheMarkers(t *testing.T) {
 			}
 		}
 	}
-	if code, _, stderr := run(t, project.seed, "config", "set", "tasks-remote", "origin", "--json"); code != 5 {
-		t.Fatalf("config set tasks-remote origin after two moves = %d, want 5; stderr = %q", code, stderr)
-	}
 	requireEachOperationOnce(t, third)
 	requireFreshCloneValidates(t, third)
+
+	code, stdout, stderr = run(t, project.seed, "config", "set", "tasks-remote", "origin")
+	if code != 0 || !strings.Contains(stdout, "move the tasks back from third to origin") {
+		t.Fatalf("config set tasks-remote origin after two moves = (%d, %q, %q)", code, stdout, stderr)
+	}
+	back := moveTasksJSON(t, project.seed)
+	if back.From.Remote != "third" || back.To.Remote != "origin" || back.Returned != "returned" || !back.Verified {
+		t.Fatalf("third move-tasks = %+v, want third to origin", back)
+	}
+	// Both stale generations, set up for tasks and third, are told origin.
+	for _, clone := range []string{onOrigin, onTasks} {
+		code, _, stderr := run(t, clone, "fetch", "--json")
+		if code != 3 {
+			t.Fatalf("list after the move back = %d, want 3; stderr = %q", code, stderr)
+		}
+		if refusal := requireTasksRemoteRefusal(t, stderr, core.CategoryNotInitialized, core.TasksRemoteMoved); refusal.MovedTo == nil || refusal.MovedTo.URL != project.code {
+			t.Fatalf("refusal after the move back = %+v, want origin", refusal)
+		}
+	}
+	requireEachOperationOnce(t, project.code)
+	requireFreshCloneValidates(t, project.code)
 }

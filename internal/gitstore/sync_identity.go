@@ -100,6 +100,14 @@ func (r *Repository) rememberOriginIdentity(state originIdentityState) {
 	r.originIdentity = state
 }
 
+// forgetObservedMove drops a marker this handle found on its remote earlier,
+// once a later read shows that remote live.
+func (r *Repository) forgetObservedMove() {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	r.originMoved = nil
+}
+
 func (r *Repository) observedOriginIdentity() originIdentityState {
 	r.metadataMu.RLock()
 	defer r.metadataMu.RUnlock()
@@ -188,7 +196,7 @@ func (r *Repository) publishIdentityBeforeTasks(ctx context.Context, remoteHead 
 			"%s is missing, so this clone cannot say which project it is publishing to %s; rerun workbook setup",
 			identityRef, r.remote())
 	}
-	if remoteHead == local.Head {
+	if remoteHead == local.Head || r.liveIdentityAt(ctx, remoteHead, local) {
 		r.rememberOriginIdentity(originIdentityAgreed)
 		return nil
 	}
@@ -238,8 +246,53 @@ func (r *Repository) publishIdentityBeforeTasks(ctx context.Context, remoteHead 
 		return err
 	}
 	r.rememberOriginIdentity(originIdentityAgreed)
+	r.rememberLiveIdentity(remote.Head)
 	r.recordIdentityReport(result)
 	return nil
+}
+
+// liveIdentityAt reports whether head, where the remote's identity ref was
+// just listed, is a place the tasks came back to with this clone's project,
+// without asking the remote anything more. A project whose tasks never left
+// lists its identity commit there, which the caller compares with its own;
+// one whose tasks went away and came back lists the return recorded above
+// it, which no comparison with the local identity ref can settle. Commits do
+// not change, so a head this handle read to be live is live for as long as
+// the remote lists it, and one this checkout's tracking ref already holds is
+// read from there, by local Git work alone. That keeps a moved-and-back
+// project's publication to the connections a never-moved one makes.
+func (r *Repository) liveIdentityAt(ctx context.Context, head string, local identityRecord) bool {
+	if head == "" {
+		return false
+	}
+	r.metadataMu.RLock()
+	_, known := r.liveIdentities[head]
+	r.metadataMu.RUnlock()
+	if known {
+		return true
+	}
+	tracked, found, err := r.trackingIdentityHead(ctx, r.remote())
+	if err != nil || !found || tracked != head {
+		return false
+	}
+	record, found, err := r.readIdentityRef(ctx, r.remoteIdentityRef())
+	if err != nil || !found || record.Head != head || record.Moved != nil || record.Root != local.Head ||
+		!bytes.Equal(record.Document, local.Document) {
+		return false
+	}
+	r.rememberLiveIdentity(head)
+	return true
+}
+
+// rememberLiveIdentity records head as a live identity ref tip of this
+// clone's project (liveIdentityAt).
+func (r *Repository) rememberLiveIdentity(head string) {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	if r.liveIdentities == nil {
+		r.liveIdentities = map[string]struct{}{}
+	}
+	r.liveIdentities[head] = struct{}{}
 }
 
 // recordIdentityReport keeps what a publication path did about the identity,
@@ -348,6 +401,7 @@ func (r *Repository) reconcileIdentity(ctx context.Context, publish, announce bo
 	switch {
 	case remoteFound && remoteHead == localHead:
 		r.rememberOriginIdentity(originIdentityAgreed)
+		r.forgetObservedMove()
 	case remoteFound:
 		local, err := r.identityRecordAt(ctx, identityRef, localHead)
 		if err != nil {
@@ -375,10 +429,22 @@ func (r *Repository) reconcileIdentity(ctx context.Context, publish, announce bo
 				"it was read, and nothing is published to it", r.remote(), remote.Moved.URL, remote.Moved.Remote)
 			return result, nil
 		}
+		if remote.Departed != nil && r.finishedMoveRequired() {
+			// Setup on a place the tasks came back to: the place they came
+			// back from must be marked before anything is published here.
+			to := core.TasksRemoteSetting{Name: r.remote(), URL: redactURLCredentials(r.gitRemoteURL(ctx, r.remote()))}
+			if err := r.checkMoveFinished(ctx, to, remote.Departed); err != nil {
+				return result, err
+			}
+		}
 		if err := r.adoptOriginIdentityCommit(ctx, local, remote, result); err != nil {
 			return result, err
 		}
 		r.rememberOriginIdentity(originIdentityAgreed)
+		r.rememberLiveIdentity(remote.Head)
+		// A remote this handle saw marked earlier, and that the tasks have
+		// come back to since, is live again.
+		r.forgetObservedMove()
 	case publish:
 		local, err := r.identityRecordAt(ctx, identityRef, localHead)
 		if err != nil {
@@ -519,13 +585,19 @@ func (r *Repository) adoptOriginIdentityCommit(
 		// the guard that keeps the local identity ref off one regardless.
 		return r.remoteMarkedMoved(ctx, *remote.Moved, true)
 	}
-	if err := r.replaceRef(ctx, identityRef, remote.Head, local.Head); err != nil {
+	// A place the tasks came back to carries the identity commit at the
+	// bottom of its history. That commit is what agrees or is adopted; the
+	// record of the moves above it stays on the remote's copy.
+	if remote.Root == local.Head {
+		return nil
+	}
+	if err := r.replaceRef(ctx, identityRef, remote.Root, local.Head); err != nil {
 		return core.Wrap(core.CategoryStaleWrite,
 			"cannot adopt origin's Workbook project identity commit", err)
 	}
-	r.rememberIdentityHead(remote.Head)
+	r.rememberIdentityHead(remote.Root)
 	result.Status = SyncIdentityAdopted
-	result.Head = remote.Head
+	result.Head = remote.Root
 	result.Detail = fmt.Sprintf(
 		"adopted %s's identity commit for project %s; both commits carry the same document",
 		r.remote(), remote.Identity.ProjectID)
@@ -553,7 +625,7 @@ func (r *Repository) memoizedIdentityRecord() (identityRecord, bool, error) {
 	if err != nil {
 		return identityRecord{}, false, err
 	}
-	return identityRecord{Head: head, Identity: identity, Document: document}, true, nil
+	return identityRecord{Head: head, Identity: identity, Document: document, Root: head}, true, nil
 }
 
 // identityRecordAt reads the document at one already-observed identity ref tip,
@@ -569,7 +641,7 @@ func (r *Repository) identityRecordAt(ctx context.Context, ref, head string) (id
 		if err != nil {
 			return identityRecord{}, err
 		}
-		return identityRecord{Head: head, Identity: identity, Document: document}, nil
+		return identityRecord{Head: head, Identity: identity, Document: document, Root: head}, nil
 	}
 
 	if err := r.rememberGitObjectID(head); err != nil {

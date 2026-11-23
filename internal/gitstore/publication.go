@@ -1,7 +1,9 @@
 package gitstore
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -65,6 +67,43 @@ func (r *Repository) pushTaskHeads(ctx context.Context, config core.ProjectConfi
 		return outcome, nil
 	}
 
+	// A move replaces a stale copy at its destination only after backing it
+	// up, and never pushes over a tip that moved since it was read.
+	backup := r.activeMoveBackup(r.remote())
+	if backup != nil {
+		var leases []leasedPush
+		for _, candidate := range kept {
+			if candidate.Lease != nil {
+				leases = append(leases, *candidate.Lease)
+			}
+		}
+		if len(leases) > 0 {
+			if err := r.backUpReplacedTips(ctx, config, backup, leases); err != nil {
+				if !errors.Is(err, errReplacedTipMoved) {
+					return outcome, err
+				}
+				r.metadataMu.Lock()
+				backup.stale = true
+				r.metadataMu.Unlock()
+				unleased := kept[:0:0]
+				for _, candidate := range kept {
+					if candidate.Lease == nil {
+						unleased = append(unleased, candidate)
+						continue
+					}
+					outcome.Tasks[candidate.TaskID] = SyncTaskResult{TaskID: candidate.TaskID, Status: SyncRejected,
+						Detail: compactionStaleDetail(r.remote())}
+				}
+				kept = unleased
+				if len(kept) == 0 {
+					return outcome, nil
+				}
+			} else if r.leasedPushHook != nil {
+				r.leasedPushHook()
+			}
+		}
+	}
+
 	expected := make(map[string]string, len(kept))
 	forced := make(map[string]bool)
 	args := []string{"push", "--porcelain"}
@@ -86,8 +125,23 @@ func (r *Repository) pushTaskHeads(ctx context.Context, config core.ProjectConfi
 		return outcome, err
 	}
 	for _, candidate := range kept {
-		if candidate.Lease != nil && pushed[candidate.TaskID].Status == SyncCompactionPublished {
+		if candidate.Lease == nil {
+			continue
+		}
+		item := pushed[candidate.TaskID]
+		if item.Status == SyncCompactionPublished {
 			_ = r.advanceTrackingRef(ctx, candidate.TaskID, candidate.Lease.ExpectedRemote, candidate.Lease.Local)
+		}
+		if backup != nil {
+			stale := item.Status == SyncRejected && item.Detail == compactionStaleDetail(r.remote())
+			r.metadataMu.Lock()
+			switch {
+			case item.Status == SyncCompactionPublished:
+				backup.replaced[candidate.TaskID] = struct{}{}
+			case stale:
+				backup.stale = true
+			}
+			r.metadataMu.Unlock()
 		}
 	}
 	var accepted []string
@@ -185,7 +239,7 @@ func (r *Repository) strandedPublication(ctx context.Context, taskIDs []string) 
 		return nil
 	}
 	local, found, err := r.memoizedIdentityRecord()
-	if err != nil || (found && local.Head == head) {
+	if err != nil || (found && (local.Head == head || r.liveIdentityAt(ctx, head, local))) {
 		return nil
 	}
 	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--no-auto-maintenance", remote, r.identityFetchRefspec()); err != nil {
@@ -193,7 +247,13 @@ func (r *Repository) strandedPublication(ctx context.Context, taskIDs []string) 
 		return nil
 	}
 	record, found, err := r.readIdentityRef(ctx, r.remoteIdentityRef())
-	if err != nil || !found || record.Moved == nil {
+	if err != nil || !found {
+		return nil
+	}
+	if record.Moved == nil {
+		if found && record.Head == head && record.Root == local.Head && bytes.Equal(record.Document, local.Document) {
+			r.rememberLiveIdentity(head)
+		}
 		return nil
 	}
 	r.metadataMu.Lock()
@@ -232,6 +292,9 @@ func (r *Repository) PublicationWarnings() []core.Warning {
 // strandedRefusal is the report for task refs a remote accepted just as it was
 // marked as moved.
 func (r *Repository) strandedRefusal(ctx context.Context, remote string, moved TasksMoved, taskIDs []string) error {
+	if path := r.followMoved(ctx, moved); !path.Loop {
+		moved = path.Current
+	}
 	command := "workbook setup"
 	next := "pull the commit that sets tasks-remote in " + configPath + " and run workbook setup, which publishes it there"
 	if tasksOnly, err := r.TasksOnly(ctx); err == nil && tasksOnly {
@@ -283,6 +346,9 @@ func (r *Repository) CheckRemoteNotMoved(ctx context.Context, reread bool) error
 	}
 	moved, found, err := r.trackedMoveMarker(ctx, remote, head)
 	if err != nil || !found {
+		return nil
+	}
+	if moved, found = r.stillMoved(ctx, remote, moved); !found {
 		return nil
 	}
 	return r.remoteMarkedMoved(ctx, moved, true)

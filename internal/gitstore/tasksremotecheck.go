@@ -54,9 +54,9 @@ func sameRepositoryRefusal(remote, address, other, otherAddress string) error {
 }
 
 // OriginMarkedMoved reports the marker on origin's identity ref, asking origin
-// when it can and falling back on what this checkout last read from it. It
-// is for refusing to share tasks through origin again after they moved away
-// from it, which this version cannot undo.
+// when it can and falling back on what this checkout last read from it. It is
+// for saying, when the settings go back to origin, whether the tasks have to
+// be moved back there.
 func (r *Repository) OriginMarkedMoved(ctx context.Context) (*TasksMoved, error) {
 	const origin = core.DefaultTasksRemote
 	if !r.hasGitRemote(ctx, origin) {
@@ -80,19 +80,4 @@ func (r *Repository) OriginMarkedMoved(ctx context.Context) (*TasksMoved, error)
 		return nil, err
 	}
 	return record.Moved, nil
-}
-
-// MovedForGood is the refusal for sharing tasks through origin again once
-// they have moved away from it.
-func MovedForGood(moved TasksMoved) error {
-	return core.TasksRemoteError(core.CategoryValidation,
-		core.TasksRemoteRefusal{
-			Reason:  core.TasksRemoteMovedForGood,
-			Remote:  core.DefaultTasksRemote,
-			MovedTo: &core.TasksRemoteTarget{Remote: moved.Remote, URL: moved.URL},
-		},
-		"this project's tasks have moved from origin to %s (remote %q), and this version of Workbook cannot move them back: "+
-			"origin is marked as the place they left, and every checkout still reading it is refused. "+
-			"The move is one-way; docs/reference.md says what moving them back by hand involves",
-		moved.URL, moved.Remote)
 }

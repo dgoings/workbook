@@ -113,9 +113,6 @@ const (
 	// TasksRemoteSameRepository: the tasks remote is the same repository as
 	// the one the tasks would move from, whatever its address says.
 	TasksRemoteSameRepository = "same-repository"
-	// TasksRemoteMovedForGood: the settings would share tasks through a
-	// remote marked as moved, which this version cannot move them back to.
-	TasksRemoteMovedForGood = "moved-for-good"
 	// TasksRemoteReadOnly: --remote named a remote other than the project's
 	// tasks remote for a command that publishes. Such a remote is only read.
 	TasksRemoteReadOnly = "read-only-remote"
