@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -241,6 +242,18 @@ func (r *Repository) moveTasks(ctx context.Context, config core.ProjectConfig, o
 	if _, err := r.ProbeTasksRemote(ctx); err != nil {
 		return result, r.forgetAddedRemote(ctx, setup, err)
 	}
+	// A source already marked as moved somewhere else cannot be marked for
+	// this move, so it is refused before anything is written anywhere.
+	source, found, err := r.remoteIdentityRecord(ctx, from)
+	if err != nil {
+		return result, r.forgetAddedRemote(ctx, setup,
+			wrapKeepingCategory("cannot read the project identity "+from+" holds", err))
+	}
+	if found && source.Moved != nil {
+		if err := r.refuseMarkedElsewhere(ctx, from, *source.Moved, to); err != nil {
+			return result, r.forgetAddedRemote(ctx, setup, err)
+		}
+	}
 	returning := destination.Departed != nil
 	if err := r.refuseUnfitDestination(ctx, from, to.Name, options.AllowBranches); err != nil {
 		return result, r.forgetAddedRemote(ctx, setup, err)
@@ -445,10 +458,12 @@ func (r *Repository) defaultMoveSource(ctx context.Context, to string, departed 
 	var path []string
 	for r.hasGitRemote(ctx, from) {
 		if seen[from] {
+			loop := path[slices.Index(path, from):]
 			return "", core.Errorf(core.CategoryConflict,
 				"following the moved markers from %s leads back to %s (%s), so no place says it holds the tasks: "+
-					"two moves ran at once, or one was stopped partway; name the place that holds them with workbook move-tasks --from <remote>",
-				to, from, strings.Join(append(path, from), " -> "))
+					"a move between %s is unfinished. Finish it first with workbook move-tasks, "+
+					"from a clone whose tasks-remote names where that move was taking the tasks, then run this one",
+				to, from, strings.Join(append(path, from), " -> "), joinPlaces(loop))
 		}
 		seen[from] = true
 		path = append(path, from)
@@ -462,6 +477,15 @@ func (r *Repository) defaultMoveSource(ctx context.Context, to string, departed 
 		from = moved.Remote
 	}
 	return from, nil
+}
+
+// joinPlaces names the places on a circle of markers: "origin and tasks", or
+// "origin, tasks and third".
+func joinPlaces(places []string) string {
+	if len(places) < 2 {
+		return strings.Join(places, "")
+	}
+	return strings.Join(places[:len(places)-1], ", ") + " and " + places[len(places)-1]
 }
 
 // missingMoveHop refuses a walk that reached a marker naming a remote this
@@ -1152,19 +1176,9 @@ func listedRefNames(listing []byte) []string {
 // repeated run pushes the same commit and Git reports it up to date, and a
 // run that finds the marker already there reports it so.
 func (r *Repository) markTasksMoved(ctx context.Context, from string, to core.TasksRemoteSetting) (string, error) {
-	local, found, err := r.readIdentityRef(ctx, identityRef)
+	local, moved, err := r.moveMarker(ctx, to)
 	if err != nil {
 		return "", err
-	}
-	if !found {
-		return "", core.Errorf(core.CategoryCorruptData, "%s is missing; rerun workbook setup", identityRef)
-	}
-	moved := TasksMoved{
-		Format:    tasksMovedFormat,
-		Version:   tasksMovedVersion,
-		ProjectID: local.Identity.ProjectID,
-		Remote:    to.Name,
-		URL:       to.URL,
 	}
 	tracking := remoteIdentityRefFor(from)
 	base := local
@@ -1176,13 +1190,10 @@ func (r *Repository) markTasksMoved(ctx context.Context, from string, to core.Ta
 	}
 	if found {
 		if current.Moved != nil {
-			if *current.Moved == moved || sameOriginMarker(*current.Moved, moved) {
-				return "already", nil
+			if err := r.refuseMarkedElsewhere(ctx, from, *current.Moved, to); err != nil {
+				return "", err
 			}
-			return "", core.Errorf(core.CategoryConflict,
-				"%s is marked as moved to %s (remote %q) already, not to %s; "+
-					"run workbook move-tasks --from <remote> naming the place that holds the tasks now",
-				from, current.Moved.URL, current.Moved.Remote, to.Name)
+			return "already", nil
 		}
 		base = current
 	}
@@ -1202,6 +1213,41 @@ func (r *Repository) markTasksMoved(ctx context.Context, from string, to core.Ta
 		return "", core.Wrap(core.CategoryOperational, "cannot record the published marker", err)
 	}
 	return "marked", nil
+}
+
+// moveMarker is this checkout's identity record and the marker a move to to
+// writes on the place it leaves.
+func (r *Repository) moveMarker(ctx context.Context, to core.TasksRemoteSetting) (identityRecord, TasksMoved, error) {
+	local, found, err := r.readIdentityRef(ctx, identityRef)
+	if err != nil {
+		return identityRecord{}, TasksMoved{}, err
+	}
+	if !found {
+		return identityRecord{}, TasksMoved{}, core.Errorf(core.CategoryCorruptData, "%s is missing; rerun workbook setup", identityRef)
+	}
+	return local, TasksMoved{
+		Format:    tasksMovedFormat,
+		Version:   tasksMovedVersion,
+		ProjectID: local.Identity.ProjectID,
+		Remote:    to.Name,
+		URL:       to.URL,
+	}, nil
+}
+
+// refuseMarkedElsewhere refuses a move from a place already marked as moved
+// to somewhere other than to, which this move's own marker cannot replace.
+func (r *Repository) refuseMarkedElsewhere(ctx context.Context, from string, current TasksMoved, to core.TasksRemoteSetting) error {
+	_, moved, err := r.moveMarker(ctx, to)
+	if err != nil {
+		return err
+	}
+	if current == moved || sameOriginMarker(current, moved) {
+		return nil
+	}
+	return core.Errorf(core.CategoryConflict,
+		"%s is marked as moved to %s (remote %q) already, not to %s; "+
+			"run workbook move-tasks --from <remote> naming the place that holds the tasks now",
+		from, current.URL, current.Remote, to.Name)
 }
 
 // sameOriginMarker reports two markers naming origin as where the tasks went.

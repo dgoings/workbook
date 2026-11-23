@@ -664,3 +664,50 @@ func TestCheckMoveDoneRefusesUntilThePlaceLeftIsMarked(t *testing.T) {
 		t.Fatalf("CheckMoveDone() on a tasks remote marked as moved = %v", err)
 	}
 }
+
+// From a move back stopped with both places marked, each naming the other, a
+// checkout whose settings name a third place is refused by move-tasks, told
+// that the move between origin and tasks is unfinished and to finish it
+// first, with no --from to try; and --from naming either marked place is
+// refused before anything is written, so the third place is left with no
+// identity and no tasks.
+func TestAMoveFromAStoppedMoveBackWritesNothingToAThirdPlace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newMoveFixture(t, testrepo.FormatSHA1)
+	tasks := core.TasksRemoteSetting{Name: "tasks", URL: fixture.tasks}
+	third := core.TasksRemoteSetting{Name: "third", URL: newBarePlace(t, testrepo.FormatSHA1, "third")}
+	first, _ := moveTo(t, fixture.first, tasks)
+	onTasks, _ := checkoutOn(t, fixture.origin, tasks)
+	mover, moverConfig := pullSettings(t, first, core.TasksRemoteSetting{})
+	mover.moveStepHook = func(at string) error {
+		if at == "return" {
+			return errMoveInterrupted
+		}
+		return nil
+	}
+	if _, err := mover.MoveTasks(ctx, moverConfig, MoveTasksOptions{}); !errors.Is(err, errMoveInterrupted) {
+		t.Fatalf("MoveTasks() = %v, want the interruption", err)
+	}
+
+	second, secondConfig := pullSettings(t, onTasks, third)
+	_, err := second.MoveTasks(ctx, secondConfig, MoveTasksOptions{})
+	if core.CategoryOf(err) != core.CategoryConflict ||
+		!strings.Contains(err.Error(), "a move between origin and tasks is unfinished") ||
+		!strings.Contains(err.Error(), "Finish it first with workbook move-tasks") ||
+		strings.Contains(err.Error(), "--from") {
+		t.Fatalf("move to third = %v, want the unfinished move named and no --from", err)
+	}
+	for _, from := range []string{"origin", "tasks"} {
+		_, err := reopenRepository(t, second).MoveTasks(ctx, secondConfig, MoveTasksOptions{From: from})
+		if core.CategoryOf(err) != core.CategoryConflict || !strings.Contains(err.Error(), from+" is marked as moved to") {
+			t.Fatalf("move to third --from %s = %v, want refused for its marker", from, err)
+		}
+	}
+	if _, err := plainGit(third.URL, "rev-parse", "--verify", "--quiet", identityRef); err == nil {
+		t.Fatalf("third holds an identity ref")
+	}
+	if refs := refListing(t, third.URL, "refs/"); refs != "" {
+		t.Fatalf("third holds refs: %s", refs)
+	}
+}
