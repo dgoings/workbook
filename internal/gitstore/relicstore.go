@@ -561,9 +561,11 @@ func (r *Repository) GetRelic(ctx context.Context, config core.ProjectConfig, re
 // commit, then moves the relic's ref from parent's head to it, or creates the
 // ref when parent is nil.
 //
-// content carries the fields and body of parts the pack names. A nil Fields
-// leaves an existing part's fields.json as it is and gives a new part an empty
-// one. A body is stored only when this change saved it, as
+// content carries the fields and body of parts the pack names. A part this
+// pack adds takes its fields.json from Fields, an empty one when Fields is nil.
+// A part the parent has keeps its fields.json unless the pack carries a
+// part.field.set or part.field.clear for it and Fields is not nil, whatever
+// content holds otherwise. A body is stored only when this change saved it, as
 // core.RelicBodySavedBy judges: the record's body version for the part is the
 // ID of an operation in the pack, and the part is new or that version is not
 // the one parent records. Otherwise the part keeps the body it had, whatever
@@ -739,6 +741,7 @@ func planRelicWrite(
 		parentRecord = &parent.Record
 	}
 	named := core.RelicPartsNamedBy(pack)
+	fieldsEdited := relicPartsWithFieldOperations(pack)
 	isNamed := make(map[string]struct{}, len(named))
 	for _, partID := range named {
 		isNamed[partID] = struct{}{}
@@ -777,7 +780,10 @@ func planRelicWrite(
 			_, write.existing = parent.Record.State.Relic.Part(partID)
 		}
 		partContent := content[partID]
-		if partContent.Fields != nil || !write.existing {
+		// A part the parent has keeps its fields.json unless the pack sets or
+		// clears one of its fields, which is what rule R7 holds a read to.
+		_, isEdited := fieldsEdited[partID]
+		if !write.existing || (isEdited && partContent.Fields != nil) {
 			encoded, err := encodeRelicPartFields(partID, partContent.Fields)
 			if err != nil {
 				return relicWritePlan{}, err
@@ -801,8 +807,9 @@ func planRelicWrite(
 		} else if part.Body != nil {
 			// The part keeps the body the parent stores, which has to be the
 			// size the state records. The fold leaves the size alone unless it
-			// gives the body a new version, except for a part.body.set that
-			// carries the ID of the version it starts from.
+			// gives the body a new version, and a pack is refused before this
+			// if a body edit in it names itself as its base, so only a record
+			// that does not follow from the pack is refused here.
 			kept := int64(-1)
 			if parentRecord != nil {
 				if before, existed := parentRecord.State.Relic.Part(partID); existed && before.Body != nil {

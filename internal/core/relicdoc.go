@@ -554,6 +554,12 @@ func validateRelicOperationDocument(operation RelicOperation) error {
 			if err := validateCanonicalULID("part.body.set base", operation.Body.Base); err != nil {
 				return err
 			}
+			// The edit's own ID is the version it saves, so naming itself as
+			// the version it started from would relabel a body without a new
+			// version.
+			if operation.Body.Base == operation.ID {
+				return corrupt("part.body.set %s names itself as its base", operation.ID)
+			}
 		}
 	}
 	return nil

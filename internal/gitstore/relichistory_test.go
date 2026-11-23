@@ -871,32 +871,39 @@ func TestRuleR6ARepeatedBodyEditCannotReplaceABody(t *testing.T) {
 		t.Fatal("the replacement body must differ from the stored one and be the same size")
 	}
 
-	for name, base := range map[string]string{
-		// The operation exactly as it was first delivered. Its base is no
-		// longer current, so the fold ignores it.
-		"delivered again from its first base": a.id,
-		// The operation naming the version it saved as its base. The fold
-		// applies it, which saves the version the body already has.
-		"from the version it saved": saved,
-	} {
-		pack := relicChildPack(edited, relicBodySet(700011, a.id, base, replaced.body))
-		before, _ := edited.Record.State.Relic.Part(a.id)
-		after, _ := foldRelic(t, &edited, pack).State.Relic.Part(a.id)
-		if before.Body.Version != saved || *after.Body != *before.Body {
-			t.Fatalf("%s: the repeated body edit folded the body from %+v to %+v; the test needs it to change nothing",
-				name, *before.Body, *after.Body)
-		}
-
-		err := checkRelicRule(t, repo, config, edited, 3, relicRuleCase{
-			pack:      pack,
-			honest:    current,
-			violating: withForgedPart(current, a.id, replaced),
-			fragments: []string{a.id, "body"},
-		})
-		if core.CategoryOf(err) != core.CategoryCorruptData || !strings.HasSuffix(err.Error(), relicValidateHint) {
-			t.Fatalf("%s: GetRelic() error = %v, want corrupt data naming workbook validate", name, err)
-		}
+	// The operation exactly as it was first delivered. Its base is no longer
+	// current, so the fold ignores it.
+	pack := relicChildPack(edited, relicBodySet(700011, a.id, a.id, replaced.body))
+	before, _ := edited.Record.State.Relic.Part(a.id)
+	ignored := foldRelic(t, &edited, pack)
+	after, _ := ignored.State.Relic.Part(a.id)
+	if before.Body.Version != saved || *after.Body != *before.Body {
+		t.Fatalf("the repeated body edit folded the body from %+v to %+v; the test needs it to change nothing",
+			*before.Body, *after.Body)
 	}
+	err := checkRelicRule(t, repo, config, edited, 3, relicRuleCase{
+		pack:      pack,
+		honest:    current,
+		violating: withForgedPart(current, a.id, replaced),
+		fragments: []string{a.id, "body"},
+	})
+	assertGetRelicRefused(t, err)
+
+	// The operation naming the version it saved as its base names itself,
+	// which no pack may do, so it never reaches the fold. A commit holding it
+	// is refused with the body it replaces left as it was.
+	selfBased := relicChildPack(edited, relicBodySet(700011, a.id, saved, alice))
+	operationJSON, marshalErr := json.Marshal(selfBased)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	forged := forgeRelicCommit(t, repo, edited.Head, append(operationJSON, '\n'),
+		encodedRelicDocument(t, ignored.State), current)
+	pointRelicRef(t, repo, edited.Operation.RelicID, forged)
+	assertRelicHistoryStopsAt(t, repo, config, edited.Operation.RelicID, forged, forged, 3,
+		core.CategoryCorruptData, saved, "base")
+	_, err = repo.GetRelic(context.Background(), config, edited.Operation.RelicID)
+	assertGetRelicRefused(t, err)
 }
 
 func TestRuleR7FieldsDoNotFollowFromTheOperations(t *testing.T) {

@@ -1007,10 +1007,60 @@ func TestWriteRelicNeverStoresTextFromARepeatedPartAdd(t *testing.T) {
 	assertSameRelicSnapshot(t, got, written)
 }
 
-// A part.body.set that carries the ID of the version it starts from folds to
-// that same version with the size it names. It saves no body, so the part
-// would keep its text under a state recording another size. That is a commit
-// no read accepts, so the writer refuses to store it.
+// Fields given for a part the parent has are stored only when the pack sets or
+// clears one of its fields, as rule R7 holds every read to. Otherwise the part
+// keeps the parent's fields.json, whatever content holds.
+func TestWriteRelicKeepsFieldsWithoutAFieldOperation(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	part := relicTestPartNumbered(1).withField("heading", "Goals").withBody("md", []byte("the first text\n"))
+	other := relicTestPartNumbered(2).withField("heading", "Risks")
+	root := writeRelicRoot(t, repo, config, part, other)
+	relicID := root.Operation.RelicID
+	fieldsAt := func(head, partID string) string {
+		return gitOutput(t, repo, "rev-parse", head+":parts/"+partID+"/fields.json")
+	}
+	changed := relicTestPartNumbered(1).withField("heading", "Something else").fields
+
+	moved := writeRelicChild(t, repo, config, root,
+		map[string]core.RelicPartContent{part.id: {Fields: changed}},
+		relicPartMove(700101, part.id, "3/1"))
+	if before, after := fieldsAt(root.Head, part.id), fieldsAt(moved.Head, part.id); before != after {
+		t.Fatalf("a move stored fields.json %s in place of %s", after, before)
+	}
+	assertRelicHistoryValid(t, repo, config, relicID, moved.Head, 2)
+	got, err := repo.GetRelic(ctx, config, relicID)
+	if err != nil {
+		t.Fatalf("GetRelic() after the move error = %v", err)
+	}
+	assertSameRelicSnapshot(t, got, moved)
+
+	// A field edit of the part does store what the caller gives.
+	edit := relicFieldSet(700102, part.id, "heading", "Something else")
+	edited := writeRelicChild(t, repo, config, moved,
+		map[string]core.RelicPartContent{part.id: {Fields: relicFieldsAfter(t, repo, config, moved, part.id, edit)}},
+		edit)
+	parts, err := repo.ReadRelicParts(ctx, config, edited, []string{part.id}, false)
+	if err != nil {
+		t.Fatalf("ReadRelicParts() error = %v", err)
+	}
+	if want := changed; !reflect.DeepEqual(parts[part.id].Fields, want) {
+		t.Fatalf("fields after the field edit = %s, want %s", parts[part.id].Fields, want)
+	}
+	assertRelicHistoryValid(t, repo, config, relicID, edited.Head, 3)
+	if got, err = repo.GetRelic(ctx, config, relicID); err != nil {
+		t.Fatalf("GetRelic() after the field edit error = %v", err)
+	}
+	assertSameRelicSnapshot(t, got, edited)
+}
+
+// A part that keeps the body its parent stores has to keep the size the parent
+// records. No pack folds to anything else since a body edit may not name
+// itself as its base, so WriteRelic refuses that pack outright and the guard in
+// planRelicWrite is reached here with a forged record: a move whose state
+// records another size for the part. That is a commit no read accepts, so the
+// writer refuses to store it.
 func TestWriteRelicRefusesABodySizeNoSavedBodyBacks(t *testing.T) {
 	t.Parallel()
 	repo, config := relicRepository(t, testrepo.FormatSHA1)
@@ -1023,17 +1073,25 @@ func TestWriteRelicRefusesABodySizeNoSavedBodyBacks(t *testing.T) {
 	edited := writeRelicChild(t, repo, config, root,
 		map[string]core.RelicPartContent{part.id: {Body: current, HasBody: true}},
 		relicBodySet(700001, part.id, part.id, current))
-
 	longer := append(bytes.ToUpper(current), "and more\n"...)
-	pack := relicChildPack(edited, relicBodySet(700001, part.id, saved, longer))
-	record := foldRelic(t, &edited, pack)
-	if got, _ := record.State.Relic.Part(part.id); got.Body.Version != saved || got.Body.Bytes != int64(len(longer)) {
-		t.Fatalf("the repeated edit folded to %+v; the test needs version %s recording %d bytes",
-			*got.Body, saved, len(longer))
-	}
 
-	_, err := repo.WriteRelic(ctx, config, &edited, pack, record,
+	// The edit repeated with the version it saved as its base names itself.
+	selfBased := relicChildPack(edited, relicBodySet(700001, part.id, saved, longer))
+	_, err := repo.WriteRelic(ctx, config, &edited, selfBased, edited.Record,
 		map[string]core.RelicPartContent{part.id: {Body: longer, HasBody: true}}, "update relic")
+	assertRelicCategory(t, err, core.CategoryCorruptData, saved)
+
+	pack := relicChildPack(edited, relicPartMove(700002, part.id, "2/1"))
+	record := foldRelic(t, &edited, pack)
+	for index := range record.State.Relic.Parts {
+		if record.State.Relic.Parts[index].ID == part.id {
+			body := *record.State.Relic.Parts[index].Body
+			body.Bytes = int64(len(longer))
+			record.State.Relic.Parts[index].Body = &body
+		}
+	}
+	_, err = planRelicWrite(&edited, pack, record,
+		map[string]core.RelicPartContent{part.id: {Body: longer, HasBody: true}})
 	assertRelicCategory(t, err, core.CategoryValidation, part.id, fmt.Sprintf("%d bytes", len(longer)))
 	if bytes.Contains([]byte(err.Error()), bytes.ToUpper(current[:10])) {
 		t.Fatalf("the refusal %q carries body text", err)

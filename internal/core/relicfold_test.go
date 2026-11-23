@@ -583,17 +583,23 @@ func TestRelicBodySavedByAndPartsNamedBy(t *testing.T) {
 	}
 
 	// A repeated part.body.set carries the ID that is already the body's
-	// version, whether it names the current version as its base or an older one.
-	for name, base := range map[string]string{"from the current version": relicTestID(247), "from an older version": relicDocPartA} {
-		repeatedEdit := relicFoldPack(3, RelicOperation{ID: relicTestID(247), Type: RelicOperationPartBodySet, Part: relicDocPartA,
-			Body: &RelicBodyChange{Format: "md", Bytes: 1840, Base: base}})
-		afterRepeatedEdit := mustApplyRelic(t, edited, repeatedEdit)
-		if got := requirePartForTest(t, afterRepeatedEdit.State.Relic, relicDocPartA).Body.Version; got != relicTestID(247) {
-			t.Fatalf("a repeated body edit %s folded to version %s; the test needs the version to stay", name, got)
-		}
-		if RelicBodySavedBy(&edited, repeatedEdit, afterRepeatedEdit, relicDocPartA) {
-			t.Errorf("a repeated part.body.set %s saved no body: part A's version did not change", name)
-		}
+	// version. Delivered again from the version it started from, the fold
+	// ignores it.
+	repeatedEdit := relicFoldPack(3, RelicOperation{ID: relicTestID(247), Type: RelicOperationPartBodySet, Part: relicDocPartA,
+		Body: &RelicBodyChange{Format: "md", Bytes: 1840, Base: relicDocPartA}})
+	afterRepeatedEdit := mustApplyRelic(t, edited, repeatedEdit)
+	if got := requirePartForTest(t, afterRepeatedEdit.State.Relic, relicDocPartA).Body.Version; got != relicTestID(247) {
+		t.Fatalf("a repeated body edit folded to version %s; the test needs the version to stay", got)
+	}
+	if RelicBodySavedBy(&edited, repeatedEdit, afterRepeatedEdit, relicDocPartA) {
+		t.Errorf("a repeated part.body.set saved no body: part A's version did not change")
+	}
+	// Naming the version it saved as its base, it names itself, which no pack
+	// may do.
+	selfBased := relicFoldPack(3, RelicOperation{ID: relicTestID(247), Type: RelicOperationPartBodySet, Part: relicDocPartA,
+		Body: &RelicBodyChange{Format: "md", Bytes: 1840, Base: relicTestID(247)}})
+	if _, err := ApplyRelic(&edited, selfBased); CategoryOf(err) != CategoryCorruptData {
+		t.Errorf("ApplyRelic(a body edit based on itself) error = %v, want corrupt data", err)
 	}
 
 	if got, want := RelicPartsNamedBy(pack), []string{relicDocPartA, relicDocPartB}; !reflect.DeepEqual(got, want) {

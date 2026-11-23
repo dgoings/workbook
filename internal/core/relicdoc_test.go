@@ -320,6 +320,27 @@ func TestRelicPackEnvelopeRules(t *testing.T) {
 	}
 }
 
+// A body edit's base is the version it started from, and its own ID is the
+// version it saves, so the two are never the same operation. One that names
+// itself could relabel a body without giving it a new version.
+func TestRelicBodyEditCannotNameItselfAsItsBase(t *testing.T) {
+	edit := relicTestID(8)
+	pack := NewRelicOperationPack(relicDocProject, relicDocRelic, relicDocGeneration, relicDocActor, 2, relicDocTime,
+		[]RelicOperation{{ID: edit, Type: RelicOperationPartBodySet, Part: relicDocPartA,
+			Body: &RelicBodyChange{Format: "txt", Bytes: 1840, Base: edit}}})
+	requireRelicPackRefused(t, "a body edit based on itself", pack)
+
+	// The same edit from another version is an ordinary pack.
+	pack.Operations[0].Body.Base = relicDocPartA
+	encoded, err := EncodeDocument(pack)
+	if err != nil {
+		t.Fatalf("EncodeDocument(an edit from another version) = %v", err)
+	}
+	if _, err := DecodeRelicOperationPack(encoded); err != nil {
+		t.Fatalf("DecodeRelicOperationPack(an edit from another version) = %v", err)
+	}
+}
+
 func TestRelicStateRefusesOversizedSingleValuesOnSaveAndOnRead(t *testing.T) {
 	property := func(size int) map[string]json.RawMessage {
 		// {"k":"…"} is eight bytes around the string's contents.
