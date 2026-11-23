@@ -551,7 +551,11 @@ it falls on today or one of the next three days, and a task in a status tagged
 `done`, or deleted, is neither. Each reader judges against their own calendar,
 so two people in different timezones can disagree about a task for up to a day
 around midnight. That is a difference in what they are shown, never in the
-task: both hold the same date.
+task: both hold the same date. The `overdue` and `dueSoon` members of a task in
+JSON are the answering machine's reading; the web board makes its own in the
+browser, from `due`, the window the page publishes and which tasks the server
+says are finished, so a board served from another timezone still reads the
+reader's calendar.
 
 **Why generation 5, and why per payload.** A date had to reach an older build as
 "a newer Workbook wrote this" and never as corruption, and a task that never had

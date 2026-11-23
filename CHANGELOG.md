@@ -272,7 +272,8 @@ before anyone runs it; see Compatibility across versions below.
   before today is marked overdue, and one due today or in the next three days
   due soon, in words beside the date in `show`, `list`, the web board's cards
   and task page, and the desktop app's Next view; a task in a done status, or
-  deleted, is never marked. Each reader judges against their own local date.
+  deleted, is never marked. Each reader judges against their own local date,
+  and an open board judges again when that date changes.
   Every task object in JSON carries `due` (`null` when there is none),
   `overdue` and `dueSoon`. The web board sets the date with a date field.
   `workbook next` ignores due dates. Concurrent edits to one task's date

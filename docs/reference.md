@@ -392,12 +392,16 @@ workbook update WB-01K0M6B8 --clear-due
 ```
 
 `--due` takes a date as `YYYY-MM-DD`, `today`, `tomorrow`, or `+Nd` for N days
-from today (N from 0 to 36500). The relative forms are worked out against this
+from today, where N is decimal digits from 0 to 36500 and leading zeros are
+allowed (`+07d` is `+7d`). The relative forms are worked out against this
 machine's local date when the command runs, and only the date they come to is
 recorded: the confirmation prints it, and the task holds `2026-12-04`, never
 `+3d`. A migration that sets `WORKBOOK_NOW` to record a project's past resolves
-them against that recorded day instead, because the date is written into the
-history; whether a task is overdue is still judged against the real today.
+them against the local date of that recorded instant instead, because the date
+is written into the history: `WORKBOOK_NOW=2026-03-01T02:00:00Z` with
+`--due today` records `2026-02-28` on a machine in New York, where that instant
+is still February 28. Whether a task is overdue is still judged against the
+real today.
 Anything else — `2026-02-30`, `next friday`, `+1w`, an empty value — is a
 `validation` error (exit `5`) and records nothing. `--due` and `--clear-due`
 together are an `invalid-invocation` (exit `2`). Setting, changing and clearing
@@ -433,20 +437,25 @@ put the word beside the date — `2026-11-20 overdue`, `2026-11-24 due soon` —
 because the terminal output carries no color. The web board's cards and task
 page show the same words, with color repeating them rather than standing in for
 them, and the task page sets the date with a date field (empty it to clear the
-date). The desktop app's Next view marks a dated task the same way.
+date). The board judges each date in the browser, against the reader's own
+local date, and judges again when that date changes while the page is open, on
+its next poll; the page as the server first sends it shows a card's date with
+no word beside it, so a reader with scripts off sees the date alone. The
+desktop app's Next view marks a dated task the same way.
 
 **In JSON**, every task object carries three members:
 
 | Member | Value |
 | --- | --- |
 | `due` | The date as `"YYYY-MM-DD"`, or `null` when the task has none. Always present. |
-| `overdue` | `true` when the task is overdue for the machine that answered. Always present. |
-| `dueSoon` | `true` when the task is due soon for the machine that answered. Always present. |
+| `overdue` | `true` when the task is overdue on the local date of the machine that answered. Always present. |
+| `dueSoon` | `true` when the task is due soon on the local date of the machine that answered. Always present. |
 
 `overdue` and `dueSoon` are worked out when the command runs and never stored,
 so the same task can answer differently tomorrow, or on a machine in another
-timezone. A caller in another zone than the CLI it runs should judge `due`
-itself.
+timezone. The tasks `workbook serve` sends its board carry them too, judged on
+the serving machine's local date; the board does not use them. A caller in
+another zone than the machine that answered should judge `due` itself.
 
 **Synchronization.** Two clones that set different dates on one task reconcile
 the way they do for any other one-value field: the clone that synchronizes last
