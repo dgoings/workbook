@@ -1,6 +1,7 @@
 package gitstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -238,7 +239,7 @@ func (r *Repository) strandedPublication(ctx context.Context, taskIDs []string) 
 		return nil
 	}
 	local, found, err := r.memoizedIdentityRecord()
-	if err != nil || (found && local.Head == head) {
+	if err != nil || (found && (local.Head == head || r.liveIdentityAt(ctx, head, local))) {
 		return nil
 	}
 	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--no-auto-maintenance", remote, r.identityFetchRefspec()); err != nil {
@@ -246,7 +247,13 @@ func (r *Repository) strandedPublication(ctx context.Context, taskIDs []string) 
 		return nil
 	}
 	record, found, err := r.readIdentityRef(ctx, r.remoteIdentityRef())
-	if err != nil || !found || record.Moved == nil {
+	if err != nil || !found {
+		return nil
+	}
+	if record.Moved == nil {
+		if found && record.Head == head && record.Root == local.Head && bytes.Equal(record.Document, local.Document) {
+			r.rememberLiveIdentity(head)
+		}
 		return nil
 	}
 	r.metadataMu.Lock()

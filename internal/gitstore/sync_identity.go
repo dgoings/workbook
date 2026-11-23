@@ -196,7 +196,7 @@ func (r *Repository) publishIdentityBeforeTasks(ctx context.Context, remoteHead 
 			"%s is missing, so this clone cannot say which project it is publishing to %s; rerun workbook setup",
 			identityRef, r.remote())
 	}
-	if remoteHead == local.Head {
+	if remoteHead == local.Head || r.liveIdentityAt(ctx, remoteHead, local) {
 		r.rememberOriginIdentity(originIdentityAgreed)
 		return nil
 	}
@@ -246,8 +246,53 @@ func (r *Repository) publishIdentityBeforeTasks(ctx context.Context, remoteHead 
 		return err
 	}
 	r.rememberOriginIdentity(originIdentityAgreed)
+	r.rememberLiveIdentity(remote.Head)
 	r.recordIdentityReport(result)
 	return nil
+}
+
+// liveIdentityAt reports whether head, where the remote's identity ref was
+// just listed, is a place the tasks came back to with this clone's project,
+// without asking the remote anything more. A project whose tasks never left
+// lists its identity commit there, which the caller compares with its own;
+// one whose tasks went away and came back lists the return recorded above
+// it, which no comparison with the local identity ref can settle. Commits do
+// not change, so a head this handle read to be live is live for as long as
+// the remote lists it, and one this checkout's tracking ref already holds is
+// read from there, by local Git work alone. That keeps a moved-and-back
+// project's publication to the connections a never-moved one makes.
+func (r *Repository) liveIdentityAt(ctx context.Context, head string, local identityRecord) bool {
+	if head == "" {
+		return false
+	}
+	r.metadataMu.RLock()
+	_, known := r.liveIdentities[head]
+	r.metadataMu.RUnlock()
+	if known {
+		return true
+	}
+	tracked, found, err := r.trackingIdentityHead(ctx, r.remote())
+	if err != nil || !found || tracked != head {
+		return false
+	}
+	record, found, err := r.readIdentityRef(ctx, r.remoteIdentityRef())
+	if err != nil || !found || record.Head != head || record.Moved != nil || record.Root != local.Head ||
+		!bytes.Equal(record.Document, local.Document) {
+		return false
+	}
+	r.rememberLiveIdentity(head)
+	return true
+}
+
+// rememberLiveIdentity records head as a live identity ref tip of this
+// clone's project (liveIdentityAt).
+func (r *Repository) rememberLiveIdentity(head string) {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	if r.liveIdentities == nil {
+		r.liveIdentities = map[string]struct{}{}
+	}
+	r.liveIdentities[head] = struct{}{}
 }
 
 // recordIdentityReport keeps what a publication path did about the identity,
@@ -396,6 +441,7 @@ func (r *Repository) reconcileIdentity(ctx context.Context, publish, announce bo
 			return result, err
 		}
 		r.rememberOriginIdentity(originIdentityAgreed)
+		r.rememberLiveIdentity(remote.Head)
 		// A remote this handle saw marked earlier, and that the tasks have
 		// come back to since, is live again.
 		r.forgetObservedMove()

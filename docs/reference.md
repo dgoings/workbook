@@ -1726,6 +1726,21 @@ inline board save from one to three (the listings before and after). A command
 handed to a watcher opens none, as before; a board save handed to one goes
 from one connection, its own push, to none; and the watcher's round goes from
 two to three.
+
+A project whose tasks moved to their own repository and came back to `origin`
+costs the same connections as one that never moved them: measured the same
+way, an inline `workbook update` makes three (fetch, push, the listing after
+it), an inline board save three (the listing before, the push, the listing
+after), an update handed to a watcher none, the watcher's round three, and a
+board save handed to the board's own loop none itself, the loop then making
+four (its round's three and one more fetch), in both kinds of project. `origin`
+lists the return recorded on its identity ref rather than the identity commit
+itself; a checkout that has read that return to be live, in this command or
+by an earlier fetch into its tracking ref, takes it as agreement without
+fetching it again. What it does cost is local: reading the return's commits
+adds up to four Git processes to a command (21 rather than 17 for a handed
+update, 42 rather than 38 inline), and none to an inline board save. A test
+measures every one of these and fails on a difference in connections.
 Comparing operations by content as well as ID, below, runs no Git command.
 
 ### Choosing the remote and moving the tasks

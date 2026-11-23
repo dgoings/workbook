@@ -84,6 +84,10 @@ type Repository struct {
 	returningTo string
 	// identityChains memoizes readIdentityChain by tip commit.
 	identityChains map[string]identityChain
+	// liveIdentities are identity ref tips this handle has read to be live
+	// with this clone's project, other than the identity commit itself: a
+	// return recorded on a place the tasks came back to (liveIdentityAt).
+	liveIdentities map[string]struct{}
 	// followed memoizes followMoved by the marker it started from.
 	followed map[TasksMoved]movedPath
 	// originMoved is the tasks-moved marker this command found on the remote
