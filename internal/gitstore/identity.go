@@ -97,6 +97,8 @@ type identityRecord struct {
 	// tasks left, the move a return came back over for a place they returned
 	// to, and nil for a place they never left.
 	Departed *TasksMoved
+	// Departures is every move recorded on the ref, newest first.
+	Departures []TasksMoved
 	// hidden is the marker a move back read past (see returningRemote): the
 	// tip is still that marker, though Moved reads as live.
 	hidden *TasksMoved
@@ -747,7 +749,7 @@ func (r *Repository) readIdentityObjects(ctx context.Context, ref, head string, 
 			"%s carries a tasks-moved marker for project %s, but its identity is project %s",
 			ref, chain.departed.ProjectID, record.Identity.ProjectID)
 	}
-	record.Root, record.Moved, record.Departed = chain.root, chain.moved, chain.departed
+	record.Root, record.Moved, record.Departed, record.Departures = chain.root, chain.moved, chain.departed, chain.departures
 	if ref == remoteIdentityRefFor(r.returningRemote()) && record.Moved != nil {
 		// The place a move is bringing the tasks back to is read as live for
 		// the length of that move, so it can be brought up to date before

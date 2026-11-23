@@ -206,6 +206,8 @@ type identityChain struct {
 	// departed is the newest marker in the chain: the tip's own, or, for a
 	// tip that records a return, the marker it returned over.
 	departed *TasksMoved
+	// departures is every marker in the chain, newest first.
+	departures []TasksMoved
 }
 
 // readIdentityChain validates the history below an identity ref tip that has
@@ -360,6 +362,7 @@ func (r *Repository) readIdentityChain(
 			return identityChain{}, err
 		}
 		chain.departed = &moved
+		chain.departures = append([]TasksMoved{moved}, chain.departures...)
 		if index == 0 {
 			chain.moved = &moved
 		}
@@ -590,19 +593,47 @@ func (r *Repository) tasksMovedRefusalHere(ctx context.Context, moved TasksMoved
 	return tasksMovedRefusal(r.remote(), moved)
 }
 
-// neverLeftFor reports whether place, where the tasks are, has not recorded
-// leaving for remote. Settings that once named place and now name remote are
-// either a change of tasks-remote whose move-tasks has not run, or a checkout
-// that has not pulled the change that brought the tasks back to place after
-// they went to remote; only in the second does place's newest departure name
-// remote. A place that cannot be read says nothing, and the refusal stays the
-// ordinary one.
+// neverLeftFor reports whether the tasks have certainly never been moved to
+// remote, so settings that once named place and now name remote are a change
+// of tasks-remote whose move-tasks has not run, and not a checkout that missed
+// a later change. It holds only when place, where the tasks are, is live, and
+// no marker recorded at remote, at place, or at any place those markers lead
+// to names remote as where the tasks went. A place that cannot be read says
+// nothing, and the refusal stays the ordinary one.
 func (r *Repository) neverLeftFor(ctx context.Context, place TasksMoved, remote string) bool {
 	record, found, err := r.readPlaceIdentity(ctx, place)
 	if err != nil || !found || record.Moved != nil {
 		return false
 	}
-	return record.Departed == nil || record.Departed.Remote != remote
+	left, found, err := r.readPlaceIdentity(ctx, TasksMoved{Remote: remote})
+	if err != nil || !found {
+		return false
+	}
+	queue := append(append([]TasksMoved(nil), left.Departures...), record.Departures...)
+	seen := map[TasksMoved]bool{{Remote: remote}: true, {Remote: place.Remote, URL: place.URL}: true}
+	for len(queue) > 0 {
+		next := queue[0]
+		queue = queue[1:]
+		if next.Remote == remote {
+			return false
+		}
+		key := TasksMoved{Remote: next.Remote, URL: next.URL}
+		if seen[key] {
+			continue
+		}
+		if len(seen) > movedFollowLimit {
+			return false
+		}
+		seen[key] = true
+		visited, found, err := r.readPlaceIdentity(ctx, next)
+		if err != nil {
+			return false
+		}
+		if found {
+			queue = append(queue, visited.Departures...)
+		}
+	}
+	return true
 }
 
 // settingsCommittedAwayFrom reports whether the settings committed at HEAD

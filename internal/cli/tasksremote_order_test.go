@@ -79,3 +79,75 @@ func TestTasksRemoteSettingsCommittedBeforeTheMoveSayToRunMoveTasks(t *testing.T
 		t.Fatalf("origin holds %s at %s, want the teammate's %s", project.ids[0], got, want)
 	}
 }
+
+// After a route through three places and back, origin to tasks to third to
+// origin, each move run before its settings were committed and pushed, a
+// checkout or a fresh clone left on any older generation of the settings is
+// told to pull and run setup, never to run move-tasks: the place its settings
+// name is one the tasks were moved to, so its settings may be stale, and
+// running move-tasks there would undo the finished move.
+func TestTasksRemoteOlderGenerationsAfterAThreePlaceRouteAreToldToSetUp(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA1)
+	third := newBareRepository(t, testrepo.FormatSHA1)
+	generations := map[string]string{"origin": strings.TrimSpace(cliGitOutput(t, project.seed, "rev-parse", "HEAD"))}
+	checkouts := map[string]string{}
+	for _, step := range []struct{ name, url string }{{"tasks", project.tasks}, {"third", third}, {"origin", ""}} {
+		args := []string{"config", "unset", "tasks-remote"}
+		if step.url != "" {
+			args = []string{"config", "set", "tasks-remote", step.name, "--url", step.url}
+		}
+		if code, stdout, stderr := run(t, project.seed, args...); code != 0 {
+			t.Fatalf("%v = (%d, %q, %q)", args, code, stdout, stderr)
+		}
+		if code, stdout, stderr := run(t, project.seed, "move-tasks"); code != 0 {
+			t.Fatalf("move-tasks to %s = (%d, %q, %q)", step.name, code, stdout, stderr)
+		}
+		cliGit(t, project.seed, "add", ".workbook/config.json")
+		cliGit(t, project.seed, "commit", "--quiet", "-m", "Move the tasks to "+step.name)
+		cliGit(t, project.seed, "push", "--quiet", "origin", "main")
+		if step.url == "" {
+			break
+		}
+		generations[step.name] = strings.TrimSpace(cliGitOutput(t, project.seed, "rev-parse", "HEAD"))
+		checkout := cloneCode(t, project)
+		compactRun(t, checkout, "setup")
+		checkouts[step.name] = checkout
+	}
+
+	for _, name := range []string{"tasks", "third"} {
+		code, _, stderr := run(t, checkouts[name], "update", project.ids[0], "--title", "Edited on "+name+"'s settings", "--json")
+		requireToldToSetUp(t, "checkout on "+name+"'s settings", code, stderr, name, project.code)
+		code, _, stderr = run(t, checkouts[name], "update", project.ids[0], "--title", "Edited on "+name+"'s settings")
+		if code != 3 || !strings.Contains(stderr, "then run workbook setup") || strings.Contains(stderr, "has not been run") {
+			t.Fatalf("checkout on %s's settings = (%d, %q), want pull and run setup", name, code, stderr)
+		}
+	}
+	for _, name := range []string{"origin", "tasks", "third"} {
+		fresh := cloneCode(t, project)
+		cliGit(t, fresh, "reset", "--quiet", "--hard", generations[name])
+		code, stdout, stderr := run(t, fresh, "setup", "--json")
+		if name == "origin" {
+			// Origin's own settings name the place the tasks are now.
+			if code != 0 {
+				t.Fatalf("fresh clone on origin's first settings: setup = (%d, %q, %q)", code, stdout, stderr)
+			}
+			continue
+		}
+		requireToldToSetUp(t, "fresh clone on "+name+"'s settings", code, stderr, name, project.code)
+	}
+}
+
+// requireToldToSetUp requires the moved refusal at remote, naming origin as
+// where the tasks are and workbook setup as the command.
+func requireToldToSetUp(t *testing.T, who string, code int, stderr, remote, origin string) {
+	t.Helper()
+	if code != 3 {
+		t.Fatalf("%s = %d, want 3; stderr = %q", who, code, stderr)
+	}
+	refusal := requireTasksRemoteRefusal(t, stderr, core.CategoryNotInitialized, core.TasksRemoteMoved)
+	if refusal.Remote != remote || refusal.MovedTo == nil || refusal.MovedTo.URL != origin ||
+		refusal.Command != "workbook setup" {
+		t.Fatalf("%s refusal = %+v, want moved to origin and workbook setup", who, refusal)
+	}
+}
