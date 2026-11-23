@@ -521,6 +521,42 @@ func (r *Repository) ReadRelicParts(
 	return contents, nil
 }
 
+// GetRelic returns the relic named relicID as its ref's commit stores it,
+// after checking that commit against its parent by rules R1 to R6 (see
+// relichistory.go). A commit written straight into Git whose state or body
+// does not follow from the fold is refused as corrupt data, with a pointer to
+// `workbook validate`, which checks the whole history.
+//
+// A tip written by a newer Workbook is returned unverified; see
+// verifiedRelicTip. An ID that is not one of this project's relic IDs can name
+// no relic, so it is not found, like one whose relic was never created.
+func (r *Repository) GetRelic(ctx context.Context, config core.ProjectConfig, relicID string) (core.RelicSnapshot, error) {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return core.RelicSnapshot{}, err
+	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return core.RelicSnapshot{}, err
+	}
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		return core.RelicSnapshot{}, err
+	}
+	head := ""
+	if keys.OwnsRelic(relicID) {
+		if head, err = r.relicRefValue(ctx, relicRefPrefix+relicID); err != nil {
+			return core.RelicSnapshot{}, err
+		}
+	}
+	if head == "" {
+		return core.RelicSnapshot{}, core.Errorf(core.CategoryNotFound, "relic %q was not found", relicID)
+	}
+	snapshot, err := r.verifiedRelicTip(ctx, config, relicID, head)
+	if core.CategoryOf(err) == core.CategoryCorruptData {
+		return core.RelicSnapshot{}, core.Errorf(core.CategoryCorruptData, "%v; run \"workbook validate\" for details", err)
+	}
+	return snapshot, err
+}
+
 // WriteRelic stores one relic operation pack and the record it folds to as a
 // commit, then moves the relic's ref from parent's head to it, or creates the
 // ref when parent is nil.
