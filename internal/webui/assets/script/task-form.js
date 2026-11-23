@@ -168,6 +168,28 @@
         showStatus(status, task.status);
         const priority = select("priority", priorityDefinitions, task.priority);
         showPriority(priority, task.priority);
+        // A date field, so the browser offers its own calendar and sends the one
+        // form the server stores. Emptying it removes the due date.
+        const due = document.createElement("input"); due.type = "date"; due.id = "task-due"; due.name = "due";
+        due.value = task.due || "";
+        // What the date means to this reader today, in words beside the field:
+        // Overdue or Due soon, judged as the card judges it. A task's page has
+        // the presentation the board was drawn from; a New Task form judges
+        // nothing until the task exists.
+        const dueMark = document.createElement("p"); dueMark.className = "due-state"; dueMark.dataset.dueState = "";
+        dueMark.id = "task-due-state"; dueMark.setAttribute("aria-live", "polite");
+        due.setAttribute("aria-describedby", dueMark.id);
+        // It follows the poll, unlike the field: it is a reading of the task the
+        // board holds, not part of this reader's draft.
+        function showDueState(held, view = latestPresentation.get(held.id)) {
+          const state = isNew ? "" : dueState(held, view);
+          dueMark.dataset.dueState = state;
+          dueMark.hidden = !state;
+          text(dueMark, state ? dueWord(state) : "");
+        }
+        showDueState(task);
+        const dueControl = document.createElement("div"); dueControl.className = "due-field"; dueControl.dataset.fieldFor = "task-due";
+        dueControl.append(due, dueMark);
         // Only a create chooses a key. A task that exists was minted under one
         // and its ID carries that key forever, so there is nothing here for a
         // task's own page to offer.
@@ -286,7 +308,8 @@
         properties.append(
           propertiesHeading,
           field("Status", status),
-          field("Priority", priority)
+          field("Priority", priority),
+          field("Due", dueControl)
         );
         if (key) properties.append(field("Key", key));
         properties.append(field("Labels", labels.region, true, "field--labels"));
@@ -318,7 +341,7 @@
         // and a refusal re-bases it so a deliberate retry lands on the version
         // that exists.
         let expectedHead = isNew ? "" : task.head || "";
-        const controls = { title, description, status, priority, labels, key };
+        const controls = { title, description, status, priority, labels, key, due };
         // Published for the length of this render, so a restore that is about to
         // replace this form can save what is in it. renderRoute clears it, so
         // the reader never outlives the node it reads from.
@@ -361,6 +384,8 @@
           // rendered while the baseline had moved is exactly what turns a
           // correction nobody asked for into an edit the next save sends.
           if (!("priority" in edited)) showPriority(controls.priority, held.priority);
+          if (!("due" in edited)) due.value = held.due || "";
+          showDueState(held);
           // A copy, because the board holds this task too: the baseline this
           // form measures its next save against is the form's own.
           task = Object.assign({}, held);
@@ -840,7 +865,7 @@
             // elsewhere therefore appears here within a poll tick — and, like
             // every other panel on this page, it moves nothing the form above it
             // is holding, because no field on that form follows the poll at all.
-            follow: (held, view) => { attachments.follow(held); comments.follow(held, view); adoptDescriptionAttachments(held); assignments.follow(view); setAside.follow(view); },
+            follow: (held, view) => { attachments.follow(held); comments.follow(held, view); adoptDescriptionAttachments(held); assignments.follow(view); setAside.follow(view); showDueState(held, view); },
             firstAssignmentRetry: () => assignments.firstDraftRetry()
           };
           // Attachments and assignments stand in the sidebar, as they do on a
@@ -885,6 +910,8 @@
           priority: controls.priority.value,
           labels: controls.labels.values()
         };
+        // Only a chosen date, so a create with none sends what it always sent.
+        if (controls.due && controls.due.value) values.due = controls.due.value;
         // The key, and only when the reader chose one other than the current
         // key. An absent key is the current key — that is what the route does
         // with a create naming none, and what every client predating several
@@ -917,6 +944,8 @@
         if (controls.priority.value && controls.priority.value !== task.priority) values.priority = controls.priority.value;
         const labels = controls.labels.values();
         if (!sameLabels(labels, task.labels || [])) values.labels = labels;
+        // An emptied field is sent as the empty string, which removes the date.
+        if (controls.due && controls.due.value !== (task.due || "")) values.due = controls.due.value;
         return values;
       }
       // Whether a task the server holds carries every value a save sent, each
@@ -932,6 +961,7 @@
           if (key === "description") return (task.description || "") === values.description ||
             (task.description || "") === String(values.description).trim();
           if (key === "status" || key === "priority") return task[key] === values[key];
+          if (key === "due") return (task.due || "") === (values.due || "");
           return false;
         });
       }

@@ -126,6 +126,7 @@ workbook list
 workbook serve                 # local web board, one column per status
 workbook show <task>
 workbook update <task> --status in-progress
+workbook update <task> --due +3d   # due dates: list --overdue, --due-before, --sort due
 ```
 
 Every mutating command supports `--json` for a versioned machine-readable
@@ -221,7 +222,7 @@ pulling it. See [Keep the tasks in their own repository](docs/hosting.md#keep-th
 
 The board works on a phone. On a screen that narrow it shows one column at a
 time, under a row of the columns' names and counts, and a task's page takes
-every change by touch: status, priority, labels, assignment and comments. To
+every change by touch: status, priority, due date, labels, assignment and comments. To
 reach a hosted board from a phone, open its address in the phone's browser and
 sign in as anywhere else. Adding it to the home screen gives a shortcut with
 the board's icon and the project's name. In Chrome on Android choose "Create

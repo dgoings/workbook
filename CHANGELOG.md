@@ -264,6 +264,21 @@ and it is the first command that needs every clone of a project to upgrade
 before anyone runs it; see Compatibility across versions below.
 
 ### Added
+- **Tasks can have a due date.** `workbook create --due` and `workbook update
+  --due` take a date as `YYYY-MM-DD`, `today`, `tomorrow`, or `+Nd`, and record
+  the date it comes to, never the relative form; `update --clear-due` removes
+  it, and anything else is refused with exit 5. `workbook list --overdue`,
+  `--due-before <date>` and `--sort due` find and order dated tasks. A task due
+  before today is marked overdue, and one due today or in the next three days
+  due soon, in words beside the date in `show`, `list`, the web board's cards
+  and task page, and the desktop app's Next view; a task in a done status, or
+  deleted, is never marked. Each reader judges against their own local date,
+  and an open board judges again when that date changes.
+  Every task object in JSON carries `due` (`null` when there is none),
+  `overdue` and `dueSoon`. The web board sets the date with a date field.
+  `workbook next` ignores due dates. Concurrent edits to one task's date
+  follow the rule for any one-value field: the clone that synchronizes last
+  wins, with no conflict reported.
 - **`WORKBOOK_NOW=<RFC 3339 time>`** makes a command record that time in place
   of the system clock, so a project's past can be imported with each step dated
   when it happened. It moves operation wall times, the time inside every new
@@ -495,6 +510,11 @@ before anyone runs it; see Compatibility across versions below.
   the new text. A clone running this release names who made the edit, so it no
   longer reads as the author's own words. Upgrading every clone is what makes
   the rule hold everywhere.
+- **A task given a due date is out of an older clone's reach.** Releases
+  before this one still list, show and synchronize it, without its date, say it
+  was written by a newer Workbook, and refuse to change it (exit 9). A task that
+  never had a date is untouched, so a team that does not use due dates sees no
+  difference. Upgrade every clone before anyone sets one.
 - **Upgrade every clone to v0.7.0 before anyone compacts.** Compaction never
   runs on its own, so a team has time to do this, and every compaction run's
   text output says so. Until someone compacts, v0.6.1 and newer clones work side

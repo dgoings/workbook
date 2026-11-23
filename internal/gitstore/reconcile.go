@@ -480,6 +480,7 @@ func sameTaskState(parent, next core.TaskData) bool {
 		parent.Description != next.Description ||
 		parent.Status != next.Status ||
 		parent.Priority != next.Priority ||
+		parent.Due != next.Due ||
 		parent.Rank != next.Rank ||
 		parent.Deleted != next.Deleted ||
 		!parent.CreatedAt.Equal(next.CreatedAt) {

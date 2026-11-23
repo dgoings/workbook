@@ -49,7 +49,13 @@ type Service struct {
 	History    TaskHistorySource
 	IDs        IDSource
 	Now        func() time.Time
-	Actor      string
+	// ReadNow is the reader's clock, which due states are judged against. It
+	// is separate from Now because Now is the time a change is recorded at,
+	// which a migration replaying a project's past moves (WORKBOOK_NOW), and
+	// whether a task is overdue is a reading of today, not of the past being
+	// recorded. Nil means the system clock.
+	ReadNow func() time.Time
+	Actor   string
 }
 
 // vocabulary returns the configured vocabulary, or the statuses a project with
@@ -118,6 +124,10 @@ type CreateInput struct {
 	Status      Status
 	Priority    Priority
 	Labels      []string
+	// Due is the due date in DueDateLayout, or empty for none. It is always an
+	// absolute date by the time it gets here: relative input such as `+3d` is
+	// the caller's to resolve, with ResolveDueDate, against its own today.
+	Due string
 	// Key mints the task under one of this project's active keys instead of
 	// the current one. Empty means the current key, which is what every caller
 	// that does not offer the choice asks for.
@@ -130,6 +140,9 @@ type UpdateInput struct {
 	Status      *Status
 	Priority    *Priority
 	Labels      *[]string
+	// Due sets the due date to an absolute date in DueDateLayout, or clears it
+	// when it points at the empty string.
+	Due *string
 	// Comments and Attachments are the intents that ride along with an update,
 	// in one pack with whatever else it changes.
 	//
@@ -205,7 +218,26 @@ type ListFilter struct {
 	// whitespace-separated term, case-insensitively, or whose ID begins with a
 	// term shaped like the start of one; see MatchesFind.
 	Find string
+	// Overdue keeps only the tasks that are overdue for this reader today.
+	Overdue bool
+	// DueBefore keeps only the tasks due strictly before this date, in
+	// DueDateLayout. A task with no due date is never kept.
+	DueBefore string
+	// Sort orders the list. The zero value is the board's order: status,
+	// priority, rank, then task ID.
+	Sort ListSort
 }
+
+// ListSort names an order List can return tasks in.
+type ListSort string
+
+const (
+	// ListSortBoard is the board's order, and the default.
+	ListSortBoard ListSort = ""
+	// ListSortDue is earliest due date first, with tasks that have no due date
+	// last, and the board's order between tasks due the same day.
+	ListSortDue ListSort = "due"
+)
 
 func (s Service) CreateMutation(ctx context.Context, input CreateInput) (MutationResult, error) {
 	s = s.acting(ctx)
@@ -253,6 +285,7 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 		Dependencies: []string{},
 		CreatedAt:    now,
 		UpdatedAt:    now,
+		Due:          input.Due,
 	})
 	if err != nil {
 		return MutationResult{}, err
@@ -418,6 +451,16 @@ const unfetchedFilterClause = "; fetch if a teammate added it"
 // value is never one being refused, since resolving it is exactly how it is
 // found to be live.
 func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
+	if filter.DueBefore != "" {
+		if err := ValidateDueDate(filter.DueBefore); err != nil {
+			return nil, err
+		}
+	}
+	switch filter.Sort {
+	case ListSortBoard, ListSortDue:
+	default:
+		return nil, Errorf(CategoryValidation, "unknown list order %q; the orders are: due", filter.Sort)
+	}
 	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
 		return nil, err
@@ -493,9 +536,20 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 		if filter.Find != "" && !MatchesFind(task, filter.Find, findKeys) {
 			continue
 		}
+		if filter.Overdue && !task.Overdue {
+			continue
+		}
+		if filter.DueBefore != "" && !DueBefore(task.Due, filter.DueBefore) {
+			continue
+		}
 		tasks = append(tasks, task)
 	}
 	sort.Slice(tasks, func(i, j int) bool {
+		if filter.Sort == ListSortDue {
+			if compare := CompareDue(tasks[i].Due, tasks[j].Due); compare != 0 {
+				return compare < 0
+			}
+		}
 		return compareTasks(vocabulary, s.Priorities, tasks[i], tasks[j]) < 0
 	})
 	return tasks, nil
@@ -753,6 +807,9 @@ func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input Up
 	}
 	if input.Labels != nil {
 		next.Labels = append([]string(nil), (*input.Labels)...)
+	}
+	if input.Due != nil {
+		next.Due = *input.Due
 	}
 	next, err = normalizeCanonicalTask(next)
 	if err != nil {
@@ -1250,6 +1307,10 @@ func (s Service) Project(snapshot Snapshot) Task {
 		Head:              snapshot.Head,
 		NewerWriter:       snapshot.State.RequiresNewerReader(),
 	}
+	if task.Due != "" {
+		due := task.Due
+		task.ReportedDue = &due
+	}
 	if resolved, live := s.vocabulary().Resolve(task.Status); live && resolved != task.Status {
 		task.StoredStatus = task.Status
 		task.Status = resolved
@@ -1258,7 +1319,24 @@ func (s Service) Project(snapshot Snapshot) Task {
 		task.StoredPriority = task.Priority
 		task.Priority = resolved
 	}
+	// Judged after the status is resolved, so a task whose stored token a
+	// rename forwards to a done status is finished here as it is on the board.
+	switch DueStateOf(task.Due, task.Deleted || s.vocabulary().IsDone(task.Status), s.Today()) {
+	case DueStateOverdue:
+		task.Overdue = true
+	case DueStateSoon:
+		task.DueSoon = true
+	}
 	return task
+}
+
+// Today is the reader's local date, which every overdue judgment this service
+// makes is measured against: ReadNow's, or the system clock's.
+func (s Service) Today() string {
+	if s.ReadNow != nil {
+		return LocalDate(s.ReadNow())
+	}
+	return LocalDate(time.Now())
 }
 
 // requireExpectedHead reports a stale write when the caller named a tip that is
@@ -1437,6 +1515,13 @@ func updateCommitSubject(taskID string, before, after TaskData, thread []string)
 	if before.Priority != after.Priority {
 		changes = append(changes, "priority "+string(before.Priority)+" → "+string(after.Priority))
 	}
+	if before.Due != after.Due {
+		if after.Due == "" {
+			changes = append(changes, "due cleared")
+		} else {
+			changes = append(changes, "due "+after.Due)
+		}
+	}
 	if removed := setDifference(before.Labels, after.Labels); len(removed) > 0 {
 		changes = append(changes, "labels -"+strings.Join(formatCommitLabels(removed), ","))
 	}
@@ -1502,6 +1587,7 @@ func changedOperations(current, next TaskData) []Operation {
 		{name: "priority", from: string(current.Priority), to: string(next.Priority)},
 		{name: "status", from: string(current.Status), to: string(next.Status)},
 		{name: "title", from: current.Title, to: next.Title},
+		{name: "due", from: current.Due, to: next.Due},
 	}
 	operations := make([]Operation, 0, len(fields)+len(current.Labels)+len(next.Labels))
 	for _, field := range fields {

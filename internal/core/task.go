@@ -213,6 +213,13 @@ type TaskData struct {
 	// attached to it encodes exactly as it did before either member existed.
 	Comments    []Comment    `json:"comments,omitempty"`
 	Attachments []Attachment `json:"attachments,omitempty"`
+	// Due is the task's due date in DueDateLayout, or empty for none. It is
+	// last and omitted when empty for the reason Comments is: a task that never
+	// gets a due date encodes byte for byte as it did before the member
+	// existed, so its documents stay readable by every older build. Output
+	// that describes a task, rather than stores it, reports an absent date as
+	// null; see Task.MarshalJSON.
+	Due string `json:"due,omitempty"`
 }
 
 // Task is a projected task: the stored document plus the identifiers a caller
@@ -257,6 +264,39 @@ type Task struct {
 	// per task. Omitted when false, so nothing about the ordinary envelope
 	// changes.
 	NewerWriter bool `json:"newerWriter,omitempty"`
+	// Overdue and DueSoon are what the due date means to this reader today:
+	// see DueStateOf. They are derived when the task is projected, from the
+	// reader's local date and the project's done tag, and are never stored.
+	// Both are always present, false for a task with no due date, so a caller
+	// filtering on them never has to tell "false" from "absent".
+	Overdue bool `json:"overdue"`
+	DueSoon bool `json:"dueSoon"`
+	// ReportedDue is the due date as every task object in JSON output reports
+	// it: the date, or null for none. It is set when the task is projected.
+	//
+	// It exists because the stored document omits an empty due date, for
+	// compatibility, and Task embeds that document: without it a task with no
+	// due date would leave the member out of every envelope instead of saying
+	// null. This field is shallower than TaskData.Due, which is how both Go and
+	// encoding/json let it win, so `due` in a task object — and in a
+	// TaskDetail, which embeds Task — is always this one. Code reads TaskData.Due.
+	//
+	// The same rule applies on the way back in: decoding a task object fills
+	// this field and leaves TaskData.Due empty. Nothing in Workbook decodes a
+	// task from its JSON output; a Go caller that does reads the date here.
+	ReportedDue *string `json:"due"`
+}
+
+// DueState is the task's due state as projected.
+func (task Task) DueState() DueState {
+	switch {
+	case task.Overdue:
+		return DueStateOverdue
+	case task.DueSoon:
+		return DueStateSoon
+	default:
+		return DueStateNone
+	}
 }
 
 // NormalizeTask puts a stored task into its canonical form, checking every
@@ -294,6 +334,11 @@ func NormalizeTask(task TaskData) (TaskData, error) {
 	}
 	if _, err := parseRank(task.Rank); err != nil {
 		return TaskData{}, err
+	}
+	if task.Due != "" {
+		if err := ValidateDueDate(task.Due); err != nil {
+			return TaskData{}, err
+		}
 	}
 
 	labels, err := normalizeLabels(task.Labels)

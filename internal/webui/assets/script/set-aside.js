@@ -14,6 +14,7 @@
         description: "Description",
         status: "Status",
         priority: "Priority",
+        due: "Due",
         rank: "Position",
         labels: "Label",
         dependencies: "Depends on"
@@ -37,7 +38,11 @@
         const prose = (label, value) => ({ label, value: value || "", raw: value || "", block: true });
         switch (operation.type) {
           case "field.set":
-            return operation.field === "description" ? prose(field, operation.value) : line(field, operation.value);
+            if (operation.field === "description") return prose(field, operation.value);
+            // A cleared due date is a value too, and says so rather than
+            // drawing an empty row.
+            if (operation.field === "due" && !operation.value) return line("Due date removed", "");
+            return line(field, operation.value);
           case "set.add":
             return line(field + " added", operation.value);
           case "set.remove":

@@ -42,7 +42,8 @@ describe('loadNext', () => {
       id: 'p1', key: 'ONE', name: 'One', status: 'running', eligible: 4, error: null,
       tasks: [{
         id: '/one-1', title: 'Task /one-1', priority: 'medium', status: 'ready',
-        labels: ['a'], assignees: ['me@example.com'], updatedAt: '2026-09-26T10:00:00Z'
+        labels: ['a'], assignees: ['me@example.com'], updatedAt: '2026-09-26T10:00:00Z',
+        due: '', dueState: ''
       }]
     })
   })
@@ -62,8 +63,24 @@ describe('loadNext', () => {
     const run = async () => ({ tasks: [{ id: 'X-1', title: 'Bare' }], eligible: 1 })
     const result = await nextview.loadNext({ projects: projects.slice(0, 1), limit: 1, run })
     assert.deepEqual(result.projects[0].tasks[0], {
-      id: 'X-1', title: 'Bare', priority: '', status: '', labels: [], assignees: [], updatedAt: ''
+      id: 'X-1', title: 'Bare', priority: '', status: '', labels: [], assignees: [], updatedAt: '', due: '', dueState: ''
     })
+  })
+
+  test('carries the due date and the state the CLI judged it in', async () => {
+    const run = async () => ({
+      tasks: [
+        task('A', { due: '2026-11-01', overdue: true, dueSoon: false }),
+        task('B', { due: '2026-11-24', overdue: false, dueSoon: true }),
+        task('C', { due: '2027-01-01', overdue: false, dueSoon: false }),
+        task('D', { due: null, overdue: false, dueSoon: false })
+      ],
+      eligible: 4
+    })
+    const result = await nextview.loadNext({ projects: projects.slice(0, 1), limit: 4, run })
+    assert.deepEqual(result.projects[0].tasks.map(({ due, dueState }) => [due, dueState]), [
+      ['2026-11-01', 'overdue'], ['2026-11-24', 'due-soon'], ['2027-01-01', ''], ['', '']
+    ])
   })
 
   test('carries each project\'s server status and calls a missing one stopped', async () => {

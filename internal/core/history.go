@@ -416,6 +416,8 @@ func fieldValue(task TaskData, field string) string {
 		return string(task.Priority)
 	case "rank":
 		return task.Rank
+	case "due":
+		return task.Due
 	default:
 		return ""
 	}
@@ -436,6 +438,7 @@ func CompareTasks(from, to TaskData) []FieldChange {
 		{"title", from.Title, to.Title},
 		{"status", string(from.Status), string(to.Status)},
 		{"priority", string(from.Priority), string(to.Priority)},
+		{"due", from.Due, to.Due},
 		{"description", from.Description, to.Description},
 		{"rank", from.Rank, to.Rank},
 	} {
@@ -481,9 +484,9 @@ func assignmentValues(assignments []Assignment) []string {
 // fieldDisplayOrder keeps a pack's fields in one reading order whatever order
 // the operations happen to be recorded in.
 var fieldDisplayOrder = map[string]int{
-	"task": 0, "title": 1, "status": 2, "priority": 3,
-	"description": 4, "rank": 5, "labels": 6, "dependencies": 7,
-	"assignments": 8,
+	"task": 0, "title": 1, "status": 2, "priority": 3, "due": 4,
+	"description": 5, "rank": 6, "labels": 7, "dependencies": 8,
+	"assignments": 9,
 }
 
 func sortFieldChanges(fields []FieldChange) {
@@ -511,6 +514,8 @@ func FieldLabel(field string) string {
 		return "Status"
 	case "priority":
 		return "Priority"
+	case "due":
+		return "Due"
 	case "description":
 		return "Description"
 	case "rank":

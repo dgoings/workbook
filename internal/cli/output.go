@@ -698,6 +698,13 @@ func writeComparison(output io.Writer, comparison core.Comparison) {
 func writeFieldChanges(output io.Writer, fields []core.FieldChange) {
 	for _, change := range fields {
 		label := core.FieldLabel(change.Field)
+		// A due date set where there was none, or cleared, has an empty side
+		// that is a real value rather than one the log did not recover, so it
+		// is named instead of falling into the edited form below.
+		if change.Kind == core.ChangeSet && change.Field == "due" {
+			fmt.Fprintf(output, "\t%s:\t%s → %s\n", label, dueOrNone(change.From), dueOrNone(change.To))
+			continue
+		}
 		switch change.Kind {
 		case core.ChangeReordered:
 			fmt.Fprintf(output, "\t%s:\tReordered\n", label)
@@ -731,6 +738,14 @@ func writeFieldChanges(output io.Writer, fields []core.FieldChange) {
 			fmt.Fprintf(output, "\t%s:\t%s → %s\n", label, singleLine(change.From), singleLine(change.To))
 		}
 	}
+}
+
+// dueOrNone is one side of a due-date change: the date, or "none".
+func dueOrNone(due string) string {
+	if due == "" {
+		return "none"
+	}
+	return due
 }
 
 // renderWordDiff marks removed and added runs the way `git diff --word-diff`
@@ -774,6 +789,7 @@ func writeShowThread(output io.Writer, task core.Task, comments []core.ThreadCom
 	writeDescription(output, task.Description)
 	fmt.Fprintf(output, "Status:\t%s\n", task.Status)
 	fmt.Fprintf(output, "Priority:\t%s\n", task.Priority)
+	fmt.Fprintf(output, "Due:\t%s\n", terminalui.DueCell(task))
 	fmt.Fprintf(output, "Labels:\t%s\n", singleLine(strings.Join(task.Labels, ",")))
 	writeAssignments(output, task.Assignments, time.Now())
 	fmt.Fprintf(output, "Rank:\t%s\n", task.Rank)

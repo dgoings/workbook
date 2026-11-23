@@ -231,15 +231,15 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"status":   {},
 		"priority": {},
 		"key":      {},
-		"create":   {"description": stringFlag, "status": stringFlag, "priority": stringFlag, "key": stringFlag, "label": stringFlag, "no-sync": boolFlag, "json": boolFlag},
-		"list":     {"status": stringFlag, "priority": stringFlag, "key": stringFlag, "label": stringFlag, "find": stringFlag, "all": boolFlag, "json": boolFlag},
+		"create":   {"description": stringFlag, "status": stringFlag, "priority": stringFlag, "due": stringFlag, "key": stringFlag, "label": stringFlag, "no-sync": boolFlag, "json": boolFlag},
+		"list":     {"status": stringFlag, "priority": stringFlag, "key": stringFlag, "label": stringFlag, "find": stringFlag, "all": boolFlag, "overdue": boolFlag, "due-before": stringFlag, "sort": stringFlag, "json": boolFlag},
 		"show": {
 			"history": boolFlag, "limit": stringFlag, "all": boolFlag, "compare": pairFlag,
 			"get-attachment": stringFlag, "out": stringFlag, "json": boolFlag,
 		},
 		"update": {
 			"title": stringFlag, "description": stringFlag, "status": stringFlag, "priority": stringFlag,
-			"label": stringFlag, "clear-labels": boolFlag,
+			"label": stringFlag, "clear-labels": boolFlag, "due": stringFlag, "clear-due": boolFlag,
 			"comment": stringFlag, "edit-comment": stringFlag, "remove-comment": stringFlag,
 			"attach-file": stringFlag, "attach-url": stringFlag, "attach-label": stringFlag,
 			"remove-attachment": stringFlag,
