@@ -221,6 +221,13 @@ func (set KeySet) Owns(taskID string) bool {
 	return ok && set.Contains(key)
 }
 
+// OwnsRelic reports a relic ID that belongs to this project: a relic-ID shape
+// whose key this project has minted under, active or retired.
+func (set KeySet) OwnsRelic(relicID string) bool {
+	key, _, ok := ParseRelicID(relicID)
+	return ok && set.Contains(key)
+}
+
 // RequireOwned is Owns with a message, for a name somebody typed or a ref
 // Workbook found.
 func (set KeySet) RequireOwned(taskID string) error {
