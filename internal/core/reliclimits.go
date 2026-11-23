@@ -107,7 +107,12 @@ func ValidateRelicName(kind, name string) error {
 
 // CanonicalRelicValue decodes exactly one JSON value and re-encodes it in the
 // stored form: numbers keep their written text, object members are sorted, and
-// a repeated member keeps its last value.
+// a repeated member keeps its last value. The encoding is exactly json.Marshal's,
+// including its HTML escaping (a "<", ">" or "&" in a string is written as
+// \u003c, \u003e or \u0026). Stored values are embedded as json.RawMessage in
+// documents that core.EncodeDocument writes with json.Marshal, which escapes a
+// RawMessage again, so a form that left them bare would differ from the bytes
+// read back from storage.
 func CanonicalRelicValue(raw []byte) (json.RawMessage, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
@@ -118,13 +123,11 @@ func CanonicalRelicValue(raw []byte) (json.RawMessage, error) {
 	if _, err := decoder.Token(); err != io.EOF {
 		return nil, Errorf(CategoryValidation, "the value must be exactly one JSON value")
 	}
-	var encoded bytes.Buffer
-	encoder := json.NewEncoder(&encoded)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
+	encoded, err := json.Marshal(value)
+	if err != nil {
 		return nil, Wrap(CategoryValidation, "the value cannot be encoded", err)
 	}
-	return json.RawMessage(bytes.TrimSuffix(encoded.Bytes(), []byte("\n"))), nil
+	return json.RawMessage(encoded), nil
 }
 
 // BodyFormatFromFileName derives a body format label from a file name's ending:

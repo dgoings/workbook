@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -85,11 +86,33 @@ func TestCanonicalRelicValue(t *testing.T) {
 		`1.0`:                     `1.0`,
 		`1e2`:                     `1e2`,
 		`{"a":1,"a":2}`:           `{"a":2}`,
-		`"<"`:                     `"<"`,
+		`"<"`:                     `"\u003c"`,
+		`"a&b>c"`:                 `"a\u0026b\u003ec"`,
+		`"\u003c"`:                `"\u003c"`,
 	} {
 		got, err := CanonicalRelicValue([]byte(in))
 		if err != nil || string(got) != want {
 			t.Errorf("CanonicalRelicValue(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{`"<"`, `{"k":"a&b"}`, `[1.0,"x>y"]`} {
+		canonical, err := CanonicalRelicValue([]byte(in))
+		if err != nil {
+			t.Fatalf("CanonicalRelicValue(%q): %v", in, err)
+		}
+		type holder struct {
+			Value json.RawMessage `json:"value"`
+		}
+		encoded, err := json.Marshal(holder{Value: canonical})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back holder
+		if err := json.Unmarshal(encoded, &back); err != nil {
+			t.Fatal(err)
+		}
+		if string(back.Value) != string(canonical) {
+			t.Errorf("value %q does not survive json.Marshal: read back %q, canonical %q", in, back.Value, canonical)
 		}
 	}
 	for _, bad := range []string{"", "{", "1 2"} {
