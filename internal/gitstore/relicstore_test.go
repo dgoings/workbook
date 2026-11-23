@@ -949,6 +949,104 @@ func TestWriteRelicNeverStoresTextFromAStaleBodyEdit(t *testing.T) {
 	}
 }
 
+// A second part.add for a part the relic already has carries the ID that is
+// the version of that part's first body, and the fold ignores it. The writer
+// must not take the version being an operation of the pack for the pack having
+// saved the body.
+func TestWriteRelicNeverStoresTextFromARepeatedPartAdd(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	current := []byte("the first text\n")
+	part := relicTestPartNumbered(1).withField("heading", "Goals").withBody("md", current)
+	root := writeRelicRoot(t, repo, config, part)
+	relicID := root.Operation.RelicID
+
+	// The same size as the current text, so only the rule about which change
+	// saved the body stands between it and the tree.
+	replacement := bytes.ToUpper(current)
+	pack := relicChildPack(root, relicPartAdd(part.id, "1/1", replacement))
+	record := foldRelic(t, &root, pack)
+	before, _ := root.Record.State.Relic.Part(part.id)
+	if after, _ := record.State.Relic.Part(part.id); before.Body.Version != part.id || *after.Body != *before.Body {
+		t.Fatalf("the repeated part.add folded the body from %+v to %+v; the test needs it to change nothing",
+			*before.Body, *after.Body)
+	}
+
+	written, err := repo.WriteRelic(ctx, config, &root, pack, record,
+		map[string]core.RelicPartContent{part.id: {Body: replacement, HasBody: true}}, "update relic")
+	if err != nil {
+		t.Fatalf("WriteRelic() error = %v", err)
+	}
+	if before, after := gitOutput(t, repo, "rev-parse", root.Head+":parts/"+part.id+"/body"),
+		gitOutput(t, repo, "rev-parse", written.Head+":parts/"+part.id+"/body"); before != after {
+		t.Fatalf("the repeated part.add replaced body %s with %s", before, after)
+	}
+	if before, after := gitOutput(t, repo, "rev-parse", root.Head+":parts"),
+		gitOutput(t, repo, "rev-parse", written.Head+":parts"); before != after {
+		t.Fatalf("the repeated part.add moved the parts tree from %s to %s", before, after)
+	}
+	parts, err := repo.ReadRelicParts(ctx, config, written, []string{part.id}, true)
+	if err != nil {
+		t.Fatalf("ReadRelicParts() error = %v", err)
+	}
+	if got := parts[part.id]; !got.HasBody || !bytes.Equal(got.Body, current) {
+		t.Fatalf("body after the repeated part.add = %q, want %q", got.Body, current)
+	}
+	if operations := written.Operation.Operations; len(operations) != 1 ||
+		operations[0].Type != core.RelicOperationPartAdd || operations[0].ID != part.id {
+		t.Fatalf("the written pack holds %+v, want the repeated part.add", operations)
+	}
+
+	// What the writer stored is a commit every rule accepts.
+	assertRelicHistoryValid(t, repo, config, relicID, written.Head, 2)
+	got, err := repo.GetRelic(ctx, config, relicID)
+	if err != nil {
+		t.Fatalf("GetRelic() error = %v", err)
+	}
+	assertSameRelicSnapshot(t, got, written)
+}
+
+// A part.body.set that carries the ID of the version it starts from folds to
+// that same version with the size it names. It saves no body, so the part
+// would keep its text under a state recording another size. That is a commit
+// no read accepts, so the writer refuses to store it.
+func TestWriteRelicRefusesABodySizeNoSavedBodyBacks(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	part := relicTestPartNumbered(1).withBody("md", []byte("the first text\n"))
+	root := writeRelicRoot(t, repo, config, part)
+	relicID := root.Operation.RelicID
+	current := []byte("the second text, saved from the first\n")
+	saved := relicTestID(700001)
+	edited := writeRelicChild(t, repo, config, root,
+		map[string]core.RelicPartContent{part.id: {Body: current, HasBody: true}},
+		relicBodySet(700001, part.id, part.id, current))
+
+	longer := append(bytes.ToUpper(current), "and more\n"...)
+	pack := relicChildPack(edited, relicBodySet(700001, part.id, saved, longer))
+	record := foldRelic(t, &edited, pack)
+	if got, _ := record.State.Relic.Part(part.id); got.Body.Version != saved || got.Body.Bytes != int64(len(longer)) {
+		t.Fatalf("the repeated edit folded to %+v; the test needs version %s recording %d bytes",
+			*got.Body, saved, len(longer))
+	}
+
+	_, err := repo.WriteRelic(ctx, config, &edited, pack, record,
+		map[string]core.RelicPartContent{part.id: {Body: longer, HasBody: true}}, "update relic")
+	assertRelicCategory(t, err, core.CategoryValidation, part.id, fmt.Sprintf("%d bytes", len(longer)))
+	if bytes.Contains([]byte(err.Error()), bytes.ToUpper(current[:10])) {
+		t.Fatalf("the refusal %q carries body text", err)
+	}
+
+	// Nothing landed, and the relic still reads as it did.
+	got, err := repo.GetRelic(ctx, config, relicID)
+	if err != nil {
+		t.Fatalf("GetRelic() error = %v", err)
+	}
+	assertSameRelicSnapshot(t, got, edited)
+}
+
 func TestWriteRelicRefusesOversizedContent(t *testing.T) {
 	t.Parallel()
 	repo, config := relicRepository(t, testrepo.FormatSHA1)

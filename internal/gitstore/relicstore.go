@@ -563,11 +563,14 @@ func (r *Repository) GetRelic(ctx context.Context, config core.ProjectConfig, re
 //
 // content carries the fields and body of parts the pack names. A nil Fields
 // leaves an existing part's fields.json as it is and gives a new part an empty
-// one. A body is stored only when the record's body version for the part is
-// the ID of an operation in the pack; otherwise the part keeps the body it had,
-// whatever content holds, so text from an edit the fold ignored is never
-// stored. A part the pack does not name keeps its subtree object, and content
-// given for one is refused rather than dropped.
+// one. A body is stored only when this change saved it, as
+// core.RelicBodySavedBy judges: the record's body version for the part is the
+// ID of an operation in the pack, and the part is new or that version is not
+// the one parent records. Otherwise the part keeps the body it had, whatever
+// content holds, so text from an edit the fold ignored, or beside a repeated
+// part.add or part.body.set, is never stored. A part the pack does not name
+// keeps its subtree object, and content given for one is refused rather than
+// dropped.
 //
 // Nothing is visible until the ref moves, and the ref moves only if it still
 // points at parent's head: a write interrupted before that leaves unreferenced
@@ -731,6 +734,10 @@ func planRelicWrite(
 		plan.add(encoded)
 	}
 
+	var parentRecord *core.RelicRecord
+	if parent != nil {
+		parentRecord = &parent.Record
+	}
 	named := core.RelicPartsNamedBy(pack)
 	isNamed := make(map[string]struct{}, len(named))
 	for _, partID := range named {
@@ -777,7 +784,7 @@ func planRelicWrite(
 			}
 			write.fields = plan.add(encoded)
 		}
-		if core.RelicBodySavedBy(pack, record, partID) {
+		if core.RelicBodySavedBy(parentRecord, pack, record, partID) {
 			if !partContent.HasBody {
 				return relicWritePlan{}, core.Errorf(core.CategoryValidation,
 					"this change saves a body for part %s, but no body was given for it", partID)
@@ -791,6 +798,21 @@ func planRelicWrite(
 					"the body of part %s is %d bytes, but the change records %d bytes", partID, size, part.Body.Bytes)
 			}
 			write.body = plan.add(partContent.Body)
+		} else if part.Body != nil {
+			// The part keeps the body the parent stores, which has to be the
+			// size the state records. The fold leaves the size alone unless it
+			// gives the body a new version, except for a part.body.set that
+			// carries the ID of the version it starts from.
+			kept := int64(-1)
+			if parentRecord != nil {
+				if before, existed := parentRecord.State.Relic.Part(partID); existed && before.Body != nil {
+					kept = before.Body.Bytes
+				}
+			}
+			if kept != part.Body.Bytes {
+				return relicWritePlan{}, core.Errorf(core.CategoryValidation,
+					"this change records a body of %d bytes for part %s without saving one", part.Body.Bytes, partID)
+			}
 		}
 		plan.parts = append(plan.parts, write)
 	}

@@ -26,14 +26,19 @@ import (
 //	R4  A fields.json is at most 16384 bytes. A body is at most 1048576 bytes
 //	    and is the size the state records.
 //	R5  A part P does not name has the subtree it had in the parent.
-//	R6  A part's body differs from the parent's only when the state's body
-//	    version for it is the ID of an operation in P.
+//	R6  A part's body differs from the parent's only when this commit saved
+//	    it: the state's body version for it is the ID of an operation in P,
+//	    and the part is new in this commit or that version is not the one in
+//	    the parent's state. A repeated part.add or part.body.set, which leaves
+//	    the version as it was, therefore cannot carry new text.
 //	R7  A part's fields.json is its parent's with P's field operations for it
 //	    applied in order. For a part P adds, it is a canonical fields document
 //	    that agrees with any field operations P carries for it.
 //
-// R1 to R6 are judged from object IDs and sizes. R7 reads the fields.json of
-// the parts P names, and only `workbook validate` pays for that.
+// R1 to R6 are judged from object IDs and sizes. So is one case of R7: a part
+// that P names without setting or clearing a field, and that the parent has,
+// keeps its fields.json object. The rest of R7 reads the fields.json of the
+// parts P names, and only `workbook validate` pays for that.
 //
 // The rules are this build's. A commit whose pack or state declares a newer
 // generation is not judged by them: it is neither valid nor corrupt here, and
@@ -319,10 +324,11 @@ func relicListedBlobSize(relicID, partID, what, listed string) (int64, error) {
 	return size, nil
 }
 
-// VerifyRelicTransition checks a commit against its parent, nil for a root:
-// rules R1, R5 and R6, which need only what ReadRelicCommit returned for the
-// two, and R7 when deep is true, which reads the fields.json of the parts the
-// commit's pack names through one Git batch process.
+// VerifyRelicTransition checks a commit against its parent, nil for a root.
+// Rules R1, R5 and R6, and the case of R7 that object IDs settle, need only
+// what ReadRelicCommit returned for the two, and are always checked. The rest
+// of R7 is checked when deep is true, by reading the fields.json of the parts
+// the commit's pack names through one Git batch process.
 //
 // Either commit declaring a newer generation is CategoryNewerWriter: this
 // build cannot say whether one follows from the other.
@@ -357,6 +363,7 @@ func (r *Repository) VerifyRelicTransition(ctx context.Context, parent *RelicCom
 	for _, partID := range core.RelicPartsNamedBy(commit.Operation) {
 		named[partID] = struct{}{}
 	}
+	fieldsEdited := relicPartsWithFieldOperations(commit.Operation)
 	for _, part := range commit.Record.State.Relic.Parts {
 		objects := commit.Parts[part.ID]
 		before, existed := parentParts[part.ID]
@@ -368,14 +375,33 @@ func (r *Repository) VerifyRelicTransition(ctx context.Context, parent *RelicCom
 		}
 		// before.Body is empty for a part the commit adds, which then has a
 		// body only if the commit saved one.
-		if objects.Body != before.Body && !core.RelicBodySavedBy(commit.Operation, commit.Record, part.ID) {
+		if objects.Body != before.Body && !core.RelicBodySavedBy(parentRecord, commit.Operation, commit.Record, part.ID) {
 			return corruptRelic(relicID, "the body of part %s changed, but no operation in the commit saved it", part.ID)
+		}
+		// The case of rule R7 that takes no read. A part the commit adds is
+		// not held to it: its fields arrive in the tree.
+		if _, isEdited := fieldsEdited[part.ID]; existed && !isEdited && objects.Fields != before.Fields {
+			return corruptRelic(relicID,
+				"the fields of part %s changed, but no operation in the commit sets or clears one", part.ID)
 		}
 	}
 	if !deep {
 		return nil
 	}
-	return r.verifyRelicFields(ctx, parentParts, commit)
+	return r.verifyRelicFields(ctx, parentParts, commit, fieldsEdited)
+}
+
+// relicPartsWithFieldOperations returns the parts a pack sets or clears a
+// field of.
+func relicPartsWithFieldOperations(pack core.RelicOperationPack) map[string]struct{} {
+	edited := make(map[string]struct{})
+	for _, operation := range pack.Operations {
+		switch operation.Type {
+		case core.RelicOperationPartFieldSet, core.RelicOperationPartFieldClear:
+			edited[operation.Part] = struct{}{}
+		}
+	}
+	return edited
 }
 
 // relicFieldsCheck is one fields.json rule R7 has to read to judge.
@@ -386,20 +412,18 @@ type relicFieldsCheck struct {
 	after  string
 }
 
-// verifyRelicFields checks rule R7 for the parts a commit's pack names. A part
-// the pack names without a field operation must keep its fields.json object,
-// which takes no read. The others are read two blobs at a time, so the check
-// holds one part's fields in memory however many parts the pack names.
-func (r *Repository) verifyRelicFields(ctx context.Context, parentParts map[string]RelicPartObjects, commit RelicCommit) error {
+// verifyRelicFields checks the part of rule R7 that has to read fields.json:
+// the parts a commit's pack adds, and the ones it sets or clears a field of.
+// VerifyRelicTransition has already held every other part the pack names to
+// the fields.json object it had. The blobs are read two at a time, so the
+// check holds one part's fields in memory however many parts the pack names.
+func (r *Repository) verifyRelicFields(
+	ctx context.Context,
+	parentParts map[string]RelicPartObjects,
+	commit RelicCommit,
+	fieldsEdited map[string]struct{},
+) error {
 	relicID := commit.Record.State.RelicID
-	edited := make(map[string]struct{})
-	for _, operation := range commit.Operation.Operations {
-		switch operation.Type {
-		case core.RelicOperationPartFieldSet, core.RelicOperationPartFieldClear:
-			edited[operation.Part] = struct{}{}
-		}
-	}
-
 	var checks []relicFieldsCheck
 	var input bytes.Buffer
 	for _, partID := range core.RelicPartsNamedBy(commit.Operation) {
@@ -409,11 +433,7 @@ func (r *Repository) verifyRelicFields(ctx context.Context, parentParts map[stri
 			continue
 		}
 		before, existed := parentParts[partID]
-		if _, isEdited := edited[partID]; existed && !isEdited {
-			if objects.Fields != before.Fields {
-				return corruptRelic(relicID,
-					"the fields of part %s changed, but no operation in the commit sets or clears one", partID)
-			}
+		if _, isEdited := fieldsEdited[partID]; existed && !isEdited {
 			continue
 		}
 		check := relicFieldsCheck{partID: partID, after: objects.Fields}
@@ -514,8 +534,10 @@ func relicFieldsAre(stored []byte, fields map[string]json.RawMessage, partID str
 }
 
 // verifiedRelicTip reads the commit a relic's ref points at and checks it
-// against its parent by rules R1 to R6, which is what a single-relic read
-// promises: a state or a body that does not follow from the fold is refused.
+// against its parent by rules R1 to R6 and the case of R7 that object IDs
+// settle, which is what a single-relic read promises: a state or a body that
+// does not follow from the fold is refused, and so are fields that changed
+// with no operation to change them.
 //
 // A tip that declares a newer generation is returned unverified, as far as it
 // can be read. Whoever uses it sees the marker and refuses to change it.

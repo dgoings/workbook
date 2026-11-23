@@ -818,6 +818,87 @@ func TestRuleR6BodyReplacedWithoutABodyEdit(t *testing.T) {
 	assertGetRelicRefused(t, err)
 }
 
+// A part's first body has the part's own ID as its version, and a part.add
+// operation's ID is the part's ID. So a second part.add for a part the relic
+// already has carries the ID of that body's version, and the fold ignores it.
+// It saved nothing, and the body must stay the one the parent stores.
+func TestRuleR6ARepeatedPartAddCannotReplaceABody(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	tip, a, _ := relicRuleHistory(t, repo, config)
+	stored := forgedPartsOf(t, repo, tip.Head)
+	// The same size as the body it replaces, so no size gives it away.
+	replaced := stored[a.id]
+	replaced.body = bytes.ToUpper(replaced.body)
+	if bytes.Equal(replaced.body, stored[a.id].body) || len(replaced.body) != len(stored[a.id].body) {
+		t.Fatal("the replacement body must differ from the stored one and be the same size")
+	}
+
+	pack := relicChildPack(tip, relicPartAdd(a.id, "1/1", replaced.body))
+	before, _ := tip.Record.State.Relic.Part(a.id)
+	after, _ := foldRelic(t, &tip, pack).State.Relic.Part(a.id)
+	if before.Body.Version != a.id || *after.Body != *before.Body {
+		t.Fatalf("the repeated part.add folded the body from %+v to %+v; the test needs it to change nothing",
+			*before.Body, *after.Body)
+	}
+
+	// forgeRelicChild stores the state the fold computes, so the forged commit
+	// is honest about the version and wrong only in its tree.
+	err := checkRelicRule(t, repo, config, tip, 2, relicRuleCase{
+		pack:      pack,
+		honest:    stored,
+		violating: withForgedPart(stored, a.id, replaced),
+		fragments: []string{a.id, "body"},
+	})
+	assertGetRelicRefused(t, err)
+}
+
+// The same for a part.body.set that carries the ID of the operation that saved
+// the current body: the version it would save is the one the body already has.
+func TestRuleR6ARepeatedBodyEditCannotReplaceABody(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	tip, a, _ := relicRuleHistory(t, repo, config)
+	alice := []byte("Alice's text, saved from the first version\n")
+	saved := relicTestID(700011)
+	edited := writeRelicChild(t, repo, config, tip,
+		map[string]core.RelicPartContent{a.id: {Body: alice, HasBody: true}},
+		relicBodySet(700011, a.id, a.id, alice))
+	current := forgedPartsOf(t, repo, edited.Head)
+	replaced := current[a.id]
+	replaced.body = bytes.ToUpper(alice)
+	if bytes.Equal(replaced.body, alice) || len(replaced.body) != len(alice) {
+		t.Fatal("the replacement body must differ from the stored one and be the same size")
+	}
+
+	for name, base := range map[string]string{
+		// The operation exactly as it was first delivered. Its base is no
+		// longer current, so the fold ignores it.
+		"delivered again from its first base": a.id,
+		// The operation naming the version it saved as its base. The fold
+		// applies it, which saves the version the body already has.
+		"from the version it saved": saved,
+	} {
+		pack := relicChildPack(edited, relicBodySet(700011, a.id, base, replaced.body))
+		before, _ := edited.Record.State.Relic.Part(a.id)
+		after, _ := foldRelic(t, &edited, pack).State.Relic.Part(a.id)
+		if before.Body.Version != saved || *after.Body != *before.Body {
+			t.Fatalf("%s: the repeated body edit folded the body from %+v to %+v; the test needs it to change nothing",
+				name, *before.Body, *after.Body)
+		}
+
+		err := checkRelicRule(t, repo, config, edited, 3, relicRuleCase{
+			pack:      pack,
+			honest:    current,
+			violating: withForgedPart(current, a.id, replaced),
+			fragments: []string{a.id, "body"},
+		})
+		if core.CategoryOf(err) != core.CategoryCorruptData || !strings.HasSuffix(err.Error(), relicValidateHint) {
+			t.Fatalf("%s: GetRelic() error = %v, want corrupt data naming workbook validate", name, err)
+		}
+	}
+}
+
 func TestRuleR7FieldsDoNotFollowFromTheOperations(t *testing.T) {
 	t.Parallel()
 	repo, config := relicRepository(t, testrepo.FormatSHA1)
@@ -838,7 +919,7 @@ func TestRuleR7FieldsDoNotFollowFromTheOperations(t *testing.T) {
 	})
 	// A single-relic read does not open fields.json, so it serves the commit.
 	if err != nil {
-		t.Fatalf("GetRelic() error = %v; only workbook validate checks rule R7", err)
+		t.Fatalf("GetRelic() error = %v; only workbook validate reads fields.json", err)
 	}
 }
 
@@ -857,13 +938,71 @@ func TestRuleR7FieldEditNotApplied(t *testing.T) {
 		fragments: []string{a.id, "fields"},
 	})
 	if err != nil {
-		t.Fatalf("GetRelic() error = %v; only workbook validate checks rule R7", err)
+		t.Fatalf("GetRelic() error = %v; only workbook validate reads fields.json", err)
+	}
+}
+
+// The part of rule R7 that needs no read: a part the pack names without
+// setting or clearing a field keeps the fields.json object it had. Object IDs
+// settle it, so a single-relic read refuses the commit as validation does.
+func TestGetRelicRefusesAChangedFieldsBlobWithNoFieldOperation(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	tip, a, b := relicRuleHistory(t, repo, config)
+	stored := forgedPartsOf(t, repo, tip.Head)
+	changed := func(parts map[string]forgedPart) map[string]forgedPart {
+		part := parts[a.id]
+		part.fields = forgedFields(t, "a", "old", "b", "changed")
+		return withForgedPart(parts, a.id, part)
+	}
+	newBody := []byte("the goals, edited\n")
+	edited := stored[a.id]
+	edited.body = newBody
+	withNewBody := withForgedPart(stored, a.id, edited)
+
+	for name, test := range map[string]relicRuleCase{
+		"a move": {
+			pack:      relicChildPack(tip, relicPartMove(700010, a.id, "5/2")),
+			honest:    stored,
+			violating: changed(stored),
+		},
+		"a removal": {
+			pack:      relicChildPack(tip, relicPartChange(700010, core.RelicOperationPartRemove, a.id)),
+			honest:    stored,
+			violating: changed(stored),
+		},
+		// The body may change here, and the fields still may not.
+		"a body edit": {
+			pack:      relicChildPack(tip, relicBodySet(700010, a.id, a.id, newBody)),
+			honest:    withNewBody,
+			violating: changed(withNewBody),
+		},
+		"a repeated part.add": {
+			pack:      relicChildPack(tip, relicPartAdd(a.id, "1/1", stored[a.id].body)),
+			honest:    stored,
+			violating: changed(stored),
+		},
+		// A field operation for another part does not cover this one.
+		"a move beside a field edit of another part": {
+			pack: relicChildPack(tip,
+				relicPartMove(700010, a.id, "5/2"), relicFieldSet(700011, b.id, "heading", "Decision")),
+			honest:    stored,
+			violating: changed(stored),
+		},
+	} {
+		test.fragments = []string{a.id, "fields"}
+		err := checkRelicRule(t, repo, config, tip, 2, test)
+		if core.CategoryOf(err) != core.CategoryCorruptData || !strings.HasSuffix(err.Error(), relicValidateHint) {
+			t.Fatalf("%s: GetRelic() error = %v, want corrupt data naming workbook validate", name, err)
+		}
 	}
 }
 
 // Rule R7 also covers a part the pack names without a field operation, whose
 // fields must stay as they were, and a part the pack adds, whose fields.json
-// has no earlier version to follow from.
+// has no earlier version to follow from. The first is settled by object IDs,
+// so a single-relic read refuses it too. The others take a read of
+// fields.json, which only validation pays for.
 func TestRuleR7CoversPartsWithoutFieldOperationsAndNewParts(t *testing.T) {
 	t.Parallel()
 	repo, config := relicRepository(t, testrepo.FormatSHA1)
@@ -876,9 +1015,10 @@ func TestRuleR7CoversPartsWithoutFieldOperationsAndNewParts(t *testing.T) {
 		return withForgedPart(stored, a.id, part)
 	}
 	loose := bytes.Replace(forgedFields(t, "heading", "Why"), []byte(`"fields":{`), []byte(`"fields": {`), 1)
+	const noFieldOperation = "a named part with no field operation"
 
 	for name, test := range map[string]relicRuleCase{
-		"a named part with no field operation": {
+		noFieldOperation: {
 			pack:      relicChildPack(tip, relicPartMove(700010, a.id, "5/2")),
 			honest:    stored,
 			violating: fieldsOfA("a", "old", "b", "changed"),
@@ -910,8 +1050,15 @@ func TestRuleR7CoversPartsWithoutFieldOperationsAndNewParts(t *testing.T) {
 			fragments: []string{added, "fields"},
 		},
 	} {
-		if err := checkRelicRule(t, repo, config, tip, 2, test); err != nil {
-			t.Fatalf("%s: GetRelic() error = %v; only workbook validate checks rule R7", name, err)
+		err := checkRelicRule(t, repo, config, tip, 2, test)
+		if name == noFieldOperation {
+			if core.CategoryOf(err) != core.CategoryCorruptData || !strings.HasSuffix(err.Error(), relicValidateHint) {
+				t.Fatalf("%s: GetRelic() error = %v, want corrupt data naming workbook validate", name, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: GetRelic() error = %v; only workbook validate reads fields.json", name, err)
 		}
 	}
 }

@@ -526,16 +526,74 @@ func TestApplyRelicFields(t *testing.T) {
 func TestRelicBodySavedByAndPartsNamedBy(t *testing.T) {
 	pack := goldenRelicPack()
 	record := goldenRelicRecord(t)
-	if !RelicBodySavedBy(pack, record, relicDocPartA) {
+	// A new relic has no parent, so every body it lists arrived with it.
+	if !RelicBodySavedBy(nil, pack, record, relicDocPartA) {
 		t.Errorf("part A's body was saved by the root pack")
 	}
-	if RelicBodySavedBy(pack, record, relicDocPartB) {
+	if RelicBodySavedBy(nil, pack, record, relicDocPartB) {
 		t.Errorf("part B has no body")
+	}
+	if RelicBodySavedBy(nil, pack, record, relicTestID(239)) {
+		t.Errorf("the relic has no such part")
 	}
 	edit := relicFoldPack(2, RelicOperation{ID: relicTestID(240), Type: RelicOperationTitleSet, Title: "Next"})
 	next := mustApplyRelic(t, record, edit)
-	if RelicBodySavedBy(edit, next, relicDocPartA) {
+	if RelicBodySavedBy(&record, edit, next, relicDocPartA) {
 		t.Errorf("part A's body was not saved by a title edit")
+	}
+
+	// A part new in this commit.
+	partC := relicTestID(245)
+	add := relicFoldPack(2, RelicOperation{ID: partC, Type: RelicOperationPartAdd, PartType: "section", Position: "3/1",
+		Body: &RelicBodyChange{Format: "md", Bytes: 12}})
+	added := mustApplyRelic(t, record, add)
+	if !RelicBodySavedBy(&record, add, added, partC) {
+		t.Errorf("part C's body was saved by the pack that added it")
+	}
+	if RelicBodySavedBy(&record, add, added, relicDocPartA) {
+		t.Errorf("part A's body was not saved by a pack that adds part C")
+	}
+
+	// A body version that changed: a first body for a part that had none, and
+	// a new version of a body.
+	firstBody := relicFoldPack(2, RelicOperation{ID: relicTestID(246), Type: RelicOperationPartBodySet, Part: relicDocPartB,
+		Body: &RelicBodyChange{Format: "md", Bytes: 7}})
+	if !RelicBodySavedBy(&record, firstBody, mustApplyRelic(t, record, firstBody), relicDocPartB) {
+		t.Errorf("part B's first body was saved by the pack that set it")
+	}
+	bodyEdit := relicFoldPack(2, RelicOperation{ID: relicTestID(247), Type: RelicOperationPartBodySet, Part: relicDocPartA,
+		Body: &RelicBodyChange{Format: "md", Bytes: 1840, Base: relicDocPartA}})
+	edited := mustApplyRelic(t, record, bodyEdit)
+	if got := requirePartForTest(t, edited.State.Relic, relicDocPartA).Body.Version; got != relicTestID(247) {
+		t.Fatalf("the body edit folded to version %s; the test needs it to apply", got)
+	}
+	if !RelicBodySavedBy(&record, bodyEdit, edited, relicDocPartA) {
+		t.Errorf("part A's body was saved by the edit that gave it a new version")
+	}
+
+	// A repeated part.add carries the ID of a part the relic already has,
+	// which is also the version of that part's first body. The fold ignores
+	// it, so it saved nothing.
+	repeatedAdd := relicFoldPack(2, RelicOperation{ID: relicDocPartA, Type: RelicOperationPartAdd, PartType: "section",
+		Position: "1/1", Body: &RelicBodyChange{Format: "md", Bytes: 1840}})
+	afterRepeatedAdd := mustApplyRelic(t, record, repeatedAdd)
+	requireRelicEqual(t, "a repeated part.add", withoutUpdatedAt(afterRepeatedAdd.State.Relic), withoutUpdatedAt(record.State.Relic))
+	if RelicBodySavedBy(&record, repeatedAdd, afterRepeatedAdd, relicDocPartA) {
+		t.Errorf("a repeated part.add saved no body: part A's version did not change")
+	}
+
+	// A repeated part.body.set carries the ID that is already the body's
+	// version, whether it names the current version as its base or an older one.
+	for name, base := range map[string]string{"from the current version": relicTestID(247), "from an older version": relicDocPartA} {
+		repeatedEdit := relicFoldPack(3, RelicOperation{ID: relicTestID(247), Type: RelicOperationPartBodySet, Part: relicDocPartA,
+			Body: &RelicBodyChange{Format: "md", Bytes: 1840, Base: base}})
+		afterRepeatedEdit := mustApplyRelic(t, edited, repeatedEdit)
+		if got := requirePartForTest(t, afterRepeatedEdit.State.Relic, relicDocPartA).Body.Version; got != relicTestID(247) {
+			t.Fatalf("a repeated body edit %s folded to version %s; the test needs the version to stay", name, got)
+		}
+		if RelicBodySavedBy(&edited, repeatedEdit, afterRepeatedEdit, relicDocPartA) {
+			t.Errorf("a repeated part.body.set %s saved no body: part A's version did not change", name)
+		}
 	}
 
 	if got, want := RelicPartsNamedBy(pack), []string{relicDocPartA, relicDocPartB}; !reflect.DeepEqual(got, want) {

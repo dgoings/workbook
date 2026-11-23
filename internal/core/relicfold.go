@@ -323,12 +323,33 @@ func ApplyRelicFields(before map[string]json.RawMessage, partID string, operatio
 	return fields
 }
 
-// RelicBodySavedBy reports whether the record's body version for the part is
-// the ID of an operation in the pack.
-func RelicBodySavedBy(pack RelicOperationPack, record RelicRecord, partID string) bool {
+// RelicBodySavedBy reports whether the pack saved the body the record lists
+// for the part, which is the one case in which a commit may store body bytes
+// its parent does not. record is what folding pack onto parent computes, and
+// parent is nil for the pack that starts a relic.
+//
+// It is true only when the part has a body in record, that body's version is
+// the ID of an operation in pack, and the version is new: parent is nil, the
+// parent has no such part, the parent's part has no body, or its body has
+// another version.
+//
+// The version being an operation of the pack is not enough. A part's first
+// body has the part's own ID as its version, which is also the ID of the
+// part.add that created it, so a second part.add for that part carries the ID
+// and the fold ignores it. A part.body.set can likewise carry the ID that is
+// already the body's version. Neither changes the version, so neither saved a
+// body, and whatever text arrives beside one is not stored. The writer and the
+// history check both ask this function, so they agree on that.
+func RelicBodySavedBy(parent *RelicRecord, pack RelicOperationPack, record RelicRecord, partID string) bool {
 	part, ok := record.State.Relic.Part(partID)
 	if !ok || part.Body == nil {
 		return false
+	}
+	if parent != nil {
+		before, existed := parent.State.Relic.Part(partID)
+		if existed && before.Body != nil && before.Body.Version == part.Body.Version {
+			return false
+		}
 	}
 	for _, operation := range pack.Operations {
 		if operation.ID == part.Body.Version {
