@@ -39,6 +39,7 @@ Commands:
   move-tasks [--from <remote>] [--allow-branches] [--clean-up] [--no-backup | --backup <path>] [--json]
   reset [--dry-run] [--no-backup [--discard-unpublished] | --backup <path>] [--json]
   reset --remote <remote> [--confirm <remote>] [--dry-run] [--no-backup | --backup <path>] [--json]
+  relic <command> [options]
   status <command> [options]
   priority <command> [options]
   key <command> [options]

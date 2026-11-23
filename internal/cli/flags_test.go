@@ -231,6 +231,7 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"status":   {},
 		"priority": {},
 		"key":      {},
+		"relic":    {},
 		"create":   {"description": stringFlag, "status": stringFlag, "priority": stringFlag, "due": stringFlag, "key": stringFlag, "label": stringFlag, "no-sync": boolFlag, "json": boolFlag},
 		"list":     {"status": stringFlag, "priority": stringFlag, "key": stringFlag, "label": stringFlag, "find": stringFlag, "all": boolFlag, "overdue": boolFlag, "due-before": stringFlag, "sort": stringFlag, "json": boolFlag},
 		"show": {

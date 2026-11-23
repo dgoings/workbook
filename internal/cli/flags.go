@@ -860,6 +860,84 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
+	"relic": {
+		Name:     "relic",
+		Synopsis: "workbook relic <command> [options]",
+		Description: "Create, read and change relics: records that hold specs, plans, decisions and similar material as named parts.\n\n" +
+			"A relic ID looks like WB-R-01M9… and a part is addressed as <relic>#<part>. Any\n" +
+			"unambiguous prefix of either works. Relics are kept in this checkout only; they\n" +
+			"are not shared with the tasks remote yet.",
+		Positionals:     []string{"<command>"},
+		SubcommandOrder: []string{"create", "list", "show", "delete", "restore", "export"},
+		Subcommands: map[string]commandMetadata{
+			"create": {
+				Name:     "create",
+				Synopsis: "workbook relic create [<title>] [--type <type>] [--from-file <file>] [--json]",
+				Description: "Create a relic.\n\n" +
+					"Without --from-file the title and --type are both required and the relic has\n" +
+					"no parts. With it, the relic is created from a whole workbook.relic document,\n" +
+					"as relic export writes one, with new IDs; a title or --type given here\n" +
+					"replaces the document's.",
+				Positionals: []string{"[<title>]"},
+				Options: []optionMetadata{
+					{Name: "type", Kind: stringFlag, Value: "<type>", Description: "relic type, such as spec or plan"},
+					{Name: "from-file", Kind: stringFlag, Value: "<file>", Description: "create from a whole relic in one JSON document (- reads standard input)"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"list": {
+				Name:        "list",
+				Synopsis:    "workbook relic list [--type <type>] [--all] [--json]",
+				Description: "List relics, oldest first. Deleted relics are left out unless --all is given.",
+				Options: []optionMetadata{
+					{Name: "type", Kind: stringFlag, Value: "<type>", Description: "show only relics of this type"},
+					{Name: "all", Kind: boolFlag, Description: "include deleted relics"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"show": {
+				Name:     "show",
+				Synopsis: "workbook relic show <relic>[#<part>] [--body] [--removed] [--json]",
+				Description: "Show a relic, or one of its parts.\n\n" +
+					"Bodies are left out unless --body is given. With <relic>#<part> and --body,\n" +
+					"and without --json, only that part's body is written, byte for byte.",
+				Positionals: []string{"<relic>[#<part>]"},
+				Options: []optionMetadata{
+					{Name: "body", Kind: boolFlag, Description: "include body text"},
+					{Name: "removed", Kind: boolFlag, Description: "include removed parts"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"delete": {
+				Name:        "delete",
+				Synopsis:    "workbook relic delete <relic> [--json]",
+				Description: "Delete a relic. Its history is kept, and relic restore brings it back.",
+				Positionals: []string{"<relic>"},
+				Options: []optionMetadata{
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"restore": {
+				Name:        "restore",
+				Synopsis:    "workbook relic restore <relic> [--json]",
+				Description: "Restore a deleted relic.",
+				Positionals: []string{"<relic>"},
+				Options: []optionMetadata{
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"export": {
+				Name:     "export",
+				Synopsis: "workbook relic export <relic> [--json]",
+				Description: "Write a relic, with its live parts and their bodies, as one workbook.relic\n" +
+					"document that relic create --from-file reads.",
+				Positionals: []string{"<relic>"},
+				Options: []optionMetadata{
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+		},
+	},
 	"hooks": {
 		Name:            "hooks",
 		Synopsis:        "workbook hooks <command> [options]",
@@ -1002,7 +1080,7 @@ var commandSchemas = map[string]commandMetadata{
 }
 
 var commandOrder = []string{
-	"setup", "create", "list", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "compact", "version", "fetch", "push", "sync", "move-tasks", "reset", "status", "priority", "key", "config", "docs", "hooks", "serve", "completion",
+	"setup", "create", "list", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "compact", "version", "fetch", "push", "sync", "move-tasks", "reset", "relic", "status", "priority", "key", "config", "docs", "hooks", "serve", "completion",
 }
 
 type commandFlagSet struct {
