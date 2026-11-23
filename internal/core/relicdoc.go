@@ -161,6 +161,17 @@ type RelicSnapshot struct {
 	Record    RelicRecord
 }
 
+// RelicPartContent is one part's content, in or out: what its fields.json and
+// body blobs hold. HasBody tells an empty body from no body.
+//
+// On a write, a nil Fields leaves an existing part's fields.json as it is and
+// gives a new part an empty one.
+type RelicPartContent struct {
+	Fields  map[string]json.RawMessage
+	Body    []byte
+	HasBody bool
+}
+
 // relicOperationMinReader declares the generation each relic operation type
 // needs. Every type this story writes is generation six; a later story's types
 // take higher numbers.

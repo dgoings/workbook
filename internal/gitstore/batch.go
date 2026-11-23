@@ -161,6 +161,9 @@ func (r *Repository) readTaskHeadsPartialBatch(
 type batchObject struct {
 	objectID string
 	kind     string
+	// size is the object's size as Git's batch header states it. It is set for
+	// a refused object too, whose contents were never read.
+	size     int64
 	contents []byte
 	missing  bool
 	// refused holds the reason an object present in the response stream was not
@@ -336,7 +339,7 @@ func readBatchObject(reader *bufio.Reader) (batchObject, error) {
 		if _, err := io.CopyN(io.Discard, reader, int64(size)+1); err != nil {
 			return batchObject{}, err
 		}
-		return batchObject{objectID: fields[0], kind: fields[1], refused: refused}, nil
+		return batchObject{objectID: fields[0], kind: fields[1], size: int64(size), refused: refused}, nil
 	}
 	contents := make([]byte, int(size))
 	if _, err := io.ReadFull(reader, contents); err != nil {
@@ -349,7 +352,7 @@ func readBatchObject(reader *bufio.Reader) (batchObject, error) {
 	if terminator != '\n' {
 		return batchObject{}, fmt.Errorf("Git batch object has no newline terminator")
 	}
-	return batchObject{objectID: fields[0], kind: fields[1], contents: contents}, nil
+	return batchObject{objectID: fields[0], kind: fields[1], size: int64(size), contents: contents}, nil
 }
 
 func decodeObjectID(objectID string) ([]byte, error) {

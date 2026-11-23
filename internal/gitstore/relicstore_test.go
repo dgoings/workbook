@@ -1,0 +1,1521 @@
+package gitstore
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testrepo"
+)
+
+const relicTestActor = "workbook@example.test"
+
+var relicTestTime = time.Date(2026, time.November, 23, 10, 0, 0, 0, time.UTC)
+
+// relicTestID builds the canonical ULID relic tests name things with. Parts
+// and operations use small numbers; the helpers below keep relic IDs, create
+// operations and history generations in ranges of their own.
+func relicTestID(n int) string {
+	return fmt.Sprintf("01M9A%021d", n)
+}
+
+func relicTestRelicID(n int) string {
+	return core.NewRelicID("WB", relicTestID(600000+n))
+}
+
+func relicRepository(t *testing.T, objectFormat string) (*Repository, core.ProjectConfig) {
+	t.Helper()
+	testrepo.RequireObjectFormat(t, objectFormat)
+	return writeRepositoryWithObjectFormat(t, objectFormat)
+}
+
+// forBothRelicFormats runs one test body against a SHA-1 and a SHA-256
+// repository.
+func forBothRelicFormats(t *testing.T, run func(t *testing.T, repo *Repository, config core.ProjectConfig)) {
+	t.Helper()
+	for _, objectFormat := range []string{testrepo.FormatSHA1, testrepo.FormatSHA256} {
+		t.Run(objectFormat, func(t *testing.T) {
+			t.Parallel()
+			repo, config := relicRepository(t, objectFormat)
+			run(t, repo, config)
+		})
+	}
+}
+
+// relicTestPart is one part a test creates: its ID, and the content that goes
+// in the tree beside the part.add that names it.
+type relicTestPart struct {
+	id      string
+	fields  map[string]json.RawMessage
+	body    []byte
+	hasBody bool
+	format  string
+}
+
+func relicTestPartNumbered(n int) relicTestPart {
+	return relicTestPart{id: relicTestID(n)}
+}
+
+func (part relicTestPart) withField(name, value string) relicTestPart {
+	fields := make(map[string]json.RawMessage, len(part.fields)+1)
+	for existing, stored := range part.fields {
+		fields[existing] = stored
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	fields[name] = encoded
+	part.fields = fields
+	return part
+}
+
+func (part relicTestPart) withBody(format string, body []byte) relicTestPart {
+	part.body, part.hasBody, part.format = body, true, format
+	return part
+}
+
+// relicRootPack builds the create pack for relic number relicNumber and the
+// content its parts carry.
+func relicRootPack(
+	config core.ProjectConfig,
+	relicNumber int,
+	parts ...relicTestPart,
+) (core.RelicOperationPack, map[string]core.RelicPartContent) {
+	operations := []core.RelicOperation{{
+		ID:    relicTestID(800000 + relicNumber),
+		Type:  core.RelicOperationCreate,
+		Relic: &core.RelicCreateData{Title: "Task archive compaction", Type: "spec", CreatedAt: relicTestTime},
+	}}
+	content := make(map[string]core.RelicPartContent, len(parts))
+	for index, part := range parts {
+		operation := core.RelicOperation{
+			ID:       part.id,
+			Type:     core.RelicOperationPartAdd,
+			PartType: "section",
+			Position: fmt.Sprintf("%d/1", index+1),
+		}
+		if part.hasBody {
+			operation.Body = &core.RelicBodyChange{Format: part.format, Bytes: int64(len(part.body))}
+		}
+		operations = append(operations, operation)
+		content[part.id] = core.RelicPartContent{Fields: part.fields, Body: part.body, HasBody: part.hasBody}
+	}
+	pack := core.NewRelicOperationPack(
+		config.ProjectID,
+		relicTestRelicID(relicNumber),
+		relicTestID(900000+relicNumber),
+		relicTestActor,
+		1,
+		relicTestTime,
+		operations,
+	)
+	return pack, content
+}
+
+func foldRelic(t *testing.T, parent *core.RelicSnapshot, pack core.RelicOperationPack) core.RelicRecord {
+	t.Helper()
+	var parentRecord *core.RelicRecord
+	if parent != nil {
+		parentRecord = &parent.Record
+	}
+	record, err := core.ApplyRelic(parentRecord, pack)
+	if err != nil {
+		t.Fatalf("ApplyRelic() error = %v", err)
+	}
+	return record
+}
+
+func writeRelicRoot(t *testing.T, repo *Repository, config core.ProjectConfig, parts ...relicTestPart) core.RelicSnapshot {
+	t.Helper()
+	return writeRelicRootNumbered(t, repo, config, 1, parts...)
+}
+
+func writeRelicRootNumbered(
+	t *testing.T,
+	repo *Repository,
+	config core.ProjectConfig,
+	relicNumber int,
+	parts ...relicTestPart,
+) core.RelicSnapshot {
+	t.Helper()
+	pack, content := relicRootPack(config, relicNumber, parts...)
+	record := foldRelic(t, nil, pack)
+	snapshot, err := repo.WriteRelic(context.Background(), config, nil, pack, record, content, "create relic "+pack.RelicID)
+	if err != nil {
+		t.Fatalf("WriteRelic(create %s) error = %v", pack.RelicID, err)
+	}
+	return snapshot
+}
+
+// relicChildPack builds the next pack of the relic parent is the tip of.
+func relicChildPack(parent core.RelicSnapshot, operations ...core.RelicOperation) core.RelicOperationPack {
+	state := parent.Record.State
+	return core.NewRelicOperationPack(
+		state.ProjectID,
+		state.RelicID,
+		state.History.Generation,
+		relicTestActor,
+		state.LogicalClock+1,
+		relicTestTime.Add(time.Duration(state.LogicalClock)*time.Minute),
+		operations,
+	)
+}
+
+func writeRelicChild(
+	t *testing.T,
+	repo *Repository,
+	config core.ProjectConfig,
+	parent core.RelicSnapshot,
+	content map[string]core.RelicPartContent,
+	operations ...core.RelicOperation,
+) core.RelicSnapshot {
+	t.Helper()
+	pack := relicChildPack(parent, operations...)
+	record := foldRelic(t, &parent, pack)
+	snapshot, err := repo.WriteRelic(context.Background(), config, &parent, pack, record, content, "update relic "+pack.RelicID)
+	if err != nil {
+		t.Fatalf("WriteRelic(update %s) error = %v", pack.RelicID, err)
+	}
+	return snapshot
+}
+
+func relicBodySet(operationNumber int, partID, base string, body []byte) core.RelicOperation {
+	return core.RelicOperation{
+		ID:   relicTestID(operationNumber),
+		Type: core.RelicOperationPartBodySet,
+		Part: partID,
+		Body: &core.RelicBodyChange{Format: "md", Bytes: int64(len(body)), Base: base},
+	}
+}
+
+func relicTitleSet(operationNumber int, title string) core.RelicOperation {
+	return core.RelicOperation{ID: relicTestID(operationNumber), Type: core.RelicOperationTitleSet, Title: title}
+}
+
+func relicRef(relicID string) string { return "refs/workbook/relics/" + relicID }
+
+// relicBlob reads one object's exact bytes, which gitOutput would trim.
+func relicBlob(t *testing.T, repo *Repository, name string) []byte {
+	t.Helper()
+	contents, err := repo.Git(context.Background(), nil, "cat-file", "blob", name)
+	if err != nil {
+		t.Fatalf("cat-file blob %s: %v", name, err)
+	}
+	return contents
+}
+
+func relicLines(output string) []string {
+	if output == "" {
+		return nil
+	}
+	return strings.Split(output, "\n")
+}
+
+// relicParents returns the parent object IDs of a commit.
+func relicParents(t *testing.T, repo *Repository, commit string) []string {
+	t.Helper()
+	return strings.Fields(gitOutput(t, repo, "rev-list", "--parents", "-n", "1", commit))[1:]
+}
+
+func readRelicTip(t *testing.T, repo *Repository, config core.ProjectConfig, relicID string) core.RelicSnapshot {
+	t.Helper()
+	heads, err := repo.ListRelicHeads(context.Background(), config)
+	if err != nil {
+		t.Fatalf("ListRelicHeads() error = %v", err)
+	}
+	for _, head := range heads {
+		if head.RelicID != relicID {
+			continue
+		}
+		snapshots, err := repo.ReadRelicTips(context.Background(), config, []core.RelicHead{head})
+		if err != nil {
+			t.Fatalf("ReadRelicTips(%s) error = %v", relicID, err)
+		}
+		return snapshots[0]
+	}
+	t.Fatalf("relic %s has no ref", relicID)
+	return core.RelicSnapshot{}
+}
+
+func encodedRelicDocument(t *testing.T, document any) []byte {
+	t.Helper()
+	encoded, err := core.EncodeDocument(document)
+	if err != nil {
+		t.Fatalf("EncodeDocument(%T) error = %v", document, err)
+	}
+	return encoded
+}
+
+// assertSameRelicSnapshot compares two snapshots by what they store.
+func assertSameRelicSnapshot(t *testing.T, got, want core.RelicSnapshot) {
+	t.Helper()
+	if got.Head != want.Head {
+		t.Fatalf("snapshot head = %q, want %q", got.Head, want.Head)
+	}
+	for name, pair := range map[string][2]any{
+		"operation": {got.Operation, want.Operation},
+		"state":     {got.Record.State, want.Record.State},
+		"links":     {got.Record.Links, want.Record.Links},
+	} {
+		if gotBytes, wantBytes := encodedRelicDocument(t, pair[0]), encodedRelicDocument(t, pair[1]); !bytes.Equal(gotBytes, wantBytes) {
+			t.Fatalf("snapshot %s = %s, want %s", name, gotBytes, wantBytes)
+		}
+	}
+}
+
+func assertRelicCategory(t *testing.T, err error, want core.Category, fragments ...string) {
+	t.Helper()
+	if got := core.CategoryOf(err); got != want {
+		t.Fatalf("category = %q, want %q; error = %v", got, want, err)
+	}
+	for _, fragment := range fragments {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("error %q does not mention %q", err, fragment)
+		}
+	}
+}
+
+// relicFieldsOfSize returns fields whose stored fields.json is exactly size
+// bytes.
+func relicFieldsOfSize(t *testing.T, size int) map[string]json.RawMessage {
+	t.Helper()
+	empty, err := json.Marshal(core.NewRelicFields(map[string]json.RawMessage{"pad": json.RawMessage(`""`)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fill := size - (len(empty) + 1)
+	if fill < 0 {
+		t.Fatalf("fields.json cannot be %d bytes", size)
+	}
+	fields := map[string]json.RawMessage{"pad": json.RawMessage(`"` + strings.Repeat("x", fill) + `"`)}
+	stored, err := json.Marshal(core.NewRelicFields(fields))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored)+1 != size {
+		t.Fatalf("built fields.json of %d bytes, want %d", len(stored)+1, size)
+	}
+	return fields
+}
+
+// relicWriteLeftovers lists what a relic write left in Workbook's private
+// directory.
+func relicWriteLeftovers(t *testing.T, repo *Repository) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(repo.CommonGitDir, "workbook"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var leftovers []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "relic-write-") {
+			leftovers = append(leftovers, entry.Name())
+		}
+	}
+	return leftovers
+}
+
+// forgeRelicTree writes one tree from `git ls-tree` lines.
+func forgeRelicTree(t *testing.T, repo *Repository, entries []string) string {
+	t.Helper()
+	return gitOutputWithInput(t, repo, []byte(strings.Join(entries, "\n")+"\n"), "mktree")
+}
+
+func forgeRelicCommitOf(t *testing.T, repo *Repository, tree string, parents ...string) string {
+	t.Helper()
+	args := []string{"commit-tree", tree, "-m", "forged"}
+	for _, parent := range parents {
+		args = append(args, "-p", parent)
+	}
+	return gitOutput(t, repo, args...)
+}
+
+func forgeRelicBlob(t *testing.T, repo *Repository, contents []byte) string {
+	t.Helper()
+	return gitOutputWithInput(t, repo, contents, "hash-object", "-w", "--stdin")
+}
+
+// replaceRelicTreeEntry returns entries with the one named name dropped and,
+// when replacement is not empty, replaced by it.
+func replaceRelicTreeEntry(t *testing.T, entries []string, name, replacement string) []string {
+	t.Helper()
+	replaced := make([]string, 0, len(entries)+1)
+	found := false
+	for _, entry := range entries {
+		if strings.HasSuffix(entry, "\t"+name) {
+			found = true
+			continue
+		}
+		replaced = append(replaced, entry)
+	}
+	if !found {
+		t.Fatalf("tree has no entry %q in %q", name, entries)
+	}
+	if replacement != "" {
+		replaced = append(replaced, replacement)
+	}
+	return replaced
+}
+
+// forgeRelicPart returns a commit that is snapshot's tree with one part's
+// subtree replaced by the given blobs. An empty bodyBlob leaves the body out.
+func forgeRelicPart(t *testing.T, repo *Repository, snapshot core.RelicSnapshot, partID, fieldsBlob, bodyBlob string) string {
+	t.Helper()
+	partEntries := []string{"100644 blob " + fieldsBlob + "\tfields.json"}
+	if bodyBlob != "" {
+		partEntries = append(partEntries, "100644 blob "+bodyBlob+"\tbody")
+	}
+	partTree := forgeRelicTree(t, repo, partEntries)
+	parts := replaceRelicTreeEntry(t,
+		relicLines(gitOutput(t, repo, "ls-tree", snapshot.Head+":parts")),
+		partID, "040000 tree "+partTree+"\t"+partID)
+	top := replaceRelicTreeEntry(t,
+		relicLines(gitOutput(t, repo, "ls-tree", snapshot.Head)),
+		"parts", "040000 tree "+forgeRelicTree(t, repo, parts)+"\tparts")
+	return forgeRelicCommitOf(t, repo, forgeRelicTree(t, repo, top), relicParents(t, repo, snapshot.Head)...)
+}
+
+func TestWriteRelicStoresTheDocumentedTree(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		body := []byte(strings.Repeat("Compaction keeps the task's current state. ", 43)[:1840])
+		partA := relicTestPartNumbered(1).withField("heading", "Goals").withBody("md", body)
+		partB := relicTestPartNumbered(2).withField("status", "open")
+		pack, content := relicRootPack(config, 1, partA, partB)
+		record := foldRelic(t, nil, pack)
+
+		snapshot, err := repo.WriteRelic(ctx, config, nil, pack, record, content, "create relic "+pack.RelicID)
+		if err != nil {
+			t.Fatalf("WriteRelic() error = %v", err)
+		}
+
+		wantPaths := []string{
+			"links.json",
+			"operation.json",
+			"parts/" + partA.id + "/body",
+			"parts/" + partA.id + "/fields.json",
+			"parts/" + partB.id + "/fields.json",
+			"state.json",
+		}
+		listed := relicLines(gitOutput(t, repo, "ls-tree", "-r", snapshot.Head))
+		if len(listed) != len(wantPaths) {
+			t.Fatalf("ls-tree -r = %q, want exactly %q", listed, wantPaths)
+		}
+		for index, line := range listed {
+			meta, path, _ := strings.Cut(line, "\t")
+			if path != wantPaths[index] || !strings.HasPrefix(meta, "100644 blob ") {
+				t.Fatalf("tree entry %d = %q, want a 100644 blob at %q", index, line, wantPaths[index])
+			}
+		}
+		if parents := relicParents(t, repo, snapshot.Head); len(parents) != 0 {
+			t.Fatalf("root commit parents = %q, want none", parents)
+		}
+		if got, want := string(relicBlob(t, repo, snapshot.Head+":links.json")),
+			`{"format":"workbook.relic-links","version":1,"links":[]}`+"\n"; got != want {
+			t.Fatalf("links.json = %q, want %q", got, want)
+		}
+		if got, want := string(relicBlob(t, repo, snapshot.Head+":parts/"+partA.id+"/fields.json")),
+			`{"format":"workbook.relic-part-fields","version":1,"fields":{"heading":"Goals"}}`+"\n"; got != want {
+			t.Fatalf("fields.json = %q, want %q", got, want)
+		}
+		if got := relicBlob(t, repo, snapshot.Head+":parts/"+partA.id+"/body"); !bytes.Equal(got, body) {
+			t.Fatalf("body blob is %d bytes and differs from the %d bytes given", len(got), len(body))
+		}
+		operation := relicBlob(t, repo, snapshot.Head+":operation.json")
+		if !bytes.Equal(operation, encodedRelicDocument(t, pack)) {
+			t.Fatalf("operation.json = %s, want the encoded pack", operation)
+		}
+		if bytes.Contains(operation, []byte("Compaction keeps")) || bytes.Contains(operation, []byte("Goals")) {
+			t.Fatalf("operation.json carries part content: %s", operation)
+		}
+		if got := relicBlob(t, repo, snapshot.Head+":state.json"); !bytes.Equal(got, encodedRelicDocument(t, record.State)) {
+			t.Fatalf("state.json = %s, want the encoded state", got)
+		}
+		if got := refValue(t, repo, relicRef(pack.RelicID)); got != snapshot.Head {
+			t.Fatalf("relic ref = %q, want %q", got, snapshot.Head)
+		}
+		if got := gitOutput(t, repo, "reflog", "show", "--format=%gs", relicRef(pack.RelicID)); got != "workbook: create relic "+pack.RelicID {
+			t.Fatalf("reflog message = %q", got)
+		}
+
+		want := core.RelicSnapshot{Head: snapshot.Head, Operation: pack, Record: record}
+		assertSameRelicSnapshot(t, snapshot, want)
+		assertSameRelicSnapshot(t, readRelicTip(t, repo, config, pack.RelicID), want)
+
+		parts, err := repo.ReadRelicParts(ctx, config, snapshot, []string{partA.id, partB.id}, true)
+		if err != nil {
+			t.Fatalf("ReadRelicParts() error = %v", err)
+		}
+		wantParts := map[string]core.RelicPartContent{
+			partA.id: {Fields: partA.fields, Body: body, HasBody: true},
+			partB.id: {Fields: partB.fields},
+		}
+		if !reflect.DeepEqual(parts, wantParts) {
+			t.Fatalf("ReadRelicParts() = %#v, want %#v", parts, wantParts)
+		}
+	})
+}
+
+func TestEditingOnePartRewritesOnlyThatPart(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		const partCount, editedIndex = 500, 250
+		parts := make([]relicTestPart, partCount)
+		for index := range parts {
+			parts[index] = relicTestPartNumbered(index+1).
+				withField("heading", fmt.Sprintf("Section %d", index+1)).
+				withBody("md", []byte(fmt.Sprintf("Body of section %d.\n", index+1)))
+		}
+		root := writeRelicRoot(t, repo, config, parts...)
+		edited := parts[editedIndex]
+		newBody := []byte("The rewritten section.\n")
+
+		// Nil fields: the body edit leaves the part's fields.json as it is.
+		updated := writeRelicChild(t, repo, config, root,
+			map[string]core.RelicPartContent{edited.id: {Body: newBody, HasBody: true}},
+			relicBodySet(700001, edited.id, edited.id, newBody))
+
+		if parents := relicParents(t, repo, updated.Head); len(parents) != 1 || parents[0] != root.Head {
+			t.Fatalf("update parents = %q, want exactly %q", parents, root.Head)
+		}
+		var oldNames, newNames []string
+		for index, part := range parts {
+			if index == editedIndex {
+				continue
+			}
+			oldNames = append(oldNames, root.Head+":parts/"+part.id)
+			newNames = append(newNames, updated.Head+":parts/"+part.id)
+		}
+		oldTrees := relicLines(gitOutput(t, repo, append([]string{"rev-parse"}, oldNames...)...))
+		newTrees := relicLines(gitOutput(t, repo, append([]string{"rev-parse"}, newNames...)...))
+		if len(oldTrees) != partCount-1 || !reflect.DeepEqual(oldTrees, newTrees) {
+			t.Fatalf("the %d untouched part subtrees changed object IDs", partCount-1)
+		}
+		if before, after := gitOutput(t, repo, "rev-parse", root.Head+":parts/"+edited.id),
+			gitOutput(t, repo, "rev-parse", updated.Head+":parts/"+edited.id); before == after {
+			t.Fatalf("the edited part kept subtree %s", before)
+		}
+		if before, after := gitOutput(t, repo, "rev-parse", root.Head+":parts/"+edited.id+"/fields.json"),
+			gitOutput(t, repo, "rev-parse", updated.Head+":parts/"+edited.id+"/fields.json"); before != after {
+			t.Fatalf("the edited part's fields.json changed from %s to %s", before, after)
+		}
+		if got := relicBlob(t, repo, updated.Head+":parts/"+edited.id+"/body"); !bytes.Equal(got, newBody) {
+			t.Fatalf("edited body = %q, want %q", got, newBody)
+		}
+		if got := len(relicLines(gitOutput(t, repo, "ls-tree", updated.Head+":parts"))); got != partCount {
+			t.Fatalf("parts tree holds %d subtrees, want %d", got, partCount)
+		}
+	})
+}
+
+// A change that names no part reuses the parent's whole parts tree, and one
+// that adds the first part creates it.
+func TestWriteRelicKeepsOrCreatesThePartsTree(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+
+	empty := writeRelicRoot(t, repo, config)
+	if got := relicLines(gitOutput(t, repo, "ls-tree", "--name-only", empty.Head)); !reflect.DeepEqual(got, []string{"links.json", "operation.json", "state.json"}) {
+		t.Fatalf("tree of a relic with no part = %q", got)
+	}
+
+	added := relicTestPartNumbered(1).withField("heading", "Goals")
+	first := writeRelicChild(t, repo, config, empty,
+		map[string]core.RelicPartContent{added.id: {Fields: added.fields}},
+		core.RelicOperation{ID: added.id, Type: core.RelicOperationPartAdd, PartType: "section", Position: "1/1"})
+	if got := relicLines(gitOutput(t, repo, "ls-tree", "-r", "--name-only", first.Head)); !reflect.DeepEqual(got,
+		[]string{"links.json", "operation.json", "parts/" + added.id + "/fields.json", "state.json"}) {
+		t.Fatalf("tree after the first part = %q", got)
+	}
+
+	retitled := writeRelicChild(t, repo, config, first, nil, relicTitleSet(700001, "A new title"))
+	if before, after := gitOutput(t, repo, "rev-parse", first.Head+":parts"),
+		gitOutput(t, repo, "rev-parse", retitled.Head+":parts"); before != after {
+		t.Fatalf("a title change moved the parts tree from %s to %s", before, after)
+	}
+
+	// New fields replace fields.json; a part added without content gets the
+	// empty document.
+	second := relicTestPartNumbered(2)
+	changed := writeRelicChild(t, repo, config, retitled,
+		map[string]core.RelicPartContent{added.id: {Fields: map[string]json.RawMessage{"heading": json.RawMessage(`"Aims"`)}}},
+		core.RelicOperation{ID: relicTestID(700002), Type: core.RelicOperationPartFieldSet, Part: added.id, Name: "heading", Value: json.RawMessage(`"Aims"`)},
+		core.RelicOperation{ID: second.id, Type: core.RelicOperationPartAdd, PartType: "section", Position: "2/1"})
+	parts, err := repo.ReadRelicParts(ctx, config, changed, []string{added.id, second.id}, true)
+	if err != nil {
+		t.Fatalf("ReadRelicParts() error = %v", err)
+	}
+	want := map[string]core.RelicPartContent{
+		added.id:  {Fields: map[string]json.RawMessage{"heading": json.RawMessage(`"Aims"`)}},
+		second.id: {Fields: map[string]json.RawMessage{}},
+	}
+	if !reflect.DeepEqual(parts, want) {
+		t.Fatalf("ReadRelicParts() = %#v, want %#v", parts, want)
+	}
+	if got, want := string(relicBlob(t, repo, changed.Head+":parts/"+second.id+"/fields.json")),
+		`{"format":"workbook.relic-part-fields","version":1,"fields":{}}`+"\n"; got != want {
+		t.Fatalf("empty fields.json = %q, want %q", got, want)
+	}
+
+	// A first body for a part that had none joins its fields.json, and a
+	// move leaves every subtree where it was.
+	firstBody := []byte("now it has a body\n")
+	withBody := writeRelicChild(t, repo, config, changed,
+		map[string]core.RelicPartContent{second.id: {Body: firstBody, HasBody: true}},
+		relicBodySet(700003, second.id, "", firstBody),
+		core.RelicOperation{ID: relicTestID(700004), Type: core.RelicOperationPartMove, Part: added.id, Position: "3/1"})
+	if got := relicLines(gitOutput(t, repo, "ls-tree", "-r", "--name-only", withBody.Head)); !reflect.DeepEqual(got, []string{
+		"links.json", "operation.json",
+		"parts/" + added.id + "/fields.json",
+		"parts/" + second.id + "/body", "parts/" + second.id + "/fields.json",
+		"state.json",
+	}) {
+		t.Fatalf("tree after a first body = %q", got)
+	}
+	if got := relicBlob(t, repo, withBody.Head+":parts/"+second.id+"/body"); !bytes.Equal(got, firstBody) {
+		t.Fatalf("first body = %q, want %q", got, firstBody)
+	}
+	if before, after := gitOutput(t, repo, "rev-parse", changed.Head+":parts/"+added.id),
+		gitOutput(t, repo, "rev-parse", withBody.Head+":parts/"+added.id); before != after {
+		t.Fatalf("a move changed the part's subtree from %s to %s", before, after)
+	}
+}
+
+func TestWriteRelicUsesABoundedNumberOfGitProcesses(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	var commands [][]string
+	repo.commandObserver = func(args []string) { commands = append(commands, args) }
+	count := func(relicNumber, partCount int) int {
+		t.Helper()
+		parts := make([]relicTestPart, partCount)
+		for index := range parts {
+			parts[index] = relicTestPartNumbered(relicNumber*1000+index).
+				withField("heading", fmt.Sprintf("Section %d", index)).
+				withBody("md", []byte(fmt.Sprintf("Body %d of relic %d.\n", index, relicNumber)))
+		}
+		commands = nil
+		writeRelicRootNumbered(t, repo, config, relicNumber, parts...)
+		return len(commands)
+	}
+
+	// The first write also loads the project's keys, so it is the most this
+	// repository ever spends on one.
+	const bound = 15
+	cold := count(1, 3)
+	small := count(2, 3)
+	large := count(3, 300)
+	largeCommands := commands
+	if cold > bound || large > bound {
+		t.Fatalf("a first write ran %d Git commands and a 300-part create ran %d, want at most %d each: %q",
+			cold, large, bound, largeCommands)
+	}
+	if large != small {
+		t.Fatalf("a 300-part create ran %d Git commands and a 3-part create ran %d; the count must not grow with the parts: %q",
+			large, small, largeCommands)
+	}
+
+	// An update's count does not grow with the parts it rewrites either.
+	tip := readRelicTip(t, repo, config, relicTestRelicID(3))
+	update := func(parent core.RelicSnapshot, operationNumber int, partNumbers ...int) (core.RelicSnapshot, int) {
+		t.Helper()
+		content := map[string]core.RelicPartContent{}
+		var operations []core.RelicOperation
+		for _, number := range partNumbers {
+			partID := relicTestID(3000 + number)
+			part, _ := parent.Record.State.Relic.Part(partID)
+			body := []byte(fmt.Sprintf("Rewritten by %d.\n", operationNumber+number))
+			content[partID] = core.RelicPartContent{Body: body, HasBody: true}
+			operations = append(operations, relicBodySet(operationNumber+number, partID, part.Body.Version, body))
+		}
+		commands = nil
+		next := writeRelicChild(t, repo, config, parent, content, operations...)
+		return next, len(commands)
+	}
+	many := make([]int, 200)
+	for index := range many {
+		many[index] = index
+	}
+	tip, one := update(tip, 710000, 0)
+	_, twoHundred := update(tip, 720000, many...)
+	t.Logf("Git commands: first write %d, 3-part create %d, 300-part create %d, 1-part update %d, 200-part update %d",
+		cold, small, large, one, twoHundred)
+	if one > bound || twoHundred != one {
+		t.Fatalf("an update of one part ran %d Git commands and of 200 parts ran %d, want the same and at most %d: %q",
+			one, twoHundred, bound, commands)
+	}
+}
+
+func TestWriteRelicRefusesAStaleParent(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	part := relicTestPartNumbered(1).withBody("md", []byte("first\n"))
+	root := writeRelicRoot(t, repo, config, part)
+
+	first := writeRelicChild(t, repo, config, root, nil, relicTitleSet(700001, "The first writer's title"))
+
+	secondPack := relicChildPack(root, relicTitleSet(700002, "The second writer's title"))
+	_, err := repo.WriteRelic(ctx, config, &root, secondPack, foldRelic(t, &root, secondPack), nil, "update relic")
+	assertRelicCategory(t, err, core.CategoryStaleWrite, "relic ref changed concurrently")
+	if got := refValue(t, repo, relicRef(secondPack.RelicID)); got != first.Head {
+		t.Fatalf("relic ref = %q after a refused write, want the first write's %q", got, first.Head)
+	}
+	assertSameRelicSnapshot(t, readRelicTip(t, repo, config, secondPack.RelicID), first)
+
+	// A second create of the same relic never replaces the first.
+	createPack, createContent := relicRootPack(config, 1, part)
+	_, err = repo.WriteRelic(ctx, config, nil, createPack, foldRelic(t, nil, createPack), createContent, "create relic")
+	assertRelicCategory(t, err, core.CategoryStaleWrite, "relic ref changed concurrently")
+	if got := refValue(t, repo, relicRef(createPack.RelicID)); got != first.Head {
+		t.Fatalf("relic ref = %q after a refused create, want %q", got, first.Head)
+	}
+}
+
+// The check before the objects are written only saves work. The ref move is
+// what decides: two writers that both got as far as a commit cannot both land.
+func TestRelicRefMoveIsACompareAndSwap(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	root := writeRelicRoot(t, repo, config, relicTestPartNumbered(1))
+	ref := relicRef(root.Operation.RelicID)
+
+	var commits []string
+	for index, title := range []string{"One", "Two"} {
+		pack := relicChildPack(root, relicTitleSet(700001+index, title))
+		commit, err := repo.writeRelicObjects(ctx, &root, pack, foldRelic(t, &root, pack), nil, "update relic")
+		if err != nil {
+			t.Fatalf("writeRelicObjects(%s) error = %v", title, err)
+		}
+		commits = append(commits, commit)
+	}
+	if err := repo.moveRelicRef(ctx, ref, commits[0], root.Head, "update relic"); err != nil {
+		t.Fatalf("moveRelicRef(first) error = %v", err)
+	}
+	err := repo.moveRelicRef(ctx, ref, commits[1], root.Head, "update relic")
+	assertRelicCategory(t, err, core.CategoryStaleWrite, "relic ref changed concurrently")
+	if got := refValue(t, repo, ref); got != commits[0] {
+		t.Fatalf("relic ref = %q, want the first mover's %q", got, commits[0])
+	}
+
+	// The same for two creates of one relic.
+	createRef := relicRef(relicTestRelicID(2))
+	var roots []string
+	for _, parts := range [][]relicTestPart{nil, {relicTestPartNumbered(5)}} {
+		pack, content := relicRootPack(config, 2, parts...)
+		commit, err := repo.writeRelicObjects(ctx, nil, pack, foldRelic(t, nil, pack), content, "create relic")
+		if err != nil {
+			t.Fatalf("writeRelicObjects(create) error = %v", err)
+		}
+		roots = append(roots, commit)
+	}
+	if err := repo.moveRelicRef(ctx, createRef, roots[0], "", "create relic"); err != nil {
+		t.Fatalf("moveRelicRef(first create) error = %v", err)
+	}
+	err = repo.moveRelicRef(ctx, createRef, roots[1], "", "create relic")
+	assertRelicCategory(t, err, core.CategoryStaleWrite, "relic ref changed concurrently")
+	if got := refValue(t, repo, createRef); got != roots[0] {
+		t.Fatalf("relic ref = %q, want the first create's %q", got, roots[0])
+	}
+}
+
+// Several processes writing the same relic from the same tip: exactly one
+// lands, every other is told its write was stale, and nothing is half-written.
+func TestConcurrentRelicWritesLandExactlyOne(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	part := relicTestPartNumbered(1).withBody("md", []byte("first\n"))
+	root := writeRelicRoot(t, repo, config, part)
+
+	const writers = 8
+	type outcome struct {
+		snapshot core.RelicSnapshot
+		err      error
+	}
+	outcomes := make([]outcome, writers)
+	bodyOf := make(map[string]string, writers)
+	start := make(chan struct{})
+	var group sync.WaitGroup
+	for index := range writers {
+		// Each writer has its own handle, as each process would.
+		writer, err := Open(ctx, repo.Root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := []byte(fmt.Sprintf("writer %d\n", index))
+		pack := relicChildPack(root, relicBodySet(700001+index, part.id, part.id, body))
+		bodyOf[relicTestID(700001+index)] = string(body)
+		record := foldRelic(t, &root, pack)
+		content := map[string]core.RelicPartContent{part.id: {Body: body, HasBody: true}}
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			snapshot, err := writer.WriteRelic(ctx, config, &root, pack, record, content, "update relic")
+			outcomes[index] = outcome{snapshot: snapshot, err: err}
+		}()
+	}
+	close(start)
+	group.Wait()
+
+	var winners []core.RelicSnapshot
+	for index, result := range outcomes {
+		switch {
+		case result.err == nil:
+			winners = append(winners, result.snapshot)
+		case core.CategoryOf(result.err) != core.CategoryStaleWrite:
+			t.Fatalf("writer %d failed with %q, want a stale write: %v", index, core.CategoryOf(result.err), result.err)
+		}
+	}
+	if len(winners) != 1 {
+		t.Fatalf("%d writers landed, want exactly one", len(winners))
+	}
+	tip := readRelicTip(t, repo, config, root.Operation.RelicID)
+	assertSameRelicSnapshot(t, tip, winners[0])
+	if parents := relicParents(t, repo, tip.Head); len(parents) != 1 || parents[0] != root.Head {
+		t.Fatalf("tip parents = %q, want exactly %q", parents, root.Head)
+	}
+	parts, err := repo.ReadRelicParts(ctx, config, tip, []string{part.id}, true)
+	if err != nil {
+		t.Fatalf("ReadRelicParts() error = %v", err)
+	}
+	winningPart, _ := tip.Record.State.Relic.Part(part.id)
+	if want := bodyOf[winningPart.Body.Version]; want == "" || string(parts[part.id].Body) != want {
+		t.Fatalf("stored body = %q, want the winner's %q", parts[part.id].Body, want)
+	}
+	gitOutput(t, repo, "fsck", "--no-dangling")
+	if leftovers := relicWriteLeftovers(t, repo); len(leftovers) != 0 {
+		t.Fatalf("the writers left %q behind", leftovers)
+	}
+}
+
+func TestInterruptedRelicWriteChangesNothing(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	partA := relicTestPartNumbered(1).withField("heading", "Goals").withBody("md", []byte("first\n"))
+	partB := relicTestPartNumbered(2)
+	root := writeRelicRoot(t, repo, config, partA, partB)
+	ref := relicRef(root.Operation.RelicID)
+
+	newBody := []byte("second\n")
+	added := relicTestPartNumbered(3).withBody("md", []byte("a new part\n"))
+	pack := relicChildPack(root,
+		relicBodySet(700001, partA.id, partA.id, newBody),
+		core.RelicOperation{ID: added.id, Type: core.RelicOperationPartAdd, PartType: "section", Position: "3/1",
+			Body: &core.RelicBodyChange{Format: "md", Bytes: int64(len(added.body))}})
+	record := foldRelic(t, &root, pack)
+	content := map[string]core.RelicPartContent{
+		partA.id: {Body: newBody, HasBody: true},
+		added.id: {Body: added.body, HasBody: true},
+	}
+
+	// Everything but the ref move: the write stopped here.
+	orphan, err := repo.writeRelicObjects(ctx, &root, pack, record, content, "update relic")
+	if err != nil {
+		t.Fatalf("writeRelicObjects() error = %v", err)
+	}
+	if kind := gitOutput(t, repo, "cat-file", "-t", orphan); kind != "commit" {
+		t.Fatalf("the interrupted write left a %s, want its commit", kind)
+	}
+	if got := refValue(t, repo, ref); got != root.Head {
+		t.Fatalf("relic ref = %q after an interrupted write, want %q", got, root.Head)
+	}
+	assertSameRelicSnapshot(t, readRelicTip(t, repo, config, root.Operation.RelicID), root)
+	parts, err := repo.ReadRelicParts(ctx, config, root, []string{partA.id}, true)
+	if err != nil || string(parts[partA.id].Body) != "first\n" {
+		t.Fatalf("ReadRelicParts() = %#v, %v; want the body from before the interrupted write", parts, err)
+	}
+	gitOutput(t, repo, "fsck", "--no-dangling")
+	if leftovers := relicWriteLeftovers(t, repo); len(leftovers) != 0 {
+		t.Fatalf("the interrupted write left %q behind", leftovers)
+	}
+
+	written, err := repo.WriteRelic(ctx, config, &root, pack, record, content, "update relic")
+	if err != nil {
+		t.Fatalf("WriteRelic() after an interrupted write error = %v", err)
+	}
+	if got := refValue(t, repo, ref); got != written.Head {
+		t.Fatalf("relic ref = %q, want %q", got, written.Head)
+	}
+	if parents := relicParents(t, repo, written.Head); len(parents) != 1 || parents[0] != root.Head {
+		t.Fatalf("parents = %q, want exactly %q", parents, root.Head)
+	}
+	assertSameRelicSnapshot(t, readRelicTip(t, repo, config, root.Operation.RelicID),
+		core.RelicSnapshot{Head: written.Head, Operation: pack, Record: record})
+	gitOutput(t, repo, "fsck", "--no-dangling")
+}
+
+// The temporary files a write hashes are removed whether it succeeds or fails.
+func TestWriteRelicRemovesItsTemporaryFiles(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	pack, content := relicRootPack(config, 1, relicTestPartNumbered(1).withBody("md", []byte("a body\n")))
+	record := foldRelic(t, nil, pack)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sawTemporaryFiles := false
+	repo.commandObserver = func(args []string) {
+		if !slices.Contains(args, "--stdin-paths") {
+			return
+		}
+		// The files are on disk when Git is asked to hash them, and Git never
+		// gets to: the process is stopped here.
+		sawTemporaryFiles = len(relicWriteLeftovers(t, repo)) == 1
+		cancel()
+	}
+	if _, err := repo.WriteRelic(ctx, config, nil, pack, record, content, "create relic"); err == nil {
+		t.Fatal("WriteRelic() with a canceled hash-object succeeded")
+	}
+	repo.commandObserver = nil
+	if !sawTemporaryFiles {
+		t.Fatal("the write never had its temporary directory on disk; the test checks nothing")
+	}
+	if leftovers := relicWriteLeftovers(t, repo); len(leftovers) != 0 {
+		t.Fatalf("a failed write left %q behind", leftovers)
+	}
+	if refExists(t, repo, relicRef(pack.RelicID)) {
+		t.Fatal("a failed write created the relic ref")
+	}
+
+	if _, err := repo.WriteRelic(context.Background(), config, nil, pack, record, content, "create relic"); err != nil {
+		t.Fatalf("WriteRelic() error = %v", err)
+	}
+	if leftovers := relicWriteLeftovers(t, repo); len(leftovers) != 0 {
+		t.Fatalf("a finished write left %q behind", leftovers)
+	}
+}
+
+func TestWriteRelicNeverStoresTextFromAStaleBodyEdit(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	part := relicTestPartNumbered(1).withBody("md", []byte("the first text\n"))
+	root := writeRelicRoot(t, repo, config, part)
+	current := []byte("the second text, saved from the first\n")
+	edited := writeRelicChild(t, repo, config, root,
+		map[string]core.RelicPartContent{part.id: {Body: current, HasBody: true}},
+		relicBodySet(700001, part.id, part.id, current))
+
+	// This edit also started from the first version, which is no longer the
+	// current one, so the fold leaves the body alone.
+	// It is the same size as the current text, so only the version rule
+	// stands between it and the tree.
+	stale := bytes.ToUpper(current)
+	pack := relicChildPack(edited, relicBodySet(700002, part.id, part.id, stale))
+	record := foldRelic(t, &edited, pack)
+	if got, _ := record.State.Relic.Part(part.id); got.Body.Version != relicTestID(700001) {
+		t.Fatalf("the stale edit folded to version %s; the test needs it to change nothing", got.Body.Version)
+	}
+
+	written, err := repo.WriteRelic(ctx, config, &edited, pack, record,
+		map[string]core.RelicPartContent{part.id: {Body: stale, HasBody: true}}, "update relic")
+	if err != nil {
+		t.Fatalf("WriteRelic() error = %v", err)
+	}
+	if before, after := gitOutput(t, repo, "rev-parse", edited.Head+":parts/"+part.id+"/body"),
+		gitOutput(t, repo, "rev-parse", written.Head+":parts/"+part.id+"/body"); before != after {
+		t.Fatalf("the stale edit replaced body %s with %s", before, after)
+	}
+	if before, after := gitOutput(t, repo, "rev-parse", edited.Head+":parts"),
+		gitOutput(t, repo, "rev-parse", written.Head+":parts"); before != after {
+		t.Fatalf("the stale edit moved the parts tree from %s to %s", before, after)
+	}
+	parts, err := repo.ReadRelicParts(ctx, config, written, []string{part.id}, true)
+	if err != nil {
+		t.Fatalf("ReadRelicParts() error = %v", err)
+	}
+	if got := parts[part.id]; !got.HasBody || !bytes.Equal(got.Body, current) {
+		t.Fatalf("body after the stale edit = %q, want %q", got.Body, current)
+	}
+	if !bytes.Contains(relicBlob(t, repo, written.Head+":operation.json"), []byte(relicTestID(700002))) {
+		t.Fatal("the stale edit is not in history")
+	}
+}
+
+func TestWriteRelicRefusesOversizedContent(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	partID := relicTestID(1)
+
+	// create builds a one-part create whose operation records recordedBytes
+	// for the body, and writes it with the given content.
+	create := func(relicNumber int, recordedBytes int64, content core.RelicPartContent) (core.RelicSnapshot, string, error) {
+		pack, _ := relicRootPack(config, relicNumber, relicTestPartNumbered(1).withBody("md", nil))
+		pack.Operations[1].Body.Bytes = recordedBytes
+		snapshot, err := repo.WriteRelic(ctx, config, nil, pack, foldRelic(t, nil, pack),
+			map[string]core.RelicPartContent{partID: content}, "create relic")
+		return snapshot, pack.RelicID, err
+	}
+
+	for name, test := range map[string]struct {
+		recordedBytes int64
+		content       core.RelicPartContent
+		fragments     []string
+	}{
+		"a body over the limit": {
+			recordedBytes: core.MaxRelicBodyBytes,
+			content:       core.RelicPartContent{Body: bytes.Repeat([]byte("x"), core.MaxRelicBodyBytes+1), HasBody: true},
+			fragments:     []string{partID, "1048577", "1048576"},
+		},
+		"a body of another length than recorded": {
+			recordedBytes: 10,
+			content:       core.RelicPartContent{Body: []byte("eleven byte"), HasBody: true},
+			fragments:     []string{partID, "11 bytes", "10 bytes"},
+		},
+		"no body where one is recorded": {
+			recordedBytes: 10,
+			content:       core.RelicPartContent{},
+			fragments:     []string{partID},
+		},
+		"fields over the limit": {
+			recordedBytes: 4,
+			content:       core.RelicPartContent{Fields: relicFieldsOfSize(t, core.MaxRelicPartFieldsBytes+1), Body: []byte("body"), HasBody: true},
+			fragments:     []string{partID, "16385", "16384"},
+		},
+	} {
+		_, relicID, err := create(1, test.recordedBytes, test.content)
+		if core.CategoryOf(err) != core.CategoryValidation {
+			t.Fatalf("%s: category = %q, want %q; error = %v", name, core.CategoryOf(err), core.CategoryValidation, err)
+		}
+		for _, fragment := range test.fragments {
+			if !strings.Contains(err.Error(), fragment) {
+				t.Fatalf("%s: error %q does not mention %q", name, err, fragment)
+			}
+		}
+		if len(err.Error()) > 500 {
+			t.Fatalf("%s: the %d-byte error echoes the content back", name, len(err.Error()))
+		}
+		if refExists(t, repo, relicRef(relicID)) {
+			t.Fatalf("%s: the refused write created the relic ref", name)
+		}
+		if leftovers := relicWriteLeftovers(t, repo); len(leftovers) != 0 {
+			t.Fatalf("%s: the refused write left %q behind", name, leftovers)
+		}
+	}
+
+	// Exactly at each limit is stored and read back.
+	body := bytes.Repeat([]byte("y"), core.MaxRelicBodyBytes)
+	fields := relicFieldsOfSize(t, core.MaxRelicPartFieldsBytes)
+	snapshot, _, err := create(2, core.MaxRelicBodyBytes, core.RelicPartContent{Fields: fields, Body: body, HasBody: true})
+	if err != nil {
+		t.Fatalf("WriteRelic() at the limits error = %v", err)
+	}
+	if size := gitOutput(t, repo, "cat-file", "-s", snapshot.Head+":parts/"+partID+"/fields.json"); size != "16384" {
+		t.Fatalf("stored fields.json is %s bytes, want 16384", size)
+	}
+	parts, err := repo.ReadRelicParts(ctx, config, snapshot, []string{partID}, true)
+	if err != nil {
+		t.Fatalf("ReadRelicParts() at the limits error = %v", err)
+	}
+	if got := parts[partID]; !got.HasBody || !bytes.Equal(got.Body, body) || !reflect.DeepEqual(got.Fields, fields) {
+		t.Fatalf("content at the limits did not read back: %d body bytes, %d fields", len(got.Body), len(got.Fields))
+	}
+}
+
+// Content for a part the change does not name could only be dropped, so the
+// write is refused instead.
+func TestWriteRelicRefusesContentForAPartItDoesNotName(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	partA, partB := relicTestPartNumbered(1), relicTestPartNumbered(2)
+	root := writeRelicRoot(t, repo, config, partA, partB)
+
+	pack := relicChildPack(root, core.RelicOperation{
+		ID: relicTestID(700001), Type: core.RelicOperationPartFieldSet, Part: partA.id,
+		Name: "heading", Value: json.RawMessage(`"Goals"`),
+	})
+	fields := map[string]json.RawMessage{"heading": json.RawMessage(`"Goals"`)}
+	_, err := repo.WriteRelic(ctx, config, &root, pack, foldRelic(t, &root, pack),
+		map[string]core.RelicPartContent{partA.id: {Fields: fields}, partB.id: {Fields: fields}}, "update relic")
+	assertRelicCategory(t, err, core.CategoryValidation, partB.id)
+	if got := refValue(t, repo, relicRef(pack.RelicID)); got != root.Head {
+		t.Fatalf("relic ref = %q after a refused write, want %q", got, root.Head)
+	}
+
+	// An operation naming a part the relic does not have folds to no change,
+	// and the tree gains no subtree for it.
+	missing := relicTestID(99)
+	ghost := writeRelicChild(t, repo, config, root, nil, core.RelicOperation{
+		ID: relicTestID(700002), Type: core.RelicOperationPartRemove, Part: missing,
+	})
+	if before, after := gitOutput(t, repo, "rev-parse", root.Head+":parts"),
+		gitOutput(t, repo, "rev-parse", ghost.Head+":parts"); before != after {
+		t.Fatalf("an operation on a missing part moved the parts tree from %s to %s", before, after)
+	}
+}
+
+// Git's own content filters never touch a body: it is stored as given.
+func TestWriteRelicStoresBodyBytesExactly(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		gitOutput(t, repo, "config", "core.autocrlf", "true")
+		bodies := [][]byte{
+			[]byte("windows\r\nline endings\r\n"),
+			[]byte("unix\nline endings\n"),
+			{},
+			{0xff, 0xfe, 0x00, 0x80, '\r', '\n'},
+		}
+		parts := make([]relicTestPart, len(bodies))
+		ids := make([]string, len(bodies))
+		for index, body := range bodies {
+			parts[index] = relicTestPartNumbered(index+1).withBody("", body)
+			ids[index] = parts[index].id
+		}
+		root := writeRelicRoot(t, repo, config, parts...)
+
+		read, err := repo.ReadRelicParts(context.Background(), config, root, ids, true)
+		if err != nil {
+			t.Fatalf("ReadRelicParts() error = %v", err)
+		}
+		for index, body := range bodies {
+			if got := relicBlob(t, repo, root.Head+":parts/"+ids[index]+"/body"); !bytes.Equal(got, body) {
+				t.Fatalf("body %d stored as %q, want %q", index, got, body)
+			}
+			if got := read[ids[index]]; !got.HasBody || !bytes.Equal(got.Body, body) {
+				t.Fatalf("body %d read as %q (has body %t), want %q", index, got.Body, got.HasBody, body)
+			}
+		}
+
+		// Without bodies only the fields are read.
+		fieldsOnly, err := repo.ReadRelicParts(context.Background(), config, root, ids[:1], false)
+		if err != nil {
+			t.Fatalf("ReadRelicParts(no bodies) error = %v", err)
+		}
+		if want := map[string]core.RelicPartContent{ids[0]: {Fields: map[string]json.RawMessage{}}}; !reflect.DeepEqual(fieldsOnly, want) {
+			t.Fatalf("ReadRelicParts(no bodies) = %#v, want %#v", fieldsOnly, want)
+		}
+
+		_, err = repo.ReadRelicParts(context.Background(), config, root, []string{relicTestID(99)}, true)
+		assertRelicCategory(t, err, core.CategoryNotFound, relicTestID(99))
+	})
+}
+
+func TestWriteRelicRefusesAnObjectOverTheCeiling(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+
+	// Each part costs more in state.json, which also records the body's
+	// version, than in operation.json, so the state passes the ceiling first.
+	const partCount = 8500
+	partType := strings.Repeat("t", core.MaxRelicPartTypeBytes)
+	position := "1" + strings.Repeat("0", core.MaxRelicPartPositionBytes-3) + "/1"
+	format := strings.Repeat("f", core.MaxRelicBodyFormatBytes)
+	operations := []core.RelicOperation{{
+		ID:    relicTestID(800001),
+		Type:  core.RelicOperationCreate,
+		Relic: &core.RelicCreateData{Title: "A relic too large to store", Type: "spec", CreatedAt: relicTestTime},
+	}}
+	content := make(map[string]core.RelicPartContent, partCount)
+	for index := range partCount {
+		id := relicTestID(index + 1)
+		operations = append(operations, core.RelicOperation{
+			ID: id, Type: core.RelicOperationPartAdd, PartType: partType, Position: position,
+			Body: &core.RelicBodyChange{Format: format},
+		})
+		content[id] = core.RelicPartContent{HasBody: true}
+	}
+	pack := core.NewRelicOperationPack(config.ProjectID, relicTestRelicID(1), relicTestID(900001),
+		relicTestActor, 1, relicTestTime, operations)
+	record := foldRelic(t, nil, pack)
+	if size := len(encodedRelicDocument(t, pack)); size > MaxObjectBytes {
+		t.Fatalf("operation.json is %d bytes; the test needs it under the ceiling", size)
+	}
+	stateSize := len(encodedRelicDocument(t, record.State))
+	if stateSize <= MaxObjectBytes {
+		t.Fatalf("state.json is %d bytes; the test needs it over the ceiling", stateSize)
+	}
+
+	_, err := repo.WriteRelic(context.Background(), config, nil, pack, record, content, "create relic")
+	assertRelicCategory(t, err, core.CategoryValidation, "4194304", fmt.Sprint(stateSize), "state")
+	if len(err.Error()) > 500 {
+		t.Fatalf("the %d-byte error echoes the document back", len(err.Error()))
+	}
+	if refExists(t, repo, relicRef(pack.RelicID)) {
+		t.Fatal("the refused write created the relic ref")
+	}
+}
+
+func TestReadRelicPartsRefusesOversizedBlobs(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	body := []byte(strings.Repeat("b", 1840))
+	part := relicTestPartNumbered(1).withField("heading", "Goals").withBody("md", body)
+	root := writeRelicRoot(t, repo, config, part)
+	fieldsBlob := gitOutput(t, repo, "rev-parse", root.Head+":parts/"+part.id+"/fields.json")
+	bodyBlob := gitOutput(t, repo, "rev-parse", root.Head+":parts/"+part.id+"/body")
+
+	oversizedFields, err := json.Marshal(core.NewRelicFields(relicFieldsOfSize(t, core.MaxRelicPartFieldsBytes+1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, test := range map[string]struct {
+		fieldsBlob, bodyBlob string
+		fragments            []string
+	}{
+		"fields one byte over the limit": {
+			fieldsBlob: forgeRelicBlob(t, repo, append(oversizedFields, '\n')),
+			bodyBlob:   bodyBlob,
+			fragments:  []string{part.id, "16385", "16384"},
+		},
+		"a body one byte over the limit": {
+			fieldsBlob: fieldsBlob,
+			bodyBlob:   forgeRelicBlob(t, repo, bytes.Repeat([]byte("b"), core.MaxRelicBodyBytes+1)),
+			fragments:  []string{part.id, "1048577", "1048576"},
+		},
+		"a body over the object ceiling": {
+			fieldsBlob: fieldsBlob,
+			bodyBlob:   forgeRelicBlob(t, repo, bytes.Repeat([]byte("b"), MaxObjectBytes+1)),
+			fragments:  []string{part.id, "4194305", "1048576"},
+		},
+		"fields over the object ceiling": {
+			fieldsBlob: forgeRelicBlob(t, repo, bytes.Repeat([]byte("f"), MaxObjectBytes+1)),
+			bodyBlob:   bodyBlob,
+			fragments:  []string{part.id, "4194305", "16384"},
+		},
+		"a body of another size than the state records": {
+			fieldsBlob: fieldsBlob,
+			bodyBlob:   forgeRelicBlob(t, repo, body[:1839]),
+			fragments:  []string{part.id, "1839", "1840"},
+		},
+		"no body where the state records one": {
+			fieldsBlob: fieldsBlob,
+			fragments:  []string{part.id},
+		},
+		"fields that are not the canonical document": {
+			fieldsBlob: forgeRelicBlob(t, repo, []byte(`{"format":"workbook.relic-part-fields","version":1,"fields":{ "heading":"Goals"}}`+"\n")),
+			bodyBlob:   bodyBlob,
+			fragments:  []string{part.id},
+		},
+	} {
+		forged := core.RelicSnapshot{
+			Head:      forgeRelicPart(t, repo, root, part.id, test.fieldsBlob, test.bodyBlob),
+			Operation: root.Operation,
+			Record:    root.Record,
+		}
+		_, err := repo.ReadRelicParts(ctx, config, forged, []string{part.id}, true)
+		if core.CategoryOf(err) != core.CategoryCorruptData {
+			t.Fatalf("%s: category = %q, want %q; error = %v", name, core.CategoryOf(err), core.CategoryCorruptData, err)
+		}
+		for _, fragment := range test.fragments {
+			if !strings.Contains(err.Error(), fragment) {
+				t.Fatalf("%s: error %q does not mention %q", name, err, fragment)
+			}
+		}
+	}
+
+	// The same forged body is never read when bodies are not asked for.
+	forged := core.RelicSnapshot{
+		Head:      forgeRelicPart(t, repo, root, part.id, fieldsBlob, forgeRelicBlob(t, repo, bytes.Repeat([]byte("b"), core.MaxRelicBodyBytes+1))),
+		Operation: root.Operation,
+		Record:    root.Record,
+	}
+	if _, err := repo.ReadRelicParts(ctx, config, forged, []string{part.id}, false); err != nil {
+		t.Fatalf("ReadRelicParts(no bodies) error = %v", err)
+	}
+}
+
+func TestReadRelicTipsRefusesAMalformedTree(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	part := relicTestPartNumbered(1).withBody("md", []byte("a body\n"))
+	root := writeRelicRoot(t, repo, config, part)
+	child := writeRelicChild(t, repo, config, root, nil, relicTitleSet(700001, "A new title"))
+	other := writeRelicRootNumbered(t, repo, config, 2, relicTestPartNumbered(2))
+	bare := writeRelicRootNumbered(t, repo, config, 3)
+	relicID := root.Operation.RelicID
+
+	rootEntries := relicLines(gitOutput(t, repo, "ls-tree", root.Head))
+	childEntries := relicLines(gitOutput(t, repo, "ls-tree", child.Head))
+	bareEntries := relicLines(gitOutput(t, repo, "ls-tree", bare.Head))
+	blobOf := func(name string) string { return gitOutput(t, repo, "rev-parse", name) }
+	entry := func(mode, kind, objectID, name string) string {
+		return mode + " " + kind + " " + objectID + "\t" + name
+	}
+	commit := func(entries []string, parents ...string) string {
+		return forgeRelicCommitOf(t, repo, forgeRelicTree(t, repo, entries), parents...)
+	}
+	loose := bytes.Replace(relicBlob(t, repo, root.Head+":operation.json"), []byte(`{"format"`), []byte(`{ "format"`), 1)
+
+	for name, test := range map[string]struct {
+		relicID string
+		head    string
+	}{
+		"an extra top-level entry": {
+			head: commit(append(append([]string{}, rootEntries...), entry("100644", "blob", blobOf(root.Head+":links.json"), "notes.txt"))),
+		},
+		"no links.json": {
+			head: commit(replaceRelicTreeEntry(t, rootEntries, "links.json", "")),
+		},
+		"a parts blob": {
+			head: commit(replaceRelicTreeEntry(t, rootEntries, "parts", entry("100644", "blob", blobOf(root.Head+":links.json"), "parts"))),
+		},
+		"no parts tree though the state lists a part": {
+			head: commit(replaceRelicTreeEntry(t, rootEntries, "parts", "")),
+		},
+		"a parts tree though the state lists no part": {
+			relicID: bare.Operation.RelicID,
+			head:    commit(append(append([]string{}, bareEntries...), entry("040000", "tree", blobOf(root.Head+":parts"), "parts"))),
+		},
+		"an executable links.json": {
+			head: commit(replaceRelicTreeEntry(t, rootEntries, "links.json", entry("100755", "blob", blobOf(root.Head+":links.json"), "links.json"))),
+		},
+		"links.json that is not the links document": {
+			head: commit(replaceRelicTreeEntry(t, rootEntries, "links.json", entry("100644", "blob", blobOf(root.Head+":state.json"), "links.json"))),
+		},
+		"two parents": {
+			head: commit(childEntries, root.Head, other.Head),
+		},
+		"a create with a parent": {
+			head: commit(rootEntries, other.Head),
+		},
+		"an update with no parent": {
+			head: commit(childEntries),
+		},
+		"a state.json naming another relic": {
+			head: commit(replaceRelicTreeEntry(t, rootEntries, "state.json", entry("100644", "blob", blobOf(other.Head+":state.json"), "state.json"))),
+		},
+		"another relic's whole commit": {
+			head: other.Head,
+		},
+		"an operation.json that is not canonical": {
+			head: commit(replaceRelicTreeEntry(t, rootEntries, "operation.json", entry("100644", "blob", forgeRelicBlob(t, repo, loose), "operation.json"))),
+		},
+		"a tree instead of a commit": {
+			head: blobOf(root.Head + "^{tree}"),
+		},
+		"an object Git does not have": {
+			head: strings.Repeat("0", len(root.Head)-1) + "1",
+		},
+	} {
+		head := core.RelicHead{RelicID: relicID, ObjectID: test.head}
+		if test.relicID != "" {
+			head.RelicID = test.relicID
+		}
+		// A valid head beside it shares the batch and must not hide the refusal.
+		_, err := repo.ReadRelicTips(ctx, config, []core.RelicHead{{RelicID: other.Operation.RelicID, ObjectID: other.Head}, head})
+		if core.CategoryOf(err) != core.CategoryCorruptData {
+			t.Fatalf("%s: category = %q, want %q; error = %v", name, core.CategoryOf(err), core.CategoryCorruptData, err)
+		}
+	}
+
+	// The commits Workbook wrote read back, in the order asked for.
+	snapshots, err := repo.ReadRelicTips(ctx, config, []core.RelicHead{
+		{RelicID: bare.Operation.RelicID, ObjectID: bare.Head},
+		{RelicID: relicID, ObjectID: child.Head},
+		{RelicID: relicID, ObjectID: root.Head},
+	})
+	if err != nil {
+		t.Fatalf("ReadRelicTips() error = %v", err)
+	}
+	for index, want := range []core.RelicSnapshot{bare, child, root} {
+		assertSameRelicSnapshot(t, snapshots[index], want)
+	}
+	if empty, err := repo.ReadRelicTips(ctx, config, nil); err != nil || len(empty) != 0 {
+		t.Fatalf("ReadRelicTips(none) = %#v, %v", empty, err)
+	}
+}
+
+// A commit written under rules this build does not have is served, not called
+// corrupt: its tree is not judged, and nothing can be written on top of it.
+func TestReadRelicTipsServesANewerGenerationWithoutJudgingItsTree(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	part := relicTestPartNumbered(1).withBody("md", []byte("a body\n"))
+	root := writeRelicRoot(t, repo, config, part)
+	ref := relicRef(root.Operation.RelicID)
+
+	newer := func(name string) string {
+		contents := relicBlob(t, repo, root.Head+":"+name)
+		raised := bytes.Replace(contents, []byte(`"minReader":6`), []byte(`"minReader":7`), 1)
+		if bytes.Equal(raised, contents) {
+			t.Fatalf("%s carries no generation marker to raise", name)
+		}
+		return forgeRelicBlob(t, repo, raised)
+	}
+	entries := relicLines(gitOutput(t, repo, "ls-tree", root.Head))
+	entries = replaceRelicTreeEntry(t, entries, "operation.json", "100644 blob "+newer("operation.json")+"\toperation.json")
+	entries = replaceRelicTreeEntry(t, entries, "state.json", "100644 blob "+newer("state.json")+"\tstate.json")
+	entries = append(entries, "100644 blob "+forgeRelicBlob(t, repo, []byte("something new\n"))+"\tindex.json")
+	forged := forgeRelicCommitOf(t, repo, forgeRelicTree(t, repo, entries))
+	gitOutput(t, repo, "update-ref", ref, forged, root.Head)
+
+	tip := readRelicTip(t, repo, config, root.Operation.RelicID)
+	if tip.Head != forged || !tip.Operation.RequiresNewerReader() || !tip.Record.State.RequiresNewerReader() {
+		t.Fatalf("tip = %s (pack generation %d, state generation %d), want the forged newer commit %s",
+			tip.Head, tip.Operation.MinReader, tip.Record.State.MinReader, forged)
+	}
+	if tip.Record.State.Relic.Title != root.Record.State.Relic.Title {
+		t.Fatalf("newer tip title = %q, want %q", tip.Record.State.Relic.Title, root.Record.State.Relic.Title)
+	}
+	parts, err := repo.ReadRelicParts(ctx, config, tip, []string{part.id}, true)
+	if err != nil || string(parts[part.id].Body) != "a body\n" {
+		t.Fatalf("ReadRelicParts(newer tip) = %#v, %v", parts, err)
+	}
+
+	// A merge is still not a relic commit at any generation.
+	merge := forgeRelicCommitOf(t, repo, forgeRelicTree(t, repo, entries), root.Head, forged)
+	_, err = repo.ReadRelicTips(ctx, config, []core.RelicHead{{RelicID: root.Operation.RelicID, ObjectID: merge}})
+	assertRelicCategory(t, err, core.CategoryCorruptData)
+
+	pack := relicChildPack(root, relicTitleSet(700001, "A title from the older build"))
+	_, err = repo.WriteRelic(ctx, config, &tip, pack, foldRelic(t, &root, pack), nil, "update relic")
+	assertRelicCategory(t, err, core.CategoryNewerWriter)
+	if got := refValue(t, repo, ref); got != forged {
+		t.Fatalf("relic ref = %q after a refused write, want %q", got, forged)
+	}
+}
+
+func TestListRelicHeadsIgnoresTaskRefsAndRefusesStrangers(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+
+	if heads, err := repo.ListRelicHeads(ctx, config); err != nil || len(heads) != 0 {
+		t.Fatalf("ListRelicHeads() with no relic = %#v, %v", heads, err)
+	}
+
+	const secondTaskID = "WB-01K0M6B8A4FTT8C39MXXYTW7D2"
+	writeIndependentRoot(t, repo, config, writeTaskID, writeGenerationID, "01K0M6B8A4FTT8C39MXXYTW7C4", "First task")
+	writeIndependentRoot(t, repo, config, secondTaskID, "01K0M6B8A4FTT8C39MXXYTW7D3", "01K0M6B8A4FTT8C39MXXYTW7D4", "Second task")
+	// Written out of ID order.
+	later := writeRelicRootNumbered(t, repo, config, 2, relicTestPartNumbered(1))
+	earlier := writeRelicRootNumbered(t, repo, config, 1)
+
+	heads, err := repo.ListRelicHeads(ctx, config)
+	if err != nil {
+		t.Fatalf("ListRelicHeads() error = %v", err)
+	}
+	want := []core.RelicHead{
+		{RelicID: relicTestRelicID(1), ObjectID: earlier.Head},
+		{RelicID: relicTestRelicID(2), ObjectID: later.Head},
+	}
+	if !reflect.DeepEqual(heads, want) {
+		t.Fatalf("ListRelicHeads() = %#v, want %#v", heads, want)
+	}
+	taskHeads, err := repo.ListTaskHeads(ctx, config)
+	if err != nil || len(taskHeads) != 2 {
+		t.Fatalf("ListTaskHeads() beside relics = %#v, %v; want the two tasks", taskHeads, err)
+	}
+
+	for name, stranger := range map[string]struct {
+		create []string
+		remove []string
+	}{
+		"a task ID": {
+			create: []string{"update-ref", relicRef(writeTaskID), earlier.Head},
+			remove: []string{"update-ref", "-d", relicRef(writeTaskID)},
+		},
+		"another project's key": {
+			create: []string{"update-ref", relicRef(core.NewRelicID("OTHER", relicTestID(1))), earlier.Head},
+			remove: []string{"update-ref", "-d", relicRef(core.NewRelicID("OTHER", relicTestID(1)))},
+		},
+		"a nested name": {
+			create: []string{"update-ref", relicRef(relicTestRelicID(3)) + "/draft", earlier.Head},
+			remove: []string{"update-ref", "-d", relicRef(relicTestRelicID(3)) + "/draft"},
+		},
+		"a symbolic ref": {
+			create: []string{"symbolic-ref", relicRef(relicTestRelicID(3)), relicRef(relicTestRelicID(1))},
+			remove: []string{"symbolic-ref", "-d", relicRef(relicTestRelicID(3))},
+		},
+	} {
+		gitOutput(t, repo, stranger.create...)
+		_, err := repo.ListRelicHeads(ctx, config)
+		if core.CategoryOf(err) != core.CategoryCorruptData {
+			t.Fatalf("%s: category = %q, want %q; error = %v", name, core.CategoryOf(err), core.CategoryCorruptData, err)
+		}
+		gitOutput(t, repo, stranger.remove...)
+	}
+	if heads, err := repo.ListRelicHeads(ctx, config); err != nil || !reflect.DeepEqual(heads, want) {
+		t.Fatalf("ListRelicHeads() after the strangers were removed = %#v, %v", heads, err)
+	}
+}
+
+// A relic ref that became symbolic is never written through.
+func TestWriteRelicRefusesASymbolicRef(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	root := writeRelicRoot(t, repo, config)
+	ref := relicRef(root.Operation.RelicID)
+	shadow := "refs/workbook/shadow"
+	gitOutput(t, repo, "update-ref", shadow, root.Head)
+	gitOutput(t, repo, "update-ref", "--no-deref", "-d", ref)
+	gitOutput(t, repo, "symbolic-ref", ref, shadow)
+
+	pack := relicChildPack(root, relicTitleSet(700001, "A new title"))
+	_, err := repo.WriteRelic(context.Background(), config, &root, pack, foldRelic(t, &root, pack), nil, "update relic")
+	assertRelicCategory(t, err, core.CategoryCorruptData, "symbolic")
+	if got := refValue(t, repo, shadow); got != root.Head {
+		t.Fatalf("the ref behind the symbolic relic ref moved to %q", got)
+	}
+	if got := gitOutput(t, repo, "symbolic-ref", ref); got != shadow {
+		t.Fatalf("the symbolic relic ref now reads %q", got)
+	}
+}
+
+// The parent a caller hands over must be the commit Git stores at that head:
+// the new tree is built from that commit's parts.
+func TestWriteRelicRefusesAParentThatIsNotTheStoredCommit(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	part := relicTestPartNumbered(1)
+	root := writeRelicRoot(t, repo, config, part)
+	child := writeRelicChild(t, repo, config, root, nil, relicTitleSet(700001, "A new title"))
+
+	// The tip's head with the root's record: a fold onto a state the commit
+	// does not hold.
+	mismatched := core.RelicSnapshot{Head: child.Head, Operation: root.Operation, Record: root.Record}
+	pack := relicChildPack(root, relicTitleSet(700002, "Another title"))
+	_, err := repo.WriteRelic(ctx, config, &mismatched, pack, foldRelic(t, &root, pack), nil, "update relic")
+	assertRelicCategory(t, err, core.CategoryValidation, child.Head)
+	if got := refValue(t, repo, relicRef(pack.RelicID)); got != child.Head {
+		t.Fatalf("relic ref = %q after a refused write, want %q", got, child.Head)
+	}
+
+	// A head that is not an object ID at all is refused as one, and an
+	// abbreviated one is simply not what the ref holds.
+	next := relicChildPack(child, relicTitleSet(700003, "Another title"))
+	for head, want := range map[string]core.Category{
+		strings.ToUpper(child.Head): core.CategoryValidation,
+		"HEAD":                      core.CategoryValidation,
+		child.Head[:12]:             core.CategoryStaleWrite,
+	} {
+		odd := core.RelicSnapshot{Head: head, Operation: child.Operation, Record: child.Record}
+		_, err = repo.WriteRelic(ctx, config, &odd, next, foldRelic(t, &child, next), nil, "update relic")
+		assertRelicCategory(t, err, want)
+	}
+	if got := refValue(t, repo, relicRef(pack.RelicID)); got != child.Head {
+		t.Fatalf("relic ref = %q after refused writes, want %q", got, child.Head)
+	}
+
+	// A relic of another project's key is not this project's to write.
+	foreign, content := relicRootPack(config, 5)
+	foreign.RelicID = core.NewRelicID("OTHER", relicTestID(5))
+	_, err = repo.WriteRelic(ctx, config, nil, foreign, foldRelic(t, nil, foreign), content, "create relic")
+	assertRelicCategory(t, err, core.CategoryValidation)
+	if refExists(t, repo, relicRef(foreign.RelicID)) {
+		t.Fatal("a relic under another project's key was written")
+	}
+}
