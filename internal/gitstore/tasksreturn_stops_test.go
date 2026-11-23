@@ -606,3 +606,61 @@ func TestSetupRefusesAPlaceTheTasksCameBackToWhileTheOtherIsLive(t *testing.T) {
 		})
 	}
 }
+
+// CheckMoveDone, called directly, refuses settings that name a tasks remote
+// the tasks never left while origin still holds them unmarked: before
+// move-tasks ran, and after a run stopped before the mark. Once origin is
+// marked as moved there it passes, whether or not the run went on to finish,
+// and a tasks remote marked as moved itself is not its check.
+func TestCheckMoveDoneRefusesUntilThePlaceLeftIsMarked(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newMoveFixture(t, testrepo.FormatSHA1)
+	tasks := core.TasksRemoteSetting{Name: "tasks", URL: fixture.tasks}
+	mover, config := pullSettings(t, fixture.first, tasks)
+	requireNotMoved := func(when string) {
+		t.Helper()
+		err := reopenRepository(t, mover).CheckMoveDone(ctx)
+		refusal, found := core.TasksRemoteRefusalOf(err)
+		if !found || refusal.Reason != core.TasksRemoteNotMoved || refusal.Command != "workbook move-tasks" ||
+			refusal.Remote != "tasks" || !strings.Contains(err.Error(), "origin ("+fixture.origin+") still holds them") {
+			t.Fatalf("CheckMoveDone() %s = %v (%+v), want the not-moved refusal naming origin", when, err, refusal)
+		}
+	}
+	requireNotMoved("before move-tasks ran")
+
+	for _, step := range []string{"copy", "reread"} {
+		mover.moveStepHook = func(at string) error {
+			if at == step {
+				return errMoveInterrupted
+			}
+			return nil
+		}
+		if _, err := mover.MoveTasks(ctx, config, MoveTasksOptions{}); !errors.Is(err, errMoveInterrupted) {
+			t.Fatalf("MoveTasks() stopped at %s = %v, want the interruption", step, err)
+		}
+		mover.moveStepHook = nil
+		if step == "copy" {
+			requireNotMoved("after a move stopped before the mark")
+			continue
+		}
+		if err := reopenRepository(t, mover).CheckMoveDone(ctx); err != nil {
+			t.Fatalf("CheckMoveDone() after a move stopped past the mark = %v", err)
+		}
+	}
+	if _, err := mover.MoveTasks(ctx, config, MoveTasksOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopenRepository(t, mover).CheckMoveDone(ctx); err != nil {
+		t.Fatalf("CheckMoveDone() after the move = %v", err)
+	}
+
+	// The tasks go back to origin, and a checkout still on the tasks
+	// settings finds tasks marked: every command refuses that with where the
+	// tasks are, so CheckMoveDone leaves it alone.
+	back, _ := moveTo(t, mover, core.TasksRemoteSetting{})
+	stale, _ := pullSettings(t, back, tasks)
+	if err := stale.CheckMoveDone(ctx); err != nil {
+		t.Fatalf("CheckMoveDone() on a tasks remote marked as moved = %v", err)
+	}
+}
