@@ -830,14 +830,17 @@ var commandSchemas = map[string]commandMetadata{
 		Description: "Wipe this checkout's Workbook data, or one remote's, to start again from nothing.\n\n" +
 			"With no --remote it changes nothing shared. It stops this checkout's watcher,\n" +
 			"deletes every local ref under refs/workbook/ (task, tracking, parked and\n" +
-			"set-aside refs among them) and the caches under <git-common-dir>/workbook and\n" +
-			"any untracked file under .workbook/. Tracked files, .workbook/config.json and\n" +
-			"guidelines.md among them, are left alone. `workbook setup` then `workbook sync`\n" +
-			"rebuild everything from the tasks remote the settings name. First it writes a\n" +
-			"Git bundle of every ref it deletes, as compact does, and prints where it is and\n" +
-			"the git fetch that restores it. Work this checkout's tasks remote did not hold\n" +
-			"when it last synchronized is listed; with --no-backup such work is refused\n" +
-			"unless --discard-unpublished is given too.\n\n" +
+			"set-aside refs among them), the caches under <git-common-dir>/workbook, and\n" +
+			"the temporary files Workbook's own writes leave under .workbook/. Every other\n" +
+			"file is left alone: tracked files, .workbook/config.json and guidelines.md, and\n" +
+			"untracked files Workbook did not write, which it counts. A dry run lists the\n" +
+			"same refs and files. `workbook setup` then `workbook sync` rebuild everything\n" +
+			"from the tasks remote the settings name. First it writes a Git bundle of every\n" +
+			"ref it deletes, as compact does, and prints where it is and the git fetch that\n" +
+			"restores it; a --backup inside .workbook/ or <git-common-dir>/workbook is\n" +
+			"refused. Work the tasks remote does not hold is listed; with --no-backup such\n" +
+			"work is refused unless --discard-unpublished is given too, and --no-backup is\n" +
+			"refused outright when the tasks remote cannot be checked.\n\n" +
 			"With --remote it deletes that remote's refs under refs/workbook/ instead: the\n" +
 			"only Workbook command that deletes shared refs. At a place the tasks moved away\n" +
 			"from it keeps refs/workbook/project, which carries the moved marker, so a\n" +

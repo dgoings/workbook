@@ -128,6 +128,11 @@ func (r *Repository) ResetRemote(ctx context.Context, projectID string, plan Rem
 		return RemoteResetResult{}, err
 	}
 	var result RemoteResetResult
+	if !options.NoBackup {
+		if err := r.CheckResetBackup(options.Backup); err != nil {
+			return result, err
+		}
+	}
 	if len(plan.Refs) > 0 && !options.NoBackup {
 		path, err := r.writeResetBundle(ctx, projectID, plan.tracking(), plan.Remote, options)
 		if err != nil {
@@ -161,6 +166,9 @@ func (r *Repository) ResetRemote(ctx context.Context, projectID string, plan Rem
 	if err := r.fetchForReset(ctx, plan.Remote); err != nil {
 		return result, r.withBundle(err, result.Bundle)
 	}
+	if err := requireBundle(result.Bundle); err != nil {
+		return result, err
+	}
 	if len(refused) == 0 {
 		return result, nil
 	}
@@ -183,8 +191,18 @@ func (r *Repository) ResetRemote(ctx context.Context, projectID string, plan Rem
 		Command:   command,
 		Remaining: remaining,
 		Bundle:    result.Bundle,
-	}, "%s refused to delete %d of its Workbook refs: %s. It still holds %s. Once the host allows deleting refs under %s, run %s again to finish",
-		plan.Remote, len(refused), rule, strings.Join(remaining, ", "), workbookRefRoot, command)
+	}, "%s refused to delete %d of its Workbook refs: %s. It still holds %s. Once the host allows deleting refs under %s, run %s again to finish%s",
+		plan.Remote, len(refused), rule, strings.Join(remaining, ", "), workbookRefRoot, command, keepBundle(result.Bundle))
+}
+
+// keepBundle tells a person whose remote reset stopped partway to keep its
+// bundle: the run that finishes the job writes one of only what is left.
+func keepBundle(bundle string) string {
+	if bundle == "" {
+		return ""
+	}
+	return ". Keep the backup bundle at " + bundle + ": it holds every ref this run was to delete, " +
+		"and the run that finishes writes a bundle of only the ones still there"
 }
 
 // withBundle names the bundle written before err, which nothing else would.

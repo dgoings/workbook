@@ -35,7 +35,9 @@ import (
 //
 // Both write a Git bundle of every ref they are about to delete first, with
 // the same manifest, default location and flags compaction uses, so what was
-// removed can be fetched back.
+// removed can be fetched back. Two kinds of ref are left out of it: a damaged
+// one, whose object cannot be bundled, and the manifest ref an interrupted
+// backup left; and --no-backup, where it is allowed, writes no bundle.
 const workbookRefRoot = "refs/workbook/"
 
 // workbookDirectory is the tracked folder of project files in a worktree.
@@ -56,6 +58,9 @@ const (
 	ResetDeletionRefused = "deletion-refused"
 	// ResetWatcherRunning: this checkout's watcher could not be stopped.
 	ResetWatcherRunning = "watcher-running"
+	// ResetUnchecked: --no-backup was given and the tasks remote could not
+	// be checked for what this checkout alone holds.
+	ResetUnchecked = "unchecked"
 )
 
 // ResetRef is one ref a reset removes.
@@ -128,6 +133,33 @@ type ResetOptions struct {
 	Now   func() time.Time
 }
 
+// PrepareResetBackup fixes the run's ID and the bundle's path before a reset
+// does anything, and refuses a path the reset could not keep: one inside a
+// folder it removes files from (CheckResetBackup), or a file that already
+// exists, which a bundle never overwrites. The options it returns name the
+// bundle file itself.
+func (r *Repository) PrepareResetBackup(options ResetOptions) (ResetOptions, error) {
+	options, err := options.withDefaults()
+	if err != nil || options.NoBackup {
+		return options, err
+	}
+	if err := r.CheckResetBackup(options.Backup); err != nil {
+		return options, err
+	}
+	path, err := ResolveArchivePath(r.CommonGitDir, options.RunID, options.Backup)
+	if err != nil {
+		return options, err
+	}
+	if path, err = filepath.Abs(path); err != nil {
+		return options, core.Wrap(core.CategoryOperational, "cannot resolve backup path", err)
+	}
+	if err := refuseExistingArchive(path); err != nil {
+		return options, err
+	}
+	options.Backup = path
+	return options, nil
+}
+
 func (options ResetOptions) withDefaults() (ResetOptions, error) {
 	if options.RunID == "" {
 		id, err := core.CryptoULIDSource{}.New()
@@ -166,9 +198,18 @@ type LocalResetPlan struct {
 	Unpublished []UnpublishedRef
 	SetAside    []string
 	// Unchecked is why the remote could not be read just now, when it could
-	// not: Unpublished is then measured by what this checkout last saw of it,
-	// which can name work published since.
+	// not: Unpublished is then measured by this checkout's tracking refs for
+	// it, which can be wrong either way. They name work published since the
+	// last fetch as unpublished, and when the remote lost refs since then,
+	// they hide work that exists only here. A reset without a bundle is
+	// refused while it is set.
 	Unchecked string
+	// Caches is every file and folder the reset removes besides refs: each
+	// entry of the Git directory's workbook/ folder, and each temporary file
+	// Workbook's own writes leave under .workbook/. Left counts the other
+	// untracked files under .workbook/, which are not Workbook's and stay.
+	Caches []string
+	Left   int
 }
 
 // Holds reports whether the plan removes work that exists only here.
@@ -200,6 +241,22 @@ func (r *Repository) PlanLocalReset(ctx context.Context, remote string) (LocalRe
 	heads, err := r.remoteWorkbookHeads(ctx, remote)
 	if err != nil {
 		plan.Unchecked = err.Error()
+		var fetchErr *remoteHistoryError
+		if errors.As(err, &fetchErr) {
+			// The remote answered; what failed was this checkout taking its
+			// history in, which a damaged local ref is the usual cause of.
+			var damaged []string
+			for _, ref := range refs {
+				if ref.Damaged != "" {
+					damaged = append(damaged, ref.Ref)
+				}
+			}
+			plan.Unchecked = remote + " was read, but its history could not be fetched into this checkout to compare"
+			if len(damaged) > 0 {
+				plan.Unchecked += ", which holds damaged refs (" + strings.Join(damaged, ", ") + ")"
+			}
+			plan.Unchecked += ": " + fetchErr.err.Error()
+		}
 		heads = map[string]string{}
 		tracking := remoteTrackingPrefix(remote)
 		for _, ref := range refs {
@@ -210,6 +267,9 @@ func (r *Repository) PlanLocalReset(ctx context.Context, remote string) (LocalRe
 	}
 	plan.Unpublished, err = r.unpublishedWork(ctx, refs, heads)
 	if err != nil {
+		return LocalResetPlan{}, err
+	}
+	if plan.Caches, plan.Left, err = r.localResetCaches(ctx); err != nil {
 		return LocalResetPlan{}, err
 	}
 	return plan, nil
@@ -224,7 +284,7 @@ func (r *Repository) remoteWorkbookHeads(ctx context.Context, remote string) (ma
 	}
 	listing, err := r.Git(ctx, nil, "ls-remote", "--refs", remote, workbookRefRoot+"*")
 	if err != nil {
-		return nil, err
+		return nil, core.Wrap(core.CategoryOperational, remote+" could not be read", err)
 	}
 	heads := map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(listing)), "\n") {
@@ -245,18 +305,29 @@ func (r *Repository) remoteWorkbookHeads(ctx context.Context, remote string) (ma
 	}
 	if _, err := r.Git(ctx, names.Bytes(), "fetch", "--no-tags", "--no-write-fetch-head", "--no-auto-maintenance",
 		"--stdin", remote); err != nil {
-		return nil, err
+		return nil, &remoteHistoryError{err: err}
 	}
 	return heads, nil
 }
+
+// remoteHistoryError is a remote that listed its refs and whose history this
+// checkout then failed to fetch: the remote is readable, and the failure is
+// this checkout's.
+type remoteHistoryError struct{ err error }
+
+func (e *remoteHistoryError) Error() string { return "fetching its history failed: " + e.err.Error() }
+
+func (e *remoteHistoryError) Unwrap() error { return e.err }
 
 // LocalResetResult is what a reset of this checkout did.
 type LocalResetResult struct {
 	Removed []ResetRef
 	// Bundle is the backup's absolute path, or "" when none was written.
 	Bundle string
-	// Caches names each cache file or directory removed.
+	// Caches names each cache file or directory removed, and Left counts the
+	// untracked files under .workbook/ that are not Workbook's and stayed.
 	Caches []string
+	Left   int
 }
 
 // ResetLocal removes every ref plan names and this checkout's caches,
@@ -271,6 +342,14 @@ func (r *Repository) ResetLocal(ctx context.Context, projectID string, plan Loca
 		return LocalResetResult{}, err
 	}
 	var result LocalResetResult
+	if !options.NoBackup {
+		if err := r.CheckResetBackup(options.Backup); err != nil {
+			return result, err
+		}
+	}
+	if err := r.resetStep("start"); err != nil {
+		return result, err
+	}
 	if len(plan.Refs) > 0 && !options.NoBackup {
 		path, err := r.writeResetBundle(ctx, projectID, plan.Refs, "", options)
 		if err != nil {
@@ -288,9 +367,104 @@ func (r *Repository) ResetLocal(ctx context.Context, projectID string, plan Loca
 	if err := r.resetStep("refs"); err != nil {
 		return result, err
 	}
-	caches, err := r.removeCaches(ctx)
-	result.Caches = caches
-	return result, err
+	caches, left, err := r.removeCaches(ctx)
+	result.Caches, result.Left = caches, left
+	if err != nil {
+		return result, err
+	}
+	return result, requireBundle(result.Bundle)
+}
+
+// requireBundle fails loudly when the bundle a reset wrote is no longer
+// where it was written, so a reset never reports a backup that is not there.
+func requireBundle(bundle string) error {
+	if bundle == "" {
+		return nil
+	}
+	if info, err := os.Stat(bundle); err != nil || !info.Mode().IsRegular() {
+		return core.Errorf(core.CategoryOperational,
+			"the backup bundle written at %s is not there any more, so the refs removed are not kept in it; "+
+				"restore them from another copy of the project, such as a clone or the remote", bundle)
+	}
+	return nil
+}
+
+// CheckResetBackup refuses a --backup value that would put the bundle inside
+// a folder a reset of this checkout removes files from: the Git directory's
+// workbook/ folder and this worktree's .workbook/. The bundle's own path is
+// resolved as the write would resolve it, symbolic links included, and ""
+// is the default location, which is outside both. The refusal changes
+// nothing, so a reset checks before it does anything else.
+func (r *Repository) CheckResetBackup(backup string) error {
+	if backup == "" {
+		return nil
+	}
+	path, err := ResolveArchivePath(r.CommonGitDir, "backup", backup)
+	if err != nil {
+		return err
+	}
+	if path, err = filepath.Abs(path); err != nil {
+		return core.Wrap(core.CategoryOperational, "cannot resolve backup path", err)
+	}
+	for _, folder := range r.resetFolders() {
+		if pathInside(path, folder) {
+			return core.Errorf(core.CategoryInvocation,
+				"--backup %s puts the bundle inside %s, which workbook reset removes files from; write it somewhere else", backup, folder)
+		}
+	}
+	return nil
+}
+
+// resetFolders is every folder a reset of this checkout removes files from.
+func (r *Repository) resetFolders() []string {
+	folders := []string{filepath.Join(r.CommonGitDir, "workbook")}
+	if r.Root != "" {
+		folders = append(folders, filepath.Join(r.Root, workbookDirectory))
+	}
+	return folders
+}
+
+// pathInside reports whether path is folder or lies anywhere under it, once
+// both are absolute with every symbolic link resolved, or when one of path's
+// folders is folder itself by another spelling, as on a file system that
+// ignores case.
+func pathInside(path, folder string) bool {
+	resolved, resolvedFolder := resolveExisting(path), resolveExisting(folder)
+	if resolved == resolvedFolder || strings.HasPrefix(resolved, resolvedFolder+string(filepath.Separator)) {
+		return true
+	}
+	target, err := os.Stat(resolvedFolder)
+	if err != nil {
+		return false
+	}
+	for directory := resolved; ; directory = filepath.Dir(directory) {
+		if info, err := os.Stat(directory); err == nil && os.SameFile(info, target) {
+			return true
+		}
+		if parent := filepath.Dir(directory); parent == directory {
+			return false
+		}
+	}
+}
+
+// resolveExisting is path, absolute, with the symbolic links in the part of
+// it that exists resolved and the rest appended as written.
+func resolveExisting(path string) string {
+	path = filepath.Clean(path)
+	var rest []string
+	for current := path; ; current = filepath.Dir(current) {
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			for index := len(rest) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, rest[index])
+			}
+			return resolved
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return path
+		}
+		rest = append(rest, filepath.Base(current))
+	}
 }
 
 // resetStep runs the test hook after a reset's step.
@@ -436,8 +610,11 @@ func (r *Repository) classifyResetRefs(ctx context.Context, refs []ResetRef) err
 // unpublishedWork is every local task ref and the configuration ledger
 // holding commits that none of remoteHeads reaches, with the operations those
 // commits record. remoteHeads is what the remote holds now, or, when it could
-// not be read, what this checkout last saw of it, which can only name too
-// much, never too little.
+// not be read, what this checkout's tracking refs say it held at the last
+// fetch. Those can be wrong both ways: they name work published since as
+// unpublished, and when the remote lost refs since, as a reset of it makes
+// it, they reach commits the remote no longer holds and so hide work that
+// exists only here.
 func (r *Repository) unpublishedWork(ctx context.Context, refs []ResetRef, remoteHeads map[string]string) ([]UnpublishedRef, error) {
 	var tips []string
 	var candidates []ResetRef
@@ -608,7 +785,9 @@ func (r *Repository) writeResetBundle(ctx context.Context, projectID string, ref
 	var bundled []bundledRef
 	var taskRefs []ResetRef
 	for _, ref := range refs {
-		if ref.Damaged != "" {
+		// A manifest ref an interrupted backup left is not data: the bundle
+		// carries its own manifest under that name.
+		if ref.Damaged != "" || ref.Ref == archiveManifestRef {
 			continue
 		}
 		bundled = append(bundled, bundledRef{name: ref.Ref, expected: ref.ObjectID})
@@ -709,7 +888,10 @@ func (r *Repository) deleteLocalRefs(ctx context.Context, refs []ResetRef) error
 		if !strings.HasPrefix(ref.Ref, workbookRefRoot) {
 			return core.Errorf(core.CategoryOperational, "refusing to delete %s, which is outside %s", ref.Ref, workbookRefRoot)
 		}
-		if strings.HasPrefix(ref.Damaged, "it is a symbolic ref") {
+		// The manifest ref a backup sets and removes, which an interrupted
+		// one may have left, is not leased: this run's own backup replaced
+		// and removed it.
+		if strings.HasPrefix(ref.Damaged, "it is a symbolic ref") || ref.Ref == archiveManifestRef {
 			fmt.Fprintf(&input, "delete %s\n", ref.Ref)
 			continue
 		}
@@ -723,51 +905,79 @@ func (r *Repository) deleteLocalRefs(ctx context.Context, refs []ResetRef) error
 	return nil
 }
 
-// removeCaches removes the disposable caches under <git-common-dir>/workbook
-// and every untracked file under .workbook/ in this worktree, which Git says
-// are not tracked, such as a temporary file an interrupted write left. A
-// tracked file is never removed, and neither are config.json and
-// guidelines.md, tracked or not. It returns the paths
-// removed, and none that were already gone.
-func (r *Repository) removeCaches(ctx context.Context) ([]string, error) {
-	var removed []string
+// workbookTemporaryPattern matches the temporary file Workbook's own write
+// of .workbook/config.json leaves when it is interrupted. It is the only file
+// Workbook writes under .workbook/ besides config.json and guidelines.md,
+// which are project files and stay.
+const workbookTemporaryPattern = ".config-*.tmp"
+
+// localResetCaches is what removeCaches would remove now: every entry of the
+// Git directory's workbook/ folder, which holds only Workbook's caches, and
+// every untracked file directly under .workbook/ that Workbook's own writes
+// leave behind. left counts the other untracked files under .workbook/,
+// ignored ones included, which are somebody else's and stay.
+func (r *Repository) localResetCaches(ctx context.Context) (caches []string, left int, err error) {
 	cacheDir := filepath.Join(r.CommonGitDir, "workbook")
 	entries, err := os.ReadDir(cacheDir)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 	case err != nil:
-		return nil, core.Wrap(core.CategoryOperational, "cannot read Workbook's cache directory", err)
+		return nil, 0, core.Wrap(core.CategoryOperational, "cannot read Workbook's cache directory", err)
 	default:
 		for _, entry := range entries {
-			path := filepath.Join(cacheDir, entry.Name())
-			if err := os.RemoveAll(path); err != nil {
-				return removed, core.Wrap(core.CategoryOperational, "cannot remove "+path, err)
-			}
-			removed = append(removed, path)
+			caches = append(caches, filepath.Join(cacheDir, entry.Name()))
 		}
-		if err := os.Remove(cacheDir); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return removed, core.Wrap(core.CategoryOperational, "cannot remove "+cacheDir, err)
-		}
+	}
+	if r.Root == "" {
+		return caches, 0, nil
 	}
 	output, err := r.Git(ctx, nil, "ls-files", "-z", "--others", "--", workbookDirectory+"/")
 	if err != nil {
-		return removed, err
+		return caches, 0, err
 	}
+	folder := filepath.Join(r.Root, workbookDirectory)
 	for _, name := range strings.Split(string(output), "\x00") {
-		// The settings and the guidelines are project files even before
-		// anybody commits them, and setup needs the settings to know where
-		// the tasks are.
-		if name == "" || name == configPath || name == workbookDirectory+"/guidelines.md" {
+		if name == "" {
 			continue
 		}
 		path := filepath.Join(r.Root, filepath.FromSlash(name))
-		if !strings.HasPrefix(path, filepath.Join(r.Root, workbookDirectory)+string(filepath.Separator)) {
-			return removed, core.Errorf(core.CategoryOperational, "Git listed %q outside %s", name, workbookDirectory)
+		if !strings.HasPrefix(path, folder+string(filepath.Separator)) {
+			return caches, 0, core.Errorf(core.CategoryOperational, "Git listed %q outside %s", name, workbookDirectory)
 		}
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return removed, core.Wrap(core.CategoryOperational, "cannot remove "+path, err)
+		// The settings and the guidelines are project files even before
+		// anybody commits them, and setup needs the settings to know where
+		// the tasks are.
+		if name == configPath || name == workbookDirectory+"/guidelines.md" {
+			continue
+		}
+		if matched, _ := filepath.Match(workbookTemporaryPattern, filepath.Base(path)); matched && filepath.Dir(path) == folder {
+			caches = append(caches, path)
+			continue
+		}
+		left++
+	}
+	return caches, left, nil
+}
+
+// removeCaches removes what localResetCaches lists, then the Git directory's
+// workbook/ folder itself. A tracked file is never removed, and neither is
+// any file under .workbook/ that Workbook did not write. It returns the paths
+// removed, none that were already gone, and how many files it left.
+func (r *Repository) removeCaches(ctx context.Context) ([]string, int, error) {
+	caches, left, err := r.localResetCaches(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	var removed []string
+	for _, path := range caches {
+		if err := os.RemoveAll(path); err != nil {
+			return removed, left, core.Wrap(core.CategoryOperational, "cannot remove "+path, err)
 		}
 		removed = append(removed, path)
 	}
-	return removed, nil
+	cacheDir := filepath.Join(r.CommonGitDir, "workbook")
+	if err := os.Remove(cacheDir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return removed, left, core.Wrap(core.CategoryOperational, "cannot remove "+cacheDir, err)
+	}
+	return removed, left, nil
 }

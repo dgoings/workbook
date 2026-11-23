@@ -101,6 +101,9 @@ func TestResetRebuildsADamagedCheckoutToMatchAFreshClone(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(clone, ".workbook", "stray.cache"), []byte("untracked"), 0o644); err != nil {
 				t.Fatal(err)
 			}
+			if err := os.WriteFile(filepath.Join(clone, ".workbook", ".config-1.tmp"), []byte("{"), 0o644); err != nil {
+				t.Fatal(err)
+			}
 			if code, _, _ := run(t, clone, "list"); code == 0 {
 				t.Fatal("list succeeded on the damaged checkout; the damage did not take")
 			}
@@ -126,13 +129,16 @@ func TestResetRebuildsADamagedCheckoutToMatchAFreshClone(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(commonDir, "workbook")); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("the cache directory is still there: %v", err)
 			}
-			if _, err := os.Stat(filepath.Join(clone, ".workbook", "stray.cache")); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("the untracked file under .workbook is still there: %v", err)
+			if _, err := os.Stat(filepath.Join(clone, ".workbook", ".config-1.tmp")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("Workbook's temporary file under .workbook is still there: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(clone, ".workbook", "stray.cache")); err != nil || summary.Left != 1 {
+				t.Fatalf("the untracked file Workbook did not write under .workbook: %v, left %d", err, summary.Left)
 			}
 			if got := cliGitOutput(t, clone, "ls-files", "-s", ".workbook"); got != trackedBefore {
 				t.Fatalf("tracked files under .workbook changed:\n%s\nwant\n%s", got, trackedBefore)
 			}
-			statusBefore = strings.TrimSpace(strings.Replace(statusBefore, "?? .workbook/stray.cache", "", 1))
+			statusBefore = strings.TrimSpace(strings.Replace(statusBefore, "?? .workbook/.config-1.tmp\n", "", 1))
 			if status := cliGitOutput(t, clone, "status", "--porcelain"); status != statusBefore {
 				t.Fatalf("the working tree changed:\n%s\nwant\n%s", status, statusBefore)
 			}
@@ -453,7 +459,8 @@ func TestResetRemoteNamesAHostRuleAgainstDeletionAndFinishesWhenItIsLifted(t *te
 			if refusal.Reason != gitstore.ResetDeletionRefused || !reflect.DeepEqual(refusal.Remaining, want) ||
 				refusal.Bundle == "" || refusal.Command != "workbook reset --remote origin --confirm origin" ||
 				!strings.Contains(message, "rule: Workbook refs here may not be deleted") ||
-				!strings.Contains(message, "hook declined") {
+				!strings.Contains(message, "hook declined") ||
+				!strings.Contains(message, "Keep the backup bundle at "+refusal.Bundle) {
 				t.Fatalf("refusal = %q, %+v; want remaining %v", message, refusal, want)
 			}
 			var held []string

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -46,8 +47,12 @@ type resetSummary struct {
 	// not: Unpublished is then what this checkout last saw it lacked.
 	Unchecked string        `json:"unchecked,omitempty"`
 	Watcher   *resetWatcher `json:"watcher,omitempty"`
-	Caches    []string      `json:"caches"`
-	Bundle    string        `json:"bundle,omitempty"`
+	// Caches is every file and folder removed besides refs, or on a dry run
+	// every one that would be; Left counts the untracked files under
+	// .workbook/ that Workbook did not write, which stay.
+	Caches []string `json:"caches"`
+	Left   int      `json:"left"`
+	Bundle string   `json:"bundle,omitempty"`
 	// Restore is the Git command that fetches the bundle's refs back.
 	Restore string   `json:"restore,omitempty"`
 	Next    []string `json:"next"`
@@ -89,15 +94,21 @@ func runReset(ctx context.Context, args []string, cwd string, stdout, stderr io.
 	case typed["backup"] && *backup == "":
 		return core.Errorf(core.CategoryInvocation, "reset --backup requires a path")
 	}
-	if *backup == "-" {
-		// As for compact: typed as a path, "-" is a file of that name.
-		*backup = "./-"
+	if *backup != "" && !filepath.IsAbs(*backup) {
+		// Relative to where the command runs, which is where the person
+		// typed it; "-" is a file of that name, as for compact.
+		*backup = filepath.Join(cwd, *backup)
 	}
 	repository, err := gitstore.Open(ctx, cwd)
 	if err != nil {
 		return err
 	}
 	options := gitstore.ResetOptions{NoBackup: *noBackup, Backup: *backup, Flags: given}
+	// Every refusal the bundle's path can earn comes before anything is
+	// stopped, written or removed, and a dry run earns the same ones.
+	if options, err = repository.PrepareResetBackup(options); err != nil {
+		return err
+	}
 	if typed["remote"] {
 		return runResetRemote(ctx, repository, *remote, *confirm, *dryRun, options, *jsonMode, stdout, stderr)
 	}
@@ -106,7 +117,9 @@ func runReset(ctx context.Context, args []string, cwd string, stdout, stderr io.
 
 // runResetCheckout wipes this checkout's Workbook data: its watcher first, so
 // its last synchronization publishes what it held, then every ref under
-// refs/workbook/, then the caches.
+// refs/workbook/, then the caches. What can refuse the reset is checked
+// before the watcher is stopped, and again once it has stopped, since its
+// last synchronization changes what this checkout alone holds.
 func runResetCheckout(
 	ctx context.Context,
 	repository *gitstore.Repository,
@@ -116,34 +129,35 @@ func runResetCheckout(
 	stdout io.Writer,
 ) error {
 	projectID, remote := repository.ResetSettings()
-	watcher, err := stopResetWatcher(repository.CommonGitDir, dryRun)
-	if err != nil {
-		return err
-	}
 	plan, err := repository.PlanLocalReset(ctx, remote)
 	if err != nil {
 		return err
 	}
+	if err := refuseLocalReset(plan, options, discard, nil); err != nil {
+		return err
+	}
+	watcher, err := stopResetWatcher(repository.CommonGitDir, dryRun)
+	if err != nil {
+		return err
+	}
+	if watcher != nil && watcher.Stopped {
+		if plan, err = repository.PlanLocalReset(ctx, remote); err != nil {
+			return err
+		}
+		if err := refuseLocalReset(plan, options, discard, watcher); err != nil {
+			return err
+		}
+	}
 	summary := resetSummary{
 		DryRun: dryRun, Scope: "checkout", Remote: remote, URL: repository.GitRemoteURL(ctx, remote),
 		Refs: emptyIfNil(plan.Refs), Kept: []string{}, Unpublished: emptyIfNil(plan.Unpublished),
-		SetAside: emptyIfNil(plan.SetAside), Unchecked: plan.Unchecked, Watcher: watcher, Caches: []string{},
+		SetAside: emptyIfNil(plan.SetAside), Unchecked: plan.Unchecked, Watcher: watcher,
+		Caches: emptyIfNil(plan.Caches), Left: plan.Left,
 	}
 	for _, ref := range plan.Refs {
 		if strings.HasPrefix(ref.Ref, "refs/workbook/tasks/") {
 			summary.Tasks++
 		}
-	}
-	if options.NoBackup && plan.Holds() && !discard {
-		return gitstore.NewResetRefusal(core.CategoryValidation, gitstore.ResetRefusal{
-			Reason:      gitstore.ResetUnpublished,
-			Remote:      remote,
-			Command:     "workbook reset --no-backup --discard-unpublished",
-			Unpublished: plan.Unpublished,
-			SetAside:    plan.SetAside,
-		}, "this checkout holds work that exists only here, which %s %s: %s. Run workbook sync to publish it, "+
-			"or reset without --no-backup to keep it in a bundle, or add --discard-unpublished to lose it",
-			remote, lacks(plan), describeLocalOnly(plan))
 	}
 	// A checkout with no project settings left, as leaving Workbook makes
 	// it, has nothing to set up again.
@@ -158,7 +172,7 @@ func runResetCheckout(
 		if err != nil {
 			return err
 		}
-		summary.Bundle, summary.Caches = result.Bundle, emptyIfNil(result.Caches)
+		summary.Bundle, summary.Caches, summary.Left = result.Bundle, emptyIfNil(result.Caches), result.Left
 		if result.Bundle != "" {
 			summary.Restore = repository.RestoreCommand(result.Bundle, plan.Refs)
 		}
@@ -168,6 +182,47 @@ func runResetCheckout(
 		return nil
 	}
 	writeResetSummary(stdout, summary)
+	return nil
+}
+
+// refuseLocalReset refuses a reset of this checkout without a bundle that
+// would lose work existing only here, or that cannot tell whether it would
+// because the tasks remote could not be checked. watcher is set when the
+// watcher was already stopped, which the refusal then says.
+func refuseLocalReset(plan gitstore.LocalResetPlan, options gitstore.ResetOptions, discard bool, watcher *resetWatcher) error {
+	if !options.NoBackup || len(plan.Refs) == 0 {
+		return nil
+	}
+	stopped := ""
+	if watcher != nil && watcher.Stopped {
+		stopped = fmt.Sprintf(" This checkout's watcher, process %d, was stopped; start it again with workbook sync --watch.", watcher.PID)
+	}
+	if plan.Unchecked != "" {
+		// The tracking refs are only what the remote held at the last fetch:
+		// they hide work here when the remote lost refs since, so they
+		// cannot stand in for the check --no-backup relies on.
+		return gitstore.NewResetRefusal(core.CategoryValidation, gitstore.ResetRefusal{
+			Reason:      gitstore.ResetUnchecked,
+			Remote:      plan.Remote,
+			Command:     "workbook reset",
+			Unpublished: plan.Unpublished,
+			SetAside:    plan.SetAside,
+		}, "%s could not be checked for work that exists only in this checkout (%s), so a reset without a bundle is refused, "+
+			"--discard-unpublished or not: what this checkout last fetched from it cannot say what it lacks now. "+
+			"Run workbook reset without --no-backup; the bundle is cheap, and it can be deleted afterwards.%s",
+			plan.Remote, plan.Unchecked, stopped)
+	}
+	if plan.Holds() && !discard {
+		return gitstore.NewResetRefusal(core.CategoryValidation, gitstore.ResetRefusal{
+			Reason:      gitstore.ResetUnpublished,
+			Remote:      plan.Remote,
+			Command:     "workbook reset --no-backup --discard-unpublished",
+			Unpublished: plan.Unpublished,
+			SetAside:    plan.SetAside,
+		}, "this checkout holds work that exists only here, which %s does not hold: %s. Run workbook sync to publish it, "+
+			"or reset without --no-backup to keep it in a bundle, or add --discard-unpublished to lose it.%s",
+			plan.Remote, describeLocalOnly(plan), stopped)
+	}
 	return nil
 }
 
@@ -262,14 +317,6 @@ func emptyIfNil[T any](values []T) []T {
 	return values
 }
 
-// lacks says how the tasks remote was found to lack what this checkout holds.
-func lacks(plan gitstore.LocalResetPlan) string {
-	if plan.Unchecked != "" {
-		return "lacked when this checkout last read it (it cannot be read now: " + plan.Unchecked + ")"
-	}
-	return "does not hold"
-}
-
 // describeLocalOnly names what exists only in this checkout, for a refusal.
 func describeLocalOnly(plan gitstore.LocalResetPlan) string {
 	var parts []string
@@ -331,8 +378,8 @@ func writeResetSummary(output io.Writer, summary resetSummary) {
 		fmt.Fprintf(output, "Set aside:\t%s\n", ref)
 	}
 	if summary.Unchecked != "" {
-		fmt.Fprintf(output, "Unchecked:\t%s could not be read, so what it lacks is what this checkout last saw it lack: %s\n",
-			summary.Remote, summary.Unchecked)
+		fmt.Fprintf(output, "Unchecked:\t%s; what it lacks is measured by what this checkout last fetched from it, "+
+			"which misses work here if it lost refs since\n", summary.Unchecked)
 	}
 	if summary.Watcher != nil {
 		if summary.Watcher.Stopped {
@@ -342,7 +389,14 @@ func writeResetSummary(output io.Writer, summary resetSummary) {
 		}
 	}
 	if len(summary.Caches) > 0 {
-		fmt.Fprintf(output, "Caches:\t%s removed\n", plural(len(summary.Caches), "file"))
+		removed := "removed"
+		if summary.DryRun {
+			removed = "would be removed"
+		}
+		fmt.Fprintf(output, "Caches:\t%s %s\n", plural(len(summary.Caches), "cache file"), removed)
+	}
+	if summary.Left > 0 {
+		fmt.Fprintf(output, "Left:\t%s under .workbook/ that Workbook did not write, left alone\n", plural(summary.Left, "untracked file"))
 	}
 	if summary.Bundle != "" {
 		fmt.Fprintf(output, "Backup:\t%s\n", summary.Bundle)

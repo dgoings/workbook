@@ -198,6 +198,13 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 	if err != nil {
 		return err
 	}
+	if *cleanUp && !*noBackup {
+		// The clean-up's bundle goes where --backup says; one a later reset
+		// of this checkout would delete is refused before anything moves.
+		if err := repository.CheckResetBackup(*backup); err != nil {
+			return err
+		}
+	}
 	if tasksOnly, err := repository.TasksOnly(ctx); err != nil {
 		return err
 	} else if tasksOnly {
@@ -220,6 +227,11 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 		return err
 	}
 	summary := moveTasksSummary{MoveTasksResult: result}
+	if err != nil && *cleanUp {
+		// The move finished but set edits aside: the place left is not
+		// cleaned up until the person has looked at them.
+		summary.CleanUpNext = "workbook reset --remote " + result.From.Remote
+	}
 	if err == nil && *cleanUp {
 		cleaned, cleanErr := cleanUpAfterMove(ctx, repository, config.ProjectID, result, gitstore.ResetOptions{
 			NoBackup: *noBackup, Backup: *backup, Flags: given,
@@ -279,6 +291,9 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 		fmt.Fprintf(stdout, "Config:\tnot carried\t(%s holds configuration changes this checkout's have diverged from; "+
 			"make them again with workbook config set)\n", result.From.Remote)
 	}
+	if summary.CleanUpNext != "" {
+		fmt.Fprintf(stdout, "Cleaned up:\tnothing, because edits were set aside\t(once they are dealt with, run %s)\n", summary.CleanUpNext)
+	}
 	if cleaned := summary.CleanUp; cleaned != nil {
 		fmt.Fprintf(stdout, "Cleaned up:\t%s\t(%s deleted there, %s kept)\n",
 			cleaned.Remote, plural(len(cleaned.Refs), "Workbook ref"), strings.Join(cleaned.Kept, ", "))
@@ -296,6 +311,9 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 type moveTasksSummary struct {
 	gitstore.MoveTasksResult
 	CleanUp *resetSummary `json:"cleanUp,omitempty"`
+	// CleanUpNext is the command that cleans up the place left, when
+	// --clean-up did not because the move set edits aside.
+	CleanUpNext string `json:"cleanUpNext,omitempty"`
 }
 
 // cleanUpAfterMove does to the place a finished move left what reset

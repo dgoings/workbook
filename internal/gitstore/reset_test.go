@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dgoings/workbook/internal/core"
 )
 
 var errResetInterrupted = errors.New("interrupted")
@@ -177,5 +179,205 @@ func TestResetRemoteResumesAfterAnInterruptionAtEveryStep(t *testing.T) {
 				t.Fatalf("refs outside refs/workbook/ changed:\n%s\nwant\n%s", got, outside)
 			}
 		})
+	}
+}
+
+// A reset stopped before its backup began, or killed while writing it, which
+// leaves the manifest ref the backup sets and a half-written temporary bundle
+// beside the file it was writing, is finished by the first run after it. That
+// run's bundle holds every ref the checkout had, the leftover manifest ref is
+// neither bundled as data nor allowed to fail the bundle's own check, and the
+// temporary file is not taken for a backup.
+func TestResetLocalFinishesOnTheFirstRunAfterAnInterruptedBackup(t *testing.T) {
+	t.Parallel()
+	for _, interruption := range []string{"before the bundle", "during the bundle at --backup", "during the bundle at the default place"} {
+		t.Run(interruption, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			first, _, config := syncRepositories(t)
+			createSyncTask(t, first, config, "Published")
+			if _, err := first.Sync(ctx, config); err != nil {
+				t.Fatal(err)
+			}
+			createSyncTask(t, first, config, "Here only")
+			before, outside := workbookRefs(t, first.Root), otherRefs(t, first.Root)
+			options := ResetOptions{}
+			var temporary string
+			switch interruption {
+			case "before the bundle":
+				plan, err := first.PlanLocalReset(ctx, "origin")
+				if err != nil {
+					t.Fatal(err)
+				}
+				first.resetStepHook = func(at string) error {
+					if at == "start" {
+						return errResetInterrupted
+					}
+					return nil
+				}
+				if _, err := first.ResetLocal(ctx, config.ProjectID, plan, options); !errors.Is(err, errResetInterrupted) {
+					t.Fatalf("ResetLocal() error = %v, want the interruption before the bundle", err)
+				}
+				first.resetStepHook = nil
+				if got := workbookRefs(t, first.Root); len(got) != len(before) {
+					t.Fatalf("an interruption before the bundle changed refs: %v", got)
+				}
+			default:
+				// What a process killed between setting the manifest ref and
+				// publishing the bundle leaves: the ref, and the temporary
+				// file half written.
+				manifest, err := first.writeArchiveManifest(ctx, normalizedArchiveManifest(ArchiveManifest{
+					ProjectID: config.ProjectID, RunID: "01INTERRUPTEDRUN0000000000", Flags: []string{"reset"},
+				}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := first.setArchiveManifestRef(ctx, manifest); err != nil {
+					t.Fatal(err)
+				}
+				if interruption == "during the bundle at --backup" {
+					options.Backup = filepath.Join(t.TempDir(), "kept.bundle")
+					temporary = options.Backup + ".tmp"
+				} else {
+					temporary = DefaultArchivePath(first.CommonGitDir, "01INTERRUPTEDRUN0000000000") + ".tmp"
+				}
+				if err := os.MkdirAll(filepath.Dir(temporary), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(temporary, []byte("# v2 git bundle\nhalf"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			plan, err := first.PlanLocalReset(ctx, "origin")
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := first.ResetLocal(ctx, config.ProjectID, plan, options)
+			if err != nil {
+				t.Fatalf("the first ResetLocal() after the interruption = %v", err)
+			}
+			if result.Bundle == "" || result.Bundle == temporary {
+				t.Fatalf("bundle = %q, want a new one, not the temporary file %q", result.Bundle, temporary)
+			}
+			syncGit(t, first.Root, "bundle", "verify", result.Bundle)
+			want := map[string]string{}
+			for name, objectID := range before {
+				if name != archiveManifestRef {
+					want[name] = objectID
+				}
+			}
+			if got := bundleHeads(t, first.Root, result.Bundle); len(got) != len(want) {
+				t.Fatalf("the bundle holds %v, want %v", got, want)
+			}
+			for name, objectID := range want {
+				if got := bundleHeads(t, first.Root, result.Bundle)[name]; got != objectID {
+					t.Fatalf("the bundle holds %s at %q, want %s", name, got, objectID)
+				}
+			}
+			if got := workbookRefs(t, first.Root); len(got) != 0 {
+				t.Fatalf("refs left after the reset: %v", got)
+			}
+			if got := otherRefs(t, first.Root); got != outside {
+				t.Fatalf("refs outside refs/workbook/ changed:\n%s\nwant\n%s", got, outside)
+			}
+		})
+	}
+}
+
+// A --backup inside a folder a reset of this checkout removes files from is
+// refused before anything is done, however it is spelled: a file or a folder,
+// through a symbolic link, or not yet existing. The default place is outside
+// those folders in an ordinary checkout, a linked worktree, whose Git
+// directory is the main checkout's, and a tasks-only folder.
+func TestResetRefusesABackupInsideAFolderItRemovesFilesFrom(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	first, _, config := syncRepositories(t)
+	linkedDir := filepath.Join(t.TempDir(), "linked")
+	syncGit(t, first.Root, "worktree", "add", "--detach", "--quiet", linkedDir, "HEAD")
+	linked, err := Open(ctx, linkedDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := strings.TrimSpace(syncGit(t, first.Root, "remote", "get-url", "origin"))
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	tasksOnlyDir := t.TempDir()
+	if _, err := PrepareTasksOnlyFolder(ctx, tasksOnlyDir, origin, config.Key); err != nil {
+		t.Fatal(err)
+	}
+	tasksOnly, err := Open(ctx, tasksOnlyDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	link := filepath.Join(outside, "link")
+	if err := os.Symlink(filepath.Join(first.Root, ".workbook"), link); err != nil {
+		t.Fatal(err)
+	}
+	for _, backup := range []string{
+		filepath.Join(first.Root, ".workbook", "mybackup.bundle"),
+		filepath.Join(first.Root, ".workbook"),
+		filepath.Join(first.Root, ".workbook", "new", "folder", "x.bundle"),
+		filepath.Join(first.CommonGitDir, "workbook"),
+		filepath.Join(first.CommonGitDir, "workbook", "mybackup.bundle"),
+		filepath.Join(link, "mybackup.bundle"),
+		link,
+	} {
+		if err := first.CheckResetBackup(backup); err == nil || core.CategoryOf(err) != core.CategoryInvocation ||
+			!strings.Contains(err.Error(), backup) {
+			t.Errorf("CheckResetBackup(%s) = %v, want an invocation refusal naming it", backup, err)
+		}
+		if _, err := first.PrepareResetBackup(ResetOptions{Backup: backup}); err == nil {
+			t.Errorf("PrepareResetBackup(%s) accepted it", backup)
+		}
+	}
+	if err := linked.CheckResetBackup(filepath.Join(first.CommonGitDir, "workbook")); err == nil {
+		t.Error("a linked worktree accepted the shared Git directory's workbook/ folder")
+	}
+	if err := linked.CheckResetBackup(filepath.Join(linkedDir, ".workbook", "x.bundle")); err == nil {
+		t.Error("a linked worktree accepted its own .workbook/ folder")
+	}
+	for _, accepted := range []string{filepath.Join(outside, "elsewhere.bundle"), outside,
+		filepath.Join(first.CommonGitDir, "workbook-archive")} {
+		if err := first.CheckResetBackup(accepted); err != nil {
+			t.Errorf("CheckResetBackup(%q) = %v, want it accepted", accepted, err)
+		}
+	}
+	for name, repository := range map[string]*Repository{"checkout": first, "linked worktree": linked, "tasks-only folder": tasksOnly} {
+		options, err := repository.PrepareResetBackup(ResetOptions{})
+		if err != nil {
+			t.Fatalf("%s: PrepareResetBackup() = %v", name, err)
+		}
+		for _, folder := range append(repository.resetFolders(), first.resetFolders()...) {
+			if pathInside(options.Backup, folder) {
+				t.Errorf("%s: the default bundle %s is inside %s", name, options.Backup, folder)
+			}
+		}
+	}
+}
+
+// A reset never reports a bundle that is not there: one that vanishes before
+// the reset finishes fails it, naming the path.
+func TestResetLocalFailsWhenItsBundleIsGone(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	first, _, config := syncRepositories(t)
+	createSyncTask(t, first, config, "Here only")
+	plan, err := first.PlanLocalReset(ctx, "origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := ResetOptions{Backup: filepath.Join(t.TempDir(), "gone.bundle")}
+	first.resetStepHook = func(at string) error {
+		if at == "refs" {
+			return os.Remove(options.Backup)
+		}
+		return nil
+	}
+	if _, err := first.ResetLocal(ctx, config.ProjectID, plan, options); err == nil || !strings.Contains(err.Error(), options.Backup) {
+		t.Fatalf("ResetLocal() with its bundle gone = %v, want an error naming %s", err, options.Backup)
 	}
 }
