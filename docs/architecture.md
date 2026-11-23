@@ -1041,7 +1041,9 @@ replay is carried back by operation identity, and one compacted there in
 between arrives through the same leased non-fast-forward push any compaction
 uses, which succeeds only while the place still holds the tip this run read
 there. An edit a teammate published to that older copy after the tasks left is
-replayed onto the checkpoint first, so the push loses no operation. No other
+replayed onto the checkpoint first, or, when it cannot apply because the task
+was deleted and compacted, set aside in the mover's clone, so the push loses no
+operation unreported. No other
 ref moves backwards, and none is deleted.
 
 That push is the only other time a task ref moves anywhere but forward, and
@@ -1111,10 +1113,10 @@ up, is refused at both with the circle refusal, whose command is `workbook
 move-tasks`, so nothing is published to either and nothing is split between
 them; the rerun, from any checkout, finishes the move to the place that
 checkout's settings name. The cost is that until somebody reruns it nobody
-can publish, which is the visible failure a stopped move should have. Two
-moves run at the same moment from that state, from checkouts naming different
-places, can still each record a return and leave both live; the next
-`move-tasks` from either settles it. Setup in a clone whose settings name a
+can publish, which is the visible failure a stopped move should have. A move
+is a coordinated team action: one person runs `move-tasks` at a time, and two
+runs at the same moment can leave two places live until `move-tasks` is run
+again. Setup in a clone whose settings name a
 place the tasks came back to, or name no tasks remote at all, follows the
 markers from that place's newest departure and refuses, with `move-not-done`,
 while any place along them still holds the tasks unmarked; a place along them
@@ -1130,6 +1132,18 @@ or after 32 places. A checkout whose remote copy shows a marker asks that
 remote again before refusing, so a place the tasks came back to is used again
 without anybody running setup. Both lookups happen only on the way to a
 refusal, so a checkout that is where the tasks are pays nothing for them.
+
+A refused checkout whose committed settings name the marked place, where an
+earlier committed version named the place the tasks are now, may be stale or
+may hold a change of `tasks-remote` committed before its move ran; the
+settings alone cannot say which. It is told to run `move-tasks` only when no
+marker at the place it names, at the place the tasks are, or at any place
+those markers lead to records a move to the place it names: then the tasks
+never went there, and the settings are a move not yet run. Every other case is
+told to pull and run setup, with a sentence for the person who did mean to
+move. Telling a stale checkout to run `move-tasks` would undo a finished move,
+and telling a teammate of a committed-first move to pull and set up only
+repeats the refusal until the move runs, so the doubt goes to setup.
 
 The default shared backend uses custom refs because they avoid branch switching and per-repository head contention. A conventional `workbook/state` branch may be offered as a compatibility fallback for Git hosts that reject custom refs. A future optional relay may provide strict leases, heartbeats, notifications, or high-concurrency agent coordination while retaining the same operation model.
 

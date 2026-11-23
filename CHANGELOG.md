@@ -72,7 +72,12 @@ that meets a remote this clone lacks says to add it with `git remote add`.
 Setup on a place the tasks came back to, or with no tasks remote named,
 refuses while the place they came back from still holds them unmarked. A
 teammate who pulls a tasks-remote change committed before its move ran is
-told to run `workbook move-tasks`, not to pull again. `move-tasks` refuses a
+told to run `workbook move-tasks`, not to pull again, when no recorded move
+ever took the tasks to the place it names; a checkout on stale settings is
+never told to, since running it there would undo a finished move.
+`move-tasks` from a place marked as moved elsewhere is refused before it
+writes anything to the destination, and the circle refusal names the
+unfinished move to finish first rather than `--from`. `move-tasks` refuses a
 mirror of a marked origin as it refuses any repository holding branches; only
 the remote named origin in a checkout of its code is excused. A
 moved-and-back project's publications cost the connections a never-moved

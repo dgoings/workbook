@@ -1823,15 +1823,17 @@ costs the same connections as one that never moved them: measured the same
 way, an inline `workbook update` makes three (fetch, push, the listing after
 it), an inline board save three (the listing before, the push, the listing
 after), an update handed to a watcher none, the watcher's round three, and a
-board save handed to the board's own loop none itself, the loop then making
-four (its round's three and one more fetch), in both kinds of project. `origin`
+board save handed to a watcher none itself, that watcher's round three, in
+both kinds of project. A board's own loop runs the same round, on a timer that
+adds a fetch whenever it falls due, which is why the test hands the board's
+save to a watcher that waits an hour between scheduled rounds. `origin`
 lists the return recorded on its identity ref rather than the identity commit
 itself; a checkout that has read that return to be live, in this command or
 by an earlier fetch into its tracking ref, takes it as agreement without
 fetching it again. What it does cost is local: reading the return's commits
-adds up to four Git processes to a command (21 rather than 17 for a handed
-update, 42 rather than 38 inline), and none to an inline board save. A test
-measures every one of these and fails on a difference in connections.
+adds a few Git processes to a command (21 rather than 17 for a handed update,
+42 rather than 38 inline, when measured). A test measures every one of these,
+logs the processes and fails only on a difference in connections.
 Comparing operations by content as well as ID, below, runs no Git command.
 
 ### Choosing the remote and moving the tasks
@@ -1856,10 +1858,15 @@ a move back. A teammate who pulls it before `move-tasks` has run is refused,
 exit 3, publishes nothing to either place, and keeps every edit not yet
 published: for a first move, setup says the move was never finished
 (`move-not-done`); for a move back, the place the setting names is still
-marked, and every command and setup there say that the change of
-`tasks-remote` is committed and its move has not been run, with `command`
-`workbook move-tasks`, rather than to pull and run setup, which cannot help.
-Once `move-tasks` has run, their setup works with nothing more to pull.
+marked. When no move recorded in the markers ever took the tasks to that
+place, every command and setup there say that the change of `tasks-remote` is
+committed and its move has not been run, with `command` `workbook move-tasks`,
+since pulling and running setup cannot help. When some move did, as for a move
+back to a tasks repository the tasks went to before, the teammate's settings
+cannot be told apart from stale ones, so they are told to pull and run setup,
+`command` `workbook setup`, with a sentence saying that whoever changed
+`tasks-remote` runs `workbook move-tasks` first. Once `move-tasks` has run,
+their setup works with nothing more to pull.
 
 `config set tasks-remote <name> --url <address>` refuses a name that is not a
 single-component Git remote name (letters, digits, `.`, `_` and `-`), `origin`
@@ -1914,7 +1921,9 @@ replaces it with the checkpoint and exits 8 naming the task by title and ID
 and saying it was deleted and compacted at the place left, so the change made
 at the returned-to place cannot apply, and the task stays deleted and
 compacted. A run stopped before that replacement reports it when run again,
-under the ref it parked; after it, no run meets it again. No other ref moves
+under the ref it parked; after it, no run meets it again. With `--no-backup`,
+no bundle holds the replaced copy, so a set-aside edit survives only in the
+mover's parked ref and in the clone of whoever made it. No other ref moves
 backwards, and none is deleted. Removing the old copies is not part of a move,
 and a move works whether they are there, stale, compacted or gone.
 
@@ -1957,7 +1966,11 @@ does not have is refused, exit 5, saying to add it with `git remote add <name>
 <url>`, which the message spells out, and run the command again, or to name
 this checkout's own remote for that address with `--from`; a walk
 that comes back to a place it passed is refused, exit 8, saying the markers form
-a circle. Before it writes anything it lists both
+a circle, that the move between the places on it is unfinished, and to finish
+that move first with `workbook move-tasks` from a clone whose settings name
+where it was taking the tasks. An old place, named or found, that is already
+marked as moved somewhere other than the new place is refused, exit 8, before
+anything is written to the new place. Before it writes anything it lists both
 remotes, and refuses a new place that is the same repository as the old one,
 with the `same-repository` reason, exit 5, however its address is spelled. It
 tells the two apart by what they hold: it writes a ref named by a fresh ULID
@@ -2050,11 +2063,11 @@ any checkout: it moves the tasks to the place that checkout's settings name,
 following the markers to find them, and asks for `git remote add <name> <url>`
 first when a marker names a remote the checkout lacks. Edits recorded but not
 published in the meantime stay in each checkout and go to the live place at its
-next publication. This is not proof against two people running `workbook
-move-tasks` at the same moment from that state, from checkouts whose settings
-name different places: each can record a return, and both places are then live
-until either runs `workbook move-tasks` again, which carries what reached the
-other and marks it. A move is one person's job, so say who is making it.
+next publication.
+
+A move is a coordinated team action: one person runs `workbook move-tasks` at
+a time. Two runs at the same moment can leave two places live until
+`workbook move-tasks` is run again.
 
 ```json
 {"format":"workbook.result","version":1,"command":"move-tasks","data":{"from":{"remote":"origin","url":"git@github.com:team/code.git"},"to":{"remote":"tasks","url":"git@github.com:team/tasks.git"},"remote":"added","marked":"already","tasks":42,"identical":41,"carried":1,"stragglers":{"operations":1,"tasks":["WB-01M…"],"actors":["sam@example.com"]},"config":"unchanged","copy":{…},"recopy":{…},"verified":true}}
@@ -2147,14 +2160,21 @@ What is guaranteed and what is not:
   folder), up to 32 places; that costs one listing per place, and only on the
   way to a refusal. A walk that cannot read a place names the last place a
   marker named. One that meets a place twice says the markers lead back to a
-  place already passed, which only two moves run at once can leave, and names
-  `workbook move-tasks`, which settles it. A checkout whose settings name a
+  place already passed, which a move back stopped between marking the place it
+  leaves and recording the return leaves, and names `workbook move-tasks`,
+  which finishes it. A checkout whose settings name a
   place the tasks came back to is not refused: before refusing, it asks that
   remote again, and finding it live, uses it and publishes the edits it kept.
-- A checkout whose settings name a place the tasks have since left again, as
-  someone's changed but not yet moved settings do, is refused the same way,
-  and the message adds that whoever changed the settings runs
-  `workbook move-tasks` first.
+- A checkout whose committed settings name a marked place, where an earlier
+  committed version named the place the tasks are now, is either on stale
+  settings or on a change of `tasks-remote` committed before its move ran.
+  Workbook tells it to run `workbook move-tasks` only when that is certain: the
+  place the tasks are is unmarked, and no marker recorded at the place the
+  settings name, at the place the tasks are, or at any place those markers lead
+  to names the place the settings name as where the tasks went. Otherwise it is
+  told to pull and run setup, and the message adds that whoever changed the
+  settings runs `workbook move-tasks` first. The checks read each of those
+  places once, and only on the way to a refusal.
 
 ### Setup and the refusals
 
@@ -2187,8 +2207,8 @@ envelope, saying which remote, why, and the command that gets out of it:
 | `remote-missing` | 3 | The settings name a remote this checkout does not have: what an ordinary pull of the settings change leaves. `url` is the address setup will add. |
 | `not-read` | 3 | The checkout has the remote and has never read the tasks from it: what a setup without access leaves. The message names the address and the access needed. |
 | `unreachable` | 1 | Setup could not list the tasks remote. The message says which address, that seeing the tasks needs read access to it and changing them needs push access, and Git's own reason. |
-| `tasks-moved` | 3 | This checkout's tasks remote is marked as moved, so its settings predate the move. `movedTo` names the new place. The message says to pull the commit that sets `tasks-remote` and run setup, and that unpublished edits are kept; `command` is `workbook setup`. When the settings committed at `HEAD` name the marked place and an earlier committed version named the place the tasks are now, which has never recorded leaving for the marked one, the change of `tasks-remote` was committed before its move ran: the message says so, and that pulling and running setup cannot finish it, and `command` is `workbook move-tasks`. When the markers lead in a circle, because a move was stopped between marking the old place and recording the return, the message says so and `command` is `workbook move-tasks` too. In a [tasks-only folder](#tasks-only-folders) it gives one command instead, `workbook setup --tasks-only <new address>`, which repoints that folder at the new place and keeps its unpublished edits; `command` holds it. Exit 5, category `validation`, when the marked remote was named with `--remote` and the command would publish to it. |
-| `move-not-done` | 3 | Setup found the place the tasks came from still holding task refs with no marker: the move was never run or never finished. That place is `origin` for a first move and, for a move back, the place the markers lead to from the newest departure recorded at the place the settings name, which is `origin` when they name no tasks remote. Setup follows those markers whether or not a tasks remote is named, and costs nothing more when `origin` lists the identity commit this checkout already holds. A place along them that cannot be read is refused, exit 3 with this reason, naming it and saying to run setup again or, if that repository no longer exists, `workbook setup --no-sync` and then `workbook sync`; a marker naming a remote this checkout lacks says to add it with `git remote add`. `command` is `workbook move-tasks`. |
+| `tasks-moved` | 3 | This checkout's tasks remote is marked as moved, so its settings predate the move. `movedTo` names the new place. The message says to pull the commit that sets `tasks-remote` and run setup, and that unpublished edits are kept; `command` is `workbook setup`. When the settings committed at `HEAD` name the marked place, an earlier committed version named the place the tasks are now, that place is unmarked, and no marker recorded at either place or at any place their markers lead to names the marked place as where the tasks went, the change of `tasks-remote` was committed before its move ran: the message says so, and that pulling and running setup cannot finish it, and `command` is `workbook move-tasks`. Any other case keeps `command` `workbook setup`. When the markers lead in a circle, because a move was stopped between marking the old place and recording the return, the message says so and `command` is `workbook move-tasks` too. In a [tasks-only folder](#tasks-only-folders) it gives one command instead, `workbook setup --tasks-only <new address>`, which repoints that folder at the new place and keeps its unpublished edits; `command` holds it. Exit 5, category `validation`, when the marked remote was named with `--remote` and the command would publish to it. |
+| `move-not-done` | 3 | Setup found the place the tasks came from still holding task refs with no marker: the move was never run or never finished. That place is `origin` for a first move and, for a move back, the place the markers lead to from the newest departure recorded at the place the settings name, which is `origin` when they name no tasks remote. Setup follows those markers whether or not a tasks remote is named, and costs nothing more when `origin` lists the identity commit this checkout already holds. A place along them that cannot be read is refused, exit 3 with this reason, naming it and saying to run setup again or, if that repository no longer exists, and you know the move finished, `workbook setup --no-sync` and then `workbook sync`, which skip that check; a marker naming a remote this checkout lacks says to add it with `git remote add`. `command` is `workbook move-tasks`. |
 | `published-after-move` | 3 | The remote accepted this command's task refs and, listed again straight after, was marked as moved: the edit went to a place the tasks have left. `tasks` names them; the edit is kept in this checkout, and the message says to pull the setting and run setup, and that `workbook move-tasks` run again carries it. |
 | `same-repository` | 5 | `move-tasks` or `setup` found the tasks remote to be the same repository as the place the tasks are in, whatever its address says. `command` is the `config set` to correct it. |
 | `read-only-remote` | 5 | `push`, or a publication, named with `--remote` a remote other than the project's tasks remote. `command` is `workbook push`. |

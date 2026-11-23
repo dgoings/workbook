@@ -1511,8 +1511,8 @@ func (r *Repository) checkMoveFinished(ctx context.Context, to core.TasksRemoteS
 			return core.Wrap(core.CategoryOperational,
 				fmt.Sprintf("cannot read %s (%s), where this project's tasks were before they went to %s, "+
 					"so this checkout cannot check that the move there finished; check that this checkout can reach it "+
-					"and run workbook setup again, or, if that repository no longer exists, run workbook setup --no-sync "+
-					"and then workbook sync", place.Remote, place.URL, to.Name),
+					"and run workbook setup again, or, if that repository no longer exists and you know the move finished, "+
+					"run workbook setup --no-sync and then workbook sync", place.Remote, place.URL, to.Name),
 				cause)
 		}
 		record, found, err := r.readPlaceIdentity(ctx, place)

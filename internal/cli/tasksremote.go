@@ -145,7 +145,7 @@ func writeTasksRemoteSetting(
 			fmt.Fprintf(stdout, "Next:\trun workbook move-tasks to copy the tasks from %s to %s and mark %s, "+
 				"then commit and push %s; everyone else runs workbook setup after pulling it. "+
 				"Committing it first is safe too: a checkout that pulls it before the move ran is refused "+
-				"and told to run workbook move-tasks\n",
+				"and publishes nothing until the move has run\n",
 				source, setting.Name, source, ".workbook/config.json")
 		}
 	} else if before.TasksRemote.Chosen() {
@@ -155,7 +155,7 @@ func writeTasksRemoteSetting(
 			fmt.Fprintf(stdout, "Next:\trun workbook move-tasks to move the tasks back from %s to origin and mark %s, "+
 				"then commit and push %s; everyone else runs workbook setup after pulling it. "+
 				"Committing it first is safe too: a checkout that pulls it before the move ran is refused "+
-				"and told to run workbook move-tasks\n",
+				"and publishes nothing until the move has run\n",
 				source, source, ".workbook/config.json")
 		} else {
 			fmt.Fprintf(stdout, "Next:\tcommit %s; tasks are shared through origin again, "+

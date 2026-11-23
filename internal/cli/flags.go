@@ -792,9 +792,11 @@ var commandSchemas = map[string]commandMetadata{
 			"the old place after the move, applying each operation once. Then commit and\n" +
 			"push .workbook/config.json; everyone else runs `workbook setup` after pulling it.\n" +
 			"Committing and pushing the settings before running this is safe too: a\n" +
-			"checkout that pulls them before the move ran is refused, told to run\n" +
-			"`workbook move-tasks`, and publishes nothing until it has; its unpublished\n" +
-			"edits are kept.\n\n" +
+			"checkout that pulls them before the move ran is refused and publishes nothing\n" +
+			"until it has; its unpublished edits are kept. It is told to run\n" +
+			"`workbook move-tasks` when no move ever took the tasks to the place the settings\n" +
+			"name, and otherwise to pull and run setup, since its settings may be stale,\n" +
+			"with a sentence saying that whoever changed tasks-remote runs move-tasks first.\n\n" +
 			"The new place can be one the tasks left earlier, origin included: the copies it\n" +
 			"still holds are brought up to date, and it records that the tasks are back. A\n" +
 			"copy there of a task compacted since the tasks left is replaced with its\n" +
