@@ -63,7 +63,20 @@ printed and reported in `bundles`, and a copy that changes before the push is
 read again and bundled again rather than pushed over. A late edit there to a
 task deleted and compacted in between is set aside in the mover's clone and
 reported once with exit 8, by title and ID, and the task stays deleted and
-compacted, where it used to make the move exit 8 on every run. Moves can go any number of times in any order;
+compacted, where it used to make the move exit 8 on every run. A move back
+marks the place it leaves before it records the return, so a run stopped
+between the two leaves both places refusing every publication, with the
+circle refusal and `workbook move-tasks` as its command, instead of two live
+places; the rerun finishes it from any checkout. A walk along the markers
+that meets a remote this clone lacks says to add it with `git remote add`.
+Setup on a place the tasks came back to, or with no tasks remote named,
+refuses while the place they came back from still holds them unmarked. A
+teammate who pulls a tasks-remote change committed before its move ran is
+told to run `workbook move-tasks`, not to pull again. `move-tasks` refuses a
+mirror of a marked origin as it refuses any repository holding branches; only
+the remote named origin in a checkout of its code is excused. A
+moved-and-back project's publications cost the connections a never-moved
+project's do. Moves can go any number of times in any order;
 a checkout on any earlier generation of the settings is told the place the
 tasks are now, by following the markers there, and markers that lead in a
 circle are reported as such. `workbook

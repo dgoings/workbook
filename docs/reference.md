@@ -1862,7 +1862,9 @@ which is the remote `config set` names in the command it prints. For a place
 they left, it starts at the place they went when they left it, so it ends at
 the place they are in now or, on a run finishing a move back, at the place
 already marked as moved to the new one. A marker naming a remote this checkout
-does not have is refused, exit 5, with the `--from` that would work, and a walk
+does not have is refused, exit 5, saying to add it with `git remote add <name>
+<url>`, which the message spells out, and run the command again, or to name
+this checkout's own remote for that address with `--from`; a walk
 that comes back to a place it passed is refused, exit 8, saying the markers form
 a circle. Before it writes anything it lists both
 remotes, and refuses a new place that is the same repository as the old one,
@@ -1882,9 +1884,14 @@ must be allowed there or the probe removed by hand. A run that then finds that
 probe still there stops before writing another, so at most one is ever left.
 
 Then it refuses a new place that holds branches, exit 5, unless
-`--allow-branches` says that is meant or the tasks lived there before, because
-a repository for tasks holds only Workbook refs; `origin`, the code's own
-repository, is a place they lived before. Never give it for a mirror, a repository something updates
+`--allow-branches` says that is meant or the new place is the code's own
+repository, because a repository for tasks holds only Workbook refs. The code's
+own repository is the remote named `origin`, and only in a checkout whose
+`HEAD` is one of the branches `origin` lists, or an ancestor or descendant of
+one this checkout holds: settings can never name `origin` as a tasks remote,
+so no other repository can pass for it, and what the destination's own refs
+say, a moved marker included, never excuses the check, since a mirror of a
+marked `origin` carries that marker too. Never give it for a mirror, a repository something updates
 from the code repository, such as a host's mirroring feature or a job running
 `git push --mirror`: that update would delete or overwrite the tasks' refs at
 each run, because they are not in the code repository's copy. The refusal and
@@ -1897,13 +1904,13 @@ the command's help say the same. Then:
    A new place the tasks left earlier is still marked then, and every other
    checkout is still refused there; this run alone treats it as live, so it is
    brought up to date before anybody uses it;
-3. for a new place the tasks left earlier, records their return there (see
+3. marks the old place;
+4. reads the old place again, for edits published there before the mark or
+   since;
+5. carries and publishes those the same way;
+6. for a new place the tasks left earlier, records their return there (see
    [The moved marker](#the-moved-marker)), after which checkouts whose
    settings name it use it again;
-4. marks the old place;
-5. reads the old place again, for edits published there before the mark or
-   since;
-6. carries and publishes those the same way;
 7. lists both places afresh and requires the new place to hold, task by task,
    every operation ID the old place holds, or to have it set aside in this
    checkout. A difference is reported by naming each task and the operations
@@ -1942,10 +1949,21 @@ Every step is safe to repeat: an interrupted run, wherever it stopped, is
 finished by running the command again, a run whose marker is already published
 reports `"marked":"already"`, one whose return is already recorded reports
 `"returned":"already"`, and a run at any later time carries whatever reached
-the old place since. The new place's return is recorded before the old place
-is marked, so no interruption leaves both places marked: stopped between the
-two, both are live, checkouts on either settings keep publishing to their own,
-and the rerun carries what reached the old place.
+the old place since. The old place is marked before the new place's return is
+recorded, so no interruption leaves two places live at once: stopped between
+the two, both places are marked, each naming the other, and every checkout,
+on either generation of the settings or freshly set up, is refused at both
+with the circle refusal (`command` `workbook move-tasks`) and publishes
+nothing anywhere. Running `workbook move-tasks` again finishes the move from
+any checkout: it moves the tasks to the place that checkout's settings name,
+following the markers to find them, and asks for `git remote add <name> <url>`
+first when a marker names a remote the checkout lacks. Edits recorded but not
+published in the meantime stay in each checkout and go to the live place at its
+next publication. This is not proof against two people running `workbook
+move-tasks` at the same moment from that state, from checkouts whose settings
+name different places: each can record a return, and both places are then live
+until either runs `workbook move-tasks` again, which carries what reached the
+other and marks it. A move is one person's job, so say who is making it.
 
 ```json
 {"format":"workbook.result","version":1,"command":"move-tasks","data":{"from":{"remote":"origin","url":"git@github.com:team/code.git"},"to":{"remote":"tasks","url":"git@github.com:team/tasks.git"},"remote":"added","marked":"already","tasks":42,"identical":41,"carried":1,"stragglers":{"operations":1,"tasks":["WB-01M…"],"actors":["sam@example.com"]},"config":"unchanged","copy":{…},"recopy":{…},"verified":true}}
@@ -1977,8 +1995,8 @@ What is guaranteed and what is not:
   holding every operation they hold, each once. A teammate's edit recorded but
   not yet published stays in their checkout's own refs and is published to the
   new place by their next `workbook setup`.
-- Before step 4, a checkout still on the old settings goes on publishing to the
-  old place, and steps 5 and 6 carry that across. After step 4, such a checkout
+- Before step 3, a checkout still on the old settings goes on publishing to the
+  old place, and steps 4 and 5 carry that across. After step 3, such a checkout
   is refused: every command that would publish asks the old place's identity
   ref first and stops with the `tasks-moved` refusal.
 - The mark cannot be made atomic with other people's edits: plain Git has no
@@ -2011,7 +2029,7 @@ What is guaranteed and what is not:
   Do not count on a ruleset protecting a ref outside branches and tags without
   trying a push against it. A self-hosted Git server can do it with a
   `pre-receive` or `update` hook.
-- If the move is never finished (stopped before step 4 and not run again), the
+- If the move is never finished (stopped before step 3 and not run again), the
   old place is unmarked and checkouts on the old settings keep using it. A new
   checkout's setup refuses that state instead of joining one half of it; see
   `move-not-done` below.
@@ -2079,7 +2097,7 @@ envelope, saying which remote, why, and the command that gets out of it:
 | `not-read` | 3 | The checkout has the remote and has never read the tasks from it: what a setup without access leaves. The message names the address and the access needed. |
 | `unreachable` | 1 | Setup could not list the tasks remote. The message says which address, that seeing the tasks needs read access to it and changing them needs push access, and Git's own reason. |
 | `tasks-moved` | 3 | This checkout's tasks remote is marked as moved, so its settings predate the move. `movedTo` names the new place. The message says to pull the commit that sets `tasks-remote` and run setup, and that unpublished edits are kept; `command` is `workbook setup`. When the settings committed at `HEAD` name the marked place and an earlier committed version named the place the tasks are now, which has never recorded leaving for the marked one, the change of `tasks-remote` was committed before its move ran: the message says so, and that pulling and running setup cannot finish it, and `command` is `workbook move-tasks`. When the markers lead in a circle, because a move was stopped between marking the old place and recording the return, the message says so and `command` is `workbook move-tasks` too. In a [tasks-only folder](#tasks-only-folders) it gives one command instead, `workbook setup --tasks-only <new address>`, which repoints that folder at the new place and keeps its unpublished edits; `command` holds it. Exit 5, category `validation`, when the marked remote was named with `--remote` and the command would publish to it. |
-| `move-not-done` | 3 | Setup found the place the tasks came from still holding task refs with no marker: the move was never run or never finished. That place is `origin` for a first move and, for a move back, the place the markers lead to from the one the settings name. `command` is `workbook move-tasks`. |
+| `move-not-done` | 3 | Setup found the place the tasks came from still holding task refs with no marker: the move was never run or never finished. That place is `origin` for a first move and, for a move back, the place the markers lead to from the newest departure recorded at the place the settings name, which is `origin` when they name no tasks remote. Setup follows those markers whether or not a tasks remote is named, and costs nothing more when `origin` lists the identity commit this checkout already holds. A place along them that cannot be read is refused, exit 3 with this reason, naming it and saying to run setup again or, if that repository no longer exists, `workbook setup --no-sync` and then `workbook sync`; a marker naming a remote this checkout lacks says to add it with `git remote add`. `command` is `workbook move-tasks`. |
 | `published-after-move` | 3 | The remote accepted this command's task refs and, listed again straight after, was marked as moved: the edit went to a place the tasks have left. `tasks` names them; the edit is kept in this checkout, and the message says to pull the setting and run setup, and that `workbook move-tasks` run again carries it. |
 | `same-repository` | 5 | `move-tasks` or `setup` found the tasks remote to be the same repository as the place the tasks are in, whatever its address says. `command` is the `config set` to correct it. |
 | `read-only-remote` | 5 | `push`, or a publication, named with `--remote` a remote other than the project's tasks remote. `command` is `workbook push`. |

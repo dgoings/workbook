@@ -70,8 +70,12 @@ somebody who can push to both repositories:
 
 `move-tasks` copies every task, marks the code repository as the place the
 tasks moved away from, and checks that the new repository holds everything the
-old one did. If it stops partway, run it again. The old repository keeps its
-copy. Tell the team before you move, and run `workbook move-tasks` once more
+old one did. If it stops partway, run it again; a move back stopped partway
+leaves both repositories refusing every publication until it is run again,
+from any clone. The old repository keeps its copy. Commit and push the setting
+after `move-tasks` finishes, as above; committing it first is safe too, since
+a teammate who pulls it before the move ran is refused, publishes nothing, and
+is told to have `workbook move-tasks` run. Tell the team before you move, and run `workbook move-tasks` once more
 after everyone has pulled: an edit somebody published in the moment of the
 move waits on the old repository until then. If such an edit conflicts with
 what happened to its task at the new repository, the command reports it to

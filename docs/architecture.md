@@ -970,8 +970,8 @@ there. An edit a teammate published to that older copy after the tasks left is
 replayed onto the checkpoint first, so the push loses no operation. No other
 ref moves backwards, and none is deleted.
 
-That push is the one other way a task ref moves other than forward, and it
-only ever replaces an older copy of a task already compacted by hand. Before
+That push is the only other time a task ref moves anywhere but forward, and
+it only ever replaces an older copy of a task already compacted by hand. Before
 the first such push in a run, `move-tasks` writes a Git bundle of every tip it
 is about to replace, with compact's manifest, default location and
 `--no-backup` / `--backup <path>` flags, and prints and reports where it is.
@@ -1018,22 +1018,36 @@ the commits carry the same fixed author, committer and dates as I, so the same
 move written twice is the same commit. The local identity ref still never
 leaves I; adopting a remote's copy adopts the root at the bottom of its line.
 
-A move back is ordered so that a single run never leaves both places marked.
-While it copies, the place it returns to is still marked and refuses every
-other checkout; this run alone reads that place as live. Then it records the
-return, then marks the place it leaves:
+A move back is ordered so that no stop leaves two places live at once. While
+it copies, the place it returns to is still marked and refuses every other
+checkout; this run alone reads that place as live. Then it marks the place it
+leaves, copies again whatever was published there before the mark, and only
+then records the return:
 
 ```text
-               copy to dest      record return     mark source        recopy, verify
-source (live)  ──────────────>   (live)            ──> M(dest)
-dest   M(src)  (refused to       ──> R (live)      (live)
-                others)
+               copy to dest      mark source       recopy            record return     verify
+source (live)  ──────────────>   ──> M(dest)       (refused)         (refused)
+dest   M(src)  (refused to       (refused to       (refused to       ──> R (live)
+                others)           others)           others)
 ```
 
-Stopped after the return and before the mark, both places are live, so neither
-set of settings is refused and nothing is stranded; the rerun marks the source
-and carries what reached it. Two different moves run at once can still leave
-markers pointing at each other. A checkout refused for being on an old
+Stopped between the mark and the return, both places are marked, each naming
+the other. Every checkout, on any generation of the settings and freshly set
+up, is refused at both with the circle refusal, whose command is `workbook
+move-tasks`, so nothing is published to either and nothing is split between
+them; the rerun, from any checkout, finishes the move to the place that
+checkout's settings name. The cost is that until somebody reruns it nobody
+can publish, which is the visible failure a stopped move should have. Two
+moves run at the same moment from that state, from checkouts naming different
+places, can still each record a return and leave both live; the next
+`move-tasks` from either settles it. Setup in a clone whose settings name a
+place the tasks came back to, or name no tasks remote at all, follows the
+markers from that place's newest departure and refuses, with `move-not-done`,
+while any place along them still holds the tasks unmarked; a place along them
+it cannot read, or names a remote it lacks, is refused with what to do rather
+than skipped.
+
+A checkout refused for being on an old
 generation of the settings follows the markers, through its own remote of each
 name when it has one and at the recorded address otherwise, to name the place
 the tasks are now; the walk stops at a live place, at a place it cannot read,
