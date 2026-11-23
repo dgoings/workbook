@@ -71,6 +71,9 @@ type Repository struct {
 	// remote() in tasksremote.go.
 	remoteOverride string
 	remoteName     string
+	// requireFinishedMove makes synchronization check a remote the tasks
+	// came back to (RequireFinishedMove).
+	requireFinishedMove bool
 	// returningTo names the remote a move is bringing the tasks back to,
 	// whose marker is read as live for the length of that move; see
 	// MoveTasks.

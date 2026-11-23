@@ -384,6 +384,14 @@ func (r *Repository) reconcileIdentity(ctx context.Context, publish, announce bo
 				"it was read, and nothing is published to it", r.remote(), remote.Moved.URL, remote.Moved.Remote)
 			return result, nil
 		}
+		if remote.Departed != nil && r.finishedMoveRequired() {
+			// Setup on a place the tasks came back to: the place they came
+			// back from must be marked before anything is published here.
+			to := core.TasksRemoteSetting{Name: r.remote(), URL: redactURLCredentials(r.gitRemoteURL(ctx, r.remote()))}
+			if err := r.checkMoveFinished(ctx, to, remote.Departed); err != nil {
+				return result, err
+			}
+		}
 		if err := r.adoptOriginIdentityCommit(ctx, local, remote, result); err != nil {
 			return result, err
 		}

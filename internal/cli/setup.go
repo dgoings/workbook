@@ -220,6 +220,9 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 				return err
 			}
 		}
+		// A place the tasks came back to, origin among them, is checked by
+		// the synchronization below before it publishes anything.
+		repository.RequireFinishedMove()
 	}
 	// A checkout that predates the project's Workbook adoption carries no
 	// tracked configuration, so Init alone would mint a second identity for a

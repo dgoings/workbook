@@ -12,7 +12,7 @@ import (
 )
 
 // returnSteps are the steps of a move back to a place the tasks left, in order.
-var returnSteps = []string{"read", "copy", "return", "mark", "reread", "recopy", "verify"}
+var returnSteps = []string{"read", "copy", "mark", "reread", "recopy", "return", "verify"}
 
 // newBarePlace is an empty bare repository for tasks to move to.
 func newBarePlace(t *testing.T, objectFormat, name string) string {
@@ -99,6 +99,19 @@ func requireMovedTo(t *testing.T, err error, url string) {
 	}
 }
 
+// requireMarkersInACircle requires err to be the refusal for markers that
+// lead in a circle, which names workbook move-tasks as the command that
+// finishes the move, in its text and its JSON.
+func requireMarkersInACircle(t *testing.T, err error) {
+	t.Helper()
+	refusal, found := core.TasksRemoteRefusalOf(err)
+	if !found || refusal.Reason != core.TasksRemoteMoved || refusal.Command != "workbook move-tasks" ||
+		!strings.Contains(err.Error(), "leads back to a place already passed") ||
+		!strings.Contains(err.Error(), "Run workbook move-tasks to finish the move") {
+		t.Fatalf("error = %v (refusal %+v), want the refusal for markers in a circle", err, refusal)
+	}
+}
+
 // identityShape is what a place's identity ref says: "identity" for the
 // identity commit, "moved:<url>" for a marker, "returned" for a return.
 func identityShape(t *testing.T, bare string) string {
@@ -161,7 +174,7 @@ func TestMoveTasksBackToOriginResumesAfterAnInterruptionAtEveryStep(t *testing.T
 
 func TestMoveTasksBackToOriginInSHA256Repositories(t *testing.T) {
 	t.Parallel()
-	returnToOriginAfterInterruption(t, testrepo.FormatSHA256, 2, "return")
+	returnToOriginAfterInterruption(t, testrepo.FormatSHA256, 5, "return")
 }
 
 func returnToOriginAfterInterruption(t *testing.T, objectFormat string, index int, step string) {
@@ -200,8 +213,8 @@ func returnToOriginAfterInterruption(t *testing.T, objectFormat string, index in
 	}
 	first.moveStepHook = nil
 
-	returned := index > 2 // origin records the return before "mark"
-	marked := index > 3   // the tasks repository is marked before "reread"
+	marked := index > 2   // the tasks repository is marked before "reread"
+	returned := index > 5 // origin records the return last, before "verify"
 	if got, want := identityShape(t, fixture.origin), map[bool]string{true: "returned", false: "moved:" + fixture.tasks}[returned]; got != want {
 		t.Fatalf("origin interrupted at %s = %s, want %s", step, got, want)
 	}
@@ -209,7 +222,9 @@ func returnToOriginAfterInterruption(t *testing.T, objectFormat string, index in
 	// The tasks-repository teammate edits during the interruption.
 	updateSyncTask(t, gen1, gen1Config, fixture.ids[1], "Edited on the tasks settings during the move back")
 	_, gen1Err := gen1.Sync(ctx, gen1Config)
-	if marked {
+	if marked && !returned {
+		requireMarkersInACircle(t, gen1Err)
+	} else if marked {
 		requireMovedTo(t, gen1Err, first.gitRemoteURL(ctx, "origin"))
 	} else if gen1Err != nil {
 		t.Fatalf("tasks-settings teammate before the mark = %v", gen1Err)
@@ -321,10 +336,15 @@ func TestMoveTasksThroughAThirdPlaceAndBackResumesAtEveryStep(t *testing.T) {
 				t.Fatalf("MoveTasks() error = %v, want the interruption at %s", err, step)
 			}
 			first.moveStepHook = nil
-			if index > 3 {
+			if index > 2 {
+				// Third is marked; tasks stays marked until the return.
 				updateSyncTask(t, gen2, gen2Config, fixture.ids[0], "Kept on the third settings")
 				_, err := gen2.Sync(ctx, gen2Config)
-				requireMovedTo(t, err, tasks.URL)
+				if index > 5 {
+					requireMovedTo(t, err, tasks.URL)
+				} else {
+					requireMarkersInACircle(t, err)
+				}
 			}
 
 			result, err := first.MoveTasks(ctx, config, MoveTasksOptions{})

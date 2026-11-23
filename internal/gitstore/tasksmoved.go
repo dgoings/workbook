@@ -614,9 +614,10 @@ func movedLoopRefusal(remote string, moved TasksMoved, path movedPath) error {
 			Command: "workbook move-tasks",
 		},
 		"%s is marked as the place this project's tasks moved away from, and following the markers from there "+
-			"(%s) leads back to a place already passed, so no place says it holds the tasks: two moves ran at once, "+
-			"or one was stopped partway. Whoever moves the tasks runs workbook move-tasks from a clone whose %s names "+
-			"where they are to be; edits this checkout has not published yet are kept",
+			"(%s) leads back to a place already passed, so no place says it holds the tasks: a move was stopped partway, "+
+			"or two ran at once, and nothing is published anywhere until it is finished. "+
+			"Run workbook move-tasks to finish the move, from a clone whose %s names where the tasks are to be, "+
+			"which is usually whoever started it; edits this checkout has not published yet are kept",
 		remote, strings.Join(path.Places, " -> "), configPath)
 }
 

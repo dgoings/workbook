@@ -110,7 +110,15 @@ func (r *Repository) switchRemote(name string) {
 //  3. mark the old place: one fast-forward of its refs/workbook/project;
 //  4. and 5. read the old place again and carry what was published there
 //     before the mark, or since;
-//  6. compare, task by task, the operation IDs the two places hold.
+//  6. for a place the tasks are coming back to, record their return there:
+//     one fast-forward of its refs/workbook/project on top of its marker;
+//  7. compare, task by task, the operation IDs the two places hold.
+//
+// A place the tasks come back to stays marked until step 6, and the place
+// they leave is marked at step 3, so no stop between them leaves two places
+// accepting a publish: in between each names the other, every checkout but
+// this run is refused at both (movedLoopRefusal), and running this again from
+// a clone whose settings name either place finishes a move to that place.
 //
 // Carrying is by operation identity. A task whose every operation this
 // checkout holds is carried, whatever its commits; one the old place holds at
@@ -232,16 +240,6 @@ func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, o
 		return result, err
 	}
 
-	if returning {
-		if err := r.moveStep("return"); err != nil {
-			return result, err
-		}
-		r.switchRemote(to.Name)
-		result.Returned, err = r.markTasksReturned(ctx, to.Name, from)
-		if err != nil {
-			return result, err
-		}
-	}
 	if err := r.moveStep("mark"); err != nil {
 		return result, err
 	}
@@ -265,6 +263,22 @@ func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, o
 	result.Recopy, err = r.moveCopy(ctx, config, from, to.Name, carried, &result)
 	if err != nil {
 		return result, err
+	}
+
+	if returning {
+		// The return is recorded last, once the old place is marked and
+		// everything published there before the mark is carried: until then
+		// both places are marked, each naming the other, so every checkout
+		// but this run is refused at both and nothing is published to either.
+		// A run stopped in between is finished by running it again.
+		if err := r.moveStep("return"); err != nil {
+			return result, err
+		}
+		r.switchRemote(to.Name)
+		result.Returned, err = r.markTasksReturned(ctx, to.Name, from)
+		if err != nil {
+			return result, err
+		}
 	}
 
 	if err := r.moveStep("verify"); err != nil {
@@ -385,8 +399,9 @@ func (r *Repository) defaultMoveSource(ctx context.Context, to string, departed 
 func missingMoveHop(from string, moved TasksMoved) error {
 	return core.Errorf(core.CategoryValidation,
 		"%s is marked as moved to %s (remote %q), which this checkout does not have, so the tasks are there or further on; "+
-			"run workbook move-tasks --from <remote> naming this checkout's remote for %s",
-		from, moved.URL, moved.Remote, moved.URL)
+			"add it with git remote add %s %s and run workbook move-tasks again, "+
+			"or run workbook move-tasks --from <remote> naming this checkout's own remote for that address",
+		from, moved.URL, moved.Remote, moved.Remote, moved.URL)
 }
 
 // originAsDestination is origin as the place to move the tasks back to, for
@@ -1034,7 +1049,7 @@ func (r *Repository) markTasksMoved(ctx context.Context, from string, to core.Ta
 	}
 	if found {
 		if current.Moved != nil {
-			if *current.Moved == moved {
+			if *current.Moved == moved || sameOriginMarker(*current.Moved, moved) {
 				return "already", nil
 			}
 			return "", core.Errorf(core.CategoryConflict,
@@ -1062,6 +1077,14 @@ func (r *Repository) markTasksMoved(ctx context.Context, from string, to core.Ta
 	return "marked", nil
 }
 
+// sameOriginMarker reports two markers naming origin as where the tasks went.
+// A move back to origin records origin's address as the checkout that made it
+// spells it, which another checkout may spell differently, and every reader
+// resolves the name through its own remote of that name.
+func sameOriginMarker(a, b TasksMoved) bool {
+	return a.Remote == core.DefaultTasksRemote && b.Remote == core.DefaultTasksRemote && a.ProjectID == b.ProjectID
+}
+
 // markTasksReturned records on to's identity ref that the tasks came back:
 // one commit on top of the marker it carries, whose tree is the identity
 // commit's own. Like the marker, it is a fast-forward with fixed inputs, so a
@@ -1085,8 +1108,8 @@ func (r *Repository) markTasksReturned(ctx context.Context, to, from string) (st
 		"push", "--porcelain", to, commit+":"+identityRef)
 	if push.err != nil {
 		return "", core.Wrap(core.CategoryOperational,
-			fmt.Sprintf("cannot record on %s that the tasks are back; they are copied there, %s is not marked yet, "+
-				"and running workbook move-tasks again finishes the move", to, from),
+			fmt.Sprintf("cannot record on %s that the tasks are back; they are copied there and %s is marked, "+
+				"so every checkout is refused at both until running workbook move-tasks again finishes the move", to, from),
 			gitCommandResultError(push))
 	}
 	if _, err := r.Git(ctx, nil, "update-ref", "--no-deref", remoteIdentityRefFor(to), commit); err != nil {
@@ -1229,56 +1252,120 @@ func (r *Repository) trackingRefHeads(ctx context.Context, prefix string) (map[s
 	return heads, nil
 }
 
-// CheckMoveDone refuses setup in a checkout whose project chose a tasks remote
-// while the place the tasks were in still holds task refs and is not marked
-// as moved: the person who chose the remote has not run move-tasks, or it was
-// interrupted before the mark, and joining now would publish to one place
-// while teammates publish to the other.
+// CheckMoveDone refuses setup in a checkout whose settings name a tasks
+// remote while the place the tasks were in before still holds task refs and
+// is not marked as moved: whoever changed the settings has not run
+// move-tasks, or it stopped before the mark, and joining now would publish to
+// one place while teammates publish to the other. Settings that name no tasks
+// remote are checked by the synchronization setup runs (RequireFinishedMove),
+// where origin's identity is read anyway, so a project that never moved its
+// tasks pays nothing for it.
 //
-// The place the tasks were in is found as move-tasks finds it: origin, or
-// where its markers lead, for a remote the tasks never left; and for one they
-// came back to, the place they went when they left it, or where its markers
-// lead. A tasks remote marked as moved itself is not this check's: every
-// command refuses it with the place the tasks are now.
-//
-// It is best effort. A checkout that cannot reach those places, or a project
-// that shares its tasks through origin, is not checked.
+// A tasks remote marked as moved itself is not this check's: every command
+// refuses it with the place the tasks are now. Otherwise the place the tasks
+// were in before is checked as checkMoveFinished says.
 func (r *Repository) CheckMoveDone(ctx context.Context) error {
 	tracked, exists, err := r.readConfig()
 	if err != nil || !exists || !tracked.TasksRemote.Chosen() {
 		return err
 	}
 	to := tracked.TasksRemote
-	destination, _, err := r.remoteIdentityRecord(ctx, to.Name)
-	if err != nil || destination.Moved != nil {
-		return nil
-	}
-	from, err := r.defaultMoveSource(ctx, to.Name, destination.Departed)
-	if err != nil || from == to.Name || !r.hasGitRemote(ctx, from) {
-		return nil
-	}
-	listing, err := r.Git(ctx, nil, "ls-remote", "--refs", from, taskRefPrefix+"*")
-	if err != nil || len(listedRefNames(listing)) == 0 {
-		return nil
-	}
-	record, found, err := r.remoteIdentityRecord(ctx, from)
+	destination, found, err := r.remoteIdentityRecord(ctx, to.Name)
 	if err != nil {
+		return wrapKeepingCategory("cannot read the project identity "+to.Name+" holds to check that the tasks' move there finished", err)
+	}
+	if found && destination.Moved != nil {
 		return nil
 	}
-	if found && record.Moved != nil {
-		return nil
+	return r.checkMoveFinished(ctx, to, destination.Departed)
+}
+
+// RequireFinishedMove makes this handle's synchronizations check, when the
+// remote they read records that the tasks left it once and came back, that
+// the place they came back from is marked (checkMoveFinished), and refuse
+// before publishing anything when it is not. Setup asks for it. The check
+// runs only for a remote that records a departure, which a project that never
+// moved its tasks has none of.
+func (r *Repository) RequireFinishedMove() {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	r.requireFinishedMove = true
+}
+
+func (r *Repository) finishedMoveRequired() bool {
+	r.metadataMu.RLock()
+	defer r.metadataMu.RUnlock()
+	return r.requireFinishedMove
+}
+
+// checkMoveFinished refuses when the place the tasks were in before they went
+// to to still holds task refs and is not marked as moved. That place is found
+// as move-tasks finds it: origin, or where its markers lead, for a place the
+// tasks never left (departed is nil); and for one they came back to, the
+// place they went when they left it (departed), or where its markers lead.
+// Each hop is read through this checkout's remote of the name the marker
+// gives, or, when it has none, at the address the marker records.
+//
+// A place on the way that cannot be read refuses with what to do, because a
+// check that skips what it cannot read is the one that lets two places be
+// live at once.
+func (r *Repository) checkMoveFinished(ctx context.Context, to core.TasksRemoteSetting, departed *TasksMoved) error {
+	notMoved := func(place TasksMoved) error {
+		return core.TasksRemoteError(core.CategoryNotInitialized,
+			core.TasksRemoteRefusal{
+				Reason:  core.TasksRemoteNotMoved,
+				Remote:  to.Name,
+				URL:     to.URL,
+				MovedTo: &core.TasksRemoteTarget{Remote: to.Name, URL: to.URL},
+				Command: "workbook move-tasks",
+			},
+			"this project's settings say its tasks are in %s (remote %q), but %s (%s) still holds them and is not marked as moved, "+
+				"so the move has not finished; whoever changed tasks-remote in %s runs workbook move-tasks, "+
+				"and this checkout runs workbook setup after that",
+			to.URL, to.Name, place.Remote, place.URL, configPath)
 	}
-	return core.TasksRemoteError(core.CategoryNotInitialized,
-		core.TasksRemoteRefusal{
-			Reason:  core.TasksRemoteNotMoved,
-			Remote:  to.Name,
-			URL:     to.URL,
-			MovedTo: &core.TasksRemoteTarget{Remote: to.Name, URL: to.URL},
-			Command: "workbook move-tasks",
-		},
-		"this project's settings say its tasks are in %s (remote %q), but %s still holds them and is not marked as moved, "+
-			"so the move has not finished; whoever set tasks-remote runs workbook move-tasks, and this checkout runs workbook setup after that",
-		to.URL, to.Name, from)
+	place := TasksMoved{Remote: core.DefaultTasksRemote, URL: redactURLCredentials(r.gitRemoteURL(ctx, core.DefaultTasksRemote))}
+	if departed != nil {
+		place = *departed
+	}
+	seen := map[string]bool{to.Name: true}
+	for hops := 0; ; hops++ {
+		if seen[place.Remote] || hops >= movedFollowLimit {
+			return notMoved(place)
+		}
+		seen[place.Remote] = true
+		unreadable := func(cause error) error {
+			return core.Wrap(core.CategoryOperational,
+				fmt.Sprintf("cannot read %s (%s), where this project's tasks were before they went to %s, "+
+					"so this checkout cannot check that the move there finished; check that this checkout can reach it "+
+					"and run workbook setup again, or, if that repository no longer exists, run workbook setup --no-sync "+
+					"and then workbook sync", place.Remote, place.URL, to.Name),
+				cause)
+		}
+		record, found, err := r.readPlaceIdentity(ctx, place)
+		if err != nil {
+			return unreadable(err)
+		}
+		if found && record.Moved != nil {
+			if record.Moved.Remote == to.Name {
+				return nil
+			}
+			place = *record.Moved
+			continue
+		}
+		address := place.Remote
+		if !r.hasGitRemote(ctx, address) {
+			address = place.URL
+		}
+		listing, err := r.Git(ctx, nil, "ls-remote", "--refs", address, taskRefPrefix+"*")
+		if err != nil {
+			return unreadable(err)
+		}
+		if len(listedRefNames(listing)) == 0 {
+			return nil
+		}
+		return notMoved(place)
+	}
 }
 
 // wrapKeepingCategory adds context to err without changing its exit code.
