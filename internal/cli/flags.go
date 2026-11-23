@@ -631,16 +631,6 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
-	"board": {
-		Name:        "board",
-		Synopsis:    "workbook board [--wide | --narrow] [--json]",
-		Description: "Show the task board.",
-		Options: []optionMetadata{
-			{Name: "wide", Kind: boolFlag, Description: "force wide board layout"},
-			{Name: "narrow", Kind: boolFlag, Description: "force narrow board layout"},
-			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
-		},
-	},
 	"show": {
 		Name:     "show",
 		Synopsis: "workbook show <id-or-prefix> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--get-attachment <id-or-prefix> [--out <path>]] [--json]",
@@ -941,7 +931,7 @@ var commandSchemas = map[string]commandMetadata{
 }
 
 var commandOrder = []string{
-	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "compact", "version", "fetch", "push", "sync", "move-tasks", "status", "priority", "key", "config", "docs", "hooks", "serve", "completion",
+	"setup", "create", "list", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "compact", "version", "fetch", "push", "sync", "move-tasks", "status", "priority", "key", "config", "docs", "hooks", "serve", "completion",
 }
 
 type commandFlagSet struct {

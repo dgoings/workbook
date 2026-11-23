@@ -61,10 +61,10 @@ type Column struct {
 //
 // A renderer must consume both. Rendering Columns alone silently deletes tasks
 // from the reader's view, and a task that is invisible reads as a task that was
-// deleted rather than one that is merely unsorted. Both renderers therefore
-// give UnknownTasks its own labeled region — the terminal an UNKNOWN STATUS
-// section, the web board an "Unknown status" area below the columns — rather
-// than folding it into a column that would misreport the status. Keeping it out
+// deleted rather than one that is merely unsorted. The web board therefore
+// gives UnknownTasks its own labeled region, an "Unknown status" area below the
+// columns, rather than folding it into a column that would misreport the
+// status. Keeping it out
 // of the columns matters as much as showing it: the region is a display, not a
 // seventh status, so nothing drops into it — there is no status such a drop
 // would name. Its cards do drag out on the web board, which is the recovery:
@@ -73,7 +73,7 @@ type Column struct {
 //
 // This is routine rather than exotic, because a clone whose configuration this
 // one has not fetched produces it on its own. internal/presentation/parity_test.go
-// holds the decision and asserts it against both renderers at once.
+// holds the decision and asserts it against the web board.
 type Board struct {
 	Columns      []Column
 	UnknownTasks []TaskView
@@ -92,7 +92,7 @@ func boardVocabulary(vocabulary core.Vocabulary) core.Vocabulary {
 	return vocabulary
 }
 
-// TaskViews derives every fact both boards show about a task set, resolving
+// TaskViews derives every fact the board shows about a task set, resolving
 // each status through the project's own vocabulary.
 //
 // Dependency progress and the waiting-on-dependencies flag read the vocabulary's
@@ -258,8 +258,8 @@ func AssignmentChip(assignment core.Assignment) string {
 }
 
 // AssignmentChips renders a task's assignments in stored order, which is by
-// principal and then label, so two boards drawn from one task agree about which
-// chip comes first.
+// principal and then label, so every surface drawn from one task agrees about
+// which chip comes first.
 func AssignmentChips(assignments []core.Assignment) []string {
 	if len(assignments) == 0 {
 		return nil

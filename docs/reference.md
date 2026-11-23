@@ -14,7 +14,6 @@ workbook setup [--key <key>] [--no-docs] [--no-sync] [--skill-dir <dir>] [--no-s
 workbook setup --tasks-only <url> [--key <key>] [--no-docs] [--no-skill] [--json]
 workbook create <title> [--description <text>] [--status <status>] [--priority <priority>] [--key <key>] [--label <label>] [--no-sync] [--json]
 workbook list [--status <status>] [--priority <priority>] [--key <key>] [--label <label>] [--find <text>] [--all] [--json]
-workbook board [--wide | --narrow] [--json]
 workbook show <task> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--get-attachment <attachment> [--out <path>]] [--json]
 workbook update <task> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--label <label>] [--clear-labels] [--comment <body>] [--edit-comment <comment>] [--remove-comment <comment>] [--attach-file <path>] [--attach-url <url>] [--attach-label <text>] [--remove-attachment <attachment>] [--assign <who>] [--unassign <who>] [--force] [--no-sync] [--json]
 workbook delete <task> [--no-sync] [--json]
@@ -155,8 +154,8 @@ that project and never creates one.
 The folder is an ordinary Git folder, not a bare one, with nothing checked out.
 It has no branch and no tag, and none of the code's objects. Setup writes
 `.workbook/config.json` into it as it does in a clone, uncommitted, and installs
-no agent documentation or skill. `list`, `show`, `create`, `update`, `board`,
-`serve` and the other task commands work there as they do in a clone, and
+no agent documentation or skill. `list`, `show`, `create`, `update`, `serve`
+and the other task commands work there as they do in a clone, and
 changes publish to the remote the same way.
 
 What makes the folder tasks-only is recorded in its own Git settings, never in
@@ -621,11 +620,10 @@ qualify. It skips the tasks somebody else is assigned to — see
 `--limit <n>` offers the first `n` eligible tasks in that same order; its JSON
 `data` is `{"tasks": [...], "eligible": N}`, where `eligible` counts every task
 that qualified, and its text output is a `list` header and one row per task.
-`--limit` cannot be combined with `--claim`, which takes one task. `board` uses
-the same core task order and presents an actionable, unambiguous task-ID prefix
-with each card's priority, title, labels, and assignees. Its JSON output retains
-full task IDs, descriptions, and the rest of the task data. Normal `list`,
-`show`, `board`, and `next` reads use the local SQLite projection.
+`--limit` cannot be combined with `--claim`, which takes one task. The web board
+uses the same core task order and presents an actionable, unambiguous task-ID
+prefix with each card's priority, title, labels, and assignees. Normal `list`,
+`show`, and `next` reads use the local SQLite projection.
 Implementation links remain future work.
 
 ## Who an edit is recorded under
@@ -764,8 +762,8 @@ instead of removing each other's claims forever.
 `workbook show` prints each assignment with the identity, when it was recorded,
 and how long ago that was. Staleness is displayed and never enforced: "assigned
 9 days ago" on a task nobody has touched is a fact for people to settle between
-themselves. Both boards show a compact chip — the local part of the address plus
-the agent label — beside each card's labels.
+themselves. The web board shows a compact chip — the local part of the address
+plus the agent label — beside each card's labels.
 
 On `workbook serve`'s board the chip row is drawn only on a card somebody holds,
 so an unassigned board is exactly the board it has always been, and it is capped
@@ -1157,7 +1155,7 @@ The web board's **Priorities** section does all of this from the browser —
 adding, renaming, relabeling, recoloring, the `default` role, reordering and
 removal — against this same ledger and with these same refusals, the way its
 **Statuses** section administers the columns; see
-[Terminal board](#terminal-board).
+[Board columns](#board-columns).
 
 ## Project keys
 
@@ -1316,7 +1314,7 @@ Everyone on the team upgrades together; see
 The web board's **Keys** section administers the same key set from the
 browser — add a key, make one current, retire one, reactivate one — against
 this same ledger and with these same refusals, the way its **Statuses** section
-administers the columns; see [Terminal board](#terminal-board). Its new-task
+administers the columns; see [Board columns](#board-columns). Its new-task
 form offers the key to mint under when there is more than one to choose from;
 see [Local web board](#local-web-board).
 
@@ -2773,20 +2771,20 @@ Validation cost is measured by the benchmark harness's `validate-full-history`,
 representative 500-task, 20-operation fixture; run `scripts/benchmark.sh` and
 compare reports to see how audits behave over time.
 
-## Terminal board
+## Board columns
 
-`workbook board` draws one column per status the project defines, in the order
-`workbook status list` reports and under the labels it shows. It chooses its
-wide layout on an interactive terminal wide enough for those columns: the budget
-is per column, and a six-status project's threshold is 140 columns, which is
-what it has always been. A project with three statuses reaches its wide layout
-on a narrower terminal, and one with ten needs a wider one. Vertically stacked
-status sections are used for narrow or noninteractive output; `--wide` and
-`--narrow` force the respective layouts. The task-ID prefixes in human output
-are accepted anywhere a task ID is accepted.
+The board `workbook serve` opens in a browser draws one column per status the
+project defines, in the order `workbook status list` reports and under the
+labels it shows. The task-ID prefixes on its cards are accepted anywhere a task
+ID is accepted.
 
-The web board draws the same columns, resolved per request, so a status change
-another clone made reaches a running `workbook serve` on the next poll. It does
+Workbook 0.7 removed the terminal board, the `board` command. Running it now is
+the usage error any unknown command gets, with a sentence pointing at `workbook
+serve`. A script that read `board --json` reads `workbook list --json` instead:
+both returned the same task array in the same order.
+
+The columns are resolved per request, so a status change another clone made
+reaches a running `workbook serve` on the next poll. It does
 not rebuild the columns under an open page — that would destroy the card nodes
 holding open forms, staged changes and unread refusals — and instead shows a
 notice offering a reload.
@@ -2925,10 +2923,11 @@ reason for a status change to be refused as another status change would be.
 A task can hold a status that resolves to nothing this project defines: not a
 live status, and not one any recorded rename or removal forwards to a live one.
 That is what a clone whose configuration this checkout has not fetched produces
-on its own. Both boards show that task rather than dropping it, under a heading
-that says the status was not recognized: the terminal board prints an
-`UNKNOWN STATUS` section below its columns, and the web board shows an "Unknown
-status" region below its own. A task that is invisible reads as a task that was
+on its own. The web board shows that task rather than dropping it, under a
+heading that says the status was not recognized: an "Unknown status" region
+below its columns. On the command line, `workbook list` shows the task with the
+status it stores, and `workbook status list` counts it among the unresolved. A
+task that is invisible reads as a task that was
 deleted, which is a worse report than a task that is merely unsorted.
 
 A stored status that a rename or a removal does forward is not in this region.
@@ -2993,7 +2992,7 @@ is exit `7`.
 
 The residue is a task whose stored status fails the shape rule, and it is not a
 one-task problem. Every command that reads the project reads every task ref, so
-one such task stops the whole project: `list`, `board`, `next`, `show` and
+one such task stops the whole project: `list`, `next`, `show` and
 `update` of a *healthy* sibling, `status list`, and `rebuild` all exit `7`, and
 `workbook serve` answers `/` with a 500 carrying the same error document instead
 of a board. `workbook validate` is the only verb that still answers — it exits
@@ -3016,11 +3015,11 @@ mutation boundary, replay — checks the shape first. A repair verb is deferred 
 that likelihood alone, not on the cost of hitting it, which is a whole project.
 If anybody does hit it, that judgment should be revisited rather than defended.
 
-Both boards read the unknown/known split from one place — `presentation.Board`
+The web board reads the unknown/known split from one place — `presentation.Board`
 separates `Columns` from `UnknownTasks` — so a renderer that consumes only
 `Columns` silently deletes tasks from the reader's view.
-`internal/presentation/parity_test.go` asserts both boards against the same task
-set and is what keeps them aligned.
+`internal/presentation/parity_test.go` holds the web board to that model for
+one task set.
 
 ## Text-mode output safety
 
@@ -3034,7 +3033,7 @@ body makes a terminal draw the rest of the line backwards and an attachment
 named `gpj.exe` then reads as `exe.jpg`. Format runes that carry meaning rather
 than direction, such as the zero-width joiner inside an emoji sequence, print as
 they were written. The same rule already shaped Git commit subjects and now
-applies to `list`, `board`, `show`, its history and comparison output, conflict
+applies to `list`, `show`, its history and comparison output, conflict
 detail, and the line a mutation prints.
 
 The web board is less strict about one part of this: it keeps the three

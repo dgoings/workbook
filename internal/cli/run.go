@@ -87,7 +87,7 @@ func runWithEnvironment(
 	// environment that command would have run under: somebody who mistyped
 	// `udpate` needs to hear that, not that WORKBOOK_ACTOR is unusable.
 	if _, known := commandSchemas[command]; !known {
-		err := core.Errorf(core.CategoryInvocation, "unknown command %q", command)
+		err := unknownCommandError(command)
 		writeError(stderr, err, jsonMode)
 		return core.ExitCode(err)
 	}
@@ -121,8 +121,6 @@ func runWithEnvironment(
 		err = runCreate(ctx, commandArgs, cwd, stdout, stderr)
 	case "list":
 		err = runList(ctx, commandArgs, cwd, stdout, stderr)
-	case "board":
-		err = runBoard(ctx, commandArgs, cwd, stdout, stderr)
 	case "show":
 		err = runShow(ctx, commandArgs, cwd, stdout, stderr)
 	case "update":
@@ -172,13 +170,31 @@ func runWithEnvironment(
 	case "completion":
 		err = runCompletion(commandArgs, stdout)
 	default:
-		err = core.Errorf(core.CategoryInvocation, "unknown command %q", command)
+		err = unknownCommandError(command)
 	}
 	if err != nil {
 		writeError(stderr, err, jsonMode)
 		return core.ExitCode(err)
 	}
 	return 0
+}
+
+// removedCommands holds a sentence for each command a release took away, said
+// after the unknown-command error so a person or a script still using one
+// hears where its job went rather than wondering whether the name was
+// mistyped. The command itself stays unknown: it is refused exactly as any
+// other unknown name is, with the same exit code and usage.
+var removedCommands = map[string]string{
+	"board": "It was removed; `workbook serve` opens the board in a browser.",
+}
+
+// unknownCommandError is the refusal for a command name Workbook does not
+// have, naming where a removed command's job went when the name is one.
+func unknownCommandError(command string) error {
+	if pointer, removed := removedCommands[command]; removed {
+		return core.Errorf(core.CategoryInvocation, "unknown command %q. %s", command, pointer)
+	}
+	return core.Errorf(core.CategoryInvocation, "unknown command %q", command)
 }
 
 func runVersion(args []string, stdout io.Writer) error {

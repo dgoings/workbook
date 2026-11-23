@@ -1,34 +1,36 @@
-// Package presentation_test cross-checks the two boards Workbook renders.
+// Package presentation_test cross-checks the web board against the board model
+// internal/presentation builds.
 //
-// Parity is by construction today: the terminal renderer and the web API both
-// consume internal/presentation, and each side is tested alone. Nothing fed one
-// task set to both and compared what they present, so a renderer that started
-// deriving a fact for itself — recomputing an ID prefix, counting dependencies
-// again, formatting a priority from its own table — would agree with its own
-// tests while the two boards showed a user different things about one task.
+// The web API and the page the server renders both consume
+// internal/presentation, and each is tested alone. Nothing else feeds one task
+// set to the model and to the web board and compares what they present, so a
+// web surface that started deriving a fact for itself — recomputing an ID
+// prefix, counting dependencies again, formatting a priority from its own
+// table — would agree with its own tests while showing a user something the
+// model never said. These tests used to compare the terminal board as well;
+// that command was removed, and the model is what any future surface would
+// consume.
 //
 // The standing decision this file exists to hold: every task in the set a board
-// is handed appears somewhere on that board, on both boards. A status this
-// build has no column for is a presentation problem, never a reason to stop
-// naming a task — Board.UnknownTasks is computed once here for exactly that,
-// and a renderer that consumes Board.Columns without also consuming
-// Board.UnknownTasks silently deletes tasks from the reader's view. Two Ready
-// changes make that routine rather than exotic: per-project custom status
-// columns, and removing the default Blocked status. Both leave one clone
-// holding a status another clone does not know.
+// is handed appears somewhere on that board. A status this build has no column
+// for is a presentation problem, never a reason to stop naming a task —
+// Board.UnknownTasks is computed once here for exactly that, and a renderer that
+// consumes Board.Columns without also consuming Board.UnknownTasks silently
+// deletes tasks from the reader's view. Per-project custom status columns, and
+// removing the default Blocked status, make that routine rather than exotic:
+// both leave one clone holding a status another clone does not know.
 //
 // So a new renderer, or a new column source, keeps the two rules
-// TestBothBoardsNameATaskWhoseStatusHasNoColumn asserts: the unknown set is
+// TestTheWebBoardNamesATaskWhoseStatusHasNoColumn asserts: the unknown set is
 // rendered, and it is rendered under its own heading rather than folded into a
 // column that would misreport the task's status.
 //
-// The columns themselves are a project's own now, which is where the second
-// standing decision lives: TestBothBoardsBuildTheProjectsOwnColumns feeds one
-// vocabulary to both boards and requires the same columns, the same labels and
-// the same card in the same place on each. Parity used to be free, because both
-// boards read one fixed array of six statuses. It is not free any more, and a
-// renderer that reintroduced a status list of its own would pass every test it
-// owns while disagreeing with the other board about where a task is.
+// The columns themselves are a project's own, which is where the second
+// standing decision lives: TestTheWebBoardBuildsTheProjectsOwnColumns feeds one
+// vocabulary to the model and to the web board and requires the same columns,
+// the same labels and the same card in the same place on each. A renderer that
+// reintroduced a status list of its own would pass every test it owns while
+// disagreeing with the model about where a task is.
 package presentation_test
 
 import (
@@ -43,7 +45,6 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/presentation"
-	"github.com/dgoings/workbook/internal/terminalui"
 	"github.com/dgoings/workbook/internal/webui"
 )
 
@@ -81,7 +82,7 @@ func parityTasks() []core.Task {
 	}
 }
 
-func TestBothBoardsPresentTheSameFactsAboutOneTaskSet(t *testing.T) {
+func TestTheWebBoardPresentsTheModelsFactsAboutOneTaskSet(t *testing.T) {
 	tasks := parityTasks()
 	board := presentation.NewBoard(tasks, core.Vocabulary{})
 	document := webBoardDocument(t, tasks)
@@ -98,69 +99,56 @@ func TestBothBoardsPresentTheSameFactsAboutOneTaskSet(t *testing.T) {
 		webTasks[task.ID] = task
 	}
 
-	wide := renderTerminalBoard(t, board, terminalui.LayoutWide)
-	narrow := renderTerminalBoard(t, board, terminalui.LayoutNarrow)
-
 	seen := 0
 	for _, column := range board.Columns {
 		for _, view := range column.Tasks {
 			seen++
 			entry, ok := web[view.Task.ID]
 			if !ok {
-				t.Fatalf("web board omits task %s that the terminal board places in %q", view.Task.ID, column.Label)
+				t.Fatalf("web board omits task %s that the model places in %q", view.Task.ID, column.Label)
 			}
 			// The derived facts have to be the same numbers, not merely both
 			// plausible: an ID prefix computed twice is the classic drift.
 			if entry.IDPrefix != view.IDPrefix {
-				t.Errorf("task %s prefix: terminal %q, web %q", view.Task.ID, view.IDPrefix, entry.IDPrefix)
+				t.Errorf("task %s prefix: model %q, web %q", view.Task.ID, view.IDPrefix, entry.IDPrefix)
 			}
 			if entry.DependenciesComplete != view.DependenciesComplete || entry.DependenciesTotal != view.DependenciesTotal {
-				t.Errorf("task %s dependency summary: terminal %d/%d, web %d/%d",
+				t.Errorf("task %s dependency summary: model %d/%d, web %d/%d",
 					view.Task.ID, view.DependenciesComplete, view.DependenciesTotal,
 					entry.DependenciesComplete, entry.DependenciesTotal)
 			}
 			if entry.WaitingOnDependencies != view.WaitingOnDependencies {
-				t.Errorf("task %s waiting-on-dependencies: terminal %t, web %t",
+				t.Errorf("task %s waiting-on-dependencies: model %t, web %t",
 					view.Task.ID, view.WaitingOnDependencies, entry.WaitingOnDependencies)
 			}
 
-			// And the task fields both surfaces show have to come out equal.
+			// And the task fields the web board shows have to come out equal.
 			served, ok := webTasks[view.Task.ID]
 			if !ok {
 				t.Fatalf("web board lists no task %s", view.Task.ID)
 			}
 			if served.Title != view.Task.Title || served.Priority != view.Task.Priority ||
 				served.Status != view.Task.Status || strings.Join(served.Labels, ",") != strings.Join(view.Task.Labels, ",") {
-				t.Errorf("task %s: terminal shows %#v, web serves %#v", view.Task.ID, view.Task, served)
-			}
-
-			// The terminal has to actually print what it was handed. Both
-			// layouts, because they format a card differently: the wide board
-			// abbreviates priority to one letter and the narrow board spells it.
-			assertRenders(t, "wide", wide, view.IDPrefix, view.Task.Title, wideMarker(view.Task.Priority))
-			assertRenders(t, "narrow", narrow, view.IDPrefix, view.Task.Title, "["+string(view.Task.Priority)+"]")
-			if len(view.Task.Labels) > 0 {
-				assertRenders(t, "wide", wide, strings.Join(view.Task.Labels, ","))
-				assertRenders(t, "narrow", narrow, strings.Join(view.Task.Labels, ", "))
+				t.Errorf("task %s: model holds %#v, web serves %#v", view.Task.ID, view.Task, served)
 			}
 		}
 	}
 	if seen != len(tasks) {
-		t.Fatalf("terminal board placed %d of %d tasks in canonical columns", seen, len(tasks))
+		t.Fatalf("model placed %d of %d tasks in canonical columns", seen, len(tasks))
 	}
 	if len(board.UnknownTasks) != 0 {
 		t.Fatalf("canonical tasks landed outside the columns: %#v", board.UnknownTasks)
 	}
 }
 
-// A status neither board has a column for is the one case where "render the
+// A status the board has no column for is the one case where "render the
 // columns" and "render every task" come apart, and it is the case a beta
 // produces on its own: two clones on different Workbook versions, one holding a
-// status the other has never heard of. Both boards name the task, under a
-// heading that says the status was not recognized, rather than one of them
-// quietly dropping it — a task that is invisible reads as a task that was
+// status the other has never heard of. The model and the web board both name
+// the task, under a heading that says the status was not recognized, rather
+// than quietly dropping it — a task that is invisible reads as a task that was
 // deleted, which is a worse lie than a task that is merely unsorted.
-func TestBothBoardsNameATaskWhoseStatusHasNoColumn(t *testing.T) {
+func TestTheWebBoardNamesATaskWhoseStatusHasNoColumn(t *testing.T) {
 	const strandedID = "WB-01J0000000000000000000EE"
 	tasks := append(parityTasks(), core.Task{
 		ID: strandedID,
@@ -183,19 +171,8 @@ func TestBothBoardsNameATaskWhoseStatusHasNoColumn(t *testing.T) {
 	}
 	prefix := board.UnknownTasks[0].IDPrefix
 
-	for _, layout := range []struct {
-		name   string
-		layout terminalui.Layout
-	}{{"wide", terminalui.LayoutWide}, {"narrow", terminalui.LayoutNarrow}} {
-		rendered := renderTerminalBoard(t, board, layout.layout)
-		if !strings.Contains(rendered, "UNKNOWN STATUS (1)") {
-			t.Errorf("terminal %s board did not name the unknown status:\n%s", layout.name, rendered)
-		}
-		assertRenders(t, layout.name, rendered, prefix, "Status from a newer Workbook")
-	}
-
 	// The web side carries it in both arrays with the same derived prefix, so a
-	// client that renders the document has the same facts the terminal printed.
+	// client that renders the document has the same facts the model holds.
 	document := webBoardDocument(t, tasks)
 	var served *webui.TaskPresentation
 	for index, entry := range document.Presentation {
@@ -207,7 +184,7 @@ func TestBothBoardsNameATaskWhoseStatusHasNoColumn(t *testing.T) {
 		t.Fatalf("web presentation omits the unknown-status task: %#v", document.Presentation)
 	}
 	if served.IDPrefix != prefix {
-		t.Fatalf("unknown-status prefix: terminal %q, web %q", prefix, served.IDPrefix)
+		t.Fatalf("unknown-status prefix: model %q, web %q", prefix, served.IDPrefix)
 	}
 
 	// And the page the server renders before any script runs shows it too, in a
@@ -225,7 +202,7 @@ func TestBothBoardsNameATaskWhoseStatusHasNoColumn(t *testing.T) {
 		t.Fatalf("web board page rendered %s inside a status column, at %d before the unknown region at %d", strandedID, card, region)
 	}
 	if !strings.Contains(page, `data-id-prefix="`+prefix+`"`) {
-		t.Errorf("web board page does not show the terminal's ID prefix %q", prefix)
+		t.Errorf("web board page does not show the model's ID prefix %q", prefix)
 	}
 	if !strings.Contains(page, "Unknown status") {
 		t.Errorf("web board page does not label the unknown-status region:\n%s", page)
@@ -293,16 +270,16 @@ func customVocabularyTasks() []core.Task {
 	}
 }
 
-// The columns are the project's, on both boards, and a task lands in the same
-// one on both.
+// The columns are the project's, in the model and on the web board, and a task
+// lands in the same one on both.
 //
 // This is the parity rule the fixed six-status array used to satisfy for free.
-// Now that each board builds its columns from a vocabulary, "both boards agree"
-// has to be asserted against a vocabulary neither of them could have guessed —
+// Now that columns are built from a vocabulary, "the web board agrees with the
+// model" has to be asserted against a vocabulary neither could have guessed —
 // including the two cases resolution exists for, a stored status a rename
 // replaced and one a removal forwarded, which belong in a live column rather
 // than in the unknown region.
-func TestBothBoardsBuildTheProjectsOwnColumns(t *testing.T) {
+func TestTheWebBoardBuildsTheProjectsOwnColumns(t *testing.T) {
 	tasks := customVocabularyTasks()
 	vocabulary := parityVocabulary(t)
 	board := presentation.NewBoard(tasks, vocabulary)
@@ -313,20 +290,20 @@ func TestBothBoardsBuildTheProjectsOwnColumns(t *testing.T) {
 		{"shipped", "Shipped"},
 	}
 	if len(board.Columns) != len(wantColumns) {
-		t.Fatalf("terminal board has %d columns, want %d: %#v", len(board.Columns), len(wantColumns), board.Columns)
+		t.Fatalf("model has %d columns, want %d: %#v", len(board.Columns), len(wantColumns), board.Columns)
 	}
-	terminalPlacement := make(map[string]string, len(tasks))
+	modelPlacement := make(map[string]string, len(tasks))
 	for index, column := range board.Columns {
 		if string(column.Status) != wantColumns[index].status || column.Label != wantColumns[index].label {
-			t.Fatalf("terminal column %d = {%q, %q}, want {%q, %q}",
+			t.Fatalf("model column %d = {%q, %q}, want {%q, %q}",
 				index, column.Status, column.Label, wantColumns[index].status, wantColumns[index].label)
 		}
 		for _, view := range column.Tasks {
-			terminalPlacement[view.Task.ID] = string(column.Status)
+			modelPlacement[view.Task.ID] = string(column.Status)
 		}
 	}
 	for _, view := range board.UnknownTasks {
-		terminalPlacement[view.Task.ID] = unknownRegion
+		modelPlacement[view.Task.ID] = unknownRegion
 	}
 	want := map[string]string{
 		"WB-01J0000000000000000000A1": "inbox",
@@ -335,27 +312,8 @@ func TestBothBoardsBuildTheProjectsOwnColumns(t *testing.T) {
 		"WB-01J0000000000000000000D4": "shipped",
 		"WB-01J0000000000000000000E5": unknownRegion,
 	}
-	if !reflect.DeepEqual(terminalPlacement, want) {
-		t.Fatalf("terminal placement = %#v, want %#v", terminalPlacement, want)
-	}
-
-	// The labels have to reach the printed board too, in both layouts: a column
-	// that carries the project's label and prints a derived one is the same
-	// drift by another route.
-	for name, layout := range map[string]terminalui.Layout{"wide": terminalui.LayoutWide, "narrow": terminalui.LayoutNarrow} {
-		rendered := renderTerminalBoard(t, board, layout)
-		for _, column := range wantColumns {
-			heading := column.label
-			if layout == terminalui.LayoutNarrow {
-				heading = strings.ToUpper(heading)
-			}
-			assertRenders(t, name, rendered, heading)
-		}
-		for _, absent := range []string{"BACKLOG", "IN REVIEW", "Backlog", "In Review"} {
-			if strings.Contains(rendered, absent) {
-				t.Errorf("terminal %s board prints the built-in column %q for a project that does not define it:\n%s", name, absent, rendered)
-			}
-		}
+	if !reflect.DeepEqual(modelPlacement, want) {
+		t.Fatalf("model placement = %#v, want %#v", modelPlacement, want)
 	}
 
 	// And the page the server renders before any script runs has to agree,
@@ -371,8 +329,8 @@ func TestBothBoardsBuildTheProjectsOwnColumns(t *testing.T) {
 				index, column.status, column.label, wantColumns[index].status, wantColumns[index].label)
 		}
 	}
-	if got := webPlacement(t, page); !reflect.DeepEqual(got, terminalPlacement) {
-		t.Fatalf("web placement = %#v, want the terminal board's %#v", got, terminalPlacement)
+	if got := webPlacement(t, page); !reflect.DeepEqual(got, modelPlacement) {
+		t.Fatalf("web placement = %#v, want the model's %#v", got, modelPlacement)
 	}
 
 	// The default-tagged status is the server's answer, not a constant: it is
@@ -383,7 +341,8 @@ func TestBothBoardsBuildTheProjectsOwnColumns(t *testing.T) {
 }
 
 // unknownRegion is the placement key for the region that is not a column, so
-// the two boards can be compared with one map rather than two shapes.
+// the model and the web board can be compared with one map rather than two
+// shapes.
 const unknownRegion = "(unknown)"
 
 type webColumn struct{ status, label string }
@@ -470,37 +429,4 @@ func webBoardResponse(t *testing.T, tasks []core.Task, vocabulary core.Vocabular
 		t.Fatalf("GET %s = %d, want %d; body = %s", path, recorder.Code, http.StatusOK, recorder.Body.String())
 	}
 	return recorder
-}
-
-func renderTerminalBoard(t *testing.T, board presentation.Board, layout terminalui.Layout) string {
-	t.Helper()
-	var output strings.Builder
-	// Wide enough that nothing under test is truncated, so a missing string is
-	// a missing fact rather than an elision.
-	if err := terminalui.RenderBoard(&output, board, layout, 400); err != nil {
-		t.Fatalf("RenderBoard() error = %v", err)
-	}
-	return output.String()
-}
-
-func assertRenders(t *testing.T, layout, rendered string, wanted ...string) {
-	t.Helper()
-	for _, want := range wanted {
-		if !strings.Contains(rendered, want) {
-			t.Errorf("%s board does not show %q", layout, want)
-		}
-	}
-}
-
-func wideMarker(priority core.Priority) string {
-	switch priority {
-	case core.PriorityHigh:
-		return "[H]"
-	case core.PriorityMedium:
-		return "[M]"
-	case core.PriorityLow:
-		return "[L]"
-	default:
-		return "[?]"
-	}
 }
