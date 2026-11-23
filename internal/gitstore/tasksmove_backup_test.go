@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -152,5 +153,87 @@ func TestMoveTasksBackStoppedBeforeReplacingASetAsideCopyReportsItOnce(t *testin
 	result, err = first.MoveTasks(context.Background(), config, MoveTasksOptions{})
 	if err != nil || len(result.SetAside) != 0 || len(result.Bundles) != 0 {
 		t.Fatalf("MoveTasks() third run = %+v, %v, want quiet", result, err)
+	}
+}
+
+// A checkout that synchronizes with a place the tasks came back to keeps its
+// own identity ref on the identity commit at the bottom of that place's
+// history, never on the return recorded above it, whether it set up there
+// afresh or already held the identity commit.
+func TestSyncWithAMovedAndBackRemoteKeepsTheIdentityRefAtTheRoot(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newMoveFixture(t, testrepo.FormatSHA1)
+	first, config := moveTo(t, fixture.first, core.TasksRemoteSetting{Name: "tasks", URL: fixture.tasks})
+	first, config = pullSettings(t, first, core.TasksRemoteSetting{})
+	if _, err := first.MoveTasks(ctx, config, MoveTasksOptions{}); err != nil {
+		t.Fatalf("MoveTasks() back = %v", err)
+	}
+	tip := syncGit(t, fixture.origin, "rev-parse", identityRef)
+	root := syncGit(t, fixture.origin, "rev-list", "--max-parents=0", identityRef)
+	if tip == root {
+		t.Fatalf("origin's identity ref is at its root %s, want a return above it", root)
+	}
+
+	fresh, freshConfig := checkoutOn(t, fixture.origin, core.TasksRemoteSetting{})
+	if _, err := fresh.Sync(ctx, freshConfig); err != nil {
+		t.Fatalf("Sync() in a fresh checkout = %v", err)
+	}
+	for name, repo := range map[string]*Repository{"the fresh checkout": fresh, "the mover": first} {
+		if _, err := repo.Sync(ctx, config); err != nil {
+			t.Fatalf("Sync() in %s = %v", name, err)
+		}
+		if got := syncGit(t, repo.Root, "rev-parse", identityRef); got != root {
+			t.Fatalf("%s's identity ref = %s, want the identity commit %s, not the return %s", name, got, root, tip)
+		}
+	}
+}
+
+// An identity history of exactly identityChainLimit commits above the
+// identity commit is read, and one commit more is refused with the limit's
+// own message, not some other failure further on.
+func TestIdentityChainLimitReadsTheLongestChainAndRefusesOneMore(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo, _, config := syncRepositories(t)
+	local, found, err := repo.readIdentityRef(ctx, identityRef)
+	if err != nil || !found {
+		t.Fatalf("readIdentityRef() = %v, %v", found, err)
+	}
+	marker, err := repo.writeTasksMovedCommit(ctx, local, TasksMoved{
+		Format: tasksMovedFormat, Version: tasksMovedVersion, ProjectID: config.ProjectID,
+		Remote: "tasks", URL: "https://example.test/tasks.git",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerTree := syncGit(t, repo.Root, "rev-parse", marker+"^{tree}")
+	returnTree := syncGit(t, repo.Root, "rev-parse", local.Head+"^{tree}")
+	tips := []string{local.Head, marker}
+	for len(tips) <= identityChainLimit+1 {
+		tree, message := returnTree, tasksReturnedCommitMessage
+		if len(tips)%2 == 1 {
+			tree, message = markerTree, tasksMovedCommitMessage
+		}
+		commit, err := repo.writeIdentityChainCommit(ctx, tree, tips[len(tips)-1], message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tips = append(tips, commit)
+	}
+
+	longest := remoteIdentityRefFor("longest")
+	syncGit(t, repo.Root, "update-ref", longest, tips[identityChainLimit])
+	record, found, err := repo.readIdentityRef(ctx, longest)
+	if err != nil || !found || record.Root != local.Head || record.Moved != nil {
+		t.Fatalf("readIdentityRef() of %d commits above the identity commit = %+v, %v, %v, want a live place",
+			identityChainLimit, record, found, err)
+	}
+	tooLong := remoteIdentityRefFor("toolong")
+	syncGit(t, repo.Root, "update-ref", tooLong, tips[identityChainLimit+1])
+	_, _, err = repo.readIdentityRef(ctx, tooLong)
+	want := fmt.Sprintf("carries more than %d moves and returns above the project's identity commit", identityChainLimit)
+	if core.CategoryOf(err) != core.CategoryCorruptData || !strings.Contains(fmt.Sprint(err), want) {
+		t.Fatalf("readIdentityRef() of %d commits above the identity commit = %v, want %q", identityChainLimit+1, err, want)
 	}
 }
