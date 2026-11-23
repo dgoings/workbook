@@ -299,6 +299,27 @@ and it is the first command that needs every clone of a project to upgrade
 before anyone runs it; see Compatibility across versions below.
 
 ### Added
+- **`workbook reset` removes Workbook's data from a checkout or a remote.** Run
+  by hand, `workbook reset` stops this checkout's watcher, then removes every
+  ref under `refs/workbook/` and the caches, and leaves tracked files,
+  `.workbook/config.json` and `.workbook/guidelines.md` alone; `workbook setup`
+  then rebuilds the checkout as a fresh clone would, which is how a checkout
+  with damaged Workbook data is started over. `workbook reset --remote <remote>`
+  deletes that remote's Workbook refs with leased pushes. At a place the tasks
+  moved away from it keeps the moved marker. At the place the tasks live it is
+  refused, exit 5, unless `--confirm <remote>` names it again, and always writes
+  a bundle. Both forms write a backup bundle first, as `compact` does, print the
+  `git fetch` that restores it, take `--dry-run`, `--no-backup` and
+  `--backup <path>`, and never touch a ref outside `refs/workbook/`. A checkout
+  reset lists the work its tasks remote lacks, and refuses `--no-backup` while
+  there is any, unless `--discard-unpublished` is given too. A host that
+  refuses to delete refs gets one refusal naming its rule and the refs left,
+  and running the command again once the host allows it finishes the job.
+  `workbook move-tasks --clean-up` runs the remote reset on the place a
+  finished move left. A checkout that still holds the tasks publishes them back
+  to a wiped place on its next sync. The reference documents
+  [leaving Workbook](docs/reference.md#leaving-workbook) step by step. Refusals
+  carry a `reset` member in the JSON error.
 - **Tasks can have a due date.** `workbook create --due` and `workbook update
   --due` take a date as `YYYY-MM-DD`, `today`, `tomorrow`, or `+Nd`, and record
   the date it comes to, never the relative form; `update --clear-due` removes
