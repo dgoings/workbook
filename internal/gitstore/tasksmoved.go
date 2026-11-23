@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -583,7 +584,121 @@ func (r *Repository) tasksMovedRefusalHere(ctx context.Context, moved TasksMoved
 				"every edit saved here that has not been published, then serve the board from here again",
 			moved.URL, moved.URL)
 	}
+	if !path.Unverified && r.settingsCommittedAwayFrom(ctx, moved.Remote) && r.neverLeftFor(ctx, moved, r.remote()) {
+		return unfinishedMoveRefusal(r.remote(), moved)
+	}
 	return tasksMovedRefusal(r.remote(), moved)
+}
+
+// neverLeftFor reports whether place, where the tasks are, has not recorded
+// leaving for remote. Settings that once named place and now name remote are
+// either a change of tasks-remote whose move-tasks has not run, or a checkout
+// that has not pulled the change that brought the tasks back to place after
+// they went to remote; only in the second does place's newest departure name
+// remote. A place that cannot be read says nothing, and the refusal stays the
+// ordinary one.
+func (r *Repository) neverLeftFor(ctx context.Context, place TasksMoved, remote string) bool {
+	record, found, err := r.readPlaceIdentity(ctx, place)
+	if err != nil || !found || record.Moved != nil {
+		return false
+	}
+	return record.Departed == nil || record.Departed.Remote != remote
+}
+
+// settingsCommittedAwayFrom reports whether the settings committed at HEAD
+// name this handle's remote while an earlier committed version of them named
+// place, where the markers say the tasks are. That is a change of
+// tasks-remote, committed and pulled, whose move-tasks has not run yet:
+// pulling and running setup cannot help, because the settings are already
+// the new ones. It reads the file's last 32 committed versions, and only on
+// the way to a refusal; a clone without that history, or a working tree
+// whose settings differ from HEAD's, is told to pull and run setup as before.
+func (r *Repository) settingsCommittedAwayFrom(ctx context.Context, place string) bool {
+	if place == "" || place == r.remote() {
+		return false
+	}
+	listing, err := r.Git(ctx, nil, "log", "--format=%H", "-n", "32", "HEAD", "--", configPath)
+	if err != nil {
+		return false
+	}
+	commits := strings.Fields(string(listing))
+	if len(commits) < 2 {
+		return false
+	}
+	var request strings.Builder
+	for _, commit := range commits {
+		request.WriteString(commit + ":" + configPath + "\n")
+	}
+	output, err := r.Git(ctx, []byte(request.String()), "cat-file", "--batch")
+	if err != nil {
+		return false
+	}
+	names := committedTasksRemoteNames(output)
+	if len(names) != len(commits) || names[0] != r.remote() {
+		return false
+	}
+	for _, name := range names[1:] {
+		if name == place {
+			return true
+		}
+	}
+	return false
+}
+
+// committedTasksRemoteNames is the remote each version of the settings in a
+// cat-file --batch answer names for the tasks, newest first: origin when it
+// names none, and "" for a version that is missing or cannot be read.
+func committedTasksRemoteNames(output []byte) []string {
+	var names []string
+	for len(output) > 0 {
+		newline := bytes.IndexByte(output, '\n')
+		if newline < 0 {
+			break
+		}
+		header := strings.Fields(string(output[:newline]))
+		output = output[newline+1:]
+		if len(header) != 3 || header[1] != "blob" {
+			names = append(names, "")
+			continue
+		}
+		size, err := strconv.Atoi(header[2])
+		if err != nil || size+1 > len(output) {
+			break
+		}
+		var settings struct {
+			TasksRemote struct {
+				Name string `json:"name"`
+			} `json:"tasksRemote"`
+		}
+		name := ""
+		if json.Unmarshal(output[:size], &settings) == nil {
+			name = settings.TasksRemote.Name
+			if name == "" {
+				name = "origin"
+			}
+		}
+		names = append(names, name)
+		output = output[size+1:]
+	}
+	return names
+}
+
+// unfinishedMoveRefusal is the moved refusal for a checkout whose committed
+// settings already name the place being moved to, before move-tasks ran.
+func unfinishedMoveRefusal(remote string, moved TasksMoved) error {
+	return core.TasksRemoteError(core.CategoryNotInitialized,
+		core.TasksRemoteRefusal{
+			Reason:  core.TasksRemoteMoved,
+			Remote:  remote,
+			MovedTo: &core.TasksRemoteTarget{Remote: moved.Remote, URL: moved.URL},
+			Command: "workbook move-tasks",
+		},
+		"this checkout's %s names %s for the tasks, and an earlier commit of it named %s, but the tasks are still at %s "+
+			"(remote %q) and %s is marked as the place they left: the change of tasks-remote is committed, and the move "+
+			"it is for has not been run. Pulling and running setup cannot finish it. Whoever changed tasks-remote runs "+
+			"workbook move-tasks, from any clone with these settings, which moves the tasks to %s; "+
+			"edits this checkout has not published yet are kept, and go there at its next publication after that",
+		configPath, remote, moved.Remote, moved.URL, moved.Remote, remote, remote)
 }
 
 // tasksMovedRefusal is what every command says in a checkout whose tasks

@@ -143,7 +143,9 @@ func writeTasksRemoteSetting(
 		fmt.Fprintf(stdout, "Address:\t%s\n", result.URL)
 		if source != setting.Name {
 			fmt.Fprintf(stdout, "Next:\trun workbook move-tasks to copy the tasks from %s to %s and mark %s, "+
-				"then commit %s; everyone else runs workbook setup after pulling it\n",
+				"then commit and push %s; everyone else runs workbook setup after pulling it. "+
+				"Committing it first is safe too: a checkout that pulls it before the move ran is refused "+
+				"and told to run workbook move-tasks\n",
 				source, setting.Name, source, ".workbook/config.json")
 		}
 	} else if before.TasksRemote.Chosen() {
@@ -151,7 +153,9 @@ func writeTasksRemoteSetting(
 		// otherwise they never left, and only the setting changes.
 		if moved, err := repository.OriginMarkedMoved(ctx); err == nil && moved != nil {
 			fmt.Fprintf(stdout, "Next:\trun workbook move-tasks to move the tasks back from %s to origin and mark %s, "+
-				"then commit %s; everyone else runs workbook setup after pulling it\n",
+				"then commit and push %s; everyone else runs workbook setup after pulling it. "+
+				"Committing it first is safe too: a checkout that pulls it before the move ran is refused "+
+				"and told to run workbook move-tasks\n",
 				source, source, ".workbook/config.json")
 		} else {
 			fmt.Fprintf(stdout, "Next:\tcommit %s; tasks are shared through origin again, "+
@@ -225,6 +229,12 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 	case "already":
 		fmt.Fprintf(stdout, "Marked:\t%s\t(already marked by an earlier run)\n", result.From.Remote)
 	}
+	switch result.Returned {
+	case "returned":
+		fmt.Fprintf(stdout, "Returned:\t%s\t(the tasks are back at a place they left; checkouts whose settings name it use it again)\n", result.To.Remote)
+	case "already":
+		fmt.Fprintf(stdout, "Returned:\t%s\t(already recorded by an earlier run)\n", result.To.Remote)
+	}
 	if len(result.Replaced) > 0 {
 		fmt.Fprintf(stdout, "Replaced:\t%s\t(the older copies %s kept, replaced with the checkpoints they were compacted to)\n",
 			strings.Join(result.Replaced, ", "), result.To.Remote)
@@ -249,7 +259,7 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 		fmt.Fprintf(stdout, "Config:\tnot carried\t(%s holds configuration changes this checkout's have diverged from; "+
 			"make them again with workbook config set)\n", result.From.Remote)
 	}
-	fmt.Fprintf(stdout, "Next:\tcommit .workbook/config.json and push it; everyone else pulls it and runs workbook setup\n")
+	fmt.Fprintf(stdout, "Next:\tcommit .workbook/config.json and push it, if that is not done yet; everyone else pulls it and runs workbook setup\n")
 	return err
 }
 

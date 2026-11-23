@@ -773,8 +773,12 @@ var commandSchemas = map[string]commandMetadata{
 			"for edits published before the mark, and checks that the new place holds every\n" +
 			"operation the old place does. Every step is safe to repeat: an interrupted run\n" +
 			"is finished by running it again, and a later run carries any edit that reached\n" +
-			"the old place after the move, applying each operation once. Then commit\n" +
-			".workbook/config.json; everyone else runs `workbook setup` after pulling it.\n\n" +
+			"the old place after the move, applying each operation once. Then commit and\n" +
+			"push .workbook/config.json; everyone else runs `workbook setup` after pulling it.\n" +
+			"Committing and pushing the settings before running this is safe too: a\n" +
+			"checkout that pulls them before the move ran is refused, told to run\n" +
+			"`workbook move-tasks`, and publishes nothing until it has; its unpublished\n" +
+			"edits are kept.\n\n" +
 			"The new place can be one the tasks left earlier, origin included: the copies it\n" +
 			"still holds are brought up to date, and it records that the tasks are back. A\n" +
 			"copy there of a task compacted since the tasks left is replaced with its\n" +

@@ -1743,6 +1743,18 @@ git add .workbook/config.json && git commit -m "Keep tasks in their own reposito
 workbook setup
 ```
 
+The order of steps 2 and 3 is the one to follow: run `move-tasks`, then commit
+and push the setting, so a teammate's setup after pulling works straight away.
+Committing and pushing the setting first is safe too, for a first move and for
+a move back. A teammate who pulls it before `move-tasks` has run is refused,
+exit 3, publishes nothing to either place, and keeps every edit not yet
+published: for a first move, setup says the move was never finished
+(`move-not-done`); for a move back, the place the setting names is still
+marked, and every command and setup there say that the change of
+`tasks-remote` is committed and its move has not been run, with `command`
+`workbook move-tasks`, rather than to pull and run setup, which cannot help.
+Once `move-tasks` has run, their setup works with nothing more to pull.
+
 `config set tasks-remote <name> --url <address>` refuses a name that is not a
 single-component Git remote name (letters, digits, `.`, `_` and `-`), `origin`
 with an address, a missing `--url`, an address that begins with `-` or holds
@@ -1759,7 +1771,8 @@ until setup runs, this checkout's task commands say to run it. Its `Next:` line
 says what is left to do, from the settings it replaced: before a move, only to
 commit the file, since the tasks never left `origin` and the tasks repository
 keeps the copy it holds; after one, to run `workbook move-tasks`, which moves
-them back.
+them back, then to commit and push the file, and that committing it first is
+safe too.
 
 ### Moving the tasks back
 
@@ -2050,7 +2063,7 @@ envelope, saying which remote, why, and the command that gets out of it:
 | `remote-missing` | 3 | The settings name a remote this checkout does not have: what an ordinary pull of the settings change leaves. `url` is the address setup will add. |
 | `not-read` | 3 | The checkout has the remote and has never read the tasks from it: what a setup without access leaves. The message names the address and the access needed. |
 | `unreachable` | 1 | Setup could not list the tasks remote. The message says which address, that seeing the tasks needs read access to it and changing them needs push access, and Git's own reason. |
-| `tasks-moved` | 3 | This checkout's tasks remote is marked as moved, so its settings predate the move. `movedTo` names the new place. The message says to pull the commit that sets `tasks-remote` and run setup, and that unpublished edits are kept. In a [tasks-only folder](#tasks-only-folders) it gives one command instead, `workbook setup --tasks-only <new address>`, which repoints that folder at the new place and keeps its unpublished edits; `command` holds it. Exit 5, category `validation`, when the marked remote was named with `--remote` and the command would publish to it. |
+| `tasks-moved` | 3 | This checkout's tasks remote is marked as moved, so its settings predate the move. `movedTo` names the new place. The message says to pull the commit that sets `tasks-remote` and run setup, and that unpublished edits are kept; `command` is `workbook setup`. When the settings committed at `HEAD` name the marked place and an earlier committed version named the place the tasks are now, which has never recorded leaving for the marked one, the change of `tasks-remote` was committed before its move ran: the message says so, and that pulling and running setup cannot finish it, and `command` is `workbook move-tasks`. When the markers lead in a circle, because a move was stopped between marking the old place and recording the return, the message says so and `command` is `workbook move-tasks` too. In a [tasks-only folder](#tasks-only-folders) it gives one command instead, `workbook setup --tasks-only <new address>`, which repoints that folder at the new place and keeps its unpublished edits; `command` holds it. Exit 5, category `validation`, when the marked remote was named with `--remote` and the command would publish to it. |
 | `move-not-done` | 3 | Setup found the place the tasks came from still holding task refs with no marker: the move was never run or never finished. That place is `origin` for a first move and, for a move back, the place the markers lead to from the one the settings name. `command` is `workbook move-tasks`. |
 | `published-after-move` | 3 | The remote accepted this command's task refs and, listed again straight after, was marked as moved: the edit went to a place the tasks have left. `tasks` names them; the edit is kept in this checkout, and the message says to pull the setting and run setup, and that `workbook move-tasks` run again carries it. |
 | `same-repository` | 5 | `move-tasks` or `setup` found the tasks remote to be the same repository as the place the tasks are in, whatever its address says. `command` is the `config set` to correct it. |
