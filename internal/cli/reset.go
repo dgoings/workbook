@@ -141,9 +141,9 @@ func runResetCheckout(
 			Command:     "workbook reset --no-backup --discard-unpublished",
 			Unpublished: plan.Unpublished,
 			SetAside:    plan.SetAside,
-		}, "this checkout holds work %s did not hold when it last synchronized: %s. Run workbook sync to publish it, "+
+		}, "this checkout holds work that exists only here, which %s %s: %s. Run workbook sync to publish it, "+
 			"or reset without --no-backup to keep it in a bundle, or add --discard-unpublished to lose it",
-			remote, describeLocalOnly(plan))
+			remote, lacks(plan), describeLocalOnly(plan))
 	}
 	tasksOnly, _ := repository.TasksOnly(ctx)
 	if tasksOnly {
@@ -258,6 +258,14 @@ func emptyIfNil[T any](values []T) []T {
 		return []T{}
 	}
 	return values
+}
+
+// lacks says how the tasks remote was found to lack what this checkout holds.
+func lacks(plan gitstore.LocalResetPlan) string {
+	if plan.Unchecked != "" {
+		return "lacked when this checkout last read it (it cannot be read now: " + plan.Unchecked + ")"
+	}
+	return "does not hold"
 }
 
 // describeLocalOnly names what exists only in this checkout, for a refusal.
