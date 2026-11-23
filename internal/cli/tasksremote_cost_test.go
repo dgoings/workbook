@@ -23,6 +23,9 @@ import (
 type gitTraceCursor struct {
 	path   string
 	offset int64
+	// running holds the top-level Git processes that have started and not
+	// yet exited, so a slow one is not mistaken for a quiet process.
+	running map[string]bool
 }
 
 // gitCost is how many Git processes, and how many of them connected to a
@@ -66,9 +69,20 @@ func (cursor *gitTraceCursor) next(t *testing.T) gitCost {
 			SID   string   `json:"sid"`
 			Argv  []string `json:"argv"`
 		}
-		if json.Unmarshal(line, &event) != nil || event.Event != "start" || strings.Contains(event.SID, "/") {
+		if json.Unmarshal(line, &event) != nil || strings.Contains(event.SID, "/") {
 			continue
 		}
+		if event.Event == "atexit" {
+			delete(cursor.running, event.SID)
+			continue
+		}
+		if event.Event != "start" {
+			continue
+		}
+		if cursor.running == nil {
+			cursor.running = map[string]bool{}
+		}
+		cursor.running[event.SID] = true
 		cost.processes++
 		argv := event.Argv
 		if len(argv) > 2 && argv[1] == "-C" {
@@ -161,27 +175,39 @@ func startTracedProcess(t *testing.T, binary, clone string, args ...string) (*gi
 	return cursor, output, stop
 }
 
-// settle waits until a traced process has started no Git process for a
-// while, and returns what it ran until then.
+// settle waits until a traced process has no Git process running and has
+// started none for two seconds, and returns what it ran until then.
 func (cursor *gitTraceCursor) settle(t *testing.T) gitCost {
+	t.Helper()
+	return cursor.settleAfter(t, "")
+}
+
+// settleAfter is settle that also waits for a connection of the named kind,
+// such as the push a round publishes with. Quiet alone cannot tell a round
+// that has finished from one a slow machine has not started yet.
+func (cursor *gitTraceCursor) settleAfter(t *testing.T, connection string) gitCost {
 	t.Helper()
 	var total gitCost
 	quiet := 0
-	deadline := time.Now().Add(30 * time.Second)
-	for quiet < 10 {
+	seen := connection == ""
+	deadline := time.Now().Add(2 * time.Minute)
+	for quiet < 20 {
 		if time.Now().After(deadline) {
-			t.Fatal("the traced process never went quiet")
+			t.Fatalf("the traced process never went quiet after a %q; it ran %s", connection, total)
 		}
 		time.Sleep(100 * time.Millisecond)
 		cost := cursor.next(t)
-		if cost.processes == 0 {
+		total.processes += cost.processes
+		total.connections = append(total.connections, cost.connections...)
+		total.commands = append(total.commands, cost.commands...)
+		for _, made := range cost.connections {
+			seen = seen || made == connection
+		}
+		if cost.processes == 0 && len(cursor.running) == 0 && seen {
 			quiet++
 			continue
 		}
 		quiet = 0
-		total.processes += cost.processes
-		total.connections = append(total.connections, cost.connections...)
-		total.commands = append(total.commands, cost.commands...)
 	}
 	return total
 }
@@ -221,7 +247,7 @@ func costsOf(t *testing.T, binary string, project tasksRemoteProject, clone stri
 		t.Fatalf("the update was not handed to the watcher: %s", output)
 	}
 	costs["update handed to a watcher"] = handed
-	costs["watcher round"] = watcher.settle(t)
+	costs["watcher round"] = watcher.settleAfter(t, "push")
 
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -247,9 +273,11 @@ func costsOf(t *testing.T, binary string, project tasksRemoteProject, clone stri
 		if len(saved.Warnings) != 0 {
 			t.Fatalf("%s save warnings = %+v; the board wrote %q", mode, saved.Warnings, boardOutput.String())
 		}
-		costs["board save "+mode] = board.settle(t)
-		if mode == "deferred" {
-			costs["board save's watcher round"] = watcher.settle(t)
+		if mode == "inline" {
+			costs["board save inline"] = board.settleAfter(t, "push")
+		} else {
+			costs["board save's watcher round"] = watcher.settleAfter(t, "push")
+			costs["board save deferred"] = board.settle(t)
 		}
 	}
 	stopBoard()
