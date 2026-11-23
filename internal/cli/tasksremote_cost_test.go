@@ -188,8 +188,13 @@ func (cursor *gitTraceCursor) settle(t *testing.T) gitCost {
 
 // costsOf measures, in one clone, an inline update, an update handed to a
 // watcher and the watcher's round that publishes it, and a board save
-// published inline and one handed to the board's own loop with that loop's
-// round.
+// published inline and one handed to the watcher with the watcher's round.
+//
+// The watcher waits an hour between scheduled rounds, so the only round it
+// runs while measured is the one a handed change asks for. The board runs no
+// loop of its own while the watcher owns the repository; its own loop is the
+// same code on a five-second timer, whose rounds would land in a measurement
+// or not depending on timing.
 func costsOf(t *testing.T, binary string, project tasksRemoteProject, clone string) map[string]gitCost {
 	t.Helper()
 	costs := map[string]gitCost{}
@@ -217,7 +222,6 @@ func costsOf(t *testing.T, binary string, project tasksRemoteProject, clone stri
 	}
 	costs["update handed to a watcher"] = handed
 	costs["watcher round"] = watcher.settle(t)
-	stopWatcher()
 
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -229,26 +233,35 @@ func costsOf(t *testing.T, binary string, project tasksRemoteProject, clone stri
 	waitForHTTP(t, "http://"+address+"/healthz")
 	base := "http://" + address
 	board.settle(t)
+	if body, status := boardRequest(t, http.MethodGet, base+"/api/sync", ""); status != http.StatusOK ||
+		!strings.Contains(string(body), `"watcher":true`) {
+		t.Fatalf("GET /api/sync = %d; body = %s, want the watcher answering", status, body)
+	}
 	for _, mode := range []string{"inline", "deferred"} {
 		if body, status := boardRequest(t, http.MethodPut, base+"/api/sync", `{"mode":"`+mode+`"}`); status != http.StatusOK {
 			t.Fatalf("PUT /api/sync %s = %d; body = %s", mode, status, body)
 		}
 		board.settle(t)
+		watcher.settle(t)
 		saved := boardSave(t, http.MethodPatch, base+"/api/tasks/"+task, `{"title":"Saved on the board, `+mode+`"}`)
 		if len(saved.Warnings) != 0 {
 			t.Fatalf("%s save warnings = %+v; the board wrote %q", mode, saved.Warnings, boardOutput.String())
 		}
 		costs["board save "+mode] = board.settle(t)
+		if mode == "deferred" {
+			costs["board save's watcher round"] = watcher.settle(t)
+		}
 	}
 	stopBoard()
+	stopWatcher()
 	return costs
 }
 
 // A project whose tasks went to their own repository and came back costs
-// what one that never moved them costs: the same Git processes and the same
-// connections to origin for an update published inline, one handed to a
-// watcher and the watcher's round, and a board save published inline and one
-// handed to the board's own loop with that loop's round.
+// what one that never moved them costs: the same connections to origin for an
+// update published inline, one handed to a watcher and the watcher's round,
+// and a board save published inline and one handed to the watcher with the
+// watcher's round. Git processes are logged, not compared.
 func TestTasksRemoteMovedAndBackCostsWhatANeverMovedProjectCosts(t *testing.T) {
 	t.Parallel()
 	binary := buildWorkbookBinary(t)
@@ -257,7 +270,8 @@ func TestTasksRemoteMovedAndBackCostsWhatANeverMovedProjectCosts(t *testing.T) {
 	neverCosts := costsOf(t, binary, never, neverClone)
 	backCosts := costsOf(t, binary, back, backClone)
 	for _, name := range []string{
-		"update inline", "update handed to a watcher", "watcher round", "board save inline", "board save deferred",
+		"update inline", "update handed to a watcher", "watcher round",
+		"board save inline", "board save deferred", "board save's watcher round",
 	} {
 		t.Logf("%s: never moved %s; moved and back %s", name, neverCosts[name], backCosts[name])
 		if extra, missing := commandDifference(backCosts[name].commands, neverCosts[name].commands); len(extra)+len(missing) > 0 {
