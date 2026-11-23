@@ -490,6 +490,46 @@ func TestADifferentMoveDuringAStoppedMoveLeavesNoPlaceUnmarked(t *testing.T) {
 	}
 }
 
+// A mirror of the code repository made after it was marked carries the
+// marker, and is not therefore a place the tasks lived: move-tasks to it is
+// refused for its branches, with the mirror warning, unless --allow-branches
+// is passed, and nothing is written there. Origin itself, this checkout's
+// code repository, is accepted without it.
+func TestMoveTasksBackToAMirrorOfTheMarkedOriginNeedsAllowBranches(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newMoveFixture(t, testrepo.FormatSHA1)
+	first, _ := moveTo(t, fixture.first, core.TasksRemoteSetting{Name: "tasks", URL: fixture.tasks})
+	mirror := t.TempDir() + "/mirror.git"
+	syncGit(t, t.TempDir(), "clone", "--mirror", "--quiet", fixture.origin, mirror)
+	if refs := refListing(t, mirror, "refs/heads/"); refs == "" {
+		t.Fatal("the mirror holds no branches")
+	}
+	before := refListing(t, mirror, "refs/")
+	mover, config := pullSettings(t, first, core.TasksRemoteSetting{Name: "mirror", URL: mirror})
+	_, err := mover.MoveTasks(ctx, config, MoveTasksOptions{})
+	if core.CategoryOf(err) != core.CategoryValidation || !strings.Contains(err.Error(), "holds branches") ||
+		!strings.Contains(err.Error(), "Never pass it for a mirror") {
+		t.Fatalf("MoveTasks() to a mirror of the marked origin = %v, want the branches refusal", err)
+	}
+	if after := refListing(t, mirror, "refs/"); after != before {
+		t.Fatalf("the refused move wrote to the mirror:\n%s\n%s", before, after)
+	}
+	if got := identityShape(t, fixture.tasks); got != "identity" {
+		t.Fatalf("tasks after the refused move = %s, want left live", got)
+	}
+
+	// Origin, which holds the branches this checkout's code comes from, is
+	// accepted without the flag.
+	mover, config = pullSettings(t, mover, core.TasksRemoteSetting{})
+	if _, err := mover.MoveTasks(ctx, config, MoveTasksOptions{}); err != nil {
+		t.Fatalf("MoveTasks() back to origin = %v", err)
+	}
+	if got := identityShape(t, fixture.origin); got != "returned" {
+		t.Fatalf("origin after the move back = %s", got)
+	}
+}
+
 // recordReturnByHand writes the return on a marked place without marking the
 // place the tasks are in, which is the state an interrupted move back made
 // before it marked first: both places live.

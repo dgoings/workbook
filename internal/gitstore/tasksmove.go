@@ -208,10 +208,8 @@ func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, o
 	if _, err := r.ProbeTasksRemote(ctx); err != nil {
 		return result, r.forgetAddedRemote(ctx, setup, err)
 	}
-	// A place the tasks lived at before was accepted as their home then;
-	// origin, the code's own repository, is one, and holds branches.
 	returning := destination.Departed != nil
-	if err := r.refuseUnfitDestination(ctx, from, to.Name, options.AllowBranches || returning); err != nil {
+	if err := r.refuseUnfitDestination(ctx, from, to.Name, options.AllowBranches); err != nil {
 		return result, r.forgetAddedRemote(ctx, setup, err)
 	}
 	if returning {
@@ -904,7 +902,8 @@ func (r *Repository) carryConfig(ctx context.Context, config core.ProjectConfig,
 
 // refuseUnfitDestination refuses a destination that is the same repository
 // as the old place, however its address is spelled, and then one that holds
-// branches, unless the person said they mean it.
+// branches, unless the person said they mean it or the destination is this
+// checkout's own code repository (codeOrigin).
 //
 // Sameness is decided by what the two hold, not by their addresses: a ref
 // with a name nobody else could pick is written to the destination and looked
@@ -938,11 +937,16 @@ func (r *Repository) refuseUnfitDestination(ctx context.Context, from, to string
 	if err != nil {
 		return core.Wrap(core.CategoryOperational, "cannot list "+to, err)
 	}
-	var branches, leftover []string
-	for _, name := range listedRefNames(listing) {
+	var branches, branchTips, leftover []string
+	for _, line := range strings.Split(string(listing), "\n") {
+		tip, name, found := strings.Cut(line, "\t")
+		if !found {
+			continue
+		}
 		switch {
 		case strings.HasPrefix(name, "refs/heads/"):
 			branches = append(branches, name)
+			branchTips = append(branchTips, tip)
 		case strings.HasPrefix(name, sameRepositoryProbePrefix) && name < probe:
 			leftover = append(leftover, name)
 		}
@@ -971,7 +975,7 @@ func (r *Repository) refuseUnfitDestination(ctx context.Context, from, to string
 	if removeErr != nil {
 		return removeErr
 	}
-	if len(branches) > 0 && !allowBranches {
+	if len(branches) > 0 && !allowBranches && !r.codeOrigin(ctx, to, branchTips) {
 		shown := branches
 		if len(shown) > 3 {
 			shown = append(append([]string(nil), shown[:3]...), fmt.Sprintf("and %d more", len(branches)-3))
@@ -984,6 +988,44 @@ func (r *Repository) refuseUnfitDestination(ctx context.Context, from, to string
 			to, redactURLCredentials(r.gitRemoteURL(ctx, to)), strings.Join(shown, ", "))
 	}
 	return nil
+}
+
+// codeOrigin reports a destination whose branches are expected: the remote
+// named origin, in a checkout whose HEAD shares history with one of the
+// branch tips origin lists, so origin holds this checkout's code.
+//
+// A mirror cannot pass it. The destination is the remote named origin only
+// for settings that name no tasks remote, and settings can never name origin
+// (config set tasks-remote origin is the same as unsetting it, and an address
+// beside it is refused), so a mirror of the code is a destination only under
+// another name, and its branches are then refused like any other's. The
+// destination's own refs, a marker recording that tasks left it among them,
+// never excuse the check: a mirror made after the code repository was marked
+// carries that marker too.
+func (r *Repository) codeOrigin(ctx context.Context, to string, branchTips []string) bool {
+	if to != core.DefaultTasksRemote {
+		return false
+	}
+	head, err := r.Git(ctx, nil, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+	if err != nil {
+		return false
+	}
+	here := strings.TrimSpace(string(head))
+	for _, tip := range branchTips {
+		if tip == here {
+			return true
+		}
+		if _, err := r.Git(ctx, nil, "cat-file", "-e", tip+"^{commit}"); err != nil {
+			continue
+		}
+		if _, err := r.Git(ctx, nil, "merge-base", "--is-ancestor", tip, here); err == nil {
+			return true
+		}
+		if _, err := r.Git(ctx, nil, "merge-base", "--is-ancestor", here, tip); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // removeProbes deletes probe refs from to in one push, and says plainly when
