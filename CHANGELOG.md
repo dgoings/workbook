@@ -25,7 +25,7 @@ version order rather than at the top; a heading no newer than the previous
 release counts as no entry, so it never blocks the next release. See
 [Patch releases to an older line](CONTRIBUTING.md#patch-releases-to-an-older-line).
 
-## Unreleased
+## v0.7.0 — 2026-11-23
 
 A project can keep its tasks in a repository of their own, so that access to
 them, such as a hosted board's deploy key, is not access to the code. `workbook

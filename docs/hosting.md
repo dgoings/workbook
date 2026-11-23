@@ -112,8 +112,7 @@ says the tasks were not published and lets the code push through.
 
 The board needs a Workbook release whose `workbook serve --help` lists
 `--public-url` and `--actor-header`, and whose `workbook setup --help` lists
-`--tasks-only`. v0.6.1, the newest release when this guide was written, has
-none of them, so until a release does, build from source.
+`--tasks-only`. v0.7.0 is the first release that has them.
 
 Install it in `/usr/local/bin`, where the service below runs it from and where
 `sudo` finds it. Both ways below need Git, SSH and curl; on Ubuntu or Debian:
