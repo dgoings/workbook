@@ -132,11 +132,27 @@ func (s *memoryRelicStore) WriteRelic(
 	if parts == nil {
 		parts = map[string]RelicPartContent{}
 	}
+	// As the Git store does: a part the relic had keeps its fields unless the
+	// pack edits them, and any part keeps its body unless this pack saved one.
 	for partID, given := range content {
-		if given.Fields == nil {
-			given.Fields = map[string]json.RawMessage{}
+		stored, existed := parts[partID]
+		fieldsEdited := false
+		for _, operation := range pack.Operations {
+			if operation.Part == partID &&
+				(operation.Type == RelicOperationPartFieldSet || operation.Type == RelicOperationPartFieldClear) {
+				fieldsEdited = true
+			}
 		}
-		parts[partID] = given
+		switch {
+		case !existed && given.Fields == nil:
+			stored.Fields = map[string]json.RawMessage{}
+		case !existed, fieldsEdited && given.Fields != nil:
+			stored.Fields = given.Fields
+		}
+		if RelicBodySavedBy(parentRecord, pack, record, partID) {
+			stored.Body, stored.HasBody = given.Body, true
+		}
+		parts[partID] = stored
 	}
 	s.content[pack.RelicID] = parts
 	return snapshot, nil
@@ -520,6 +536,30 @@ func TestRelicListFiltersAndOrders(t *testing.T) {
 	}
 	if !everything[2].Deleted {
 		t.Errorf("deleted relic summary = %+v", everything[2])
+	}
+}
+
+func TestRelicShowNamesItsFormatAndVersion(t *testing.T) {
+	store := newMemoryRelicStore()
+	store.put(relicSnapshotForTest(t, 1, "spec", []string{relicTestID(11)}, false, false))
+	service := newRelicTestService(store, nil)
+	relicID := NewRelicID(serviceTestConfig.Key, relicTestID(700001))
+
+	for _, address := range []string{relicID, relicID + "#" + relicTestID(11)} {
+		document, err := service.Show(context.Background(), address, RelicShowOptions{})
+		if err != nil {
+			t.Fatalf("Show(%s): %v", address, err)
+		}
+		if document.Format != RelicDocumentFormat || document.Version != 1 {
+			t.Errorf("Show(%s) format, version = %q, %d; want %q, 1", address, document.Format, document.Version, RelicDocumentFormat)
+		}
+		encoded, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.HasPrefix(encoded, []byte(`{"format":"workbook.relic","version":1,`)) {
+			t.Errorf("Show(%s) JSON = %s, want it to open with the format and version", address, encoded)
+		}
 	}
 }
 

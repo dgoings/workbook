@@ -33,7 +33,7 @@ type RelicDocumentPart struct {
 }
 
 // RelicDocument is a relic as show and export present it, and what create
-// --from-file reads. Show leaves Format and Version unset; export sets them.
+// --from-file reads. Show and export both name the format and its version.
 type RelicDocument struct {
 	Format     string                     `json:"format"`
 	Version    int                        `json:"version"`
@@ -135,6 +135,8 @@ func newRelicDocument(snapshot RelicSnapshot, parts []RelicPart, content map[str
 		properties[name] = value
 	}
 	document := RelicDocument{
+		Format:     RelicDocumentFormat,
+		Version:    documentVersion,
 		ID:         snapshot.Record.State.RelicID,
 		Head:       snapshot.Head,
 		Title:      relic.Title,

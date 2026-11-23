@@ -1096,16 +1096,12 @@ func TestValidateRelicHistoryStopsAtTheFirstBadCommit(t *testing.T) {
 	assertSameRelicSnapshot(t, got, later)
 }
 
-func TestGetRelicReturnsANewerWritersRelicUnverified(t *testing.T) {
-	t.Parallel()
-	repo, config := relicRepository(t, testrepo.FormatSHA1)
-	ctx := context.Background()
-	part := relicTestPartNumbered(1).withBody("md", []byte("a body\n"))
-	root := writeRelicRoot(t, repo, config, part)
+// forgeNewerRelicTip puts on top of root, as the relic's tip, what a later
+// Workbook writes when it retires the relic: an operation type and a state
+// this build has no rules for, marked generation 7. It returns that commit.
+func forgeNewerRelicTip(t *testing.T, repo *Repository, config core.ProjectConfig, root core.RelicSnapshot) string {
+	t.Helper()
 	relicID := root.Operation.RelicID
-
-	// What a later Workbook writes when it retires the relic: an operation
-	// type and a state this build has no rules for, marked generation 7.
 	raise := func(document []byte, replacements ...string) []byte {
 		for index := 0; index < len(replacements); index += 2 {
 			raised := bytes.Replace(document, []byte(replacements[index]), []byte(replacements[index+1]), 1)
@@ -1127,6 +1123,17 @@ func TestGetRelicReturnsANewerWritersRelicUnverified(t *testing.T) {
 		`"retired":false`, `"retired":true`)
 	forged := forgeRelicCommit(t, repo, root.Head, operationJSON, stateJSON, forgedPartsOf(t, repo, root.Head))
 	pointRelicRef(t, repo, relicID, forged)
+	return forged
+}
+
+func TestGetRelicReturnsANewerWritersRelicUnverified(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	part := relicTestPartNumbered(1).withBody("md", []byte("a body\n"))
+	root := writeRelicRoot(t, repo, config, part)
+	relicID := root.Operation.RelicID
+	forged := forgeNewerRelicTip(t, repo, config, root)
 
 	got, err := repo.GetRelic(ctx, config, relicID)
 	if err != nil {

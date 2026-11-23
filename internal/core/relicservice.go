@@ -110,25 +110,34 @@ func (s RelicService) now() time.Time {
 	return s.Now()
 }
 
+// newID mints one canonical ULID that is not in seen, and adds it.
+func (s RelicService) newID(seen map[string]struct{}) (string, error) {
+	if s.IDs == nil {
+		return "", Errorf(CategoryOperational, "ID source is required")
+	}
+	id, err := s.IDs.New()
+	if err != nil {
+		return "", Wrap(CategoryOperational, "cannot generate ID", err)
+	}
+	if err := validateGeneratedULID(id); err != nil {
+		return "", err
+	}
+	if _, exists := seen[id]; exists {
+		return "", Errorf(CategoryValidation, "ID source returned duplicate ULID %q", id)
+	}
+	seen[id] = struct{}{}
+	return id, nil
+}
+
 // newIDs mints count distinct canonical ULIDs.
 func (s RelicService) newIDs(count int) ([]string, error) {
-	if s.IDs == nil {
-		return nil, Errorf(CategoryOperational, "ID source is required")
-	}
 	ids := make([]string, count)
 	seen := make(map[string]struct{}, count)
 	for index := range ids {
-		id, err := s.IDs.New()
+		id, err := s.newID(seen)
 		if err != nil {
-			return nil, Wrap(CategoryOperational, "cannot generate ID", err)
-		}
-		if err := validateGeneratedULID(id); err != nil {
 			return nil, err
 		}
-		if _, exists := seen[id]; exists {
-			return nil, Errorf(CategoryValidation, "ID source returned duplicate ULID %q", id)
-		}
-		seen[id] = struct{}{}
 		ids[index] = id
 	}
 	return ids, nil
@@ -194,21 +203,69 @@ func resolvePartPrefix(relic string, parts []RelicPart, prefix string) (RelicPar
 	}
 }
 
+// canonicalRelicValue checks one property or field and returns its value in
+// its stored form. kind is "property" or "field".
+func canonicalRelicValue(kind, name string, value json.RawMessage) (json.RawMessage, error) {
+	if err := ValidateRelicName(kind, name); err != nil {
+		return nil, err
+	}
+	stored, err := CanonicalRelicValue(value)
+	if err != nil {
+		return nil, Errorf(CategoryValidation, "the %s %q: %s", kind, name, err.Error())
+	}
+	return stored, nil
+}
+
 // canonicalRelicValues checks a properties or fields object and returns it
 // with every value in its stored form. kind is "property" or "field".
 func canonicalRelicValues(kind string, values map[string]json.RawMessage) (map[string]json.RawMessage, error) {
 	canonical := make(map[string]json.RawMessage, len(values))
 	for name, value := range values {
-		if err := ValidateRelicName(kind, name); err != nil {
-			return nil, err
-		}
-		stored, err := CanonicalRelicValue(value)
+		stored, err := canonicalRelicValue(kind, name, value)
 		if err != nil {
-			return nil, Errorf(CategoryValidation, "the %s %q: %s", kind, name, err.Error())
+			return nil, err
 		}
 		canonical[name] = stored
 	}
 	return canonical, nil
+}
+
+// checkRelicPropertiesSize refuses a properties object over its limit.
+func checkRelicPropertiesSize(properties map[string]json.RawMessage) error {
+	encoded, err := json.Marshal(properties)
+	if err != nil {
+		return Wrap(CategoryValidation, "the relic's properties cannot be encoded", err)
+	}
+	if len(encoded) > MaxRelicPropertiesBytes {
+		return relicSizeError("the relic's properties", len(encoded), MaxRelicPropertiesBytes)
+	}
+	return nil
+}
+
+// checkRelicFieldsSize refuses a part's fields whose fields.json would be over
+// its limit. what names the part, as in "part 3".
+func checkRelicFieldsSize(what string, fields map[string]json.RawMessage) error {
+	measured, err := json.Marshal(NewRelicFields(fields))
+	if err != nil {
+		return Wrap(CategoryValidation, fmt.Sprintf("the fields of %s cannot be encoded", what), err)
+	}
+	// The limit is on the stored fields.json, which ends with a newline.
+	if size := len(measured) + 1; size > MaxRelicPartFieldsBytes {
+		return relicSizeError("the fields of "+what, size, MaxRelicPartFieldsBytes)
+	}
+	return nil
+}
+
+// checkRelicBodyInput checks a body to save: its format label and its size.
+// what names the part, as in "part 3".
+func checkRelicBodyInput(what string, body RelicBodyInput) error {
+	if err := ValidateRelicBodyFormat(body.Format); err != nil {
+		return Errorf(CategoryValidation, "%s: %s", what, err.Error())
+	}
+	if size := len(body.Content); size > MaxRelicBodyBytes {
+		return relicSizeError("the body of "+what, size, MaxRelicBodyBytes)
+	}
+	return nil
 }
 
 // relicCreatePart is one part of a create after its values are checked.
@@ -231,52 +288,35 @@ func checkRelicCreate(input RelicCreateInput) (string, map[string]json.RawMessag
 	if err != nil {
 		return "", nil, nil, err
 	}
-	encoded, err := json.Marshal(properties)
-	if err != nil {
-		return "", nil, nil, Wrap(CategoryValidation, "the relic's properties cannot be encoded", err)
-	}
-	if len(encoded) > MaxRelicPropertiesBytes {
-		return "", nil, nil, relicSizeError("the relic's properties", len(encoded), MaxRelicPropertiesBytes)
-	}
-	if count := len(input.Parts); count > MaxRelicLiveParts {
-		return "", nil, nil, Errorf(CategoryValidation,
-			"the relic would have %d parts; the limit is %d live parts", count, MaxRelicLiveParts)
+	if err := checkRelicPropertiesSize(properties); err != nil {
+		return "", nil, nil, err
 	}
 
+	// A new relic starts from nothing, so every part it has is one it adds.
+	created := relicPartTotals{live: len(input.Parts), all: len(input.Parts)}
 	parts := make([]relicCreatePart, len(input.Parts))
-	var bodyBytes int64
 	for index, part := range input.Parts {
-		number := index + 1
+		what := fmt.Sprintf("part %d", index+1)
 		if err := ValidateRelicPartType(part.Type); err != nil {
-			return "", nil, nil, Errorf(CategoryValidation, "part %d: %s", number, err.Error())
+			return "", nil, nil, Errorf(CategoryValidation, "%s: %s", what, err.Error())
 		}
 		fields, err := canonicalRelicValues("field", part.Fields)
 		if err != nil {
-			return "", nil, nil, Errorf(CategoryValidation, "part %d: %s", number, err.Error())
+			return "", nil, nil, Errorf(CategoryValidation, "%s: %s", what, err.Error())
 		}
-		measured, err := json.Marshal(NewRelicFields(fields))
-		if err != nil {
-			return "", nil, nil, Wrap(CategoryValidation, fmt.Sprintf("the fields of part %d cannot be encoded", number), err)
-		}
-		// The limit is on the stored fields.json, which ends with a newline.
-		if size := len(measured) + 1; size > MaxRelicPartFieldsBytes {
-			return "", nil, nil, relicSizeError(fmt.Sprintf("the fields of part %d", number), size, MaxRelicPartFieldsBytes)
+		if err := checkRelicFieldsSize(what, fields); err != nil {
+			return "", nil, nil, err
 		}
 		if part.Body != nil {
-			if err := ValidateRelicBodyFormat(part.Body.Format); err != nil {
-				return "", nil, nil, Errorf(CategoryValidation, "part %d: %s", number, err.Error())
+			if err := checkRelicBodyInput(what, *part.Body); err != nil {
+				return "", nil, nil, err
 			}
-			if size := len(part.Body.Content); size > MaxRelicBodyBytes {
-				return "", nil, nil, relicSizeError(fmt.Sprintf("the body of part %d", number), size, MaxRelicBodyBytes)
-			}
-			bodyBytes += int64(len(part.Body.Content))
+			created.liveBodyBytes += int64(len(part.Body.Content))
 		}
 		parts[index] = relicCreatePart{input: part, fields: fields}
 	}
-	if bodyBytes > MaxRelicLiveBodyBytes {
-		return "", nil, nil, Errorf(CategoryValidation,
-			"the parts' bodies would total %d bytes; the limit for the bodies of a relic's live parts is %d bytes",
-			bodyBytes, MaxRelicLiveBodyBytes)
+	if err := checkRelicGrowth(relicPartTotals{}, created); err != nil {
+		return "", nil, nil, err
 	}
 	return title, properties, parts, nil
 }
@@ -417,12 +457,7 @@ func (s RelicService) Export(ctx context.Context, idOrPrefix string) (RelicDocum
 	if err != nil {
 		return RelicDocument{}, err
 	}
-	document, err := s.relicDocument(ctx, snapshot, snapshot.Record.State.Relic.LiveParts(), true)
-	if err != nil {
-		return RelicDocument{}, err
-	}
-	document.Format, document.Version = RelicDocumentFormat, documentVersion
-	return document, nil
+	return s.relicDocument(ctx, snapshot, snapshot.Record.State.Relic.LiveParts(), true)
 }
 
 // getRelic resolves an ID or prefix and reads that relic, checked against its
