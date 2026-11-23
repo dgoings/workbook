@@ -1818,6 +1818,22 @@ func writeValidationResult(output io.Writer, result historyvalidation.Result) {
 				label, result.Config.Failure.Commit, result.Config.Failure.Category, result.Config.Failure.Message)
 		}
 	}
+	// The relic summary is printed only for a repository that holds a relic,
+	// so one that holds none prints what it always printed.
+	if result.Relics != nil {
+		fmt.Fprintf(output, "Validated %d relic(s): %d commit(s) checked; %d valid, %d invalid.\n",
+			result.Relics.RelicCount, result.Relics.CommitsChecked, result.Relics.Valid, result.Relics.Invalid)
+		if result.Relics.NewerWriter > 0 {
+			fmt.Fprintf(output, "%d relic(s) were written by a newer workbook and could not be checked.\n", result.Relics.NewerWriter)
+		}
+		for _, failure := range result.Relics.Failures {
+			label := "Invalid"
+			if core.Category(failure.Category) == core.CategoryNewerWriter {
+				label = "Newer"
+			}
+			fmt.Fprintf(output, "%s %s at %s [%s]: %s\n", label, failure.RelicID, failure.Commit, failure.Category, failure.Message)
+		}
+	}
 	// Advisories are printed after the verdict and never change it: they
 	// describe a state everybody wrote deliberately and nobody can be blamed
 	// for, which is the whole reason they are not failures.

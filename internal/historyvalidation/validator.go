@@ -38,6 +38,11 @@ type Result struct {
 	// changes a status. A run against such a project therefore emits exactly
 	// the JSON it emitted before this section existed.
 	Config *ConfigValidation `json:"config,omitempty"`
+	// Relics reports the audit of every relic history, and is omitted for a
+	// repository that holds no relic ref, which therefore emits exactly the
+	// JSON it emitted before relics existed. Relic histories are not cached:
+	// every run checks each of them from its root.
+	Relics *RelicValidation `json:"relics,omitempty"`
 	// Advisories carry what is true about the validated state without being
 	// wrong with it. They never affect the exit status; see Advisory.
 	Advisories []Advisory `json:"advisories,omitempty"`
@@ -201,8 +206,19 @@ func (v *Validator) Validate(ctx context.Context, full bool) (Result, error) {
 	}
 	result.Config = configuration
 	result.Advisories = advisories
+	// Relics are audited last and reported whatever the tasks and the ledger
+	// said, for the same reason the ledger is: a separate history whose
+	// verdict has to be stated on its own.
+	relics, relicErr := v.validateRelics(ctx)
+	if relicErr != nil {
+		return result, relicErr
+	}
+	result.Relics = relics
 	if result.Invalid > 0 {
 		return result, core.Errorf(core.CategoryCorruptData, "semantic history validation found %d invalid task(s)", result.Invalid)
+	}
+	if relics != nil && relics.Invalid > 0 {
+		return result, core.Errorf(core.CategoryCorruptData, "semantic history validation found %d invalid relic(s)", relics.Invalid)
 	}
 	if !sameHeads(initialHeads, finalHeads) {
 		return result, core.Errorf(core.CategoryStaleWrite, "canonical task heads changed during validation")
@@ -233,6 +249,11 @@ func (v *Validator) Validate(ctx context.Context, full bool) (Result, error) {
 			"configuration ledger validation failed at %s: %s",
 			configuration.Failure.Commit, configuration.Failure.Message,
 		)
+	}
+	if relics != nil && relics.NewerWriter > 0 {
+		return result, core.Errorf(core.CategoryNewerWriter,
+			"%d relic history(s) were written by a newer workbook; upgrade workbook to validate them",
+			relics.NewerWriter)
 	}
 	return result, nil
 }

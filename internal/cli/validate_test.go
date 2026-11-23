@@ -15,6 +15,7 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/historyvalidation"
 	"github.com/dgoings/workbook/internal/testenv"
+	"github.com/dgoings/workbook/internal/testrepo"
 )
 
 func TestValidateRejectsPositionalsAndUnknownFlags(t *testing.T) {
@@ -451,8 +452,12 @@ var validationResultJSONKeys = map[string]struct{}{
 // repository has the thing they report on. `config` is one: a project with no
 // configuration ledger has no ledger audit, and one minted by this build has a
 // genesis from its first moment and therefore always does.
+//
+// `relics` is another: a repository that holds no relic ref reports none, so
+// its output is the output it gave before relics existed.
 var validationResultOptionalJSONKeys = map[string]struct{}{
 	"config": {},
+	"relics": {},
 }
 
 func validationResultSchemaError(data []byte) error {
@@ -530,4 +535,193 @@ func gitInput(t *testing.T, repository string, input []byte, args ...string) str
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
 	}
 	return strings.TrimSpace(string(output))
+}
+
+// validatedRelics is the `relics` member of validate's JSON result, decoded
+// by its documented member names rather than through the Go type, so these
+// tests pin the names a script reads.
+type validatedRelics struct {
+	RelicCount     int `json:"relicCount"`
+	CommitsChecked int `json:"commitsChecked"`
+	Valid          int `json:"valid"`
+	Invalid        int `json:"invalid"`
+	NewerWriter    int `json:"newerWriter"`
+	Failures       []struct {
+		RelicID  string `json:"relicId"`
+		Commit   string `json:"commit"`
+		Category string `json:"category"`
+		Message  string `json:"message"`
+	} `json:"failures"`
+}
+
+// relicValidation runs `validate --json` and returns its exit code, its task
+// result and its `relics` member, nil when the result has none.
+func relicValidation(t *testing.T, repository string) (int, historyvalidation.Result, *validatedRelics, string) {
+	t.Helper()
+	code, stdout, stderr := run(t, repository, "validate", "--json")
+	result := decodeValidationResult(t, stdout)
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "validate").Data, &members); err != nil {
+		t.Fatalf("decode validation members: %v", err)
+	}
+	raw, found := members["relics"]
+	if !found {
+		return code, result, nil, stderr
+	}
+	var relics validatedRelics
+	if err := json.Unmarshal(raw, &relics); err != nil {
+		t.Fatalf("decode relics member: %v; member = %s", err, raw)
+	}
+	if relics.Failures == nil {
+		t.Fatalf("relics member = %s, want failures as a list", raw)
+	}
+	return code, result, &relics, stderr
+}
+
+func TestValidateOutputIsUnchangedWithoutRelics(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	createValidationTask(t, repository, "first")
+	createValidationTask(t, repository, "second")
+
+	code, result, relics, stderr := relicValidation(t, repository)
+	if code != 0 || relics != nil {
+		t.Fatalf("validate --json = (%d, relics %#v), want 0 and no relics member; stderr = %q", code, relics, stderr)
+	}
+	if result.TaskCount != 2 {
+		t.Fatalf("taskCount = %d, want 2", result.TaskCount)
+	}
+	code, stdout, stderr := run(t, repository, "validate")
+	if code != 0 {
+		t.Fatalf("validate code = %d; stderr = %q", code, stderr)
+	}
+	if !strings.HasPrefix(stdout, "Validated 2 task(s):") || strings.Contains(strings.ToLower(stdout), "relic") {
+		t.Fatalf("validate output = %q, want the task summary first and no mention of relics", stdout)
+	}
+}
+
+func TestValidateChecksRelicHistory(t *testing.T) {
+	t.Parallel()
+	for _, objectFormat := range []string{testrepo.FormatSHA1, testrepo.FormatSHA256} {
+		t.Run(objectFormat, func(t *testing.T) {
+			t.Parallel()
+			testrepo.RequireObjectFormat(t, objectFormat)
+			repository := testrepo.New(t, testrepo.WithObjectFormat(objectFormat))
+			if code, _, stderr := run(t, repository, "setup", "--key", "WB"); code != 0 {
+				t.Fatalf("setup code = %d; stderr = %q", code, stderr)
+			}
+			createValidationTask(t, repository, "a task beside the relics")
+			fixture := openRelicFixture(t, repository)
+			fixture.threeCommitRelic(t, 1)
+			fixture.threeCommitRelic(t, 2)
+
+			code, result, relics, stderr := relicValidation(t, repository)
+			if code != 0 {
+				t.Fatalf("validate --json code = %d; stderr = %q", code, stderr)
+			}
+			if result.TaskCount != 1 || result.Valid != 1 || result.CommitsChecked != 1 {
+				t.Fatalf("task result = %#v, want the one task counted as before", result)
+			}
+			if relics == nil || relics.RelicCount != 2 || relics.CommitsChecked != 6 ||
+				relics.Valid != 2 || relics.Invalid != 0 || relics.NewerWriter != 0 || len(relics.Failures) != 0 {
+				t.Fatalf("relics = %#v, want 2 relics, 6 commits checked, 2 valid", relics)
+			}
+
+			code, stdout, stderr := run(t, repository, "validate")
+			if code != 0 {
+				t.Fatalf("validate code = %d; stderr = %q", code, stderr)
+			}
+			if want := "Validated 2 relic(s): 6 commit(s) checked; 2 valid, 0 invalid.\n"; !strings.Contains(stdout, want) {
+				t.Fatalf("validate output = %q, want it to contain %q", stdout, want)
+			}
+			if !strings.HasPrefix(stdout, "Validated 1 task(s):") {
+				t.Fatalf("validate output = %q, want the task summary first", stdout)
+			}
+		})
+	}
+}
+
+func TestValidateNamesARelicCommitThatDoesNotFollowFromItsHistory(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	task := createValidationTask(t, repository, "a task beside the relics")
+	fixture := openRelicFixture(t, repository)
+	fixture.threeCommitRelic(t, 1)
+	tip := fixture.threeCommitRelic(t, 2)
+	forged := fixture.forgeRelicOverwrite(t, tip, 700001)
+
+	code, result, relics, stderr := relicValidation(t, repository)
+	if code != 7 {
+		t.Fatalf("validate --json code = %d, want 7; stderr = %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryCorruptData, "semantic history validation found 1 invalid relic(s)")
+	if result.TaskCount != 1 || result.Valid != 1 || result.Invalid != 0 {
+		t.Fatalf("task result = %#v, want task %s still reported valid", result, task.ID)
+	}
+	if relics == nil || relics.RelicCount != 2 || relics.Valid != 1 || relics.Invalid != 1 || len(relics.Failures) != 1 {
+		t.Fatalf("relics = %#v, want one of two relics invalid", relics)
+	}
+	// The first relic's three commits and the second's three good ones.
+	if relics.CommitsChecked != 6 {
+		t.Fatalf("relics commitsChecked = %d, want 6", relics.CommitsChecked)
+	}
+	failure := relics.Failures[0]
+	if failure.RelicID != tip.Operation.RelicID || failure.Commit != forged || failure.Category != "corrupt-data" || failure.Message == "" {
+		t.Fatalf("relic failure = %#v, want relic %s at commit %s as corrupt-data", failure, tip.Operation.RelicID, forged)
+	}
+
+	code, stdout, _ := run(t, repository, "validate")
+	if code != 7 {
+		t.Fatalf("validate code = %d, want 7", code)
+	}
+	for _, want := range []string{
+		"Validated 1 task(s):",
+		"Validated 2 relic(s): 6 commit(s) checked; 1 valid, 1 invalid.\n",
+		"Invalid " + tip.Operation.RelicID + " at " + forged + " [corrupt-data]: " + failure.Message + "\n",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("validate output = %q, want it to contain %q", stdout, want)
+		}
+	}
+}
+
+func TestValidateRunsRelicsEveryTime(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	fixture := openRelicFixture(t, repository)
+	fixture.threeCommitRelic(t, 1)
+	fixture.threeCommitRelic(t, 2)
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		code, _, relics, stderr := relicValidation(t, repository)
+		if code != 0 || relics == nil || relics.CommitsChecked != 6 {
+			t.Fatalf("validate run %d = (%d, relics %#v), want 0 and 6 relic commits checked; stderr = %q", attempt, code, relics, stderr)
+		}
+	}
+}
+
+func TestValidateCountsANewerWritersRelic(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	createValidationTask(t, repository, "a task beside the relics")
+	fixture := openRelicFixture(t, repository)
+	fixture.threeCommitRelic(t, 1)
+	tip := fixture.threeCommitRelic(t, 2)
+	newer := fixture.forgeNewerRelicCommit(t, tip, 700001)
+
+	code, result, relics, stderr := relicValidation(t, repository)
+	if code != 9 {
+		t.Fatalf("validate --json code = %d, want 9; stderr = %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryNewerWriter,
+		"1 relic history(s) were written by a newer workbook; upgrade workbook to validate them")
+	if result.Valid != 1 || result.Invalid != 0 {
+		t.Fatalf("task result = %#v, want the task valid", result)
+	}
+	if relics == nil || relics.NewerWriter != 1 || relics.Invalid != 0 || relics.Valid != 1 || len(relics.Failures) != 1 {
+		t.Fatalf("relics = %#v, want one newer-writer relic and nothing invalid", relics)
+	}
+	if failure := relics.Failures[0]; failure.RelicID != tip.Operation.RelicID || failure.Commit != newer || failure.Category != "newer-writer" {
+		t.Fatalf("relic failure = %#v, want relic %s at %s as newer-writer", failure, tip.Operation.RelicID, newer)
+	}
 }

@@ -3280,6 +3280,41 @@ depend on the order task IDs happen to sort in. It names the repeated operation,
 the commit that first recorded it, and, when the two are different tasks, the
 task that already owns the ULID.
 
+`validate` also checks every relic history under `refs/workbook/relics/`. Each
+relic is read from its root to its tip, and every commit must hold exactly the
+state, links, part fields and body blobs that its operations produce from its
+parent commit. Relic results are not cached: every run, `--full` or not,
+checks every relic commit again, and none of them is written to
+`validation.sqlite`. The JSON result reports them in a `relics` member, which is
+left out when the repository holds no relic ref, so a repository without relics
+gets the same output it got before relics existed:
+
+```json
+"relics": {
+  "relicCount": 2,
+  "commitsChecked": 5,
+  "valid": 1,
+  "invalid": 1,
+  "failures": [
+    {"relicId": "WB-R-01M9A...", "commit": "<full commit ID>",
+     "category": "corrupt-data", "message": "..."}
+  ]
+}
+```
+
+`relicCount` is the number of relic refs. `commitsChecked` counts the relic
+commits that passed, summed over every relic. `valid` and `invalid` count
+relics. `newerWriter` counts relics whose history was written by a newer
+Workbook and could not be checked. It is left out when zero, and these relics
+are not counted as invalid. `failures` lists, by relic ID, the first commit of
+each relic that failed or could not be checked, with its category and message.
+Text output adds `Validated N relic(s): N commit(s) checked; N valid, N
+invalid.` and one `Invalid <relic-id> at <commit> [<category>]: <message>` line
+per failure. A failure that could not be checked starts with `Newer` instead of
+`Invalid`. An invalid relic exits `7` (`corrupt-data`), but only after any
+invalid task, which is reported first. A relic written by a newer Workbook exits
+`9` (`newer-writer`) only when nothing else is wrong.
+
 An incremental run holds the project's recorded operation ULIDs in memory for
 the length of the audit — a few megabytes at the representative 500-task,
 20-operation size, and linear in the project's operation count above it.
