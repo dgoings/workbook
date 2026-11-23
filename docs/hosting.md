@@ -72,7 +72,10 @@ somebody who can push to both repositories:
 tasks moved away from, and checks that the new repository holds everything the
 old one did. If it stops partway, run it again; a move back stopped partway
 leaves both repositories refusing every publication until it is run again,
-from any clone. The old repository keeps its copy. Commit and push the setting
+from any clone. The old repository keeps its copy. To remove that copy, once
+the last `move-tasks` below has run, give that run `--clean-up` or run
+`workbook reset --remote origin`; only the marker saying where the tasks went
+stays (see [Cleaning up after a move](reference.md#cleaning-up-after-a-move)). Commit and push the setting
 after `move-tasks` finishes, as above; committing it first is safe too, since
 a teammate who pulls it before the move ran is refused and publishes nothing
 until the move has run. Tell the team before you move, and run `workbook move-tasks` once more

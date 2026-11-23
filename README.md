@@ -219,7 +219,8 @@ from the code, move the tasks to a repository of their own first: `workbook
 config set tasks-remote tasks --url <address>`, then `workbook move-tasks`,
 then commit `.workbook/config.json`; everyone else runs `workbook setup` after
 pulling it. The tasks move back the same way, with `workbook config unset
-tasks-remote` and `workbook move-tasks`. See [Keep the tasks in their own repository](docs/hosting.md#keep-the-tasks-in-their-own-repository).
+tasks-remote` and `workbook move-tasks`. Add `--clean-up` to remove the copies the move leaves at
+the old place, keeping only the marker that points to the new one. See [Keep the tasks in their own repository](docs/hosting.md#keep-the-tasks-in-their-own-repository).
 
 The board works on a phone. On a screen that narrow it shows one column at a
 time, under a row of the columns' names and counts, and a task's page takes
@@ -245,7 +246,10 @@ Workbook separates its data model, transport, and query engine:
   inspectable and mergeable. `workbook compact`, run by hand, replaces the
   history of Done and Deleted tasks with one new checkpoint commit each, after
   saving the old history to a local backup bundle; it changes no existing
-  commit.
+  commit. `workbook reset`, also run by hand, removes Workbook's refs and
+  caches from one checkout, or its refs from one remote, after saving them to a
+  bundle: to start a checkout over, to clear the copies a move left behind, or
+  to [leave Workbook](docs/reference.md#leaving-workbook).
 - **Git storage** — operations live in tool-private refs under
   `refs/workbook/`, synchronized explicitly and only with `origin`. Task state
   never touches the checked-out code branch.

@@ -115,10 +115,34 @@ func (r *Repository) writeArchiveBundle(ctx context.Context, config core.Project
 	if err != nil {
 		return err
 	}
+	refs := make([]bundledRef, 0, len(manifest.Tasks)+len(parked))
+	for _, task := range manifest.Tasks {
+		refs = append(refs, bundledRef{name: prefix + task.TaskID, expected: task.OldTip, taskID: task.TaskID})
+	}
+	for _, name := range parked {
+		refs = append(refs, bundledRef{name: name})
+	}
+	return r.writeRefsBundle(ctx, path, manifest, refs)
+}
 
+// bundledRef is one ref a backup bundle holds, under its own name. expected,
+// when set, is the commit the bundle must hold it at: a ref that moved
+// before the bundle was written fails the write. taskID names the task a
+// moved ref belongs to, which is reported as an *ArchiveTasksMovedError so a
+// compaction can leave that task out and bundle the rest.
+type bundledRef struct {
+	name, expected, taskID string
+}
+
+// writeRefsBundle writes the verified bundle at path holding refs and the
+// canonical manifest at archiveManifestRef. It is the part of a backup that
+// compaction, a move back and a reset share: the manifest commit, the bundle,
+// its verification, the check of every expected tip, and the publication of
+// the file by an atomic rename, never over an existing one.
+func (r *Repository) writeRefsBundle(ctx context.Context, path string, manifest ArchiveManifest, refs []bundledRef) error {
 	// Git runs in the working-tree root, not in this process's directory, so a
 	// relative path would name two different files.
-	path, err = filepath.Abs(path)
+	path, err := filepath.Abs(path)
 	if err != nil {
 		return core.Wrap(core.CategoryOperational, "cannot resolve backup path", err)
 	}
@@ -156,12 +180,14 @@ func (r *Repository) writeArchiveBundle(ctx context.Context, config core.Project
 		}
 	}()
 
-	args := []string{"bundle", "create", temporary, archiveManifestRef}
-	for _, task := range manifest.Tasks {
-		args = append(args, prefix+task.TaskID)
+	// The names go on standard input, so a bundle of every ref a large
+	// project holds is not limited by the length of a command line.
+	var names bytes.Buffer
+	names.WriteString(archiveManifestRef + "\n")
+	for _, ref := range refs {
+		names.WriteString(ref.name + "\n")
 	}
-	args = append(args, parked...)
-	if _, err := r.Git(ctx, nil, args...); err != nil {
+	if _, err := r.Git(ctx, names.Bytes(), "bundle", "create", temporary, "--stdin"); err != nil {
 		return core.Wrap(core.CategoryOperational, "cannot write the backup bundle", err)
 	}
 	if err := r.deleteArchiveManifestRef(cleanupCtx, manifestCommit); err != nil {
@@ -172,7 +198,7 @@ func (r *Repository) writeArchiveBundle(ctx context.Context, config core.Project
 	if _, err := r.Git(ctx, nil, "bundle", "verify", temporary); err != nil {
 		return core.Wrap(core.CategoryOperational, "the backup bundle failed verification", err)
 	}
-	if err := r.checkArchiveHeads(ctx, temporary, manifestCommit, manifest.Tasks, prefix); err != nil {
+	if err := r.checkArchiveHeads(ctx, temporary, manifestCommit, refs); err != nil {
 		return err
 	}
 	if err := syncFile(temporary); err != nil {
@@ -219,12 +245,18 @@ func (r *Repository) canonicalArchiveManifest(ctx context.Context, config core.P
 		}
 	}
 
+	return normalizedArchiveManifest(manifest), nil
+}
+
+// normalizedArchiveManifest is manifest as it is stored: this build's format
+// and version, its time in UTC, and empty lists rather than null ones.
+func normalizedArchiveManifest(manifest ArchiveManifest) ArchiveManifest {
 	manifest.Format = archiveManifestFormat
 	manifest.Version = archiveManifestVersion
 	manifest.CreatedAt = manifest.CreatedAt.UTC()
 	manifest.Flags = append([]string{}, manifest.Flags...)
 	manifest.Tasks = append([]ArchiveTask{}, manifest.Tasks...)
-	return manifest, nil
+	return manifest
 }
 
 // archiveParkedRefs lists every parked reconcile ref of the archived tasks,
@@ -307,10 +339,10 @@ func (r *Repository) deleteArchiveManifestRef(ctx context.Context, commit string
 }
 
 // checkArchiveHeads reads the bundle's refs back and requires the manifest
-// this run wrote and every task at the tip the run observed. A task that moved
+// this run wrote and every ref at the tip the run observed. A task that moved
 // between selection and bundling would leave the bundle without the history
 // the run is about to drop.
-func (r *Repository) checkArchiveHeads(ctx context.Context, bundle, manifestCommit string, tasks []ArchiveTask, prefix string) error {
+func (r *Repository) checkArchiveHeads(ctx context.Context, bundle, manifestCommit string, refs []bundledRef) error {
 	output, err := r.Git(ctx, nil, "bundle", "list-heads", bundle)
 	if err != nil {
 		return core.Wrap(core.CategoryOperational, "cannot list the backup bundle's refs", err)
@@ -331,19 +363,26 @@ func (r *Repository) checkArchiveHeads(ctx context.Context, bundle, manifestComm
 			"%s changed while the backup bundle was written; another compaction may be running", archiveManifestRef)
 	}
 	var moved *ArchiveTasksMovedError
-	for _, task := range tasks {
-		got, found := heads[prefix+task.TaskID]
+	for _, ref := range refs {
+		got, found := heads[ref.name]
 		if !found {
-			return core.Errorf(core.CategoryOperational, "the backup bundle lacks task %s", task.TaskID)
+			if ref.taskID != "" {
+				return core.Errorf(core.CategoryOperational, "the backup bundle lacks task %s", ref.taskID)
+			}
+			return core.Errorf(core.CategoryOperational, "the backup bundle lacks %s", ref.name)
 		}
-		if got == task.OldTip {
+		if ref.expected == "" || got == ref.expected {
 			continue
+		}
+		if ref.taskID == "" {
+			return core.Errorf(core.CategoryStaleWrite,
+				"%s moved from %s to %s while the backup bundle was written", ref.name, ref.expected, got)
 		}
 		if moved == nil {
 			moved = &ArchiveTasksMovedError{err: core.Errorf(core.CategoryStaleWrite,
-				"task %s moved from %s to %s since it was selected for compaction", task.TaskID, task.OldTip, got)}
+				"task %s moved from %s to %s since it was selected for compaction", ref.taskID, ref.expected, got)}
 		}
-		moved.TaskIDs = append(moved.TaskIDs, task.TaskID)
+		moved.TaskIDs = append(moved.TaskIDs, ref.taskID)
 	}
 	if moved != nil {
 		return moved

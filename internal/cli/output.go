@@ -36,7 +36,9 @@ Commands:
   fetch [--remote <remote>] [--json]
   push [--remote <remote>] [--json]
   sync [--watch [--interval <duration>]] [--status] [--remote <remote>] [--json]
-  move-tasks [--from <remote>] [--allow-branches] [--no-backup | --backup <path>] [--json]
+  move-tasks [--from <remote>] [--allow-branches] [--clean-up] [--no-backup | --backup <path>] [--json]
+  reset [--dry-run] [--no-backup [--discard-unpublished] | --backup <path>] [--json]
+  reset --remote <remote> [--confirm <remote>] [--dry-run] [--no-backup | --backup <path>] [--json]
   status <command> [options]
   priority <command> [options]
   key <command> [options]
@@ -138,6 +140,9 @@ type ErrorBody struct {
 	// TasksRemote is present only on a refusal about the remote a project
 	// shares its tasks through: which remote, why, and the command to run.
 	TasksRemote *core.TasksRemoteRefusal `json:"tasksRemote,omitempty"`
+	// Reset is present only on a refusal of workbook reset: why, and what it
+	// would have removed or could not.
+	Reset *gitstore.ResetRefusal `json:"reset,omitempty"`
 }
 
 type ErrorEnvelope struct {
@@ -467,6 +472,7 @@ func writeError(output io.Writer, err error, jsonMode bool) {
 				Category:    core.CategoryOf(err),
 				Message:     publicErrorMessage(err),
 				TasksRemote: tasksRemoteRefusal(err),
+				Reset:       resetRefusalOf(err),
 			},
 		})
 		return
@@ -476,6 +482,15 @@ func writeError(output io.Writer, err error, jsonMode bool) {
 	if core.CategoryOf(err) == core.CategoryInvocation {
 		fmt.Fprint(output, usage)
 	}
+}
+
+func resetRefusalOf(err error) *gitstore.ResetRefusal {
+	var refusal *gitstore.ResetRefusalError
+	if !errors.As(err, &refusal) {
+		return nil
+	}
+	copied := refusal.Refusal
+	return &copied
 }
 
 func tasksRemoteRefusal(err error) *core.TasksRemoteRefusal {

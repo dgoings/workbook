@@ -104,6 +104,9 @@ type Repository struct {
 	// stops the run where it returns an error, standing in for a process
 	// killed at that point.
 	moveStepHook func(step string) error
+	// resetStepHook, set only by tests, runs after each step of a reset; an
+	// error from it stops the reset there, as an interruption would.
+	resetStepHook func(step string) error
 	// leasedPushHook, set only by tests, runs after a move's backup of the
 	// copies a leased push replaces and before that push, standing in for a
 	// teammate who publishes in between.
