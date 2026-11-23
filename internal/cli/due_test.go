@@ -595,8 +595,12 @@ func TestWorkbookNowResolvesARelativeDueDateOnTheLocalDateOfThatInstant(t *testi
 		}
 		decodeClockJSON(t, runBinaryWithEnvironment(t, binary, repository, test.environment,
 			"create", "Dated during a migration", "--due", "today", "--no-sync", "--json"), &created)
-		if created.Data.Due == nil || *created.Data.Due != test.want {
-			t.Errorf("%s: %v --due today recorded %v, want the local date %s", test.name, test.environment, created.Data.Due, test.want)
+		recorded := "none"
+		if created.Data.Due != nil {
+			recorded = *created.Data.Due
+		}
+		if recorded != test.want {
+			t.Errorf("%s: %v --due today recorded %s, want the local date %s", test.name, test.environment, recorded, test.want)
 		}
 	}
 }
