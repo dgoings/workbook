@@ -1334,6 +1334,17 @@ function renderNextRow (project, task) {
 
   const meta = document.createElement('span')
   meta.className = 'next-row__meta'
+  // The due date leads the meta, worded as the board words it: the word is
+  // the mark, and the chip's color only repeats it.
+  if (task.due) {
+    const due = document.createElement('span')
+    const state = task.dueState === 'overdue' || task.dueState === 'due-soon' ? task.dueState : ''
+    due.className = state === 'overdue'
+      ? 'label next-row__due next-row__due--overdue'
+      : state === 'due-soon' ? 'label next-row__due next-row__due--soon' : 'label next-row__due'
+    due.textContent = `${state === 'overdue' ? 'Overdue' : state === 'due-soon' ? 'Due soon' : 'Due'} ${task.due}`
+    meta.append(due)
+  }
   for (const label of task.labels) {
     const chip = document.createElement('span')
     chip.className = 'label'

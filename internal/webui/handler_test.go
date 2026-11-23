@@ -4849,6 +4849,8 @@ boardView.dataset.attachmentNameLimit = String(boardAttachmentNameLimit);
 boardView.dataset.attachmentLabelLimit = String(boardAttachmentLabelLimit);
 boardView.dataset.attachmentUrlLimit = String(boardAttachmentURLLimit);
 boardView.dataset.inlineMedia = boardInlineMedia;
+// How far ahead a due date counts as due soon, as the server publishes it.
+boardView.dataset.dueSoonDays = String(` + strconv.Itoa(core.DueSoonDays) + `);
 // The region that holds tasks whose status matches no column. It is always in
 // the document and hidden while empty, because the status that strands a task
 // arrives on a poll rather than on the first paint, and a region the server

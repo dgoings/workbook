@@ -12,10 +12,10 @@ both human-readable output and a versioned machine-readable result envelope:
 ```text
 workbook setup [--key <key>] [--no-docs] [--no-sync] [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook setup --tasks-only <url> [--key <key>] [--no-docs] [--no-skill] [--json]
-workbook create <title> [--description <text>] [--status <status>] [--priority <priority>] [--key <key>] [--label <label>] [--no-sync] [--json]
-workbook list [--status <status>] [--priority <priority>] [--key <key>] [--label <label>] [--find <text>] [--all] [--json]
+workbook create <title> [--description <text>] [--status <status>] [--priority <priority>] [--due <date>] [--key <key>] [--label <label>] [--no-sync] [--json]
+workbook list [--status <status>] [--priority <priority>] [--key <key>] [--label <label>] [--find <text>] [--overdue] [--due-before <date>] [--sort due] [--all] [--json]
 workbook show <task> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--get-attachment <attachment> [--out <path>]] [--json]
-workbook update <task> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--label <label>] [--clear-labels] [--comment <body>] [--edit-comment <comment>] [--remove-comment <comment>] [--attach-file <path>] [--attach-url <url>] [--attach-label <text>] [--remove-attachment <attachment>] [--assign <who>] [--unassign <who>] [--force] [--no-sync] [--json]
+workbook update <task> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--due <date> | --clear-due] [--label <label>] [--clear-labels] [--comment <body>] [--edit-comment <comment>] [--remove-comment <comment>] [--attach-file <path>] [--attach-url <url>] [--attach-label <text>] [--remove-attachment <attachment>] [--assign <who>] [--unassign <who>] [--force] [--no-sync] [--json]
 workbook delete <task> [--no-sync] [--json]
 workbook restore <task> [--into <status>] [--no-sync] [--json]
 workbook move <task> (--before <task> | --after <task>) [--no-sync] [--json]
@@ -71,7 +71,8 @@ workbook help [command]
 contains every whitespace-separated word of `<text>`, case-insensitively, or,
 for a word shaped like the start of a task ID (a project key, a dash, and more
 characters), whose ID begins with it; it combines with the other `list` filters,
-and an empty `--find` is refused.
+and an empty `--find` is refused. `--overdue`, `--due-before` and `--sort due`
+are described under [Due dates](#due-dates).
 
 `workbook setup` is the single bootstrap path for a fresh clone. It creates or
 validates the tracked `.workbook/config.json` holding the project ID and key,
@@ -381,6 +382,96 @@ per-file ceiling is refused before it is read, and the refusal suggests a link,
 which stores nothing. Only a regular file may be attached: a ceiling read off a
 stat bounds only a file whose size a stat describes, and a device or a named
 pipe reports no size and then reads without end.
+
+## Due dates
+
+A task may have a due date. It is a calendar date with no time of day:
+
+```sh
+workbook create "Ship the beta" --due 2026-12-01
+workbook update WB-01K0M6B8 --due +3d       # three days from today
+workbook update WB-01K0M6B8 --due tomorrow
+workbook update WB-01K0M6B8 --clear-due
+```
+
+`--due` takes a date as `YYYY-MM-DD`, `today`, `tomorrow`, or `+Nd` for N days
+from today, where N is decimal digits from 0 to 36500 and leading zeros are
+allowed (`+07d` is `+7d`). The relative forms are worked out against this
+machine's local date when the command runs, and only the date they come to is
+recorded: the confirmation prints it, and the task holds `2026-12-04`, never
+`+3d`. A migration that sets `WORKBOOK_NOW` to record a project's past resolves
+them against the local date of that recorded instant instead, because the date
+is written into the history: `WORKBOOK_NOW=2026-03-01T02:00:00Z` with
+`--due today` records `2026-02-28` on a machine in New York, where that instant
+is still February 28. Whether a task is overdue is still judged against the
+real today.
+Anything else — `2026-02-30`, `next friday`, `+1w`, an empty value — is a
+`validation` error (exit `5`) and records nothing. `--due` and `--clear-due`
+together are an `invalid-invocation` (exit `2`). Setting, changing and clearing
+a date are each one operation in the task's history, shown by
+`workbook show --history` like any other field change.
+
+**Overdue and due soon.** A task is *overdue* when its date is before today and
+*due soon* when its date is today or one of the next three days. A task in a
+status tagged `done`, or a deleted task, is never either. "Today" is the local
+date of whoever is looking: two people in different timezones can see the same
+task as overdue and not overdue for up to a day around midnight. That is a
+difference in what they are shown; both hold the same date.
+
+**Finding them.**
+
+```sh
+workbook list --overdue                  # only tasks that are overdue
+workbook list --due-before 2026-12-01    # due strictly before this date
+workbook list --due-before +7d           # due within the coming week
+workbook list --sort due                 # earliest first, undated tasks last
+```
+
+`--due-before` takes the same forms as `--due` and includes finished tasks,
+since a date before a cutoff is a fact about the task rather than a judgment.
+All three combine with the other `list` filters. `--sort due` orders by date,
+with tasks of the same date, and every undated task after them, in the board's
+usual order; it is the only `--sort` order. `workbook next` does not look at due
+dates: what it offers next is decided as it always was.
+
+**How they read.** `workbook show` prints a `Due:` line, empty for a task with
+none. `workbook list` adds a `DUE` column when any listed task has a date. Both
+put the word beside the date — `2026-11-20 overdue`, `2026-11-24 due soon` —
+because the terminal output carries no color. The web board's cards and task
+page show the same words, with color repeating them rather than standing in for
+them, and the task page sets the date with a date field (empty it to clear the
+date). The board judges each date in the browser, against the reader's own
+local date, and judges again when that date changes while the page is open, on
+its next poll; the page as the server first sends it shows a card's date with
+no word beside it, so a reader with scripts off sees the date alone. The
+desktop app's Next view marks a dated task the same way.
+
+**In JSON**, every task object carries three members:
+
+| Member | Value |
+| --- | --- |
+| `due` | The date as `"YYYY-MM-DD"`, or `null` when the task has none. Always present. |
+| `overdue` | `true` when the task is overdue on the local date of the machine that answered. Always present. |
+| `dueSoon` | `true` when the task is due soon on the local date of the machine that answered. Always present. |
+
+`overdue` and `dueSoon` are worked out when the command runs and never stored,
+so the same task can answer differently tomorrow, or on a machine in another
+timezone. The tasks `workbook serve` sends its board carry them too, judged on
+the serving machine's local date; the board does not use them. A caller in
+another zone than the machine that answered should judge `due` itself.
+
+**Synchronization.** Two clones that set different dates on one task reconcile
+the way they do for any other one-value field: the clone that synchronizes last
+has its date applied on top, and no conflict is reported. Two clones that set
+the same date are not in conflict either. Compaction keeps a task's date.
+
+**Older Workbook versions.** A task that has ever had a due date is written in a
+format releases before this one cannot fully read. Such a release still lists,
+shows and synchronizes the task, without its date, marks it as written by a
+newer Workbook, and refuses to change it (exit `9`, `newer-writer`). A task that
+never had a date is unaffected. Everyone on a team upgrades together; see
+[Mixed versions and forks](#mixed-versions-and-forks), and
+[Due dates](architecture.md#due-dates) in the architecture notes for the format.
 
 ## Comments and attachments
 
@@ -3954,7 +4045,7 @@ Read:
 Write, all of it published to `origin` like any other change:
 
 - Create tasks, and change any task's title, description, status, priority,
-  labels, position and dependencies (`POST /api/tasks`, `PATCH
+  due date, labels, position and dependencies (`POST /api/tasks`, `PATCH
   /api/tasks/<id>`, `/status`, `/position`, the dependency routes).
 - Delete any task and restore any deleted one (`DELETE /api/tasks/<id>`,
   `POST /api/tasks/<id>/restore`). Deleting records a tombstone; nothing is
@@ -4223,7 +4314,7 @@ the nested Git-durable mutation routes above: a Depends On edge is written to
 the current task and a Blocks edge to the other task.
 
 Task forms use a wide main column and a compact sidebar holding, in order,
-Properties (status, priority and labels), Dependencies, Assignments,
+Properties (status, priority, due date and labels), Dependencies, Assignments,
 and Attachments; the New Task form and a task's own page lay it out alike.
 Every section is spaced the same way, a rule between each, and every
 dependency, assignment and attachment is drawn as the same bordered card with

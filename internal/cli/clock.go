@@ -55,6 +55,16 @@ func compactionNow() time.Time {
 	return recordedOr(compactNow)
 }
 
+// recordedToday is the instant recordedNow names, in this machine's zone, so
+// its calendar day is the writer's local date. That is what a relative due
+// date such as `today` or `+3d` is resolved against. The system clock already
+// reads in the local zone; a WORKBOOK_NOW value carries whatever offset it was
+// written with, and 2026-03-01T02:00:00Z is still February 28 for a writer in
+// New York, so it is moved into the local zone too — one rule for both clocks.
+func recordedToday() time.Time {
+	return recordedNow().Local()
+}
+
 func recordedOr(fallback func() time.Time) time.Time {
 	// An unreadable value never gets this far; Run has already refused it.
 	if at, set, err := recordedTime(); err == nil && set {

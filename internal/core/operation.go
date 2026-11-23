@@ -84,6 +84,20 @@ const (
 // running maximum keeps it on every state after the checkpoint, so an older
 // clone reads a compacted task from its stored state and refuses to change it.
 //
+// Five is the generation due dates introduce. It is the first generation that
+// belongs to a field rather than to an operation type: a due date is set with an
+// ordinary field.set naming the field `due`, and is carried by a task.create or
+// a history.checkpoint whose task holds one, so OperationMinReader asks about
+// the payload as well as the type. A build that folds generation four does not
+// know the field, and both older builds measured before this shipped — the
+// v0.6.0 release and the main branch this was added to — report a field.set of
+// an unknown field,
+// and a state carrying an unknown member, as corrupt data and refuse to list
+// the project at all. With the marker they show the task from its checkpoint,
+// warn that a newer Workbook wrote it, and refuse to change it. Only the tasks
+// that ever carried a due date are marked; every other task is written exactly
+// as before.
+//
 // Raising this constant is the last step of shipping a new operation type, not
 // the first: the build has to be able to fold generation N before it may claim
 // to. It is also inseparable from the table that declares N — a pack this build
@@ -99,7 +113,7 @@ const (
 // has already happened, from cache, while the mutations it refused now succeed.
 // See historyvalidation.readerGeneration. Any future cache of a fold's outcome
 // owes the same.
-const SupportedFormatGeneration = 4
+const SupportedFormatGeneration = 5
 
 type Actor struct {
 	ID string `json:"id"`
@@ -314,6 +328,31 @@ func checkpointMinReader() int {
 	return operationMinReader[OperationHistoryCheckpoint]
 }
 
+// OperationMinReader is the generation a reader needs to fold one operation:
+// its type's, raised to generation five when the operation records a due date.
+//
+// A due date is the one requirement that depends on a payload rather than on a
+// type. field.set and task.create have been generation zero since the first
+// release, and must stay so for every field and every task that has nothing to
+// do with a due date, or one person setting a due date on one task would put
+// every task anybody edits out of an older teammate's reach.
+func OperationMinReader(operation Operation) int {
+	required := operationMinReader[operation.Type]
+	if carriesDue(operation) && required < dueMinReader {
+		required = dueMinReader
+	}
+	return required
+}
+
+// carriesDue reports an operation that records a due date: a field.set of the
+// due field, clearing included, or a task value that holds one.
+func carriesDue(operation Operation) bool {
+	if operation.Type == OperationFieldSet && operation.Field == "due" {
+		return true
+	}
+	return operation.Task != nil && operation.Task.Due != ""
+}
+
 // PackMinReader returns the generation a reader needs to fold these operations,
 // which is the highest any one of them requires.
 //
@@ -325,7 +364,7 @@ func checkpointMinReader() int {
 func PackMinReader(operations []Operation) int {
 	generation := 0
 	for _, operation := range operations {
-		if required := operationMinReader[operation.Type]; required > generation {
+		if required := OperationMinReader(operation); required > generation {
 			generation = required
 		}
 	}
@@ -765,6 +804,8 @@ func applyFieldSet(task *TaskData, operation Operation) error {
 		task.Priority = Priority(operation.Value)
 	case "rank":
 		task.Rank = operation.Value
+	case "due":
+		task.Due = operation.Value
 	}
 	return nil
 }
@@ -852,6 +893,12 @@ func validateStateDocument(state StateDocument) error {
 	}
 	if !reflect.DeepEqual(state.Task, normalized) {
 		return corrupt("task state is not canonical")
+	}
+	// The state's watermark is a running maximum, so a task that holds a due
+	// date has had a pack that recorded one, and carries its generation.
+	if state.Task.Due != "" && state.MinReader < dueMinReader {
+		return corrupt("task state holding a due date has minimum reader generation %d, below %d",
+			state.MinReader, dueMinReader)
 	}
 	return nil
 }
@@ -970,6 +1017,13 @@ func validateOperationPackDocument(pack OperationPack) error {
 	for _, operation := range pack.Operations {
 		if err := validateOperationDocument(operation); err != nil {
 			return err
+		}
+		// A due date written without its marker would reach an older build as
+		// corrupt data rather than as an upgrade notice, so this build refuses
+		// to call such a pack valid either — the rule a checkpoint is held to.
+		if carriesDue(operation) && pack.MinReader < dueMinReader {
+			return corrupt("operation pack recording a due date has minimum reader generation %d, below %d",
+				pack.MinReader, dueMinReader)
 		}
 		if _, duplicate := seen[operation.ID]; duplicate {
 			return corrupt("operation pack contains duplicate operation ID %q", operation.ID)
@@ -1191,6 +1245,16 @@ func validateFieldSetOperation(operation Operation) error {
 		// cost the rank ceiling withholds.
 		if _, err := parseRank(operation.Value); err != nil {
 			return Wrap(CategoryCorruptData, "field.set rank is invalid", err)
+		}
+	case "due":
+		// An empty value clears the due date. Anything else is a calendar date
+		// in the one stored form, because relative input is resolved before an
+		// operation is ever written; a value in any other shape is one no
+		// build wrote.
+		if operation.Value != "" {
+			if err := ValidateDueDate(operation.Value); err != nil {
+				return Wrap(CategoryCorruptData, "field.set due is invalid", err)
+			}
 		}
 	default:
 		return corrupt("field.set does not support field %q", operation.Field)
