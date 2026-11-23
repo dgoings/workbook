@@ -202,8 +202,10 @@ unreachable. See [Compaction](#compaction).
 
 The one manual exception to keeping a task ref at all is `workbook reset`, which
 deletes refs under `refs/workbook/` from one checkout or one remote when a person
-runs it. It changes no commit either, and it writes a bundle of every ref it
-deletes first. See [Resetting Workbook data](#resetting-workbook-data).
+runs it. It changes no commit either, and it writes a bundle of the refs it
+deletes first. A damaged ref, whose object cannot be bundled, is left out of
+it, and `--no-backup` writes none where it is allowed. See
+[Resetting Workbook data](#resetting-workbook-data).
 
 ### Assignments
 
@@ -735,9 +737,10 @@ left at the old place, and leaving Workbook. The command and its refusals are in
 it does to the storage model.
 
 **What it deletes, and what it never touches.** Only refs under
-`refs/workbook/`, the caches under `<git-common-dir>/workbook/`, and untracked
-files under `.workbook/` other than `config.json` and `guidelines.md`. Never a
-branch, a tag, another ref or a tracked file. No commit changes. The commits the
+`refs/workbook/`, the caches under `<git-common-dir>/workbook/`, and the
+untracked temporary files Workbook's own writes leave under `.workbook/`
+(`.config-*.tmp`). Never a branch, a tag, another ref, a tracked file, or an
+untracked file under `.workbook/` that Workbook did not write. No commit changes. The commits the
 deleted refs reached become unreachable and stay in the object database until
 `git gc` prunes them, as compaction's replaced history does. A tombstone is
 still how a task is deleted while the project uses Workbook. A reset removes the
@@ -761,13 +764,18 @@ this clone
 ```
 
 **The bundle comes first.** Each run writes and verifies a bundle of every ref
-it deletes, with the compaction manifest, before it deletes anything. A ref that
-moved since the run read it stops the run. A checkout's bundle holds the refs
-under their own names. A remote's holds them under the names this checkout
-tracks them by, so fetching from it never overwrites a live ref. A checkout may
-skip the bundle only when nothing it holds is missing from the tasks remote, or
-when `--discard-unpublished` says to lose it. The place the tasks live always
-gets one.
+it deletes, with the compaction manifest, before it deletes anything. Two
+exceptions: a damaged ref cannot be bundled and is deleted anyway, and the
+manifest ref an interrupted backup left is not data. A ref that moved since the
+run read it stops the run. A checkout's bundle holds the refs under their own
+names. A remote's holds them under the names this checkout tracks them by, so
+fetching from it never overwrites a live ref. A checkout may skip the bundle
+only when the tasks remote, read just then, holds everything it has, or when
+`--discard-unpublished` says to lose it. A checkout that cannot read its tasks
+remote always writes one, because its tracking refs can hide work a remote
+lost since the last fetch. The place the tasks live always gets one. A bundle
+path inside a folder the reset removes files from is refused before anything
+happens, and the run checks the bundle is still there before it reports it.
 
 **Deletion at a remote is leased.** Each deletion is a push of `:ref` with
 `--force-with-lease` on the commit the run just fetched, so a ref somebody
@@ -775,7 +783,9 @@ changed since is not deleted. A host that refuses deletions under its own rules
 leaves the refs it refused, and the run reports them. Nothing is undone, and the
 next run deletes what is left. A run stopped at any point is finished by running
 it again: each step is idempotent, and the bundle of the first run already holds
-everything.
+everything. A run killed while writing its bundle leaves the manifest ref, which
+the next run replaces and removes, and a temporary file the next run does not
+read.
 
 **The moved marker stays.** At a place the tasks moved away from, the reset
 keeps `refs/workbook/project` and its marker. That keeps every guarantee a

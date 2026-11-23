@@ -2908,7 +2908,8 @@ Compaction makes the old history unreachable. It does not delete it.
 for starting a checkout over, for removing the copies a [move](#a-tasks-remote-other-than-origin)
 left behind, and for [leaving Workbook](#leaving-workbook). Neither touches a ref
 outside `refs/workbook/`, a branch, a tag or a tracked file. Both write a backup
-bundle first and print the Git command that brings its refs back.
+bundle first, unless `--no-backup` is given where it is allowed, and print the
+Git command that brings its refs back.
 
 These commands change what everyone sees. Workbook does not detect a teammate
 running Workbook against the same remote at the same moment, so agree when to
@@ -2920,7 +2921,11 @@ run them, as for any change the whole project shares.
 workbook reset [--dry-run] [--no-backup [--discard-unpublished] | --backup <path>] [--json]
 ```
 
-A reset of a checkout does three things, in this order:
+A reset of a checkout first makes every check that can refuse it: the bundle's
+path (see [The reset's backup bundle](#the-resets-backup-bundle)) and, with
+`--no-backup`, the work that exists only here (see below). A refused reset
+changes nothing, and leaves the watcher running. Then it does three things, in
+this order:
 
 1. It stops this checkout's watcher (`workbook sync --watch`), if one is
    running. It asks the process the watcher reports itself as to stop. That is
@@ -2929,16 +2934,25 @@ A reset of a checkout does three things, in this order:
    then waits up to 20 seconds for the watcher to go. A watcher that cannot be
    found, cannot be stopped, or does not stop in time is refused, exit 1, reason
    `watcher-running`, saying to stop it with Ctrl-C in its terminal and run
-   the reset again. Nothing is removed then.
+   the reset again. Nothing is removed then. The watcher's last
+   synchronization can change what exists only here, so a reset with
+   `--no-backup` checks that work again once the watcher has stopped, and a
+   refusal then says the watcher was stopped.
 2. It writes the backup bundle (see below) and then removes every ref under
    `refs/workbook/` in one transaction. That covers the task refs, the project
    identity, the settings ledger, the parked refs of edits a reconciliation
    set aside, and the tracking refs of every remote.
 3. It removes the caches: everything under `<git-common-dir>/workbook/`, such
    as the SQLite projection, the identity guard and the watcher's address, and
-   any file under `.workbook/` that Git does not track. It never removes
-   `.workbook/config.json` or `.workbook/guidelines.md`, whether tracked or not,
-   and never removes a tracked file.
+   the temporary files Workbook's own writes leave under `.workbook/`. The only
+   such file is `.workbook/.config-*.tmp`, which an interrupted write of the
+   settings leaves. Every other file under `.workbook/` stays: tracked files,
+   `.workbook/config.json` and `.workbook/guidelines.md` whether tracked or
+   not, and untracked or ignored files Workbook did not write, which a `Left:`
+   line counts.
+
+A dry run lists exactly the refs and the files a real run would then remove,
+on its `Would remove:` and `Caches:` lines and in its JSON.
 
 It does not remove the backup bundles under `<git-common-dir>/workbook-archive/`,
 the managed pre-push hook, the agent documentation or the skill. Run `workbook
@@ -2966,17 +2980,27 @@ tasks remote does not have:
 
 It measures this against the remote as it is now. It lists the remote's Workbook
 refs and fetches the objects of those this checkout lacks without moving any ref,
-so a dry run changes nothing. A remote that cannot be read is measured by what
-this checkout last fetched from it, and an `Unchecked:` line says why. That
-measure can name work published since. A remote that was wiped holds nothing,
-so after one every task here is listed.
+so a dry run changes nothing. A remote that was wiped holds nothing, so after
+one every task here is listed.
+
+When that check cannot be made, an `Unchecked:` line says why, and what is
+listed comes from this checkout's tracking refs for the remote, which are what
+it held at the last fetch. Either the remote could not be read, or it was read
+and its history could not be fetched into this checkout, which a damaged ref
+here causes; the line then says the remote was read and names the damaged
+refs. Tracking refs can be wrong both ways. They name work published since the
+last fetch, and when the remote lost refs since, as a reset of it makes it,
+they reach commits it no longer holds and so hide work that exists only here.
 
 The bundle keeps that work, so a plain reset goes ahead with it. `--no-backup`
 writes no bundle, so a reset with `--no-backup` of a checkout that holds such
 work is refused, exit 5, reason `unpublished`. The refusal names each task and
 says to publish it with `workbook sync`, to reset without `--no-backup`, or to
 add `--discard-unpublished`, which is the only way to lose it on purpose.
-`--discard-unpublished` needs `--no-backup`.
+`--discard-unpublished` needs `--no-backup`. While the check cannot be made,
+`--no-backup` is refused, exit 5, reason `unchecked`, with or without
+`--discard-unpublished`: a bundle is cheap, and the tracking refs cannot say
+what would be lost.
 
 #### Restoring a checkout
 
@@ -3035,7 +3059,9 @@ A host that refuses to delete refs, as a branch-protection or push rule can, is
 refused, exit 1, reason `deletion-refused`. The refusal names the host's reason
 and the lines it sent, and lists every Workbook ref the remote still holds.
 Deletions the host allowed are not undone. Once the host allows deleting refs
-under `refs/workbook/`, running the same command again finishes the job.
+under `refs/workbook/`, running the same command again finishes the job. That
+run's bundle holds only the refs still left, so the refusal names the first
+run's bundle, which holds every ref, and says to keep it.
 
 A reset of a remote does not stop this checkout's watcher.
 
@@ -3059,17 +3085,29 @@ The new repository must use the same object format as the bundle.
 A reset writes its bundle as [`compact`](#the-backup-bundle) does. It goes to
 `<git-common-dir>/workbook-archive/<run-id>.bundle` by default, or to
 `--backup <path>`: a directory gets the default file name, and any other path is
-the file name. A path that already exists is refused. `--no-backup` and
-`--backup` cannot be combined. The bundle holds each ref under its own name, and
+the file name. A relative path is taken from the directory the command runs in.
+A path that already exists is refused, exit 5. A path inside a folder a reset of
+this checkout removes files from, `.workbook/` or `<git-common-dir>/workbook/`,
+is refused, exit 2, once symbolic links are resolved, for a file or a
+directory, and for `reset --remote` and `move-tasks --clean-up` too. The
+default place is outside both, in a linked worktree and a tasks-only folder as
+well. Both refusals come before anything is stopped, written or removed, and a
+dry run makes them too. `--no-backup` and `--backup` cannot be combined. The bundle holds each ref under its own name, and
 the same manifest, at `refs/workbook/archive/manifest`, with `reset` first among
 its flags and one entry per task. It is verified before any ref is removed, and
 a ref that moved since the reset read it stops the run with nothing removed. A
-reset that has nothing to keep writes no bundle. Workbook does not read bundles
-back, delete them or rotate them.
+reset that has nothing to keep writes no bundle. A damaged ref is left out of
+it, and so is a `refs/workbook/archive/manifest` that an interrupted backup
+left, which is not data and is removed with the rest. Before reporting the
+bundle, the reset checks that it is still there, and fails naming the path if
+it is not. Workbook does not read bundles back, delete them or rotate them.
 
-A reset stopped part way, after its bundle or after the refs went at a checkout
-or partway through the deletions at a remote, is finished by running it again.
-Each run writes a bundle of what is left, if anything is.
+A reset stopped part way, before or during its bundle, after the refs went at a
+checkout, or partway through the deletions at a remote, is finished by running
+it again once. Each run writes a bundle of what is left, if anything is. A run
+killed while writing its bundle can leave a `<bundle>.tmp` file beside where
+the bundle was going. That file is not a backup, the next run does not read it,
+and it can be deleted.
 
 ### The reset's JSON result
 
@@ -3078,7 +3116,7 @@ The result's `data` is the same for both forms:
 ```json
 {"dryRun":false,"scope":"remote","remote":"tasks","url":"git@github.com:team/tasks.git",
  "refs":[{"ref":"refs/workbook/tasks/WB-01M…","objectId":"…"}],"kept":[],"tasks":2,
- "unpublished":[],"setAside":[],"caches":[],
+ "unpublished":[],"setAside":[],"caches":[],"left":0,
  "bundle":"/…/.git/workbook-archive/01M….bundle",
  "restore":"git fetch … 'refs/workbook/remotes/tasks/*:refs/workbook/*'","next":["workbook reset"]}
 ```
@@ -3088,11 +3126,15 @@ The result's `data` is the same for both forms:
 `movedTo` names where the tasks went, for a place they left. `unpublished` has,
 for each ref, `ref`, `taskId` and `title` for a task, `new` when the remote has
 no such ref, `commits`, and `operations`, the IDs of the operations those
-commits hold. `unchecked` is why the remote could not
-be read, and `watcher` is `{"pid":…,"stopped":true}` when a watcher was found.
+commits hold. `unchecked` is why the tasks remote could not be checked, and
+`watcher` is `{"pid":…,"stopped":true}` when a watcher was found. `caches` lists
+each file and folder removed besides refs, or with `dryRun` each one that would
+be, and `left` counts the untracked files under `.workbook/` that Workbook did
+not write and left alone.
 
 A refusal adds a `reset` member to the error: `reason` (`unpublished`,
-`confirm`, `backup-required`, `deletion-refused` or `watcher-running`), and,
+`unchecked`, `confirm`, `backup-required`, `deletion-refused` or
+`watcher-running`), and,
 as they apply, `remote`, `command` (the command to run), `tasks`,
 `unpublished`, `setAside`, `remaining` (the refs a host would not delete) and
 `bundle` (the bundle a refused run had already written).
@@ -3102,12 +3144,16 @@ as they apply, `remote`, `command` (the command to run), `tasks`,
 `workbook move-tasks --clean-up` resets the place the tasks left once the move
 has finished, as `workbook reset --remote <that place>` does: every Workbook ref
 there but the moved marker goes, after its own bundle is written. With
-`--backup <file>`, the move's bundle goes to that file and the clean-up's to the
-same name with `-clean-up` before the extension. `--no-backup` applies to both.
-A move that stops with an error cleans up nothing. A clean-up that fails after a
-finished move says the move is complete and to run `workbook reset --remote
-<place>` to finish. The JSON result carries the clean-up as a `cleanUp` member
-shaped as above. The tasks can still move back to a place cleaned up this way:
+`--backup <file>`, the clean-up's bundle goes to that file. When the move itself
+wrote a bundle there, as a move back that replaces older copies does, the
+clean-up's goes to the same name with `-clean-up` before the extension instead.
+`--no-backup` applies to both. A move that stops with an error cleans up
+nothing. A move that finished but set edits aside, exit 8, cleans up nothing
+either: its output says so on a `Cleaned up:` line, and its JSON names the
+command to run once the edits are dealt with as `cleanUpNext`, `workbook reset
+--remote <place>`. A clean-up that fails after a finished move says the move is
+complete and to run `workbook reset --remote <place>` to finish. The JSON
+result carries the clean-up as a `cleanUp` member shaped as above. The tasks can still move back to a place cleaned up this way:
 a move back works whether the old copies are there or gone.
 
 ### Leaving Workbook
@@ -3117,10 +3163,13 @@ commands, no `workbook sync --watch`, no board. Then, with `tasks` standing for
 the project's tasks remote (`origin` if its settings name none):
 
 ```sh
-# 1. In one checkout: remove the managed documentation and the settings, and
-#    push without the pre-push hook, which would publish the tasks again.
+# 1. In one checkout: remove the managed documentation and the settings, stage
+#    what docs remove changed, and push without the pre-push hook, which would
+#    publish the tasks again.
 workbook docs remove
-git rm -r .workbook
+git rm -r -q .workbook
+git rm -r -q --ignore-unmatch .claude/skills/workbook   # the skill, where it is committed
+git add AGENTS.md                            # and any other file docs remove wrote, such as CLAUDE.md
 git commit -m "Stop tracking tasks with Workbook"
 git push --no-verify
 
@@ -3135,14 +3184,17 @@ workbook reset
 hook=$(git rev-parse --git-path hooks/pre-push)
 if [ "$(sed -n 2p "$hook" 2>/dev/null)" = '# workbook-managed-pre-push v1' ]; then rm "$hook"; fi
 rm -rf .claude/skills/workbook               # the skill, where it is not committed
-git remote remove tasks                      # only if setup added it for the tasks
 
 # 4. Check that nothing is left; each line should print nothing.
 git ls-remote origin 'refs/workbook/*'
-git ls-remote tasks 'refs/workbook/*'        # before removing that remote
+git ls-remote tasks 'refs/workbook/*'        # only if there is a tasks remote
 git for-each-ref refs/workbook/
 ls "$(git rev-parse --git-common-dir)/workbook" 2>/dev/null
-git ls-files .workbook
+git ls-files .workbook '*workbook/SKILL.md'
+git grep -l 'workbook:begin' -- AGENTS.md CLAUDE.md
+
+# 5. Then, in every checkout:
+git remote remove tasks                      # only if setup added it for the tasks
 ```
 
 What each step removes:
@@ -3151,8 +3203,10 @@ What each step removes:
    file it manages, such as `AGENTS.md`, and removes `.workbook/guidelines.md`
    and this checkout's skill. It
    leaves a file you edited inside its managed block unless given `--force`.
-   `git rm` removes `.workbook/config.json`. Run `docs remove` before any reset,
-   while this checkout can still read the project.
+   `git rm` removes `.workbook/config.json` and a committed skill, and `git add`
+   stages the edited `AGENTS.md`, so that every other checkout loses them when
+   it pulls. Run `docs remove` before any reset, while this checkout can still
+   read the project.
 2. Step 2 removes every Workbook ref on each remote, and `git push :ref` removes
    the marker. This cannot be undone except from the bundles the resets print.
 3. Each `workbook reset` stops that checkout's watcher, writes a bundle of
@@ -3161,7 +3215,10 @@ What each step removes:
    bundle. The hook is removed only when it is Workbook's own. Use your
    `skillDir` in place of `.claude/skills` if you set one.
 4. A remote that holds Workbook refs again was published to by a checkout that
-   still held tasks. Reset that checkout, then run step 2 again.
+   still held tasks. Reset that checkout, then run step 2 again. The last two
+   checks find a skill or a Workbook section a checkout still tracks. Step 1
+   was not pulled there, or it left a file out.
+5. The remote is removed last, because step 4 reads it.
 
 The bundles stay in each checkout's `<git-common-dir>/workbook-archive/` until
 you delete them. Deleting them is the last step that cannot be undone:

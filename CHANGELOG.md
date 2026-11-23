@@ -301,8 +301,11 @@ before anyone runs it; see Compatibility across versions below.
 ### Added
 - **`workbook reset` removes Workbook's data from a checkout or a remote.** Run
   by hand, `workbook reset` stops this checkout's watcher, then removes every
-  ref under `refs/workbook/` and the caches, and leaves tracked files,
-  `.workbook/config.json` and `.workbook/guidelines.md` alone; `workbook setup`
+  ref under `refs/workbook/`, the caches under `<git-common-dir>/workbook/`, and
+  the temporary files Workbook's own writes leave under `.workbook/`. It leaves
+  tracked files, `.workbook/config.json`, `.workbook/guidelines.md` and every
+  untracked file Workbook did not write alone, counting those, and its dry run
+  lists exactly the refs and files a real run removes; `workbook setup`
   then rebuilds the checkout as a fresh clone would, which is how a checkout
   with damaged Workbook data is started over. `workbook reset --remote <remote>`
   deletes that remote's Workbook refs with leased pushes. At a place the tasks
@@ -310,13 +313,18 @@ before anyone runs it; see Compatibility across versions below.
   refused, exit 5, unless `--confirm <remote>` names it again, and always writes
   a bundle. Both forms write a backup bundle first, as `compact` does, print the
   `git fetch` that restores it, take `--dry-run`, `--no-backup` and
-  `--backup <path>`, and never touch a ref outside `refs/workbook/`. A checkout
-  reset lists the work its tasks remote lacks, and refuses `--no-backup` while
-  there is any, unless `--discard-unpublished` is given too. A host that
-  refuses to delete refs gets one refusal naming its rule and the refs left,
-  and running the command again once the host allows it finishes the job.
-  `workbook move-tasks --clean-up` runs the remote reset on the place a
-  finished move left. A checkout that still holds the tasks publishes them back
+  `--backup <path>`, and never touch a ref outside `refs/workbook/`. A
+  `--backup` inside `.workbook/` or `<git-common-dir>/workbook/` is refused
+  before anything is done, and every refusal comes before the watcher is
+  stopped. A checkout reset lists the work its tasks remote lacks, and refuses
+  `--no-backup` while there is any, unless `--discard-unpublished` is given
+  too, and refuses it outright while the tasks remote cannot be checked. A
+  reset stopped at any point, during its bundle included, is finished by
+  running it again once. A host that refuses to delete refs gets one refusal
+  naming its rule, the refs left and the bundle to keep, and running the
+  command again once the host allows it finishes the job. `workbook move-tasks
+  --clean-up` runs the remote reset on the place a finished move left, and
+  cleans nothing after a move that set edits aside. A checkout that still holds the tasks publishes them back
   to a wiped place on its next sync. The reference documents
   [leaving Workbook](docs/reference.md#leaving-workbook) step by step. Refusals
   carry a `reset` member in the JSON error.
