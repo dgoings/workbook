@@ -206,9 +206,9 @@ func olderReaderPublishesBeforeADueDate(t *testing.T, binary string) {
 		t.Fatalf("writer reads (%q, %q), want the older clone's title and the replayed date", shown.Title, reportedDue(shown))
 	}
 	values, readers := dueOperations(t, writer, task.ID)
-	if strings.Join(values, ",") != "2030-03-03" || len(readers) != 1 || readers[0] != core.SupportedFormatGeneration {
-		t.Fatalf("due operations = %q at readers %v, want the one replayed date, marked %d",
-			values, readers, core.SupportedFormatGeneration)
+	if strings.Join(values, ",") != "2030-03-03" || len(readers) != 1 || readers[0] != 5 {
+		t.Fatalf("due operations = %q at readers %v, want the one replayed date, marked 5",
+			values, readers)
 	}
 
 	// The older clone now meets the date the way it meets any other.

@@ -151,7 +151,7 @@ func TestATaskWithNoDueDateEncodesAsItAlwaysHas(t *testing.T) {
 func TestADueDateWithoutItsMarkerIsCorrupt(t *testing.T) {
 	state := createdTask(t)
 	pack := dueFieldSet(state, operationID2, "2026-12-01")
-	pack.MinReader = SupportedFormatGeneration - 1
+	pack.MinReader = dueMinReader - 1
 	assertCorrupt(t, applyError(&state, pack))
 
 	create := createPack()

@@ -98,6 +98,21 @@ const (
 // that ever carried a due date are marked; every other task is written exactly
 // as before.
 //
+// Six is the generation relics introduce. A relic is a new kind of record under
+// its own refs, refs/workbook/relics/, with its own operation pack and state
+// formats, and every one of its thirteen operation types declares six (see
+// RelicMinReader). It is a new number rather than a join to five because a
+// build that folds due dates does not know what a relic is. Unlike every
+// generation before it, it marks no task and no configuration pack: a task or
+// configuration history is written exactly as before, and no older build folds
+// a relic ref. The marker is there for the relic formats' own future: a later
+// story's relic operation types take seven and above, so this build reports a
+// relic carrying one as written by a newer Workbook rather than as corrupt
+// data. It was raised with the relic documents rather than after the relic
+// fold, the one exception to the rule below, because those documents carry six
+// from their first byte and nothing reads or writes a relic ref until the fold
+// and the store exist beside them.
+//
 // Raising this constant is the last step of shipping a new operation type, not
 // the first: the build has to be able to fold generation N before it may claim
 // to. It is also inseparable from the table that declares N — a pack this build
@@ -113,7 +128,7 @@ const (
 // has already happened, from cache, while the mutations it refused now succeed.
 // See historyvalidation.readerGeneration. Any future cache of a fold's outcome
 // owes the same.
-const SupportedFormatGeneration = 5
+const SupportedFormatGeneration = 6
 
 type Actor struct {
 	ID string `json:"id"`

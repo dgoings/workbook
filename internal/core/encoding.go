@@ -36,6 +36,26 @@ func EncodeDocument(value any) ([]byte, error) {
 			return nil, err
 		}
 		document = typed
+	case RelicOperationPack:
+		if err := validateRelicOperationPackDocument(typed); err != nil {
+			return nil, err
+		}
+		document = typed
+	case RelicStateDocument:
+		if err := validateRelicStateDocument(typed); err != nil {
+			return nil, err
+		}
+		document = typed
+	case RelicLinksDocument:
+		if err := validateRelicLinksDocument(typed); err != nil {
+			return nil, err
+		}
+		document = typed
+	case RelicFieldsDocument:
+		if err := validateRelicFieldsDocument(typed); err != nil {
+			return nil, err
+		}
+		document = typed
 	default:
 		return nil, Errorf(CategoryValidation, "cannot encode unsupported document type %T", value)
 	}

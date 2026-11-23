@@ -118,8 +118,8 @@ func TestDueDateIsSetChangedAndClearedAsOperations(t *testing.T) {
 		t.Fatalf("due operations = %q, want set, change and clear, one each", values)
 	}
 	for index, reader := range readers {
-		if reader != core.SupportedFormatGeneration {
-			t.Fatalf("pack %d recording a due date declares minReader %d, want %d", index, reader, core.SupportedFormatGeneration)
+		if reader != 5 {
+			t.Fatalf("pack %d recording a due date declares minReader %d, want 5", index, reader)
 		}
 	}
 
@@ -410,8 +410,8 @@ func TestCompactionAndARebuildKeepTheDueDate(t *testing.T) {
 	}
 	assertParentless(t, repository, task.ID)
 	values, readers := dueOperations(t, repository, task.ID)
-	if len(values) != 1 || values[0] != "2030-07-05" || readers[0] != core.SupportedFormatGeneration {
-		t.Fatalf("checkpoint due = %q at minReader %v, want 2030-07-05 at %d", values, readers, core.SupportedFormatGeneration)
+	if len(values) != 1 || values[0] != "2030-07-05" || readers[0] != 5 {
+		t.Fatalf("checkpoint due = %q at minReader %v, want 2030-07-05 at 5", values, readers)
 	}
 	if shown := cliShowTask(t, repository, task.ID); reportedDue(shown) != "2030-07-05" || shown.Overdue || shown.DueSoon {
 		t.Fatalf("compacted task = %+v, want its date and no due state", shown)
