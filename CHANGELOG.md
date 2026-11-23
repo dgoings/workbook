@@ -54,7 +54,13 @@ commands: `config unset tasks-remote` (or `config set` naming the earlier
 remote), then `move-tasks`, which brings the copies that place kept up to
 date, a task compacted in between included, and records the return as one more
 fast-forward commit on its `refs/workbook/project`, so a checkout whose
-settings name it works again. Moves can go any number of times in any order;
+settings name it works again. A task compacted in between replaces the older
+copy that place kept by the same leased push a compaction makes, after a
+teammate's late edit to that copy is replayed onto it and after the copy is
+written to a backup bundle the way `compact` writes one, at the same default
+place or `--backup <path>`, skipped with `--no-backup`; the bundle's path is
+printed and reported in `bundles`, and a copy that changes before the push is
+read again and bundled again rather than pushed over. Moves can go any number of times in any order;
 a checkout on any earlier generation of the settings is told the place the
 tasks are now, by following the markers there, and markers that lead in a
 circle are reported as such. `workbook

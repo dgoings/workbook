@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -65,6 +66,43 @@ func (r *Repository) pushTaskHeads(ctx context.Context, config core.ProjectConfi
 		return outcome, nil
 	}
 
+	// A move replaces a stale copy at its destination only after backing it
+	// up, and never pushes over a tip that moved since it was read.
+	backup := r.activeMoveBackup(r.remote())
+	if backup != nil {
+		var leases []leasedPush
+		for _, candidate := range kept {
+			if candidate.Lease != nil {
+				leases = append(leases, *candidate.Lease)
+			}
+		}
+		if len(leases) > 0 {
+			if err := r.backUpReplacedTips(ctx, config, backup, leases); err != nil {
+				if !errors.Is(err, errReplacedTipMoved) {
+					return outcome, err
+				}
+				r.metadataMu.Lock()
+				backup.stale = true
+				r.metadataMu.Unlock()
+				unleased := kept[:0:0]
+				for _, candidate := range kept {
+					if candidate.Lease == nil {
+						unleased = append(unleased, candidate)
+						continue
+					}
+					outcome.Tasks[candidate.TaskID] = SyncTaskResult{TaskID: candidate.TaskID, Status: SyncRejected,
+						Detail: compactionStaleDetail(r.remote())}
+				}
+				kept = unleased
+				if len(kept) == 0 {
+					return outcome, nil
+				}
+			} else if r.leasedPushHook != nil {
+				r.leasedPushHook()
+			}
+		}
+	}
+
 	expected := make(map[string]string, len(kept))
 	forced := make(map[string]bool)
 	args := []string{"push", "--porcelain"}
@@ -86,8 +124,23 @@ func (r *Repository) pushTaskHeads(ctx context.Context, config core.ProjectConfi
 		return outcome, err
 	}
 	for _, candidate := range kept {
-		if candidate.Lease != nil && pushed[candidate.TaskID].Status == SyncCompactionPublished {
+		if candidate.Lease == nil {
+			continue
+		}
+		item := pushed[candidate.TaskID]
+		if item.Status == SyncCompactionPublished {
 			_ = r.advanceTrackingRef(ctx, candidate.TaskID, candidate.Lease.ExpectedRemote, candidate.Lease.Local)
+		}
+		if backup != nil {
+			stale := item.Status == SyncRejected && item.Detail == compactionStaleDetail(r.remote())
+			r.metadataMu.Lock()
+			switch {
+			case item.Status == SyncCompactionPublished:
+				backup.replaced[candidate.TaskID] = struct{}{}
+			case stale:
+				backup.stale = true
+			}
+			r.metadataMu.Unlock()
 		}
 	}
 	var accepted []string

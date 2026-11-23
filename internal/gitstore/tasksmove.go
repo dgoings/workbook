@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -56,6 +57,12 @@ type MoveTasksResult struct {
 	// Verified is set once the new place has been shown to hold every
 	// operation the old place does, or to have it set aside here.
 	Verified bool `json:"verified"`
+	// Replaced names the tasks whose older copy at the new place this run
+	// replaced with the checkpoint they were compacted to, by a leased
+	// non-fast-forward push, and Bundles the backups of those copies it wrote
+	// first (tasksmove_backup.go). Both are absent when there were none.
+	Replaced []string `json:"replaced,omitempty"`
+	Bundles  []string `json:"bundles,omitempty"`
 }
 
 // MoveStragglers is what one run carried by operation identity.
@@ -81,6 +88,15 @@ type MoveTasksOptions struct {
 	From string
 	// AllowBranches accepts a destination that holds branches.
 	AllowBranches bool
+	// NoBackup writes no bundle of the copies a move back replaces at the
+	// destination, and Backup names where to write it, as for compact.
+	NoBackup bool
+	Backup   string
+	// Flags are the flags as given, for the bundle's manifest, and RunID
+	// and Now name and date it; a fresh ULID and the clock by default.
+	Flags []string
+	RunID string
+	Now   func() time.Time
 }
 
 // switchRemote points this handle at name for the next synchronization and
@@ -133,6 +149,20 @@ func (r *Repository) switchRemote(name string) {
 // settings that publishes in the moment around the mark is told so by its own
 // command (strandedPublication), and running this again carries the edit.
 func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, options MoveTasksOptions) (MoveTasksResult, error) {
+	result, err := r.moveTasks(ctx, config, options)
+	// The bundles a run wrote are reported however it ended: a person who
+	// has to look for a replaced copy needs to know where it is.
+	if backup := r.endMoveBackup(); backup != nil {
+		result.Bundles = backup.bundles
+		for taskID := range backup.replaced {
+			result.Replaced = append(result.Replaced, taskID)
+		}
+		sort.Strings(result.Replaced)
+	}
+	return result, err
+}
+
+func (r *Repository) moveTasks(ctx context.Context, config core.ProjectConfig, options MoveTasksOptions) (MoveTasksResult, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return MoveTasksResult{}, err
 	}
@@ -168,6 +198,9 @@ func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, o
 	}
 	defer r.switchRemote("")
 	defer r.setReturning("")
+	if err := r.beginMoveBackup(to.Name, options); err != nil {
+		return MoveTasksResult{}, r.forgetAddedRemote(ctx, setup, err)
+	}
 
 	// Both places are asked before anything is written, so a run without
 	// access to one of them, or pointed at the wrong repository, stops having
@@ -477,8 +510,7 @@ func (r *Repository) moveCopy(
 	carried *moveCarry,
 	result *MoveTasksResult,
 ) (SyncRunResult, error) {
-	r.switchRemote(to)
-	run, err := r.Sync(ctx, config)
+	run, err := r.syncDestination(ctx, config, to)
 	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
 		return run, wrapKeepingCategory("cannot copy the tasks to "+to, err)
 	}
@@ -489,12 +521,26 @@ func (r *Repository) moveCopy(
 	if !changed {
 		return run, nil
 	}
-	r.switchRemote(to)
-	run, err = r.Sync(ctx, config)
+	run, err = r.syncDestination(ctx, config, to)
 	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
 		return run, wrapKeepingCategory("cannot copy the tasks to "+to, err)
 	}
 	return run, nil
+}
+
+// syncDestination synchronizes with the new place. A leased push that found
+// the tip it was taken on changed, or whose backup found it changed, pushed
+// nothing over it; the synchronization runs again, which reads the place
+// afresh, backs up what it holds now and leases on that, up to three times.
+// A tip that keeps changing is left for the verification to report.
+func (r *Repository) syncDestination(ctx context.Context, config core.ProjectConfig, to string) (SyncRunResult, error) {
+	for attempt := 0; ; attempt++ {
+		r.switchRemote(to)
+		run, err := r.Sync(ctx, config)
+		if !r.takeStaleLease() || attempt == 2 {
+			return run, err
+		}
+	}
 }
 
 // moveCarry accumulates what a run carried by operation identity.

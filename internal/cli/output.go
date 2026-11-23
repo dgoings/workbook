@@ -36,7 +36,7 @@ Commands:
   fetch [--remote <remote>] [--json]
   push [--remote <remote>] [--json]
   sync [--watch [--interval <duration>]] [--status] [--remote <remote>] [--json]
-  move-tasks [--from <remote>] [--allow-branches] [--json]
+  move-tasks [--from <remote>] [--allow-branches] [--no-backup | --backup <path>] [--json]
   status <command> [options]
   priority <command> [options]
   key <command> [options]

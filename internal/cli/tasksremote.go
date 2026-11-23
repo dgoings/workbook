@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -164,12 +165,27 @@ func writeTasksRemoteSetting(
 }
 
 func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
+	given := append([]string{}, args...)
 	flags := newFlagSet("move-tasks")
 	from := flags.String("from", "", "the remote the tasks are in now (default: the place the moved markers lead to)")
 	allowBranches := flags.Bool("allow-branches", false, "accept a tasks remote that holds branches; never a mirror of the code repository")
+	noBackup := flags.Bool("no-backup", false, "write no backup bundle of the copies a move back replaces")
+	backup := flags.String("backup", "", "write the backup bundle here, or into this directory")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
+	}
+	typed := map[string]bool{}
+	flags.Visit(func(visited *flag.Flag) { typed[visited.Name] = true })
+	if *noBackup && typed["backup"] {
+		return core.Errorf(core.CategoryInvocation, "--no-backup and --backup cannot be combined")
+	}
+	if typed["backup"] && *backup == "" {
+		return core.Errorf(core.CategoryInvocation, "move-tasks --backup requires a path")
+	}
+	if *backup == "-" {
+		// As for compact: typed as a path, "-" is a file of that name.
+		*backup = "./-"
 	}
 	repository, config, err := openRepositoryFor(ctx, cwd, stderr, "", false)
 	if err != nil {
@@ -185,8 +201,15 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 	// repeat, and the error says to run the command again. A run that set
 	// operations aside for a conflict did finish, so it reports what it did
 	// and then the conflict.
-	result, err := repository.MoveTasks(ctx, config, gitstore.MoveTasksOptions{From: *from, AllowBranches: *allowBranches})
+	result, err := repository.MoveTasks(ctx, config, gitstore.MoveTasksOptions{
+		From: *from, AllowBranches: *allowBranches, NoBackup: *noBackup, Backup: *backup, Flags: given,
+	})
 	if err != nil && !result.Verified {
+		// A bundle written before the run stopped is said where it is, on
+		// standard error beside the error, since nothing else names it.
+		for _, bundle := range result.Bundles {
+			fmt.Fprintf(stderr, "Backup:\t%s\n", bundle)
+		}
 		return err
 	}
 	if *jsonMode {
@@ -201,6 +224,13 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 		fmt.Fprintf(stdout, "Marked:\t%s\t(checkouts still using it are refused and told where the tasks went)\n", result.From.Remote)
 	case "already":
 		fmt.Fprintf(stdout, "Marked:\t%s\t(already marked by an earlier run)\n", result.From.Remote)
+	}
+	if len(result.Replaced) > 0 {
+		fmt.Fprintf(stdout, "Replaced:\t%s\t(the older copies %s kept, replaced with the checkpoints they were compacted to)\n",
+			strings.Join(result.Replaced, ", "), result.To.Remote)
+	}
+	for _, bundle := range result.Bundles {
+		fmt.Fprintf(stdout, "Backup:\t%s\n", bundle)
 	}
 	if stragglers := result.Stragglers; stragglers != nil {
 		fmt.Fprintf(stdout, "Carried:\t%d operation(s) on %s by %s\t(found at %s and missing at %s)\n",

@@ -30,7 +30,7 @@ workbook version [--json]
 workbook fetch [--remote <remote>] [--json]
 workbook push [--remote <remote>] [--json]
 workbook sync [--watch [--interval <duration>]] [--status] [--remote <remote>] [--json]
-workbook move-tasks [--from <remote>] [--allow-branches] [--json]
+workbook move-tasks [--from <remote>] [--allow-branches] [--no-backup | --backup <path>] [--json]
 workbook status list [--json]
 workbook status add <status> [--label <label>] [--before <status> | --after <status>] [--tag <tag>]... [--no-sync] [--no-docs] [--json]
 workbook status rename <status> <new-status> [--label <label>] [--no-sync] [--no-docs] [--json]
@@ -1785,9 +1785,27 @@ somebody removed it, is published afresh. A task compacted at the newer place in
 between arrives as its checkpoint, which replaces the older history the
 returned-to place kept for it the way any [compaction](#publishing-a-compaction) is
 published: a non-fast-forward push of that one task ref that succeeds only while
-the place still holds exactly the tip the checkpoint accounts for. No other ref
-moves backwards, and none is deleted. Removing the old copies is not part of a
-move, and a move works whether they are there, stale, compacted or gone.
+the place still holds exactly the tip this run read there. An edit a teammate
+published to that older copy after the tasks left is replayed onto the
+checkpoint first, so it arrives with the rest. No other ref moves backwards,
+and none is deleted. Removing the old copies is not part of a move, and a move
+works whether they are there, stale, compacted or gone.
+
+Before the first such push in a run, `move-tasks` writes a Git bundle of every
+tip it is about to replace, as [`compact`](#the-backup-bundle) does: at
+`<git-common-dir>/workbook-archive/<run-id>.bundle` by default, elsewhere with
+`--backup <path>`, and not at all with `--no-backup`; the two cannot be
+combined, and a path that already exists is refused. The bundle holds each
+replaced tip under the name this clone tracks it by,
+`refs/workbook/remotes/<remote>/tasks/<id>` (not `refs/workbook/tasks/<id>`,
+so fetching from it never overwrites a live task), and the same manifest, with
+`move-tasks` first among its flags. It is verified before the push. The push is
+leased on exactly the tip that was bundled: if the place changed since, nothing
+is pushed over it, and the run reads the place again, writes another bundle
+(the run ID with `-2`, `-3` appended, or beside the `--backup` file) and tries
+again, up to three times. Each path is printed as a `Backup:` line, also when
+the run then stops with an error, and the tasks it replaced as a `Replaced:`
+line. A run that replaces nothing writes no bundle.
 
 The place the tasks come back to records it with one commit on top of its
 marker, a fast-forward (see [The moved marker](#the-moved-marker)). The place
@@ -1899,7 +1917,9 @@ and the rerun carries what reached the old place.
 
 `remote` is `added` or `kept`, as setup reports it. `returned`, present only
 for a move to a place the tasks left earlier, is `returned` when this run
-recorded their return there and `already` when an earlier run had.
+recorded their return there and `already` when an earlier run had. `replaced`,
+present only when there were some, names the tasks whose older copy there this
+run replaced with their checkpoint, and `bundles` the backups it wrote first.
 `stragglers`, present only
 when there were some, counts the operations this run carried from a place that
 was already marked, names their tasks and who made them. The count covers only

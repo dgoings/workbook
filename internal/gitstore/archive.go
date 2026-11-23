@@ -90,6 +90,14 @@ func ResolveArchivePath(commonGitDir, runID, flagValue string) (string, error) {
 // *ArchiveTasksMovedError naming them all. Every failure removes the temporary file, and
 // archiveManifestRef is gone from this repository whenever it returns.
 func (r *Repository) WriteArchiveBundle(ctx context.Context, config core.ProjectConfig, path string, manifest ArchiveManifest) error {
+	return r.writeArchiveBundle(ctx, config, path, manifest, taskRefPrefix)
+}
+
+// writeArchiveBundle is WriteArchiveBundle with the namespace each task's old
+// tip is read from and held under in the bundle: refs/workbook/tasks/ for a
+// compaction, and a remote's tracking namespace for the copies a move back
+// replaces there (moveBackup).
+func (r *Repository) writeArchiveBundle(ctx context.Context, config core.ProjectConfig, path string, manifest ArchiveManifest, prefix string) error {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return err
 	}
@@ -150,7 +158,7 @@ func (r *Repository) WriteArchiveBundle(ctx context.Context, config core.Project
 
 	args := []string{"bundle", "create", temporary, archiveManifestRef}
 	for _, task := range manifest.Tasks {
-		args = append(args, taskRefPrefix+task.TaskID)
+		args = append(args, prefix+task.TaskID)
 	}
 	args = append(args, parked...)
 	if _, err := r.Git(ctx, nil, args...); err != nil {
@@ -164,7 +172,7 @@ func (r *Repository) WriteArchiveBundle(ctx context.Context, config core.Project
 	if _, err := r.Git(ctx, nil, "bundle", "verify", temporary); err != nil {
 		return core.Wrap(core.CategoryOperational, "the backup bundle failed verification", err)
 	}
-	if err := r.checkArchiveHeads(ctx, temporary, manifestCommit, manifest.Tasks); err != nil {
+	if err := r.checkArchiveHeads(ctx, temporary, manifestCommit, manifest.Tasks, prefix); err != nil {
 		return err
 	}
 	if err := syncFile(temporary); err != nil {
@@ -302,7 +310,7 @@ func (r *Repository) deleteArchiveManifestRef(ctx context.Context, commit string
 // this run wrote and every task at the tip the run observed. A task that moved
 // between selection and bundling would leave the bundle without the history
 // the run is about to drop.
-func (r *Repository) checkArchiveHeads(ctx context.Context, bundle, manifestCommit string, tasks []ArchiveTask) error {
+func (r *Repository) checkArchiveHeads(ctx context.Context, bundle, manifestCommit string, tasks []ArchiveTask, prefix string) error {
 	output, err := r.Git(ctx, nil, "bundle", "list-heads", bundle)
 	if err != nil {
 		return core.Wrap(core.CategoryOperational, "cannot list the backup bundle's refs", err)
@@ -324,7 +332,7 @@ func (r *Repository) checkArchiveHeads(ctx context.Context, bundle, manifestComm
 	}
 	var moved *ArchiveTasksMovedError
 	for _, task := range tasks {
-		got, found := heads[taskRefPrefix+task.TaskID]
+		got, found := heads[prefix+task.TaskID]
 		if !found {
 			return core.Errorf(core.CategoryOperational, "the backup bundle lacks task %s", task.TaskID)
 		}

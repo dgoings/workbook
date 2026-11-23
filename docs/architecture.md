@@ -965,8 +965,29 @@ it held when they left, so the ordinary synchronization brings them up to date:
 a task edited only at the newer place fast-forwards, one carried there by
 replay is carried back by operation identity, and one compacted there in
 between arrives through the same leased non-fast-forward push any compaction
-uses, which succeeds only while the place still holds the tip the checkpoint
-accounts for. No other ref moves backwards, and none is deleted.
+uses, which succeeds only while the place still holds the tip this run read
+there. An edit a teammate published to that older copy after the tasks left is
+replayed onto the checkpoint first, so the push loses no operation. No other
+ref moves backwards, and none is deleted.
+
+That push is the one other way a task ref moves other than forward, and it
+only ever replaces an older copy of a task already compacted by hand. Before
+the first such push in a run, `move-tasks` writes a Git bundle of every tip it
+is about to replace, with compact's manifest, default location and
+`--no-backup` / `--backup <path>` flags, and prints and reports where it is.
+The bundle holds each replaced tip under the name the mover's clone tracks it
+by, `refs/workbook/remotes/<remote>/tasks/<task-id>`, not
+`refs/workbook/tasks/<task-id>`, so fetching from it never overwrites a live
+task ref. A lease that finds the tip changed since it was bundled pushes
+nothing: the run reads the place again, writes another bundle of what it holds
+now, and tries again, up to three times.
+
+```text
+returned-to place, before:   refs/workbook/tasks/T ──> E (late edit) ── C ── … ── create
+place left, compacted:       refs/workbook/tasks/T ──> K (checkpoint, lists C … create)
+returned-to place, after:    refs/workbook/tasks/T ──> E' (E replayed) ── K
+bundle in the mover's clone: refs/workbook/remotes/origin/tasks/T ──> E, and refs/workbook/archive/manifest
+```
 
 The return is recorded with one more fast-forward commit on the place's
 identity ref, R, whose tree is I's tree and nothing else, so it needs no new
@@ -1034,7 +1055,9 @@ The default shared backend uses custom refs because they avoid branch switching 
 - **Derived when possible:** do not duplicate facts already represented by Git.
 - **No hidden rewrites:** shared history is append-only and never force-pushed
   unconditionally. The one exception, `workbook compact`, is visible and manual,
-  and adds a checkpoint commit rather than changing any commit.
+  and adds a checkpoint commit rather than changing any commit. Moving the
+  tasks back publishes such a checkpoint over the older copy the returned-to
+  place kept, the same way and only after bundling that copy.
 - **Progressive complexity:** no service is required for the default workflow; stronger coordination can be optional.
 
 ## Non-goals

@@ -764,7 +764,7 @@ var commandSchemas = map[string]commandMetadata{
 	},
 	"move-tasks": {
 		Name:     "move-tasks",
-		Synopsis: "workbook move-tasks [--from <remote>] [--allow-branches] [--json]",
+		Synopsis: "workbook move-tasks [--from <remote>] [--allow-branches] [--no-backup | --backup <path>] [--json]",
 		Description: "Move this project's tasks to the tasks remote its settings name.\n\n" +
 			"Run it after `workbook config set tasks-remote <name> --url <address>`, or after\n" +
 			"`workbook config unset tasks-remote` to move the tasks back to origin. It copies\n" +
@@ -776,7 +776,10 @@ var commandSchemas = map[string]commandMetadata{
 			"the old place after the move, applying each operation once. Then commit\n" +
 			".workbook/config.json; everyone else runs `workbook setup` after pulling it.\n\n" +
 			"The new place can be one the tasks left earlier, origin included: the copies it\n" +
-			"still holds are brought up to date, and it records that the tasks are back.\n\n" +
+			"still holds are brought up to date, and it records that the tasks are back. A\n" +
+			"copy there of a task compacted since the tasks left is replaced with its\n" +
+			"checkpoint, after a backup bundle of the copy is written, as compact writes one;\n" +
+			"--no-backup and --backup <path> work as they do for compact.\n\n" +
 			"It refuses a new place that is the same repository as the old one, however its\n" +
 			"address is spelled, and one that holds branches unless --allow-branches is given\n" +
 			"or the tasks lived there before. Never give it for a mirror, a repository\n" +
@@ -786,6 +789,8 @@ var commandSchemas = map[string]commandMetadata{
 		Options: []optionMetadata{
 			{Name: "from", Kind: stringFlag, Value: "<remote>", Description: "the Git remote the tasks are in now (default: the place the moved markers lead to)"},
 			{Name: "allow-branches", Kind: boolFlag, Description: "accept a tasks remote that holds branches; never a mirror of the code repository"},
+			{Name: "no-backup", Kind: boolFlag, Description: "write no backup bundle of the copies a move back replaces"},
+			{Name: "backup", Kind: stringFlag, Value: "<path>", Description: "write the backup bundle here, or into this directory"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
