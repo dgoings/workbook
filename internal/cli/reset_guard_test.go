@@ -182,6 +182,46 @@ func TestResetDryRunListsExactlyWhatTheResetRemoves(t *testing.T) {
 	}
 }
 
+// Every check that can refuse a reset runs before this checkout's watcher is
+// stopped: a refused reset leaves the watcher running.
+func TestResetRefusesBeforeStoppingTheWatcher(t *testing.T) {
+	t.Parallel()
+	binary := buildWorkbookBinary(t)
+	project := codeProject(t, testrepo.FormatSHA1)
+	clone := cloneCode(t, project)
+	if code, stdout, stderr := run(t, clone, "setup"); code != 0 {
+		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
+	}
+	_, exited := startResetWatcher(t, binary, clone)
+	commonDir := filepath.Join(clone, ".git")
+
+	existing := filepath.Join(t.TempDir(), "existing.bundle")
+	if err := os.WriteFile(existing, []byte("kept"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cliGit(t, clone, "update-ref", "refs/workbook/reconciled/"+project.ids[0]+"/1", localTaskRef(t, clone, project.ids[0]))
+	for _, refusal := range []struct {
+		args []string
+		code int
+	}{
+		{[]string{"--backup", existing}, 5},
+		{[]string{"--backup", ".workbook"}, 2},
+		{[]string{"--no-backup"}, 5},
+	} {
+		if code, stdout, stderr := run(t, clone, append([]string{"reset", "--json"}, refusal.args...)...); code != refusal.code {
+			t.Fatalf("reset %v = (%d, %q, %q), want %d", refusal.args, code, stdout, stderr, refusal.code)
+		}
+		select {
+		case <-exited:
+			t.Fatalf("reset %v was refused and stopped the watcher", refusal.args)
+		default:
+		}
+		if !watcherAnswers(commonDir) {
+			t.Fatalf("reset %v was refused and the watcher no longer answers", refusal.args)
+		}
+	}
+}
+
 // With its tasks remote unreachable a checkout cannot tell what only it
 // holds: its tracking refs say what the remote held at the last fetch, and a
 // remote wiped since then makes them hide work. A reset without a bundle is
