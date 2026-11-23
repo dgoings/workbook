@@ -780,7 +780,7 @@ var commandSchemas = map[string]commandMetadata{
 	},
 	"move-tasks": {
 		Name:     "move-tasks",
-		Synopsis: "workbook move-tasks [--from <remote>] [--allow-branches] [--no-backup | --backup <path>] [--json]",
+		Synopsis: "workbook move-tasks [--from <remote>] [--allow-branches] [--clean-up] [--no-backup | --backup <path>] [--json]",
 		Description: "Move this project's tasks to the tasks remote its settings name.\n\n" +
 			"Run it after `workbook config set tasks-remote <name> --url <address>`, or after\n" +
 			"`workbook config unset tasks-remote` to move the tasks back to origin. It copies\n" +
@@ -802,6 +802,11 @@ var commandSchemas = map[string]commandMetadata{
 			"copy there of a task compacted since the tasks left is replaced with its\n" +
 			"checkpoint, after a backup bundle of the copy is written, as compact writes one;\n" +
 			"--no-backup and --backup <path> work as they do for compact.\n\n" +
+			"With --clean-up, once the move is complete and verified, it does to the place\n" +
+			"the tasks left what `workbook reset --remote` does there: it writes a bundle of\n" +
+			"that place's Workbook refs, unless --no-backup, and deletes every one of them\n" +
+			"but the moved marker. A move that stops early, or sets an edit aside, cleans\n" +
+			"nothing; run `workbook reset --remote <name>` afterwards instead.\n\n" +
 			"It refuses a new place that is the same repository as the old one, however its\n" +
 			"address is spelled, and one that holds branches unless --allow-branches is given\n" +
 			"or it is the remote named origin and holds this checkout's code; a moved\n" +
@@ -812,8 +817,43 @@ var commandSchemas = map[string]commandMetadata{
 		Options: []optionMetadata{
 			{Name: "from", Kind: stringFlag, Value: "<remote>", Description: "the Git remote the tasks are in now (default: the place the moved markers lead to)"},
 			{Name: "allow-branches", Kind: boolFlag, Description: "accept a tasks remote that holds branches; never a mirror of the code repository"},
-			{Name: "no-backup", Kind: boolFlag, Description: "write no backup bundle of the copies a move back replaces"},
+			{Name: "clean-up", Kind: boolFlag, Description: "after a verified move, delete the Workbook refs at the place left, all but its moved marker"},
+			{Name: "no-backup", Kind: boolFlag, Description: "write no backup bundle of the copies a move back replaces or a clean-up deletes"},
 			{Name: "backup", Kind: stringFlag, Value: "<path>", Description: "write the backup bundle here, or into this directory"},
+			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+		},
+	},
+	"reset": {
+		Name: "reset",
+		Synopsis: "workbook reset [--dry-run] [--no-backup [--discard-unpublished] | --backup <path>] [--json]\n" +
+			"workbook reset --remote <remote> [--confirm <remote>] [--dry-run] [--no-backup | --backup <path>] [--json]",
+		Description: "Wipe this checkout's Workbook data, or one remote's, to start again from nothing.\n\n" +
+			"With no --remote it changes nothing shared. It stops this checkout's watcher,\n" +
+			"deletes every local ref under refs/workbook/ (task, tracking, parked and\n" +
+			"set-aside refs among them) and the caches under <git-common-dir>/workbook and\n" +
+			"any untracked file under .workbook/. Tracked files, .workbook/config.json and\n" +
+			"guidelines.md among them, are left alone. `workbook setup` then `workbook sync`\n" +
+			"rebuild everything from the tasks remote the settings name. First it writes a\n" +
+			"Git bundle of every ref it deletes, as compact does, and prints where it is and\n" +
+			"the git fetch that restores it. Work this checkout's tasks remote did not hold\n" +
+			"when it last synchronized is listed; with --no-backup such work is refused\n" +
+			"unless --discard-unpublished is given too.\n\n" +
+			"With --remote it deletes that remote's refs under refs/workbook/ instead: the\n" +
+			"only Workbook command that deletes shared refs. At a place the tasks moved away\n" +
+			"from it keeps refs/workbook/project, which carries the moved marker, so a\n" +
+			"checkout still on old settings is still refused and told where the tasks went.\n" +
+			"A remote that holds the project's tasks is wiped only when --confirm names it\n" +
+			"again, and always after the bundle is written. A checkout that still holds the\n" +
+			"tasks publishes them back to a wiped remote on its next sync.\n\n" +
+			"Nothing outside refs/workbook/ is touched: no code, branch or tag. Every step\n" +
+			"is safe to interrupt; running the command again finishes the job.",
+		Options: []optionMetadata{
+			{Name: "remote", Kind: stringFlag, Value: "<remote>", Description: "wipe this Git remote's Workbook refs instead of this checkout's"},
+			{Name: "confirm", Kind: stringFlag, Value: "<remote>", Description: "with --remote, the remote's name again, to wipe the place the tasks live"},
+			{Name: "dry-run", Kind: boolFlag, Description: "report what would be removed and change nothing"},
+			{Name: "no-backup", Kind: boolFlag, Description: "write no backup bundle"},
+			{Name: "backup", Kind: stringFlag, Value: "<path>", Description: "write the backup bundle here, or into this directory"},
+			{Name: "discard-unpublished", Kind: boolFlag, Description: "with --no-backup, remove work that exists only in this checkout"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
@@ -959,7 +999,7 @@ var commandSchemas = map[string]commandMetadata{
 }
 
 var commandOrder = []string{
-	"setup", "create", "list", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "compact", "version", "fetch", "push", "sync", "move-tasks", "status", "priority", "key", "config", "docs", "hooks", "serve", "completion",
+	"setup", "create", "list", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "compact", "version", "fetch", "push", "sync", "move-tasks", "reset", "status", "priority", "key", "config", "docs", "hooks", "serve", "completion",
 }
 
 type commandFlagSet struct {

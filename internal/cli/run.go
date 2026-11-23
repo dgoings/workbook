@@ -145,6 +145,8 @@ func runWithEnvironment(
 		err = runCompact(ctx, commandArgs, cwd, stdout, stderr)
 	case "move-tasks":
 		err = runMoveTasks(ctx, commandArgs, cwd, stdout, stderr)
+	case "reset":
+		err = runReset(ctx, commandArgs, cwd, stdout, stderr)
 	case "version":
 		err = runVersion(commandArgs, stdout)
 	case "fetch":

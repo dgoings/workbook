@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -173,6 +175,7 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 	flags := newFlagSet("move-tasks")
 	from := flags.String("from", "", "the remote the tasks are in now (default: the place the moved markers lead to)")
 	allowBranches := flags.Bool("allow-branches", false, "accept a tasks remote that holds branches; never a mirror of the code repository")
+	cleanUp := flags.Bool("clean-up", false, "after a verified move, delete the Workbook refs at the place left, all but its moved marker")
 	noBackup := flags.Bool("no-backup", false, "write no backup bundle of the copies a move back replaces")
 	backup := flags.String("backup", "", "write the backup bundle here, or into this directory")
 	jsonMode := flags.Bool("json", false, "emit JSON")
@@ -216,8 +219,25 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 		}
 		return err
 	}
+	summary := moveTasksSummary{MoveTasksResult: result}
+	if err == nil && *cleanUp {
+		cleaned, cleanErr := cleanUpAfterMove(ctx, repository, config.ProjectID, result, gitstore.ResetOptions{
+			NoBackup: *noBackup, Backup: *backup, Flags: given,
+		})
+		if cleanErr != nil {
+			err = core.Wrap(core.CategoryOf(cleanErr),
+				fmt.Sprintf("the move is complete, but cleaning up %s did not finish; run workbook reset --remote %s to finish it",
+					result.From.Remote, result.From.Remote), cleanErr)
+			var refusal *gitstore.ResetRefusalError
+			if errors.As(cleanErr, &refusal) && refusal.Refusal.Bundle != "" {
+				fmt.Fprintf(stderr, "Backup:\t%s\n", refusal.Refusal.Bundle)
+			}
+		} else {
+			summary.CleanUp = &cleaned
+		}
+	}
 	if *jsonMode {
-		writeResult(stdout, "move-tasks", result)
+		writeResult(stdout, "move-tasks", summary)
 		return err
 	}
 	fmt.Fprintf(stdout, "Moved:\t%s (%s)\t->\t%s (%s)\n", result.From.Remote, result.From.URL, result.To.Remote, result.To.URL)
@@ -259,8 +279,48 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 		fmt.Fprintf(stdout, "Config:\tnot carried\t(%s holds configuration changes this checkout's have diverged from; "+
 			"make them again with workbook config set)\n", result.From.Remote)
 	}
+	if cleaned := summary.CleanUp; cleaned != nil {
+		fmt.Fprintf(stdout, "Cleaned up:\t%s\t(%s deleted there, %s kept)\n",
+			cleaned.Remote, plural(len(cleaned.Refs), "Workbook ref"), strings.Join(cleaned.Kept, ", "))
+		if cleaned.Bundle != "" {
+			fmt.Fprintf(stdout, "Backup:\t%s\n", cleaned.Bundle)
+			fmt.Fprintf(stdout, "Restore:\tin a new empty repository, %s\n", cleaned.Restore)
+		}
+	}
 	fmt.Fprintf(stdout, "Next:\tcommit .workbook/config.json and push it, if that is not done yet; everyone else pulls it and runs workbook setup\n")
 	return err
+}
+
+// moveTasksSummary is move-tasks' JSON result: the move, and what
+// --clean-up removed at the place the tasks left.
+type moveTasksSummary struct {
+	gitstore.MoveTasksResult
+	CleanUp *resetSummary `json:"cleanUp,omitempty"`
+}
+
+// cleanUpAfterMove does to the place a finished move left what reset
+// --remote does there. The place is marked by then, so its identity ref is
+// kept and no confirmation is needed; a place that somehow is not marked is
+// refused as reset refuses a live remote. A --backup file the move itself
+// wrote is never overwritten: the clean-up's bundle goes beside it.
+func cleanUpAfterMove(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	projectID string,
+	result gitstore.MoveTasksResult,
+	options gitstore.ResetOptions,
+) (resetSummary, error) {
+	if options.Backup != "" {
+		if info, err := os.Stat(options.Backup); err == nil && !info.IsDir() {
+			extension := filepath.Ext(options.Backup)
+			options.Backup = strings.TrimSuffix(options.Backup, extension) + "-clean-up" + extension
+		}
+	}
+	plan, err := repository.PlanRemoteReset(ctx, result.From.Remote)
+	if err != nil {
+		return resetSummary{}, err
+	}
+	return resetRemote(ctx, repository, projectID, plan, "", false, options)
 }
 
 // sameAddress reports two spellings of one address: equal once a trailing
