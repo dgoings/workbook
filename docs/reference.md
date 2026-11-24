@@ -608,6 +608,659 @@ in the commit that added them, because no command changes a commit; space comes
 back only after `workbook compact` moves the task to a checkpoint that does not
 carry them and Git prunes the old commits.
 
+## Relics
+
+A relic is a record for material that is longer or more structured than a
+task: a spec, a plan, a decision record. It has a title, a type, properties
+and an ordered list of parts. A part has a type, fields and, optionally, a
+body. A property or a field is a named JSON value. A body is a file's bytes,
+stored exactly as given, with an optional format label such as `md`.
+
+```sh
+workbook relic create "Task archive compaction" --type spec
+workbook relic update WB-R-01M85MZ2 --set status=draft --add-part --part-type section --field heading=Goals --body-file goals.md --add-part --part-type decision --field "heading=Keep a backup bundle" --field-json accepted=true
+workbook relic show WB-R-01M85MZ2
+```
+
+```text
+WB-R-01M85MZ25Z7GNEM9GBR0A24ED1	spec	Task archive compaction
+Author:	alice@example.com
+Updated:	2026-11-24T02:08:11Z
+Properties:
+  status: draft
+#01M85MZ2GZ4MV33Z6KB3H5SHZ3	section	md, 102 bytes, version 01M85MZ2GZ4MV33Z6KB3H5SHZ3
+  heading: Goals
+#01M85MZ2GZQY6GC0MH3244S3N9	decision	no body
+  accepted: true
+  heading: Keep a backup bundle
+```
+
+**Relics stay in this checkout.** They are not shared: no command sends a
+relic to a remote or reads one from it, `workbook sync` leaves relic refs
+alone, and a fresh clone has none. Relics are not in the SQLite index, and no
+task command returns one: `workbook list`, `next` and `show` answer as they did
+before relics existed. There are no links between relics and tasks, no
+schemas, no history or diff commands, no retiring, no compaction and no web
+page for relics yet. Until relics are shared, the only copy of a relic is the
+one in this checkout's Git repository.
+
+Each relic is one ref, `refs/workbook/relics/<relic-id>`, holding a chain of
+immutable commits, as a task ref does. No relic command deletes a ref or
+changes a commit. See [Relic refs](architecture.md#relic-refs) for the stored
+format.
+
+### Relic IDs and part addresses
+
+A relic ID is `<KEY>-R-<ULID>`, where the key is the project's current key
+when the relic is created: `WB-R-01M85MZ25Z7GNEM9GBR0A24ED1`. Its grammar is
+`^[A-Z][A-Z0-9]{1,9}-R-[0-7][0-9A-HJKMNP-TV-Z]{25}$`. A relic ID is never a
+task ID. A task command given a relic ID, and a relic command given a task ID,
+both answer `not-found` (exit `4`).
+
+A part ID is an uppercase ULID, `01M85MZ2GZ4MV33Z6KB3H5SHZ3`. It is the ID of
+the operation that added the part, and it never changes.
+
+A part address is `<relic-id>#<part-id>`:
+`WB-R-01M85MZ25Z7GNEM9GBR0A24ED1#01M85MZ2GZ4MV33Z6KB3H5SHZ3`.
+
+Any unambiguous prefix of a relic ID or of a part ID works wherever one is
+taken, on either side of the `#`, and letter case is ignored. A prefix that
+matches nothing is `not-found` (exit `4`). A prefix that matches more than one
+is `validation` (exit `5`) and says to use more characters. The first ten
+characters of a ULID are its time, so IDs made by one command usually share
+them: two parts added together need a prefix of eleven characters or more.
+Quote an address in a shell that gives `#` a meaning inside a word, as zsh
+does with `EXTENDED_GLOB` set.
+
+### Creating a relic
+
+```sh
+workbook relic create "Task archive compaction" --type spec
+```
+
+```text
+WB-R-01M85MZ25Z7GNEM9GBR0A24ED1	spec	Task archive compaction
+```
+
+The output is the relic's ID, type and title, separated by tabs. The relic
+starts with no properties and no parts. The title and `--type` are both
+required. The title is trimmed, must not be blank, and is at most 500 bytes.
+
+A relic type and a part type are lowercase names:
+`^[a-z0-9]+(-[a-z0-9]+)*$`, at most 100 bytes. That is lowercase ASCII letters
+and digits, in words joined by single hyphens, such as `spec`, `plan` or
+`decision-record`. Workbook gives no type a meaning yet. Any other name is
+refused with exit `5`:
+
+```sh
+workbook relic create "Too loud" --type "Design Doc"
+```
+
+```text
+workbook: the relic type "Design Doc" must be lowercase letters and digits, with single hyphens between words
+```
+
+`relic create --from-file <file>` creates a relic with its parts from one
+document instead. See [The relic document](#the-relic-document).
+
+### Changing a relic
+
+`workbook relic update <relic>` makes every change to a relic. One command
+takes any number of changes:
+
+| Change | Options |
+| --- | --- |
+| Set the title | `--title <title>` |
+| Set a property | `--set <name>=<value>` for text, `--set-json <name>=<json>` for any JSON value |
+| Remove a property | `--clear <name>` |
+| Add a part | `--add-part --part-type <type>`, then any of `--field`, `--field-json`, `--body-file` with `--body-format`, and `--before <part>` or `--after <part>` |
+| Change a part | `--part <part>`, then at least one of `--field`, `--field-json`, `--clear-field <name>`, and `--body-file` with `--body-format` and `--base <version>` |
+| Move a part | `--move-part <part>`, then `--before <part>` or `--after <part>` |
+| Remove or restore a part | `--remove-part <part>`, `--restore-part <part>` |
+
+```sh
+workbook relic update WB-R-01M85MZ2 --set status=draft --add-part --part-type section --field heading=Goals --body-file goals.md --add-part --part-type decision --field "heading=Keep a backup bundle" --field-json accepted=true
+```
+
+```text
+WB-R-01M85MZ25Z7GNEM9GBR0A24ED1	spec	Task archive compaction
+part	01M85MZ2GZ4MV33Z6KB3H5SHZ3	section	01M85MZ2GZ4MV33Z6KB3H5SHZ3
+part	01M85MZ2GZQY6GC0MH3244S3N9	decision	-
+```
+
+After the relic's line, the output has one `part` line for each part the
+command added or edited: the part's ID, its type, and its body version, or `-`
+when it has no body.
+
+**Groups.** `--add-part`, `--part`, `--move-part`, `--remove-part` and
+`--restore-part` each start a group, and the part options typed after one
+belong to it until the next group starts. `--title`, `--set`, `--set-json` and
+`--clear` always act on the relic, wherever they are typed, even between a
+group's options. `--part` takes a part ID, a prefix, or a whole part address
+of the relic being changed. Every other part option (`--move-part`,
+`--remove-part`, `--restore-part`, `--before` and `--after`) takes a part ID
+or a prefix, not an address.
+
+**All or nothing.** The changes apply in the order given, and each one sees
+the ones before it. They are recorded together as one commit, or, when any one
+of them is refused, none is recorded.
+
+**One name, once.** One command may name a given property once, and a given
+field of a given part once. Naming one twice is refused with exit `5` and
+nothing is written, whatever the combination: a set and a clear, two sets or
+two clears, `--set` with `--set-json`, or `--field` with `--field-json` or
+`--clear-field`.
+
+```sh
+workbook relic update WB-R-01M85MZ2 --set status=approved --clear status
+workbook relic update WB-R-01M85MZ2 --part 01M85MZ2GZQ --field accepted=yes --field-json accepted=true
+```
+
+```text
+workbook: this update sets and clears property "status"; name a property once in one update
+workbook: this update sets field "accepted" of part 01M85MZ2GZQY6GC0MH3244S3N9 twice; name a field once for each part in one update
+```
+
+**Values.** `--set` and `--field` store their value as text, a JSON string.
+`--set-json` and `--field-json` store any one JSON value: a number, `true`, a
+list, an object. The name ends at the first `=`, so a value may contain more
+of them. A property or field name must not be empty and must not contain `=`
+or a control character. A value is stored in one canonical form: object
+members are sorted by name, a number keeps the text it was written with, and
+inside a string `<`, `>` and `&` are written as `\u003c`, `\u003e` and
+`\u0026`. Those escapes mean the same characters. `relic show` prints the
+characters, `relic export` prints the escapes, and a value read back and
+stored again does not change.
+
+**No change.** A change that would leave the relic as it is records nothing.
+When no change in a command records anything, the command exits `0`, prints
+`No change: <relic-id>`, and reports `"changed": false` in JSON, so a repeated
+command is safe. Saving a body is the exception: it always records a new body
+version, even when the bytes are the same.
+
+```sh
+workbook relic update WB-R-01M85MZ2 --set status=draft
+```
+
+```text
+No change: WB-R-01M85MZ25Z7GNEM9GBR0A24ED1
+```
+
+**Bodies.** `--body-file <file>` saves the file's bytes as the part's body.
+Only a regular file is read, standard input is not, and a file over 1 MiB is
+refused before it is read. The body's format label comes from the file's
+ending, lowercased: `goals.md` and `Notes.MD` both give `md`, and a file with
+no ending gives no label. `--body-format <label>` names the label instead, and
+an empty one means no label. A label is at most 16 bytes of
+`^[a-z0-9][a-z0-9.+-]*$`: lowercase ASCII letters, digits, `.`, `+` and `-`,
+starting with a letter or a digit. A file whose ending is not a label is
+refused with exit `5`, and the message says to pass `--body-format`. Workbook
+gives no label a meaning yet. `relic show` prints a body with no label as
+`txt`; in JSON such a body has no `format` member. Saving over a body that
+exists needs `--base`; see [Body versions](#body-versions).
+
+**Refusals.** A command line that is put together wrongly is
+`invalid-invocation` (exit `2`), and nothing is read or judged before it is
+refused: a part option before any group, an option its group does not take,
+`--add-part` without `--part-type`, `--part` with no change after it,
+`--move-part` without `--before` or `--after`, `--body-format` or `--base`
+without `--body-file` in the same group, or no change at all. A deleted relic
+cannot be changed until it is restored (exit `5`).
+
+### Listing relics
+
+```sh
+workbook relic list
+```
+
+```text
+WB-R-01M85MZ25Z7GNEM9GBR0A24ED1	spec	3 parts	Task archive compaction, second draft
+WB-R-01M85MZ7WMRMC3BTYH3JQ1T26K	plan	3 parts	Task archive compaction, second draft
+```
+
+Each line is the relic's ID, its type, how many live parts it has, and its
+title, separated by tabs. Relics are listed in ID order, which is the order
+they were created in, to the millisecond. `--type <type>` keeps the relics of
+exactly that type. Deleted relics are left out unless `--all` is given, which
+marks each deleted relic with one more column, `deleted`:
+
+```sh
+workbook relic delete WB-R-01M85MZ7
+workbook relic list --all
+```
+
+```text
+WB-R-01M85MZ25Z7GNEM9GBR0A24ED1	spec	3 parts	Task archive compaction, second draft
+WB-R-01M85MZ7WMRMC3BTYH3JQ1T26K	plan	3 parts	Task archive compaction, second draft	deleted
+```
+
+`relic list --json` carries a list of relics, each with `id`, `head`, `title`,
+`type`, `author`, `retired`, `deleted`, `createdAt`, `updatedAt` and `parts`,
+the number of live parts. `head` is the commit the relic's ref points at.
+
+### Showing a relic
+
+`workbook relic show <relic>` prints the relic, its properties, and each live
+part with its fields, as at the top of this section. A part's line is `#` and
+its ID, its type, and its body's format, size and version, or `no body`.
+Properties and fields are printed in name order, a string as its text and any
+other value as compact JSON. Times are UTC.
+
+`--body` adds each body's text under its part. `--removed` adds removed parts,
+each marked `removed`. Positions are not printed; `--json` carries them.
+
+A part address shows the relic's own lines and that one part, removed or not:
+
+```sh
+workbook relic show WB-R-01M85MZ2#01M85MZ2GZ4
+```
+
+```text
+WB-R-01M85MZ25Z7GNEM9GBR0A24ED1	spec	Task archive compaction
+Author:	alice@example.com
+Updated:	2026-11-24T02:08:11Z
+Properties:
+  status: draft
+#01M85MZ2GZ4MV33Z6KB3H5SHZ3	section	md, 102 bytes, version 01M85MZ2GZ4MV33Z6KB3H5SHZ3
+  heading: Goals
+```
+
+A part address with `--body`, and without `--json`, writes only that part's
+body, byte for byte, so it can be redirected to a file. A part with no body is
+`not-found` (exit `4`) there.
+
+```sh
+workbook relic show WB-R-01M85MZ2#01M85MZ2GZ4 --body
+```
+
+```text
+Finished tasks keep every commit they ever had.
+Compaction replaces that history with one checkpoint.
+```
+
+Every other line of text output passes through the terminal filter described
+under [Text-mode output safety](#text-mode-output-safety), so `--json` is the
+interface for exact values. `relic show --json` carries
+[the relic document](#the-relic-document), with a body's content only under
+`--body`. A body that is not valid UTF-8 is not printed in a whole relic's
+text output, which says so; its part address with `--body` writes its bytes,
+and JSON carries it as `base64`.
+
+`relic show`, `relic export`, `relic update`, `relic delete` and
+`relic restore` each check the relic's newest commit against its parent before
+they answer. A newest commit whose stored relic or whose bodies do not follow
+from its operations is `corrupt-data` (exit `7`), and the message points at
+`workbook validate`, which checks the whole history. `relic list` reads each
+relic's newest commit without that check.
+
+### Body versions
+
+Every saved body has a version: the ID of the operation that saved it. The
+first body of a part that was added with one has the part's own ID as its
+version. `relic show` prints the version, and `relic update` prints the new
+one after a save.
+
+To save over a body, say which version the edit started from, with `--base
+<version>`. The save is recorded only when that is the part's current body
+version, written out in full; a prefix is not accepted here.
+
+```sh
+workbook relic update WB-R-01M85MZ2 --part 01M85MZ2GZ4 --body-file goals.md --base 01M85MZ2GZ4MV33Z6KB3H5SHZ3
+```
+
+```text
+WB-R-01M85MZ25Z7GNEM9GBR0A24ED1	spec	Task archive compaction
+part	01M85MZ2GZ4MV33Z6KB3H5SHZ3	section	01M85MZ3RXE62HZWS6KJYS86T0
+```
+
+A save from any other version is refused as `stale-write` (exit `6`), and
+nothing is written. Repeating the command above, with the base it has already
+replaced:
+
+```text
+workbook: part 01M85MZ2GZ4MV33Z6KB3H5SHZ3 body is at version 01M85MZ3RXE62HZWS6KJYS86T0, not 01M85MZ2GZ4MV33Z6KB3H5SHZ3; read it again with "workbook relic show WB-R-01M85MZ25Z7GNEM9GBR0A24ED1#01M85MZ2GZ4MV33Z6KB3H5SHZ3 --body" and save from that version
+```
+
+With `--json` the same refusal is the error envelope:
+
+```json
+{"format":"workbook.error","version":1,"error":{"category":"stale-write","message":"part 01M85MZ2GZ4MV33Z6KB3H5SHZ3 body is at version 01M85MZ3RXE62HZWS6KJYS86T0, not 01M85MZ2GZ4MV33Z6KB3H5SHZ3; read it again with \"workbook relic show WB-R-01M85MZ25Z7GNEM9GBR0A24ED1#01M85MZ2GZ4MV33Z6KB3H5SHZ3 --body\" and save from that version"}}
+```
+
+Unlike other `stale-write` refusals, this one fails the same way on every
+retry, because somebody saved a newer body. Read the part again, with `relic
+show <relic>#<part>` for its version and `--body` for its text, carry the
+change over to that text, and save with the new version as the base.
+
+`--base` is required whenever the part has a body, and the refusal names the
+version to pass:
+
+```sh
+workbook relic update WB-R-01M85MZ2 --part 01M85MZ2GZ4 --body-file goals.md
+```
+
+```text
+workbook: part 01M85MZ2GZ4MV33Z6KB3H5SHZ3 body is at version 01M85MZ3RXE62HZWS6KJYS86T0; pass --base 01M85MZ3RXE62HZWS6KJYS86T0 to save over it
+```
+
+`--base` given for a part that has no body is refused with exit `6` as well.
+Fields and properties have no versions and take no base.
+
+Two commands changing one relic at the same moment are a different case of
+exit `6`. Each started from the same newest commit, exactly one is recorded,
+and the other is refused with nothing written. The refused command succeeds
+when it is run again, unless it saves a body the first command also saved.
+
+### Part order
+
+Parts are kept in order by position. A position is an exact fraction written
+`numerator/denominator` in lowest terms, such as `3/2`, as a task's rank is.
+Workbook chooses positions; no option takes one. Text output lists parts in
+order without printing positions, and JSON carries each part's `position`.
+
+- A relic created from a document places its parts in document order, at
+  `1/1`, `2/1` and so on.
+- `--add-part` with no `--before` or `--after` puts the part after every part
+  the relic holds, removed ones included.
+- `--add-part` or `--move-part` with `--before <part>` or `--after <part>`
+  puts the part directly beside that part, at the fraction with the smallest
+  denominator in the gap. It looks at live parts only.
+
+```sh
+workbook relic update WB-R-01M85MZ2 --add-part --part-type section --field heading=Non-goals --before 01M85MZ2GZQ --json
+```
+
+```json
+{"format":"workbook.result","version":1,"command":"relic update","data":{"relic":{"id":"WB-R-01M85MZ25Z7GNEM9GBR0A24ED1","head":"5e368c6540d5daa16d9be10ea60eb19cb42cab3f","title":"Task archive compaction","type":"spec","author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-24T02:08:11.455471Z","updatedAt":"2026-11-24T02:08:13.897379Z","parts":3},"parts":[{"id":"01M85MZ4J9KBN3G8P0NY17QVW0","type":"section","position":"3/2","fields":{"heading":"Non-goals"}}],"changed":true}}
+```
+
+The new part went between `1/1` and `2/1`, at `3/2`.
+
+`--move-part` needs `--before` or `--after`; without one it is
+`invalid-invocation` (exit `2`). Both together are refused with exit `5`. A
+part cannot be placed beside itself, and the part named by `--before` or
+`--after` must be live. Moving a part to where it already is changes nothing.
+
+Because a placement looks at live parts only, a new or moved part can be given
+the position a removed part holds. If that part is restored later, the two
+share a position and are ordered by part ID. Moving either one beside the
+other gives them separate positions again. Until then, a third part can be
+placed between the two only when its ID sorts between theirs; otherwise the
+command is refused with exit `5` and says to move one of them first.
+
+A position is at most 256 bytes. Placing a part into the same shrinking gap
+again and again makes positions longer, and a placement that would need a
+longer one is refused with exit `5`, saying to place the part somewhere else
+or to move a neighboring part first.
+
+### Removing and restoring parts
+
+```sh
+workbook relic update WB-R-01M85MZ2 --remove-part 01M85MZ4J9
+workbook relic show WB-R-01M85MZ2 --removed
+```
+
+```text
+WB-R-01M85MZ25Z7GNEM9GBR0A24ED1	spec	Task archive compaction
+Author:	alice@example.com
+Updated:	2026-11-24T02:08:15Z
+Properties:
+  status: draft
+#01M85MZ2GZ4MV33Z6KB3H5SHZ3	section	md, 146 bytes, version 01M85MZ3RXE62HZWS6KJYS86T0
+  heading: Goals
+#01M85MZ2GZQY6GC0MH3244S3N9	decision	no body
+  accepted: true
+  heading: Keep a backup bundle
+#01M85MZ4J9KBN3G8P0NY17QVW0	section	no body	removed
+  heading: Non-goals
+```
+
+`--remove-part` marks a part removed. The part keeps its ID, fields, body and
+position, and no stored commit changes, so removing a part frees no space.
+A removed part is left out of `relic show` and `relic export`. `relic show
+--removed` lists it, and its own part address shows it. It cannot be edited or
+moved, and no part can be placed beside it, until it is restored:
+
+```sh
+workbook relic update WB-R-01M85MZ2 --part 01M85MZ4J9 --field heading=Later
+```
+
+```text
+workbook: part 01M85MZ4J9KBN3G8P0NY17QVW0 was removed; restore it first with --restore-part 01M85MZ4J9KBN3G8P0NY17QVW0
+```
+
+`--restore-part` brings it back at the position it had. Removing a removed
+part, or restoring a live one, changes nothing.
+
+### Deleting and restoring a relic
+
+```sh
+workbook relic delete WB-R-01M85MZ7
+workbook relic restore WB-R-01M85MZ7
+```
+
+`relic delete` marks the relic deleted. Its ref and its whole history stay.
+A deleted relic is left out of `relic list` unless `--all` is given. It can
+still be shown and exported, and `relic show` prints `Deleted: yes`. It cannot
+be changed until `relic restore` brings it back:
+
+```sh
+workbook relic update WB-R-01M85MZ7 --title "Edited while deleted"
+```
+
+```text
+workbook: relic WB-R-01M85MZ7WMRMC3BTYH3JQ1T26K is deleted; restore it first with "workbook relic restore WB-R-01M85MZ7WMRMC3BTYH3JQ1T26K"
+```
+
+Both commands print the relic's line, as `relic create` does. Deleting a
+deleted relic, or restoring a live one, changes nothing and prints `No change:
+<relic-id>`.
+
+### The relic document
+
+`workbook relic export <relic>` writes the whole relic as one JSON document of
+format `workbook.relic`, with its live parts in order and their bodies:
+
+```sh
+workbook relic export WB-R-01M85MZ2
+```
+
+```json
+{
+  "format": "workbook.relic",
+  "version": 1,
+  "id": "WB-R-01M85MZ25Z7GNEM9GBR0A24ED1",
+  "head": "07854057317165a45e3e6e84994573250c0e04b1",
+  "title": "Task archive compaction, second draft",
+  "type": "spec",
+  "schema": null,
+  "author": "alice@example.com",
+  "retired": false,
+  "deleted": false,
+  "createdAt": "2026-11-24T02:08:11.455471Z",
+  "updatedAt": "2026-11-24T02:08:15.933276Z",
+  "properties": {
+    "owner": "Alice \u003calice@example.com\u003e",
+    "reviewers": [
+      "alice@example.com",
+      "bob@example.com"
+    ],
+    "status": "draft"
+  },
+  "parts": [
+    {
+      "id": "01M85MZ2GZ4MV33Z6KB3H5SHZ3",
+      "type": "section",
+      "position": "1/1",
+      "fields": {
+        "heading": "Goals"
+      },
+      "body": {
+        "format": "md",
+        "version": "01M85MZ3RXE62HZWS6KJYS86T0",
+        "bytes": 146,
+        "text": "Finished tasks keep every commit they ever had.\nCompaction replaces that history with one checkpoint.\nThe old history is saved to a bundle first.\n"
+      }
+    },
+    {
+      "id": "01M85MZ2GZQY6GC0MH3244S3N9",
+      "type": "decision",
+      "position": "2/1",
+      "fields": {
+        "accepted": true,
+        "heading": "Keep a backup bundle"
+      }
+    },
+    {
+      "id": "01M85MZ4J9KBN3G8P0NY17QVW0",
+      "type": "section",
+      "position": "3/1",
+      "fields": {
+        "heading": "Non-goals"
+      }
+    }
+  ],
+  "links": []
+}
+```
+
+Without `--json` the output is the document alone, indented, and nothing else.
+With `--json` the document is the `data` of the usual result envelope, on one
+line. `relic show --json` writes the same document, for the parts it was asked
+for, with body content only under `--body`.
+
+| Member | Value |
+| --- | --- |
+| `format`, `version` | `"workbook.relic"` and `1`. |
+| `id`, `head` | The relic's ID, and the commit its ref points at. |
+| `title`, `type` | As stored. |
+| `schema` | Always `null`. |
+| `author` | Who created the relic. |
+| `retired` | Always `false`. |
+| `deleted` | Whether the relic is deleted. |
+| `createdAt`, `updatedAt` | UTC times. `updatedAt` is the time of the newest commit. |
+| `properties` | An object of the relic's properties. |
+| `parts` | The parts, in order. Each has `id`, `type`, `position`, `fields`, `removed` only when it is `true`, and `body` when the part has one. |
+| `parts[].body` | `format` when the body has a label, `version`, `bytes`, and the content as `text`, or as `base64` when the bytes are not valid UTF-8. An empty body is `"text": ""`. |
+| `links` | Always an empty list. |
+
+`workbook relic create --from-file <file>` creates a relic from such a
+document, and `-` reads it from standard input:
+
+```sh
+workbook relic export WB-R-01M85MZ2 | workbook relic create --from-file - --type plan
+```
+
+```text
+WB-R-01M85MZ7WMRMC3BTYH3JQ1T26K	plan	Task archive compaction, second draft
+part	01M85MZ7WM0706NGRV0GC989Y8	section	01M85MZ7WM0706NGRV0GC989Y8
+part	01M85MZ7WM2417K0ZW0KAXJGJX	decision	-
+part	01M85MZ7WMB0VNVB2KVVVNY795	section	-
+```
+
+The new relic is a new record. It gets a new ID, its parts get new IDs, and
+the first body of each part gets a new version. The whole relic is recorded as
+one commit.
+
+- **Read:** `format` and `version`, which must be `workbook.relic` and `1`;
+  `title`, `type` and `properties`; and each part's `type`, `fields`, and
+  body `format` with exactly one of `text` and `base64`.
+- **Ignored:** `id`, `head`, `author`, `retired`, `deleted`, `createdAt` and
+  `updatedAt`; each part's `id`, `position` and `removed`; and each body's
+  `version` and `bytes`. Parts are placed in the order the document lists
+  them, and every one is live.
+- **Refused** (exit `5`): a member the format does not have, a `schema` that
+  is not `null`, and a `links` list that is not empty.
+
+A title given first on the command line, or `--type`, replaces the document's.
+Both may be left out when the document has them. Every value is checked as
+`relic update` checks it, and a document that fails any check creates nothing.
+A file that does not exist is `not-found` (exit `4`).
+
+### What a relic may hold
+
+| Limit | Value | Measured as | Checked |
+| --- | --- | --- | --- |
+| Title | 500 bytes | The title after surrounding whitespace is trimmed. | When saved and when read |
+| Relic type, part type | 100 bytes each | The name. | When saved and when read |
+| Body format label | 16 bytes | The label. | When saved and when read |
+| Part position | 256 bytes | The `numerator/denominator` text. | When saved and when read |
+| Properties | 65,536 bytes (64 KiB) | The relic's properties object as stored JSON. | When saved and when read |
+| Fields of one part | 16,384 bytes (16 KiB) | The part's stored fields document, with the few bytes that wrap it. | When saved and when read |
+| Body | 1,048,576 bytes (1 MiB) | One part's body. | When saved and when read |
+| Live parts | 2,000 | Parts that are not removed. | Only when a change adds or restores a part |
+| Parts | 4,000 | Parts, counting removed ones. | Only when a change adds a part |
+| Live bodies | 16,777,216 bytes (16 MiB) | The bodies of the live parts, added together. | Only when a change makes the total larger |
+| Git object | 4,194,304 bytes (4 MiB) | Any one stored object. | Never stored larger; never read larger |
+
+Sizes are measured on what the whole command would leave stored, not after
+each change in it. A command that goes over a limit is refused as `validation`
+(exit `5`), with the size and the limit in the message, and writes nothing.
+
+The first seven limits are also checked when what was stored is read back. A
+stored value over one was not written by these commands, and its relic is
+reported as `corrupt-data` (exit `7`).
+
+The two counts and the total are different: they are never checked when a
+relic is read, and they refuse only growth. A command that adds nothing is
+never refused for them, so a relic that is already over one can still be read,
+edited, and brought back under by removing parts.
+
+Treat these numbers as part of the storage format, as the task limits are.
+One can be raised later. None can be lowered, because a relic already stored
+at the old size would stop reading.
+
+### Relics in other commands
+
+**`workbook validate`** checks every commit of every relic, from the commit
+that created it to its newest, and reports the result on a line of its own:
+
+```text
+Validated 2 relic(s): 11 commit(s) checked; 2 valid, 0 invalid.
+```
+
+See [Semantic history validation](#semantic-history-validation) for what is
+checked and for the `relics` member of the JSON result.
+
+**`workbook reset`** counts every relic as work that exists only in this
+checkout, because nothing publishes relics. A reset writes the relic refs into
+its backup bundle before it removes them, and the `Restore:` line it prints
+fetches `'refs/workbook/relics/*:refs/workbook/relics/*'` back from that
+bundle. `--no-backup` is refused with exit `5` while the checkout holds a
+relic, unless `--discard-unpublished` is added, which loses the relics on
+purpose. `workbook reset --remote` removes refs from a remote and never
+touches a relic in this checkout. See
+[Work that exists only here](#work-that-exists-only-here).
+
+**Task commands** do not see relics. `workbook rebuild` reads none into the
+SQLite index, and `workbook fetch`, `push`, `sync`, `move-tasks` and
+`compact` neither read nor move a relic ref.
+
+**A newer Workbook.** The relic formats carry the same `minReader` marker task
+histories do; see [Mixed Workbook versions](architecture.md#mixed-workbook-versions).
+A relic whose newest commit was written by a newer Workbook than this one can
+still be shown, as far as this build can read it. `relic update`,
+`relic delete` and `relic restore` refuse it as `newer-writer` (exit `9`),
+naming the relic and saying to upgrade, and write nothing. `workbook validate`
+counts it under `newerWriter` rather than as invalid.
+
+### Relic JSON results
+
+Every relic command takes `--json` and uses the result and error envelopes
+described below. The `command` member is `relic create`, `relic list`,
+`relic show`, `relic update`, `relic delete`, `relic restore` or
+`relic export`.
+
+`relic create`, `relic update`, `relic delete` and `relic restore` report the
+same three members, as in the `--add-part` result under
+[Part order](#part-order):
+
+| Member | Value |
+| --- | --- |
+| `relic` | The relic after the command, with the members `relic list --json` gives. |
+| `parts` | The parts the command added or edited, in the order it first changed them, each with `id`, `type`, `position`, `fields`, and `body` without its content. A part that was only moved, removed or restored is not listed. Always present, and empty when there is none. |
+| `changed` | `false` when the command recorded nothing. |
+
 ## Machine-readable output and exit codes
 
 With `--json`, success is a single compact line carrying a versioned envelope,
@@ -633,7 +1286,7 @@ without parsing a message:
 | 1 | `operational` | The environment or `origin` is at fault: an unreachable remote, a Git command that failed, a port already bound. |
 | 2 | `invalid-invocation` | The command line is wrong. Fix the arguments. |
 | 3 | `not-initialized` | This repository has no Workbook project. Run `workbook setup`. |
-| 4 | `not-found` | No such task, commit, or setting. |
+| 4 | `not-found` | No such task, relic, part, commit, or setting. |
 | 5 | `validation` | The input is well-formed but not allowed, such as an unknown status or restoring an active task. It fails the same way on every retry. |
 | 6 | `stale-write` | The task ref moved between read and write, so the compare-and-swap was refused, or a bounded wait on the shared SQLite cache ran out while another process held or replaced it. Nothing was written. Retrying the identical command usually succeeds. |
 | 7 | `corrupt-data` | Stored data could not be read as Workbook wrote it. Read the message; repair or rebuild before continuing. |
@@ -662,6 +1315,10 @@ process during each of three attempts at one command, and the cache replaced by
 another process again each time it was recovered, three rounds running. A read
 is never refused because somebody else updated the cache's rows at the same
 moment; see [Simultaneous requests](#simultaneous-requests).
+
+A relic body saved from a body version that is no longer current is exit `6`
+too, and it is the one `stale-write` that a retry of the identical command
+does not get past; see [Body versions](#body-versions).
 
 Reporting a conflict and failing over one are separate things. `workbook next`
 exits `0` while listing conflicts in its envelope, because a caller asking which

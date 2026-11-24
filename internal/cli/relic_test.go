@@ -515,3 +515,69 @@ func TestRelicListMarksDeletedRelics(t *testing.T) {
 		t.Fatalf("relic list --all = (%d, %q, %q), want %q", code, stdout, stderr, want)
 	}
 }
+
+// docSection returns one section of a document, with whitespace collapsed:
+// from the line that is exactly heading to the next heading of the same or a
+// higher level, or to the end. It is empty when the document has no such
+// heading.
+func docSection(document, heading string) string {
+	level := len(heading) - len(strings.TrimLeft(heading, "#"))
+	var section []string
+	inside, fenced := false, false
+	for _, line := range strings.Split(document, "\n") {
+		if strings.HasPrefix(line, "```") {
+			fenced = !fenced
+		}
+		if !fenced && strings.HasPrefix(line, "#") {
+			hashes := len(line) - len(strings.TrimLeft(line, "#"))
+			switch {
+			case line == heading:
+				inside = true
+			case inside && hashes <= level:
+				return strings.Join(strings.Fields(strings.Join(section, "\n")), " ")
+			}
+		}
+		if inside {
+			section = append(section, line)
+		}
+	}
+	return strings.Join(strings.Fields(strings.Join(section, "\n")), " ")
+}
+
+// Relics are a stored format nobody can discover from a command's output: the
+// ref, the address form, the base rule and the limits have to be written down,
+// and so does the fact that nothing shares a relic yet. Each document is held
+// to its relic section, because the task sections already say "500" and "1 MiB".
+func TestReferenceDocumentsLocalRelics(t *testing.T) {
+	t.Parallel()
+	reference := docSection(repositoryDoc(t, "docs", "reference.md"), "## Relics")
+	if reference == "" {
+		t.Fatal("docs/reference.md has no \"## Relics\" section")
+	}
+	for _, required := range []string{
+		"refs/workbook/relics/",
+		"<relic-id>#<part-id>",
+		"--base",
+		"stale-write",
+		"not shared",
+		"workbook.relic",
+		// The limits, as the table writes them.
+		"500", "100", "16", "256", "64 KiB", "16 KiB", "1 MiB", "2,000", "4,000", "16 MiB",
+		// What relic update's help says about where a relic option may be typed.
+		"always act on the relic",
+	} {
+		if !strings.Contains(reference, required) {
+			t.Errorf("the reference's relic section is missing %q", required)
+		}
+	}
+
+	architecture := docSection(repositoryDoc(t, "docs", "architecture.md"), "### Relic refs")
+	if architecture == "" {
+		t.Fatal("docs/architecture.md has no \"### Relic refs\" section")
+	}
+	for _, required := range []string{"refs/workbook/relics/", "links.json", "parts/"} {
+		if !strings.Contains(architecture, required) {
+			t.Errorf("the architecture's relic section is missing %q", required)
+		}
+	}
+}

@@ -920,7 +920,8 @@ var commandSchemas = map[string]commandMetadata{
 					"workbook relic update <relic> [--remove-part <part>]... [--restore-part <part>]...",
 				Description: "Change a relic. Every change given in one command is recorded together, or none is.\n\n" +
 					"--add-part, --part, --move-part, --remove-part and --restore-part each start a group,\n" +
-					"and the part options after one belong to it. Changes apply in the order given.\n\n" +
+					"and the part options after one belong to it. Changes apply in the order given.\n" +
+					"--title, --set, --set-json and --clear always act on the relic, wherever they are typed.\n\n" +
 					"Saving a body over an existing one needs --base <version>, the version shown by\n" +
 					"\"workbook relic show <relic>#<part>\". A save from an older version is refused: read\n" +
 					"the part again and save from the version it is at now.\n\n" +

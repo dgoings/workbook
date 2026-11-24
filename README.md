@@ -146,6 +146,12 @@ every project in the user configuration; the
 policy layers, divergence reconciliation, and the explicit `fetch`, `push`,
 and `sync` commands.
 
+Workbook also keeps relics: records for specs, plans and decisions, each made
+of typed parts with fields and bodies. `workbook relic` creates, shows and
+edits them. Relics are local for now. They stay in the checkout that wrote
+them: nothing synchronizes them with `origin`, and they are not on the board
+or linked to tasks. See [Relics](docs/reference.md#relics).
+
 ## Target workflows
 
 ### Solo development

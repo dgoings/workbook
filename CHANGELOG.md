@@ -27,6 +27,25 @@ release counts as no entry, so it never blocks the next release. See
 
 ## Unreleased
 
+Workbook has a second kind of record, the relic, for specs, plans, decisions
+and similar material. A relic has a title, a type, properties and an ordered
+list of parts, and a part has a type, fields and an optional body of up to
+1 MiB. `workbook relic create`, `list`, `show`, `update`, `delete`, `restore`
+and `export` work with them, and `relic create --from-file` creates one from
+the document `relic export` writes. Saving over a part's body needs `--base
+<version>`, the body version the edit started from, and a save from an older
+version is refused with exit 6 instead of overwriting the newer text. Each
+relic is one ref under `refs/workbook/relics/`, a chain of immutable commits
+in new formats that declare writer-format generation 6. Relics are local for
+now: they are not shared with the tasks remote, not in the SQLite index and
+not on the board, and there are no links, schemas, history or diff commands,
+retiring or compaction for them yet. `workbook validate` checks every relic
+history. `workbook reset` treats every relic as work that exists only in the
+checkout, so it writes them to its bundle, and refuses `--no-backup` while one
+exists unless `--discard-unpublished` is given. No task command changes
+behavior. See [Relics](docs/reference.md#relics) and
+[Relic refs](docs/architecture.md#relic-refs).
+
 A project can keep its tasks in a repository of their own, so that access to
 them, such as a hosted board's deploy key, is not access to the code. `workbook
 config set tasks-remote <name> --url <address>` records the remote in

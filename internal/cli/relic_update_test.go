@@ -1090,6 +1090,7 @@ func TestRelicUpdateHelp(t *testing.T) {
 	for _, want := range []string{
 		"Change a relic. Every change given in one command is recorded together, or none is.",
 		"--add-part, --part, --move-part, --remove-part and --restore-part each start a group,",
+		"--title, --set, --set-json and --clear always act on the relic, wherever they are typed.",
 		"Saving a body over an existing one needs --base <version>, the version shown by",
 		"--set and --field store text. --set-json and --field-json store any JSON value.",
 		"One command names a property once, and a field of a part once; naming one twice is refused.",
