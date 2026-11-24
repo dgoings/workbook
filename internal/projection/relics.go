@@ -6,7 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"slices"
 	"sort"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
@@ -268,6 +272,9 @@ func (s *Store) indexRelics(ctx context.Context, db *sql.DB) (relicPass, error) 
 		}
 	}
 
+	if s.beforeRelicWrite != nil {
+		s.beforeRelicWrite()
+	}
 	transaction, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return relicPass{}, s.databaseError("begin relic index refresh", err)
@@ -711,4 +718,438 @@ func sqlBool(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+// relicStateFormat is the format every relic state this build reads declares,
+// which a snapshot built from rows carries. Only states this build verified
+// are indexed, so it is the only format a row can stand for.
+const relicStateFormat = "workbook.relic-state"
+
+// RelicReader returns a core.RelicReader that answers from the relic tables.
+// Each call returns a new reader, which refreshes the index once, on its first
+// ListRelicHeads or GetRelic, and answers every later call from that pass.
+//
+// It is for reads. Its snapshots carry the full state, but their operation
+// holds only the project, relic and history generation, so no write may fold
+// onto one: a relic mutation reads its relic from Git.
+//
+// A relic the index holds no usable row for is read from Git as the
+// repository reads it, with the same answers and the same errors. That covers
+// a relic the pass could not index, damaged or written by a newer Workbook,
+// and one whose row another writer moved during the pass, which is answered
+// from the pass's own Git read instead.
+func (s *Store) RelicReader() core.RelicReader {
+	return &relicIndexReader{store: s}
+}
+
+type relicIndexReader struct {
+	store *Store
+	mu    sync.Mutex
+	pass  *relicPass
+}
+
+var _ core.RelicReader = (*relicIndexReader)(nil)
+
+// refreshed returns the pass this reader answers from, running it the first
+// time.
+func (r *relicIndexReader) refreshed(ctx context.Context, config core.ProjectConfig) (*relicPass, error) {
+	if err := r.store.validateConfig(config); err != nil {
+		return nil, err
+	}
+	if r.store.relics == nil {
+		return nil, errNoRelicSource()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pass != nil {
+		return r.pass, nil
+	}
+	var pass relicPass
+	if err := r.store.withActiveDatabase(ctx, func(ctx context.Context) error {
+		var err error
+		pass, err = r.store.refreshRelicsActive(ctx)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	r.pass = &pass
+	return r.pass, nil
+}
+
+// ListRelicHeads returns the heads the pass listed.
+func (r *relicIndexReader) ListRelicHeads(ctx context.Context, config core.ProjectConfig) ([]core.RelicHead, error) {
+	pass, err := r.refreshed(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	return slices.Clone(pass.heads), nil
+}
+
+// ReadRelicTips answers each head from its row when the row names that head,
+// from the pass's Git read when the pass read it, and otherwise from the
+// repository, so a tip Git refuses fails the listing as it does without an
+// index.
+func (r *relicIndexReader) ReadRelicTips(ctx context.Context, config core.ProjectConfig, heads []core.RelicHead) ([]core.RelicSnapshot, error) {
+	pass, err := r.refreshed(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	var rows map[string]core.RelicSnapshot
+	if err := r.store.withActiveDatabase(ctx, func(ctx context.Context) error {
+		var err error
+		rows, err = r.store.queryIndexedRelics(ctx, "")
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	snapshots := make([]core.RelicSnapshot, len(heads))
+	var missed []core.RelicHead
+	var missedAt []int
+	for index, head := range heads {
+		if snapshot, ok := pass.answer(head, rows); ok {
+			snapshots[index] = snapshot
+			continue
+		}
+		missed = append(missed, head)
+		missedAt = append(missedAt, index)
+	}
+	if len(missed) > 0 {
+		read, err := r.store.relics.ReadRelicTips(ctx, config, missed)
+		if err != nil {
+			return nil, err
+		}
+		if len(read) != len(missed) {
+			return nil, core.Errorf(core.CategoryCorruptData, "relic tip read returned %d relics, want %d", len(read), len(missed))
+		}
+		for position, index := range missedAt {
+			snapshots[index] = read[position]
+		}
+	}
+	return snapshots, nil
+}
+
+// GetRelic answers from the relic's row, or the pass's Git read of it, and
+// otherwise reads it from the repository, which gives the same errors and
+// the same pointer to `workbook validate` a read without an index gives.
+func (r *relicIndexReader) GetRelic(ctx context.Context, config core.ProjectConfig, relicID string) (core.RelicSnapshot, error) {
+	pass, err := r.refreshed(ctx, config)
+	if err != nil {
+		return core.RelicSnapshot{}, err
+	}
+	head, listed := pass.head(relicID)
+	if listed {
+		var rows map[string]core.RelicSnapshot
+		if err := r.store.withActiveDatabase(ctx, func(ctx context.Context) error {
+			var err error
+			rows, err = r.store.queryIndexedRelics(ctx, relicID)
+			return err
+		}); err != nil {
+			return core.RelicSnapshot{}, err
+		}
+		if snapshot, ok := pass.answer(head, rows); ok {
+			return snapshot, nil
+		}
+	}
+	return r.store.relics.GetRelic(ctx, config, relicID)
+}
+
+// ReadRelicParts reads fields from the rows when snapshot is the head they
+// hold, or from the pass's Git read of that head, and bodies from Git by the
+// object IDs those hold, in one read. Anything else, and any request the
+// rows cannot settle, is read from the repository.
+func (r *relicIndexReader) ReadRelicParts(
+	ctx context.Context,
+	config core.ProjectConfig,
+	snapshot core.RelicSnapshot,
+	partIDs []string,
+	bodies bool,
+) (map[string]core.RelicPartContent, error) {
+	pass, err := r.refreshed(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	relicID := snapshot.Record.State.RelicID
+	// The repository says what is wrong with a request the state does not
+	// settle: a part ID that is not one, or a part the relic does not have.
+	wanted := make([]core.RelicPart, 0, len(partIDs))
+	seen := make(map[string]struct{}, len(partIDs))
+	for _, partID := range partIDs {
+		if _, repeated := seen[partID]; repeated {
+			continue
+		}
+		seen[partID] = struct{}{}
+		part, found := snapshot.Record.State.Relic.Part(partID)
+		if core.ValidatePartID(partID) != nil || !found {
+			return r.store.relics.ReadRelicParts(ctx, config, snapshot, partIDs, bodies)
+		}
+		wanted = append(wanted, part)
+	}
+
+	var stored map[string]indexedPartContent
+	if relic, found := pass.fromGit[relicID]; found && relic.Snapshot.Head == snapshot.Head {
+		stored = make(map[string]indexedPartContent, len(relic.Parts))
+		for partID, objects := range relic.Parts {
+			stored[partID] = indexedPartContent{fields: relic.Fields[partID], body: objects.Body}
+		}
+	} else if err := r.store.withActiveDatabase(ctx, func(ctx context.Context) error {
+		var err error
+		stored, err = r.store.queryIndexedParts(ctx, relicID, snapshot.Head)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+
+	contents := make(map[string]core.RelicPartContent, len(wanted))
+	var requests []core.RelicPart
+	var bodyRequests []gitstore.RelicBodyRequest
+	for _, part := range wanted {
+		row, found := stored[part.ID]
+		if !found {
+			return r.store.relics.ReadRelicParts(ctx, config, snapshot, partIDs, bodies)
+		}
+		fields, err := core.DecodeRelicFieldsDocument(row.fields)
+		if err != nil {
+			return r.store.relics.ReadRelicParts(ctx, config, snapshot, partIDs, bodies)
+		}
+		contents[part.ID] = core.RelicPartContent{Fields: fields.Fields}
+		if bodies && part.Body != nil {
+			if row.body == "" {
+				return r.store.relics.ReadRelicParts(ctx, config, snapshot, partIDs, bodies)
+			}
+			requests = append(requests, part)
+			bodyRequests = append(bodyRequests, gitstore.RelicBodyRequest{
+				RelicID: relicID, PartID: part.ID, ObjectID: row.body, Bytes: part.Body.Bytes,
+			})
+		}
+	}
+	if len(bodyRequests) > 0 {
+		read, err := r.store.relics.ReadRelicBodies(ctx, config, bodyRequests)
+		if err != nil {
+			return nil, err
+		}
+		if len(read) != len(bodyRequests) {
+			return nil, core.Errorf(core.CategoryCorruptData, "relic body read returned %d bodies, want %d", len(read), len(bodyRequests))
+		}
+		for index, part := range requests {
+			content := contents[part.ID]
+			content.Body, content.HasBody = read[index], true
+			contents[part.ID] = content
+		}
+	}
+	return contents, nil
+}
+
+// head returns the head the pass listed for relicID.
+func (pass *relicPass) head(relicID string) (core.RelicHead, bool) {
+	index, found := slices.BinarySearchFunc(pass.heads, relicID, func(head core.RelicHead, id string) int {
+		return strings.Compare(head.RelicID, id)
+	})
+	if found {
+		return pass.heads[index], true
+	}
+	// A source that lists heads out of order is still answered.
+	for _, head := range pass.heads {
+		if head.RelicID == relicID {
+			return head, true
+		}
+	}
+	return core.RelicHead{}, false
+}
+
+// answer returns the snapshot of head the index can give: the pass's own Git
+// read when it made one, else the row when it holds that head. A relic the
+// pass refused is never answered here.
+func (pass *relicPass) answer(head core.RelicHead, rows map[string]core.RelicSnapshot) (core.RelicSnapshot, bool) {
+	if _, failed := pass.failed[head.RelicID]; failed {
+		return core.RelicSnapshot{}, false
+	}
+	if relic, found := pass.fromGit[head.RelicID]; found && relic.Snapshot.Head == head.ObjectID {
+		return relic.Snapshot, true
+	}
+	if snapshot, found := rows[head.RelicID]; found && snapshot.Head == head.ObjectID {
+		return snapshot, true
+	}
+	return core.RelicSnapshot{}, false
+}
+
+// queryIndexedRelics builds the snapshot every relic row holds, or only
+// relicID's when it is not empty, in one read transaction. A relic whose part
+// rows do not number what its row records is left out, so it is read from Git.
+func (s *Store) queryIndexedRelics(ctx context.Context, relicID string) (map[string]core.RelicSnapshot, error) {
+	transaction, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, s.databaseError("begin indexed relic query", err)
+	}
+	defer transaction.Rollback()
+	where, args := "", []any{}
+	if relicID != "" {
+		where, args = ` WHERE relic_id = ?`, []any{relicID}
+	}
+
+	snapshots := map[string]core.RelicSnapshot{}
+	partCounts := map[string]int{}
+	rows, err := transaction.QueryContext(ctx, `SELECT relic_id, head, project_id, state_version, min_reader,
+		history_generation, compacted_from, logical_clock, title, type, schema, author, retired, deleted,
+		created_at, updated_at, part_count FROM relics`+where, args...)
+	if err != nil {
+		return nil, s.databaseError("query indexed relics", err)
+	}
+	for rows.Next() {
+		snapshot, partCount, err := scanIndexedRelic(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		id := snapshot.Record.State.RelicID
+		snapshots[id], partCounts[id] = snapshot, partCount
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, s.databaseError("read indexed relics", err)
+	}
+
+	properties, err := transaction.QueryContext(ctx, `SELECT relic_id, name, value FROM relic_properties`+where, args...)
+	if err != nil {
+		return nil, s.databaseError("query indexed relic properties", err)
+	}
+	for properties.Next() {
+		var id, name, value string
+		if err := properties.Scan(&id, &name, &value); err != nil {
+			properties.Close()
+			return nil, s.databaseError("read indexed relic property", err)
+		}
+		if snapshot, found := snapshots[id]; found {
+			snapshot.Record.State.Relic.Properties[name] = json.RawMessage(value)
+		}
+	}
+	if err := errors.Join(properties.Err(), properties.Close()); err != nil {
+		return nil, s.databaseError("read indexed relic properties", err)
+	}
+
+	parts, err := transaction.QueryContext(ctx, `SELECT relic_id, part_id, type, position, removed,
+		body_format, body_version, body_bytes FROM relic_parts`+where+` ORDER BY relic_id, ordinal`, args...)
+	if err != nil {
+		return nil, s.databaseError("query indexed relic parts", err)
+	}
+	for parts.Next() {
+		var id string
+		var part core.RelicPart
+		var removed int
+		var format, version sql.NullString
+		var size sql.NullInt64
+		if err := parts.Scan(&id, &part.ID, &part.Type, &part.Position, &removed, &format, &version, &size); err != nil {
+			parts.Close()
+			return nil, s.databaseError("read indexed relic part", err)
+		}
+		part.Removed = removed != 0
+		if version.Valid {
+			part.Body = &core.RelicBody{Format: format.String, Version: version.String, Bytes: size.Int64}
+		}
+		if snapshot, found := snapshots[id]; found {
+			snapshot.Record.State.Relic.Parts = append(snapshot.Record.State.Relic.Parts, part)
+			snapshots[id] = snapshot
+		}
+	}
+	if err := errors.Join(parts.Err(), parts.Close()); err != nil {
+		return nil, s.databaseError("read indexed relic parts", err)
+	}
+	for id, snapshot := range snapshots {
+		if len(snapshot.Record.State.Relic.Parts) != partCounts[id] {
+			delete(snapshots, id)
+		}
+	}
+	return snapshots, nil
+}
+
+func scanIndexedRelic(scanner rowScanner) (core.RelicSnapshot, int, error) {
+	var head, schema, createdAt, updatedAt string
+	var state core.RelicStateDocument
+	var compactedFrom sql.NullString
+	var clock int64
+	var retired, deleted, partCount int
+	relic := &state.Relic
+	if err := scanner.Scan(&state.RelicID, &head, &state.ProjectID, &state.Version, &state.MinReader,
+		&state.History.Generation, &compactedFrom, &clock, &relic.Title, &relic.Type, &schema, &relic.Author,
+		&retired, &deleted, &createdAt, &updatedAt, &partCount); err != nil {
+		return core.RelicSnapshot{}, 0, cacheError("read indexed relic", err)
+	}
+	if clock < 0 {
+		return core.RelicSnapshot{}, 0, core.Errorf(core.CategoryCorruptData, "indexed relic %s has an invalid logical clock", state.RelicID)
+	}
+	created, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return core.RelicSnapshot{}, 0, core.Wrap(core.CategoryCorruptData, "indexed relic "+state.RelicID+" has an invalid creation time", err)
+	}
+	updated, err := time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return core.RelicSnapshot{}, 0, core.Wrap(core.CategoryCorruptData, "indexed relic "+state.RelicID+" has an invalid update time", err)
+	}
+	state.Format = relicStateFormat
+	state.LogicalClock = uint64(clock)
+	if compactedFrom.Valid {
+		from := compactedFrom.String
+		state.History.CompactedFrom = &from
+	}
+	if schema != "null" {
+		relic.Schema = json.RawMessage(schema)
+	}
+	relic.Retired, relic.Deleted = retired != 0, deleted != 0
+	relic.CreatedAt, relic.UpdatedAt = created, updated
+	relic.Properties = map[string]json.RawMessage{}
+	relic.Parts = make([]core.RelicPart, 0, partCount)
+	return core.RelicSnapshot{
+		Head: head,
+		Operation: core.RelicOperationPack{
+			ProjectID: state.ProjectID, RelicID: state.RelicID, HistoryGeneration: state.History.Generation,
+		},
+		Record: core.RelicRecord{State: state, Links: core.EmptyRelicLinks()},
+	}, partCount, nil
+}
+
+// indexedPartContent is what the index holds of one part's content: its
+// fields.json bytes and its body's object ID, empty for no body.
+type indexedPartContent struct {
+	fields []byte
+	body   string
+}
+
+// queryIndexedParts reads the fields and body object of every part of
+// relicID, when its row still holds head and every part row is there. It
+// returns nil otherwise, which sends the read to Git.
+func (s *Store) queryIndexedParts(ctx context.Context, relicID, head string) (map[string]indexedPartContent, error) {
+	transaction, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, s.databaseError("begin indexed relic part query", err)
+	}
+	defer transaction.Rollback()
+	var rowHead string
+	var partCount int
+	err = transaction.QueryRowContext(ctx, `SELECT head, part_count FROM relics WHERE relic_id = ?`, relicID).Scan(&rowHead, &partCount)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && rowHead != head {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, s.databaseError("query indexed relic head", err)
+	}
+	rows, err := transaction.QueryContext(ctx, `SELECT part_id, fields, body_object FROM relic_parts WHERE relic_id = ?`, relicID)
+	if err != nil {
+		return nil, s.databaseError("query indexed relic part content", err)
+	}
+	defer rows.Close()
+	parts := make(map[string]indexedPartContent, partCount)
+	for rows.Next() {
+		var partID string
+		var fields []byte
+		var body sql.NullString
+		if err := rows.Scan(&partID, &fields, &body); err != nil {
+			return nil, s.databaseError("read indexed relic part content", err)
+		}
+		parts[partID] = indexedPartContent{fields: fields, body: body.String}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, s.databaseError("read indexed relic part content", err)
+	}
+	if len(parts) != partCount {
+		return nil, nil
+	}
+	return parts, nil
 }

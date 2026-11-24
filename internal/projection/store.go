@@ -99,6 +99,10 @@ type Store struct {
 	// are written, and an error rolls the transaction back. It is a test seam
 	// for a pass interrupted before it commits, and nil otherwise.
 	beforeRelicCommit func() error
+	// beforeRelicWrite runs in a relic pass after its Git reads and before its
+	// transaction begins. It is a test seam for another writer moving a row in
+	// that window, and nil otherwise.
+	beforeRelicWrite func()
 }
 
 var _ core.TaskReader = (*Store)(nil)

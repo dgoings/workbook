@@ -376,3 +376,29 @@ func TestReadRelicBodiesReadsByObjectID(t *testing.T) {
 		}
 	})
 }
+
+func TestReadRelicOperationsTruncatesOnlyTheRelicWithAMissingCommit(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	sound := writeRelicRootNumbered(t, repo, config, 1, relicTestPartNumbered(1).withField("status", "open"))
+	soundChild := writeRelicChild(t, repo, config, sound, nil, relicTitleSet(700001, "One"))
+	gapRoot := writeRelicRootNumbered(t, repo, config, 2, relicTestPartNumbered(1).withField("status", "open"))
+	gapChild := writeRelicChild(t, repo, config, gapRoot, nil, relicTitleSet(700002, "Two"))
+	loseRelicObject(t, repo, gapRoot.Head)
+
+	results, err := repo.ReadRelicOperations(ctx, config, []RelicHistoryRequest{
+		historyRequest(soundChild, ""), historyRequest(gapChild, ""),
+	})
+	if err != nil {
+		t.Fatalf("ReadRelicOperations() error = %v", err)
+	}
+	if results[0].Truncated != nil {
+		t.Fatalf("the sound relic was truncated: %+v", results[0].Truncated)
+	}
+	assertOperationCommits(t, results[0].Commits, sound, soundChild)
+	if results[1].Truncated == nil || len(results[1].Commits) != 0 {
+		t.Fatalf("the relic with a gap = %+v, want it truncated", results[1])
+	}
+	assertRelicCategory(t, results[1].Truncated.Err, core.CategoryCorruptData, gapRoot.Operation.RelicID)
+}

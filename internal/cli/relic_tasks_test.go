@@ -107,8 +107,21 @@ func TestTaskCommandsNeverReturnRelics(t *testing.T) {
 			t.Errorf("%v with relics = %+v, before them %+v", command, got, want)
 		}
 	}
-	if got := runCommand(t, empty, "rebuild", "--json"); got != rebuildBefore {
-		t.Errorf("rebuild --json with relics = %+v, before them %+v", got, rebuildBefore)
+	// Rebuild now counts relics too; its task count and cache path are unchanged.
+	rebuildAfter := runCommand(t, empty, "rebuild", "--json")
+	var gotRebuild, wantRebuild rebuildResult
+	if rebuildAfter.code != 0 || rebuildAfter.stderr != "" || rebuildBefore.code != 0 {
+		t.Fatalf("rebuild --json with relics = %+v, before them %+v", rebuildAfter, rebuildBefore)
+	}
+	if err := json.Unmarshal(assertJSONResult(t, rebuildAfter.stdout, "rebuild").Data, &gotRebuild); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(assertJSONResult(t, rebuildBefore.stdout, "rebuild").Data, &wantRebuild); err != nil {
+		t.Fatal(err)
+	}
+	wantRebuild.RelicCount = 3
+	if gotRebuild != wantRebuild {
+		t.Errorf("rebuild --json with relics = %+v, want %+v", gotRebuild, wantRebuild)
 	}
 
 	addr := startServeBoard(t, repository)

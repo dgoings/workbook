@@ -50,14 +50,6 @@ func runRelic(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	}
 }
 
-// openRelicReadService opens the repository and returns a service whose
-// Reader is the repository, for a command that only reads, so a checkout with
-// no acting person can still read its relics. A command that changes a relic
-// opens a task session instead (see mutateRelic).
-func openRelicReadService(ctx context.Context, cwd string, stderr io.Writer) (core.RelicService, error) {
-	return openRelicServiceFor(ctx, cwd, stderr, false)
-}
-
 func openRelicServiceFor(ctx context.Context, cwd string, stderr io.Writer, withActor bool) (core.RelicService, error) {
 	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
@@ -191,10 +183,11 @@ func runRelicList(ctx context.Context, args []string, cwd string, stdout, stderr
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	service, err := openRelicReadService(ctx, cwd, stderr)
+	service, release, err := openRelicReadService(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
+	defer release()
 	summaries, err := service.List(ctx, core.RelicListFilter{Type: *relicType, IncludeDeleted: *all})
 	if err != nil {
 		return err
@@ -220,10 +213,11 @@ func runRelicShow(ctx context.Context, args []string, cwd string, stdout, stderr
 		return err
 	}
 	address := values[0]
-	service, err := openRelicReadService(ctx, cwd, stderr)
+	service, release, err := openRelicReadService(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
+	defer release()
 	document, err := service.Show(ctx, address, core.RelicShowOptions{Bodies: *bodies, Removed: *removed})
 	if err != nil {
 		return err
@@ -320,10 +314,11 @@ func runRelicExport(ctx context.Context, args []string, cwd string, stdout, stde
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	service, err := openRelicReadService(ctx, cwd, stderr)
+	service, release, err := openRelicReadService(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
+	defer release()
 	document, err := service.Export(ctx, values[0])
 	if err != nil {
 		return err

@@ -38,8 +38,9 @@ import (
 var watcherProbeDeadline = 50 * time.Millisecond
 
 type rebuildResult struct {
-	TaskCount int    `json:"taskCount"`
-	CachePath string `json:"cachePath"`
+	TaskCount  int    `json:"taskCount"`
+	RelicCount int    `json:"relicCount"`
+	CachePath  string `json:"cachePath"`
 }
 
 type helpRequest struct {
@@ -1757,15 +1758,15 @@ func runRebuild(ctx context.Context, args []string, cwd string, stdout, stderr i
 		return err
 	}
 	defer releaseProjection()
-	count, err := store.Rebuild(ctx)
+	counts, err := store.RebuildWithRelics(ctx)
 	if err != nil {
 		return err
 	}
-	result := rebuildResult{TaskCount: count, CachePath: store.CachePath()}
+	result := rebuildResult{TaskCount: counts.Tasks, RelicCount: counts.Relics, CachePath: store.CachePath()}
 	if *jsonMode {
 		writeResult(stdout, "rebuild", result)
 	} else {
-		fmt.Fprintf(stdout, "Rebuilt %d task(s) at %s.\n", result.TaskCount, result.CachePath)
+		fmt.Fprintf(stdout, "Rebuilt %d task(s) and %d relic(s) at %s.\n", result.TaskCount, result.RelicCount, result.CachePath)
 	}
 	return nil
 }

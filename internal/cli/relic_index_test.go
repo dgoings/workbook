@@ -1,0 +1,211 @@
+package cli
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testrepo"
+)
+
+// relicReadOutputs records what every relic read command prints for the
+// relics in ids.
+func relicReadOutputs(t *testing.T, repository string, ids []string) []string {
+	t.Helper()
+	commands := [][]string{{"relic", "list", "--all", "--json"}}
+	for _, id := range ids {
+		commands = append(commands,
+			[]string{"relic", "show", id, "--body", "--removed", "--json"},
+			[]string{"relic", "export", id, "--json"})
+	}
+	outputs := make([]string, 0, len(commands))
+	for _, command := range commands {
+		code, stdout, stderr := run(t, repository, command...)
+		if code != 0 || stderr != "" {
+			t.Fatalf("%s = (%d, %q, %q)", strings.Join(command, " "), code, stdout, stderr)
+		}
+		outputs = append(outputs, stdout)
+	}
+	return outputs
+}
+
+func relicCachePath(t *testing.T, repository string) string {
+	t.Helper()
+	commonDir := gitOutput(t, repository, "rev-parse", "--git-common-dir")
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(repository, commonDir)
+	}
+	return filepath.Join(commonDir, "workbook", "cache.sqlite")
+}
+
+func assertSameOutputs(t *testing.T, label string, got, want []string) {
+	t.Helper()
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("%s: output %d =\n%s\nwant\n%s", label, index, got[index], want[index])
+		}
+	}
+}
+
+func TestRelicReadsAreTheSameAfterTheIndexIsDeleted(t *testing.T) {
+	t.Parallel()
+	for _, objectFormat := range []string{testrepo.FormatSHA1, testrepo.FormatSHA256} {
+		t.Run(objectFormat, func(t *testing.T) {
+			t.Parallel()
+			repository := relicRepositoryFor(t, objectFormat)
+			first := mustCreateRelic(t, repository, "--from-file", writeRelicDocumentFile(t, relicTestDocument(t)))
+			second := mustCreateRelic(t, repository, "Second", "--type", "plan")
+			mustRelic(t, repository, nil, "update", second.Relic.ID, "--title", "Second, revised")
+			deleted := mustCreateRelic(t, repository, "Deleted", "--type", "plan")
+			mustRelic(t, repository, nil, "delete", deleted.Relic.ID)
+			ids := []string{first.Relic.ID, second.Relic.ID, deleted.Relic.ID}
+
+			want := relicReadOutputs(t, repository, ids)
+			cache := relicCachePath(t, repository)
+			if err := os.Remove(cache); err != nil {
+				t.Fatalf("remove the cache: %v", err)
+			}
+			assertSameOutputs(t, "after the cache was deleted", relicReadOutputs(t, repository, ids), want)
+
+			code, stdout, stderr := run(t, repository, "rebuild", "--json")
+			if code != 0 || stderr != "" {
+				t.Fatalf("rebuild = (%d, %q, %q)", code, stdout, stderr)
+			}
+			var rebuilt rebuildResult
+			if err := json.Unmarshal(assertJSONResult(t, stdout, "rebuild").Data, &rebuilt); err != nil {
+				t.Fatal(err)
+			}
+			if rebuilt.RelicCount != len(ids) {
+				t.Fatalf("rebuild relicCount = %d, want %d", rebuilt.RelicCount, len(ids))
+			}
+			assertSameOutputs(t, "after a rebuild", relicReadOutputs(t, repository, ids), want)
+
+			info, err := os.Stat(cache)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Truncate(cache, info.Size()/2); err != nil {
+				t.Fatal(err)
+			}
+			assertSameOutputs(t, "after the cache was truncated", relicReadOutputs(t, repository, ids), want)
+		})
+	}
+}
+
+func TestRelicShowSeesAnUpdateWithoutARebuild(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	created := mustCreateRelic(t, repository, "Before", "--type", "spec")
+	var shown core.RelicDocument
+	mustRelic(t, repository, &shown, "show", created.Relic.ID)
+
+	var updated core.RelicMutationResult
+	mustRelic(t, repository, &updated, "update", created.Relic.ID, "--title", "After")
+	mustRelic(t, repository, &shown, "show", created.Relic.ID)
+	if shown.Title != "After" || shown.Head != updated.Relic.Head || shown.Head == created.Relic.Head {
+		t.Fatalf("show = %q at %s, want \"After\" at %s", shown.Title, shown.Head, updated.Relic.Head)
+	}
+}
+
+func TestRebuildReportsRelics(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	if code, _, stderr := run(t, repository, "create", "A task", "--no-sync"); code != 0 {
+		t.Fatalf("create = %d; stderr = %q", code, stderr)
+	}
+	mustCreateRelic(t, repository, "One", "--type", "spec")
+	mustCreateRelic(t, repository, "Two", "--type", "spec")
+
+	code, stdout, stderr := run(t, repository, "rebuild", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("rebuild --json = (%d, %q, %q)", code, stdout, stderr)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "rebuild").Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data["taskCount"] != float64(1) || data["relicCount"] != float64(2) {
+		t.Fatalf("rebuild --json data = %v, want taskCount 1 and relicCount 2", data)
+	}
+	code, stdout, stderr = run(t, repository, "rebuild")
+	if code != 0 || stderr != "" {
+		t.Fatalf("rebuild = (%d, %q, %q)", code, stdout, stderr)
+	}
+	if want := fmt.Sprintf("Rebuilt 1 task(s) and 2 relic(s) at %s.\n", data["cachePath"]); stdout != want {
+		t.Fatalf("rebuild printed %q, want %q", stdout, want)
+	}
+}
+
+// Two worktrees of one repository share one index, and separate processes in
+// each read and change relics at once.
+func TestRelicCommandsInTwoWorktreesAndProcessesShareOneIndex(t *testing.T) {
+	t.Parallel()
+	binary := buildWorkbookBinary(t)
+	repository := initializedRepository(t)
+	second := filepath.Join(t.TempDir(), "second")
+	gitOutput(t, repository, "add", ".workbook/config.json")
+	gitOutput(t, repository, "commit", "--quiet", "-m", "Initialize Workbook")
+	gitOutput(t, repository, "worktree", "add", "--quiet", "-b", "second", second)
+	worktrees := []string{repository, second}
+	var ids []string
+	for index := range worktrees {
+		ids = append(ids, mustCreateRelic(t, repository, fmt.Sprintf("Relic %d", index), "--type", "spec").Relic.ID)
+	}
+
+	const jobs = 80
+	work := make([]func() []raceReply, jobs)
+	for index := range work {
+		worktree := index % 2
+		switch index % 4 {
+		case 0, 1:
+			title := fmt.Sprintf("Title %03d", index)
+			work[index] = one(func() raceReply {
+				return processReply(binary, worktrees[worktree], false, "relic", "update", ids[worktree], "--title", title, "--json")
+			})
+		case 2:
+			work[index] = one(func() raceReply {
+				return processReply(binary, worktrees[worktree], true, "relic", "list", "--json")
+			})
+		case 3:
+			work[index] = one(func() raceReply {
+				return processReply(binary, worktrees[worktree], true, "relic", "show", ids[1-worktree], "--json")
+			})
+		}
+	}
+	tallyRace(t, race(t, work))
+
+	listings := make([]string, len(worktrees))
+	for index, worktree := range worktrees {
+		code, stdout, stderr := run(t, worktree, "relic", "list", "--json")
+		if code != 0 || stderr != "" {
+			t.Fatalf("relic list in %s = (%d, %q, %q)", worktree, code, stdout, stderr)
+		}
+		listings[index] = stdout
+	}
+	if listings[0] != listings[1] {
+		t.Fatalf("the worktrees list\n%s\nand\n%s", listings[0], listings[1])
+	}
+	var summaries []core.RelicSummary
+	if err := json.Unmarshal(assertJSONResult(t, listings[0], "relic list").Data, &summaries); err != nil {
+		t.Fatal(err)
+	}
+	for _, summary := range summaries {
+		head := gitOutput(t, repository, "rev-parse", "refs/workbook/relics/"+summary.ID)
+		var pack struct {
+			Operations []struct {
+				Title string `json:"title"`
+			} `json:"operations"`
+		}
+		if err := json.Unmarshal([]byte(gitOutput(t, repository, "cat-file", "blob", head+":operation.json")), &pack); err != nil {
+			t.Fatal(err)
+		}
+		if summary.Head != head || len(pack.Operations) != 1 || summary.Title != pack.Operations[0].Title {
+			t.Fatalf("relic %s lists %q at %s, want the last update recorded in Git, %+v at %s",
+				summary.ID, summary.Title, summary.Head, pack.Operations, head)
+		}
+	}
+}

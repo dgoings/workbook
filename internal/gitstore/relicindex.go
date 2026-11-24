@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -257,22 +258,29 @@ func (r *Repository) ReadRelicOperations(
 		fmt.Fprintln(&input, request.Head.ObjectID)
 	}
 
-	output, err := r.Git(ctx, input.Bytes(), "rev-list", "--parents", "--stdin")
-	if err != nil {
-		return nil, core.Wrap(core.CategoryCorruptData, "cannot read relic history parent graph", err)
-	}
-	graph, err := parseParentGraph(output)
-	if err != nil {
-		return nil, err
-	}
-	for objectID, parents := range graph {
-		for _, id := range append([]string{objectID}, parents...) {
-			if err := r.validateFullObjectID(id); err != nil {
-				return nil, core.Wrap(core.CategoryCorruptData, "Git returned an invalid history graph object ID", err)
+	graph, err := r.relicParentGraph(ctx, input.Bytes())
+	if err != nil && gitExitedWithFailure(ctx, err) {
+		// Git could not walk some history: a commit is missing from the object
+		// store. Each head is walked alone to find which, so that one relic's
+		// gap truncates only that relic's chain. This costs a process per head,
+		// and only a repository with a gap pays it.
+		graph, err = map[string][]string{}, nil
+		for index, request := range requests {
+			own, walkErr := r.relicParentGraph(ctx, []byte(request.Head.ObjectID+"\n"))
+			if walkErr != nil {
+				if !gitExitedWithFailure(ctx, walkErr) {
+					return nil, walkErr
+				}
+				results[index].Truncated = &HistoryFailure{
+					TaskID: request.Head.RelicID, Commit: request.Head.ObjectID,
+					Err: corruptRelic(request.Head.RelicID, "its history cannot be followed from commit %s: a commit is missing from Git", request.Head.ObjectID),
+				}
+				continue
 			}
+			maps.Copy(graph, own)
 		}
 	}
-	if err := validateCompleteParentGraph(graph); err != nil {
+	if err != nil {
 		return nil, err
 	}
 
@@ -282,6 +290,9 @@ func (r *Repository) ReadRelicOperations(
 	chains := make([][]link, len(requests))
 	var packs bytes.Buffer
 	for index, request := range requests {
+		if results[index].Truncated != nil {
+			continue
+		}
 		var newestFirst []link
 		walked := map[string]struct{}{}
 		for current := request.Head.ObjectID; ; {
@@ -355,6 +366,31 @@ func (r *Repository) ReadRelicOperations(
 		return nil, err
 	}
 	return results, nil
+}
+
+// relicParentGraph walks the histories of the heads in input, one to a line,
+// and checks the graph Git returns is whole. A walk Git refuses comes back
+// wrapping Git's own error.
+func (r *Repository) relicParentGraph(ctx context.Context, input []byte) (map[string][]string, error) {
+	output, err := r.Git(ctx, input, "rev-list", "--parents", "--stdin")
+	if err != nil {
+		return nil, core.Wrap(core.CategoryCorruptData, "cannot read relic history parent graph", err)
+	}
+	graph, err := parseParentGraph(output)
+	if err != nil {
+		return nil, err
+	}
+	for objectID, parents := range graph {
+		for _, id := range append([]string{objectID}, parents...) {
+			if err := r.validateFullObjectID(id); err != nil {
+				return nil, core.Wrap(core.CategoryCorruptData, "Git returned an invalid history graph object ID", err)
+			}
+		}
+	}
+	if err := validateCompleteParentGraph(graph); err != nil {
+		return nil, err
+	}
+	return graph, nil
 }
 
 // relicOperationPackOf decodes one operation.json read from a batch.
