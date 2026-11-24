@@ -37,14 +37,21 @@ func writeRelicMutation(stdout io.Writer, command string, result core.RelicMutat
 	}
 }
 
+// writeRelicList prints one line per relic. A deleted relic, which only relic
+// list --all lists, gets a last column saying so, as a removed part does in
+// writeRelicDocument; a live relic's line is the same with or without --all.
 func writeRelicList(stdout io.Writer, summaries []core.RelicSummary) {
 	for _, summary := range summaries {
 		parts := "parts"
 		if summary.Parts == 1 {
 			parts = "part"
 		}
-		fmt.Fprintf(stdout, "%s\t%s\t%d %s\t%s\n",
+		fmt.Fprintf(stdout, "%s\t%s\t%d %s\t%s",
 			summary.ID, singleLine(summary.Type), summary.Parts, parts, singleLine(summary.Title))
+		if summary.Deleted {
+			fmt.Fprint(stdout, "\tdeleted")
+		}
+		fmt.Fprintln(stdout)
 	}
 }
 

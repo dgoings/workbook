@@ -868,7 +868,7 @@ var commandSchemas = map[string]commandMetadata{
 			"unambiguous prefix of either works. Relics are kept in this checkout only; they\n" +
 			"are not shared with the tasks remote yet.",
 		Positionals:     []string{"<command>"},
-		SubcommandOrder: []string{"create", "list", "show", "delete", "restore", "export"},
+		SubcommandOrder: []string{"create", "list", "show", "update", "delete", "restore", "export"},
 		Subcommands: map[string]commandMetadata{
 			"create": {
 				Name:     "create",
@@ -891,7 +891,7 @@ var commandSchemas = map[string]commandMetadata{
 				Description: "List relics, oldest first. Deleted relics are left out unless --all is given.",
 				Options: []optionMetadata{
 					{Name: "type", Kind: stringFlag, Value: "<type>", Description: "show only relics of this type"},
-					{Name: "all", Kind: boolFlag, Description: "include deleted relics"},
+					{Name: "all", Kind: boolFlag, Description: "include deleted relics, each marked deleted"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},
@@ -905,6 +905,46 @@ var commandSchemas = map[string]commandMetadata{
 				Options: []optionMetadata{
 					{Name: "body", Kind: boolFlag, Description: "include body text"},
 					{Name: "removed", Kind: boolFlag, Description: "include removed parts"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"update": {
+				Name: "update",
+				// One form per kind of change. They combine freely in one command;
+				// a merged line would not show which part options follow which
+				// group option.
+				Synopsis: "workbook relic update <relic> [--title <title>] [--set <name>=<value>]... [--set-json <name>=<json>]... [--clear <name>]... [--json]\n" +
+					"workbook relic update <relic> --add-part --part-type <type> [--field <name>=<value>]... [--field-json <name>=<json>]... [--body-file <file> [--body-format <label>]] [--before <part> | --after <part>]\n" +
+					"workbook relic update <relic> --part <part> [--field <name>=<value>]... [--field-json <name>=<json>]... [--clear-field <name>]... [--body-file <file> [--body-format <label>] [--base <version>]]\n" +
+					"workbook relic update <relic> --move-part <part> (--before <part> | --after <part>)\n" +
+					"workbook relic update <relic> [--remove-part <part>]... [--restore-part <part>]...",
+				Description: "Change a relic. Every change given in one command is recorded together, or none is.\n\n" +
+					"--add-part, --part, --move-part, --remove-part and --restore-part each start a group,\n" +
+					"and the part options after one belong to it. Changes apply in the order given.\n\n" +
+					"Saving a body over an existing one needs --base <version>, the version shown by\n" +
+					"\"workbook relic show <relic>#<part>\". A save from an older version is refused: read\n" +
+					"the part again and save from the version it is at now.\n\n" +
+					"--set and --field store text. --set-json and --field-json store any JSON value.",
+				Positionals: []string{"<relic>"},
+				Options: []optionMetadata{
+					{Name: "title", Kind: stringFlag, Value: "<title>", Description: "set the relic's title"},
+					{Name: "set", Kind: stringFlag, Value: "<name>=<value>", Description: "set a property to text"},
+					{Name: "set-json", Kind: stringFlag, Value: "<name>=<json>", Description: "set a property to a JSON value"},
+					{Name: "clear", Kind: stringFlag, Value: "<name>", Description: "remove a property"},
+					{Name: "add-part", Kind: boolFlag, Description: "add a part, described by the part options after it"},
+					{Name: "part-type", Kind: stringFlag, Value: "<type>", Description: "the new part's type, such as section or decision"},
+					{Name: "field", Kind: stringFlag, Value: "<name>=<value>", Description: "set a field of the part to text"},
+					{Name: "field-json", Kind: stringFlag, Value: "<name>=<json>", Description: "set a field of the part to a JSON value"},
+					{Name: "clear-field", Kind: stringFlag, Value: "<name>", Description: "remove a field of the part"},
+					{Name: "body-file", Kind: stringFlag, Value: "<file>", Description: "save this file's contents as the part's body"},
+					{Name: "body-format", Kind: stringFlag, Value: "<label>", Description: "body format, such as md, instead of the file's ending; empty for none"},
+					{Name: "base", Kind: stringFlag, Value: "<version>", Description: "the body version this save starts from"},
+					{Name: "before", Kind: stringFlag, Value: "<part>", Description: "put the part before this one"},
+					{Name: "after", Kind: stringFlag, Value: "<part>", Description: "put the part after this one"},
+					{Name: "part", Kind: stringFlag, Value: "<part>", Description: "change this part with the part options after it"},
+					{Name: "move-part", Kind: stringFlag, Value: "<part>", Description: "move this part to where --before or --after says"},
+					{Name: "remove-part", Kind: stringFlag, Value: "<part>", Description: "remove this part; --restore-part brings it back"},
+					{Name: "restore-part", Kind: stringFlag, Value: "<part>", Description: "restore this removed part"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},

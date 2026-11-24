@@ -36,6 +36,11 @@ workbook reset --remote <remote> [--confirm <remote>] [--dry-run] [--no-backup |
 workbook relic create [<title>] [--type <type>] [--from-file <file>] [--json]
 workbook relic list [--type <type>] [--all] [--json]
 workbook relic show <relic>[#<part>] [--body] [--removed] [--json]
+workbook relic update <relic> [--title <title>] [--set <name>=<value>]... [--set-json <name>=<json>]... [--clear <name>]... [--json]
+workbook relic update <relic> --add-part --part-type <type> [--field <name>=<value>]... [--field-json <name>=<json>]... [--body-file <file> [--body-format <label>]] [--before <part> | --after <part>]
+workbook relic update <relic> --part <part> [--field <name>=<value>]... [--field-json <name>=<json>]... [--clear-field <name>]... [--body-file <file> [--body-format <label>] [--base <version>]]
+workbook relic update <relic> --move-part <part> (--before <part> | --after <part>)
+workbook relic update <relic> [--remove-part <part>]... [--restore-part <part>]...
 workbook relic delete <relic> [--json]
 workbook relic restore <relic> [--json]
 workbook relic export <relic> [--json]

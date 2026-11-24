@@ -37,6 +37,8 @@ func runRelic(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 		return runRelicList(ctx, args, cwd, stdout, stderr)
 	case "show":
 		return runRelicShow(ctx, args, cwd, stdout, stderr)
+	case "update":
+		return runRelicUpdate(ctx, args, cwd, stdout, stderr)
 	case "delete":
 		return runRelicSetDeleted(ctx, "delete", args, cwd, stdout, stderr)
 	case "restore":
@@ -171,7 +173,7 @@ func readRelicDocument(path string, stdin io.Reader) (core.RelicDocument, error)
 func runRelicList(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("relic", "list")
 	relicType := flags.String("type", "", "show only relics of this type")
-	all := flags.Bool("all", false, "include deleted relics")
+	all := flags.Bool("all", false, "include deleted relics, each marked deleted")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err

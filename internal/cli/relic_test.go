@@ -353,7 +353,7 @@ func TestRelicCommandsRefuseBadInvocations(t *testing.T) {
 		relicErrorMessage(t, repository, 2, core.CategoryInvocation, args...)
 	}
 	message := relicErrorMessage(t, repository, 2, core.CategoryInvocation)
-	for _, subcommand := range []string{"create", "list", "show", "delete", "restore", "export"} {
+	for _, subcommand := range []string{"create", "list", "show", "update", "delete", "restore", "export"} {
 		if !strings.Contains(message, subcommand) {
 			t.Errorf("relic with no subcommand message = %q, want it to name %s", message, subcommand)
 		}
@@ -386,7 +386,7 @@ func TestRelicPrefixResolution(t *testing.T) {
 func TestRelicHelp(t *testing.T) {
 	t.Parallel()
 	output := assertHelpOutput(t, []string{"help", "relic"}, "Usage: workbook relic <command> [options]")
-	for _, subcommand := range []string{"create", "list", "show", "delete", "restore", "export"} {
+	for _, subcommand := range []string{"create", "list", "show", "update", "delete", "restore", "export"} {
 		if !strings.Contains(output, "\n  "+subcommand+" ") {
 			t.Errorf("relic help = %q, want subcommand %s", output, subcommand)
 		}
@@ -459,5 +459,59 @@ func TestRelicIsAuthoredByTheActingUser(t *testing.T) {
 	if pack.Actor.ID != actor {
 		t.Fatalf("create pack actor = %q, want %q", pack.Actor.ID, actor)
 	}
-	// The half that runs relic update under a second actor is added with relic update.
+
+	// A change by someone else is recorded under their name and leaves the
+	// relic's author as it was.
+	const editor = "bob@example.test"
+	code, stdout, stderr = runAs(t, repository, editor, "relic", "update", created.Relic.ID, "--title", "Edited", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("relic update as %s = (%d, %q, %q)", editor, code, stdout, stderr)
+	}
+	var updated core.RelicMutationResult
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "relic update").Data, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Changed || updated.Relic.Author != actor {
+		t.Fatalf("relic after an update as %s = %+v, want a change that leaves the author %q", editor, updated.Relic, actor)
+	}
+	var shown core.RelicDocument
+	mustRelic(t, repository, &shown, "show", created.Relic.ID)
+	if shown.Author != actor || shown.Title != "Edited" {
+		t.Fatalf("show after an update as %s = author %q title %q, want author %q", editor, shown.Author, shown.Title, actor)
+	}
+	packJSON = gitOutput(t, repository, "cat-file", "blob", updated.Relic.Head+":operation.json")
+	pack = core.RelicOperationPack{}
+	if err := json.Unmarshal([]byte(packJSON), &pack); err != nil {
+		t.Fatal(err)
+	}
+	if pack.Actor.ID != editor {
+		t.Fatalf("update pack actor = %q, want %q", pack.Actor.ID, editor)
+	}
+}
+
+// relic list --all marks a deleted relic with a last column of its own, as
+// relic show --removed marks a removed part. A live relic's line is the same
+// four columns with or without --all.
+func TestRelicListMarksDeletedRelics(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	live := mustCreateRelic(t, repository, "Kept", "--type", "spec").Relic.ID
+	deleted := mustCreateRelic(t, repository, "Dropped", "--type", "plan").Relic.ID
+	mustRelic(t, repository, nil, "delete", deleted)
+
+	liveLine := live + "\tspec\t0 parts\tKept\n"
+	code, stdout, stderr := run(t, repository, "relic", "list")
+	if code != 0 || stderr != "" || stdout != liveLine {
+		t.Fatalf("relic list = (%d, %q, %q), want only %q", code, stdout, stderr, liveLine)
+	}
+	// Relics list in ID order, and two made in the same millisecond may sort
+	// either way.
+	want := liveLine + deleted + "\tplan\t0 parts\tDropped\tdeleted\n"
+	if deleted < live {
+		want = deleted + "\tplan\t0 parts\tDropped\tdeleted\n" + liveLine
+	}
+	code, stdout, stderr = run(t, repository, "relic", "list", "--all")
+	if code != 0 || stderr != "" || stdout != want {
+		t.Fatalf("relic list --all = (%d, %q, %q), want %q", code, stdout, stderr, want)
+	}
 }
