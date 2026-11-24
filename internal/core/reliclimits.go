@@ -144,45 +144,9 @@ func ValidateRelicName(kind, name string) error {
 	return nil
 }
 
-// relicValueDepth counts how deep a JSON value nests arrays and objects: 0 for
-// a scalar, 1 for [1]. It is one pass over the bytes that keeps a counter and
-// nothing else, so it costs the same for any depth and can run before anything
-// that decodes the value by recursion. It does not judge whether the value is
-// valid JSON, which is the decoder's to say; of text that is not, it counts
-// the brackets outside strings.
-func relicValueDepth(raw []byte) int {
-	depth, deepest := 0, 0
-	inString, escaped := false, false
-	for _, b := range raw {
-		if inString {
-			switch {
-			case escaped:
-				escaped = false
-			case b == '\\':
-				escaped = true
-			case b == '"':
-				inString = false
-			}
-			continue
-		}
-		switch b {
-		case '"':
-			inString = true
-		case '[', '{':
-			depth++
-			if depth > deepest {
-				deepest = depth
-			}
-		case ']', '}':
-			depth--
-		}
-	}
-	return deepest
-}
-
 // checkRelicValueDepth refuses a value that nests deeper than the limit.
-func checkRelicValueDepth(raw []byte) error {
-	if depth := relicValueDepth(raw); depth > MaxRelicValueDepth {
+func checkRelicValueDepth(depth int) error {
+	if depth > MaxRelicValueDepth {
 		return Errorf(CategoryValidation,
 			"the value nests arrays and objects %d levels deep; the limit is %d levels", depth, MaxRelicValueDepth)
 	}
@@ -204,18 +168,24 @@ func checkRelicValueSize(kind string, size int) error {
 }
 
 // CanonicalRelicValue decodes exactly one JSON value and re-encodes it in the
-// stored form: numbers keep their written text, object members are sorted, and
-// a repeated member keeps its last value. The encoding is exactly json.Marshal's,
-// including its HTML escaping (a "<", ">" or "&" in a string is written as
-// \u003c, \u003e or \u0026). Stored values are embedded as json.RawMessage in
-// documents that core.EncodeDocument writes with json.Marshal, which escapes a
-// RawMessage again, so a form that left them bare would differ from the bytes
-// read back from storage.
+// stored form: numbers keep their written text and object members are sorted.
+// The encoding is exactly json.Marshal's, including its HTML escaping (a "<",
+// ">" or "&" in a string is written as its six-byte \u escape). Stored values
+// are embedded as json.RawMessage in documents that core.EncodeDocument writes
+// with json.Marshal, which escapes a RawMessage again, so a form that left
+// them bare would differ from the bytes read back from storage.
 //
 // A value that nests deeper than MaxRelicValueDepth is refused first, by a
 // count that does not recurse, so no depth reaches the decoder or the encoder.
+// The same pass over the bytes finds text the decoder would replace instead of
+// refusing, and checkRelicValueText refuses it, along with an object that
+// names a member twice: the value stored is the value given, or nothing is.
 func CanonicalRelicValue(raw []byte) (json.RawMessage, error) {
-	if err := checkRelicValueDepth(raw); err != nil {
+	scan := scanRelicJSONText(raw)
+	if err := checkRelicValueDepth(scan.depth); err != nil {
+		return nil, err
+	}
+	if err := checkRelicValueText(raw, scan); err != nil {
 		return nil, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))

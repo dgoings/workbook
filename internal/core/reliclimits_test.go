@@ -85,7 +85,6 @@ func TestCanonicalRelicValue(t *testing.T) {
 		` "x" `:                   `"x"`,
 		`1.0`:                     `1.0`,
 		`1e2`:                     `1e2`,
-		`{"a":1,"a":2}`:           `{"a":2}`,
 		`"<"`:                     `"\u003c"`,
 		`"a&b>c"`:                 `"a\u0026b\u003ec"`,
 		`"\u003c"`:                `"\u003c"`,
@@ -115,7 +114,8 @@ func TestCanonicalRelicValue(t *testing.T) {
 			t.Errorf("value %q does not survive json.Marshal: read back %q, canonical %q", in, back.Value, canonical)
 		}
 	}
-	for _, bad := range []string{"", "{", "1 2"} {
+	// A member named twice kept its last value once; it is refused now.
+	for _, bad := range []string{"", "{", "1 2", `{"a":1,"a":2}`} {
 		_, err := CanonicalRelicValue([]byte(bad))
 		requireValidation(t, "value "+bad, err)
 	}

@@ -52,10 +52,16 @@ type RelicDocument struct {
 	Links      []json.RawMessage          `json:"links"`
 }
 
-// DecodeRelicDocument reads exactly one relic document, refusing a member this
-// build does not know. What the document says is checked when it is turned
-// into a create; see RelicCreateInputFromDocument.
+// DecodeRelicDocument reads exactly one relic document. It refuses a member
+// this build does not know, with names matched exactly, a member named twice
+// in one object at any depth, and text that is not valid UTF-8 or holds a \u
+// escape for half of a surrogate pair: each is something the decoder would
+// read as a document the text never was. What the document says is checked
+// when it is turned into a create; see RelicCreateInputFromDocument.
 func DecodeRelicDocument(data []byte) (RelicDocument, error) {
+	if err := checkRelicDocumentText(data); err != nil {
+		return RelicDocument{}, err
+	}
 	var document RelicDocument
 	if err := decodeOneJSON(data, &document); err != nil {
 		return RelicDocument{}, Errorf(CategoryValidation, "the relic document cannot be read: %s", err.Error())
