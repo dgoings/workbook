@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -723,5 +724,107 @@ func TestValidateCountsANewerWritersRelic(t *testing.T) {
 	}
 	if failure := relics.Failures[0]; failure.RelicID != tip.Operation.RelicID || failure.Commit != newer || failure.Category != "newer-writer" {
 		t.Fatalf("relic failure = %#v, want relic %s at %s as newer-writer", failure, tip.Operation.RelicID, newer)
+	}
+}
+
+// The forgery the fold could once not tell from an honest edit: a body's
+// version goes from the part's ID to a new one, and then a third text arrives
+// under the part's ID again. A save made from that first version by someone
+// who read the first text would then overwrite text they never saw. The fold
+// refuses the commit that takes the part's ID a second time, so every relic
+// command does, and validation names the relic and the ID.
+func TestABodyVersionTakenAgainIsRefusedByEveryRelicCommand(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	fixture := openRelicFixture(t, repository)
+	fixture.threeCommitRelic(t, 1)
+	root := fixture.createRelic(t, 2, []byte("the first text\n"))
+	part := root.Record.State.Relic.Parts[0]
+	relicID := root.Operation.RelicID
+	edited := fixture.setRelicBody(t, root, 700001, part.ID, []byte("the second text\n"))
+
+	third := []byte("a third text under the first one's version\n")
+	pack := nextRelicPack(edited, relicBodySetOperation(0, part.ID, relicTestID(700001), third))
+	pack.Operations[0].ID = part.ID
+	// The state a fold that let the ID through computes.
+	claimed := edited.Record.State
+	claimed.LogicalClock = pack.LogicalClock
+	claimed.Relic.UpdatedAt = pack.WallTime
+	claimed.Relic.Parts = slices.Clone(claimed.Relic.Parts)
+	claimed.Relic.Parts[0].Body = &core.RelicBody{Format: "md", Version: part.ID, Bytes: int64(len(third))}
+	fields := gitOutput(t, repository, "rev-parse", edited.Head+":parts/"+part.ID+"/fields.json")
+	body := gitInput(t, repository, third, "hash-object", "-w", "--stdin")
+	subtree := gitInput(t, repository, []byte("100644 blob "+fields+"\tfields.json\n100644 blob "+body+"\tbody\n"), "mktree")
+	parts := gitInput(t, repository, []byte("040000 tree "+subtree+"\t"+part.ID+"\n"), "mktree")
+	forged := fixture.forgeRelicCommit(t, edited.Head, encodedRelicDocument(t, pack), encodedRelicDocument(t, claimed), parts)
+	gitInput(t, repository, nil, "update-ref", relicRef(relicID), forged, edited.Head)
+
+	if message := relicErrorMessage(t, repository, 7, core.CategoryCorruptData, "show", relicID); !strings.Contains(message, relicID) {
+		t.Fatalf("relic show error = %q, want the relic named", message)
+	}
+	mine := filepath.Join(t.TempDir(), "mine.md")
+	if err := os.WriteFile(mine, []byte("text written after reading the first text\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	relicErrorMessage(t, repository, 7, core.CategoryCorruptData,
+		"update", relicID, "--part", part.ID, "--body-file", mine, "--base", part.ID)
+	if head := relicHeadOf(t, repository, relicID); head != forged {
+		t.Fatalf("the refused save moved the relic ref from %s to %s", forged, head)
+	}
+
+	code, _, relics, stderr := relicValidation(t, repository)
+	if code != 7 {
+		t.Fatalf("validate --json code = %d, want 7; stderr = %q", code, stderr)
+	}
+	if relics == nil || relics.RelicCount != 2 || relics.Valid != 1 || relics.Invalid != 1 || len(relics.Failures) != 1 {
+		t.Fatalf("relics = %#v, want one of two relics invalid", relics)
+	}
+	failure := relics.Failures[0]
+	if failure.RelicID != relicID || failure.Commit != forged || failure.Category != "corrupt-data" ||
+		!strings.Contains(failure.Message, relicID) || !strings.Contains(failure.Message, part.ID) {
+		t.Fatalf("relic failure = %#v, want relic %s at commit %s, naming the relic and the ID %s",
+			failure, relicID, forged, part.ID)
+	}
+}
+
+// One operation ID in two commits of a relic, where the state keeps no trace
+// of the first use: every checkpoint follows from its parent, so a single
+// read serves the relic, and validation names the relic and the ID.
+func TestValidateNamesAnOperationIDUsedInTwoCommitsOfARelic(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	fixture := openRelicFixture(t, repository)
+	healthy := fixture.threeCommitRelic(t, 1)
+	tip := fixture.threeCommitRelic(t, 2)
+	relicID := tip.Operation.RelicID
+	// threeCommitRelic's title change is operation n*10+3.
+	repeatedID := relicTestID(23)
+	pack := nextRelicPack(tip, core.RelicOperation{ID: repeatedID, Type: core.RelicOperationTitleSet, Title: "Another title"})
+	record, err := core.ApplyRelic(&tip.Record, pack)
+	if err != nil {
+		t.Fatalf("ApplyRelic() error = %v", err)
+	}
+	forged := fixture.forgeRelicCommit(t, tip.Head, encodedRelicDocument(t, pack), encodedRelicDocument(t, record.State),
+		gitOutput(t, repository, "rev-parse", tip.Head+":parts"))
+	gitInput(t, repository, nil, "update-ref", relicRef(relicID), forged, tip.Head)
+
+	if shown := shownRelic(t, repository, relicID); shown.Title != "Another title" {
+		t.Fatalf("relic show title = %q, want the forged commit served: a single read does not walk history", shown.Title)
+	}
+
+	code, _, relics, stderr := relicValidation(t, repository)
+	if code != 7 {
+		t.Fatalf("validate --json code = %d, want 7; stderr = %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryCorruptData, "semantic history validation found 1 invalid relic(s)")
+	if relics == nil || relics.RelicCount != 2 || relics.Valid != 1 || relics.Invalid != 1 || len(relics.Failures) != 1 {
+		t.Fatalf("relics = %#v, want relic %s valid and relic %s invalid", relics, healthy.Operation.RelicID, relicID)
+	}
+	failure := relics.Failures[0]
+	if failure.RelicID != relicID || failure.Commit != forged || failure.Category != "corrupt-data" ||
+		!strings.Contains(failure.Message, relicID) || !strings.Contains(failure.Message, repeatedID) ||
+		!strings.Contains(failure.Message, tip.Head) {
+		t.Fatalf("relic failure = %#v, want relic %s at commit %s, naming the relic, the ID %s and its first commit %s",
+			failure, relicID, forged, repeatedID, tip.Head)
 	}
 }

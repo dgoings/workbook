@@ -265,15 +265,15 @@ func fmtInts(values []int) string {
 	return string(encoded)
 }
 
+// A part.add is not among these: delivered twice it would take a part's ID a
+// second time, which the fold refuses. See
+// TestApplyRelicRefusesAnIDUsedAgainForAPartOrABodyVersion.
 func TestApplyRelicDuplicateDeliveryChangesNothing(t *testing.T) {
-	partC := relicTestID(140)
 	cases := []struct {
 		name  string
 		setup []RelicOperation
 		ops   []RelicOperation
 	}{
-		{name: "part.add", ops: []RelicOperation{{ID: partC, Type: RelicOperationPartAdd, PartType: "note", Position: "5/1",
-			Body: &RelicBodyChange{Bytes: 3}}}},
 		{name: "part.body.set", ops: []RelicOperation{{ID: relicTestID(141), Type: RelicOperationPartBodySet,
 			Part: relicDocPartA, Body: &RelicBodyChange{Format: "md", Bytes: 5, Base: relicDocPartA}}}},
 		{name: "part.move", ops: []RelicOperation{{ID: relicTestID(142), Type: RelicOperationPartMove,
@@ -572,15 +572,12 @@ func TestRelicBodySavedByAndPartsNamedBy(t *testing.T) {
 	}
 
 	// A repeated part.add carries the ID of a part the relic already has,
-	// which is also the version of that part's first body. The fold ignores
-	// it, so it saved nothing.
+	// which is also the version of that part's first body. The fold refuses
+	// it, so there is no record for it to have saved a body in.
 	repeatedAdd := relicFoldPack(2, RelicOperation{ID: relicDocPartA, Type: RelicOperationPartAdd, PartType: "section",
 		Position: "1/1", Body: &RelicBodyChange{Format: "md", Bytes: 1840}})
-	afterRepeatedAdd := mustApplyRelic(t, record, repeatedAdd)
-	requireRelicEqual(t, "a repeated part.add", withoutUpdatedAt(afterRepeatedAdd.State.Relic), withoutUpdatedAt(record.State.Relic))
-	if RelicBodySavedBy(&record, repeatedAdd, afterRepeatedAdd, relicDocPartA) {
-		t.Errorf("a repeated part.add saved no body: part A's version did not change")
-	}
+	_, err := ApplyRelic(&record, repeatedAdd)
+	requireCorruptData(t, "a repeated part.add", err)
 
 	// A repeated part.body.set carries the ID that is already the body's
 	// version. Delivered again from the version it started from, the fold
@@ -666,5 +663,63 @@ func TestApplyRelicFieldsPastTheirTotal(t *testing.T) {
 	}
 	if _, err := DecodeRelicFieldsDocument(encoded); err != nil {
 		t.Fatalf("DecodeRelicFieldsDocument(the folded fields): %v", err)
+	}
+}
+
+// A part's ID names the part and is the version of its first body, and a body
+// edit's ID is the version it saves. An operation that takes one of those IDs
+// again would make one name stand for two things: a body version that names
+// two texts, so that a save from it overwrites text its author never saw, or
+// a part added twice. The fold refuses each as corrupt data.
+func TestApplyRelicRefusesAnIDUsedAgainForAPartOrABodyVersion(t *testing.T) {
+	root := goldenRelicRecord(t)
+	second := relicTestID(180)
+	// Part A's body goes from its first version, the part's ID, to second.
+	edited := mustApplyRelic(t, root, relicFoldPack(2, RelicOperation{ID: second, Type: RelicOperationPartBodySet,
+		Part: relicDocPartA, Body: &RelicBodyChange{Format: "md", Bytes: 20, Base: relicDocPartA}}))
+
+	for name, operation := range map[string]RelicOperation{
+		"a body edit that takes the part's own ID, which was its first version": {
+			ID: relicDocPartA, Type: RelicOperationPartBodySet, Part: relicDocPartA,
+			Body: &RelicBodyChange{Format: "md", Bytes: 30, Base: second}},
+		"a body edit that takes another part's ID": {
+			ID: relicDocPartB, Type: RelicOperationPartBodySet, Part: relicDocPartA,
+			Body: &RelicBodyChange{Format: "md", Bytes: 30, Base: second}},
+		"a body edit from a stale base that takes a part's ID": {
+			ID: relicDocPartA, Type: RelicOperationPartBodySet, Part: relicDocPartA,
+			Body: &RelicBodyChange{Format: "md", Bytes: 30, Base: relicTestID(181)}},
+		"a first body for another part that takes a part's ID": {
+			ID: relicDocPartA, Type: RelicOperationPartBodySet, Part: relicDocPartB,
+			Body: &RelicBodyChange{Format: "md", Bytes: 30}},
+		"a part.add that takes the ID of a part the relic has": {
+			ID: relicDocPartB, Type: RelicOperationPartAdd, PartType: "note", Position: "9/1"},
+		"a part.add that takes the ID of a removed part": {
+			ID: relicDocPartA, Type: RelicOperationPartAdd, PartType: "note", Position: "9/1",
+			Body: &RelicBodyChange{Format: "md", Bytes: 30}},
+		"a part.add that takes the ID of a body's current version": {
+			ID: second, Type: RelicOperationPartAdd, PartType: "note", Position: "9/1"},
+	} {
+		parent := edited
+		if strings.Contains(name, "removed") {
+			parent = mustApplyRelic(t, edited, relicFoldPack(3,
+				RelicOperation{ID: relicTestID(182), Type: RelicOperationPartRemove, Part: relicDocPartA}))
+		}
+		_, err := ApplyRelic(&parent, relicFoldPack(parent.State.LogicalClock+1, operation))
+		requireCorruptData(t, name, err)
+		if err != nil && !strings.Contains(err.Error(), operation.ID) {
+			t.Errorf("%s: error %q does not name the ID %s", name, err, operation.ID)
+		}
+	}
+
+	// IDs nothing has used fold as before.
+	next := mustApplyRelic(t, edited, relicFoldPack(3,
+		RelicOperation{ID: relicTestID(183), Type: RelicOperationPartBodySet, Part: relicDocPartA,
+			Body: &RelicBodyChange{Format: "md", Bytes: 30, Base: second}},
+		RelicOperation{ID: relicTestID(184), Type: RelicOperationPartAdd, PartType: "note", Position: "9/1"}))
+	if body := requirePartForTest(t, next.State.Relic, relicDocPartA).Body; body.Version != relicTestID(183) {
+		t.Errorf("part A body version = %s, want the new edit's", body.Version)
+	}
+	if len(next.State.Relic.Parts) != 3 {
+		t.Errorf("parts = %d, want 3", len(next.State.Relic.Parts))
 	}
 }

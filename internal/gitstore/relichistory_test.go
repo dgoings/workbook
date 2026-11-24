@@ -822,12 +822,15 @@ func TestRuleR6BodyReplacedWithoutABodyEdit(t *testing.T) {
 
 // A part's first body has the part's own ID as its version, and a part.add
 // operation's ID is the part's ID. So a second part.add for a part the relic
-// already has carries the ID of that body's version, and the fold ignores it.
-// It saved nothing, and the body must stay the one the parent stores.
-func TestRuleR6ARepeatedPartAddCannotReplaceABody(t *testing.T) {
+// already has would take the ID of that body's version, and the text beside it
+// would arrive under a version that already names other text. The fold refuses
+// it, so a commit holding one is refused whatever state it claims.
+func TestARepeatedPartAddIsRefusedOnReadAndNamedByValidate(t *testing.T) {
 	t.Parallel()
 	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
 	tip, a, _ := relicRuleHistory(t, repo, config)
+	relicID := tip.Operation.RelicID
 	stored := forgedPartsOf(t, repo, tip.Head)
 	// The same size as the body it replaces, so no size gives it away.
 	replaced := stored[a.id]
@@ -837,30 +840,44 @@ func TestRuleR6ARepeatedPartAddCannotReplaceABody(t *testing.T) {
 	}
 
 	pack := relicChildPack(tip, relicPartAdd(a.id, "1/1", replaced.body))
-	before, _ := tip.Record.State.Relic.Part(a.id)
-	after, _ := foldRelic(t, &tip, pack).State.Relic.Part(a.id)
-	if before.Body.Version != a.id || *after.Body != *before.Body {
-		t.Fatalf("the repeated part.add folded the body from %+v to %+v; the test needs it to change nothing",
-			*before.Body, *after.Body)
+	if _, err := core.ApplyRelic(&tip.Record, pack); core.CategoryOf(err) != core.CategoryCorruptData {
+		t.Fatalf("ApplyRelic(a repeated part.add) error = %v, want corrupt data", err)
 	}
-
-	// forgeRelicChild stores the state the fold computes, so the forged commit
-	// is honest about the version and wrong only in its tree.
-	err := checkRelicRule(t, repo, config, tip, 2, relicRuleCase{
-		pack:      pack,
-		honest:    stored,
-		violating: withForgedPart(stored, a.id, replaced),
-		fragments: []string{a.id, "body"},
-	})
-	assertGetRelicRefused(t, err)
+	// The state a build that ignored the operation would have computed: the
+	// parent's, one clock on.
+	claimed := tip.Record.State
+	claimed.LogicalClock = pack.LogicalClock
+	claimed.Relic.UpdatedAt = pack.WallTime
+	for name, parts := range map[string]map[string]forgedPart{
+		"with the tree left as it was": stored,
+		"with the body replaced":       withForgedPart(stored, a.id, replaced),
+	} {
+		forged := forgeRelicCommit(t, repo, tip.Head,
+			encodedRelicDocument(t, pack), encodedRelicDocument(t, claimed), parts)
+		pointRelicRef(t, repo, relicID, forged)
+		_, err := repo.GetRelic(ctx, config, relicID)
+		if err == nil {
+			t.Fatalf("%s: GetRelic() accepted a repeated part.add", name)
+		}
+		assertGetRelicRefused(t, err)
+		assertRelicCategory(t, err, core.CategoryCorruptData, relicID, a.id)
+		assertRelicHistoryStopsAt(t, repo, config, relicID, forged, forged, 2,
+			core.CategoryCorruptData, relicID, a.id)
+	}
 }
 
-// The same for a part.body.set that carries the ID of the operation that saved
-// the current body: the version it would save is the one the body already has.
+// A part.body.set that carries the ID of the operation that saved the current
+// body would save the version the body already has. Delivered again from the
+// base it first had it is stale, so the fold ignores it and a single-relic
+// read serves the commit while the tree keeps the body. It cannot replace the
+// body, and the full walk refuses the commit either way: its operation ID is
+// already in the history.
 func TestRuleR6ARepeatedBodyEditCannotReplaceABody(t *testing.T) {
 	t.Parallel()
 	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
 	tip, a, _ := relicRuleHistory(t, repo, config)
+	relicID := tip.Operation.RelicID
 	alice := []byte("Alice's text, saved from the first version\n")
 	saved := relicTestID(700011)
 	edited := writeRelicChild(t, repo, config, tip,
@@ -883,12 +900,23 @@ func TestRuleR6ARepeatedBodyEditCannotReplaceABody(t *testing.T) {
 		t.Fatalf("the repeated body edit folded the body from %+v to %+v; the test needs it to change nothing",
 			*before.Body, *after.Body)
 	}
-	err := checkRelicRule(t, repo, config, edited, 3, relicRuleCase{
-		pack:      pack,
-		honest:    current,
-		violating: withForgedPart(current, a.id, replaced),
-		fragments: []string{a.id, "body"},
-	})
+
+	// With the tree left alone the commit breaks no rule a single-relic read
+	// checks, and the walk names the ID it repeats.
+	kept := forgeRelicChild(t, repo, edited, pack, current)
+	pointRelicRef(t, repo, relicID, kept)
+	if got, err := repo.GetRelic(ctx, config, relicID); err != nil || got.Head != kept {
+		t.Fatalf("GetRelic() of the repeated edit that keeps the body = %s, %v; want %s", got.Head, err, kept)
+	}
+	assertRelicHistoryStopsAt(t, repo, config, relicID, kept, kept, 3,
+		core.CategoryCorruptData, relicID, saved, edited.Head)
+
+	// With the body replaced, both refuse it.
+	violating := forgeRelicChild(t, repo, edited, pack, withForgedPart(current, a.id, replaced))
+	pointRelicRef(t, repo, relicID, violating)
+	assertRelicHistoryStopsAt(t, repo, config, relicID, violating, violating, 3,
+		core.CategoryCorruptData, a.id, "body")
+	_, err := repo.GetRelic(ctx, config, relicID)
 	assertGetRelicRefused(t, err)
 
 	// The operation naming the version it saved as its base names itself,
@@ -985,11 +1013,6 @@ func TestGetRelicRefusesAChangedFieldsBlobWithNoFieldOperation(t *testing.T) {
 			pack:      relicChildPack(tip, relicBodySet(700010, a.id, a.id, newBody)),
 			honest:    withNewBody,
 			violating: changed(withNewBody),
-		},
-		"a repeated part.add": {
-			pack:      relicChildPack(tip, relicPartAdd(a.id, "1/1", stored[a.id].body)),
-			honest:    stored,
-			violating: changed(stored),
 		},
 		// A field operation for another part does not cover this one.
 		"a move beside a field edit of another part": {
@@ -1509,4 +1532,120 @@ func TestOneRelicValuePastItsLimitIsCorruptData(t *testing.T) {
 	if len(err.Error()) > 500 {
 		t.Fatalf("the refusal is %d bytes long; it must not carry the value", len(err.Error()))
 	}
+}
+
+// The fold sees an ID used twice only where the state still holds the first
+// use. A body's earlier versions and every other kind of operation leave no
+// such trace, so a commit that takes one of those IDs again folds like any
+// other, and a single-relic read serves it. The full walk has every pack in
+// front of it and refuses the commit that repeats.
+func TestValidateRelicHistoryRefusesAnOperationIDInTwoCommits(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		part := relicTestPartNumbered(1).withBody("md", []byte("the first text\n"))
+		root := writeRelicRoot(t, repo, config, part)
+		relicID := root.Operation.RelicID
+		write := func(parent core.RelicSnapshot, number int, base string, text string) core.RelicSnapshot {
+			t.Helper()
+			return writeRelicChild(t, repo, config, parent,
+				map[string]core.RelicPartContent{part.id: {Body: []byte(text), HasBody: true}},
+				relicBodySet(number, part.id, base, []byte(text)))
+		}
+		// The body goes from its first version to n1, then to n2.
+		n1, n2 := relicTestID(700001), relicTestID(700002)
+		first := write(root, 700001, part.id, "the second text\n")
+		second := write(first, 700002, n1, "the third text\n")
+		titled := writeRelicChild(t, repo, config, second, nil, relicTitleSet(700003, "A new title"))
+		assertRelicHistoryValid(t, repo, config, relicID, titled.Head, 4)
+
+		// forged writes pack onto titled the way an honest writer would have,
+		// had the ID been new: the state the fold computes and the tree that
+		// state describes.
+		forged := func(pack core.RelicOperationPack, parts map[string]forgedPart) string {
+			t.Helper()
+			commit := forgeRelicChild(t, repo, titled, pack, parts)
+			pointRelicRef(t, repo, relicID, commit)
+			got, err := repo.GetRelic(ctx, config, relicID)
+			if err != nil || got.Head != commit {
+				t.Fatalf("GetRelic() = %s, %v; want %s: a single-relic read does not walk history", got.Head, err, commit)
+			}
+			return commit
+		}
+		stored := forgedPartsOf(t, repo, titled.Head)
+
+		// A body version that named the second text now names a fourth: a save
+		// made from n1 by someone who read the second text would overwrite it.
+		again := []byte("a fourth text under the second one's version\n")
+		body := stored[part.id]
+		body.body = again
+		bodyAgain := forged(relicChildPack(titled, relicBodySet(700001, part.id, n2, again)),
+			withForgedPart(stored, part.id, body))
+		if got := readRelicTip(t, repo, config, relicID); func() string {
+			stored, _ := got.Record.State.Relic.Part(part.id)
+			return stored.Body.Version
+		}() != n1 {
+			t.Fatal("the forged commit did not give the body the version n1 again; the test needs it to")
+		}
+		assertRelicHistoryStopsAt(t, repo, config, relicID, bodyAgain, bodyAgain, 4,
+			core.CategoryCorruptData, relicID, n1, first.Head)
+
+		// Any other operation's ID, here a title change's.
+		titleAgain := forged(relicChildPack(titled, relicTitleSet(700003, "Another title")), stored)
+		assertRelicHistoryStopsAt(t, repo, config, relicID, titleAgain, titleAgain, 4,
+			core.CategoryCorruptData, relicID, relicTestID(700003), titled.Head)
+
+		// The ID of the relic.create itself.
+		created := root.Operation.Operations[0]
+		if created.Type != core.RelicOperationCreate {
+			t.Fatalf("the root pack opens with %s; the test needs relic.create", created.Type)
+		}
+		reused := core.RelicOperation{ID: created.ID, Type: core.RelicOperationTitleSet, Title: "A title under the create's ID"}
+		createAgain := forged(relicChildPack(titled, reused), stored)
+		assertRelicHistoryStopsAt(t, repo, config, relicID, createAgain, createAgain, 4,
+			core.CategoryCorruptData, relicID, created.ID, root.Head)
+
+		// The honest history is untouched by all of it.
+		pointRelicRef(t, repo, relicID, titled.Head)
+		assertRelicHistoryValid(t, repo, config, relicID, titled.Head, 4)
+	})
+}
+
+// An operation ID is used once along one relic's own history. Nothing compares
+// one ref with another: two relics whose packs carry the same IDs are both
+// valid, and so is a second walk that starts at an older commit of a relic,
+// which shares every commit and every ID with the walk from its tip.
+func TestValidateRelicHistoryNeverComparesOperationIDsAcrossRefs(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	part := relicTestPartNumbered(1).withBody("md", []byte("the first text\n"))
+	edit := func(root core.RelicSnapshot) core.RelicSnapshot {
+		t.Helper()
+		titled := writeRelicChild(t, repo, config, root, nil, relicTitleSet(700001, "A new title"))
+		return writeRelicChild(t, repo, config, titled,
+			map[string]core.RelicPartContent{part.id: {Body: []byte("the second text\n"), HasBody: true}},
+			relicBodySet(700002, part.id, part.id, []byte("the second text\n")))
+	}
+	one := edit(writeRelicRootNumbered(t, repo, config, 1, part))
+	two := edit(writeRelicRootNumbered(t, repo, config, 2, part))
+	if one.Operation.RelicID == two.Operation.RelicID {
+		t.Fatal("the two relics have one ID; the test needs two")
+	}
+	shared := map[string]bool{}
+	for _, operation := range one.Operation.Operations {
+		shared[operation.ID] = true
+	}
+	for _, operation := range two.Operation.Operations {
+		if !shared[operation.ID] {
+			t.Fatalf("the two relics' newest packs do not share operation %s; the test needs them to", operation.ID)
+		}
+	}
+	assertRelicHistoryValid(t, repo, config, one.Operation.RelicID, one.Head, 3)
+	assertRelicHistoryValid(t, repo, config, two.Operation.RelicID, two.Head, 3)
+
+	// An older commit of the first relic, walked on its own as a second ref
+	// holding it would be.
+	older := relicParents(t, repo, one.Head)[0]
+	assertRelicHistoryValid(t, repo, config, one.Operation.RelicID, older, 2)
+	assertRelicHistoryValid(t, repo, config, one.Operation.RelicID, one.Head, 3)
 }

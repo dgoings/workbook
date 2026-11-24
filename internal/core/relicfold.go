@@ -34,10 +34,13 @@ func foldedRelicMinReader(parent *RelicRecord, pack RelicOperationPack) int {
 //
 // The fold is tolerant where an operation can only be stale: a body edit from
 // a base that is not the part's current version, an operation naming a part
-// the relic does not have, a second part.add with the same ID, removing a
-// removed part, restoring a live part and clearing an absent name all change
-// nothing, and the operation stays in history. Tombstone and restore keep the
-// task rules and are corrupt data when misused.
+// the relic does not have, removing a removed part, restoring a live part and
+// clearing an absent name all change nothing, and the operation stays in
+// history. Tombstone and restore keep the task rules and are corrupt data
+// when misused.
+//
+// It is not tolerant of an ID used twice where the state shows it: see
+// refuseReusedRelicID.
 func ApplyRelic(parent *RelicRecord, pack RelicOperationPack) (RelicRecord, error) {
 	// The generation gate runs before anything else, so a newer document is
 	// reported as newer rather than judged by rules this build may not know.
@@ -73,6 +76,9 @@ func ApplyRelic(parent *RelicRecord, pack RelicOperationPack) (RelicRecord, erro
 	for _, operation := range operations {
 		if relic.Deleted && operation.Type != RelicOperationRestore {
 			return RelicRecord{}, corrupt("cannot change a deleted relic")
+		}
+		if err := refuseReusedRelicID(relic, operation); err != nil {
+			return RelicRecord{}, err
 		}
 		applyRelicOperation(&relic, operation)
 	}
@@ -165,6 +171,37 @@ func checkRelicChild(parent RelicStateDocument, pack RelicOperationPack) error {
 		for _, operation := range pack.Operations[1:] {
 			if operation.Type == RelicOperationTombstone {
 				return corrupt("relic.restore must not be followed by relic.tombstone")
+			}
+		}
+	}
+	return nil
+}
+
+// refuseReusedRelicID refuses an operation that takes an ID the relic's state
+// already uses for something else. An operation ID is used once in a relic's
+// history, and two of those uses are names the state keeps: a part's ID, which
+// is the ID of the part.add that made it and the version of its first body,
+// and a body's version, which is the ID of the operation that saved it.
+//
+// A part.body.set that took a part's ID would give a body a version that
+// already named other text, so a later save from that version would overwrite
+// text its author never saw. A part.add that took a part's ID or a body's
+// current version would make one name stand for two things the same way. The
+// state does not keep a body's earlier versions or any other operation's ID,
+// so the fold cannot see those reused; the full history walk does.
+func refuseReusedRelicID(relic RelicData, operation RelicOperation) error {
+	switch operation.Type {
+	case RelicOperationPartBodySet:
+		if _, exists := relic.Part(operation.ID); exists {
+			return corrupt("part.body.set %s takes the ID of a part of the relic; an operation ID is used once", operation.ID)
+		}
+	case RelicOperationPartAdd:
+		for _, part := range relic.Parts {
+			if part.ID == operation.ID {
+				return corrupt("part.add %s takes the ID of a part the relic already has; an operation ID is used once", operation.ID)
+			}
+			if part.Body != nil && part.Body.Version == operation.ID {
+				return corrupt("part.add %s takes the ID that is the body version of part %s; an operation ID is used once", operation.ID, part.ID)
 			}
 		}
 	}
@@ -333,13 +370,13 @@ func ApplyRelicFields(before map[string]json.RawMessage, partID string, operatio
 // parent has no such part, the parent's part has no body, or its body has
 // another version.
 //
-// The version being an operation of the pack is not enough. A part's first
-// body has the part's own ID as its version, which is also the ID of the
-// part.add that created it, so a second part.add for that part carries the ID
-// and the fold ignores it. A part.body.set can likewise carry the ID that is
-// already the body's version. Neither changes the version, so neither saved a
-// body, and whatever text arrives beside one is not stored. The writer and the
-// history check both ask this function, so they agree on that.
+// The version being an operation of the pack is not enough. A part.body.set
+// delivered a second time carries the ID that is already the body's version,
+// and from the base it first had it is stale and the fold ignores it. It does
+// not change the version, so it saved no body, and whatever text arrives
+// beside it is not stored. The writer and the history check both ask this
+// function, so they agree on that. A second part.add for a part never gets
+// this far: the fold refuses it.
 func RelicBodySavedBy(parent *RelicRecord, pack RelicOperationPack, record RelicRecord, partID string) bool {
 	part, ok := record.State.Relic.Part(partID)
 	if !ok || part.Body == nil {

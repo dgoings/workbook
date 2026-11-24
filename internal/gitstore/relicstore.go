@@ -574,7 +574,7 @@ func (r *Repository) GetRelic(ctx context.Context, config core.ProjectConfig, re
 // ID of an operation in the pack, and the part is new or that version is not
 // the one parent records. Otherwise the part keeps the body it had, whatever
 // content holds, so text from an edit the fold ignored, or beside a repeated
-// part.add or part.body.set, is never stored. A part the pack does not name
+// part.body.set, is never stored. A part the pack does not name
 // keeps its subtree object, and content given for one is refused rather than
 // dropped.
 //

@@ -30,8 +30,9 @@ import (
 //	R6  A part's body differs from the parent's only when this commit saved
 //	    it: the state's body version for it is the ID of an operation in P,
 //	    and the part is new in this commit or that version is not the one in
-//	    the parent's state. A repeated part.add or part.body.set, which leaves
-//	    the version as it was, therefore cannot carry new text.
+//	    the parent's state. A repeated part.body.set, which leaves the
+//	    version as it was, therefore cannot carry new text. (A repeated
+//	    part.add never gets here: the fold refuses it, which is R1.)
 //	R7  A part's fields.json is its parent's with P's field operations for it
 //	    applied in order. For a part P adds, it is a canonical fields document
 //	    that agrees with any field operations P carries for it.
@@ -48,6 +49,13 @@ import (
 // No rule limits how large one part's fields are together, or one relic's
 // properties: those are totals, checked when a change makes one grow and
 // never when a relic is read, like the number of parts.
+//
+// One thing no rule about a commit and its parent can hold: an operation ID
+// is used once in a relic's history. The fold refuses the reuse the parent's
+// state shows, a part's ID or a body's current version taken again. Any other
+// reuse is seen only by the walk over the whole history, ValidateRelicHistory,
+// which keeps every ID it has passed along that one history and compares
+// nothing across refs.
 //
 // The rules are this build's. A commit whose pack or state declares a newer
 // generation is not judged by them: it is neither valid nor corrupt here, and
@@ -578,7 +586,8 @@ func (r *Repository) verifiedRelicTip(
 }
 
 // ValidateRelicHistory checks every commit of one relic's history, root to
-// tip, against all seven rules, and stops at the first that fails. checked is
+// tip, against all seven rules and for an operation ID an earlier commit of
+// the same history already used, and stops at the first that fails. checked is
 // the number of commits that passed before it, which is the whole history when
 // failure is nil.
 //
@@ -628,6 +637,10 @@ func (r *Repository) ValidateRelicHistory(
 			"relic %s: Git did not list the history of commit %s", head.RelicID, head.ObjectID)
 	}
 
+	// usedIn is the commit each operation ID of this history first appeared
+	// in. It covers this one walk and nothing else: another ref may hold the
+	// same commits, and so the same IDs, and that is no fault of either.
+	usedIn := map[string]string{}
 	var previous *RelicCommit
 	for _, objectID := range commits {
 		commit, err := r.readRelicCommit(ctx, config, head.RelicID, objectID)
@@ -645,6 +658,20 @@ func (r *Repository) ValidateRelicHistory(
 		}
 		if err := r.VerifyRelicTransition(ctx, previous, commit, true); err != nil {
 			return failed(objectID, err)
+		}
+		// An operation ID is used once in a relic's history. The rules above
+		// judge a commit against its parent alone, and the parent's state
+		// keeps only some IDs: a body's earlier versions and most operations
+		// leave no trace in it, so only the walk can see one used again.
+		for _, operation := range commit.Operation.Operations {
+			if first, used := usedIn[operation.ID]; used {
+				return failed(objectID, corruptRelic(head.RelicID,
+					"operation ID %s is used in commit %s and again in commit %s; an operation ID is used once in a relic's history",
+					operation.ID, first, objectID))
+			}
+		}
+		for _, operation := range commit.Operation.Operations {
+			usedIn[operation.ID] = objectID
 		}
 		checked++
 		previous = &commit

@@ -965,11 +965,10 @@ func TestWriteRelicNeverStoresTextFromAStaleBodyEdit(t *testing.T) {
 	}
 }
 
-// A second part.add for a part the relic already has carries the ID that is
-// the version of that part's first body, and the fold ignores it. The writer
-// must not take the version being an operation of the pack for the pack having
-// saved the body.
-func TestWriteRelicNeverStoresTextFromARepeatedPartAdd(t *testing.T) {
+// A second part.add for a part the relic already has takes the ID that is the
+// version of that part's first body. The fold refuses it, so the writer has no
+// record to store and writes nothing, whatever record the caller hands it.
+func TestWriteRelicRefusesARepeatedPartAdd(t *testing.T) {
 	t.Parallel()
 	repo, config := relicRepository(t, testrepo.FormatSHA1)
 	ctx := context.Background()
@@ -978,49 +977,36 @@ func TestWriteRelicNeverStoresTextFromARepeatedPartAdd(t *testing.T) {
 	root := writeRelicRoot(t, repo, config, part)
 	relicID := root.Operation.RelicID
 
-	// The same size as the current text, so only the rule about which change
-	// saved the body stands between it and the tree.
+	// The same size as the current text, so nothing but the repeated ID stands
+	// between it and the tree.
 	replacement := bytes.ToUpper(current)
 	pack := relicChildPack(root, relicPartAdd(part.id, "1/1", replacement))
-	record := foldRelic(t, &root, pack)
-	before, _ := root.Record.State.Relic.Part(part.id)
-	if after, _ := record.State.Relic.Part(part.id); before.Body.Version != part.id || *after.Body != *before.Body {
-		t.Fatalf("the repeated part.add folded the body from %+v to %+v; the test needs it to change nothing",
-			*before.Body, *after.Body)
+	if _, err := core.ApplyRelic(&root.Record, pack); core.CategoryOf(err) != core.CategoryCorruptData {
+		t.Fatalf("ApplyRelic(a repeated part.add) error = %v, want corrupt data", err)
 	}
+	// The record a caller that ignored the operation would hand over: the
+	// parent's, one clock on.
+	record := root.Record
+	record.State.LogicalClock = pack.LogicalClock
+	record.State.Relic.UpdatedAt = pack.WallTime
 
-	written, err := repo.WriteRelic(ctx, config, &root, pack, record,
+	_, err := repo.WriteRelic(ctx, config, &root, pack, record,
 		map[string]core.RelicPartContent{part.id: {Body: replacement, HasBody: true}}, "update relic")
-	if err != nil {
-		t.Fatalf("WriteRelic() error = %v", err)
+	if err == nil {
+		t.Fatal("WriteRelic() stored a repeated part.add")
 	}
-	if before, after := gitOutput(t, repo, "rev-parse", root.Head+":parts/"+part.id+"/body"),
-		gitOutput(t, repo, "rev-parse", written.Head+":parts/"+part.id+"/body"); before != after {
-		t.Fatalf("the repeated part.add replaced body %s with %s", before, after)
+	assertRelicCategory(t, err, core.CategoryCorruptData, part.id)
+	if tip := gitOutput(t, repo, "rev-parse", relicRef(relicID)); tip != root.Head {
+		t.Fatalf("the relic ref moved from %s to %s", root.Head, tip)
 	}
-	if before, after := gitOutput(t, repo, "rev-parse", root.Head+":parts"),
-		gitOutput(t, repo, "rev-parse", written.Head+":parts"); before != after {
-		t.Fatalf("the repeated part.add moved the parts tree from %s to %s", before, after)
-	}
-	parts, err := repo.ReadRelicParts(ctx, config, written, []string{part.id}, true)
+	parts, err := repo.ReadRelicParts(ctx, config, root, []string{part.id}, true)
 	if err != nil {
 		t.Fatalf("ReadRelicParts() error = %v", err)
 	}
 	if got := parts[part.id]; !got.HasBody || !bytes.Equal(got.Body, current) {
-		t.Fatalf("body after the repeated part.add = %q, want %q", got.Body, current)
+		t.Fatalf("body after the refused part.add = %q, want %q", got.Body, current)
 	}
-	if operations := written.Operation.Operations; len(operations) != 1 ||
-		operations[0].Type != core.RelicOperationPartAdd || operations[0].ID != part.id {
-		t.Fatalf("the written pack holds %+v, want the repeated part.add", operations)
-	}
-
-	// What the writer stored is a commit every rule accepts.
-	assertRelicHistoryValid(t, repo, config, relicID, written.Head, 2)
-	got, err := repo.GetRelic(ctx, config, relicID)
-	if err != nil {
-		t.Fatalf("GetRelic() error = %v", err)
-	}
-	assertSameRelicSnapshot(t, got, written)
+	assertRelicHistoryValid(t, repo, config, relicID, root.Head, 1)
 }
 
 // Fields given for a part the parent has are stored only when the pack sets or
