@@ -324,6 +324,7 @@ func TestGuidelinesNameRealRelicJSONMembers(t *testing.T) {
 				Theirs: core.RelicBodyVersion{Version: version, Bytes: 2, Object: "c", Base64: &notText},
 			},
 			ParkedRef: "refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1",
+			Unapplied: []core.RelicUnappliedOperation{{OperationID: version, Operation: "title.set", Commit: "d"}},
 		}},
 	}, keys)
 	jsonKeys(t, ResultEnvelope{Format: "workbook.result", Version: 1, Command: "relic show", Data: core.RelicDocument{
@@ -350,7 +351,7 @@ func TestGuidelinesNameRealRelicJSONMembers(t *testing.T) {
 	}
 	for _, member := range []string{
 		"relics", "relic", "part", "rel", "parts", "body", "text", "base64", "version",
-		"relicConflict", "type", "base", "ours", "theirs", "parkedRef",
+		"relicConflict", "type", "base", "ours", "theirs", "parkedRef", "unapplied",
 	} {
 		if !keys[member] {
 			t.Errorf("no JSON result has a member %q", member)

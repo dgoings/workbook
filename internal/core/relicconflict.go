@@ -1,6 +1,10 @@
 package core
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 // RelicConflictType discriminates the situations that stop a relic's replay.
 // It is a union of its own, beside the task and configuration unions, because
@@ -46,18 +50,30 @@ type RelicTombstoneConflict struct {
 	Operation   RelicOperationType `json:"operation"`
 }
 
+// RelicUnappliedOperation is a local operation a stopped replay did not
+// apply, other than the one its conflict names. Commit is the local commit
+// whose operation.json holds it.
+type RelicUnappliedOperation struct {
+	OperationID string             `json:"operationId"`
+	Operation   RelicOperationType `json:"operation"`
+	Commit      string             `json:"commit"`
+}
+
 // RelicConflict is one relic whose replay stopped. ParkedRef names the ref
 // that keeps the local tip, and Unreplayed counts the local packs that were
-// not replayed. Remote names the remote when it is not origin.
+// not replayed. Unapplied lists, oldest first, every operation of those packs
+// other than the one the conflict names and those the remote already holds.
+// Remote names the remote when it is not origin.
 type RelicConflict struct {
-	RelicID    string                  `json:"relicId"`
-	Type       RelicConflictType       `json:"type"`
-	Part       string                  `json:"part,omitempty"`
-	Body       *RelicBodyConflict      `json:"body,omitempty"`
-	Tombstone  *RelicTombstoneConflict `json:"tombstone,omitempty"`
-	ParkedRef  string                  `json:"parkedRef,omitempty"`
-	Unreplayed int                     `json:"unreplayed"`
-	Remote     string                  `json:"remote,omitempty"`
+	RelicID    string                    `json:"relicId"`
+	Type       RelicConflictType         `json:"type"`
+	Part       string                    `json:"part,omitempty"`
+	Body       *RelicBodyConflict        `json:"body,omitempty"`
+	Tombstone  *RelicTombstoneConflict   `json:"tombstone,omitempty"`
+	ParkedRef  string                    `json:"parkedRef,omitempty"`
+	Unreplayed int                       `json:"unreplayed"`
+	Unapplied  []RelicUnappliedOperation `json:"unapplied,omitempty"`
+	Remote     string                    `json:"remote,omitempty"`
 }
 
 // SetRelicBodyVersionContent fills in a version's content as a relic document
@@ -84,7 +100,7 @@ func RelicConflictDetail(conflict RelicConflict) string {
 	remote := conflictRemote(conflict.Remote)
 	switch conflict.Type {
 	case RelicConflictBody:
-		return relic + relicBodyConflictDetail(conflict, remote)
+		return relic + relicBodyConflictDetail(conflict, remote) + relicUnappliedDetail(conflict, "saving the body")
 	case RelicConflictTombstone:
 		detail := remote + " deleted this relic, so the local changes cannot apply"
 		if conflict.Tombstone != nil {
@@ -95,7 +111,7 @@ func RelicConflictDetail(conflict RelicConflict) string {
 			detail += "; the local changes are kept at " + conflict.ParkedRef
 		}
 		return relic + detail + "; to keep them, run `workbook relic restore " + conflict.RelicID +
-			"` and make the changes again"
+			"` and make the changes again" + relicUnappliedDetail(conflict, "the restore")
 	default:
 		return relic + string(conflict.Type)
 	}
@@ -122,4 +138,35 @@ func relicBodyConflictDetail(conflict RelicConflict, remote string) string {
 		"; run `git cat-file blob " + conflict.ParkedRef + ":parts/" + part + "/body > mine.md` to write it, " +
 		show + " to write the text that stands, combine the two in mine.md, then run " +
 		"`workbook relic update " + conflict.RelicID + " --part " + part + " --body-file mine.md --base " + theirs + "`"
+}
+
+// relicUnappliedNamed bounds how many unapplied operations a detail names.
+const relicUnappliedNamed = 5
+
+// relicUnappliedDetail is the end of a detail that names the other local
+// changes the replay did not apply, or "" when there are none. It names each
+// by its operation type and ID, never by anything the relic holds, and says
+// how to see them and to make them again after the recovery.
+func relicUnappliedDetail(conflict RelicConflict, after string) string {
+	unapplied := conflict.Unapplied
+	if len(unapplied) == 0 {
+		return ""
+	}
+	named := make([]string, 0, relicUnappliedNamed)
+	for index, operation := range unapplied {
+		if index == relicUnappliedNamed {
+			break
+		}
+		named = append(named, string(operation.Operation)+" "+operation.OperationID)
+	}
+	list := strings.Join(named, ", ")
+	if more := len(unapplied) - len(named); more > 0 {
+		list += " and " + strconv.Itoa(more) + " more"
+	}
+	detail := "; " + strconv.Itoa(len(unapplied)) + " other local change(s) were not applied either: " + list
+	if conflict.ParkedRef != "" {
+		detail += "; they are kept at " + conflict.ParkedRef
+	}
+	return detail + "; `git cat-file blob " + unapplied[0].Commit + ":operation.json` shows the first, " +
+		"and the report's `unapplied` list under --json gives the commit of each; make them again after " + after
 }

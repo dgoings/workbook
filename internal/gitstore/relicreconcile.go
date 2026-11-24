@@ -308,6 +308,7 @@ func (r *Repository) replayRelic(
 		if step.Conflict != nil {
 			conflict := *step.Conflict
 			conflict.Unreplayed = len(locals) - index
+			conflict.Unapplied = relicUnappliedOperations(locals[index:], step.ConflictOperation, held)
 			if conflict.Type == core.RelicConflictBody {
 				conflict.Body = relicBodyConflictAt(base, locals[len(locals)-1], parent, conflict.Part)
 			}
@@ -343,6 +344,24 @@ func (r *Repository) replayRelic(
 		outcome.Warnings = nil
 	}
 	return outcome
+}
+
+// relicUnappliedOperations lists, oldest first, the operations of the local
+// commits a stopped replay did not apply: every one but named, the operation
+// the conflict names, and those the fetched history already holds.
+func relicUnappliedOperations(stopped []RelicCommit, named string, held map[string]core.RelicOperation) []core.RelicUnappliedOperation {
+	var unapplied []core.RelicUnappliedOperation
+	for _, commit := range stopped {
+		for _, operation := range commit.Operation.Operations {
+			if _, holds := held[operation.ID]; holds || operation.ID == named {
+				continue
+			}
+			unapplied = append(unapplied, core.RelicUnappliedOperation{
+				OperationID: operation.ID, Operation: operation.Type, Commit: commit.ObjectID,
+			})
+		}
+	}
+	return unapplied
 }
 
 // sameRelicBodies says, for each part the pack saves a body for, whether the

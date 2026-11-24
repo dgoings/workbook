@@ -259,7 +259,9 @@ type relicBodyConflict struct {
 	baseVersion, theirs string // theirs is the first clone's saved version
 }
 
-func newRelicBodyConflict(t *testing.T, title, base, theirs, ours, name string) relicBodyConflict {
+// newRelicBodyConflict builds the conflict. extra is added to the second
+// clone's save of its body, as other changes made in the same command.
+func newRelicBodyConflict(t *testing.T, title, base, theirs, ours, name string, extra ...string) relicBodyConflict {
 	t.Helper()
 	first, second := cliSyncRepositories(t)
 	state := relicBodyConflict{first: first, second: second}
@@ -273,8 +275,8 @@ func newRelicBodyConflict(t *testing.T, title, base, theirs, ours, name string) 
 	saved := mustUpdateRelic(t, first, state.relicID, "--part", state.partID,
 		"--body-file", writeRelicBodyFile(t, name, theirs), "--base", state.baseVersion, "--no-sync")
 	state.theirs = saved.Parts[0].Body.Version
-	mustUpdateRelic(t, second, state.relicID, "--part", state.partID,
-		"--body-file", writeRelicBodyFile(t, name, ours), "--base", state.baseVersion, "--no-sync")
+	mustUpdateRelic(t, second, state.relicID, append([]string{"--part", state.partID,
+		"--body-file", writeRelicBodyFile(t, name, ours), "--base", state.baseVersion, "--no-sync"}, extra...)...)
 	if code, stdout, stderr := run(t, first, "sync"); code != 0 {
 		t.Fatalf("first sync = (%d, %q, %q)", code, stdout, stderr)
 	}
@@ -307,7 +309,13 @@ func showPartBody(t *testing.T, repository, relicID, partID string) string {
 func TestRelicBodyConflictReportsThreeVersions(t *testing.T) {
 	t.Parallel()
 	const base, theirs, ours = "The original text.\n", "The first clone's text.\n", "The second clone's text.\n"
-	state := newRelicBodyConflict(t, "Contested", base, theirs, ours, "body.md")
+	// The second clone's body save also sets a property and the title, and a
+	// later command sets another property; none of them is applied.
+	state := newRelicBodyConflict(t, "Contested", base, theirs, ours, "body.md",
+		"--set", "samepackprop=a", "--title", "Lost title")
+	withBody := cliGitOutput(t, state.second, "rev-parse", relicRef(state.relicID))
+	mustUpdateRelic(t, state.second, state.relicID, "--set", "later=a", "--no-sync")
+	later := cliGitOutput(t, state.second, "rev-parse", relicRef(state.relicID))
 
 	code, stdout, stderr := run(t, state.second, "sync", "--json")
 	if code != 8 {
@@ -318,6 +326,31 @@ func TestRelicBodyConflictReportsThreeVersions(t *testing.T) {
 		t.Fatalf("relicConflict = %+v, want one", envelope.RelicConflict)
 	}
 	conflict := envelope.RelicConflict[0]
+	unapplied := conflict.Unapplied
+	if len(unapplied) != 3 || unapplied[0].Commit != withBody || unapplied[1].Commit != withBody || unapplied[2].Commit != later ||
+		unapplied[2].Operation != core.RelicOperationPropertySet {
+		t.Fatalf("unapplied = %+v, want the two other changes of commit %s and the property.set of %s", unapplied, withBody, later)
+	}
+	kinds := map[core.RelicOperationType]bool{unapplied[0].Operation: true, unapplied[1].Operation: true}
+	if !kinds[core.RelicOperationPropertySet] || !kinds[core.RelicOperationTitleSet] {
+		t.Fatalf("unapplied = %+v, want a property.set and a title.set from the body's command", unapplied)
+	}
+	for _, operation := range unapplied {
+		if shown := cliGitOutput(t, state.second, "cat-file", "blob", operation.Commit+":operation.json"); !strings.Contains(shown, operation.OperationID) {
+			t.Fatalf("commit %s's operation.json does not hold %s:\n%s", operation.Commit, operation.OperationID, shown)
+		}
+	}
+	line := "; 3 other local change(s) were not applied either: " +
+		string(unapplied[0].Operation) + " " + unapplied[0].OperationID + ", " +
+		string(unapplied[1].Operation) + " " + unapplied[1].OperationID + ", " +
+		string(unapplied[2].Operation) + " " + unapplied[2].OperationID + "; they are kept at " + conflict.ParkedRef +
+		"; `git cat-file blob " + withBody + ":operation.json` shows the first"
+	if !strings.Contains(stderr, strings.ReplaceAll(line, ">", `\u003e`)) {
+		t.Fatalf("the error envelope does not name the other changes, %q:\n%s", line, stderr)
+	}
+	if !strings.Contains(stdout, line) {
+		t.Fatalf("the fetch's relic detail does not name the other changes, %q:\n%s", line, stdout)
+	}
 	if conflict.RelicID != state.relicID || conflict.Type != core.RelicConflictBody || conflict.Part != state.partID ||
 		conflict.Body == nil {
 		t.Fatalf("conflict = %+v, want a body conflict on %s#%s", conflict, state.relicID, state.partID)
@@ -402,6 +435,8 @@ func TestRelicConflictTextOutputIsTerminalSafe(t *testing.T) {
 		ours   = "OURS-TEXT \x1b[2J\a\n"
 	)
 	state := newRelicBodyConflict(t, "Hostile \x1b[2J\a title", base, theirs, ours, "body.md")
+	mustUpdateRelic(t, state.second, state.relicID, "--set", "later=a", "--no-sync")
+	later := cliGitOutput(t, state.second, "rev-parse", relicRef(state.relicID))
 
 	code, stdout, stderr := run(t, state.second, "sync")
 	if code != 8 {
@@ -420,6 +455,8 @@ func TestRelicConflictTextOutputIsTerminalSafe(t *testing.T) {
 	parked := "refs/workbook/reconciled-relics/" + state.relicID + "/1"
 	commands := []string{
 		"git cat-file blob " + parked + ":parts/" + state.partID + "/body > mine.md",
+		"; 1 other local change(s) were not applied either: property.set ",
+		"git cat-file blob " + later + ":operation.json",
 		"workbook relic show " + state.relicID + "#" + state.partID + " --body > current.md",
 		"workbook relic update " + state.relicID + " --part " + state.partID + " --body-file mine.md --base " + state.theirs,
 	}

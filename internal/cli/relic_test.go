@@ -566,6 +566,8 @@ func TestReferenceDocumentsSharedRelics(t *testing.T) {
 		"workbook.relic",
 		// How relics are shared, and what a conflict reports.
 		"--no-sync", "relicConflict", "relic-over-limit", "git cat-file blob", "body", "tombstone",
+		// The other local changes a conflict did not apply, and how to see each.
+		"`unapplied`", ":operation.json",
 		// The limits, as the table writes them.
 		"500", "100", "16", "256", "64 KiB", "16 KiB", "1 MiB", "2,000", "4,000", "16 MiB",
 		// What relic update's help says about where a relic option may be typed.

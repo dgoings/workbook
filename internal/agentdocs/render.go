@@ -288,7 +288,8 @@ func relicGuidelines(keys core.KeySet) string {
 		"the same way. A sync that meets another clone's edit of the same body exits\n" +
 		"8 and reports it in the result envelope's `relicConflict` list: an entry of\n" +
 		"`type` `body` whose `body` carries `base`, `ours` and `theirs`, with your\n" +
-		"text kept at `parkedRef`.\n\n" +
+		"text kept at `parkedRef`. Other local changes the sync did not apply are\n" +
+		"listed in `unapplied`; make them again after saving the body.\n\n" +
 		"On either, read the part again. When your intent is clear, apply your\n" +
 		"change to the current text and save with `--base` set to the current\n" +
 		"version. Otherwise show the user both versions and ask; never save over\n" +

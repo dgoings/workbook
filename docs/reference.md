@@ -1905,6 +1905,21 @@ The old history is saved to a bundle under .git first, and the bundle is kept.
 
 To keep the text that stands instead, do nothing: the relic already holds it.
 
+**Other changes that were not applied.** The replay stops at the command that
+saved the body, so the rest of that command and every later local command are
+not applied either: a `--title` or `--set` given with the `--body-file`, for
+example. When there are any, the conflict's line ends by naming them, with
+their operation type and ID, up to five, and the report lists them all in
+`unapplied`. Each entry names the local commit that holds it, and
+`git cat-file blob <commit>:operation.json` shows exactly what it changed. They
+are kept at the parked ref. Make them again after saving the body. Had bob
+also set a property with `--no-sync` before he synchronized, his line would
+end like this, where `<operation-id>` and `<commit>` are that change's:
+
+```text
+; 1 other local change(s) were not applied either: property.set <operation-id>; they are kept at refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1; `git cat-file blob <commit>:operation.json` shows the first, and the report's `unapplied` list under --json gives the commit of each; make them again after saving the body
+```
+
 **The report in JSON.** With `--json`, the result envelope carries the
 conflicts in `relicConflict`, a list beside `conflict` and `configConflict`,
 and the relic's line in the fetch carries the same detail text mode prints.
@@ -1975,6 +1990,7 @@ Sync:	completed
 | `tombstone` | For `tombstone`, the local operation the deletion stopped: `operationId` and `operation`. |
 | `parkedRef` | Where the old local tip is kept. |
 | `unreplayed` | How many of this checkout's commits did not replay. |
+| `unapplied` | The other local operations that did not apply, oldest first: every one of the commits that did not replay except the one the conflict names, and except any the remote already holds. Each has `operationId`, `operation` (its type) and `commit` (the local commit whose `operation.json` holds it). Absent when there are none. |
 | `remote` | The remote the conflict was met with. |
 
 A body is at most 1 MiB, so one body conflict's report can reach about 4 MiB
@@ -1982,7 +1998,10 @@ once its three texts are escaped as JSON.
 
 **A deleted relic.** When the remote holds a deletion and this checkout holds
 an edit to the relic, the relic is deleted here as well, and the edit is
-parked. The detail says to restore the relic and make the change again. Bob
+parked. The detail says to restore the relic and make the change again. It
+names the first operation that could not apply; when the relic's other local
+changes hold more, the line names them and the report lists them in
+`unapplied`, as for a body. Make them again after the restore. Bob
 changed the second relic with `--no-sync`, alice deleted it, and bob
 synchronized, restored it and made his change again:
 

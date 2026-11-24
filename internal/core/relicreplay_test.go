@@ -129,6 +129,9 @@ func TestPlanRelicReplayStopsOnAStaleBody(t *testing.T) {
 				step.Conflict.RelicID != relicDocRelic {
 				t.Errorf("%s: conflict = %#v, want a body conflict for part A of the relic", label, step.Conflict)
 			}
+			if step.ConflictOperation != ours {
+				t.Errorf("%s: conflict operation = %q, want the stale save %s", label, step.ConflictOperation, ours)
+			}
 			if step.Skip || !reflect.DeepEqual(step.Record, RelicRecord{}) {
 				t.Errorf("%s: skip %v, record %#v; want neither", label, step.Skip, step.Record)
 			}
@@ -168,6 +171,9 @@ func TestPlanRelicReplayStopsOnAStaleBody(t *testing.T) {
 		if step.Conflict == nil || step.Conflict.Type != RelicConflictBody || step.Conflict.Part != relicDocPartB {
 			t.Errorf("conflict = %#v, want a body conflict for part B", step.Conflict)
 		}
+		if step.ConflictOperation != relicTestID(324) {
+			t.Errorf("conflict operation = %q, want %s", step.ConflictOperation, relicTestID(324))
+		}
 	})
 
 	t.Run("a body for a part the relic does not have is refused", func(t *testing.T) {
@@ -204,6 +210,9 @@ func TestPlanRelicReplayOnADeletedRelic(t *testing.T) {
 		}
 		if got := *step.Conflict.Tombstone; got.OperationID != tc.blocked.ID || got.Operation != tc.blocked.Type {
 			t.Errorf("%s: blocked operation = %#v, want %s %s", label, got, tc.blocked.Type, tc.blocked.ID)
+		}
+		if step.ConflictOperation != tc.blocked.ID {
+			t.Errorf("%s: conflict operation = %q, want %s", label, step.ConflictOperation, tc.blocked.ID)
 		}
 		if step.Skip || !reflect.DeepEqual(step.Record, RelicRecord{}) {
 			t.Errorf("%s: skip %v, record %#v; want neither", label, step.Skip, step.Record)
@@ -565,6 +574,89 @@ func TestRelicConflictDetailIsSafeAndComplete(t *testing.T) {
 	}
 }
 
+// relicUnappliedForTest is count local operations a stopped replay did not
+// apply, alternating property.set and title.set, the first two in one commit.
+func relicUnappliedForTest(count int) []RelicUnappliedOperation {
+	unapplied := make([]RelicUnappliedOperation, count)
+	for index := range unapplied {
+		kind := RelicOperationPropertySet
+		if index%2 == 1 {
+			kind = RelicOperationTitleSet
+		}
+		commit := "c0ffee" + strconv.Itoa(index)
+		if index == 1 {
+			commit = unapplied[0].Commit
+		}
+		unapplied[index] = RelicUnappliedOperation{OperationID: relicTestID(400 + index), Operation: kind, Commit: commit}
+	}
+	return unapplied
+}
+
+func TestRelicConflictDetailNamesTheUnappliedChanges(t *testing.T) {
+	conflict, _ := relicBodyConflictForTest()
+	theirs := conflict.Body.Theirs.Version
+	body := "relic " + relicDocRelic + ": part " + relicDocPartA + ": the body was saved here and on origin from the same version; " +
+		"the text from origin stands; the text saved here is kept at " + conflict.ParkedRef + "; run `git cat-file blob " +
+		conflict.ParkedRef + ":parts/" + relicDocPartA + "/body > mine.md` to write it, `workbook relic show " + relicDocRelic +
+		"#" + relicDocPartA + " --body > current.md` to write the text that stands, combine the two in mine.md, then run " +
+		"`workbook relic update " + relicDocRelic + " --part " + relicDocPartA + " --body-file mine.md --base " + theirs + "`"
+	tombstone := RelicConflict{
+		RelicID:   relicDocRelic,
+		Type:      RelicConflictTombstone,
+		Tombstone: &RelicTombstoneConflict{OperationID: relicTestID(382), Operation: RelicOperationTitleSet},
+		ParkedRef: "refs/workbook/reconciled-relics/" + relicDocRelic + "/2",
+	}
+	deleted := "relic " + relicDocRelic + ": origin deleted this relic, so the local title.set operation " + relicTestID(382) +
+		" cannot apply; the local changes are kept at " + tombstone.ParkedRef + "; to keep them, run `workbook relic restore " +
+		relicDocRelic + "` and make the changes again"
+
+	// With nothing else unapplied, each detail is the one it always was.
+	for _, unapplied := range [][]RelicUnappliedOperation{nil, {}} {
+		conflict.Unapplied, tombstone.Unapplied = unapplied, unapplied
+		if got := RelicConflictDetail(conflict); got != body {
+			t.Errorf("body detail with %#v unapplied =\n%s\nwant\n%s", unapplied, got, body)
+		}
+		if got := RelicConflictDetail(tombstone); got != deleted {
+			t.Errorf("tombstone detail with %#v unapplied =\n%s\nwant\n%s", unapplied, got, deleted)
+		}
+	}
+
+	named := func(unapplied []RelicUnappliedOperation) string {
+		listed := make([]string, len(unapplied))
+		for index, operation := range unapplied {
+			listed[index] = string(operation.Operation) + " " + operation.OperationID
+		}
+		return strings.Join(listed, ", ")
+	}
+	all := relicUnappliedForTest(7)
+	for _, check := range []struct {
+		count int
+		names string
+	}{
+		{1, named(all[:1])},
+		{5, named(all[:5])},
+		{7, named(all[:5]) + " and 2 more"},
+	} {
+		unapplied := relicUnappliedForTest(check.count)
+		for _, kind := range []struct {
+			name, detail, after string
+			conflict            RelicConflict
+		}{
+			{"body", body, "saving the body", conflict},
+			{"tombstone", deleted, "the restore", tombstone},
+		} {
+			kind.conflict.Unapplied = unapplied
+			want := kind.detail + "; " + strconv.Itoa(check.count) + " other local change(s) were not applied either: " +
+				check.names + "; they are kept at " + kind.conflict.ParkedRef + "; `git cat-file blob " + unapplied[0].Commit +
+				":operation.json` shows the first, and the report's `unapplied` list under --json gives the commit of each; " +
+				"make them again after " + kind.after
+			if got := RelicConflictDetail(kind.conflict); got != want {
+				t.Errorf("%s detail with %d unapplied =\n%s\nwant\n%s", kind.name, check.count, got, want)
+			}
+		}
+	}
+}
+
 func TestRelicRemovedPartWarnings(t *testing.T) {
 	remove := relicFoldPack(2, RelicOperation{ID: relicTestID(390), Type: RelicOperationPartRemove, Part: relicDocPartA})
 	field := relicFoldPack(2, RelicOperation{ID: relicTestID(391), Type: RelicOperationPartFieldSet, Part: relicDocPartA,
@@ -680,6 +772,18 @@ func TestRelicConflictJSONShape(t *testing.T) {
 	}, `{"relicId":"`+relicDocRelic+`","type":"tombstone",`+
 		`"tombstone":{"operationId":"`+relicTestID(382)+`","operation":"title.set"},`+
 		`"parkedRef":"refs/workbook/reconciled-relics/`+relicDocRelic+`/1","unreplayed":1}`)
+
+	requireJSON("a tombstone conflict with other changes unapplied", RelicConflict{
+		RelicID:    relicDocRelic,
+		Type:       RelicConflictTombstone,
+		Tombstone:  &RelicTombstoneConflict{OperationID: relicTestID(382), Operation: RelicOperationTitleSet},
+		ParkedRef:  "refs/workbook/reconciled-relics/" + relicDocRelic + "/1",
+		Unreplayed: 2,
+		Unapplied:  []RelicUnappliedOperation{{OperationID: relicTestID(383), Operation: RelicOperationPropertySet, Commit: "dddd4444"}},
+	}, `{"relicId":"`+relicDocRelic+`","type":"tombstone",`+
+		`"tombstone":{"operationId":"`+relicTestID(382)+`","operation":"title.set"},`+
+		`"parkedRef":"refs/workbook/reconciled-relics/`+relicDocRelic+`/1","unreplayed":2,`+
+		`"unapplied":[{"operationId":"`+relicTestID(383)+`","operation":"property.set","commit":"dddd4444"}]}`)
 
 	// The content of a version is its text or its base64, never both, and an
 	// empty body is the empty text.

@@ -17,11 +17,13 @@ type RelicReplayInput struct {
 }
 
 // RelicReplayStep is what replay does with one local pack: skip it, stop on
-// Conflict, or write it with Record as the state beside it.
+// Conflict, or write it with Record as the state beside it. ConflictOperation
+// is the ID of the pack's operation that Conflict names.
 type RelicReplayStep struct {
-	Skip     bool
-	Conflict *RelicConflict
-	Record   RelicRecord
+	Skip              bool
+	Conflict          *RelicConflict
+	ConflictOperation string
+	Record            RelicRecord
 }
 
 // PlanRelicReplay decides what replaying one local pack onto parent does. It
@@ -65,12 +67,15 @@ func PlanRelicReplay(parent RelicRecord, pack RelicOperationPack, input RelicRep
 	if err != nil {
 		return RelicReplayStep{}, relicReplayError(relicID, err)
 	}
-	part, err := staleRelicBody(parent.State.Relic, pack, input.SameBody)
+	stale, err := staleRelicBody(parent.State.Relic, pack, input.SameBody)
 	if err != nil {
 		return RelicReplayStep{}, relicReplayError(relicID, err)
 	}
-	if part != "" {
-		return RelicReplayStep{Conflict: &RelicConflict{RelicID: relicID, Type: RelicConflictBody, Part: part}}, nil
+	if stale != nil {
+		return RelicReplayStep{
+			Conflict:          &RelicConflict{RelicID: relicID, Type: RelicConflictBody, Part: stale.Part},
+			ConflictOperation: stale.ID,
+		}, nil
 	}
 	return RelicReplayStep{Record: record}, nil
 }
@@ -125,7 +130,7 @@ func planRelicReplayOnDeletion(parent RelicRecord, pack RelicOperationPack) (Rel
 		RelicID:   parent.State.RelicID,
 		Type:      RelicConflictTombstone,
 		Tombstone: &RelicTombstoneConflict{OperationID: blocked.ID, Operation: blocked.Type},
-	}}, true
+	}, ConflictOperation: blocked.ID}, true
 }
 
 // relicPackOnly reports whether every operation of the pack has the type.
@@ -181,11 +186,11 @@ func sameRelicOperation(a, b RelicOperation) (bool, error) {
 }
 
 // staleRelicBody is rule 3. It walks the pack's body saves against the
-// parent's versions, as the fold will, and returns the first part whose save
-// is stale and disagrees with the parent's body, or "" when none is. A save
+// parent's versions, as the fold will, and returns the first save that is
+// stale and disagrees with the parent's body, or nil when none is. A save
 // for a part neither the parent nor the pack has is an error: no honest
 // writer saved it.
-func staleRelicBody(parent RelicData, pack RelicOperationPack, sameBody map[string]bool) (string, error) {
+func staleRelicBody(parent RelicData, pack RelicOperationPack, sameBody map[string]bool) (*RelicOperation, error) {
 	versions := map[string]string{}
 	for _, part := range parent.Parts {
 		versions[part.ID] = ""
@@ -193,7 +198,8 @@ func staleRelicBody(parent RelicData, pack RelicOperationPack, sameBody map[stri
 			versions[part.ID] = part.Body.Version
 		}
 	}
-	for _, operation := range pack.Operations {
+	for index := range pack.Operations {
+		operation := &pack.Operations[index]
 		switch operation.Type {
 		case RelicOperationPartAdd:
 			if _, exists := versions[operation.ID]; exists {
@@ -206,18 +212,18 @@ func staleRelicBody(parent RelicData, pack RelicOperationPack, sameBody map[stri
 		case RelicOperationPartBodySet:
 			current, exists := versions[operation.Part]
 			if !exists {
-				return "", corrupt("part.body.set %s names part %s, which the relic does not have", operation.ID, operation.Part)
+				return nil, corrupt("part.body.set %s names part %s, which the relic does not have", operation.ID, operation.Part)
 			}
 			if operation.Body.Base == current {
 				versions[operation.Part] = operation.ID
 				continue
 			}
 			if !sameBody[operation.Part] {
-				return operation.Part, nil
+				return operation, nil
 			}
 		}
 	}
-	return "", nil
+	return nil, nil
 }
 
 // RelicRemovedPartWarnings warns, once per part removed in result, when one

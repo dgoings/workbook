@@ -392,6 +392,89 @@ func TestReplayOntoADeletedRelicIsATombstoneConflict(t *testing.T) {
 	}
 }
 
+// requireUnapplied asserts a stopped replay's list of the other local
+// operations it did not apply.
+func requireUnapplied(t *testing.T, outcome relicReconcileOutcome, want ...core.RelicUnappliedOperation) {
+	t.Helper()
+	if outcome.Conflict == nil {
+		t.Fatalf("outcome = %+v, want a conflict", outcome)
+	}
+	got := outcome.Conflict.Unapplied
+	if len(got) != len(want) {
+		t.Fatalf("unapplied = %+v, want %+v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("unapplied = %+v, want %+v", got, want)
+		}
+	}
+}
+
+func unappliedAt(operation core.RelicOperation, commit core.RelicSnapshot) core.RelicUnappliedOperation {
+	return core.RelicUnappliedOperation{OperationID: operation.ID, Operation: operation.Type, Commit: commit.Head}
+}
+
+func TestABodyConflictNamesTheOtherLocalChanges(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	p := relicTestPartNumbered(1).withBody("md", []byte("shared text\n"))
+	root := writeRelicRoot(t, repo, config, p)
+	ours, theirs := []byte("saved here\n"), []byte("saved there\n")
+	remote := relicHistoryFrom(t, repo, config, root, relicOps(relicBodySet(201, p.id, p.id, theirs)).withBody(p.id, theirs))
+
+	t.Run("in the same command", func(t *testing.T) {
+		body, property, title := relicBodySet(101, p.id, p.id, ours), relicPropertySet(102, "owner", "here"), relicTitleSet(103, "Lost title")
+		local := relicHistoryFrom(t, repo, config, root, relicOps(body, property, title).withBody(p.id, ours))
+		outcome := replayDivergedSnapshots(t, repo, config, local, remote)
+		requireReplayed(t, outcome)
+		if outcome.Conflict.Type != core.RelicConflictBody || outcome.Conflict.Unreplayed != 1 {
+			t.Fatalf("conflict = %+v, want a body conflict with one pack unreplayed", outcome.Conflict)
+		}
+		requireUnapplied(t, outcome, unappliedAt(property, local), unappliedAt(title, local))
+	})
+
+	t.Run("in a later command", func(t *testing.T) {
+		body, title := relicBodySet(111, p.id, p.id, ours), relicTitleSet(112, "Lost title")
+		first := relicHistoryFrom(t, repo, config, root, relicOps(body).withBody(p.id, ours))
+		local := relicHistoryFrom(t, repo, config, first, relicOps(title))
+		outcome := replayDivergedSnapshots(t, repo, config, local, remote)
+		requireReplayed(t, outcome)
+		if outcome.Conflict.Type != core.RelicConflictBody || outcome.Conflict.Unreplayed != 2 {
+			t.Fatalf("conflict = %+v, want a body conflict with two packs unreplayed", outcome.Conflict)
+		}
+		requireUnapplied(t, outcome, unappliedAt(title, local))
+	})
+
+	t.Run("not one the remote already holds", func(t *testing.T) {
+		body, title, property := relicBodySet(121, p.id, p.id, ours), relicTitleSet(122, "Lost title"), relicPropertySet(123, "owner", "here")
+		first := relicHistoryFrom(t, repo, config, root, relicOps(body, title).withBody(p.id, ours))
+		local := relicHistoryFrom(t, repo, config, first, relicOps(property))
+		holding := relicHistoryFrom(t, repo, config, remote, relicOps(property))
+		outcome := replayDivergedSnapshots(t, repo, config, local, holding)
+		requireReplayed(t, outcome)
+		requireUnapplied(t, outcome, unappliedAt(title, first))
+	})
+}
+
+func TestATombstoneConflictNamesTheOtherLocalChanges(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	root := writeRelicRoot(t, repo, config)
+	title, owner, reviewer := relicTitleSet(101, "Lost title"), relicPropertySet(102, "owner", "here"), relicPropertySet(103, "reviewer", "here")
+	first := relicHistoryFrom(t, repo, config, root, relicOps(title, owner))
+	local := relicHistoryFrom(t, repo, config, first, relicOps(reviewer))
+	remote := relicHistoryFrom(t, repo, config, root, relicOps(relicTombstone(201)))
+
+	outcome := replayDivergedSnapshots(t, repo, config, local, remote)
+	requireReplayed(t, outcome)
+	conflict := outcome.Conflict
+	if conflict == nil || conflict.Type != core.RelicConflictTombstone || conflict.Tombstone == nil ||
+		conflict.Tombstone.OperationID != title.ID || conflict.Unreplayed != 2 {
+		t.Fatalf("conflict = %+v, want a tombstone conflict naming %s with two packs unreplayed", conflict, title.ID)
+	}
+	requireUnapplied(t, outcome, unappliedAt(owner, first), unappliedAt(reviewer, local))
+}
+
 func TestReplayingADeletionOverAnEditDeletes(t *testing.T) {
 	t.Parallel()
 	repo, config := relicRepository(t, testrepo.FormatSHA1)
