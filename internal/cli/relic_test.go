@@ -7,7 +7,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -566,7 +568,46 @@ func TestReferenceDocumentsLocalRelics(t *testing.T) {
 		"500", "100", "16", "256", "64 KiB", "16 KiB", "1 MiB", "2,000", "4,000", "16 MiB",
 		// What relic update's help says about where a relic option may be typed.
 		"always act on the relic",
+		// What relic list's help says about the order.
+		"Relics are listed in ID order",
+		// The warning for a machine that still has an older Workbook on it.
+		"Upgrade every Workbook on the machine before creating relics.",
 	} {
+		if !strings.Contains(reference, required) {
+			t.Errorf("the reference's relic section is missing %q", required)
+		}
+	}
+	// Every limit that is a size is in the table by its exact number of bytes,
+	// taken from the constant the commands enforce, and each row says what it
+	// limits.
+	for _, limit := range []struct {
+		row   string
+		value int
+		unit  string
+	}{
+		{"| Title |", core.MaxRelicTitleBytes, " bytes"},
+		{"| Relic type, part type |", core.MaxRelicTypeBytes, " bytes"},
+		{"| Relic type, part type |", core.MaxRelicPartTypeBytes, " bytes"},
+		{"| Property name, field name |", core.MaxRelicNameBytes, " bytes"},
+		{"| Body format label |", core.MaxRelicBodyFormatBytes, " bytes"},
+		{"| Part position |", core.MaxRelicPartPositionBytes, " bytes"},
+		{"| One property value |", core.MaxRelicPropertyValueBytes, " bytes"},
+		{"| One field value |", core.MaxRelicFieldValueBytes, " bytes"},
+		{"| Nesting inside one value |", core.MaxRelicValueDepth, " levels"},
+		{"| Body |", core.MaxRelicBodyBytes, " bytes"},
+		{"| Properties together |", core.MaxRelicPropertiesBytes, " bytes"},
+		{"| Fields of one part together |", core.MaxRelicPartFieldsBytes, " bytes"},
+		{"| Live parts |", core.MaxRelicLiveParts, ""},
+		{"| Parts |", core.MaxRelicParts, ""},
+		{"| Live bodies |", core.MaxRelicLiveBodyBytes, " bytes"},
+	} {
+		want := limit.row + " " + groupedDigits(limit.value) + limit.unit
+		if !strings.Contains(reference, want) {
+			t.Errorf("the reference's limit table has no row beginning %q", want)
+		}
+	}
+	// The size --from-file reads is a limit on one command's input.
+	for _, required := range []string{groupedDigits(maxRelicDocumentBytes) + " bytes (64 MiB)", "32 levels"} {
 		if !strings.Contains(reference, required) {
 			t.Errorf("the reference's relic section is missing %q", required)
 		}
@@ -576,11 +617,34 @@ func TestReferenceDocumentsLocalRelics(t *testing.T) {
 	if architecture == "" {
 		t.Fatal("docs/architecture.md has no \"### Relic refs\" section")
 	}
-	for _, required := range []string{"refs/workbook/relics/", "links.json", "parts/"} {
+	// The one member order an operation is stored in is the order of the
+	// struct that is marshaled, so the document is held to the struct.
+	var members []string
+	operation := reflect.TypeOf(core.RelicOperation{})
+	for index := 0; index < operation.NumField(); index++ {
+		name, _, _ := strings.Cut(operation.Field(index).Tag.Get("json"), ",")
+		members = append(members, "`"+name+"`")
+	}
+	architecture = strings.Join(strings.Fields(architecture), " ")
+	for _, required := range []string{
+		"refs/workbook/relics/", "links.json", "parts/",
+		"always written in one order, " + strings.Join(members, ", ") + ",",
+		"until relics are shared",
+	} {
 		if !strings.Contains(architecture, required) {
 			t.Errorf("the architecture's relic section is missing %q", required)
 		}
 	}
+}
+
+// groupedDigits writes a count as the reference does: digits, with a comma
+// before each group of three.
+func groupedDigits(number int) string {
+	digits := strconv.Itoa(number)
+	for at := len(digits) - 3; at > 0; at -= 3 {
+		digits = digits[:at] + "," + digits[at:]
+	}
+	return digits
 }
 
 // One relic that cannot be read fails relic list as a whole, and the error

@@ -34,17 +34,44 @@ list of parts, and a part has a type, fields and an optional body of up to
 and `export` work with them, and `relic create --from-file` creates one from
 the document `relic export` writes. Saving over a part's body needs `--base
 <version>`, the body version the edit started from, and a save from an older
-version is refused with exit 6 instead of overwriting the newer text. Each
-relic is one ref under `refs/workbook/relics/`, a chain of immutable commits
-in new formats that declare writer-format generation 6. Relics are local for
-now: they are not shared with the tasks remote, not in the SQLite index and
-not on the board, and there are no links, schemas, history or diff commands,
-retiring or compaction for them yet. `workbook validate` checks every relic
-history. `workbook reset` treats every relic as work that exists only in the
-checkout, so it writes them to its bundle, and refuses `--no-backup` while one
-exists unless `--discard-unpublished` is given. No task command changes
-behavior. See [Relics](docs/reference.md#relics) and
+version is refused with exit 6 instead of overwriting the newer text. A save
+over a body keeps the body's format label unless `--body-format` gives
+another. `relic show <relic>#<part> --body` writes the body byte for byte
+into a file or a pipe, and prints it through the terminal filter on a
+terminal. Each relic is one ref under `refs/workbook/relics/`, a chain of
+immutable commits in new formats that declare writer-format generation 6.
+
+A relic's limits are part of its stored format. One property value is at most
+64 KiB and one field value at most 16 KiB, measured on the stored JSON, where
+each `<`, `>` or `&` in a string counts six bytes. A value nests lists and
+objects at most 32 levels deep. A property or field name is 1 to 100 bytes of
+valid UTF-8 with no `=`, no control character and no white space at either
+end, and names are compared byte for byte. A relic's properties together, one
+part's fields together, its part counts and its live bodies together are
+totals: a change is refused only when it leaves a total over its limit and
+larger than it was, and a total is never checked when a relic is read. Text
+that is not valid UTF-8 and an object that names a member twice are refused,
+never repaired, and `relic create --from-file` reads at most 64 MiB.
+
+Relics are local until they are shared: they are not sent to the tasks
+remote, not in the SQLite index and not on the board, and there are no links,
+schemas, history or diff commands, retiring or compaction for them yet.
+`workbook validate` checks every commit of every relic history, and refuses a
+relic in which two commits record the same operation ID. `workbook reset` treats
+every relic as work that exists only in the checkout, so it writes them to its
+bundle, a damaged relic ref that still resolves to a commit included, and
+refuses `--no-backup` while one exists unless `--discard-unpublished` is
+given. In a checkout with no tasks remote to check against, which a local-only
+project is, `--no-backup` is refused with `--discard-unpublished` or without
+it. No task command changes behavior. See
+[Relics](docs/reference.md#relics) and
 [Relic refs](docs/architecture.md#relic-refs).
+
+**Upgrade every Workbook on the machine before creating relics.** A Workbook
+from before relics does not know the refs that hold them. Its `workbook reset
+--no-backup` deletes the relic refs without writing a bundle, and the restore
+command its plain `workbook reset` prints does not fetch them back from the
+bundle it wrote.
 
 A project can keep its tasks in a repository of their own, so that access to
 them, such as a hosted board's deploy key, is not access to the code. `workbook

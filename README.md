@@ -148,9 +148,11 @@ and `sync` commands.
 
 Workbook also keeps relics: records for specs, plans and decisions, each made
 of typed parts with fields and bodies. `workbook relic` creates, shows and
-edits them. Relics are local for now. They stay in the checkout that wrote
-them: nothing synchronizes them with `origin`, and they are not on the board
-or linked to tasks. See [Relics](docs/reference.md#relics).
+edits them. Relics are local until they are shared. For now they stay in the
+checkout that wrote them: nothing synchronizes them with `origin`, and they
+are not on the board or linked to tasks. Upgrade every Workbook on a machine
+before creating relics there, because a `workbook reset` run by a Workbook
+from before relics can lose them. See [Relics](docs/reference.md#relics).
 
 ## Target workflows
 

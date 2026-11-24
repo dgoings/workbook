@@ -97,11 +97,14 @@ the proposed domain reconciliation rules.
 ### Relic refs
 
 A relic is a second kind of record, stored beside tasks and by the same means.
-Each relic owns one ref, named by its ID:
+Each relic owns one ref, named by its ID. These are the three relics
+[the reference](reference.md#relics) builds, and every example in this
+section is from that same repository:
 
 ```text
-07854057317165a45e3e6e84994573250c0e04b1 commit	refs/workbook/relics/WB-R-01M85MZ25Z7GNEM9GBR0A24ED1
-9fe790ba3ffa20aec4b7f1af1ab129ccd55a1dd2 commit	refs/workbook/relics/WB-R-01M85MZ7WMRMC3BTYH3JQ1T26K
+00bd3bed1475956d1c6ea20d221a1b78824e7d23 commit	refs/workbook/relics/WB-R-01M86B5EHY4R2HME50RYZKH12Z
+f6393dbd3b629ff581f63f8799515e1a6c8521e3 commit	refs/workbook/relics/WB-R-01M86B5HKECWCKS2BRQBFX149H
+3228f940e87a124e95927be4b18db4846a9dc5b9 commit	refs/workbook/relics/WB-R-01M86B5QA29AWYWGHW05XZ08JT
 ```
 
 The ref points to a commit, and a relic's history is a chain of them. The
@@ -124,30 +127,29 @@ parts/<part-id>/body          raw bytes, exactly as given     one part's body
 subtree for each part the state lists, live or removed, named by the part's
 ID. A subtree always holds `fields.json`, even when the part has no fields,
 and holds `body` only when the part has a body. This is the second commit of
-the relic that [the reference](reference.md#relics) builds, the one that added
-its first two parts:
+the first relic, the one that added its first two parts:
 
 ```sh
-git cat-file -p caaa127b80780dbc5e96484b939c51ad6416514d
-git ls-tree -r -t caaa127b80780dbc5e96484b939c51ad6416514d
+git cat-file -p 810ccef944d7fb99b13142f5dcc2757249bbbf3f
+git ls-tree -r -t 810ccef944d7fb99b13142f5dcc2757249bbbf3f
 ```
 
 ```text
-tree f8886ae34336c8b8815d3fdc100a08fabfb1dfba
-parent 9a86da308a7be2aadb91c23e77b4634243cf2820
-author Alice <alice@example.com> 1795486091 -0500
-committer Alice <alice@example.com> 1795486091 -0500
+tree 882f00dee6b4a05916cf54bcd67742aae761189b
+parent 0b5dddf51b076d59085b0d5345b66d68375dd237
+author Alice <alice@example.com> 1795509369 -0500
+committer Alice <alice@example.com> 1795509369 -0500
 
-update relic WB-R-01M85MZ25Z7GNEM9GBR0A24ED1
+update relic WB-R-01M86B5EHY4R2HME50RYZKH12Z
 100644 blob 6dff43c5f530676ca8e2b2af7abd0a5313114242	links.json
-100644 blob e29d88c1047649da619e5c519fca54e0b89c08fc	operation.json
-040000 tree f6d3447a3f12f75dc2a894206f80fdfa65882151	parts
-040000 tree 2a01530cc10dfba07644e3695b3e2c55e9e66bde	parts/01M85MZ2GZ4MV33Z6KB3H5SHZ3
-100644 blob 16d81d64d9b6b65c667cb090454484b0f0607e4d	parts/01M85MZ2GZ4MV33Z6KB3H5SHZ3/body
-100644 blob a6810f4c2c65f39a46e613b576342477923289e3	parts/01M85MZ2GZ4MV33Z6KB3H5SHZ3/fields.json
-040000 tree 56523e1fc6cd3fce09bd6cde24fe776a124c5a63	parts/01M85MZ2GZQY6GC0MH3244S3N9
-100644 blob 434192cf2e5b563c3f91be8b2d479e83a9d2f77c	parts/01M85MZ2GZQY6GC0MH3244S3N9/fields.json
-100644 blob a5aca8e630f76121cabdb842e89e9c3b55e39e72	state.json
+100644 blob 88dbeb2426132cbb9c2be5354a355be6853e438d	operation.json
+040000 tree 3268399f1f0a1a4a4a002e808c85d93dc3d4f634	parts
+040000 tree 56523e1fc6cd3fce09bd6cde24fe776a124c5a63	parts/01M86B5ESZP5Y76C7WD7HFES83
+100644 blob 434192cf2e5b563c3f91be8b2d479e83a9d2f77c	parts/01M86B5ESZP5Y76C7WD7HFES83/fields.json
+040000 tree 2a01530cc10dfba07644e3695b3e2c55e9e66bde	parts/01M86B5ESZPGDSDZYRJ5AN1HF8
+100644 blob 16d81d64d9b6b65c667cb090454484b0f0607e4d	parts/01M86B5ESZPGDSDZYRJ5AN1HF8/body
+100644 blob a6810f4c2c65f39a46e613b576342477923289e3	parts/01M86B5ESZPGDSDZYRJ5AN1HF8/fields.json
+100644 blob 6828d5b74a0baa8848ac2318c1ceedc64ec50351	state.json
 ```
 
 **The four documents.** Each names its format and `"version": 1`, and is
@@ -155,8 +157,9 @@ stored as one line: the output of Go's `json.Marshal` and one newline, with
 the members in the order shown here. A stored document that is not byte for
 byte what this build writes for the same content is `corrupt-data`. No relic
 document records a Git object ID, so the format is the same in SHA-1 and
-SHA-256 repositories. `wallTime`, `createdAt` and `updatedAt` are recorded in
-UTC, and are display metadata.
+SHA-256 repositories. `wallTime`, `createdAt` and `updatedAt` are display
+metadata. They are written in UTC with a `Z`, and a reader refuses any other
+form, an offset of `+00:00` included, as `corrupt-data`.
 
 `operation.json` of that commit, stored as one line and shown here through
 `jq .`:
@@ -166,23 +169,23 @@ UTC, and are display metadata.
   "format": "workbook.relic-operation-pack",
   "version": 1,
   "minReader": 6,
-  "projectId": "01M85MZ1SC6NH2APV0072PSRFE",
-  "relicId": "WB-R-01M85MZ25Z7GNEM9GBR0A24ED1",
-  "historyGeneration": "01M85MZ25ZT322VZ96YQ97ASYE",
+  "projectId": "01M86B5E3T0YJ4ECEFRZ8BM34G",
+  "relicId": "WB-R-01M86B5EHY4R2HME50RYZKH12Z",
+  "historyGeneration": "01M86B5EHYYE7QGJQMKFRWED6T",
   "actor": {
     "id": "alice@example.com"
   },
   "logicalClock": 2,
-  "wallTime": "2026-11-24T02:08:11.80795Z",
+  "wallTime": "2026-11-24T08:36:09.663809Z",
   "operations": [
     {
-      "id": "01M85MZ2GZC8H0G5AF2PVP4ERG",
+      "id": "01M86B5ESZ7STS4R84TG0XPAGK",
       "type": "property.set",
       "name": "status",
       "value": "draft"
     },
     {
-      "id": "01M85MZ2GZ4MV33Z6KB3H5SHZ3",
+      "id": "01M86B5ESZPGDSDZYRJ5AN1HF8",
       "type": "part.add",
       "partType": "section",
       "position": "1/1",
@@ -192,7 +195,7 @@ UTC, and are display metadata.
       }
     },
     {
-      "id": "01M85MZ2GZQY6GC0MH3244S3N9",
+      "id": "01M86B5ESZP5Y76C7WD7HFES83",
       "type": "part.add",
       "partType": "decision",
       "position": "2/1"
@@ -203,35 +206,44 @@ UTC, and are display metadata.
 
 `historyGeneration` is a ULID minted when the relic is created, and every pack
 of the relic repeats it. `logicalClock` is `1` in the creating commit and one
-more in each commit after it. The next commit saved a new body over the first
+more in each commit after it. A later commit saved a new body over the first
 part's, and its `operation.json` is, as stored:
 
 ```json
-{"format":"workbook.relic-operation-pack","version":1,"minReader":6,"projectId":"01M85MZ1SC6NH2APV0072PSRFE","relicId":"WB-R-01M85MZ25Z7GNEM9GBR0A24ED1","historyGeneration":"01M85MZ25ZT322VZ96YQ97ASYE","actor":{"id":"alice@example.com"},"logicalClock":3,"wallTime":"2026-11-24T02:08:13.085725Z","operations":[{"id":"01M85MZ3RXE62HZWS6KJYS86T0","type":"part.body.set","part":"01M85MZ2GZ4MV33Z6KB3H5SHZ3","body":{"format":"md","bytes":146,"base":"01M85MZ2GZ4MV33Z6KB3H5SHZ3"}}]}
+{"format":"workbook.relic-operation-pack","version":1,"minReader":6,"projectId":"01M86B5E3T0YJ4ECEFRZ8BM34G","relicId":"WB-R-01M86B5EHY4R2HME50RYZKH12Z","historyGeneration":"01M86B5EHYYE7QGJQMKFRWED6T","actor":{"id":"alice@example.com"},"logicalClock":4,"wallTime":"2026-11-24T08:36:13.368167Z","operations":[{"id":"01M86B5JDRCYRM2P2G4TSYG2NW","type":"part.body.set","part":"01M86B5ESZPGDSDZYRJ5AN1HF8","body":{"format":"md","bytes":146,"base":"01M86B5ESZPGDSDZYRJ5AN1HF8"}}]}
 ```
 
-| Operation type | Members besides `id` and `type` |
+An operation's members are always written in one order, `id`, `type`,
+`relic`, `title`, `name`, `value`, `part`, `partType`, `position`, `body`, and
+an operation has only the ones its type takes:
+
+| Operation type | Members after `id` and `type`, in stored order |
 | --- | --- |
 | `relic.create` | `relic`: `title`, `type`, `createdAt` |
 | `title.set` | `title` |
 | `relic.tombstone`, `relic.restore` | none |
 | `property.set` | `name`, `value` |
 | `property.clear` | `name` |
-| `part.add` | `partType`, `position`, and `body` when the part is added with one: `format` when it has a label, and `bytes`. The operation's `id` is the new part's ID. |
-| `part.field.set` | `part`, `name`, `value` |
-| `part.field.clear` | `part`, `name` |
-| `part.body.set` | `part`, and `body`: `format` when it has a label, `bytes`, and `base`, the body version the save started from, left out when the part had no body |
+| `part.add` | `partType`, `position`, and `body` when the part is added with one: `format` when it has a label, then `bytes`. The operation's `id` is the new part's ID. |
+| `part.field.set` | `name`, `value`, `part` |
+| `part.field.clear` | `name`, `part` |
+| `part.body.set` | `part`, and `body`: `format` when it has a label, then `bytes`, then `base`, the body version the save started from, left out when the part had no body |
 | `part.move` | `part`, `position` |
 | `part.remove`, `part.restore` | `part` |
 
-An operation that carries any other member, or lacks one of its own, is
-`corrupt-data`. A `value` is a JSON value in canonical form: what
-`json.Marshal` writes after decoding with numbers kept as text, so object
-members are sorted and `<`, `>` and `&` inside a string are `\u003c`,
-`\u003e` and `\u0026`. `part.add` and `part.body.set` carry a body's label
-and size and never its content, and a new part's fields are not in the pack
-either: both are in the commit's tree. An operation pack therefore does not
-grow with the content it records.
+An operation that carries any other member, lacks one of its own, or writes
+them in another order is `corrupt-data`. A `value` is a JSON value in
+canonical form: what `json.Marshal` writes after decoding with numbers kept as
+text, so object members are sorted and `<`, `>` and `&` inside a string are
+`\u003c`, `\u003e` and `\u0026`. It nests arrays and objects at
+most 32 levels deep, and it is at most 65,536 bytes as a property's value and
+16,384 bytes as a field's. A `name` is 1 to 100 bytes of valid UTF-8 with no
+`=`, no control character (Unicode category Cc), and no white space (Unicode
+`White_Space`) at either end. Names are not normalized, and are compared byte
+for byte. `part.add` and `part.body.set` carry a body's label and size and
+never its content, and a new part's fields are not in the pack either: both
+are in the commit's tree. An operation pack therefore does not grow with the
+content it records.
 
 `state.json` of the same commit as the first pack, through `jq .`:
 
@@ -240,10 +252,10 @@ grow with the content it records.
   "format": "workbook.relic-state",
   "version": 1,
   "minReader": 6,
-  "projectId": "01M85MZ1SC6NH2APV0072PSRFE",
-  "relicId": "WB-R-01M85MZ25Z7GNEM9GBR0A24ED1",
+  "projectId": "01M86B5E3T0YJ4ECEFRZ8BM34G",
+  "relicId": "WB-R-01M86B5EHY4R2HME50RYZKH12Z",
   "history": {
-    "generation": "01M85MZ25ZT322VZ96YQ97ASYE",
+    "generation": "01M86B5EHYYE7QGJQMKFRWED6T",
     "compactedFrom": null
   },
   "logicalClock": 2,
@@ -254,24 +266,24 @@ grow with the content it records.
     "author": "alice@example.com",
     "retired": false,
     "deleted": false,
-    "createdAt": "2026-11-24T02:08:11.455471Z",
-    "updatedAt": "2026-11-24T02:08:11.80795Z",
+    "createdAt": "2026-11-24T08:36:09.406468Z",
+    "updatedAt": "2026-11-24T08:36:09.663809Z",
     "properties": {
       "status": "draft"
     },
     "parts": [
       {
-        "id": "01M85MZ2GZ4MV33Z6KB3H5SHZ3",
+        "id": "01M86B5ESZPGDSDZYRJ5AN1HF8",
         "type": "section",
         "position": "1/1",
         "body": {
           "format": "md",
-          "version": "01M85MZ2GZ4MV33Z6KB3H5SHZ3",
+          "version": "01M86B5ESZPGDSDZYRJ5AN1HF8",
           "bytes": 102
         }
       },
       {
-        "id": "01M85MZ2GZQY6GC0MH3244S3N9",
+        "id": "01M86B5ESZP5Y76C7WD7HFES83",
         "type": "decision",
         "position": "2/1"
       }
@@ -310,14 +322,22 @@ judged by the rules below.
 **The fold.** `state.json` is what folding the commit's operations onto its
 parent's state computes. Some operations fold to no change and stay in the
 history: a `part.body.set` whose `base` is not the part's current body
-version, an operation that names a part the relic does not have, a second
-`part.add` with an ID the relic already has, removing a removed part,
-restoring a live one, and clearing a name that is not set. Deletion is
-stricter, as it is for tasks: `relic.restore` needs a deleted relic and comes
-first in its pack, and any other operation on a deleted relic is
-`corrupt-data`. The commands are stricter than the fold. `relic update`
+version, an operation that names a part the relic does not have, removing a
+removed part, restoring a live one, and clearing a name that is not set.
+Deletion is stricter, as it is for tasks: `relic.restore` needs a deleted
+relic and comes first in its pack, and any other operation on a deleted relic
+is `corrupt-data`. The commands are stricter than the fold. `relic update`
 refuses a body save from a stale base instead of recording one the fold would
 ignore.
+
+**An operation ID is used once in a relic's history.** A part's ID is the ID
+of the `part.add` that made it, and a body's version is the ID of the
+operation that saved it, so an ID used twice would name two things. The fold
+refuses the reuse the parent's state shows, as `corrupt-data`: a `part.add`
+whose ID is the ID of a part the relic already has or the current body version
+of one, and a `part.body.set` whose ID is a part's ID. A second `part.add`
+for a part is therefore not ignored. Any other reuse leaves no trace in the
+state, and only a walk over the whole history sees it.
 
 **What makes a relic commit valid.** For a commit with pack P, its parent
 commit (none for the first) and its stored state and links:
@@ -331,45 +351,60 @@ commit (none for the first) and its stored state and links:
 3. `parts/` holds one subtree for each part the state lists, named by part ID.
    Each holds `fields.json`, `body` exactly when the state records a body, and
    nothing else.
-4. A `fields.json` is at most 16,384 bytes. A `body` is at most 1,048,576
-   bytes, and is the size the state records.
+4. A `fields.json` is at most 4,194,304 bytes, the limit for any one stored
+   object, and each value in it is at most 16,384 bytes. A `body` is at most
+   1,048,576 bytes, and is the size the state records.
 5. A part that P does not name has the same subtree object as in the parent.
 6. A part's `body` differs from the parent's only when this commit saved it:
    the state's body version for the part is the ID of an operation in P, and
    the part is new in this commit or that version is not the one in the
-   parent's state. A repeated `part.add` or `part.body.set`, which the fold
-   ignores, therefore cannot bring new content with it.
+   parent's state. A repeated `part.body.set`, which the fold ignores,
+   therefore cannot bring new content with it.
 7. A part's `fields.json` is the parent's with P's `part.field.set` and
    `part.field.clear` operations for that part applied in order. For a part P
    adds, it is a canonical fields document that agrees with any field
    operations P carries for it.
 
 Rules 1 to 6 are judged from object IDs and sizes, without opening anything
-under `parts/`. So is one case of rule 7: a part that P names without setting
-or clearing a field keeps the `fields.json` object it had. The rest of rule 7
-reads the `fields.json` of the parts P names.
+under `parts/`, except the limit on one field value, which takes reading the
+`fields.json` that holds it. So is one case of rule 7: a part that P names
+without setting or clearing a field keeps the `fields.json` object it had. The
+rest of rule 7 reads the `fields.json` of the parts P names.
+
+No rule limits how large one relic's properties are together, or one part's
+fields, or how many parts a relic has. Those are totals. The commands refuse a
+change that leaves one over its limit and larger than it was, and nothing
+checks one when a relic is read, so a relic over a total still reads. See
+[What a relic may hold](reference.md#what-a-relic-may-hold).
 
 - A **write** computes the state by folding and refuses to store a record
   that is not the fold's. A part the pack does not name keeps its subtree
   object, so a commit stores only what it changed.
 - **`relic show`, `export`, `update`, `delete` and `restore`** check the
   relic's newest commit against its parent by rules 1 to 6 and the case of
-  rule 7 that needs no read.
+  rule 7 that needs no read, and check the limit on one field value for the
+  parts whose fields they read.
 - **`relic list`** reads each relic's newest commit alone: rule 2, and that
   the three documents are the bytes this build writes.
 - **`workbook validate`** checks every commit of every relic, first to
-  newest, by all seven rules, and caches nothing.
+  newest, by all seven rules, and caches nothing. It also refuses a relic in
+  which one operation ID is recorded by two commits of that relic's own
+  history. It compares nothing across relics.
 
 **Writes are compare-and-swap.** Nothing is visible until the ref moves, and
 the ref moves only if it still points at the commit the change started from.
 Of two writers that started from the same commit, exactly one lands and the
-other is refused as `stale-write`. A write interrupted before the ref moves
-leaves unreferenced objects and changes nothing.
+other is refused as `stale-write`, told that another change was saved first
+and to run the command again. Nothing retries it. A write interrupted before
+the ref moves leaves unreferenced objects and changes nothing.
 
-**Relic refs are local.** No command fetches, pushes, moves or compacts a
-relic ref, and no relic is written to the SQLite projection: the relic
-commands read Git directly. `workbook reset` is the only command that deletes
-a relic ref, after writing it to the reset's bundle.
+**Relic refs are local until relics are shared.** No command fetches, pushes,
+moves or compacts a relic ref, and no relic is written to the SQLite
+projection: the relic commands read Git directly. `workbook reset` is the only
+command that deletes a relic ref, after writing it to the reset's bundle. A
+relic ref that is damaged but still names a commit is written to the bundle
+like any other, because nothing else holds a relic; only one whose object is
+missing or is not a commit is deleted with nothing kept.
 
 ### Operation pack
 
@@ -480,8 +515,9 @@ unreachable. See [Compaction](#compaction).
 The one manual exception to keeping a task ref at all is `workbook reset`, which
 deletes refs under `refs/workbook/` from one checkout or one remote when a person
 runs it. It changes no commit either, and it writes a bundle of the refs it
-deletes first. A damaged ref, whose object cannot be bundled, is left out of
-it, and `--no-backup` writes none where it is allowed. See
+deletes first. A damaged ref is left out of it, except a damaged relic ref
+that still resolves to a commit, which Git can bundle and nothing else holds.
+`--no-backup` writes no bundle where it is allowed. See
 [Resetting Workbook data](#resetting-workbook-data).
 
 ### Assignments
@@ -1048,8 +1084,10 @@ this clone
 
 **The bundle comes first.** Each run writes and verifies a bundle of every ref
 it deletes, with the compaction manifest, before it deletes anything. Two
-exceptions: a damaged ref cannot be bundled and is deleted anyway, and the
-manifest ref an interrupted backup left is not data. A ref that moved since the
+exceptions: a damaged ref is not bundled and is deleted anyway, and the
+manifest ref an interrupted backup left is not data. A damaged relic ref that
+still resolves to a commit is not one of them: it goes into the bundle with
+its history, because a relic exists nowhere but in the checkout. A ref that moved since the
 run read it stops the run. A checkout's bundle holds the refs under their own
 names. A remote's holds them under the names this checkout tracks them by, so
 fetching from it never overwrites a live ref. A checkout may skip the bundle

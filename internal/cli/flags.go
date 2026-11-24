@@ -886,9 +886,10 @@ var commandSchemas = map[string]commandMetadata{
 				},
 			},
 			"list": {
-				Name:        "list",
-				Synopsis:    "workbook relic list [--type <type>] [--all] [--json]",
-				Description: "List relics, oldest first. Deleted relics are left out unless --all is given.",
+				Name:     "list",
+				Synopsis: "workbook relic list [--type <type>] [--all] [--json]",
+				Description: "List relics in ID order, which is the order they were created in under one\n" +
+					"project key. Deleted relics are left out unless --all is given.",
 				Options: []optionMetadata{
 					{Name: "type", Kind: stringFlag, Value: "<type>", Description: "show only relics of this type"},
 					{Name: "all", Kind: boolFlag, Description: "include deleted relics, each marked deleted"},
