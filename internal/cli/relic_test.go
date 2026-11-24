@@ -678,6 +678,36 @@ func TestReferenceDocumentsSharedRelics(t *testing.T) {
 			t.Errorf("the architecture is missing %q", required)
 		}
 	}
+
+	// Relics for agents: a long document belongs in a relic, the guidelines
+	// teach agents to use them, and the README and the reference say so.
+	fullReference := strings.Join(strings.Fields(repositoryDoc(t, "docs", "reference.md")), " ")
+	if strings.Contains(fullReference, "belongs in the repository with the task linking to it") {
+		t.Error("the reference still says a document belongs in the repository with the task linking to it")
+	}
+	if !strings.Contains(fullReference, "belongs in a relic") {
+		t.Error("the reference does not say a document belongs in a relic")
+	}
+	if !strings.Contains(reference, "### Relics for agents") {
+		t.Error("the reference's relic section has no \"### Relics for agents\" subsection")
+	}
+	forAgents := docSection(repositoryDoc(t, "docs", "reference.md"), "### Relics for agents")
+	for _, required := range []string{".workbook/guidelines.md", "workbook docs update", "--base", "relic list --linked-to"} {
+		if !strings.Contains(forAgents, required) {
+			t.Errorf("the reference's \"### Relics for agents\" is missing %q", required)
+		}
+	}
+	readme := strings.Join(strings.Fields(repositoryDoc(t, "README.md")), " ")
+	for _, required := range []string{"`workbook relic show", "`.workbook/guidelines.md`"} {
+		if !strings.Contains(readme, required) {
+			t.Errorf("the README's relic text is missing %q", required)
+		}
+	}
+	for _, required := range []string{"git ls-tree -r -t", "parts/<part-id>/body", "040000 tree"} {
+		if !strings.Contains(architecture, required) {
+			t.Errorf("the architecture's relic section is missing the commit-and-tree example's %q", required)
+		}
+	}
 }
 
 // groupedDigits writes a count as the reference does: digits, with a comma

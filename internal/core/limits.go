@@ -28,8 +28,8 @@ const (
 	// trimmed. Roughly five lines of terminal text.
 	MaxTitleBytes = 500
 	// MaxDescriptionBytes bounds a task description. Roughly a thousand lines
-	// of prose, well past the point where the body belongs in the repository
-	// and the task should link to it.
+	// of prose, well past the point where the text belongs in a relic linked
+	// to the task.
 	MaxDescriptionBytes = 64 << 10
 	// MaxLabelBytes bounds one label.
 	MaxLabelBytes = 100

@@ -155,8 +155,13 @@ are combined, and the one kind that cannot be, two saves over the same body
 version or an edit to a relic deleted elsewhere, is reported as a relic
 conflict that keeps the change that did not apply. A relic, or one of its
 parts, links to tasks with `workbook relic update --link <task> --rel <rel>`,
-and `workbook show <task>` lists the relics that link to it. Relics are not
-on the board. Upgrade every Workbook on a machine before creating relics there,
+and `workbook show <task>` lists the relics that link to it. The generated
+`.workbook/guidelines.md` and the Workbook skill teach agents to use them: to
+find the relics linked to their task, read one part with `workbook relic show
+<relic>#<part> --body --json`, and save an edit with `--base` naming the
+version they read; see [Relics for agents](docs/reference.md#relics-for-agents).
+Relics are not on the board. Upgrade every Workbook on a machine before
+creating relics there,
 because a `workbook reset` run by a Workbook from before relics can lose a
 change not yet published. See [Relics](docs/reference.md#relics).
 

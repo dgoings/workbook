@@ -1193,6 +1193,27 @@ func TestREADMECommandPolicyRejectsUnimplementedCommandOutsideProposedSection(t 
 	if violations := readmeCommandPolicyViolations(proposal); len(violations) != 0 {
 		t.Fatalf("proposed command violations = %q, want none", violations)
 	}
+
+	// A command that has subcommands is held to them inside code, in a span
+	// or a fenced block, and prose may still name the command alone.
+	for _, unbuilt := range []string{
+		"## Relics\n\nCompare two versions with `workbook relic diff <relic>`.\n",
+		"## Relics\n\n```sh\nworkbook relic history <relic> --json\n```\n",
+	} {
+		if violations := readmeCommandPolicyViolations(unbuilt); len(violations) != 1 || !strings.Contains(violations[0], `"relic`) {
+			t.Errorf("violations of %q = %q, want one for the relic subcommand", unbuilt, violations)
+		}
+	}
+	for _, allowed := range []string{
+		"## Relics\n\n`workbook relic` creates them; `workbook relic show <relic>` reads one.\n",
+		"## Relics\n\nThe workbook relic diff command does not exist yet.\n",
+		"## Proposed relic history\n\nA future release may add `workbook relic diff <relic>`.\n",
+		"## Statuses\n\n```sh\nworkbook status list --json\nworkbook relic <command> --help\n```\n",
+	} {
+		if violations := readmeCommandPolicyViolations(allowed); len(violations) != 0 {
+			t.Errorf("violations of %q = %q, want none", allowed, violations)
+		}
+	}
 }
 
 func readmeCommandPolicyViolations(readme string) []string {
@@ -1203,9 +1224,24 @@ func readmeCommandPolicyViolations(readme string) []string {
 		implemented[name] = true
 	}
 	commandPattern := regexp.MustCompile(`\bworkbook ([a-z][a-z0-9-]*)\b`)
+	subcommandPattern := regexp.MustCompile(`\bworkbook ([a-z][a-z0-9-]*) ([a-z][a-z0-9-]*)\b`)
 	var h2, h3 string
 	var violations []string
+	fenced := false
 	for index, line := range strings.Split(readme, "\n") {
+		// The code on this line: all of it inside a fenced block, and the
+		// inline code spans outside one. Only code is held to subcommands,
+		// since prose may name a command group in passing.
+		var code []string
+		if strings.HasPrefix(strings.TrimLeft(line, " "), "```") {
+			fenced = !fenced
+		} else if fenced {
+			code = []string{line}
+		} else {
+			for _, span := range guidanceCodeSpans(line, index+1) {
+				code = append(code, span.code)
+			}
+		}
 		switch {
 		case strings.HasPrefix(line, "## "):
 			h2 = strings.TrimSpace(strings.TrimPrefix(line, "## "))
@@ -1220,6 +1256,15 @@ func readmeCommandPolicyViolations(readme string) []string {
 			if !implemented[match[1]] && !isProposed {
 				violations = append(violations,
 					fmt.Sprintf("line %d under %q uses %q", index+1, headingPath, match[1]))
+			}
+		}
+		for _, text := range code {
+			for _, match := range subcommandPattern.FindAllStringSubmatch(text, -1) {
+				subcommands := commandSchemas[match[1]].Subcommands
+				if _, exists := subcommands[match[2]]; len(subcommands) > 0 && !exists && !isProposed {
+					violations = append(violations,
+						fmt.Sprintf("line %d under %q uses %q", index+1, headingPath, match[1]+" "+match[2]))
+				}
 			}
 		}
 	}

@@ -361,8 +361,8 @@ that can be corrected, and is reported as `corrupt-data` (exit `7`).
 
 The limits are set far above ordinary use: a title is a headline, a description
 is prose and short code fences, and labels are vocabulary. A description that
-approaches 64 KiB is a document, and a document belongs in the repository with
-the task linking to it.
+approaches 64 KiB is a document, and a document belongs in a relic linked to
+the task (see [Relics](#relics)).
 
 The rank limit bounds work rather than storage. A rank is an exact rational, it
 is parsed every time a task is read and again on every comparison that orders a
@@ -2398,6 +2398,44 @@ were shared. A relic that could not be replayed is also listed in the
 envelope's `relicConflict`, as under [A relic conflict](#a-relic-conflict),
 and a relic over a limit after a merge gives a `relic-over-limit` warning in
 `warnings`.
+
+### Relics for agents
+
+The generated guidelines, `.workbook/guidelines.md`, have a `Relics` section,
+and the Workbook skill the same steps; `workbook setup` installs both and
+`workbook docs update` refreshes them. They teach an agent to find the relics
+linked to a task, read one part, and save an edit naming the version it read,
+with these commands, in this order:
+
+```sh
+workbook show <task> --json
+workbook relic list --linked-to <task> --json
+workbook relic show <relic>#<part> --body --json
+workbook relic update <relic> --part <part> --body-file <file> --base <version> --json
+```
+
+The links are the task's `data.relics`, as under
+[Links to tasks](#links-to-tasks), and the part's body and its version are
+`data.parts[0].body.text` and `data.parts[0].body.version`, as under
+[The relic document](#the-relic-document). The skill tells an agent to read
+each linked part before editing files, as part of the task's context.
+
+They also say what to do when a save meets another edit of the same body. A
+save from a version that is no longer current is refused with exit `6`
+(`stale-write`), as under [Body versions](#body-versions), and repeating it
+fails the same way. A sync that meets another clone's save reports a
+[relic conflict](#a-relic-conflict), exit `8`. Either way the agent reads the
+part again and, when its intent is clear, applies its change to the current
+text and saves from the current version. Otherwise it shows the user both
+versions and asks. The exit-code table in the guidelines says that a relic
+save refused for its `--base` needs a fresh read first, where most exit `6`
+refusals succeed when retried.
+
+The guidelines describe relic IDs under the project's current key, as
+`WB-R-<ULID>` and `WB-<ULID>` here. They name only commands and options that
+exist: a test holds every `workbook` command in the guidelines and the skill
+to the command schemas, and runs the four commands above in order against a
+temporary repository.
 
 ## Machine-readable output and exit codes
 

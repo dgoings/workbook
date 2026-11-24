@@ -119,6 +119,17 @@ document with links. The web board's task API does not list links. See
 [Relics](docs/reference.md#relics) and
 [Relic refs](docs/architecture.md#relic-refs).
 
+The generated guidelines and the Workbook skill teach agents to use relics.
+`.workbook/guidelines.md` gains a `Relics` section: what a relic is, its ID
+under the project's current key, the four commands that find the relics
+linked to a task, read one part and save an edit with `--base`, and what to do
+when that save is refused as `stale-write` (exit 6) or meets another clone's
+edit as a relic conflict (exit 8). Its exit-code table says a relic save
+refused for its `--base` needs a fresh read first. The skill tells an agent to
+read each linked part before editing files. Run `workbook docs update` to
+refresh both. See
+[Relics for agents](docs/reference.md#relics-for-agents).
+
 **Upgrade every Workbook on the machine before creating relics.** A Workbook
 from before relics does not know the refs that hold them. Its `workbook reset
 --no-backup` deletes the relic refs without writing a bundle, and the restore
