@@ -120,8 +120,21 @@ func (r *Repository) ReadRelicCommit(
 }
 
 // readRelicCommit is ReadRelicCommit for a caller that has already checked the
-// repository and its configuration.
+// repository and its configuration. Whatever it cannot read, the error names
+// the relic.
 func (r *Repository) readRelicCommit(
+	ctx context.Context,
+	config core.ProjectConfig,
+	relicID, objectID string,
+) (RelicCommit, error) {
+	commit, err := r.readRelicCommitObjects(ctx, config, relicID, objectID)
+	if err != nil {
+		return RelicCommit{}, namedRelicError(relicID, err)
+	}
+	return commit, nil
+}
+
+func (r *Repository) readRelicCommitObjects(
 	ctx context.Context,
 	config core.ProjectConfig,
 	relicID, objectID string,
@@ -218,6 +231,14 @@ func (r *Repository) readRelicPartObjects(
 	// ends each record with a NUL and leaves names unquoted.
 	listing, err := r.Git(ctx, nil, "ls-tree", "-r", "-t", "-l", "-z", commit)
 	if err != nil {
+		// The commit and the top of its tree have been read, so what Git
+		// cannot list is a directory further down that it does not have: the
+		// one that holds the parts, or one part's. That is this relic's
+		// damage, and Git's own words for it are not the user's to decode.
+		if gitExitedWithFailure(ctx, err) {
+			return nil, corruptRelic(state.RelicID,
+				"commit %s: its tree cannot be listed; a directory it names is missing from Git or cannot be read", commit)
+		}
 		return nil, err
 	}
 	return relicPartObjectsFromListing(listing, state)
@@ -585,6 +606,43 @@ func (r *Repository) verifiedRelicTip(
 	return snapshot, nil
 }
 
+// relicHistoryGap finds why Git could not walk a relic's history from head: a
+// commit that cannot be read, or one that names a parent Git does not have. It
+// returns the commit to report and the reason, or a nil reason when every
+// commit down to the one that created the relic is there, so that the walk
+// failed for some cause this cannot see.
+//
+// It starts from the oldest commit Git reached before it gave up, which a walk
+// that is not reversed prints as it goes, and follows parents from there by
+// hand. That listing is only a place to start: nothing is concluded from it.
+func (r *Repository) relicHistoryGap(ctx context.Context, config core.ProjectConfig, head core.RelicHead) (string, error) {
+	objectID := head.ObjectID
+	reached := strings.Fields(string(r.gitWithEnvResult(ctx, nil, nil, "rev-list", "--first-parent", head.ObjectID).stdout))
+	if len(reached) > 0 {
+		if _, err := decodeObjectID(reached[len(reached)-1]); err == nil {
+			objectID = reached[len(reached)-1]
+		}
+	}
+	for ctx.Err() == nil {
+		commit, err := r.readRelicCommit(ctx, config, head.RelicID, objectID)
+		if err != nil {
+			return objectID, err
+		}
+		if commit.Parent == "" {
+			return "", nil
+		}
+		if _, err := r.Git(ctx, nil, "cat-file", "-e", commit.Parent); err != nil {
+			if !gitExitedWithFailure(ctx, err) {
+				return "", nil
+			}
+			return objectID, corruptRelic(head.RelicID,
+				"the history cannot be followed past commit %s: its parent %s is missing from Git", objectID, commit.Parent)
+		}
+		objectID = commit.Parent
+	}
+	return "", nil
+}
+
 // ValidateRelicHistory checks every commit of one relic's history, root to
 // tip, against all seven rules and for an operation ID an earlier commit of
 // the same history already used, and stops at the first that fails. checked is
@@ -611,6 +669,7 @@ func (r *Repository) ValidateRelicHistory(
 	// failed sorts a refusal into the failure this history is reported with,
 	// or an error that says nothing about the history.
 	failed := func(commit string, refusal error) (int, *RelicHistoryFailure, error) {
+		refusal = namedRelicError(head.RelicID, refusal)
 		switch core.CategoryOf(refusal) {
 		case core.CategoryCorruptData, core.CategoryNewerWriter:
 			if ctx.Err() == nil {
@@ -631,7 +690,15 @@ func (r *Repository) ValidateRelicHistory(
 			return failed(head.ObjectID, readErr)
 		}
 		if err != nil {
-			return 0, nil, err
+			// The head is a relic commit, and Git still could not walk from
+			// it: some commit further back is not in the object store. Which
+			// one is this relic's failure to report, in words of our own.
+			if gitExitedWithFailure(ctx, err) {
+				if commit, gap := r.relicHistoryGap(ctx, config, head); gap != nil {
+					return failed(commit, gap)
+				}
+			}
+			return 0, nil, namedRelicError(head.RelicID, err)
 		}
 		return 0, nil, core.Errorf(core.CategoryOperational,
 			"relic %s: Git did not list the history of commit %s", head.RelicID, head.ObjectID)

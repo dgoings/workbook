@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -46,6 +48,39 @@ const relicRefChanged = "relic ref changed concurrently"
 
 func corruptRelic(relicID, format string, args ...any) error {
 	return core.Errorf(core.CategoryCorruptData, "relic %s: %s", relicID, fmt.Sprintf(format, args...))
+}
+
+// namedRelicError makes an error raised while reading one relic say which
+// relic it was. A project holds many relics and a command that reads them all
+// stops at the first it cannot read, so an error that names none leaves
+// nothing to look at. An error that already names the relic is returned as it
+// is, and the category is kept either way.
+//
+// The relic's name goes at the front of one whole message, causes included,
+// because a command reports only an error's own message unless the error is
+// operational. An operational error keeps its chain, so a caller can still
+// find a cancelled context in it.
+func namedRelicError(relicID string, err error) error {
+	if err == nil || relicID == "" || strings.Contains(err.Error(), relicID) {
+		return err
+	}
+	category := core.CategoryOf(err)
+	if category == "" || category == core.CategoryOperational {
+		return core.Wrap(core.CategoryOperational, "relic "+relicID, err)
+	}
+	return core.Errorf(category, "relic %s: %s", relicID, err.Error())
+}
+
+// gitExitedWithFailure reports whether err is Git having run and answered
+// with a failure of its own, as it does when it meets an object it does not
+// have. A command that never ran, or that was stopped because the context
+// ended, says nothing about the repository.
+func gitExitedWithFailure(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	var exitError *exec.ExitError
+	return errors.As(err, &exitError) && exitError.ExitCode() > 0
 }
 
 // ListRelicHeads returns every relic ref tip, ordered by relic ID. The
@@ -210,7 +245,8 @@ func (r *Repository) ReadRelicTips(
 		for position := range objects {
 			object, err := readBatchObject(batch.Reader())
 			if err != nil {
-				return nil, batch.ReadFailure("cannot read relic objects from Git batch", err)
+				return nil, namedRelicError(head.RelicID,
+					batch.ReadFailure("cannot read relic objects from Git batch", err))
 			}
 			objects[position] = object
 		}
@@ -226,7 +262,22 @@ func (r *Repository) ReadRelicTips(
 	return snapshots, nil
 }
 
+// validateRelicTip judges the five objects read for one commit of a relic, and
+// names the relic in whatever it refuses them for.
 func validateRelicTip(
+	objects [5]batchObject,
+	config core.ProjectConfig,
+	head core.RelicHead,
+	objectIDBytes int,
+) (core.RelicSnapshot, error) {
+	snapshot, err := validateRelicTipObjects(objects, config, head, objectIDBytes)
+	if err != nil {
+		return core.RelicSnapshot{}, namedRelicError(head.RelicID, err)
+	}
+	return snapshot, nil
+}
+
+func validateRelicTipObjects(
 	objects [5]batchObject,
 	config core.ProjectConfig,
 	head core.RelicHead,
@@ -408,6 +459,20 @@ func (r *Repository) ReadRelicParts(
 	partIDs []string,
 	bodies bool,
 ) (map[string]core.RelicPartContent, error) {
+	contents, err := r.readRelicParts(ctx, config, snapshot, partIDs, bodies)
+	if err != nil {
+		return nil, namedRelicError(snapshot.Record.State.RelicID, err)
+	}
+	return contents, nil
+}
+
+func (r *Repository) readRelicParts(
+	ctx context.Context,
+	config core.ProjectConfig,
+	snapshot core.RelicSnapshot,
+	partIDs []string,
+	bodies bool,
+) (map[string]core.RelicPartContent, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return nil, err
 	}
@@ -555,6 +620,7 @@ func (r *Repository) GetRelic(ctx context.Context, config core.ProjectConfig, re
 		return core.RelicSnapshot{}, core.Errorf(core.CategoryNotFound, "relic %q was not found", relicID)
 	}
 	snapshot, err := r.verifiedRelicTip(ctx, config, relicID, head)
+	err = namedRelicError(relicID, err)
 	if core.CategoryOf(err) == core.CategoryCorruptData {
 		return core.RelicSnapshot{}, core.Errorf(core.CategoryCorruptData, "%v; run \"workbook validate\" for details", err)
 	}

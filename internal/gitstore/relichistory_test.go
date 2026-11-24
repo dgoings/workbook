@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -1688,14 +1690,220 @@ func TestATimeStoredWithAnOffsetIsNotCanonical(t *testing.T) {
 				t.Fatalf("%s: GetRelic() served a time stored with an offset", name)
 			}
 			assertGetRelicRefused(t, err)
-			assertRelicCategory(t, err, core.CategoryCorruptData, "not canonical")
+			assertRelicCategory(t, err, core.CategoryCorruptData, relicID, "not canonical")
 			if _, err := repo.ReadRelicTips(ctx, config, []core.RelicHead{{RelicID: relicID, ObjectID: forged}}); err == nil {
 				t.Fatalf("%s: ReadRelicTips() served a time stored with an offset", name)
 			} else {
-				assertRelicCategory(t, err, core.CategoryCorruptData, "not canonical")
+				assertRelicCategory(t, err, core.CategoryCorruptData, relicID, "not canonical")
 			}
 			assertRelicHistoryStopsAt(t, repo, config, relicID, forged, forged, 1,
-				core.CategoryCorruptData, "not canonical")
+				core.CategoryCorruptData, relicID, "not canonical")
 		}
 	})
+}
+
+// loseRelicObject deletes one object from the repository, as a damaged or
+// partly copied object store is missing it.
+func loseRelicObject(t *testing.T, repo *Repository, objectID string) {
+	t.Helper()
+	gitDir := gitOutput(t, repo, "rev-parse", "--absolute-git-dir")
+	if err := os.Remove(filepath.Join(gitDir, "objects", objectID[:2], objectID[2:])); err != nil {
+		t.Fatalf("remove object %s to lose it: %v", objectID, err)
+	}
+}
+
+// assertNoRawGitText asserts that a refusal about a relic is in Workbook's own
+// words: it names the relic and repeats nothing a Git command printed.
+func assertNoRawGitText(t *testing.T, label string, err error, relicID string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("%s: no error", label)
+	}
+	message := err.Error()
+	if !strings.Contains(message, relicID) {
+		t.Fatalf("%s: error %q does not name relic %s", label, message, relicID)
+	}
+	for _, raw := range []string{"ls-tree", "rev-list", "exit status", "fatal:", "error:", "git "} {
+		if strings.Contains(message, raw) {
+			t.Fatalf("%s: error %q repeats Git's own text (%q)", label, message, raw)
+		}
+	}
+}
+
+// A relic commit can name a tree Git does not have: one part's directory, or
+// the directory of all parts. Git cannot list such a commit's tree. That is
+// the relic's damage, not a failure to run Git, so it is corrupt data for
+// that relic and for no other.
+func TestAMissingPartTreeIsCorruptDataForTheRelic(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		healthy := writeRelicRootNumbered(t, repo, config, 2, relicTestPartNumbered(1).withBody("md", []byte("sound\n")))
+		tip, a, _ := relicRuleHistory(t, repo, config)
+		relicID := tip.Operation.RelicID
+		absent := strings.Repeat("0", len(tip.Head)-1) + "1"
+
+		onePart := replaceRelicTreeEntry(t,
+			relicLines(gitOutput(t, repo, "ls-tree", tip.Head+":parts")), a.id, "040000 tree "+absent+"\t"+a.id)
+		forgedParts := gitOutputWithInput(t, repo, []byte(strings.Join(onePart, "\n")+"\n"), "mktree", "--missing")
+		top := relicLines(gitOutput(t, repo, "ls-tree", tip.Head))
+		for name, entry := range map[string]string{
+			"one part's directory":       "040000 tree " + forgedParts + "\tparts",
+			"the directory of all parts": "040000 tree " + absent + "\tparts",
+		} {
+			tree := gitOutputWithInput(t, repo,
+				[]byte(strings.Join(replaceRelicTreeEntry(t, top, "parts", entry), "\n")+"\n"), "mktree", "--missing")
+			forged := forgeRelicCommitOf(t, repo, tree, relicParents(t, repo, tip.Head)...)
+			pointRelicRef(t, repo, relicID, forged)
+
+			checked, failure, err := repo.ValidateRelicHistory(ctx, config, core.RelicHead{RelicID: relicID, ObjectID: forged})
+			if err != nil {
+				t.Fatalf("%s: ValidateRelicHistory() error = %v, want the relic's failure", name, err)
+			}
+			if failure == nil || failure.Commit != forged || checked != 1 {
+				t.Fatalf("%s: ValidateRelicHistory() = %d checked, failure %+v; want 1 checked and commit %s refused",
+					name, checked, failure, forged)
+			}
+			assertRelicCategory(t, failure.Err, core.CategoryCorruptData, forged)
+			assertNoRawGitText(t, name+" (validate)", failure.Err, relicID)
+
+			_, err = repo.GetRelic(ctx, config, relicID)
+			assertGetRelicRefused(t, err)
+			assertNoRawGitText(t, name+" (read)", err, relicID)
+		}
+
+		// The relic beside it is untouched by any of this.
+		assertRelicHistoryValid(t, repo, config, healthy.Operation.RelicID, healthy.Head, 1)
+		if _, err := repo.GetRelic(ctx, config, healthy.Operation.RelicID); err != nil {
+			t.Fatalf("GetRelic() of the healthy relic error = %v", err)
+		}
+	})
+}
+
+// A history whose commits are not all in the object store cannot be walked.
+// Validation says which commit names a parent Git does not have. A read of
+// the newest commit looks no further than that commit's parent.
+func TestAMissingCommitIsCorruptDataForTheRelic(t *testing.T) {
+	t.Parallel()
+	for _, missing := range []string{"the first commit", "a commit in the middle", "the newest commit"} {
+		t.Run(missing, func(t *testing.T) {
+			t.Parallel()
+			forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+				ctx := context.Background()
+				healthy := writeRelicRootNumbered(t, repo, config, 2, relicTestPartNumbered(1).withBody("md", []byte("sound\n")))
+				part := relicTestPartNumbered(1).withBody("md", []byte("the first text\n"))
+				root := writeRelicRootNumbered(t, repo, config, 1, part)
+				relicID := root.Operation.RelicID
+				second := writeRelicChild(t, repo, config, root, nil, relicTitleSet(700001, "A second title"))
+				third := writeRelicChild(t, repo, config, second, nil, relicTitleSet(700002, "A third title"))
+				fourth := writeRelicChild(t, repo, config, third, nil, relicTitleSet(700003, "A fourth title"))
+				assertRelicHistoryValid(t, repo, config, relicID, fourth.Head, 4)
+
+				// lost is the commit removed, and named is the commit the
+				// failure is reported at: the oldest one Git still has above
+				// the gap, or the ref's own target when that is what is gone.
+				lost, named, readable := root.Head, second.Head, true
+				switch missing {
+				case "a commit in the middle":
+					lost, named = second.Head, third.Head
+				case "the newest commit":
+					lost, named, readable = fourth.Head, fourth.Head, false
+				}
+				loseRelicObject(t, repo, lost)
+
+				checked, failure, err := repo.ValidateRelicHistory(ctx, config, core.RelicHead{RelicID: relicID, ObjectID: fourth.Head})
+				if err != nil {
+					t.Fatalf("ValidateRelicHistory() error = %v, want the relic's failure", err)
+				}
+				if failure == nil || failure.Commit != named || checked != 0 {
+					t.Fatalf("ValidateRelicHistory() = %d checked, failure %+v; want none checked and commit %s named",
+						checked, failure, named)
+				}
+				assertRelicCategory(t, failure.Err, core.CategoryCorruptData, lost)
+				assertNoRawGitText(t, "validate", failure.Err, relicID)
+
+				got, err := repo.GetRelic(ctx, config, relicID)
+				if readable {
+					if err != nil || got.Head != fourth.Head {
+						t.Fatalf("GetRelic() = %s, %v; want %s: a single read looks no further than the parent", got.Head, err, fourth.Head)
+					}
+				} else {
+					assertGetRelicRefused(t, err)
+					assertNoRawGitText(t, "read", err, relicID)
+				}
+
+				// A ref whose commit's own parent is gone is refused on read.
+				if missing == "the first commit" {
+					pointRelicRef(t, repo, relicID, second.Head)
+					_, err := repo.GetRelic(ctx, config, relicID)
+					assertGetRelicRefused(t, err)
+					assertNoRawGitText(t, "read of the commit above the gap", err, relicID)
+				}
+
+				heads, err := repo.ListRelicHeads(ctx, config)
+				if err != nil || len(heads) != 2 {
+					t.Fatalf("ListRelicHeads() = %v, %v; want both relics listed", heads, err)
+				}
+				assertRelicHistoryValid(t, repo, config, healthy.Operation.RelicID, healthy.Head, 1)
+			})
+		})
+	}
+}
+
+// Whatever stops one relic's newest commit from being read, the error says
+// which relic it was.
+func TestAnUnreadableRelicNamesItself(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	healthy := writeRelicRootNumbered(t, repo, config, 2, relicTestPartNumbered(1).withBody("md", []byte("sound\n")))
+	root := writeRelicRootNumbered(t, repo, config, 1, relicTestPartNumbered(1).withBody("md", []byte("the first text\n")))
+	relicID := root.Operation.RelicID
+	pack := relicChildPack(root, relicTitleSet(700001, "A new title"))
+	record := foldRelic(t, &root, pack)
+	state := encodedRelicDocument(t, record.State)
+	parts := forgedPartsOf(t, repo, root.Head)
+
+	for name, documents := range map[string][2][]byte{
+		"a state with a space after it":      {encodedRelicDocument(t, pack), []byte(strings.TrimSuffix(string(state), "\n") + " \n")},
+		"a state that is not JSON":           {encodedRelicDocument(t, pack), []byte("{\n")},
+		"a pack with a member nobody knows":  {bytes.Replace(encodedRelicDocument(t, pack), []byte(`{"format"`), []byte(`{"extra":1,"format"`), 1), state},
+		"a state that claims another title":  {encodedRelicDocument(t, pack), bytes.Replace(state, []byte("A new title"), []byte("Another one"), 1)},
+		"a state whose title is not trimmed": {encodedRelicDocument(t, pack), bytes.Replace(state, []byte("A new title"), []byte("A new title "), 1)},
+	} {
+		forged := forgeRelicCommit(t, repo, root.Head, documents[0], documents[1], parts)
+		pointRelicRef(t, repo, relicID, forged)
+		wantPrefix := "relic " + relicID + ": "
+
+		_, err := repo.GetRelic(ctx, config, relicID)
+		assertGetRelicRefused(t, err)
+		if !strings.HasPrefix(err.Error(), wantPrefix) {
+			t.Fatalf("%s: GetRelic() error %q does not start with %q", name, err, wantPrefix)
+		}
+
+		heads, err := repo.ListRelicHeads(ctx, config)
+		if err != nil || len(heads) != 2 {
+			t.Fatalf("%s: ListRelicHeads() = %v, %v", name, heads, err)
+		}
+		_, err = repo.ReadRelicTips(ctx, config, heads)
+		if name == "a state that claims another title" {
+			// The tip read does not fold, so it serves this one.
+			if err != nil {
+				t.Fatalf("%s: ReadRelicTips() error = %v", name, err)
+			}
+		} else {
+			assertRelicCategory(t, err, core.CategoryCorruptData)
+			if !strings.HasPrefix(err.Error(), wantPrefix) || strings.Contains(err.Error(), healthy.Operation.RelicID) {
+				t.Fatalf("%s: ReadRelicTips() error %q must start with %q and not name the healthy relic", name, err, wantPrefix)
+			}
+		}
+
+		_, failure, err := repo.ValidateRelicHistory(ctx, config, core.RelicHead{RelicID: relicID, ObjectID: forged})
+		if err != nil || failure == nil || !strings.HasPrefix(failure.Err.Error(), wantPrefix) {
+			t.Fatalf("%s: ValidateRelicHistory() = %+v, %v; want a failure that starts with %q", name, failure, err, wantPrefix)
+		}
+		if strings.Count(failure.Err.Error(), relicID) != 1 {
+			t.Fatalf("%s: the failure names the relic more than once: %q", name, failure.Err)
+		}
+	}
 }

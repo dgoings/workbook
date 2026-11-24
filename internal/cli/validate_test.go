@@ -828,3 +828,103 @@ func TestValidateNamesAnOperationIDUsedInTwoCommitsOfARelic(t *testing.T) {
 			failure, relicID, forged, repeatedID, tip.Head)
 	}
 }
+
+// requireNoRawGitText fails when a message about a relic repeats what a Git
+// command printed instead of saying it in Workbook's own words.
+func requireNoRawGitText(t *testing.T, label, message string) {
+	t.Helper()
+	for _, raw := range []string{"ls-tree", "rev-list", "exit status", "fatal:", "error:", "git "} {
+		if strings.Contains(message, raw) {
+			t.Fatalf("%s: %q repeats Git's own text (%q)", label, message, raw)
+		}
+	}
+}
+
+// A relic whose history names an object Git does not have is that relic's
+// corrupt data. Validation says so for that relic, in the relics section, and
+// still reports every other relic and every task.
+func TestValidateReportsARelicWithAMissingObjectAndEverythingElse(t *testing.T) {
+	t.Parallel()
+	for _, missing := range []string{"a part directory that points at a missing object", "a missing first commit"} {
+		t.Run(missing, func(t *testing.T) {
+			t.Parallel()
+			repository := initializedRepository(t)
+			task := createValidationTask(t, repository, "a task beside the relics")
+			fixture := openRelicFixture(t, repository)
+			healthy := fixture.threeCommitRelic(t, 1)
+			root := fixture.createRelic(t, 2, []byte("the first text\n"))
+			part := root.Record.State.Relic.Parts[0]
+			relicID := root.Operation.RelicID
+			edited := fixture.setRelicBody(t, root, 22, part.ID, []byte("the second text\n"))
+			tip := fixture.setRelicTitle(t, edited, 23, "Task archive compaction, revised")
+
+			// at is the commit the failure is reported at, and showCode what
+			// relic show answers: a single read looks at the newest commit and
+			// its parent, so it does not see a first commit that is gone.
+			at, showCode := "", 7
+			if missing == "a missing first commit" {
+				object := filepath.Join(repository, ".git", "objects", root.Head[:2], root.Head[2:])
+				if err := os.Remove(object); err != nil {
+					t.Fatalf("remove the first commit to lose it: %v", err)
+				}
+				at, showCode = edited.Head, 0
+			} else {
+				absent := strings.Repeat("0", len(tip.Head)-1) + "1"
+				parts := gitInput(t, repository, []byte("040000 tree "+absent+"\t"+part.ID+"\n"), "mktree", "--missing")
+				at = fixture.forgeRelicCommit(t, edited.Head,
+					[]byte(gitOutput(t, repository, "cat-file", "blob", tip.Head+":operation.json")+"\n"),
+					[]byte(gitOutput(t, repository, "cat-file", "blob", tip.Head+":state.json")+"\n"), parts)
+				gitInput(t, repository, nil, "update-ref", relicRef(relicID), at, tip.Head)
+			}
+
+			code, result, relics, stderr := relicValidation(t, repository)
+			if code != 7 {
+				t.Fatalf("validate --json code = %d, want 7; stderr = %q", code, stderr)
+			}
+			assertJSONError(t, stderr, core.CategoryCorruptData, "semantic history validation found 1 invalid relic(s)")
+			if result.TaskCount != 1 || result.Valid != 1 || result.Invalid != 0 {
+				t.Fatalf("task result = %#v, want task %s still reported valid", result, task.ID)
+			}
+			if relics == nil || relics.RelicCount != 2 || relics.Valid != 1 || relics.Invalid != 1 || len(relics.Failures) != 1 {
+				t.Fatalf("relics = %#v, want relic %s valid and relic %s invalid", relics, healthy.Operation.RelicID, relicID)
+			}
+			failure := relics.Failures[0]
+			if failure.RelicID != relicID || failure.Commit != at || failure.Category != "corrupt-data" ||
+				!strings.Contains(failure.Message, relicID) {
+				t.Fatalf("relic failure = %#v, want relic %s at commit %s as corrupt-data, named in the message", failure, relicID, at)
+			}
+			requireNoRawGitText(t, "the relic's failure", failure.Message)
+
+			code, stdout, stderr := run(t, repository, "validate")
+			if code != 7 {
+				t.Fatalf("validate code = %d, want 7", code)
+			}
+			for _, want := range []string{
+				"Validated 1 task(s):",
+				"Validated 2 relic(s):",
+				"1 valid, 1 invalid.\n",
+				"Invalid " + relicID + " at " + at + " [corrupt-data]: " + failure.Message + "\n",
+			} {
+				if !strings.Contains(stdout, want) {
+					t.Fatalf("validate output = %q, want it to contain %q", stdout, want)
+				}
+			}
+			requireNoRawGitText(t, "validate's output", stdout+stderr)
+
+			code, stdout, stderr = run(t, repository, "relic", "show", relicID, "--json")
+			if code != showCode {
+				t.Fatalf("relic show = (%d, %q, %q), want exit %d", code, stdout, stderr, showCode)
+			}
+			if showCode == 7 {
+				assertJSONError(t, stderr, core.CategoryCorruptData, "")
+				if !strings.Contains(stderr, relicID) {
+					t.Fatalf("relic show error = %q, want the relic named", stderr)
+				}
+				requireNoRawGitText(t, "relic show", stderr)
+			}
+			if shown := shownRelic(t, repository, healthy.Operation.RelicID); shown.ID != healthy.Operation.RelicID {
+				t.Fatalf("relic show of the healthy relic = %#v", shown)
+			}
+		})
+	}
+}

@@ -581,3 +581,55 @@ func TestReferenceDocumentsLocalRelics(t *testing.T) {
 		}
 	}
 }
+
+// One relic that cannot be read fails relic list as a whole, and the error
+// says which relic it was, as it does for every command that reads that relic.
+func TestAnUnreadableRelicIsNamedByEveryCommandThatReadsIt(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	fixture := openRelicFixture(t, repository)
+	healthy := fixture.threeCommitRelic(t, 1)
+	root := fixture.createRelic(t, 2, []byte("the first text\n"))
+	relicID := root.Operation.RelicID
+	pack := nextRelicPack(root, core.RelicOperation{ID: relicTestID(22), Type: core.RelicOperationTitleSet, Title: "A new title"})
+	record, err := core.ApplyRelic(&root.Record, pack)
+	if err != nil {
+		t.Fatalf("ApplyRelic() error = %v", err)
+	}
+	// The honest state with one space after it: every member is right and the
+	// bytes are not the ones Workbook writes.
+	state := []byte(strings.TrimSuffix(string(encodedRelicDocument(t, record.State)), "\n") + " \n")
+	forged := fixture.forgeRelicCommit(t, root.Head, encodedRelicDocument(t, pack), state,
+		gitOutput(t, repository, "rev-parse", root.Head+":parts"))
+	gitInput(t, repository, nil, "update-ref", relicRef(relicID), forged, root.Head)
+
+	body := filepath.Join(t.TempDir(), "body.md")
+	if err := os.WriteFile(body, []byte("another text\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	part := root.Record.State.Relic.Parts[0].ID
+	for name, args := range map[string][]string{
+		"list":             {"list"},
+		"list --all":       {"list", "--all"},
+		"show":             {"show", relicID},
+		"show a part":      {"show", relicID + "#" + part},
+		"export":           {"export", relicID},
+		"update the title": {"update", relicID, "--title", "Another title"},
+		"update a body":    {"update", relicID, "--part", part, "--body-file", body, "--base", part},
+		"delete":           {"delete", relicID},
+	} {
+		message := relicErrorMessage(t, repository, 7, core.CategoryCorruptData, args...)
+		if !strings.Contains(message, "relic "+relicID+": ") || !strings.Contains(message, "not canonical") {
+			t.Fatalf("relic %s: message %q does not name relic %s and what is wrong with it", name, message, relicID)
+		}
+		if strings.Contains(message, healthy.Operation.RelicID) {
+			t.Fatalf("relic %s: message %q names the healthy relic", name, message)
+		}
+	}
+	if head := relicHeadOf(t, repository, relicID); head != forged {
+		t.Fatalf("a refused command moved the relic from %s to %s", forged, head)
+	}
+	if shown := shownRelic(t, repository, healthy.Operation.RelicID); shown.ID != healthy.Operation.RelicID {
+		t.Fatalf("relic show of the healthy relic = %#v", shown)
+	}
+}
