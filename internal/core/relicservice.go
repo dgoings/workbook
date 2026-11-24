@@ -103,11 +103,13 @@ func (s RelicService) actorFor(ctx context.Context) string {
 	return s.Actor
 }
 
+// now is the instant a change is recorded at, in UTC whatever zone the clock
+// answers in: a stored time is UTC, and a reader refuses any other.
 func (s RelicService) now() time.Time {
 	if s.Now == nil {
 		return time.Now().UTC()
 	}
-	return s.Now()
+	return s.Now().UTC()
 }
 
 // newID mints one canonical ULID that is not in seen, and adds it.

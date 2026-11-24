@@ -262,8 +262,8 @@ func (s RelicService) setRelicDeleted(ctx context.Context, idOrPrefix string, de
 }
 
 // relicMessageNameLimit is the longest property or field name a refusal
-// repeats. A name has no limit of its own, so a longer one is given by size.
-const relicMessageNameLimit = 100
+// repeats, which is the longest a name may be. A longer one is given by size.
+const relicMessageNameLimit = MaxRelicNameBytes
 
 // relicNamedInMessage names a property or field for a refusal, by its size
 // alone when it is too long to repeat.

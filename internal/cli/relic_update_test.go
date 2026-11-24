@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -1170,4 +1171,100 @@ func TestConcurrentRelicUpdatesLeaveAValidHistory(t *testing.T) {
 		}
 	}
 	assertRelicHistoriesValid(t, repository, 1)
+}
+
+// relicNestedJSON returns a JSON value that nests arrays the given number of
+// levels deep.
+func relicNestedJSON(depth int) string {
+	return strings.Repeat("[", depth) + "1" + strings.Repeat("]", depth)
+}
+
+// A value may nest arrays and objects 32 levels deep. One level more is a
+// validation refusal that gives the depth and the limit, at any depth: the
+// 9,998 levels that once reached the encoder and came back as corrupt data,
+// and more than Go's own decoder allows.
+func TestRelicValuesNestAtMost32Levels(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	created := mustCreateRelic(t, repository, "Nesting", "--type", "spec")
+	id := created.Relic.ID
+	added := mustUpdateRelic(t, repository, id, "--add-part", "--part-type", "note")
+	part := added.Parts[0].ID
+	head := added.Relic.Head
+
+	for _, depth := range []int{33, 9998, 10001} {
+		for name, args := range map[string][]string{
+			"a property":            {"update", id, "--set-json", "deep=" + relicNestedJSON(depth)},
+			"a field":               {"update", id, "--part", part, "--field-json", "deep=" + relicNestedJSON(depth)},
+			"a field of a new part": {"update", id, "--add-part", "--part-type", "note", "--field-json", "deep=" + relicNestedJSON(depth)},
+		} {
+			message := relicErrorMessage(t, repository, 5, core.CategoryValidation, args...)
+			for _, want := range []string{strconv.Itoa(depth) + " levels", "the limit is 32"} {
+				if !strings.Contains(message, want) {
+					t.Fatalf("%s nested %d levels: message %q does not hold %q", name, depth, message, want)
+				}
+			}
+			if len(message) > 300 {
+				t.Fatalf("%s nested %d levels: the message is %d bytes long; it must not repeat the value", name, depth, len(message))
+			}
+		}
+	}
+	if now := relicHeadOf(t, repository, id); now != head {
+		t.Fatalf("a refused value moved the relic from %s to %s", head, now)
+	}
+	// A whole relic read from a document is held to the same limit.
+	document := bytes.Replace(relicTestDocument(t), []byte(`"weight":3`), []byte(`"weight":`+relicNestedJSON(33)), 1)
+	message := relicErrorMessage(t, repository, 5, core.CategoryValidation, "create", "--from-file", writeRelicDocumentFile(t, document))
+	if !strings.Contains(message, "33 levels") || !strings.Contains(message, "the limit is 32") {
+		t.Fatalf("a document with a property nested 33 levels: message %q does not give the depth and the limit", message)
+	}
+
+	atLimit := relicNestedJSON(32)
+	mustUpdateRelic(t, repository, id, "--set-json", "deep="+atLimit, "--part", part, "--field-json", "deep="+atLimit)
+	shown := shownRelic(t, repository, id)
+	if got := string(shown.Properties["deep"]); got != atLimit {
+		t.Fatalf("the property nested 32 levels reads back as %s", got)
+	}
+	if code, _, stderr := run(t, repository, "validate"); code != 0 {
+		t.Fatalf("validate after a value nested 32 levels = %d; stderr = %q", code, stderr)
+	}
+}
+
+// A property or field name is at most 100 bytes.
+func TestRelicNamesAreAtMost100Bytes(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	created := mustCreateRelic(t, repository, "Names", "--type", "spec")
+	id := created.Relic.ID
+	added := mustUpdateRelic(t, repository, id, "--add-part", "--part-type", "note")
+	part := added.Parts[0].ID
+	head := added.Relic.Head
+
+	long := strings.Repeat("n", 101)
+	for name, args := range map[string][]string{
+		"a property":         {"update", id, "--set", long + "=x"},
+		"a property cleared": {"update", id, "--clear", long},
+		"a field":            {"update", id, "--part", part, "--field", long + "=x"},
+		"a field cleared":    {"update", id, "--part", part, "--clear-field", long},
+	} {
+		message := relicErrorMessage(t, repository, 5, core.CategoryValidation, args...)
+		if !strings.Contains(message, "name is 101 bytes") || !strings.Contains(message, "the limit is 100 bytes") ||
+			strings.Contains(message, long) {
+			t.Fatalf("%s named in 101 bytes: message %q must give the size and the limit and not repeat the name", name, message)
+		}
+	}
+	if now := relicHeadOf(t, repository, id); now != head {
+		t.Fatalf("a refused name moved the relic from %s to %s", head, now)
+	}
+	// A whole relic read from a document is held to the same limit.
+	document := bytes.Replace(relicTestDocument(t), []byte(`"weight":3`), []byte(`"`+long+`":3`), 1)
+	message := relicErrorMessage(t, repository, 5, core.CategoryValidation, "create", "--from-file", writeRelicDocumentFile(t, document))
+	if !strings.Contains(message, "name is 101 bytes") || strings.Contains(message, long) {
+		t.Fatalf("a document with a property named in 101 bytes: message %q must give the size and not repeat the name", message)
+	}
+	atLimit := strings.Repeat("n", 100)
+	mustUpdateRelic(t, repository, id, "--set", atLimit+"=x", "--part", part, "--field", atLimit+"=y")
+	if shown := shownRelic(t, repository, id); string(shown.Properties[atLimit]) != `"x"` {
+		t.Fatalf("the property named in 100 bytes reads back as %s", shown.Properties[atLimit])
+	}
 }

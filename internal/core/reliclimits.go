@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -15,7 +16,8 @@ import (
 //
 // A limit on one stored item is checked when the item is saved and again when
 // it is read: the title, a type name, a body format label, a position, one
-// property value, one field value and one body. A count or a total is checked
+// property value, one field value, how deep a value nests, a property or field
+// name and one body. A count or a total is checked
 // only when a change makes it grow, and never when a relic is read, so that no
 // sequence of changes that were each allowed can add up to a relic nothing
 // will read: the live parts, the parts counting removed ones, the bodies of
@@ -40,6 +42,11 @@ const (
 	MaxRelicLiveParts       = 2000
 	MaxRelicParts           = 4000
 	MaxRelicLiveBodyBytes   = 16 * 1024 * 1024
+	// MaxRelicNameBytes bounds one property name and one field name.
+	MaxRelicNameBytes = 100
+	// MaxRelicValueDepth bounds how deep one property or field value nests
+	// arrays and objects: a scalar is depth 0 and [1] is depth 1.
+	MaxRelicValueDepth = 32
 )
 
 var (
@@ -105,9 +112,20 @@ func ValidateRelicBodyFormat(label string) error {
 
 // ValidateRelicName checks a property or field name. kind is "property" or
 // "field" and only shapes the message.
+//
+// A name is at most MaxRelicNameBytes of valid UTF-8, not empty, without '='
+// or a control character, and with no white space at either end, by Unicode's
+// White_Space property: two names that differ only by a space nobody can see
+// would be two properties. White space inside a name is the name's own. The
+// name is not required to be in a Unicode normalization form; nothing here
+// compares names except byte for byte. A name over the limit is reported by
+// its size, never repeated.
 func ValidateRelicName(kind, name string) error {
 	if name == "" {
 		return Errorf(CategoryValidation, "a %s name must not be empty", kind)
+	}
+	if len(name) > MaxRelicNameBytes {
+		return relicSizeError("a "+kind+" name", len(name), MaxRelicNameBytes)
 	}
 	if !utf8.ValidString(name) {
 		return Errorf(CategoryValidation, "a %s name must be valid UTF-8", kind)
@@ -117,6 +135,56 @@ func ValidateRelicName(kind, name string) error {
 			return Errorf(CategoryValidation,
 				"a %s name must not contain '=' or control characters", kind)
 		}
+	}
+	first, _ := utf8.DecodeRuneInString(name)
+	last, _ := utf8.DecodeLastRuneInString(name)
+	if unicode.Is(unicode.White_Space, first) || unicode.Is(unicode.White_Space, last) {
+		return Errorf(CategoryValidation, "a %s name must not begin or end with white space", kind)
+	}
+	return nil
+}
+
+// relicValueDepth counts how deep a JSON value nests arrays and objects: 0 for
+// a scalar, 1 for [1]. It is one pass over the bytes that keeps a counter and
+// nothing else, so it costs the same for any depth and can run before anything
+// that decodes the value by recursion. It does not judge whether the value is
+// valid JSON, which is the decoder's to say; of text that is not, it counts
+// the brackets outside strings.
+func relicValueDepth(raw []byte) int {
+	depth, deepest := 0, 0
+	inString, escaped := false, false
+	for _, b := range raw {
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case b == '\\':
+				escaped = true
+			case b == '"':
+				inString = false
+			}
+			continue
+		}
+		switch b {
+		case '"':
+			inString = true
+		case '[', '{':
+			depth++
+			if depth > deepest {
+				deepest = depth
+			}
+		case ']', '}':
+			depth--
+		}
+	}
+	return deepest
+}
+
+// checkRelicValueDepth refuses a value that nests deeper than the limit.
+func checkRelicValueDepth(raw []byte) error {
+	if depth := relicValueDepth(raw); depth > MaxRelicValueDepth {
+		return Errorf(CategoryValidation,
+			"the value nests arrays and objects %d levels deep; the limit is %d levels", depth, MaxRelicValueDepth)
 	}
 	return nil
 }
@@ -143,7 +211,13 @@ func checkRelicValueSize(kind string, size int) error {
 // documents that core.EncodeDocument writes with json.Marshal, which escapes a
 // RawMessage again, so a form that left them bare would differ from the bytes
 // read back from storage.
+//
+// A value that nests deeper than MaxRelicValueDepth is refused first, by a
+// count that does not recurse, so no depth reaches the decoder or the encoder.
 func CanonicalRelicValue(raw []byte) (json.RawMessage, error) {
+	if err := checkRelicValueDepth(raw); err != nil {
+		return nil, err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var value any

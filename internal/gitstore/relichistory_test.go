@@ -1649,3 +1649,53 @@ func TestValidateRelicHistoryNeverComparesOperationIDsAcrossRefs(t *testing.T) {
 	assertRelicHistoryValid(t, repo, config, one.Operation.RelicID, older, 2)
 	assertRelicHistoryValid(t, repo, config, one.Operation.RelicID, one.Head, 3)
 }
+
+// A stored time is UTC written with Z. The same instant written with an
+// offset is other bytes that Go reads and writes back unchanged, so a pack
+// and a state that agree on it are consistent with each other and with their
+// own re-encoding. Every read refuses them all the same.
+func TestATimeStoredWithAnOffsetIsNotCanonical(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		root := writeRelicRoot(t, repo, config, relicTestPartNumbered(1).withBody("md", []byte("the first text\n")))
+		relicID := root.Operation.RelicID
+		pack := relicChildPack(root, relicTitleSet(700001, "A new title"))
+		record := foldRelic(t, &root, pack)
+
+		const written, elsewhere = `"2026-11-23T10:01:00Z"`, `"2026-11-23T15:01:00+05:00"`
+		rewrite := func(document []byte, member string) []byte {
+			t.Helper()
+			forged := bytes.Replace(document, []byte(member+written), []byte(member+elsewhere), 1)
+			if bytes.Equal(forged, document) {
+				t.Fatalf("the document holds no %s%s to rewrite: %s", member, written, document)
+			}
+			return forged
+		}
+		for name, documents := range map[string][2][]byte{
+			"in the pack and the state": {
+				rewrite(encodedRelicDocument(t, pack), `"wallTime":`),
+				rewrite(encodedRelicDocument(t, record.State), `"updatedAt":`),
+			},
+			"in the pack alone":  {rewrite(encodedRelicDocument(t, pack), `"wallTime":`), encodedRelicDocument(t, record.State)},
+			"in the state alone": {encodedRelicDocument(t, pack), rewrite(encodedRelicDocument(t, record.State), `"updatedAt":`)},
+		} {
+			forged := forgeRelicCommit(t, repo, root.Head, documents[0], documents[1], forgedPartsOf(t, repo, root.Head))
+			pointRelicRef(t, repo, relicID, forged)
+
+			_, err := repo.GetRelic(ctx, config, relicID)
+			if err == nil {
+				t.Fatalf("%s: GetRelic() served a time stored with an offset", name)
+			}
+			assertGetRelicRefused(t, err)
+			assertRelicCategory(t, err, core.CategoryCorruptData, "not canonical")
+			if _, err := repo.ReadRelicTips(ctx, config, []core.RelicHead{{RelicID: relicID, ObjectID: forged}}); err == nil {
+				t.Fatalf("%s: ReadRelicTips() served a time stored with an offset", name)
+			} else {
+				assertRelicCategory(t, err, core.CategoryCorruptData, "not canonical")
+			}
+			assertRelicHistoryStopsAt(t, repo, config, relicID, forged, forged, 1,
+				core.CategoryCorruptData, "not canonical")
+		}
+	})
+}

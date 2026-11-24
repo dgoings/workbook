@@ -972,7 +972,9 @@ func TestRelicUpdateRefusesANameGivenTwice(t *testing.T) {
 			"field":    {{Kind: RelicEditPart, Part: goals, Fields: []RelicFieldEdit{setField(long, "a"), clearField(long)}}},
 		} {
 			_, err := service.Update(ctx, relicID, edits)
-			requireRelicCategory(t, label, err, CategoryValidation, "5000 bytes long")
+			// A name that long is no name at all, which is said before the
+			// update is searched for a name given twice.
+			requireRelicCategory(t, label, err, CategoryValidation, "name is 5000 bytes", "the limit is 100 bytes")
 			if len(err.Error()) > 300 {
 				t.Errorf("%s: the refusal is %d bytes long; it must not carry the name", label, len(err.Error()))
 			}

@@ -426,6 +426,9 @@ func validateRelicOperationPackDocument(pack RelicOperationPack) error {
 	if pack.WallTime.IsZero() {
 		return corrupt("relic operation pack wall time must be present")
 	}
+	if err := validateRelicTimeZone("relic operation pack wall time", pack.WallTime); err != nil {
+		return err
+	}
 	if len(pack.Operations) == 0 {
 		return corrupt("relic operation pack must contain at least one operation")
 	}
@@ -502,6 +505,9 @@ func validateRelicOperationDocument(operation RelicOperation) error {
 		if operation.Relic.CreatedAt.IsZero() {
 			return corrupt("relic.create creation time must be present")
 		}
+		if err := validateRelicTimeZone("relic.create creation time", operation.Relic.CreatedAt); err != nil {
+			return err
+		}
 	}
 	if operation.Title != "" {
 		if err := validateStoredRelicTitle(operation.Title); err != nil {
@@ -576,6 +582,18 @@ func validateStoredRelicTitle(title string) error {
 	}
 	if trimmed != title {
 		return Errorf(CategoryValidation, "the relic title must be stored trimmed")
+	}
+	return nil
+}
+
+// validateRelicTimeZone requires a stored time to be in UTC, which is written
+// with Z. A relic's writer records every time in UTC, and a time with an
+// offset is the same instant in other bytes: Go reads it and writes it back
+// unchanged, so comparing a document with its own re-encoding does not catch
+// it. An offset of zero written as +00:00 or -00:00 is refused here too.
+func validateRelicTimeZone(what string, stored time.Time) error {
+	if stored.Location() != time.UTC {
+		return corrupt("%s is not canonical: a stored time is UTC, written with Z", what)
 	}
 	return nil
 }
@@ -669,6 +687,12 @@ func validateRelicData(relic RelicData) error {
 	}
 	if relic.CreatedAt.IsZero() || relic.UpdatedAt.IsZero() {
 		return corrupt("relic state creation and update times must be present")
+	}
+	if err := validateRelicTimeZone("relic state creation time", relic.CreatedAt); err != nil {
+		return err
+	}
+	if err := validateRelicTimeZone("relic state update time", relic.UpdatedAt); err != nil {
+		return err
 	}
 	if relic.Properties == nil {
 		return corrupt("relic state properties must be an object")
