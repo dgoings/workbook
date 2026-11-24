@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -249,10 +248,7 @@ func (r *Repository) ReadRelicTips(
 		}
 	}
 
-	batch, err := r.startObjectBatch(ctx, func(writer io.Writer) error {
-		_, err := writer.Write(input.Bytes())
-		return err
-	})
+	batch, err := r.startRelicObjectBatch(ctx, input.Bytes())
 	if err != nil {
 		return nil, err
 	}
@@ -547,10 +543,7 @@ func (r *Repository) readRelicParts(
 		return corruptRelic(relicID, "part %s: %s", partID, fmt.Sprintf(format, args...))
 	}
 
-	batch, err := r.startObjectBatch(ctx, func(writer io.Writer) error {
-		_, err := writer.Write(input.Bytes())
-		return err
-	})
+	batch, err := r.startRelicObjectBatch(ctx, input.Bytes())
 	if err != nil {
 		return nil, err
 	}
@@ -1097,10 +1090,7 @@ func (r *Repository) readRelicParentTrees(
 	for _, partID := range partIDs {
 		fmt.Fprintf(&input, "%s:%s/%s\n", parent.Head, relicPartsPath, partID)
 	}
-	batch, err := r.startObjectBatch(ctx, func(writer io.Writer) error {
-		_, err := writer.Write(input.Bytes())
-		return err
-	})
+	batch, err := r.startRelicObjectBatch(ctx, input.Bytes())
 	if err != nil {
 		return relicParentTrees{}, err
 	}

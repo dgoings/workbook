@@ -298,7 +298,21 @@ func isRootPack(pack core.OperationPack) bool {
 	return false
 }
 
+// readBatchObject reads one record of a `git cat-file --batch` response,
+// refusing an object over the ceiling for one stored object.
 func readBatchObject(reader *bufio.Reader) (batchObject, error) {
+	return readBatchObjectWithin(reader, MaxObjectBytes)
+}
+
+// readBatchObjectWithin is readBatchObject for a caller that knows how large
+// the object it asked for may be, which can be far below the ceiling: a tree
+// whose entries the caller can count before reading it. An object over limit
+// is refused exactly as one over the ceiling is, from the size in the header
+// and before anything is allocated for it. A limit above the ceiling is the
+// ceiling.
+func readBatchObjectWithin(reader *bufio.Reader, limit int64) (batchObject, error) {
+	// No caller's limit raises the ceiling.
+	limit = min(limit, MaxObjectBytes)
 	header, err := reader.ReadString('\n')
 	if err != nil {
 		return batchObject{}, err
@@ -330,12 +344,21 @@ func readBatchObject(reader *bufio.Reader) (batchObject, error) {
 	// one over-ceiling object fails the task that owns it instead of every task
 	// sharing the batch. The alternative trades a memory exhaustion for a worse
 	// availability failure: one pushed ref that no command can read past.
-	if size > MaxObjectBytes {
+	if int64(size) > limit {
 		refused := core.Errorf(
 			core.CategoryCorruptData,
 			"Git object %s is %d bytes, over Workbook's %d byte object ceiling",
 			fields[0], size, MaxObjectBytes,
 		)
+		if limit != MaxObjectBytes {
+			// The caller knows what it asked for and says so in its own words;
+			// this is what is reported if it does not.
+			refused = core.Errorf(
+				core.CategoryCorruptData,
+				"Git object %s is %d bytes; the limit for it is %d bytes",
+				fields[0], size, limit,
+			)
+		}
 		if _, err := io.CopyN(io.Discard, reader, int64(size)+1); err != nil {
 			return batchObject{}, err
 		}
@@ -391,6 +414,14 @@ func commitTreeObjectID(contents []byte, noun string) (string, error) {
 		return "", core.Errorf(core.CategoryCorruptData, "%s has no tree header", noun)
 	}
 	return treeID, nil
+}
+
+// rawTreeEntryBytes is the size of one entry of a raw tree object, by the
+// layout scanRawTreeEntries reads: the mode, a space, the name, a NUL and the
+// object ID as bytes. A reader that knows which entries a tree may hold adds
+// these up to learn the tree's size before reading it.
+func rawTreeEntryBytes(mode, name string, objectIDBytes int) int64 {
+	return int64(len(mode)) + 1 + int64(len(name)) + 1 + int64(objectIDBytes)
 }
 
 // scanRawTreeEntries walks a raw tree object, handing each entry to visit. The

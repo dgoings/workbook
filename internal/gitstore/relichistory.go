@@ -127,65 +127,156 @@ func (r *Repository) readRelicCommit(
 	config core.ProjectConfig,
 	relicID, objectID string,
 ) (RelicCommit, error) {
-	commit, err := r.readRelicCommitObjects(ctx, config, relicID, objectID)
-	if err != nil {
-		return RelicCommit{}, namedRelicError(relicID, err)
+	commits, errs := r.readRelicCommitDocuments(ctx, config, []core.RelicHead{{RelicID: relicID, ObjectID: objectID}})
+	if errs[0] != nil {
+		return RelicCommit{}, errs[0]
 	}
-	return commit, nil
-}
-
-func (r *Repository) readRelicCommitObjects(
-	ctx context.Context,
-	config core.ProjectConfig,
-	relicID, objectID string,
-) (RelicCommit, error) {
-	decoded, err := decodeObjectID(objectID)
-	if err != nil {
-		return RelicCommit{}, core.Wrap(core.CategoryValidation, "relic commit object ID is invalid", err)
-	}
-	// The same five objects a tip read asks for, so the same check judges them.
-	var input bytes.Buffer
-	fmt.Fprintf(&input, "%s\n%s^{tree}\n", objectID, objectID)
-	for _, path := range []string{relicOperationPath, relicStatePath, relicLinksPath} {
-		fmt.Fprintf(&input, "%s:%s\n", objectID, path)
-	}
-	batch, err := r.startObjectBatch(ctx, func(writer io.Writer) error {
-		_, err := writer.Write(input.Bytes())
-		return err
-	})
-	if err != nil {
-		return RelicCommit{}, err
-	}
-	defer batch.Close()
-	var objects [5]batchObject
-	for position := range objects {
-		object, err := readBatchObject(batch.Reader())
-		if err != nil {
-			return RelicCommit{}, batch.ReadFailure("cannot read relic objects from Git batch", err)
-		}
-		objects[position] = object
-	}
-	if err := batch.Finish(); err != nil {
-		return RelicCommit{}, err
-	}
-
-	snapshot, err := validateRelicTip(objects, config, core.RelicHead{RelicID: relicID, ObjectID: objectID}, len(decoded))
-	if err != nil {
-		return RelicCommit{}, err
-	}
-	parent, err := relicCommitParent(objects[0].contents)
-	if err != nil {
-		return RelicCommit{}, err
-	}
-	commit := RelicCommit{ObjectID: objectID, Parent: parent, Operation: snapshot.Operation, Record: snapshot.Record}
+	commit := commits[0]
 	if commit.needsNewerReader() {
 		return commit, nil
 	}
-	commit.Parts, err = r.readRelicPartObjects(ctx, objectID, snapshot.Record.State)
+	parts, err := r.readRelicPartObjects(ctx, objectID, commit.Record.State)
 	if err != nil {
-		return RelicCommit{}, err
+		return RelicCommit{}, namedRelicError(relicID, err)
 	}
+	commit.Parts = parts
 	return commit, nil
+}
+
+// readRelicCommitsPartial is readRelicCommit for many commits at once, each
+// read as the relic its head names. The results are in the order of heads. One
+// failure never fails another head: a commit that cannot be read, or that
+// breaks rule R2, R3 or R4, leaves a zero commit and an error naming its relic
+// in its own place, and every other commit is returned.
+//
+// Git is started at most four times however many heads there are: once for
+// every commit's documents, and three times for their parts, as
+// readRelicPartObjectsBatch describes.
+func (r *Repository) readRelicCommitsPartial(
+	ctx context.Context,
+	config core.ProjectConfig,
+	heads []core.RelicHead,
+) ([]RelicCommit, []error) {
+	commits, errs := r.readRelicCommitDocuments(ctx, config, heads)
+	r.readRelicCommitParts(ctx, commits, errs)
+	return commits, errs
+}
+
+// readRelicCommitDocuments reads the commit each head names through one Git
+// batch process and checks what a tip read checks, which is everything
+// ReadRelicCommit checks short of the parts: each commit comes back with Parts
+// nil. A head that cannot be read fails alone. Only a response this reader
+// cannot follow fails the heads after it too, because nothing after a garbled
+// record can be trusted.
+func (r *Repository) readRelicCommitDocuments(
+	ctx context.Context,
+	config core.ProjectConfig,
+	heads []core.RelicHead,
+) ([]RelicCommit, []error) {
+	commits := make([]RelicCommit, len(heads))
+	errs := make([]error, len(heads))
+	type request struct{ index, objectIDBytes int }
+	requests := make([]request, 0, len(heads))
+	var input bytes.Buffer
+	for index, head := range heads {
+		decoded, err := decodeObjectID(head.ObjectID)
+		if err != nil {
+			errs[index] = namedRelicError(head.RelicID,
+				core.Wrap(core.CategoryValidation, "relic commit object ID is invalid", err))
+			continue
+		}
+		requests = append(requests, request{index: index, objectIDBytes: len(decoded)})
+		// The same five objects a tip read asks for, so the same check judges them.
+		fmt.Fprintf(&input, "%s\n%s^{tree}\n", head.ObjectID, head.ObjectID)
+		for _, path := range []string{relicOperationPath, relicStatePath, relicLinksPath} {
+			fmt.Fprintf(&input, "%s:%s\n", head.ObjectID, path)
+		}
+	}
+	if len(requests) == 0 {
+		return commits, errs
+	}
+	fail := func(failed []request, err error) {
+		for _, request := range failed {
+			commits[request.index] = RelicCommit{}
+			errs[request.index] = namedRelicError(heads[request.index].RelicID, err)
+		}
+	}
+
+	batch, err := r.startRelicObjectBatch(ctx, input.Bytes())
+	if err != nil {
+		fail(requests, err)
+		return commits, errs
+	}
+	defer batch.Close()
+	for position, request := range requests {
+		head := heads[request.index]
+		var objects [5]batchObject
+		for slot := range objects {
+			object, err := readBatchObject(batch.Reader())
+			if err != nil {
+				fail(requests[position:], batch.ReadFailure("cannot read relic objects from Git batch", err))
+				return commits, errs
+			}
+			objects[slot] = object
+		}
+		snapshot, err := validateRelicTip(objects, config, head, request.objectIDBytes)
+		if err != nil {
+			errs[request.index] = err
+			continue
+		}
+		parent, err := relicCommitParent(objects[0].contents)
+		if err != nil {
+			errs[request.index] = namedRelicError(head.RelicID, err)
+			continue
+		}
+		commits[request.index] = RelicCommit{
+			ObjectID: head.ObjectID, Parent: parent, Operation: snapshot.Operation, Record: snapshot.Record,
+		}
+	}
+	if err := batch.Finish(); err != nil {
+		// Git and this reader disagree about the stream, so no record read
+		// from it can be trusted.
+		fail(requests, err)
+	}
+	return commits, errs
+}
+
+// readRelicCommitParts fills in Parts for every commit that was read, which is
+// one whose error is nil, and that this build can judge, through one call of
+// readRelicPartObjectsBatch. A commit whose parts break rule R3 or R4, or
+// cannot be read, becomes a zero commit with the error in its place.
+func (r *Repository) readRelicCommitParts(ctx context.Context, commits []RelicCommit, errs []error) {
+	indexes := make([]int, 0, len(commits))
+	requests := make([]relicPartsRequest, 0, len(commits))
+	for index, commit := range commits {
+		if errs[index] != nil || commit.needsNewerReader() {
+			continue
+		}
+		indexes = append(indexes, index)
+		requests = append(requests, relicPartsRequest{Commit: commit.ObjectID, State: commit.Record.State})
+	}
+	parts, partErrs := r.readRelicPartObjectsBatch(ctx, requests)
+	for position, index := range indexes {
+		if partErrs[position] != nil {
+			commits[index], errs[index] = RelicCommit{}, partErrs[position]
+			continue
+		}
+		commits[index].Parts = parts[position]
+	}
+}
+
+// startRelicObjectBatch starts one Git batch process for requests, which holds
+// one object name to a line, and tells the test seam what is being asked for.
+func (r *Repository) startRelicObjectBatch(ctx context.Context, requests []byte) (*objectBatch, error) {
+	if r.relicObjectObserver != nil {
+		for _, request := range bytes.Split(bytes.TrimSuffix(requests, []byte{'\n'}), []byte{'\n'}) {
+			r.relicObjectObserver(string(request))
+		}
+	}
+	return r.startObjectBatch(ctx, func(writer io.Writer) error {
+		_, err := writer.Write(requests)
+		return err
+	})
 }
 
 // relicCommitParent returns the parent a commit object names, or "" for a
@@ -215,151 +306,488 @@ func relicCommitParent(contents []byte) (string, error) {
 	return parent, nil
 }
 
-// readRelicPartObjects lists a commit's tree with one Git process and returns
-// the objects of every part the state lists, checked against rules R3 and R4.
-// Nothing under parts/ is opened: Git reports each blob's size.
+// readRelicPartObjects returns the objects of every part the state lists in
+// one commit, checked against rules R3 and R4. It is readRelicPartObjectsBatch
+// for a single commit.
 func (r *Repository) readRelicPartObjects(
 	ctx context.Context,
 	commit string,
 	state core.RelicStateDocument,
 ) (map[string]RelicPartObjects, error) {
-	if len(state.Relic.Parts) == 0 {
-		// Rule R2 has already established that the commit has no parts tree.
-		return map[string]RelicPartObjects{}, nil
-	}
-	// -t lists the subtrees themselves, whose object IDs rule R5 compares. -z
-	// ends each record with a NUL and leaves names unquoted.
-	listing, err := r.Git(ctx, nil, "ls-tree", "-r", "-t", "-l", "-z", commit)
-	if err != nil {
-		// The commit and the top of its tree have been read, so what Git
-		// cannot list is a directory further down that it does not have: the
-		// one that holds the parts, or one part's. That is this relic's
-		// damage, and Git's own words for it are not the user's to decode.
-		if gitExitedWithFailure(ctx, err) {
-			return nil, corruptRelic(state.RelicID,
-				"commit %s: a directory it names is missing from Git or cannot be read", commit)
-		}
-		return nil, err
-	}
-	return relicPartObjectsFromListing(listing, state)
+	parts, errs := r.readRelicPartObjectsBatch(ctx, []relicPartsRequest{{Commit: commit, State: state}})
+	return parts[0], errs[0]
 }
 
-// relicPartObjectsFromListing reads `git ls-tree -r -t -l -z` output for a
-// relic commit. Each record is
-//
-//	<mode> SP <type> SP <object> SP+ <size> TAB <path> NUL
-//
-// where the size is "-" for a tree.
-func relicPartObjectsFromListing(listing []byte, state core.RelicStateDocument) (map[string]RelicPartObjects, error) {
-	relicID := state.RelicID
-	listed := make(map[string]struct{}, len(state.Relic.Parts))
+// relicPartsRequest asks for the objects of the parts one commit stores. State
+// is that commit's own state, which says which parts those are.
+type relicPartsRequest struct {
+	Commit string
+	State  core.RelicStateDocument
+}
+
+// relicPartsRead is one relicPartsRequest on its way through the three passes
+// of readRelicPartObjectsBatch.
+type relicPartsRead struct {
+	relicPartsRequest
+	// index is the request's place among the requests.
+	index         int
+	objectIDBytes int
+	// subtrees maps every part the state lists to its subtree, once the parts
+	// tree has been read.
+	subtrees map[string]string
+	// parts is what the request is answered with.
+	parts map[string]RelicPartObjects
+	// err is why this request failed. A failed request takes no further part.
+	err error
+}
+
+// relicPartSubtree is one part's subtree as Git returned it. It is read once
+// however many parts and commits name it, and judged for each part that does,
+// because what it may hold depends on what the state says of that part.
+type relicPartSubtree struct {
+	// unreadable is set for an object Git does not have or that is not a tree.
+	unreadable bool
+	// size is the tree's size, and tooLarge that it is over the size of the
+	// largest subtree a part may have, so that it was not read.
+	size     int64
+	tooLarge bool
+	// malformed is why the tree could not be walked.
+	malformed error
+	// fields and body are the blobs its fields.json and body entries name.
+	fields, body string
+	// irregular names an entry called fields.json or body that is not one
+	// regular blob, and stranger is set when an entry has any other name.
+	irregular string
+	stranger  bool
+}
+
+// relicBlobInfo is what Git reports of one blob without opening it.
+type relicBlobInfo struct {
+	missing bool
+	kind    string
+	size    int64
+}
+
+// relicPartsTreeBytes is the size of the parts tree of a commit with this
+// state: one subtree entry per part the state lists, and nothing else.
+func relicPartsTreeBytes(state core.RelicStateDocument, objectIDBytes int) int64 {
+	var size int64
 	for _, part := range state.Relic.Parts {
-		listed[part.ID] = struct{}{}
+		size += rawTreeEntryBytes(subtreeMode, part.ID, objectIDBytes)
 	}
-	invalidListing := core.Errorf(core.CategoryOperational, "Git returned an invalid tree listing for relic %s", relicID)
-	if len(listing) > 0 && listing[len(listing)-1] != 0 {
-		return nil, invalidListing
-	}
+	return size
+}
 
-	parts := make(map[string]RelicPartObjects, len(listed))
-	var err error
-	for len(listing) > 0 {
-		end := bytes.IndexByte(listing, 0)
-		record := listing[:end]
-		listing = listing[end+1:]
-		meta, path, found := bytes.Cut(record, []byte{'\t'})
-		fields := strings.Fields(string(meta))
-		if !found || len(fields) != 4 {
-			return nil, invalidListing
-		}
-		mode, kind, objectID, size := fields[0], fields[1], fields[2], fields[3]
-		if _, err := decodeObjectID(objectID); err != nil {
-			return nil, invalidListing
-		}
+// relicPartSubtreeBytes is the size of the largest subtree a part may have,
+// one that holds fields.json and a body. The only other size is that of one
+// that holds fields.json alone.
+func relicPartSubtreeBytes(objectIDBytes int) int64 {
+	return rawTreeEntryBytes(regularBlobMode, relicFieldsPath, objectIDBytes) +
+		rawTreeEntryBytes(regularBlobMode, relicBodyPath, objectIDBytes)
+}
 
-		segments := strings.Split(string(path), "/")
-		if len(segments) == 1 {
-			// The top of the tree was judged with the documents, by rule R2.
+// relicDirectoryMissing is the refusal for a commit that names a tree Git does
+// not have, or names as a tree an object that is not one: the directory of all
+// its parts, or one part's. That is the relic's damage, and it is said in
+// words of our own.
+func relicDirectoryMissing(relicID, commit string) error {
+	return corruptRelic(relicID, "commit %s: a directory it names is missing from Git or cannot be read", commit)
+}
+
+// readRelicPartObjectsBatch returns, for each request, the objects of every
+// part its state lists, checked against rules R3 and R4. The results are in
+// the order of requests, and a request that fails does so alone, with an error
+// that names its relic.
+//
+// Whoever can push to the tasks remote wrote these trees, so nothing is read
+// that the state has not already sized. Git is started three times, however
+// many requests there are and however many parts they have:
+//
+//  1. `cat-file --batch` for each commit's parts tree. Its size is known to
+//     the byte from the parts the state lists, and a tree of any other size is
+//     refused. A larger one is refused from Git's header, before it is read.
+//  2. `cat-file --batch` for each part's subtree. A subtree holds fields.json
+//     and at most a body, so one larger than those two entries is refused
+//     from Git's header in the same way.
+//  3. `cat-file --batch-check` for each blob those subtrees name. Git answers
+//     with one line giving its type and size. No blob is opened.
+//
+// A subtree or a blob that several parts or commits name is asked for once:
+// a commit and its parent share every part the commit did not change. A pass
+// with nothing to ask starts no process.
+func (r *Repository) readRelicPartObjectsBatch(
+	ctx context.Context,
+	requests []relicPartsRequest,
+) ([]map[string]RelicPartObjects, []error) {
+	results := make([]map[string]RelicPartObjects, len(requests))
+	errs := make([]error, len(requests))
+	reads := make([]*relicPartsRead, 0, len(requests))
+	for index, request := range requests {
+		if len(request.State.Relic.Parts) == 0 {
+			// Rule R2 has already established that the commit has no parts tree.
+			results[index] = map[string]RelicPartObjects{}
 			continue
 		}
-		partID := segments[1]
-		if _, isListed := listed[partID]; segments[0] != relicPartsPath || !isListed {
-			// The name is whatever the tree holds, so it is repeated only when
-			// it has the shape of a part ID.
-			if segments[0] == relicPartsPath && core.ValidatePartID(partID) == nil {
-				return nil, corruptRelic(relicID, "the commit stores part %s, which the relic does not list", partID)
-			}
-			return nil, corruptRelic(relicID, "the commit stores an entry under %s that is not a part the relic lists", relicPartsPath)
+		read := &relicPartsRead{relicPartsRequest: request, index: index}
+		if decoded, err := decodeObjectID(request.Commit); err != nil {
+			read.err = core.Wrap(core.CategoryValidation, "relic commit object ID is invalid", err)
+		} else {
+			read.objectIDBytes = len(decoded)
 		}
-		objects := parts[partID]
-		isBlob := mode == regularBlobMode && kind == "blob"
-		switch {
-		case len(segments) == 2:
-			// Git lists a subtree's mode with its leading zero.
-			if mode != "040000" || kind != "tree" || objects.Tree != "" {
-				return nil, corruptRelic(relicID, "part %s: its entry is not one subtree", partID)
-			}
-			objects.Tree = objectID
-		case len(segments) == 3 && segments[2] == relicFieldsPath:
-			if !isBlob || objects.Fields != "" {
-				return nil, corruptRelic(relicID, "part %s: its %s is not one regular blob", partID, relicFieldsPath)
-			}
-			objects.Fields = objectID
-			if objects.FieldsBytes, err = relicListedBlobSize(relicID, partID, relicFieldsPath, size); err != nil {
-				return nil, err
-			}
-		case len(segments) == 3 && segments[2] == relicBodyPath:
-			if !isBlob || objects.Body != "" {
-				return nil, corruptRelic(relicID, "part %s: its %s is not one regular blob", partID, relicBodyPath)
-			}
-			objects.Body = objectID
-			if objects.BodyBytes, err = relicListedBlobSize(relicID, partID, relicBodyPath, size); err != nil {
-				return nil, err
-			}
-		default:
-			return nil, corruptRelic(relicID, "part %s: its subtree holds an entry that is neither %s nor %s",
-				partID, relicFieldsPath, relicBodyPath)
-		}
-		parts[partID] = objects
+		reads = append(reads, read)
 	}
 
-	// The state's own order, so that the same commit always names the same
-	// part first.
-	for _, part := range state.Relic.Parts {
-		objects := parts[part.ID]
-		switch {
-		case objects.Tree == "":
-			return nil, corruptRelic(relicID, "the commit stores no subtree for part %s", part.ID)
-		case objects.Fields == "":
-			return nil, corruptRelic(relicID, "part %s: it has no %s", part.ID, relicFieldsPath)
-		case objects.FieldsBytes > MaxObjectBytes:
-			return nil, corruptRelic(relicID, "part %s: its %s is %d bytes; the limit is %d bytes",
-				part.ID, relicFieldsPath, objects.FieldsBytes, MaxObjectBytes)
-		case part.Body == nil && objects.Body != "":
-			return nil, corruptRelic(relicID, "part %s: it stores a body the relic does not record", part.ID)
-		case part.Body == nil:
-			// Neither records nor stores a body.
-		case objects.Body == "":
-			return nil, corruptRelic(relicID, "part %s: the relic records a body it does not store", part.ID)
-		case objects.BodyBytes > core.MaxRelicBodyBytes:
-			return nil, corruptRelic(relicID, "part %s: its body is %d bytes; the limit is %d bytes",
-				part.ID, objects.BodyBytes, core.MaxRelicBodyBytes)
-		case objects.BodyBytes != part.Body.Bytes:
-			return nil, corruptRelic(relicID, "part %s: its body is %d bytes, but the relic records %d bytes",
-				part.ID, objects.BodyBytes, part.Body.Bytes)
+	r.readRelicPartsTrees(ctx, liveRelicPartsReads(reads))
+	r.readRelicPartSubtrees(ctx, liveRelicPartsReads(reads))
+	r.measureRelicPartBlobs(ctx, liveRelicPartsReads(reads))
+	for _, read := range reads {
+		if read.err != nil {
+			errs[read.index] = namedRelicError(read.State.RelicID, read.err)
+			continue
 		}
+		results[read.index] = read.parts
 	}
-	return parts, nil
+	return results, errs
 }
 
-// relicListedBlobSize reads the size Git listed for one of a part's blobs. Git
-// lists a blob it does not have with a size that is not a number.
-func relicListedBlobSize(relicID, partID, what, listed string) (int64, error) {
-	size, err := strconv.ParseInt(listed, 10, 64)
-	if err != nil || size < 0 {
-		return 0, corruptRelic(relicID, "part %s: its %s is missing from Git", partID, what)
+// liveRelicPartsReads returns the reads that have not failed.
+func liveRelicPartsReads(reads []*relicPartsRead) []*relicPartsRead {
+	live := make([]*relicPartsRead, 0, len(reads))
+	for _, read := range reads {
+		if read.err == nil {
+			live = append(live, read)
+		}
 	}
-	return size, nil
+	return live
+}
+
+func failRelicPartsReads(reads []*relicPartsRead, err error) {
+	for _, read := range reads {
+		read.err = err
+	}
+}
+
+// readRelicPartsTrees is the first pass of readRelicPartObjectsBatch: it reads
+// each commit's parts tree and finds the subtree of every part its state
+// lists.
+func (r *Repository) readRelicPartsTrees(ctx context.Context, reads []*relicPartsRead) {
+	if len(reads) == 0 {
+		return
+	}
+	var input bytes.Buffer
+	for _, read := range reads {
+		fmt.Fprintf(&input, "%s:%s\n", read.Commit, relicPartsPath)
+	}
+	batch, err := r.startRelicObjectBatch(ctx, input.Bytes())
+	if err != nil {
+		failRelicPartsReads(reads, err)
+		return
+	}
+	defer batch.Close()
+	for position, read := range reads {
+		expected := relicPartsTreeBytes(read.State, read.objectIDBytes)
+		object, err := readBatchObjectWithin(batch.Reader(), expected)
+		if err != nil {
+			failRelicPartsReads(reads[position:], batch.ReadFailure("cannot read relic parts trees from Git batch", err))
+			return
+		}
+		read.subtrees, read.err = relicPartSubtreesIn(read, object, expected)
+	}
+	if err := batch.Finish(); err != nil {
+		failRelicPartsReads(reads, err)
+	}
+}
+
+// relicPartSubtreesIn judges one commit's parts tree by rule R3 and returns
+// the subtree of each part the state lists. expected is the size the state
+// gives the tree.
+func relicPartSubtreesIn(read *relicPartsRead, object batchObject, expected int64) (map[string]string, error) {
+	relicID := read.State.RelicID
+	wrongSize := corruptRelic(relicID,
+		"the commit's %s directory is %d bytes; one that holds only the parts the relic lists is %d bytes",
+		relicPartsPath, object.size, expected)
+	switch {
+	case object.missing || object.kind != "tree":
+		return nil, relicDirectoryMissing(relicID, read.Commit)
+	case object.size > expected:
+		// It was not read, so which entries it has too many of is not known.
+		return nil, wrongSize
+	case object.refused != nil:
+		return nil, object.refused
+	}
+
+	listed := make(map[string]struct{}, len(read.State.Relic.Parts))
+	for _, part := range read.State.Relic.Parts {
+		listed[part.ID] = struct{}{}
+	}
+	subtrees := make(map[string]string, len(listed))
+	err := scanRawTreeEntries(object.contents, read.objectIDBytes, "relic parts tree", func(mode, name, objectID string) error {
+		if _, isListed := listed[name]; !isListed {
+			// The name is whatever the tree holds, so it is repeated only when
+			// it has the shape of a part ID.
+			if core.ValidatePartID(name) == nil {
+				return corruptRelic(relicID, "the commit stores part %s, which the relic does not list", name)
+			}
+			return corruptRelic(relicID, "the commit stores an entry under %s that is not a part the relic lists", relicPartsPath)
+		}
+		if _, repeated := subtrees[name]; repeated || mode != subtreeMode {
+			return corruptRelic(relicID, "part %s: its entry is not one subtree", name)
+		}
+		subtrees[name] = objectID
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// The state's own order, so that the same commit always names the same
+	// part first.
+	for _, part := range read.State.Relic.Parts {
+		if subtrees[part.ID] == "" {
+			return nil, corruptRelic(relicID, "the commit stores no subtree for part %s", part.ID)
+		}
+	}
+	if object.size != expected {
+		return nil, wrongSize
+	}
+	return subtrees, nil
+}
+
+// readRelicPartSubtrees is the second pass of readRelicPartObjectsBatch: it
+// reads each distinct part subtree once and judges it by rule R3 for every
+// part that names it.
+func (r *Repository) readRelicPartSubtrees(ctx context.Context, reads []*relicPartsRead) {
+	if len(reads) == 0 {
+		return
+	}
+	subtrees := map[string]*relicPartSubtree{}
+	var order []string
+	var input bytes.Buffer
+	for _, read := range reads {
+		for _, part := range read.State.Relic.Parts {
+			objectID := read.subtrees[part.ID]
+			if _, asked := subtrees[objectID]; asked {
+				continue
+			}
+			subtrees[objectID] = &relicPartSubtree{}
+			order = append(order, objectID)
+			fmt.Fprintf(&input, "%s\n", objectID)
+		}
+	}
+	batch, err := r.startRelicObjectBatch(ctx, input.Bytes())
+	if err != nil {
+		failRelicPartsReads(reads, err)
+		return
+	}
+	defer batch.Close()
+	for _, objectID := range order {
+		// The ID was read out of a tree, so its width is the repository's.
+		objectIDBytes := len(objectID) / 2
+		limit := relicPartSubtreeBytes(objectIDBytes)
+		object, err := readBatchObjectWithin(batch.Reader(), limit)
+		if err != nil {
+			failRelicPartsReads(reads, batch.ReadFailure("cannot read relic part trees from Git batch", err))
+			return
+		}
+		*subtrees[objectID] = parseRelicPartSubtree(object, limit, objectIDBytes)
+	}
+	if err := batch.Finish(); err != nil {
+		failRelicPartsReads(reads, err)
+		return
+	}
+
+	for _, read := range reads {
+		read.parts = make(map[string]RelicPartObjects, len(read.State.Relic.Parts))
+		for _, part := range read.State.Relic.Parts {
+			objectID := read.subtrees[part.ID]
+			subtree := subtrees[objectID]
+			if read.err = subtree.judge(read.State.RelicID, read.Commit, part, relicPartSubtreeBytes(len(objectID)/2)); read.err != nil {
+				break
+			}
+			read.parts[part.ID] = RelicPartObjects{Tree: objectID, Fields: subtree.fields, Body: subtree.body}
+		}
+	}
+}
+
+// parseRelicPartSubtree reads what one part's subtree holds, leaving the
+// judgment to judge.
+func parseRelicPartSubtree(object batchObject, limit int64, objectIDBytes int) relicPartSubtree {
+	subtree := relicPartSubtree{size: object.size}
+	switch {
+	case object.missing || object.kind != "tree":
+		subtree.unreadable = true
+		return subtree
+	case object.size > limit:
+		subtree.tooLarge = true
+		return subtree
+	case object.refused != nil:
+		subtree.malformed = object.refused
+		return subtree
+	}
+	seen := map[string]struct{}{}
+	subtree.malformed = scanRawTreeEntries(object.contents, objectIDBytes, "relic part tree", func(mode, name, objectID string) error {
+		if name != relicFieldsPath && name != relicBodyPath {
+			subtree.stranger = true
+			return nil
+		}
+		if _, repeated := seen[name]; (repeated || mode != regularBlobMode) && subtree.irregular == "" {
+			subtree.irregular = name
+		}
+		seen[name] = struct{}{}
+		if name == relicFieldsPath {
+			subtree.fields = objectID
+		} else {
+			subtree.body = objectID
+		}
+		return nil
+	})
+	return subtree
+}
+
+// judge holds a subtree to rule R3 for one part that names it: fields.json,
+// body exactly when the state records a body for the part, and nothing else.
+// A subtree that passes holds one entry or two, each a regular blob, so its
+// size is one of the two a part's subtree can have.
+func (subtree *relicPartSubtree) judge(relicID, commit string, part core.RelicPart, limit int64) error {
+	switch {
+	case subtree.unreadable:
+		return relicDirectoryMissing(relicID, commit)
+	case subtree.tooLarge:
+		// It was not read, so what else it holds is not known.
+		return corruptRelic(relicID, "part %s: its subtree is %d bytes, so it holds more than %s and %s, which take %d bytes",
+			part.ID, subtree.size, relicFieldsPath, relicBodyPath, limit)
+	case subtree.malformed != nil:
+		return subtree.malformed
+	case subtree.irregular != "":
+		return corruptRelic(relicID, "part %s: its %s is not one regular blob", part.ID, subtree.irregular)
+	case subtree.stranger:
+		return corruptRelic(relicID, "part %s: its subtree holds an entry that is neither %s nor %s",
+			part.ID, relicFieldsPath, relicBodyPath)
+	case subtree.fields == "":
+		return corruptRelic(relicID, "part %s: it has no %s", part.ID, relicFieldsPath)
+	case part.Body == nil && subtree.body != "":
+		return corruptRelic(relicID, "part %s: it stores a body the relic does not record", part.ID)
+	case part.Body != nil && subtree.body == "":
+		return corruptRelic(relicID, "part %s: the relic records a body it does not store", part.ID)
+	}
+	return nil
+}
+
+// measureRelicPartBlobs is the third pass of readRelicPartObjectsBatch: it
+// asks Git for the type and size of each distinct blob the subtrees name and
+// judges them by rule R4. Nothing is opened.
+func (r *Repository) measureRelicPartBlobs(ctx context.Context, reads []*relicPartsRead) {
+	if len(reads) == 0 {
+		return
+	}
+	asked := map[string]struct{}{}
+	var order []string
+	var input bytes.Buffer
+	for _, read := range reads {
+		for _, part := range read.State.Relic.Parts {
+			objects := read.parts[part.ID]
+			for _, objectID := range []string{objects.Fields, objects.Body} {
+				if _, repeated := asked[objectID]; repeated || objectID == "" {
+					continue
+				}
+				asked[objectID] = struct{}{}
+				order = append(order, objectID)
+				fmt.Fprintf(&input, "%s\n", objectID)
+			}
+		}
+	}
+	output, err := r.Git(ctx, input.Bytes(), "cat-file", "--batch-check")
+	if err != nil {
+		failRelicPartsReads(reads, err)
+		return
+	}
+	blobs, err := parseRelicBlobInfo(output, order)
+	if err != nil {
+		failRelicPartsReads(reads, err)
+		return
+	}
+
+	for _, read := range reads {
+		relicID := read.State.RelicID
+		// The state's own order, so that the same commit always names the same
+		// part first.
+		for _, part := range read.State.Relic.Parts {
+			objects := read.parts[part.ID]
+			fields := blobs[objects.Fields]
+			if read.err = relicBlobPresent(relicID, part.ID, relicFieldsPath, fields); read.err != nil {
+				break
+			}
+			if fields.size > MaxObjectBytes {
+				read.err = corruptRelic(relicID, "part %s: its %s is %d bytes; the limit is %d bytes",
+					part.ID, relicFieldsPath, fields.size, MaxObjectBytes)
+				break
+			}
+			objects.FieldsBytes = fields.size
+			if part.Body != nil {
+				body := blobs[objects.Body]
+				if read.err = relicBlobPresent(relicID, part.ID, relicBodyPath, body); read.err != nil {
+					break
+				}
+				if body.size > core.MaxRelicBodyBytes {
+					read.err = corruptRelic(relicID, "part %s: its body is %d bytes; the limit is %d bytes",
+						part.ID, body.size, core.MaxRelicBodyBytes)
+					break
+				}
+				if body.size != part.Body.Bytes {
+					read.err = corruptRelic(relicID, "part %s: its body is %d bytes, but the relic records %d bytes",
+						part.ID, body.size, part.Body.Bytes)
+					break
+				}
+				objects.BodyBytes = body.size
+			}
+			read.parts[part.ID] = objects
+		}
+	}
+}
+
+// relicBlobPresent refuses a blob a part's subtree names that Git does not
+// have, or that is not a blob at all.
+func relicBlobPresent(relicID, partID, what string, blob relicBlobInfo) error {
+	switch {
+	case blob.missing:
+		return corruptRelic(relicID, "part %s: its %s is missing from Git", partID, what)
+	case blob.kind != "blob":
+		return corruptRelic(relicID, "part %s: its %s is not one regular blob", partID, what)
+	}
+	return nil
+}
+
+// parseRelicBlobInfo reads `git cat-file --batch-check` output for the object
+// IDs asked, in order. Each line is
+//
+//	<object> SP <type> SP <size>
+//
+// or, for an object Git does not have, `<object> SP missing`.
+func parseRelicBlobInfo(output []byte, asked []string) (map[string]relicBlobInfo, error) {
+	invalid := core.Errorf(core.CategoryOperational, "Git returned an invalid listing of relic object sizes")
+	if len(output) == 0 || output[len(output)-1] != '\n' {
+		return nil, invalid
+	}
+	lines := strings.Split(string(output[:len(output)-1]), "\n")
+	if len(lines) != len(asked) {
+		return nil, invalid
+	}
+	blobs := make(map[string]relicBlobInfo, len(asked))
+	for index, line := range lines {
+		fields := strings.Fields(line)
+		switch {
+		case len(fields) == 2 && fields[0] == asked[index] && fields[1] == "missing":
+			blobs[asked[index]] = relicBlobInfo{missing: true}
+		case len(fields) == 3 && fields[0] == asked[index]:
+			size, err := strconv.ParseInt(fields[2], 10, 64)
+			if err != nil || size < 0 {
+				return nil, invalid
+			}
+			blobs[asked[index]] = relicBlobInfo{kind: fields[1], size: size}
+		default:
+			return nil, invalid
+		}
+	}
+	return blobs, nil
 }
 
 // VerifyRelicTransition checks a commit against its parent, nil for a root.
@@ -487,10 +915,7 @@ func (r *Repository) verifyRelicFields(
 		return nil
 	}
 
-	batch, err := r.startObjectBatch(ctx, func(writer io.Writer) error {
-		_, err := writer.Write(input.Bytes())
-		return err
-	})
+	batch, err := r.startRelicObjectBatch(ctx, input.Bytes())
 	if err != nil {
 		return err
 	}
@@ -572,11 +997,72 @@ func relicFieldsAre(stored []byte, fields map[string]json.RawMessage, partID str
 	return err == nil && bytes.Equal(expected, stored)
 }
 
-// verifiedRelicTip reads the commit a relic's ref points at and checks it
-// against its parent by rules R1 to R6 and the case of R7 that object IDs
-// settle, which is what a single-relic read promises: a state or a body that
-// does not follow from the fold is refused, and so are fields that changed
-// with no operation to change them.
+// verifyRelicTips reads the commit each head names and checks it as a
+// single-relic read does: alone by rules R2 to R4, and against its first
+// parent by rules R1, R5 and R6 and the case of R7 that object IDs settle. A
+// state or a body that does not follow from the fold is refused, and so are
+// fields that changed with no operation to change them. The rest of R7, and
+// anything further back in the history, is `workbook validate`'s to check.
+//
+// The results are in the order of heads, and one failure never fails another
+// head: a tip that fails leaves a zero commit and an error naming its relic.
+// A tip that declares a newer generation cannot be checked. Its error is
+// CategoryNewerWriter, and it alone is returned beside its error, as far as it
+// could be read, so that a caller can tell it from a commit of this build's
+// generation that sits on top of a newer one, which fails the same way with a
+// zero commit.
+//
+// The caller has checked the repository and its configuration. Git is started
+// at most five times however many heads there are: for the tips' documents,
+// for their parents' documents, and three times for the parts of both
+// together, so that a subtree a tip shares with its parent is read once.
+func (r *Repository) verifyRelicTips(
+	ctx context.Context,
+	config core.ProjectConfig,
+	heads []core.RelicHead,
+) ([]RelicCommit, []error) {
+	commits, errs := r.readRelicCommitDocuments(ctx, config, heads)
+	// parentAt is where each tip's parent is read to, after the tips, or -1
+	// for a tip with no parent to read.
+	parentAt := make([]int, len(heads))
+	var parentHeads []core.RelicHead
+	for index, commit := range commits {
+		parentAt[index] = -1
+		if errs[index] != nil || commit.needsNewerReader() || commit.Parent == "" {
+			continue
+		}
+		parentAt[index] = len(heads) + len(parentHeads)
+		parentHeads = append(parentHeads, core.RelicHead{RelicID: heads[index].RelicID, ObjectID: commit.Parent})
+	}
+	parents, parentErrs := r.readRelicCommitDocuments(ctx, config, parentHeads)
+	commits, errs = append(commits, parents...), append(errs, parentErrs...)
+	r.readRelicCommitParts(ctx, commits, errs)
+
+	for index, head := range heads {
+		if errs[index] != nil {
+			continue
+		}
+		if commits[index].needsNewerReader() {
+			errs[index] = newerRelicHistory(head.RelicID)
+			continue
+		}
+		var parent *RelicCommit
+		if at := parentAt[index]; at >= 0 {
+			if errs[at] != nil {
+				commits[index], errs[index] = RelicCommit{}, errs[at]
+				continue
+			}
+			parent = &commits[at]
+		}
+		if err := r.VerifyRelicTransition(ctx, parent, commits[index], false); err != nil {
+			commits[index], errs[index] = RelicCommit{}, namedRelicError(head.RelicID, err)
+		}
+	}
+	return commits[:len(heads):len(heads)], errs[:len(heads):len(heads)]
+}
+
+// verifiedRelicTip reads the commit a relic's ref points at and checks it as
+// verifyRelicTips does, which is what a single-relic read promises.
 //
 // A tip that declares a newer generation is returned unverified, as far as it
 // can be read. Whoever uses it sees the marker and refuses to change it.
@@ -585,26 +1071,13 @@ func (r *Repository) verifiedRelicTip(
 	config core.ProjectConfig,
 	relicID, head string,
 ) (core.RelicSnapshot, error) {
-	commit, err := r.readRelicCommit(ctx, config, relicID, head)
-	if err != nil {
+	commits, errs := r.verifyRelicTips(ctx, config, []core.RelicHead{{RelicID: relicID, ObjectID: head}})
+	commit, err := commits[0], errs[0]
+	// Only a newer writer's own tip comes back beside its error.
+	if err != nil && !commit.needsNewerReader() {
 		return core.RelicSnapshot{}, err
 	}
-	snapshot := core.RelicSnapshot{Head: commit.ObjectID, Operation: commit.Operation, Record: commit.Record}
-	if commit.needsNewerReader() {
-		return snapshot, nil
-	}
-	var parent *RelicCommit
-	if commit.Parent != "" {
-		read, err := r.readRelicCommit(ctx, config, relicID, commit.Parent)
-		if err != nil {
-			return core.RelicSnapshot{}, err
-		}
-		parent = &read
-	}
-	if err := r.VerifyRelicTransition(ctx, parent, commit, false); err != nil {
-		return core.RelicSnapshot{}, err
-	}
-	return snapshot, nil
+	return core.RelicSnapshot{Head: commit.ObjectID, Operation: commit.Operation, Record: commit.Record}, nil
 }
 
 // relicHistoryGap finds why Git could not walk a relic's history from head: a

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -538,14 +539,35 @@ func TestRuleR1RootStateDoesNotFollowFromItsPack(t *testing.T) {
 func TestRuleR3ExtraPartSubtree(t *testing.T) {
 	t.Parallel()
 	repo, config := relicRepository(t, testrepo.FormatSHA1)
-	tip, _, _ := relicRuleHistory(t, repo, config)
+	tip, _, b := relicRuleHistory(t, repo, config)
 	stored := forgedPartsOf(t, repo, tip.Head)
 	stranger := relicTestID(9)
+	retitle := relicChildPack(tip, relicTitleSet(700010, "Another title"))
 
+	// A subtree beside the two the relic lists makes the parts tree one entry
+	// larger than the state says it is. It is refused by that size, without
+	// being read, so the refusal gives the two sizes and cannot name the
+	// stranger.
+	listedBytes := relicObjectSize(t, repo, tip.Head+":parts")
 	err := checkRelicRule(t, repo, config, tip, 2, relicRuleCase{
-		pack:      relicChildPack(tip, relicTitleSet(700010, "Another title")),
+		pack:      retitle,
 		honest:    stored,
 		violating: withForgedPart(stored, stranger, forgedPart{fields: forgedFields(t)}),
+		fragments: []string{fmt.Sprintf("is %d bytes", listedBytes/2*3), fmt.Sprintf("is %d bytes", listedBytes)},
+	})
+	assertGetRelicRefused(t, err)
+	if strings.Contains(err.Error(), stranger) {
+		t.Fatalf("the refusal names %s, which only reading the oversize tree could have found: %v", stranger, err)
+	}
+
+	// A stranger in the place of a listed part leaves the tree the size the
+	// state says, so it is read, and the stranger is named.
+	swapped := withForgedPart(stored, stranger, forgedPart{fields: forgedFields(t)})
+	delete(swapped, b.id)
+	err = checkRelicRule(t, repo, config, tip, 2, relicRuleCase{
+		pack:      retitle,
+		honest:    stored,
+		violating: swapped,
 		fragments: []string{stranger},
 	})
 	assertGetRelicRefused(t, err)
@@ -1322,19 +1344,21 @@ func TestReadingARelicUsesABoundedNumberOfGitProcesses(t *testing.T) {
 		return len(commands)
 	}
 
-	// The ref, then the documents and the tree listing of the tip and of its
-	// parent.
+	// The ref, then the documents of the tip and of its parent, then the parts
+	// of both together: their parts trees, their parts' subtrees and the sizes
+	// of their blobs.
 	getSmall, getLarge := get(small), get(large)
 	getCommands := commands
-	if getLarge != getSmall || getLarge > 5 {
-		t.Fatalf("GetRelic ran %d Git commands for 3 parts and %d for 300, want the same and at most 5: %q",
+	if getLarge != getSmall || getLarge > 6 {
+		t.Fatalf("GetRelic ran %d Git commands for 3 parts and %d for 300, want the same and at most 6: %q",
 			getSmall, getLarge, getCommands)
 	}
-	// One listing of the history, then at most three per commit: its
-	// documents, its tree listing, and the fields rule R7 has to read.
+	// One listing of the history, then at most five per commit: its documents,
+	// its parts tree, its parts' subtrees, the sizes of their blobs, and the
+	// fields rule R7 has to read.
 	validateSmall, validateLarge := validate(small), validate(large)
-	if validateLarge != validateSmall || validateLarge > 1+3*3 {
-		t.Fatalf("ValidateRelicHistory ran %d Git commands for 3 parts and %d for 300, want the same and at most 10: %q",
+	if validateLarge != validateSmall || validateLarge > 1+3*5 {
+		t.Fatalf("ValidateRelicHistory ran %d Git commands for 3 parts and %d for 300, want the same and at most 16: %q",
 			validateSmall, validateLarge, commands)
 	}
 	t.Logf("Git commands: GetRelic %d, ValidateRelicHistory of 3 commits %d", getLarge, validateLarge)
@@ -1904,6 +1928,472 @@ func TestAnUnreadableRelicNamesItself(t *testing.T) {
 		}
 		if strings.Count(failure.Err.Error(), relicID) != 1 {
 			t.Fatalf("%s: the failure names the relic more than once: %q", name, failure.Err)
+		}
+	}
+}
+
+// relicObjectSize returns the size Git reports for one object.
+func relicObjectSize(t *testing.T, repo *Repository, name string) int64 {
+	t.Helper()
+	size, err := strconv.ParseInt(gitOutput(t, repo, "cat-file", "-s", name), 10, 64)
+	if err != nil {
+		t.Fatalf("cat-file -s %s: %v", name, err)
+	}
+	return size
+}
+
+// observeRelicObjects records every object a relic reader asks Git for with
+// its content.
+func observeRelicObjects(repo *Repository) *[]string {
+	requests := &[]string{}
+	repo.relicObjectObserver = func(request string) { *requests = append(*requests, request) }
+	return requests
+}
+
+// relicCommitRequests is what reading one relic commit's documents asks for.
+func relicCommitRequests(commit string) []string {
+	return []string{commit, commit + "^{tree}", commit + ":operation.json", commit + ":state.json", commit + ":links.json"}
+}
+
+// A commit's parts are read from the trees themselves: the parts tree, each
+// part's subtree, and the size of each blob. Nothing lists the commit's tree.
+func TestRelicPartObjectsAreReadWithoutListingATree(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		parts := []relicTestPart{
+			relicTestPartNumbered(1).withField("heading", "Goals").withBody("md", []byte("the goals\n")),
+			relicTestPartNumbered(2).withBody("txt", []byte("plain text, and rather more of it\n")),
+			relicTestPartNumbered(3).withField("status", "open"),
+		}
+		root := writeRelicRoot(t, repo, config, parts...)
+
+		commands := observeCommands(repo)
+		commit, err := repo.ReadRelicCommit(ctx, config, root.Operation.RelicID, root.Head)
+		ran := *commands
+		repo.commandObserver = nil
+		if err != nil {
+			t.Fatalf("ReadRelicCommit() error = %v", err)
+		}
+		for _, command := range ran {
+			if len(command) > 0 && command[0] == "ls-tree" {
+				t.Fatalf("ReadRelicCommit() listed a tree: %q", ran)
+			}
+		}
+		// The documents, the parts tree and the subtrees are read; the blobs
+		// are only measured.
+		if batches, checks := countCommand(ran, "cat-file", "--batch"), countCommand(ran, "cat-file", "--batch-check"); batches != 3 || checks != 1 || len(ran) != 4 {
+			t.Fatalf("ReadRelicCommit() ran %q, want three cat-file --batch and one cat-file --batch-check", ran)
+		}
+
+		want := make(map[string]RelicPartObjects, len(parts))
+		for _, part := range parts {
+			path := root.Head + ":parts/" + part.id
+			objects := RelicPartObjects{
+				Tree:        gitOutput(t, repo, "rev-parse", path),
+				Fields:      gitOutput(t, repo, "rev-parse", path+"/fields.json"),
+				FieldsBytes: relicObjectSize(t, repo, path+"/fields.json"),
+			}
+			if part.hasBody {
+				objects.Body = gitOutput(t, repo, "rev-parse", path+"/body")
+				objects.BodyBytes = relicObjectSize(t, repo, path+"/body")
+			}
+			want[part.id] = objects
+		}
+		if !maps.Equal(commit.Parts, want) {
+			t.Fatalf("commit parts = %+v, want %+v", commit.Parts, want)
+		}
+	})
+}
+
+// Whoever can push can write a parts tree of any size. A reader knows from the
+// relic's own state how large that tree is, to the byte, and refuses any other
+// size from Git's header: the tree is not read, and nothing it names is asked
+// for.
+func TestAnOversizePartsTreeIsRefusedBeforeItIsRead(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		part := relicTestPartNumbered(1).withBody("md", []byte("the goals\n"))
+		root := writeRelicRoot(t, repo, config, part)
+		relicID := root.Operation.RelicID
+		subtree := gitOutput(t, repo, "rev-parse", root.Head+":parts/"+part.id)
+		honestBytes := relicObjectSize(t, repo, root.Head+":parts")
+
+		// The root commit again, with a parts tree that holds the one part the
+		// state lists and extra entries beside it. Every extra entry names the
+		// same subtree, so the forgery costs one object however many there are.
+		crowd := func(extra int) (commit string, treeBytes int64) {
+			t.Helper()
+			entries := []string{"040000 tree " + subtree + "\t" + part.id}
+			for index := range extra {
+				entries = append(entries, "040000 tree "+subtree+"\t"+relicTestID(100000+index))
+			}
+			crowded := forgeRelicTree(t, repo, entries)
+			top := replaceRelicTreeEntry(t,
+				relicLines(gitOutput(t, repo, "ls-tree", root.Head)), "parts", "040000 tree "+crowded+"\tparts")
+			return forgeRelicCommitOf(t, repo, forgeRelicTree(t, repo, top)), relicObjectSize(t, repo, crowded)
+		}
+
+		for _, extra := range []int{5000, 1} {
+			forged, crowdedBytes := crowd(extra)
+			requests := observeRelicObjects(repo)
+			commands := observeCommands(repo)
+			_, err := repo.ReadRelicCommit(ctx, config, relicID, forged)
+			ran, asked := *commands, *requests
+			repo.commandObserver, repo.relicObjectObserver = nil, nil
+
+			assertRelicCategory(t, err, core.CategoryCorruptData, relicID,
+				fmt.Sprintf("%d bytes", crowdedBytes), fmt.Sprintf("%d bytes", honestBytes))
+			if len(err.Error()) > 500 {
+				t.Fatalf("%d extra entries: the refusal is %d bytes long; it must not carry what the tree holds", extra, len(err.Error()))
+			}
+			if want := append(relicCommitRequests(forged), forged+":parts"); !slices.Equal(asked, want) {
+				t.Fatalf("%d extra entries: the read asked for %q, want only %q: no part subtree", extra, asked, want)
+			}
+			if countCommand(ran, "cat-file", "--batch") != 2 || len(ran) != 2 {
+				t.Fatalf("%d extra entries: the read ran %q, want the documents and the parts tree and nothing after", extra, ran)
+			}
+
+			checked, failure, err := repo.ValidateRelicHistory(ctx, config, core.RelicHead{RelicID: relicID, ObjectID: forged})
+			if err != nil || failure == nil || failure.Commit != forged || checked != 0 {
+				t.Fatalf("%d extra entries: ValidateRelicHistory() = %d checked, failure %+v, error %v; want commit %s refused",
+					extra, checked, failure, err, forged)
+			}
+			assertRelicCategory(t, failure.Err, core.CategoryCorruptData, fmt.Sprintf("%d bytes", crowdedBytes))
+		}
+
+		// The honest commit is read, subtree and all.
+		requests := observeRelicObjects(repo)
+		if _, err := repo.ReadRelicCommit(ctx, config, relicID, root.Head); err != nil {
+			t.Fatalf("ReadRelicCommit(honest) error = %v", err)
+		}
+		if !slices.Contains(*requests, subtree) {
+			t.Fatalf("the honest read asked for %q, want the part's subtree %s among them", *requests, subtree)
+		}
+	})
+}
+
+// A part's subtree holds fields.json and at most a body, so its size has a
+// ceiling a reader can work out before asking for it. A larger one is refused
+// from Git's header, and no blob it names is asked about.
+func TestAnOversizePartSubtreeIsRefusedBeforeItIsRead(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		part := relicTestPartNumbered(1).withBody("md", []byte("the goals\n"))
+		root := writeRelicRoot(t, repo, config, part)
+		relicID := root.Operation.RelicID
+		path := root.Head + ":parts/" + part.id
+		fields, body := gitOutput(t, repo, "rev-parse", path+"/fields.json"), gitOutput(t, repo, "rev-parse", path+"/body")
+		// The honest subtree holds both entries, so it is the largest a part's
+		// subtree may be.
+		largestBytes := relicObjectSize(t, repo, path)
+
+		entries := []string{"100644 blob " + fields + "\tfields.json", "100644 blob " + body + "\tbody"}
+		for index := range 5000 {
+			entries = append(entries, fmt.Sprintf("100644 blob %s\tnote-%04d", body, index))
+		}
+		crowded := forgeRelicTree(t, repo, entries)
+		crowdedBytes := relicObjectSize(t, repo, crowded)
+		parts := forgeRelicTree(t, repo, []string{"040000 tree " + crowded + "\t" + part.id})
+		top := replaceRelicTreeEntry(t,
+			relicLines(gitOutput(t, repo, "ls-tree", root.Head)), "parts", "040000 tree "+parts+"\tparts")
+		forged := forgeRelicCommitOf(t, repo, forgeRelicTree(t, repo, top))
+
+		commands := observeCommands(repo)
+		_, err := repo.ReadRelicCommit(ctx, config, relicID, forged)
+		ran := *commands
+		repo.commandObserver = nil
+		assertRelicCategory(t, err, core.CategoryCorruptData, relicID, part.id,
+			fmt.Sprintf("%d bytes", crowdedBytes), fmt.Sprintf("%d bytes", largestBytes))
+		if len(err.Error()) > 500 {
+			t.Fatalf("the refusal is %d bytes long; it must not carry what the tree holds", len(err.Error()))
+		}
+		if countCommand(ran, "cat-file", "--batch") != 3 || len(ran) != 3 {
+			t.Fatalf("the read ran %q, want the documents, the parts tree and the subtree, and no blob measured", ran)
+		}
+	})
+}
+
+// However many commits are read together, Git is started the same number of
+// times: once for every commit's documents, once for every parts tree, once for
+// every part's subtree and once to measure every blob.
+func TestReadingManyRelicCommitsUsesAFixedNumberOfGitProcesses(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	const relics = 20
+	heads := make([]core.RelicHead, relics)
+	for number := range relics {
+		tip := writeRelicRootNumbered(t, repo, config, number+1,
+			relicTestPartNumbered(1).withField("heading", fmt.Sprintf("Section %d", number)).
+				withBody("md", []byte(fmt.Sprintf("Body of relic %d.\n", number))),
+			relicTestPartNumbered(2).withField("status", "open"))
+		heads[number] = core.RelicHead{RelicID: tip.Operation.RelicID, ObjectID: tip.Head}
+	}
+	bare := writeRelicRootNumbered(t, repo, config, relics+1)
+
+	commands := observeCommands(repo)
+	read := func(heads []core.RelicHead, wantParts int) int {
+		t.Helper()
+		*commands = nil
+		commits, errs := repo.readRelicCommitsPartial(ctx, config, heads)
+		if len(commits) != len(heads) || len(errs) != len(heads) {
+			t.Fatalf("readRelicCommitsPartial() returned %d commits and %d errors for %d heads", len(commits), len(errs), len(heads))
+		}
+		for index, head := range heads {
+			if errs[index] != nil {
+				t.Fatalf("readRelicCommitsPartial() error for %s = %v", head.RelicID, errs[index])
+			}
+			if commits[index].ObjectID != head.ObjectID || commits[index].Record.State.RelicID != head.RelicID ||
+				len(commits[index].Parts) != wantParts {
+				t.Fatalf("commit %d = %s of relic %s with %d parts, want %s of relic %s with %d parts", index,
+					commits[index].ObjectID, commits[index].Record.State.RelicID, len(commits[index].Parts),
+					head.ObjectID, head.RelicID, wantParts)
+			}
+		}
+		return len(*commands)
+	}
+
+	one, many := read(heads[:1], 2), read(heads, 2)
+	if one != many || many != 4 {
+		t.Fatalf("reading 1 commit ran %d Git commands and reading %d ran %d, want 4 for both: %q", one, relics, many, *commands)
+	}
+	// A pass with nothing to ask starts no process: a relic with no part has
+	// no parts tree, and no heads means nothing to read at all.
+	if got := read([]core.RelicHead{{RelicID: bare.Operation.RelicID, ObjectID: bare.Head}}, 0); got != 1 {
+		t.Fatalf("reading a relic with no part ran %d Git commands, want 1: %q", got, *commands)
+	}
+	if got := read(nil, 0); got != 0 {
+		t.Fatalf("reading no commit ran %d Git commands, want none: %q", got, *commands)
+	}
+}
+
+// Commits read together fail apart. Whatever is wrong with one of them, the
+// others are returned, and its error names its own relic.
+func TestOneUnreadableRelicCommitDoesNotFailTheBatch(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	first := writeRelicRootNumbered(t, repo, config, 1, relicTestPartNumbered(1).withBody("md", []byte("the first\n")))
+	second := writeRelicRootNumbered(t, repo, config, 2, relicTestPartNumbered(1).withBody("md", []byte("the second\n")))
+	third := writeRelicRootNumbered(t, repo, config, 3, relicTestPartNumbered(1).withField("status", "open"))
+	secondID := second.Operation.RelicID
+	stored := forgedPartsOf(t, repo, second.Head)
+	added := relicTestID(3)
+	body := []byte("a new part\n")
+	subtree := gitOutput(t, repo, "rev-parse", second.Head+":parts/"+relicTestID(1))
+	crowded := forgeRelicTree(t, repo, []string{
+		"040000 tree " + subtree + "\t" + relicTestID(1), "040000 tree " + subtree + "\t" + relicTestID(9),
+	})
+
+	for name, test := range map[string]struct {
+		objectID  string
+		category  core.Category
+		fragments []string
+	}{
+		"a part without fields.json": {
+			forgeRelicChild(t, repo, second, relicChildPack(second, relicPartAdd(added, "2/1", body)),
+				withForgedPart(stored, added, forgedPart{body: body, hasBody: true})),
+			core.CategoryCorruptData, []string{added, "fields.json"},
+		},
+		"a parts tree with an entry too many": {
+			forgeRelicCommitOf(t, repo, forgeRelicTree(t, repo, replaceRelicTreeEntry(t,
+				relicLines(gitOutput(t, repo, "ls-tree", second.Head)), "parts", "040000 tree "+crowded+"\tparts"))),
+			core.CategoryCorruptData, []string{"bytes"},
+		},
+		"a part's subtree Git does not have": {
+			forgeRelicCommitOf(t, repo, gitOutputWithInput(t, repo, []byte(strings.Join(replaceRelicTreeEntry(t,
+				relicLines(gitOutput(t, repo, "ls-tree", second.Head)), "parts",
+				"040000 tree "+gitOutputWithInput(t, repo,
+					[]byte("040000 tree "+strings.Repeat("0", len(second.Head)-1)+"1\t"+relicTestID(1)+"\n"), "mktree", "--missing")+
+					"\tparts"), "\n")+"\n"), "mktree", "--missing")),
+			core.CategoryCorruptData, []string{"missing from Git"},
+		},
+		"a commit Git does not have": {
+			strings.Repeat("0", len(second.Head)-1) + "1", core.CategoryCorruptData, nil,
+		},
+		"another relic's commit": {third.Head, core.CategoryCorruptData, nil},
+		"not an object ID":       {"not-an-object-id", core.CategoryValidation, nil},
+	} {
+		heads := []core.RelicHead{
+			{RelicID: first.Operation.RelicID, ObjectID: first.Head},
+			{RelicID: secondID, ObjectID: test.objectID},
+			{RelicID: third.Operation.RelicID, ObjectID: third.Head},
+		}
+		commits, errs := repo.readRelicCommitsPartial(ctx, config, heads)
+		if len(commits) != 3 || len(errs) != 3 {
+			t.Fatalf("%s: readRelicCommitsPartial() returned %d commits and %d errors for 3 heads", name, len(commits), len(errs))
+		}
+		if errs[0] != nil || errs[2] != nil {
+			t.Fatalf("%s: the commits beside the unreadable one failed: %v, %v", name, errs[0], errs[2])
+		}
+		if commits[0].ObjectID != first.Head || len(commits[0].Parts) != 1 || commits[2].ObjectID != third.Head || len(commits[2].Parts) != 1 {
+			t.Fatalf("%s: the commits beside the unreadable one = %+v and %+v, want %s and %s with their parts",
+				name, commits[0], commits[2], first.Head, third.Head)
+		}
+		if errs[1] == nil {
+			t.Fatalf("%s: the unreadable commit was read: %+v", name, commits[1])
+		}
+		assertRelicCategory(t, errs[1], test.category, append([]string{secondID}, test.fragments...)...)
+		if strings.Contains(errs[1].Error(), first.Operation.RelicID) {
+			t.Fatalf("%s: the error names a relic that was read: %v", name, errs[1])
+		}
+		if commits[1].ObjectID != "" || commits[1].Parts != nil {
+			t.Fatalf("%s: the unreadable commit was returned all the same: %+v", name, commits[1])
+		}
+	}
+}
+
+// Tips are verified together as a single-relic read verifies one: each against
+// its own parent, each failing alone, through the same Git processes however
+// many there are.
+func TestVerifyRelicTipsChecksEachTipAgainstItsParent(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	text := func(number int) []byte { return []byte(fmt.Sprintf("the text of relic %d\n", number)) }
+	rootOf := func(number int) core.RelicSnapshot {
+		t.Helper()
+		return writeRelicRootNumbered(t, repo, config, number,
+			relicTestPartNumbered(1).withBody("md", text(number)), relicTestPartNumbered(2).withField("status", "open"))
+	}
+	head := func(snapshot core.RelicSnapshot, objectID string) core.RelicHead {
+		return core.RelicHead{RelicID: snapshot.Operation.RelicID, ObjectID: objectID}
+	}
+
+	alone := rootOf(1)
+	parent := rootOf(2)
+	child := writeRelicChild(t, repo, config, parent, nil, relicTitleSet(700001, "A new title"))
+
+	// A commit that replaces a body no operation in it saved.
+	overwritten := rootOf(3)
+	forgedParts := forgedPartsOf(t, repo, overwritten.Head)
+	edit := forgedParts[relicTestID(1)]
+	edit.body = []byte("text no operation saved\n")
+	forged := forgeRelicChild(t, repo, overwritten, relicChildPack(overwritten, relicTitleSet(700002, "Another title")),
+		withForgedPart(forgedParts, relicTestID(1), edit))
+
+	// A tip a newer Workbook wrote, and this build's commit on top of one.
+	newerRoot := rootOf(4)
+	newer := forgeNewerRelicTip(t, repo, config, newerRoot)
+	belowRoot := rootOf(5)
+	below := forgeNewerRelicTip(t, repo, config, belowRoot)
+	pack := core.NewRelicOperationPack(config.ProjectID, belowRoot.Operation.RelicID, belowRoot.Operation.HistoryGeneration,
+		relicTestActor, 3, relicTestTime, []core.RelicOperation{relicTitleSet(700003, "A title from the older build")})
+	state := belowRoot.Record.State
+	state.LogicalClock, state.Relic.Title, state.Relic.UpdatedAt = 3, "A title from the older build", relicTestTime
+	onTop := forgeRelicCommit(t, repo, below,
+		encodedRelicDocument(t, pack), encodedRelicDocument(t, state), forgedPartsOf(t, repo, belowRoot.Head))
+
+	// A tip whose parent Git does not have.
+	orphanRoot := rootOf(6)
+	orphan := writeRelicChild(t, repo, config, orphanRoot, nil, relicTitleSet(700004, "A new title"))
+
+	heads := []core.RelicHead{
+		head(alone, alone.Head), head(child, child.Head), head(overwritten, forged),
+		head(newerRoot, newer), head(belowRoot, onTop), head(orphanRoot, orphan.Head),
+	}
+	loseRelicObject(t, repo, orphanRoot.Head)
+
+	commands := observeCommands(repo)
+	requests := observeRelicObjects(repo)
+	commits, errs := repo.verifyRelicTips(ctx, config, heads)
+	ran, asked := *commands, *requests
+	repo.commandObserver, repo.relicObjectObserver = nil, nil
+	if len(commits) != len(heads) || len(errs) != len(heads) {
+		t.Fatalf("verifyRelicTips() returned %d commits and %d errors for %d heads", len(commits), len(errs), len(heads))
+	}
+
+	for index, want := range []core.RelicSnapshot{alone, child} {
+		if errs[index] != nil {
+			t.Fatalf("verifyRelicTips() error for a sound tip = %v", errs[index])
+		}
+		assertSameRelicSnapshot(t, core.RelicSnapshot{
+			Head: commits[index].ObjectID, Operation: commits[index].Operation, Record: commits[index].Record,
+		}, want)
+		if len(commits[index].Parts) != 2 {
+			t.Fatalf("a verified tip carries %d parts, want 2", len(commits[index].Parts))
+		}
+	}
+	if commits[1].Parent != parent.Head {
+		t.Fatalf("the child's parent = %q, want %s", commits[1].Parent, parent.Head)
+	}
+
+	assertRelicCategory(t, errs[2], core.CategoryCorruptData, overwritten.Operation.RelicID, relicTestID(1))
+	assertRelicCategory(t, errs[5], core.CategoryCorruptData, orphanRoot.Operation.RelicID, orphanRoot.Head)
+	for _, index := range []int{2, 5} {
+		if commits[index].ObjectID != "" {
+			t.Fatalf("a tip that failed its check was returned all the same: %+v", commits[index])
+		}
+	}
+	// A newer writer's tip cannot be checked, and is returned as far as it
+	// could be read so that a caller can tell it from a commit this build
+	// wrote on top of one.
+	assertRelicCategory(t, errs[3], core.CategoryNewerWriter, newerRoot.Operation.RelicID)
+	if commits[3].ObjectID != newer || !commits[3].needsNewerReader() || commits[3].Parts != nil {
+		t.Fatalf("the newer writer's tip = %+v, want commit %s unverified and without parts", commits[3], newer)
+	}
+	assertRelicCategory(t, errs[4], core.CategoryNewerWriter, belowRoot.Operation.RelicID)
+	if commits[4].ObjectID != "" {
+		t.Fatalf("a commit on top of a newer writer's was returned all the same: %+v", commits[4])
+	}
+
+	// The tips' documents, their parents' documents, then every parts tree,
+	// every subtree and every blob size, each in one process.
+	if len(ran) != 5 || countCommand(ran, "cat-file", "--batch") != 4 || countCommand(ran, "cat-file", "--batch-check") != 1 {
+		t.Fatalf("verifyRelicTips() ran %q, want four cat-file --batch and one cat-file --batch-check", ran)
+	}
+	// A tip and its parent mostly hold the same subtrees. Each is asked for
+	// once.
+	seen := map[string]struct{}{}
+	for _, request := range asked {
+		if _, repeated := seen[request]; repeated {
+			t.Fatalf("verifyRelicTips() asked for %s twice: %q", request, asked)
+		}
+		seen[request] = struct{}{}
+	}
+	for _, partID := range []string{relicTestID(1), relicTestID(2)} {
+		subtree := gitOutput(t, repo, "rev-parse", child.Head+":parts/"+partID)
+		if subtree != gitOutput(t, repo, "rev-parse", parent.Head+":parts/"+partID) {
+			t.Fatalf("the child and its parent hold different subtrees for part %s", partID)
+		}
+		if _, found := seen[subtree]; !found {
+			t.Fatalf("verifyRelicTips() never asked for subtree %s of part %s: %q", subtree, partID, asked)
+		}
+	}
+	// No body and no fields were opened: the check reads trees and sizes.
+	for _, request := range asked {
+		if strings.HasSuffix(request, "/"+relicBodyPath) || strings.HasSuffix(request, "/"+relicFieldsPath) {
+			t.Fatalf("verifyRelicTips() opened %s", request)
+		}
+	}
+	for _, snapshot := range []core.RelicSnapshot{alone, child} {
+		for _, partID := range []string{relicTestID(1), relicTestID(2)} {
+			for _, blob := range []string{relicFieldsPath, relicBodyPath} {
+				output, err := repo.Git(ctx, nil, "rev-parse", "--verify", "--quiet", snapshot.Head+":parts/"+partID+"/"+blob)
+				if err != nil {
+					continue
+				}
+				if _, opened := seen[strings.TrimSpace(string(output))]; opened {
+					t.Fatalf("verifyRelicTips() opened the %s of part %s", blob, partID)
+				}
+			}
+		}
+	}
+
+	// What it accepts and refuses is what a single-relic read does.
+	for index, relicHead := range heads {
+		pointRelicRef(t, repo, relicHead.RelicID, relicHead.ObjectID)
+		_, err := repo.GetRelic(ctx, config, relicHead.RelicID)
+		switch {
+		case index == 3:
+			if err != nil {
+				t.Fatalf("GetRelic() of the newer writer's tip error = %v, want it served unverified", err)
+			}
+		case (err == nil) != (errs[index] == nil) || core.CategoryOf(err) != core.CategoryOf(errs[index]):
+			t.Fatalf("GetRelic() of head %d error = %v, but verifyRelicTips() said %v", index, err, errs[index])
 		}
 	}
 }

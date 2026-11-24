@@ -1,7 +1,10 @@
 package gitstore
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -13,6 +16,63 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/testenv"
 )
+
+// A reader that knows how large an object may be refuses a larger one from the
+// size in Git's header. It allocates nothing for it and still consumes the
+// record, so the object after it is read as usual.
+func TestReadBatchObjectWithinSkipsAnObjectOverItsLimit(t *testing.T) {
+	t.Parallel()
+	treeID, blobID := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	tree := bytes.Repeat([]byte{'t'}, 1000)
+	blob := []byte("ten bytes\n")
+	if len(blob) != 10 {
+		t.Fatalf("the test's blob is %d bytes", len(blob))
+	}
+	stream := func() *bufio.Reader {
+		var records bytes.Buffer
+		fmt.Fprintf(&records, "%s tree %d\n%s\n%s blob %d\n%s\n", treeID, len(tree), tree, blobID, len(blob), blob)
+		return bufio.NewReader(&records)
+	}
+
+	reader := stream()
+	first, err := readBatchObjectWithin(reader, 100)
+	if err != nil {
+		t.Fatalf("readBatchObjectWithin(tree) error = %v", err)
+	}
+	if first.refused == nil || first.contents != nil {
+		t.Fatalf("the 1000 byte tree = refused %v with %d bytes read, want it refused and nothing read",
+			first.refused, len(first.contents))
+	}
+	if first.objectID != treeID || first.kind != "tree" || first.size != 1000 {
+		t.Fatalf("the refused tree = %s %s of %d bytes, want %s tree of 1000 bytes", first.objectID, first.kind, first.size, treeID)
+	}
+	if got := core.CategoryOf(first.refused); got != core.CategoryCorruptData {
+		t.Fatalf("refusal category = %q, want %q; error = %v", got, core.CategoryCorruptData, first.refused)
+	}
+	for _, fragment := range []string{treeID, "1000 bytes", "100 bytes"} {
+		if !strings.Contains(first.refused.Error(), fragment) {
+			t.Fatalf("refusal %q does not mention %q", first.refused, fragment)
+		}
+	}
+	second, err := readBatchObjectWithin(reader, 100)
+	if err != nil {
+		t.Fatalf("readBatchObjectWithin(blob) error = %v", err)
+	}
+	if second.refused != nil || second.objectID != blobID || second.kind != "blob" || !bytes.Equal(second.contents, blob) {
+		t.Fatalf("the object after the refused one = %+v, want the blob's 10 bytes", second)
+	}
+
+	// An object exactly at the limit is read, and the reader with no limit of
+	// its own still reads up to the ceiling for one object.
+	atLimit, err := readBatchObjectWithin(stream(), 1000)
+	if err != nil || atLimit.refused != nil || !bytes.Equal(atLimit.contents, tree) {
+		t.Fatalf("readBatchObjectWithin(limit 1000) = refused %v, %v; want the tree read", atLimit.refused, err)
+	}
+	whole, err := readBatchObject(stream())
+	if err != nil || whole.refused != nil || !bytes.Equal(whole.contents, tree) {
+		t.Fatalf("readBatchObject() = refused %v, %v; want the tree read", whole.refused, err)
+	}
+}
 
 func TestReadTaskHeadsPartialConsumesAllRecordsAfterMissingMiddleHead(t *testing.T) {
 	t.Parallel()

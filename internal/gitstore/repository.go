@@ -188,6 +188,12 @@ type Repository struct {
 	actor            string
 	actorErr         error
 	commandObserver  gitCommandObserver
+	// relicObjectObserver is told every object a relic reader asks Git for
+	// with its content, as the request Git was given: an object ID, or a
+	// commit and a path. An object whose size and type alone are asked for is
+	// not reported. It is nil outside tests, which use it to prove what a
+	// read opened and what it left closed, a part's body above all.
+	relicObjectObserver func(request string)
 }
 
 // Open discovers the repository containing startDir without changing the
