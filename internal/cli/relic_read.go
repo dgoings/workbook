@@ -31,5 +31,38 @@ func openRelicReadService(ctx context.Context, cwd string, stderr io.Writer) (co
 		return core.RelicService{}, nil, err
 	}
 	service.Reader = store.RelicReader()
+	service.Tasks = indexedTaskReader{index: store, repository: repository}
 	return service, release, nil
+}
+
+// indexedTaskReader is the task reader a relic read marks removed link
+// targets through: the index, or the repository when the index cannot be
+// built or read, as the relic reads themselves fall back.
+type indexedTaskReader struct {
+	index      core.TaskReader
+	repository core.TaskReader
+}
+
+func (r indexedTaskReader) List(ctx context.Context, config core.ProjectConfig) ([]core.Snapshot, error) {
+	snapshots, err := r.index.List(ctx, config)
+	if err != nil && ctx.Err() == nil {
+		return r.repository.List(ctx, config)
+	}
+	return snapshots, err
+}
+
+func (r indexedTaskReader) Get(ctx context.Context, config core.ProjectConfig, taskID string) (core.Snapshot, error) {
+	snapshot, err := r.index.Get(ctx, config, taskID)
+	if err != nil && ctx.Err() == nil && core.CategoryOf(err) != core.CategoryNotFound {
+		return r.repository.Get(ctx, config, taskID)
+	}
+	return snapshot, err
+}
+
+func (r indexedTaskReader) Resolve(ctx context.Context, config core.ProjectConfig, prefix string) (string, error) {
+	taskID, err := r.index.Resolve(ctx, config, prefix)
+	if err != nil && ctx.Err() == nil && core.CategoryOf(err) != core.CategoryNotFound && core.CategoryOf(err) != core.CategoryValidation {
+		return r.repository.Resolve(ctx, config, prefix)
+	}
+	return taskID, err
 }

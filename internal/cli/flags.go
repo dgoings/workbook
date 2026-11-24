@@ -921,7 +921,8 @@ var commandSchemas = map[string]commandMetadata{
 					"workbook relic update <relic> --add-part --part-type <type> [--field <name>=<value>]... [--field-json <name>=<json>]... [--body-file <file> [--body-format <label>]] [--before <part> | --after <part>] [--no-sync]\n" +
 					"workbook relic update <relic> --part <part> [--field <name>=<value>]... [--field-json <name>=<json>]... [--clear-field <name>]... [--body-file <file> [--body-format <label>] [--base <version>]] [--no-sync]\n" +
 					"workbook relic update <relic> --move-part <part> (--before <part> | --after <part>) [--no-sync]\n" +
-					"workbook relic update <relic> [--remove-part <part>]... [--restore-part <part>]... [--no-sync]",
+					"workbook relic update <relic> [--remove-part <part>]... [--restore-part <part>]... [--no-sync]\n" +
+					"workbook relic update <relic> [--link <task> [--from <part>] --rel <rel>]... [--unlink <link>]... [--no-sync]",
 				Description: "Change a relic. Every change given in one command is recorded together, or none is.\n\n" +
 					"--add-part, --part, --move-part, --remove-part and --restore-part each start a group,\n" +
 					"and the part options after one belong to it. Changes apply in the order given.\n" +
@@ -932,7 +933,10 @@ var commandSchemas = map[string]commandMetadata{
 					"A part's first body takes its format label from the file's ending. A save over a body\n" +
 					"keeps the label the body has. --body-format sets the label in either case.\n\n" +
 					"--set and --field store text. --set-json and --field-json store any JSON value.\n" +
-					"One command names a property once, and a field of a part once; naming one twice is refused.",
+					"One command names a property once, and a field of a part once; naming one twice is refused.\n\n" +
+					"--link starts a group too: it links the relic, or with --from one of its parts, to a task,\n" +
+					"named by --rel, such as implemented-by. Linking what is already linked changes nothing.\n" +
+					"--unlink removes one link, named by the ID relic show lists.",
 				Positionals: []string{"<relic>"},
 				Options: []optionMetadata{
 					{Name: "title", Kind: stringFlag, Value: "<title>", Description: "set the relic's title"},
@@ -953,6 +957,10 @@ var commandSchemas = map[string]commandMetadata{
 					{Name: "move-part", Kind: stringFlag, Value: "<part>", Description: "move this part to where --before or --after says"},
 					{Name: "remove-part", Kind: stringFlag, Value: "<part>", Description: "remove this part; --restore-part brings it back"},
 					{Name: "restore-part", Kind: stringFlag, Value: "<part>", Description: "restore this removed part"},
+					{Name: "link", Kind: stringFlag, Value: "<task>", Description: "link to this task, with --rel and, from one part, --from"},
+					{Name: "from", Kind: stringFlag, Value: "<part>", Description: "make the link from this part instead of the whole relic"},
+					{Name: "rel", Kind: stringFlag, Value: "<rel>", Description: "the link's relationship, such as implemented-by"},
+					{Name: "unlink", Kind: stringFlag, Value: "<link>", Description: "remove this link"},
 					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},

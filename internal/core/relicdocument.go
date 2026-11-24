@@ -49,7 +49,7 @@ type RelicDocument struct {
 	UpdatedAt  *time.Time                 `json:"updatedAt,omitempty"`
 	Properties map[string]json.RawMessage `json:"properties"`
 	Parts      []RelicDocumentPart        `json:"parts"`
-	Links      []json.RawMessage          `json:"links"`
+	Links      []RelicDocumentLink        `json:"links"`
 }
 
 // DecodeRelicDocument reads exactly one relic document. It refuses a member
@@ -86,7 +86,8 @@ func RelicCreateInputFromDocument(document RelicDocument) (RelicCreateInput, err
 		return RelicCreateInput{}, Errorf(CategoryValidation, "this version of workbook cannot create a relic that names a schema")
 	}
 	if len(document.Links) != 0 {
-		return RelicCreateInput{}, Errorf(CategoryValidation, "this version of workbook cannot create a relic with links")
+		return RelicCreateInput{}, Errorf(CategoryValidation,
+			"this version of workbook cannot create a relic with links; empty the document's \"links\" list, create the relic, then add each link with \"workbook relic update <relic> --link <task> --rel <rel>\"")
 	}
 	input := RelicCreateInput{
 		Title:      document.Title,
@@ -155,7 +156,7 @@ func newRelicDocument(snapshot RelicSnapshot, parts []RelicPart, content map[str
 		UpdatedAt:  &updatedAt,
 		Properties: properties,
 		Parts:      make([]RelicDocumentPart, 0, len(parts)),
-		Links:      []json.RawMessage{},
+		Links:      []RelicDocumentLink{},
 	}
 	for _, part := range parts {
 		document.Parts = append(document.Parts, newRelicDocumentPart(part, content[part.ID]))

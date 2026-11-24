@@ -30,9 +30,13 @@ type RelicService struct {
 	Keys   KeySet
 	Reader RelicReader
 	Writer RelicWriter
-	IDs    IDSource
-	Now    func() time.Time
-	Actor  string
+	// Tasks resolves the tasks links point at: the repository for a change,
+	// the index for a read. Only link edits, and a show of a relic with links,
+	// use it.
+	Tasks TaskReader
+	IDs   IDSource
+	Now   func() time.Time
+	Actor string
 }
 
 // RelicSummary is one relic as relic list shows it. Parts counts live parts.
@@ -491,17 +495,26 @@ func (s RelicService) Show(ctx context.Context, address string, options RelicSho
 	default:
 		parts = relic.LiveParts()
 	}
-	return s.relicDocument(ctx, snapshot, parts, options.Bodies)
+	links, err := s.relicDocumentLinks(ctx, snapshot.Record.Links, parts, !hasPart, true)
+	if err != nil {
+		return RelicDocument{}, err
+	}
+	return s.relicDocument(ctx, snapshot, parts, links, options.Bodies)
 }
 
 // Export returns the whole relic with its bodies and live parts, as the
-// workbook.relic document create --from-file reads.
+// workbook.relic document create --from-file reads, and every link it stores,
+// as stored: no task is read.
 func (s RelicService) Export(ctx context.Context, idOrPrefix string) (RelicDocument, error) {
 	snapshot, err := s.getRelic(ctx, idOrPrefix)
 	if err != nil {
 		return RelicDocument{}, err
 	}
-	return s.relicDocument(ctx, snapshot, snapshot.Record.State.Relic.LiveParts(), true)
+	links := make([]RelicDocumentLink, 0, len(snapshot.Record.Links.Links))
+	for _, link := range snapshot.Record.Links.Links {
+		links = append(links, RelicDocumentLink{RelicLink: link})
+	}
+	return s.relicDocument(ctx, snapshot, snapshot.Record.State.Relic.LiveParts(), links, true)
 }
 
 // getRelic resolves an ID or prefix and reads that relic, checked against its
@@ -518,7 +531,7 @@ func (s RelicService) getRelic(ctx context.Context, idOrPrefix string) (RelicSna
 	return s.Reader.GetRelic(ctx, s.Config, head.RelicID)
 }
 
-func (s RelicService) relicDocument(ctx context.Context, snapshot RelicSnapshot, parts []RelicPart, bodies bool) (RelicDocument, error) {
+func (s RelicService) relicDocument(ctx context.Context, snapshot RelicSnapshot, parts []RelicPart, links []RelicDocumentLink, bodies bool) (RelicDocument, error) {
 	partIDs := make([]string, len(parts))
 	for index, part := range parts {
 		partIDs[index] = part.ID
@@ -527,7 +540,9 @@ func (s RelicService) relicDocument(ctx context.Context, snapshot RelicSnapshot,
 	if err != nil {
 		return RelicDocument{}, err
 	}
-	return newRelicDocument(snapshot, parts, content), nil
+	document := newRelicDocument(snapshot, parts, content)
+	document.Links = links
+	return document, nil
 }
 
 func relicSummaryOf(snapshot RelicSnapshot) RelicSummary {

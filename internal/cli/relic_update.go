@@ -43,11 +43,22 @@ var relicUpdateGroups = map[string]struct {
 	"move-part":    {core.RelicEditMovePart, []string{"before", "after"}},
 	"remove-part":  {core.RelicEditRemovePart, nil},
 	"restore-part": {core.RelicEditRestorePart, nil},
+	"link":         {core.RelicEditAddLink, []string{"from", "rel"}},
+	"unlink":       {core.RelicEditRemoveLink, nil},
 }
 
 // relicUpdateGroupOrder lists the group options in the order help does, for
 // a message that names the ones a part option may follow.
-var relicUpdateGroupOrder = []string{"add-part", "part", "move-part", "remove-part", "restore-part"}
+var relicUpdateGroupOrder = []string{"add-part", "part", "move-part", "remove-part", "restore-part", "link", "unlink"}
+
+// relicUpdateGroupSubject is what the group an option belongs to is about, "part"
+// or "link", for a refusal that says so.
+func relicUpdateGroupSubject(option string) string {
+	if option == "link" || slices.Contains(relicUpdateGroups["link"].takes, option) {
+		return "link"
+	}
+	return "part"
+}
 
 // relicUpdateEchoLimit is the longest thing typed that a refusal repeats. It
 // is also longer than any ID: the longest thing that names a relic, a part or
@@ -198,7 +209,7 @@ func splitRelicUpdateArgs(args []string) (changes []relicUpdateChange, jsonMode,
 			}
 			if group < 0 {
 				return nil, false, false, core.Errorf(core.CategoryInvocation,
-					"relic update --%s applies to one part; give it after %s", name, relicUpdateGroupsTaking(name))
+					"relic update --%s applies to one %s; give it after %s", name, relicUpdateGroupSubject(name), relicUpdateGroupsTaking(name))
 			}
 			if err := changes[group].add(name, value); err != nil {
 				return nil, false, false, err
@@ -256,7 +267,8 @@ func (change *relicUpdateChange) add(option, value string) error {
 	// likely a group that was not started than a wish to have the first ignored.
 	if _, given := change.once[option]; given {
 		return core.Errorf(core.CategoryInvocation,
-			"relic update accepts --%s once after each --%s; start another group for another part", option, change.option)
+			"relic update accepts --%s once after each --%s; start another group for another %s",
+			option, change.option, relicUpdateGroupSubject(change.option))
 	}
 	if change.once == nil {
 		change.once = map[string]string{}
@@ -282,7 +294,7 @@ func (change relicUpdateChange) check() error {
 	case hasFile && file == "-":
 		return core.Errorf(core.CategoryInvocation, "relic update --body-file takes a file; it does not read standard input")
 	}
-	for _, option := range []string{"before", "after"} {
+	for _, option := range []string{"before", "after", "from"} {
 		if anchor, given := change.once[option]; given && anchor == "" {
 			return core.Errorf(core.CategoryInvocation, "relic update --%s requires a part", option)
 		}
@@ -299,6 +311,10 @@ func (change relicUpdateChange) check() error {
 		if len(change.fields) == 0 && !hasFile {
 			return core.Errorf(core.CategoryInvocation,
 				"relic update --part needs a change after it: --field, --field-json, --clear-field or --body-file")
+		}
+	case "link":
+		if _, given := change.once["rel"]; !given {
+			return core.Errorf(core.CategoryInvocation, "relic update --link requires --rel <rel>, such as implemented-by")
 		}
 	case "move-part":
 		// Both at once is left to the relic to refuse, as it is for --add-part.
@@ -324,6 +340,18 @@ func (change relicUpdateChange) edit(readFile func(string) ([]byte, error)) (edi
 		return core.RelicEdit{Kind: core.RelicEditSetProperty, Name: change.name, Value: value}, "", nil
 	case "clear":
 		return core.RelicEdit{Kind: core.RelicEditClearProperty, Name: change.name}, "", nil
+	case "link":
+		for _, typed := range [][2]string{{"--link", change.name}, {"--from", change.once["from"]}} {
+			if err := checkRelicUpdateID(typed[0], typed[1]); err != nil {
+				return core.RelicEdit{}, "", err
+			}
+		}
+		return core.RelicEdit{Kind: core.RelicEditAddLink, Task: change.name, From: change.once["from"], Rel: change.once["rel"]}, "", nil
+	case "unlink":
+		if err := checkRelicUpdateID("--unlink", change.name); err != nil {
+			return core.RelicEdit{}, "", err
+		}
+		return core.RelicEdit{Kind: core.RelicEditRemoveLink, Link: change.name}, "", nil
 	}
 
 	if change.option != "add-part" {

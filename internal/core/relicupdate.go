@@ -51,6 +51,10 @@ type RelicEdit struct {
 	Base          string           // edit-part with a body
 	BodyFile      string           // edit-part with a body and no format asked for
 	Before, After string           // add-part, move-part: anchor part ID or prefix
+	Task          string           // add-link: task ID or prefix
+	From          string           // add-link: part ID or prefix, or empty for the whole relic
+	Rel           string           // add-link
+	Link          string           // remove-link: link ID or prefix
 }
 
 // relicPartTotals is what the add-time limits measure of a relic: how many of
@@ -182,6 +186,7 @@ func (s RelicService) Update(ctx context.Context, idOrPrefix string, edits []Rel
 		parent:  snapshot,
 		relicID: relicID,
 		relic:   copyRelicData(snapshot.Record.State.Relic),
+		links:   copyRelicLinks(snapshot.Record.Links),
 		minted:  map[string]struct{}{},
 		named:   map[string]map[string]bool{},
 		before:  map[string]map[string]json.RawMessage{},
@@ -357,6 +362,7 @@ type relicUpdate struct {
 	// relic is the working copy every edit reads and changes, with its parts
 	// kept in order. It is what folding operations onto parent gives.
 	relic      RelicData
+	links      RelicLinksDocument
 	operations []RelicOperation
 	minted     map[string]struct{}
 	// named holds, by part, the fields an edit so far has set or cleared, and
@@ -393,6 +399,10 @@ func (u *relicUpdate) apply(ctx context.Context, edit RelicEdit) error {
 		return u.setPartRemoved(edit, true)
 	case RelicEditRestorePart:
 		return u.setPartRemoved(edit, false)
+	case RelicEditAddLink:
+		return u.addLink(ctx, edit)
+	case RelicEditRemoveLink:
+		return u.removeLink(edit)
 	default:
 		return Errorf(CategoryValidation, "a relic update has no %q edit", string(edit.Kind))
 	}
@@ -410,6 +420,12 @@ func (u *relicUpdate) record(operation RelicOperation) error {
 	}
 	u.operations = append(u.operations, operation)
 	applyRelicOperation(&u.relic, operation)
+	if operation.Type == RelicOperationLinkAdd || operation.Type == RelicOperationLinkRemove {
+		if err := applyRelicLinkOperation(&u.links, u.relic, operation); err != nil {
+			return err
+		}
+		sortRelicLinks(u.links.Links)
+	}
 	if operation.Type == RelicOperationPartAdd || operation.Type == RelicOperationPartMove {
 		return sortRelicParts(u.relic.Parts)
 	}

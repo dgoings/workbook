@@ -25,6 +25,7 @@ func newRelicService(repository *gitstore.Repository, config core.ProjectConfig,
 		Keys:   keys,
 		Reader: repository,
 		Writer: repository,
+		Tasks:  repository,
 		IDs:    core.CryptoULIDSource{Now: recordedNow},
 		// Relic documents record their times in UTC, as the stored format
 		// shows them.

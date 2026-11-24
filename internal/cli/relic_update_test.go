@@ -1191,7 +1191,8 @@ func TestRelicUpdateHelp(t *testing.T) {
 			"       workbook relic update <relic> --add-part --part-type <type> [--field <name>=<value>]... [--field-json <name>=<json>]... [--body-file <file> [--body-format <label>]] [--before <part> | --after <part>] [--no-sync]\n"+
 			"       workbook relic update <relic> --part <part> [--field <name>=<value>]... [--field-json <name>=<json>]... [--clear-field <name>]... [--body-file <file> [--body-format <label>] [--base <version>]] [--no-sync]\n"+
 			"       workbook relic update <relic> --move-part <part> (--before <part> | --after <part>) [--no-sync]\n"+
-			"       workbook relic update <relic> [--remove-part <part>]... [--restore-part <part>]... [--no-sync]\n")
+			"       workbook relic update <relic> [--remove-part <part>]... [--restore-part <part>]... [--no-sync]\n"+
+			"       workbook relic update <relic> [--link <task> [--from <part>] --rel <rel>]... [--unlink <link>]... [--no-sync]\n")
 	for _, want := range []string{
 		"Change a relic. Every change given in one command is recorded together, or none is.",
 		"--add-part, --part, --move-part, --remove-part and --restore-part each start a group,",
@@ -1199,6 +1200,8 @@ func TestRelicUpdateHelp(t *testing.T) {
 		"Saving a body over an existing one needs --base <version>, the version shown by",
 		"--set and --field store text. --set-json and --field-json store any JSON value.",
 		"One command names a property once, and a field of a part once; naming one twice is refused.",
+		"--link starts a group too: it links the relic, or with --from one of its parts, to a task,",
+		"--unlink removes one link, named by the ID relic show lists.",
 	} {
 		if !strings.Contains(output, want) {
 			t.Errorf("relic update help = %q, want %q", output, want)
@@ -1223,7 +1226,7 @@ func TestRelicUpdateHelp(t *testing.T) {
 		}
 	}
 	want := []string{"title", "set", "set-json", "clear", "add-part", "part-type", "field", "field-json", "clear-field",
-		"body-file", "body-format", "base", "before", "after", "part", "move-part", "remove-part", "restore-part", "no-sync", "json"}
+		"body-file", "body-format", "base", "before", "after", "part", "move-part", "remove-part", "restore-part", "link", "from", "rel", "unlink", "no-sync", "json"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("relic update options = %q, want %q", names, want)
 	}

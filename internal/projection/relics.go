@@ -301,7 +301,14 @@ func (s *Store) indexRelics(ctx context.Context, db *sql.DB) (relicPass, error) 
 			}
 			continue
 		}
-		if actual != expected {
+		// The rows hold no links yet, so a relic with links gets no row and is
+		// answered from this pass's Git read, as a relic another writer moved is.
+		if actual != expected || len(relic.Snapshot.Record.Links.Links) > 0 {
+			if actual == expected {
+				if err := writer.deleteRelic(ctx, relicID); err != nil {
+					return relicPass{}, err
+				}
+			}
 			if pass.fromGit == nil {
 				pass.fromGit = map[string]gitstore.IndexedRelic{}
 			}

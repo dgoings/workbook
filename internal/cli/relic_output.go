@@ -82,6 +82,28 @@ func writeRelicDocument(stdout io.Writer, document core.RelicDocument, bodies bo
 			writeRelicBodyText(stdout, *part.Body)
 		}
 	}
+	writeRelicLinks(stdout, document.Links)
+}
+
+// writeRelicLinks prints a relic's links after its parts, one line each: the
+// link's ID, the part it is from or "relic", its relationship and its task,
+// with "(removed)" after a task that is deleted or not there.
+func writeRelicLinks(stdout io.Writer, links []core.RelicDocumentLink) {
+	if len(links) == 0 {
+		return
+	}
+	fmt.Fprintln(stdout, "Links:")
+	for _, link := range links {
+		from := link.From
+		if from == "" {
+			from = "relic"
+		}
+		fmt.Fprintf(stdout, "\t%s\t%s\t%s\t%s", singleLine(link.ID), singleLine(from), singleLine(link.Rel), singleLine(link.To.Task))
+		if link.TargetRemoved {
+			fmt.Fprint(stdout, " (removed)")
+		}
+		fmt.Fprintln(stdout)
+	}
 }
 
 // relicBodySummary describes a part's body without its text.
