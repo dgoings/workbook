@@ -1468,3 +1468,84 @@ func TestRelicCreateRefusesOneValuePastItsLimit(t *testing.T) {
 		}
 	}
 }
+
+// A save over a body that names no format keeps the label the body has. The
+// file the text came from names the label only of a part's first body, so the
+// name of a scratch file never decides how a stored body is drawn.
+func TestRelicBodySaveKeepsItsFormatLabel(t *testing.T) {
+	store, service, relicID, goals, decision, note := relicCreatedForUpdate(t)
+	ctx := context.Background()
+	writes := 1
+	label := func(part string) string {
+		t.Helper()
+		body := requirePartForTest(t, store.snapshots[relicID].Record.State.Relic, part).Body
+		if body == nil {
+			t.Fatalf("part %s has no body", part)
+		}
+		return body.Format
+	}
+	save := func(what, part string, edit RelicEdit) {
+		t.Helper()
+		edit.Kind, edit.Part = RelicEditPart, part
+		if body := requirePartForTest(t, store.snapshots[relicID].Record.State.Relic, part).Body; body != nil {
+			edit.Base = body.Version
+		}
+		result, err := service.Update(ctx, relicID, []RelicEdit{edit})
+		writes++
+		write := requireRelicWritten(t, what, store, writes, result, err)
+		// The label kept is the label recorded: a body edit states the format
+		// it saves.
+		if operation := write.pack.Operations[0]; operation.Type != RelicOperationPartBodySet ||
+			operation.Body.Format != label(part) {
+			t.Fatalf("%s: operation = %+v with body %+v, want a body edit recording label %q",
+				what, operation, operation.Body, label(part))
+		}
+	}
+
+	if got := label(goals); got != "md" {
+		t.Fatalf("the fixture's goals body is labeled %q, want md", got)
+	}
+	for _, file := range []string{"tmp.QdhVaHD4", "edit", "body.txt", "Notes.HTML", "draft.my notes"} {
+		save("a save from "+file, goals, RelicEdit{BodyFile: file, Body: &RelicBodyInput{Content: []byte("from " + file)}})
+		if got := label(goals); got != "md" {
+			t.Fatalf("a save from %s with no format left the label %q, want md", file, got)
+		}
+	}
+	// A format read from the file's name is not a format asked for, whatever
+	// Body.Format holds beside it.
+	save("a save with a file and a stray format", goals,
+		RelicEdit{BodyFile: "body.txt", Body: &RelicBodyInput{Format: "txt", Content: []byte("stray")}})
+	if got := label(goals); got != "md" {
+		t.Fatalf("a save naming a file left the label %q, want md", got)
+	}
+
+	save("a save that asks for html", goals, RelicEdit{Body: &RelicBodyInput{Format: "html", Content: []byte("<p>")}})
+	if got := label(goals); got != "html" {
+		t.Fatalf("a save that asks for html left the label %q", got)
+	}
+	save("a save that asks for no label", goals, RelicEdit{Body: &RelicBodyInput{Content: []byte("plain")}})
+	if got := label(goals); got != "" {
+		t.Fatalf("a save that asks for no label left the label %q", got)
+	}
+	// No label is a label to keep, too.
+	save("a save over an unlabeled body", goals, RelicEdit{BodyFile: "notes.md", Body: &RelicBodyInput{Content: []byte("still plain")}})
+	if got := label(goals); got != "" {
+		t.Fatalf("a save from notes.md over an unlabeled body left the label %q, want none", got)
+	}
+	// The note's body is empty and unlabeled; it is a body all the same.
+	save("a save over an empty body", note, RelicEdit{BodyFile: "notes.md", Body: &RelicBodyInput{Content: []byte("text")}})
+	if got := label(note); got != "" {
+		t.Fatalf("a save from notes.md over an empty unlabeled body left the label %q, want none", got)
+	}
+
+	// A part with no body yet takes its first label from the file's ending.
+	_, err := service.Update(ctx, relicID, []RelicEdit{{
+		Kind: RelicEditPart, Part: decision, BodyFile: "draft.my notes", Body: &RelicBodyInput{Content: []byte("x")},
+	}})
+	requireRelicCategory(t, "a first body from a file whose ending is no label", err, CategoryValidation, "--body-format", "draft.my notes")
+	requireRelicWrites(t, "a first body from a file whose ending is no label", store, writes)
+	save("a first body from Notes.MD", decision, RelicEdit{BodyFile: "Notes.MD", Body: &RelicBodyInput{Content: []byte("# Why\n")}})
+	if got := label(decision); got != "md" {
+		t.Fatalf("a first body saved from Notes.MD is labeled %q, want md", got)
+	}
+}

@@ -31,6 +31,13 @@ type RelicFieldEdit struct {
 
 // RelicEdit is one change in a relic update. Which members it reads depends on
 // its kind, named beside each.
+//
+// BodyFile says that an edit-part's body comes with no format asked for, and
+// names the file its content was read from. The body then keeps the label the
+// part's body has, whatever Body.Format holds; a part with no body yet takes
+// its first label from the ending of this name. With BodyFile empty,
+// Body.Format was asked for and is what the body is saved with, and an empty
+// one asks for no label. So "not given" and "given as empty" are told apart.
 type RelicEdit struct {
 	Kind          RelicEditKind
 	Title         string           // title
@@ -41,6 +48,7 @@ type RelicEdit struct {
 	Fields        []RelicFieldEdit // add-part (sets only), edit-part
 	Body          *RelicBodyInput  // add-part, edit-part
 	Base          string           // edit-part with a body
+	BodyFile      string           // edit-part with a body and no format asked for
 	Before, After string           // add-part, move-part: anchor part ID or prefix
 }
 
@@ -603,6 +611,27 @@ func checkRelicBodyBase(relicID string, part RelicPart, base string) error {
 	}
 }
 
+// relicBodyToSave returns the body an edit saves on part, with the format
+// label it is saved under. An edit that asked for no format keeps the label
+// the part's body has, so that the name of the file a body was edited in
+// never relabels it; only a part's first body is labeled by that name.
+func relicBodyToSave(part RelicPart, edit RelicEdit) (RelicBodyInput, error) {
+	body := *edit.Body
+	switch {
+	case edit.BodyFile == "":
+		// The format was asked for.
+	case part.Body != nil:
+		body.Format = part.Body.Format
+	default:
+		format, err := BodyFormatFromFileName(edit.BodyFile)
+		if err != nil {
+			return RelicBodyInput{}, err
+		}
+		body.Format = format
+	}
+	return body, nil
+}
+
 func (u *relicUpdate) editPart(ctx context.Context, edit RelicEdit) error {
 	part, err := u.livePart(edit.Part)
 	if err != nil {
@@ -616,8 +645,12 @@ func (u *relicUpdate) editPart(ctx context.Context, edit RelicEdit) error {
 			return err
 		}
 	}
+	var body RelicBodyInput
 	if edit.Body != nil {
-		if err := checkRelicBodyInput("part "+part.ID, *edit.Body); err != nil {
+		if body, err = relicBodyToSave(part, edit); err != nil {
+			return err
+		}
+		if err := checkRelicBodyInput("part "+part.ID, body); err != nil {
 			return err
 		}
 		if err := checkRelicBodyBase(u.relicID, part, edit.Base); err != nil {
@@ -657,12 +690,12 @@ func (u *relicUpdate) editPart(ctx context.Context, edit RelicEdit) error {
 		operation := RelicOperation{
 			Type: RelicOperationPartBodySet,
 			Part: part.ID,
-			Body: &RelicBodyChange{Format: edit.Body.Format, Bytes: int64(len(edit.Body.Content)), Base: edit.Base},
+			Body: &RelicBodyChange{Format: body.Format, Bytes: int64(len(body.Content)), Base: edit.Base},
 		}
 		if err := u.record(operation); err != nil {
 			return err
 		}
-		u.bodies[part.ID] = edit.Body.Content
+		u.bodies[part.ID] = body.Content
 	}
 	if len(u.operations) > recorded {
 		u.markChanged(part.ID)

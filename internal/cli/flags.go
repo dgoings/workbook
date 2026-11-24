@@ -925,6 +925,8 @@ var commandSchemas = map[string]commandMetadata{
 					"Saving a body over an existing one needs --base <version>, the version shown by\n" +
 					"\"workbook relic show <relic>#<part>\". A save from an older version is refused: read\n" +
 					"the part again and save from the version it is at now.\n\n" +
+					"A part's first body takes its format label from the file's ending. A save over a body\n" +
+					"keeps the label the body has. --body-format sets the label in either case.\n\n" +
 					"--set and --field store text. --set-json and --field-json store any JSON value.\n" +
 					"One command names a property once, and a field of a part once; naming one twice is refused.",
 				Positionals: []string{"<relic>"},
@@ -939,7 +941,7 @@ var commandSchemas = map[string]commandMetadata{
 					{Name: "field-json", Kind: stringFlag, Value: "<name>=<json>", Description: "set a field of the part to a JSON value"},
 					{Name: "clear-field", Kind: stringFlag, Value: "<name>", Description: "remove a field of the part"},
 					{Name: "body-file", Kind: stringFlag, Value: "<file>", Description: "save this file's contents as the part's body"},
-					{Name: "body-format", Kind: stringFlag, Value: "<label>", Description: "body format, such as md, instead of the file's ending; empty for none"},
+					{Name: "body-format", Kind: stringFlag, Value: "<label>", Description: "body format, such as md, instead of the file's ending or the label the body has; empty for none"},
 					{Name: "base", Kind: stringFlag, Value: "<version>", Description: "the body version this save starts from"},
 					{Name: "before", Kind: stringFlag, Value: "<part>", Description: "put the part before this one"},
 					{Name: "after", Kind: stringFlag, Value: "<part>", Description: "put the part after this one"},

@@ -357,10 +357,19 @@ func (change relicUpdateChange) edit(readFile func(string) ([]byte, error)) (edi
 			return core.RelicEdit{}, "", core.Errorf(core.CategoryValidation,
 				"the --body-file path is %d bytes long; the limit is %d bytes", len(file), relicBodyFilePathLimit)
 		}
-		// --body-format wins over the file's ending, and an empty one means no
-		// label, so a file whose ending is no label can still be saved.
+		// --body-format is a label asked for, and an empty one asks for none,
+		// so a file whose ending is no label can still be saved. Without it
+		// the label comes from the file's ending, but only for a body that has
+		// none to keep: a new part's body here, and for --part the relic
+		// decides, from the file's name, once it knows whether the part has a
+		// body. A save over a body is never relabeled by the name of the file
+		// it was edited in.
 		format, labeled := change.once["body-format"]
-		if !labeled {
+		switch {
+		case labeled:
+		case change.option == "part":
+			edit.BodyFile = filepath.Base(file)
+		default:
 			if format, err = core.BodyFormatFromFileName(filepath.Base(file)); err != nil {
 				return core.RelicEdit{}, "", err
 			}

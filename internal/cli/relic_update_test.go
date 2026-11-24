@@ -66,8 +66,11 @@ func TestParseRelicUpdateArgsKeepsOrderAndGroups(t *testing.T) {
 					{Name: "n", Value: json.RawMessage(`3`)},
 					{Name: "old", Clear: true},
 				},
-				Body: &core.RelicBodyInput{Format: "txt", Content: []byte("text\n")},
-				Base: "V1",
+				// A --part group names no format of its own: the file's name
+				// goes along for the relic to use if the part has no body yet.
+				Body:     &core.RelicBodyInput{Content: []byte("text\n")},
+				BodyFile: "b.txt",
+				Base:     "V1",
 			},
 			{Kind: core.RelicEditMovePart, Part: "P2", Before: "P1"},
 			{Kind: core.RelicEditRemovePart, Part: "P3"},
@@ -83,7 +86,8 @@ func TestParseRelicUpdateArgsKeepsOrderAndGroups(t *testing.T) {
 
 func TestParseRelicUpdateArgsAcceptsEveryFlagForm(t *testing.T) {
 	t.Parallel()
-	files := map[string]string{"notes.md": "# Notes\n", "draft.my_notes": "draft\n", "plain": "plain\n", "Notes.MD": "caps\n"}
+	files := map[string]string{"notes.md": "# Notes\n", "draft.my_notes": "draft\n", "plain": "plain\n", "Notes.MD": "caps\n",
+		"some/where/Notes.MD": "deep\n"}
 	text := func(value string) json.RawMessage { return json.RawMessage(strconv.Quote(value)) }
 	for _, test := range []struct {
 		name string
@@ -169,6 +173,20 @@ func TestParseRelicUpdateArgsAcceptsEveryFlagForm(t *testing.T) {
 				{Kind: core.RelicEditAddPart, PartType: "a", Body: &core.RelicBodyInput{Format: "rst", Content: []byte("# Notes\n")}},
 				{Kind: core.RelicEditAddPart, PartType: "a", Body: &core.RelicBodyInput{Format: "txt", Content: []byte("draft\n")}},
 				{Kind: core.RelicEditPart, Part: "P1", Body: &core.RelicBodyInput{Content: []byte("# Notes\n")}},
+			}},
+		},
+		{
+			name: "a --part group passes the file's name and no format, unless --body-format is given",
+			args: []string{"WB-R-X",
+				"--part", "P1", "--body-file", "notes.md",
+				"--part", "P2", "--body-file", "draft.my_notes",
+				"--part", "P3", "--body-file", "some/where/Notes.MD",
+				"--part", "P4", "--body-file", "notes.md", "--body-format", "txt"},
+			want: relicUpdateRequest{Relic: "WB-R-X", Edits: []core.RelicEdit{
+				{Kind: core.RelicEditPart, Part: "P1", BodyFile: "notes.md", Body: &core.RelicBodyInput{Content: []byte("# Notes\n")}},
+				{Kind: core.RelicEditPart, Part: "P2", BodyFile: "draft.my_notes", Body: &core.RelicBodyInput{Content: []byte("draft\n")}},
+				{Kind: core.RelicEditPart, Part: "P3", BodyFile: "Notes.MD", Body: &core.RelicBodyInput{Content: []byte("deep\n")}},
+				{Kind: core.RelicEditPart, Part: "P4", Body: &core.RelicBodyInput{Format: "txt", Content: []byte("# Notes\n")}},
 			}},
 		},
 		{
@@ -304,7 +322,8 @@ func TestParseRelicUpdateArgsRefusals(t *testing.T) {
 			[]string{"--part", "<relic>#<part>"}},
 		{"a part address with two parts", []string{"WB-R-X", "--part", "WB-R-X#P#Q", "--field", "a=b"}, core.CategoryValidation,
 			[]string{"--part", "<relic>#<part>"}},
-		{"a body file whose ending is no format label", []string{"WB-R-X", "--part", "P", "--body-file", "draft.my_notes"},
+		{"a new part's body file whose ending is no format label",
+			[]string{"WB-R-X", "--add-part", "--part-type", "a", "--body-file", "draft.my_notes"},
 			core.CategoryValidation, []string{"--body-format"}},
 		{"a body file that is not there", []string{"WB-R-X", "--part", "P", "--body-file", "missing.md"},
 			core.CategoryNotFound, []string{"missing.md"}},
@@ -1031,6 +1050,91 @@ func TestRelicUpdateBodyFiles(t *testing.T) {
 	if after := relicHeadOf(t, repository, id); after != head {
 		t.Fatalf("a refused update moved the relic from %s to %s", head, after)
 	}
+}
+
+// The ordinary way to edit a body is to write it to a scratch file, change it
+// and save that file. The scratch file's name does not decide the body's
+// label: a save over a body keeps the label it has unless --body-format asks
+// for another, and the file's ending labels only a part's first body.
+func TestRelicBodySaveKeepsItsFormatLabel(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	directory := t.TempDir()
+	write := func(name, content string) string {
+		path := filepath.Join(directory, name)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	added := mustUpdateRelic(t, repository, id,
+		"--add-part", "--part-type", "section", "--body-file", write("goals.md", "# Goals\n"),
+		"--add-part", "--part-type", "decision")
+	goals, decision := added.Parts[0].ID, added.Parts[1].ID
+	body := func(part string) *core.RelicDocumentBody {
+		t.Helper()
+		return shownRelic(t, repository, id+"#"+part).Parts[0].Body
+	}
+	save := func(part, file string, more ...string) *core.RelicDocumentBody {
+		t.Helper()
+		args := []string{"--part", part, "--body-file", file}
+		if current := body(part); current != nil {
+			args = append(args, "--base", current.Version)
+		}
+		saved := mustUpdateRelic(t, repository, id, append(args, more...)...)
+		if !saved.Changed || len(saved.Parts) != 1 || saved.Parts[0].Body == nil {
+			t.Fatalf("save of %s from %s = %+v, want the part with its new body", part, file, saved)
+		}
+		return saved.Parts[0].Body
+	}
+
+	// The reviewer's sequence: a name mktemp gave, a name with no ending, and
+	// a .txt file, each saved over a Markdown body.
+	for _, name := range []string{"tmp.QdhVaHD4", "edit", "body.txt"} {
+		text := "# Goals\n\nSaved from " + name + ".\n"
+		if saved := save(goals, write(name, text)); saved.Format != "md" {
+			t.Fatalf("a save from %s relabeled the md body %q", name, saved.Format)
+		}
+		if stored := body(goals); stored.Format != "md" {
+			t.Fatalf("after a save from %s the body is labeled %q, want md", name, stored.Format)
+		}
+		if got := relicBodyText(t, repository, id, goals); got != text {
+			t.Fatalf("after a save from %s the body is %q, want %q", name, got, text)
+		}
+	}
+	// A file whose ending could not be a label saves over a body all the same.
+	if saved := save(goals, write("draft.my_notes", "draft\n")); saved.Format != "md" {
+		t.Fatalf("a save from draft.my_notes relabeled the md body %q", saved.Format)
+	}
+
+	if saved := save(goals, write("page", "<p>Goals</p>\n"), "--body-format", "html"); saved.Format != "html" {
+		t.Fatalf("--body-format html left the label %q", saved.Format)
+	}
+	if saved := save(goals, write("again.md", "<p>Goals</p>\n<p>More</p>\n")); saved.Format != "html" {
+		t.Fatalf("a save from again.md relabeled the html body %q", saved.Format)
+	}
+	if saved := save(goals, write("plain.md", "Goals\n"), "--body-format", ""); saved.Format != "" {
+		t.Fatalf("--body-format with an empty label left the label %q, want none", saved.Format)
+	}
+	if saved := save(goals, write("still.md", "Goals, still\n")); saved.Format != "" {
+		t.Fatalf("a save from still.md labeled the unlabeled body %q", saved.Format)
+	}
+
+	// The decision has no body yet, so its first body takes the file's ending.
+	head := relicHeadOf(t, repository, id)
+	message := relicErrorMessage(t, repository, 5, core.CategoryValidation,
+		"update", id, "--part", decision, "--body-file", filepath.Join(directory, "draft.my_notes"))
+	if !strings.Contains(message, "--body-format") || !strings.Contains(message, "draft.my_notes") {
+		t.Fatalf("a first body from draft.my_notes: message %q, want it to name the file and --body-format", message)
+	}
+	if now := relicHeadOf(t, repository, id); now != head {
+		t.Fatalf("a refused first body moved the relic from %s to %s", head, now)
+	}
+	if saved := save(decision, write("Notes.MD", "# Why\n")); saved.Format != "md" {
+		t.Fatalf("a first body saved from Notes.MD is labeled %q, want md", saved.Format)
+	}
+	assertRelicHistoriesValid(t, repository, 1)
 }
 
 func TestRelicUpdateRefusesBadInvocations(t *testing.T) {
