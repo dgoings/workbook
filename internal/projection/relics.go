@@ -1,0 +1,714 @@
+package projection
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"math"
+	"sort"
+
+	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/gitstore"
+)
+
+// Relics are projected beside tasks, into four tables of their own:
+//
+//	relics            one row per relic: its state's scalars and its head
+//	relic_properties  one row per property, its value as canonical JSON
+//	relic_parts       one row per part, live or removed, in state order, with
+//	                  its fields.json exactly as stored and the object ID,
+//	                  format, version and size of its body
+//	relic_operations  one row per recorded operation along the first-parent
+//	                  chain, its pack's scalars beside it
+//
+// Body text is never copied in. A body is read from Git by the object ID its
+// row holds, once per body shown. Every row is derived from a relic ref, and a
+// relic the index cannot hold, damaged or written by a newer Workbook, gets no
+// row at all and is read from Git on every read.
+//
+// Only relic reads and `workbook rebuild` read relic refs. A task path, the
+// automatic rebuild included, never does, so after a cache loss the relic
+// tables are empty until the first relic read fills them.
+
+// relicSource is what the projection reads relics from: the reads a relic
+// service makes, for the relics the index cannot answer, and the three batch
+// readers a relic pass indexes with.
+type relicSource interface {
+	core.RelicReader
+	ReadIndexedRelics(context.Context, core.ProjectConfig, []gitstore.RelicIndexRequest) ([]gitstore.IndexedRelic, []error)
+	ReadRelicOperations(context.Context, core.ProjectConfig, []gitstore.RelicHistoryRequest) ([]gitstore.RelicOperationsResult, error)
+	ReadRelicBodies(context.Context, core.ProjectConfig, []gitstore.RelicBodyRequest) ([][]byte, error)
+}
+
+func (s repositorySource) ListRelicHeads(ctx context.Context, config core.ProjectConfig) ([]core.RelicHead, error) {
+	return s.repository.ListRelicHeads(ctx, config)
+}
+
+func (s repositorySource) ReadRelicTips(ctx context.Context, config core.ProjectConfig, heads []core.RelicHead) ([]core.RelicSnapshot, error) {
+	return s.repository.ReadRelicTips(ctx, config, heads)
+}
+
+func (s repositorySource) GetRelic(ctx context.Context, config core.ProjectConfig, relicID string) (core.RelicSnapshot, error) {
+	return s.repository.GetRelic(ctx, config, relicID)
+}
+
+func (s repositorySource) ReadRelicParts(
+	ctx context.Context,
+	config core.ProjectConfig,
+	snapshot core.RelicSnapshot,
+	partIDs []string,
+	bodies bool,
+) (map[string]core.RelicPartContent, error) {
+	return s.repository.ReadRelicParts(ctx, config, snapshot, partIDs, bodies)
+}
+
+func (s repositorySource) ReadIndexedRelics(
+	ctx context.Context,
+	config core.ProjectConfig,
+	requests []gitstore.RelicIndexRequest,
+) ([]gitstore.IndexedRelic, []error) {
+	return s.repository.ReadIndexedRelics(ctx, config, requests)
+}
+
+func (s repositorySource) ReadRelicOperations(
+	ctx context.Context,
+	config core.ProjectConfig,
+	requests []gitstore.RelicHistoryRequest,
+) ([]gitstore.RelicOperationsResult, error) {
+	return s.repository.ReadRelicOperations(ctx, config, requests)
+}
+
+func (s repositorySource) ReadRelicBodies(
+	ctx context.Context,
+	config core.ProjectConfig,
+	requests []gitstore.RelicBodyRequest,
+) ([][]byte, error) {
+	return s.repository.ReadRelicBodies(ctx, config, requests)
+}
+
+// relicSchemaChecks name every column of every relic table, for
+// requiredSchemaExists.
+var relicSchemaChecks = [4]string{
+	`SELECT relic_id, head, project_id, state_version, min_reader, history_generation, compacted_from, logical_clock, title, type, schema, author, retired, deleted, created_at, updated_at, part_count FROM relics LIMIT 0`,
+	`SELECT relic_id, name, value FROM relic_properties LIMIT 0`,
+	`SELECT relic_id, part_id, ordinal, type, position, removed, fields_object, fields, body_object, body_format, body_version, body_bytes FROM relic_parts LIMIT 0`,
+	`SELECT relic_id, commit_id, chain_index, pack_index, operation_id, logical_clock, history_generation, min_reader, actor, wall_time, type, part, payload FROM relic_operations LIMIT 0`,
+}
+
+func errNoRelicSource() error {
+	return core.Errorf(core.CategoryOperational, "projection has no relic source")
+}
+
+// relicPass is what one relic pass saw: every relic head it listed, the Git
+// read of each changed relic whose row another writer moved first, which the
+// pass left alone, and the refusal of each relic it could not index.
+type relicPass struct {
+	heads   []core.RelicHead
+	fromGit map[string]gitstore.IndexedRelic
+	failed  map[string]error
+}
+
+// RebuildCounts is what RebuildWithRelics indexed.
+type RebuildCounts struct {
+	Tasks, Relics int
+}
+
+// RebuildWithRelics is Rebuild with every relic indexed into the same new
+// cache before it is installed. Relics counts the relics indexed, not the ones
+// the index refused.
+func (s *Store) RebuildWithRelics(ctx context.Context) (RebuildCounts, error) {
+	s.rebuildMu.Lock()
+	defer s.rebuildMu.Unlock()
+	if s.closed {
+		return RebuildCounts{}, errStoreClosed()
+	}
+	if s.relics == nil {
+		return RebuildCounts{}, errNoRelicSource()
+	}
+	tasks, err := s.rebuildLocked(ctx, true)
+	if err != nil {
+		return RebuildCounts{}, err
+	}
+	// The cache in place may be one another process installed instead, which
+	// can hold no relics yet. A pass brings it to the refs; on this build's own
+	// cache it only lists them.
+	if _, err := s.indexRelics(ctx, s.db); err != nil {
+		return RebuildCounts{}, err
+	}
+	var relics int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM relics`).Scan(&relics); err != nil {
+		return RebuildCounts{}, s.databaseError("count indexed relics", err)
+	}
+	return RebuildCounts{Tasks: tasks, Relics: relics}, nil
+}
+
+// refreshRelicsActive brings the active cache's relic rows up to the relic
+// refs, with rebuildMu read-held and the cache validated.
+func (s *Store) refreshRelicsActive(ctx context.Context) (relicPass, error) {
+	if s.relics == nil {
+		return relicPass{}, errNoRelicSource()
+	}
+	return s.indexRelics(ctx, s.db)
+}
+
+// cachedRelic is one relic row as a pass first reads it.
+type cachedRelic struct {
+	head                string
+	partCount, partRows int
+}
+
+// changed reports whether the row cannot answer for head: it names another
+// commit, or it is missing part rows, which only a write cut short or a
+// damaged cache leaves.
+func (row cachedRelic) changed(head string) bool {
+	return row.head != head || row.partCount != row.partRows
+}
+
+// indexRelics runs one relic pass against db, modeled on the task refresh.
+//
+// It reads the rows' heads and part counts, lists the relic refs once, and
+// reads from Git only the relics whose row is missing, names another head, or
+// is half-written, with the fields objects their old rows hold given as
+// known. Then one transaction writes each of them with a compare-and-swap on
+// the head its row had when the pass began, so a row another writer moved in
+// between is left as that writer left it and the pass's own Git read goes into
+// fromGit for the caller to answer from. A relic Git refuses goes into failed,
+// and any row it had is deleted under the same compare-and-swap, so a verdict
+// is never cached. A row whose ref is gone is deleted.
+func (s *Store) indexRelics(ctx context.Context, db *sql.DB) (relicPass, error) {
+	cached, err := cachedRelicRows(ctx, db)
+	if err != nil {
+		return relicPass{}, err
+	}
+	heads, err := s.relics.ListRelicHeads(ctx, s.config)
+	if err != nil {
+		return relicPass{}, err
+	}
+	pass := relicPass{heads: heads}
+	listed := make(map[string]struct{}, len(heads))
+	var changed []core.RelicHead
+	for _, head := range heads {
+		listed[head.RelicID] = struct{}{}
+		if row, found := cached[head.RelicID]; !found || row.changed(head.ObjectID) {
+			changed = append(changed, head)
+		}
+	}
+	var gone []string
+	for relicID := range cached {
+		if _, found := listed[relicID]; !found {
+			gone = append(gone, relicID)
+		}
+	}
+	sort.Strings(gone)
+	if len(changed) == 0 && len(gone) == 0 {
+		return pass, nil
+	}
+
+	previous, err := previousRelicRows(ctx, db, changed, cached)
+	if err != nil {
+		return relicPass{}, err
+	}
+	requests := make([]gitstore.RelicIndexRequest, len(changed))
+	for index, head := range changed {
+		requests[index] = gitstore.RelicIndexRequest{Head: head, KnownFields: previous[head.RelicID].knownFields()}
+	}
+	indexed := map[string]gitstore.IndexedRelic{}
+	var verified []core.RelicHead
+	if len(requests) > 0 {
+		relics, errs := s.relics.ReadIndexedRelics(ctx, s.config, requests)
+		if len(relics) != len(requests) || len(errs) != len(requests) {
+			return relicPass{}, core.Errorf(core.CategoryCorruptData,
+				"relic index read returned %d relics and %d errors, want %d", len(relics), len(errs), len(requests))
+		}
+		for index, head := range changed {
+			if err := errs[index]; err != nil {
+				// A read that never reached the relic says nothing about it,
+				// so it fails the pass rather than condemn the relic.
+				switch core.CategoryOf(err) {
+				case "", core.CategoryOperational, core.CategoryStaleWrite:
+					return relicPass{}, err
+				}
+				if pass.failed == nil {
+					pass.failed = map[string]error{}
+				}
+				pass.failed[head.RelicID] = err
+				continue
+			}
+			relic, err := completeIndexedRelic(head, relics[index], previous[head.RelicID].fields)
+			if err != nil {
+				return relicPass{}, err
+			}
+			indexed[head.RelicID] = relic
+			verified = append(verified, head)
+		}
+	}
+
+	chains := map[string]gitstore.RelicOperationsResult{}
+	if len(verified) > 0 {
+		historyRequests := make([]gitstore.RelicHistoryRequest, len(verified))
+		for index, head := range verified {
+			historyRequests[index] = gitstore.RelicHistoryRequest{Head: head, StopAt: previous[head.RelicID].stopAt}
+		}
+		results, err := s.relics.ReadRelicOperations(ctx, s.config, historyRequests)
+		if err != nil {
+			return relicPass{}, err
+		}
+		if len(results) != len(historyRequests) {
+			return relicPass{}, core.Errorf(core.CategoryCorruptData,
+				"relic operation read returned %d chains, want %d", len(results), len(historyRequests))
+		}
+		for index, result := range results {
+			if result.RelicID != verified[index].RelicID || result.Head != verified[index].ObjectID {
+				return relicPass{}, core.Errorf(core.CategoryCorruptData,
+					"relic operation read returned relic %s at %s, want %s at %s",
+					result.RelicID, result.Head, verified[index].RelicID, verified[index].ObjectID)
+			}
+			chains[result.RelicID] = result
+		}
+	}
+
+	transaction, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return relicPass{}, s.databaseError("begin relic index refresh", err)
+	}
+	defer transaction.Rollback()
+	writer, err := prepareRelicWriter(ctx, transaction)
+	if err != nil {
+		return relicPass{}, err
+	}
+	defer writer.close()
+	for _, head := range changed {
+		relicID := head.RelicID
+		actual, err := writer.head(ctx, relicID)
+		if err != nil {
+			return relicPass{}, err
+		}
+		expected := cached[relicID].head
+		relic, ok := indexed[relicID]
+		if !ok {
+			if actual == expected {
+				if err := writer.deleteRelic(ctx, relicID); err != nil {
+					return relicPass{}, err
+				}
+			}
+			continue
+		}
+		if actual != expected {
+			if pass.fromGit == nil {
+				pass.fromGit = map[string]gitstore.IndexedRelic{}
+			}
+			pass.fromGit[relicID] = relic
+			continue
+		}
+		if err := writer.writeRelic(ctx, relic, chains[relicID]); err != nil {
+			return relicPass{}, err
+		}
+	}
+	for _, relicID := range gone {
+		actual, err := writer.head(ctx, relicID)
+		if err != nil {
+			return relicPass{}, err
+		}
+		if actual == cached[relicID].head {
+			if err := writer.deleteRelic(ctx, relicID); err != nil {
+				return relicPass{}, err
+			}
+		}
+	}
+	if s.beforeRelicCommit != nil {
+		if err := s.beforeRelicCommit(); err != nil {
+			return relicPass{}, err
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		return relicPass{}, s.databaseError("commit relic index refresh", err)
+	}
+	return pass, nil
+}
+
+// cachedRelicRows reads every relic row's head and part count, and how many
+// part rows each has.
+func cachedRelicRows(ctx context.Context, db *sql.DB) (map[string]cachedRelic, error) {
+	cached := map[string]cachedRelic{}
+	rows, err := db.QueryContext(ctx, `SELECT relic_id, head, part_count FROM relics`)
+	if err != nil {
+		return nil, cacheError("query indexed relic heads", err)
+	}
+	for rows.Next() {
+		var relicID string
+		var row cachedRelic
+		if err := rows.Scan(&relicID, &row.head, &row.partCount); err != nil {
+			rows.Close()
+			return nil, cacheError("read indexed relic head", err)
+		}
+		cached[relicID] = row
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, cacheError("read indexed relic heads", err)
+	}
+
+	counts, err := db.QueryContext(ctx, `SELECT relic_id, COUNT(*) FROM relic_parts GROUP BY relic_id`)
+	if err != nil {
+		return nil, cacheError("count indexed relic parts", err)
+	}
+	defer counts.Close()
+	for counts.Next() {
+		var relicID string
+		var count int
+		if err := counts.Scan(&relicID, &count); err != nil {
+			return nil, cacheError("read indexed relic part count", err)
+		}
+		if row, found := cached[relicID]; found {
+			row.partRows = count
+			cached[relicID] = row
+		}
+	}
+	if err := counts.Err(); err != nil {
+		return nil, cacheError("read indexed relic part counts", err)
+	}
+	return cached, nil
+}
+
+// previousRelic is what a changed relic's old rows give its re-read: the
+// fields bytes they hold by object ID, and where its operation rows end.
+type previousRelic struct {
+	fields map[string][]byte
+	// stopAt is the row's head when the operation rows end at that commit, so
+	// the chain is read from there. Otherwise it is empty and the whole chain
+	// is read and replaces the rows.
+	stopAt string
+}
+
+func (previous previousRelic) knownFields() map[string]struct{} {
+	if len(previous.fields) == 0 {
+		return nil
+	}
+	known := make(map[string]struct{}, len(previous.fields))
+	for objectID := range previous.fields {
+		known[objectID] = struct{}{}
+	}
+	return known
+}
+
+func previousRelicRows(
+	ctx context.Context,
+	db *sql.DB,
+	changed []core.RelicHead,
+	cached map[string]cachedRelic,
+) (map[string]previousRelic, error) {
+	previous := map[string]previousRelic{}
+	var fieldsQuery, tailQuery *sql.Stmt
+	defer func() {
+		for _, statement := range []*sql.Stmt{fieldsQuery, tailQuery} {
+			if statement != nil {
+				_ = statement.Close()
+			}
+		}
+	}()
+	for _, head := range changed {
+		row, found := cached[head.RelicID]
+		if !found {
+			continue
+		}
+		if fieldsQuery == nil {
+			var err error
+			if fieldsQuery, err = db.PrepareContext(ctx, `SELECT fields_object, fields FROM relic_parts WHERE relic_id = ?`); err != nil {
+				return nil, cacheError("prepare indexed relic fields query", err)
+			}
+			if tailQuery, err = db.PrepareContext(ctx,
+				`SELECT commit_id FROM relic_operations WHERE relic_id = ? ORDER BY chain_index DESC, pack_index DESC LIMIT 1`); err != nil {
+				return nil, cacheError("prepare indexed relic operation query", err)
+			}
+		}
+		entry := previousRelic{fields: map[string][]byte{}}
+		rows, err := fieldsQuery.QueryContext(ctx, head.RelicID)
+		if err != nil {
+			return nil, cacheError("query indexed relic fields", err)
+		}
+		for rows.Next() {
+			var objectID string
+			var fields []byte
+			if err := rows.Scan(&objectID, &fields); err != nil {
+				rows.Close()
+				return nil, cacheError("read indexed relic fields", err)
+			}
+			entry.fields[objectID] = fields
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return nil, cacheError("read indexed relic fields", err)
+		}
+		var tail string
+		switch err := tailQuery.QueryRowContext(ctx, head.RelicID).Scan(&tail); {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return nil, cacheError("read indexed relic operation tail", err)
+		case tail == row.head:
+			entry.stopAt = row.head
+		}
+		previous[head.RelicID] = entry
+	}
+	return previous, nil
+}
+
+// completeIndexedRelic checks that Git returned the relic asked for, and fills
+// in the fields of every part whose fields object was known from the old rows,
+// so the relic carries the fields of every part.
+func completeIndexedRelic(head core.RelicHead, relic gitstore.IndexedRelic, known map[string][]byte) (gitstore.IndexedRelic, error) {
+	state := relic.Snapshot.Record.State
+	if relic.Snapshot.Head != head.ObjectID || state.RelicID != head.RelicID {
+		return gitstore.IndexedRelic{}, core.Errorf(core.CategoryCorruptData,
+			"relic index read returned relic %s at %s, want %s at %s", state.RelicID, relic.Snapshot.Head, head.RelicID, head.ObjectID)
+	}
+	fields := make(map[string][]byte, len(state.Relic.Parts))
+	for _, part := range state.Relic.Parts {
+		objects, found := relic.Parts[part.ID]
+		if !found {
+			return gitstore.IndexedRelic{}, core.Errorf(core.CategoryCorruptData,
+				"relic %s: the index read returned no objects for part %s", head.RelicID, part.ID)
+		}
+		stored, read := relic.Fields[part.ID]
+		if !read {
+			stored, read = known[objects.Fields]
+		}
+		if !read {
+			return gitstore.IndexedRelic{}, core.Errorf(core.CategoryOperational,
+				"relic %s: the fields of part %s were neither read nor indexed", head.RelicID, part.ID)
+		}
+		fields[part.ID] = stored
+	}
+	relic.Fields = fields
+	return relic, nil
+}
+
+// relicWriter holds the prepared statements one pass writes rows with.
+type relicWriter struct {
+	statements                            []*sql.Stmt
+	selectHead, insertRelic, insertProp   *sql.Stmt
+	insertPart, insertOperation, tailStmt *sql.Stmt
+	deleteOperations                      *sql.Stmt
+	// deletes remove a relic's rows from every table but its operations.
+	deletes []*sql.Stmt
+}
+
+func prepareRelicWriter(ctx context.Context, transaction *sql.Tx) (*relicWriter, error) {
+	writer := &relicWriter{}
+	prepare := func(query string) (*sql.Stmt, error) {
+		statement, err := transaction.PrepareContext(ctx, query)
+		if err != nil {
+			return nil, cacheError("prepare relic index statement", err)
+		}
+		writer.statements = append(writer.statements, statement)
+		return statement, nil
+	}
+	var err error
+	for _, step := range []struct {
+		target **sql.Stmt
+		query  string
+	}{
+		{&writer.selectHead, `SELECT head FROM relics WHERE relic_id = ?`},
+		{&writer.insertRelic, `INSERT INTO relics (
+			relic_id, head, project_id, state_version, min_reader, history_generation, compacted_from,
+			logical_clock, title, type, schema, author, retired, deleted, created_at, updated_at, part_count
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`},
+		{&writer.insertProp, `INSERT INTO relic_properties (relic_id, name, value) VALUES (?, ?, ?)`},
+		{&writer.insertPart, `INSERT INTO relic_parts (
+			relic_id, part_id, ordinal, type, position, removed, fields_object, fields,
+			body_object, body_format, body_version, body_bytes
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`},
+		{&writer.insertOperation, `INSERT INTO relic_operations (
+			relic_id, commit_id, chain_index, pack_index, operation_id, logical_clock,
+			history_generation, min_reader, actor, wall_time, type, part, payload
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`},
+		{&writer.tailStmt, `SELECT commit_id, chain_index FROM relic_operations WHERE relic_id = ? ORDER BY chain_index DESC, pack_index DESC LIMIT 1`},
+		{&writer.deleteOperations, `DELETE FROM relic_operations WHERE relic_id = ?`},
+	} {
+		if *step.target, err = prepare(step.query); err != nil {
+			writer.close()
+			return nil, err
+		}
+	}
+	for _, table := range []string{"relic_properties", "relic_parts", "relics"} {
+		statement, err := prepare(`DELETE FROM ` + table + ` WHERE relic_id = ?`)
+		if err != nil {
+			writer.close()
+			return nil, err
+		}
+		writer.deletes = append(writer.deletes, statement)
+	}
+	return writer, nil
+}
+
+func (w *relicWriter) close() {
+	for _, statement := range w.statements {
+		_ = statement.Close()
+	}
+}
+
+// head returns the head one relic's row names, or "" for no row.
+func (w *relicWriter) head(ctx context.Context, relicID string) (string, error) {
+	var head string
+	err := w.selectHead.QueryRowContext(ctx, relicID).Scan(&head)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", cacheError("read indexed relic head during refresh", err)
+	}
+	return head, nil
+}
+
+// deleteRelic removes every row of one relic.
+func (w *relicWriter) deleteRelic(ctx context.Context, relicID string) error {
+	for _, statement := range append(w.deletes, w.deleteOperations) {
+		if _, err := statement.ExecContext(ctx, relicID); err != nil {
+			return cacheError("remove indexed relic", err)
+		}
+	}
+	return nil
+}
+
+// writeRelic replaces one relic's rows with relic, and brings its operation
+// rows to chain: appended from where they end when the chain was read from
+// there, replaced when the chain restarted at the root, and removed when the
+// chain could not be read whole.
+func (w *relicWriter) writeRelic(ctx context.Context, relic gitstore.IndexedRelic, chain gitstore.RelicOperationsResult) error {
+	state := relic.Snapshot.Record.State
+	relicID := state.RelicID
+	data := state.Relic
+	if relic.Snapshot.Head == "" || relicID == "" || state.ProjectID == "" || state.History.Generation == "" ||
+		state.LogicalClock > math.MaxInt64 {
+		return core.Errorf(core.CategoryCorruptData, "cannot index invalid relic snapshot")
+	}
+	for _, statement := range w.deletes {
+		if _, err := statement.ExecContext(ctx, relicID); err != nil {
+			return cacheError("replace indexed relic", err)
+		}
+	}
+	var compactedFrom sql.NullString
+	if state.History.CompactedFrom != nil {
+		compactedFrom = sql.NullString{String: *state.History.CompactedFrom, Valid: true}
+	}
+	schema := string(data.Schema)
+	if schema == "" {
+		schema = "null"
+	}
+	if _, err := w.insertRelic.ExecContext(ctx,
+		relicID, relic.Snapshot.Head, state.ProjectID, state.Version, state.MinReader, state.History.Generation, compactedFrom,
+		int64(state.LogicalClock), data.Title, data.Type, schema, data.Author, sqlBool(data.Retired), sqlBool(data.Deleted),
+		formatTime(data.CreatedAt), formatTime(data.UpdatedAt), len(data.Parts),
+	); err != nil {
+		return cacheError("index relic", err)
+	}
+	for name, value := range data.Properties {
+		canonical, err := core.CanonicalRelicValue(value)
+		if err != nil {
+			return core.Errorf(core.CategoryCorruptData, "relic %s: the property %q cannot be indexed: %v", relicID, name, err)
+		}
+		if _, err := w.insertProp.ExecContext(ctx, relicID, name, string(canonical)); err != nil {
+			return cacheError("index relic property", err)
+		}
+	}
+	for ordinal, part := range data.Parts {
+		objects := relic.Parts[part.ID]
+		var bodyObject, bodyFormat, bodyVersion sql.NullString
+		var bodyBytes sql.NullInt64
+		if part.Body != nil {
+			bodyObject = sql.NullString{String: objects.Body, Valid: true}
+			bodyFormat = sql.NullString{String: part.Body.Format, Valid: true}
+			bodyVersion = sql.NullString{String: part.Body.Version, Valid: true}
+			bodyBytes = sql.NullInt64{Int64: part.Body.Bytes, Valid: true}
+		}
+		if _, err := w.insertPart.ExecContext(ctx,
+			relicID, part.ID, ordinal, part.Type, part.Position, sqlBool(part.Removed), objects.Fields, string(relic.Fields[part.ID]),
+			bodyObject, bodyFormat, bodyVersion, bodyBytes,
+		); err != nil {
+			return cacheError("index relic part", err)
+		}
+	}
+
+	switch {
+	case chain.Truncated != nil:
+		// A chain that stops short of the head would read as a whole one.
+		return w.dropOperations(ctx, relicID)
+	case !chain.BoundaryReached:
+		if err := w.dropOperations(ctx, relicID); err != nil {
+			return err
+		}
+		return w.insertOperations(ctx, relicID, 0, chain.Commits)
+	}
+	// The chain was read from the head the row had. The rows are extended
+	// only where they still end at that head; anything else is a chain the
+	// index cannot place, so its rows are dropped rather than left with a hole.
+	tail, index, found, err := w.operationTail(ctx, relicID)
+	if err != nil {
+		return err
+	}
+	if !found || len(chain.Commits) > 0 && tail != chain.Commits[0].Parent {
+		return w.dropOperations(ctx, relicID)
+	}
+	return w.insertOperations(ctx, relicID, index+1, chain.Commits)
+}
+
+func (w *relicWriter) dropOperations(ctx context.Context, relicID string) error {
+	if _, err := w.deleteOperations.ExecContext(ctx, relicID); err != nil {
+		return cacheError("remove indexed relic operations", err)
+	}
+	return nil
+}
+
+func (w *relicWriter) operationTail(ctx context.Context, relicID string) (string, int, bool, error) {
+	var commit string
+	var index int64
+	err := w.tailStmt.QueryRowContext(ctx, relicID).Scan(&commit, &index)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, cacheError("read indexed relic operation tail", err)
+	}
+	if index < 0 || index > math.MaxInt32 {
+		return "", 0, false, core.Errorf(core.CategoryCorruptData, "indexed relic %s has an invalid operation chain index", relicID)
+	}
+	return commit, int(index), true, nil
+}
+
+func (w *relicWriter) insertOperations(ctx context.Context, relicID string, start int, commits []gitstore.RelicOperationCommit) error {
+	for offset, commit := range commits {
+		pack := commit.Operation
+		if pack.LogicalClock > math.MaxInt64 {
+			return core.Errorf(core.CategoryCorruptData, "relic %s: commit %s has an invalid logical clock", relicID, commit.ObjectID)
+		}
+		for packIndex, operation := range pack.Operations {
+			payload, err := json.Marshal(operation)
+			if err != nil {
+				return core.Wrap(core.CategoryCorruptData, "cannot index relic operation", err)
+			}
+			if _, err := w.insertOperation.ExecContext(ctx,
+				relicID, commit.ObjectID, start+offset, packIndex, operation.ID, int64(pack.LogicalClock),
+				pack.HistoryGeneration, pack.MinReader, pack.Actor.ID, formatTime(pack.WallTime),
+				string(operation.Type), relicOperationPart(operation), string(payload),
+			); err != nil {
+				return cacheError("index relic operation", err)
+			}
+		}
+	}
+	return nil
+}
+
+// relicOperationPart is the part an operation names: its own ID for the
+// part.add that creates the part, the part it changes otherwise, and nothing
+// for an operation on the relic itself.
+func relicOperationPart(operation core.RelicOperation) string {
+	if operation.Type == core.RelicOperationPartAdd {
+		return operation.ID
+	}
+	return operation.Part
+}
+
+func sqlBool(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}

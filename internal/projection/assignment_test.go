@@ -93,23 +93,23 @@ func TestProjectionRoundTripsAssignments(t *testing.T) {
 // stale stamp and no probe to save it.
 //
 // So this stamps the previous version onto an otherwise-current cache and
-// requires it to be discarded. With the constant at "8" the stamp mismatches
-// and the cache is rebuilt; revert it to "7" and the stamp matches, the cache
+// requires it to be discarded. With the constant at "9" the stamp mismatches
+// and the cache is rebuilt; revert it to "8" and the stamp matches, the cache
 // survives, and this fails.
 //
 // The versions each release moved it for: "4" was assignments, "5" the comment
 // thread, the attachment list, and the operation payload that records them,
 // "6" the drop compaction records on an attachment it did not keep, "7" the
-// compactedFrom a checkpoint leaves on every later state, and "8" the due
-// date.
+// compactedFrom a checkpoint leaves on every later state, "8" the due
+// date, and "9" the relic tables.
 func TestACacheStampedWithThePreviousSchemaVersionIsDiscarded(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	// Belt and braces: the behavioural half below is what actually pins the
 	// stamp, and this says out loud which version it is pinned against.
-	if schemaVersion != "8" {
-		t.Fatalf("schemaVersion = %q, want \"8\"; the projected due date moved it there", schemaVersion)
+	if schemaVersion != "9" {
+		t.Fatalf("schemaVersion = %q, want \"9\"; the relic tables moved it there", schemaVersion)
 	}
 	snapshot := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-stamped", "Stamped")
 	snapshot.State.Task.Assignments = []core.Assignment{
@@ -131,7 +131,7 @@ func TestACacheStampedWithThePreviousSchemaVersionIsDiscarded(t *testing.T) {
 	// Age the stamp without touching the tables, which is the one thing the
 	// probe cannot see.
 	if _, err := store.db.ExecContext(ctx,
-		`UPDATE projection_meta SET value = '7' WHERE key = 'schema_version'`); err != nil {
+		`UPDATE projection_meta SET value = '8' WHERE key = 'schema_version'`); err != nil {
 		t.Fatalf("age the schema stamp: %v", err)
 	}
 	// A row the source no longer serves, so a rebuild is observable.

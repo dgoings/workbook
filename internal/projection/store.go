@@ -92,6 +92,13 @@ type Store struct {
 	// It is a test seam standing for another process replacing the cache in
 	// that window, and nil otherwise.
 	afterRecovery func()
+	// relics is the source relic reads and relic passes read Git through, or
+	// nil when the task source cannot read relics. See relics.go.
+	relics relicSource
+	// beforeRelicCommit runs inside a relic pass's transaction after its rows
+	// are written, and an error rolls the transaction back. It is a test seam
+	// for a pass interrupted before it commits, and nil otherwise.
+	beforeRelicCommit func() error
 }
 
 var _ core.TaskReader = (*Store)(nil)
@@ -122,6 +129,9 @@ func openStore(ctx context.Context, source taskHeadSource, config core.ProjectCo
 		return nil, err
 	}
 	store := &Store{source: source, config: config, cachePath: cachePath, db: db, rename: os.Rename}
+	if relics, ok := source.(relicSource); ok {
+		store.relics = relics
+	}
 	store.dbInfo, _ = store.cacheStat()
 	return store, nil
 }
@@ -204,7 +214,7 @@ func (s *Store) Rebuild(ctx context.Context) (int, error) {
 	if s.closed {
 		return 0, errStoreClosed()
 	}
-	return s.rebuildLocked(ctx)
+	return s.rebuildLocked(ctx, false)
 }
 
 // rebuildLocked builds a cache from the task refs and installs it, with
@@ -224,14 +234,18 @@ func (s *Store) Rebuild(ctx context.Context) (int, error) {
 // its own. Renaming over it would pull a valid cache out from under every
 // process that just opened it, each of which would then rebuild or redo in
 // turn.
-func (s *Store) rebuildLocked(ctx context.Context) (int, error) {
+//
+// withRelics also indexes every relic into the build. Recovery and Rebuild
+// leave the relic tables empty, so a task command never reads a relic; the
+// first relic read fills them, because every relic then counts as changed.
+func (s *Store) rebuildLocked(ctx context.Context, withRelics bool) (int, error) {
 	const attempts = 2
 	for attempt := 1; ; attempt++ {
 		heads, err := s.source.ListTaskHeads(ctx, s.config)
 		if err != nil {
 			return 0, err
 		}
-		temporary, err := s.buildTemporaryDatabase(ctx, heads)
+		temporary, err := s.buildTemporaryDatabase(ctx, heads, withRelics)
 		if err != nil {
 			return 0, err
 		}
@@ -624,7 +638,7 @@ func (s *Store) recoverLocked(ctx context.Context) error {
 			return nil
 		}
 	}
-	_, err := s.rebuildLocked(ctx)
+	_, err := s.rebuildLocked(ctx, false)
 	return err
 }
 
@@ -696,7 +710,7 @@ func (s *Store) reopenReplacedLocked(ctx context.Context) error {
 	if s.cacheUsable(ctx) {
 		return nil
 	}
-	_, err := s.rebuildLocked(ctx)
+	_, err := s.rebuildLocked(ctx, false)
 	return err
 }
 
@@ -774,6 +788,7 @@ func (s *Store) requiredSchemaExists(ctx context.Context) bool {
 		`SELECT task_id, dependency_id FROM task_dependencies LIMIT 0`,
 		`SELECT task_id, principal, label, creator, created_at FROM task_assignments LIMIT 0`,
 		`SELECT operation_id, task_id, commit_id, chain_index, pack_index, logical_clock, history_generation, min_reader, actor, wall_time, type, field, value, task_data, payload FROM operations LIMIT 0`,
+		relicSchemaChecks[0], relicSchemaChecks[1], relicSchemaChecks[2], relicSchemaChecks[3],
 	} {
 		rows, err := s.db.QueryContext(ctx, query)
 		if err != nil {
@@ -1697,7 +1712,7 @@ func (s *Store) queryStrings(ctx context.Context, transaction *sql.Tx, query, ta
 	return values, nil
 }
 
-func (s *Store) buildTemporaryDatabase(ctx context.Context, heads []gitstore.TaskHead) (string, error) {
+func (s *Store) buildTemporaryDatabase(ctx context.Context, heads []gitstore.TaskHead, withRelics bool) (string, error) {
 	temporary, err := os.CreateTemp(filepath.Dir(s.cachePath), "."+filepath.Base(s.cachePath)+"-*.tmp")
 	if err != nil {
 		return "", cacheError("create temporary projection cache", err)
@@ -1751,6 +1766,12 @@ func (s *Store) buildTemporaryDatabase(ctx context.Context, heads []gitstore.Tas
 	if err := replaceSnapshots(ctx, db, snapshots, chains); err != nil {
 		_ = os.Remove(temporaryPath)
 		return "", err
+	}
+	if withRelics {
+		if _, err := s.indexRelics(ctx, db); err != nil {
+			_ = os.Remove(temporaryPath)
+			return "", err
+		}
 	}
 	return temporaryPath, nil
 }

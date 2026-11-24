@@ -922,8 +922,10 @@ func TestStoreConcurrentReadsAndRebuilds(t *testing.T) {
 // somebody reads a collection per task instead, this is what says so.
 //
 // It moved from ten to twelve when assignments arrived, which is the whole cost
-// of a new collection: one statement in the schema probe, one bulk read.
-const listQueryCeiling = 12
+// of a new collection: one statement in the schema probe, one bulk read. It
+// moved to sixteen with the four relic tables, which a task List never reads
+// but the schema probe checks, one statement each.
+const listQueryCeiling = 16
 
 func TestListUsesBoundedSQLQueriesForManyTasks(t *testing.T) {
 	t.Parallel()

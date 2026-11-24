@@ -1,6 +1,13 @@
 package projection
 
-// schemaVersion is bumped to 8 because a task row now keeps the task's due
+// schemaVersion is bumped to 9 because the cache now holds relics: one row per
+// relic, its properties, its parts with their fields and the object ID, format
+// and size of each body, and its recorded operations. Body text is never
+// copied in; it stays in Git and is read by object ID. A cache stamped earlier
+// has no relic tables, so it is discarded and Git read again, as every earlier
+// bump did.
+//
+// Version 8 was bumped because a task row now keeps the task's due
 // date. A cache stamped earlier has no column for it, and a mutation folded
 // onto a snapshot that dropped it would write a state.json without the date —
 // silently clearing it for every clone — so the cache is discarded and Git read
@@ -37,7 +44,7 @@ package projection
 // checkpoint and every recorded pack, where a missing column reads as
 // generation zero — a claim rather than an absence, and the one claim that must
 // never be made wrongly.
-const schemaVersion = "8"
+const schemaVersion = "9"
 
 const schema = `
 CREATE TABLE projection_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -72,4 +79,35 @@ CREATE TABLE operations (
   payload TEXT NOT NULL
 );
 CREATE INDEX operations_by_chain ON operations (task_id, chain_index, pack_index);
-CREATE INDEX operations_by_commit ON operations (task_id, commit_id);`
+CREATE INDEX operations_by_commit ON operations (task_id, commit_id);
+CREATE TABLE relics (
+  relic_id TEXT PRIMARY KEY, head TEXT NOT NULL, project_id TEXT NOT NULL,
+  state_version INTEGER NOT NULL, min_reader INTEGER NOT NULL,
+  history_generation TEXT NOT NULL, compacted_from TEXT,
+  logical_clock INTEGER NOT NULL, title TEXT NOT NULL, type TEXT NOT NULL,
+  schema TEXT NOT NULL, author TEXT NOT NULL, retired INTEGER NOT NULL,
+  deleted INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  part_count INTEGER NOT NULL
+);
+CREATE INDEX relics_by_type ON relics (type, relic_id);
+CREATE TABLE relic_properties (
+  relic_id TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL,
+  PRIMARY KEY (relic_id, name)
+);
+CREATE TABLE relic_parts (
+  relic_id TEXT NOT NULL, part_id TEXT NOT NULL, ordinal INTEGER NOT NULL,
+  type TEXT NOT NULL, position TEXT NOT NULL, removed INTEGER NOT NULL,
+  fields_object TEXT NOT NULL, fields TEXT NOT NULL,
+  body_object TEXT, body_format TEXT, body_version TEXT, body_bytes INTEGER,
+  PRIMARY KEY (relic_id, part_id)
+);
+CREATE INDEX relic_parts_by_order ON relic_parts (relic_id, ordinal);
+CREATE TABLE relic_operations (
+  relic_id TEXT NOT NULL, commit_id TEXT NOT NULL, chain_index INTEGER NOT NULL,
+  pack_index INTEGER NOT NULL, operation_id TEXT NOT NULL,
+  logical_clock INTEGER NOT NULL, history_generation TEXT NOT NULL,
+  min_reader INTEGER NOT NULL, actor TEXT NOT NULL, wall_time TEXT NOT NULL,
+  type TEXT NOT NULL, part TEXT NOT NULL, payload TEXT NOT NULL,
+  PRIMARY KEY (relic_id, chain_index, pack_index)
+);
+CREATE INDEX relic_operations_by_id ON relic_operations (operation_id);`
