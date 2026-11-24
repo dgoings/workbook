@@ -54,6 +54,9 @@ type options struct {
 	storage           bool
 	storageOperations string
 	storageDepths     []int
+
+	relics     bool
+	relicScale string
 }
 
 type stringListFlag []string
@@ -162,6 +165,8 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *options) {
 	flags.Var(&options.scalingPointFlags, "scaling-point", "scaling matrix point as <active tasks>x<history depth> (repeatable, requires --scaling)")
 	flags.BoolVar(&options.storage, "storage-resources", false, "measure storage and peak resource growth instead of scenarios")
 	flags.StringVar(&options.storageOperations, "storage-operations", "20,100", "comma-separated operations-per-task depths for --storage-resources")
+	flags.BoolVar(&options.relics, "relics", false, "build the relic benchmark set and measure the relic scenarios instead")
+	flags.StringVar(&options.relicScale, "relic-scale", relicScaleFull, "relic benchmark scale for --relics: full or smoke")
 	return flags, options
 }
 
@@ -220,6 +225,9 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 	}
 	if options.outputMarkdown == "" {
 		return fmt.Errorf("--output-markdown is required")
+	}
+	if relicRun, err := configureRelicOptions(flags, options); relicRun || err != nil {
+		return err
 	}
 	if options.storage {
 		if len(options.scenarioFlags) != 0 {
@@ -368,6 +376,9 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 	}
 	if options.storage {
 		return runStorageResourceBenchmark(ctx, options, environment)
+	}
+	if options.relics {
+		return runRelicBenchmark(ctx, options, environment)
 	}
 
 	fixtureRoot, err := os.MkdirTemp("", "workbook-benchmark-")

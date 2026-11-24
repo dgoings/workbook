@@ -309,7 +309,7 @@ func TestRelicFixtureSpecsMatchTheStoryTable(t *testing.T) {
 	if got := full.TaskFixture("sha1"); got != (FixtureSpec{TotalTasks: 500, ActiveTasks: 475, TombstonedTasks: 25, OperationsPerTask: 20, ObjectFormat: "sha1"}) {
 		t.Fatalf("full task fixture = %+v", got)
 	}
-	if got := smoke.TaskFixture("sha256"); got != (FixtureSpec{TotalTasks: 10, ActiveTasks: 9, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: "sha256"}) {
+	if got := smoke.TaskFixture("sha256"); got != (FixtureSpec{TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: "sha256"}) {
 		t.Fatalf("smoke task fixture = %+v", got)
 	}
 }

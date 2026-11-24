@@ -84,6 +84,9 @@ type Report struct {
 	// WatcherSteadyState is the descriptive account of a running
 	// `workbook sync --watch`. It is absent from runs that did not observe one.
 	WatcherSteadyState *WatcherSteadyStateReport `json:"watcherSteadyState,omitempty"`
+	// Relics is the descriptive account of a workbook-bench --relics run. It
+	// is absent from runs that did not measure relics.
+	Relics *RelicBenchmarkReport `json:"relics,omitempty"`
 }
 
 func Summarize(samples []Sample) Summary {
@@ -149,7 +152,10 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 	if err := writeStorageResourceMarkdown(w, r.StorageResources); err != nil {
 		return err
 	}
-	return writeWatcherMarkdown(w, r.WatcherSteadyState)
+	if err := writeWatcherMarkdown(w, r.WatcherSteadyState); err != nil {
+		return err
+	}
+	return writeRelicMarkdown(w, r.Relics)
 }
 
 func (r Report) normalized() Report {

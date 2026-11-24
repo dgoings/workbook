@@ -144,6 +144,10 @@ type CommandMeasurement struct {
 	Sample Sample
 	Stdout []byte
 	Stderr []byte
+	// GitCommands tallies the Trace2 cmd_name of every Git process the
+	// measured command started, by subcommand. It is not part of Sample, so a
+	// report carries it only where a family copies it out.
+	GitCommands map[string]int
 }
 
 // MeasureCommandOutput runs a command under a fresh Trace2 event file and
@@ -211,14 +215,15 @@ func MeasureCommandOutput(ctx context.Context, spec CommandSpec) CommandMeasurem
 		measurement.Sample.Error = stderrSummary(string(measurement.Stderr), err)
 	}
 
-	gitProcesses, traceErr := cursor.CountNewGitProcesses()
+	counts, traceErr := cursor.CountNew()
 	if traceErr != nil {
 		if measurement.Sample.Error == "" {
 			measurement.Sample.Error = traceErr.Error()
 		}
 		return measurement
 	}
-	measurement.Sample.GitProcesses = gitProcesses
+	measurement.Sample.GitProcesses = counts.GitProcesses
+	measurement.GitCommands = counts.Commands
 	return measurement
 }
 

@@ -8,6 +8,7 @@
 #   scripts/benchmark.sh --scenario cli-list --tasks 50 --operations 5
 #   scripts/benchmark.sh --object-format sha256
 #   scripts/benchmark.sh --scaling
+#   scripts/benchmark.sh --relics                   # relic family; minutes of setup
 #
 # The reports carry no pass/fail thresholds; compare a run's Markdown report
 # with an earlier one to see whether the baseline has shifted.

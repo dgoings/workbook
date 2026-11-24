@@ -606,21 +606,24 @@ func publishFixtureToLocalOrigin(ctx context.Context, timeout time.Duration, fix
 	}
 
 	// Git rejects a wildcard refspec that matches nothing, so a fixture with no
-	// task refs publishes nothing rather than failing the scenario.
-	refs, _, err := runRepositoryGit(
-		ctx, timeout, fixtureRoot, "for-each-ref", "--format=%(refname)", "refs/workbook/tasks/",
-	)
-	if err != nil {
-		return err
-	}
-	if len(bytes.TrimSpace(refs)) == 0 {
-		return nil
-	}
-	if _, _, err := runRepositoryGit(
-		ctx, timeout, fixtureRoot, "push", "--quiet", "origin",
-		"refs/workbook/tasks/*:refs/workbook/tasks/*",
-	); err != nil {
-		return err
+	// task refs publishes nothing rather than failing the scenario. A fixture
+	// with relics publishes them too, so the measured command finds origin as
+	// up to date with its relics as with its tasks.
+	for _, prefix := range []string{"refs/workbook/tasks/", relicRefPrefix} {
+		refs, _, err := runRepositoryGit(
+			ctx, timeout, fixtureRoot, "for-each-ref", "--format=%(refname)", prefix,
+		)
+		if err != nil {
+			return err
+		}
+		if len(bytes.TrimSpace(refs)) == 0 {
+			continue
+		}
+		if _, _, err := runRepositoryGit(
+			ctx, timeout, fixtureRoot, "push", "--quiet", "origin", prefix+"*:"+prefix+"*",
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }

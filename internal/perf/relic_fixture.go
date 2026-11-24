@@ -71,10 +71,12 @@ func SmokeRelicFixtureSpec() RelicFixtureSpec {
 }
 
 // TaskFixture is the task fixture the relics are added to: the smoke task
-// fixture for the smoke spec, and the default 500-task fixture otherwise.
+// fixture for the smoke spec, and the default 500-task fixture otherwise. The
+// smoke fixture has ten active tasks beside its tombstone, the fewest the
+// cli-burst-independent-10 scenario of the task comparison can run on.
 func (s RelicFixtureSpec) TaskFixture(objectFormat string) FixtureSpec {
 	if s == SmokeRelicFixtureSpec() {
-		return FixtureSpec{TotalTasks: 10, ActiveTasks: 9, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: objectFormat}
+		return FixtureSpec{TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: objectFormat}
 	}
 	return FixtureSpec{TotalTasks: 500, ActiveTasks: 475, TombstonedTasks: 25, OperationsPerTask: 20, ObjectFormat: objectFormat}
 }
