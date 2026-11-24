@@ -891,7 +891,7 @@ func TestPushUsesOneBoundedPublication(t *testing.T) {
 	// One listing answers all three questions Push has to ask origin: which
 	// task tips it already holds, which project it is, and whether it has this
 	// project's configuration ledger.
-	if got := countCommand(commands, "ls-remote", "--refs", "origin", taskRefPrefix+"*", identityRef, configRef); got != 1 {
+	if got := countCommand(commands, "ls-remote", "--refs", "origin", taskRefPrefix+"*", relicRefPrefix+"*", identityRef, configRef); got != 1 {
 		t.Fatalf("wildcard remote probes = %d, want 1; commands = %v", got, commands)
 	}
 	// The only other listing is the one after the push: origin's identity ref
@@ -902,7 +902,8 @@ func TestPushUsesOneBoundedPublication(t *testing.T) {
 		if len(command) == 0 || command[0] != "ls-remote" {
 			continue
 		}
-		wildcard := len(command) == 6 && command[3] == taskRefPrefix+"*" && command[4] == identityRef && command[5] == configRef
+		wildcard := len(command) == 7 && command[3] == taskRefPrefix+"*" && command[4] == relicRefPrefix+"*" &&
+			command[5] == identityRef && command[6] == configRef
 		identityOnly := len(command) == 4 && command[3] == identityRef
 		if !wildcard && !identityOnly {
 			t.Fatalf("Push() ran a per-task remote probe: %v", command)

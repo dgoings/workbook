@@ -66,6 +66,44 @@ func TestParseRemoteTaskHeadsRejectsInvalidRecords(t *testing.T) {
 	}
 }
 
+// Push lists origin's relic refs in its one listing, so the task parser must
+// pass over them, and the relic parser must read only them.
+func TestParseRemoteTaskHeadsSkipsRelicRefs(t *testing.T) {
+	t.Parallel()
+	const taskID = "WB-01K0M6B8A4FTT8C39MXXYTW7D1"
+	relicID := relicTestRelicID(1)
+	objectID, relicObjectID := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	output := []byte(objectID + "\trefs/workbook/tasks/" + taskID + "\n" +
+		relicObjectID + "\trefs/workbook/relics/" + relicID + "\n" +
+		relicObjectID + "\trefs/workbook/relics/" + relicID + "/nested\n" +
+		relicObjectID + "\trefs/workbook/relics/not-a-relic\n")
+	repository := &Repository{objectIDBytes: 20}
+	heads, ignored, err := repository.parseRemoteTaskHeads(core.FoundingKeySet("WB"), output)
+	if err != nil {
+		t.Fatalf("parseRemoteTaskHeads() error = %v", err)
+	}
+	if want := map[string]string{taskID: objectID}; !reflect.DeepEqual(heads, want) || len(ignored) != 0 {
+		t.Fatalf("remote task heads = %#v, ignored %#v; want %#v and none ignored", heads, ignored, want)
+	}
+	relics, err := parseRemoteRelicHeads(output)
+	if err != nil {
+		t.Fatalf("parseRemoteRelicHeads() error = %v", err)
+	}
+	if want := map[string]string{relicID: relicObjectID}; !reflect.DeepEqual(relics, want) {
+		t.Fatalf("remote relic heads = %#v, want %#v", relics, want)
+	}
+	for _, bad := range []string{
+		strings.TrimSuffix(string(output), "\n"),
+		relicObjectID + "\trefs/workbook/relics/" + relicID + "\n" + relicObjectID + "\trefs/workbook/relics/" + relicID + "\n",
+		"ref: refs/heads/main\trefs/workbook/relics/" + relicID + "\n",
+		relicObjectID + "\trefs/workbook/relics/" + relicID + "\textra\n",
+	} {
+		if _, err := parseRemoteRelicHeads([]byte(bad)); err == nil {
+			t.Fatalf("parseRemoteRelicHeads(%q) error = nil", bad)
+		}
+	}
+}
+
 // Origin's task namespace is writable by every collaborator, so a name this
 // version does not recognize is skipped and reported instead of failing the
 // listing that publication depends on. The report separates a name no project

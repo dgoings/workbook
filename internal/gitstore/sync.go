@@ -138,6 +138,10 @@ type fetchState struct {
 // (compactionLease). One
 // non-atomic publication preserves per-ref outcomes so a rejection does not
 // prevent unrelated tasks from publishing.
+//
+// Relic refs go out after the task refs, in a push of their own, each plain:
+// the one listing of origin also names its relic refs, and every local relic
+// whose tip origin does not hold is checked and published.
 func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncResult, error) {
 	result := SyncResult{Remote: r.remote(), Tasks: []SyncTaskResult{}}
 	if err := r.verifyIdentity(ctx); err != nil {
@@ -154,7 +158,11 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		return failedSyncPhase(result, "push failed before completion", err)
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].taskID < refs[j].taskID })
-	if len(refs) == 0 {
+	relicRecords, err := r.relicRefRecords(ctx, relicRefPrefix)
+	if err != nil {
+		return failedSyncPhase(result, "push failed before completion", err)
+	}
+	if len(refs) == 0 && len(relicRecords) == 0 {
 		// A project with no task refs can still hold a configuration ledger.
 		// Returning here published nothing, which made `workbook push` the one
 		// publication path that could silently keep a vocabulary local — and
@@ -188,7 +196,7 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	// Both singleton refs ride the listing Push already makes, so establishing
 	// that origin is this project, and whether it holds this project's
 	// configuration, costs no round trip of its own.
-	remoteOutput, err := r.Git(ctx, nil, "ls-remote", "--refs", r.remote(), taskRefPrefix+"*", identityRef, configRef)
+	remoteOutput, err := r.Git(ctx, nil, "ls-remote", "--refs", r.remote(), taskRefPrefix+"*", relicRefPrefix+"*", identityRef, configRef)
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}
@@ -229,6 +237,12 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}
 	result.Ignored = ignored
+	remoteRelics, err := parseRemoteRelicHeads(remoteOutput)
+	if err != nil {
+		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
+	}
+	// A relic ref this clone cannot name stops the relics, not the tasks.
+	relicCandidates, relicListErr := localRelicPushCandidates(keys, relicRecords, remoteRelics)
 	candidates := make([]pushCandidate, 0, len(valid))
 	for _, ref := range refs {
 		snapshot, ok := valid[ref.taskID]
@@ -284,15 +298,42 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		}
 		result.Tasks = append(result.Tasks, items[ref.taskID])
 	}
-	result.Status = SyncPhaseCompleted
 	if stranded != nil {
+		result.Status = SyncPhaseCompleted
 		return result, stranded
+	}
+	// Relics go out after the task refs, in a push of their own, so nothing
+	// origin does with a relic can change a task's outcome. Every relic tip is
+	// checked here: no fetch in this command read them.
+	var relics relicPublication
+	if relicListErr == nil {
+		unchecked := make(map[string]bool, len(relicCandidates))
+		for _, candidate := range relicCandidates {
+			unchecked[candidate.RelicID] = true
+		}
+		if relics, err = r.publishRelics(ctx, config, relicCandidates, unchecked); err != nil {
+			return failedSyncPhase(result, "push failed before publishing relics", err)
+		}
+		result.Relics = relics.Results
+	}
+	result.Status = SyncPhaseCompleted
+	if relics.Stranded != nil {
+		return result, relics.Stranded
 	}
 	if invalid > 0 {
 		return result, core.Errorf(core.CategoryCorruptData, "%d local task ref(s) failed validation", invalid)
 	}
+	if relicListErr != nil {
+		return result, relicListErr
+	}
+	if err := relics.invalidError(); err != nil {
+		return result, err
+	}
 	if len(rejected) > 0 {
 		return result, r.rejectedByRemote(rejected)
+	}
+	if err := relics.rejectedError(r.remote()); err != nil {
+		return result, err
 	}
 	if changed > 0 {
 		return result, core.Errorf(core.CategoryStaleWrite, "%d local task ref(s) changed during push", changed)
@@ -1160,16 +1201,35 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 		}
 		result.Tasks = append(result.Tasks, items[taskID])
 	}
-	result.Status = SyncPhaseCompleted
 	if stranded != nil {
+		result.Status = SyncPhaseCompleted
 		return result, stranded
+	}
+	// Relics go out after the task refs, in a push of their own. Fetch read
+	// every relic origin holds that changed; only a relic origin does not hold
+	// is checked here.
+	relicCandidates, unchecked := fetchedRelicPushCandidates(state.Relics)
+	relics, err := r.publishRelics(ctx, config, relicCandidates, unchecked)
+	if err != nil {
+		return failedSyncPhase(result, "push failed before publishing relics", err)
+	}
+	result.Relics = relics.Results
+	result.Status = SyncPhaseCompleted
+	if relics.Stranded != nil {
+		return result, relics.Stranded
 	}
 	if duplicated > 0 {
 		return result, core.Errorf(core.CategoryCorruptData,
 			"%d local task ref(s) record an operation twice and were not published", duplicated)
 	}
+	if err := relics.invalidError(); err != nil {
+		return result, err
+	}
 	if len(rejected) > 0 {
 		return result, r.rejectedByRemote(rejected)
+	}
+	if err := relics.rejectedError(r.remote()); err != nil {
+		return result, err
 	}
 	if changed > 0 {
 		return result, core.Errorf(core.CategoryStaleWrite, "%d local task ref(s) changed during push", changed)

@@ -46,6 +46,10 @@ func (r *Repository) parseRemoteTaskHeads(
 		if isPublicationSingletonRef(refName) {
 			continue
 		}
+		// Relic refs ride the same listing and are read by parseRemoteRelicHeads.
+		if strings.HasPrefix(refName, relicRefPrefix) {
+			continue
+		}
 		if !strings.HasPrefix(refName, taskRefPrefix) {
 			return nil, nil, core.Errorf(core.CategoryOperational, "Git returned remote ref outside %q", taskRefPrefix)
 		}
@@ -64,6 +68,52 @@ func (r *Repository) parseRemoteTaskHeads(
 		heads[taskID] = objectID
 	}
 	return heads, ignored, nil
+}
+
+// parseRemoteRelicHeads reads the relic refs of the listing Push makes, by
+// relic ID, and skips every other record. A name under the relic namespace
+// that is not one relic ID is skipped too: anyone who can push can write one,
+// and a publication only asks this map about relics this clone holds. As with
+// task heads, a record Git should never have emitted is an error, and so is
+// the same relic twice.
+func parseRemoteRelicHeads(output []byte) (map[string]string, error) {
+	heads := make(map[string]string)
+	if len(output) == 0 {
+		return heads, nil
+	}
+	if output[len(output)-1] != '\n' {
+		return nil, core.Errorf(core.CategoryOperational, "Git returned unterminated remote relic heads")
+	}
+	for _, line := range bytes.Split(output[:len(output)-1], []byte{'\n'}) {
+		objectID, refName, found := bytes.Cut(line, []byte{'\t'})
+		if !found || len(objectID) == 0 || len(refName) == 0 || bytes.IndexByte(refName, '\t') >= 0 {
+			return nil, core.Errorf(core.CategoryOperational, "Git returned an invalid remote relic-head record")
+		}
+		if !strings.HasPrefix(string(refName), relicRefPrefix) {
+			continue
+		}
+		if !isLowerHex(objectID) {
+			return nil, core.Errorf(core.CategoryOperational, "Git returned an invalid remote relic object ID")
+		}
+		relicID := strings.TrimPrefix(string(refName), relicRefPrefix)
+		if strings.Contains(relicID, "/") || core.ValidateRelicIDShape(relicID) != nil {
+			continue
+		}
+		if _, duplicate := heads[relicID]; duplicate {
+			return nil, core.Errorf(core.CategoryOperational, "Git returned duplicate remote relic ref %q", refName)
+		}
+		heads[relicID] = string(objectID)
+	}
+	return heads, nil
+}
+
+func isLowerHex(value []byte) bool {
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return len(value) > 0
 }
 
 // publicationSingletonRefs are the non-task refs that publication's one remote

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -759,4 +760,766 @@ func TestFetchReadsNoBodyText(t *testing.T) {
 			t.Fatalf("a fetch asked for body %q; all requests: %q", request, *requests)
 		}
 	}
+}
+
+// relicClones is the two-clone fixture of the row tests: each clone edits
+// through its own relic service, which mints IDs from a range of its own.
+type relicClones struct {
+	first, second *Repository
+	config        core.ProjectConfig
+	a, b          core.RelicService
+}
+
+func newRelicClones(first, second *Repository, config core.ProjectConfig) relicClones {
+	return relicClones{
+		first: first, second: second, config: config,
+		a: relicServiceFor(first, config, 100000),
+		b: relicServiceFor(second, config, 200000),
+	}
+}
+
+// syncClean runs Sync and requires it to succeed.
+func syncClean(t *testing.T, repo *Repository, config core.ProjectConfig) SyncRunResult {
+	t.Helper()
+	result, err := repo.Sync(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Sync() error = %v; result = %+v", err, result)
+	}
+	return result
+}
+
+// share creates a relic in the first clone and brings it to the second by
+// synchronizing both.
+func (c relicClones) share(t *testing.T, input core.RelicCreateInput) core.RelicMutationResult {
+	t.Helper()
+	if input.Type == "" {
+		input.Type = "spec"
+	}
+	created, err := c.a.Create(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	pushed := syncClean(t, c.first, c.config)
+	if len(pushed.Push.Relics) != 1 || pushed.Push.Relics[0].Status != SyncPublished {
+		t.Fatalf("first Sync() pushed relics %+v, want the new one published", pushed.Push.Relics)
+	}
+	assertRelicSyncOutcome(t, syncClean(t, c.second, c.config).Fetch, created.Relic.ID, SyncCreated)
+	return created
+}
+
+// update changes a relic through service and returns the IDs of the
+// operations the change recorded.
+func (c relicClones) update(t *testing.T, service core.RelicService, relicID string, edits ...core.RelicEdit) []string {
+	t.Helper()
+	result, err := service.Update(context.Background(), relicID, edits)
+	if err != nil {
+		t.Fatalf("Update(%s) error = %v", relicID, err)
+	}
+	if !result.Changed {
+		t.Fatalf("Update(%s) changed nothing", relicID)
+	}
+	repo := c.first
+	if service.Writer == c.second {
+		repo = c.second
+	}
+	var ids []string
+	for _, operation := range readRelicTip(t, repo, c.config, relicID).Operation.Operations {
+		ids = append(ids, operation.ID)
+	}
+	return ids
+}
+
+// round runs the row tests' three synchronizations, each of which must
+// succeed, and returns the second clone's.
+func (c relicClones) round(t *testing.T) SyncRunResult {
+	t.Helper()
+	syncClean(t, c.first, c.config)
+	second := syncClean(t, c.second, c.config)
+	syncClean(t, c.first, c.config)
+	return second
+}
+
+// assertConverged requires both clones and origin to hold one tip for the
+// relic, a valid history in which no operation ID is recorded twice, and
+// returns that tip.
+func (c relicClones) assertConverged(t *testing.T, relicID string) string {
+	t.Helper()
+	head := relicRefHead(t, c.first, relicID)
+	if second := relicRefHead(t, c.second, relicID); second != head {
+		t.Fatalf("relic %s: second's tip %s, first's %s", relicID, second, head)
+	}
+	if origin := remoteRefValue(t, c.first, relicRef(relicID)); origin != head {
+		t.Fatalf("relic %s: origin's tip %s, the clones' %s", relicID, origin, head)
+	}
+	assertReplayedHistory(t, c.first, c.config, relicID, head)
+	assertReplayedHistory(t, c.second, c.config, relicID, head)
+	return head
+}
+
+// relicHistoryOperationIDs returns every operation ID of head's first-parent
+// chain.
+func relicHistoryOperationIDs(t *testing.T, repo *Repository, head string) map[string]bool {
+	t.Helper()
+	ids := map[string]bool{}
+	for _, commit := range strings.Fields(gitOutput(t, repo, "rev-list", "--first-parent", head)) {
+		pack, err := core.DecodeRelicOperationPack(relicBlob(t, repo, commit+":operation.json"))
+		if err != nil {
+			t.Fatalf("DecodeRelicOperationPack(%s) error = %v", commit, err)
+		}
+		for _, operation := range pack.Operations {
+			ids[operation.ID] = true
+		}
+	}
+	return ids
+}
+
+func assertHistoryHolds(t *testing.T, repo *Repository, head string, operationIDs ...[]string) {
+	t.Helper()
+	held := relicHistoryOperationIDs(t, repo, head)
+	for _, ids := range operationIDs {
+		for _, id := range ids {
+			if !held[id] {
+				t.Fatalf("the history at %s lacks operation %s", head, id)
+			}
+		}
+	}
+}
+
+func shownRelic(t *testing.T, service core.RelicService, relicID string) core.RelicDocument {
+	t.Helper()
+	document, err := service.Show(context.Background(), relicID, core.RelicShowOptions{Bodies: true, Removed: true})
+	if err != nil {
+		t.Fatalf("Show(%s) error = %v", relicID, err)
+	}
+	return document
+}
+
+func shownPart(t *testing.T, document core.RelicDocument, partID string) core.RelicDocumentPart {
+	t.Helper()
+	for _, part := range document.Parts {
+		if part.ID == partID {
+			return part
+		}
+	}
+	t.Fatalf("relic %s has no part %s: %+v", document.ID, partID, document.Parts)
+	return core.RelicDocumentPart{}
+}
+
+func assertRawString(t *testing.T, what string, got json.RawMessage, want string) {
+	t.Helper()
+	encoded, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, encoded) {
+		shown := string(got)
+		if len(shown) > 80 {
+			shown = shown[:80] + "..."
+		}
+		t.Fatalf("%s = %s, want %q", what, shown, want)
+	}
+}
+
+func setProperty(t *testing.T, name, value string) core.RelicEdit {
+	return core.RelicEdit{Kind: core.RelicEditSetProperty, Name: name, Value: relicJSONString(t, value)}
+}
+
+func setField(t *testing.T, partID, name, value string) core.RelicEdit {
+	return core.RelicEdit{Kind: core.RelicEditPart, Part: partID,
+		Fields: []core.RelicFieldEdit{{Name: name, Value: relicJSONString(t, value)}}}
+}
+
+func saveBody(partID, base, text string) core.RelicEdit {
+	return core.RelicEdit{Kind: core.RelicEditPart, Part: partID, Base: base,
+		Body: &core.RelicBodyInput{Format: "md", Content: []byte(text)}}
+}
+
+func relicParts(t *testing.T, count int, withBody bool) []core.RelicPartInput {
+	parts := make([]core.RelicPartInput, count)
+	for index := range parts {
+		parts[index] = core.RelicPartInput{
+			Type:   "section",
+			Fields: map[string]json.RawMessage{"heading": relicJSONString(t, fmt.Sprintf("Section %d", index+1))},
+		}
+		if withBody {
+			parts[index].Body = &core.RelicBodyInput{Format: "md", Content: []byte(fmt.Sprintf("text %d\n", index+1))}
+		}
+	}
+	return parts
+}
+
+func assertNoRelicReport(t *testing.T, result SyncRunResult) {
+	t.Helper()
+	if len(result.Fetch.RelicConflicts) != 0 || len(result.Fetch.RelicWarnings) != 0 {
+		t.Fatalf("Sync() reported conflicts %+v and warnings %+v, want neither",
+			result.Fetch.RelicConflicts, result.Fetch.RelicWarnings)
+	}
+}
+
+func assertOneWarning(t *testing.T, result SyncRunResult, code string) {
+	t.Helper()
+	warnings := result.Fetch.RelicWarnings
+	if len(warnings) != 1 || warnings[0].Code != code {
+		t.Fatalf("Sync() warnings = %+v, want one %s", warnings, code)
+	}
+	if len(result.Fetch.RelicConflicts) != 0 {
+		t.Fatalf("Sync() conflicts = %+v, want none", result.Fetch.RelicConflicts)
+	}
+}
+
+func TestRelicEditsToDifferentPartsFieldsAndPropertiesBothApply(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		c := newRelicClones(first, second, config)
+		t.Run("different parts", func(t *testing.T) {
+			created := c.share(t, core.RelicCreateInput{Title: "Parts", Parts: relicParts(t, 2, true)})
+			relicID, p, q := created.Relic.ID, created.Parts[0], created.Parts[1]
+			c.update(t, c.a, relicID, saveBody(p.ID, p.Body.Version, "first's text\n"))
+			c.update(t, c.b, relicID, saveBody(q.ID, q.Body.Version, "second's text\n"))
+			result := c.round(t)
+			assertRelicSyncOutcome(t, result.Fetch, relicID, SyncReconciled)
+			assertNoRelicReport(t, result)
+			c.assertConverged(t, relicID)
+			for _, service := range []core.RelicService{c.a, c.b} {
+				document := shownRelic(t, service, relicID)
+				if got := *shownPart(t, document, p.ID).Body.Text; got != "first's text\n" {
+					t.Fatalf("part %s body = %q, want first's", p.ID, got)
+				}
+				if got := *shownPart(t, document, q.ID).Body.Text; got != "second's text\n" {
+					t.Fatalf("part %s body = %q, want second's", q.ID, got)
+				}
+			}
+		})
+		t.Run("different fields of one part", func(t *testing.T) {
+			created := c.share(t, core.RelicCreateInput{Title: "Fields", Parts: relicParts(t, 1, false)})
+			relicID, p := created.Relic.ID, created.Parts[0].ID
+			c.update(t, c.a, relicID, setField(t, p, "a", "from first"))
+			c.update(t, c.b, relicID, setField(t, p, "b", "from second"))
+			result := c.round(t)
+			assertRelicSyncOutcome(t, result.Fetch, relicID, SyncReconciled)
+			assertNoRelicReport(t, result)
+			c.assertConverged(t, relicID)
+			for _, service := range []core.RelicService{c.a, c.b} {
+				fields := shownPart(t, shownRelic(t, service, relicID), p).Fields
+				assertRawString(t, "field a", fields["a"], "from first")
+				assertRawString(t, "field b", fields["b"], "from second")
+			}
+		})
+		t.Run("different properties", func(t *testing.T) {
+			relicID := c.share(t, core.RelicCreateInput{Title: "Properties"}).Relic.ID
+			c.update(t, c.a, relicID, setProperty(t, "x", "from first"))
+			c.update(t, c.b, relicID, setProperty(t, "y", "from second"))
+			result := c.round(t)
+			assertRelicSyncOutcome(t, result.Fetch, relicID, SyncReconciled)
+			assertNoRelicReport(t, result)
+			c.assertConverged(t, relicID)
+			for _, service := range []core.RelicService{c.a, c.b} {
+				properties := shownRelic(t, service, relicID).Properties
+				assertRawString(t, "property x", properties["x"], "from first")
+				assertRawString(t, "property y", properties["y"], "from second")
+			}
+		})
+		t.Run("properties that pass the total together", func(t *testing.T) {
+			relicID := c.share(t, core.RelicCreateInput{Title: "Large properties"}).Relic.ID
+			x, y := strings.Repeat("x", 40*1024), strings.Repeat("y", 40*1024)
+			c.update(t, c.a, relicID, setProperty(t, "x", x))
+			c.update(t, c.b, relicID, setProperty(t, "y", y))
+			result := c.round(t)
+			assertRelicSyncOutcome(t, result.Fetch, relicID, SyncReconciled)
+			assertOneWarning(t, result, core.WarningRelicOverLimit)
+			c.assertConverged(t, relicID)
+			for _, service := range []core.RelicService{c.a, c.b} {
+				properties := shownRelic(t, service, relicID).Properties
+				assertRawString(t, "property x", properties["x"], x)
+				assertRawString(t, "property y", properties["y"], y)
+			}
+			_, err := c.a.Update(context.Background(), relicID, []core.RelicEdit{setProperty(t, "z", "more")})
+			if core.CategoryOf(err) != core.CategoryValidation {
+				t.Fatalf("Update() growing the properties error = %v, want a validation error", err)
+			}
+		})
+		t.Run("fields of one part that pass the total together", func(t *testing.T) {
+			created := c.share(t, core.RelicCreateInput{Title: "Large fields", Parts: relicParts(t, 1, false)})
+			relicID, p := created.Relic.ID, created.Parts[0].ID
+			a, b := strings.Repeat("a", 9*1024), strings.Repeat("b", 9*1024)
+			c.update(t, c.a, relicID, setField(t, p, "a", a))
+			c.update(t, c.b, relicID, setField(t, p, "b", b))
+			result := c.round(t)
+			assertRelicSyncOutcome(t, result.Fetch, relicID, SyncReconciled)
+			assertOneWarning(t, result, core.WarningRelicOverLimit)
+			c.assertConverged(t, relicID)
+			for _, service := range []core.RelicService{c.a, c.b} {
+				fields := shownPart(t, shownRelic(t, service, relicID), p).Fields
+				assertRawString(t, "field a", fields["a"], a)
+				assertRawString(t, "field b", fields["b"], b)
+			}
+			_, err := c.a.Update(context.Background(), relicID, []core.RelicEdit{setField(t, p, "c", "more")})
+			if core.CategoryOf(err) != core.CategoryValidation {
+				t.Fatalf("Update() growing the fields error = %v, want a validation error", err)
+			}
+		})
+	})
+}
+
+func TestRelicSameFieldOrPropertyLaterSyncWins(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		c := newRelicClones(first, second, config)
+		t.Run("field", func(t *testing.T) {
+			created := c.share(t, core.RelicCreateInput{Title: "Field", Parts: relicParts(t, 1, false)})
+			relicID, p := created.Relic.ID, created.Parts[0].ID
+			ours := c.update(t, c.a, relicID, setField(t, p, "heading", "first's heading"))
+			theirs := c.update(t, c.b, relicID, setField(t, p, "heading", "second's heading"))
+			result := c.round(t)
+			assertRelicSyncOutcome(t, result.Fetch, relicID, SyncReconciled)
+			assertNoRelicReport(t, result)
+			head := c.assertConverged(t, relicID)
+			assertHistoryHolds(t, first, head, ours, theirs)
+			for _, service := range []core.RelicService{c.a, c.b} {
+				assertRawString(t, "heading", shownPart(t, shownRelic(t, service, relicID), p).Fields["heading"], "second's heading")
+			}
+		})
+		t.Run("property", func(t *testing.T) {
+			relicID := c.share(t, core.RelicCreateInput{Title: "Property"}).Relic.ID
+			ours := c.update(t, c.a, relicID, setProperty(t, "owner", "first"))
+			theirs := c.update(t, c.b, relicID, setProperty(t, "owner", "second"))
+			result := c.round(t)
+			assertRelicSyncOutcome(t, result.Fetch, relicID, SyncReconciled)
+			assertNoRelicReport(t, result)
+			head := c.assertConverged(t, relicID)
+			assertHistoryHolds(t, first, head, ours, theirs)
+			for _, service := range []core.RelicService{c.a, c.b} {
+				assertRawString(t, "owner", shownRelic(t, service, relicID).Properties["owner"], "second")
+			}
+		})
+	})
+}
+
+func relicPartOrder(t *testing.T, service core.RelicService, relicID string) []string {
+	t.Helper()
+	var order []string
+	for _, part := range shownRelic(t, service, relicID).Parts {
+		order = append(order, part.ID)
+	}
+	return order
+}
+
+func TestRelicTitleAndPositionLaterSyncWins(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		c := newRelicClones(first, second, config)
+		t.Run("title", func(t *testing.T) {
+			relicID := c.share(t, core.RelicCreateInput{Title: "Title"}).Relic.ID
+			ours := c.update(t, c.a, relicID, core.RelicEdit{Kind: core.RelicEditTitle, Title: "First's title"})
+			theirs := c.update(t, c.b, relicID, core.RelicEdit{Kind: core.RelicEditTitle, Title: "Second's title"})
+			result := c.round(t)
+			assertRelicSyncOutcome(t, result.Fetch, relicID, SyncReconciled)
+			assertNoRelicReport(t, result)
+			head := c.assertConverged(t, relicID)
+			assertHistoryHolds(t, first, head, ours, theirs)
+			for _, service := range []core.RelicService{c.a, c.b} {
+				if got := shownRelic(t, service, relicID).Title; got != "Second's title" {
+					t.Fatalf("title = %q, want second's", got)
+				}
+			}
+		})
+		t.Run("position", func(t *testing.T) {
+			created := c.share(t, core.RelicCreateInput{Title: "Position", Parts: relicParts(t, 3, false)})
+			relicID := created.Relic.ID
+			p1, p2, p3 := created.Parts[0].ID, created.Parts[1].ID, created.Parts[2].ID
+			ours := c.update(t, c.a, relicID, core.RelicEdit{Kind: core.RelicEditMovePart, Part: p1, After: p2})
+			theirs := c.update(t, c.b, relicID, core.RelicEdit{Kind: core.RelicEditMovePart, Part: p1, After: p3})
+			want := relicPartOrder(t, c.b, relicID)
+			if !reflect.DeepEqual(want, []string{p2, p3, p1}) {
+				t.Fatalf("second's order before the sync = %q", want)
+			}
+			result := c.round(t)
+			assertRelicSyncOutcome(t, result.Fetch, relicID, SyncReconciled)
+			assertNoRelicReport(t, result)
+			head := c.assertConverged(t, relicID)
+			assertHistoryHolds(t, first, head, ours, theirs)
+			for _, service := range []core.RelicService{c.a, c.b} {
+				if got := relicPartOrder(t, service, relicID); !reflect.DeepEqual(got, want) {
+					t.Fatalf("part order = %q, want second's %q", got, want)
+				}
+			}
+		})
+	})
+}
+
+func TestRelicSameBodyIsAConflict(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		c := newRelicClones(first, second, config)
+		created := c.share(t, core.RelicCreateInput{Title: "Body", Parts: relicParts(t, 1, true)})
+		relicID, p := created.Relic.ID, created.Parts[0]
+		c.update(t, c.a, relicID, saveBody(p.ID, p.Body.Version, "first's text\n"))
+		c.update(t, c.b, relicID, saveBody(p.ID, p.Body.Version, "second's text\n"))
+
+		syncClean(t, first, config)
+		result, err := second.Sync(context.Background(), config)
+		if core.CategoryOf(err) != core.CategoryConflict {
+			t.Fatalf("second Sync() error = %v, want a conflict; result = %+v", err, result)
+		}
+		assertRelicSyncOutcome(t, result.Fetch, relicID, SyncConflicted)
+		conflicts := result.Fetch.RelicConflicts
+		if len(conflicts) != 1 || conflicts[0].Type != core.RelicConflictBody || conflicts[0].Part != p.ID {
+			t.Fatalf("conflicts = %+v, want one body conflict on part %s", conflicts, p.ID)
+		}
+		syncClean(t, first, config)
+		c.assertConverged(t, relicID)
+		for _, service := range []core.RelicService{c.a, c.b} {
+			if got := *shownPart(t, shownRelic(t, service, relicID), p.ID).Body.Text; got != "first's text\n" {
+				t.Fatalf("body = %q, want first's", got)
+			}
+		}
+		if got := string(relicBlob(t, second, conflicts[0].ParkedRef+":parts/"+p.ID+"/body")); got != "second's text\n" {
+			t.Fatalf("the parked ref holds %q, want second's text", got)
+		}
+	})
+}
+
+func TestRelicEditOnARemovedPartAppliesAndWarns(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		c := newRelicClones(first, second, config)
+		for _, remover := range []string{"first", "second"} {
+			t.Run("removed by "+remover, func(t *testing.T) {
+				created := c.share(t, core.RelicCreateInput{Title: "Removed by " + remover, Parts: relicParts(t, 1, false)})
+				relicID, p := created.Relic.ID, created.Parts[0].ID
+				remove := core.RelicEdit{Kind: core.RelicEditRemovePart, Part: p}
+				edit := setField(t, p, "heading", "edited")
+				if remover == "first" {
+					c.update(t, c.a, relicID, remove)
+					c.update(t, c.b, relicID, edit)
+				} else {
+					c.update(t, c.a, relicID, edit)
+					c.update(t, c.b, relicID, remove)
+				}
+				result := c.round(t)
+				assertRelicSyncOutcome(t, result.Fetch, relicID, SyncReconciled)
+				assertOneWarning(t, result, core.WarningRelicEditOnRemovedPart)
+				c.assertConverged(t, relicID)
+				for _, service := range []core.RelicService{c.a, c.b} {
+					part := shownPart(t, shownRelic(t, service, relicID), p)
+					if !part.Removed {
+						t.Fatalf("part %s is live, want it removed", p)
+					}
+					assertRawString(t, "heading", part.Fields["heading"], "edited")
+				}
+			})
+		}
+	})
+}
+
+func TestRelicDeletedOnOneSideAndEditedOnTheOther(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		c := newRelicClones(first, second, config)
+		ctx := context.Background()
+		t.Run("deleter first", func(t *testing.T) {
+			relicID := c.share(t, core.RelicCreateInput{Title: "Deleter first"}).Relic.ID
+			if _, err := c.a.Delete(ctx, relicID); err != nil {
+				t.Fatalf("Delete() error = %v", err)
+			}
+			c.update(t, c.b, relicID, core.RelicEdit{Kind: core.RelicEditTitle, Title: "Edited"})
+			syncClean(t, first, config)
+			result, err := second.Sync(ctx, config)
+			if core.CategoryOf(err) != core.CategoryConflict {
+				t.Fatalf("second Sync() error = %v, want a conflict; result = %+v", err, result)
+			}
+			conflicts := result.Fetch.RelicConflicts
+			if len(conflicts) != 1 || conflicts[0].Type != core.RelicConflictTombstone {
+				t.Fatalf("conflicts = %+v, want one tombstone conflict", conflicts)
+			}
+			syncClean(t, first, config)
+			c.assertConverged(t, relicID)
+			state := readRelicTip(t, second, config, relicID).Record.State.Relic
+			if !state.Deleted || state.Title != "Deleter first" {
+				t.Fatalf("relic deleted %t, title %q; want deleted with the first title", state.Deleted, state.Title)
+			}
+		})
+		t.Run("deleter second", func(t *testing.T) {
+			relicID := c.share(t, core.RelicCreateInput{Title: "Deleter second"}).Relic.ID
+			edit := c.update(t, c.a, relicID, core.RelicEdit{Kind: core.RelicEditTitle, Title: "Edited"})
+			if _, err := c.b.Delete(ctx, relicID); err != nil {
+				t.Fatalf("Delete() error = %v", err)
+			}
+			result := c.round(t)
+			assertRelicSyncOutcome(t, result.Fetch, relicID, SyncReconciled)
+			assertNoRelicReport(t, result)
+			head := c.assertConverged(t, relicID)
+			assertHistoryHolds(t, first, head, edit)
+			state := readRelicTip(t, first, config, relicID).Record.State.Relic
+			if !state.Deleted || state.Title != "Edited" {
+				t.Fatalf("relic deleted %t, title %q; want deleted holding the edit", state.Deleted, state.Title)
+			}
+		})
+	})
+}
+
+// allRefs lists every ref of the repository at directory with its object,
+// apart from the tracking refs. Only a fetch writes those, so a clone's
+// tracking ref names origin's tip as the clone's last fetch found it, which
+// is before its own push.
+func allRefs(t *testing.T, directory string) string {
+	t.Helper()
+	var kept []string
+	for _, line := range strings.Split(syncGit(t, directory, "for-each-ref", "--format=%(refname) %(objectname)"), "\n") {
+		if !strings.HasPrefix(line, "refs/workbook/remotes/") {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+func TestRelicSyncIsTheSameAfterRetriesAndDuplicates(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		c := newRelicClones(first, second, config)
+		bare := syncGit(t, first.Root, "remote", "get-url", "origin")
+
+		t.Run("syncing again changes nothing", func(t *testing.T) {
+			relicID := c.share(t, core.RelicCreateInput{Title: "Retried"}).Relic.ID
+			c.update(t, c.a, relicID, setProperty(t, "x", "from first"))
+			c.update(t, c.b, relicID, setProperty(t, "y", "from second"))
+			c.round(t)
+			c.assertConverged(t, relicID)
+			before := []string{allRefs(t, first.Root), allRefs(t, second.Root), allRefs(t, bare)}
+			for range 2 {
+				syncClean(t, first, config)
+				syncClean(t, second, config)
+			}
+			after := []string{allRefs(t, first.Root), allRefs(t, second.Root), allRefs(t, bare)}
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("syncing again moved refs:\nbefore %q\nafter  %q", before, after)
+			}
+			for _, repo := range []*Repository{first, second} {
+				if got, want := refValue(t, repo, relicTrackingRef(relicID)), relicRefHead(t, repo, relicID); got != want {
+					t.Fatalf("tracking ref %s, relic ref %s; want them equal once synchronized", got, want)
+				}
+			}
+		})
+
+		t.Run("a commit two clones publish lands once", func(t *testing.T) {
+			relicID := c.share(t, core.RelicCreateInput{Title: "Duplicated"}).Relic.ID
+			ours := c.update(t, c.a, relicID, setProperty(t, "x", "from first"))
+			third := openSyncClone(t, bare)
+			if _, err := third.LoadConfig(); err != nil {
+				t.Fatal(err)
+			}
+			syncGit(t, third.Root, "fetch", "--quiet", first.Root, relicRef(relicID)+":"+relicRef(relicID))
+			c.update(t, c.b, relicID, setProperty(t, "y", "from second"))
+			syncClean(t, second, config)
+
+			replayed := syncClean(t, third, config)
+			assertRelicSyncOutcome(t, replayed.Fetch, relicID, SyncReconciled)
+			assertRelicSyncOutcome(t, replayed.Push, relicID, SyncPublished)
+			published := remoteRefValue(t, first, relicRef(relicID))
+			if published != relicRefHead(t, third, relicID) {
+				t.Fatalf("origin holds %s, want the third clone's %s", published, relicRefHead(t, third, relicID))
+			}
+			result := syncClean(t, first, config)
+			if len(result.Push.Relics) != 0 {
+				t.Fatalf("first Sync() pushed relics %+v, want none", result.Push.Relics)
+			}
+			syncClean(t, second, config)
+			head := c.assertConverged(t, relicID)
+			if head != published {
+				t.Fatalf("first ended on %s, want origin's %s: its own pack was written again", head, published)
+			}
+			assertHistoryHolds(t, first, head, ours)
+		})
+
+		t.Run("a replay whose ref never moved", func(t *testing.T) {
+			relicID := c.share(t, core.RelicCreateInput{Title: "Interrupted"}).Relic.ID
+			c.update(t, c.a, relicID, setProperty(t, "x", "from first"))
+			c.update(t, c.b, relicID, setProperty(t, "y", "from second"))
+			syncClean(t, first, config)
+
+			// The second clone fetches and writes the replayed objects, and
+			// stops before its relic ref moves.
+			syncGit(t, second.Root, "fetch", "--quiet", "origin", relicFetchRefspecFor("origin"))
+			local := relicRefHead(t, second, relicID)
+			request := relicReconcileRequest{RelicID: relicID, Local: local, Remote: refValue(t, second, relicTrackingRef(relicID))}
+			_, _, diverged, graph, err := second.classifyRelicHeads(ctx, []relicReconcileRequest{request})
+			if err != nil || len(diverged) != 1 {
+				t.Fatalf("classifyRelicHeads() = %v, %v; want the relic diverged", diverged, err)
+			}
+			interrupted := second.reconcileDivergentRelics(ctx, config, diverged, graph)
+			if len(interrupted) != 1 || interrupted[0].Err != nil || interrupted[0].Next == "" {
+				t.Fatalf("reconcileDivergentRelics() = %+v", interrupted)
+			}
+			if got := relicRefHead(t, second, relicID); got != local {
+				t.Fatalf("the relic ref moved to %s, want %s", got, local)
+			}
+
+			result := syncClean(t, second, config)
+			assertRelicSyncOutcome(t, result.Fetch, relicID, SyncReconciled)
+			syncClean(t, first, config)
+			head := c.assertConverged(t, relicID)
+			if got, want := refValue(t, second, head+"^{tree}"), refValue(t, second, interrupted[0].Next+"^{tree}"); got != want {
+				t.Fatalf("the synchronized tip's tree %s differs from the interrupted replay's %s", got, want)
+			}
+			if got, want := gitOutput(t, second, "rev-list", "--count", head), gitOutput(t, second, "rev-list", "--count", interrupted[0].Next); got != want {
+				t.Fatalf("the synchronized history has %s commits, the interrupted replay %s", got, want)
+			}
+		})
+	})
+}
+
+// relicPushes returns the push commands that named a relic ref.
+func relicPushes(commands [][]string) [][]string {
+	var pushes [][]string
+	for _, command := range commands {
+		if len(command) > 0 && command[0] == "push" && strings.Contains(strings.Join(command, " "), relicRefPrefix) {
+			pushes = append(pushes, command)
+		}
+	}
+	return pushes
+}
+
+func TestPushPublishesOnlyRelicsThatDiffer(t *testing.T) {
+	t.Parallel()
+	first, _, config := syncRepositories(t)
+	unchanged := writeRelicRootNumbered(t, first, config, 1)
+	changed := writeRelicRootNumbered(t, first, config, 2)
+	publishRelicRefs(t, first)
+	edited := writeRelicChild(t, first, config, changed, nil, relicTitleSet(700001, "Changed"))
+	added := writeRelicRootNumbered(t, first, config, 3)
+
+	commands := observeCommands(first)
+	result, err := first.Push(context.Background(), config)
+	first.commandObserver = nil
+	if err != nil {
+		t.Fatalf("Push() error = %v; result = %+v", err, result)
+	}
+	want := []SyncRelicResult{
+		{RelicID: changed.Operation.RelicID, Status: SyncPublished},
+		{RelicID: added.Operation.RelicID, Status: SyncPublished},
+	}
+	if !reflect.DeepEqual(result.Relics, want) {
+		t.Fatalf("Push() relics = %+v, want %+v", result.Relics, want)
+	}
+	pushes := relicPushes(*commands)
+	if len(pushes) != 1 {
+		t.Fatalf("Push() ran relic pushes %q, want one", pushes)
+	}
+	refspecs := strings.Join(pushes[0], " ")
+	if strings.Contains(refspecs, unchanged.Operation.RelicID) {
+		t.Fatalf("Push() pushed the unchanged relic: %q", pushes[0])
+	}
+	for _, snapshot := range []core.RelicSnapshot{unchanged, edited, added} {
+		relicID := snapshot.Operation.RelicID
+		if got := remoteRefValue(t, first, relicRef(relicID)); got != snapshot.Head {
+			t.Fatalf("origin's relic %s = %s, want %s", relicID, got, snapshot.Head)
+		}
+	}
+}
+
+func TestPushNeverForcesOrDeletesARelicRef(t *testing.T) {
+	t.Parallel()
+	first, second, config := syncRepositories(t)
+	ctx := context.Background()
+	root := sharedRelic(t, first, second, config, 1)
+	relicID := root.Operation.RelicID
+	commands := observeCommands(second)
+	writeRelicChild(t, second, config, root, nil, relicTitleSet(700101, "Second's title"))
+	writeRelicChild(t, first, config, root, nil, relicTitleSet(700001, "First's title"))
+	publishRelicRefs(t, first)
+	// Rejected, by Push and by PushRelic; then replayed and published.
+	if _, err := second.Push(ctx, config); err == nil {
+		t.Fatal("Push() over a later remote tip succeeded")
+	}
+	if _, err := second.PushRelic(ctx, config, relicID); err == nil {
+		t.Fatal("PushRelic() over a later remote tip succeeded")
+	}
+	syncClean(t, second, config)
+	writeRelicChild(t, second, config, readRelicTip(t, second, config, relicID), nil, relicTitleSet(700102, "Again"))
+	if result, err := second.PushRelic(ctx, config, relicID); err != nil || result.Status != SyncPublished {
+		t.Fatalf("PushRelic() = %+v, %v; want published", result, err)
+	}
+	second.commandObserver = nil
+
+	pushes := relicPushes(*commands)
+	if len(pushes) < 4 {
+		t.Fatalf("observed relic pushes %q, want four", pushes)
+	}
+	for _, command := range pushes {
+		for _, arg := range command {
+			if strings.HasPrefix(arg, "+") || strings.HasPrefix(arg, ":") || strings.HasPrefix(arg, "--force") || arg == "-f" ||
+				arg == "--delete" || arg == "-d" || arg == "--mirror" || arg == "--prune" {
+				t.Fatalf("a relic push forced or deleted: %q", command)
+			}
+		}
+	}
+}
+
+func TestPushOfRelicsIsOneConnectionForAnyNumber(t *testing.T) {
+	t.Parallel()
+	first, _, config := syncRepositories(t)
+	push := func() int {
+		t.Helper()
+		commands := observeCommands(first)
+		result, err := first.Push(context.Background(), config)
+		first.commandObserver = nil
+		if err != nil {
+			t.Fatalf("Push() error = %v; result = %+v", err, result)
+		}
+		return len(relicPushes(*commands))
+	}
+	writeRelicRootNumbered(t, first, config, 1)
+	if got := push(); got != 1 {
+		t.Fatalf("one changed relic ran %d relic pushes, want one", got)
+	}
+	for n := 2; n <= 11; n++ {
+		writeRelicRootNumbered(t, first, config, n)
+	}
+	if got := push(); got != 1 {
+		t.Fatalf("ten changed relics ran %d relic pushes, want one", got)
+	}
+	if got := push(); got != 0 {
+		t.Fatalf("no changed relic ran %d relic pushes, want none", got)
+	}
+}
+
+func TestPushRelicRejectedByALaterRemoteTipIsReported(t *testing.T) {
+	t.Parallel()
+	first, second, config := syncRepositories(t)
+	ctx := context.Background()
+	root := sharedRelic(t, first, second, config, 1)
+	relicID := root.Operation.RelicID
+	local := writeRelicChild(t, second, config, root, nil, relicTitleSet(700101, "Second's title"))
+	fetchRelics(t, second, config)
+	// Origin moves after the fetch.
+	theirs := writeRelicChild(t, first, config, root, nil, relicTitleSet(700001, "First's title"))
+	publishRelicRefs(t, first)
+
+	single, err := second.PushRelicAfterFetch(ctx, config, relicID)
+	if core.CategoryOf(err) != core.CategoryOperational || single.Status != SyncRejected {
+		t.Fatalf("PushRelicAfterFetch() = %+v, %v; want rejected with an operational error", single, err)
+	}
+	if !strings.HasPrefix(single.Detail, "relic "+relicID+":") || !strings.HasPrefix(err.Error(), "relic "+relicID+":") {
+		t.Fatalf("detail %q and error %q, want both to name the relic", single.Detail, err)
+	}
+	result, err := second.Push(ctx, config)
+	if core.CategoryOf(err) != core.CategoryOperational {
+		t.Fatalf("Push() error = %v, want operational", err)
+	}
+	assertRelicSyncOutcome(t, result, relicID, SyncRejected)
+	if got := relicRefHead(t, second, relicID); got != local.Head {
+		t.Fatalf("the local relic ref moved to %s, want %s", got, local.Head)
+	}
+	if got := remoteRefValue(t, second, relicRef(relicID)); got != theirs.Head {
+		t.Fatalf("origin's relic ref = %s, want first's %s", got, theirs.Head)
+	}
+
+	synced := syncClean(t, second, config)
+	assertRelicSyncOutcome(t, synced.Fetch, relicID, SyncReconciled)
+	assertRelicSyncOutcome(t, synced.Push, relicID, SyncPublished)
+	if got := remoteRefValue(t, second, relicRef(relicID)); got != relicRefHead(t, second, relicID) {
+		t.Fatalf("origin's relic ref = %s, want second's replayed tip", got)
+	}
+	assertReplayedHistory(t, second, config, relicID, relicRefHead(t, second, relicID))
 }

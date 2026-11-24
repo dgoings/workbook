@@ -136,8 +136,11 @@ type relicRefUpdate struct {
 func (r *Repository) syncFetchedRelics(ctx context.Context, config core.ProjectConfig) (relicFetchState, relicStage) {
 	state := relicFetchState{Local: map[string]string{}, Tracking: map[string]string{}, Withheld: map[string]struct{}{}}
 	var stage relicStage
+	// A stage that failed leaves the push phase nothing to publish: what it
+	// read may be partial, and the next sync repairs what it did not do.
 	fail := func(err error) (relicFetchState, relicStage) {
 		stage.Err = err
+		state.Local = map[string]string{}
 		return state, stage
 	}
 
@@ -446,4 +449,244 @@ func (r *Repository) relicMovedDuringSync(ctx context.Context, updates []relicRe
 	}
 	return core.Errorf(core.CategoryStaleWrite,
 		"relic %s: changed while it was being synchronized; run the command again", relicID)
+}
+
+// A push carries relics beside tasks, in a `git push` of its own that runs
+// after the task push, so a relic origin refuses can never change what
+// happened to a task. Every refspec is plain: no relic ref is ever forced,
+// leased or deleted, so Git's own non-fast-forward rule is the only race
+// guard, and a refused relic is replayed onto origin's tip by the next fetch.
+
+// relicPushCandidate is one relic ref to publish at Head.
+type relicPushCandidate struct {
+	RelicID, Head string
+}
+
+// pushRelicHeads publishes candidates in one push and returns one outcome per
+// relic, read from Git's porcelain: published, up-to-date or rejected. It does
+// not check the remote afterwards; the caller lists the identity ref again
+// for the relics origin accepted (strandedPublication).
+func (r *Repository) pushRelicHeads(ctx context.Context, candidates []relicPushCandidate) (map[string]SyncRelicResult, error) {
+	outcomes := make(map[string]SyncRelicResult, len(candidates))
+	if len(candidates) == 0 {
+		return outcomes, nil
+	}
+	if r.readOnlyRemote() {
+		return nil, readOnlyRemotePublication(r.remote(), r.configuredRemote())
+	}
+	expected := make(map[string]string, len(candidates))
+	args := []string{"push", "--porcelain", r.remote()}
+	for _, candidate := range candidates {
+		refName := relicRefPrefix + candidate.RelicID
+		expected[refName] = candidate.RelicID
+		args = append(args, candidate.Head+":"+refName)
+	}
+	push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil, args...)
+	pushed, err := parsePushPorcelain(r.remote(), push.stdout, expected, nil, gitCommandResultError(push))
+	if err != nil {
+		return nil, err
+	}
+	for relicID, item := range pushed {
+		outcome := SyncRelicResult{RelicID: relicID, Status: item.Status}
+		if item.Status == SyncRejected {
+			outcome.Detail = fmt.Sprintf("relic %s: %s refused it %s; the next sync replays the local changes onto %s's tip",
+				relicID, r.remote(), item.Detail, r.remote())
+		}
+		outcomes[relicID] = outcome
+	}
+	return outcomes, nil
+}
+
+// relicPublication is what one publication of relic refs did.
+type relicPublication struct {
+	// Results has one entry per relic that was a candidate, by relic ID.
+	Results []SyncRelicResult
+	// Invalid and Rejected hold the detail of each relic not published
+	// because it failed its check, and of each origin refused.
+	Invalid, Rejected []string
+	// Stranded is set when origin, listed again after it accepted relic refs,
+	// turned out to be the place the tasks moved away from.
+	Stranded error
+}
+
+func (p relicPublication) invalidError() error {
+	return relicDetailsError(core.CategoryCorruptData, p.Invalid, "were not published")
+}
+
+func (p relicPublication) rejectedError(remote string) error {
+	return relicDetailsError(core.CategoryOperational, p.Rejected, "were refused by "+remote)
+}
+
+// publishRelics checks the candidates named in unchecked as a single-relic
+// read does, and publishes every candidate that passes in one push. A tip
+// that fails is reported invalid and is not published. A tip a newer Workbook
+// wrote is published unchecked: it is history this clone holds and cannot
+// judge, and publishing it rewrites nothing. The error is for a publication
+// that could not run.
+func (r *Repository) publishRelics(
+	ctx context.Context,
+	config core.ProjectConfig,
+	candidates []relicPushCandidate,
+	unchecked map[string]bool,
+) (relicPublication, error) {
+	var publication relicPublication
+	if len(candidates) == 0 {
+		return publication, nil
+	}
+	results := make(map[string]SyncRelicResult, len(candidates))
+	var heads []core.RelicHead
+	for _, candidate := range candidates {
+		if unchecked[candidate.RelicID] {
+			heads = append(heads, core.RelicHead{RelicID: candidate.RelicID, ObjectID: candidate.Head})
+		}
+	}
+	if len(heads) > 0 {
+		_, errs := r.verifyRelicTips(ctx, config, heads)
+		for index, head := range heads {
+			if err := errs[index]; err != nil && core.CategoryOf(err) != core.CategoryNewerWriter {
+				detail := relicDetail(head.RelicID, err)
+				results[head.RelicID] = SyncRelicResult{RelicID: head.RelicID, Status: SyncInvalid, Detail: detail}
+			}
+		}
+	}
+	kept := candidates[:0:0]
+	for _, candidate := range candidates {
+		if _, invalid := results[candidate.RelicID]; !invalid {
+			kept = append(kept, candidate)
+		}
+	}
+	pushed, err := r.pushRelicHeads(ctx, kept)
+	if err != nil {
+		return publication, err
+	}
+	var accepted []string
+	for relicID, outcome := range pushed {
+		results[relicID] = outcome
+		if outcome.Status == SyncPublished {
+			accepted = append(accepted, relicID)
+		}
+	}
+	for _, candidate := range candidates {
+		outcome := results[candidate.RelicID]
+		publication.Results = append(publication.Results, outcome)
+		switch outcome.Status {
+		case SyncInvalid:
+			publication.Invalid = append(publication.Invalid, outcome.Detail)
+		case SyncRejected:
+			publication.Rejected = append(publication.Rejected, outcome.Detail)
+		}
+	}
+	sort.Slice(publication.Results, func(i, j int) bool {
+		return publication.Results[i].RelicID < publication.Results[j].RelicID
+	})
+	if len(accepted) > 0 {
+		sort.Strings(accepted)
+		publication.Stranded = r.strandedPublication(ctx, accepted)
+	}
+	return publication, nil
+}
+
+// localRelicPushCandidates reads this clone's relic refs, as listed, and
+// returns the ones whose tip is not the one origin holds, sorted by relic ID.
+func localRelicPushCandidates(keys core.KeySet, records []relicRefRecord, remote map[string]string) ([]relicPushCandidate, error) {
+	candidates := make([]relicPushCandidate, 0, len(records))
+	for _, record := range records {
+		head, err := canonicalRelicHead(keys, record)
+		if err != nil {
+			return nil, err
+		}
+		if remote[head.RelicID] == head.ObjectID {
+			continue
+		}
+		candidates = append(candidates, relicPushCandidate{RelicID: head.RelicID, Head: head.ObjectID})
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].RelicID < candidates[j].RelicID })
+	return candidates, nil
+}
+
+// fetchedRelicPushCandidates returns the relics a sync's push phase
+// publishes: each whose local tip is not the tip just fetched, unless the
+// fetch withheld it. A relic the fetch reported invalid or waiting on an
+// upgrade is withheld; a conflicted one is not, because its ref is a clean
+// descendant of origin's tip. unchecked names the candidates the fetch never
+// read, which are the relics origin does not hold.
+func fetchedRelicPushCandidates(state relicFetchState) ([]relicPushCandidate, map[string]bool) {
+	var candidates []relicPushCandidate
+	unchecked := map[string]bool{}
+	for relicID, local := range state.Local {
+		if _, withheld := state.Withheld[relicID]; withheld {
+			continue
+		}
+		tracking, tracked := state.Tracking[relicID]
+		if tracked && tracking == local {
+			continue
+		}
+		if !tracked {
+			unchecked[relicID] = true
+		}
+		candidates = append(candidates, relicPushCandidate{RelicID: relicID, Head: local})
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].RelicID < candidates[j].RelicID })
+	return candidates, unchecked
+}
+
+// PushRelic publishes one relic ref to origin, as PushTask publishes one task
+// ref: the tip alone is checked, origin's identity is settled and the
+// configuration ledger goes out first, and origin's identity ref is listed
+// again after it accepts the relic. It issues no listing of origin's relics;
+// Git's non-fast-forward rule is the race guard, and its porcelain reports a
+// relic origin already holds as up-to-date.
+func (r *Repository) PushRelic(ctx context.Context, config core.ProjectConfig, relicID string) (SyncRelicResult, error) {
+	return r.pushRelic(ctx, config, relicID, false)
+}
+
+// PushRelicAfterFetch is PushRelic for a short-lived command that fetched from
+// the tasks remote on this handle moments before, as PushTaskAfterFetch is.
+func (r *Repository) PushRelicAfterFetch(ctx context.Context, config core.ProjectConfig, relicID string) (SyncRelicResult, error) {
+	return r.pushRelic(ctx, config, relicID, true)
+}
+
+func (r *Repository) pushRelic(ctx context.Context, config core.ProjectConfig, relicID string, afterFetch bool) (SyncRelicResult, error) {
+	result := SyncRelicResult{RelicID: relicID}
+	if err := r.verifyIdentity(ctx); err != nil {
+		return result, err
+	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return result, err
+	}
+	if err := core.ValidateRelicIDShape(relicID); err != nil {
+		return result, core.Wrap(core.CategoryValidation, "relic "+relicID+": the ID is invalid", err)
+	}
+	head, err := r.relicRefValue(ctx, relicRefPrefix+relicID)
+	if err != nil {
+		return result, err
+	}
+	if head == "" {
+		return result, core.Errorf(core.CategoryNotFound, "relic %s: there is no Workbook ref to publish", relicID)
+	}
+	_, errs := r.verifyRelicTips(ctx, config, []core.RelicHead{{RelicID: relicID, ObjectID: head}})
+	if err := errs[0]; err != nil && core.CategoryOf(err) != core.CategoryNewerWriter {
+		result.Status, result.Detail = SyncInvalid, relicDetail(relicID, err)
+		return result, core.Errorf(core.CategoryCorruptData, "%s; it was not published", result.Detail)
+	}
+	if err := r.ensureOriginIdentityAgreement(ctx, nil, afterFetch); err != nil {
+		return result, err
+	}
+	if _, err := r.publishConfigLedger(ctx); err != nil {
+		return result, err
+	}
+	pushed, err := r.pushRelicHeads(ctx, []relicPushCandidate{{RelicID: relicID, Head: head}})
+	if err != nil {
+		return result, err
+	}
+	result = pushed[relicID]
+	if result.Status == SyncPublished {
+		if err := r.strandedPublication(ctx, []string{relicID}); err != nil {
+			return result, err
+		}
+	}
+	if result.Status == SyncRejected {
+		return result, core.Errorf(core.CategoryOperational, "%s", result.Detail)
+	}
+	return result, nil
 }

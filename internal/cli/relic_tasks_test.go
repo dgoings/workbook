@@ -211,17 +211,33 @@ func TestTaskOutputIsUnchangedByRelics(t *testing.T) {
 	}
 }
 
-// A sync publishes the task and leaves the relic where it is: origin holds no
-// relic ref, and the local one has not moved.
-func TestNoRelicRefIsPushedOrFetched(t *testing.T) {
+// Relic refs travel with every push, fetch and sync, beside the task refs.
+func TestRelicRefsAreSharedByFetchPushAndSync(t *testing.T) {
 	t.Parallel()
 	project := codeProject(t, "sha1")
 	clone := cloneCode(t, project)
 	if code, stdout, stderr := run(t, clone, "setup"); code != 0 {
 		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
 	}
+	originRelic := func(relicID string) string {
+		t.Helper()
+		fields := strings.Fields(cliGitOutput(t, clone, "ls-remote", "origin", relicRef(relicID)))
+		if len(fields) != 2 {
+			return ""
+		}
+		return fields[0]
+	}
+
+	pushed := mustCreateRelic(t, clone, "Pushed relic", "--type", "spec").Relic
+	if code, stdout, stderr := run(t, clone, "push"); code != 0 {
+		t.Fatalf("push = (%d, %q, %q)", code, stdout, stderr)
+	}
+	if got := originRelic(pushed.ID); got != pushed.Head {
+		t.Fatalf("origin's relic ref after push = %q, want %s", got, pushed.Head)
+	}
+
 	task := cliCreateTask(t, clone, "Published task")
-	relic := mustCreateRelic(t, clone, "Local relic", "--type", "spec").Relic
+	synced := mustCreateRelic(t, clone, "Synced relic", "--type", "spec").Relic
 	if code, stdout, stderr := run(t, clone, "sync"); code != 0 {
 		t.Fatalf("sync = (%d, %q, %q)", code, stdout, stderr)
 	}
@@ -229,18 +245,14 @@ func TestNoRelicRefIsPushedOrFetched(t *testing.T) {
 	if !strings.Contains(listing, "\trefs/workbook/tasks/"+task.ID) {
 		t.Fatalf("origin lacks the task ref:\n%s", listing)
 	}
-	if strings.Contains(listing, "refs/workbook/relics/") || strings.Contains(listing, "-R-") {
-		t.Fatalf("origin holds a relic ref:\n%s", listing)
+	if got := originRelic(synced.ID); got != synced.Head {
+		t.Fatalf("origin's relic ref after sync = %q, want %s", got, synced.Head)
 	}
-	if head := relicHeadOf(t, clone, relic.ID); head != relic.Head {
-		t.Fatalf("local relic ref = %s after sync, want %s", head, relic.Head)
-	}
-	if got := refsUnder(t, clone, "refs/workbook/remotes/"); strings.Contains(got, "relics/") {
-		t.Fatalf("this checkout tracks a relic ref:\n%s", got)
+	if head := relicHeadOf(t, clone, synced.ID); head != synced.Head {
+		t.Fatalf("local relic ref = %s after sync, want %s", head, synced.Head)
 	}
 
-	// A relic someone wrote to origin by hand arrives with a sync.
-	cliGit(t, clone, "push", "--quiet", "origin", relicRef(relic.ID)+":"+relicRef(relic.ID))
+	// A fresh clone gets both with its first sync.
 	other := cloneCode(t, project)
 	if code, stdout, stderr := run(t, other, "setup"); code != 0 {
 		t.Fatalf("second setup = (%d, %q, %q)", code, stdout, stderr)
@@ -248,11 +260,13 @@ func TestNoRelicRefIsPushedOrFetched(t *testing.T) {
 	if code, stdout, stderr := run(t, other, "sync"); code != 0 {
 		t.Fatalf("second sync = (%d, %q, %q)", code, stdout, stderr)
 	}
-	if head := relicHeadOf(t, other, relic.ID); head != relic.Head {
-		t.Fatalf("the fresh clone's relic ref = %s after sync, want %s", head, relic.Head)
-	}
-	if got := refsUnder(t, other, "refs/workbook/remotes/"); !strings.Contains(got, "refs/workbook/remotes/origin/relics/"+relic.ID) {
-		t.Fatalf("the fresh clone does not track the relic:\n%s", got)
+	for _, relic := range []struct{ ID, Head string }{{pushed.ID, pushed.Head}, {synced.ID, synced.Head}} {
+		if head := relicHeadOf(t, other, relic.ID); head != relic.Head {
+			t.Fatalf("the fresh clone's relic ref = %s after sync, want %s", head, relic.Head)
+		}
+		if got := refsUnder(t, other, "refs/workbook/remotes/"); !strings.Contains(got, "refs/workbook/remotes/origin/relics/"+relic.ID) {
+			t.Fatalf("the fresh clone does not track the relic:\n%s", got)
+		}
 	}
 }
 

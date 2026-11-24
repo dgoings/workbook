@@ -63,6 +63,11 @@ var (
 	fetchBefore   = "git fetch --no-tags --prune --no-auto-maintenance origin "
 	relicRefspec  = " +refs/workbook/relics/*:refs/workbook/remotes/origin/relics/*"
 	relicsListing = "git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/relics/ refs/workbook/remotes/origin/relics/"
+	// Every push also asks origin for its relic refs in its one listing, and
+	// lists this checkout's relic refs once to find the ones origin lacks.
+	pushListingBefore = "git ls-remote --refs origin refs/workbook/tasks/* refs/workbook/project refs/workbook/config"
+	pushListingNow    = "git ls-remote --refs origin refs/workbook/tasks/* refs/workbook/relics/* refs/workbook/project refs/workbook/config"
+	localRelicListing = "git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/relics/"
 )
 
 var (
@@ -309,6 +314,10 @@ func withThisBranchsChecks(t *testing.T, report string) string {
 		if sorting {
 			if strings.HasPrefix(line, fetchBefore) {
 				section = append(section, line+relicRefspec, relicsListing)
+				continue
+			}
+			if line == pushListingBefore {
+				section = append(section, pushListingNow, localRelicListing)
 				continue
 			}
 			section = append(section, line)
