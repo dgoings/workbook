@@ -549,9 +549,10 @@ func docSection(document, heading string) string {
 
 // Relics are a stored format nobody can discover from a command's output: the
 // ref, the address form, the base rule and the limits have to be written down,
-// and so does the fact that nothing shares a relic yet. Each document is held
-// to its relic section, because the task sections already say "500" and "1 MiB".
-func TestReferenceDocumentsLocalRelics(t *testing.T) {
+// and so do how relics are shared and what a relic conflict leaves behind.
+// Each document is held to its relic section, because the task sections
+// already say "500" and "1 MiB".
+func TestReferenceDocumentsSharedRelics(t *testing.T) {
 	t.Parallel()
 	reference := docSection(repositoryDoc(t, "docs", "reference.md"), "## Relics")
 	if reference == "" {
@@ -562,8 +563,9 @@ func TestReferenceDocumentsLocalRelics(t *testing.T) {
 		"<relic-id>#<part-id>",
 		"--base",
 		"stale-write",
-		"not shared",
 		"workbook.relic",
+		// How relics are shared, and what a conflict reports.
+		"--no-sync", "relicConflict", "relic-over-limit", "git cat-file blob", "body", "tombstone",
 		// The limits, as the table writes them.
 		"500", "100", "16", "256", "64 KiB", "16 KiB", "1 MiB", "2,000", "4,000", "16 MiB",
 		// What relic update's help says about where a relic option may be typed.
@@ -576,6 +578,9 @@ func TestReferenceDocumentsLocalRelics(t *testing.T) {
 		if !strings.Contains(reference, required) {
 			t.Errorf("the reference's relic section is missing %q", required)
 		}
+	}
+	if strings.Contains(reference, "not shared") {
+		t.Error("the reference's relic section still says relics are not shared")
 	}
 	// Every limit that is a size is in the table by its exact number of bytes,
 	// taken from the constant the commands enforce, and each row says what it
@@ -629,11 +634,17 @@ func TestReferenceDocumentsLocalRelics(t *testing.T) {
 	for _, required := range []string{
 		"refs/workbook/relics/", "links.json", "parts/",
 		"always written in one order, " + strings.Join(members, ", ") + ",",
-		"until relics are shared",
+		// Where another clone's relics are kept, where a conflict parks a tip,
+		// and the refspec that fills the first.
+		"refs/workbook/remotes/", "refs/workbook/reconciled-relics/",
+		"+refs/workbook/relics/*:refs/workbook/remotes/<remote>/relics/*",
 	} {
 		if !strings.Contains(architecture, required) {
 			t.Errorf("the architecture's relic section is missing %q", required)
 		}
+	}
+	if versions := docSection(repositoryDoc(t, "docs", "architecture.md"), "### Mixed Workbook versions"); !strings.Contains(versions, "relic") {
+		t.Error("the architecture's \"### Mixed Workbook versions\" section does not say what an older Workbook does with relics")
 	}
 }
 

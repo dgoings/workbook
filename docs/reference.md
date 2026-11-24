@@ -171,7 +171,9 @@ It has no branch and no tag, and none of the code's objects. Setup writes
 `.workbook/config.json` into it as it does in a clone, uncommitted, and installs
 no agent documentation or skill. `list`, `show`, `create`, `update`, `serve`
 and the other task commands work there as they do in a clone, and
-changes publish to the remote the same way.
+changes publish to the remote the same way. The folder gets the project's
+relics too, and the relic commands work in it; see
+[Sharing relics](#sharing-relics).
 
 What makes the folder tasks-only is recorded in its own Git settings, never in
 the shared `.workbook/config.json`:
@@ -618,45 +620,49 @@ body. A property or a field is a named JSON value. A body is a file's bytes,
 stored exactly as given, with an optional format label such as `md`.
 
 The examples in this section are one session, in the order they appear, run
-by `alice@example.com` in a project whose key is `WB`. Each command is shown
-as it was typed and each output as it was printed. The session starts with a
+by `alice@example.com` in a project whose key is `WB`, in a clone of a remote
+that a second person, `bob@example.com`, clones later. Each command is shown
+as it was typed and each output as it was printed. Every command that changes
+a relic synchronizes with the remote, as a task command does, and ends with a
+`Sync:` line; see [Sharing relics](#sharing-relics). The session starts with a
 file `goals.md` that holds two lines of text, and with these three commands:
 
 ```sh
 workbook relic create "Task archive compaction" --type spec
-workbook relic update WB-R-01M86B5E --set status=draft --add-part --part-type section --field heading=Goals --body-file goals.md --add-part --part-type decision --field "heading=Keep a backup bundle" --field-json accepted=true
-workbook relic show WB-R-01M86B5E
+workbook relic update WB-R-01M87F0S --set status=draft --add-part --part-type section --field heading=Goals --body-file goals.md --add-part --part-type decision --field "heading=Keep a backup bundle" --field-json accepted=true
+workbook relic show WB-R-01M87F0S
 ```
 
 ```text
-WB-R-01M86B5EHY4R2HME50RYZKH12Z	spec	Task archive compaction
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction
 Author:	alice@example.com
-Updated:	2026-11-24T08:36:09Z
+Updated:	2026-11-24T19:02:46Z
 Properties:
   status: draft
-#01M86B5ESZPGDSDZYRJ5AN1HF8	section	md, 102 bytes, version 01M86B5ESZPGDSDZYRJ5AN1HF8
+#01M87F0T8ZACFWH3F27EK4CYVH	section	md, 102 bytes, version 01M87F0T8ZACFWH3F27EK4CYVH
   heading: Goals
-#01M86B5ESZP5Y76C7WD7HFES83	decision	no body
+#01M87F0T8ZDXPZV8WNS006CBKV	decision	no body
   accepted: true
   heading: Keep a backup bundle
 ```
 
-**Relics stay in this checkout.** They are not shared: no command sends a
-relic to a remote or reads one from it, `workbook sync` leaves relic refs
-alone, and a fresh clone has none. Relics are not in the SQLite index, and no
-task command returns one: `workbook list`, `next` and `show` answer as they did
-before relics existed. There are no links between relics and tasks, no
-schemas, no history or diff commands, no retiring, no compaction and no web
-page for relics yet. Until relics are shared, the only copy of a relic is the
-one in this checkout's Git repository.
+**Relics are shared with the tasks.** Every command that sends task refs to
+the tasks remote or reads them from it carries relic refs too, and a fresh
+clone gets every relic from `workbook setup`; see
+[Sharing relics](#sharing-relics). No task command returns a relic:
+`workbook list` and `next` answer as they did before relics existed. There
+are no schemas, no history or diff commands, no retiring, no compaction and no
+web page for relics yet.
 
 **Upgrade every Workbook on the machine before creating relics.** A Workbook
 from before relics does not know the refs that hold them. Its `workbook reset
 --no-backup` deletes the relic refs with the rest, writes no bundle, and does
-not say that it held relics. Its plain `workbook reset` writes them into its
-bundle, but the restore command it prints does not fetch them back. Nothing
-else keeps a relic, so a reset by an older Workbook can lose every relic in
-the checkout.
+not say that it held relics, because it does not count them as work that
+exists only here. Its plain `workbook reset` writes them into its bundle, but
+the restore command it prints does not fetch them back. A relic the tasks
+remote already holds comes back with the next `workbook sync` of this build.
+A change to a relic that was not yet published, because it was made with
+`--no-sync`, offline, or with `auto-sync` off, can be lost.
 
 Each relic is one ref, `refs/workbook/relics/<relic-id>`, holding a chain of
 immutable commits, as a task ref does. No relic command deletes a ref or
@@ -666,16 +672,16 @@ format.
 ### Relic IDs and part addresses
 
 A relic ID is `<KEY>-R-<ULID>`, where the key is the project's current key
-when the relic is created: `WB-R-01M86B5EHY4R2HME50RYZKH12Z`. Its grammar is
+when the relic is created: `WB-R-01M87F0SQYHP3HCR4QEN3RTVEX`. Its grammar is
 `^[A-Z][A-Z0-9]{1,9}-R-[0-7][0-9A-HJKMNP-TV-Z]{25}$`. A relic ID is never a
 task ID. A task command given a relic ID, and a relic command given a task ID,
 both answer `not-found` (exit `4`).
 
-A part ID is an uppercase ULID, `01M86B5ESZPGDSDZYRJ5AN1HF8`. It is the ID of
+A part ID is an uppercase ULID, `01M87F0T8ZACFWH3F27EK4CYVH`. It is the ID of
 the operation that added the part, and it never changes.
 
 A part address is `<relic-id>#<part-id>`:
-`WB-R-01M86B5EHY4R2HME50RYZKH12Z#01M86B5ESZPGDSDZYRJ5AN1HF8`.
+`WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH`.
 
 Any unambiguous prefix of a relic ID or of a part ID works wherever one is
 taken, on either side of the `#`, and letter case is ignored. A prefix that
@@ -686,11 +692,11 @@ made by one command usually share them. The two parts added above do, and ten
 characters do not tell them apart:
 
 ```sh
-workbook relic show WB-R-01M86B5E#01M86B5ESZ
+workbook relic show WB-R-01M87F0S#01M87F0T8Z
 ```
 
 ```text
-workbook: part prefix "01M86B5ESZ" matches 2 parts of WB-R-01M86B5EHY4R2HME50RYZKH12Z; use more characters
+workbook: part prefix "01M87F0T8Z" matches 2 parts of WB-R-01M87F0SQYHP3HCR4QEN3RTVEX; use more characters
 ```
 
 Quote an address in a shell that gives `#` a meaning inside a word, as zsh
@@ -705,7 +711,8 @@ workbook relic create "Task archive compaction" --type spec
 ```
 
 ```text
-WB-R-01M86B5EHY4R2HME50RYZKH12Z	spec	Task archive compaction
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction
+Sync:	completed
 ```
 
 The output is the relic's ID, type and title, separated by tabs. The relic
@@ -749,13 +756,14 @@ The session's second command set a property and added two parts, the first
 with a body:
 
 ```sh
-workbook relic update WB-R-01M86B5E --set status=draft --add-part --part-type section --field heading=Goals --body-file goals.md --add-part --part-type decision --field "heading=Keep a backup bundle" --field-json accepted=true
+workbook relic update WB-R-01M87F0S --set status=draft --add-part --part-type section --field heading=Goals --body-file goals.md --add-part --part-type decision --field "heading=Keep a backup bundle" --field-json accepted=true
 ```
 
 ```text
-WB-R-01M86B5EHY4R2HME50RYZKH12Z	spec	Task archive compaction
-part	01M86B5ESZPGDSDZYRJ5AN1HF8	section	01M86B5ESZPGDSDZYRJ5AN1HF8
-part	01M86B5ESZP5Y76C7WD7HFES83	decision	-
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction
+part	01M87F0T8ZACFWH3F27EK4CYVH	section	01M87F0T8ZACFWH3F27EK4CYVH
+part	01M87F0T8ZDXPZV8WNS006CBKV	decision	-
+Sync:	completed
 ```
 
 After the relic's line, the output has one `part` line for each part the
@@ -782,13 +790,13 @@ two clears, `--set` with `--set-json`, or `--field` with `--field-json` or
 `--clear-field`.
 
 ```sh
-workbook relic update WB-R-01M86B5E --set status=approved --clear status
-workbook relic update WB-R-01M86B5E --part 01M86B5ESZP5 --field accepted=yes --field-json accepted=true
+workbook relic update WB-R-01M87F0S --set status=approved --clear status
+workbook relic update WB-R-01M87F0S --part 01M87F0T8ZD --field accepted=yes --field-json accepted=true
 ```
 
 ```text
 workbook: this update sets and clears property "status"; name a property once in one update
-workbook: this update sets field "accepted" of part 01M86B5ESZP5Y76C7WD7HFES83 twice; name a field once for each part in one update
+workbook: this update sets field "accepted" of part 01M87F0T8ZDXPZV8WNS006CBKV twice; name a field once for each part in one update
 ```
 
 **Names.** A property name or a field name is 1 to 100 bytes of valid UTF-8.
@@ -823,23 +831,24 @@ prints as `null`. `relic export` and `--json` carry every value as it is
 stored. A value read back and stored again does not change.
 
 ```sh
-workbook relic update WB-R-01M86B5E --title "Task archive compaction, second draft" --set "owner=Alice <alice@example.com>" --set-json 'reviewers=["Alice <alice@example.com>","bob@example.com"]' --set-json approved=null
-workbook relic show WB-R-01M86B5E
+workbook relic update WB-R-01M87F0S --title "Task archive compaction, second draft" --set "owner=Alice <alice@example.com>" --set-json 'reviewers=["Alice <alice@example.com>","bob@example.com"]' --set-json approved=null
+workbook relic show WB-R-01M87F0S
 ```
 
 ```text
-WB-R-01M86B5EHY4R2HME50RYZKH12Z	spec	Task archive compaction, second draft
-WB-R-01M86B5EHY4R2HME50RYZKH12Z	spec	Task archive compaction, second draft
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+Sync:	completed
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
 Author:	alice@example.com
-Updated:	2026-11-24T08:36:10Z
+Updated:	2026-11-24T19:02:48Z
 Properties:
   approved: null
   owner: Alice <alice@example.com>
   reviewers: ["Alice \u003calice@example.com\u003e","bob@example.com"]
   status: draft
-#01M86B5ESZPGDSDZYRJ5AN1HF8	section	md, 102 bytes, version 01M86B5ESZPGDSDZYRJ5AN1HF8
+#01M87F0T8ZACFWH3F27EK4CYVH	section	md, 102 bytes, version 01M87F0T8ZACFWH3F27EK4CYVH
   heading: Goals
-#01M86B5ESZP5Y76C7WD7HFES83	decision	no body
+#01M87F0T8ZDXPZV8WNS006CBKV	decision	no body
   accepted: true
   heading: Keep a backup bundle
 ```
@@ -851,11 +860,12 @@ command is safe. Saving a body is the exception: it always records a new body
 version, even when the bytes are the same.
 
 ```sh
-workbook relic update WB-R-01M86B5E --set status=draft
+workbook relic update WB-R-01M87F0S --set status=draft
 ```
 
 ```text
-No change: WB-R-01M86B5EHY4R2HME50RYZKH12Z
+No change: WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+Sync:	completed
 ```
 
 **Bodies.** `--body-file <file>` saves the file's bytes as the part's body.
@@ -900,9 +910,10 @@ workbook relic list
 ```
 
 ```text
-WB-R-01M86B5HKECWCKS2BRQBFX149H	plan	Release checklist
-WB-R-01M86B5EHY4R2HME50RYZKH12Z	spec	2 parts	Task archive compaction, second draft
-WB-R-01M86B5HKECWCKS2BRQBFX149H	plan	0 parts	Release checklist
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	Release checklist
+Sync:	completed
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	2 parts	Task archive compaction, second draft
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	0 parts	Release checklist
 ```
 
 Each line of `relic list` is the relic's ID, its type, how many live parts it
@@ -937,19 +948,19 @@ each marked `removed`. Positions are not printed; `--json` carries them.
 A part address shows the relic's own lines and that one part, removed or not:
 
 ```sh
-workbook relic show WB-R-01M86B5E#01M86B5ESZPG
+workbook relic show WB-R-01M87F0S#01M87F0T8ZA
 ```
 
 ```text
-WB-R-01M86B5EHY4R2HME50RYZKH12Z	spec	Task archive compaction, second draft
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
 Author:	alice@example.com
-Updated:	2026-11-24T08:36:10Z
+Updated:	2026-11-24T19:02:48Z
 Properties:
   approved: null
   owner: Alice <alice@example.com>
   reviewers: ["Alice \u003calice@example.com\u003e","bob@example.com"]
   status: draft
-#01M86B5ESZPGDSDZYRJ5AN1HF8	section	md, 102 bytes, version 01M86B5ESZPGDSDZYRJ5AN1HF8
+#01M87F0T8ZACFWH3F27EK4CYVH	section	md, 102 bytes, version 01M87F0T8ZACFWH3F27EK4CYVH
   heading: Goals
 ```
 
@@ -957,7 +968,7 @@ A part address with `--body`, and without `--json`, writes only that part's
 body. A part with no body is `not-found` (exit `4`) there.
 
 ```sh
-workbook relic show WB-R-01M86B5E#01M86B5ESZPG --body
+workbook relic show WB-R-01M87F0S#01M87F0T8ZA --body
 ```
 
 ```text
@@ -1000,11 +1011,11 @@ Workbook writes no such relic; the one below had its newest `state.json`
 rewritten with Git alone, after the session:
 
 ```sh
-workbook relic show AB-R-01M86B6ADMR9ZBJEY9RRKY2W6W
+workbook relic show AB-R-01M87F4VC3D1ZDFRBP3M6YCB7Y
 ```
 
 ```text
-workbook: relic AB-R-01M86B6ADMR9ZBJEY9RRKY2W6W: relic state is not canonical; run "workbook validate" for details
+workbook: relic AB-R-01M87F4VC3D1ZDFRBP3M6YCB7Y: relic state is not canonical; run "workbook validate" for details
 ```
 
 A relic whose newest commit, or that commit's parent, names an object Git does
@@ -1025,12 +1036,13 @@ Letter case is ignored, as it is for every ID. The session adds a third line
 to `goals.md` and saves it over the body it showed above:
 
 ```sh
-workbook relic update WB-R-01M86B5E --part 01M86B5ESZPG --body-file goals.md --base 01M86B5ESZPGDSDZYRJ5AN1HF8
+workbook relic update WB-R-01M87F0S --part 01M87F0T8ZA --body-file goals.md --base 01M87F0T8ZACFWH3F27EK4CYVH
 ```
 
 ```text
-WB-R-01M86B5EHY4R2HME50RYZKH12Z	spec	Task archive compaction, second draft
-part	01M86B5ESZPGDSDZYRJ5AN1HF8	section	01M86B5JDRCYRM2P2G4TSYG2NW
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+part	01M87F0T8ZACFWH3F27EK4CYVH	section	01M87F0ZKD0X1MC06E1JCG5QBY
+Sync:	completed
 ```
 
 The body is still labeled `md`: a save over a body keeps its label.
@@ -1040,38 +1052,38 @@ nothing is written. Repeating the same command, with the base it has just
 replaced:
 
 ```sh
-workbook relic update WB-R-01M86B5E --part 01M86B5ESZPG --body-file goals.md --base 01M86B5ESZPGDSDZYRJ5AN1HF8
+workbook relic update WB-R-01M87F0S --part 01M87F0T8ZA --body-file goals.md --base 01M87F0T8ZACFWH3F27EK4CYVH
 ```
 
 ```text
-workbook: part 01M86B5ESZPGDSDZYRJ5AN1HF8 body is at version 01M86B5JDRCYRM2P2G4TSYG2NW, not 01M86B5ESZPGDSDZYRJ5AN1HF8; read it again with "workbook relic show WB-R-01M86B5EHY4R2HME50RYZKH12Z#01M86B5ESZPGDSDZYRJ5AN1HF8 --body" and save from that version
+workbook: part 01M87F0T8ZACFWH3F27EK4CYVH body is at version 01M87F0ZKD0X1MC06E1JCG5QBY, not 01M87F0T8ZACFWH3F27EK4CYVH; read it again with "workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body" and save from that version
 ```
 
 With `--json` the same refusal is the error envelope:
 
 ```json
-{"format":"workbook.error","version":1,"error":{"category":"stale-write","message":"part 01M86B5ESZPGDSDZYRJ5AN1HF8 body is at version 01M86B5JDRCYRM2P2G4TSYG2NW, not 01M86B5ESZPGDSDZYRJ5AN1HF8; read it again with \"workbook relic show WB-R-01M86B5EHY4R2HME50RYZKH12Z#01M86B5ESZPGDSDZYRJ5AN1HF8 --body\" and save from that version"}}
+{"format":"workbook.error","version":1,"error":{"category":"stale-write","message":"part 01M87F0T8ZACFWH3F27EK4CYVH body is at version 01M87F0ZKD0X1MC06E1JCG5QBY, not 01M87F0T8ZACFWH3F27EK4CYVH; read it again with \"workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body\" and save from that version"}}
 ```
 
 `--base` is required whenever the part has a body, and the refusal names the
 version to pass:
 
 ```sh
-workbook relic update WB-R-01M86B5E --part 01M86B5ESZPG --body-file goals.md
+workbook relic update WB-R-01M87F0S --part 01M87F0T8ZA --body-file goals.md
 ```
 
 ```text
-workbook: part 01M86B5ESZPGDSDZYRJ5AN1HF8 body is at version 01M86B5JDRCYRM2P2G4TSYG2NW; pass --base 01M86B5JDRCYRM2P2G4TSYG2NW to save over it
+workbook: part 01M87F0T8ZACFWH3F27EK4CYVH body is at version 01M87F0ZKD0X1MC06E1JCG5QBY; pass --base 01M87F0ZKD0X1MC06E1JCG5QBY to save over it
 ```
 
 `--base` given for a part that has no body is refused as well:
 
 ```sh
-workbook relic update WB-R-01M86B5E --part 01M86B5ESZP5 --body-file goals.md --base 01M86B5JDRCYRM2P2G4TSYG2NW
+workbook relic update WB-R-01M87F0S --part 01M87F0T8ZD --body-file goals.md --base 01M87F0ZKD0X1MC06E1JCG5QBY
 ```
 
 ```text
-workbook: part 01M86B5ESZP5Y76C7WD7HFES83 has no body, so there is no version 01M86B5JDRCYRM2P2G4TSYG2NW to start from
+workbook: part 01M87F0T8ZDXPZV8WNS006CBKV has no body, so there is no version 01M87F0ZKD0X1MC06E1JCG5QBY to start from
 ```
 
 **These three refusals are exit `6`, and none of them is got past by running
@@ -1114,11 +1126,11 @@ order without printing positions, and JSON carries each part's `position`.
   denominator in the gap. It looks at live parts only.
 
 ```sh
-workbook relic update WB-R-01M86B5E --add-part --part-type section --field heading=Non-goals --before 01M86B5ESZP5 --json
+workbook relic update WB-R-01M87F0S --add-part --part-type section --field heading=Non-goals --before 01M87F0T8ZD --json
 ```
 
 ```json
-{"format":"workbook.result","version":1,"command":"relic update","data":{"relic":{"id":"WB-R-01M86B5EHY4R2HME50RYZKH12Z","head":"ab6ef617fe72340bd880f8bda36d96119470be17","title":"Task archive compaction, second draft","type":"spec","author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-24T08:36:09.406468Z","updatedAt":"2026-11-24T08:36:14.516765Z","parts":3},"parts":[{"id":"01M86B5KHMDWF1Q5SPY5FGRC2T","type":"section","position":"3/2","fields":{"heading":"Non-goals"}}],"changed":true}}
+{"format":"workbook.result","version":1,"command":"relic update","data":{"relic":{"id":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","head":"c5ed20941945d1b370927f125911e5909890c80c","title":"Task archive compaction, second draft","type":"spec","author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-24T19:02:45.75869Z","updatedAt":"2026-11-24T19:02:54.052091Z","parts":3},"parts":[{"id":"01M87F11V42NP3MEYSJ017ZDDA","type":"section","position":"3/2","fields":{"heading":"Non-goals"}}],"changed":true},"sync":{"enabled":true,"source":"default","status":"completed","fetch":{"remote":"origin","status":"completed","tasks":[]},"pushRelic":{"relicId":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","status":"published"}}}
 ```
 
 The new part went between `1/1` and `2/1`, at `3/2`, so it is now the second
@@ -1144,25 +1156,26 @@ or to move a neighboring part first.
 ### Removing and restoring parts
 
 ```sh
-workbook relic update WB-R-01M86B5E --remove-part 01M86B5KHMD
-workbook relic show WB-R-01M86B5E --removed
+workbook relic update WB-R-01M87F0S --remove-part 01M87F11V42
+workbook relic show WB-R-01M87F0S --removed
 ```
 
 ```text
-WB-R-01M86B5EHY4R2HME50RYZKH12Z	spec	Task archive compaction, second draft
-WB-R-01M86B5EHY4R2HME50RYZKH12Z	spec	Task archive compaction, second draft
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+Sync:	completed
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
 Author:	alice@example.com
-Updated:	2026-11-24T08:36:14Z
+Updated:	2026-11-24T19:02:54Z
 Properties:
   approved: null
   owner: Alice <alice@example.com>
   reviewers: ["Alice \u003calice@example.com\u003e","bob@example.com"]
   status: draft
-#01M86B5ESZPGDSDZYRJ5AN1HF8	section	md, 146 bytes, version 01M86B5JDRCYRM2P2G4TSYG2NW
+#01M87F0T8ZACFWH3F27EK4CYVH	section	md, 146 bytes, version 01M87F0ZKD0X1MC06E1JCG5QBY
   heading: Goals
-#01M86B5KHMDWF1Q5SPY5FGRC2T	section	no body	removed
+#01M87F11V42NP3MEYSJ017ZDDA	section	no body	removed
   heading: Non-goals
-#01M86B5ESZP5Y76C7WD7HFES83	decision	no body
+#01M87F0T8ZDXPZV8WNS006CBKV	decision	no body
   accepted: true
   heading: Keep a backup bundle
 ```
@@ -1175,35 +1188,37 @@ it. It cannot be edited or moved, and no part can be placed beside it, until
 it is restored:
 
 ```sh
-workbook relic update WB-R-01M86B5E --part 01M86B5KHMD --field heading=Later
+workbook relic update WB-R-01M87F0S --part 01M87F11V42 --field heading=Later
 ```
 
 ```text
-workbook: part 01M86B5KHMDWF1Q5SPY5FGRC2T was removed; restore it first with --restore-part 01M86B5KHMDWF1Q5SPY5FGRC2T
+workbook: part 01M87F11V42NP3MEYSJ017ZDDA was removed; restore it first with --restore-part 01M87F11V42NP3MEYSJ017ZDDA
 ```
 
 `--restore-part` brings it back at the position it had. Removing a removed
 part, or restoring a live one, changes nothing.
 
 ```sh
-workbook relic update WB-R-01M86B5E --restore-part 01M86B5KHMD
+workbook relic update WB-R-01M87F0S --restore-part 01M87F11V42
 ```
 
 ```text
-WB-R-01M86B5EHY4R2HME50RYZKH12Z	spec	Task archive compaction, second draft
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+Sync:	completed
 ```
 
 ### Deleting and restoring a relic
 
 ```sh
-workbook relic delete WB-R-01M86B5H
+workbook relic delete WB-R-01M87F0Y
 workbook relic list --all
 ```
 
 ```text
-WB-R-01M86B5HKECWCKS2BRQBFX149H	plan	Release checklist
-WB-R-01M86B5EHY4R2HME50RYZKH12Z	spec	3 parts	Task archive compaction, second draft
-WB-R-01M86B5HKECWCKS2BRQBFX149H	plan	0 parts	Release checklist	deleted
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	Release checklist
+Sync:	completed
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	3 parts	Task archive compaction, second draft
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	0 parts	Release checklist	deleted
 ```
 
 `relic delete` marks the relic deleted and prints the relic's line, as `relic
@@ -1213,13 +1228,14 @@ and `relic show` prints `Deleted: yes`. It cannot be changed until `relic
 restore` brings it back:
 
 ```sh
-workbook relic update WB-R-01M86B5H --title "Edited while deleted"
-workbook relic restore WB-R-01M86B5H
+workbook relic update WB-R-01M87F0Y --title "Edited while deleted"
+workbook relic restore WB-R-01M87F0Y
 ```
 
 ```text
-workbook: relic WB-R-01M86B5HKECWCKS2BRQBFX149H is deleted; restore it first with "workbook relic restore WB-R-01M86B5HKECWCKS2BRQBFX149H"
-WB-R-01M86B5HKECWCKS2BRQBFX149H	plan	Release checklist
+workbook: relic WB-R-01M87F0YHZ1852KPS55KCDPXG2 is deleted; restore it first with "workbook relic restore WB-R-01M87F0YHZ1852KPS55KCDPXG2"
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	Release checklist
+Sync:	completed
 ```
 
 Deleting a deleted relic, or restoring a live one, changes nothing and prints
@@ -1231,23 +1247,23 @@ Deleting a deleted relic, or restoring a live one, changes nothing and prints
 format `workbook.relic`, with its live parts in order and their bodies:
 
 ```sh
-workbook relic export WB-R-01M86B5E
+workbook relic export WB-R-01M87F0S
 ```
 
 ```json
 {
   "format": "workbook.relic",
   "version": 1,
-  "id": "WB-R-01M86B5EHY4R2HME50RYZKH12Z",
-  "head": "00bd3bed1475956d1c6ea20d221a1b78824e7d23",
+  "id": "WB-R-01M87F0SQYHP3HCR4QEN3RTVEX",
+  "head": "3e680ce8bdf534b0a12ddb4002e693c3894a9369",
   "title": "Task archive compaction, second draft",
   "type": "spec",
   "schema": null,
   "author": "alice@example.com",
   "retired": false,
   "deleted": false,
-  "createdAt": "2026-11-24T08:36:09.406468Z",
-  "updatedAt": "2026-11-24T08:36:15.537593Z",
+  "createdAt": "2026-11-24T19:02:45.75869Z",
+  "updatedAt": "2026-11-24T19:02:56.218696Z",
   "properties": {
     "approved": null,
     "owner": "Alice \u003calice@example.com\u003e",
@@ -1259,7 +1275,7 @@ workbook relic export WB-R-01M86B5E
   },
   "parts": [
     {
-      "id": "01M86B5ESZPGDSDZYRJ5AN1HF8",
+      "id": "01M87F0T8ZACFWH3F27EK4CYVH",
       "type": "section",
       "position": "1/1",
       "fields": {
@@ -1267,13 +1283,13 @@ workbook relic export WB-R-01M86B5E
       },
       "body": {
         "format": "md",
-        "version": "01M86B5JDRCYRM2P2G4TSYG2NW",
+        "version": "01M87F0ZKD0X1MC06E1JCG5QBY",
         "bytes": 146,
         "text": "Finished tasks keep every commit they ever had.\nCompaction replaces that history with one checkpoint.\nThe old history is saved to a bundle first.\n"
       }
     },
     {
-      "id": "01M86B5KHMDWF1Q5SPY5FGRC2T",
+      "id": "01M87F11V42NP3MEYSJ017ZDDA",
       "type": "section",
       "position": "3/2",
       "fields": {
@@ -1281,7 +1297,7 @@ workbook relic export WB-R-01M86B5E
       }
     },
     {
-      "id": "01M86B5ESZP5Y76C7WD7HFES83",
+      "id": "01M87F0T8ZDXPZV8WNS006CBKV",
       "type": "decision",
       "position": "2/1",
       "fields": {
@@ -1318,14 +1334,15 @@ for, with body content only under `--body`.
 document, and `-` reads it from standard input:
 
 ```sh
-workbook relic export WB-R-01M86B5E | workbook relic create --from-file - --type plan
+workbook relic export WB-R-01M87F0S | workbook relic create --from-file - --type plan
 ```
 
 ```text
-WB-R-01M86B5QA29AWYWGHW05XZ08JT	plan	Task archive compaction, second draft
-part	01M86B5QA2565QFA2GXG32FEQC	section	01M86B5QA2565QFA2GXG32FEQC
-part	01M86B5QA2F80TG09PEK7ANZVP	section	-
-part	01M86B5QA2M5H6KNJ7KRYBBXJJ	decision	-
+WB-R-01M87F17QTWKQKT6MZWX54HFY8	plan	Task archive compaction, second draft
+part	01M87F17QTQAFWG6DJCPQSCWZQ	section	01M87F17QTQAFWG6DJCPQSCWZQ
+part	01M87F17QTVCY2H4X9Z600ZMG6	section	-
+part	01M87F17QTTXNR7433BG90Z5M2	decision	-
+Sync:	completed
 ```
 
 The new relic is a new record. It gets a new ID, its parts get new IDs, and
@@ -1367,7 +1384,7 @@ The file `--from-file` reads is the document, not a command's JSON result.
 message that says so:
 
 ```sh
-workbook relic export WB-R-01M86B5E --json > result.json
+workbook relic export WB-R-01M87F0S --json > result.json
 workbook relic create --from-file result.json
 ```
 
@@ -1407,7 +1424,7 @@ Two 40,000-byte properties set in one command, each within the limit for one
 value, are refused together:
 
 ```text
-workbook: the relic's properties are 80164 bytes; the limit is 65536 bytes
+workbook: the relic's properties are 80167 bytes; the limit is 65536 bytes
 ```
 
 The first nine limits are also checked when what was stored is read back. A
@@ -1446,28 +1463,34 @@ failure is one line that names the relic, the first commit that failed, and
 the cause. For the damaged relic under [A damaged relic](#a-damaged-relic):
 
 ```text
-Invalid AB-R-01M86B6ADMR9ZBJEY9RRKY2W6W at 2cd8b0f9334bd78a00d4a22c61791fb7e2eb903b [corrupt-data]: relic state is not canonical
+Invalid AB-R-01M87F4VC3D1ZDFRBP3M6YCB7Y at 5a6cb7552a43b43efd4b7da6df92244e8d81a0b1 [corrupt-data]: relic state is not canonical
 ```
 
 See [Semantic history validation](#semantic-history-validation) for what is
 checked and for the `relics` member of the JSON result.
 
-**`workbook reset`** counts every relic as work that exists only in this
-checkout, because nothing publishes relics. A reset writes the relic refs into
-its backup bundle before it removes them, and the `Restore:` line it prints
-fetches `'refs/workbook/relics/*:refs/workbook/relics/*'` back from that
-bundle. A relic ref that is damaged but still names a commit is kept the same
-way. `--no-backup` is refused with exit `5` while the checkout holds a relic,
-unless `--discard-unpublished` is added, which loses the relics on purpose.
-In a checkout with no tasks remote to check against, or one that cannot reach
-it, `--no-backup` is refused with `--discard-unpublished` or without it.
-`workbook reset --remote` removes refs from a remote and never touches a
-relic in this checkout. See
+**`workbook reset`** measures a relic as it measures a task. A relic whose
+every commit the tasks remote holds is published, and only a change it lacks
+is work that exists only here, listed on an `Unpublished:` line as `relic <id>
+"<title>"` with how many operations it holds. A parked relic tip, which holds
+the text a [relic conflict](#a-relic-conflict) did not apply, is listed on a
+`Set aside:` line. A reset writes the relic refs and the parked relic tips
+into its backup bundle before it removes them, and the `Restore:` line it
+prints fetches `'refs/workbook/relics/*:refs/workbook/relics/*'` back from
+that bundle, and the parked tips as well when there were any. A relic ref
+that is damaged but still names a commit is kept the same way, because a sync
+never publishes a relic it cannot read. `--no-backup` is refused with exit `5`
+while such work exists, as it is for a task; see
 [Work that exists only here](#work-that-exists-only-here).
+`workbook reset --remote` deletes the relic refs at a remote with the rest of
+its Workbook refs, after writing them to its bundle.
 
-**Task commands** do not see relics. `workbook rebuild` reads none into the
-SQLite index, and `workbook fetch`, `push`, `sync`, `move-tasks` and
-`compact` neither read nor move a relic ref.
+**Task commands** do not return relics. `workbook list` and `next` read no
+relic, and `workbook compact` leaves relic refs alone. `workbook fetch`,
+`push`, `sync` and `move-tasks` carry them; see [Sharing relics](#sharing-relics).
+`workbook status`, `priority`, `key`, `config`, `compact` and `next` report a
+relic conflict their own fetch met, beside the task conflicts, with the same
+`relicConflict` member.
 
 **A newer Workbook.** The relic formats carry the same `minReader` marker task
 histories do; see [Mixed Workbook versions](architecture.md#mixed-workbook-versions).
@@ -1476,6 +1499,520 @@ still be shown, as far as this build can read it. `relic update`,
 `relic delete` and `relic restore` refuse it as `newer-writer` (exit `9`),
 naming the relic and saying to upgrade, and write nothing. `workbook validate`
 counts it under `newerWriter` rather than as invalid.
+
+### Sharing relics
+
+Relics travel with the tasks, to and from the tasks remote: `origin`, unless
+the project's settings name another (see
+[A tasks remote other than origin](#a-tasks-remote-other-than-origin)).
+`workbook fetch`, `push` and `sync` carry relic refs as they carry task refs,
+and so do the synchronization a command runs before and after a change, a
+running `workbook sync --watch`, the board's own loop under `workbook serve`,
+the pre-push hook, `workbook setup` and `workbook move-tasks`. A fresh clone
+has every relic once `workbook setup` has run there:
+
+```sh
+workbook relic list
+```
+
+```text
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	3 parts	Task archive compaction, second draft
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	0 parts	Release checklist
+WB-R-01M87F17QTWKQKT6MZWX54HFY8	plan	3 parts	Task archive compaction, second draft
+```
+
+That is bob's clone. Each relic is fetched to a tracking ref beside the
+task tracking refs, `refs/workbook/remotes/origin/relics/<relic-id>`, and from
+there to the relic's own ref:
+
+```sh
+git for-each-ref refs/workbook/relics/ refs/workbook/remotes/origin/relics/
+```
+
+```text
+3e680ce8bdf534b0a12ddb4002e693c3894a9369 commit	refs/workbook/relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+00fc4f61eb62c288c79d3c9cef8ba71d3416340a commit	refs/workbook/relics/WB-R-01M87F0YHZ1852KPS55KCDPXG2
+a112b0c1b8059dfafa88aefc65ad45d447da7426 commit	refs/workbook/relics/WB-R-01M87F17QTWKQKT6MZWX54HFY8
+3e680ce8bdf534b0a12ddb4002e693c3894a9369 commit	refs/workbook/remotes/origin/relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+00fc4f61eb62c288c79d3c9cef8ba71d3416340a commit	refs/workbook/remotes/origin/relics/WB-R-01M87F0YHZ1852KPS55KCDPXG2
+a112b0c1b8059dfafa88aefc65ad45d447da7426 commit	refs/workbook/remotes/origin/relics/WB-R-01M87F17QTWKQKT6MZWX54HFY8
+```
+
+`relic create`, `relic update`, `relic delete` and `relic restore` synchronize
+as a task command does. Each fetches first, records its change, and pushes the
+one relic ref it moved, and its output ends with the `Sync:` line every
+synchronizing command prints; with `--json` the result carries it as `sync`.
+`--no-sync`, or the setting `auto-sync` turned off, skips both: the change is
+recorded in this checkout only, no `Sync:` line is printed, and the next
+`workbook sync`, `push`, or synchronizing command publishes it. While a
+watcher is running, a change is handed to it to publish, as a task change is;
+see [Continuous synchronization](#continuous-synchronization). `relic list`,
+`relic show` and `relic export` never contact the remote: they read what this
+checkout holds.
+
+```sh
+workbook relic update WB-R-01M87F0S --set reviewed=true --no-sync
+workbook push
+```
+
+```text
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+WB-01M87F19RB1PVEE87F7PS1D1FJ	up-to-date
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	published
+```
+
+A fetch, a push and a sync list one line for each relic they changed or could
+not change, after the task lines, in the same form: the relic's ID, its
+status and, when there is one, a detail. A relic that did not change is not
+listed. A fetch reports `created`, `fast-forwarded`, `reconciled`,
+`conflicted`, `needs-upgrade` or `invalid`, and a push reports `published`,
+`rejected` or `invalid`. Here alice fetches what bob just pushed:
+
+```sh
+workbook fetch
+```
+
+```text
+WB-01M87F19RB1PVEE87F7PS1D1FJ	unchanged
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	fast-forwarded
+```
+
+**What a sync reads.** A relic whose ref and tracking ref name the same commit
+has not changed, and nothing of it is read. For a changed relic, a sync reads
+the commit, its operations, its state and the sizes of its parts, and checks
+the fetched tip as `relic show` checks a relic's newest commit. It never reads
+a body's text. It reads a part's fields only when both sides changed fields of
+that part. The only command that reads a body during a sync is the one
+reporting a [body conflict](#a-relic-conflict), which reads at most the three
+texts the report carries.
+
+**What a sync refuses.** A relic whose tip at the tasks remote fails that check
+is reported `invalid` with the reason, and its local ref is not moved. Every
+other relic and every task is still synchronized, and the command exits `7`
+after everything else has finished. A local relic ref this build cannot read
+is reported `invalid` and is neither moved nor pushed. A relic written by a
+newer Workbook is taken as it is when this checkout has no change of its own
+to replay onto it, and is reported `needs-upgrade`, exit `9`, when it has. A
+ref under `refs/workbook/relics/` at the tasks remote whose name is not one of
+this project's relic IDs is skipped and reported as an ignored ref, as a
+stray name under the task namespace is; see
+[Explicit task sharing](#explicit-task-sharing). Its line calls it what it
+calls such a task name:
+
+```sh
+workbook fetch
+```
+
+```text
+Ignored:	refs/workbook/relics/not-a-relic	may be another Workbook's task	relic ID "not-a-relic" must be <KEY>-R-<ULID>
+	kept on origin; Workbook deletes no ref there.
+	deleting a "may be another Workbook's task" ref would destroy a newer Workbook's or another project's history.
+WB-01M87F19RB1PVEE87F7PS1D1FJ	unchanged
+```
+
+A relic whose documents name another project is skipped the same way.
+
+**What a push does.** Relic refs are pushed in a `git push` of their own, after
+the task refs and only when a relic changed. A relic ref is never pushed with
+force, deleted at the remote, or moved locally except by compare-and-swap. A
+push the remote refuses because it holds newer commits is reported
+`rejected`, and the next sync replays this checkout's changes onto them and
+pushes again.
+
+`workbook fetch --remote <remote>`, which fills another remote's tracking refs
+for inspection, does not fetch relics.
+
+### When two edits meet
+
+Two clones can change one relic before either has the other's change. The
+clone that synchronizes second replays its own changes onto what the first one
+published: each of its commits is written again on top of the fetched tip,
+with the same operations, operation IDs, actor and wall time, and only its
+logical clock rewritten. No merge commit is written. Bob set a property with
+`--no-sync`, alice set another and published it, and bob then synchronized:
+
+```sh
+workbook relic update WB-R-01M87F0S --set reviewer=bob@example.com --no-sync
+workbook relic update WB-R-01M87F0S --set status=review
+workbook sync
+workbook relic show WB-R-01M87F0S | sed -n '/^Properties:/,/^#/p'
+git log --format='%h %an %s' -3 refs/workbook/relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+```
+
+```text
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+Sync:	completed
+Fetch:
+WB-01M87F19RB1PVEE87F7PS1D1FJ	unchanged
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	reconciled	relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: replayed 1 local change(s); 0 already on origin or changing nothing
+Push:
+WB-01M87F19RB1PVEE87F7PS1D1FJ	up-to-date
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	published
+Properties:
+  approved: null
+  owner: Alice <alice@example.com>
+  reviewed: yes
+  reviewer: bob@example.com
+  reviewers: ["Alice \u003calice@example.com\u003e","bob@example.com"]
+  status: review
+#01M87F0T8ZACFWH3F27EK4CYVH	section	md, 146 bytes, version 01M87F0ZKD0X1MC06E1JCG5QBY
+a61eb71 Bob replay relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+bd840f6 Alice update relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+5654d72 Bob update relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+```
+
+The first command is bob's and the second alice's. The relic holds both
+properties, and bob's change is the commit `replay relic` on top of alice's.
+What the replay does depends on what both sides changed. Alice synchronizes
+first and bob second:
+
+| What both sides changed | Relic status in bob's clone | Stored result | Reported | Exit |
+| --- | --- | --- | --- | --- |
+| Different parts, different fields of one part, or different properties | `reconciled` | both changes, even when together they pass a total | nothing, or the warning `relic-over-limit` when a total or a count is passed | `0` |
+| The same field or property, to different values | `reconciled` | bob's value; both operations in the history | nothing | `0` |
+| The title, or the position of the same part | `reconciled` | bob's value; both operations in the history | nothing | `0` |
+| The same body, to different bytes | `conflicted` | alice's body; bob's old tip parked | a `relicConflict` entry of type `body` naming the part, with the base, bob's and alice's texts | `8` |
+| Alice removed a part, bob edited it | `reconciled` | the part stays removed and holds bob's edit | the warning `relic-edit-on-removed-part` naming the relic and the part | `0` |
+| Alice deleted the relic, bob edited it | `conflicted` | deleted; bob's old tip parked | a `relicConflict` entry of type `tombstone` | `8` |
+| Alice edited the relic, bob deleted it | `reconciled` | deleted, holding alice's edit | nothing | `0` |
+
+These are guarantees. No stored value is ever half of one side's: every body,
+property, field and title is one side's whole value or the result of applying
+whole operations in order, and no conflict marker is written anywhere. Each
+operation is recorded once, whatever the order the clones synchronize in, and
+a sync repeated, retried after it was interrupted, or run on the same commits
+in two clones, ends in the same state.
+
+**A deletion that synchronizes second applies without a word.** When alice
+edits a relic and bob deletes it, bob's sync reports the relic `reconciled`
+and nothing more, and the relic is deleted in both clones. This is what
+happens to a task too. Alice's edit is not lost: it is in the relic's history,
+and `relic restore` brings the relic back with it. Only the opposite order, a
+deletion that reached the remote first, is a conflict. Here bob deleted the
+third relic with `--no-sync`, alice changed it, and bob synchronized:
+
+```sh
+workbook relic delete WB-R-01M87F17 --no-sync
+workbook relic update WB-R-01M87F17 --set status=approved
+workbook sync
+workbook relic list --all
+workbook relic show WB-R-01M87F17 | sed -n '/^Properties:/,/^#/p'
+```
+
+```text
+WB-R-01M87F17QTWKQKT6MZWX54HFY8	plan	Task archive compaction, second draft
+WB-R-01M87F17QTWKQKT6MZWX54HFY8	plan	Task archive compaction, second draft
+Sync:	completed
+Fetch:
+WB-01M87F19RB1PVEE87F7PS1D1FJ	unchanged
+WB-R-01M87F17QTWKQKT6MZWX54HFY8	reconciled	relic WB-R-01M87F17QTWKQKT6MZWX54HFY8: replayed 1 local change(s); 0 already on origin or changing nothing
+Push:
+WB-01M87F19RB1PVEE87F7PS1D1FJ	up-to-date
+WB-R-01M87F17QTWKQKT6MZWX54HFY8	published
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	3 parts	Task archive compaction, second draft
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	0 parts	Release checklist
+WB-R-01M87F17QTWKQKT6MZWX54HFY8	plan	3 parts	Task archive compaction, second draft	deleted
+Properties:
+  approved: null
+  owner: Alice <alice@example.com>
+  reviewers: ["Alice \u003calice@example.com\u003e","bob@example.com"]
+  status: approved
+#01M87F17QTQAFWG6DJCPQSCWZQ	section	md, 146 bytes, version 01M87F17QTQAFWG6DJCPQSCWZQ
+```
+
+**Totals can be passed together.** Each clone checks the totals and counts of
+[What a relic may hold](#what-a-relic-may-hold) when it saves, but two changes
+that each fit can pass a total together. The replay keeps both and warns with
+`relic-over-limit`, giving the size or the count and the limit. The next change
+that makes that total larger is refused, as any change past a total is, and a
+change that makes it smaller is saved. Bob and alice each set a property of
+40,000 bytes on the second relic, bob first and with `--no-sync`, and bob
+then synchronized and changed it twice more:
+
+```sh
+workbook relic update WB-R-01M87F0Y --set notes="$(head -c 40000 /dev/zero | tr '\0' b)" --no-sync
+workbook relic update WB-R-01M87F0Y --set summary="$(head -c 40000 /dev/zero | tr '\0' a)"
+workbook sync
+workbook relic update WB-R-01M87F0Y --set more=x
+workbook relic update WB-R-01M87F0Y --clear notes
+```
+
+```text
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	Release checklist
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	Release checklist
+Sync:	completed
+Fetch:
+WB-01M87F19RB1PVEE87F7PS1D1FJ	unchanged
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	reconciled	relic WB-R-01M87F0YHZ1852KPS55KCDPXG2: replayed 1 local change(s); 0 already on origin or changing nothing
+Push:
+WB-01M87F19RB1PVEE87F7PS1D1FJ	up-to-date
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	published
+workbook: warning: relic WB-R-01M87F0YHZ1852KPS55KCDPXG2: the relic's properties are 80025 bytes; the limit is 65536 bytes; both changes are kept, and the next change that makes it larger is refused; clear or shorten a property
+workbook: the relic's properties are 80036 bytes; the limit is 65536 bytes
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	Release checklist
+Sync:	completed
+```
+
+**An edit to a removed part is kept and hidden.** When one side removed a part
+and the other edited it, the part stays removed, holds the edit, and the sync
+warns with `relic-edit-on-removed-part`. Bob changed a field of the third part
+with `--no-sync`, alice removed that part, and bob synchronized:
+
+```sh
+workbook relic update WB-R-01M87F0S --part 01M87F11V42 --field heading="Non-goals and limits" --no-sync
+workbook relic update WB-R-01M87F0S --remove-part 01M87F11V42
+workbook sync
+workbook relic show WB-R-01M87F0S#01M87F11V42
+```
+
+```text
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+part	01M87F11V42NP3MEYSJ017ZDDA	section	-
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+Sync:	completed
+Fetch:
+WB-01M87F19RB1PVEE87F7PS1D1FJ	unchanged
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	reconciled	relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: replayed 1 local change(s); 0 already on origin or changing nothing
+Push:
+WB-01M87F19RB1PVEE87F7PS1D1FJ	up-to-date
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	published
+workbook: warning: relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: part 01M87F11V42NP3MEYSJ017ZDDA was edited here and removed in another clone; it stays removed and holds the edit; restore it with `workbook relic update WB-R-01M87F0SQYHP3HCR4QEN3RTVEX --restore-part 01M87F11V42NP3MEYSJ017ZDDA` to see the edit
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+Author:	alice@example.com
+Updated:	2026-11-24T19:03:20Z
+Properties:
+  approved: null
+  owner: Alice <alice@example.com>
+  reviewed: yes
+  reviewer: bob@example.com
+  reviewers: ["Alice \u003calice@example.com\u003e","bob@example.com"]
+  status: review
+#01M87F11V42NP3MEYSJ017ZDDA	section	no body	removed
+  heading: Non-goals and limits
+```
+
+A warning from a sync is printed by the command that met it, or, for a sync a
+watcher ran, on the watcher's terminal; it is not kept for a later command.
+
+**Two saves of one body usually meet at `--base`.** With synchronization on, a
+command fetches before it saves, so the second of two people saving the same
+body is refused as a save from a stale base (exit `6`), as under
+[Body versions](#body-versions), and nothing reaches the remote. A body
+conflict comes from a save that was already recorded in this checkout without
+being published, with `--no-sync`, offline, or with `auto-sync` off, meeting
+another save of the same body.
+
+### A relic conflict
+
+A conflict stops the replay of that relic. Its ref moves to the remote's tip,
+plus whatever of this checkout's changes replayed before the one that could
+not, and the old local tip is kept at
+`refs/workbook/reconciled-relics/<relic-id>/<n>`, counting from 1, in the same
+compare-and-swap. That parked tip is never pushed and never removed
+automatically: it holds the only copy of the text that was not applied, until
+`workbook reset` writes it to a bundle and removes it. The command reports the
+conflict once, exits `8`, and every other relic and task is still
+synchronized. Bob and alice each saved a new third line over the same version
+of the first part's body, bob first and with `--no-sync`, and bob then
+synchronized:
+
+```sh
+workbook relic update WB-R-01M87F0S --part 01M87F0T8ZA --body-file goals.md --base 01M87F0ZKD0X1MC06E1JCG5QBY --no-sync
+workbook relic update WB-R-01M87F0S --part 01M87F0T8ZA --body-file goals.md --base 01M87F0ZKD0X1MC06E1JCG5QBY
+workbook sync
+```
+
+```text
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+part	01M87F0T8ZACFWH3F27EK4CYVH	section	01M87F205BTS8BJX4REAA4KMWJ
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+part	01M87F0T8ZACFWH3F27EK4CYVH	section	01M87F211MQKDWR4N1Q504HW4X
+Sync:	completed
+Fetch:
+WB-01M87F19RB1PVEE87F7PS1D1FJ	unchanged
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	conflicted	relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: part 01M87F0T8ZACFWH3F27EK4CYVH: the body was saved here and on origin from the same version; the text from origin stands; the text saved here is kept at refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1; run `git cat-file blob refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1:parts/01M87F0T8ZACFWH3F27EK4CYVH/body > mine.md` to write it, `workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body > current.md` to write the text that stands, combine the two in mine.md, then run `workbook relic update WB-R-01M87F0SQYHP3HCR4QEN3RTVEX --part 01M87F0T8ZACFWH3F27EK4CYVH --body-file mine.md --base 01M87F211MQKDWR4N1Q504HW4X`
+Push:
+WB-01M87F19RB1PVEE87F7PS1D1FJ	up-to-date
+Relic conflict:	WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	body	relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: part 01M87F0T8ZACFWH3F27EK4CYVH: the body was saved here and on origin from the same version; the text from origin stands; the text saved here is kept at refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1; run `git cat-file blob refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1:parts/01M87F0T8ZACFWH3F27EK4CYVH/body > mine.md` to write it, `workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body > current.md` to write the text that stands, combine the two in mine.md, then run `workbook relic update WB-R-01M87F0SQYHP3HCR4QEN3RTVEX --part 01M87F0T8ZACFWH3F27EK4CYVH --body-file mine.md --base 01M87F211MQKDWR4N1Q504HW4X`
+workbook: relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: part 01M87F0T8ZACFWH3F27EK4CYVH: the body was saved here and on origin from the same version; the text from origin stands; the text saved here is kept at refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1; run `git cat-file blob refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1:parts/01M87F0T8ZACFWH3F27EK4CYVH/body > mine.md` to write it, `workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body > current.md` to write the text that stands, combine the two in mine.md, then run `workbook relic update WB-R-01M87F0SQYHP3HCR4QEN3RTVEX --part 01M87F0T8ZACFWH3F27EK4CYVH --body-file mine.md --base 01M87F211MQKDWR4N1Q504HW4X`
+```
+
+The text that stands is alice's, the one the remote held first. Text output
+names the versions and the commands that write each text to a file, and never
+prints the text itself. The next sync does not report the conflict again:
+
+```sh
+workbook sync
+git for-each-ref refs/workbook/reconciled-relics/
+```
+
+```text
+Fetch:
+WB-01M87F19RB1PVEE87F7PS1D1FJ	unchanged
+Push:
+WB-01M87F19RB1PVEE87F7PS1D1FJ	up-to-date
+735d9a70c9284f3e7443555e6e24bc42e111e70a commit	refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1
+```
+
+**Getting the text back.** Three commands bring the text that was not applied
+back and save it, where `<parked-ref>` and `<theirs-version>` are the
+report's `parkedRef` and `body.theirs.version`, both of which the conflict's
+line spells out:
+
+1. `git cat-file blob <parked-ref>:parts/<part-id>/body > mine.md` writes the
+   text that was not applied. Reading a relic at an older commit is a Git
+   command for now.
+2. `workbook relic show <relic>#<part> --body > current.md` writes the text
+   that stands.
+3. After combining the two by hand in `mine.md`, `workbook relic update
+   <relic> --part <part> --body-file mine.md --base <theirs-version>` saves it.
+
+```sh
+git cat-file blob refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1:parts/01M87F0T8ZACFWH3F27EK4CYVH/body > mine.md
+workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body > current.md
+diff current.md mine.md
+```
+
+```text
+3c3
+< The old history is saved to a bundle under .git first.
+---
+> The old history is saved to a bundle first, and the bundle is kept.
+```
+
+Bob combined the two third lines in `mine.md` and saved it:
+
+```sh
+workbook relic update WB-R-01M87F0SQYHP3HCR4QEN3RTVEX --part 01M87F0T8ZACFWH3F27EK4CYVH --body-file mine.md --base 01M87F211MQKDWR4N1Q504HW4X
+workbook relic show WB-R-01M87F0S#01M87F0T8ZA --body
+```
+
+```text
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+part	01M87F0T8ZACFWH3F27EK4CYVH	section	01M87F244F21JP9K0HBRMFJX04
+Sync:	completed
+Finished tasks keep every commit they ever had.
+Compaction replaces that history with one checkpoint.
+The old history is saved to a bundle under .git first, and the bundle is kept.
+```
+
+To keep the text that stands instead, do nothing: the relic already holds it.
+
+**The report in JSON.** With `--json`, the result envelope carries the
+conflicts in `relicConflict`, a list beside `conflict` and `configConflict`,
+and the relic's line in the fetch carries the same detail text mode prints.
+Bob and alice made the same two saves again, this time each adding a fourth
+line, and bob synchronized with `--json`. The result went to `conflict.json`,
+and the error envelope bob's command wrote to standard error is the line
+that follows it. The result envelope in the file holds the conflict:
+
+```sh
+workbook relic update WB-R-01M87F0S --part 01M87F0T8ZA --body-file mine.md --base 01M87F244F21JP9K0HBRMFJX04 --no-sync
+workbook relic update WB-R-01M87F0S --part 01M87F0T8ZA --body-file goals.md --base 01M87F244F21JP9K0HBRMFJX04
+workbook sync --json > conflict.json
+jq .relicConflict conflict.json
+jq -c .data.fetch.relics conflict.json
+```
+
+```text
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+part	01M87F0T8ZACFWH3F27EK4CYVH	section	01M87F273245GW2Y9NJSWHEMWQ
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+part	01M87F0T8ZACFWH3F27EK4CYVH	section	01M87F283AZ3GZ7ZW9GZKM2RK9
+Sync:	completed
+{"format":"workbook.error","version":1,"error":{"category":"conflict","message":"relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: part 01M87F0T8ZACFWH3F27EK4CYVH: the body was saved here and on origin from the same version; the text from origin stands; the text saved here is kept at refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/2; run `git cat-file blob refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/2:parts/01M87F0T8ZACFWH3F27EK4CYVH/body \u003e mine.md` to write it, `workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body \u003e current.md` to write the text that stands, combine the two in mine.md, then run `workbook relic update WB-R-01M87F0SQYHP3HCR4QEN3RTVEX --part 01M87F0T8ZACFWH3F27EK4CYVH --body-file mine.md --base 01M87F283AZ3GZ7ZW9GZKM2RK9`"}}
+[
+  {
+    "relicId": "WB-R-01M87F0SQYHP3HCR4QEN3RTVEX",
+    "type": "body",
+    "part": "01M87F0T8ZACFWH3F27EK4CYVH",
+    "body": {
+      "base": {
+        "version": "01M87F244F21JP9K0HBRMFJX04",
+        "format": "md",
+        "bytes": 181,
+        "object": "d7236f6a859ec647e42393432fe28f3e6d72c2e1",
+        "text": "Finished tasks keep every commit they ever had.\nCompaction replaces that history with one checkpoint.\nThe old history is saved to a bundle under .git first, and the bundle is kept.\n"
+      },
+      "ours": {
+        "version": "01M87F273245GW2Y9NJSWHEMWQ",
+        "format": "md",
+        "bytes": 201,
+        "object": "8d2d80b3f13ec98d2ad0f516697cfe783b3c208f",
+        "text": "Finished tasks keep every commit they ever had.\nCompaction replaces that history with one checkpoint.\nThe old history is saved to a bundle under .git first, and the bundle is kept.\nBob, a fourth line.\n"
+      },
+      "theirs": {
+        "version": "01M87F283AZ3GZ7ZW9GZKM2RK9",
+        "format": "md",
+        "bytes": 203,
+        "object": "ebf87e493debb69e0f4432b1196a964a220a41b2",
+        "text": "Finished tasks keep every commit they ever had.\nCompaction replaces that history with one checkpoint.\nThe old history is saved to a bundle under .git first, and the bundle is kept.\nAlice, a fourth line.\n"
+      }
+    },
+    "parkedRef": "refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/2",
+    "unreplayed": 1,
+    "remote": "origin"
+  }
+]
+[{"relicId":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","status":"conflicted","detail":"relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: part 01M87F0T8ZACFWH3F27EK4CYVH: the body was saved here and on origin from the same version; the text from origin stands; the text saved here is kept at refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/2; run `git cat-file blob refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/2:parts/01M87F0T8ZACFWH3F27EK4CYVH/body > mine.md` to write it, `workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body > current.md` to write the text that stands, combine the two in mine.md, then run `workbook relic update WB-R-01M87F0SQYHP3HCR4QEN3RTVEX --part 01M87F0T8ZACFWH3F27EK4CYVH --body-file mine.md --base 01M87F283AZ3GZ7ZW9GZKM2RK9`"}]
+```
+
+| Member | Value |
+| --- | --- |
+| `relicId`, `type` | The relic, and `body` or `tombstone`. |
+| `part` | For `body`, the part whose body both sides saved. |
+| `body.base` | The part's body at the commit both histories share. Absent when the part had no body there. |
+| `body.ours` | The body at the parked local tip: the text that was not applied. |
+| `body.theirs` | The body at the remote's tip: the text that stands. Its `version` is the `--base` to save from. |
+| `body.*` | Each version has `version`, `format` when it has a label, `bytes`, `object` (the blob that holds it), and the content as `text`, or as `base64` when it is not UTF-8 text. |
+| `tombstone` | For `tombstone`, the local operation the deletion stopped: `operationId` and `operation`. |
+| `parkedRef` | Where the old local tip is kept. |
+| `unreplayed` | How many of this checkout's commits did not replay. |
+| `remote` | The remote the conflict was met with. |
+
+A body is at most 1 MiB, so one body conflict's report can reach about 4 MiB
+once its three texts are escaped as JSON.
+
+**A deleted relic.** When the remote holds a deletion and this checkout holds
+an edit to the relic, the relic is deleted here as well, and the edit is
+parked. The detail says to restore the relic and make the change again. Bob
+changed the second relic with `--no-sync`, alice deleted it, and bob
+synchronized, restored it and made his change again:
+
+```sh
+workbook relic update WB-R-01M87F0Y --set owner=bob@example.com --no-sync
+workbook relic delete WB-R-01M87F0Y
+workbook sync
+workbook relic restore WB-R-01M87F0Y
+workbook relic update WB-R-01M87F0Y --set owner=bob@example.com
+```
+
+```text
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	Release checklist
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	Release checklist
+Sync:	completed
+Fetch:
+WB-01M87F19RB1PVEE87F7PS1D1FJ	unchanged
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	conflicted	relic WB-R-01M87F0YHZ1852KPS55KCDPXG2: origin deleted this relic, so the local property.set operation 01M87F2AHMB15362SBP9MWDKYV cannot apply; the local changes are kept at refs/workbook/reconciled-relics/WB-R-01M87F0YHZ1852KPS55KCDPXG2/1; to keep them, run `workbook relic restore WB-R-01M87F0YHZ1852KPS55KCDPXG2` and make the changes again
+Push:
+WB-01M87F19RB1PVEE87F7PS1D1FJ	up-to-date
+Relic conflict:	WB-R-01M87F0YHZ1852KPS55KCDPXG2	tombstone	relic WB-R-01M87F0YHZ1852KPS55KCDPXG2: origin deleted this relic, so the local property.set operation 01M87F2AHMB15362SBP9MWDKYV cannot apply; the local changes are kept at refs/workbook/reconciled-relics/WB-R-01M87F0YHZ1852KPS55KCDPXG2/1; to keep them, run `workbook relic restore WB-R-01M87F0YHZ1852KPS55KCDPXG2` and make the changes again
+workbook: relic WB-R-01M87F0YHZ1852KPS55KCDPXG2: origin deleted this relic, so the local property.set operation 01M87F2AHMB15362SBP9MWDKYV cannot apply; the local changes are kept at refs/workbook/reconciled-relics/WB-R-01M87F0YHZ1852KPS55KCDPXG2/1; to keep them, run `workbook relic restore WB-R-01M87F0YHZ1852KPS55KCDPXG2` and make the changes again
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	Release checklist
+Sync:	completed
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	Release checklist
+Sync:	completed
+```
+
+**A conflict met by a relic command.** `relic update`, `relic delete` and
+`relic restore` fetch before they change anything. When that fetch parks a
+conflict on the relic the command names, the command records nothing, reports
+the conflict as above, and exits `8`; run it again to make the change on top
+of what now stands. A conflict that fetch meets on another relic is reported
+with the command's own output, and the command makes its change and exits `0`.
+With a watcher running, a conflict the watcher met is reported by the next
+command that hands it a change, with the three texts read from this checkout.
 
 ### Relic JSON results
 
@@ -1493,6 +2030,32 @@ same three members, as in the `--add-part` result under
 | `relic` | The relic after the command, with the members `relic list --json` gives. |
 | `parts` | The parts the command added or edited, in the order it first changed them, each with `id`, `type`, `position`, `fields`, and `body` without its content. A part that was only moved, removed or restored is not listed. Always present, and empty when there is none. |
 | `changed` | `false` when the command recorded nothing. |
+
+Those four commands also report, in the envelope's `sync` member, the fetch
+they ran and the push of the one relic they changed, as `sync.pushRelic`:
+
+```json
+{"enabled":true,"source":"default","status":"completed","fetch":{"remote":"origin","status":"completed","tasks":[{"taskId":"WB-01M87F19RB1PVEE87F7PS1D1FJ","status":"unchanged"}]},"pushRelic":{"relicId":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","status":"published"}}
+```
+
+`pushRelic` has `relicId`, `status` (`published`, `rejected` or `invalid`)
+and, when it did not publish, `detail`. It is absent with `--no-sync`, when
+the command changed nothing, when the fetch did not complete, and when a
+running watcher was handed the change to publish. `relic list`, `relic show` and `relic export` contact no remote and
+report no `sync`.
+
+`workbook fetch`, `workbook push` and `workbook sync` list each relic they
+changed or could not change in a `relics` list on the phase that met it:
+`data.relics` for `fetch` and `push`, and `data.fetch.relics` and
+`data.push.relics` for `sync`. Each entry has `relicId`, `status` and, when
+there is more to say, `detail`. A fetch reports `created`, `fast-forwarded`,
+`reconciled`, `conflicted`, `needs-upgrade` or `invalid`; a push reports
+`published`, `rejected` or `invalid`. A relic that did not change is not
+listed, so a phase that changed no relic gives the JSON it gave before relics
+were shared. A relic that could not be replayed is also listed in the
+envelope's `relicConflict`, as under [A relic conflict](#a-relic-conflict),
+and a relic over a limit after a merge gives a `relic-over-limit` warning in
+`warnings`.
 
 ## Machine-readable output and exit codes
 
@@ -1523,7 +2086,7 @@ without parsing a message:
 | 5 | `validation` | The input is well-formed but not allowed, such as an unknown status or restoring an active task. It fails the same way on every retry. |
 | 6 | `stale-write` | The task or relic ref moved between read and write, so the compare-and-swap was refused, or a bounded wait on the shared SQLite cache ran out while another process held or replaced it. Nothing was written. Retrying the identical command usually succeeds. A relic body saved from the wrong `--base` is exit `6` as well, and retrying that one does not. |
 | 7 | `corrupt-data` | Stored data could not be read as Workbook wrote it. Read the message; repair or rebuild before continuing. |
-| 8 | `conflict` | Reconciliation stopped on a decision Workbook will not make. See [Reconciling divergent histories](#reconciling-divergent-histories). |
+| 8 | `conflict` | Reconciliation stopped on a decision Workbook will not make, for a task, a status or priority, or a relic. See [Reconciling divergent histories](#reconciling-divergent-histories) and [A relic conflict](#a-relic-conflict). |
 | 9 | `newer-writer` | A newer Workbook wrote this history and this build cannot fold it. Nothing is damaged; upgrade Workbook. See [Mixed Workbook versions](architecture.md#mixed-workbook-versions). |
 | 10 | `assigned` | The task is assigned to somebody else, you have no assignment on it, and you did not pass `--force`. Nothing was recorded. Pick another task. See [Assignments](#assignments). |
 
@@ -1564,7 +2127,10 @@ changes; see [Body versions](#body-versions).
 Reporting a conflict and failing over one are separate things. `workbook next`
 exits `0` while listing conflicts in its envelope, because a caller asking which
 task to pick up next is not the caller who has to resolve them; a mutation that
-could not replay past one exits `8`.
+could not replay past one exits `8`. A relic conflict follows the same rule.
+`workbook fetch` and `sync` exit `8` when they park one. A relic command exits
+`8` when its fetch parks one on the relic it names, and exits `0`, listing the
+conflict in `relicConflict`, when the conflict is on another relic.
 
 ## User-global configuration
 
@@ -2554,6 +3120,20 @@ synchronizing mutation still happens. Stale refs are pruned only from Workbook's
 isolated tracking namespace, allowing `sync` to republish an intact canonical
 task ref if its remote counterpart was removed externally.
 
+The same `git fetch` downloads `refs/workbook/relics/*` into
+`refs/workbook/remotes/origin/relics/*`. After every task ref has moved, each
+relic that is missing or behind locally is created or fast-forwarded, and a
+relic changed on both sides has its local commits replayed onto the fetched
+tip, in a compare-and-swap transaction of its own. `push` and `sync` publish
+the relic refs in a second `git push` after the task push, without force and
+without deletion. A relic that cannot be replayed is a
+[relic conflict](#a-relic-conflict): its local tip is parked, `fetch` and
+`sync` exit `8`, and every other relic and every task still synchronizes. A
+name under `refs/workbook/relics/` on `origin` that is not one of this
+project's relic IDs is skipped and reported on an `Ignored:` line like a task
+ref's. Text output and JSON list each relic a phase changed; see
+[Sharing relics](#sharing-relics) and [Relic JSON results](#relic-json-results).
+
 `refs/workbook/tasks/*` on `origin` is writable by everyone with push access and
 is not covered by branch protection on typical hosts, so a name Workbook does
 not recognize there is not treated as corruption. `fetch`, `push`, and `sync`
@@ -2915,7 +3495,9 @@ from the code repository, such as a host's mirroring feature or a job running
 each run, because they are not in the code repository's copy. The refusal and
 the command's help say the same. Then:
 
-1. reads the old place into its tracking refs, and nothing else;
+1. reads the old place into its tracking refs, and nothing else, except that
+   the old place's relics are folded into this checkout's relic refs at once,
+   replaying any local relic change onto them as a fetch does;
 2. synchronizes with the new place, carries onto this checkout's tasks every
    operation the old place holds that they lack, and synchronizes again, which
    publishes every task, the configuration ledger and the identity ref there.
@@ -2932,7 +3514,10 @@ the command's help say the same. Then:
 7. lists both places afresh and requires the new place to hold, task by task,
    every operation ID the old place holds, or to have it set aside in this
    checkout. A difference is reported by naming each task and the operations
-   it lacks.
+   it lacks. The same holds for relics: every relic the old place holds must
+   be at the new place at the same commit, or with every operation held there
+   under other commits or in a relic tip parked in this checkout. A relic that
+   is not is named as `relic <id> (lacks <n> change(s))`, counting commits.
 
 Carrying is by operation identity. A task the new place holds at the old
 place's commit is `identical`; one whose every operation it holds under other
@@ -2954,6 +3539,20 @@ without a `parkedRef`, exits 0 and does not try it again. Dismissing the
 set-aside edit on the board deletes the parked ref, so the next run tries the
 edit again, meets the same conflict, parks and reports it once more, and is
 quiet after that.
+
+Relics move with the tasks: `move-tasks` fetches the old place's relics
+itself, and the two synchronizations with the new place publish them there.
+A relic change that cannot be replayed is a
+[relic conflict](#a-relic-conflict): its local tip is parked under
+`refs/workbook/reconciled-relics/<relic>/<n>`, the run finishes and is
+verified, and it exits 8 with the conflict's detail. `--clean-up` then
+deletes nothing, and its `Cleaned up:` line names the
+`workbook reset --remote <remote>` to run once the conflict is dealt with. A ref
+under `refs/workbook/relics/` at the old place that is not one of this
+project's relics cannot be carried, so the run is not verified: it exits 8
+naming `relic ref <name> (not one of this project's relics, so the move cannot
+carry it)`, and `--clean-up` deletes nothing. Remove or rename such a ref at
+the old place by hand once you know what it holds, and run the command again.
 
 A conflicting edit that reaches the old place late is reported only to whoever
 runs `workbook move-tasks`, in the clone they run it from: setup and sync read
@@ -2997,7 +3596,11 @@ when there were some, counts the operations this run carried from a place that
 was already marked, names their tasks and who made them. The count covers only
 the run that reports it: operations an earlier run carried before it was
 stopped are at the new place already, so the run that finishes the move does
-not count them, and nothing records them. `setAside`, present only when there
+not count them, and nothing records them. `relics`, `relicsIdentical` and
+`relicsCarried`, present only when the old place holds relics, count its relic
+refs as `tasks`, `identical` and `carried` count task refs, with a relic whose
+missing operations are in a parked relic tip of this checkout counted as
+carried; text output prints them on a `Relics:` line. `setAside`, present only when there
 were some, lists each set-aside task with its `title`, its `operations` and,
 when this run parked them, its `parkedRef`. `config` is `unchanged`, `carried`
 when this run took the old place's configuration ledger, or `not-carried` when
@@ -3220,6 +3823,17 @@ either place. Neither kind of build can say that an upgrade is what is needed,
 which is one more reason a team upgrades together before moving its tasks
 back.
 
+A release from before relics (v0.6.1 and earlier) works in a clone of a
+remote that holds them and leaves them alone. Its fetch asks only for task,
+identity and configuration refs, so its `setup` and `sync` bring no relic into
+the clone, its `push` and `sync` publish no relic, and the relics at the
+remote keep their tips. Its `list`, `show` and `update` work as before. A
+clone of this build that also holds relics and is used with such a release
+keeps its relic refs: that fetch does not prune them. The test suite plays the v0.6.1 release against a remote with
+relics to hold it to this. Such a release has no `move-tasks`, so it cannot
+move relics anywhere; its reset is described under
+[Relics](#relics).
+
 ## Continuous synchronization
 
 `workbook sync --watch` runs the same sequence on a loop in the foreground,
@@ -3261,9 +3875,23 @@ repeats is written once, and again only when its message changes; the first
 round that succeeds after it writes `workbook: background sync is working
 again`. `workbook serve` runs the same loop and writes the same lines.
 
+A watcher shares relics as a foreground `workbook sync` does, and a relic
+command hands it its change the way a task command does. A relic conflict it
+meets is written as `workbook: conflict on relic <relic-id>: ...`, with the
+detail a foreground sync prints and never any body text. The next command
+that hands the watcher a change reports that conflict in its own output and
+`relicConflict`, reading the three texts of a body conflict from this
+checkout, since the watcher keeps none. The watcher's status document is
+version 2, the first that shares relics. A command finds a watcher that
+serves version 1, an older Workbook's, not worth trusting and synchronizes
+inline instead, so a relic change is never handed to a watcher that would not
+push it.
+
 `workbook sync --status` reports whether a watcher is running, what it last did,
-any conflicts it is holding, and the refs its last synchronization skipped under
-`origin`'s task namespace. That last set is what the watcher observed rather
+any task conflicts it is holding, and the refs its last synchronization skipped under
+`origin`'s task namespace. It does not list the relic conflicts the watcher
+holds; those reach a person through the watcher's terminal and the next
+command that hands it a change. That last set is what the watcher observed rather
 than an accumulating memory: the tracking namespace is pruned against `origin`
 on every fetch, so a name `origin` no longer holds leaves the report on the next
 synchronization. `workbook serve` runs the same loop, so the board reflects
@@ -3332,6 +3960,16 @@ is a task a compaction left stuck, which only
 [`workbook compact --adopt`](#when-a-compaction-cannot-be-combined) settles. The contract is
 complete without a terminal, so JSON output, hooks, agents, and the web board
 all consume the same list.
+
+Relics are reconciled the same way, by replaying local commits onto the
+fetched tip and parking the old local tip, under
+`refs/workbook/reconciled-relics/<relic-id>/<n>`. Two situations stop a
+relic's replay, `body` and `tombstone`, and they are reported in the
+envelope's `relicConflict` list rather than in `conflict`; see
+[When two edits meet](#when-two-edits-meet) and
+[A relic conflict](#a-relic-conflict). A parked relic tip is never pushed and
+never retired: only `workbook reset` removes one, after writing it to its
+bundle.
 
 Parked refs stay local; they are never pushed, because every enumeration that
 builds a push refspec is scoped to `refs/workbook/tasks/`. Most parked refs hold
@@ -3876,7 +4514,8 @@ names something other than a commit, a Workbook commit with no `operation.json`,
 or a symbolic ref. This is how a checkout whose Workbook data is damaged is
 rebuilt to match a fresh clone. A damaged ref is not in the bundle, with one
 exception: a damaged relic ref that still resolves to a commit. Git can bundle
-a commit whatever its tree holds, and nothing else holds a relic, so that ref
+a commit whatever its tree holds, and a sync never publishes a relic it
+cannot read, so nothing else holds that one, and that ref
 is written to the bundle with its history, counts as
 [work that exists only here](#work-that-exists-only-here), and comes back with
 the `Restore:` command. The `Damaged:` line ends one of three ways:
@@ -3901,11 +4540,25 @@ tasks remote does not have:
   such ref;
 - every parked ref, listed on a `Set aside:` line.
 
-A relic counts too. Nothing publishes relics yet, so every relic ref is work
-that exists only here, listed as `relic <id> "<title>"` and `never published`,
-with `relicId` in the JSON in place of `taskId`. A damaged relic ref that
-resolves to a commit is listed as well, as `relic <id>` with no title when its
-newest commit cannot be read as a relic.
+A relic counts the same way: a relic whose every commit the remote's relic ref
+reaches is published, and one with commits it lacks is listed as
+`relic <id> "<title>"` with how many operations it holds, or `never published`,
+with `relicId` in the JSON in place of `taskId`. A change made with
+`--no-sync` and not yet synchronized:
+
+```text
+Unpublished:	relic WB-R-01M87F0YHZ1852KPS55KCDPXG2 "Release checklist", 1 operation
+```
+
+A damaged relic ref that resolves to a commit is listed as well, as
+`relic <id>` with no title when its newest commit cannot be read as a relic.
+A parked relic tip, which holds a change a
+[relic conflict](#a-relic-conflict) did not apply, is listed on a `Set aside:`
+line, as a parked task tip is:
+
+```text
+Set aside:	refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1
+```
 
 It measures this against the remote as it is now. It lists the remote's Workbook
 refs and fetches the objects of those this checkout lacks without moving any ref,
@@ -3924,20 +4577,11 @@ they reach commits it no longer holds and so hide work that exists only here.
 The bundle keeps that work, so a plain reset goes ahead with it. `--no-backup`
 writes no bundle, so a reset with `--no-backup` of a checkout that holds such
 work is refused, exit 5, reason `unpublished`. The refusal names each task and
-relic and ends with what can be done, which depends on what is unpublished:
-
-- With no relic among it, it says to publish the work with `workbook sync`,
-  to reset without `--no-backup`, or to add `--discard-unpublished`.
-- When all of it is relics, it does not offer `workbook sync`, which would
-  publish none of it: `Reset without --no-backup to keep it in a bundle, or
-  add --discard-unpublished to lose it.`
-- With relics and other work, it says: `Run workbook sync to publish
-  everything but the relics, or reset without --no-backup to keep all of it
-  in a bundle, or add --discard-unpublished to lose it.`
-
-Both relic forms end `workbook sync does not publish relics yet, so a relic is
-kept only by the bundle.` `--discard-unpublished` is the only way to lose such
-work on purpose, and it needs `--no-backup`. While the check cannot be made,
+relic and ends with what can be done, whatever the work is: `Run workbook
+sync to publish it, or reset without --no-backup to keep it in a bundle, or
+add --discard-unpublished to lose it.` A parked tip, task or relic, is never
+published, so only the bundle keeps it. `--discard-unpublished` is the only
+way to lose such work on purpose, and it needs `--no-backup`. While the check cannot be made,
 `--no-backup` is refused, exit 5, reason `unchecked`, with or without
 `--discard-unpublished`: a bundle is cheap, and the tracking refs cannot say
 what would be lost. A local-only project is such a checkout: it has no Git
@@ -3947,8 +4591,9 @@ check against and its reset cannot skip the bundle.
 #### Restoring a checkout
 
 The `Restore:` line is a `git fetch` from the bundle of the refs that hold work:
-the task refs, plus the parked refs, the relic refs and the settings ledger
-when there were any.
+the task refs, plus the parked refs, the relic refs, the parked relic
+tips (`'refs/workbook/reconciled-relics/*:refs/workbook/reconciled-relics/*'`)
+and the settings ledger when there were any.
 
 ```sh
 git fetch .git/workbook-archive/01M….bundle 'refs/workbook/tasks/*:refs/workbook/tasks/*' refs/workbook/config:refs/workbook/config

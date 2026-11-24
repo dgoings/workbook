@@ -102,9 +102,9 @@ Each relic owns one ref, named by its ID. These are the three relics
 section is from that same repository:
 
 ```text
-00bd3bed1475956d1c6ea20d221a1b78824e7d23 commit	refs/workbook/relics/WB-R-01M86B5EHY4R2HME50RYZKH12Z
-f6393dbd3b629ff581f63f8799515e1a6c8521e3 commit	refs/workbook/relics/WB-R-01M86B5HKECWCKS2BRQBFX149H
-3228f940e87a124e95927be4b18db4846a9dc5b9 commit	refs/workbook/relics/WB-R-01M86B5QA29AWYWGHW05XZ08JT
+3e680ce8bdf534b0a12ddb4002e693c3894a9369 commit	refs/workbook/relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+00fc4f61eb62c288c79d3c9cef8ba71d3416340a commit	refs/workbook/relics/WB-R-01M87F0YHZ1852KPS55KCDPXG2
+a112b0c1b8059dfafa88aefc65ad45d447da7426 commit	refs/workbook/relics/WB-R-01M87F17QTWKQKT6MZWX54HFY8
 ```
 
 The ref points to a commit, and a relic's history is a chain of them. The
@@ -130,26 +130,26 @@ and holds `body` only when the part has a body. This is the second commit of
 the first relic, the one that added its first two parts:
 
 ```sh
-git cat-file -p 810ccef944d7fb99b13142f5dcc2757249bbbf3f
-git ls-tree -r -t 810ccef944d7fb99b13142f5dcc2757249bbbf3f
+git cat-file -p 46d0f2366693b7b2c12931251a6f5ccf8baaf254
+git ls-tree -r -t 46d0f2366693b7b2c12931251a6f5ccf8baaf254
 ```
 
 ```text
-tree 882f00dee6b4a05916cf54bcd67742aae761189b
-parent 0b5dddf51b076d59085b0d5345b66d68375dd237
-author Alice <alice@example.com> 1795509369 -0500
-committer Alice <alice@example.com> 1795509369 -0500
+tree aa9cacbfa79f0b0df65954bfe848e2082256d02b
+parent 2583738ff456c357a6e355cfdd2100a17ff705ff
+author Alice <alice@example.com> 1795546966 -0500
+committer Alice <alice@example.com> 1795546966 -0500
 
-update relic WB-R-01M86B5EHY4R2HME50RYZKH12Z
+update relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
 100644 blob 6dff43c5f530676ca8e2b2af7abd0a5313114242	links.json
-100644 blob 88dbeb2426132cbb9c2be5354a355be6853e438d	operation.json
-040000 tree 3268399f1f0a1a4a4a002e808c85d93dc3d4f634	parts
-040000 tree 56523e1fc6cd3fce09bd6cde24fe776a124c5a63	parts/01M86B5ESZP5Y76C7WD7HFES83
-100644 blob 434192cf2e5b563c3f91be8b2d479e83a9d2f77c	parts/01M86B5ESZP5Y76C7WD7HFES83/fields.json
-040000 tree 2a01530cc10dfba07644e3695b3e2c55e9e66bde	parts/01M86B5ESZPGDSDZYRJ5AN1HF8
-100644 blob 16d81d64d9b6b65c667cb090454484b0f0607e4d	parts/01M86B5ESZPGDSDZYRJ5AN1HF8/body
-100644 blob a6810f4c2c65f39a46e613b576342477923289e3	parts/01M86B5ESZPGDSDZYRJ5AN1HF8/fields.json
-100644 blob 6828d5b74a0baa8848ac2318c1ceedc64ec50351	state.json
+100644 blob e2a8753c19ef8bec82721be1e125d90398e5dfda	operation.json
+040000 tree 86cec1d053a9538dd05920695cad813c99fcebc0	parts
+040000 tree 2a01530cc10dfba07644e3695b3e2c55e9e66bde	parts/01M87F0T8ZACFWH3F27EK4CYVH
+100644 blob 16d81d64d9b6b65c667cb090454484b0f0607e4d	parts/01M87F0T8ZACFWH3F27EK4CYVH/body
+100644 blob a6810f4c2c65f39a46e613b576342477923289e3	parts/01M87F0T8ZACFWH3F27EK4CYVH/fields.json
+040000 tree 56523e1fc6cd3fce09bd6cde24fe776a124c5a63	parts/01M87F0T8ZDXPZV8WNS006CBKV
+100644 blob 434192cf2e5b563c3f91be8b2d479e83a9d2f77c	parts/01M87F0T8ZDXPZV8WNS006CBKV/fields.json
+100644 blob 47fe6ed186d6346917b301bf7c2f6ad889888523	state.json
 ```
 
 **The four documents.** Each names its format and `"version": 1`, and is
@@ -169,23 +169,23 @@ form, an offset of `+00:00` included, as `corrupt-data`.
   "format": "workbook.relic-operation-pack",
   "version": 1,
   "minReader": 6,
-  "projectId": "01M86B5E3T0YJ4ECEFRZ8BM34G",
-  "relicId": "WB-R-01M86B5EHY4R2HME50RYZKH12Z",
-  "historyGeneration": "01M86B5EHYYE7QGJQMKFRWED6T",
+  "projectId": "01M87F0RVXDCDBV34NDN8Z3Y5E",
+  "relicId": "WB-R-01M87F0SQYHP3HCR4QEN3RTVEX",
+  "historyGeneration": "01M87F0SQY2QS322FBM9041WZG",
   "actor": {
     "id": "alice@example.com"
   },
   "logicalClock": 2,
-  "wallTime": "2026-11-24T08:36:09.663809Z",
+  "wallTime": "2026-11-24T19:02:46.30335Z",
   "operations": [
     {
-      "id": "01M86B5ESZ7STS4R84TG0XPAGK",
+      "id": "01M87F0T8ZZF0EYEQ24M0ZWM2Z",
       "type": "property.set",
       "name": "status",
       "value": "draft"
     },
     {
-      "id": "01M86B5ESZPGDSDZYRJ5AN1HF8",
+      "id": "01M87F0T8ZACFWH3F27EK4CYVH",
       "type": "part.add",
       "partType": "section",
       "position": "1/1",
@@ -195,7 +195,7 @@ form, an offset of `+00:00` included, as `corrupt-data`.
       }
     },
     {
-      "id": "01M86B5ESZP5Y76C7WD7HFES83",
+      "id": "01M87F0T8ZDXPZV8WNS006CBKV",
       "type": "part.add",
       "partType": "decision",
       "position": "2/1"
@@ -210,7 +210,7 @@ more in each commit after it. A later commit saved a new body over the first
 part's, and its `operation.json` is, as stored:
 
 ```json
-{"format":"workbook.relic-operation-pack","version":1,"minReader":6,"projectId":"01M86B5E3T0YJ4ECEFRZ8BM34G","relicId":"WB-R-01M86B5EHY4R2HME50RYZKH12Z","historyGeneration":"01M86B5EHYYE7QGJQMKFRWED6T","actor":{"id":"alice@example.com"},"logicalClock":4,"wallTime":"2026-11-24T08:36:13.368167Z","operations":[{"id":"01M86B5JDRCYRM2P2G4TSYG2NW","type":"part.body.set","part":"01M86B5ESZPGDSDZYRJ5AN1HF8","body":{"format":"md","bytes":146,"base":"01M86B5ESZPGDSDZYRJ5AN1HF8"}}]}
+{"format":"workbook.relic-operation-pack","version":1,"minReader":6,"projectId":"01M87F0RVXDCDBV34NDN8Z3Y5E","relicId":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","historyGeneration":"01M87F0SQY2QS322FBM9041WZG","actor":{"id":"alice@example.com"},"logicalClock":4,"wallTime":"2026-11-24T19:02:51.757371Z","operations":[{"id":"01M87F0ZKD0X1MC06E1JCG5QBY","type":"part.body.set","part":"01M87F0T8ZACFWH3F27EK4CYVH","body":{"format":"md","bytes":146,"base":"01M87F0T8ZACFWH3F27EK4CYVH"}}]}
 ```
 
 An operation's members are always written in one order, `id`, `type`,
@@ -252,10 +252,10 @@ content it records.
   "format": "workbook.relic-state",
   "version": 1,
   "minReader": 6,
-  "projectId": "01M86B5E3T0YJ4ECEFRZ8BM34G",
-  "relicId": "WB-R-01M86B5EHY4R2HME50RYZKH12Z",
+  "projectId": "01M87F0RVXDCDBV34NDN8Z3Y5E",
+  "relicId": "WB-R-01M87F0SQYHP3HCR4QEN3RTVEX",
   "history": {
-    "generation": "01M86B5EHYYE7QGJQMKFRWED6T",
+    "generation": "01M87F0SQY2QS322FBM9041WZG",
     "compactedFrom": null
   },
   "logicalClock": 2,
@@ -266,24 +266,24 @@ content it records.
     "author": "alice@example.com",
     "retired": false,
     "deleted": false,
-    "createdAt": "2026-11-24T08:36:09.406468Z",
-    "updatedAt": "2026-11-24T08:36:09.663809Z",
+    "createdAt": "2026-11-24T19:02:45.75869Z",
+    "updatedAt": "2026-11-24T19:02:46.30335Z",
     "properties": {
       "status": "draft"
     },
     "parts": [
       {
-        "id": "01M86B5ESZPGDSDZYRJ5AN1HF8",
+        "id": "01M87F0T8ZACFWH3F27EK4CYVH",
         "type": "section",
         "position": "1/1",
         "body": {
           "format": "md",
-          "version": "01M86B5ESZPGDSDZYRJ5AN1HF8",
+          "version": "01M87F0T8ZACFWH3F27EK4CYVH",
           "bytes": 102
         }
       },
       {
-        "id": "01M86B5ESZP5Y76C7WD7HFES83",
+        "id": "01M87F0T8ZDXPZV8WNS006CBKV",
         "type": "decision",
         "position": "2/1"
       }
@@ -398,13 +398,106 @@ other is refused as `stale-write`, told that another change was saved first
 and to run the command again. Nothing retries it. A write interrupted before
 the ref moves leaves unreferenced objects and changes nothing.
 
-**Relic refs are local until relics are shared.** No command fetches, pushes,
-moves or compacts a relic ref, and no relic is written to the SQLite
-projection: the relic commands read Git directly. `workbook reset` is the only
-command that deletes a relic ref, after writing it to the reset's bundle. A
-relic ref that is damaged but still names a commit is written to the bundle
-like any other, because nothing else holds a relic; only one whose object is
-missing or is not a commit is deleted with nothing kept.
+**Relic refs are shared with the task refs.** The one `git fetch` every
+synchronization makes carries a fourth refspec beside the task, identity and
+settings refspecs:
+
+```text
++refs/workbook/relics/*:refs/workbook/remotes/<remote>/relics/*
+```
+
+so each relic at the tasks remote lands on a tracking ref under
+`refs/workbook/remotes/<remote>/relics/`, written only by `git fetch`, and the
+relic's own ref is then moved to it by compare-and-swap. In the second clone of
+the reference's session, right after setup, each relic's ref and its tracking
+ref name the same commit:
+
+```text
+3e680ce8bdf534b0a12ddb4002e693c3894a9369 commit	refs/workbook/relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+00fc4f61eb62c288c79d3c9cef8ba71d3416340a commit	refs/workbook/relics/WB-R-01M87F0YHZ1852KPS55KCDPXG2
+a112b0c1b8059dfafa88aefc65ad45d447da7426 commit	refs/workbook/relics/WB-R-01M87F17QTWKQKT6MZWX54HFY8
+3e680ce8bdf534b0a12ddb4002e693c3894a9369 commit	refs/workbook/remotes/origin/relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+00fc4f61eb62c288c79d3c9cef8ba71d3416340a commit	refs/workbook/remotes/origin/relics/WB-R-01M87F0YHZ1852KPS55KCDPXG2
+a112b0c1b8059dfafa88aefc65ad45d447da7426 commit	refs/workbook/remotes/origin/relics/WB-R-01M87F17QTWKQKT6MZWX54HFY8
+```
+
+Relic refs go out in a `git push` of their own, after the task push and only
+when a relic changed. It is never forced and never deletes a ref, so a remote
+that holds newer commits refuses it, and the next fetch replays this clone's
+commits onto them. Relic refs move in their own transaction after the task
+refs, so a relic can never roll back a task; a sync stopped between the two
+leaves the relics one sync behind, which the next sync repairs.
+
+**What a fetch reads.** One `for-each-ref` over both relic namespaces finds
+the relics whose ref and tracking ref differ, and nothing of any other relic
+is read. For each changed relic, one batch reads its new commits' parents, and
+the commit, `operation.json`, `state.json` and `links.json` of the fetched tip
+and of its parent. The `parts` tree is refused unless its size is exactly what
+the state's part count implies, and a part's subtree unless it has one of the
+two sizes a part can have, so a tree padded with extra entries is refused
+before it is read. Each `fields.json` and `body` blob is checked by its size
+and type from `git cat-file --batch-check`, without opening it. Every object
+is refused above the 4 MiB object limit before it is allocated. The fetched
+tip is checked as `relic show` checks a newest commit, by rules 1 to 6 and the
+case of rule 7 that needs no read; `workbook validate` stays the full check.
+No sync opens a `body` blob. A `fields.json` is read only when the replay must
+combine field changes both sides made to one part.
+
+**Replay.** A relic changed on both sides is replayed: each local commit the
+fetched history does not hold is written again, oldest first, on top of the
+fetched tip, with the same operation IDs, actor and wall time and a new
+logical clock, and with the blob IDs of the bodies and fields it saved. A
+commit whose operations the fetched history already holds is skipped, so an
+operation lands once. Bob's property change, replayed onto alice's:
+
+```text
+a61eb71 Bob replay relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+bd840f6 Alice update relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+5654d72 Bob update relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+```
+
+The fold ignores a `part.body.set` whose `base` is not the part's current
+version, so replay decides before it writes. A body save over a version that
+is no longer current stops the replay, unless it saved the same blob with the
+same label as the body that stands, and so does any change to a relic the
+fetched history has deleted. Counts and totals never stop it: two changes that
+each fit may pass one together, and the replay keeps both and warns. When a
+replay stops, the relic's ref moves to the fetched tip plus what replayed
+before the stop, and the old local tip is parked under
+`refs/workbook/reconciled-relics/<relic-id>/<n>` in the same transaction. That
+namespace is outside `refs/workbook/relics/`, is never pushed, and is not a
+relic history `workbook validate` walks. Bob's saved body, parked when alice's
+reached the remote first:
+
+```text
+* 87d0bd9 Alice update relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+| * 735d9a7 Bob update relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+|/  
+* 59c29f0 Bob replay relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+* 93c5a41 Alice update relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+```
+
+The commit on the side line is bob's save, which only the parked ref reaches,
+and the relic's ref is alice's commit on top of the commit both share. See
+[Concurrency and synchronization](#concurrency-and-synchronization) for what
+each pair of concurrent changes gives, and
+[A relic conflict](reference.md#a-relic-conflict) for getting parked text back.
+
+**What a fetch refuses.** A fetched tip that fails its check leaves the local
+ref where it is and is reported `invalid`; every other relic and every task
+still synchronizes. A name under the relic namespace that is not one of this
+project's relic IDs, a symbolic ref there, and a relic whose documents name
+another project are skipped and reported as ignored refs, with `plausibleTask`
+true so nothing offers to delete them. A tip written by a newer Workbook is
+taken without the check when there is nothing to replay onto it, as a newer
+task tip is, and is reported `needs-upgrade` when there is.
+
+`workbook reset` is the only command that deletes a relic ref. A reset of a
+checkout writes the relic refs and parked relic tips to its bundle first, and a
+relic ref that is damaged but still names a commit is kept like any other,
+because a sync never publishes a relic it cannot read; only one whose object is
+missing or is not a commit is deleted with nothing kept. A reset of a remote
+writes the remote's relic refs to its bundle and deletes them with the rest.
 
 ### Operation pack
 
@@ -738,6 +831,21 @@ Generation 6 belongs to relics alone. It marks no task pack and no
 configuration pack, so a task or a configuration history is written exactly as
 before, and every relic pack and state carries it. See
 [Relic refs](#relic-refs).
+
+**Relics and an older Workbook.** A release from before relics, v0.6.1
+included, never sees one. Its fetch names only the task, identity and
+configuration refspecs, so relic refs at the remote never enter its clone; its
+push and sync leave the relic refs at the remote as they are; and its fetch
+prunes no relic ref a clone already holds. A tested run of the v0.6.1 release
+against a remote holding relics holds it to this. The one way such a release
+can lose a relic is its `workbook reset`, which does not know relic refs are
+work; see [Relics](reference.md#relics). A relic tip written by a newer
+Workbook than the reader follows the task rules above: it is fast-forwarded
+onto when there is nothing local to replay, and reported `needs-upgrade` with
+nothing moved when there is. The watcher's status document moved to version 2
+with relic sharing, and a command does not hand a change to a watcher serving
+another version, so a version 1 watcher, which would not push a relic, is
+bypassed and the command synchronizes inline.
 
 Generation 0 is every operation type Workbook shipped before assignments, and it
 is the only generation that writes no marker. So a create, a field change, a
@@ -1087,7 +1195,11 @@ it deletes, with the compaction manifest, before it deletes anything. Two
 exceptions: a damaged ref is not bundled and is deleted anyway, and the
 manifest ref an interrupted backup left is not data. A damaged relic ref that
 still resolves to a commit is not one of them: it goes into the bundle with
-its history, because a relic exists nowhere but in the checkout. A ref that moved since the
+its history, because a sync never publishes a relic it cannot read, so the
+checkout may hold its only copy. Relic refs and parked relic tips
+(`refs/workbook/reconciled-relics/`) are bundled like task refs and parked
+task tips, and a relic change the tasks remote lacks, or a parked relic tip,
+is work that exists only in the checkout. A ref that moved since the
 run read it stops the run. A checkout's bundle holds the refs under their own
 names. A remote's holds them under the names this checkout tracks them by, so
 fetching from it never overwrites a live ref. A checkout may skip the bundle
@@ -1175,6 +1287,44 @@ Recording the parking point would close that gap; it is local bookkeeping,
 not a format change, and is not done yet.
 
 Exclusive claims are different. When `--remote-required` is used, a claim succeeds only after the remote accepts a fast-forward update based on the task ref that was fetched. If another agent claimed the task first, Workbook refetches and reports that the claim failed instead of merging two exclusive claims. Offline claims, if supported, must be visibly tentative.
+
+**Relics.** A relic is reconciled by the same replay, with its own rules,
+because its values are whole documents rather than task fields. The clone that
+synchronizes second writes each of its relic commits again on the fetched tip,
+oldest first, with the same operation IDs, actor and wall time and a new
+logical clock, and skips a commit whose operations the fetched history already
+holds. What each pair of concurrent changes gives:
+
+| Concurrent changes | Result | Stops the replay |
+| --- | --- | --- |
+| Different properties, parts, or fields of one part | both kept | no |
+| The same property, field, title or part position | the second syncer's value; both operations in history | no |
+| Two changes that each fit a total and together pass it | both kept, `relic-over-limit` warning | no |
+| An edit to a part removed elsewhere | the part stays removed and holds the edit, `relic-edit-on-removed-part` warning | no |
+| A deletion that syncs second, over an edit | deleted, holding the edit, no report | no |
+| Two body saves over the same version, to different bytes | the first syncer's body; the second's tip parked | yes, `body` |
+| An edit that syncs second, over a deletion | deleted; the edit's tip parked | yes, `tombstone` |
+
+The replay decides before it writes: the fold ignores a `part.body.set` whose
+`base` is not the part's current version, so the replay checks every body save
+against the fetched state and stops on the first that would be dropped, unless
+it saved the same blob with the same label. It never stops for a count or a
+total, because refusing would lose one clone's work that was valid where it was
+made. A stopped replay moves the relic's ref to the fetched tip plus whatever
+replayed before the stop, parks the old local tip under
+`refs/workbook/reconciled-relics/<relic-id>/<n>` in the same transaction, and
+reports a `relicConflict` entry; see
+[A relic conflict](reference.md#a-relic-conflict).
+
+These are guarantees: every stored value is one side's whole value or the
+result of applying whole operations in order; each operation is recorded once
+whatever the order of delivery, and a repeated or interrupted sync changes
+nothing further; a change that did not apply is kept in a parked tip until a
+reset bundles and removes it. The deletion that syncs second is the one case
+where a clone's intent is applied with no report: the edit it overrides stays
+in the relic's history, and `relic restore` brings it back. Parked relic tips
+are never pushed and never retired: unlike a parked task tip, nothing judges
+one settled yet, so each stays until a reset bundles and removes it.
 
 Workbook does not rely on Git hooks for correctness. The optional managed
 pre-push hook publishes task refs as a convenience, but fresh clones, alternate
@@ -1372,7 +1522,8 @@ code clone                                        origin (code)
   refs/workbook/project ──> I           <---->      refs/workbook/project ──> I
   refs/workbook/config                  <---->      refs/workbook/config
   refs/workbook/tasks/*                 <---->      refs/workbook/tasks/*
-  refs/workbook/remotes/tasks/{project,config,tasks/*}  (tracking)
+  refs/workbook/relics/*                <---->      refs/workbook/relics/*
+  refs/workbook/remotes/tasks/{project,config,tasks/*,relics/*}  (tracking)
 ```
 
 A remote other than the project's tasks remote is only ever read into its
@@ -1391,7 +1542,25 @@ written, once. Identity is checked by content as well as ID: a pack that
 reuses a recorded ID for a different change is refused as corrupt, naming both
 commits, because skipping it would take one value silently. Every publication
 also refuses a history that records an operation ID twice, wherever it came
-from. The mark is one commit on the old
+from.
+
+Relics move with the tasks but by a different route. A task from the old place
+is only read into its tracking prefix, as above, but the old place's relics
+are folded into this checkout's relic refs at once, by the same relic stage a
+fetch runs. That is safe for relics, as it is not for tasks, because a relic
+replay skips every commit whose operations the other side already holds, so
+alternating between two places never writes a relic operation twice. The two
+synchronizations with the new place then publish them. Verification lists
+both places' relic refs and requires the new place to hold every operation of
+every relic the old place holds, at the same commit, under other commits, or in
+a relic tip parked in this checkout. A name under `refs/workbook/relics/` at
+the old place that is not one of this project's relics cannot be carried, so it
+leaves the move unverified, and `--clean-up`, which deletes only after a
+verified move, deletes nothing. A relic conflict met while carrying parks the
+local tip as any fetch does; the run is verified but exits 8, and `--clean-up`
+waits until a person has looked at it.
+
+The mark is one commit on the old
 place's identity ref:
 
 ```text

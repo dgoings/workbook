@@ -53,17 +53,38 @@ larger than it was, and a total is never checked when a relic is read. Text
 that is not valid UTF-8 and an object that names a member twice are refused,
 never repaired, and `relic create --from-file` reads at most 64 MiB.
 
-Relics are local until they are shared: they are not sent to the tasks
-remote, not in the SQLite index and not on the board, and there are no links,
-schemas, history or diff commands, retiring or compaction for them yet.
+Relics are shared with the tasks. `workbook fetch`, `push`, `sync`, `setup`,
+`move-tasks` and `sync --watch` carry relic refs to and from the tasks
+remote, through tracking refs under `refs/workbook/remotes/<remote>/relics/`.
+`relic create`, `update`, `delete` and `restore` fetch first, push the one
+relic they changed, and print a `Sync:` line; `--no-sync` skips both, and the
+read commands contact no remote. A relic changed in two clones is combined by
+replaying one clone's commits onto the other's, operation by operation. Two
+saves over the same body version, and an edit to a relic the remote has
+deleted, stop the replay: the remote's version stands, the local tip is parked
+under `refs/workbook/reconciled-relics/`, and the command reports a relic
+conflict, exit 8, in text and in a new `relicConflict` envelope member that
+carries all three bodies. A deletion that synchronizes second applies with no
+report. Two changes that each fit a total but pass it together are both kept,
+with a `relic-over-limit` warning, and an edit to a part removed elsewhere
+gives `relic-edit-on-removed-part`. A relic at the old place that a move
+cannot carry leaves the move unverified, so `--clean-up` deletes nothing. The
+watcher's status document is now version 2; a command does not hand a change
+to an older watcher. Relics are not in the SQLite index or on the board, and
+there are no links, schemas, history or diff commands, retiring or compaction
+for them yet.
+
 `workbook validate` checks every commit of every relic history, and refuses a
-relic in which two commits record the same operation ID. `workbook reset` treats
-every relic as work that exists only in the checkout, so it writes them to its
-bundle, a damaged relic ref that still resolves to a commit included, and
-refuses `--no-backup` while one exists unless `--discard-unpublished` is
-given. In a checkout with no tasks remote to check against, which a local-only
-project is, `--no-backup` is refused with `--discard-unpublished` or without
-it. No task command changes behavior. See
+relic in which two commits record the same operation ID. `workbook reset`
+measures a relic as it measures a task: a change the tasks remote lacks is
+work that exists only in the checkout, and a parked relic tip is set aside.
+It writes relic refs and parked relic tips to its bundle, a damaged relic ref
+that still resolves to a commit included, and `--no-backup` is refused while
+such work exists unless `--discard-unpublished` is given. In a checkout with
+no tasks remote to check against, which a local-only project is,
+`--no-backup` is refused with `--discard-unpublished` or without it. A
+Workbook from before relics, v0.6.1 included, works beside them and leaves
+the relics at a remote alone. See
 [Relics](docs/reference.md#relics) and
 [Relic refs](docs/architecture.md#relic-refs).
 
@@ -71,7 +92,8 @@ it. No task command changes behavior. See
 from before relics does not know the refs that hold them. Its `workbook reset
 --no-backup` deletes the relic refs without writing a bundle, and the restore
 command its plain `workbook reset` prints does not fetch them back from the
-bundle it wrote.
+bundle it wrote. A relic the tasks remote holds comes back with the next sync;
+a change not yet published can be lost.
 
 A project can keep its tasks in a repository of their own, so that access to
 them, such as a hosted board's deploy key, is not access to the code. `workbook
