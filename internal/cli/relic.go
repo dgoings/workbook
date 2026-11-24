@@ -148,24 +148,47 @@ func runRelicCreate(ctx context.Context, args []string, cwd string, stdin io.Rea
 	return nil
 }
 
+// maxRelicDocumentBytes is the largest workbook.relic document relic create
+// --from-file reads. It is an input limit, not part of the stored format, and
+// is set to hold the largest relic the stored limits allow with room to spare:
+//
+//	16 MiB of bodies, which a document may carry as base64    22.4 MiB
+//	2,000 parts with 16 KiB of fields each                    31.3 MiB
+//	64 KiB of properties                                       0.1 MiB
+//
+// which is under 54 MiB before the document's own punctuation and any
+// indentation.
+const maxRelicDocumentBytes = 64 * 1024 * 1024
+
 // readRelicDocument reads and decodes the workbook.relic document at path, or
-// on standard input for "-".
+// on standard input for "-". It reads at most one byte more than
+// maxRelicDocumentBytes, which is enough to know a document is too large, so
+// input that never ends is refused after a bounded read.
 func readRelicDocument(path string, stdin io.Reader) (core.RelicDocument, error) {
-	var content []byte
-	var err error
-	if path == "-" {
-		content, err = io.ReadAll(stdin)
+	source, reader := "standard input", stdin
+	if path != "-" {
+		source = singleLine(path)
+		file, err := os.Open(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return core.RelicDocument{}, core.Wrap(core.CategoryNotFound, "cannot read "+source, err)
+		}
 		if err != nil {
+			return core.RelicDocument{}, core.Wrap(core.CategoryOperational, "cannot read "+source, err)
+		}
+		defer file.Close()
+		reader = file
+	}
+	content, err := io.ReadAll(io.LimitReader(reader, maxRelicDocumentBytes+1))
+	if err != nil {
+		if path == "-" {
 			return core.RelicDocument{}, core.Wrap(core.CategoryOperational, "cannot read the relic document from standard input", err)
 		}
-	} else {
-		content, err = os.ReadFile(path)
-		if errors.Is(err, fs.ErrNotExist) {
-			return core.RelicDocument{}, core.Wrap(core.CategoryNotFound, "cannot read "+singleLine(path), err)
-		}
-		if err != nil {
-			return core.RelicDocument{}, core.Wrap(core.CategoryOperational, "cannot read "+singleLine(path), err)
-		}
+		return core.RelicDocument{}, core.Wrap(core.CategoryOperational, "cannot read "+source, err)
+	}
+	if len(content) > maxRelicDocumentBytes {
+		return core.RelicDocument{}, core.Errorf(core.CategoryValidation,
+			"the relic document from %s is more than %d bytes; the limit is %d bytes",
+			source, maxRelicDocumentBytes, maxRelicDocumentBytes)
 	}
 	return core.DecodeRelicDocument(content)
 }

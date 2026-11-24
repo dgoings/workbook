@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -631,5 +632,79 @@ func TestAnUnreadableRelicIsNamedByEveryCommandThatReadsIt(t *testing.T) {
 	}
 	if shown := shownRelic(t, repository, healthy.Operation.RelicID); shown.ID != healthy.Operation.RelicID {
 		t.Fatalf("relic show of the healthy relic = %#v", shown)
+	}
+}
+
+// endlessRelicInput is a standard input that never ends: every read fills the
+// buffer it is given. It counts what was taken from it, and fails once a
+// megabyte more than the limit has been taken, so a reader with no bound fails
+// this test instead of exhausting the machine.
+type endlessRelicInput struct{ taken int64 }
+
+func (input *endlessRelicInput) Read(buffer []byte) (int, error) {
+	if input.taken > maxRelicDocumentBytes+1024*1024 {
+		return 0, errors.New("the input was read past any bound")
+	}
+	for index := range buffer {
+		buffer[index] = ' '
+	}
+	input.taken += int64(len(buffer))
+	return len(buffer), nil
+}
+
+// relic create --from-file reads its document through a limit, so input that
+// never ends is refused after a bounded read instead of filling memory.
+func TestRelicCreateFromFileReadsABoundedDocument(t *testing.T) {
+	t.Parallel()
+	if maxRelicDocumentBytes != 64*1024*1024 {
+		t.Fatalf("maxRelicDocumentBytes = %d, want 64 MiB", maxRelicDocumentBytes)
+	}
+	repository := initializedRepository(t)
+	refused := func(label string, code int, stdout, stderr string) {
+		t.Helper()
+		if code != 5 || stdout != "" {
+			t.Fatalf("%s = (%d, %q, %q), want exit 5", label, code, stdout, stderr)
+		}
+		assertJSONError(t, stderr, core.CategoryValidation, "")
+		for _, want := range []string{"67108864 bytes", "relic document"} {
+			if !strings.Contains(stderr, want) {
+				t.Fatalf("%s: error %q does not hold %q", label, stderr, want)
+			}
+		}
+		if len(stderr) > 400 {
+			t.Fatalf("%s: the error is %d bytes long; it must not repeat the document", label, len(stderr))
+		}
+	}
+
+	endless := &endlessRelicInput{}
+	code, stdout, stderr := runWithInput(t, repository, endless, "relic", "create", "--from-file", "-", "--json")
+	refused("an endless standard input", code, stdout, stderr)
+	// One byte past the limit is enough to know, and is all that is read.
+	if endless.taken != maxRelicDocumentBytes+1 {
+		t.Fatalf("an endless standard input: %d bytes were read, want %d", endless.taken, maxRelicDocumentBytes+1)
+	}
+
+	// A document that is valid in every other way, one byte over and exactly
+	// at the limit: JSON allows white space after the value.
+	document := relicTestDocument(t)
+	padded := func(size int) []byte {
+		return append(append(make([]byte, 0, size), document...), bytes.Repeat([]byte{' '}, size-len(document))...)
+	}
+	path := writeRelicDocumentFile(t, padded(maxRelicDocumentBytes+1))
+	code, stdout, stderr = run(t, repository, "relic", "create", "--from-file", path, "--json")
+	refused("a file one byte over", code, stdout, stderr)
+	code, stdout, stderr = runWithInput(t, repository, bytes.NewReader(padded(maxRelicDocumentBytes+1)),
+		"relic", "create", "--from-file", "-", "--json")
+	refused("standard input one byte over", code, stdout, stderr)
+	if code, stdout, _ := run(t, repository, "relic", "list", "--json"); code != 0 || !strings.Contains(stdout, `"data":[]`) {
+		t.Fatalf("relic list after the refusals = (%d, %q), want no relic", code, stdout)
+	}
+
+	if err := os.WriteFile(path, padded(maxRelicDocumentBytes), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	created := mustCreateRelic(t, repository, "--from-file", path)
+	if created.Relic.Title != "Archive plan" {
+		t.Fatalf("a document exactly at the limit created %q", created.Relic.Title)
 	}
 }
