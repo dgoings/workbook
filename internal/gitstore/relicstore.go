@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -121,25 +122,36 @@ func (r *Repository) ListRelicHeads(ctx context.Context, config core.ProjectConf
 
 	heads := make([]core.RelicHead, 0, len(records))
 	for _, record := range records {
-		relicID := strings.TrimPrefix(record.name, relicRefPrefix)
-		if relicID == "" || strings.Contains(relicID, "/") {
-			return nil, core.Errorf(core.CategoryCorruptData, "relic ref %q does not name one relic", record.name)
+		head, err := canonicalRelicHead(keys, record)
+		if err != nil {
+			return nil, err
 		}
-		if err := core.ValidateRelicIDShape(relicID); err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "relic ref ID is invalid", err)
-		}
-		if !keys.OwnsRelic(relicID) {
-			return nil, core.Errorf(core.CategoryCorruptData,
-				"relic ref %q carries a project key this project does not have; its keys are: %s",
-				record.name, core.KeyNameList(keys))
-		}
-		if record.symbolicTarget != "" {
-			return nil, core.Errorf(core.CategoryCorruptData, "relic ref %q must not be symbolic", record.name)
-		}
-		heads = append(heads, core.RelicHead{RelicID: relicID, ObjectID: record.objectID})
+		heads = append(heads, head)
 	}
 	sort.Slice(heads, func(i, j int) bool { return heads[i].RelicID < heads[j].RelicID })
 	return heads, nil
+}
+
+// canonicalRelicHead reads one record of refs/workbook/relics/. Only Workbook
+// writes there, so a ref that does not name one relic of this project, or is
+// symbolic, is corrupt data.
+func canonicalRelicHead(keys core.KeySet, record relicRefRecord) (core.RelicHead, error) {
+	relicID := strings.TrimPrefix(record.name, relicRefPrefix)
+	if relicID == "" || strings.Contains(relicID, "/") {
+		return core.RelicHead{}, core.Errorf(core.CategoryCorruptData, "relic ref %q does not name one relic", record.name)
+	}
+	if err := core.ValidateRelicIDShape(relicID); err != nil {
+		return core.RelicHead{}, core.Wrap(core.CategoryCorruptData, "relic ref ID is invalid", err)
+	}
+	if !keys.OwnsRelic(relicID) {
+		return core.RelicHead{}, core.Errorf(core.CategoryCorruptData,
+			"relic ref %q carries a project key this project does not have; its keys are: %s",
+			record.name, core.KeyNameList(keys))
+	}
+	if record.symbolicTarget != "" {
+		return core.RelicHead{}, core.Errorf(core.CategoryCorruptData, "relic ref %q must not be symbolic", record.name)
+	}
+	return core.RelicHead{RelicID: relicID, ObjectID: record.objectID}, nil
 }
 
 type relicRefRecord struct {
@@ -148,10 +160,11 @@ type relicRefRecord struct {
 	symbolicTarget string
 }
 
-// relicRefRecords lists the refs at or under pattern through Git's ref
-// enumeration, so packed and loose refs behave the same way.
-func (r *Repository) relicRefRecords(ctx context.Context, pattern string) ([]relicRefRecord, error) {
-	contents, err := r.Git(ctx, nil, "for-each-ref", "--format="+taskRefFormat, pattern)
+// relicRefRecords lists the refs at or under each pattern through one run of
+// Git's ref enumeration, so packed and loose refs behave the same way. Every
+// pattern is a ref name or a namespace ending in a slash.
+func (r *Repository) relicRefRecords(ctx context.Context, patterns ...string) ([]relicRefRecord, error) {
+	contents, err := r.Git(ctx, nil, append([]string{"for-each-ref", "--format=" + taskRefFormat}, patterns...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +182,7 @@ func (r *Repository) relicRefRecords(ctx context.Context, pattern string) ([]rel
 			return nil, core.Errorf(core.CategoryCorruptData, "Git returned an invalid relic ref record")
 		}
 		record := relicRefRecord{name: string(parts[0]), objectID: string(parts[1]), symbolicTarget: string(parts[2])}
-		if !strings.HasPrefix(record.name, relicRefPrefix) {
+		if !slices.ContainsFunc(patterns, func(pattern string) bool { return strings.HasPrefix(record.name, pattern) }) {
 			return nil, core.Errorf(core.CategoryCorruptData, "Git returned a ref outside the relic namespace")
 		}
 		// The width comes from Git's own full-width %(objectname), and every
@@ -342,7 +355,13 @@ func validateRelicTipObjects(
 		return core.RelicSnapshot{}, err
 	}
 	if pack.ProjectID != config.ProjectID || state.ProjectID != config.ProjectID {
-		return core.RelicSnapshot{}, corruptRelic(head.RelicID, "the documents do not match the configured project")
+		refusal := corruptRelic(head.RelicID, "the documents do not match the configured project")
+		// Both documents naming one other project is that project's relic,
+		// which a fetch reports as another project's ref rather than as damage.
+		if pack.ProjectID == state.ProjectID {
+			return core.RelicSnapshot{}, &foreignProjectDocumentsError{ProjectID: pack.ProjectID, cause: refusal}
+		}
+		return core.RelicSnapshot{}, refusal
 	}
 	if pack.RelicID != head.RelicID || state.RelicID != head.RelicID {
 		return core.RelicSnapshot{}, corruptRelic(head.RelicID, "the documents do not match the relic ref")

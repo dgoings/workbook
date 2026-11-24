@@ -128,6 +128,8 @@ type fetchState struct {
 	Withheld map[string]struct{}
 	Identity *SyncIdentityResult
 	Config   *SyncConfigResult
+	// Relics is the relic stage's view, for the push phase.
+	Relics relicFetchState
 }
 
 // Push publishes validated local Workbook task refs to origin without deletion
@@ -493,6 +495,14 @@ type SyncResult struct {
 	// status; merging them would give every consumer of one a member that can
 	// never be populated for it.
 	ConfigConflicts []core.ConfigConflict `json:"-"`
+	// Relics lists the relics this phase changed or could not change. A
+	// relic that did not change is not listed, so a phase that changed none
+	// emits the JSON it emitted before relics were synchronized.
+	Relics []SyncRelicResult `json:"relics,omitempty"`
+	// RelicConflicts and RelicWarnings travel like Conflicts: callers lift
+	// them to the result envelope.
+	RelicConflicts []core.RelicConflict `json:"-"`
+	RelicWarnings  []core.Warning       `json:"-"`
 }
 
 // Sync fetches and validates origin's Workbook refs, replays any divergent
@@ -586,7 +596,7 @@ func (r *Repository) fetch(
 		return state, result, err
 	}
 
-	// One fetch carries all three namespaces. Each of the two singleton refs is
+	// One fetch carries all four namespaces. Each of the two singleton refs is
 	// worth nothing if learning it costs a round trip of its own on every
 	// synchronization, and a separate fetch could also observe a different
 	// moment than the tasks it is supposed to describe. Both singleton refspecs
@@ -596,6 +606,7 @@ func (r *Repository) fetch(
 		"+"+taskRefPrefix+"*:"+r.remoteTaskRefPrefix()+"*",
 		r.identityFetchRefspec(),
 		r.configFetchRefspec(),
+		relicFetchRefspecFor(r.remote()),
 	); err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
 		return state, result, err
@@ -914,6 +925,21 @@ func (r *Repository) fetch(
 	}
 	result.Tasks = sortedSyncOutcomes(state.Outcomes)
 	result.Status = SyncPhaseCompleted
+
+	// Relics come after every task ref has moved, in a transaction of their
+	// own, so nothing a relic does can change a task's outcome. Whatever the
+	// stage reports, the phase stays completed.
+	relics, relicStage := r.syncFetchedRelics(ctx, config)
+	state.Relics = relics
+	result.Relics = relicStage.Results
+	result.RelicConflicts = relicStage.Conflicts
+	result.RelicWarnings = relicStage.Warnings
+	if len(relicStage.Ignored) > 0 {
+		result.Ignored = append(result.Ignored, relicStage.Ignored...)
+		sort.Slice(result.Ignored, func(i, j int) bool { return result.Ignored[i].Ref < result.Ignored[j].Ref })
+	}
+
+	// Each relic error comes directly after the task error of its category.
 	if invalidCanonical > 0 {
 		return state, result, core.Errorf(core.CategoryCorruptData, "%d local task ref(s) failed validation", invalidCanonical)
 	}
@@ -922,6 +948,9 @@ func (r *Repository) fetch(
 	}
 	if invalidReconciled > 0 {
 		return state, result, core.Errorf(core.CategoryCorruptData, "%d divergent task history(s) could not be replayed", invalidReconciled)
+	}
+	if err := relicStage.corruptError(); err != nil {
+		return state, result, err
 	}
 	// Reported after corruption and before conflicts, which is the order of how
 	// much they say about the repository. Every other task in this run fetched,
@@ -933,8 +962,19 @@ func (r *Repository) fetch(
 				"upgrade workbook to replay the local changes onto them",
 			newerReconciled)
 	}
+	if err := relicStage.newerWriterError(); err != nil {
+		return state, result, err
+	}
 	if len(result.Conflicts) > 0 {
 		return state, result, core.ConflictError(result.Conflicts)
+	}
+	if err := relicStage.conflictError(); err != nil {
+		return state, result, err
+	}
+	// A relic ref that moved while the stage ran has no task error of its
+	// category: a task transaction that fails ends the fetch before this.
+	if err := relicStage.otherError(); err != nil {
+		return state, result, err
 	}
 	// The configuration stage's failure is reported last, after every task has
 	// been fetched, replayed and recorded. That ordering is the decision: the

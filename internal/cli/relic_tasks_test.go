@@ -239,7 +239,7 @@ func TestNoRelicRefIsPushedOrFetched(t *testing.T) {
 		t.Fatalf("this checkout tracks a relic ref:\n%s", got)
 	}
 
-	// A relic someone wrote to origin by hand is not fetched by a sync.
+	// A relic someone wrote to origin by hand arrives with a sync.
 	cliGit(t, clone, "push", "--quiet", "origin", relicRef(relic.ID)+":"+relicRef(relic.ID))
 	other := cloneCode(t, project)
 	if code, stdout, stderr := run(t, other, "setup"); code != 0 {
@@ -248,8 +248,11 @@ func TestNoRelicRefIsPushedOrFetched(t *testing.T) {
 	if code, stdout, stderr := run(t, other, "sync"); code != 0 {
 		t.Fatalf("second sync = (%d, %q, %q)", code, stdout, stderr)
 	}
-	if got := refsUnder(t, other, "refs/workbook/"); strings.Contains(got, "relics/") {
-		t.Fatalf("a fresh clone fetched a relic ref:\n%s", got)
+	if head := relicHeadOf(t, other, relic.ID); head != relic.Head {
+		t.Fatalf("the fresh clone's relic ref = %s after sync, want %s", head, relic.Head)
+	}
+	if got := refsUnder(t, other, "refs/workbook/remotes/"); !strings.Contains(got, "refs/workbook/remotes/origin/relics/"+relic.ID) {
+		t.Fatalf("the fresh clone does not track the relic:\n%s", got)
 	}
 }
 

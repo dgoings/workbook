@@ -23,6 +23,14 @@ func remoteTrackingPrefix(remote string) string { return remoteTrackingRoot + re
 
 func remoteTaskRefPrefixFor(remote string) string { return remoteTrackingPrefix(remote) + "tasks/" }
 
+// relicTrackingRefPrefixFor is where a fetch from remote mirrors its relic
+// refs. Only `git fetch` writes there.
+func relicTrackingRefPrefixFor(remote string) string { return remoteTrackingPrefix(remote) + "relics/" }
+
+func relicFetchRefspecFor(remote string) string {
+	return "+" + relicRefPrefix + "*:" + relicTrackingRefPrefixFor(remote) + "*"
+}
+
 func remoteIdentityRefFor(remote string) string { return remoteTrackingPrefix(remote) + "project" }
 
 func remoteConfigRefFor(remote string) string { return remoteTrackingPrefix(remote) + "config" }
@@ -88,6 +96,8 @@ func isTrackingTaskRefPrefix(prefix string) bool {
 }
 
 func (r *Repository) remoteTaskRefPrefix() string { return remoteTaskRefPrefixFor(r.remote()) }
+
+func (r *Repository) remoteRelicRefPrefix() string { return relicTrackingRefPrefixFor(r.remote()) }
 
 func (r *Repository) remoteIdentityRef() string { return remoteIdentityRefFor(r.remote()) }
 

@@ -1118,14 +1118,16 @@ func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Sync() error = %v; result = %#v", err, result)
 			}
-			// One fetch carries all three namespaces. Both singleton refs ride
-			// the refspec list rather than adding a round trip of their own.
+			// One fetch carries all four namespaces. Both singleton refs and
+			// the relics ride the refspec list rather than adding a round trip
+			// of their own.
 			if got := countCommand(commands, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", "origin",
-				"+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*", identityFetchRefspec, configFetchRefspec); got != 1 {
+				"+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*", identityFetchRefspec, configFetchRefspec,
+				relicFetchRefspecFor("origin")); got != 1 {
 				t.Fatalf("fetch commands = %d, want 1; commands = %v", got, commands)
 			}
 			if got := countCommandPrefix(commands, "fetch"); got != 1 {
-				t.Fatalf("fetch invocations = %d, want exactly one for all three namespaces; commands = %v", got, commands)
+				t.Fatalf("fetch invocations = %d, want exactly one for all four namespaces; commands = %v", got, commands)
 			}
 			// The configuration stage enumerates both of its refs once, and the
 			// push phase reuses that observation rather than asking again.
