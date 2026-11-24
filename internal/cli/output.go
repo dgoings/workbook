@@ -687,6 +687,7 @@ func writeList(output io.Writer, tasks []core.Task) error {
 
 func writeShowDetail(output io.Writer, detail core.TaskDetail) {
 	writeShowThread(output, detail.Task, detail.Comments, detail.RemovedComments)
+	writeShowRelics(output, detail.Relics)
 	if detail.History != nil {
 		writeChangeLog(output, *detail.History)
 	}

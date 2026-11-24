@@ -63,6 +63,17 @@ func relicReaderFixture(t *testing.T, repository *gitstore.Repository, config co
 		t.Fatal(err)
 	}
 	gone := shapes.Parts[5].ID
+	// Links from the whole relic, from a live part and from the part removed
+	// below, to a live task and to one deleted afterwards.
+	live, deletedTask := linkIndexTask(t, repository, config, 1), linkIndexTask(t, repository, config, 2)
+	if _, err := service.Update(ctx, shapes.Relic.ID, []core.RelicEdit{
+		{Kind: core.RelicEditAddLink, Task: live, Rel: "relates-to"},
+		{Kind: core.RelicEditAddLink, Task: deletedTask, From: shapes.Parts[0].ID, Rel: "implemented-by"},
+		{Kind: core.RelicEditAddLink, Task: live, From: gone, Rel: "decided-by"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deleteIndexTask(t, repository, config, deletedTask)
 	if _, err := service.Update(ctx, shapes.Relic.ID, []core.RelicEdit{{Kind: core.RelicEditRemovePart, Part: gone}}); err != nil {
 		t.Fatal(err)
 	}
@@ -139,10 +150,20 @@ func TestIndexAnswersEqualGitAnswers(t *testing.T) {
 		if err := os.Remove(store.CachePath()); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
-		cold := relicAnswers(t, repository, config, store.RelicReader, ids)
+		cold := relicAnswers(t, repository, config, func() core.RelicReader { return store.RelicReader() }, ids)
 		assertSameAnswers(t, "cold", cold, fromGit)
-		warm := relicAnswers(t, repository, config, store.RelicReader, ids)
+		warm := relicAnswers(t, repository, config, func() core.RelicReader { return store.RelicReader() }, ids)
 		assertSameAnswers(t, "warm", warm, fromGit)
+		tasks, err := repository.List(context.Background(), config)
+		if err != nil || len(tasks) != 2 {
+			t.Fatalf("tasks = %d, %v; want the fixture's two", len(tasks), err)
+		}
+		for _, task := range tasks {
+			taskID := task.State.TaskID
+			if got, want := mustLookupJSON(t, relicLinksTo(t, store, config, taskID)), lookupFromGit(t, repository, config, taskID); got != want {
+				t.Fatalf("RelicLinksTo(%s) =\n%s\nwant\n%s", taskID, got, want)
+			}
+		}
 		if got := countRows(t, store, `SELECT COUNT(*) FROM relics`); got != len(ids) {
 			t.Fatalf("the index holds %d relics, want %d", got, len(ids))
 		}
@@ -196,8 +217,8 @@ func TestDamagedAndNewerRelicsReadAsTheyDoFromGit(t *testing.T) {
 
 	ids := []string{damaged, newer}
 	fromGit := relicAnswers(t, repository, config, func() core.RelicReader { return repository }, ids)
-	assertSameAnswers(t, "index", relicAnswers(t, repository, config, store.RelicReader, ids), fromGit)
-	assertSameAnswers(t, "again", relicAnswers(t, repository, config, store.RelicReader, ids), fromGit)
+	assertSameAnswers(t, "index", relicAnswers(t, repository, config, func() core.RelicReader { return store.RelicReader() }, ids), fromGit)
+	assertSameAnswers(t, "again", relicAnswers(t, repository, config, func() core.RelicReader { return store.RelicReader() }, ids), fromGit)
 	var refused bool
 	for _, answer := range fromGit {
 		if bytes.Contains([]byte(answer), []byte("error "+core.CategoryCorruptData)) {
@@ -280,7 +301,7 @@ func TestRelicReadsAnswerFromGitWhenTheIndexCannotBeBuilt(t *testing.T) {
 		}
 
 		fromGit := relicAnswers(t, repository, config, func() core.RelicReader { return repository }, ids)
-		assertSameAnswers(t, "index", relicAnswers(t, repository, config, store.RelicReader, ids), fromGit)
+		assertSameAnswers(t, "index", relicAnswers(t, repository, config, func() core.RelicReader { return store.RelicReader() }, ids), fromGit)
 
 		var refused bool
 		for _, answer := range fromGit {

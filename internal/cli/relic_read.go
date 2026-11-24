@@ -30,7 +30,9 @@ func openRelicReadService(ctx context.Context, cwd string, stderr io.Writer) (co
 	if err != nil {
 		return core.RelicService{}, nil, err
 	}
-	service.Reader = store.RelicReader()
+	index := store.RelicReader()
+	service.Reader = index
+	service.Links = index
 	service.Tasks = indexedTaskReader{index: store, repository: repository}
 	return service, release, nil
 }

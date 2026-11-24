@@ -53,6 +53,7 @@ func writeRelicList(stdout io.Writer, summaries []core.RelicSummary) {
 			fmt.Fprint(stdout, "\tdeleted")
 		}
 		fmt.Fprintln(stdout)
+		writeRelicLinkMatches(stdout, summary.LinkedBy)
 	}
 }
 

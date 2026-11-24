@@ -706,6 +706,9 @@ type TaskDetail struct {
 	RemovedComments []RemovedComment `json:"removedComments,omitempty"`
 	History         *ChangeLog       `json:"history,omitempty"`
 	Comparison      *Comparison      `json:"comparison,omitempty"`
+	// Relics lists the links relics have to the task. workbook show fills it
+	// from the relic index; ShowDetail leaves it empty.
+	Relics []TaskRelicLink `json:"relics,omitempty"`
 }
 
 // ShowDetail returns one task, optionally with its change log and a field-level

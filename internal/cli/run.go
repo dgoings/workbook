@@ -944,6 +944,12 @@ func runShow(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		return err
 	}
 	warnings := newerWriterTaskWarnings(detail.Task)
+	relics, relicWarnings, err := taskRelicLinks(ctx, service, detail.Task.ID)
+	if err != nil {
+		return err
+	}
+	detail.Relics = relics
+	warnings = append(warnings, relicWarnings...)
 	if *jsonMode {
 		writeResultWithWarnings(stdout, "show", detail, warnings)
 	} else {

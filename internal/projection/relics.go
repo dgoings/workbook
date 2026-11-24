@@ -160,13 +160,14 @@ func (s *Store) refreshRelicsActive(ctx context.Context) (relicPass, error) {
 type cachedRelic struct {
 	head                string
 	partCount, partRows int
+	linkCount, linkRows int
 }
 
 // changed reports whether the row cannot answer for head: it names another
-// commit, or it is missing part rows, which only a write cut short or a
-// damaged cache leaves.
+// commit, or it is missing part or link rows, which only a write cut short or
+// a damaged cache leaves.
 func (row cachedRelic) changed(head string) bool {
-	return row.head != head || row.partCount != row.partRows
+	return row.head != head || row.partCount != row.partRows || row.linkCount != row.linkRows
 }
 
 // indexRelics runs one relic pass against db, modeled on the task refresh.
@@ -301,14 +302,7 @@ func (s *Store) indexRelics(ctx context.Context, db *sql.DB) (relicPass, error) 
 			}
 			continue
 		}
-		// The rows hold no links yet, so a relic with links gets no row and is
-		// answered from this pass's Git read, as a relic another writer moved is.
-		if actual != expected || len(relic.Snapshot.Record.Links.Links) > 0 {
-			if actual == expected {
-				if err := writer.deleteRelic(ctx, relicID); err != nil {
-					return relicPass{}, err
-				}
-			}
+		if actual != expected {
 			if pass.fromGit == nil {
 				pass.fromGit = map[string]gitstore.IndexedRelic{}
 			}
@@ -341,18 +335,18 @@ func (s *Store) indexRelics(ctx context.Context, db *sql.DB) (relicPass, error) 
 	return pass, nil
 }
 
-// cachedRelicRows reads every relic row's head and part count, and how many
-// part rows each has.
+// cachedRelicRows reads every relic row's head, part count and link count, and
+// how many part and link rows each has.
 func cachedRelicRows(ctx context.Context, db *sql.DB) (map[string]cachedRelic, error) {
 	cached := map[string]cachedRelic{}
-	rows, err := db.QueryContext(ctx, `SELECT relic_id, head, part_count FROM relics`)
+	rows, err := db.QueryContext(ctx, `SELECT relic_id, head, part_count, link_count FROM relics`)
 	if err != nil {
 		return nil, cacheError("query indexed relic heads", err)
 	}
 	for rows.Next() {
 		var relicID string
 		var row cachedRelic
-		if err := rows.Scan(&relicID, &row.head, &row.partCount); err != nil {
+		if err := rows.Scan(&relicID, &row.head, &row.partCount, &row.linkCount); err != nil {
 			rows.Close()
 			return nil, cacheError("read indexed relic head", err)
 		}
@@ -362,24 +356,31 @@ func cachedRelicRows(ctx context.Context, db *sql.DB) (map[string]cachedRelic, e
 		return nil, cacheError("read indexed relic heads", err)
 	}
 
-	counts, err := db.QueryContext(ctx, `SELECT relic_id, COUNT(*) FROM relic_parts GROUP BY relic_id`)
+	// One query counts the part rows and the link rows of every relic.
+	counts, err := db.QueryContext(ctx, `SELECT relic_id, 0, COUNT(*) FROM relic_parts GROUP BY relic_id
+		UNION ALL SELECT relic_id, 1, COUNT(*) FROM relic_links GROUP BY relic_id`)
 	if err != nil {
-		return nil, cacheError("count indexed relic parts", err)
+		return nil, cacheError("count indexed relic parts and links", err)
 	}
 	defer counts.Close()
 	for counts.Next() {
 		var relicID string
+		var links bool
 		var count int
-		if err := counts.Scan(&relicID, &count); err != nil {
-			return nil, cacheError("read indexed relic part count", err)
+		if err := counts.Scan(&relicID, &links, &count); err != nil {
+			return nil, cacheError("read indexed relic part or link count", err)
 		}
 		if row, found := cached[relicID]; found {
-			row.partRows = count
+			if links {
+				row.linkRows = count
+			} else {
+				row.partRows = count
+			}
 			cached[relicID] = row
 		}
 	}
 	if err := counts.Err(); err != nil {
-		return nil, cacheError("read indexed relic part counts", err)
+		return nil, cacheError("read indexed relic part and link counts", err)
 	}
 	return cached, nil
 }
@@ -500,7 +501,7 @@ type relicWriter struct {
 	statements                            []*sql.Stmt
 	selectHead, insertRelic, insertProp   *sql.Stmt
 	insertPart, insertOperation, tailStmt *sql.Stmt
-	deleteOperations                      *sql.Stmt
+	insertLink, deleteOperations          *sql.Stmt
 	// deletes remove a relic's rows from every table but its operations.
 	deletes []*sql.Stmt
 }
@@ -523,8 +524,11 @@ func prepareRelicWriter(ctx context.Context, transaction *sql.Tx) (*relicWriter,
 		{&writer.selectHead, `SELECT head FROM relics WHERE relic_id = ?`},
 		{&writer.insertRelic, `INSERT INTO relics (
 			relic_id, head, project_id, state_version, min_reader, history_generation, compacted_from,
-			logical_clock, title, type, schema, author, retired, deleted, created_at, updated_at, part_count
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`},
+			logical_clock, title, type, schema, author, retired, deleted, created_at, updated_at, part_count, link_count
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`},
+		{&writer.insertLink, `INSERT INTO relic_links (
+			relic_id, link_id, from_part, to_kind, to_id, to_part, rel
+		) VALUES (?, ?, ?, 'task', ?, '', ?)`},
 		{&writer.insertProp, `INSERT INTO relic_properties (relic_id, name, value) VALUES (?, ?, ?)`},
 		{&writer.insertPart, `INSERT INTO relic_parts (
 			relic_id, part_id, ordinal, type, position, removed, fields_object, fields,
@@ -542,7 +546,7 @@ func prepareRelicWriter(ctx context.Context, transaction *sql.Tx) (*relicWriter,
 			return nil, err
 		}
 	}
-	for _, table := range []string{"relic_properties", "relic_parts", "relics"} {
+	for _, table := range []string{"relic_properties", "relic_parts", "relic_links", "relics"} {
 		statement, err := prepare(`DELETE FROM ` + table + ` WHERE relic_id = ?`)
 		if err != nil {
 			writer.close()
@@ -610,9 +614,17 @@ func (w *relicWriter) writeRelic(ctx context.Context, relic gitstore.IndexedReli
 	if _, err := w.insertRelic.ExecContext(ctx,
 		relicID, relic.Snapshot.Head, state.ProjectID, state.Version, state.MinReader, state.History.Generation, compactedFrom,
 		int64(state.LogicalClock), data.Title, data.Type, schema, data.Author, sqlBool(data.Retired), sqlBool(data.Deleted),
-		formatTime(data.CreatedAt), formatTime(data.UpdatedAt), len(data.Parts),
+		formatTime(data.CreatedAt), formatTime(data.UpdatedAt), len(data.Parts), len(relic.Snapshot.Record.Links.Links),
 	); err != nil {
 		return cacheError("index relic", err)
+	}
+	for _, link := range relic.Snapshot.Record.Links.Links {
+		if link.To.Task == "" {
+			return core.Errorf(core.CategoryCorruptData, "relic %s: link %s points at no task", relicID, link.ID)
+		}
+		if _, err := w.insertLink.ExecContext(ctx, relicID, link.ID, link.From, link.To.Task, link.Rel); err != nil {
+			return cacheError("index relic link", err)
+		}
 	}
 	for name, value := range data.Properties {
 		canonical, err := core.CanonicalRelicValue(value)
@@ -751,7 +763,7 @@ const relicStateFormat = "workbook.relic-state"
 // missing cache needs, or when SQLite refuses the cache, the reader answers
 // every call from the repository, as a read without an index does. Only a
 // cancelled read is refused with its context's error.
-func (s *Store) RelicReader() core.RelicReader {
+func (s *Store) RelicReader() RelicIndex {
 	return &relicIndexReader{store: s}
 }
 
@@ -1023,7 +1035,8 @@ func (pass *relicPass) answer(head core.RelicHead, rows map[string]core.RelicSna
 
 // queryIndexedRelics builds the snapshot every relic row holds, or only
 // relicID's when it is not empty, in one read transaction. A relic whose part
-// rows do not number what its row records is left out, so it is read from Git.
+// or link rows do not number what its row records is left out, so it is read
+// from Git.
 func (s *Store) queryIndexedRelics(ctx context.Context, relicID string) (map[string]core.RelicSnapshot, error) {
 	transaction, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -1036,21 +1049,21 @@ func (s *Store) queryIndexedRelics(ctx context.Context, relicID string) (map[str
 	}
 
 	snapshots := map[string]core.RelicSnapshot{}
-	partCounts := map[string]int{}
+	partCounts, linkCounts := map[string]int{}, map[string]int{}
 	rows, err := transaction.QueryContext(ctx, `SELECT relic_id, head, project_id, state_version, min_reader,
 		history_generation, compacted_from, logical_clock, title, type, schema, author, retired, deleted,
-		created_at, updated_at, part_count FROM relics`+where, args...)
+		created_at, updated_at, part_count, link_count FROM relics`+where, args...)
 	if err != nil {
 		return nil, s.databaseError("query indexed relics", err)
 	}
 	for rows.Next() {
-		snapshot, partCount, err := scanIndexedRelic(rows)
+		snapshot, partCount, linkCount, err := scanIndexedRelic(rows)
 		if err != nil {
 			rows.Close()
 			return nil, err
 		}
 		id := snapshot.Record.State.RelicID
-		snapshots[id], partCounts[id] = snapshot, partCount
+		snapshots[id], partCounts[id], linkCounts[id] = snapshot, partCount, linkCount
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, s.databaseError("read indexed relics", err)
@@ -1101,36 +1114,56 @@ func (s *Store) queryIndexedRelics(ctx context.Context, relicID string) (map[str
 	if err := errors.Join(parts.Err(), parts.Close()); err != nil {
 		return nil, s.databaseError("read indexed relic parts", err)
 	}
+	links, err := transaction.QueryContext(ctx, `SELECT relic_id, link_id, from_part, to_id, rel FROM relic_links`+
+		where+` ORDER BY relic_id, link_id`, args...)
+	if err != nil {
+		return nil, s.databaseError("query indexed relic links", err)
+	}
+	for links.Next() {
+		var id string
+		var link core.RelicLink
+		if err := links.Scan(&id, &link.ID, &link.From, &link.To.Task, &link.Rel); err != nil {
+			links.Close()
+			return nil, s.databaseError("read indexed relic link", err)
+		}
+		if snapshot, found := snapshots[id]; found {
+			snapshot.Record.Links.Links = append(snapshot.Record.Links.Links, link)
+			snapshots[id] = snapshot
+		}
+	}
+	if err := errors.Join(links.Err(), links.Close()); err != nil {
+		return nil, s.databaseError("read indexed relic links", err)
+	}
 	for id, snapshot := range snapshots {
-		if len(snapshot.Record.State.Relic.Parts) != partCounts[id] {
+		if len(snapshot.Record.State.Relic.Parts) != partCounts[id] || len(snapshot.Record.Links.Links) != linkCounts[id] {
 			delete(snapshots, id)
 		}
 	}
 	return snapshots, nil
 }
 
-func scanIndexedRelic(scanner rowScanner) (core.RelicSnapshot, int, error) {
+func scanIndexedRelic(scanner rowScanner) (core.RelicSnapshot, int, int, error) {
 	var head, schema, createdAt, updatedAt string
 	var state core.RelicStateDocument
 	var compactedFrom sql.NullString
 	var clock int64
-	var retired, deleted, partCount int
+	var retired, deleted, partCount, linkCount int
 	relic := &state.Relic
 	if err := scanner.Scan(&state.RelicID, &head, &state.ProjectID, &state.Version, &state.MinReader,
 		&state.History.Generation, &compactedFrom, &clock, &relic.Title, &relic.Type, &schema, &relic.Author,
-		&retired, &deleted, &createdAt, &updatedAt, &partCount); err != nil {
-		return core.RelicSnapshot{}, 0, cacheError("read indexed relic", err)
+		&retired, &deleted, &createdAt, &updatedAt, &partCount, &linkCount); err != nil {
+		return core.RelicSnapshot{}, 0, 0, cacheError("read indexed relic", err)
 	}
 	if clock < 0 {
-		return core.RelicSnapshot{}, 0, core.Errorf(core.CategoryCorruptData, "indexed relic %s has an invalid logical clock", state.RelicID)
+		return core.RelicSnapshot{}, 0, 0, core.Errorf(core.CategoryCorruptData, "indexed relic %s has an invalid logical clock", state.RelicID)
 	}
 	created, err := time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
-		return core.RelicSnapshot{}, 0, core.Wrap(core.CategoryCorruptData, "indexed relic "+state.RelicID+" has an invalid creation time", err)
+		return core.RelicSnapshot{}, 0, 0, core.Wrap(core.CategoryCorruptData, "indexed relic "+state.RelicID+" has an invalid creation time", err)
 	}
 	updated, err := time.Parse(time.RFC3339Nano, updatedAt)
 	if err != nil {
-		return core.RelicSnapshot{}, 0, core.Wrap(core.CategoryCorruptData, "indexed relic "+state.RelicID+" has an invalid update time", err)
+		return core.RelicSnapshot{}, 0, 0, core.Wrap(core.CategoryCorruptData, "indexed relic "+state.RelicID+" has an invalid update time", err)
 	}
 	state.Format = relicStateFormat
 	state.LogicalClock = uint64(clock)
@@ -1151,7 +1184,7 @@ func scanIndexedRelic(scanner rowScanner) (core.RelicSnapshot, int, error) {
 			ProjectID: state.ProjectID, RelicID: state.RelicID, HistoryGeneration: state.History.Generation,
 		},
 		Record: core.RelicRecord{State: state, Links: core.EmptyRelicLinks()},
-	}, partCount, nil
+	}, partCount, linkCount, nil
 }
 
 // indexedPartContent is what the index holds of one part's content: its

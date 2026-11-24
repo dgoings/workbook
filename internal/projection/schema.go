@@ -1,6 +1,13 @@
 package projection
 
-// schemaVersion is bumped to 9 because the cache now holds relics: one row per
+// schemaVersion is bumped to 10 because the cache now holds relic links: a
+// relic_links row per live link, indexed by what the link points at so "what
+// links to this task?" is one query, and a link_count on each relic row, so a
+// relic whose link rows were cut short is read again as one missing part rows
+// is. A version 9 cache has neither, and it served every relic as one with no
+// links, so it is discarded and Git read again.
+//
+// Version 9 was bumped because the cache now holds relics: one row per
 // relic, its properties, its parts with their fields and the object ID, format
 // and size of each body, and its recorded operations. Body text is never
 // copied in; it stays in Git and is read by object ID. A cache stamped earlier
@@ -44,7 +51,7 @@ package projection
 // checkpoint and every recorded pack, where a missing column reads as
 // generation zero — a claim rather than an absence, and the one claim that must
 // never be made wrongly.
-const schemaVersion = "9"
+const schemaVersion = "10"
 
 const schema = `
 CREATE TABLE projection_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -87,7 +94,7 @@ CREATE TABLE relics (
   logical_clock INTEGER NOT NULL, title TEXT NOT NULL, type TEXT NOT NULL,
   schema TEXT NOT NULL, author TEXT NOT NULL, retired INTEGER NOT NULL,
   deleted INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-  part_count INTEGER NOT NULL
+  part_count INTEGER NOT NULL, link_count INTEGER NOT NULL
 );
 CREATE INDEX relics_by_type ON relics (type, relic_id);
 CREATE TABLE relic_properties (
@@ -110,4 +117,10 @@ CREATE TABLE relic_operations (
   type TEXT NOT NULL, part TEXT NOT NULL, payload TEXT NOT NULL,
   PRIMARY KEY (relic_id, chain_index, pack_index)
 );
-CREATE INDEX relic_operations_by_id ON relic_operations (operation_id);`
+CREATE INDEX relic_operations_by_id ON relic_operations (operation_id);
+CREATE TABLE relic_links (
+  relic_id TEXT NOT NULL, link_id TEXT NOT NULL, from_part TEXT NOT NULL,
+  to_kind TEXT NOT NULL, to_id TEXT NOT NULL, to_part TEXT NOT NULL,
+  rel TEXT NOT NULL, PRIMARY KEY (relic_id, link_id)
+);
+CREATE INDEX relic_links_by_target ON relic_links (to_kind, to_id, to_part, relic_id, link_id);`

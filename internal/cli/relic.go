@@ -179,6 +179,7 @@ func runRelicList(ctx context.Context, args []string, cwd string, stdout, stderr
 	flags := newFlagSet("relic", "list")
 	relicType := flags.String("type", "", "show only relics of this type")
 	all := flags.Bool("all", false, "include deleted relics, each marked deleted")
+	linkedTo := flags.String("linked-to", "", "show only relics that link to this task")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -188,7 +189,11 @@ func runRelicList(ctx context.Context, args []string, cwd string, stdout, stderr
 		return err
 	}
 	defer release()
-	summaries, err := service.List(ctx, core.RelicListFilter{Type: *relicType, IncludeDeleted: *all})
+	filter := core.RelicListFilter{Type: *relicType, IncludeDeleted: *all}
+	if flagGiven(flags, "linked-to") {
+		return runRelicListLinkedTo(ctx, service, *linkedTo, filter, *jsonMode, stdout, stderr)
+	}
+	summaries, err := service.List(ctx, filter)
 	if err != nil {
 		return err
 	}

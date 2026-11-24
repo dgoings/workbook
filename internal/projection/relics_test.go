@@ -82,6 +82,7 @@ func relicServiceForIndex(repository *gitstore.Repository, config core.ProjectCo
 		Config: config,
 		Reader: repository,
 		Writer: repository,
+		Tasks:  repository,
 		IDs: core.IDSourceFunc(func() (string, error) {
 			mutex.Lock()
 			defer mutex.Unlock()
@@ -291,6 +292,7 @@ func dumpRelicTables(t *testing.T, store *Store) string {
 		`SELECT * FROM relic_properties ORDER BY relic_id, name`,
 		`SELECT * FROM relic_parts ORDER BY relic_id, part_id`,
 		`SELECT * FROM relic_operations ORDER BY relic_id, chain_index, pack_index`,
+		`SELECT * FROM relic_links ORDER BY relic_id, link_id`,
 	} {
 		fmt.Fprintf(&dump, "%s\n", query)
 		dumpRows(t, store.db, &dump, query)
@@ -689,6 +691,10 @@ func TestRelicIndexContentsDoNotDependOnReadOrder(t *testing.T) {
 			mutate()
 			runRelicPass(t, stepwise)
 		}
+		for _, mutate := range relicLinkMutations(t, repository, config, service, ids) {
+			mutate()
+			runRelicPass(t, stepwise)
+		}
 
 		reversed := openRelicStore(t, orderedRelicSource{repositorySource{repository: repository}}, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 		runRelicPass(t, reversed)
@@ -1080,7 +1086,7 @@ func TestRelicIndexHoldsNoBodyText(t *testing.T) {
 	}
 }
 
-func TestSchemaVersionEightCacheIsReplaced(t *testing.T) {
+func TestSchemaVersionNineCacheIsReplaced(t *testing.T) {
 	t.Parallel()
 	repository, config := initializeWorkbook(t)
 	ctx := context.Background()
@@ -1088,14 +1094,15 @@ func TestSchemaVersionEightCacheIsReplaced(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// A cache as version 8 wrote it: the task tables and no relic table.
+	// A cache as version 9 wrote it: the relic tables, with no link count and
+	// no link table.
 	old, err := sql.Open("sqlite", cachePath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := old.Exec(schema+`;
-		DROP TABLE relics; DROP TABLE relic_properties; DROP TABLE relic_parts; DROP TABLE relic_operations;
-		INSERT INTO projection_meta (key, value) VALUES ('schema_version', '8'), ('project_id', ?)`, config.ProjectID); err != nil {
+		DROP TABLE relic_links; ALTER TABLE relics DROP COLUMN link_count;
+		INSERT INTO projection_meta (key, value) VALUES ('schema_version', '9'), ('project_id', ?)`, config.ProjectID); err != nil {
 		t.Fatal(err)
 	}
 	if err := old.Close(); err != nil {
@@ -1106,7 +1113,7 @@ func TestSchemaVersionEightCacheIsReplaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	if store.cacheUsable(ctx) {
-		t.Fatal("a version 8 cache is usable")
+		t.Fatal("a version 9 cache is usable")
 	}
 	if _, err := store.List(ctx, config); err != nil {
 		t.Fatalf("List() error = %v", err)
@@ -1115,10 +1122,11 @@ func TestSchemaVersionEightCacheIsReplaced(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT value FROM projection_meta WHERE key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != schemaVersion || schemaVersion != "9" {
-		t.Fatalf("schema version = %s (built %s), want 9", version, schemaVersion)
+	if version != schemaVersion || schemaVersion != "10" {
+		t.Fatalf("schema version = %s (built %s), want 10", version, schemaVersion)
 	}
-	for _, table := range []string{"relics", "relic_properties", "relic_parts", "relic_operations"} {
+	countRows(t, store, `SELECT COUNT(link_count) FROM relics`)
+	for _, table := range []string{"relics", "relic_properties", "relic_parts", "relic_operations", "relic_links"} {
 		countRows(t, store, `SELECT COUNT(*) FROM `+table)
 	}
 }

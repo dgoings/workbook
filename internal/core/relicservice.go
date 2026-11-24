@@ -34,6 +34,8 @@ type RelicService struct {
 	// the index for a read. Only link edits, and a show of a relic with links,
 	// use it.
 	Tasks TaskReader
+	// Links answers which relics link to a task; only LinkedTo uses it.
+	Links RelicLinkIndex
 	IDs   IDSource
 	Now   func() time.Time
 	Actor string
@@ -51,6 +53,9 @@ type RelicSummary struct {
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 	Parts     int       `json:"parts"`
+	// LinkedBy is set only by LinkedTo: the relic's links to the task asked
+	// about.
+	LinkedBy []RelicLinkMatch `json:"linkedBy,omitempty"`
 }
 
 // RelicMutationResult is what a command that changes a relic reports. Parts
