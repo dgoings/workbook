@@ -661,6 +661,23 @@ func TestReferenceDocumentsSharedRelics(t *testing.T) {
 			t.Errorf("the architecture's SQLite projection section is missing %q", required)
 		}
 	}
+
+	// Links to tasks: the options, the members a reader meets, and the two
+	// operations and the table that hold them.
+	if strings.Contains(reference, "Always an empty list") {
+		t.Error("the reference still says a relic's links are always an empty list")
+	}
+	for _, required := range []string{"--link", "--unlink", "--from", "--rel", "--linked-to", "targetRemoved", "linkedBy", "`relics`"} {
+		if !strings.Contains(reference, required) {
+			t.Errorf("the reference's relic section is missing %q", required)
+		}
+	}
+	whole := strings.Join(strings.Fields(repositoryDoc(t, "docs", "architecture.md")), " ")
+	for _, required := range []string{"link.add", "link.remove", "relic_links"} {
+		if !strings.Contains(whole, required) {
+			t.Errorf("the architecture is missing %q", required)
+		}
+	}
 }
 
 // groupedDigits writes a count as the reference does: digits, with a comma

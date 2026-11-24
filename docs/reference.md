@@ -1328,7 +1328,7 @@ for, with body content only under `--body`.
 | `properties` | An object of the relic's properties. |
 | `parts` | The parts, in order. Each has `id`, `type`, `position`, `fields`, `removed` only when it is `true`, and `body` when the part has one. |
 | `parts[].body` | `format` when the body has a label, `version`, `bytes`, and the content as `text`, or as `base64` when the bytes are not valid UTF-8. An empty body is `"text": ""`. |
-| `links` | Always an empty list. |
+| `links` | The relic's live links, ordered by ID: each with `id`, `from` when it is from a part, `to` as `{"task": "<task-id>"}`, and `rel`. `relic show` lists only the links of the parts it shows, and adds `targetRemoved: true` to a link whose task is deleted or not in this clone. See [Links to tasks](#links-to-tasks). |
 
 `workbook relic create --from-file <file>` creates a relic from such a
 document, and `-` reads it from standard input:
@@ -1369,7 +1369,9 @@ one commit.
     a body, `properties`, one part's `fields`, or an object inside a value;
   - a member the format does not have. Member names are matched exactly, so
     `"Title"` is not `"title"`;
-  - a `schema` that is not `null`, and a `links` list that is not empty;
+  - a `schema` that is not `null`, and a `links` list that is not empty: the
+    new relic's parts get new IDs, so add each link afterwards with
+    `relic update --link`;
   - a body with both `text` and `base64`, or with neither.
 
 A title given first on the command line, or `--type`, replaces the document's.
@@ -1410,6 +1412,8 @@ workbook: this is the JSON result of a command, not a relic document: it has "co
 | Live parts | 2,000 | Parts that are not removed. | Only when a change adds or restores a part |
 | Parts | 4,000 | Parts, counting removed ones. | Only when a change adds a part |
 | Live bodies | 16,777,216 bytes (16 MiB) | The bodies of the live parts, added together. | Only when a change makes the total larger |
+| Link relationship | 100 bytes | The `rel`, lowercase words joined by single hyphens. | When saved and when read |
+| Live links | 2,000 | Links that are not removed. | Only when a change adds a link |
 | Git object | 4,194,304 bytes (4 MiB) | Any one stored object. | Never stored larger; never read larger |
 
 A value's size is the size of its stored form, with its quotes and its
@@ -1427,16 +1431,17 @@ value, are refused together:
 workbook: the relic's properties are 80167 bytes; the limit is 65536 bytes
 ```
 
-The first nine limits are also checked when what was stored is read back. A
+The first nine limits, and the link relationship, are also checked when what
+was stored is read back. A
 stored value over one was not written by these commands, and its relic is
 reported as `corrupt-data` (exit `7`).
 
-The two totals for properties and fields, the two counts and the total for
+The two totals for properties and fields, the three counts and the total for
 bodies are different: they are never checked when a relic is read, and they
 refuse only growth. A change is refused for one only when it leaves the total
 over its limit and larger than it was. A relic that is already over one can
 still be read and edited, and brought back under: clearing a property,
-setting a smaller value or removing a part is always saved.
+setting a smaller value, removing a part or removing a link is always saved.
 
 `relic create --from-file` also reads at most 67,108,864 bytes (64 MiB) of
 document. That is a limit on one command's input, not on what is stored.
@@ -1486,7 +1491,8 @@ while such work exists, as it is for a task; see
 its Workbook refs, after writing them to its bundle.
 
 **Task commands** do not return relics. `workbook list` and `next` read no
-relic, and `workbook compact` leaves relic refs alone. `workbook fetch`,
+relic, `workbook show <task>` lists the relics that link to the task (see
+[Links to tasks](#links-to-tasks)), and `workbook compact` leaves relic refs alone. `workbook fetch`,
 `push`, `sync` and `move-tasks` carry them; see [Sharing relics](#sharing-relics).
 `workbook status`, `priority`, `key`, `config`, `compact` and `next` report a
 relic conflict their own fetch met, beside the task conflicts, with the same
@@ -2062,6 +2068,293 @@ every read, with the same answer and the same error as before the index
 existed. A relic read never fails because of the cache: if the cache cannot
 be built or read, as when a damaged task ref stops the rebuild, relic reads
 answer from Git.
+
+### Links to tasks
+
+A relic, or one of its parts, can link to a task. A link has its own ID, the
+part it is from or none for the whole relic, the task it points at, and a
+relationship, `rel`, such as `implemented-by`. It is stored once, on the
+relic: the task's history does not change. Alice made a second task and
+linked the relic to the first and its decision part to the second, in one
+command:
+
+```sh
+workbook create "Bundle the old history"
+workbook relic update WB-R-01M87F0S --link WB-01M87F19RB1 --rel implemented-by --link WB-01M87F2JJT7 --from 01M87F0T8ZD --rel implemented-by
+workbook relic show WB-R-01M87F0S
+```
+
+```text
+WB-01M87F2JJT7ERPBSGFX8XTZ4NW	backlog	medium	Bundle the old history
+Sync:	completed
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+Sync:	completed
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+Author:	alice@example.com
+Updated:	2026-11-24T19:03:45Z
+Properties:
+  approved: null
+  owner: Alice <alice@example.com>
+  reviewed: yes
+  reviewer: bob@example.com
+  reviewers: ["Alice \u003calice@example.com\u003e","bob@example.com"]
+  status: review
+#01M87F0T8ZACFWH3F27EK4CYVH	section	md, 203 bytes, version 01M87F283AZ3GZ7ZW9GZKM2RK9
+  heading: Goals
+#01M87F0T8ZDXPZV8WNS006CBKV	decision	no body
+  accepted: true
+  heading: Keep a backup bundle
+Links:
+	01M87F2KNMJKQA2AYXXF2ZQ5C4	relic	implemented-by	WB-01M87F19RB1PVEE87F7PS1D1FJ
+	01M87F2KR522KBJ4CWWSRHRY4G	01M87F0T8ZDXPZV8WNS006CBKV	implemented-by	WB-01M87F2JJT7ERPBSGFX8XTZ4NW
+```
+
+`--link <task>` starts a link and needs `--rel <rel>`; `--from <part>`, given
+after `--link`, makes the link from that part rather than the whole relic.
+Each `--link` is its own group, so one update adds several links. A task is named by
+any unambiguous prefix of its ID, as a task command takes it. `relic show`
+lists the links under `Links:`, one per line: the link's ID, `relic` or the
+part it is from, the relationship and the task. A whole-relic `relic show`
+lists every link, and `relic show <relic>#<part>` only that part's.
+
+A `rel` is 1 to 100 bytes of lowercase letters and digits, with single hyphens
+between words. Linking what is already linked, the same part or the whole
+relic to the same task with the same relationship, records nothing and says
+`No change`, so a retried command is safe. The same task under another
+relationship is a second link:
+
+```sh
+workbook relic update WB-R-01M87F0S --link WB-01M87F19RB1 --rel implemented-by
+workbook relic update WB-R-01M87F0Y --link WB-01M87F19RB1 --rel relates-to
+```
+
+```text
+No change: WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+Sync:	completed
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	Release checklist
+Sync:	completed
+```
+
+**From the task's side.** `relic list --linked-to <task>` lists the relics
+that link to a task, each with the links that do, and `workbook show <task>`
+ends with a `Relics:` section that lists them, with `relics` in its JSON. A
+task with no links shows no section and no member. Both answer from the
+[relic index](#the-relic-index):
+
+```sh
+workbook relic list --linked-to WB-01M87F19RB1
+workbook relic list --linked-to WB-01M87F19RB1 --json
+workbook show WB-01M87F19RB1
+workbook show WB-01M87F19RB1 --json | jq -c '.data.relics'
+```
+
+```text
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	2 parts	Task archive compaction, second draft
+	01M87F2KNMJKQA2AYXXF2ZQ5C4	relic	implemented-by
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	0 parts	Release checklist
+	01M87F2PV71CCDX34JPK969NYV	relic	relates-to
+{"format":"workbook.result","version":1,"command":"relic list","data":[{"id":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","head":"9838201adc215ebdae1780fef049d03763273df7","title":"Task archive compaction, second draft","type":"spec","author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-24T19:02:45.75869Z","updatedAt":"2026-11-24T19:03:45.157964Z","parts":2,"linkedBy":[{"link":"01M87F2KNMJKQA2AYXXF2ZQ5C4","rel":"implemented-by"}]},{"id":"WB-R-01M87F0YHZ1852KPS55KCDPXG2","head":"2582439f3202d7b0e539ae782f0b83facf090182","title":"Release checklist","type":"plan","author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-24T19:02:50.687794Z","updatedAt":"2026-11-24T19:03:48.327344Z","parts":0,"linkedBy":[{"link":"01M87F2PV71CCDX34JPK969NYV","rel":"relates-to"}]}]}
+ID:	WB-01M87F19RB1PVEE87F7PS1D1FJ
+Project ID:	01M87F0RVXDCDBV34NDN8Z3Y5E
+Title:	Write the compaction command
+Description:	
+Status:	backlog
+Priority:	medium
+Due:	
+Labels:	
+Assignments:	
+Rank:	1/1
+Dependencies:	
+Created At:	2026-11-24T14:03:02.155093-05:00
+Updated At:	2026-11-24T14:03:02.155093-05:00
+Deleted:	false
+History Generation:	01M87F19RB8WNZJ5EV6SZHWGDY
+Head:	f9b8437ee3bd5b22ee166240ca45a4e3f62e403b
+
+Relics:
+	WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	implemented-by	Task archive compaction, second draft
+	WB-R-01M87F0YHZ1852KPS55KCDPXG2	relates-to	Release checklist
+[{"relic":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","title":"Task archive compaction, second draft","type":"spec","link":"01M87F2KNMJKQA2AYXXF2ZQ5C4","rel":"implemented-by"},{"relic":"WB-R-01M87F0YHZ1852KPS55KCDPXG2","title":"Release checklist","type":"plan","link":"01M87F2PV71CCDX34JPK969NYV","rel":"relates-to"}]
+```
+
+In `relic list --json`, each relic carries `linkedBy`, the links to the task
+as `link`, `part` and `partType` for a link from a part, and `rel`. Each entry
+of the task's `relics` has `relic`, `title`, `type`, `part` and `partType` for
+a link from a part, `link` and `rel`. A deleted relic is listed by
+`--linked-to` only with `--all`, and neither lists a link from a removed part:
+a link from a part is hidden wherever the part is, and comes back with it.
+`workbook show` never fails because of relics. A relic it cannot read, one
+that is damaged or written by a newer Workbook, is left out with a
+`relic-links-unread` warning that names it.
+
+**In the relic's own form.** `relic show --json` lists the links of the parts
+it shows in `links`, each with `id`, `from` for a link from a part, `to` with
+the task, and `rel`. The relic's commit stores the live links in
+`links.json`, ordered by ID, and the commit's operations record the change:
+
+```sh
+workbook relic show WB-R-01M87F0S#01M87F0T8ZD
+workbook relic show WB-R-01M87F0S --json | jq -c '.data.links'
+git cat-file blob refs/workbook/relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX:links.json
+git cat-file blob 9838201adc215ebdae1780fef049d03763273df7:operation.json | jq -c .operations
+```
+
+```text
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+Author:	alice@example.com
+Updated:	2026-11-24T19:03:45Z
+Properties:
+  approved: null
+  owner: Alice <alice@example.com>
+  reviewed: yes
+  reviewer: bob@example.com
+  reviewers: ["Alice \u003calice@example.com\u003e","bob@example.com"]
+  status: review
+#01M87F0T8ZDXPZV8WNS006CBKV	decision	no body
+  accepted: true
+  heading: Keep a backup bundle
+Links:
+	01M87F2KR522KBJ4CWWSRHRY4G	01M87F0T8ZDXPZV8WNS006CBKV	implemented-by	WB-01M87F2JJT7ERPBSGFX8XTZ4NW
+[{"id":"01M87F2KNMJKQA2AYXXF2ZQ5C4","to":{"task":"WB-01M87F19RB1PVEE87F7PS1D1FJ"},"rel":"implemented-by"},{"id":"01M87F2KR522KBJ4CWWSRHRY4G","from":"01M87F0T8ZDXPZV8WNS006CBKV","to":{"task":"WB-01M87F2JJT7ERPBSGFX8XTZ4NW"},"rel":"implemented-by"}]
+{"format":"workbook.relic-links","version":1,"links":[{"id":"01M87F2KNMJKQA2AYXXF2ZQ5C4","to":{"task":"WB-01M87F19RB1PVEE87F7PS1D1FJ"},"rel":"implemented-by"},{"id":"01M87F2KR522KBJ4CWWSRHRY4G","from":"01M87F0T8ZDXPZV8WNS006CBKV","to":{"task":"WB-01M87F2JJT7ERPBSGFX8XTZ4NW"},"rel":"implemented-by"}]}
+[{"id":"01M87F2KNMJKQA2AYXXF2ZQ5C4","type":"link.add","link":{"to":{"task":"WB-01M87F19RB1PVEE87F7PS1D1FJ"},"rel":"implemented-by"}},{"id":"01M87F2KR522KBJ4CWWSRHRY4G","type":"link.add","link":{"from":"01M87F0T8ZDXPZV8WNS006CBKV","to":{"task":"WB-01M87F2JJT7ERPBSGFX8XTZ4NW"},"rel":"implemented-by"}}]
+```
+
+**Refused** (nothing is written): a `rel` that is not a lowercase word list
+(exit `5`); a relic ID, since a relic links only to tasks so far (exit `5`); a
+task that does not exist (exit `4`); `--link` with no `--rel`, and `--from`
+before any `--link` (exit `2`); a `--from` part that does not exist (exit `4`)
+or is removed (exit `5`); and a deleted task (exit `5`), shown further on:
+
+```sh
+workbook relic update WB-R-01M87F0S --link WB-01M87F19RB1 --rel "Implemented By"
+workbook relic update WB-R-01M87F0S --link WB-R-01M87F0YHZ1852KPS55KCDPXG2 --rel relates-to
+workbook relic update WB-R-01M87F0S --link WB-7ZZZZ --rel relates-to
+workbook relic update WB-R-01M87F0S --link WB-01M87F19RB1
+workbook relic update WB-R-01M87F0S --from 01M87F0T8ZD --rel implemented-by
+```
+
+```text
+workbook: the link relationship "Implemented By" must be lowercase letters and digits, with single hyphens between words
+workbook: a relic links only to tasks so far; "WB-R-01M87F0YHZ1852KPS55KCDPXG2" is not a task
+workbook: no task matches "WB-7ZZZZ"
+workbook: relic update --link requires --rel <rel>, such as implemented-by
+workbook: relic update --from applies to one link; give it after --link
+```
+
+The two invocation errors are followed by the command's usage, left out here.
+A relic holds at most 2,000 live links, checked only when a change adds one; a
+relic over the limit, which two clones' links together can make, can still be
+read and changed, and any link can be removed.
+
+**A task that is removed later.** A link stays when its task is deleted.
+`relic show` marks it `(removed)`, and `targetRemoved: true` in JSON; the
+same holds for a task this clone does not have. The deleted task cannot be
+linked again until it is restored, and `--linked-to` still finds the relic:
+
+```sh
+workbook delete WB-01M87F2JJT7
+workbook relic show WB-R-01M87F0S
+workbook relic show WB-R-01M87F0S --json | jq -c '.data.links'
+workbook relic update WB-R-01M87F0Y --link WB-01M87F2JJT7 --rel relates-to
+workbook relic list --linked-to WB-01M87F2JJT7
+```
+
+```text
+WB-01M87F2JJT7ERPBSGFX8XTZ4NW	backlog	medium	Bundle the old history
+Sync:	completed
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+Author:	alice@example.com
+Updated:	2026-11-24T19:03:45Z
+Properties:
+  approved: null
+  owner: Alice <alice@example.com>
+  reviewed: yes
+  reviewer: bob@example.com
+  reviewers: ["Alice \u003calice@example.com\u003e","bob@example.com"]
+  status: review
+#01M87F0T8ZACFWH3F27EK4CYVH	section	md, 203 bytes, version 01M87F283AZ3GZ7ZW9GZKM2RK9
+  heading: Goals
+#01M87F0T8ZDXPZV8WNS006CBKV	decision	no body
+  accepted: true
+  heading: Keep a backup bundle
+Links:
+	01M87F2KNMJKQA2AYXXF2ZQ5C4	relic	implemented-by	WB-01M87F19RB1PVEE87F7PS1D1FJ
+	01M87F2KR522KBJ4CWWSRHRY4G	01M87F0T8ZDXPZV8WNS006CBKV	implemented-by	WB-01M87F2JJT7ERPBSGFX8XTZ4NW (removed)
+[{"id":"01M87F2KNMJKQA2AYXXF2ZQ5C4","to":{"task":"WB-01M87F19RB1PVEE87F7PS1D1FJ"},"rel":"implemented-by"},{"id":"01M87F2KR522KBJ4CWWSRHRY4G","from":"01M87F0T8ZDXPZV8WNS006CBKV","to":{"task":"WB-01M87F2JJT7ERPBSGFX8XTZ4NW"},"rel":"implemented-by","targetRemoved":true}]
+workbook: task WB-01M87F2JJT7ERPBSGFX8XTZ4NW is deleted; restore it first
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	2 parts	Task archive compaction, second draft
+	01M87F2KR522KBJ4CWWSRHRY4G	01M87F0T8ZDXPZV8WNS006CBKV	implemented-by
+```
+
+When the task list cannot be read, `relic show` still answers: the links are
+listed without `targetRemoved`, and a `relic-link-targets-unread` warning says
+that links to removed tasks are not marked.
+
+**Removing a link.** `--unlink <link>` removes one link, named by its ID or an
+unambiguous prefix of it, by recording a `link.remove` that names the ID. The
+link is no longer in `links.json`; its `link.add` stays in the history.
+`relic update --json` reports the relic as any update does, with no link
+member, so read a new link's ID from `relic show`. A full-length link ID the
+relic does not hold records nothing, so a retry after the link is gone is
+safe, and so is a mistyped full-length ID, which is not reported. A shorter
+prefix that matches no link is `not-found` (exit `4`), and one that matches
+two is refused (exit `5`). Linking the same task again
+makes a new link with a new ID:
+
+```sh
+workbook relic update WB-R-01M87F0S --unlink 01M87F2KNMJ
+git cat-file blob refs/workbook/relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX:operation.json | jq -c .operations
+git cat-file blob refs/workbook/relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX:links.json
+workbook relic update WB-R-01M87F0S --link WB-01M87F19RB1 --rel implemented-by --json | jq -c .data
+workbook relic update WB-R-01M87F0S --unlink 01M87F2KNMJKQA2AYXXF2ZQ5C4
+workbook relic update WB-R-01M87F0S --unlink 01M0000
+```
+
+```text
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
+Sync:	completed
+[{"id":"01M87F2Z6246AY8E00388DH9SS","type":"link.remove","linkId":"01M87F2KNMJKQA2AYXXF2ZQ5C4"}]
+{"format":"workbook.relic-links","version":1,"links":[{"id":"01M87F2KR522KBJ4CWWSRHRY4G","from":"01M87F0T8ZDXPZV8WNS006CBKV","to":{"task":"WB-01M87F2JJT7ERPBSGFX8XTZ4NW"},"rel":"implemented-by"}]}
+{"relic":{"id":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","head":"ecab03238f99a74eb0366e7dbd69e889028f623a","title":"Task archive compaction, second draft","type":"spec","author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-24T19:02:45.75869Z","updatedAt":"2026-11-24T19:03:58.380464Z","parts":2},"parts":[],"changed":true}
+No change: WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
+Sync:	completed
+workbook: relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX has no link "01M0000"
+```
+
+**Export and `--from-file`.** `relic export` lists every stored link, as
+`links.json` holds them. `relic create --from-file` refuses a document whose
+`links` is not empty (exit `5`), since its parts get new IDs:
+
+```sh
+workbook relic export WB-R-01M87F0S | jq -c .links
+workbook relic export WB-R-01M87F0S | workbook relic create --from-file - --type plan
+```
+
+```text
+[{"id":"01M87F2KR522KBJ4CWWSRHRY4G","from":"01M87F0T8ZDXPZV8WNS006CBKV","to":{"task":"WB-01M87F2JJT7ERPBSGFX8XTZ4NW"},"rel":"implemented-by"},{"id":"01M87F30NCBXBZXB7160GW3MB7","to":{"task":"WB-01M87F19RB1PVEE87F7PS1D1FJ"},"rel":"implemented-by"}]
+```
+
+The second command's message says that this version cannot create a relic
+with links, and to empty the document's `"links"` list, create the relic, then
+add each link with `relic update <relic> --link <task> --rel <rel>`.
+
+**Links are shared with the relic.** A link travels in the relic's commits,
+so the next sync brings it to every clone, and two clones' link changes are
+combined as any two relic changes are: every link either clone adds is kept,
+two clones adding the same link at once keep two links with two IDs, and a
+removal removes only the link it names. Bob, in his clone, after alice's
+changes:
+
+```sh
+workbook sync > /dev/null; workbook show WB-01M87F19RB1 | tail -3
+```
+
+```text
+Relics:
+	WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	implemented-by	Task archive compaction, second draft
+	WB-R-01M87F0YHZ1852KPS55KCDPXG2	relates-to	Release checklist
+```
 
 ### Relic JSON results
 
@@ -5366,7 +5659,8 @@ PATCH /api/display                       record the project's name and colors;
                                          value clears a setting, and only what
                                          changed is recorded
 GET /api/tasks/<id>            the task as `workbook show --json` gives it, for
-                              the request's person
+                              the request's person, without the `relics` that
+                              link to it
 GET /api/tasks/<id>/history   versioned change log and status lifecycle JSON
 POST /api/tasks               create a task
 PATCH /api/tasks/<id>         update task fields

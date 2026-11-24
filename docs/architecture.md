@@ -118,7 +118,7 @@ relic as they leave it:
 ```text
 operation.json                workbook.relic-operation-pack   the operations this commit records
 state.json                    workbook.relic-state            the relic after them, without part content
-links.json                    workbook.relic-links            the relic's links: always the empty document
+links.json                    workbook.relic-links            the relic's live links
 parts/<part-id>/fields.json   workbook.relic-part-fields      one part's fields
 parts/<part-id>/body          raw bytes, exactly as given     one part's body
 ```
@@ -230,6 +230,8 @@ An operation's members are always written in one order, `id`, `type`,
 | `part.body.set` | `part`, and `body`: `format` when it has a label, then `bytes`, then `base`, the body version the save started from, left out when the part had no body |
 | `part.move` | `part`, `position` |
 | `part.remove`, `part.restore` | `part` |
+| `link.add` | `link`: `from` when the link is from a part, `to` as `{"task": "<task-id>"}`, then `rel`. The operation's `id` is the new link's ID. |
+| `link.remove` | `linkId`, the ID of the link it removes |
 
 An operation that carries any other member, lacks one of its own, or writes
 them in another order is `corrupt-data`. A `value` is a JSON value in
@@ -300,11 +302,58 @@ part's first body, which is why it equals the part's ID above, and the
 `updatedAt` is the `wallTime` of this one. `schema` is always `null`,
 `retired` is always `false` and `history.compactedFrom` is always `null`.
 
-`links.json` is the same 57 bytes in every commit:
+`links.json` holds the relic's live links, ordered by ID, and is these 57
+bytes in every commit of a relic that has none:
 
 ```json
 {"format":"workbook.relic-links","version":1,"links":[]}
 ```
+
+A link is added by a `link.add` and removed by a `link.remove` that names its
+ID, and `links.json` is what folding them gives. A removed link is gone from
+`links.json` and lives on only in the history. In the reference's session,
+the relic linked to two tasks, and then the link to the first was removed:
+
+```text
+refs/workbook/relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX ──> C2 (parent C1)
+  C2 operation.json  [link.remove linkId 01M87F2KNMJKQA2AYXXF2ZQ5C4]
+     links.json      [01M87F2KR522KBJ4CWWSRHRY4G]
+  C1 operation.json  [link.add 01M87F2KNMJKQA2AYXXF2ZQ5C4  to WB-01M87F19RB1PVEE87F7PS1D1FJ  implemented-by,
+                      link.add 01M87F2KR522KBJ4CWWSRHRY4G  from part 01M87F0T8ZDXPZV8WNS006CBKV
+                                                           to WB-01M87F2JJT7ERPBSGFX8XTZ4NW  implemented-by]
+     links.json      [01M87F2KNMJKQA2AYXXF2ZQ5C4, 01M87F2KR522KBJ4CWWSRHRY4G]
+```
+
+with C2's `links.json`, as stored:
+
+```json
+{"format":"workbook.relic-links","version":1,"links":[{"id":"01M87F2KR522KBJ4CWWSRHRY4G","from":"01M87F0T8ZDXPZV8WNS006CBKV","to":{"task":"WB-01M87F2JJT7ERPBSGFX8XTZ4NW"},"rel":"implemented-by"}]}
+```
+
+A link has `id`, `from` only when it is from a part, `to` and `rel`. `to` is an
+object with exactly one member, `task`, so that later generations can add
+other kinds of target as members of their own. `rel` is 1 to 100 bytes of
+lowercase letters and digits with single hyphens between words. Any other
+member is `corrupt-data` on read. A `link.add` is `corrupt-data` when its ID
+is already a live link's, a part's or a current body version's, or when its
+`from` names a part the relic does not have. A `link.remove` that names no
+live link changes nothing: the link was removed in another clone, or the
+remove was delivered twice. A link stays when its task is deleted, and a link
+from a removed part stays in `links.json`; readers hide it wherever they hide
+the part. No task commit records anything about a link.
+
+**Concurrent links.** Each `link.add` mints its own ID, so every add either
+clone makes survives a replay, and a `link.remove` removes only the ID it
+names. These are guarantees. An add in one clone and a removal of an older
+link with the same `from`, `to` and `rel` in another leave the new link; two
+removals of one link fold to one; two clones adding the same link at once
+leave two links with two IDs, both listed, until somebody unlinks one. A
+command adding a link that is already live records nothing, so only clones
+that had not seen each other's add can make that pair. A link change stops a
+replay only as any edit does: a link added onto a relic the other clone
+deleted is a `tombstone` conflict. A link added from a part the other clone removed is
+kept with the `relic-edit-on-removed-part` warning, and links that together
+pass the 2,000-link limit are kept with `relic-over-limit`.
 
 `parts/<part-id>/fields.json`, for the second part above:
 
@@ -821,7 +870,7 @@ than per release:
 | 3 | `priority.add`, `priority.rename`, `priority.relabel`, `priority.remove`, `priority.reorder`, `priority.tag`, `priority.untag`, `priority.recolor`, `key.add`, `key.current`, `key.retire` |
 | 4 | `history.checkpoint` |
 | 5 | `field.set` of `due`, and a `task.create` or `history.checkpoint` whose task carries a due date |
-| 6 | Every relic operation: `relic.create`, `title.set`, `relic.tombstone`, `relic.restore`, `property.set`, `property.clear`, `part.add`, `part.field.set`, `part.field.clear`, `part.body.set`, `part.move`, `part.remove`, `part.restore` |
+| 6 | Every relic operation: `relic.create`, `title.set`, `relic.tombstone`, `relic.restore`, `property.set`, `property.clear`, `part.add`, `part.field.set`, `part.field.clear`, `part.body.set`, `part.move`, `part.remove`, `part.restore`, `link.add`, `link.remove` |
 
 Generation 5 is the one row decided by an operation's payload rather than its
 type: a `field.set` of any other field is still generation 0, and so is a create
@@ -1434,14 +1483,15 @@ reads are not serialized behind writes.
 The advice to run `workbook rebuild` is reserved for a cache SQLite cannot read
 or write.
 
-**Relics.** The same cache holds relics, in four tables of their own:
+**Relics.** The same cache holds relics, in five tables of their own:
 
 | Table | One row per | Holds |
 | --- | --- | --- |
-| `relics` | relic | the head commit it was read from, title, type, author, times, deleted, and `part_count`, the number of part rows it must have |
+| `relics` | relic | the head commit it was read from, title, type, author, times, deleted, and `part_count` and `link_count`, the number of part and link rows it must have |
 | `relic_properties` | property | the name and the stored JSON value |
 | `relic_parts` | part | order, type, position, removed, the `fields.json` object ID and bytes, and the body's format, version, size and `body_object` |
 | `relic_operations` | recorded operation | commit, place in the chain, operation ID, actor, wall time, type, the part it names and its payload |
+| `relic_links` | live link | the link ID, the part it is from or `''`, the target as `to_kind` (`task`), `to_id` and `to_part` (`''`), and `rel` |
 
 Body bytes are never copied into the cache. A part row holds the ID of the
 `body` blob in the relic's commit tree, and a command that shows a body reads
@@ -1468,8 +1518,8 @@ part_id|type|body_format|body_bytes|body_version|body_object
 of them first makes one relic pass, as a task read refreshes the task rows: it
 reads every row's head and part count, lists the relic refs once, and reads
 from Git only the relics whose row is missing, names another head, or does not
-have as many part rows as `part_count` says, which only a write cut short or a
-damaged cache leaves. A changed relic's re-read reuses the fields bytes its
+have as many part and link rows as `part_count` and `link_count` say, which
+only a write cut short or a damaged cache leaves. A changed relic's re-read reuses the fields bytes its
 old rows hold by object ID and reads its operation chain from the commit the
 rows end at. One transaction then writes the changed relics, each with a
 compare-and-swap on the head its row had when the pass began. A row another
@@ -1487,9 +1537,34 @@ Git. Relic mutations always read the relic from Git and never fold onto a
 cached row; they do not warm the index, so the next read reads that relic
 once.
 
-Only relic reads and `workbook rebuild` read relic refs. `list`, `next`, the
-board and the other task paths read none, and neither does the
-automatic rebuild a missing or outdated cache triggers: after a cache loss the
+`relic_links` is indexed by its target, so `relic list --linked-to <task>`
+and `workbook show <task>` find the links to a task with one indexed lookup
+after the relic pass, and never by reading relic objects. Its rows for the
+reference's session:
+
+```text
+relic_id|link_id|from_part|to_kind|to_id|rel
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX|01M87F2KNMJKQA2AYXXF2ZQ5C4||task|WB-01M87F19RB1PVEE87F7PS1D1FJ|implemented-by
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX|01M87F2KR522KBJ4CWWSRHRY4G|01M87F0T8ZDXPZV8WNS006CBKV|task|WB-01M87F2JJT7ERPBSGFX8XTZ4NW|implemented-by
+WB-R-01M87F0YHZ1852KPS55KCDPXG2|01M87F2PV71CCDX34JPK969NYV||task|WB-01M87F19RB1PVEE87F7PS1D1FJ|relates-to
+```
+
+The relic tables, `relic_links` included, are schema version 10; a cache of
+an older version, from a build without them, is replaced by the first command
+this build runs, and an older build replaces a version 10 cache the same way.
+A relic the index cannot hold is reported by a reverse lookup as unread, with
+a `relic-links-unread` warning, rather than read from Git, so the lookup stays
+one query and a damaged relic's links stay out of sight from the task until it
+is repaired.
+
+Only relic reads, `workbook show <task>` and `workbook rebuild` read relic
+refs. `workbook show` is the one task command that does: it runs the relic
+pass to list the relics that link to the task, which costs every `show`, in
+every repository, a listing of the relic refs even when there are none, and
+a second task-ref listing; it never fails because of a relic. `list`, `next`,
+the board and the other task paths read none; the web API's
+`GET /api/tasks/<id>` does not list relic links. Neither does the automatic
+rebuild a missing or outdated cache triggers: after a cache loss the
 relic tables stay empty until the first relic read, which finds every relic
 changed and indexes them all. `workbook rebuild` indexes every relic into the
 new cache before installing it and reports the count as `relicCount`. How long

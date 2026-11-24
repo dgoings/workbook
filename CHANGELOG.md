@@ -71,7 +71,7 @@ gives `relic-edit-on-removed-part`. A relic at the old place that a move
 cannot carry leaves the move unverified, so `--clean-up` deletes nothing. The
 watcher's status document is now version 2; a command does not hand a change
 to an older watcher. Relics are not on the board, and
-there are no links, schemas, history or diff commands, retiring or compaction
+there are no schemas, history or diff commands, retiring or compaction
 for them yet.
 
 `workbook validate` checks every commit of every relic history, and refuses a
@@ -93,11 +93,29 @@ seen without a rebuild. The cache holds each body's object ID, never its
 bytes; a body is read from Git when it is shown. A relic the cache cannot
 hold, damaged or written by a newer Workbook, is read from Git as before, and
 a relic read answers from Git when the cache cannot be built at all. Task
-commands read no relic, and the automatic rebuild a missing cache triggers
+commands other than `workbook show` read no relic, and the automatic rebuild a missing cache triggers
 leaves the relic tables to the first relic read. `workbook rebuild` indexes
 relics too: its text line now reads `Rebuilt <n> task(s) and <m> relic(s) at
 <path>.`, and its JSON gains `relicCount`. The cache's schema changed, so the
-first command run by this build replaces an older cache. See
+first command run by this build replaces an older cache.
+
+A relic, or one of its parts, can link to a task. `relic update --link <task>
+--rel <rel>`, with `--from <part>` for a link from a part, adds a link, and
+`--unlink <link>` removes one by its ID. `rel` is up to 100 bytes of lowercase
+words joined by hyphens, such as `implemented-by`, and a relic holds at most
+2,000 live links, checked only when one is added. A link is stored once, on
+the relic, in `links.json` and as `link.add` and `link.remove` operations; the
+task's history does not change. Linking what is already linked and unlinking
+a full ID already gone record nothing, so retries are safe, and every link
+two clones add survives their sync. A deleted task, a missing task and a
+relic ID are refused as targets. `relic show` lists links under `Links:`, and
+marks a link whose task was deleted since `(removed)`, `targetRemoved` in
+JSON. `relic list --linked-to <task>` lists the relics that link to a task,
+with `linkedBy` in JSON, and `workbook show <task>` ends with a `Relics:`
+section, `relics` in JSON; a relic it cannot read gives a `relic-links-unread`
+warning instead of a failure. Both answer from a new `relic_links` table, and
+the cache's schema is version 10. `relic create --from-file` still refuses a
+document with links. The web board's task API does not list links. See
 [Relics](docs/reference.md#relics) and
 [Relic refs](docs/architecture.md#relic-refs).
 
