@@ -618,3 +618,53 @@ func TestRelicBodySavedByAndPartsNamedBy(t *testing.T) {
 		t.Errorf("RelicPartsNamedBy(title edit) = %#v, want an empty list", got)
 	}
 }
+
+// The limit on all of a relic's properties together is a total: each of two
+// packs may set a property that is within every limit on its own, and the fold
+// has to produce the relic that holds both. Refusing it would make a relic
+// unreadable through two edits that were each allowed.
+func TestApplyRelicFoldsPropertiesPastTheirTotal(t *testing.T) {
+	large := func() json.RawMessage { return json.RawMessage(`"` + strings.Repeat("x", 40000-2) + `"`) }
+	record := goldenRelicRecord(t)
+	record = mustApplyRelic(t, record, relicFoldPack(2,
+		RelicOperation{ID: relicTestID(50), Type: RelicOperationPropertySet, Name: "a", Value: large()}))
+	record = mustApplyRelic(t, record, relicFoldPack(3,
+		RelicOperation{ID: relicTestID(51), Type: RelicOperationPropertySet, Name: "b", Value: large()}))
+	encoded, err := json.Marshal(record.State.Relic.Properties)
+	if err != nil || len(encoded) <= MaxRelicPropertiesBytes {
+		t.Fatalf("the folded properties are %d bytes, %v; want them past %d", len(encoded), err, MaxRelicPropertiesBytes)
+	}
+	requireRelicStateRoundTrips(t, "the folded relic", record.State)
+	// And the relic can still be changed.
+	record = mustApplyRelic(t, record, relicFoldPack(4,
+		RelicOperation{ID: relicTestID(52), Type: RelicOperationTitleSet, Title: "Still here"}))
+	if record.State.Relic.Title != "Still here" {
+		t.Fatalf("title = %q", record.State.Relic.Title)
+	}
+
+	// One value past the limit for one value is not a total, and is refused.
+	_, err = ApplyRelic(&record, relicFoldPack(5, RelicOperation{
+		ID: relicTestID(53), Type: RelicOperationPropertySet, Name: "c",
+		Value: json.RawMessage(`"` + strings.Repeat("x", MaxRelicPropertyValueBytes-1) + `"`),
+	}))
+	requireCorruptData(t, "one property value of 64 KiB + 1", err)
+}
+
+// The same for one part's fields, which the fold computes from the stored
+// fields and the pack's field operations.
+func TestApplyRelicFieldsPastTheirTotal(t *testing.T) {
+	large := func() json.RawMessage { return json.RawMessage(`"` + strings.Repeat("x", 9000-2) + `"`) }
+	fields := ApplyRelicFields(nil, relicDocPartA, []RelicOperation{
+		{ID: relicTestID(50), Type: RelicOperationPartFieldSet, Part: relicDocPartA, Name: "a", Value: large()},
+	})
+	fields = ApplyRelicFields(fields, relicDocPartA, []RelicOperation{
+		{ID: relicTestID(51), Type: RelicOperationPartFieldSet, Part: relicDocPartA, Name: "b", Value: large()},
+	})
+	encoded, err := EncodeDocument(NewRelicFields(fields))
+	if err != nil || len(encoded) <= MaxRelicPartFieldsBytes {
+		t.Fatalf("EncodeDocument(the folded fields) = %d bytes, %v; want them stored past %d", len(encoded), err, MaxRelicPartFieldsBytes)
+	}
+	if _, err := DecodeRelicFieldsDocument(encoded); err != nil {
+		t.Fatalf("DecodeRelicFieldsDocument(the folded fields): %v", err)
+	}
+}

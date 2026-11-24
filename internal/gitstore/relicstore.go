@@ -394,9 +394,13 @@ func validateRelicTreeEntries(tree workbookTree, hasParts bool) error {
 // a body, and this says only what was read.
 //
 // The sizes are checked here because nothing else has: a tip read does not
-// open parts/. A fields blob or a body over its limit, a body whose size is
-// not the one the state records, a missing blob and a fields.json that is not
-// the document this build writes are each corrupt data naming the part.
+// open parts/. A body over its limit, a body whose size is not the one the
+// state records, a missing blob, a fields.json over the ceiling for one stored
+// object, one field value over the limit for one value, and a fields.json that
+// is not the document this build writes are each corrupt data naming the part.
+// How large a part's fields are together is a total, checked when a change
+// makes it grow and never here, so the read is bounded by the object ceiling
+// alone, from the size in Git's batch header before anything is allocated.
 func (r *Repository) ReadRelicParts(
 	ctx context.Context,
 	config core.ProjectConfig,
@@ -490,7 +494,7 @@ func (r *Repository) ReadRelicParts(
 	}
 	for _, wanted := range requests {
 		partID := wanted.part.ID
-		stored, err := readBlob(partID, relicFieldsPath, core.MaxRelicPartFieldsBytes)
+		stored, err := readBlob(partID, relicFieldsPath, MaxObjectBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -826,23 +830,24 @@ func planRelicWrite(
 	return plan, nil
 }
 
-// encodeRelicPartFields returns a part's fields.json, refusing one over the
-// size limit by its size and never by its content.
+// encodeRelicPartFields returns a part's fields.json, refusing what a reader
+// would refuse: one value over the limit for one field value, which
+// core.EncodeDocument checks, and a blob over the ceiling for one stored
+// object. Neither refusal carries content.
+//
+// How large one part's fields are together is a total. The service refuses a
+// change that makes it grow past its limit, and the store does not judge it:
+// a part may already be over, and a change that leaves it no larger has to be
+// written.
 func encodeRelicPartFields(partID string, fields map[string]json.RawMessage) ([]byte, error) {
-	document := core.NewRelicFields(fields)
-	// Measured before core checks the document, so that an oversized one is
-	// reported as a size the caller can act on.
-	measured, err := json.Marshal(document)
-	if err != nil {
-		return nil, core.Wrap(core.CategoryValidation, fmt.Sprintf("the fields of part %s cannot be encoded", partID), err)
-	}
-	if size := len(measured) + 1; size > core.MaxRelicPartFieldsBytes {
-		return nil, core.Errorf(core.CategoryValidation,
-			"the fields of part %s are %d bytes; the limit is %d bytes", partID, size, core.MaxRelicPartFieldsBytes)
-	}
-	encoded, err := core.EncodeDocument(document)
+	encoded, err := core.EncodeDocument(core.NewRelicFields(fields))
 	if err != nil {
 		return nil, core.Wrap(core.CategoryValidation, fmt.Sprintf("the fields of part %s are invalid", partID), err)
+	}
+	if len(encoded) > MaxObjectBytes {
+		return nil, core.Errorf(core.CategoryValidation,
+			"the fields of part %s would be %d bytes; the limit for one stored object is %d bytes; clear a field first",
+			partID, len(encoded), MaxObjectBytes)
 	}
 	return encoded, nil
 }

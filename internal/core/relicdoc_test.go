@@ -342,9 +342,9 @@ func TestRelicBodyEditCannotNameItselfAsItsBase(t *testing.T) {
 }
 
 func TestRelicStateRefusesOversizedSingleValuesOnSaveAndOnRead(t *testing.T) {
-	property := func(size int) map[string]json.RawMessage {
-		// {"k":"…"} is eight bytes around the string's contents.
-		return map[string]json.RawMessage{"k": json.RawMessage(`"` + strings.Repeat("x", size-8) + `"`)}
+	// value is one stored value of exactly size bytes, quotes included.
+	value := func(size int) json.RawMessage {
+		return json.RawMessage(`"` + strings.Repeat("x", size-2) + `"`)
 	}
 	cases := []struct {
 		label string
@@ -358,18 +358,14 @@ func TestRelicStateRefusesOversizedSingleValuesOnSaveAndOnRead(t *testing.T) {
 		{"position", func(s *RelicStateDocument, n int) {
 			s.Relic.Parts[0].Position = "1/1" + strings.Repeat("0", n-3)
 		}, MaxRelicPartPositionBytes},
-		{"properties", func(s *RelicStateDocument, n int) { s.Relic.Properties = property(n) }, MaxRelicPropertiesBytes},
+		{"one property value", func(s *RelicStateDocument, n int) {
+			s.Relic.Properties = map[string]json.RawMessage{"k": value(n)}
+		}, MaxRelicPropertyValueBytes},
 		{"body bytes", func(s *RelicStateDocument, n int) { s.Relic.Parts[0].Body.Bytes = int64(n) }, MaxRelicBodyBytes},
 	}
 	for _, testCase := range cases {
 		atLimit := goldenRelicState()
 		testCase.set(&atLimit, testCase.limit)
-		if testCase.label == "properties" {
-			encoded, _ := json.Marshal(atLimit.Relic.Properties)
-			if len(encoded) != MaxRelicPropertiesBytes {
-				t.Fatalf("properties at the limit encode to %d bytes", len(encoded))
-			}
-		}
 		requireRelicStateRoundTrips(t, testCase.label+" at the limit", atLimit)
 
 		over := goldenRelicState()
@@ -377,30 +373,43 @@ func TestRelicStateRefusesOversizedSingleValuesOnSaveAndOnRead(t *testing.T) {
 		requireRelicStateRefused(t, testCase.label+" over the limit", over)
 	}
 
-	heading := func(size int) RelicFieldsDocument {
-		overhead, err := EncodeDocument(NewRelicFields(map[string]json.RawMessage{"heading": json.RawMessage(`""`)}))
+	// The same for an operation that carries a value, which is where a stored
+	// value first appears.
+	for _, kind := range []struct {
+		label     string
+		operation func(json.RawMessage) RelicOperation
+		limit     int
+	}{
+		{"property.set value", func(v json.RawMessage) RelicOperation {
+			return RelicOperation{ID: relicTestID(40), Type: RelicOperationPropertySet, Name: "k", Value: v}
+		}, MaxRelicPropertyValueBytes},
+		{"part.field.set value", func(v json.RawMessage) RelicOperation {
+			return RelicOperation{ID: relicTestID(40), Type: RelicOperationPartFieldSet, Part: relicDocPartA, Name: "k", Value: v}
+		}, MaxRelicFieldValueBytes},
+	} {
+		atLimit := singleRelicOperationPack(kind.operation(value(kind.limit)))
+		encoded, err := EncodeDocument(atLimit)
 		if err != nil {
-			t.Fatalf("EncodeDocument(fields): %v", err)
+			t.Errorf("%s at the limit: EncodeDocument: %v", kind.label, err)
+		} else if _, err := DecodeRelicOperationPack(encoded); err != nil {
+			t.Errorf("%s at the limit: DecodeRelicOperationPack: %v", kind.label, err)
 		}
-		contents := strings.Repeat("x", size-len(overhead))
-		return NewRelicFields(map[string]json.RawMessage{"heading": json.RawMessage(`"` + contents + `"`)})
+		requireRelicPackRefused(t, kind.label+" over the limit", singleRelicOperationPack(kind.operation(value(kind.limit+1))))
 	}
-	encoded, err := EncodeDocument(heading(MaxRelicPartFieldsBytes))
-	if err != nil || len(encoded) != MaxRelicPartFieldsBytes {
-		t.Fatalf("fields at the limit: %d bytes, %v", len(encoded), err)
+
+	atLimit := NewRelicFields(map[string]json.RawMessage{"heading": value(MaxRelicFieldValueBytes)})
+	encoded, err := EncodeDocument(atLimit)
+	if err != nil {
+		t.Fatalf("EncodeDocument(a field value at the limit): %v", err)
 	}
 	if _, err := DecodeRelicFieldsDocument(encoded); err != nil {
-		t.Fatalf("DecodeRelicFieldsDocument at the limit: %v", err)
+		t.Fatalf("DecodeRelicFieldsDocument(a field value at the limit): %v", err)
 	}
-	over := heading(MaxRelicPartFieldsBytes + 1)
+	over := NewRelicFields(map[string]json.RawMessage{"heading": value(MaxRelicFieldValueBytes + 1)})
 	_, err = EncodeDocument(over)
-	requireCorruptData(t, "fields over the limit (encode)", err)
-	stored := marshalRelicDocument(t, over)
-	if len(stored) != MaxRelicPartFieldsBytes+1 {
-		t.Fatalf("fields over the limit stored as %d bytes", len(stored))
-	}
-	_, err = DecodeRelicFieldsDocument(stored)
-	requireCorruptData(t, "fields over the limit (decode)", err)
+	requireCorruptData(t, "one field value over the limit (encode)", err)
+	_, err = DecodeRelicFieldsDocument(marshalRelicDocument(t, over))
+	requireCorruptData(t, "one field value over the limit (decode)", err)
 }
 
 func TestRelicStateNeverChecksCountsOrTotals(t *testing.T) {
@@ -421,7 +430,33 @@ func TestRelicStateNeverChecksCountsOrTotals(t *testing.T) {
 	if live := len(state.Relic.LiveParts()); live != MaxRelicLiveParts+1 {
 		t.Fatalf("%d live parts, want %d", live, MaxRelicLiveParts+1)
 	}
+	// All of a relic's properties together, and all of one part's fields
+	// together, are totals too: each is a sum over values that separate
+	// operations set. Two values that are each within the limit for one value
+	// take each total one byte past its limit here.
+	filler := func(size int) json.RawMessage { return json.RawMessage(`"` + strings.Repeat("x", size-2) + `"`) }
+	state.Relic.Properties = map[string]json.RawMessage{"a": filler(40000), "b": filler(40000)}
+	padding, err := json.Marshal(state.Relic.Properties)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Relic.Properties["b"] = filler(40000 - (len(padding) - (MaxRelicPropertiesBytes + 1)))
+	if encoded, _ := json.Marshal(state.Relic.Properties); len(encoded) != MaxRelicPropertiesBytes+1 {
+		t.Fatalf("the properties encode to %d bytes, want %d", len(encoded), MaxRelicPropertiesBytes+1)
+	}
 	requireRelicStateRoundTrips(t, "a relic over every count and total", state)
+
+	fields := NewRelicFields(map[string]json.RawMessage{"a": filler(9000), "b": filler(9000)})
+	stored := marshalRelicDocument(t, fields)
+	fields.Fields["b"] = filler(9000 - (len(stored) - (MaxRelicPartFieldsBytes + 1)))
+	stored, err = EncodeDocument(fields)
+	if err != nil || len(stored) != MaxRelicPartFieldsBytes+1 {
+		t.Fatalf("EncodeDocument(fields one byte past their total) = %d bytes, %v", len(stored), err)
+	}
+	decoded, err := DecodeRelicFieldsDocument(stored)
+	if err != nil || !reflect.DeepEqual(decoded, fields) {
+		t.Fatalf("DecodeRelicFieldsDocument(fields one byte past their total) = %v", err)
+	}
 }
 
 func TestRelicStateCanonicalForm(t *testing.T) {

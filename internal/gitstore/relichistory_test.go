@@ -716,7 +716,9 @@ func TestRuleR4BodySizeDiffersFromState(t *testing.T) {
 }
 
 // Rule R4's two size limits are judged from the sizes Git reports, whatever
-// the state says.
+// the state says. For fields.json the limit is the ceiling for one stored
+// object: how large one part's fields are together is a total, which no
+// reader checks.
 func TestRuleR4FieldsAndBodyLimits(t *testing.T) {
 	t.Parallel()
 	repo, config := relicRepository(t, testrepo.FormatSHA1)
@@ -738,11 +740,11 @@ func TestRuleR4FieldsAndBodyLimits(t *testing.T) {
 	}
 
 	for name, test := range map[string]relicRuleCase{
-		"fields.json one byte over its limit": {
+		"fields.json one byte over the ceiling for one object": {
 			pack:      relicChildPack(tip, relicPartAdd(added, "3/1", nil)),
-			honest:    withForgedPart(stored, added, forgedPart{fields: fieldsOfSize(core.MaxRelicPartFieldsBytes)}),
-			violating: withForgedPart(stored, added, forgedPart{fields: fieldsOfSize(core.MaxRelicPartFieldsBytes + 1)}),
-			fragments: []string{added, "16385 bytes", "16384 bytes"},
+			honest:    withForgedPart(stored, added, forgedPart{fields: fieldsOfSize(MaxObjectBytes)}),
+			violating: withForgedPart(stored, added, forgedPart{fields: fieldsOfSize(MaxObjectBytes + 1)}),
+			fragments: []string{added, "4194305 bytes", "4194304 bytes"},
 		},
 		"a body one byte over its limit": {
 			pack:      relicChildPack(tip, relicBodySet(700010, a.id, a.id, atLimit)),
@@ -1367,4 +1369,144 @@ func TestValidateRelicHistoryNamesAHeadThatIsNotARelicCommit(t *testing.T) {
 
 	_, _, err := repo.ValidateRelicHistory(ctx, config, core.RelicHead{RelicID: relicID, ObjectID: "not-an-object-id"})
 	assertRelicCategory(t, err, core.CategoryValidation)
+}
+
+// largeRelicString is a string value of exactly size stored bytes.
+func largeRelicString(size int) string { return strings.Repeat("x", size-2) }
+
+// All of a relic's properties together, and all of one part's fields
+// together, are totals. Two changes that are each within every limit add up
+// to a relic past both, and every reader still reads it: the tip read, the
+// single-relic read, the part read and the whole-history check. A later story
+// replays edits made on two machines, and gets such a relic honestly.
+func TestARelicPastItsPropertyAndFieldTotalsStaysReadable(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		part := relicTestPartNumbered(1).withBody("md", []byte("the goals\n"))
+		tip := writeRelicRoot(t, repo, config, part)
+		relicID := tip.Record.State.RelicID
+		tip = writeRelicChild(t, repo, config, tip, nil, relicPropertySet(700001, "a", largeRelicString(40000)))
+		tip = writeRelicChild(t, repo, config, tip, nil, relicPropertySet(700002, "b", largeRelicString(40000)))
+		for number, name := range []string{"a", "b"} {
+			operation := relicFieldSet(700003+number, part.id, name, largeRelicString(9000))
+			tip = writeRelicChild(t, repo, config, tip, map[string]core.RelicPartContent{
+				part.id: {Fields: relicFieldsAfter(t, repo, config, tip, part.id, operation)},
+			}, operation)
+		}
+		if size := len(encodedRelicDocument(t, tip.Record.State)); size <= core.MaxRelicPropertiesBytes {
+			t.Fatalf("state.json is %d bytes; the test needs its properties past their total", size)
+		}
+		if size := len(relicBlob(t, repo, tip.Head+":parts/"+part.id+"/fields.json")); size <= core.MaxRelicPartFieldsBytes {
+			t.Fatalf("fields.json is %d bytes; the test needs it past the total", size)
+		}
+
+		assertSameRelicSnapshot(t, readRelicTip(t, repo, config, relicID), tip)
+		got, err := repo.GetRelic(ctx, config, relicID)
+		if err != nil {
+			t.Fatalf("GetRelic() error = %v", err)
+		}
+		assertSameRelicSnapshot(t, got, tip)
+		parts, err := repo.ReadRelicParts(ctx, config, tip, []string{part.id}, true)
+		if err != nil || len(parts[part.id].Fields) != 2 {
+			t.Fatalf("ReadRelicParts() = %d fields, %v; want both", len(parts[part.id].Fields), err)
+		}
+		assertRelicHistoryValid(t, repo, config, relicID, tip.Head, 5)
+
+		// And the service changes it in every way that does not grow a total.
+		service := relicServiceFor(repo, config, 710000)
+		for _, change := range []struct {
+			label string
+			edits []core.RelicEdit
+		}{
+			{"the title changed", []core.RelicEdit{{Kind: core.RelicEditTitle, Title: "Still editable"}}},
+			{"a body saved", []core.RelicEdit{{Kind: core.RelicEditPart, Part: part.id, Base: part.id, Body: &core.RelicBodyInput{Content: []byte("new text\n")}}}},
+			{"a property set to a value of the same size", []core.RelicEdit{{Kind: core.RelicEditSetProperty, Name: "b", Value: relicJSONString(t, strings.Repeat("y", 40000-2))}}},
+			{"a field set to a value of the same size", []core.RelicEdit{{Kind: core.RelicEditPart, Part: part.id, Fields: []core.RelicFieldEdit{{Name: "b", Value: relicJSONString(t, strings.Repeat("y", 9000-2))}}}}},
+		} {
+			result, err := service.Update(ctx, relicID, change.edits)
+			if err != nil || !result.Changed {
+				t.Fatalf("%s: Update() = %+v, %v; want it written", change.label, result.Relic, err)
+			}
+		}
+		for _, change := range []struct {
+			label string
+			edits []core.RelicEdit
+		}{
+			{"a property added", []core.RelicEdit{{Kind: core.RelicEditSetProperty, Name: "c", Value: relicJSONString(t, "more")}}},
+			{"a field added", []core.RelicEdit{{Kind: core.RelicEditPart, Part: part.id, Fields: []core.RelicFieldEdit{{Name: "c", Value: relicJSONString(t, "more")}}}}},
+		} {
+			_, err := service.Update(ctx, relicID, change.edits)
+			assertRelicCategory(t, err, core.CategoryValidation, "the limit is")
+		}
+		for _, change := range []struct {
+			label string
+			edits []core.RelicEdit
+		}{
+			{"a property cleared", []core.RelicEdit{{Kind: core.RelicEditClearProperty, Name: "a"}}},
+			{"a field set to a smaller value", []core.RelicEdit{{Kind: core.RelicEditPart, Part: part.id, Fields: []core.RelicFieldEdit{{Name: "b", Value: relicJSONString(t, "short")}}}}},
+		} {
+			result, err := service.Update(ctx, relicID, change.edits)
+			if err != nil || !result.Changed {
+				t.Fatalf("%s: Update() = %+v, %v; want it written", change.label, result.Relic, err)
+			}
+		}
+		head := relicRefHead(t, repo, relicID)
+		assertRelicHistoryValid(t, repo, config, relicID, head, 11)
+	})
+}
+
+// One property value, or one field value, past the limit for one value is not
+// a total. It is corrupt data to every reader that opens the document holding
+// it.
+func TestOneRelicValuePastItsLimitIsCorruptData(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	part := relicTestPartNumbered(1)
+	root := writeRelicRoot(t, repo, config, part)
+	relicID := root.Record.State.RelicID
+	stored := forgedPartsOf(t, repo, root.Head)
+
+	// A property: the pack and the state are forged around the fold, which
+	// refuses the value itself.
+	value := largeRelicString(core.MaxRelicPropertyValueBytes + 1)
+	honest := relicChildPack(root, relicPropertySet(700001, "long", "short"))
+	record := foldRelic(t, &root, honest)
+	operationJSON := bytes.Replace(encodedRelicDocument(t, honest), []byte(`"short"`), []byte(`"`+value+`"`), 1)
+	stateJSON := bytes.Replace(encodedRelicDocument(t, record.State), []byte(`"short"`), []byte(`"`+value+`"`), 1)
+	forged := forgeRelicCommit(t, repo, root.Head, operationJSON, stateJSON, stored)
+	pointRelicRef(t, repo, relicID, forged)
+	assertRelicHistoryStopsAt(t, repo, config, relicID, forged, forged, 1, core.CategoryCorruptData, "65537", "65536")
+	_, err := repo.GetRelic(ctx, config, relicID)
+	assertGetRelicRefused(t, err)
+	heads, err := repo.ListRelicHeads(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = repo.ReadRelicTips(ctx, config, heads)
+	assertRelicCategory(t, err, core.CategoryCorruptData, "65537", "65536")
+	if len(err.Error()) > 500 {
+		t.Fatalf("the refusal is %d bytes long; it must not carry the value", len(err.Error()))
+	}
+
+	// A field: the fields.json a new part arrives with holds the value.
+	added := relicTestID(3)
+	oversized, err := json.Marshal(core.NewRelicFields(relicFieldValueOfSize(core.MaxRelicFieldValueBytes + 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack := relicChildPack(root, relicPartAdd(added, "3/1", nil))
+	forged = forgeRelicChild(t, repo, root, pack, withForgedPart(stored, added, forgedPart{fields: append(oversized, '\n')}))
+	pointRelicRef(t, repo, relicID, forged)
+	assertRelicHistoryStopsAt(t, repo, config, relicID, forged, forged, 1, core.CategoryCorruptData, added, "16385", "16384")
+	tip, err := repo.GetRelic(ctx, config, relicID)
+	if err != nil {
+		t.Fatalf("GetRelic() error = %v; a single-relic read does not open fields.json", err)
+	}
+	_, err = repo.ReadRelicParts(ctx, config, tip, []string{added}, false)
+	assertRelicCategory(t, err, core.CategoryCorruptData, added, "16385", "16384")
+	if len(err.Error()) > 500 {
+		t.Fatalf("the refusal is %d bytes long; it must not carry the value", len(err.Error()))
+	}
 }

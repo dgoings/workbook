@@ -12,18 +12,34 @@ import (
 
 // Limits on what a relic stores. They are part of the storage format: they can
 // be raised later and never lowered.
+//
+// A limit on one stored item is checked when the item is saved and again when
+// it is read: the title, a type name, a body format label, a position, one
+// property value, one field value and one body. A count or a total is checked
+// only when a change makes it grow, and never when a relic is read, so that no
+// sequence of changes that were each allowed can add up to a relic nothing
+// will read: the live parts, the parts counting removed ones, the bodies of
+// the live parts together, all of a relic's properties together and all of one
+// part's fields together.
 const (
 	MaxRelicTitleBytes        = 500
 	MaxRelicTypeBytes         = 100
 	MaxRelicPartTypeBytes     = 100
 	MaxRelicBodyFormatBytes   = 16
 	MaxRelicPartPositionBytes = 256
-	MaxRelicPropertiesBytes   = 64 * 1024
-	MaxRelicPartFieldsBytes   = 16 * 1024
-	MaxRelicBodyBytes         = 1024 * 1024
-	MaxRelicLiveParts         = 2000
-	MaxRelicParts             = 4000
-	MaxRelicLiveBodyBytes     = 16 * 1024 * 1024
+	// MaxRelicPropertyValueBytes and MaxRelicFieldValueBytes bound one stored
+	// value, measured as its canonical bytes: the form CanonicalRelicValue
+	// gives, escapes included.
+	MaxRelicPropertyValueBytes = 64 * 1024
+	MaxRelicFieldValueBytes    = 16 * 1024
+	// MaxRelicPropertiesBytes is a total: the encoded properties object of one
+	// relic. MaxRelicPartFieldsBytes is a total: one part's fields.json.
+	MaxRelicPropertiesBytes = 64 * 1024
+	MaxRelicPartFieldsBytes = 16 * 1024
+	MaxRelicBodyBytes       = 1024 * 1024
+	MaxRelicLiveParts       = 2000
+	MaxRelicParts           = 4000
+	MaxRelicLiveBodyBytes   = 16 * 1024 * 1024
 )
 
 var (
@@ -101,6 +117,20 @@ func ValidateRelicName(kind, name string) error {
 			return Errorf(CategoryValidation,
 				"a %s name must not contain '=' or control characters", kind)
 		}
+	}
+	return nil
+}
+
+// checkRelicValueSize refuses one property or field value over the limit for
+// one value. kind is "property" or "field", and size is the value's canonical
+// bytes.
+func checkRelicValueSize(kind string, size int) error {
+	limit := MaxRelicPropertyValueBytes
+	if kind == "field" {
+		limit = MaxRelicFieldValueBytes
+	}
+	if size > limit {
+		return relicSizeError("a "+kind+" value", size, limit)
 	}
 	return nil
 }

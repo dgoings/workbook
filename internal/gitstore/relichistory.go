@@ -23,8 +23,9 @@ import (
 //	R3  parts/ holds one subtree per part the state lists, named by part ID.
 //	    Each holds fields.json, body exactly when the state records a body,
 //	    and nothing else.
-//	R4  A fields.json is at most 16384 bytes. A body is at most 1048576 bytes
-//	    and is the size the state records.
+//	R4  A fields.json is at most 4194304 bytes, the ceiling for one stored
+//	    object, and each value in it is at most 16384 bytes. A body is at
+//	    most 1048576 bytes and is the size the state records.
 //	R5  A part P does not name has the subtree it had in the parent.
 //	R6  A part's body differs from the parent's only when this commit saved
 //	    it: the state's body version for it is the ID of an operation in P,
@@ -35,10 +36,18 @@ import (
 //	    applied in order. For a part P adds, it is a canonical fields document
 //	    that agrees with any field operations P carries for it.
 //
-// R1 to R6 are judged from object IDs and sizes. So is one case of R7: a part
-// that P names without setting or clearing a field, and that the parent has,
-// keeps its fields.json object. The rest of R7 reads the fields.json of the
-// parts P names, and only `workbook validate` pays for that.
+// R1 to R6 are judged from object IDs and sizes, except the limit on one field
+// value, which takes reading the fields.json that holds it. So is one case of
+// R7: a part that P names without setting or clearing a field, and that the
+// parent has, keeps its fields.json object. The rest of R7 reads the
+// fields.json of the parts P names, and only `workbook validate` pays for
+// that; it is also where the limit on one field value is checked for a
+// history, since a value enters a fields.json only in a commit that names its
+// part. A read of a part's fields checks it for the part read.
+//
+// No rule limits how large one part's fields are together, or one relic's
+// properties: those are totals, checked when a change makes one grow and
+// never when a relic is read, like the number of parts.
 //
 // The rules are this build's. A commit whose pack or state declares a newer
 // generation is not judged by them: it is neither valid nor corrupt here, and
@@ -294,9 +303,9 @@ func relicPartObjectsFromListing(listing []byte, state core.RelicStateDocument) 
 			return nil, corruptRelic(relicID, "the commit stores no subtree for part %s", part.ID)
 		case objects.Fields == "":
 			return nil, corruptRelic(relicID, "part %s: it has no %s", part.ID, relicFieldsPath)
-		case objects.FieldsBytes > core.MaxRelicPartFieldsBytes:
+		case objects.FieldsBytes > MaxObjectBytes:
 			return nil, corruptRelic(relicID, "part %s: its %s is %d bytes; the limit is %d bytes",
-				part.ID, relicFieldsPath, objects.FieldsBytes, core.MaxRelicPartFieldsBytes)
+				part.ID, relicFieldsPath, objects.FieldsBytes, MaxObjectBytes)
 		case part.Body == nil && objects.Body != "":
 			return nil, corruptRelic(relicID, "part %s: it stores a body the relic does not record", part.ID)
 		case part.Body == nil:
@@ -466,9 +475,9 @@ func (r *Repository) verifyRelicFields(
 			return nil, corruptRelic(relicID, "part %s: its %s is missing from Git", partID, relicFieldsPath)
 		case object.kind != "blob":
 			return nil, corruptRelic(relicID, "part %s: its %s is not a blob", partID, relicFieldsPath)
-		case object.size > core.MaxRelicPartFieldsBytes:
+		case object.size > MaxObjectBytes:
 			return nil, corruptRelic(relicID, "part %s: its %s is %d bytes; the limit is %d bytes",
-				partID, relicFieldsPath, object.size, core.MaxRelicPartFieldsBytes)
+				partID, relicFieldsPath, object.size, MaxObjectBytes)
 		case object.refused != nil:
 			return nil, object.refused
 		}
@@ -527,8 +536,8 @@ func checkRelicFields(relicID string, check relicFieldsCheck, operations []core.
 // relicFieldsAre reports whether stored is byte for byte the fields.json of
 // fields with the part's field operations applied in order.
 func relicFieldsAre(stored []byte, fields map[string]json.RawMessage, partID string, operations []core.RelicOperation) bool {
-	// Fields that cannot be encoded, for one because they are over the size
-	// limit, are not what any stored blob within the limit holds.
+	// Fields that cannot be encoded, for one because a value is over the limit
+	// for one value, are not what any stored blob a reader accepts holds.
 	expected, err := core.EncodeDocument(core.NewRelicFields(core.ApplyRelicFields(fields, partID, operations)))
 	return err == nil && bytes.Equal(expected, stored)
 }

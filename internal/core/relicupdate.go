@@ -181,8 +181,9 @@ func (s RelicService) Update(ctx context.Context, idOrPrefix string, edits []Rel
 		return relicMutationOf(snapshot, false), nil
 	}
 
-	// Sizes are measured on what would be stored, once every edit has applied.
-	if err := checkRelicPropertiesSize(update.relic.Properties); err != nil {
+	// Totals are measured on what would be stored, once every edit has
+	// applied, against what the relic stored before any of them.
+	if err := checkRelicPropertiesGrowth(snapshot.Record.State.Relic.Properties, update.relic.Properties); err != nil {
 		return RelicMutationResult{}, err
 	}
 	content := make(map[string]RelicPartContent, len(update.changed))
@@ -191,7 +192,13 @@ func (s RelicService) Update(ctx context.Context, idOrPrefix string, edits []Rel
 		fields[partID] = update.fieldsNow(partID)
 		var stored RelicPartContent
 		if update.storesFields(partID) {
-			if err := checkRelicFieldsSize("part "+partID, fields[partID]); err != nil {
+			// A part this update adds grows from nothing; a part the relic had
+			// grows from the fields it stored.
+			var before map[string]json.RawMessage
+			if _, added := update.added[partID]; !added {
+				before = update.before[partID]
+			}
+			if err := checkRelicFieldsGrowth("part "+partID, before, fields[partID]); err != nil {
 				return RelicMutationResult{}, err
 			}
 			stored.Fields = fields[partID]
@@ -271,9 +278,9 @@ func relicNamedInMessage(kind, name string) string {
 // one part, a second time. what is the thing named, as relicNamedInMessage
 // gives it, and firstClear and clear say whether each naming cleared it.
 //
-// With each name given once, the size check on the update's end state bounds
-// every value its operations record, and a command that contradicts itself is
-// reported instead of quietly keeping its last value.
+// With each name given once, a command that contradicts itself is reported
+// instead of quietly keeping its last value, and the totals measured on the
+// update's end state count every value its operations record.
 func relicNamedTwice(what string, firstClear, clear bool, advice string) error {
 	switch {
 	case firstClear != clear:

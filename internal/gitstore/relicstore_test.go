@@ -287,26 +287,42 @@ func assertRelicCategory(t *testing.T, err error, want core.Category, fragments 
 }
 
 // relicFieldsOfSize returns fields whose stored fields.json is exactly size
-// bytes.
+// bytes, in as many values as it takes to keep each within the limit for one
+// field value.
 func relicFieldsOfSize(t *testing.T, size int) map[string]json.RawMessage {
 	t.Helper()
-	empty, err := json.Marshal(core.NewRelicFields(map[string]json.RawMessage{"pad": json.RawMessage(`""`)}))
-	if err != nil {
-		t.Fatal(err)
+	const perValue = core.MaxRelicFieldValueBytes - 1024
+	stored := func(fields map[string]json.RawMessage) int {
+		encoded, err := json.Marshal(core.NewRelicFields(fields))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(encoded) + 1
 	}
-	fill := size - (len(empty) + 1)
+	count := size/perValue + 1
+	fields := make(map[string]json.RawMessage, count)
+	for index := range count {
+		fields[fmt.Sprintf("pad%04d", index)] = json.RawMessage(`""`)
+	}
+	fill := size - stored(fields)
 	if fill < 0 {
 		t.Fatalf("fields.json cannot be %d bytes", size)
 	}
-	fields := map[string]json.RawMessage{"pad": json.RawMessage(`"` + strings.Repeat("x", fill) + `"`)}
-	stored, err := json.Marshal(core.NewRelicFields(fields))
-	if err != nil {
-		t.Fatal(err)
+	for index := range count {
+		share := fill / (count - index)
+		fill -= share
+		fields[fmt.Sprintf("pad%04d", index)] = json.RawMessage(`"` + strings.Repeat("x", share) + `"`)
 	}
-	if len(stored)+1 != size {
-		t.Fatalf("built fields.json of %d bytes, want %d", len(stored)+1, size)
+	if got := stored(fields); got != size {
+		t.Fatalf("built fields.json of %d bytes, want %d", got, size)
 	}
 	return fields
+}
+
+// relicFieldValueOfSize returns fields holding one value of exactly size
+// stored bytes.
+func relicFieldValueOfSize(size int) map[string]json.RawMessage {
+	return map[string]json.RawMessage{"pad": json.RawMessage(`"` + strings.Repeat("x", size-2) + `"`)}
 }
 
 // relicWriteLeftovers lists what a relic write left in Workbook's private
@@ -1141,10 +1157,15 @@ func TestWriteRelicRefusesOversizedContent(t *testing.T) {
 			content:       core.RelicPartContent{},
 			fragments:     []string{partID},
 		},
-		"fields over the limit": {
+		"one field value over the limit for one value": {
 			recordedBytes: 4,
-			content:       core.RelicPartContent{Fields: relicFieldsOfSize(t, core.MaxRelicPartFieldsBytes+1), Body: []byte("body"), HasBody: true},
+			content:       core.RelicPartContent{Fields: relicFieldValueOfSize(core.MaxRelicFieldValueBytes + 1), Body: []byte("body"), HasBody: true},
 			fragments:     []string{partID, "16385", "16384"},
+		},
+		"fields over the ceiling for one stored object": {
+			recordedBytes: 4,
+			content:       core.RelicPartContent{Fields: relicFieldsOfSize(t, MaxObjectBytes+1), Body: []byte("body"), HasBody: true},
+			fragments:     []string{partID, "4194305", "4194304"},
 		},
 	} {
 		_, relicID, err := create(1, test.recordedBytes, test.content)
@@ -1167,22 +1188,28 @@ func TestWriteRelicRefusesOversizedContent(t *testing.T) {
 		}
 	}
 
-	// Exactly at each limit is stored and read back.
+	// Exactly at each limit is stored and read back: a body of 1 MiB, one
+	// field value of 16 KiB, and a fields.json at the ceiling for one object.
+	// How large a part's fields are together is a total the service checks
+	// when a change makes it grow; the store holds whatever it is handed that
+	// a reader will read.
 	body := bytes.Repeat([]byte("y"), core.MaxRelicBodyBytes)
-	fields := relicFieldsOfSize(t, core.MaxRelicPartFieldsBytes)
-	snapshot, _, err := create(2, core.MaxRelicBodyBytes, core.RelicPartContent{Fields: fields, Body: body, HasBody: true})
-	if err != nil {
-		t.Fatalf("WriteRelic() at the limits error = %v", err)
-	}
-	if size := gitOutput(t, repo, "cat-file", "-s", snapshot.Head+":parts/"+partID+"/fields.json"); size != "16384" {
-		t.Fatalf("stored fields.json is %s bytes, want 16384", size)
-	}
-	parts, err := repo.ReadRelicParts(ctx, config, snapshot, []string{partID}, true)
-	if err != nil {
-		t.Fatalf("ReadRelicParts() at the limits error = %v", err)
-	}
-	if got := parts[partID]; !got.HasBody || !bytes.Equal(got.Body, body) || !reflect.DeepEqual(got.Fields, fields) {
-		t.Fatalf("content at the limits did not read back: %d body bytes, %d fields", len(got.Body), len(got.Fields))
+	for number, fields := range []map[string]json.RawMessage{
+		relicFieldValueOfSize(core.MaxRelicFieldValueBytes),
+		relicFieldsOfSize(t, MaxObjectBytes),
+	} {
+		snapshot, _, err := create(2+number, core.MaxRelicBodyBytes, core.RelicPartContent{Fields: fields, Body: body, HasBody: true})
+		if err != nil {
+			t.Fatalf("WriteRelic() at the limits error = %v", err)
+		}
+		parts, err := repo.ReadRelicParts(ctx, config, snapshot, []string{partID}, true)
+		if err != nil {
+			t.Fatalf("ReadRelicParts() at the limits error = %v", err)
+		}
+		if got := parts[partID]; !got.HasBody || !bytes.Equal(got.Body, body) || !reflect.DeepEqual(got.Fields, fields) {
+			t.Fatalf("content at the limits did not read back: %d body bytes, %d fields", len(got.Body), len(got.Fields))
+		}
+		assertRelicHistoryValid(t, repo, config, snapshot.Record.State.RelicID, snapshot.Head, 1)
 	}
 }
 
@@ -1320,7 +1347,7 @@ func TestReadRelicPartsRefusesOversizedBlobs(t *testing.T) {
 	fieldsBlob := gitOutput(t, repo, "rev-parse", root.Head+":parts/"+part.id+"/fields.json")
 	bodyBlob := gitOutput(t, repo, "rev-parse", root.Head+":parts/"+part.id+"/body")
 
-	oversizedFields, err := json.Marshal(core.NewRelicFields(relicFieldsOfSize(t, core.MaxRelicPartFieldsBytes+1)))
+	oversizedFields, err := json.Marshal(core.NewRelicFields(relicFieldValueOfSize(core.MaxRelicFieldValueBytes + 1)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1328,7 +1355,7 @@ func TestReadRelicPartsRefusesOversizedBlobs(t *testing.T) {
 		fieldsBlob, bodyBlob string
 		fragments            []string
 	}{
-		"fields one byte over the limit": {
+		"one field value one byte over the limit for one value": {
 			fieldsBlob: forgeRelicBlob(t, repo, append(oversizedFields, '\n')),
 			bodyBlob:   bodyBlob,
 			fragments:  []string{part.id, "16385", "16384"},
@@ -1346,7 +1373,7 @@ func TestReadRelicPartsRefusesOversizedBlobs(t *testing.T) {
 		"fields over the object ceiling": {
 			fieldsBlob: forgeRelicBlob(t, repo, bytes.Repeat([]byte("f"), MaxObjectBytes+1)),
 			bodyBlob:   bodyBlob,
-			fragments:  []string{part.id, "4194305", "16384"},
+			fragments:  []string{part.id, "4194305", "4194304"},
 		},
 		"a body of another size than the state records": {
 			fieldsBlob: fieldsBlob,

@@ -213,6 +213,11 @@ func canonicalRelicValue(kind, name string, value json.RawMessage) (json.RawMess
 	if err != nil {
 		return nil, Errorf(CategoryValidation, "the %s %q: %s", kind, name, err.Error())
 	}
+	// One value over the limit for one value is never stored, whatever the
+	// change does to the total.
+	if err := checkRelicValueSize(kind, len(stored)); err != nil {
+		return nil, Errorf(CategoryValidation, "the %s %q: %s", kind, name, err.Error())
+	}
 	return stored, nil
 }
 
@@ -230,30 +235,66 @@ func canonicalRelicValues(kind string, values map[string]json.RawMessage) (map[s
 	return canonical, nil
 }
 
-// checkRelicPropertiesSize refuses a properties object over its limit.
-func checkRelicPropertiesSize(properties map[string]json.RawMessage) error {
-	encoded, err := json.Marshal(properties)
+// checkRelicPropertiesGrowth refuses a change that leaves all of a relic's
+// properties together over their limit and larger than they were. before is
+// nil for a new relic, which grows from nothing.
+//
+// The limit is a total, so it is compared with the relic before the change
+// and not with the limit alone, for the reason checkRelicGrowth gives: a relic
+// may already be over it, because reading never checks a total, and only a
+// change that makes it grow is refused. Clearing a property, or setting one to
+// a value no larger, is written even then.
+func checkRelicPropertiesGrowth(before, after map[string]json.RawMessage) error {
+	encoded, err := json.Marshal(after)
 	if err != nil {
 		return Wrap(CategoryValidation, "the relic's properties cannot be encoded", err)
 	}
-	if len(encoded) > MaxRelicPropertiesBytes {
-		return relicSizeError("the relic's properties", len(encoded), MaxRelicPropertiesBytes)
+	if len(encoded) <= MaxRelicPropertiesBytes {
+		return nil
 	}
-	return nil
+	was := 0
+	if before != nil {
+		previous, err := json.Marshal(before)
+		if err != nil {
+			return Wrap(CategoryValidation, "the relic's properties cannot be encoded", err)
+		}
+		was = len(previous)
+	}
+	if len(encoded) <= was {
+		return nil
+	}
+	return relicSizeError("the relic's properties", len(encoded), MaxRelicPropertiesBytes)
 }
 
-// checkRelicFieldsSize refuses a part's fields whose fields.json would be over
-// its limit. what names the part, as in "part 3".
-func checkRelicFieldsSize(what string, fields map[string]json.RawMessage) error {
+// relicFieldsSize is the size of the fields.json that would store fields,
+// which ends with a newline.
+func relicFieldsSize(what string, fields map[string]json.RawMessage) (int, error) {
 	measured, err := json.Marshal(NewRelicFields(fields))
 	if err != nil {
-		return Wrap(CategoryValidation, fmt.Sprintf("the fields of %s cannot be encoded", what), err)
+		return 0, Wrap(CategoryValidation, fmt.Sprintf("the fields of %s cannot be encoded", what), err)
 	}
-	// The limit is on the stored fields.json, which ends with a newline.
-	if size := len(measured) + 1; size > MaxRelicPartFieldsBytes {
-		return relicSizeError("the fields of "+what, size, MaxRelicPartFieldsBytes)
+	return len(measured) + 1, nil
+}
+
+// checkRelicFieldsGrowth refuses a change that leaves one part's fields
+// together over their limit and larger than they were, as
+// checkRelicPropertiesGrowth does for properties. what names the part, as in
+// "part 3", and before is nil for a new part, which grows from nothing.
+func checkRelicFieldsGrowth(what string, before, after map[string]json.RawMessage) error {
+	size, err := relicFieldsSize(what, after)
+	if err != nil || size <= MaxRelicPartFieldsBytes {
+		return err
 	}
-	return nil
+	was := 0
+	if before != nil {
+		if was, err = relicFieldsSize(what, before); err != nil {
+			return err
+		}
+	}
+	if size <= was {
+		return nil
+	}
+	return relicSizeError("the fields of "+what, size, MaxRelicPartFieldsBytes)
 }
 
 // checkRelicBodyInput checks a body to save: its format label and its size.
@@ -288,7 +329,7 @@ func checkRelicCreate(input RelicCreateInput) (string, map[string]json.RawMessag
 	if err != nil {
 		return "", nil, nil, err
 	}
-	if err := checkRelicPropertiesSize(properties); err != nil {
+	if err := checkRelicPropertiesGrowth(nil, properties); err != nil {
 		return "", nil, nil, err
 	}
 
@@ -304,7 +345,7 @@ func checkRelicCreate(input RelicCreateInput) (string, map[string]json.RawMessag
 		if err != nil {
 			return "", nil, nil, Errorf(CategoryValidation, "%s: %s", what, err.Error())
 		}
-		if err := checkRelicFieldsSize(what, fields); err != nil {
+		if err := checkRelicFieldsGrowth(what, nil, fields); err != nil {
 			return "", nil, nil, err
 		}
 		if part.Body != nil {

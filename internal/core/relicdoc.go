@@ -359,13 +359,11 @@ func DecodeRelicLinksDocument(data []byte) (RelicLinksDocument, error) {
 	return links, nil
 }
 
-// DecodeRelicFieldsDocument strictly decodes a part's fields.json, refusing a
-// blob over the size limit before reading it.
+// DecodeRelicFieldsDocument strictly decodes a part's fields.json. Each value
+// is held to the limit for one field value. How large the fields are together
+// is a total, checked only when a change makes it grow, so it is not checked
+// here; whoever read the blob from storage bounded its size.
 func DecodeRelicFieldsDocument(data []byte) (RelicFieldsDocument, error) {
-	if len(data) > MaxRelicPartFieldsBytes {
-		return RelicFieldsDocument{}, corrupt(
-			"a part's fields are %d bytes; the limit is %d bytes", len(data), MaxRelicPartFieldsBytes)
-	}
 	var fields RelicFieldsDocument
 	if err := decodeOneJSON(data, &fields); err != nil {
 		return RelicFieldsDocument{}, err
@@ -520,7 +518,11 @@ func validateRelicOperationDocument(operation RelicOperation) error {
 		}
 	}
 	if len(operation.Value) != 0 {
-		if err := validateStoredRelicValue(operation.Value); err != nil {
+		kind := "property"
+		if operation.Part != "" {
+			kind = "field"
+		}
+		if err := validateStoredRelicValue(kind, operation.Value); err != nil {
 			return Wrap(CategoryCorruptData, string(operation.Type)+" carries an invalid value", err)
 		}
 	}
@@ -578,9 +580,14 @@ func validateStoredRelicTitle(title string) error {
 	return nil
 }
 
-// validateStoredRelicValue requires a property or field value in its canonical
-// form, which is exactly CanonicalRelicValue's output.
-func validateStoredRelicValue(value json.RawMessage) error {
+// validateStoredRelicValue requires a property or field value within the
+// limit for one value and in its canonical form, which is exactly
+// CanonicalRelicValue's output. kind is "property" or "field". The size is
+// judged first, from the stored bytes alone.
+func validateStoredRelicValue(kind string, value json.RawMessage) error {
+	if err := checkRelicValueSize(kind, len(value)); err != nil {
+		return err
+	}
 	canonical, err := CanonicalRelicValue(value)
 	if err != nil {
 		return err
@@ -602,13 +609,14 @@ func validateStoredRelicBodySize(size int64) error {
 }
 
 // validateRelicValues checks a properties or fields object: every name
-// valid, every value canonical. It never checks how many there are.
+// valid, every value canonical and within the limit for one value. It never
+// checks how many there are or how large they are together, which are totals.
 func validateRelicValues(kind string, values map[string]json.RawMessage) error {
 	for name, value := range values {
 		if err := ValidateRelicName(kind, name); err != nil {
 			return Wrap(CategoryCorruptData, "a stored "+kind+" name is invalid", err)
 		}
-		if err := validateStoredRelicValue(value); err != nil {
+		if err := validateStoredRelicValue(kind, value); err != nil {
 			return Wrap(CategoryCorruptData, "a stored "+kind+" value is invalid", err)
 		}
 	}
@@ -667,14 +675,6 @@ func validateRelicData(relic RelicData) error {
 	}
 	if err := validateRelicValues("property", relic.Properties); err != nil {
 		return err
-	}
-	encoded, err := json.Marshal(relic.Properties)
-	if err != nil {
-		return Wrap(CategoryCorruptData, "relic state properties cannot be encoded", err)
-	}
-	if len(encoded) > MaxRelicPropertiesBytes {
-		return corrupt("relic state properties are %d bytes; the limit is %d bytes",
-			len(encoded), MaxRelicPropertiesBytes)
 	}
 	if relic.Parts == nil {
 		return corrupt("relic state parts must be a list")
@@ -751,16 +751,5 @@ func validateRelicFieldsDocument(fields RelicFieldsDocument) error {
 	if fields.Fields == nil {
 		return corrupt("relic part fields must be an object")
 	}
-	if err := validateRelicValues("field", fields.Fields); err != nil {
-		return err
-	}
-	encoded, err := json.Marshal(fields)
-	if err != nil {
-		return Wrap(CategoryCorruptData, "relic part fields cannot be encoded", err)
-	}
-	// The limit is on the stored blob, which ends with a newline.
-	if size := len(encoded) + 1; size > MaxRelicPartFieldsBytes {
-		return corrupt("a part's fields are %d bytes; the limit is %d bytes", size, MaxRelicPartFieldsBytes)
-	}
-	return nil
+	return validateRelicValues("field", fields.Fields)
 }

@@ -1324,3 +1324,145 @@ func TestRelicUpdateStoresWhatItReports(t *testing.T) {
 		t.Errorf("status is still set: %s", shown.Properties)
 	}
 }
+
+// relicOverItsValueTotals stores a relic folded outside the service whose
+// properties together, and whose first part's fields together, are past their
+// totals: properties a and b of 40,000 bytes and c of 10,000, and fields a and
+// b of 9,000 bytes and c of 1,000. Every one of those values is within the
+// limit for one value, so the relic is what several allowed edits add up to.
+// Its first part has a body of four bytes at version relicTestID(1).
+func relicOverItsValueTotals(t *testing.T) (*memoryRelicStore, RelicService, string, string) {
+	t.Helper()
+	filler := func(size int) json.RawMessage { return relicRawString(strings.Repeat("v", size-2)) }
+	snapshot := relicFixture(t, 1, relicFixtureParts(2, 0, 4))
+	state := snapshot.Record.State
+	for index, property := range []struct {
+		name string
+		size int
+	}{{"a", 40000}, {"b", 40000}, {"c", 10000}} {
+		pack := NewRelicOperationPack(state.ProjectID, state.RelicID, state.History.Generation, relicServiceTestActor,
+			snapshot.Record.State.LogicalClock+1, relicServiceTestTime.Add(time.Duration(index+1)*time.Minute),
+			[]RelicOperation{{ID: relicTestID(750000 + index), Type: RelicOperationPropertySet, Name: property.name, Value: filler(property.size)}})
+		record, err := ApplyRelic(&snapshot.Record, pack)
+		if err != nil {
+			t.Fatalf("ApplyRelic(property %s): %v", property.name, err)
+		}
+		snapshot = RelicSnapshot{Head: snapshot.Head, Operation: pack, Record: record}
+	}
+	store := newMemoryRelicStore()
+	store.put(snapshot)
+	partID := relicTestID(1)
+	content := store.content[state.RelicID][partID]
+	content.Fields = map[string]json.RawMessage{"a": filler(9000), "b": filler(9000), "c": filler(1000)}
+	content.Body, content.HasBody = []byte("text"), true
+	store.content[state.RelicID][partID] = content
+
+	if size, _ := json.Marshal(snapshot.Record.State.Relic.Properties); len(size) <= MaxRelicPropertiesBytes {
+		t.Fatalf("the fixture's properties are %d bytes, want them past %d", len(size), MaxRelicPropertiesBytes)
+	}
+	if size, _ := json.Marshal(NewRelicFields(content.Fields)); len(size)+1 <= MaxRelicPartFieldsBytes {
+		t.Fatalf("the fixture's fields are %d bytes, want them past %d", len(size)+1, MaxRelicPartFieldsBytes)
+	}
+	return store, newRelicTestService(store, relicServiceIDs(900000, 100)), state.RelicID, partID
+}
+
+// All of a relic's properties together, and all of one part's fields
+// together, are totals: a change is refused only when it leaves a total over
+// its limit and larger than it was. A relic already over one, as two edits
+// made apart can leave it, keeps every change that does not grow it, so it
+// can be brought back under. One value over the limit for one value is never
+// stored.
+func TestRelicUpdateChecksPropertyAndFieldTotalsOnlyWhenTheyGrow(t *testing.T) {
+	ctx := context.Background()
+	filler := func(size int) json.RawMessage { return relicRawString(strings.Repeat("w", size-2)) }
+	setProperty := func(name string, size int) RelicEdit {
+		return RelicEdit{Kind: RelicEditSetProperty, Name: name, Value: filler(size)}
+	}
+	setField := func(part, name string, size int) RelicEdit {
+		return RelicEdit{Kind: RelicEditPart, Part: part, Fields: []RelicFieldEdit{{Name: name, Value: filler(size)}}}
+	}
+
+	store, service, relicID, partID := relicOverItsValueTotals(t)
+	if _, err := service.Show(ctx, relicID, RelicShowOptions{Bodies: true}); err != nil {
+		t.Fatalf("Show a relic over both totals: %v", err)
+	}
+
+	allowed := []struct {
+		label string
+		edits []RelicEdit
+	}{
+		{"change the title", []RelicEdit{{Kind: RelicEditTitle, Title: "Still editable"}}},
+		{"save a body", []RelicEdit{{Kind: RelicEditPart, Part: partID, Base: partID, Body: &RelicBodyInput{Content: []byte("new text")}}}},
+		{"set a property to a value of the same size", []RelicEdit{setProperty("c", 10000)}},
+		{"set a property to a smaller value", []RelicEdit{setProperty("c", 5000)}},
+		{"set a field to a value of the same size", []RelicEdit{setField(partID, "c", 1000)}},
+		{"set a field to a smaller value", []RelicEdit{setField(partID, "c", 500)}},
+		{"swap a property for a smaller one", []RelicEdit{{Kind: RelicEditClearProperty, Name: "c"}, setProperty("d", 4000)}},
+		{"clear a property", []RelicEdit{{Kind: RelicEditClearProperty, Name: "d"}}},
+		{"clear a field", []RelicEdit{{Kind: RelicEditPart, Part: partID, Fields: []RelicFieldEdit{{Name: "c", Clear: true}}}}},
+	}
+	for index, change := range allowed {
+		result, err := service.Update(ctx, relicID, change.edits)
+		requireRelicWritten(t, change.label, store, index+1, result, err)
+	}
+	// The relic is still over both totals after all of that.
+	written := len(allowed)
+	if size, _ := json.Marshal(store.snapshots[relicID].Record.State.Relic.Properties); len(size) <= MaxRelicPropertiesBytes {
+		t.Fatalf("the properties are %d bytes after the allowed changes, want them still past the total", len(size))
+	}
+
+	refused := []struct {
+		label     string
+		edits     []RelicEdit
+		fragments []string
+	}{
+		{"add a property", []RelicEdit{setProperty("e", 10)}, []string{"properties", "65536"}},
+		{"set a property to a larger value", []RelicEdit{setProperty("a", 40001)}, []string{"properties", "65536"}},
+		{"add a field", []RelicEdit{setField(partID, "e", 10)}, []string{"fields", "16384"}},
+		{"set a field to a larger value", []RelicEdit{setField(partID, "a", 9001)}, []string{"fields", "16384"}},
+		{"one property value past the limit for one value, with the total shrinking",
+			[]RelicEdit{{Kind: RelicEditClearProperty, Name: "a"}, setProperty("b", MaxRelicPropertyValueBytes+1)},
+			[]string{"65537", "65536"}},
+		{"one field value past the limit for one value, with the total shrinking",
+			[]RelicEdit{{Kind: RelicEditPart, Part: partID, Fields: []RelicFieldEdit{
+				{Name: "a", Clear: true}, {Name: "b", Value: filler(MaxRelicFieldValueBytes + 1)},
+			}}},
+			[]string{"16385", "16384"}},
+	}
+	for _, change := range refused {
+		_, err := service.Update(ctx, relicID, change.edits)
+		requireRelicCategory(t, change.label, err, CategoryValidation, change.fragments...)
+		if len(err.Error()) > 300 {
+			t.Errorf("%s: the refusal is %d bytes long; it must not carry the value", change.label, len(err.Error()))
+		}
+		requireRelicWrites(t, change.label, store, written)
+	}
+
+	// Clearing enough brings the relic back under, and it can grow again.
+	result, err := service.Update(ctx, relicID, []RelicEdit{{Kind: RelicEditClearProperty, Name: "a"}})
+	requireRelicWritten(t, "clear a large property", store, written+1, result, err)
+	result, err = service.Update(ctx, relicID, []RelicEdit{setProperty("e", 10)})
+	requireRelicWritten(t, "add a property under the total", store, written+2, result, err)
+}
+
+// A value at the limit for one value is refused on create when it takes the
+// total past its limit, and one past it is refused for itself.
+func TestRelicCreateRefusesOneValuePastItsLimit(t *testing.T) {
+	for name, mutate := range map[string]func(*RelicCreateInput){
+		"property": func(input *RelicCreateInput) {
+			input.Properties = map[string]json.RawMessage{"long": relicRawString(strings.Repeat("p", MaxRelicPropertyValueBytes-1))}
+		},
+		"field": func(input *RelicCreateInput) {
+			input.Parts[0].Fields = map[string]json.RawMessage{"long": relicRawString(strings.Repeat("f", MaxRelicFieldValueBytes-1))}
+		},
+	} {
+		store := newMemoryRelicStore()
+		input := relicCreateInputForTest()
+		mutate(&input)
+		_, err := newRelicTestService(store, relicServiceIDs(1, 20)).Create(context.Background(), input)
+		requireRelicCategory(t, name, err, CategoryValidation, "a "+name+" value", "the limit is")
+		if len(err.Error()) > 300 || len(store.writes) != 0 {
+			t.Fatalf("%s: refusal of %d bytes, %d writes", name, len(err.Error()), len(store.writes))
+		}
+	}
+}
