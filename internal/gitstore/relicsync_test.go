@@ -1523,3 +1523,72 @@ func TestPushRelicRejectedByALaterRemoteTipIsReported(t *testing.T) {
 	}
 	assertReplayedHistory(t, second, config, relicID, relicRefHead(t, second, relicID))
 }
+
+// TestThePreviousReleasesFetchNeverSeesRelics runs by hand the fetch v0.6.1
+// issues, with the three refspecs recorded in the CLI's unconfigured-session
+// transcript, against an origin that holds relics. A mixed-version team keeps
+// working only if that fetch stays blind to them, and does not prune the
+// relic refs a clone already holds.
+func TestThePreviousReleasesFetchNeverSeesRelics(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		one := createSyncTask(t, first, config, "First task")
+		two := createSyncTask(t, first, config, "Second task")
+		a := writeRelicRootNumbered(t, first, config, 1)
+		b := writeRelicRootNumbered(t, first, config, 2)
+		if _, err := first.Sync(ctx, config); err != nil {
+			t.Fatalf("first Sync() error = %v", err)
+		}
+		publishRelicRefs(t, first)
+		if listing := syncGit(t, first.Root, "ls-remote", "origin", relicRefPrefix+"*"); strings.Count(listing, relicRefPrefix) != 2 {
+			t.Fatalf("origin's relic refs = %q, want both relics", listing)
+		}
+
+		// The previous release's fetch, verbatim.
+		oldFetch := func(repo *Repository) {
+			t.Helper()
+			syncGit(t, repo.Root, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", "origin",
+				"+refs/workbook/tasks/*:refs/workbook/remotes/origin/tasks/*",
+				"+refs/workbook/project*:refs/workbook/remotes/origin/project*",
+				"+refs/workbook/config*:refs/workbook/remotes/origin/config*")
+		}
+
+		oldFetch(second)
+		if refs := syncGit(t, second.Root, "for-each-ref", "--format=%(refname)"); strings.Contains(refs, "/relics/") {
+			t.Fatalf("the previous release's fetch created a relic ref:\n%s", refs)
+		}
+		for _, task := range []core.Task{one, two} {
+			want := strings.Fields(syncGit(t, second.Root, "ls-remote", "origin", taskRefPrefix+task.ID))
+			if len(want) == 0 {
+				t.Fatalf("origin has no ref for task %s", task.ID)
+			}
+			if got := refValue(t, second, remoteTaskRefPrefixFor("origin")+task.ID); got != want[0] {
+				t.Fatalf("tracking ref for task %s = %s, want origin's %s", task.ID, got, want[0])
+			}
+		}
+
+		// A clone that already synced with this build keeps every relic ref
+		// and tracking ref through the same fetch, --prune included.
+		if _, err := second.Sync(ctx, config); err != nil {
+			t.Fatalf("second Sync() error = %v", err)
+		}
+		localBefore := relicRefNames(t, second, relicRefPrefix)
+		trackingBefore := relicRefNames(t, second, relicTrackingRefPrefixFor("origin"))
+		if len(localBefore) != 2 || len(trackingBefore) != 2 {
+			t.Fatalf("after Sync() the clone holds relic refs %v and tracking refs %v, want two of each", localBefore, trackingBefore)
+		}
+		oldFetch(second)
+		if got := relicRefNames(t, second, relicRefPrefix); !reflect.DeepEqual(got, localBefore) {
+			t.Fatalf("relic refs after the previous release's fetch = %v, want %v", got, localBefore)
+		}
+		if got := relicRefNames(t, second, relicTrackingRefPrefixFor("origin")); !reflect.DeepEqual(got, trackingBefore) {
+			t.Fatalf("relic tracking refs after the previous release's fetch = %v, want %v", got, trackingBefore)
+		}
+		for _, root := range []core.RelicSnapshot{a, b} {
+			if got := relicRefHead(t, second, root.Operation.RelicID); got != root.Head {
+				t.Fatalf("relic %s moved to %s, want %s", root.Operation.RelicID, got, root.Head)
+			}
+		}
+	})
+}
