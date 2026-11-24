@@ -56,6 +56,8 @@ type resetSummary struct {
 	// Restore is the Git command that fetches the bundle's refs back.
 	Restore string   `json:"restore,omitempty"`
 	Next    []string `json:"next"`
+	// noBackup says the reset writes no bundle, for the text summary.
+	noBackup bool
 }
 
 // resetWatcher is this checkout's watcher as a reset found it.
@@ -152,7 +154,7 @@ func runResetCheckout(
 		DryRun: dryRun, Scope: "checkout", Remote: remote, URL: repository.GitRemoteURL(ctx, remote),
 		Refs: emptyIfNil(plan.Refs), Kept: []string{}, Unpublished: emptyIfNil(plan.Unpublished),
 		SetAside: emptyIfNil(plan.SetAside), Unchecked: plan.Unchecked, Watcher: watcher,
-		Caches: emptyIfNil(plan.Caches), Left: plan.Left,
+		Caches: emptyIfNil(plan.Caches), Left: plan.Left, noBackup: options.NoBackup,
 	}
 	for _, ref := range plan.Refs {
 		if strings.HasPrefix(ref.Ref, "refs/workbook/tasks/") {
@@ -213,23 +215,39 @@ func refuseLocalReset(plan gitstore.LocalResetPlan, options gitstore.ResetOption
 			plan.Remote, plan.Unchecked, stopped)
 	}
 	if plan.Holds() && !discard {
-		for _, item := range plan.Unpublished {
-			if item.RelicID != "" {
-				stopped = " workbook sync does not publish relics yet, so a relic is kept only by the bundle." + stopped
-				break
-			}
-		}
 		return gitstore.NewResetRefusal(core.CategoryValidation, gitstore.ResetRefusal{
 			Reason:      gitstore.ResetUnpublished,
 			Remote:      plan.Remote,
 			Command:     "workbook reset --no-backup --discard-unpublished",
 			Unpublished: plan.Unpublished,
 			SetAside:    plan.SetAside,
-		}, "this checkout holds work that exists only here, which %s does not hold: %s. Run workbook sync to publish it, "+
-			"or reset without --no-backup to keep it in a bundle, or add --discard-unpublished to lose it.%s",
-			plan.Remote, describeLocalOnly(plan), stopped)
+		}, "this checkout holds work that exists only here, which %s does not hold: %s. %s%s",
+			plan.Remote, describeLocalOnly(plan), localOnlyRemedies(plan), stopped)
 	}
 	return nil
+}
+
+// localOnlyRemedies says what can be done about the work a refused reset
+// would lose. Synchronizing is offered only for what it publishes, which is
+// everything but a relic.
+func localOnlyRemedies(plan gitstore.LocalResetPlan) string {
+	relics := 0
+	for _, item := range plan.Unpublished {
+		if item.RelicID != "" {
+			relics++
+		}
+	}
+	const relicsStay = " workbook sync does not publish relics yet, so a relic is kept only by the bundle."
+	switch {
+	case relics == 0:
+		return "Run workbook sync to publish it, or reset without --no-backup to keep it in a bundle, " +
+			"or add --discard-unpublished to lose it."
+	case relics == len(plan.Unpublished) && len(plan.SetAside) == 0:
+		return "Reset without --no-backup to keep it in a bundle, or add --discard-unpublished to lose it." + relicsStay
+	default:
+		return "Run workbook sync to publish everything but the relics, or reset without --no-backup to keep all of it in a bundle, " +
+			"or add --discard-unpublished to lose it." + relicsStay
+	}
 }
 
 // runResetRemote wipes one remote's Workbook refs. A remote the tasks live
@@ -280,6 +298,7 @@ func resetRemote(
 		DryRun: dryRun, Scope: "remote", Remote: plan.Remote, URL: plan.URL, MovedTo: plan.MovedTo,
 		Refs: emptyIfNil(plan.Refs), Kept: emptyIfNil(plan.Kept), Tasks: plan.Tasks,
 		Unpublished: []gitstore.UnpublishedRef{}, SetAside: []string{}, Caches: []string{}, Next: []string{},
+		noBackup: options.NoBackup,
 	}
 	command := "workbook reset --remote " + plan.Remote + " --confirm " + plan.Remote
 	if plan.Live() && len(plan.Refs) > 0 && !dryRun {
@@ -369,7 +388,15 @@ func writeResetSummary(output io.Writer, summary resetSummary) {
 	}
 	fmt.Fprintf(output, "%s:\t%s under refs/workbook/ at %s, %s\n", verb, plural(len(summary.Refs), "ref"), where, plural(summary.Tasks, "task"))
 	for _, ref := range summary.Refs {
-		if ref.Damaged != "" {
+		switch {
+		case ref.Damaged == "":
+		case ref.Bundleable && summary.noBackup:
+			fmt.Fprintf(output, "Damaged:\t%s\t(%s)\n", ref.Ref, ref.Damaged)
+		case ref.Bundleable:
+			// A relic ref that resolves to a commit goes in the bundle,
+			// whatever is wrong with it.
+			fmt.Fprintf(output, "Damaged:\t%s\t(%s; it is a commit, so the bundle keeps it like any other ref)\n", ref.Ref, ref.Damaged)
+		default:
 			fmt.Fprintf(output, "Damaged:\t%s\t(%s; nothing of it can be kept)\n", ref.Ref, ref.Damaged)
 		}
 	}

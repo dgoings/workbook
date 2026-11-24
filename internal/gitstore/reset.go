@@ -36,8 +36,9 @@ import (
 // Both write a Git bundle of every ref they are about to delete first, with
 // the same manifest, default location and flags compaction uses, so what was
 // removed can be fetched back. Two kinds of ref are left out of it: a damaged
-// one, whose object cannot be bundled, and the manifest ref an interrupted
-// backup left; and --no-backup, where it is allowed, writes no bundle.
+// one, unless it is a relic ref that resolves to a commit, and the manifest
+// ref an interrupted backup left; and --no-backup, where it is allowed,
+// writes no bundle.
 const workbookRefRoot = "refs/workbook/"
 
 // workbookDirectory is the tracked folder of project files in a worktree.
@@ -67,12 +68,25 @@ const (
 type ResetRef struct {
 	Ref      string `json:"ref"`
 	ObjectID string `json:"objectId"`
-	// Damaged says why the ref cannot be kept in the bundle: its object is
+	// Damaged says what is wrong with the ref: it is symbolic, its object is
 	// missing, it is not a commit, or, in a namespace that holds only
 	// Workbook commits, it names some other commit. It is removed all the
-	// same, and the result names it.
+	// same, and the result names it. A damaged ref is left out of the bundle
+	// unless Bundleable is set.
 	Damaged string `json:"damaged,omitempty"`
+	// Bundleable marks a damaged relic ref that resolves to a commit. Git can
+	// bundle a commit whatever its tree holds, with all the history under
+	// it, and a relic exists nowhere but in this checkout, so such a ref is
+	// kept like an intact one: it is in the bundle, and it counts as work
+	// that exists only here. Only a relic ref whose object is missing or is
+	// not a commit is removed with nothing kept.
+	Bundleable bool `json:"bundleable,omitempty"`
 }
+
+// kept reports a ref a reset keeps in its bundle and measures for work that
+// exists only here: one with nothing wrong with it, or a damaged relic ref
+// that resolves to a commit.
+func (ref ResetRef) kept() bool { return ref.Damaged == "" || ref.Bundleable }
 
 // UnpublishedRef is local work the tasks remote did not hold when this
 // checkout last synchronized with it: commits on a task ref, a relic ref, or
@@ -491,7 +505,7 @@ func (r *Repository) RestoreCommand(bundle string, refs []ResetRef) string {
 	}
 	held := map[string]bool{}
 	for _, ref := range refs {
-		if ref.Damaged != "" {
+		if !ref.kept() {
 			continue
 		}
 		for _, namespace := range namespaces {
@@ -558,15 +572,22 @@ func (r *Repository) listLocalWorkbookRefs(ctx context.Context) ([]ResetRef, err
 	return refs, r.classifyResetRefs(ctx, refs)
 }
 
-// workbookCommitNamespace reports a namespace that holds only Workbook
-// operation commits, each with an operation.json at the top of its tree.
-func workbookCommitNamespace(ref string) bool {
+// trackedWorkbookRef is the name a ref has at the place that holds it: a
+// tracking ref's name there, and any other ref's own name.
+func trackedWorkbookRef(ref string) string {
 	if strings.HasPrefix(ref, remoteTrackingRoot) {
 		rest := strings.TrimPrefix(ref, remoteTrackingRoot)
 		if _, tail, found := strings.Cut(rest, "/"); found {
-			ref = workbookRefRoot + tail
+			return workbookRefRoot + tail
 		}
 	}
+	return ref
+}
+
+// workbookCommitNamespace reports a namespace that holds only Workbook
+// operation commits, each with an operation.json at the top of its tree.
+func workbookCommitNamespace(ref string) bool {
+	ref = trackedWorkbookRef(ref)
 	return strings.HasPrefix(ref, taskRefPrefix) || ref == configRef ||
 		strings.HasPrefix(ref, reconciledRefPrefix) || strings.HasPrefix(ref, parkedConfigRefPrefix) ||
 		strings.HasPrefix(ref, relicRefPrefix)
@@ -574,7 +595,8 @@ func workbookCommitNamespace(ref string) bool {
 
 // classifyResetRefs marks each ref whose object is missing, is not a commit,
 // or, in a namespace of operation commits, has no operation.json, with one
-// Git process for all of them.
+// Git process for all of them. A damaged relic ref that resolves to a commit
+// all the same is marked as one the bundle can hold.
 func (r *Repository) classifyResetRefs(ctx context.Context, refs []ResetRef) error {
 	if len(refs) == 0 {
 		return nil
@@ -593,12 +615,11 @@ func (r *Repository) classifyResetRefs(ctx context.Context, refs []ResetRef) err
 		return core.Errorf(core.CategoryOperational, "Git returned %d object checks, want %d", len(lines), 2*len(refs))
 	}
 	for index := range refs {
-		if refs[index].Damaged != "" {
-			continue
-		}
 		object := strings.Fields(lines[2*index])
 		operation := strings.Fields(lines[2*index+1])
 		switch {
+		case refs[index].Damaged != "":
+			// A symbolic ref, found when the refs were listed.
 		case len(object) == 2 && object[1] == "missing":
 			refs[index].Damaged = "its object is missing"
 		case len(object) != 2:
@@ -608,13 +629,20 @@ func (r *Repository) classifyResetRefs(ctx context.Context, refs []ResetRef) err
 		case workbookCommitNamespace(refs[index].Ref) && (len(operation) != 2 || operation[1] != "blob"):
 			refs[index].Damaged = "it names a commit that is not a Workbook operation commit"
 		}
+		// Whatever is wrong with a relic ref, a commit under it is one Git can
+		// bundle, and nothing else holds a relic.
+		refs[index].Bundleable = refs[index].Damaged != "" &&
+			strings.HasPrefix(trackedWorkbookRef(refs[index].Ref), relicRefPrefix) &&
+			len(object) == 2 && object[1] == "commit"
 	}
 	return nil
 }
 
 // unpublishedWork is every local task ref, relic ref and the configuration
 // ledger holding commits that none of remoteHeads reaches, with the
-// operations those commits record. remoteHeads is what the remote holds now, or, when it could
+// operations those commits record. A damaged ref is left out, except a relic
+// ref that resolves to a commit, which is measured like an intact one.
+// remoteHeads is what the remote holds now, or, when it could
 // not be read, what this checkout's tracking refs say it held at the last
 // fetch. Those can be wrong both ways: they name work published since as
 // unpublished, and when the remote lost refs since, as a reset of it makes
@@ -624,7 +652,7 @@ func (r *Repository) unpublishedWork(ctx context.Context, refs []ResetRef, remot
 	var tips []string
 	var candidates []ResetRef
 	for _, ref := range refs {
-		if ref.Damaged == "" && (strings.HasPrefix(ref.Ref, taskRefPrefix) || strings.HasPrefix(ref.Ref, relicRefPrefix) || ref.Ref == configRef) {
+		if ref.kept() && (strings.HasPrefix(ref.Ref, taskRefPrefix) || strings.HasPrefix(ref.Ref, relicRefPrefix) || ref.Ref == configRef) {
 			candidates = append(candidates, ref)
 			tips = append(tips, ref.ObjectID)
 		}
@@ -804,7 +832,7 @@ func (r *Repository) writeResetBundle(ctx context.Context, projectID string, ref
 	for _, ref := range refs {
 		// A manifest ref an interrupted backup left is not data: the bundle
 		// carries its own manifest under that name.
-		if ref.Damaged != "" || ref.Ref == archiveManifestRef {
+		if !ref.kept() || ref.Ref == archiveManifestRef {
 			continue
 		}
 		bundled = append(bundled, bundledRef{name: ref.Ref, expected: ref.ObjectID})

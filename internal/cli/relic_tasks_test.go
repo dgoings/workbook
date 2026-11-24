@@ -348,3 +348,190 @@ func TestResetRemoteLeavesALocalRelic(t *testing.T) {
 		t.Fatalf("local relic ref = %s after the remote reset, want %s", head, relic.Head)
 	}
 }
+
+// handMadeRelicTip puts one hand-made commit on a relic's ref whose tree
+// holds no operation.json, the way a person with Git plumbing would, and
+// returns it. Every commit Workbook wrote is still reachable from it.
+func handMadeRelicTip(t *testing.T, repository, relicID string) string {
+	t.Helper()
+	ref := relicRef(relicID)
+	old := cliGitOutput(t, repository, "rev-parse", ref)
+	saved := cliGitOutput(t, repository, "rev-parse", old+"^{tree}")
+	tree := gitInput(t, repository, []byte("040000 tree "+saved+"\tsaved\n"), "mktree")
+	forged := cliGitOutput(t, repository, "commit-tree", tree, "-p", old, "-m", "hand-made")
+	cliGit(t, repository, "update-ref", ref, forged)
+	return forged
+}
+
+// cloneWithAHandMadeRelicTip is a clone whose tasks are all published and
+// which holds one relic of several commits with a hand-made commit on top.
+func cloneWithAHandMadeRelicTip(t *testing.T) (clone, relicID, forged string) {
+	t.Helper()
+	project := codeProject(t, "sha1")
+	clone = cloneCode(t, project)
+	if code, stdout, stderr := run(t, clone, "setup"); code != 0 {
+		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
+	}
+	relicID = mustCreateRelic(t, clone, "Template relic", "--type", "spec").Relic.ID
+	mustUpdateRelic(t, clone, relicID, "--add-part", "--part-type", "section")
+	mustUpdateRelic(t, clone, relicID, "--set", "status=draft")
+	return clone, relicID, handMadeRelicTip(t, clone, relicID)
+}
+
+// A relic ref whose newest commit is hand-made and holds no operation.json is
+// damaged, but its object is a commit with the relic's whole history under
+// it, and nothing else holds a relic. Reset keeps it like an intact relic: it
+// refuses to go ahead without a bundle, and the bundle it writes holds the
+// ref at the same object, which the printed restore command fetches back.
+func TestResetKeepsARelicRefWhoseNewestCommitIsHandMade(t *testing.T) {
+	t.Parallel()
+	clone, relicID, forged := cloneWithAHandMadeRelicTip(t)
+	ref := relicRef(relicID)
+	before := refTips(t, clone)
+
+	message, refusal := resetRefusalJSON(t, clone, 5, "--no-backup")
+	if refusal.Reason != gitstore.ResetUnpublished || len(refusal.Unpublished) != 1 ||
+		refusal.Unpublished[0].Ref != ref || refusal.Unpublished[0].RelicID != relicID || !strings.Contains(message, relicID) {
+		t.Fatalf("reset --no-backup refusal = %q, %+v, want the damaged relic named as unpublished", message, refusal)
+	}
+	requireSameRefs(t, "the checkout's refs after the refusal", refTips(t, clone), before)
+
+	code, stdout, stderr := run(t, clone, "reset", "--dry-run")
+	if code != 0 || !strings.Contains(stdout, "Damaged:") || !strings.Contains(stdout, ref) ||
+		strings.Contains(stdout, "nothing of it can be kept") {
+		t.Fatalf("reset --dry-run = (%d, %q, %q), want the relic ref on a Damaged line that does not say nothing of it can be kept",
+			code, stdout, stderr)
+	}
+	requireSameRefs(t, "the checkout's refs after the dry run", refTips(t, clone), before)
+
+	summary := resetJSON(t, clone)
+	var listed gitstore.ResetRef
+	for _, removed := range summary.Refs {
+		if removed.Ref == ref {
+			listed = removed
+		}
+	}
+	if listed.ObjectID != forged || listed.Damaged == "" || !listed.Bundleable {
+		t.Fatalf("reset lists the relic ref as %+v, want it damaged at %s and bundleable", listed, forged)
+	}
+	if summary.Bundle == "" || len(summary.Unpublished) != 1 || summary.Unpublished[0].RelicID != relicID ||
+		!strings.Contains(summary.Restore, "refs/workbook/relics/*:refs/workbook/relics/*") {
+		t.Fatalf("reset = %+v, want a bundle, the relic listed, and a restore command that fetches relic refs", summary)
+	}
+	if got := refsUnder(t, clone, "refs/workbook/"); got != "" {
+		t.Fatalf("refs left after the reset:\n%s", got)
+	}
+
+	fresh := t.TempDir()
+	cliGit(t, fresh, "init", "--quiet")
+	cliGit(t, fresh, "fetch", "--quiet", summary.Bundle, "refs/workbook/*:refs/workbook/*")
+	if got := cliGitOutput(t, fresh, "rev-parse", "--verify", ref); got != forged {
+		t.Fatalf("the bundle restores %s at %q, want %s", ref, got, forged)
+	}
+	restore := exec.Command("sh", "-c", summary.Restore)
+	restore.Dir = clone
+	if output, err := restore.CombinedOutput(); err != nil {
+		t.Fatalf("%s: %v\n%s", summary.Restore, err, output)
+	}
+	if got := cliGitOutput(t, clone, "rev-parse", "--verify", ref); got != forged {
+		t.Fatalf("%s restores %s at %q, want %s", summary.Restore, ref, got, forged)
+	}
+}
+
+// With --discard-unpublished the same checkout is reset without a bundle, and
+// the damaged relic ref goes with the rest.
+func TestResetDiscardsADamagedRelicRefOnlyWhenTold(t *testing.T) {
+	t.Parallel()
+	clone, relicID, _ := cloneWithAHandMadeRelicTip(t)
+	// No bundle is written, so nothing says the bundle keeps the ref.
+	code, stdout, stderr := run(t, clone, "reset", "--no-backup", "--discard-unpublished", "--dry-run")
+	if code != 0 || !strings.Contains(stdout, "Damaged:") || strings.Contains(stdout, "kept") || strings.Contains(stdout, "keeps") {
+		t.Fatalf("reset --no-backup --discard-unpublished --dry-run = (%d, %q, %q), want a Damaged line that promises nothing",
+			code, stdout, stderr)
+	}
+	summary := resetJSON(t, clone, "--no-backup", "--discard-unpublished")
+	if summary.Bundle != "" || summary.Restore != "" || len(summary.Unpublished) != 1 || summary.Unpublished[0].RelicID != relicID {
+		t.Fatalf("reset --no-backup --discard-unpublished = %+v, want no bundle and the relic listed", summary)
+	}
+	if got := refsUnder(t, clone, "refs/workbook/"); got != "" {
+		t.Fatalf("refs left after the reset:\n%s", got)
+	}
+}
+
+// Only a relic ref whose object is missing or is not a commit cannot be
+// bundled, and only such a ref is said to be removed with nothing kept.
+func TestResetSaysNothingIsKeptOnlyOfARelicRefItCannotBundle(t *testing.T) {
+	t.Parallel()
+	clone, relicID, _ := cloneWithAHandMadeRelicTip(t)
+	notACommit := relicRef(relicTestRelicID(72))
+	cliGit(t, clone, "update-ref", notACommit, gitInput(t, clone, []byte("not a commit\n"), "hash-object", "-w", "--stdin"))
+
+	code, stdout, stderr := run(t, clone, "reset", "--dry-run")
+	if code != 0 {
+		t.Fatalf("reset --dry-run = (%d, %q, %q)", code, stdout, stderr)
+	}
+	for _, line := range strings.Split(stdout, "\n") {
+		if !strings.HasPrefix(line, "Damaged:") {
+			continue
+		}
+		saysNothingKept := strings.Contains(line, "nothing of it can be kept")
+		switch {
+		case strings.Contains(line, notACommit):
+			if !saysNothingKept {
+				t.Fatalf("the line for the ref naming a blob = %q, want it to say nothing of it can be kept", line)
+			}
+		case strings.Contains(line, relicRef(relicID)):
+			if saysNothingKept || !strings.Contains(line, "the bundle keeps it") {
+				t.Fatalf("the line for the ref naming a commit = %q, want it to say the bundle keeps the ref", line)
+			}
+		default:
+			t.Fatalf("unexpected Damaged line %q", line)
+		}
+	}
+	if strings.Count(stdout, "Damaged:") != 2 {
+		t.Fatalf("reset --dry-run = %q, want two Damaged lines", stdout)
+	}
+}
+
+// What the refusal of reset --no-backup says to do has to be possible: sync
+// publishes tasks and never a relic, so it is offered only for what is not a
+// relic.
+func TestResetRefusalOffersSyncOnlyForWhatSyncPublishes(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, "sha1")
+	clone := cloneCode(t, project)
+	if code, stdout, stderr := run(t, clone, "setup"); code != 0 {
+		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
+	}
+	const relicSentence = "workbook sync does not publish relics yet, so a relic is kept only by the bundle."
+	mustCreateRelic(t, clone, "Only here", "--type", "spec")
+
+	relicsOnly, _ := resetRefusalJSON(t, clone, 5, "--no-backup")
+	if strings.Contains(relicsOnly, "workbook sync to publish") || !strings.Contains(relicsOnly, relicSentence) ||
+		!strings.Contains(relicsOnly, "without --no-backup") || !strings.Contains(relicsOnly, "--discard-unpublished") {
+		t.Fatalf("refusal with only a relic = %q, want no advice to run workbook sync", relicsOnly)
+	}
+
+	cliCreateTask(t, clone, "Created here only")
+	mixed, _ := resetRefusalJSON(t, clone, 5, "--no-backup")
+	syncAdvice := strings.Index(mixed, "Run workbook sync to publish everything but the relics")
+	if syncAdvice < 0 || strings.Index(mixed, relicSentence) < syncAdvice {
+		t.Fatalf("refusal with a task and a relic = %q, want sync offered for what is not a relic, then the sentence about relics", mixed)
+	}
+}
+
+// A checkout with no relic is refused in the words it always was.
+func TestResetRefusalWithoutARelicIsUnchanged(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, "sha1")
+	clone := cloneCode(t, project)
+	if code, stdout, stderr := run(t, clone, "setup"); code != 0 {
+		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
+	}
+	cliCreateTask(t, clone, "Created here only")
+	message, _ := resetRefusalJSON(t, clone, 5, "--no-backup")
+	if !strings.Contains(message, "Run workbook sync to publish it, or reset without --no-backup to keep it in a bundle, "+
+		"or add --discard-unpublished to lose it.") || strings.Contains(message, "relic") {
+		t.Fatalf("refusal with only a task = %q", message)
+	}
+}

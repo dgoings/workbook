@@ -421,3 +421,132 @@ func TestResetLocalFailsWhenItsBundleIsGone(t *testing.T) {
 		t.Fatalf("ResetLocal() with its bundle gone = %v, want an error naming %s", err, options.Backup)
 	}
 }
+
+// forgeRelicTipWithoutAnOperation puts one hand-made commit on top of a relic
+// whose tree holds no operation.json, and points the relic's ref at it. Every
+// commit Workbook wrote for the relic is still reachable from it.
+func forgeRelicTipWithoutAnOperation(t *testing.T, repo *Repository, tip core.RelicSnapshot) string {
+	t.Helper()
+	ref := relicRef(tip.Record.State.RelicID)
+	saved := syncGit(t, repo.Root, "rev-parse", tip.Head+"^{tree}")
+	tree := syncGitInput(t, repo.Root, []byte("040000 tree "+saved+"\tsaved\n"), "mktree")
+	forged := syncGit(t, repo.Root, "commit-tree", tree, "-p", tip.Head, "-m", "hand-made")
+	syncGit(t, repo.Root, "update-ref", ref, forged, tip.Head)
+	return forged
+}
+
+// A relic ref whose newest commit is not a Workbook commit is damaged, and its
+// object is still a commit Git can bundle with the whole history under it. A
+// relic exists nowhere else, so the reset keeps it like any other ref: it is
+// work that exists only here, the bundle holds it at the same object, and the
+// restore command fetches it back.
+func TestResetBundlesADamagedRelicRefWhoseObjectIsACommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	first, _, config := syncRepositories(t)
+	createSyncTask(t, first, config, "Published")
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	root := writeRelicRoot(t, first, config, relicTestPartNumbered(1))
+	tip := writeRelicChild(t, first, config, root, nil, relicTitleSet(2, "Archive plan, revised"))
+	relicID := tip.Record.State.RelicID
+	forged := forgeRelicTipWithoutAnOperation(t, first, tip)
+
+	plan, err := first.PlanLocalReset(ctx, "origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listed *ResetRef
+	for index := range plan.Refs {
+		if plan.Refs[index].Ref == relicRef(relicID) {
+			listed = &plan.Refs[index]
+		}
+	}
+	if listed == nil || listed.ObjectID != forged || listed.Damaged == "" || !listed.Bundleable {
+		t.Fatalf("the relic ref is listed as %+v, want it damaged at %s and bundleable", listed, forged)
+	}
+	if !plan.Holds() || len(plan.Unpublished) != 1 {
+		t.Fatalf("PlanLocalReset() = %+v, want the damaged relic as the one unpublished ref", plan)
+	}
+	got := plan.Unpublished[0]
+	if got.Ref != relicRef(relicID) || got.RelicID != relicID || !got.New || got.Commits != 3 ||
+		strings.Join(got.Operations, ",") != strings.Join([]string{relicTestID(1), relicTestID(2), relicTestID(800001)}, ",") {
+		t.Fatalf("unpublished = %+v, want the relic with its three commits and the operations of the two Workbook wrote", got)
+	}
+
+	result, err := first.ResetLocal(ctx, config.ProjectID, plan, ResetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if heads := bundleHeads(t, first.Root, result.Bundle); heads[relicRef(relicID)] != forged {
+		t.Fatalf("the bundle holds %v, want %s at %s", heads, relicRef(relicID), forged)
+	}
+	if command := first.RestoreCommand(result.Bundle, plan.Refs); !strings.Contains(command, relicRefPrefix+"*:"+relicRefPrefix+"*") {
+		t.Fatalf("RestoreCommand() = %s, want it to fetch the relic refs", command)
+	}
+	if got := workbookRefs(t, first.Root); len(got) != 0 {
+		t.Fatalf("refs left after the reset: %v", got)
+	}
+	fresh := t.TempDir()
+	syncGit(t, fresh, "init", "--quiet")
+	syncGit(t, fresh, "fetch", "--quiet", result.Bundle, relicRefPrefix+"*:"+relicRefPrefix+"*")
+	if got := syncGit(t, fresh, "rev-parse", "--verify", relicRef(relicID)); got != forged {
+		t.Fatalf("the bundle restores %s at %q, want %s", relicRef(relicID), got, forged)
+	}
+	if got := syncGit(t, fresh, "rev-parse", "--verify", relicRef(relicID)+"~1"); got != tip.Head {
+		t.Fatalf("the restored ref's parent is %q, want the relic's last Workbook commit %s", got, tip.Head)
+	}
+}
+
+// A relic ref that is symbolic is damaged too, and the commit it resolves to
+// is kept the same way. One whose object is not a commit cannot be bundled:
+// it is the one kind of relic ref a reset removes with nothing kept.
+func TestResetBundlesEveryRelicRefThatResolvesToACommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	first, _, config := syncRepositories(t)
+	root := writeRelicRoot(t, first, config, relicTestPartNumbered(1))
+	symbolic := relicRef(relicTestRelicID(71))
+	notACommit := relicRef(relicTestRelicID(72))
+	syncGit(t, first.Root, "symbolic-ref", symbolic, relicRef(root.Record.State.RelicID))
+	blob := syncGitInput(t, first.Root, []byte("not a commit\n"), "hash-object", "-w", "--stdin")
+	syncGit(t, first.Root, "update-ref", notACommit, blob)
+
+	plan, err := first.PlanLocalReset(ctx, "origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]ResetRef{}
+	for _, ref := range plan.Refs {
+		listed[ref.Ref] = ref
+	}
+	if ref := listed[symbolic]; ref.Damaged == "" || !ref.Bundleable {
+		t.Fatalf("the symbolic relic ref is listed as %+v, want it damaged and bundleable", ref)
+	}
+	if ref := listed[notACommit]; ref.Damaged != "it names a blob, not a commit" || ref.Bundleable {
+		t.Fatalf("the relic ref naming a blob is listed as %+v, want it damaged and not bundleable", ref)
+	}
+	unpublished := map[string]bool{}
+	for _, item := range plan.Unpublished {
+		unpublished[item.Ref] = true
+	}
+	if !unpublished[symbolic] || unpublished[notACommit] {
+		t.Fatalf("unpublished = %+v, want the symbolic relic ref and not the one naming a blob", plan.Unpublished)
+	}
+
+	result, err := first.ResetLocal(ctx, config.ProjectID, plan, ResetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	heads := bundleHeads(t, first.Root, result.Bundle)
+	if heads[symbolic] != root.Head {
+		t.Fatalf("the bundle holds %v, want %s at %s", heads, symbolic, root.Head)
+	}
+	if _, bundled := heads[notACommit]; bundled {
+		t.Fatalf("the bundle holds %s, which names a blob", notACommit)
+	}
+	if got := workbookRefs(t, first.Root); len(got) != 0 {
+		t.Fatalf("refs left after the reset: %v", got)
+	}
+}
