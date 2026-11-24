@@ -2989,6 +2989,11 @@ tasks remote does not have:
   such ref;
 - every parked ref, listed on a `Set aside:` line.
 
+A relic counts too. Nothing publishes relics yet, so every relic ref is work
+that exists only here, listed as `relic <id> "<title>"` and `never published`,
+with `relicId` in the JSON in place of `taskId`. A refusal that names one
+says `workbook sync` does not publish it, so only the bundle keeps it.
+
 It measures this against the remote as it is now. It lists the remote's Workbook
 refs and fetches the objects of those this checkout lacks without moving any ref,
 so a dry run changes nothing. A remote that was wiped holds nothing, so after
@@ -3016,7 +3021,8 @@ what would be lost.
 #### Restoring a checkout
 
 The `Restore:` line is a `git fetch` from the bundle of the refs that hold work:
-the task refs, plus the parked refs and the settings ledger when there were any.
+the task refs, plus the parked refs, the relic refs and the settings ledger
+when there were any.
 
 ```sh
 git fetch .git/workbook-archive/01M….bundle 'refs/workbook/tasks/*:refs/workbook/tasks/*' refs/workbook/config:refs/workbook/config

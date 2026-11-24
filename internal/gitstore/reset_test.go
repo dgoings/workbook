@@ -359,6 +359,46 @@ func TestResetRefusesABackupInsideAFolderItRemovesFilesFrom(t *testing.T) {
 	}
 }
 
+// Nothing publishes a relic yet, so a checkout whose tasks remote holds every
+// task, and which also holds a relic, holds work that exists only here: the
+// relic, named by its ID and title, with every commit and operation it has.
+func TestResetCountsALocalRelicAsWorkThatExistsOnlyHere(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	first, _, config := syncRepositories(t)
+	createSyncTask(t, first, config, "Published")
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	if plan, err := first.PlanLocalReset(ctx, "origin"); err != nil || plan.Holds() {
+		t.Fatalf("PlanLocalReset() before the relic = %+v, %v; want nothing held only here", plan, err)
+	}
+	root := writeRelicRoot(t, first, config, relicTestPartNumbered(1))
+	tip := writeRelicChild(t, first, config, root, nil, relicTitleSet(2, "Archive plan, revised"))
+	relicID := tip.Record.State.RelicID
+
+	plan, err := first.PlanLocalReset(ctx, "origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Holds() || plan.Unchecked != "" || len(plan.Unpublished) != 1 {
+		t.Fatalf("PlanLocalReset() = %+v, want the relic as the one unpublished ref", plan)
+	}
+	got := plan.Unpublished[0]
+	want := UnpublishedRef{
+		Ref:        relicRef(relicID),
+		RelicID:    relicID,
+		Title:      "Archive plan, revised",
+		New:        true,
+		Commits:    2,
+		Operations: []string{relicTestID(1), relicTestID(2), relicTestID(800001)},
+	}
+	if got.Ref != want.Ref || got.RelicID != want.RelicID || got.TaskID != "" || got.Title != want.Title ||
+		got.New != want.New || got.Commits != want.Commits || strings.Join(got.Operations, ",") != strings.Join(want.Operations, ",") {
+		t.Fatalf("unpublished = %+v, want %+v", got, want)
+	}
+}
+
 // A reset never reports a bundle that is not there: one that vanishes before
 // the reset finishes fails it, naming the path.
 func TestResetLocalFailsWhenItsBundleIsGone(t *testing.T) {

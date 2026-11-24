@@ -75,12 +75,15 @@ type ResetRef struct {
 }
 
 // UnpublishedRef is local work the tasks remote did not hold when this
-// checkout last synchronized with it: commits on a task ref, or on the
-// configuration ledger, that none of the remote's tracking refs reach.
+// checkout last synchronized with it: commits on a task ref, a relic ref, or
+// the configuration ledger, that none of the remote's tracking refs reach.
+// Nothing publishes a relic yet, so in practice every relic ref is reported,
+// as New.
 type UnpublishedRef struct {
-	Ref    string `json:"ref"`
-	TaskID string `json:"taskId,omitempty"`
-	Title  string `json:"title,omitempty"`
+	Ref     string `json:"ref"`
+	TaskID  string `json:"taskId,omitempty"`
+	RelicID string `json:"relicId,omitempty"`
+	Title   string `json:"title,omitempty"`
 	// New says the tasks remote held no copy of this ref at all.
 	New        bool     `json:"new"`
 	Commits    int      `json:"commits"`
@@ -476,14 +479,15 @@ func (r *Repository) resetStep(step string) error {
 }
 
 // RestoreCommand is the Git command that brings a checkout's reset bundle
-// back: every task ref, parked ref and the configuration ledger it holds,
-// under their own names, never over a ref that already exists with other
-// history.
+// back: every task ref, parked ref, relic ref and the configuration ledger
+// it holds, under their own names, never over a ref that already exists with
+// other history.
 func (r *Repository) RestoreCommand(bundle string, refs []ResetRef) string {
 	namespaces := []struct{ prefix, refspec string }{
 		{taskRefPrefix, taskRefPrefix + "*:" + taskRefPrefix + "*"},
 		{reconciledRefPrefix, reconciledRefPrefix + "*:" + reconciledRefPrefix + "*"},
 		{parkedConfigRefPrefix, parkedConfigRefPrefix + "*:" + parkedConfigRefPrefix + "*"},
+		{relicRefPrefix, relicRefPrefix + "*:" + relicRefPrefix + "*"},
 	}
 	held := map[string]bool{}
 	for _, ref := range refs {
@@ -564,7 +568,8 @@ func workbookCommitNamespace(ref string) bool {
 		}
 	}
 	return strings.HasPrefix(ref, taskRefPrefix) || ref == configRef ||
-		strings.HasPrefix(ref, reconciledRefPrefix) || strings.HasPrefix(ref, parkedConfigRefPrefix)
+		strings.HasPrefix(ref, reconciledRefPrefix) || strings.HasPrefix(ref, parkedConfigRefPrefix) ||
+		strings.HasPrefix(ref, relicRefPrefix)
 }
 
 // classifyResetRefs marks each ref whose object is missing, is not a commit,
@@ -607,9 +612,9 @@ func (r *Repository) classifyResetRefs(ctx context.Context, refs []ResetRef) err
 	return nil
 }
 
-// unpublishedWork is every local task ref and the configuration ledger
-// holding commits that none of remoteHeads reaches, with the operations those
-// commits record. remoteHeads is what the remote holds now, or, when it could
+// unpublishedWork is every local task ref, relic ref and the configuration
+// ledger holding commits that none of remoteHeads reaches, with the
+// operations those commits record. remoteHeads is what the remote holds now, or, when it could
 // not be read, what this checkout's tracking refs say it held at the last
 // fetch. Those can be wrong both ways: they name work published since as
 // unpublished, and when the remote lost refs since, as a reset of it makes
@@ -619,7 +624,7 @@ func (r *Repository) unpublishedWork(ctx context.Context, refs []ResetRef, remot
 	var tips []string
 	var candidates []ResetRef
 	for _, ref := range refs {
-		if ref.Damaged == "" && (strings.HasPrefix(ref.Ref, taskRefPrefix) || ref.Ref == configRef) {
+		if ref.Damaged == "" && (strings.HasPrefix(ref.Ref, taskRefPrefix) || strings.HasPrefix(ref.Ref, relicRefPrefix) || ref.Ref == configRef) {
 			candidates = append(candidates, ref)
 			tips = append(tips, ref.ObjectID)
 		}
@@ -689,6 +694,9 @@ func (r *Repository) unpublishedWork(ctx context.Context, refs []ResetRef, remot
 		if strings.HasPrefix(ref.Ref, taskRefPrefix) {
 			item.TaskID = strings.TrimPrefix(ref.Ref, taskRefPrefix)
 		}
+		if strings.HasPrefix(ref.Ref, relicRefPrefix) {
+			item.RelicID = strings.TrimPrefix(ref.Ref, relicRefPrefix)
+		}
 		unpublished = append(unpublished, item)
 		commitsByRef = append(commitsByRef, commits)
 	}
@@ -729,14 +737,23 @@ func (r *Repository) describeUnpublished(ctx context.Context, unpublished []Unpu
 		return object.contents, true
 	}
 	for index := range unpublished {
-		if contents, ok := next(); ok && unpublished[index].TaskID != "" {
+		if contents, ok := next(); ok && (unpublished[index].TaskID != "" || unpublished[index].RelicID != "") {
+			// A task's state names its title under task, a relic's under
+			// relic.
 			var state struct {
 				Task struct {
 					Title string `json:"title"`
 				} `json:"task"`
+				Relic struct {
+					Title string `json:"title"`
+				} `json:"relic"`
 			}
 			if json.Unmarshal(contents, &state) == nil {
-				unpublished[index].Title = state.Task.Title
+				if unpublished[index].TaskID != "" {
+					unpublished[index].Title = state.Task.Title
+				} else {
+					unpublished[index].Title = state.Relic.Title
+				}
 			}
 		}
 		for range commitsByRef[index] {

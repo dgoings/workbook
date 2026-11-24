@@ -213,6 +213,12 @@ func refuseLocalReset(plan gitstore.LocalResetPlan, options gitstore.ResetOption
 			plan.Remote, plan.Unchecked, stopped)
 	}
 	if plan.Holds() && !discard {
+		for _, item := range plan.Unpublished {
+			if item.RelicID != "" {
+				stopped = " workbook sync does not publish relics yet, so a relic is kept only by the bundle." + stopped
+				break
+			}
+		}
 		return gitstore.NewResetRefusal(core.CategoryValidation, gitstore.ResetRefusal{
 			Reason:      gitstore.ResetUnpublished,
 			Remote:      plan.Remote,
@@ -331,8 +337,11 @@ func describeLocalOnly(plan gitstore.LocalResetPlan) string {
 
 func describeUnpublished(item gitstore.UnpublishedRef) string {
 	name := item.Ref
-	if item.TaskID != "" {
+	if item.TaskID != "" || item.RelicID != "" {
 		name = item.TaskID
+		if item.RelicID != "" {
+			name = "relic " + item.RelicID
+		}
 		if item.Title != "" {
 			name += " " + fmt.Sprintf("%q", singleLine(item.Title))
 		}
