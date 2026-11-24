@@ -37,6 +37,14 @@ type MoveTasksResult struct {
 	// its history. Every task ref is one or the other, or the run fails.
 	Identical int `json:"identical"`
 	Carried   int `json:"carried"`
+	// Relics is the number of relic refs the old place holds, and
+	// RelicsIdentical and RelicsCarried count them as Identical and Carried
+	// count tasks: at the same commit at the new place, or with every
+	// operation held there under other commits or parked in this checkout.
+	// All three are absent when the old place holds no relic.
+	Relics          int `json:"relics,omitempty"`
+	RelicsIdentical int `json:"relicsIdentical,omitempty"`
+	RelicsCarried   int `json:"relicsCarried,omitempty"`
 	// Stragglers reports the operations this run found at the old place that
 	// the new place lacked and carried across, and who made them. It is
 	// absent when there were none.
@@ -269,7 +277,8 @@ func (r *Repository) moveTasks(ctx context.Context, config core.ProjectConfig, o
 	if err := r.moveStep("read"); err != nil {
 		return result, err
 	}
-	if err := r.moveReadSource(ctx, config, from); err != nil {
+	relicConflicts, err := r.moveReadSource(ctx, config, from)
+	if err != nil {
 		return result, err
 	}
 	// Before the mark, carrying is the copy itself. Once the old place is
@@ -297,9 +306,11 @@ func (r *Repository) moveTasks(ctx context.Context, config core.ProjectConfig, o
 	if err := r.moveStep("reread"); err != nil {
 		return result, err
 	}
-	if err := r.moveReadSource(ctx, config, from); err != nil {
+	reread, err := r.moveReadSource(ctx, config, from)
+	if err != nil {
 		return result, err
 	}
+	relicConflicts = append(relicConflicts, reread...)
 	carried.counting = true
 	if err := r.moveStep("recopy"); err != nil {
 		return result, err
@@ -331,6 +342,9 @@ func (r *Repository) moveTasks(ctx context.Context, config core.ProjectConfig, o
 	if err := r.verifyMovedTasks(ctx, config, from, to.Name, &result); err != nil {
 		return result, err
 	}
+	if err := r.verifyMovedRelics(ctx, config, from, to.Name, &result); err != nil {
+		return result, err
+	}
 	result.Verified = true
 	result.Stragglers = carried.report()
 	for _, item := range r.takeMoveSetAside() {
@@ -345,6 +359,16 @@ func (r *Repository) moveTasks(ctx context.Context, config core.ProjectConfig, o
 	}
 	if len(carried.conflicts) > 0 {
 		return result, setAsideRefusal(from, to.Name, carried.conflicts)
+	}
+	// A relic whose local changes could not be replayed, onto the old place's
+	// history or the new place's, had its local tip parked in this checkout.
+	// The run is verified, and it reports them as a sync does, so a person
+	// looks at them before --clean-up runs.
+	for _, run := range []SyncRunResult{result.Copy, result.Recopy} {
+		relicConflicts = append(relicConflicts, run.Fetch.RelicConflicts...)
+	}
+	if len(relicConflicts) > 0 {
+		return result, core.RelicConflictError(relicConflicts)
 	}
 	return result, nil
 }
@@ -549,16 +573,35 @@ func (r *Repository) forgetAddedRemote(ctx context.Context, setup *TasksRemoteSe
 	return refusal
 }
 
-// moveReadSource reads the old place into its tracking refs. Nothing local
+// moveReadSource reads the old place into its tracking refs. No task ref
 // moves: the old place is not the project's tasks remote, so the fetch is a
-// read-only one (fetchTracking), and carrying is moveCopy's.
-func (r *Repository) moveReadSource(ctx context.Context, config core.ProjectConfig, from string) error {
+// read-only one (fetchTracking), and carrying tasks is moveCopy's.
+//
+// Relics are carried here instead, because fetchTracking reads no relic. The
+// old place's relic refs are fetched into its relic tracking namespace and
+// folded into this checkout's relic refs by the relic stage a fetch from the
+// tasks remote runs: created, fast-forwarded, or replayed onto the old
+// place's tip. Folding is safe to repeat for relics, as it is not for tasks,
+// because a relic replay skips every pack whose operations the other side
+// already holds. The next synchronization with the new place publishes what
+// moved. It returns the relic conflicts the stage parked.
+func (r *Repository) moveReadSource(ctx context.Context, config core.ProjectConfig, from string) ([]core.RelicConflict, error) {
 	r.switchRemote(from)
 	_, err := r.Fetch(ctx, config)
 	if err != nil {
-		return wrapKeepingCategory("cannot read the tasks from "+from, err)
+		return nil, wrapKeepingCategory("cannot read the tasks from "+from, err)
 	}
-	return nil
+	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", from,
+		relicFetchRefspecFor(from)); err != nil {
+		return nil, core.Wrap(core.CategoryOperational, "cannot read the relics from "+from, err)
+	}
+	_, stage := r.syncFetchedRelics(ctx, config)
+	for _, failure := range []error{stage.corruptError(), stage.newerWriterError(), stage.otherError()} {
+		if failure != nil {
+			return nil, wrapKeepingCategory("cannot read the relics from "+from, failure)
+		}
+	}
+	return stage.Conflicts, nil
 }
 
 // moveCopy synchronizes with the new place, carries what the old place holds
@@ -1301,8 +1344,8 @@ func (r *Repository) markTasksReturned(ctx context.Context, to, from string) (st
 func (r *Repository) verifyMovedTasks(ctx context.Context, config core.ProjectConfig, from, to string, result *MoveTasksResult) error {
 	for _, remote := range []string{from, to} {
 		if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", remote,
-			"+"+taskRefPrefix+"*:"+remoteTaskRefPrefixFor(remote)+"*"); err != nil {
-			return core.Wrap(core.CategoryOperational, "cannot list the task refs "+remote+" holds", err)
+			"+"+taskRefPrefix+"*:"+remoteTaskRefPrefixFor(remote)+"*", relicFetchRefspecFor(remote)); err != nil {
+			return core.Wrap(core.CategoryOperational, "cannot list the task and relic refs "+remote+" holds", err)
 		}
 	}
 	source, err := r.trackingRefHeads(ctx, remoteTaskRefPrefixFor(from))
@@ -1405,6 +1448,141 @@ func (r *Repository) verifyMovedTasks(ctx context.Context, config core.ProjectCo
 			to, from, strings.Join(missing, "; "))
 	}
 	return nil
+}
+
+// verifyMovedRelics proves, after verifyMovedTasks has fetched both places'
+// relic refs into their tracking namespaces, that the new place holds every
+// operation of every relic the old place holds, or that this checkout holds
+// it in a parked relic tip. A relic at the same commit at both places counts
+// as identical without reading anything. For any other, the commits of the
+// old place's history that neither the new place's history nor a parked tip
+// reaches are read, and each operation in them must be found by ID in the
+// commits on the other side that the old place's history does not reach.
+// A name under the relic namespace that is not one of this project's relics
+// is skipped, as a fetch skips it.
+func (r *Repository) verifyMovedRelics(ctx context.Context, config core.ProjectConfig, from, to string, result *MoveTasksResult) error {
+	source, err := r.trackingRefHeads(ctx, relicTrackingRefPrefixFor(from))
+	if err != nil {
+		return err
+	}
+	destination, err := r.trackingRefHeads(ctx, relicTrackingRefPrefixFor(to))
+	if err != nil {
+		return err
+	}
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(source))
+	for name := range source {
+		if core.ValidateRelicIDShape(name) == nil && keys.OwnsRelic(name) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	result.Relics, result.RelicsIdentical, result.RelicsCarried = len(names), 0, 0
+
+	var parked map[string][]string
+	var missing []string
+	for _, name := range names {
+		have, found := destination[name]
+		if found && have == source[name] {
+			result.RelicsIdentical++
+			continue
+		}
+		if parked == nil {
+			if parked, err = r.parkedRelicTips(ctx); err != nil {
+				return err
+			}
+		}
+		others := append([]string{}, parked[name]...)
+		if found {
+			others = append(others, have)
+		}
+		lacking, err := r.relicChangesNotHeld(ctx, config, name, source[name], others)
+		if err != nil {
+			return wrapKeepingCategory(fmt.Sprintf("cannot compare relic %s at %s and %s", name, from, to), err)
+		}
+		if lacking > 0 {
+			missing = append(missing, fmt.Sprintf("relic %s (lacks %d change(s))", name, lacking))
+			continue
+		}
+		result.RelicsCarried++
+	}
+	if len(missing) > 0 {
+		return core.Errorf(core.CategoryConflict,
+			"%s does not hold everything %s holds: %s; run workbook move-tasks again",
+			to, from, strings.Join(missing, "; "))
+	}
+	return nil
+}
+
+// parkedRelicTips is every parked relic tip in this checkout, by relic ID.
+func (r *Repository) parkedRelicTips(ctx context.Context) (map[string][]string, error) {
+	records, err := r.relicRefRecords(ctx, relicParkedRefPrefix)
+	if err != nil {
+		return nil, err
+	}
+	tips := map[string][]string{}
+	for _, record := range records {
+		relicID, _, found := strings.Cut(strings.TrimPrefix(record.name, relicParkedRefPrefix), "/")
+		if found && record.symbolicTarget == "" {
+			tips[relicID] = append(tips[relicID], record.objectID)
+		}
+	}
+	return tips, nil
+}
+
+// relicChangesNotHeld counts the commits of the relic's history at tip whose
+// operations are not all held by the histories at others: a commit others
+// reach is held, and any other is held when every operation ID it records is
+// recorded by a commit others reach that tip does not.
+func (r *Repository) relicChangesNotHeld(ctx context.Context, config core.ProjectConfig, relicID, tip string, others []string) (int, error) {
+	exclusive := func(include string, exclude []string) ([]string, error) {
+		input := include + "\n"
+		for _, objectID := range exclude {
+			input += "^" + objectID + "\n"
+		}
+		output, err := r.Git(ctx, []byte(input), "rev-list", "--stdin")
+		if err != nil {
+			return nil, err
+		}
+		return strings.Fields(string(output)), nil
+	}
+	theirs, err := exclusive(tip, others)
+	if err != nil || len(theirs) == 0 {
+		return 0, err
+	}
+	held := map[string]struct{}{}
+	for _, other := range others {
+		commits, err := exclusive(other, []string{tip})
+		if err != nil {
+			return 0, err
+		}
+		packs, err := r.relicChainPacks(ctx, config, relicID, commits)
+		if err != nil {
+			return 0, err
+		}
+		for _, pack := range packs {
+			for _, operation := range pack.Operations {
+				held[operation.ID] = struct{}{}
+			}
+		}
+	}
+	packs, err := r.relicChainPacks(ctx, config, relicID, theirs)
+	if err != nil {
+		return 0, err
+	}
+	lacking := 0
+	for _, pack := range packs {
+		for _, operation := range pack.Operations {
+			if _, found := held[operation.ID]; !found {
+				lacking++
+				break
+			}
+		}
+	}
+	return lacking, nil
 }
 
 // trackingRefHeads lists one tracking namespace by task ID, without reading

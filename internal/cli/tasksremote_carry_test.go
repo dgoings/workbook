@@ -3,9 +3,12 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/dgoings/workbook/internal/testenv"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
 
@@ -492,4 +495,59 @@ func TestMoveTasksSetAsideEditsAreReportedWhereMoveTasksRuns(t *testing.T) {
 	}
 	requireEachOperationOnce(t, project.tasks)
 	requireFreshCloneValidates(t, project.tasks)
+}
+
+// move-tasks --clean-up deletes the relics at the place left only once the
+// new place has been shown to hold every one of them. A run whose new place
+// lost a relic fails its verification, naming the relic, and deletes nothing
+// at the old place; once the new place keeps it, the next run carries it,
+// verifies, and cleans the old place up.
+func TestMoveTasksCleanUpRemovesRelicsOnlyAfterTheyAreCarried(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA1)
+	relics := createThreeRelics(t, project.seed)
+	if code, stdout, stderr := run(t, project.seed, "push"); code != 0 {
+		t.Fatalf("push = (%d, %q, %q)", code, stdout, stderr)
+	}
+	published := refsUnder(t, project.code, "refs/workbook/relics/")
+	if strings.Count(published, "\n")+1 != len(relics) {
+		t.Fatalf("origin holds before the move:\n%s", published)
+	}
+
+	// The new place drops the last relic every time it is pushed there.
+	lost := relicRef(relics[len(relics)-1])
+	hook := filepath.Join(project.tasks, "hooks", "post-receive")
+	testenv.WriteExecutable(t, hook, []byte("#!/bin/sh\nwhile read old new ref; do\n"+
+		"  if [ \"$ref\" = \""+lost+"\" ]; then git update-ref -d \"$ref\"; fi\ndone\n"))
+	if code, stdout, stderr := run(t, project.seed, "config", "set", "tasks-remote", "tasks", "--url", project.tasks); code != 0 {
+		t.Fatalf("config set tasks-remote = (%d, %q, %q)", code, stdout, stderr)
+	}
+	code, stdout, stderr := run(t, project.seed, "move-tasks", "--clean-up", "--json")
+	if code != 8 || stdout != "" || !strings.Contains(stderr, "relic "+relics[len(relics)-1]+" (lacks 1 change(s))") {
+		t.Fatalf("move-tasks --clean-up with a relic lost at the new place = (%d, %q, %q), want 8 naming the relic", code, stdout, stderr)
+	}
+	if got := refsUnder(t, project.code, "refs/workbook/relics/"); got != published {
+		t.Fatalf("origin's relic refs after the stopped run:\n%s\nwant\n%s", got, published)
+	}
+
+	if err := os.Remove(hook); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr = run(t, project.seed, "move-tasks", "--clean-up", "--json")
+	if code != 0 {
+		t.Fatalf("move-tasks --clean-up = (%d, %q, %q)", code, stdout, stderr)
+	}
+	var moved moveTasksSummary
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "move-tasks").Data, &moved); err != nil {
+		t.Fatal(err)
+	}
+	if !moved.Verified || moved.Relics != len(relics) || moved.CleanUp == nil {
+		t.Fatalf("move-tasks --clean-up = %+v, cleanUp %+v", moved.MoveTasksResult, moved.CleanUp)
+	}
+	if got := refsUnder(t, project.code, "refs/workbook/relics/"); got != "" {
+		t.Fatalf("origin still holds relic refs after the clean-up:\n%s", got)
+	}
+	if got := refsUnder(t, project.tasks, "refs/workbook/relics/"); got != published {
+		t.Fatalf("the new place's relic refs after the clean-up:\n%s\nwant\n%s", got, published)
+	}
 }

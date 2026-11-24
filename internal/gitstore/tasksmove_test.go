@@ -451,3 +451,121 @@ func TestMoveTasksInSHA256Repositories(t *testing.T) {
 	}
 	assertVerifyNamesWhatTheNewPlaceLacks(t, fixture)
 }
+
+// moveRelics gives the fixture's old place two relics, written by the teammate
+// still on the old settings. The clone that moves holds the first at its root
+// only, so the change the teammate then publishes to it, and the whole of the
+// second, are ones it has not fetched.
+func moveRelics(t *testing.T, fixture moveFixture) []string {
+	t.Helper()
+	ctx := context.Background()
+	first := writeRelicRootNumbered(t, fixture.second, fixture.stale, 1, relicTestPartNumbered(1))
+	if _, err := fixture.second.Sync(ctx, fixture.stale); err != nil {
+		t.Fatal(err)
+	}
+	ref := relicRef(first.Record.State.RelicID)
+	syncGit(t, fixture.first.Root, "fetch", "--quiet", fixture.origin, ref+":"+ref)
+	writeRelicChild(t, fixture.second, fixture.stale, first, nil, relicTitleSet(610001, "Changed at the old place"))
+	second := writeRelicRootNumbered(t, fixture.second, fixture.stale, 2, relicTestPartNumbered(2))
+	if _, err := fixture.second.Sync(ctx, fixture.stale); err != nil {
+		t.Fatal(err)
+	}
+	return []string{first.Record.State.RelicID, second.Record.State.RelicID}
+}
+
+// assertSameRelics requires the two places to hold the same relic refs, name
+// for name and commit for commit, and at least one.
+func assertSameRelics(t *testing.T, fixture moveFixture) {
+	t.Helper()
+	source, destination := refListing(t, fixture.origin, relicRefPrefix), refListing(t, fixture.tasks, relicRefPrefix)
+	if source != destination || source == "" {
+		t.Fatalf("relic refs differ:\norigin: %s\ntasks:  %s", source, destination)
+	}
+}
+
+// Moving the tasks moves the relics: the new place ends holding every relic
+// the old place does, at the same commits, including a change this checkout
+// had not fetched, and the verification counts them.
+func TestMoveTasksCarriesRelics(t *testing.T) {
+	t.Parallel()
+	for _, objectFormat := range []string{testrepo.FormatSHA1, testrepo.FormatSHA256} {
+		t.Run(objectFormat, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			fixture := newMoveFixture(t, objectFormat)
+			moveRelics(t, fixture)
+			result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
+			if err != nil {
+				t.Fatalf("MoveTasks() = %v", err)
+			}
+			if !result.Verified || result.Relics != 2 || result.RelicsIdentical != 2 || result.RelicsCarried != 0 {
+				t.Fatalf("MoveTasks() result = %+v, want two identical relics, verified", result)
+			}
+			assertSameRelics(t, fixture)
+			assertSameRefs(t, fixture)
+		})
+	}
+}
+
+// A relic change a teammate on the old settings publishes to the old place
+// while one move is under way, before the mark, reaches the new place in that
+// same run.
+func TestMoveTasksCarriesARelicPublishedBeforeTheMarkInTheSameRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newMoveFixture(t, testrepo.FormatSHA1)
+	relics := moveRelics(t, fixture)
+	fixture.first.moveStepHook = func(at string) error {
+		if at != "mark" {
+			return nil
+		}
+		tip, err := fixture.second.GetRelic(ctx, fixture.stale, relics[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeRelicChild(t, fixture.second, fixture.stale, tip, nil, relicTitleSet(610002, "Changed while the move runs"))
+		if _, err := fixture.second.Sync(ctx, fixture.stale); err != nil {
+			t.Fatalf("teammate sync before the mark = %v, want it published to the old place", err)
+		}
+		return nil
+	}
+	result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
+	if err != nil {
+		t.Fatalf("MoveTasks() = %v, want the teammate's relic change carried across", err)
+	}
+	if !result.Verified || result.Relics != 2 || result.RelicsIdentical != 2 {
+		t.Fatalf("MoveTasks() result = %+v, want two identical relics", result)
+	}
+	head := syncGit(t, fixture.origin, "rev-parse", relicRef(relics[0]))
+	if got := syncGit(t, fixture.tasks, "rev-parse", relicRef(relics[0])); got != head {
+		t.Fatalf("tasks holds %s at %s, want the teammate's change %s", relics[0], got, head)
+	}
+	assertSameRelics(t, fixture)
+	assertOriginMarked(t, fixture)
+}
+
+// A new place that lacks a relic the old place holds fails the verification,
+// naming the relic, and a rerun puts it back.
+func TestMoveVerificationNamesARelicTheNewPlaceLacks(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newMoveFixture(t, testrepo.FormatSHA1)
+	relics := moveRelics(t, fixture)
+	fixture.first.moveStepHook = func(at string) error {
+		if at == "verify" {
+			syncGit(t, fixture.tasks, "update-ref", "-d", relicRef(relics[1]))
+		}
+		return nil
+	}
+	result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
+	fixture.first.moveStepHook = nil
+	want := "tasks does not hold everything origin holds: relic " + relics[1] + " (lacks 1 change(s)); run workbook move-tasks again"
+	if core.CategoryOf(err) != core.CategoryConflict || err == nil || !strings.Contains(err.Error(), want) || result.Verified {
+		t.Fatalf("MoveTasks() with a relic missing at the new place = (%+v, %v), want the verification to fail with %q", result, err, want)
+	}
+	result, err = fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
+	if err != nil || !result.Verified || result.Relics != 2 {
+		t.Fatalf("MoveTasks() after the loss = (%+v, %v), want it put back and verified", result, err)
+	}
+	assertSameRelics(t, fixture)
+}

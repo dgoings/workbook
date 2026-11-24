@@ -255,6 +255,10 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 	fmt.Fprintf(stdout, "Moved:\t%s (%s)\t->\t%s (%s)\n", result.From.Remote, result.From.URL, result.To.Remote, result.To.URL)
 	fmt.Fprintf(stdout, "Tasks:\t%d\t(%d at the same commit, %d holding every operation under other commits)\n",
 		result.Tasks, result.Identical, result.Carried)
+	if result.Relics > 0 {
+		fmt.Fprintf(stdout, "Relics:\t%d\t(%d at the same commit, %d holding every operation under other commits or parked in this checkout)\n",
+			result.Relics, result.RelicsIdentical, result.RelicsCarried)
+	}
 	switch result.Marked {
 	case "marked":
 		fmt.Fprintf(stdout, "Marked:\t%s\t(checkouts still using it are refused and told where the tasks went)\n", result.From.Remote)
