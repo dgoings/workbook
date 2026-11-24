@@ -2014,6 +2014,55 @@ with the command's own output, and the command makes its change and exits `0`.
 With a watcher running, a conflict the watcher met is reported by the next
 command that hands it a change, with the three texts read from this checkout.
 
+### The relic index
+
+`relic list`, `relic show` and `relic export` answer from the relics in the
+SQLite cache at `<git-common-dir>/workbook/cache.sqlite`, the same disposable
+cache task reads use, and never from a copy of a body: a body is read from
+Git by its object ID when it is shown or exported. Before answering, a relic
+read brings the cache up to the relic refs, reading from Git only the relics
+that changed since, so a change made in another clone, worktree or process is
+seen without a rebuild. `relic create`, `update`, `delete` and `restore` read
+the relic from Git, as they always did. See
+[SQLite projection](architecture.md#sqlite-projection) for what the cache
+holds.
+
+`workbook rebuild` indexes every relic into the new cache beside the tasks
+and counts them. Alice, in her clone, after the session above:
+
+```sh
+workbook rebuild --json | jq -c '.data | {taskCount, relicCount}'
+workbook rebuild | sed "s|$PWD/||"
+```
+
+```text
+{"taskCount":1,"relicCount":3}
+Rebuilt 1 task(s) and 3 relic(s) at .git/workbook/cache.sqlite.
+```
+
+With `--json` the result has `relicCount` beside `taskCount` and `cachePath`.
+The cache can be deleted at any time. The next relic read builds it again from
+the refs and answers as before:
+
+```sh
+rm .git/workbook/cache.sqlite
+workbook relic list
+```
+
+```text
+WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	2 parts	Task archive compaction, second draft
+WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	0 parts	Release checklist
+WB-R-01M87F17QTWKQKT6MZWX54HFY8	plan	3 parts	Task archive compaction, second draft
+```
+
+A task command that finds the cache missing rebuilds the task rows only, and
+the relic rows wait for the first relic read. A relic the cache cannot hold,
+one that is damaged or was written by a newer Workbook, is read from Git on
+every read, with the same answer and the same error as before the index
+existed. A relic read never fails because of the cache: if the cache cannot
+be built or read, as when a damaged task ref stops the rebuild, relic reads
+answer from Git.
+
 ### Relic JSON results
 
 Every relic command takes `--json` and uses the result and error envelopes
@@ -3094,8 +3143,8 @@ SQLite remains a disposable read projection, not a second durability boundary.
 If a successful mutation includes a `projection-update-failed` warning, the Git
 mutation succeeded but the local projection could not be advanced. Subsequent
 reads may repair the affected row; `workbook rebuild` recreates the projection
-from the canonical Git refs when recovery is needed and reports its task count
-and cache path.
+from the canonical Git refs when recovery is needed and reports its task count,
+its relic count and the cache path; see [The relic index](#the-relic-index).
 
 ## Explicit task sharing
 

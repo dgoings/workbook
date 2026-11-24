@@ -1434,6 +1434,68 @@ reads are not serialized behind writes.
 The advice to run `workbook rebuild` is reserved for a cache SQLite cannot read
 or write.
 
+**Relics.** The same cache holds relics, in four tables of their own:
+
+| Table | One row per | Holds |
+| --- | --- | --- |
+| `relics` | relic | the head commit it was read from, title, type, author, times, deleted, and `part_count`, the number of part rows it must have |
+| `relic_properties` | property | the name and the stored JSON value |
+| `relic_parts` | part | order, type, position, removed, the `fields.json` object ID and bytes, and the body's format, version, size and `body_object` |
+| `relic_operations` | recorded operation | commit, place in the chain, operation ID, actor, wall time, type, the part it names and its payload |
+
+Body bytes are never copied into the cache. A part row holds the ID of the
+`body` blob in the relic's commit tree, and a command that shows a body reads
+it from Git by that ID, once per body. One relic's ref, its tree and its part
+rows, from the reference's session:
+
+```text
+refs/workbook/relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX ──> commit
+  tree
+   ├── operation.json, state.json, links.json      (read into relics, relic_properties, relic_operations)
+   └── parts/01M87F0T8ZACFWH3F27EK4CYVH/
+        ├── fields.json                             (bytes copied into relic_parts.fields)
+        └── body   ebf87e493debb69e0f4432b1196a964a220a41b2   (only its ID, in relic_parts.body_object)
+```
+
+```text
+part_id|type|body_format|body_bytes|body_version|body_object
+01M87F0T8ZACFWH3F27EK4CYVH|section|md|203|01M87F283AZ3GZ7ZW9GZKM2RK9|ebf87e493debb69e0f4432b1196a964a220a41b2
+01M87F11V42NP3MEYSJ017ZDDA|section||||
+01M87F0T8ZDXPZV8WNS006CBKV|decision||||
+```
+
+`relic list`, `relic show` and `relic export` answer from these tables. Each
+of them first makes one relic pass, as a task read refreshes the task rows: it
+reads every row's head and part count, lists the relic refs once, and reads
+from Git only the relics whose row is missing, names another head, or does not
+have as many part rows as `part_count` says, which only a write cut short or a
+damaged cache leaves. A changed relic's re-read reuses the fields bytes its
+old rows hold by object ID and reads its operation chain from the commit the
+rows end at. One transaction then writes the changed relics, each with a
+compare-and-swap on the head its row had when the pass began. A row another
+writer moved meanwhile is left as that writer left it, and the read answers
+that relic from the pass's own Git read, as the third line of the table above
+does for a task. A row whose ref is gone is deleted.
+
+A relic the index cannot hold, damaged or written by a newer Workbook, gets
+no row, and any row it had is deleted, so a verdict is never cached. Such a
+relic is read from Git on every read, with the same answers and errors as
+without an index. A relic read never fails because of the index: when the
+pass cannot run, because a damaged task tip stops the rebuild a missing cache
+needs or because SQLite refuses the cache, the read answers every relic from
+Git. Relic mutations always read the relic from Git and never fold onto a
+cached row; they do not warm the index, so the next read reads that relic
+once.
+
+Only relic reads and `workbook rebuild` read relic refs. `list`, `next`, the
+board and the other task paths read none, and neither does the
+automatic rebuild a missing or outdated cache triggers: after a cache loss the
+relic tables stay empty until the first relic read, which finds every relic
+changed and indexes them all. `workbook rebuild` indexes every relic into the
+new cache before installing it and reports the count as `relicCount`. How long
+that first pass takes on a fresh clone with many relics is not measured yet. A
+relic benchmark is planned, and nothing here promises a time.
+
 The cache can be deleted at any time and rebuilt entirely from Workbook refs.
 Semantic validation results live in a separate `validation.sqlite` beside it, so
 a validator-version bump does not force a projection rebuild and a long

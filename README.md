@@ -266,8 +266,9 @@ Workbook separates its data model, transport, and query engine:
   `refs/workbook/`, synchronized explicitly and only with `origin`. Task state
   never touches the checked-out code branch.
 - **SQLite projection** — a disposable materialized view accelerates reads and
-  filtering; it can be deleted at any time and rebuilt entirely from Git refs,
-  which remain canonical.
+  filtering of tasks and relics; it can be deleted at any time and rebuilt
+  entirely from Git refs, which remain canonical. It holds no relic body text:
+  a body is read from Git by its object ID when it is shown.
 
 [docs/architecture.md](docs/architecture.md) covers the storage model in
 detail: ref layout, operation packs, concurrency and synchronization

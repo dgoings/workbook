@@ -70,7 +70,7 @@ with a `relic-over-limit` warning, and an edit to a part removed elsewhere
 gives `relic-edit-on-removed-part`. A relic at the old place that a move
 cannot carry leaves the move unverified, so `--clean-up` deletes nothing. The
 watcher's status document is now version 2; a command does not hand a change
-to an older watcher. Relics are not in the SQLite index or on the board, and
+to an older watcher. Relics are not on the board, and
 there are no links, schemas, history or diff commands, retiring or compaction
 for them yet.
 
@@ -84,7 +84,20 @@ such work exists unless `--discard-unpublished` is given. In a checkout with
 no tasks remote to check against, which a local-only project is,
 `--no-backup` is refused with `--discard-unpublished` or without it. A
 Workbook from before relics, v0.6.1 included, works beside them and leaves
-the relics at a remote alone. See
+the relics at a remote alone.
+
+Relic reads are served from the SQLite cache. `relic list`, `relic show` and
+`relic export` answer from four new relic tables, refreshing only the relics
+whose ref changed since, so a change made in another clone or worktree is
+seen without a rebuild. The cache holds each body's object ID, never its
+bytes; a body is read from Git when it is shown. A relic the cache cannot
+hold, damaged or written by a newer Workbook, is read from Git as before, and
+a relic read answers from Git when the cache cannot be built at all. Task
+commands read no relic, and the automatic rebuild a missing cache triggers
+leaves the relic tables to the first relic read. `workbook rebuild` indexes
+relics too: its text line now reads `Rebuilt <n> task(s) and <m> relic(s) at
+<path>.`, and its JSON gains `relicCount`. The cache's schema changed, so the
+first command run by this build replaces an older cache. See
 [Relics](docs/reference.md#relics) and
 [Relic refs](docs/architecture.md#relic-refs).
 

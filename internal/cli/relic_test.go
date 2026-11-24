@@ -646,6 +646,21 @@ func TestReferenceDocumentsSharedRelics(t *testing.T) {
 	if versions := docSection(repositoryDoc(t, "docs", "architecture.md"), "### Mixed Workbook versions"); !strings.Contains(versions, "relic") {
 		t.Error("the architecture's \"### Mixed Workbook versions\" section does not say what an older Workbook does with relics")
 	}
+
+	// The relic index: rebuild counts relics, and the architecture says what
+	// the index holds and that a body's bytes stay in Git.
+	if strings.Contains(repositoryDoc(t, "docs", "reference.md"), "`workbook rebuild` reads none") {
+		t.Error("the reference still says workbook rebuild reads no relic")
+	}
+	if !strings.Contains(reference, "relicCount") || !strings.Contains(reference, "Rebuilt") {
+		t.Error("the reference's relic section does not show what workbook rebuild reports about relics")
+	}
+	projection := docSection(repositoryDoc(t, "docs", "architecture.md"), "## SQLite projection")
+	for _, required := range []string{"relic_parts", "body_object", "never copied"} {
+		if !strings.Contains(projection, required) {
+			t.Errorf("the architecture's SQLite projection section is missing %q", required)
+		}
+	}
 }
 
 // groupedDigits writes a count as the reference does: digits, with a comma
