@@ -25,10 +25,11 @@ const handlerDeadline = 5 * time.Second
 // fetch therefore still answers, reporting a stale lastSyncAt, and a command
 // falls back on the staleness rule rather than on a timeout.
 type server struct {
-	listener  net.Listener
-	snapshot  *atomic.Pointer[Status]
-	conflicts *conflictSet
-	nudges    chan struct{}
+	listener       net.Listener
+	snapshot       *atomic.Pointer[Status]
+	conflicts      *conflictSet[ConflictEntry]
+	relicConflicts *conflictSet[RelicConflictEntry]
+	nudges         chan struct{}
 }
 
 // bind claims this repository's socket, refusing to start when another watcher
@@ -112,6 +113,9 @@ func (s *server) handle(_ context.Context, conn net.Conn) {
 	case message.Nudge != nil:
 		s.wake()
 		s.reply(conn, response{OK: true})
+	case message.Ack != nil && message.Ack.RelicID != "":
+		s.relicConflicts.acknowledge(message.Ack.RelicID)
+		s.reply(conn, response{OK: true})
 	case message.Ack != nil:
 		s.conflicts.acknowledge(message.Ack.TaskID)
 		s.reply(conn, response{OK: true})
@@ -120,13 +124,13 @@ func (s *server) handle(_ context.Context, conn net.Conn) {
 	}
 }
 
-// status composes the timing snapshot with the live conflict set, so an
+// status composes the timing snapshot with the live conflict sets, so an
 // acknowledgement is visible immediately rather than at the next publish. The
-// set is bounded on the way out, because an answer the client refuses would
-// leave this watcher unusable and its conflicts undrainable.
+// sets are bounded on the way out, together, because an answer the client
+// refuses would leave this watcher unusable and its conflicts undrainable.
 func (s *server) status() *Status {
 	current := *s.snapshot.Load()
-	current.Conflicts = boundConflicts(s.conflicts.list())
+	current.Conflicts, current.RelicConflicts = boundStatusConflicts(s.conflicts.list(), s.relicConflicts.list())
 	return &current
 }
 

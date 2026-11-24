@@ -206,7 +206,7 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 		session.report.Detail = "automatic synchronization is disabled"
 		return session, nil
 	}
-	session.probeWatcher()
+	session.probeWatcher(ctx)
 	return session, nil
 }
 
@@ -217,7 +217,7 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 // the ordinary case. With none running the whole probe is one os.ReadFile
 // returning ENOENT, which is what keeps an unwatched repository's behavior
 // indistinguishable from before watchers existed.
-func (session *taskSession) probeWatcher() {
+func (session *taskSession) probeWatcher(ctx context.Context) {
 	client, err := syncloop.Dial(session.repository.CommonGitDir, watcherProbeDeadline)
 	if err != nil {
 		return
@@ -234,6 +234,18 @@ func (session *taskSession) probeWatcher() {
 	// fetch's entire conflict list is reported.
 	for _, entry := range status.Conflicts {
 		session.conflicts = append(session.conflicts, entry.Conflict)
+	}
+	// Its relic conflicts too, with each body read from this clone as an
+	// inline fetch's are: the watcher keeps no body text. Its relic warnings
+	// are not carried; they were said on the watcher's terminal.
+	if len(status.RelicConflicts) > 0 {
+		var fetched gitstore.SyncResult
+		for _, entry := range status.RelicConflicts {
+			fetched.RelicConflicts = append(fetched.RelicConflicts, entry.RelicConflict)
+		}
+		session.relicConflicts, session.relicWarnings = relicReport(ctx, session.repository, fetched)
+		session.report.relicConflicts = session.relicConflicts
+		session.report.relicWarnings = session.relicWarnings
 	}
 }
 
@@ -260,6 +272,19 @@ func (session *taskSession) acknowledge(conflict core.Conflict) {
 	}
 	defer client.Close()
 	_ = client.Acknowledge(conflict.TaskID)
+}
+
+// acknowledgeRelic is acknowledge for a relic's conflict.
+func (session *taskSession) acknowledgeRelic(conflict core.RelicConflict) {
+	if !session.deferred {
+		return
+	}
+	client, err := syncloop.Dial(session.repository.CommonGitDir, watcherProbeDeadline)
+	if err != nil {
+		return
+	}
+	defer client.Close()
+	_ = client.AcknowledgeRelic(conflict.RelicID)
 }
 
 // fetchBefore refreshes shared task refs so the mutation that follows applies

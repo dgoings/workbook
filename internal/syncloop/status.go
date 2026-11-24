@@ -16,8 +16,11 @@ const (
 	// StatusFormat and StatusVersion name the status document a watcher serves.
 	// Both durable wire formats in this package are versioned from their first
 	// release so a newer CLI can recognize an older watcher rather than guess.
+	//
+	// Version 2 is the first watcher that shares relics. A command never hands
+	// a relic change to a version 1 watcher, which would not push it.
 	StatusFormat  = "workbook.watcher-status"
-	StatusVersion = 1
+	StatusVersion = 2
 
 	// minimumStaleAfter floors the staleness threshold. A very short interval
 	// must not make a healthy watcher look dead to a command that arrives
@@ -38,6 +41,10 @@ type Status struct {
 	LastSyncOK bool            `json:"lastSyncOk"`
 	LastError  string          `json:"lastSyncError,omitempty"`
 	Conflicts  []ConflictEntry `json:"conflicts"`
+	// RelicConflicts is Conflicts for relics: each relic whose replay the
+	// watcher stopped and no command has reported yet. It shares the conflict
+	// budget, so a status carrying both still fits what a client reads.
+	RelicConflicts []RelicConflictEntry `json:"relicConflicts,omitempty"`
 	// IgnoredRefs names the refs under origin's task namespace the last
 	// synchronization skipped. It is the set that synchronization observed
 	// rather than an accumulating memory: the tracking mirror is pruned against
@@ -81,7 +88,33 @@ func (s Status) Trustworthy(now time.Time) bool {
 	return now.Sub(s.LastSyncAt) <= s.StaleAfter()
 }
 
-// conflictSet is the watcher's memory of conflicts no command has reported.
+// RelicConflictEntry is ConflictEntry for a relic. Head is the relic's
+// canonical tip when the conflict was recorded. The entry carries no body
+// text: a command that reports it reads the bodies from this clone itself.
+type RelicConflictEntry struct {
+	core.RelicConflict
+	Head string `json:"head"`
+}
+
+// conflictRecord is what conflictSet needs of an entry: the record it names,
+// the tip it was recorded against, and the kind of conflict it is.
+type conflictRecord interface {
+	ConflictEntry | RelicConflictEntry
+	recordID() string
+	recordedHead() string
+	kind() string
+}
+
+func (e ConflictEntry) recordID() string     { return e.TaskID }
+func (e ConflictEntry) recordedHead() string { return e.Head }
+func (e ConflictEntry) kind() string         { return string(e.Type) }
+
+func (e RelicConflictEntry) recordID() string     { return e.RelicID }
+func (e RelicConflictEntry) recordedHead() string { return e.Head }
+func (e RelicConflictEntry) kind() string         { return string(e.Type) }
+
+// conflictSet is the watcher's memory of conflicts no command has reported,
+// one set for tasks and one for relics, each keyed by the record it names.
 //
 // The generated guidelines used to promise that no conflict state is kept
 // between invocations, which held while the fetch that dropped operations and
@@ -91,70 +124,70 @@ func (s Status) Trustworthy(now time.Time) bool {
 //
 // Its mutex is held only for map operations and never across Git or network
 // work, so the request handler can read it while a synchronization is blocked.
-type conflictSet struct {
+type conflictSet[E conflictRecord] struct {
 	mu      sync.Mutex
-	entries map[string]ConflictEntry
+	entries map[string]E
 }
 
-func newConflictSet() *conflictSet {
-	return &conflictSet{entries: make(map[string]ConflictEntry)}
+func newConflictSet[E conflictRecord]() *conflictSet[E] {
+	return &conflictSet[E]{entries: make(map[string]E)}
 }
 
 // add records a conflict and reports whether it was new, so the watcher
 // announces each one to its terminal exactly once.
-func (c *conflictSet) add(entry ConflictEntry) bool {
+func (c *conflictSet[E]) add(entry E) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	existing, found := c.entries[entry.TaskID]
-	if found && existing.Head == entry.Head && existing.Type == entry.Type {
+	existing, found := c.entries[entry.recordID()]
+	if found && existing.recordedHead() == entry.recordedHead() && existing.kind() == entry.kind() {
 		return false
 	}
-	c.entries[entry.TaskID] = entry
+	c.entries[entry.recordID()] = entry
 	return true
 }
 
 // acknowledge drops the entry a command just reported, reproducing the one-shot
 // semantics of the inline gate: the identical retry then proceeds.
-func (c *conflictSet) acknowledge(taskID string) bool {
+func (c *conflictSet[E]) acknowledge(id string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, found := c.entries[taskID]; !found {
+	if _, found := c.entries[id]; !found {
 		return false
 	}
-	delete(c.entries, taskID)
+	delete(c.entries, id)
 	return true
 }
 
-// heads returns the task IDs and recorded tips, for expiry.
-func (c *conflictSet) heads() map[string]string {
+// heads returns the record IDs and recorded tips, for expiry.
+func (c *conflictSet[E]) heads() map[string]string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	heads := make(map[string]string, len(c.entries))
-	for taskID, entry := range c.entries {
-		heads[taskID] = entry.Head
+	for id, entry := range c.entries {
+		heads[id] = entry.recordedHead()
 	}
 	return heads
 }
 
-// expire drops entries whose task has moved past the recorded tip. It retires
-// conflicts on tasks nobody returns to, and costs nothing beyond the ref reads
-// the watcher already performs.
-func (c *conflictSet) expire(moved []string) {
+// expire drops entries whose record has moved past the recorded tip. It
+// retires conflicts on records nobody returns to, and costs nothing beyond the
+// ref reads the watcher already performs.
+func (c *conflictSet[E]) expire(moved []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, taskID := range moved {
-		delete(c.entries, taskID)
+	for _, id := range moved {
+		delete(c.entries, id)
 	}
 }
 
-func (c *conflictSet) list() []ConflictEntry {
+func (c *conflictSet[E]) list() []E {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entries := make([]ConflictEntry, 0, len(c.entries))
+	entries := make([]E, 0, len(c.entries))
 	for _, entry := range c.entries {
 		entries = append(entries, entry)
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].TaskID < entries[j].TaskID })
+	sort.Slice(entries, func(i, j int) bool { return entries[i].recordID() < entries[j].recordID() })
 	return entries
 }
 
@@ -170,19 +203,36 @@ func (c *conflictSet) list() []ConflictEntry {
 // way. The prefix is the same one every time, because list sorts by task ID, so
 // the conflicts that are visible stay visible until they are acknowledged.
 func boundConflicts(entries []ConflictEntry) []ConflictEntry {
-	total := 0
+	bounded, _ := boundConflictEntries(entries, 0)
+	return bounded
+}
+
+// boundStatusConflicts bounds the task and relic conflicts of one status
+// together, tasks first: relic conflicts are served from what the task
+// conflicts left of maxConflictBytes.
+func boundStatusConflicts(tasks []ConflictEntry, relics []RelicConflictEntry) ([]ConflictEntry, []RelicConflictEntry) {
+	tasks, used := boundConflictEntries(tasks, 0)
+	relics, _ = boundConflictEntries(relics, used)
+	return tasks, relics
+}
+
+// boundConflictEntries keeps the longest prefix of entries whose encoding,
+// added to the used bytes already spent, stays within maxConflictBytes, and
+// returns it with the bytes spent after it.
+func boundConflictEntries[E any](entries []E, used int) ([]E, int) {
+	total := used
 	for index, entry := range entries {
 		encoded, err := json.Marshal(entry)
 		if err != nil {
-			return entries[:index]
+			return entries[:index], total
 		}
 		// The comma that joins this entry to the previous one.
-		total += len(encoded) + 1
-		if total > maxConflictBytes {
-			return entries[:index]
+		if total+len(encoded)+1 > maxConflictBytes {
+			return entries[:index], total
 		}
+		total += len(encoded) + 1
 	}
-	return entries
+	return entries, total
 }
 
 // boundIgnoredRefs drops the entries past maxIgnoredBytes, for the reason
@@ -225,8 +275,10 @@ type nudgeRequest struct {
 	TaskID string `json:"taskId,omitempty"`
 }
 
+// ackRequest names the task, or the relic, whose conflict reached a caller.
 type ackRequest struct {
-	TaskID string `json:"taskId"`
+	TaskID  string `json:"taskId"`
+	RelicID string `json:"relicId,omitempty"`
 }
 
 type response struct {

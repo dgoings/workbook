@@ -45,6 +45,7 @@ type Syncer interface {
 	PruneParkedRefs(context.Context, core.ProjectConfig) (int, error)
 	PruneParkedConfigRefs(context.Context) (int, error)
 	InspectTaskHead(context.Context, core.ProjectConfig, string) (gitstore.TaskHead, bool, error)
+	InspectRelicHead(context.Context, core.ProjectConfig, string) (core.RelicHead, bool, error)
 	HasTasksRemote(context.Context) bool
 	PublicationWarnings() []core.Warning
 }
@@ -94,11 +95,12 @@ func Run(ctx context.Context, options Options) error {
 }
 
 type loop struct {
-	options   Options
-	conflicts *conflictSet
-	snapshot  atomic.Pointer[Status]
-	nudges    chan struct{}
-	started   time.Time
+	options        Options
+	conflicts      *conflictSet[ConflictEntry]
+	relicConflicts *conflictSet[RelicConflictEntry]
+	snapshot       atomic.Pointer[Status]
+	nudges         chan struct{}
+	started        time.Time
 	// reported is the failure last written to Stderr, empty while the last
 	// synchronization succeeded. Only the synchronizing goroutine touches it.
 	reported string
@@ -128,10 +130,11 @@ func newLoop(options Options) (*loop, error) {
 	}
 
 	created := &loop{
-		options:   options,
-		conflicts: newConflictSet(),
-		nudges:    make(chan struct{}, 1),
-		started:   options.Now(),
+		options:        options,
+		conflicts:      newConflictSet[ConflictEntry](),
+		relicConflicts: newConflictSet[RelicConflictEntry](),
+		nudges:         make(chan struct{}, 1),
+		started:        options.Now(),
 	}
 	// A status must exist before the first request arrives. Until the opening
 	// synchronization lands it reports not-yet-synchronized, which reads as
@@ -162,7 +165,13 @@ func (l *loop) run(ctx context.Context) error {
 		return err
 	}
 
-	attendant := &server{listener: listener, snapshot: &l.snapshot, conflicts: l.conflicts, nudges: l.nudges}
+	attendant := &server{
+		listener:       listener,
+		snapshot:       &l.snapshot,
+		conflicts:      l.conflicts,
+		relicConflicts: l.relicConflicts,
+		nudges:         l.nudges,
+	}
 	go attendant.serve(ctx)
 
 	fmt.Fprintf(l.options.Stderr, "%s %s interval, socket %s\n", ReadyPrefix, l.options.Interval, path)
@@ -242,6 +251,13 @@ func (l *loop) syncOnce(ctx context.Context) {
 	result, err := l.options.Repository.Sync(ctx, l.options.Config)
 	conflicts := append(append([]core.Conflict{}, result.Fetch.Conflicts...), result.Push.Conflicts...)
 	l.recordConflicts(ctx, conflicts)
+	l.recordRelicConflicts(ctx, append(append([]core.RelicConflict{}, result.Fetch.RelicConflicts...), result.Push.RelicConflicts...))
+	// A relic warning is said here and nowhere else: unlike a conflict it is
+	// not kept for the next command, and it came from the one replay that
+	// joined the two changes, so it is written once.
+	for _, warning := range append(append([]core.Warning{}, result.Fetch.RelicWarnings...), result.Push.RelicWarnings...) {
+		fmt.Fprintf(l.options.Stderr, "workbook: %s: %s\n", core.DisplayLine(warning.Code), core.DisplayLine(warning.Message))
+	}
 	// A round has no command to carry a warning, so one about a publication
 	// that could not be checked afterwards is written here. Taking them every
 	// round also keeps them from collecting in a long-lived watcher, and from
@@ -276,6 +292,7 @@ func (l *loop) syncOnce(ctx context.Context) {
 		failure = pruneErr
 	}
 	l.expireConflicts(ctx)
+	l.expireRelicConflicts(ctx)
 
 	if l.options.Projection != nil && changedRefs(result) {
 		if refreshErr := l.options.Projection.Refresh(ctx); refreshErr != nil && failure == nil {
@@ -326,6 +343,22 @@ func (l *loop) recordConflicts(ctx context.Context, conflicts []core.Conflict) {
 	}
 }
 
+// recordRelicConflicts is recordConflicts for relics, recorded against each
+// relic's canonical tip. The line names the relic and passes through the
+// control-byte filter, because what a relic holds is written by anyone who
+// can push; it never holds body text.
+func (l *loop) recordRelicConflicts(ctx context.Context, conflicts []core.RelicConflict) {
+	for _, conflict := range conflicts {
+		entry := RelicConflictEntry{RelicConflict: conflict}
+		if head, found, err := l.options.Repository.InspectRelicHead(ctx, l.options.Config, conflict.RelicID); err == nil && found {
+			entry.Head = head.ObjectID
+		}
+		if l.relicConflicts.add(entry) {
+			fmt.Fprintf(l.options.Stderr, "workbook: conflict on %s\n", core.DisplayLine(core.RelicConflictDetail(conflict)))
+		}
+	}
+}
+
 // announceIgnored names each newly skipped ref on the watcher's terminal, for
 // the reason a conflict is announced: the watcher synchronizes with nobody
 // present, and its terminal is the only channel by which a person learns that
@@ -372,6 +405,25 @@ func (l *loop) expireConflicts(ctx context.Context) {
 	l.conflicts.expire(moved)
 }
 
+// expireRelicConflicts is expireConflicts for relics.
+func (l *loop) expireRelicConflicts(ctx context.Context) {
+	recorded := l.relicConflicts.heads()
+	if len(recorded) == 0 {
+		return
+	}
+	moved := make([]string, 0, len(recorded))
+	for relicID, head := range recorded {
+		current, found, err := l.options.Repository.InspectRelicHead(ctx, l.options.Config, relicID)
+		if err != nil {
+			continue
+		}
+		if !found || current.ObjectID != head {
+			moved = append(moved, relicID)
+		}
+	}
+	l.relicConflicts.expire(moved)
+}
+
 func (l *loop) publish(ok bool, message string, ignored []gitstore.IgnoredRef) {
 	l.snapshot.Store(&Status{
 		Format:      StatusFormat,
@@ -393,6 +445,9 @@ func (l *loop) publish(ok bool, message string, ignored []gitstore.IgnoredRef) {
 // the projection refresh. Refresh is about to scale with operation count rather
 // than task count, so running it on a quiet tick would buy nothing and cost
 // increasingly more.
+//
+// A relic that moved does not count. Relic reads bring the relic index up to
+// date themselves when they run, so a refresh here would buy them nothing.
 func changedRefs(result gitstore.SyncRunResult) bool {
 	for _, task := range result.Fetch.Tasks {
 		if task.Status != gitstore.SyncUnchanged {

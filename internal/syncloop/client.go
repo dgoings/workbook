@@ -71,6 +71,12 @@ func (c *Client) Acknowledge(taskID string) error {
 	return err
 }
 
+// AcknowledgeRelic is Acknowledge for a relic's conflict.
+func (c *Client) AcknowledgeRelic(relicID string) error {
+	_, err := c.exchange(request{Ack: &ackRequest{RelicID: relicID}})
+	return err
+}
+
 func (c *Client) Close() error {
 	return c.conn.Close()
 }

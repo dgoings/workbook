@@ -53,6 +53,7 @@ func (session *taskSession) mutateRelic(
 	}
 	service := newRelicService(session.repository, session.config, session.service.Keys, session.service.Actor)
 	if conflict := session.relicConflictFor(ctx, service, target); conflict != nil {
+		session.acknowledgeRelic(*conflict)
 		return core.RelicMutationResult{}, core.RelicConflictError([]core.RelicConflict{*conflict})
 	}
 	result, err := apply(ctx, service)

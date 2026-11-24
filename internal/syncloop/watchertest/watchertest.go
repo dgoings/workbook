@@ -26,14 +26,15 @@ var sequence atomic.Int64
 // Recorder is a fake watcher. It answers with a fixed status and remembers the
 // nudges and acknowledgements it received.
 type Recorder struct {
-	mu       sync.Mutex
-	status   syncloop.Status
-	nudges   []string
-	acks     []string
-	refuse   bool
-	listener net.Listener
-	socket   string
-	stopped  bool
+	mu        sync.Mutex
+	status    syncloop.Status
+	nudges    []string
+	acks      []string
+	relicAcks []string
+	refuse    bool
+	listener  net.Listener
+	socket    string
+	stopped   bool
 }
 
 // Start publishes a watcher for commonGitDir and serves the given status until
@@ -106,6 +107,14 @@ func (r *Recorder) Acknowledgements() []string {
 	return append([]string(nil), r.acks...)
 }
 
+// RelicAcknowledgements lists the relics whose conflicts a command
+// acknowledged.
+func (r *Recorder) RelicAcknowledgements() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.relicAcks...)
+}
+
 func (r *Recorder) Stop() {
 	r.mu.Lock()
 	if r.stopped {
@@ -142,7 +151,8 @@ func (r *Recorder) handle(conn net.Conn) {
 			TaskID string `json:"taskId"`
 		} `json:"nudge"`
 		Ack *struct {
-			TaskID string `json:"taskId"`
+			TaskID  string `json:"taskId"`
+			RelicID string `json:"relicId"`
 		} `json:"ack"`
 	}
 	if err := json.Unmarshal(line, &message); err != nil {
@@ -160,6 +170,8 @@ func (r *Recorder) handle(conn net.Conn) {
 		} else {
 			r.nudges = append(r.nudges, message.Nudge.TaskID)
 		}
+	case message.Ack != nil && message.Ack.RelicID != "":
+		r.relicAcks = append(r.relicAcks, message.Ack.RelicID)
 	case message.Ack != nil:
 		r.acks = append(r.acks, message.Ack.TaskID)
 	}

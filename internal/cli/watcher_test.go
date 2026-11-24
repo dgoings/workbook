@@ -180,6 +180,105 @@ func TestSyncWatchObservesAnotherClonePushWithNoLocalCommand(t *testing.T) {
 	t.Fatalf("watcher never fetched %s into the watching clone", task.ID)
 }
 
+// A relic another clone published arrives with nobody running a command here,
+// as a task does.
+func TestSyncWatchSharesARelicWithNoLocalCommand(t *testing.T) {
+	t.Parallel()
+	first, second := cliSyncRepositories(t)
+	relicID := mustCreateRelic(t, first, "Watched relic", "--type", "spec").Relic.ID
+	published := originRelicHead(t, first, relicID)
+	if published == "" {
+		t.Fatalf("relic create did not publish %s", relicID)
+	}
+
+	startCLIWatcher(t, second, "100ms")
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if localRelicRef(second, relicID) == published {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("watcher never fetched %s into the watching clone", relicID)
+}
+
+// A relic command with a live watcher records its change and hands the push
+// over. The watcher's interval is an hour, so origin only holds the new tip if
+// the nudge delivered it.
+func TestRelicMutationDefersToALiveWatcher(t *testing.T) {
+	t.Parallel()
+	_, second := cliSyncRepositories(t)
+	relicID := mustCreateRelic(t, second, "Deferred relic", "--type", "spec").Relic.ID
+	startCLIWatcher(t, second, "1h")
+
+	envelope := runRelicJSON(t, second, 0, "update", relicID, "--title", "Renamed while watched")
+	if envelope.Sync == nil || envelope.Sync.Status != syncStatusDeferred {
+		t.Fatalf("sync = %+v, want status %q", envelope.Sync, syncStatusDeferred)
+	}
+	if envelope.Sync.PushRelic != nil {
+		t.Fatalf("deferred relic update pushed inline: %+v", envelope.Sync.PushRelic)
+	}
+
+	local := relicHeadOf(t, second, relicID)
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if originRelicHead(t, second, relicID) == local {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("origin never reached the local tip %s for %s", local, relicID)
+}
+
+// A body conflict the watcher met with nobody present reaches the next relic
+// command on that relic, with all three texts, exactly once.
+func TestAWatcherConflictReachesTheNextRelicCommand(t *testing.T) {
+	t.Parallel()
+	const base, theirs, ours = "The original text.\n", "The first clone's text.\n", "The second clone's text.\n"
+	state := newRelicBodyConflict(t, "Contested while watched", base, theirs, ours, "body.md")
+
+	output := startCLIWatcher(t, state.second, "1h")
+	if !strings.Contains(output.String(), "conflict on relic "+state.relicID) {
+		t.Fatalf("the watcher's terminal does not name the relic conflict:\n%s", output.String())
+	}
+
+	stopped := runRelicJSON(t, state.second, 8, "update", state.relicID, "--title", "T")
+	if len(stopped.RelicConflict) != 1 {
+		t.Fatalf("relicConflict = %+v, want one", stopped.RelicConflict)
+	}
+	conflict := stopped.RelicConflict[0]
+	if conflict.RelicID != state.relicID || conflict.Type != core.RelicConflictBody || conflict.Body == nil {
+		t.Fatalf("conflict = %+v, want a body conflict on %s", conflict, state.relicID)
+	}
+	if got := textOf(conflict.Body.Base); got != base {
+		t.Errorf("body.base.text = %q, want %q", got, base)
+	}
+	if got := textOf(&conflict.Body.Ours); got != ours {
+		t.Errorf("body.ours.text = %q, want %q", got, ours)
+	}
+	if got := textOf(&conflict.Body.Theirs); got != theirs {
+		t.Errorf("body.theirs.text = %q, want %q", got, theirs)
+	}
+	if shown := shownRelic(t, state.second, state.relicID); shown.Title == "T" {
+		t.Fatal("the stopped update changed the title")
+	}
+
+	again := runRelicJSON(t, state.second, 0, "update", state.relicID, "--title", "T")
+	if again.Sync == nil || again.Sync.Status != syncStatusDeferred || len(again.RelicConflict) != 0 {
+		t.Fatalf("retry = sync %+v, relicConflict %+v; want deferred with no conflict", again.Sync, again.RelicConflict)
+	}
+}
+
+// localRelicRef is the clone's tip for a relic, or "" when it holds none.
+func localRelicRef(repository, relicID string) string {
+	output, err := exec.Command("git", "-C", repository, "rev-parse", "--verify", "--quiet", relicRef(relicID)).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
 func TestSecondSyncWatchRefusesToStart(t *testing.T) {
 	t.Parallel()
 	_, second := cliSyncRepositories(t)

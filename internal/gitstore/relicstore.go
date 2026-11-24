@@ -132,6 +132,26 @@ func (r *Repository) ListRelicHeads(ctx context.Context, config core.ProjectConf
 	return heads, nil
 }
 
+// InspectRelicHead returns the tip of the exact canonical relic ref, with no
+// prefix resolution and no object read: one `for-each-ref` on that ref. A
+// name that is not a relic ID is refused before any Git process runs.
+func (r *Repository) InspectRelicHead(ctx context.Context, config core.ProjectConfig, relicID string) (core.RelicHead, bool, error) {
+	if err := core.ValidateRelicIDShape(relicID); err != nil {
+		return core.RelicHead{}, false, err
+	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return core.RelicHead{}, false, err
+	}
+	objectID, err := r.relicRefValue(ctx, relicRefPrefix+relicID)
+	if err != nil {
+		return core.RelicHead{}, false, namedRelicError(relicID, err)
+	}
+	if objectID == "" {
+		return core.RelicHead{}, false, nil
+	}
+	return core.RelicHead{RelicID: relicID, ObjectID: objectID}, true, nil
+}
+
 // canonicalRelicHead reads one record of refs/workbook/relics/. Only Workbook
 // writes there, so a ref that does not name one relic of this project, or is
 // symbolic, is corrupt data.

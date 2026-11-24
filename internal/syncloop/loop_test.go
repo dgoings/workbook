@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -332,6 +333,157 @@ func TestWatcherReportsEachConflictToItsTerminalOnce(t *testing.T) {
 	}
 }
 
+// relicTestID builds the canonical ULID relic tests name things with, as the
+// other packages' helpers of the same name do.
+func relicTestID(n int) string {
+	return fmt.Sprintf("01M9A%021d", n)
+}
+
+func relicTestRelicID(n int) string {
+	return core.NewRelicID("WB", relicTestID(600000+n))
+}
+
+// A watcher from the previous release does not push relics, so a command that
+// handed it a relic change would exit as if the change were published.
+func TestStatusFromAnOlderWatcherIsNotTrusted(t *testing.T) {
+	status := Status{
+		Format:     StatusFormat,
+		Version:    1,
+		IntervalMS: 5000,
+		LastSyncAt: time.Now(),
+		LastSyncOK: true,
+	}
+	if status.Trustworthy(time.Now()) {
+		t.Fatal("a version 1 status with a fresh synchronization is trusted")
+	}
+	status.Version = StatusVersion
+	if !status.Trustworthy(time.Now()) {
+		t.Fatalf("a version %d status with a fresh synchronization is not trusted", StatusVersion)
+	}
+}
+
+func relicBodyConflictFor(relicID string) core.RelicConflict {
+	return core.RelicConflict{
+		RelicID:   relicID,
+		Type:      core.RelicConflictBody,
+		Part:      relicTestID(1),
+		Body:      &core.RelicBodyConflict{Ours: core.RelicBodyVersion{Version: "v-ours"}, Theirs: core.RelicBodyVersion{Version: "v-theirs"}},
+		ParkedRef: "refs/workbook/reconciled-relics/" + relicID + "/1",
+	}
+}
+
+func TestRelicConflictEntryExpiresWhenTheRelicHeadMoves(t *testing.T) {
+	relicID := relicTestRelicID(1)
+	syncer := &fakeSyncer{
+		origin:         true,
+		relicHeads:     map[string]string{relicID: "head-1"},
+		relicConflicts: []core.RelicConflict{relicBodyConflictFor(relicID)},
+	}
+	directory, output := startWatcher(t, syncer, func(options *Options) {
+		options.Interval = time.Hour
+		options.Quiet = 10 * time.Millisecond
+	})
+	waitForOutput(t, output, ReadyPrefix)
+	waitForPublished(t, syncer, 1)
+
+	entries := readStatus(t, directory).RelicConflicts
+	if len(entries) != 1 || entries[0].RelicID != relicID || entries[0].Head != "head-1" {
+		t.Fatalf("relic conflicts after the reporting sync = %#v, want one for %s at head-1", entries, relicID)
+	}
+
+	syncer.setRelicConflicts(nil)
+	syncer.setRelicHead(relicID, "head-2")
+	nudge(t, directory)
+	waitForPublished(t, syncer, 2)
+
+	if entries := readStatus(t, directory).RelicConflicts; len(entries) != 0 {
+		t.Fatalf("relic conflicts after the relic head moved = %#v, want none", entries)
+	}
+}
+
+func TestRelicAcknowledgementRemovesOneConflict(t *testing.T) {
+	reported, other := relicTestRelicID(1), relicTestRelicID(2)
+	const taskID = "WB-01K0M6B8A4FTT8C39MXXYTW7D1"
+	syncer := &fakeSyncer{
+		origin:         true,
+		heads:          map[string]string{taskID: "head-1"},
+		conflicts:      []core.Conflict{{TaskID: taskID, Type: core.ConflictDescription, Description: &core.DescriptionConflict{}}},
+		relicHeads:     map[string]string{reported: "head-1", other: "head-1"},
+		relicConflicts: []core.RelicConflict{relicBodyConflictFor(reported), relicBodyConflictFor(other)},
+	}
+	directory, output := startWatcher(t, syncer, func(options *Options) {
+		options.Interval = time.Hour
+	})
+	waitForOutput(t, output, ReadyPrefix)
+	waitForPublished(t, syncer, 1)
+	if entries := readStatus(t, directory).RelicConflicts; len(entries) != 2 {
+		t.Fatalf("relic conflicts = %#v, want two", entries)
+	}
+
+	client, err := Dial(directory, probeDeadline)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	if err := client.AcknowledgeRelic(reported); err != nil {
+		t.Fatalf("AcknowledgeRelic() error = %v", err)
+	}
+	client.Close()
+
+	status := readStatus(t, directory)
+	if len(status.RelicConflicts) != 1 || status.RelicConflicts[0].RelicID != other {
+		t.Fatalf("relic conflicts after acknowledging %s = %#v, want only %s", reported, status.RelicConflicts, other)
+	}
+	if len(status.Conflicts) != 1 || status.Conflicts[0].TaskID != taskID {
+		t.Fatalf("task conflicts after a relic acknowledgement = %#v, want the task's kept", status.Conflicts)
+	}
+}
+
+// A relic conflict, like a task's, is observable to a person only on the
+// watcher's terminal at the moment the watcher meets it, and a warning a
+// watcher's synchronization produced reaches no later command at all. What the
+// lines quote is written by anyone who can push, so they pass through the
+// control-byte filter.
+func TestWatcherReportsEachRelicConflictAndWarningToItsTerminalOnce(t *testing.T) {
+	relicID := relicTestRelicID(1)
+	conflict := relicBodyConflictFor(relicID)
+	conflict.Part = "Hostile \x1b[2J\a part"
+	syncer := &fakeSyncer{
+		origin:         true,
+		relicHeads:     map[string]string{relicID: "head-1"},
+		relicConflicts: []core.RelicConflict{conflict},
+		relicWarnings: []core.Warning{{
+			Code:    core.WarningRelicEditOnRemovedPart,
+			Message: "relic " + relicID + ": part with title \x1b[2J\a was removed here and edited in another clone",
+		}},
+	}
+	directory, output := startWatcher(t, syncer, func(options *Options) {
+		options.Interval = time.Hour
+		options.Quiet = 10 * time.Millisecond
+	})
+	waitForOutput(t, output, ReadyPrefix)
+	waitForOutput(t, output, "conflict on relic "+relicID)
+	waitForOutput(t, output, core.WarningRelicEditOnRemovedPart)
+
+	// The conflict stays on the next synchronization, as a conflict a fetch
+	// keeps meeting would; the warning came from one replay and does not.
+	syncer.setRelicWarnings(nil)
+	nudge(t, directory)
+	waitForPublished(t, syncer, 2)
+
+	written := output.String()
+	if got := strings.Count(written, "conflict on relic "+relicID); got != 1 {
+		t.Fatalf("relic conflict reported %d times, want once:\n%s", got, written)
+	}
+	if got := strings.Count(written, core.WarningRelicEditOnRemovedPart); got != 1 {
+		t.Fatalf("relic warning reported %d times, want once:\n%s", got, written)
+	}
+	for index := 0; index < len(written); index++ {
+		if b := written[index]; b < 0x20 && b != '\t' && b != '\n' {
+			t.Fatalf("the watcher's terminal holds byte %#x at %d: %q", b, index, written)
+		}
+	}
+}
+
 // A failed synchronization reaches the watcher's terminal, which for a board is
 // serve's log: once when it starts failing, again when the failure changes,
 // and once more when it clears. It is not repeated on every tick, which would
@@ -616,6 +768,9 @@ type fakeSyncer struct {
 	lastContextErr error
 	lastActor      string
 	warnings       []core.Warning
+	relicHeads     map[string]string
+	relicConflicts []core.RelicConflict
+	relicWarnings  []core.Warning
 }
 
 func (f *fakeSyncer) PublicationWarnings() []core.Warning {
@@ -635,6 +790,8 @@ func (f *fakeSyncer) Sync(ctx context.Context, _ core.ProjectConfig) (gitstore.S
 	conflicts := append([]core.Conflict{}, f.conflicts...)
 	ignored := append([]gitstore.IgnoredRef{}, f.ignored...)
 	err := f.err
+	relicConflicts := append([]core.RelicConflict{}, f.relicConflicts...)
+	relicWarnings := append([]core.Warning{}, f.relicWarnings...)
 	f.mu.Unlock()
 
 	if blocker != nil {
@@ -647,17 +804,50 @@ func (f *fakeSyncer) Sync(ctx context.Context, _ core.ProjectConfig) (gitstore.S
 	result := gitstore.SyncRunResult{
 		Remote: "origin",
 		Fetch: gitstore.SyncResult{
-			Remote:    "origin",
-			Status:    gitstore.SyncPhaseCompleted,
-			Conflicts: conflicts,
-			Ignored:   ignored,
+			Remote:         "origin",
+			Status:         gitstore.SyncPhaseCompleted,
+			Conflicts:      conflicts,
+			Ignored:        ignored,
+			RelicConflicts: relicConflicts,
+			RelicWarnings:  relicWarnings,
 		},
 		Push: gitstore.SyncResult{Remote: "origin", Status: gitstore.SyncPhaseCompleted},
 	}
 	if len(conflicts) > 0 && err == nil {
 		err = core.ConflictError(conflicts)
 	}
+	if len(relicConflicts) > 0 && err == nil {
+		err = core.RelicConflictError(relicConflicts)
+	}
 	return result, err
+}
+
+func (f *fakeSyncer) InspectRelicHead(_ context.Context, _ core.ProjectConfig, relicID string) (core.RelicHead, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	head, found := f.relicHeads[relicID]
+	if !found {
+		return core.RelicHead{}, false, nil
+	}
+	return core.RelicHead{RelicID: relicID, ObjectID: head}, true, nil
+}
+
+func (f *fakeSyncer) setRelicConflicts(conflicts []core.RelicConflict) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.relicConflicts = conflicts
+}
+
+func (f *fakeSyncer) setRelicWarnings(warnings []core.Warning) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.relicWarnings = warnings
+}
+
+func (f *fakeSyncer) setRelicHead(relicID, head string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.relicHeads[relicID] = head
 }
 
 func (f *fakeSyncer) PruneParkedRefs(context.Context, core.ProjectConfig) (int, error) {
