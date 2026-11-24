@@ -1,7 +1,8 @@
-<!-- workbook:begin generator=4a133bd sha256=7fc29a798fc82ef77945d39769f732e2b133a7d80d18b02e022aa53d807b2d87 -->
+<!-- workbook:begin generator=3d05eac9 sha256=f067f57680da31e6a3494469900532f8d67fd4b0e797549cdfa9cd96961abdc6 -->
 # Workbook guidelines
 
-Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`.
+Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`
+and its relics under `refs/workbook/relics/`.
 Use the `workbook` CLI as the task-state boundary. Never edit Workbook refs,
 the SQLite projection, or `.workbook/config.json` directly.
 
@@ -116,6 +117,48 @@ somebody else, either because you forced it or because two claims raced
 and both were kept. The work was recorded; decide with the other party
 rather than removing their assignment, which Workbook refuses anyway.
 
+## Relics
+
+A relic holds a spec, a plan, a decision record or similar material that is
+longer or more structured than a task. It is made of typed parts, each with
+fields and an optional body. A relic ID is `WB-R-<ULID>` and a task ID
+`WB-<ULID>`. A part is addressed as `<relic>#<part>`, and any unambiguous
+prefix of either ID works. `workbook next`, `workbook list` and the board
+`workbook serve` runs never return relics.
+
+Read the relics linked to a task, one part at a time, and save an edit
+naming the version you read:
+
+```sh
+workbook show <task> --json
+workbook relic list --linked-to <task> --json
+workbook relic show <relic>#<part> --body --json
+workbook relic update <relic> --part <part> --body-file <file> --base <version> --json
+```
+
+`workbook show` lists the task's links in `data.relics`: each entry names
+the `relic`, the `part` it links from (absent for a link from the whole
+relic) and the `rel`, such as `implemented-by`. `workbook relic list
+--linked-to` lists the same relics. `workbook relic show` with a part and
+`--body` carries the body at `data.parts[0].body.text`, or at
+`data.parts[0].body.base64` when it is not text, and its version at
+`data.parts[0].body.version`.
+
+To save, write the whole new body to a file and pass the version you read
+as `--base`. Two edits to the same body are never merged.
+
+A save whose `--base` is no longer the current version exits 6
+(`stale-write`) and writes nothing; repeating the identical command fails
+the same way. A sync that meets another clone's edit of the same body exits
+8 and reports it in the result envelope's `relicConflict` list: an entry of
+`type` `body` whose `body` carries `base`, `ours` and `theirs`, with your
+text kept at `parkedRef`.
+
+On either, read the part again. When your intent is clear, apply your
+change to the current text and save with `--base` set to the current
+version. Otherwise show the user both versions and ask; never save over
+text you have not read.
+
 ## Machine-readable output
 
 Every command accepts `--json` except `serve`. Success is a single compact
@@ -131,9 +174,9 @@ Check the result of every mutation; do not assume it succeeded.
 | 1 | `operational` | read the message; the environment or remote is at fault |
 | 2 | `invalid-invocation` | fix the command line |
 | 3 | `not-initialized` | run `workbook setup` |
-| 4 | `not-found` | use an existing task ID |
+| 4 | `not-found` | use an existing task or relic ID |
 | 5 | `validation` | change the input; it fails the same way on every retry |
-| 6 | `stale-write` | retry the identical command; it will probably succeed |
+| 6 | `stale-write` | retry the identical command; it will probably succeed. A relic save refused for its `--base` needs a fresh read first |
 | 7 | `corrupt-data` | read the message; repair or rebuild before continuing |
 | 8 | `conflict` | read the envelope's `conflict` list, change the input, then retry |
 | 10 | `assigned` | somebody else holds that task; pick another one, or `--force` to share it |

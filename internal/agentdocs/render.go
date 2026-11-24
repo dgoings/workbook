@@ -50,7 +50,8 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary, pr
 	var builder strings.Builder
 
 	builder.WriteString("# Workbook guidelines\n\n")
-	builder.WriteString("Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`.\n")
+	builder.WriteString("Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`\n")
+	builder.WriteString("and its relics under `refs/workbook/relics/`.\n")
 	builder.WriteString("Use the `workbook` CLI as the task-state boundary. Never edit Workbook refs,\n")
 	builder.WriteString("the SQLite projection, or `.workbook/config.json` directly.\n\n")
 
@@ -159,6 +160,8 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary, pr
 	builder.WriteString("and both were kept. The work was recorded; decide with the other party\n")
 	builder.WriteString("rather than removing their assignment, which Workbook refuses anyway.\n\n")
 
+	builder.WriteString(relicGuidelines(keys))
+
 	builder.WriteString("## Machine-readable output\n\n")
 	builder.WriteString("Every command accepts `--json` except `serve`. Success is a single compact\n")
 	builder.WriteString("line: `{\"format\":\"workbook.result\",\"version\":1,\"command\":...,\"data\":...}`.\n")
@@ -175,9 +178,9 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary, pr
 		{core.CategoryOperational, "read the message; the environment or remote is at fault"},
 		{core.CategoryInvocation, "fix the command line"},
 		{core.CategoryNotInitialized, "run `workbook setup`"},
-		{core.CategoryNotFound, "use an existing task ID"},
+		{core.CategoryNotFound, "use an existing task or relic ID"},
 		{core.CategoryValidation, "change the input; it fails the same way on every retry"},
-		{core.CategoryStaleWrite, "retry the identical command; it will probably succeed"},
+		{core.CategoryStaleWrite, "retry the identical command; it will probably succeed. A relic save refused for its `--base` needs a fresh read first"},
 		{core.CategoryCorruptData, "read the message; repair or rebuild before continuing"},
 		{core.CategoryConflict, "read the envelope's `conflict` list, change the input, then retry"},
 		{core.CategoryAssigned, "somebody else holds that task; pick another one, or `--force` to share it"},
@@ -243,6 +246,53 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary, pr
 	builder.WriteString("check it with `workbook docs status`.\n")
 
 	return builder.String()
+}
+
+// relicGuidelines renders the Relics section: what a relic is, the commands
+// that find the relics linked to a task, read one part and save an edit to it,
+// and what to do when that save meets another edit. The IDs are shown under
+// the project's current key, the one a new relic is minted under.
+//
+// The fenced block is run as written by TestGuidelinesRelicWorkflowRunsAsWritten
+// in internal/cli, and every command and option in it is held to the command
+// schemas there, so the block cannot name a command or an option that does not
+// exist.
+func relicGuidelines(keys core.KeySet) string {
+	key := keys.Current()
+	return "## Relics\n\n" +
+		"A relic holds a spec, a plan, a decision record or similar material that is\n" +
+		"longer or more structured than a task. It is made of typed parts, each with\n" +
+		"fields and an optional body. A relic ID is `" + key + "-R-<ULID>` and a task ID\n" +
+		"`" + key + "-<ULID>`. A part is addressed as `<relic>#<part>`, and any unambiguous\n" +
+		"prefix of either ID works. `workbook next`, `workbook list` and the board\n" +
+		"`workbook serve` runs never return relics.\n\n" +
+		"Read the relics linked to a task, one part at a time, and save an edit\n" +
+		"naming the version you read:\n\n" +
+		"```sh\n" +
+		"workbook show <task> --json\n" +
+		"workbook relic list --linked-to <task> --json\n" +
+		"workbook relic show <relic>#<part> --body --json\n" +
+		"workbook relic update <relic> --part <part> --body-file <file> --base <version> --json\n" +
+		"```\n\n" +
+		"`workbook show` lists the task's links in `data.relics`: each entry names\n" +
+		"the `relic`, the `part` it links from (absent for a link from the whole\n" +
+		"relic) and the `rel`, such as `implemented-by`. `workbook relic list\n" +
+		"--linked-to` lists the same relics. `workbook relic show` with a part and\n" +
+		"`--body` carries the body at `data.parts[0].body.text`, or at\n" +
+		"`data.parts[0].body.base64` when it is not text, and its version at\n" +
+		"`data.parts[0].body.version`.\n\n" +
+		"To save, write the whole new body to a file and pass the version you read\n" +
+		"as `--base`. Two edits to the same body are never merged.\n\n" +
+		"A save whose `--base` is no longer the current version exits 6\n" +
+		"(`stale-write`) and writes nothing; repeating the identical command fails\n" +
+		"the same way. A sync that meets another clone's edit of the same body exits\n" +
+		"8 and reports it in the result envelope's `relicConflict` list: an entry of\n" +
+		"`type` `body` whose `body` carries `base`, `ours` and `theirs`, with your\n" +
+		"text kept at `parkedRef`.\n\n" +
+		"On either, read the part again. When your intent is clear, apply your\n" +
+		"change to the current text and save with `--base` set to the current\n" +
+		"version. Otherwise show the user both versions and ask; never save over\n" +
+		"text you have not read.\n\n"
 }
 
 // authoredText renders a value somebody wrote for prose inside a generated

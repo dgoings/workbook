@@ -28,6 +28,12 @@ SQLite projections, or configuration directly.
    entry and keep its `data.title`; never invent one. Exit code 4 there is not
    the step 3 stop: this clone cannot resolve that one dependency, so name it
    by ID, say it is unresolved, and keep working rather than stopping.
+7. When `data.relics` is not empty, read each linked part with
+   `workbook relic show <relic>#<part> --body --json` before editing files, and
+   treat it as part of the task's context. Read the part the link names, not
+   the whole relic; an entry with no `part` links from the whole relic, so run
+   `workbook relic show <relic> --json` and read the parts that bear on the
+   task.
 
 ## IDs are for commands, titles are for humans
 
@@ -52,6 +58,38 @@ active keys; without it, a task is minted under the current key.
   resolved through step 6 above.
 - Mention an ID only when it adds something: disambiguating similarly titled
   tasks, or giving a human a command to run themselves.
+
+## Relics
+
+A relic holds a spec, a plan, a decision record or similar material, made of
+typed parts with fields and an optional body. A relic ID is `<KEY>-R-<ULID>`
+and a task ID `<KEY>-<ULID>`; a part is addressed as `<relic>#<part>`, and any
+unambiguous prefix of either ID works. `workbook next` and `workbook list`
+never return relics.
+
+Read a part with `workbook relic show <relic>#<part> --body --json`: the body
+is at `data.parts[0].body.text` (`base64` when it is not text) and its version
+at `data.parts[0].body.version`. To change it, write the whole new body to a
+file and save it naming the version you read:
+
+```sh
+workbook relic update <relic> --part <part> --body-file <file> --base <version> --json
+```
+
+Two edits to the same body are never merged:
+
+- A save whose `--base` is no longer the current version exits 6
+  (`stale-write`) and writes nothing. Repeating the identical command fails
+  the same way.
+- A sync that meets another clone's edit of the same body exits 8 and reports
+  it in the result envelope's `relicConflict` list, an entry of `type` `body`
+  whose `body` carries `base`, `ours` and `theirs`; your text is kept at
+  `parkedRef`.
+
+On either, read the part again. When your intent is clear, apply your change
+to the current text and save with `--base` set to the current version.
+Otherwise show the user both versions and ask; never save over text you have
+not read.
 
 ## Statuses belong to the project
 
@@ -159,4 +197,5 @@ asked, or to reconcile after exit code 6.
   reporting a blocker or a failure.
 - Resolve a dependency ID with `workbook show` before naming the blocker.
 - Check every JSON command result; do not assume a mutation succeeded.
+- Save a relic body only with the `--base` you read.
 - Do not claim that Workbook creates branches, pull requests, or merges code.

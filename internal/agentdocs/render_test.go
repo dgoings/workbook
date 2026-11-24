@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/skills"
 )
 
 func testProject() core.ProjectConfig {
@@ -707,5 +708,122 @@ func TestSkillDocumentRendersFrontmatterOnLineOne(t *testing.T) {
 
 	if !strings.HasPrefix(contents, "---\n") {
 		t.Fatalf("rendered skill does not begin with frontmatter:\n%s", contents)
+	}
+}
+
+// defaultRelicSection is the relic guidance a project keyed WB gets, pinned
+// byte for byte. Its command block is also what
+// TestGuidelinesRelicWorkflowRunsAsWritten in internal/cli runs, so a change
+// here that breaks the workflow fails there as well.
+const defaultRelicSection = "## Relics\n\n" +
+	"A relic holds a spec, a plan, a decision record or similar material that is\n" +
+	"longer or more structured than a task. It is made of typed parts, each with\n" +
+	"fields and an optional body. A relic ID is `WB-R-<ULID>` and a task ID\n" +
+	"`WB-<ULID>`. A part is addressed as `<relic>#<part>`, and any unambiguous\n" +
+	"prefix of either ID works. `workbook next`, `workbook list` and the board\n" +
+	"`workbook serve` runs never return relics.\n\n" +
+	"Read the relics linked to a task, one part at a time, and save an edit\n" +
+	"naming the version you read:\n\n" +
+	"```sh\n" +
+	"workbook show <task> --json\n" +
+	"workbook relic list --linked-to <task> --json\n" +
+	"workbook relic show <relic>#<part> --body --json\n" +
+	"workbook relic update <relic> --part <part> --body-file <file> --base <version> --json\n" +
+	"```\n\n" +
+	"`workbook show` lists the task's links in `data.relics`: each entry names\n" +
+	"the `relic`, the `part` it links from (absent for a link from the whole\n" +
+	"relic) and the `rel`, such as `implemented-by`. `workbook relic list\n" +
+	"--linked-to` lists the same relics. `workbook relic show` with a part and\n" +
+	"`--body` carries the body at `data.parts[0].body.text`, or at\n" +
+	"`data.parts[0].body.base64` when it is not text, and its version at\n" +
+	"`data.parts[0].body.version`.\n\n" +
+	"To save, write the whole new body to a file and pass the version you read\n" +
+	"as `--base`. Two edits to the same body are never merged.\n\n" +
+	"A save whose `--base` is no longer the current version exits 6\n" +
+	"(`stale-write`) and writes nothing; repeating the identical command fails\n" +
+	"the same way. A sync that meets another clone's edit of the same body exits\n" +
+	"8 and reports it in the result envelope's `relicConflict` list: an entry of\n" +
+	"`type` `body` whose `body` carries `base`, `ours` and `theirs`, with your\n" +
+	"text kept at `parkedRef`.\n\n" +
+	"On either, read the part again. When your intent is clear, apply your\n" +
+	"change to the current text and save with `--base` set to the current\n" +
+	"version. Otherwise show the user both versions and ask; never save over\n" +
+	"text you have not read.\n"
+
+func TestRenderGuidelinesPinsTheRelicSection(t *testing.T) {
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{})
+
+	if got := section(t, guidelines, "## Relics"); got != defaultRelicSection {
+		t.Errorf("relic section =\n%s\nwant\n%s", got, defaultRelicSection)
+	}
+	// The section follows the assignments and comes before the output
+	// format, and the introduction names where relics are kept.
+	assignments := strings.Index(guidelines, "## Assignments say who is responsible\n")
+	relics := strings.Index(guidelines, "## Relics\n")
+	output := strings.Index(guidelines, "## Machine-readable output\n")
+	if assignments >= relics || relics >= output {
+		t.Errorf("section order: assignments at %d, relics at %d, output at %d", assignments, relics, output)
+	}
+	const intro = "Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`\n" +
+		"and its relics under `refs/workbook/relics/`.\n"
+	if !strings.Contains(guidelines, intro) {
+		t.Errorf("guidelines do not open with %q:\n%s", intro, guidelines)
+	}
+}
+
+func TestRenderGuidelinesNamesRelicIDsUnderTheCurrentKey(t *testing.T) {
+	keys, err := core.NewKeySet(core.KeyDocument{
+		Keys:    []core.KeyDefinition{{Key: "WB"}, {Key: "ACME"}},
+		Current: "ACME",
+	})
+	if err != nil {
+		t.Fatalf("NewKeySet() error = %v", err)
+	}
+	relics := section(t, RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}, keys), "## Relics")
+
+	for _, want := range []string{"`ACME-R-<ULID>`", "`ACME-<ULID>`"} {
+		if !strings.Contains(relics, want) {
+			t.Errorf("relic section missing %q:\n%s", want, relics)
+		}
+	}
+	if strings.Contains(relics, "WB-") {
+		t.Errorf("relic section names the founding key WB, not the current key ACME:\n%s", relics)
+	}
+}
+
+func TestRenderGuidelinesRemediesNameRelics(t *testing.T) {
+	exits := section(t, RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{}), "## Exit codes")
+
+	for _, want := range []string{
+		"| 4 | `not-found` | use an existing task or relic ID |\n",
+		"| 6 | `stale-write` | retry the identical command; it will probably succeed. A relic save refused for its `--base` needs a fresh read first |\n",
+	} {
+		if !strings.Contains(exits, want) {
+			t.Errorf("exit codes missing row %q:\n%s", want, exits)
+		}
+	}
+}
+
+func TestSkillTeachesRelics(t *testing.T) {
+	for _, want := range []string{
+		// Step 7 of reading a task: read each linked part first.
+		"`data.relics`",
+		"`workbook relic show <relic>#<part> --body --json`",
+		// Saving names the version read.
+		"workbook relic update <relic> --part <part> --body-file <file> --base <version> --json",
+		// The two ways a save meets another edit.
+		"`stale-write`",
+		"`relicConflict`",
+		// The ID shapes.
+		"`<KEY>-R-<ULID>`",
+		// Restated where agents look for it.
+		"Save a relic body only with the `--base` you read.",
+	} {
+		if !strings.Contains(skills.SkillMarkdown, want) {
+			t.Errorf("skill missing %q", want)
+		}
+	}
+	if !strings.Contains(skills.SkillMarkdown, "\n## Relics\n") {
+		t.Errorf("skill has no Relics section")
 	}
 }
