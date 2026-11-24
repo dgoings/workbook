@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -247,5 +249,84 @@ func TestRelicReaderAnswersFromGitWhenTheRowMoves(t *testing.T) {
 	}
 	if len(summaries) != 1 || summaries[0].Head != listed {
 		t.Fatalf("List() = %+v, want the listed head %s", summaries, listed)
+	}
+}
+
+// damageTaskTip points a task's ref at a blob, so a task rebuild fails.
+func damageTaskTip(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig) {
+	t.Helper()
+	created := createTask(t, repository, config, "Damaged task")
+	blob := relicIndexGit(t, repository, []byte("not a commit\n"), "hash-object", "-w", "--stdin")
+	relicIndexGit(t, repository, nil, "update-ref", "refs/workbook/tasks/"+created.ID, blob)
+}
+
+// A relic read on a cache that cannot be built, here because a task tip is
+// damaged, answers from Git exactly as a read without an index does.
+func TestRelicReadsAnswerFromGitWhenTheIndexCannotBeBuilt(t *testing.T) {
+	t.Parallel()
+	forBothRelicIndexFormats(t, func(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig) {
+		ids := relicReaderFixture(t, repository, config)
+		damaged := createIndexRelic(t, relicServiceForIndex(repository, config, 5000), "Damaged", 2)
+		updateIndexRelicTitle(t, relicServiceForIndex(repository, config, 6000), damaged, "Changed")
+		damageRelic(t, repository, damaged)
+		ids = append(ids, damaged)
+		damageTaskTip(t, repository, config)
+		store := openRelicStore(t, repositorySource{repository: repository}, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+		if _, err := store.Rebuild(context.Background()); err == nil {
+			t.Fatal("Rebuild() succeeded; the task damage did not take")
+		}
+		if err := os.Remove(store.CachePath()); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+
+		fromGit := relicAnswers(t, repository, config, func() core.RelicReader { return repository }, ids)
+		assertSameAnswers(t, "index", relicAnswers(t, repository, config, store.RelicReader, ids), fromGit)
+
+		var refused bool
+		for _, answer := range fromGit {
+			refused = refused || strings.Contains(answer, "error "+string(core.CategoryCorruptData))
+		}
+		if !refused {
+			t.Fatalf("no read of the damaged relic was refused: %q", fromGit)
+		}
+		for _, relicID := range ids {
+			got, gotErr := store.RelicReader().GetRelic(context.Background(), config, relicID)
+			want, wantErr := repository.GetRelic(context.Background(), config, relicID)
+			if fmt.Sprint(gotErr) != fmt.Sprint(wantErr) || got.Head != want.Head {
+				t.Fatalf("GetRelic(%s) = %s, %v; want %s, %v", relicID, got.Head, gotErr, want.Head, wantErr)
+			}
+		}
+	})
+}
+
+// cancellingTaskSource cancels the read it serves when the task rebuild reads
+// task tips, as a command interrupted while its index is being built is.
+type cancellingTaskSource struct {
+	*countingRelicSource
+	cancel context.CancelFunc
+}
+
+func (s cancellingTaskSource) ReadTaskHeads(ctx context.Context, config core.ProjectConfig, heads []gitstore.TaskHead) ([]core.Snapshot, error) {
+	s.cancel()
+	return nil, ctx.Err()
+}
+
+func TestCancelledRelicReadIsNotAnsweredFromGit(t *testing.T) {
+	t.Parallel()
+	repository, config := initializeWorkbook(t)
+	createIndexRelic(t, relicServiceForIndex(repository, config, 1000), "Relic", 2)
+	createTask(t, repository, config, "A task")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	counting := newCountingRelicSource(repository)
+	store := openRelicStore(t, cancellingTaskSource{countingRelicSource: counting, cancel: cancel}, config,
+		filepath.Join(t.TempDir(), "cache.sqlite"))
+
+	_, err := store.RelicReader().ListRelicHeads(ctx, config)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListRelicHeads() error = %v, want the context's", err)
+	}
+	if calls := counting.relicCalls(); calls != 0 {
+		t.Fatalf("a cancelled read made %d relic calls, want none", calls)
 	}
 }

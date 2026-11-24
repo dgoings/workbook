@@ -738,6 +738,12 @@ const relicStateFormat = "workbook.relic-state"
 // a relic the pass could not index, damaged or written by a newer Workbook,
 // and one whose row another writer moved during the pass, which is answered
 // from the pass's own Git read instead.
+//
+// A relic read never fails because the index could not be built or read. When
+// the pass fails, as it does when a damaged task tip stops the task rebuild a
+// missing cache needs, or when SQLite refuses the cache, the reader answers
+// every call from the repository, as a read without an index does. Only a
+// cancelled read is refused with its context's error.
 func (s *Store) RelicReader() core.RelicReader {
 	return &relicIndexReader{store: s}
 }
@@ -746,12 +752,16 @@ type relicIndexReader struct {
 	store *Store
 	mu    sync.Mutex
 	pass  *relicPass
+	// gitOnly is set when the pass failed: every call then answers from the
+	// repository.
+	gitOnly bool
 }
 
 var _ core.RelicReader = (*relicIndexReader)(nil)
 
 // refreshed returns the pass this reader answers from, running it the first
-// time.
+// time. It returns no pass and no error when the index cannot be used, and the
+// caller then answers from the repository.
 func (r *relicIndexReader) refreshed(ctx context.Context, config core.ProjectConfig) (*relicPass, error) {
 	if err := r.store.validateConfig(config); err != nil {
 		return nil, err
@@ -761,7 +771,7 @@ func (r *relicIndexReader) refreshed(ctx context.Context, config core.ProjectCon
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.pass != nil {
+	if r.pass != nil || r.gitOnly {
 		return r.pass, nil
 	}
 	var pass relicPass
@@ -770,10 +780,20 @@ func (r *relicIndexReader) refreshed(ctx context.Context, config core.ProjectCon
 		pass, err = r.store.refreshRelicsActive(ctx)
 		return err
 	}); err != nil {
-		return nil, err
+		if !indexUnusable(ctx) {
+			return nil, err
+		}
+		r.gitOnly = true
+		return nil, nil
 	}
 	r.pass = &pass
 	return r.pass, nil
+}
+
+// indexUnusable reports whether a failed index read is answered from the
+// repository instead: any failure but the caller's own cancellation.
+func indexUnusable(ctx context.Context) bool {
+	return ctx.Err() == nil
 }
 
 // ListRelicHeads returns the heads the pass listed.
@@ -781,6 +801,9 @@ func (r *relicIndexReader) ListRelicHeads(ctx context.Context, config core.Proje
 	pass, err := r.refreshed(ctx, config)
 	if err != nil {
 		return nil, err
+	}
+	if pass == nil {
+		return r.store.relics.ListRelicHeads(ctx, config)
 	}
 	return slices.Clone(pass.heads), nil
 }
@@ -794,13 +817,20 @@ func (r *relicIndexReader) ReadRelicTips(ctx context.Context, config core.Projec
 	if err != nil {
 		return nil, err
 	}
+	if pass == nil {
+		return r.store.relics.ReadRelicTips(ctx, config, heads)
+	}
 	var rows map[string]core.RelicSnapshot
 	if err := r.store.withActiveDatabase(ctx, func(ctx context.Context) error {
 		var err error
 		rows, err = r.store.queryIndexedRelics(ctx, "")
 		return err
 	}); err != nil {
-		return nil, err
+		if !indexUnusable(ctx) {
+			return nil, err
+		}
+		// With no rows, every head the pass did not read is read from Git.
+		rows = nil
 	}
 	snapshots := make([]core.RelicSnapshot, len(heads))
 	var missed []core.RelicHead
@@ -836,6 +866,9 @@ func (r *relicIndexReader) GetRelic(ctx context.Context, config core.ProjectConf
 	if err != nil {
 		return core.RelicSnapshot{}, err
 	}
+	if pass == nil {
+		return r.store.relics.GetRelic(ctx, config, relicID)
+	}
 	head, listed := pass.head(relicID)
 	if listed {
 		var rows map[string]core.RelicSnapshot
@@ -844,7 +877,10 @@ func (r *relicIndexReader) GetRelic(ctx context.Context, config core.ProjectConf
 			rows, err = r.store.queryIndexedRelics(ctx, relicID)
 			return err
 		}); err != nil {
-			return core.RelicSnapshot{}, err
+			if !indexUnusable(ctx) {
+				return core.RelicSnapshot{}, err
+			}
+			rows = nil
 		}
 		if snapshot, ok := pass.answer(head, rows); ok {
 			return snapshot, nil
@@ -867,6 +903,9 @@ func (r *relicIndexReader) ReadRelicParts(
 	pass, err := r.refreshed(ctx, config)
 	if err != nil {
 		return nil, err
+	}
+	if pass == nil {
+		return r.store.relics.ReadRelicParts(ctx, config, snapshot, partIDs, bodies)
 	}
 	relicID := snapshot.Record.State.RelicID
 	// The repository says what is wrong with a request the state does not
@@ -896,7 +935,10 @@ func (r *relicIndexReader) ReadRelicParts(
 		stored, err = r.store.queryIndexedParts(ctx, relicID, snapshot.Head)
 		return err
 	}); err != nil {
-		return nil, err
+		if !indexUnusable(ctx) {
+			return nil, err
+		}
+		return r.store.relics.ReadRelicParts(ctx, config, snapshot, partIDs, bodies)
 	}
 
 	contents := make(map[string]core.RelicPartContent, len(wanted))

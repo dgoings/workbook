@@ -209,3 +209,80 @@ func TestRelicCommandsInTwoWorktreesAndProcessesShareOneIndex(t *testing.T) {
 		}
 	}
 }
+
+// A damaged task tip stops the rebuild a deleted cache needs. Relic reads
+// still answer from Git, exactly as with a healthy index and with nothing on
+// stderr, while a task command still fails as it does without relics.
+func TestRelicReadsAnswerFromGitWhenATaskTipIsDamaged(t *testing.T) {
+	t.Parallel()
+	for _, objectFormat := range []string{testrepo.FormatSHA1, testrepo.FormatSHA256} {
+		t.Run(objectFormat, func(t *testing.T) {
+			t.Parallel()
+			repository := relicRepositoryFor(t, objectFormat)
+			first := mustCreateRelic(t, repository, "--from-file", writeRelicDocumentFile(t, relicTestDocument(t)))
+			second := mustCreateRelic(t, repository, "Second", "--type", "plan")
+			mustRelic(t, repository, nil, "update", second.Relic.ID, "--title", "Second, revised")
+			ids := []string{first.Relic.ID, second.Relic.ID}
+			commands := [][]string{{"relic", "list", "--json"}, {"relic", "show", first.Relic.ID, "--json"}}
+			healthy := func() []string {
+				outputs := relicReadOutputs(t, repository, ids)
+				for _, command := range commands {
+					code, stdout, stderr := run(t, repository, command...)
+					if code != 0 || stderr != "" {
+						t.Fatalf("%s = (%d, %q, %q)", strings.Join(command, " "), code, stdout, stderr)
+					}
+					outputs = append(outputs, stdout)
+				}
+				return outputs
+			}
+			want := healthy()
+
+			if code, _, stderr := run(t, repository, "create", "A task", "--no-sync"); code != 0 {
+				t.Fatalf("create = %d; stderr = %q", code, stderr)
+			}
+			taskRef := gitOutput(t, repository, "for-each-ref", "--format=%(refname)", "refs/workbook/tasks/")
+			blob := cliGitOutputInput(t, repository, "not a commit\n", "hash-object", "-w", "--stdin")
+			cliGit(t, repository, "update-ref", taskRef, blob)
+			cache := relicCachePath(t, repository)
+			if err := os.Remove(cache); err != nil {
+				t.Fatalf("remove the cache: %v", err)
+			}
+			taskCode, taskStdout, taskStderr := run(t, repository, "list", "--json")
+			if taskCode == 0 {
+				t.Fatalf("list succeeded with a damaged task tip: %q", taskStdout)
+			}
+			if err := os.Remove(cache); err != nil && !os.IsNotExist(err) {
+				t.Fatalf("remove the cache: %v", err)
+			}
+
+			assertSameOutputs(t, "with a damaged task tip", healthy(), want)
+
+			if err := os.Remove(cache); err != nil && !os.IsNotExist(err) {
+				t.Fatalf("remove the cache: %v", err)
+			}
+			code, stdout, stderr := run(t, repository, "list", "--json")
+			if code != taskCode || stdout != taskStdout || stderr != taskStderr {
+				t.Fatalf("list after the relic reads = (%d, %q, %q), want (%d, %q, %q)",
+					code, stdout, stderr, taskCode, taskStdout, taskStderr)
+			}
+		})
+	}
+}
+
+// A cache SQLite cannot open, here a directory where the cache file goes,
+// leaves relic reads answering from Git with nothing on stderr.
+func TestRelicReadsAnswerFromGitWhenTheCacheCannotBeOpened(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	created := mustCreateRelic(t, repository, "Readable", "--type", "spec")
+	ids := []string{created.Relic.ID}
+	want := relicReadOutputs(t, repository, ids)
+	cache := relicCachePath(t, repository)
+	if err := os.Remove(cache); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	assertSameOutputs(t, "with no usable cache", relicReadOutputs(t, repository, ids), want)
+}
