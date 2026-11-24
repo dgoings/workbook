@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -243,15 +244,22 @@ func runRelicShow(ctx context.Context, args []string, cwd string, stdout, stderr
 		return nil
 	}
 	if _, _, addressesPart, _ := core.ParsePartAddress(address); addressesPart && *bodies {
-		return writeRelicPartBody(stdout, document)
+		return writeRelicPartBody(stdout, document, writerIsTerminal(stdout))
 	}
 	writeRelicDocument(stdout, document, *bodies)
 	return nil
 }
 
-// writeRelicPartBody writes the one part's body exactly as stored, and
-// nothing else, so it can be piped or redirected to a file.
-func writeRelicPartBody(stdout io.Writer, document core.RelicDocument) error {
+// writeRelicPartBody writes the one part's body, and nothing else.
+//
+// Into a file or a pipe it writes the body exactly as stored, which is what a
+// redirect needs. On a terminal it writes what the whole relic's view writes
+// of the same body: each line through singleLine, so nothing the body holds
+// can move the cursor, color the screen or retitle the window. A body is
+// written by whoever can change the relic, and this is the command a person
+// is told to run to read one. A body that is not UTF-8 text is not written to
+// a terminal at all.
+func writeRelicPartBody(stdout io.Writer, document core.RelicDocument, terminal bool) error {
 	part := document.Parts[0]
 	if part.Body == nil {
 		return core.Errorf(core.CategoryNotFound, "part %s has no body", part.ID)
@@ -267,8 +275,24 @@ func writeRelicPartBody(stdout io.Writer, document core.RelicDocument) error {
 		}
 		content = decoded
 	}
-	_, err := stdout.Write(content)
-	return err
+	if !terminal {
+		_, err := stdout.Write(content)
+		return err
+	}
+	if part.Body.Text == nil {
+		_, err := fmt.Fprintf(stdout, "The body of part %s is not text (%d bytes), so it is not shown on a terminal; send the output to a file or a pipe to write its bytes.\n",
+			part.ID, len(content))
+		return err
+	}
+	if len(content) == 0 {
+		return nil
+	}
+	for _, line := range descriptionLines(string(content)) {
+		if _, err := fmt.Fprintln(stdout, line); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runRelicSetDeleted(ctx context.Context, verb string, args []string, cwd string, stdout, stderr io.Writer) error {

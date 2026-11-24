@@ -15,7 +15,8 @@ import (
 // singleLine, so nothing a relic holds can move the cursor, color the terminal
 // or forge a line of its own; --json is the interface for exact values. The
 // one exception is a single part's body under `relic show <relic>#<part>
-// --body`, which is written byte for byte (see writeRelicPartBody).
+// --body` when standard output is not a terminal, which is written byte for
+// byte so it can be redirected (see writeRelicPartBody).
 
 // writeRelicMutation reports a command that changed a relic, or did not.
 func writeRelicMutation(stdout io.Writer, command string, result core.RelicMutationResult, jsonMode bool) {
@@ -97,11 +98,11 @@ func relicBodySummary(body *core.RelicDocumentBody) string {
 
 // writeRelicBodyText prints a body under its part, one sanitized line per
 // line. A body that is not UTF-8 is not printed; its part address with --body
-// writes its bytes.
+// writes its bytes into a file or a pipe.
 func writeRelicBodyText(stdout io.Writer, body core.RelicDocumentBody) {
 	if body.Text == nil {
 		if body.Base64 != nil {
-			fmt.Fprintln(stdout, "  Body:\tnot text; show the part alone with --body to write its bytes")
+			fmt.Fprintln(stdout, "  Body:\tnot text; show the part alone with --body, into a file or a pipe, to write its bytes")
 		}
 		return
 	}

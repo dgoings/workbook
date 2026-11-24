@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 // RelicEditKind names one kind of change relic update makes.
@@ -587,27 +588,59 @@ func (u *relicUpdate) storesFields(partID string) bool {
 	return false
 }
 
+// relicVersionAsTyped reads a body version the way a command line gives it:
+// a version is a ULID, which is stored in upper case, so its ASCII letters are
+// raised and nothing else is changed. Unicode's own case rules are not used,
+// because they also turn a few characters that are not ASCII into ASCII
+// letters, and a version must be matched exactly.
+func relicVersionAsTyped(typed string) string {
+	raised := []byte(typed)
+	for index, b := range raised {
+		if b >= 'a' && b <= 'z' {
+			raised[index] = b - ('a' - 'A')
+		}
+	}
+	return string(raised)
+}
+
+// relicBaseInMessage names the base a save gave for a refusal. A version is
+// shown as versions are stored. Anything else was typed by mistake, and is
+// quoted so that nothing in it reaches a terminal as it is, or given by its
+// size alone when it is too long to repeat.
+func relicBaseInMessage(base string) string {
+	if version := relicVersionAsTyped(base); isCanonicalULID(version) {
+		return version
+	}
+	if len(base) > relicMessageNameLimit {
+		return fmt.Sprintf("a version %d bytes long", len(base))
+	}
+	return strconv.Quote(base)
+}
+
 // checkRelicBodyBase refuses a body save that did not start from the part's
-// current body: the base must be the current version exactly, and there is
-// none to give when the part has no body.
-func checkRelicBodyBase(relicID string, part RelicPart, base string) error {
+// current body, and returns the base as it is recorded: the current version,
+// or nothing for a part with no body. The base must name the current version,
+// whatever case its letters were typed in, and there is none to give when the
+// part has no body.
+func checkRelicBodyBase(relicID string, part RelicPart, base string) (string, error) {
 	if part.Body == nil {
 		if base != "" {
-			return Errorf(CategoryStaleWrite, "part %s has no body, so there is no version %s to start from", part.ID, base)
+			return "", Errorf(CategoryStaleWrite, "part %s has no body, so there is no version %s to start from",
+				part.ID, relicBaseInMessage(base))
 		}
-		return nil
+		return "", nil
 	}
 	current := part.Body.Version
-	switch base {
-	case current:
-		return nil
-	case "":
-		return Errorf(CategoryStaleWrite, "part %s body is at version %s; pass --base %s to save over it",
+	switch {
+	case relicVersionAsTyped(base) == current:
+		return current, nil
+	case base == "":
+		return "", Errorf(CategoryStaleWrite, "part %s body is at version %s; pass --base %s to save over it",
 			part.ID, current, current)
 	default:
-		return Errorf(CategoryStaleWrite,
+		return "", Errorf(CategoryStaleWrite,
 			"part %s body is at version %s, not %s; read it again with \"workbook relic show %s#%s --body\" and save from that version",
-			part.ID, current, base, relicID, part.ID)
+			part.ID, current, relicBaseInMessage(base), relicID, part.ID)
 	}
 }
 
@@ -646,6 +679,7 @@ func (u *relicUpdate) editPart(ctx context.Context, edit RelicEdit) error {
 		}
 	}
 	var body RelicBodyInput
+	var base string
 	if edit.Body != nil {
 		if body, err = relicBodyToSave(part, edit); err != nil {
 			return err
@@ -653,7 +687,7 @@ func (u *relicUpdate) editPart(ctx context.Context, edit RelicEdit) error {
 		if err := checkRelicBodyInput("part "+part.ID, body); err != nil {
 			return err
 		}
-		if err := checkRelicBodyBase(u.relicID, part, edit.Base); err != nil {
+		if base, err = checkRelicBodyBase(u.relicID, part, edit.Base); err != nil {
 			return err
 		}
 	} else if edit.Base != "" {
@@ -690,7 +724,7 @@ func (u *relicUpdate) editPart(ctx context.Context, edit RelicEdit) error {
 		operation := RelicOperation{
 			Type: RelicOperationPartBodySet,
 			Part: part.ID,
-			Body: &RelicBodyChange{Format: body.Format, Bytes: int64(len(body.Content)), Base: edit.Base},
+			Body: &RelicBodyChange{Format: body.Format, Bytes: int64(len(body.Content)), Base: base},
 		}
 		if err := u.record(operation); err != nil {
 			return err

@@ -900,7 +900,8 @@ var commandSchemas = map[string]commandMetadata{
 				Synopsis: "workbook relic show <relic>[#<part>] [--body] [--removed] [--json]",
 				Description: "Show a relic, or one of its parts.\n\n" +
 					"Bodies are left out unless --body is given. With <relic>#<part> and --body,\n" +
-					"and without --json, only that part's body is written, byte for byte.",
+					"and without --json, only that part's body is written: byte for byte into a file\n" +
+					"or a pipe, and with control characters replaced on a terminal.",
 				Positionals: []string{"<relic>[#<part>]"},
 				Options: []optionMetadata{
 					{Name: "body", Kind: boolFlag, Description: "include body text"},

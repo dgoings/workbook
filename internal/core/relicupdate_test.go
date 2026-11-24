@@ -1549,3 +1549,73 @@ func TestRelicBodySaveKeepsItsFormatLabel(t *testing.T) {
 		t.Fatalf("a first body saved from Notes.MD is labeled %q, want md", got)
 	}
 }
+
+// requireNoTerminalControl fails when text holds a character a terminal acts
+// on: a control character or a direction override.
+func requireNoTerminalControl(t *testing.T, label, text string) {
+	t.Helper()
+	for _, r := range text {
+		if r < 0x20 || (r >= 0x7f && r < 0xa0) || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) {
+			t.Fatalf("%s: %q holds the control character %U", label, text, r)
+		}
+	}
+}
+
+// The base a save names is the one thing a stale-save refusal repeats from the
+// command, so it is quoted and bounded like every other echo, and a version
+// typed in lower case is the version it names.
+func TestRelicBodyBaseIsEchoedSafelyAndMatchedWithoutCase(t *testing.T) {
+	store, service, relicID, goals, decision, _ := relicCreatedForUpdate(t)
+	ctx := context.Background()
+	save := func(part, base string) (RelicMutationResult, error) {
+		return service.Update(ctx, relicID, []RelicEdit{{
+			Kind: RelicEditPart, Part: part, Base: base, Body: &RelicBodyInput{Format: "md", Content: []byte("text for " + base)},
+		}})
+	}
+
+	hostile := "x\x1b[31mRED\xe2\x80\xae\x07"
+	for label, part := range map[string]string{"a part with a body": goals, "a part with no body": decision} {
+		_, err := save(part, hostile)
+		requireRelicCategory(t, label+", a base holding escapes", err, CategoryStaleWrite, "RED", `"x\x1b[31mRED`)
+		requireNoTerminalControl(t, label+", a base holding escapes", err.Error())
+
+		long := strings.Repeat("9", 5000)
+		_, err = save(part, long)
+		requireRelicCategory(t, label+", a 5,000-byte base", err, CategoryStaleWrite, "5000 bytes long")
+		if len(err.Error()) > 400 || strings.Contains(err.Error(), long[:200]) {
+			t.Errorf("%s: a 5,000-byte base is repeated in a %d-byte message: %.200s", label, len(err.Error()), err.Error())
+		}
+	}
+	requireRelicWrites(t, "refused saves", store, 1)
+
+	// A version is a ULID, and typing one in lower case names the same version.
+	current := requirePartForTest(t, store.snapshots[relicID].Record.State.Relic, goals).Body.Version
+	result, err := save(goals, strings.ToLower(current))
+	write := requireRelicWritten(t, "a save from the current version in lower case", store, 2, result, err)
+	if operation := write.pack.Operations[0]; operation.Type != RelicOperationPartBodySet || operation.Body.Base != current {
+		t.Fatalf("the save recorded base %q, want the version as it is stored, %q", operation.Body.Base, current)
+	}
+	next := requirePartForTest(t, store.snapshots[relicID].Record.State.Relic, goals).Body.Version
+
+	// A stale base in lower case is still stale, and the message shows both
+	// versions in the one form versions are stored in.
+	_, err = save(goals, strings.ToLower(current))
+	requireRelicCategory(t, "a stale base in lower case", err, CategoryStaleWrite,
+		"is at version "+next+", not "+current+";")
+	if strings.Contains(err.Error(), strings.ToLower(current)) {
+		t.Errorf("a stale base in lower case is repeated as typed: %q", err.Error())
+	}
+	// Only letter case is set aside: the Kelvin sign is not a K, and the
+	// long s is not an S, whatever Unicode case folding says of them.
+	for _, lookalike := range []string{
+		strings.Replace(strings.ToLower(next), "m", "\xe2\x84\xaa", 1), strings.Replace(next, "0", "o", 1),
+		strings.ToLower(next) + " ", next[:len(next)-1],
+	} {
+		if lookalike == next {
+			t.Fatalf("the lookalike of %s is the version itself", next)
+		}
+		_, err = save(goals, lookalike)
+		requireRelicCategory(t, "a base that only resembles the version", err, CategoryStaleWrite)
+	}
+	requireRelicWrites(t, "stale saves", store, 2)
+}
