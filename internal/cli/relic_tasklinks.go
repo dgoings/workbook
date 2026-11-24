@@ -58,8 +58,8 @@ func taskRelicLinks(ctx context.Context, service core.Service, taskID string) ([
 		return nil, nil, nil
 	}
 	index := store.RelicReader()
-	relics := core.RelicService{Config: service.Config, Keys: service.Keys, Reader: index, Links: index, Tasks: store}
-	summaries, warnings, err := relics.LinkedTo(ctx, taskID, core.RelicListFilter{})
+	relics := core.RelicService{Config: service.Config, Keys: service.Keys, Reader: index, Links: index}
+	summaries, warnings, err := relics.LinkedToTask(ctx, taskID, core.RelicListFilter{})
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()

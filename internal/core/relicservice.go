@@ -500,11 +500,16 @@ func (s RelicService) Show(ctx context.Context, address string, options RelicSho
 	default:
 		parts = relic.LiveParts()
 	}
-	links, err := s.relicDocumentLinks(ctx, snapshot.Record.Links, parts, !hasPart, true)
+	links, warnings, err := s.relicDocumentLinks(ctx, snapshot.Record.State.RelicID, snapshot.Record.Links, parts, !hasPart, true)
 	if err != nil {
 		return RelicDocument{}, err
 	}
-	return s.relicDocument(ctx, snapshot, parts, links, options.Bodies)
+	document, err := s.relicDocument(ctx, snapshot, parts, links, options.Bodies)
+	if err != nil {
+		return RelicDocument{}, err
+	}
+	document.Warnings = warnings
+	return document, nil
 }
 
 // Export returns the whole relic with its bodies and live parts, as the

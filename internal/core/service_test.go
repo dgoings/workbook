@@ -1622,6 +1622,7 @@ type memoryTaskStore struct {
 	snapshots map[string]Snapshot
 	writes    []memoryWrite
 	writeErr  error
+	listErr   error
 	listCalls int
 }
 
@@ -1754,6 +1755,9 @@ func newMemoryTaskStore(snapshots ...Snapshot) *memoryTaskStore {
 
 func (s *memoryTaskStore) List(_ context.Context, _ ProjectConfig) ([]Snapshot, error) {
 	s.listCalls++
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	ids := make([]string, 0, len(s.snapshots))
 	for id := range s.snapshots {
 		ids = append(ids, id)

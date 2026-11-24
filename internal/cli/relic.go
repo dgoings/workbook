@@ -227,10 +227,15 @@ func runRelicShow(ctx context.Context, args []string, cwd string, stdout, stderr
 	if err != nil {
 		return err
 	}
+	warnings := make([]core.Warning, 0, len(document.Warnings))
+	for _, warning := range document.Warnings {
+		warnings = append(warnings, core.Warning{Code: warning.Code, Message: singleLine(warning.Message)})
+	}
 	if *jsonMode {
-		writeResult(stdout, "relic show", document)
+		writeResultWithWarnings(stdout, "relic show", document, warnings)
 		return nil
 	}
+	defer writeWarnings(stderr, warnings)
 	if _, _, addressesPart, _ := core.ParsePartAddress(address); addressesPart && *bodies {
 		return writeRelicPartBody(stdout, document, writerIsTerminal(stdout))
 	}

@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -256,6 +257,9 @@ func TestShowMarksLinksToRemovedTasks(t *testing.T) {
 	if tasks.listCalls != 1 {
 		t.Fatalf("Show listed tasks %d times, want 1", tasks.listCalls)
 	}
+	if document.Warnings != nil {
+		t.Fatalf("Show warnings = %#v, want none", document.Warnings)
+	}
 
 	encoded, err := json.Marshal(document.Links[1])
 	if err != nil {
@@ -281,6 +285,58 @@ func TestShowMarksLinksToRemovedTasks(t *testing.T) {
 	// Show of a relic with links needs a task reader.
 	_, err = service.Show(ctx, relicID, RelicShowOptions{})
 	requireRelicCategory(t, "Show without a task reader", err, CategoryOperational, "relic service has no task reader")
+}
+
+// A task list that cannot be read leaves a relic's links listed, unmarked,
+// with one warning that says why; only a cancelled read is an error.
+func TestShowListsLinksUnmarkedWhenTheTasksCannotBeRead(t *testing.T) {
+	_, tasks, service, relicID, goals, _, ids := relicWithLinksToTasks(t)
+	tasks.listErr = Errorf(CategoryCorruptData, "requested task object 0123 is missing")
+	ctx := context.Background()
+	wantWarnings := []Warning{{
+		Code: WarningRelicLinkTargetsUnread,
+		Message: "the tasks cannot be read, so the targets of relic " + relicID +
+			"'s links are not checked and links to removed tasks are not marked: requested task object 0123 is missing; run `workbook validate`",
+	}}
+	for _, address := range []string{relicID, relicID + "#" + goals} {
+		document, err := service.Show(ctx, address, RelicShowOptions{})
+		if err != nil {
+			t.Fatalf("Show(%s): %v", address, err)
+		}
+		if len(document.Links) == 0 {
+			t.Fatalf("Show(%s) listed no links", address)
+		}
+		for _, link := range document.Links {
+			if link.TargetRemoved {
+				t.Fatalf("Show(%s) marked link %s with the tasks unread", address, link.ID)
+			}
+		}
+		if !reflect.DeepEqual(document.Warnings, wantWarnings) {
+			t.Fatalf("Show(%s) warnings = %#v, want %#v", address, document.Warnings, wantWarnings)
+		}
+		encoded, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "relic-link-targets-unread") {
+			t.Fatalf("Show(%s) JSON carries the warning in the document: %s", address, encoded)
+		}
+	}
+	whole, err := service.Show(ctx, relicID, RelicShowOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(whole.Links); got != len(ids) {
+		t.Fatalf("Show links = %d, want %d", got, len(ids))
+	}
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	tasks.listErr = cancelled.Err()
+	_, err = service.Show(cancelled, relicID, RelicShowOptions{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Show with a cancelled context = %v, want the context's error", err)
+	}
 }
 
 func TestShowOfARelicWithoutLinksReadsNoTasks(t *testing.T) {
@@ -359,4 +415,46 @@ func TestRelicCreateFromADocumentWithLinksIsRefused(t *testing.T) {
 	_, err = RelicCreateInputFromDocument(document)
 	requireRelicCategory(t, "create from a linked document", err, CategoryValidation,
 		"cannot create a relic with links", "relic update", "--link")
+}
+
+type fixedRelicLinkIndex struct {
+	lookup  RelicLinkLookup
+	targets []RelicLinkTarget
+}
+
+func (f *fixedRelicLinkIndex) RelicLinksTo(_ context.Context, _ ProjectConfig, target RelicLinkTarget) (RelicLinkLookup, error) {
+	f.targets = append(f.targets, target)
+	return f.lookup, nil
+}
+
+// workbook show has already resolved its task, so LinkedToTask answers for
+// that ID without a task reader; LinkedTo resolves a prefix first.
+func TestLinkedToTaskReadsNoTask(t *testing.T) {
+	ctx := context.Background()
+	relicID := serviceTestConfig.Key + "-R-" + relicTestID(1)
+	index := &fixedRelicLinkIndex{lookup: RelicLinkLookup{
+		Sources: []RelicLinkSource{{
+			Relic: RelicSummary{ID: relicID, Title: "Plan", Type: "spec"},
+			Link:  RelicLink{ID: relicTestID(2), To: RelicLinkTarget{Task: linkTestTaskID(1)}, Rel: "relates-to"},
+		}},
+		Unread: []string{serviceTestConfig.Key + "-R-" + relicTestID(3)},
+	}}
+	service := RelicService{Config: serviceTestConfig, Links: index}
+	summaries, warnings, err := service.LinkedToTask(ctx, linkTestTaskID(1), RelicListFilter{})
+	if err != nil {
+		t.Fatalf("LinkedToTask: %v", err)
+	}
+	if len(summaries) != 1 || summaries[0].ID != relicID || len(summaries[0].LinkedBy) != 1 || len(warnings) != 1 {
+		t.Fatalf("LinkedToTask = %+v, %+v", summaries, warnings)
+	}
+	if want := []RelicLinkTarget{{Task: linkTestTaskID(1)}}; !reflect.DeepEqual(index.targets, want) {
+		t.Fatalf("looked up %+v, want %+v", index.targets, want)
+	}
+
+	tasks := linkTestTasks()
+	service.Tasks = tasks
+	viaPrefix, _, err := service.LinkedTo(ctx, strings.ToLower(linkTestTaskID(1)), RelicListFilter{})
+	if err != nil || !reflect.DeepEqual(viaPrefix, summaries) {
+		t.Fatalf("LinkedTo(prefix) = %+v, %v; want %+v", viaPrefix, err, summaries)
+	}
 }

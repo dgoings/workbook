@@ -123,8 +123,11 @@ func (u *relicUpdate) removeLink(edit RelicEdit) error {
 // on a whole-relic view (whole true) the links of the relic itself and of the
 // parts listed, and on a one-part view only that part's. With targets, each
 // link to a task that is deleted or not there is marked, from one task
-// listing made only when there is a link to mark.
-func (s RelicService) relicDocumentLinks(ctx context.Context, links RelicLinksDocument, parts []RelicPart, whole, targets bool) ([]RelicDocumentLink, error) {
+// listing made only when there is a link to mark. A task listing that fails
+// leaves the links unmarked, with a warning that says why: a relic read does
+// not fail because the tasks beside it cannot be read. Only the caller's
+// cancellation is returned.
+func (s RelicService) relicDocumentLinks(ctx context.Context, relicID string, links RelicLinksDocument, parts []RelicPart, whole, targets bool) ([]RelicDocumentLink, []Warning, error) {
 	listed := make(map[string]struct{}, len(parts))
 	for _, part := range parts {
 		listed[part.ID] = struct{}{}
@@ -137,14 +140,17 @@ func (s RelicService) relicDocumentLinks(ctx context.Context, links RelicLinksDo
 		}
 	}
 	if !targets || len(presented) == 0 {
-		return presented, nil
+		return presented, nil, nil
 	}
 	if s.Tasks == nil {
-		return nil, errNoTaskReader()
+		return nil, nil, errNoTaskReader()
 	}
 	tasks, err := s.Tasks.List(ctx, s.Config)
 	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		return presented, []Warning{relicLinkTargetsUnreadWarning(relicID, err)}, nil
 	}
 	live := make(map[string]bool, len(tasks))
 	for _, task := range tasks {
@@ -153,5 +159,15 @@ func (s RelicService) relicDocumentLinks(ctx context.Context, links RelicLinksDo
 	for index := range presented {
 		presented[index].TargetRemoved = !live[presented[index].To.Task]
 	}
-	return presented, nil
+	return presented, nil, nil
+}
+
+// relicLinkTargetsUnreadWarning is the warning a relic read gives when the
+// tasks its links point at cannot be listed.
+func relicLinkTargetsUnreadWarning(relicID string, err error) Warning {
+	return Warning{
+		Code: WarningRelicLinkTargetsUnread,
+		Message: fmt.Sprintf("the tasks cannot be read, so the targets of relic %s's links are not checked and links to removed tasks are not marked: %s; run `workbook validate`",
+			relicID, err.Error()),
+	}
 }

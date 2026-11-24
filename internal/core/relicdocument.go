@@ -50,6 +50,9 @@ type RelicDocument struct {
 	Properties map[string]json.RawMessage `json:"properties"`
 	Parts      []RelicDocumentPart        `json:"parts"`
 	Links      []RelicDocumentLink        `json:"links"`
+	// Warnings is what a read has to say beside the document, such as links
+	// whose targets could not be checked. It is not part of the document.
+	Warnings []Warning `json:"-"`
 }
 
 // DecodeRelicDocument reads exactly one relic document. It refuses a member

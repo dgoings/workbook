@@ -108,7 +108,7 @@ func relicAnswers(t *testing.T, repository *gitstore.Repository, config core.Pro
 	for _, relicID := range ids {
 		for _, options := range []core.RelicShowOptions{{}, {Bodies: true}, {Removed: true}, {Bodies: true, Removed: true}} {
 			document, err := service().Show(ctx, relicID, options)
-			answers = append(answers, encode(fmt.Sprintf("show %s %+v", relicID, options), document, err))
+			answers = append(answers, encode(fmt.Sprintf("show %s %+v", relicID, options), shownAnswer(document), err))
 		}
 		exported, err := service().Export(ctx, relicID)
 		answers = append(answers, encode("export "+relicID, exported, err))
@@ -121,11 +121,20 @@ func relicAnswers(t *testing.T, repository *gitstore.Repository, config core.Pro
 			for _, bodies := range []bool{false, true} {
 				address := relicID + "#" + part.ID
 				document, err := service().Show(ctx, address, core.RelicShowOptions{Bodies: bodies})
-				answers = append(answers, encode(fmt.Sprintf("show %s bodies=%t", address, bodies), document, err))
+				answers = append(answers, encode(fmt.Sprintf("show %s bodies=%t", address, bodies), shownAnswer(document), err))
 			}
 		}
 	}
 	return answers
+}
+
+// shownAnswer is a shown document with the warnings that came with it, which
+// the document's own JSON leaves out.
+func shownAnswer(document core.RelicDocument) any {
+	return struct {
+		Document core.RelicDocument `json:"document"`
+		Warnings []core.Warning     `json:"warnings,omitempty"`
+	}{document, document.Warnings}
 }
 
 func assertSameAnswers(t *testing.T, label string, got, want []string) {
@@ -282,11 +291,17 @@ func damageTaskTip(t *testing.T, repository *gitstore.Repository, config core.Pr
 }
 
 // A relic read on a cache that cannot be built, here because a task tip is
-// damaged, answers from Git exactly as a read without an index does.
+// damaged, answers from Git exactly as a read without an index does. The
+// damage is beside the relics, so no read of a relic that is itself sound
+// fails: a relic without links reads as it does with healthy tasks, and a
+// relic with links lists them unmarked with a warning that says why.
 func TestRelicReadsAnswerFromGitWhenTheIndexCannotBeBuilt(t *testing.T) {
 	t.Parallel()
 	forBothRelicIndexFormats(t, func(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig) {
 		ids := relicReaderFixture(t, repository, config)
+		sound := append([]string(nil), ids...)
+		large, shapes := ids[1], ids[2]
+		healthy := relicAnswers(t, repository, config, func() core.RelicReader { return repository }, []string{large})
 		damaged := createIndexRelic(t, relicServiceForIndex(repository, config, 5000), "Damaged", 2)
 		updateIndexRelicTitle(t, relicServiceForIndex(repository, config, 6000), damaged, "Changed")
 		damageRelic(t, repository, damaged)
@@ -309,6 +324,34 @@ func TestRelicReadsAnswerFromGitWhenTheIndexCannotBeBuilt(t *testing.T) {
 		}
 		if !refused {
 			t.Fatalf("no read of the damaged relic was refused: %q", fromGit)
+		}
+		for _, answer := range relicAnswers(t, repository, config, func() core.RelicReader { return repository }, sound) {
+			if strings.Contains(answer, ": error ") {
+				t.Fatalf("a read of a sound relic failed with a damaged task tip: %s", answer)
+			}
+		}
+		// The relic without links answers as it did before the damage.
+		assertSameAnswers(t, "without links", relicAnswers(t, repository, config, func() core.RelicReader { return store.RelicReader() }, []string{large})[2:], healthy[2:])
+		// Every show of the relic with links lists them, unmarked, and warns.
+		var shows int
+		for _, answer := range relicAnswers(t, repository, config, func() core.RelicReader { return store.RelicReader() }, []string{shapes}) {
+			if !strings.HasPrefix(answer, "show ") {
+				continue
+			}
+			shows++
+			if strings.Contains(answer, "targetRemoved") {
+				t.Fatalf("a show marked a link with the tasks unread: %s", answer)
+			}
+			if strings.Contains(answer, `"links":[{`) != strings.Contains(answer, core.WarningRelicLinkTargetsUnread) {
+				t.Fatalf("a show's links and its warning disagree: %s", answer)
+			}
+		}
+		if shows == 0 {
+			t.Fatal("no show of the relic with links was made")
+		}
+		whole := relicAnswers(t, repository, config, func() core.RelicReader { return store.RelicReader() }, []string{shapes})[2]
+		if !strings.Contains(whole, `"links":[{`) || !strings.Contains(whole, core.WarningRelicLinkTargetsUnread) {
+			t.Fatalf("show of the relic with links = %s, want its links and the warning", whole)
 		}
 		for _, relicID := range ids {
 			got, gotErr := store.RelicReader().GetRelic(context.Background(), config, relicID)

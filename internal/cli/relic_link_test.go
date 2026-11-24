@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -241,5 +242,117 @@ func TestRelicShowOfALinkedRelicAnswersWithNoUsableCache(t *testing.T) {
 	}
 	if !strings.Contains(want, `"targetRemoved":true`) {
 		t.Fatalf("relic show = %s, want the deleted task's link marked", want)
+	}
+}
+
+// A damaged task tip leaves the tasks unreadable. relic show of a linked
+// relic, whole or one part, as text or JSON, still succeeds: it lists the
+// links unmarked and says why, in the envelope or on stderr. relic export is
+// unchanged and warns on stderr.
+func TestRelicShowOfALinkedRelicWarnsWhenTheTasksCannotBeRead(t *testing.T) {
+	t.Parallel()
+	repository, task, relicID, partID := linkedRelicRepository(t)
+	other := cliCreateTask(t, repository, "Write the docs")
+	mustUpdateRelic(t, repository, relicID, "--link", task.ID, "--from", partID, "--rel", "implemented-by",
+		"--link", other.ID, "--rel", "relates-to")
+	if code, stdout, stderr := run(t, repository, "delete", other.ID, "--no-sync"); code != 0 {
+		t.Fatalf("delete = (%d, %q, %q)", code, stdout, stderr)
+	}
+	addresses := []string{relicID, relicID + "#" + partID}
+	showJSON := func(address string) (resultDocument, core.RelicDocument, string) {
+		t.Helper()
+		code, stdout, stderr := run(t, repository, "relic", "show", address, "--json")
+		if code != 0 {
+			t.Fatalf("relic show %s --json = (%d, %q, %q)", address, code, stdout, stderr)
+		}
+		result := assertJSONResult(t, stdout, "relic show")
+		var document core.RelicDocument
+		if err := json.Unmarshal(result.Data, &document); err != nil {
+			t.Fatal(err)
+		}
+		return result, document, stderr
+	}
+	showText := func(address string) (string, string) {
+		t.Helper()
+		code, stdout, stderr := run(t, repository, "relic", "show", address)
+		if code != 0 {
+			t.Fatalf("relic show %s = (%d, %q, %q)", address, code, stdout, stderr)
+		}
+		return stdout, stderr
+	}
+	exported := func() (string, string) {
+		t.Helper()
+		code, stdout, stderr := run(t, repository, "relic", "export", relicID)
+		if code != 0 {
+			t.Fatalf("relic export = (%d, %q, %q)", code, stdout, stderr)
+		}
+		return stdout, stderr
+	}
+
+	healthyText := map[string]string{}
+	for _, address := range addresses {
+		result, document, stderr := showJSON(address)
+		if stderr != "" || len(result.Warnings) != 0 {
+			t.Fatalf("relic show %s --json with healthy tasks warned: %q, %+v", address, stderr, result.Warnings)
+		}
+		if address == relicID && !linkRemovedFor(document, other.ID) {
+			t.Fatalf("relic show %s links = %+v, want the deleted task's link marked", address, document.Links)
+		}
+		text, stderr := showText(address)
+		if stderr != "" {
+			t.Fatalf("relic show %s with healthy tasks warned: %q", address, stderr)
+		}
+		healthyText[address] = text
+	}
+	healthyExport, stderr := exported()
+	if stderr != "" {
+		t.Fatalf("relic export with healthy tasks warned: %q", stderr)
+	}
+
+	cliCreateTask(t, repository, "Damaged task")
+	var damagedRef string
+	for _, ref := range strings.Fields(gitOutput(t, repository, "for-each-ref", "--format=%(refname)", "refs/workbook/tasks/")) {
+		if !strings.HasSuffix(ref, task.ID) && !strings.HasSuffix(ref, other.ID) {
+			damagedRef = ref
+		}
+	}
+	blob := cliGitOutputInput(t, repository, "not a commit\n", "hash-object", "-w", "--stdin")
+	cliGit(t, repository, "update-ref", damagedRef, blob)
+	cache := relicCachePath(t, repository)
+	if err := os.Remove(cache); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if code, stdout, _ := run(t, repository, "list", "--json"); code == 0 {
+		t.Fatalf("list succeeded with a damaged task tip: %q", stdout)
+	}
+
+	for _, address := range addresses {
+		result, document, stderr := showJSON(address)
+		if stderr != "" {
+			t.Fatalf("relic show %s --json stderr = %q, want the warning in the envelope", address, stderr)
+		}
+		if len(result.Warnings) != 1 || result.Warnings[0].Code != core.WarningRelicLinkTargetsUnread ||
+			!strings.Contains(result.Warnings[0].Message, "links are not checked") {
+			t.Fatalf("relic show %s --json warnings = %+v, want one %s", address, result.Warnings, core.WarningRelicLinkTargetsUnread)
+		}
+		if len(document.Links) == 0 {
+			t.Fatalf("relic show %s listed no links", address)
+		}
+		for _, link := range document.Links {
+			if link.TargetRemoved {
+				t.Fatalf("relic show %s marked link %s with the tasks unread", address, link.ID)
+			}
+		}
+		text, stderr := showText(address)
+		if !strings.HasPrefix(stderr, "workbook: warning: the tasks cannot be read") || strings.Count(stderr, "\n") != 1 {
+			t.Fatalf("relic show %s stderr = %q, want one warning", address, stderr)
+		}
+		if want := strings.ReplaceAll(healthyText[address], " (removed)", ""); text != want {
+			t.Fatalf("relic show %s text = %q, want %q", address, text, want)
+		}
+	}
+	export, stderr := exported()
+	if export != healthyExport || stderr != "" {
+		t.Fatalf("relic export with the tasks unread = (%q, %q), want (%q, \"\")", export, stderr, healthyExport)
 	}
 }

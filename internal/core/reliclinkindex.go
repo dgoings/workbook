@@ -10,6 +10,10 @@ import (
 // not be read, so its links are not listed.
 const WarningRelicLinksUnread = "relic-links-unread"
 
+// WarningRelicLinkTargetsUnread says that the tasks a relic's links point at
+// could not be read, so links to removed tasks are not marked.
+const WarningRelicLinkTargetsUnread = "relic-link-targets-unread"
+
 // RelicLinkSource is one link that points at a target, with the relic that
 // holds it and, for a link from a part, that part's type, whether it is
 // removed and its place among the relic's parts. PartOrdinal is -1 for a link
@@ -120,6 +124,15 @@ func (s RelicService) LinkedTo(ctx context.Context, taskIDOrPrefix string, filte
 	taskID, err := s.Tasks.Resolve(ctx, s.Config, taskIDOrPrefix)
 	if err != nil {
 		return nil, nil, err
+	}
+	return s.LinkedToTask(ctx, taskID, filter)
+}
+
+// LinkedToTask is LinkedTo for a task ID the caller has already resolved, as
+// workbook show has: it reads no task.
+func (s RelicService) LinkedToTask(ctx context.Context, taskID string, filter RelicListFilter) ([]RelicSummary, []Warning, error) {
+	if s.Links == nil {
+		return nil, nil, Errorf(CategoryOperational, "relic service has no link index")
 	}
 	lookup, err := s.Links.RelicLinksTo(ctx, s.Config, RelicLinkTarget{Task: taskID})
 	if err != nil {
