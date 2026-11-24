@@ -894,6 +894,45 @@ func TestRelicUpdateRefusesANewerWritersRelic(t *testing.T) {
 	}
 }
 
+func TestRelicUpdateRefusesANameGivenTwice(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	part := addRelicParts(t, repository, id, "section")[0]
+	head := relicHeadOf(t, repository, id)
+
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--set", "status=a", "--clear", "status"}, `this update sets and clears property "status"`},
+		{[]string{"--set", "status=a", "--set", "status=b"}, `this update sets property "status" twice`},
+		{[]string{"--set", "status=a", "--set-json", "status=1"}, `this update sets property "status" twice`},
+		{[]string{"--title", "Edited", "--clear", "status", "--clear", "status"}, `this update clears property "status" twice`},
+		{[]string{"--part", part, "--field", "heading=x", "--clear-field", "heading"},
+			`this update sets and clears field "heading" of part ` + part},
+		{[]string{"--part", part, "--field", "heading=x", "--part", strings.ToLower(part), "--field-json", "heading=2"},
+			`this update sets field "heading" of part ` + part + " twice"},
+	} {
+		message := relicErrorMessage(t, repository, 5, core.CategoryValidation, append([]string{"update", id}, test.args...)...)
+		if !strings.Contains(message, test.want) {
+			t.Errorf("relic update %q message = %q, want %q", test.args, message, test.want)
+		}
+		if after := relicHeadOf(t, repository, id); after != head {
+			t.Fatalf("relic update %q moved the relic from %s to %s", test.args, head, after)
+		}
+	}
+
+	// In text the service's message is what is printed.
+	code, stdout, stderr := run(t, repository, "relic", "update", id, "--set", "status=a", "--clear", "status")
+	if code != 5 || stdout != "" || !strings.Contains(stderr, `this update sets and clears property "status"; name a property once in one update`) {
+		t.Fatalf("relic update in text = (%d, %q, %q), want exit 5 with the service's message", code, stdout, stderr)
+	}
+	if after := relicHeadOf(t, repository, id); after != head {
+		t.Fatalf("a refused update moved the relic from %s to %s", head, after)
+	}
+}
+
 func TestRelicUpdatePartAddress(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
@@ -1053,6 +1092,7 @@ func TestRelicUpdateHelp(t *testing.T) {
 		"--add-part, --part, --move-part, --remove-part and --restore-part each start a group,",
 		"Saving a body over an existing one needs --base <version>, the version shown by",
 		"--set and --field store text. --set-json and --field-json store any JSON value.",
+		"One command names a property once, and a field of a part once; naming one twice is refused.",
 	} {
 		if !strings.Contains(output, want) {
 			t.Errorf("relic update help = %q, want %q", output, want)

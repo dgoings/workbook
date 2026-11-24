@@ -924,7 +924,8 @@ var commandSchemas = map[string]commandMetadata{
 					"Saving a body over an existing one needs --base <version>, the version shown by\n" +
 					"\"workbook relic show <relic>#<part>\". A save from an older version is refused: read\n" +
 					"the part again and save from the version it is at now.\n\n" +
-					"--set and --field store text. --set-json and --field-json store any JSON value.",
+					"--set and --field store text. --set-json and --field-json store any JSON value.\n" +
+					"One command names a property once, and a field of a part once; naming one twice is refused.",
 				Positionals: []string{"<relic>"},
 				Options: []optionMetadata{
 					{Name: "title", Kind: stringFlag, Value: "<title>", Description: "set the relic's title"},

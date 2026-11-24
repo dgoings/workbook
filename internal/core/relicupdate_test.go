@@ -303,38 +303,19 @@ func TestRelicUpdateEditsSeeTheOnesBeforeThem(t *testing.T) {
 		requireRelicWrites(t, "remove then edit", store, 1)
 	})
 
-	t.Run("set twice, then clear", func(t *testing.T) {
-		store, service, relicID, _, _, _ := relicCreatedForUpdate(t)
-		result, err := service.Update(ctx, relicID, []RelicEdit{
-			{Kind: RelicEditSetProperty, Name: "phase", Value: relicRawString("one")},
-			{Kind: RelicEditSetProperty, Name: "phase", Value: relicRawString("one")},
-			{Kind: RelicEditClearProperty, Name: "phase"},
-			{Kind: RelicEditClearProperty, Name: "phase"},
-		})
-		write := requireRelicWritten(t, "set twice, then clear", store, 2, result, err)
-		want := []RelicOperationType{RelicOperationPropertySet, RelicOperationPropertyClear}
-		if got := relicOperationTypes(write.pack); !reflect.DeepEqual(got, want) {
-			t.Errorf("operations = %v, want %v", got, want)
-		}
-		if _, present := write.record.State.Relic.Properties["phase"]; present {
-			t.Errorf("the property is still set")
-		}
-	})
-
 	t.Run("fields in one edit", func(t *testing.T) {
 		store, service, relicID, goals, _, _ := relicCreatedForUpdate(t)
 		result, err := service.Update(ctx, relicID, []RelicEdit{{Kind: RelicEditPart, Part: goals, Fields: []RelicFieldEdit{
 			{Name: "owner", Value: relicRawString("dylan")},
-			{Name: "owner", Value: relicRawString("dylan")},
-			{Name: "owner", Clear: true},
 			{Name: "heading", Value: json.RawMessage(`{"b": 1, "a": 2}`)},
+			{Name: "absent", Clear: true},
 		}}})
 		write := requireRelicWritten(t, "fields in one edit", store, 2, result, err)
-		want := []RelicOperationType{RelicOperationPartFieldSet, RelicOperationPartFieldClear, RelicOperationPartFieldSet}
+		want := []RelicOperationType{RelicOperationPartFieldSet, RelicOperationPartFieldSet}
 		if got := relicOperationTypes(write.pack); !reflect.DeepEqual(got, want) {
 			t.Errorf("operations = %v, want %v", got, want)
 		}
-		wantFields := map[string]json.RawMessage{"heading": json.RawMessage(`{"a":2,"b":1}`)}
+		wantFields := map[string]json.RawMessage{"heading": json.RawMessage(`{"a":2,"b":1}`), "owner": relicRawString("dylan")}
 		if got := write.content[goals].Fields; !reflect.DeepEqual(got, wantFields) {
 			t.Errorf("content fields = %s, want %s", got, wantFields)
 		}
@@ -870,12 +851,214 @@ func TestRelicUpdateRefusesOversizedSingleValues(t *testing.T) {
 	requireRelicWritten(t, "a body of 1 MiB", store, 2, result, err)
 	// So is a properties object that a clear in the same update brings back
 	// under the limit: only what would be stored is measured.
+	result, err = service.Update(ctx, relicID, []RelicEdit{{Kind: RelicEditSetProperty, Name: "one", Value: long(40 * 1024)}})
+	requireRelicWritten(t, "one large property", store, 3, result, err)
 	result, err = service.Update(ctx, relicID, []RelicEdit{
-		{Kind: RelicEditSetProperty, Name: "one", Value: long(40 * 1024)},
 		{Kind: RelicEditSetProperty, Name: "two", Value: long(40 * 1024)},
 		{Kind: RelicEditClearProperty, Name: "one"},
 	})
-	requireRelicWritten(t, "properties under the limit at the end", store, 3, result, err)
+	requireRelicWritten(t, "properties under the limit at the end", store, 4, result, err)
+}
+
+// relicTitleUnchanged requires the stored relic to keep the title
+// relicCreatedForUpdate gave it.
+func relicTitleUnchanged(t *testing.T, label string, store *memoryRelicStore, relicID string) {
+	t.Helper()
+	if got := store.snapshots[relicID].Record.State.Relic.Title; got != "Task archive compaction" {
+		t.Errorf("%s: title after the refused update = %q", label, got)
+	}
+}
+
+func TestRelicUpdateRefusesANameGivenTwice(t *testing.T) {
+	ctx := context.Background()
+	set := func(name, value string) RelicEdit {
+		return RelicEdit{Kind: RelicEditSetProperty, Name: name, Value: relicRawString(value)}
+	}
+	clear := func(name string) RelicEdit { return RelicEdit{Kind: RelicEditClearProperty, Name: name} }
+	setField := func(name, value string) RelicFieldEdit {
+		return RelicFieldEdit{Name: name, Value: relicRawString(value)}
+	}
+	clearField := func(name string) RelicFieldEdit { return RelicFieldEdit{Name: name, Clear: true} }
+
+	for name, test := range map[string]struct {
+		edits     func(goals string) []RelicEdit
+		fragments func(goals string) []string
+	}{
+		"a property set and cleared": {
+			func(string) []RelicEdit { return []RelicEdit{set("status", "a"), clear("status")} },
+			func(string) []string {
+				return []string{`this update sets and clears property "status"`, "name a property once in one update"}
+			},
+		},
+		"a property cleared and set": {
+			func(string) []RelicEdit { return []RelicEdit{clear("status"), set("status", "a")} },
+			func(string) []string { return []string{`this update sets and clears property "status"`} },
+		},
+		"a property set twice": {
+			func(string) []RelicEdit { return []RelicEdit{set("status", "a"), set("status", "b")} },
+			func(string) []string {
+				return []string{`this update sets property "status" twice`, "name a property once in one update"}
+			},
+		},
+		// The relic has no such property, so each clear alone would change
+		// nothing; the refusal is decided from the edits alone.
+		"an absent property cleared twice": {
+			func(string) []RelicEdit { return []RelicEdit{clear("absent"), clear("absent")} },
+			func(string) []string { return []string{`this update clears property "absent" twice`} },
+		},
+		"a field set and cleared": {
+			func(goals string) []RelicEdit {
+				return []RelicEdit{{Kind: RelicEditPart, Part: goals, Fields: []RelicFieldEdit{setField("heading", "x"), clearField("heading")}}}
+			},
+			func(goals string) []string {
+				return []string{`this update sets and clears field "heading" of part ` + goals, "name a field once for each part in one update"}
+			},
+		},
+		"a field set twice in two edits": {
+			func(goals string) []RelicEdit {
+				return []RelicEdit{
+					{Kind: RelicEditPart, Part: goals, Fields: []RelicFieldEdit{setField("heading", "x")}},
+					{Kind: RelicEditPart, Part: goals, Fields: []RelicFieldEdit{setField("heading", "y")}},
+				}
+			},
+			func(goals string) []string {
+				return []string{`this update sets field "heading" of part ` + goals + " twice", "name a field once for each part in one update"}
+			},
+		},
+		"an absent field cleared twice": {
+			func(goals string) []RelicEdit {
+				return []RelicEdit{{Kind: RelicEditPart, Part: goals, Fields: []RelicFieldEdit{clearField("absent"), clearField("absent")}}}
+			},
+			func(goals string) []string {
+				return []string{`this update clears field "absent" of part ` + goals + " twice"}
+			},
+		},
+		// Two prefixes that find the same part name the same part.
+		"one part addressed two ways": {
+			func(goals string) []RelicEdit {
+				return []RelicEdit{
+					{Kind: RelicEditPart, Part: goals, Fields: []RelicFieldEdit{setField("heading", "x")}},
+					{Kind: RelicEditPart, Part: strings.ToLower(goals), Fields: []RelicFieldEdit{clearField("heading")}},
+				}
+			},
+			func(goals string) []string {
+				return []string{`this update sets and clears field "heading" of part ` + goals}
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, service, relicID, goals, _, _ := relicCreatedForUpdate(t)
+			// A valid change alongside the refused ones must not be written either.
+			edits := append([]RelicEdit{{Kind: RelicEditTitle, Title: "A new title"}}, test.edits(goals)...)
+			_, err := service.Update(ctx, relicID, edits)
+			requireRelicCategory(t, name, err, CategoryValidation, test.fragments(goals)...)
+			requireRelicWrites(t, name, store, 1)
+			relicTitleUnchanged(t, name, store, relicID)
+		})
+	}
+
+	t.Run("before the relic is read", func(t *testing.T) {
+		store, service, _, _, _, _ := relicCreatedForUpdate(t)
+		_, err := service.Update(ctx, "WB-R-7ZZZ", []RelicEdit{set("status", "a"), clear("status")})
+		requireRelicCategory(t, "an unknown relic", err, CategoryValidation, `"status"`)
+		requireRelicWrites(t, "an unknown relic", store, 1)
+	})
+
+	t.Run("an oversized name is not echoed", func(t *testing.T) {
+		store, service, relicID, goals, _, _ := relicCreatedForUpdate(t)
+		long := strings.Repeat("n", 5000)
+		for label, edits := range map[string][]RelicEdit{
+			"property": {set(long, "a"), set(long, "b")},
+			"field":    {{Kind: RelicEditPart, Part: goals, Fields: []RelicFieldEdit{setField(long, "a"), clearField(long)}}},
+		} {
+			_, err := service.Update(ctx, relicID, edits)
+			requireRelicCategory(t, label, err, CategoryValidation, "5000 bytes long")
+			if len(err.Error()) > 300 {
+				t.Errorf("%s: the refusal is %d bytes long; it must not carry the name", label, len(err.Error()))
+			}
+			requireRelicWrites(t, label, store, 1)
+		}
+	})
+
+	t.Run("a part added and then edited", func(t *testing.T) {
+		store, service, relicID := relicFixtureService(t, relicFixtureParts(1, 0, -1))
+		// The fixture service mints IDs from 900000, so the new part is that one.
+		added := relicTestID(900000)
+		_, err := service.Update(ctx, relicID, []RelicEdit{
+			{Kind: RelicEditAddPart, PartType: "section", Fields: []RelicFieldEdit{setField("heading", "x")}},
+			{Kind: RelicEditPart, Part: added, Fields: []RelicFieldEdit{setField("heading", "y")}},
+		})
+		requireRelicCategory(t, "a part added and then edited", err, CategoryValidation,
+			`this update sets field "heading" of part `+added+" twice")
+		requireRelicWrites(t, "a part added and then edited", store, 0)
+
+		_, err = service.Update(ctx, relicID, []RelicEdit{
+			{Kind: RelicEditAddPart, PartType: "section", Fields: []RelicFieldEdit{setField("heading", "x"), setField("heading", "y")}},
+		})
+		requireRelicCategory(t, "a new part's field given twice", err, CategoryValidation, `this update sets field "heading" of part `)
+		requireRelicWrites(t, "a new part's field given twice", store, 0)
+	})
+}
+
+func TestRelicUpdateNamesThatDoNotCollide(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("the same field on two parts", func(t *testing.T) {
+		store, service, relicID, goals, decision, _ := relicCreatedForUpdate(t)
+		result, err := service.Update(ctx, relicID, []RelicEdit{
+			{Kind: RelicEditPart, Part: goals, Fields: []RelicFieldEdit{{Name: "heading", Value: relicRawString("One")}}},
+			{Kind: RelicEditPart, Part: decision, Fields: []RelicFieldEdit{{Name: "heading", Value: relicRawString("Two")}}},
+		})
+		write := requireRelicWritten(t, "the same field on two parts", store, 2, result, err)
+		if got := write.content[goals].Fields["heading"]; string(got) != `"One"` {
+			t.Errorf("goals heading = %s", got)
+		}
+		if got := write.content[decision].Fields["heading"]; string(got) != `"Two"` {
+			t.Errorf("decision heading = %s", got)
+		}
+	})
+
+	t.Run("a property and a field of one name", func(t *testing.T) {
+		store, service, relicID, goals, _, _ := relicCreatedForUpdate(t)
+		result, err := service.Update(ctx, relicID, []RelicEdit{
+			{Kind: RelicEditSetProperty, Name: "heading", Value: relicRawString("p")},
+			{Kind: RelicEditPart, Part: goals, Fields: []RelicFieldEdit{{Name: "heading", Value: relicRawString("f")}}},
+		})
+		write := requireRelicWritten(t, "a property and a field of one name", store, 2, result, err)
+		if got := write.record.State.Relic.Properties["heading"]; string(got) != `"p"` {
+			t.Errorf("property heading = %s", got)
+		}
+		if got := write.content[goals].Fields["heading"]; string(got) != `"f"` {
+			t.Errorf("field heading = %s", got)
+		}
+	})
+
+	t.Run("several edits of one part naming different fields", func(t *testing.T) {
+		store, service, relicID, goals, _, _ := relicCreatedForUpdate(t)
+		result, err := service.Update(ctx, relicID, []RelicEdit{
+			{Kind: RelicEditPart, Part: goals, Fields: []RelicFieldEdit{{Name: "owner", Value: relicRawString("dylan")}}},
+			{Kind: RelicEditPart, Part: strings.ToLower(goals), Fields: []RelicFieldEdit{{Name: "heading", Clear: true}}},
+		})
+		write := requireRelicWritten(t, "several edits of one part", store, 2, result, err)
+		want := map[string]json.RawMessage{"owner": relicRawString("dylan")}
+		if got := write.content[goals].Fields; !reflect.DeepEqual(got, want) {
+			t.Errorf("fields = %s, want %s", got, want)
+		}
+	})
+
+	t.Run("a part added and then edited in another field", func(t *testing.T) {
+		store, service, relicID := relicFixtureService(t, relicFixtureParts(1, 0, -1))
+		added := relicTestID(900000)
+		result, err := service.Update(ctx, relicID, []RelicEdit{
+			{Kind: RelicEditAddPart, PartType: "section", Fields: []RelicFieldEdit{{Name: "heading", Value: relicRawString("x")}}},
+			{Kind: RelicEditPart, Part: added, Fields: []RelicFieldEdit{{Name: "owner", Value: relicRawString("y")}}},
+		})
+		write := requireRelicWritten(t, "a part added and then edited", store, 1, result, err)
+		want := map[string]json.RawMessage{"heading": relicRawString("x"), "owner": relicRawString("y")}
+		if got := write.content[added].Fields; !reflect.DeepEqual(got, want) {
+			t.Errorf("fields = %s, want %s", got, want)
+		}
+	})
 }
 
 func TestRelicUpdateThatChangesNothingWritesNothing(t *testing.T) {

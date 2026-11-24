@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 )
 
 // RelicEditKind names one kind of change relic update makes.
@@ -147,6 +148,9 @@ func relicMutationOf(snapshot RelicSnapshot, changed bool) RelicMutationResult {
 // The result's Parts are the parts this update added or edited, in the order
 // the edits first changed them.
 func (s RelicService) Update(ctx context.Context, idOrPrefix string, edits []RelicEdit) (RelicMutationResult, error) {
+	if err := checkRelicPropertiesNamedOnce(edits); err != nil {
+		return RelicMutationResult{}, err
+	}
 	snapshot, err := s.relicToChange(ctx, idOrPrefix)
 	if err != nil {
 		return RelicMutationResult{}, err
@@ -163,6 +167,7 @@ func (s RelicService) Update(ctx context.Context, idOrPrefix string, edits []Rel
 		relicID: relicID,
 		relic:   copyRelicData(snapshot.Record.State.Relic),
 		minted:  map[string]struct{}{},
+		named:   map[string]map[string]bool{},
 		before:  map[string]map[string]json.RawMessage{},
 		added:   map[string]struct{}{},
 		bodies:  map[string][]byte{},
@@ -249,6 +254,76 @@ func (s RelicService) setRelicDeleted(ctx context.Context, idOrPrefix string, de
 	return relicMutationOf(written, true), nil
 }
 
+// relicMessageNameLimit is the longest property or field name a refusal
+// repeats. A name has no limit of its own, so a longer one is given by size.
+const relicMessageNameLimit = 100
+
+// relicNamedInMessage names a property or field for a refusal, by its size
+// alone when it is too long to repeat.
+func relicNamedInMessage(kind, name string) string {
+	if len(name) > relicMessageNameLimit {
+		return fmt.Sprintf("a %s whose name is %d bytes long", kind, len(name))
+	}
+	return fmt.Sprintf("%s %q", kind, name)
+}
+
+// relicNamedTwice refuses an update that names one property, or one field of
+// one part, a second time. what is the thing named, as relicNamedInMessage
+// gives it, and firstClear and clear say whether each naming cleared it.
+//
+// With each name given once, the size check on the update's end state bounds
+// every value its operations record, and a command that contradicts itself is
+// reported instead of quietly keeping its last value.
+func relicNamedTwice(what string, firstClear, clear bool, advice string) error {
+	switch {
+	case firstClear != clear:
+		return Errorf(CategoryValidation, "this update sets and clears %s; %s", what, advice)
+	case clear:
+		return Errorf(CategoryValidation, "this update clears %s twice; %s", what, advice)
+	default:
+		return Errorf(CategoryValidation, "this update sets %s twice; %s", what, advice)
+	}
+}
+
+// checkRelicPropertiesNamedOnce refuses edits that set or clear one property
+// more than once. It is decided from the edits alone, before the relic is
+// read. A name that is no valid name is left to the edit's own check.
+func checkRelicPropertiesNamedOnce(edits []RelicEdit) error {
+	named := map[string]bool{} // whether the first edit to name it cleared it
+	for _, edit := range edits {
+		if edit.Kind != RelicEditSetProperty && edit.Kind != RelicEditClearProperty {
+			continue
+		}
+		if ValidateRelicName("property", edit.Name) != nil {
+			continue
+		}
+		clear := edit.Kind == RelicEditClearProperty
+		if firstClear, seen := named[edit.Name]; seen {
+			return relicNamedTwice(relicNamedInMessage("property", edit.Name), firstClear, clear,
+				"name a property once in one update")
+		}
+		named[edit.Name] = clear
+	}
+	return nil
+}
+
+// nameField records that this update sets or clears a field of a part, and
+// refuses a field the update has already named for that part. partID is the
+// part as resolved, so two prefixes of one part name the same part.
+func (u *relicUpdate) nameField(partID string, field RelicFieldEdit) error {
+	fields := u.named[partID]
+	if fields == nil {
+		fields = map[string]bool{}
+		u.named[partID] = fields
+	}
+	if firstClear, seen := fields[field.Name]; seen {
+		return relicNamedTwice(relicNamedInMessage("field", field.Name)+" of part "+partID, firstClear, field.Clear,
+			"name a field once for each part in one update")
+	}
+	fields[field.Name] = field.Clear
+	return nil
+}
+
 // relicUpdate is one update while its edits apply: the relic as the edits so
 // far leave it, and the operations and content they add up to.
 type relicUpdate struct {
@@ -261,6 +336,9 @@ type relicUpdate struct {
 	relic      RelicData
 	operations []RelicOperation
 	minted     map[string]struct{}
+	// named holds, by part, the fields an edit so far has set or cleared, and
+	// whether the first to name each cleared it.
+	named map[string]map[string]bool
 
 	// before holds a part's fields as they were before any operation here: read
 	// from the store for a part the relic had, given for a part an edit added.
@@ -426,6 +504,11 @@ func (u *relicUpdate) addPart(edit RelicEdit) error {
 	if err != nil {
 		return err
 	}
+	for _, field := range edit.Fields {
+		if err := u.nameField(id, field); err != nil {
+			return err
+		}
+	}
 	var position string
 	if given {
 		position, err = PlacePart(relicPlacements(u.relic.LiveParts()), id, anchor.ID, before)
@@ -518,6 +601,14 @@ func (u *relicUpdate) editPart(ctx context.Context, edit RelicEdit) error {
 	if err != nil {
 		return err
 	}
+	for _, field := range edit.Fields {
+		if err := ValidateRelicName("field", field.Name); err != nil {
+			return err
+		}
+		if err := u.nameField(part.ID, field); err != nil {
+			return err
+		}
+	}
 	if edit.Body != nil {
 		if err := checkRelicBodyInput("part "+part.ID, *edit.Body); err != nil {
 			return err
@@ -538,9 +629,6 @@ func (u *relicUpdate) editPart(ctx context.Context, edit RelicEdit) error {
 		operation := RelicOperation{Type: RelicOperationPartFieldClear, Part: part.ID, Name: field.Name}
 		current, present := u.fieldsNow(part.ID)[field.Name]
 		if field.Clear {
-			if err := ValidateRelicName("field", field.Name); err != nil {
-				return err
-			}
 			if !present {
 				continue
 			}
