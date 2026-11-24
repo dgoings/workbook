@@ -180,15 +180,22 @@ func newRelicDocumentPart(part RelicPart, content RelicPartContent) RelicDocumen
 	if part.Body != nil {
 		body := &RelicDocumentBody{Format: part.Body.Format, Version: part.Body.Version, Bytes: part.Body.Bytes}
 		if content.HasBody {
-			if utf8.Valid(content.Body) {
-				text := string(content.Body)
-				body.Text = &text
-			} else {
-				encoded := base64.StdEncoding.EncodeToString(content.Body)
-				body.Base64 = &encoded
-			}
+			body.Text, body.Base64 = relicBodyTextOrBase64(content.Body)
 		}
 		presented.Body = body
 	}
 	return presented
+}
+
+// relicBodyTextOrBase64 presents a body's bytes for JSON, as exactly one of
+// the two: the text when the bytes are valid UTF-8, which an empty body is,
+// and their base64 when they are not. A relic document and a relic conflict
+// both carry a body this way.
+func relicBodyTextOrBase64(content []byte) (text, encoded *string) {
+	if utf8.Valid(content) {
+		value := string(content)
+		return &value, nil
+	}
+	value := base64.StdEncoding.EncodeToString(content)
+	return nil, &value
 }

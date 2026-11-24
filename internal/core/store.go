@@ -159,6 +159,27 @@ const WarningNextHeldByOthers = "next-held-by-others"
 // travels beside it as the result's `reresolved` member.
 const WarningStatusRenameReresolves = "status-rename-reresolves"
 
+// WarningRelicEditOnRemovedPart reports that a synchronization joined a
+// change that removed a part of a relic with a change, made apart from it,
+// that edited the same part.
+//
+// It is a warning rather than a conflict because nothing is lost and nothing
+// has to be decided: the part stays removed and holds the edit, and restoring
+// the part shows it. The person who made the edit has to be told, because a
+// removed part is not shown and the edit would otherwise seem to have gone.
+const WarningRelicEditOnRemovedPart = "relic-edit-on-removed-part"
+
+// WarningRelicOverLimit reports that a synchronization joined two changes
+// that together take a relic past a count or a total: its live parts, its
+// parts counting removed ones, the bodies of its live parts together, all of
+// its properties together or all of one part's fields together.
+//
+// It is a warning rather than a refusal because each change was within the
+// limit when it was saved, and refusing one of them here would drop work that
+// was accepted. Both are kept; the next change that would make the relic
+// larger still is refused when it is saved.
+const WarningRelicOverLimit = "relic-over-limit"
+
 type Warning struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`

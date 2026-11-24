@@ -1,0 +1,713 @@
+package core
+
+import (
+	"encoding/json"
+	"reflect"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// replayStepFor plans one replay step and fails the test on an error.
+func replayStepFor(t *testing.T, parent RelicRecord, pack RelicOperationPack, input RelicReplayInput) RelicReplayStep {
+	t.Helper()
+	step, err := PlanRelicReplay(parent, pack, input)
+	if err != nil {
+		t.Fatalf("PlanRelicReplay: %v", err)
+	}
+	return step
+}
+
+// requireReplayApplied checks a step that neither skipped nor stopped, and
+// that its record is a child of parent.
+func requireReplayApplied(t *testing.T, label string, parent RelicRecord, step RelicReplayStep) {
+	t.Helper()
+	if step.Skip || step.Conflict != nil {
+		t.Fatalf("%s: skip %v, conflict %#v; want the pack applied", label, step.Skip, step.Conflict)
+	}
+	if got, want := step.Record.State.LogicalClock, parent.State.LogicalClock+1; got != want {
+		t.Errorf("%s: logical clock = %d, want %d", label, got, want)
+	}
+}
+
+// requireReplayRefused checks an error PlanRelicReplay returns for a relic it
+// cannot replay: corrupt data, naming the relic first, and nothing planned.
+func requireReplayRefused(t *testing.T, label string, step RelicReplayStep, err error) {
+	t.Helper()
+	requireCorruptData(t, label, err)
+	if err != nil && !strings.HasPrefix(err.Error(), "relic "+relicDocRelic+": ") {
+		t.Errorf("%s: error %q does not start with the relic", label, err)
+	}
+	if !reflect.DeepEqual(step, RelicReplayStep{}) {
+		t.Errorf("%s: step = %#v, want nothing planned", label, step)
+	}
+}
+
+func relicProperty(t *testing.T, record RelicRecord, name string) string {
+	t.Helper()
+	value, ok := record.State.Relic.Properties[name]
+	if !ok {
+		t.Fatalf("property %q is missing", name)
+	}
+	return string(value)
+}
+
+func TestPlanRelicReplayAppliesIndependentChanges(t *testing.T) {
+	parent := mustApplyRelic(t, goldenRelicRecord(t), relicFoldPack(2,
+		RelicOperation{ID: relicTestID(300), Type: RelicOperationPartFieldSet, Part: relicDocPartA, Name: "heading",
+			Value: json.RawMessage(`"Theirs"`)},
+		RelicOperation{ID: relicTestID(301), Type: RelicOperationPropertySet, Name: "p", Value: json.RawMessage(`1`)}))
+
+	// The pack was written at clock 2, beside the parent's own pack.
+	pack := relicFoldPack(2,
+		RelicOperation{ID: relicTestID(302), Type: RelicOperationPropertySet, Name: "q", Value: json.RawMessage(`2`)},
+		RelicOperation{ID: relicTestID(303), Type: RelicOperationPartMove, Part: relicDocPartB, Position: "1/2"})
+	step := replayStepFor(t, parent, pack, RelicReplayInput{})
+	requireReplayApplied(t, "independent changes", parent, step)
+
+	if got := relicProperty(t, step.Record, "p"); got != "1" {
+		t.Errorf("property p = %s, want the parent's 1", got)
+	}
+	if got := relicProperty(t, step.Record, "q"); got != "2" {
+		t.Errorf("property q = %s, want the pack's 2", got)
+	}
+	if got := requirePartForTest(t, step.Record.State.Relic, relicDocPartB).Position; got != "1/2" {
+		t.Errorf("part B position = %s, want 1/2", got)
+	}
+	if got := step.Record.State.Relic.Parts[0].ID; got != relicDocPartB {
+		t.Errorf("first part = %s, want part B, which moved before part A", got)
+	}
+	if pack.LogicalClock != 2 {
+		t.Errorf("the caller's pack was changed: clock = %d", pack.LogicalClock)
+	}
+}
+
+func TestPlanRelicReplayLaterValueWins(t *testing.T) {
+	parent := mustApplyRelic(t, goldenRelicRecord(t), relicFoldPack(2,
+		RelicOperation{ID: relicTestID(310), Type: RelicOperationTitleSet, Title: "Theirs"},
+		RelicOperation{ID: relicTestID(311), Type: RelicOperationPropertySet, Name: "p", Value: json.RawMessage(`"theirs"`)},
+		RelicOperation{ID: relicTestID(312), Type: RelicOperationPartMove, Part: relicDocPartB, Position: "5/1"}))
+
+	step := replayStepFor(t, parent, relicFoldPack(2,
+		RelicOperation{ID: relicTestID(313), Type: RelicOperationTitleSet, Title: "Ours"},
+		RelicOperation{ID: relicTestID(314), Type: RelicOperationPropertySet, Name: "p", Value: json.RawMessage(`"ours"`)},
+		RelicOperation{ID: relicTestID(315), Type: RelicOperationPartMove, Part: relicDocPartB, Position: "1/2"}),
+		RelicReplayInput{})
+	requireReplayApplied(t, "the same title, property and position", parent, step)
+
+	if got := step.Record.State.Relic.Title; got != "Ours" {
+		t.Errorf("title = %q, want the pack's", got)
+	}
+	if got := relicProperty(t, step.Record, "p"); got != `"ours"` {
+		t.Errorf("property p = %s, want the pack's", got)
+	}
+	if got := requirePartForTest(t, step.Record.State.Relic, relicDocPartB).Position; got != "1/2" {
+		t.Errorf("part B position = %s, want the pack's 1/2", got)
+	}
+}
+
+func TestPlanRelicReplayStopsOnAStaleBody(t *testing.T) {
+	theirs, ours := relicTestID(320), relicTestID(321)
+	// Origin saved part A's body from its first version, which is the part's ID.
+	parent := mustApplyRelic(t, goldenRelicRecord(t), relicFoldPack(2, RelicOperation{ID: theirs,
+		Type: RelicOperationPartBodySet, Part: relicDocPartA, Body: &RelicBodyChange{Format: "md", Bytes: 20, Base: relicDocPartA}}))
+	// So did this clone, from the same version.
+	stale := relicFoldPack(2, RelicOperation{ID: ours, Type: RelicOperationPartBodySet, Part: relicDocPartA,
+		Body: &RelicBodyChange{Format: "md", Bytes: 30, Base: relicDocPartA}})
+
+	t.Run("different text is a conflict", func(t *testing.T) {
+		for label, input := range map[string]RelicReplayInput{
+			"no account of the bodies": {},
+			"another part agrees":      {SameBody: map[string]bool{relicDocPartB: true}},
+			"the part disagrees":       {SameBody: map[string]bool{relicDocPartA: false}},
+		} {
+			step := replayStepFor(t, parent, stale, input)
+			if step.Conflict == nil {
+				t.Fatalf("%s: no conflict; the fold would drop the saved text without a word", label)
+			}
+			if step.Conflict.Type != RelicConflictBody || step.Conflict.Part != relicDocPartA ||
+				step.Conflict.RelicID != relicDocRelic {
+				t.Errorf("%s: conflict = %#v, want a body conflict for part A of the relic", label, step.Conflict)
+			}
+			if step.Skip || !reflect.DeepEqual(step.Record, RelicRecord{}) {
+				t.Errorf("%s: skip %v, record %#v; want neither", label, step.Skip, step.Record)
+			}
+		}
+	})
+
+	t.Run("the same text and label is agreement", func(t *testing.T) {
+		step := replayStepFor(t, parent, stale, RelicReplayInput{SameBody: map[string]bool{relicDocPartA: true}})
+		requireReplayApplied(t, "agreeing bodies", parent, step)
+		body := requirePartForTest(t, step.Record.State.Relic, relicDocPartA).Body
+		if body == nil || body.Version != theirs || body.Bytes != 20 {
+			t.Errorf("body = %#v, want the parent's version", body)
+		}
+	})
+
+	t.Run("a save from the current version applies", func(t *testing.T) {
+		second := relicTestID(322)
+		step := replayStepFor(t, parent, relicFoldPack(2,
+			RelicOperation{ID: ours, Type: RelicOperationPartBodySet, Part: relicDocPartA,
+				Body: &RelicBodyChange{Format: "md", Bytes: 30, Base: theirs}},
+			// A second save in the same pack starts from the first.
+			RelicOperation{ID: second, Type: RelicOperationPartBodySet, Part: relicDocPartA,
+				Body: &RelicBodyChange{Format: "md", Bytes: 40, Base: ours}}),
+			RelicReplayInput{})
+		requireReplayApplied(t, "a current base", parent, step)
+		if body := requirePartForTest(t, step.Record.State.Relic, relicDocPartA).Body; body == nil || body.Version != second {
+			t.Errorf("body = %#v, want the pack's last save", body)
+		}
+	})
+
+	t.Run("two first bodies for one part are a conflict", func(t *testing.T) {
+		withBody := mustApplyRelic(t, parent, relicFoldPack(3, RelicOperation{ID: relicTestID(323),
+			Type: RelicOperationPartBodySet, Part: relicDocPartB, Body: &RelicBodyChange{Format: "md", Bytes: 5}}))
+		step := replayStepFor(t, withBody, relicFoldPack(2, RelicOperation{ID: relicTestID(324),
+			Type: RelicOperationPartBodySet, Part: relicDocPartB, Body: &RelicBodyChange{Format: "md", Bytes: 6}}),
+			RelicReplayInput{})
+		if step.Conflict == nil || step.Conflict.Type != RelicConflictBody || step.Conflict.Part != relicDocPartB {
+			t.Errorf("conflict = %#v, want a body conflict for part B", step.Conflict)
+		}
+	})
+
+	t.Run("a body for a part the relic does not have is refused", func(t *testing.T) {
+		step, err := PlanRelicReplay(parent, relicFoldPack(2, RelicOperation{ID: relicTestID(325),
+			Type: RelicOperationPartBodySet, Part: relicTestID(326), Body: &RelicBodyChange{Format: "md", Bytes: 6}}),
+			RelicReplayInput{})
+		requireReplayRefused(t, "an unknown part", step, err)
+	})
+}
+
+func TestPlanRelicReplayOnADeletedRelic(t *testing.T) {
+	live := goldenRelicRecord(t)
+	deleted := mustApplyRelic(t, live, relicFoldPack(2,
+		RelicOperation{ID: relicTestID(330), Type: RelicOperationTombstone}))
+	title := RelicOperation{ID: relicTestID(331), Type: RelicOperationTitleSet, Title: "Edited"}
+	restore := RelicOperation{ID: relicTestID(332), Type: RelicOperationRestore}
+	tombstone := RelicOperation{ID: relicTestID(333), Type: RelicOperationTombstone}
+
+	for label, tc := range map[string]struct {
+		operations []RelicOperation
+		blocked    RelicOperation
+	}{
+		"an edit":                 {[]RelicOperation{title}, title},
+		"an edit, then a delete":  {[]RelicOperation{title, tombstone}, title},
+		"a restore":               {[]RelicOperation{restore}, restore},
+		"a restore, then an edit": {[]RelicOperation{restore, title}, title},
+	} {
+		step := replayStepFor(t, deleted, relicFoldPack(2, tc.operations...), RelicReplayInput{})
+		if step.Conflict == nil || step.Conflict.Type != RelicConflictTombstone || step.Conflict.Tombstone == nil {
+			t.Fatalf("%s onto a deleted relic: conflict = %#v, want a tombstone conflict", label, step.Conflict)
+		}
+		if step.Conflict.RelicID != relicDocRelic || step.Conflict.Part != "" || step.Conflict.Body != nil {
+			t.Errorf("%s: conflict = %#v, want the relic named and no part or body", label, step.Conflict)
+		}
+		if got := *step.Conflict.Tombstone; got.OperationID != tc.blocked.ID || got.Operation != tc.blocked.Type {
+			t.Errorf("%s: blocked operation = %#v, want %s %s", label, got, tc.blocked.Type, tc.blocked.ID)
+		}
+		if step.Skip || !reflect.DeepEqual(step.Record, RelicRecord{}) {
+			t.Errorf("%s: skip %v, record %#v; want neither", label, step.Skip, step.Record)
+		}
+	}
+
+	// The deleted-relic rule is the plan's rule 1 and runs before rule 2, so
+	// a pack origin already holds still stops on a relic origin then deleted.
+	held := replayStepFor(t, deleted, relicFoldPack(2, title),
+		RelicReplayInput{Held: map[string]RelicOperation{title.ID: title}})
+	if held.Conflict == nil || held.Conflict.Type != RelicConflictTombstone || held.Skip {
+		t.Errorf("a held edit onto a deleted relic: step = %#v, want a tombstone conflict", held)
+	}
+
+	for label, step := range map[string]RelicReplayStep{
+		"a delete of a deleted relic": replayStepFor(t, deleted, relicFoldPack(2, tombstone), RelicReplayInput{}),
+		"a restore of a live relic":   replayStepFor(t, live, relicFoldPack(2, restore), RelicReplayInput{}),
+	} {
+		if !step.Skip || step.Conflict != nil || !reflect.DeepEqual(step.Record, RelicRecord{}) {
+			t.Errorf("%s: step = %#v, want only a skip", label, step)
+		}
+	}
+
+	// A delete of a live relic applies, whatever origin did to it first.
+	edited := mustApplyRelic(t, live, relicFoldPack(2, title))
+	step := replayStepFor(t, edited, relicFoldPack(2, tombstone), RelicReplayInput{})
+	requireReplayApplied(t, "a delete over an edit", edited, step)
+	if !step.Record.State.Relic.Deleted || step.Record.State.Relic.Title != "Edited" {
+		t.Errorf("relic = %#v, want it deleted and holding the edit", step.Record.State.Relic)
+	}
+}
+
+func TestPlanRelicReplaySkipsWhatIsAlreadyHeld(t *testing.T) {
+	parent := goldenRelicRecord(t)
+	title := RelicOperation{ID: relicTestID(340), Type: RelicOperationTitleSet, Title: "Edited"}
+	add := RelicOperation{ID: relicTestID(341), Type: RelicOperationPartAdd, PartType: "note", Position: "9/1",
+		Body: &RelicBodyChange{Format: "md", Bytes: 12}}
+	pack := relicFoldPack(2, title, add)
+
+	// Origin's side holds both operations, under whatever commit, and more.
+	withBoth := mustApplyRelic(t, parent, relicFoldPack(2, title, add))
+	other := RelicOperation{ID: relicTestID(342), Type: RelicOperationPropertyClear, Name: "status"}
+	step := replayStepFor(t, withBoth, pack, RelicReplayInput{Held: map[string]RelicOperation{
+		title.ID: title,
+		// A copy read back from storage is equal without being the same value.
+		add.ID:   {ID: add.ID, Type: add.Type, PartType: "note", Position: "9/1", Body: &RelicBodyChange{Format: "md", Bytes: 12}},
+		other.ID: other,
+	}})
+	if !step.Skip || step.Conflict != nil || !reflect.DeepEqual(step.Record, RelicRecord{}) {
+		t.Errorf("every operation held: step = %#v, want only a skip", step)
+	}
+
+	step, err := PlanRelicReplay(parent, pack, RelicReplayInput{Held: map[string]RelicOperation{title.ID: title}})
+	requireReplayRefused(t, "one of two operations held", step, err)
+
+	retitled := title
+	retitled.Title = "Something else"
+	step, err = PlanRelicReplay(parent, relicFoldPack(2, title),
+		RelicReplayInput{Held: map[string]RelicOperation{title.ID: retitled}})
+	requireReplayRefused(t, "an ID held with another title", step, err)
+	if err != nil && !strings.Contains(err.Error(), title.ID) {
+		t.Errorf("error %q does not name the operation", err)
+	}
+
+	resized := add
+	resized.Body = &RelicBodyChange{Format: "md", Bytes: 13}
+	step, err = PlanRelicReplay(parent, relicFoldPack(2, title, add),
+		RelicReplayInput{Held: map[string]RelicOperation{title.ID: title, add.ID: resized}})
+	requireReplayRefused(t, "an ID held with another body", step, err)
+
+	// Nothing held is nothing skipped.
+	requireReplayApplied(t, "nothing held", parent, replayStepFor(t, parent, pack, RelicReplayInput{
+		Held: map[string]RelicOperation{other.ID: other},
+	}))
+}
+
+// relicValueOfSize is one stored string value of exactly size bytes.
+func relicValueOfSize(size int) json.RawMessage {
+	return json.RawMessage(`"` + strings.Repeat("x", size-2) + `"`)
+}
+
+func TestPlanRelicReplayNeverRefusesATotal(t *testing.T) {
+	parent := mustApplyRelic(t, goldenRelicRecord(t), relicFoldPack(2,
+		RelicOperation{ID: relicTestID(350), Type: RelicOperationPropertySet, Name: "theirs", Value: relicValueOfSize(40 * 1024)}))
+	step := replayStepFor(t, parent, relicFoldPack(2,
+		RelicOperation{ID: relicTestID(351), Type: RelicOperationPropertySet, Name: "ours", Value: relicValueOfSize(30 * 1024)}),
+		RelicReplayInput{})
+	requireReplayApplied(t, "two properties past their total", parent, step)
+	if got := len(relicProperty(t, step.Record, "theirs")); got != 40*1024 {
+		t.Errorf("the parent's property is %d bytes, want it kept", got)
+	}
+	if got := len(relicProperty(t, step.Record, "ours")); got != 30*1024 {
+		t.Errorf("the pack's property is %d bytes, want it applied", got)
+	}
+
+	encoded, err := json.Marshal(step.Record.State.Relic.Properties)
+	if err != nil || len(encoded) <= MaxRelicPropertiesBytes {
+		t.Fatalf("the properties are %d bytes, %v; want them past %d", len(encoded), err, MaxRelicPropertiesBytes)
+	}
+	warnings := RelicOverLimitWarnings(relicDocRelic, parent, step.Record)
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %#v, want one", warnings)
+	}
+	warning := warnings[0]
+	if warning.Code != "relic-over-limit" {
+		t.Errorf("code = %q, want relic-over-limit", warning.Code)
+	}
+	if !strings.HasPrefix(warning.Message, "relic "+relicDocRelic+": ") {
+		t.Errorf("message %q does not start with the relic", warning.Message)
+	}
+	for _, want := range []string{strconv.Itoa(len(encoded)), "65536"} {
+		if !strings.Contains(warning.Message, want) {
+			t.Errorf("message %q does not hold %s", warning.Message, want)
+		}
+	}
+	if strings.Contains(warning.Message, "xxxx") {
+		t.Errorf("the message repeats a property value")
+	}
+	// The size is the one a save is refused for.
+	refusal := checkRelicPropertiesGrowth(parent.State.Relic.Properties, step.Record.State.Relic.Properties)
+	if refusal == nil || !strings.Contains(refusal.Error(), strconv.Itoa(len(encoded))+" bytes") {
+		t.Errorf("a save past the total is refused with %v, want the same size", refusal)
+	}
+
+	// A relic that was already over is not reported again.
+	again := mustApplyRelic(t, step.Record, relicFoldPack(4,
+		RelicOperation{ID: relicTestID(352), Type: RelicOperationPropertySet, Name: "more", Value: relicValueOfSize(1024)}))
+	if got := RelicOverLimitWarnings(relicDocRelic, step.Record, again); len(got) != 0 {
+		t.Errorf("warnings for a relic already past the total = %#v, want none", got)
+	}
+}
+
+func TestPlanRelicReplayNeverRefusesACount(t *testing.T) {
+	operations := []RelicOperation{{ID: relicDocCreateOp, Type: RelicOperationCreate,
+		Relic: &RelicCreateData{Title: "Many parts", Type: "spec", CreatedAt: relicDocTime}}}
+	for index := 0; index < MaxRelicLiveParts; index++ {
+		operations = append(operations, RelicOperation{ID: relicTestID(10000 + index), Type: RelicOperationPartAdd,
+			PartType: "section", Position: strconv.Itoa(index+1) + "/1"})
+	}
+	parent, err := ApplyRelic(nil, relicFoldPack(1, operations...))
+	if err != nil {
+		t.Fatalf("ApplyRelic(a relic of %d parts): %v", MaxRelicLiveParts, err)
+	}
+	if got := RelicOverLimitWarnings(relicDocRelic, RelicRecord{}, parent); len(got) != 0 {
+		t.Fatalf("warnings at the limit = %#v, want none", got)
+	}
+
+	step := replayStepFor(t, parent, relicFoldPack(2, RelicOperation{ID: relicTestID(360), Type: RelicOperationPartAdd,
+		PartType: "section", Position: "1/2"}), RelicReplayInput{})
+	requireReplayApplied(t, "one part past the count", parent, step)
+	if got := len(step.Record.State.Relic.LiveParts()); got != MaxRelicLiveParts+1 {
+		t.Fatalf("live parts = %d, want %d", got, MaxRelicLiveParts+1)
+	}
+
+	warnings := RelicOverLimitWarnings(relicDocRelic, parent, step.Record)
+	if len(warnings) != 1 || warnings[0].Code != WarningRelicOverLimit {
+		t.Fatalf("warnings = %#v, want one relic-over-limit", warnings)
+	}
+	for _, want := range []string{"relic " + relicDocRelic + ": ", "2001", "2000"} {
+		if !strings.Contains(warnings[0].Message, want) {
+			t.Errorf("message %q does not hold %q", warnings[0].Message, want)
+		}
+	}
+}
+
+func TestRelicOverLimitWarnings(t *testing.T) {
+	// relicWith is a relic of the given parts; removed says how many of them,
+	// from the front, are removed, and each live one has a body of bodyBytes.
+	relicWith := func(parts, removed int, bodyBytes int64) RelicRecord {
+		record := RelicRecord{State: RelicStateDocument{RelicID: relicDocRelic,
+			Relic: RelicData{Properties: map[string]json.RawMessage{}, Parts: make([]RelicPart, parts)}}}
+		for index := range record.State.Relic.Parts {
+			part := RelicPart{ID: relicTestID(20000 + index), Type: "section", Position: strconv.Itoa(index+1) + "/1"}
+			if index < removed {
+				part.Removed = true
+			} else if bodyBytes > 0 {
+				part.Body = &RelicBody{Version: part.ID, Bytes: bodyBytes}
+			}
+			record.State.Relic.Parts[index] = part
+		}
+		return record
+	}
+
+	for label, tc := range map[string]struct {
+		before, after RelicRecord
+		want          []string
+	}{
+		"nothing over": {relicWith(10, 0, 100), relicWith(11, 1, 100), nil},
+		"the parts counting removed ones": {relicWith(MaxRelicParts, 3000, 0), relicWith(MaxRelicParts+1, 3000, 0),
+			[]string{"4001", "4000", "removed"}},
+		"the live bodies together": {relicWith(16, 0, MaxRelicBodyBytes), relicWith(17, 0, MaxRelicBodyBytes),
+			[]string{strconv.Itoa(17 * MaxRelicBodyBytes), strconv.Itoa(MaxRelicLiveBodyBytes)}},
+		"already over, and larger": {relicWith(MaxRelicParts+1, 3000, 0), relicWith(MaxRelicParts+2, 3000, 0), nil},
+		"over, and brought back":   {relicWith(MaxRelicParts+1, 3000, 0), relicWith(MaxRelicParts, 3000, 0), nil},
+	} {
+		warnings := RelicOverLimitWarnings(relicDocRelic, tc.before, tc.after)
+		if tc.want == nil {
+			if len(warnings) != 0 {
+				t.Errorf("%s: warnings = %#v, want none", label, warnings)
+			}
+			continue
+		}
+		if len(warnings) != 1 || warnings[0].Code != WarningRelicOverLimit ||
+			!strings.HasPrefix(warnings[0].Message, "relic "+relicDocRelic+": ") {
+			t.Errorf("%s: warnings = %#v, want one relic-over-limit naming the relic", label, warnings)
+			continue
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(warnings[0].Message, want) {
+				t.Errorf("%s: message %q does not hold %q", label, warnings[0].Message, want)
+			}
+		}
+	}
+
+	// Each limit passed is its own warning: live parts and all parts here.
+	both := RelicOverLimitWarnings(relicDocRelic, relicWith(MaxRelicLiveParts, 0, 0), relicWith(MaxRelicParts+1, 0, 0))
+	if len(both) != 2 {
+		t.Errorf("warnings for two limits passed = %#v, want two", both)
+	}
+
+	fields := RelicFieldsOverLimitWarning(relicDocRelic, relicDocPartA, 18500)
+	if fields.Code != WarningRelicOverLimit {
+		t.Errorf("fields warning code = %q, want relic-over-limit", fields.Code)
+	}
+	for _, want := range []string{"relic " + relicDocRelic + ": ", relicDocPartA, "18500", "16384"} {
+		if !strings.Contains(fields.Message, want) {
+			t.Errorf("fields warning %q does not hold %q", fields.Message, want)
+		}
+	}
+}
+
+func TestPlanRelicReplayReturnsWhatTheFoldRefuses(t *testing.T) {
+	parent := goldenRelicRecord(t)
+	for label, operation := range map[string]RelicOperation{
+		"a body save that takes the ID of a part": {ID: relicDocPartB, Type: RelicOperationPartBodySet,
+			Part: relicDocPartA, Body: &RelicBodyChange{Format: "md", Bytes: 30, Base: relicDocPartA}},
+		// The fold's refusal is not turned into a conflict by a stale base.
+		"a stale body save that takes the ID of a part": {ID: relicDocPartB, Type: RelicOperationPartBodySet,
+			Part: relicDocPartA, Body: &RelicBodyChange{Format: "md", Bytes: 30, Base: relicTestID(370)}},
+		"one property value over its own limit": {ID: relicTestID(371), Type: RelicOperationPropertySet, Name: "k",
+			Value: relicValueOfSize(MaxRelicPropertyValueBytes + 1)},
+		"a restore with an edit, onto a live relic": {ID: relicTestID(372), Type: RelicOperationRestore},
+	} {
+		operations := []RelicOperation{operation}
+		if operation.Type == RelicOperationRestore {
+			operations = append(operations, RelicOperation{ID: relicTestID(373), Type: RelicOperationTitleSet, Title: "Edited"})
+		}
+		step, err := PlanRelicReplay(parent, relicFoldPack(2, operations...), RelicReplayInput{})
+		requireReplayRefused(t, label, step, err)
+	}
+
+	// A relic from a newer Workbook is refused as that, before any rule here
+	// judges a document this build may not understand.
+	newer := parent
+	newer.State.MinReader = SupportedFormatGeneration + 1
+	step, err := PlanRelicReplay(newer, relicFoldPack(2,
+		RelicOperation{ID: relicTestID(374), Type: RelicOperationTitleSet, Title: "Edited"}), RelicReplayInput{})
+	if CategoryOf(err) != CategoryNewerWriter || !strings.HasPrefix(err.Error(), "relic "+relicDocRelic) {
+		t.Errorf("a newer relic: error = %v, want newer-writer naming the relic", err)
+	}
+	if !reflect.DeepEqual(step, RelicReplayStep{}) {
+		t.Errorf("a newer relic: step = %#v, want nothing planned", step)
+	}
+}
+
+// relicBodyConflictForTest is a body conflict as a sync reports it, with the
+// three texts filled in.
+func relicBodyConflictForTest() (RelicConflict, []string) {
+	texts := []string{"zebra words both started from\n", "quagga words saved here\n", "okapi words origin holds\n"}
+	base := RelicBodyVersion{Version: relicDocPartA, Format: "md", Bytes: int64(len(texts[0])), Object: "aaaa1111"}
+	ours := RelicBodyVersion{Version: relicTestID(380), Format: "md", Bytes: int64(len(texts[1])), Object: "bbbb2222"}
+	theirs := RelicBodyVersion{Version: relicTestID(381), Format: "md", Bytes: int64(len(texts[2])), Object: "cccc3333"}
+	SetRelicBodyVersionContent(&base, []byte(texts[0]))
+	SetRelicBodyVersionContent(&ours, []byte(texts[1]))
+	SetRelicBodyVersionContent(&theirs, []byte(texts[2]))
+	return RelicConflict{
+		RelicID:    relicDocRelic,
+		Type:       RelicConflictBody,
+		Part:       relicDocPartA,
+		Body:       &RelicBodyConflict{Base: &base, Ours: ours, Theirs: theirs},
+		ParkedRef:  "refs/workbook/reconciled-relics/" + relicDocRelic + "/1",
+		Unreplayed: 2,
+	}, texts
+}
+
+func TestRelicConflictDetailIsSafeAndComplete(t *testing.T) {
+	conflict, texts := relicBodyConflictForTest()
+	detail := RelicConflictDetail(conflict)
+	theirs := conflict.Body.Theirs.Version
+	for label, want := range map[string]string{
+		"the relic first":    "relic " + relicDocRelic + ": ",
+		"the part":           "part " + relicDocPartA,
+		"the parked ref":     conflict.ParkedRef,
+		"the remote":         "origin",
+		"the first command":  "git cat-file blob " + conflict.ParkedRef + ":parts/" + relicDocPartA + "/body > mine.md",
+		"the second command": "workbook relic show " + relicDocRelic + "#" + relicDocPartA + " --body > current.md",
+		"the third command": "workbook relic update " + relicDocRelic + " --part " + relicDocPartA +
+			" --body-file mine.md --base " + theirs,
+	} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("the detail does not hold %s, %q:\n%s", label, want, detail)
+		}
+	}
+	if !strings.HasPrefix(detail, "relic "+relicDocRelic+": ") {
+		t.Errorf("the detail does not start with the relic:\n%s", detail)
+	}
+	for _, text := range texts {
+		if strings.Contains(detail, strings.TrimSpace(text)) {
+			t.Errorf("the detail holds body text %q:\n%s", text, detail)
+		}
+	}
+	if strings.ContainsAny(detail, "\n\r") {
+		t.Errorf("the detail is more than one line:\n%s", detail)
+	}
+
+	conflict.Remote = "upstream"
+	if named := RelicConflictDetail(conflict); !strings.Contains(named, "upstream") || strings.Contains(named, "origin") {
+		t.Errorf("the detail for another remote does not name it alone:\n%s", named)
+	}
+
+	// Before a sync has parked the local tip and read the versions, the detail
+	// still names the relic and the part and says what to do.
+	bare := RelicConflictDetail(RelicConflict{RelicID: relicDocRelic, Type: RelicConflictBody, Part: relicDocPartA})
+	for _, want := range []string{"relic " + relicDocRelic + ": ", "part " + relicDocPartA, "workbook relic update"} {
+		if !strings.Contains(bare, want) {
+			t.Errorf("the detail without a parked ref does not hold %q:\n%s", want, bare)
+		}
+	}
+
+	tombstone := RelicConflict{
+		RelicID:   relicDocRelic,
+		Type:      RelicConflictTombstone,
+		Tombstone: &RelicTombstoneConflict{OperationID: relicTestID(382), Operation: RelicOperationTitleSet},
+		ParkedRef: "refs/workbook/reconciled-relics/" + relicDocRelic + "/2",
+	}
+	deleted := RelicConflictDetail(tombstone)
+	for _, want := range []string{"relic " + relicDocRelic + ": ", "origin", "title.set", tombstone.ParkedRef,
+		"workbook relic restore " + relicDocRelic} {
+		if !strings.Contains(deleted, want) {
+			t.Errorf("the tombstone detail does not hold %q:\n%s", want, deleted)
+		}
+	}
+	if !strings.HasPrefix(deleted, "relic "+relicDocRelic+": ") || strings.ContainsAny(deleted, "\n\r") {
+		t.Errorf("the tombstone detail is not one line that starts with the relic:\n%s", deleted)
+	}
+
+	one := RelicConflictError([]RelicConflict{conflict})
+	if CategoryOf(one) != CategoryConflict || one.Error() != RelicConflictDetail(conflict) {
+		t.Errorf("RelicConflictError(one) = %v, want a conflict saying the detail", one)
+	}
+	several := RelicConflictError([]RelicConflict{conflict, tombstone})
+	if CategoryOf(several) != CategoryConflict || !strings.Contains(several.Error(), "2 relic") {
+		t.Errorf("RelicConflictError(two) = %v, want a conflict counting them", several)
+	}
+	for _, text := range texts {
+		if strings.Contains(one.Error(), strings.TrimSpace(text)) || strings.Contains(several.Error(), strings.TrimSpace(text)) {
+			t.Errorf("a conflict error holds body text %q", text)
+		}
+	}
+}
+
+func TestRelicRemovedPartWarnings(t *testing.T) {
+	remove := relicFoldPack(2, RelicOperation{ID: relicTestID(390), Type: RelicOperationPartRemove, Part: relicDocPartA})
+	field := relicFoldPack(2, RelicOperation{ID: relicTestID(391), Type: RelicOperationPartFieldSet, Part: relicDocPartA,
+		Name: "heading", Value: json.RawMessage(`"Edited"`)})
+	body := relicFoldPack(2, RelicOperation{ID: relicTestID(392), Type: RelicOperationPartBodySet, Part: relicDocPartA,
+		Body: &RelicBodyChange{Format: "md", Bytes: 30, Base: relicDocPartA}})
+	move := relicFoldPack(3, RelicOperation{ID: relicTestID(393), Type: RelicOperationPartMove, Part: relicDocPartA, Position: "9/1"})
+	clear := relicFoldPack(2, RelicOperation{ID: relicTestID(394), Type: RelicOperationPartFieldClear, Part: relicDocPartA, Name: "heading"})
+	elsewhere := relicFoldPack(2,
+		RelicOperation{ID: relicTestID(395), Type: RelicOperationPartMove, Part: relicDocPartB, Position: "7/1"},
+		RelicOperation{ID: relicTestID(396), Type: RelicOperationTitleSet, Title: "Edited"})
+	restore := relicFoldPack(3, RelicOperation{ID: relicTestID(397), Type: RelicOperationPartRestore, Part: relicDocPartA})
+
+	removed := mustApplyRelic(t, goldenRelicRecord(t), remove)
+	live := goldenRelicRecord(t)
+
+	for label, tc := range map[string]struct {
+		local, remote []RelicOperationPack
+		result        RelicRecord
+		want          int
+	}{
+		"removed here, a field set on origin":     {[]RelicOperationPack{remove}, []RelicOperationPack{field}, removed, 1},
+		"removed on origin, a body saved here":    {[]RelicOperationPack{body}, []RelicOperationPack{remove}, removed, 1},
+		"removed on origin, moved here":           {[]RelicOperationPack{elsewhere, move}, []RelicOperationPack{remove}, removed, 1},
+		"removed here, a field cleared on origin": {[]RelicOperationPack{remove}, []RelicOperationPack{clear}, removed, 1},
+		"several edits are one warning":           {[]RelicOperationPack{remove}, []RelicOperationPack{field, clear, move}, removed, 1},
+		"one side did both":                       {[]RelicOperationPack{remove, move}, []RelicOperationPack{elsewhere}, removed, 0},
+		"the other side edited another part":      {[]RelicOperationPack{remove}, []RelicOperationPack{elsewhere}, removed, 0},
+		"removed on both sides, edited on none":   {[]RelicOperationPack{remove}, []RelicOperationPack{remove}, removed, 0},
+		"the part is live again":                  {[]RelicOperationPack{remove, restore}, []RelicOperationPack{field}, live, 0},
+		// Operations both sides hold were not made apart from each other.
+		"both sides hold the same operations": {[]RelicOperationPack{remove, move}, []RelicOperationPack{remove, move}, removed, 0},
+		"nothing on either side":              {nil, nil, removed, 0},
+	} {
+		warnings := RelicRemovedPartWarnings(relicDocRelic, tc.local, tc.remote, tc.result)
+		if len(warnings) != tc.want {
+			t.Errorf("%s: warnings = %#v, want %d", label, warnings, tc.want)
+			continue
+		}
+		for _, warning := range warnings {
+			if warning.Code != "relic-edit-on-removed-part" {
+				t.Errorf("%s: code = %q, want relic-edit-on-removed-part", label, warning.Code)
+			}
+			if !strings.HasPrefix(warning.Message, "relic "+relicDocRelic+": ") ||
+				!strings.Contains(warning.Message, "part "+relicDocPartA) {
+				t.Errorf("%s: message %q does not name the relic and the part", label, warning.Message)
+			}
+		}
+	}
+
+	// One warning per part, in the order the relic lists its parts.
+	bothRemoved := mustApplyRelic(t, removed, relicFoldPack(3,
+		RelicOperation{ID: relicTestID(398), Type: RelicOperationPartRemove, Part: relicDocPartB}))
+	warnings := RelicRemovedPartWarnings(relicDocRelic,
+		[]RelicOperationPack{remove, relicFoldPack(3, RelicOperation{ID: relicTestID(398), Type: RelicOperationPartRemove, Part: relicDocPartB})},
+		[]RelicOperationPack{elsewhere, field}, bothRemoved)
+	if len(warnings) != 2 || !strings.Contains(warnings[0].Message, relicDocPartA) || !strings.Contains(warnings[1].Message, relicDocPartB) {
+		t.Errorf("warnings for two parts = %#v, want part A's then part B's", warnings)
+	}
+}
+
+func TestRelicConflictJSONShape(t *testing.T) {
+	conflict, texts := relicBodyConflictForTest()
+	// The text saved here is not valid UTF-8, so it travels as base64.
+	conflict.Body.Ours.Format = ""
+	conflict.Body.Ours.Bytes = 3
+	SetRelicBodyVersionContent(&conflict.Body.Ours, []byte{0xff, 0xfe, 0x00})
+
+	requireJSON := func(label string, value any, want string) {
+		t.Helper()
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("%s: json.Marshal: %v", label, err)
+		}
+		if string(encoded) != want {
+			t.Errorf("%s:\n got %s\nwant %s", label, encoded, want)
+		}
+	}
+	quoted := func(text string) string {
+		encoded, _ := json.Marshal(text)
+		return string(encoded)
+	}
+
+	requireJSON("a body conflict", conflict, `{"relicId":"`+relicDocRelic+`","type":"body","part":"`+relicDocPartA+`",`+
+		`"body":{`+
+		`"base":{"version":"`+relicDocPartA+`","format":"md","bytes":`+strconv.Itoa(len(texts[0]))+`,"object":"aaaa1111","text":`+quoted(texts[0])+`},`+
+		`"ours":{"version":"`+relicTestID(380)+`","bytes":3,"object":"bbbb2222","base64":"//4A"},`+
+		`"theirs":{"version":"`+relicTestID(381)+`","format":"md","bytes":`+strconv.Itoa(len(texts[2]))+`,"object":"cccc3333","text":`+quoted(texts[2])+`}},`+
+		`"parkedRef":"refs/workbook/reconciled-relics/`+relicDocRelic+`/1","unreplayed":2}`)
+
+	// A part that had no body where the two histories met has no base, and a
+	// version whose content was not read carries neither text nor base64.
+	requireJSON("a body conflict with no base", RelicConflict{
+		RelicID: relicDocRelic,
+		Type:    RelicConflictBody,
+		Part:    relicDocPartB,
+		Body: &RelicBodyConflict{
+			Ours:   RelicBodyVersion{Version: relicTestID(380), Bytes: 4, Object: "bbbb2222"},
+			Theirs: RelicBodyVersion{Version: relicTestID(381), Format: "txt", Bytes: 0, Object: "cccc3333"},
+		},
+		Remote: "upstream",
+	}, `{"relicId":"`+relicDocRelic+`","type":"body","part":"`+relicDocPartB+`",`+
+		`"body":{"ours":{"version":"`+relicTestID(380)+`","bytes":4,"object":"bbbb2222"},`+
+		`"theirs":{"version":"`+relicTestID(381)+`","format":"txt","bytes":0,"object":"cccc3333"}},`+
+		`"unreplayed":0,"remote":"upstream"}`)
+
+	requireJSON("a tombstone conflict", RelicConflict{
+		RelicID:    relicDocRelic,
+		Type:       RelicConflictTombstone,
+		Tombstone:  &RelicTombstoneConflict{OperationID: relicTestID(382), Operation: RelicOperationTitleSet},
+		ParkedRef:  "refs/workbook/reconciled-relics/" + relicDocRelic + "/1",
+		Unreplayed: 1,
+	}, `{"relicId":"`+relicDocRelic+`","type":"tombstone",`+
+		`"tombstone":{"operationId":"`+relicTestID(382)+`","operation":"title.set"},`+
+		`"parkedRef":"refs/workbook/reconciled-relics/`+relicDocRelic+`/1","unreplayed":1}`)
+
+	// The content of a version is its text or its base64, never both, and an
+	// empty body is the empty text.
+	version := RelicBodyVersion{}
+	SetRelicBodyVersionContent(&version, []byte{0xff})
+	SetRelicBodyVersionContent(&version, []byte("now text"))
+	if version.Base64 != nil || version.Text == nil || *version.Text != "now text" {
+		t.Errorf("after text replaced bytes: %#v", version)
+	}
+	SetRelicBodyVersionContent(&version, []byte{0xc3, 0x28})
+	if version.Text != nil || version.Base64 == nil || *version.Base64 != "wyg=" {
+		t.Errorf("after bytes replaced text: %#v", version)
+	}
+	SetRelicBodyVersionContent(&version, nil)
+	if version.Base64 != nil || version.Text == nil || *version.Text != "" {
+		t.Errorf("after an empty body: %#v", version)
+	}
+
+	// A relic document makes the same choice for the same bytes.
+	for _, content := range [][]byte{[]byte("plain text"), {0xff, 0xfe, 0x00}, {}} {
+		var conflictVersion RelicBodyVersion
+		SetRelicBodyVersionContent(&conflictVersion, content)
+		part := newRelicDocumentPart(
+			RelicPart{ID: relicDocPartA, Type: "section", Position: "1/1", Body: &RelicBody{Version: relicDocPartA, Bytes: int64(len(content))}},
+			RelicPartContent{Body: content, HasBody: true})
+		if !reflect.DeepEqual(part.Body.Text, conflictVersion.Text) || !reflect.DeepEqual(part.Body.Base64, conflictVersion.Base64) {
+			t.Errorf("content %q: a document says text %v base64 %v, a conflict text %v base64 %v", content,
+				part.Body.Text, part.Body.Base64, conflictVersion.Text, conflictVersion.Base64)
+		}
+	}
+}
