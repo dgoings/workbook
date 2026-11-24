@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -548,5 +550,133 @@ func TestResetBundlesEveryRelicRefThatResolvesToACommit(t *testing.T) {
 	}
 	if got := workbookRefs(t, first.Root); len(got) != 0 {
 		t.Fatalf("refs left after the reset: %v", got)
+	}
+}
+
+// Sync publishes relics, so a relic the tasks remote holds is not work that
+// exists only here, and a checkout holding only published work can be reset
+// without a bundle.
+func TestResetDoesNotCountAPublishedRelic(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	first, _, config := syncRepositories(t)
+	createSyncTask(t, first, config, "Published")
+	root := writeRelicRoot(t, first, config, relicTestPartNumbered(1))
+	writeRelicChild(t, first, config, root, nil, relicTitleSet(2, "Archive plan, revised"))
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := first.PlanLocalReset(ctx, "origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Holds() || plan.Unchecked != "" {
+		t.Fatalf("PlanLocalReset() after the relic was published = %+v, want nothing held only here", plan)
+	}
+}
+
+// parkRelicTip sets ref, under the parked relic namespace, to objectID, as a
+// replay that stopped does.
+func parkRelicTip(t *testing.T, repo *Repository, relicID string, n int, objectID string) string {
+	t.Helper()
+	ref := relicParkedRefPrefix + relicID + "/" + strconv.Itoa(n)
+	syncGit(t, repo.Root, "update-ref", ref, objectID)
+	return ref
+}
+
+// A parked relic tip holds a person's text that a replay could not apply, and
+// nothing else holds it: it is set aside like a parked task tip, is in the
+// bundle, comes back with the restore command, and is removed by the reset.
+func TestResetCountsAParkedRelicTipAsSetAside(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	first, _, config := syncRepositories(t)
+	root := writeRelicRoot(t, first, config, relicTestPartNumbered(1))
+	tip := writeRelicChild(t, first, config, root, nil, relicTitleSet(2, "Archive plan, revised"))
+	relicID := tip.Record.State.RelicID
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	parked := parkRelicTip(t, first, relicID, 1, root.Head)
+
+	plan, err := first.PlanLocalReset(ctx, "origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Holds() || len(plan.Unpublished) != 0 || strings.Join(plan.SetAside, ",") != parked {
+		t.Fatalf("PlanLocalReset() = %+v, want only %s set aside", plan, parked)
+	}
+	result, err := first.ResetLocal(ctx, config.ProjectID, plan, ResetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if heads := bundleHeads(t, first.Root, result.Bundle); heads[parked] != root.Head {
+		t.Fatalf("the bundle holds %v, want %s at %s", heads, parked, root.Head)
+	}
+	if got := workbookRefs(t, first.Root); len(got) != 0 {
+		t.Fatalf("refs left after the reset: %v", got)
+	}
+	command := first.RestoreCommand(result.Bundle, plan.Refs)
+	if !strings.Contains(command, relicParkedRefPrefix+"*:"+relicParkedRefPrefix+"*") {
+		t.Fatalf("RestoreCommand() = %s, want it to fetch the parked relic refs", command)
+	}
+	restore := exec.Command("sh", "-c", command)
+	restore.Dir = first.Root
+	if output, err := restore.CombinedOutput(); err != nil {
+		t.Fatalf("%s: %v\n%s", command, err, output)
+	}
+	if got := syncGit(t, first.Root, "rev-parse", "--verify", parked); got != root.Head {
+		t.Fatalf("%s restores %s at %q, want %s", command, parked, got, root.Head)
+	}
+}
+
+// Publishing relics must not weaken what a reset keeps of a damaged one. A
+// relic ref, or a parked relic tip, naming a commit that is not a readable
+// relic is still bundled and still counted as work that exists only here,
+// because the tasks remote holds no such commit under that name; a published,
+// sound relic beside them is not counted.
+func TestResetStillBundlesADamagedRelicOnceRelicsArePublished(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	first, _, config := syncRepositories(t)
+	published := writeRelicRootNumbered(t, first, config, 1, relicTestPartNumbered(1))
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	other := writeRelicRootNumbered(t, first, config, 2, relicTestPartNumbered(1))
+	damagedID := other.Record.State.RelicID
+	damaged := forgeRelicTipWithoutAnOperation(t, first, other)
+	saved := syncGit(t, first.Root, "rev-parse", published.Head+"^{tree}")
+	tree := syncGitInput(t, first.Root, []byte("040000 tree "+saved+"\tsaved\n"), "mktree")
+	forgedParked := syncGit(t, first.Root, "commit-tree", tree, "-p", published.Head, "-m", "hand-made parked tip")
+	parked := parkRelicTip(t, first, published.Record.State.RelicID, 1, forgedParked)
+	if got := strings.TrimSpace(syncGit(t, first.Root, "ls-remote", "origin", relicRef(damagedID))); got != "" {
+		t.Fatalf("origin holds %s: %s", relicRef(damagedID), got)
+	}
+
+	plan, err := first.PlanLocalReset(ctx, "origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]ResetRef{}
+	for _, ref := range plan.Refs {
+		listed[ref.Ref] = ref
+	}
+	for _, name := range []string{relicRef(damagedID), parked} {
+		if ref := listed[name]; ref.Damaged == "" || !ref.Bundleable {
+			t.Fatalf("%s is listed as %+v, want it damaged and bundleable", name, ref)
+		}
+	}
+	if len(plan.Unpublished) != 1 || plan.Unpublished[0].RelicID != damagedID || strings.Join(plan.SetAside, ",") != parked {
+		t.Fatalf("PlanLocalReset() = %+v, want only the damaged relic unpublished and only %s set aside", plan, parked)
+	}
+
+	result, err := first.ResetLocal(ctx, config.ProjectID, plan, ResetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	heads := bundleHeads(t, first.Root, result.Bundle)
+	if heads[relicRef(damagedID)] != damaged || heads[parked] != forgedParked {
+		t.Fatalf("the bundle holds %v, want %s at %s and %s at %s", heads, relicRef(damagedID), damaged, parked, forgedParked)
 	}
 }

@@ -307,9 +307,10 @@ func TestRelicCommandsWorkInATasksOnlyFolder(t *testing.T) {
 	}
 }
 
-// A relic is never on the tasks remote, so a checkout holding one holds work
-// that exists only here: reset without a bundle is refused for it, and the
-// bundle reset writes brings it back at the same commit.
+// A relic created without a sync is not on the tasks remote, so a checkout
+// holding one holds work that exists only here: reset without a bundle is
+// refused for it, and the bundle reset writes brings it back at the same
+// commit.
 func TestResetBundlesRelics(t *testing.T) {
 	t.Parallel()
 	project := codeProject(t, "sha1")
@@ -355,27 +356,47 @@ func TestResetBundlesRelics(t *testing.T) {
 	}
 }
 
-// A reset of the remote touches only what the remote holds: this checkout's
-// relic, which the remote never held, stays where it is.
-func TestResetRemoteLeavesALocalRelic(t *testing.T) {
+// A reset of the remote deletes the relics it holds with everything else
+// under refs/workbook/, after writing them to the bundle, and touches nothing
+// in this checkout: its relic refs stay where they were.
+func TestResetRemoteDeletesRelicRefsAfterBundlingThem(t *testing.T) {
 	t.Parallel()
 	project := codeProject(t, "sha1")
 	clone := cloneCode(t, project)
 	if code, stdout, stderr := run(t, clone, "setup"); code != 0 {
 		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
 	}
-	relic := mustCreateRelic(t, clone, "Only here", "--type", "spec", "--no-sync").Relic
-	summary := resetJSON(t, clone, "--remote", "origin", "--confirm", "origin")
-	for _, ref := range summary.Refs {
-		if strings.Contains(ref.Ref, "relics/") {
-			t.Fatalf("the remote reset removed %s", ref.Ref)
+	relics := createThreeRelics(t, clone)
+	if code, stdout, stderr := run(t, clone, "sync"); code != 0 {
+		t.Fatalf("sync = (%d, %q, %q)", code, stdout, stderr)
+	}
+	heads := map[string]string{}
+	for _, relicID := range relics {
+		heads[relicID] = relicHeadOf(t, clone, relicID)
+		if got := cliGitOutput(t, project.code, "rev-parse", "--verify", relicRef(relicID)); got != heads[relicID] {
+			t.Fatalf("origin holds %s at %q before the reset, want %s", relicRef(relicID), got, heads[relicID])
 		}
 	}
-	if got := refsUnder(t, project.code, "refs/workbook/"); got != "" {
-		t.Fatalf("origin still holds:\n%s", got)
+
+	summary := resetJSON(t, clone, "--remote", "origin", "--confirm", "origin")
+	if summary.Bundle == "" {
+		t.Fatalf("reset --remote = %+v, want a bundle", summary)
 	}
-	if head := relicHeadOf(t, clone, relic.ID); head != relic.Head {
-		t.Fatalf("local relic ref = %s after the remote reset, want %s", head, relic.Head)
+	if got := refsUnder(t, project.code, "refs/workbook/relics/"); got != "" {
+		t.Fatalf("origin still holds relic refs:\n%s", got)
+	}
+	listing := cliGitOutput(t, clone, "bundle", "list-heads", summary.Bundle)
+	bundled := map[string]bool{}
+	for _, line := range strings.Split(listing, "\n") {
+		bundled[strings.TrimSpace(line)] = true
+	}
+	for _, relicID := range relics {
+		if !bundled[heads[relicID]+" refs/workbook/remotes/origin/relics/"+relicID] {
+			t.Fatalf("the bundle's heads do not name relic %s at %s:\n%s", relicID, heads[relicID], listing)
+		}
+		if head := relicHeadOf(t, clone, relicID); head != heads[relicID] {
+			t.Fatalf("local relic ref = %s after the remote reset, want %s", head, heads[relicID])
+		}
 	}
 }
 
@@ -523,30 +544,37 @@ func TestResetSaysNothingIsKeptOnlyOfARelicRefItCannotBundle(t *testing.T) {
 	}
 }
 
-// What the refusal of reset --no-backup says to do has to be possible: sync
-// publishes tasks and never a relic, so it is offered only for what is not a
-// relic.
-func TestResetRefusalOffersSyncOnlyForWhatSyncPublishes(t *testing.T) {
+// Sync publishes relics, so the refusal of reset --no-backup names an
+// unpublished relic and offers sync for it in the words it uses for a task.
+func TestResetRefusalDescribesAnUnpublishedRelic(t *testing.T) {
 	t.Parallel()
 	project := codeProject(t, "sha1")
 	clone := cloneCode(t, project)
 	if code, stdout, stderr := run(t, clone, "setup"); code != 0 {
 		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
 	}
-	const relicSentence = "workbook sync does not publish relics yet, so a relic is kept only by the bundle."
-	mustCreateRelic(t, clone, "Only here", "--type", "spec", "--no-sync")
+	const taskRemedies = "Run workbook sync to publish it, or reset without --no-backup to keep it in a bundle, " +
+		"or add --discard-unpublished to lose it."
+	relic := mustCreateRelic(t, clone, "Only here", "--type", "spec", "--no-sync").Relic
 
-	relicsOnly, _ := resetRefusalJSON(t, clone, 5, "--no-backup")
-	if strings.Contains(relicsOnly, "workbook sync to publish") || !strings.Contains(relicsOnly, relicSentence) ||
-		!strings.Contains(relicsOnly, "without --no-backup") || !strings.Contains(relicsOnly, "--discard-unpublished") {
-		t.Fatalf("refusal with only a relic = %q, want no advice to run workbook sync", relicsOnly)
+	relicsOnly, refusal := resetRefusalJSON(t, clone, 5, "--no-backup")
+	if !strings.Contains(relicsOnly, "relic "+relic.ID) || !strings.Contains(relicsOnly, taskRemedies) ||
+		strings.Contains(relicsOnly, "does not publish relics") || len(refusal.Unpublished) != 1 || refusal.Unpublished[0].RelicID != relic.ID {
+		t.Fatalf("refusal with only a relic = %q, %+v, want the relic named and the remedies a task gets", relicsOnly, refusal)
 	}
 
 	cliCreateTask(t, clone, "Created here only")
 	mixed, _ := resetRefusalJSON(t, clone, 5, "--no-backup")
-	syncAdvice := strings.Index(mixed, "Run workbook sync to publish everything but the relics")
-	if syncAdvice < 0 || strings.Index(mixed, relicSentence) < syncAdvice {
-		t.Fatalf("refusal with a task and a relic = %q, want sync offered for what is not a relic, then the sentence about relics", mixed)
+	if !strings.Contains(mixed, "relic "+relic.ID) || !strings.Contains(mixed, taskRemedies) || strings.Contains(mixed, "does not publish relics") {
+		t.Fatalf("refusal with a task and a relic = %q, want the relic named and the remedies a task gets", mixed)
+	}
+
+	// Once sync has published both, nothing exists only here.
+	if code, stdout, stderr := run(t, clone, "sync"); code != 0 {
+		t.Fatalf("sync = (%d, %q, %q)", code, stdout, stderr)
+	}
+	if summary := resetJSON(t, clone, "--no-backup", "--dry-run"); len(summary.Unpublished) != 0 {
+		t.Fatalf("reset --no-backup --dry-run after sync = %+v, want nothing unpublished", summary)
 	}
 }
 

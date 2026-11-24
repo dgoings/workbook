@@ -36,7 +36,8 @@ import (
 // Both write a Git bundle of every ref they are about to delete first, with
 // the same manifest, default location and flags compaction uses, so what was
 // removed can be fetched back. Two kinds of ref are left out of it: a damaged
-// one, unless it is a relic ref that resolves to a commit, and the manifest
+// one, unless it is a relic ref or a parked relic tip that resolves to a
+// commit, and the manifest
 // ref an interrupted backup left; and --no-backup, where it is allowed,
 // writes no bundle.
 const workbookRefRoot = "refs/workbook/"
@@ -74,25 +75,26 @@ type ResetRef struct {
 	// same, and the result names it. A damaged ref is left out of the bundle
 	// unless Bundleable is set.
 	Damaged string `json:"damaged,omitempty"`
-	// Bundleable marks a damaged relic ref that resolves to a commit. Git can
-	// bundle a commit whatever its tree holds, with all the history under
-	// it, and a relic exists nowhere but in this checkout, so such a ref is
-	// kept like an intact one: it is in the bundle, and it counts as work
-	// that exists only here. Only a relic ref whose object is missing or is
-	// not a commit is removed with nothing kept.
+	// Bundleable marks a damaged relic ref or parked relic tip that resolves
+	// to a commit. Git can bundle a commit whatever its tree holds, with all
+	// the history under it, and sync never publishes a relic it cannot read,
+	// so such a ref is kept like an intact one: it is in the bundle, and it
+	// counts as work that exists only here unless the tasks remote holds the
+	// same commit. Only a relic ref whose object is missing or is not a
+	// commit is removed with nothing kept.
 	Bundleable bool `json:"bundleable,omitempty"`
 }
 
 // kept reports a ref a reset keeps in its bundle and measures for work that
-// exists only here: one with nothing wrong with it, or a damaged relic ref
-// that resolves to a commit.
+// exists only here: one with nothing wrong with it, or a damaged relic ref or
+// parked relic tip that resolves to a commit.
 func (ref ResetRef) kept() bool { return ref.Damaged == "" || ref.Bundleable }
 
 // UnpublishedRef is local work the tasks remote did not hold when this
 // checkout last synchronized with it: commits on a task ref, a relic ref, or
 // the configuration ledger, that none of the remote's tracking refs reach.
-// Nothing publishes a relic yet, so in practice every relic ref is reported,
-// as New.
+// A relic is measured as a task is: sync publishes it, and New says it never
+// was.
 type UnpublishedRef struct {
 	Ref     string `json:"ref"`
 	TaskID  string `json:"taskId,omitempty"`
@@ -248,7 +250,7 @@ func (r *Repository) PlanLocalReset(ctx context.Context, remote string) (LocalRe
 	}
 	plan.Refs = refs
 	for _, ref := range refs {
-		if ref.Damaged == "" && (strings.HasPrefix(ref.Ref, reconciledRefPrefix) || strings.HasPrefix(ref.Ref, parkedConfigRefPrefix)) {
+		if ref.kept() && setAsideNamespace(ref.Ref) {
 			plan.SetAside = append(plan.SetAside, ref.Ref)
 		}
 	}
@@ -290,6 +292,14 @@ func (r *Repository) PlanLocalReset(ctx context.Context, remote string) (LocalRe
 		return LocalResetPlan{}, err
 	}
 	return plan, nil
+}
+
+// setAsideNamespace reports a ref that holds edits a reconciliation set
+// aside: a parked task tip, a parked configuration ledger, or a parked relic
+// tip. Nothing publishes them, so each is work that exists only here.
+func setAsideNamespace(ref string) bool {
+	return strings.HasPrefix(ref, reconciledRefPrefix) || strings.HasPrefix(ref, parkedConfigRefPrefix) ||
+		strings.HasPrefix(ref, relicParkedRefPrefix)
 }
 
 // remoteWorkbookHeads is what remote holds under refs/workbook/ now, by
@@ -493,7 +503,8 @@ func (r *Repository) resetStep(step string) error {
 }
 
 // RestoreCommand is the Git command that brings a checkout's reset bundle
-// back: every task ref, parked ref, relic ref and the configuration ledger
+// back: every task ref, parked ref, relic ref, parked relic tip and the
+// configuration ledger
 // it holds, under their own names, never over a ref that already exists with
 // other history.
 func (r *Repository) RestoreCommand(bundle string, refs []ResetRef) string {
@@ -502,6 +513,7 @@ func (r *Repository) RestoreCommand(bundle string, refs []ResetRef) string {
 		{reconciledRefPrefix, reconciledRefPrefix + "*:" + reconciledRefPrefix + "*"},
 		{parkedConfigRefPrefix, parkedConfigRefPrefix + "*:" + parkedConfigRefPrefix + "*"},
 		{relicRefPrefix, relicRefPrefix + "*:" + relicRefPrefix + "*"},
+		{relicParkedRefPrefix, relicParkedRefPrefix + "*:" + relicParkedRefPrefix + "*"},
 	}
 	held := map[string]bool{}
 	for _, ref := range refs {
@@ -590,13 +602,13 @@ func workbookCommitNamespace(ref string) bool {
 	ref = trackedWorkbookRef(ref)
 	return strings.HasPrefix(ref, taskRefPrefix) || ref == configRef ||
 		strings.HasPrefix(ref, reconciledRefPrefix) || strings.HasPrefix(ref, parkedConfigRefPrefix) ||
-		strings.HasPrefix(ref, relicRefPrefix)
+		strings.HasPrefix(ref, relicRefPrefix) || strings.HasPrefix(ref, relicParkedRefPrefix)
 }
 
 // classifyResetRefs marks each ref whose object is missing, is not a commit,
 // or, in a namespace of operation commits, has no operation.json, with one
-// Git process for all of them. A damaged relic ref that resolves to a commit
-// all the same is marked as one the bundle can hold.
+// Git process for all of them. A damaged relic ref or parked relic tip that
+// resolves to a commit all the same is marked as one the bundle can hold.
 func (r *Repository) classifyResetRefs(ctx context.Context, refs []ResetRef) error {
 	if len(refs) == 0 {
 		return nil
@@ -629,10 +641,12 @@ func (r *Repository) classifyResetRefs(ctx context.Context, refs []ResetRef) err
 		case workbookCommitNamespace(refs[index].Ref) && (len(operation) != 2 || operation[1] != "blob"):
 			refs[index].Damaged = "it names a commit that is not a Workbook operation commit"
 		}
-		// Whatever is wrong with a relic ref, a commit under it is one Git can
-		// bundle, and nothing else holds a relic.
+		// Whatever is wrong with a relic ref or a parked relic tip, a commit
+		// under it is one Git can bundle, and sync publishes no relic it
+		// cannot read.
+		tracked := trackedWorkbookRef(refs[index].Ref)
 		refs[index].Bundleable = refs[index].Damaged != "" &&
-			strings.HasPrefix(trackedWorkbookRef(refs[index].Ref), relicRefPrefix) &&
+			(strings.HasPrefix(tracked, relicRefPrefix) || strings.HasPrefix(tracked, relicParkedRefPrefix)) &&
 			len(object) == 2 && object[1] == "commit"
 	}
 	return nil
@@ -641,7 +655,8 @@ func (r *Repository) classifyResetRefs(ctx context.Context, refs []ResetRef) err
 // unpublishedWork is every local task ref, relic ref and the configuration
 // ledger holding commits that none of remoteHeads reaches, with the
 // operations those commits record. A damaged ref is left out, except a relic
-// ref that resolves to a commit, which is measured like an intact one.
+// ref that resolves to a commit, which is measured like an intact one: it
+// stops counting only once the remote's heads reach every commit on it.
 // remoteHeads is what the remote holds now, or, when it could
 // not be read, what this checkout's tracking refs say it held at the last
 // fetch. Those can be wrong both ways: they name work published since as

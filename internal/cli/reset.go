@@ -222,33 +222,16 @@ func refuseLocalReset(plan gitstore.LocalResetPlan, options gitstore.ResetOption
 			Unpublished: plan.Unpublished,
 			SetAside:    plan.SetAside,
 		}, "this checkout holds work that exists only here, which %s does not hold: %s. %s%s",
-			plan.Remote, describeLocalOnly(plan), localOnlyRemedies(plan), stopped)
+			plan.Remote, describeLocalOnly(plan), localOnlyRemedies, stopped)
 	}
 	return nil
 }
 
 // localOnlyRemedies says what can be done about the work a refused reset
-// would lose. Synchronizing is offered only for what it publishes, which is
-// everything but a relic.
-func localOnlyRemedies(plan gitstore.LocalResetPlan) string {
-	relics := 0
-	for _, item := range plan.Unpublished {
-		if item.RelicID != "" {
-			relics++
-		}
-	}
-	const relicsStay = " workbook sync does not publish relics yet, so a relic is kept only by the bundle."
-	switch {
-	case relics == 0:
-		return "Run workbook sync to publish it, or reset without --no-backup to keep it in a bundle, " +
-			"or add --discard-unpublished to lose it."
-	case relics == len(plan.Unpublished) && len(plan.SetAside) == 0:
-		return "Reset without --no-backup to keep it in a bundle, or add --discard-unpublished to lose it." + relicsStay
-	default:
-		return "Run workbook sync to publish everything but the relics, or reset without --no-backup to keep all of it in a bundle, " +
-			"or add --discard-unpublished to lose it." + relicsStay
-	}
-}
+// would lose. Sync publishes relics as it publishes tasks, so the remedies
+// are the same whatever the work is.
+const localOnlyRemedies = "Run workbook sync to publish it, or reset without --no-backup to keep it in a bundle, " +
+	"or add --discard-unpublished to lose it."
 
 // runResetRemote wipes one remote's Workbook refs. A remote the tasks live
 // on, rather than a marked place they left, is wiped only when --confirm
