@@ -1459,7 +1459,9 @@ func (r *Repository) verifyMovedTasks(ctx context.Context, config core.ProjectCo
 // reaches are read, and each operation in them must be found by ID in the
 // commits on the other side that the old place's history does not reach.
 // A name under the relic namespace that is not one of this project's relics
-// is skipped, as a fetch skips it.
+// is one the move cannot carry, as a fetch skips it, so it fails the run
+// unless the new place holds it at the same commit: otherwise --clean-up
+// would delete it at the old place with no copy left anywhere but the bundle.
 func (r *Repository) verifyMovedRelics(ctx context.Context, config core.ProjectConfig, from, to string, result *MoveTasksResult) error {
 	source, err := r.trackingRefHeads(ctx, relicTrackingRefPrefixFor(from))
 	if err != nil {
@@ -1474,16 +1476,19 @@ func (r *Repository) verifyMovedRelics(ctx context.Context, config core.ProjectC
 		return err
 	}
 	names := make([]string, 0, len(source))
+	var missing []string
 	for name := range source {
 		if core.ValidateRelicIDShape(name) == nil && keys.OwnsRelic(name) {
 			names = append(names, name)
+		} else if have, found := destination[name]; !found || have != source[name] {
+			missing = append(missing, "relic ref "+name+" (not one of this project's relics, so the move cannot carry it)")
 		}
 	}
 	sort.Strings(names)
+	sort.Strings(missing)
 	result.Relics, result.RelicsIdentical, result.RelicsCarried = len(names), 0, 0
 
 	var parked map[string][]string
-	var missing []string
 	for _, name := range names {
 		have, found := destination[name]
 		if found && have == source[name] {

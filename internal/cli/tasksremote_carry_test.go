@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/testenv"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
@@ -549,5 +550,39 @@ func TestMoveTasksCleanUpRemovesRelicsOnlyAfterTheyAreCarried(t *testing.T) {
 	}
 	if got := refsUnder(t, project.tasks, "refs/workbook/relics/"); got != published {
 		t.Fatalf("the new place's relic refs after the clean-up:\n%s\nwant\n%s", got, published)
+	}
+}
+
+// A ref under the relic namespace at the place left that is not one of this
+// project's relics is never carried, so move-tasks --clean-up fails its
+// verification naming it and deletes nothing at the old place.
+func TestMoveTasksCleanUpKeepsARelicRefTheMoveCannotCarry(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA1)
+	relics := createThreeRelics(t, project.seed)
+	if code, stdout, stderr := run(t, project.seed, "push"); code != 0 {
+		t.Fatalf("push = (%d, %q, %q)", code, stdout, stderr)
+	}
+	_, body, _ := core.ParseRelicID(relics[0])
+	stray := core.NewRelicID("OTHER", body)
+	cliGit(t, project.code, "update-ref", relicRef(stray), cliGitOutput(t, project.code, "rev-parse", relicRef(relics[0])))
+	// The move marks the old place, so only its task and relic refs are compared.
+	held := func() string {
+		return refsUnder(t, project.code, "refs/workbook/tasks/") + "\n" + refsUnder(t, project.code, "refs/workbook/relics/")
+	}
+	before := held()
+	if !strings.Contains(before, relicRef(stray)+" ") {
+		t.Fatalf("origin before the move:\n%s\nwant %s", before, stray)
+	}
+	if code, stdout, stderr := run(t, project.seed, "config", "set", "tasks-remote", "tasks", "--url", project.tasks); code != 0 {
+		t.Fatalf("config set tasks-remote = (%d, %q, %q)", code, stdout, stderr)
+	}
+	want := "relic ref " + stray + " (not one of this project's relics, so the move cannot carry it)"
+	code, stdout, stderr := run(t, project.seed, "move-tasks", "--clean-up", "--json")
+	if code != 8 || stdout != "" || !strings.Contains(stderr, want) {
+		t.Fatalf("move-tasks --clean-up with %s at the old place = (%d, %q, %q), want 8 naming it", stray, code, stdout, stderr)
+	}
+	if after := held(); after != before {
+		t.Fatalf("origin's task and relic refs after the stopped run:\n%s\nwant\n%s", after, before)
 	}
 }

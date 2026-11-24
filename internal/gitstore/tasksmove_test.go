@@ -569,3 +569,42 @@ func TestMoveVerificationNamesARelicTheNewPlaceLacks(t *testing.T) {
 	}
 	assertSameRelics(t, fixture)
 }
+
+// A ref under the relic namespace at the old place that is not one of this
+// project's relics, whether another key's relic or a name that is no relic ID,
+// is one the move cannot carry. The verification fails naming it, so that
+// --clean-up never deletes it at the old place, and a rerun fails the same way.
+func TestMoveVerificationNamesARelicRefTheMoveCannotCarry(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		ref  func(relicID string) string
+	}{
+		{"another key's relic", func(relicID string) string {
+			_, body, _ := core.ParseRelicID(relicID)
+			return core.NewRelicID("OTHER", body)
+		}},
+		{"not a relic ID", func(string) string { return "not-a-relic" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			fixture := newMoveFixture(t, testrepo.FormatSHA1)
+			relics := moveRelics(t, fixture)
+			stray := tc.ref(relics[0])
+			syncGit(t, fixture.origin, "update-ref", relicRef(stray), syncGit(t, fixture.origin, "rev-parse", relicRef(relics[0])))
+			want := "tasks does not hold everything origin holds: relic ref " + stray +
+				" (not one of this project's relics, so the move cannot carry it); run workbook move-tasks again"
+			for round := 0; round < 2; round++ {
+				result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
+				if core.CategoryOf(err) != core.CategoryConflict || err == nil || !strings.Contains(err.Error(), want) || result.Verified {
+					t.Fatalf("MoveTasks() run %d with %s at the old place = (%+v, %v), want the verification to fail with %q",
+						round, stray, result, err, want)
+				}
+			}
+			if got := refListing(t, fixture.tasks, relicRef(stray)); got != "" {
+				t.Fatalf("tasks holds %s after the move: %s", stray, got)
+			}
+		})
+	}
+}
