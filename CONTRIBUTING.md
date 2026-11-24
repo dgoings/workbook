@@ -319,6 +319,13 @@ no label releases nothing, so an erroneous edit to the file is inert. A
 version it implies. `release:patch` may be cut without one, for a fix that does
 not warrant prose.
 
+The entry is published as the release notes, so the check also holds its lead,
+the prose between the heading and the first `### ` section, to 15 non-blank
+lines. Keep the lead a short summary of the release, and write each change as a
+bullet under a section, whether it lands under `## Unreleased` as it is merged
+or in the release pull request. A paragraph added to the lead with each merged
+change is how v0.7.0's notes came to open with 270 lines of prose.
+
 Raising `SupportedFormatGeneration` implies at least `release:minor`. It
 withdraws a capability from clones already in the field: they keep fetching,
 keep reading, and keep publishing their own tasks, but they can no longer

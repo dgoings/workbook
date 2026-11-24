@@ -242,4 +242,28 @@ if [ "${newest_entry}" != "${requested_version}" ]; then
 	fail "release:${requested_bump} implies v${requested_version}, but the newest CHANGELOG entry is v${newest_entry}"
 fi
 
+# The entry is published as the release notes, and its lead, the prose between
+# the heading and the first "### " section, is all a reader sees before those
+# sections begin. Work written under Unreleased as it lands tends to add a
+# paragraph to that lead each time; v0.7.0 shipped with 270 lines of it ahead of
+# "### Added". Each such paragraph belongs as a bullet under a section, and the
+# lead stays a short summary. The limit counts non-blank lines.
+lead_limit=15
+lead_lines=$(awk -v version="${requested_version}" '
+	BEGIN { heading = "## v" version }
+	!found && index($0, heading) == 1 &&
+		(length($0) == length(heading) || substr($0, length(heading) + 1, 1) == " ") {
+		found = 1
+		next
+	}
+	found && (/^## / || /^### /) { exit }
+	found && NF { count++ }
+	END { print count + 0 }
+' "${changelog}")
+if [ "${lead_lines}" -gt "${lead_limit}" ]; then
+	fail "the CHANGELOG entry for v${requested_version} opens with ${lead_lines} lines of prose before its first \"### \" section, more than ${lead_limit}.
+  It is published as the release notes, so keep that lead a short summary and
+  move each paragraph into a bullet under a section such as \"### Highlights\"."
+fi
+
 echo "release:${requested_bump} cuts v${requested_version}, matching the newest CHANGELOG entry"

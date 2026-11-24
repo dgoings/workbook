@@ -27,571 +27,138 @@ release counts as no entry, so it never blocks the next release. See
 
 ## v0.7.0 — 2026-11-23
 
-A project can keep its tasks in a repository of their own, so that access to
-them, such as a hosted board's deploy key, is not access to the code. `workbook
-config set tasks-remote <name> --url <address>` records the remote in
-`.workbook/config.json`, refusing an address that carries a password or an
-`https` user name; `workbook move-tasks` copies every task there, marks the old
-place with one fast-forward commit on its `refs/workbook/project` saying where
-the tasks went, and checks, task by task, that the new place holds every
-operation the old one does. It carries by operation identity, so running it
-again at any time carries an edit that reached the old place since, once, and
-says how many and from whom. A carried edit that conflicts with what happened to
-its task at the new place is set aside and reported with exit 8, by task title
-and ID, saying why and that its text is kept in that clone for the board to
-show. It is the only command that reads the old place, so such an edit is
-reported only to whoever runs it. An operation ID reused at either place for a
-different change is refused as corrupt, naming both commits, rather than
-skipped. It refuses a new place that is the same repository as the old one,
-however its address is spelled, and one holding branches unless
-`--allow-branches` is given, which must never be given for a mirror of the code
-repository. It removes the probe refs an earlier run left on the new place, and
-a new place that refuses to delete refs is refused once, without a probe per
-run. It is safe to stop and run again, and the old place keeps its copy. A
-second move finds the tasks by following the first move's marker. A move can
-go back to a place the tasks left, origin included, with the same two
-commands: `config unset tasks-remote` (or `config set` naming the earlier
-remote), then `move-tasks`, which brings the copies that place kept up to
-date, a task compacted in between included, and records the return as one more
-fast-forward commit on its `refs/workbook/project`, so a checkout whose
-settings name it works again. A task compacted in between replaces the older
-copy that place kept by the same leased push a compaction makes, after a
-teammate's late edit to that copy is replayed onto it and after the copy is
-written to a backup bundle the way `compact` writes one, at the same default
-place or `--backup <path>`, skipped with `--no-backup`; the bundle's path is
-printed and reported in `bundles`, and a copy that changes before the push is
-read again and bundled again rather than pushed over. A late edit there to a
-task deleted and compacted in between is set aside in the mover's clone and
-reported once with exit 8, by title and ID, and the task stays deleted and
-compacted, where it used to make the move exit 8 on every run. A move back
-marks the place it leaves before it records the return, so a run stopped
-between the two leaves both places refusing every publication, with the
-circle refusal and `workbook move-tasks` as its command, instead of two live
-places; the rerun finishes it from any checkout. A walk along the markers
-that meets a remote this clone lacks says to add it with `git remote add`.
-Setup on a place the tasks came back to, or with no tasks remote named,
-refuses while the place they came back from still holds them unmarked. A
-teammate who pulls a tasks-remote change committed before its move ran is
-told to run `workbook move-tasks`, not to pull again, when no recorded move
-ever took the tasks to the place it names; a checkout on stale settings is
-never told to, since running it there would undo a finished move.
-`move-tasks` from a place marked as moved elsewhere is refused before it
-writes anything to the destination, and the circle refusal names the
-unfinished move to finish first rather than `--from`. `move-tasks` refuses a
-mirror of a marked origin as it refuses any repository holding branches; only
-the remote named origin in a checkout of its code is excused. A
-moved-and-back project's publications cost the connections a never-moved
-project's do. Moves can go any number of times in any order;
-a checkout on any earlier generation of the settings is told the place the
-tasks are now, by following the markers there, and markers that lead in a
-circle are reported as such. `workbook
-setup` adds the remote to each checkout from the settings, or keeps the
-checkout's own address for it. Until it runs, task commands refuse and say to
-run it; a checkout still on the old settings is refused, told where the tasks
-went, and a command whose edit landed on the old place just as it was marked
-says so and exits 3, or warns with `publication-unconfirmed` when it cannot
-check; a board already running reports every save's refused publication as a
-warning; a tasks-only folder on the old place is repointed by the one command
-its refusal names, `workbook setup --tasks-only <new address>`, which keeps the
-edits it saved; the pre-push hook lets code pushes through these refusals; and
-a setup that cannot read the tasks repository says which address and what
-access is needed. A conflict met with a tasks remote names that remote. Each refusal carries
-a `tasksRemote` member in the JSON error. `workbook fetch`, `push` and `sync`
-take `--remote` to name another remote for one run, which only reads it into
-its tracking refs and never publishes to it, and each remote's tracking refs are now
-pruned only by a fetch from that remote. Compaction and `compact --adopt`
-publish to and adopt from the tasks remote, and their messages name it where
-they said `origin`. A project that never sets the remote
-behaves as before. Older Workbook releases refuse a `.workbook/config.json`
-that names a tasks remote, exiting 7 with `cannot decode Workbook
-configuration`, so upgrade every checkout before committing the setting. See
-[A tasks remote other than origin](docs/reference.md#a-tasks-remote-other-than-origin)
-and [Keep the tasks in their own repository](docs/hosting.md#keep-the-tasks-in-their-own-repository).
-
-A board now hands its saves to a watcher, as it was meant to: its own
-background loop, or a running `workbook sync --watch`. It asked the watcher's
-status and then for the hand-off on one connection, which the watcher answers
-once, so every save was published by the board itself. The save is published
-either way; it now returns without waiting for the network and reaches the
-remote a few seconds later. A save that conflicts with a teammate's edit no
-longer says so in its response; the task page shows the set-aside edit as
-before.
-
-The web board works on a phone. A screen 560 CSS pixels wide or narrower shows
-one column at a time, under a row of the columns' names and task counts that
-stays at the top while the cards scroll; tapping a name switches to that
-column. A phone opens on the column `workbook next` draws from, and after that
-on the one it last showed. Cards do not drag at that width, so a finger on one
-scrolls, and a status is changed from the task's own page. The task page, new
-task, comments and the change log fit the screen with no sideways scrolling and
-controls at least 44 pixels each way, except links inside the text of a
-description or a comment, which keep the height of their line; fields are set
-in at least 16 pixels so the phone does not zoom in on them, and the board's
-notices stack in one box at the bottom of the screen. The configuration page is
-not laid out for a phone. The column a phone remembers is kept for each project.
-Saving the board to a home screen gives it the Workbench icon and the project's
-name, and its manifest asks for the shortcut to open in the browser, which
-"Create shortcut" in Chrome on Android does. On iOS and iPadOS 26 a shortcut opens as a web app with
-its own sign-in unless "Open as Web App" is switched off when adding it. None of
-this was tried on a real phone. The page's
-content policy gains `manifest-src 'self'` so the board's own manifest loads.
-Wider screens and the Workbench app lay the board out as before.
-
-The web board keeps a change that a proxy in front of it asked to send later.
-A `429` or `503` that carries `Retry-After` no longer loses the change: the
-page keeps it drawn as made, says it is held in that tab, asks before the tab
-is closed or left, and sends it again after the wait the proxy named — up to
-three times, each wait twice the last and none longer than a minute. A change
-that names the head it was made against is resent, since the board refuses
-such a resend as stale if the first attempt landed after all, and so is the
-sync switch, which names no head but sets a mode: setting it twice is setting
-it once. A create, any other change that names no head, and every read are sent
-once as before. The Delete button on a task's page now names the head the form
-was drawn from, as dropping a card on the Deleted column already did, so it is
-resent like the rest; a task changed since is no longer deleted unseen, and the
-form says so and offers Delete again against the version the server holds.
-
-A resend refused as stale may be the first attempt's own doing: a proxy can
-pass a change to the board and still tell the page to wait. So the page reads
-the task or the configuration again before it reports such a refusal. A change
-that is there is treated as saved: the comment box clears, the form closes or
-returns to the board, and nothing says it failed. A change that is not there is
-reported as the stale refusal it is. If the board cannot be read, the page says
-the change may already have been saved and to check before making it again,
-rather than saying it was not saved, and making the same change again from
-that panel on a task's page reads the board first instead of sending a second
-copy.
-
-A refusal whose body is not JSON, such as nginx's HTML error page, is now
-reported in a plain sentence naming the status, on the board, a task's page and
-the configuration page alike, instead of as a JSON parse error. A task form
-whose save lands after the reader typed more stays open with what they typed
-instead of leaving for the board without it, and the line beside Save that says
-a save is held is set in the board's pending color rather than its error color.
-
-`workbook serve` can now run behind a sign-in proxy for a team.
-`--public-url <url>` names the address people open the board at, and the board
-accepts it beside its own bind address while still refusing every other site.
-`--actor-header <header>` names the header the proxy sets to the signed-in
-person's email address, and each request acts for that person: their edits,
-comments and assignments are recorded under their own name, and the board
-answers which comments and assignments are theirs. A request without exactly
-one usable name is refused, `401` or `400`, and never recorded under anybody
-else's. Both options can be set by `WORKBOOK_SERVE_PUBLIC_URL` and
-`WORKBOOK_SERVE_ACTOR_HEADER`. A board given a public address keeps Git's
-output, the server's folder and the remote's address out of its answers,
-giving a short sentence and a reference whose detail is in the server's log,
-and marks every answer `Cache-Control: private, no-store`. With neither option
-the board behaves exactly as before. The new [hosting guide](docs/hosting.md)
-sets one up with Cloudflare Tunnel and Cloudflare Access, and says plainly
-what it trusts: the board takes the proxy's header on its word, so only the
-proxy may reach its port.
-
-The board now shows the edits its own sync sets aside. When its background
-sync replays the board's unpublished edits onto a task that changed on `origin`
-and meets a conflict, it keeps `origin`'s side and parks the old local tip
-under `refs/workbook/reconciled/`, as `workbook sync` always has; until now
-that was reported only on the server's terminal, so the people using a hosted
-board never learned their edit had not been kept. The board reads the parked
-refs on every listing and shows each edit they hold that the task lacks: the
-card says "1 edit set aside", and the task's page shows who made each one,
-when, the field and the text, with buttons to copy the text and to dismiss.
-An edit stops showing once the task carries it again, such as when somebody
-copies the text back and saves, when its author posts a set-aside comment
-again, or when anybody dismisses it, which deletes that parked ref. The
-[reference](docs/reference.md#edits-the-boards-sync-set-aside) lists exactly
-what settles an edit; Dismiss clears anything else. Nothing new is recorded
-and no format changes, so it survives a restart and needs no migration. The
-command line still has no way to list or dismiss parked edits.
-
-A parked ref that holds an edit the task lacks is no longer pruned. Workbook
-used to keep the three newest parked refs per task and retire the rest, and
-every reconciliation parks one, so a task synchronized a few more times lost
-its unrecovered edit without a word. Now only settled parked refs are retired
-beyond the three newest, and adopting another clone's compaction keeps the
-unsettled ones too. Only Dismiss, or a manual `workbook compact` that bundles
-them first, removes them. A parked ref the board cannot read is skipped,
-named once in the server's log with the reason, and hides nothing else.
-Listing no longer slows as parked refs accumulate: with 2,000 tasks, a repeat
-listing takes about as long with 2,000 parked refs as with none, and the first
-listing after a restart adds about half a second on an idle machine.
-
-For a board started with no options, exactly this changes:
-
-- Its cards and task pages show the notice above for any parked tip in the
-  serving checkout that holds edits the task lacks, including tips left by
-  `workbook sync` in that checkout, and by earlier versions, before the
-  upgrade.
-- `GET /api/tasks` carries a `setAside` array in a task's `presentation` when
-  it has such edits, and leaves it out otherwise.
-- `DELETE /api/tasks/<id>/set-aside` dismisses them, and its use is written to
-  standard error.
-- The background sync writes `workbook: background sync failed: <Git's
-  message>` to standard error when a round fails, again only when the message
-  changes, and `workbook: background sync is working again` when one succeeds.
-  It used to write nothing. `workbook sync --watch` writes the same lines.
-- A request carrying more than one `Origin` header is refused with `403`. No
-  browser sends one.
-
-A push Git refuses without naming a ref, such as one to a remote that cannot be
-reached, now reports Git's own message, credentials removed, on every surface,
-where it used to report `Git returned 0 push outcomes, want 1`. A push `origin`
-refuses for some task refs, such as one a server hook declines, now names up to
-three of them with Git's reason for each, as in `1 task ref(s) were rejected
-by origin: WB-01K… [remote rejected] (hook declined)`, where it used to give
-only the count. This is the message of the `workbook push` and `workbook sync`
-error, so a script matching the whole old text must match its start instead. `--public-url`
-now refuses a host a browser could not send, such as `*.example.com` or one
-with an underscore, and a port with a leading zero.
-
-Synchronization no longer stops on a commit another tool wrote with an
-identity Git will not write again, such as an empty name. The replay takes the
-commit's email as its name, or `unknown`, so the task still synchronizes.
-
-Workbook no longer repeats the user name and password of a remote's address.
-Git leaves them in some failure messages, such as the one for a remote that
-answers a push with something other than Git, and in every message naming an
-address whose password holds a slash. Those messages reached the warning a
-failed publication carries — on the web board, the browser of whoever made the
-change. When a Git command fails and its error output contains an `@`,
-Workbook now looks up the addresses Git is configured with (remote URLs and
-push URLs, and `insteadOf` and `pushInsteadOf` rewrites) and removes each one's
-credential from Git's error output and from the command the error names, on the
-board and the command line alike; the remote is still named. A password of
-eight characters or more is also removed wherever else it appears, and so is a
-user name of that length when its address has no password or only a
-placeholder for one, since that user name is usually a token; beside a password, a user name such as `workbook` is
-left alone outside its address, so `refs/workbook/tasks/*` still reads as
-written. Output a credential helper or the remote prints, and a token in an
-address's path or query string, are not removed; the
-[reference](docs/reference.md#what-anyone-who-can-open-the-board-can-do-and-see)
-says how to keep a server's credential out of its address.
-
-The web board draws text somebody typed with its direction overrides,
-embeddings and isolates as spaces — attachment names, link labels and
-addresses, titles, comments, labels, history, tooltips, accessible names and
-every browser tab title, including the project's name in it — so a
-right-to-left override can no longer make an `.exe` read as a `.pdf`. The
-right-to-left and left-to-right marks are kept, because Hebrew and Arabic text
-uses them to place punctuation and they cannot reverse a word; the command line
-still prints them as spaces. A task's Title field and the configuration page's
-project name and label fields show the cleaned text, and saving some other
-change sends the stored text back exactly, so it is never rewritten to its
-cleaned form. A file's drawn name also reads blank-looking filler characters,
-such as U+3164 HANGUL FILLER, as one space, so padding cannot push its
-extension out of sight. The download route sends a file's name with each
-control character and each override, embedding or isolate replaced by `_`, so
-`invoice<U+202E>fdp.exe` downloads as `invoice_fdp.exe` whatever the browser.
-A markdown reference to a file that is not drawn as an image always reads as
-the file's real name, with the author's own text as a caption beside it, and an
-attachment image's alternative text is its real name with the author's text in
-parentheses. A new link attachment's address may not hold a control or
-bidi-control character. Stored text and file names are unchanged. The page's
-content policy now carries `form-action 'self'`. The
-[reference](docs/reference.md#what-anyone-who-can-open-the-board-can-do-and-see)
-now lists everything anyone who can open the board can do and see, including
-what it reveals about the machine serving it.
-
-Finished work can now be compacted. `workbook compact`, run by hand, replaces
-the history of Done and Deleted tasks with one checkpoint commit each and saves
-the old history to a local backup bundle first. It changes no existing commit,
-and it is the first command that needs every clone of a project to upgrade
-before anyone runs it; see Compatibility across versions below.
+A project can now keep its tasks in a repository of their own, finished tasks
+can be compacted, and the web board can be hosted for a team behind a sign-in
+proxy and used on a phone. Tasks gain due dates, and `workbook board` is gone.
+Compacting, setting a due date and naming a tasks remote each need every clone
+upgraded first; see Compatibility across versions below.
 
 ### Added
-- **`workbook reset` removes Workbook's data from a checkout or a remote.** Run
-  by hand, `workbook reset` stops this checkout's watcher, then removes every
-  ref under `refs/workbook/`, the caches under `<git-common-dir>/workbook/`, and
-  the temporary files Workbook's own writes leave under `.workbook/`. It leaves
-  tracked files, `.workbook/config.json`, `.workbook/guidelines.md` and every
-  untracked file Workbook did not write alone, counting those, and its dry run
-  lists exactly the refs and files a real run removes; `workbook setup`
-  then rebuilds the checkout as a fresh clone would, which is how a checkout
-  with damaged Workbook data is started over. `workbook reset --remote <remote>`
-  deletes that remote's Workbook refs with leased pushes. At a place the tasks
-  moved away from it keeps the moved marker. At the place the tasks live it is
-  refused, exit 5, unless `--confirm <remote>` names it again, and always writes
-  a bundle. Both forms write a backup bundle first, as `compact` does, print the
-  `git fetch` that restores it, take `--dry-run`, `--no-backup` and
-  `--backup <path>`, and never touch a ref outside `refs/workbook/`. A
-  `--backup` inside `.workbook/` or `<git-common-dir>/workbook/` is refused
-  before anything is done, and every refusal comes before the watcher is
-  stopped. A checkout reset lists the work its tasks remote lacks, and refuses
-  `--no-backup` while there is any, unless `--discard-unpublished` is given
-  too, and refuses it outright while the tasks remote cannot be checked. A
-  reset stopped at any point, during its bundle included, is finished by
-  running it again once. A host that refuses to delete refs gets one refusal
-  naming its rule, the refs left and the bundle to keep, and running the
-  command again once the host allows it finishes the job. `workbook move-tasks
-  --clean-up` runs the remote reset on the place a finished move left, and
-  cleans nothing after a move that set edits aside. A checkout that still holds the tasks publishes them back
-  to a wiped place on its next sync. The reference documents
-  [leaving Workbook](docs/reference.md#leaving-workbook) step by step. Refusals
-  carry a `reset` member in the JSON error.
-- **Tasks can have a due date.** `workbook create --due` and `workbook update
-  --due` take a date as `YYYY-MM-DD`, `today`, `tomorrow`, or `+Nd`, and record
-  the date it comes to, never the relative form; `update --clear-due` removes
-  it, and anything else is refused with exit 5. `workbook list --overdue`,
-  `--due-before <date>` and `--sort due` find and order dated tasks. A task due
-  before today is marked overdue, and one due today or in the next three days
-  due soon, in words beside the date in `show`, `list`, the web board's cards
-  and task page, and the desktop app's Next view; a task in a done status, or
-  deleted, is never marked. Each reader judges against their own local date,
-  and an open board judges again when that date changes.
-  Every task object in JSON carries `due` (`null` when there is none),
-  `overdue` and `dueSoon`. The web board sets the date with a date field.
-  `workbook next` ignores due dates. Concurrent edits to one task's date
-  follow the rule for any one-value field: the clone that synchronizes last
-  wins, with no conflict reported.
-- **`WORKBOOK_NOW=<RFC 3339 time>`** makes a command record that time in place
-  of the system clock, so a project's past can be imported with each step dated
-  when it happened. It moves operation wall times, the time inside every new
-  identifier, configuration packs, and the time a `workbook compact` run
-  measures its cutoff from and records itself at. Git commit dates stay Git's
-  (`GIT_AUTHOR_DATE`, `GIT_COMMITTER_DATE`), and sync freshness, timeouts and
-  relative ages stay on the real clock. A value that does not parse is refused
-  before anything is written. See "Recording past work" in `docs/reference.md`.
-- **`workbook compact`** replaces the step-by-step history of every Done and
-  Deleted task with a single parentless checkpoint commit holding the task's
-  current state. `--done-only` and `--deleted-only` pick one kind, each with an
-  optional cutoff (`--done-only 30d`), and `--since` sets a cutoff for both.
-  `--dry-run` reports what a run would compact and roughly how much it would
-  save, and compacts nothing (with sync on it still runs the usual fetch first).
-  File attachments are dropped by default and
-  kept with `--keep-attachments`; a dropped file keeps its row, `show` marks it
-  removed, `--get-attachment` refuses it as not found, and the board's
-  attachment route answers `410 Gone`. Every real run first writes a verified
-  Git bundle of the history it drops to
-  `<git-common-dir>/workbook-archive/<run-id>.bundle`, or where `--backup`
-  says, unless `--no-backup` is given. The bundle keeps dropped attachments
-  too. With sync on, the run publishes the checkpoints with a leased push that
-  succeeds only while `origin` still holds the tip that was compacted. A
-  compaction `origin` refuses, or one made with `--no-sync`, stays local until
-  `workbook compact --adopt <task> --discard-local` undoes it after saving it
-  to a bundle. Every run, dry or real, states the upgrade requirement, and
-  `--json` carries it as `data.notice`.
-- **Other clones adopt a compaction automatically** when they fetch, replaying
-  any unpushed changes onto the checkpoint with their operation IDs intact. A
-  task whose changes will not replay is reported as `compacted-on-origin`
-  without failing the sync, edits to it are refused, and `workbook next` skips
-  it. **`workbook compact --adopt <task>`** retries the replay, and
-  `--discard-local` takes `origin`'s version after saving the local history to
-  a bundle. Fetch, push and sync report the new per-task statuses
-  `compaction-published`, `adopted`, `adopted-replayed` and
-  `compacted-on-origin`, and `compact --adopt --discard-local` reports
-  `discarded-local`.
-- **`workbook show --history` on a compacted task** lists the changes since the
-  checkpoint and then a line such as "12 earlier changes from Jul 3 to Sep 19
-  were compacted on Nov 10.", and `--json` carries the same facts as
-  `history.compacted`.
-- **Durations accept days.** `sync --interval` and the `compact` cutoffs take a
-  leading whole number of days, where a day is 24 hours: `30d`, `1d12h`.
-- **`workbook setup --tasks-only <url>`** sets up an empty folder that holds a
-  project's tasks and none of its code, for a server that only shows and edits
-  tasks. The folder is an ordinary Git folder with nothing checked out, no
-  branch and no tag. Its `origin` fetches through a single negative refspec,
-  `^refs/*`, so a plain `git fetch` or `git pull` in it downloads nothing, and
-  setup never reads the remote's default branch to find the project. It joins
-  a project whose identity the remote already publishes and never creates one.
-  It refuses a folder that holds files, a repository it did not set up, or a
-  Git folder whose object format differs from the remote's, and asks the
-  remote, including whether a given `--key` is its founding key, before
-  creating anything. The URL is compared exactly; to change it, run `git
-  config remote.origin.url <url>` in the folder and set up again. Agent
-  documentation and the skill are skipped, and `workbook docs` and `workbook
-  hooks install` refuse in the folder with exit `5`. The marker is
-  `workbook.tasksOnly` in the folder's own Git settings, and only there: the
-  same setting in global Git configuration or the environment is ignored.
-  Running setup again, with or without `--tasks-only`, changes nothing and
-  reports success, or restores a setting somebody changed and names it. Setup
-  needs no `user.email`; edits made there do. `--json` reports the run in a
-  `tasksOnly` object.
-- **`WORKBOOK_ACTOR` records an edit under somebody else's name.** Set to an
-  email address, it replaces the checkout's `user.email` as the person every
-  edit, `--assign self`, `workbook next` and assignment removal go by, and the
-  commit behind each edit names that address as its author and committer, even
-  when it is the checkout's own `user.email`. A
-  folder with no Git identity works when it is set, which is what a server
-  acting for many signed-in people needs. An empty or malformed value,
-  including one that is not valid UTF-8, is refused with exit `5` rather than
-  ignored; a mistyped command is still reported as unknown first. The name
-  must match a `user.email` exactly, including case, to be the same person.
-  It is asserted, like `user.email`, and nothing verifies it.
+- **Tasks can live in a repository of their own**, so that access to them,
+  such as a hosted board's deploy key, is not access to the code. `workbook
+  config set tasks-remote <name> --url <address>` names the remote, and
+  `workbook move-tasks` copies every task there and leaves a marker that sends
+  checkouts on older settings to the new place. It is safe to run again, carries
+  an edit that reached the old place late exactly once, and can move the tasks
+  back. See [A tasks remote other than origin][tasks-remote] and
+  [Keep the tasks in their own repository][own-repository] (#219, #223).
+- **`workbook compact`** replaces the history of Done and Deleted tasks with one
+  checkpoint commit each, after saving the old history to a backup bundle. It
+  runs only by hand. Other clones adopt a compaction on their next fetch and
+  replay their unpushed edits onto it, and `show --history` says how many
+  changes were compacted. Durations such as `sync --interval` now accept days
+  (`30d`). See [Task archive compaction][compaction] (#198).
+- **`workbook reset`** removes Workbook's refs and caches from a checkout, or
+  from a remote with `--remote`, after writing a backup bundle, so a damaged
+  checkout can be set up again from scratch. `workbook move-tasks --clean-up`
+  resets the place a finished move left behind. See
+  [Resetting Workbook data][reset] and [Leaving Workbook][leaving] (#224).
+- **Tasks can have a due date.** `create --due` and `update --due` take
+  `YYYY-MM-DD`, `today`, `tomorrow` or `+Nd`, and `list --overdue`,
+  `--due-before` and `--sort due` find dated tasks. `show`, `list`, the board
+  and the desktop app's Next view mark a task overdue or due soon. See
+  [Due dates][due-dates] (#222).
+- **`workbook serve` can run behind a sign-in proxy.** `--public-url` names
+  the address people open the board at, and `--actor-header` names the header
+  carrying the signed-in person's email, so each person's edits are recorded
+  under their own name. The new [hosting guide][hosting] sets one up with
+  Cloudflare Tunnel and Cloudflare Access (#215).
+- **`workbook setup --tasks-only <url>`** sets up a folder that holds a
+  project's tasks and none of its code, for a server that only hosts the board
+  (#207).
+- **The web board works on a phone.** At 560 CSS pixels wide or narrower it
+  shows one column at a time under a row of column tabs, and the task page and
+  forms fit the screen. It has not yet been tried on a real phone (#217, #220).
+- **The board shows the edits its own sync set aside.** A card says "1 edit
+  set aside", and the task page shows each edit with buttons to copy or dismiss
+  it. Until now only the server's terminal reported them. See
+  [Edits the board's sync set aside][set-aside] (#215).
+- **`WORKBOOK_ACTOR`** records edits under a given email address in place of
+  the checkout's `user.email`, as a server acting for many people needs (#208).
+- **`WORKBOOK_NOW`** makes a command record a given time in place of the
+  clock, so a project's past can be imported with each step dated when it
+  happened. See [Recording past work][past-work] (#197).
+- **Workbench can remove a project** from its sidebar, leaving the repository
+  untouched, and marks a project whose repository is gone instead of failing
+  to start its board (#202).
 
 ### Changed
-- **`workbook board` is removed.** The terminal board was made before the web
-  board, and it never worked well in a terminal. Use `workbook serve`, which
-  opens the board in a browser, or the Workbench desktop app. A script that
-  read `workbook board --json` can read `workbook list --json` instead: it
-  returns the same tasks in the same order, under the command name `list`.
-  Running `workbook board` now is the usage error any unknown command gets
-  (exit `2`), with one sentence saying the command was removed and pointing at
-  `workbook serve`. Its `--wide` and `--narrow` flags and its shell completions
-  are gone with it.
-- **Only a comment's author can edit it.** Editing somebody else's comment,
-  with `workbook update --edit-comment` or from the board, is refused with exit
-  `5` (a `400` on the board) and nothing is recorded; it used to be accepted
-  and the new text shown under the original author's name. The author is the
-  name the comment was recorded under, and the person editing is
-  `WORKBOOK_ACTOR` or else the checkout's `user.email`, so this is asserted
-  identity like everything else. Anybody can still remove any comment. The
-  board draws Edit only on your own comments and Remove on every one.
-- **The thread says who removed a comment, and who edited one when it was not
-  its author.** `workbook show` keeps a removed comment in its place as one
-  line, `(removed <time> by <person>)`, without its text, and an edit made by
-  somebody other than the author reads `(edited <time> by <person>)`. `show
-  --json` lists removed comments under `removedComments` and gives each live
-  comment `editable` (whether you may edit it) and `editedBy`. The board shows
-  the same, and its new `GET /api/tasks/<id>` answers with the task in that
-  shape; the poll and the comment routes carry `editableComments`. All of it is
-  read from operations every history already holds, so it covers comments
-  removed before this release, needs no format change, and leaves the cache as
-  it is. Compaction keeps only the live thread: a comment removed before it
-  loses its line entirely, and a comment edited before it reads `(edited
-  <time>, editor not recorded)`, with `"editorNotRecorded": true` in `show
-  --json` and on the board, so somebody else's words never read as the
-  author's own.
-- **Git 2.29 or later is required**, and the README now says so. Workbook's
-  fetches already used options from that release.
-- **A commit names the person its edit is recorded under, including when a
-  sync replays it.** An edit recorded under the checkout's own `user.email` is
-  committed exactly as before. An edit recorded under any other name, whether
-  through `WORKBOOK_ACTOR` or by a teammate whose change is replayed while
-  adopting a compaction, is committed with that name as author and committer,
-  where a replay used to take the identity of whoever ran the sync. So a
-  `workbook sync --watch` or `workbook serve` started without the variable
-  replays and publishes each person's task and configuration edits under
-  their own name, several people's in one pass, even in a folder with no Git
-  identity. A replay of an edit recorded under the checkout's own
-  `user.email` still takes the display name of the process that writes it. A
-  replay is never refused for the form of a name already in history: one Git
-  cannot store exactly, such as a `user.email` written with angle brackets,
-  takes the author and committer of the commit it replays, so the task still
-  synchronizes.
-- **`--assign` refuses a person that is not valid UTF-8.** Such a value was
-  recorded with each bad byte replaced, so as a different person. Every value
-  it accepted before is still accepted.
-- **The web board's New Task form can assign.** On a board that can record
-  assignments, the form stages them beside its dependencies and attachments
-  and sends them once the task exists; one the server refuses is retried from
-  the new task's page, as a refused dependency is.
-- **A task's page is laid out like the New Task form.** Assignments and
-  attachments moved into the sidebar, after the dependencies; only the
-  comments and the change history sit below the form. As on the New Task form,
-  the form fills the window: the description and Save stay on the screen and a
-  long sidebar scrolls inside the form, whether the header stacks onto several
-  rows or the task's title wraps. A title so long that it leaves the form
-  under 26rem is the exception: the form keeps that height and the page
-  scrolls to its Save row. Empty assignment and attachment lists no longer explain
-  themselves or count to zero, and a chosen file is listed with a × to take it
-  back out before **Add file** sends or stages it.
-- **Depends On and Blocks are one Dependencies section** on both task forms:
-  one list in which each row is tagged Depends On or Blocks, Depends On first,
-  and one task picker with an **Add as** toggle choosing which kind the next
-  entry is. The toggle stays where it was put after an add, so several entries
-  of one kind are one choice and several picks. The picker no longer offers a
-  task the server would refuse as a cycle: under Depends On, a task that
-  already depends on this one, directly or through others; under Blocks, a task
-  this one already depends on, directly or through others. Staged rows on the
-  New Task form count, and a task left out comes back when the toggle moves or
-  the row that closed the path is removed. The option highlighted with the
-  arrow keys no longer jumps back to none on the board's once-a-second refresh.
-  Nothing about how an edge is stored or sent changed.
-- **The task form's sidebar is tidier.** Every section — Properties,
-  Dependencies, Assignments and Attachments — is spaced alike, with the same
-  room above and below the rule between sections, and every dependency,
-  assignment and attachment is the same bordered card. Each card's Remove or
-  Unassign button is now a red × at the right end of its first line, named
-  for what it removes ("Unassign sam@example.com", "Remove dependency on
-  …") for screen readers and as its tooltip, so titles and file names get the
-  card's width. A dependency no longer prints the other task's ID (hover its
-  title for it); an assignment shows when it was recorded but no longer how
-  long ago; a link's URL is its name's tooltip rather than repeated under it,
-  and an attachment's details are one line (hover it for the media type and
-  exact time). The browser's "Choose File / No file chosen" control is a
-  **Choose file** button over the same file input; the dependency picker's
-  **Add**, **Assign**, and the link form's **Attach** (**Add** on the New Task
-  form) sit on their box's line, the link button beside the URL with the
-  optional label on the line below; and the help paragraph under the
-  assignment box is gone, its placeholder still showing who a blank box
-  assigns. A dependency or assignment that was not saved shows "Not saved",
-  the reason and **Retry** on their own lines under its title rather than
-  beside the ×. A focused × also keeps the keyboard focus across the board's
-  once-a-second poll, which the dependency list's and the attachment list's
-  did not, and keyboard focus no longer falls to the top of the page after a
-  sidebar change: removing a row moves it to the × that took the row's place
-  (or the one before it, or the section's box once the list is empty), adding
-  a dependency or a link returns it to the box it was added from, and a change
-  that was refused leaves it on the button that was pressed.
-- **Smaller task form changes.** The New Task header is a compact band with a ×
-  that closes the form, as a task's page now has too; Back on the New Task form
-  is Cancel, at the far right; **Create more** sits beside Save, its checkbox
-  after its words; and the description's Done button reads Preview.
-- **The SQLite projection is rebuilt once after upgrading.** Its schema version
-  moves from 5 to 7, so the first command this release runs discards the cache
-  and reads Git again. Nothing needs to be done, and no task data lives in the
-  cache.
-- **The format generation is now 4.** A `history.checkpoint` operation, and
-  every task state after one, declares generation 4. Nothing else this release
-  writes raises the generation, so a task nobody has compacted is unchanged,
-  byte for byte.
+- **`workbook board` is removed.** Use `workbook serve` or the Workbench app.
+  A script that read `workbook board --json` can read `workbook list --json`,
+  which returns the same tasks in the same order (#221).
+- **Only a comment's author can edit it**, from the command line or the board.
+  Anybody can still remove a comment, and the thread now says who removed one
+  and who edited one when it was not its author (#213).
+- **A commit names the person its edit is recorded under**, including when a
+  sync replays a teammate's edit, so a shared watcher or board publishes each
+  person's edits under their own name. `--assign` refuses a name that is not
+  valid UTF-8 (#208).
+- **The board hands its saves to a running watcher**, as it was meant to. A
+  save returns without waiting for the network and reaches the remote a few
+  seconds later (#219).
+- **The board keeps a change a proxy asked it to send later.** A `429` or
+  `503` carrying `Retry-After` is retried up to three times instead of being
+  lost, and an error page that is not JSON is reported in a plain sentence
+  (#214).
+- **The board's task forms were reworked.** The New Task form can assign, a
+  task's page uses the same sidebar layout, Depends On and Blocks are one
+  Dependencies section whose picker leaves out tasks that would close a cycle,
+  and the sidebar's rows, buttons and keyboard focus are tidier (#203, #204,
+  #205, #206).
+- **Push errors say more.** A push Git refuses outright reports Git's own
+  message rather than `Git returned 0 push outcomes, want 1`, and a push refused
+  for some task refs names up to three of them with Git's reason. A script that
+  matches the whole old message must match its start instead (#215).
+- **A failed background sync is logged.** `workbook serve` and `workbook sync
+  --watch` write a line to standard error when a round fails and when it
+  recovers; they used to write nothing (#215).
+- **Git 2.29 or later is required**, and the README says so (#207).
+- **The desktop app runs on Electron 44.11.5** (#192).
+- **The SQLite projection is rebuilt once after upgrading.** Nothing needs to
+  be done, and no task data lives in the cache (#198).
+- **The format generation is now 4**, for compacted tasks only. A task nobody
+  has compacted is unchanged, byte for byte (#198).
 
 ### Fixed
-- **Simultaneous requests to the board no longer fail with a rebuild error.**
-  When many requests reached `workbook serve` at once — tasks filed together,
-  a busy page, a hosted board — some were answered `500` with "cannot refresh
-  projection cache after a concurrent update; run `workbook rebuild`". The
-  cache was fine and nothing was lost: the request had found the cache updated
-  by another request, or by another process using the same repository, and
-  gave up. A read now leaves a cache row somebody else moved to them and
-  answers that task from the checkpoint it read from Git, so it is never
-  refused for that reason, on the board or the command line; a write that
-  loses the race to the task's ref is still refused as `stale-write`, exactly
-  as before. The few bounded waits on the cache that can still run out, for a
-  read as for a write — the cache locked by another process past its
-  five-second timeout, a cache file another process replaced during each of
-  three attempts, or again each time it was recovered — now answer
-  `stale-write` (exit `6`, `409` on the board) with "try again" instead of
-  `500` with rebuild advice, because nothing was written and the same request
-  is the right next step. A board card refused this way says the board was
-  busy, not that the task changed elsewhere. A write that succeeded no longer carries a warning to run
-  `workbook rebuild` when another write to the same task landed beside it.
-  `workbook rebuild` is still advised when the cache itself cannot be read.
-- **`workbook rebuild`, and the rebuild a command runs when it finds no
-  cache, no longer refuse while tasks are being written.** A rebuild whose task
-  refs moved during both of its builds used to exit `6` without installing
-  anything, which also failed the read that had needed the cache, so several
-  commands started at once in a fresh clone could refuse each other. The
-  second build is now installed, and the next read brings it up to the refs. A
-  rebuild that finds another process has already installed a usable cache
-  opens that cache instead of replacing it.
+- **A remote's password no longer appears in error messages.** Workbook
+  removes the credentials of the addresses Git is configured with from Git's
+  error output, on the command line and the board, where a failed publication
+  could show them to whoever made the change (#209).
+- **Typed text can no longer disguise itself on the board.** Bidirectional
+  override characters in titles, comments, file names and elsewhere are drawn
+  as spaces, so a file name cannot make an `.exe` read as a `.pdf`. See
+  [What anyone who can open the board can do and see][board-exposure] (#209).
+- **A parked ref that holds an edit the task lacks is no longer pruned**, and
+  listing tasks no longer slows as parked refs accumulate (#215).
+- **Sync no longer stops on a commit with an identity Git will not write
+  again**, such as one another tool wrote with an empty name (#215).
+- **Simultaneous requests to the board no longer fail with a rebuild error**,
+  and `workbook rebuild` no longer refuses while tasks are being written (#216).
 
 ### Compatibility across versions
+- **Upgrade every clone before anyone compacts.** A v0.6.1 clone that meets a
+  compacted task reports it as invalid on every sync, and with the pre-push
+  hook its code pushes fail too, until it upgrades. Nothing on the remote is
+  lost. Every compaction run says so (#198).
+- **Upgrade every clone before anyone sets a due date.** Older releases show
+  such a task without its date and refuse to change it (exit 9). Tasks without
+  a date are unaffected (#222).
+- **Upgrade every clone before committing a tasks remote.** Older releases
+  refuse a `.workbook/config.json` that names one (exit 7) (#219).
+- **An older clone can still edit somebody else's comment.** Every clone shows
+  the edit, and this release names who made it, so it no longer reads as the
+  author's own words (#213).
 
-- **An older clone can still edit somebody else's comment.** The refusal is
-  made where an edit is authored, so a clone running an earlier release
-  records such an edit as it always did, and every clone, old or new, shows
-  the new text. A clone running this release names who made the edit, so it no
-  longer reads as the author's own words. Upgrading every clone is what makes
-  the rule hold everywhere.
-- **A task given a due date is out of an older clone's reach.** Releases
-  before this one still list, show and synchronize it, without its date, say it
-  was written by a newer Workbook, and refuse to change it (exit 9). A task that
-  never had a date is untouched, so a team that does not use due dates sees no
-  difference. Upgrade every clone before anyone sets one.
-- **Upgrade every clone to v0.7.0 before anyone compacts.** Compaction never
-  runs on its own, so a team has time to do this, and every compaction run's
-  text output says so. Until someone compacts, v0.6.1 and newer clones work side
-  by side as before.
-- If a team skips that step, a v0.6.1 clone fails safely on a compacted task,
-  but not cleanly. A clone that already had the task reports it on every sync
-  as invalid ("tracking and canonical tips use different history
-  generations"), so every sync exits non-zero as if the data were corrupt. Its
-  local ref stays on the old history, so it keeps accepting edits to the task
-  that can never be pushed. With the managed pre-push hook installed, every
-  `git push` of code from that clone fails too, until its owner upgrades. No
-  old history gets pushed back over the checkpoint, so nothing on `origin` is
-  lost.
+[tasks-remote]: https://github.com/dgoings/workbook/blob/v0.7.0/docs/reference.md#a-tasks-remote-other-than-origin
+[own-repository]: https://github.com/dgoings/workbook/blob/v0.7.0/docs/hosting.md#keep-the-tasks-in-their-own-repository
+[compaction]: https://github.com/dgoings/workbook/blob/v0.7.0/docs/reference.md#task-archive-compaction
+[reset]: https://github.com/dgoings/workbook/blob/v0.7.0/docs/reference.md#resetting-workbook-data
+[leaving]: https://github.com/dgoings/workbook/blob/v0.7.0/docs/reference.md#leaving-workbook
+[due-dates]: https://github.com/dgoings/workbook/blob/v0.7.0/docs/reference.md#due-dates
+[hosting]: https://github.com/dgoings/workbook/blob/v0.7.0/docs/hosting.md
+[set-aside]: https://github.com/dgoings/workbook/blob/v0.7.0/docs/reference.md#edits-the-boards-sync-set-aside
+[past-work]: https://github.com/dgoings/workbook/blob/v0.7.0/docs/reference.md#recording-past-work
+[board-exposure]: https://github.com/dgoings/workbook/blob/v0.7.0/docs/reference.md#what-anyone-who-can-open-the-board-can-do-and-see
 
 ## v0.6.1 — 2026-10-28
 
