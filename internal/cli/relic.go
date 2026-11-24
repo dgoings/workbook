@@ -120,6 +120,12 @@ func runRelicCreate(ctx context.Context, args []string, cwd string, stdin io.Rea
 		if err != nil {
 			return err
 		}
+		// Without this the refusal is the type rule's, about a type "" that
+		// nobody gave.
+		if input.Type == "" && !typeGiven {
+			return core.Errorf(core.CategoryValidation,
+				"the relic document has no type; add a \"type\" member to it, or pass --type <type>, such as spec or plan")
+		}
 	} else {
 		if !titleGiven {
 			return core.Errorf(core.CategoryInvocation,

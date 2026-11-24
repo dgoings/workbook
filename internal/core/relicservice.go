@@ -168,7 +168,8 @@ func ResolveRelicPrefix(heads []RelicHead, idOrPrefix string) (RelicHead, error)
 	case 1:
 		return matches[0], nil
 	default:
-		return RelicHead{}, Errorf(CategoryValidation, "relic ID prefix %q is ambiguous", idOrPrefix)
+		return RelicHead{}, Errorf(CategoryValidation,
+			"relic prefix %q matches %d relics; use more characters", idOrPrefix, len(matches))
 	}
 }
 
@@ -265,7 +266,7 @@ func checkRelicPropertiesGrowth(before, after map[string]json.RawMessage) error 
 	if len(encoded) <= was {
 		return nil
 	}
-	return relicSizeError("the relic's properties", len(encoded), MaxRelicPropertiesBytes)
+	return relicTotalSizeError("the relic's properties", len(encoded), MaxRelicPropertiesBytes)
 }
 
 // relicFieldsSize is the size of the fields.json that would store fields,
@@ -296,7 +297,7 @@ func checkRelicFieldsGrowth(what string, before, after map[string]json.RawMessag
 	if size <= was {
 		return nil
 	}
-	return relicSizeError("the fields of "+what, size, MaxRelicPartFieldsBytes)
+	return relicTotalSizeError("the fields of "+what, size, MaxRelicPartFieldsBytes)
 }
 
 // checkRelicBodyInput checks a body to save: its format label and its size.

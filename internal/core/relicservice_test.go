@@ -458,7 +458,7 @@ func TestResolveRelicPrefix(t *testing.T) {
 		}
 	}
 	_, err := ResolveRelicPrefix(heads, "wb-r-")
-	requireRelicCategory(t, "ambiguous", err, CategoryValidation, "ambiguous", `"wb-r-"`)
+	requireRelicCategory(t, "ambiguous", err, CategoryValidation, `relic prefix "wb-r-" matches 2 relics`, "use more characters")
 	_, err = ResolveRelicPrefix(heads, "WB-R-01M9B")
 	requireRelicCategory(t, "none", err, CategoryNotFound, `no relic matches "WB-R-01M9B"`)
 	_, err = ResolveRelicPrefix(heads, "  ")

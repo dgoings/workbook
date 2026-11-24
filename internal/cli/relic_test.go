@@ -379,8 +379,8 @@ func TestRelicPrefixResolution(t *testing.T) {
 	}
 	mustCreateRelic(t, repository, "Second", "--type", "spec")
 	message := relicErrorMessage(t, repository, 5, core.CategoryValidation, "show", "WB-R-")
-	if !strings.Contains(message, "ambiguous") {
-		t.Fatalf("show WB-R- message = %q, want ambiguous", message)
+	if !strings.Contains(message, `relic prefix "WB-R-" matches 2 relics`) || !strings.Contains(message, "use more characters") {
+		t.Fatalf("show WB-R- message = %q, want it to count the matches and say to use more characters", message)
 	}
 }
 

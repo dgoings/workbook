@@ -118,7 +118,7 @@ func writeRelicBodyText(stdout io.Writer, body core.RelicDocumentBody) {
 
 // writeRelicValues prints properties or fields in name order, one
 // `name: value` line each. A JSON string prints as its text, anything else as
-// compact JSON.
+// compact JSON: a null prints as null.
 func writeRelicValues(stdout io.Writer, indent string, values map[string]json.RawMessage) {
 	names := make([]string, 0, len(values))
 	for name := range values {
@@ -130,10 +130,15 @@ func writeRelicValues(stdout io.Writer, indent string, values map[string]json.Ra
 	}
 }
 
+// relicValueText is a value as relic show prints it. Only a JSON string is
+// decoded to its text. A null also decodes into a string without an error,
+// as the empty one, so the first byte decides, not the decoder.
 func relicValueText(value json.RawMessage) string {
-	var text string
-	if err := json.Unmarshal(value, &text); err == nil {
-		return text
+	if trimmed := bytes.TrimSpace(value); len(trimmed) > 0 && trimmed[0] == '"' {
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err == nil {
+			return text
+		}
 	}
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, value); err != nil {

@@ -453,8 +453,8 @@ func TestValidateRelicCheckpointRejectsAStateThatDoesNotFollow(t *testing.T) {
 	won.State.Relic.Parts[0].Body = &RelicBody{Format: "md", Version: c3, Bytes: 99}
 	err := ValidateRelicCheckpoint(&alice, bobPack, won)
 	requireCorruptData(t, "a stale edit that won", err)
-	if err == nil || !strings.Contains(err.Error(), "stored checkpoint differs from computed state") {
-		t.Errorf("error = %v, want it to say the stored checkpoint differs", err)
+	if err == nil || !strings.Contains(err.Error(), "the stored relic is not what its operations produce") {
+		t.Errorf("error = %v, want it to say the stored relic is not what its operations produce", err)
 	}
 }
 

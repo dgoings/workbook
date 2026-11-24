@@ -333,7 +333,7 @@ func ValidateRelicCheckpoint(parent *RelicRecord, pack RelicOperationPack, store
 		return Wrap(CategoryCorruptData, "cannot encode stored relic links", err)
 	}
 	if !bytes.Equal(computedState, storedState) || !bytes.Equal(computedLinks, storedLinks) {
-		return corrupt("stored checkpoint differs from computed state")
+		return corrupt("the stored relic is not what its operations produce")
 	}
 	return nil
 }

@@ -611,7 +611,7 @@ func validateStoredRelicValue(kind string, value json.RawMessage) error {
 		return err
 	}
 	if !bytes.Equal(canonical, value) {
-		return Errorf(CategoryValidation, "the value is not stored in canonical form")
+		return Errorf(CategoryValidation, "the value is not in canonical form")
 	}
 	return nil
 }
@@ -632,13 +632,28 @@ func validateStoredRelicBodySize(size int64) error {
 func validateRelicValues(kind string, values map[string]json.RawMessage) error {
 	for name, value := range values {
 		if err := ValidateRelicName(kind, name); err != nil {
-			return Wrap(CategoryCorruptData, "a stored "+kind+" name is invalid", err)
+			return storedRelicValueError(kind, "name", err)
 		}
 		if err := validateStoredRelicValue(kind, value); err != nil {
-			return Wrap(CategoryCorruptData, "a stored "+kind+" value is invalid", err)
+			return storedRelicValueError(kind, "value", err)
 		}
 	}
 	return nil
+}
+
+// storedRelicValueError reports a stored name or value that breaks a rule, as
+// corrupt data. what is "name" or "value". The rule's own message opens with
+// its subject, "a property name" or "the value", so the subject is said once,
+// as in "a stored property name must not be empty", and not once here and
+// again there.
+func storedRelicValueError(kind, what string, err error) error {
+	message := err.Error()
+	for _, subject := range []string{"a " + kind + " " + what + " ", "the " + what + " "} {
+		if rest, found := strings.CutPrefix(message, subject); found {
+			return corrupt("a stored %s %s %s", kind, what, rest)
+		}
+	}
+	return Wrap(CategoryCorruptData, "a stored "+kind+" "+what+" is invalid", err)
 }
 
 func validateRelicStateDocument(state RelicStateDocument) error {

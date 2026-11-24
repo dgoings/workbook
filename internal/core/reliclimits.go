@@ -58,6 +58,12 @@ func relicSizeError(what string, size, limit int) error {
 	return Errorf(CategoryValidation, "%s is %d bytes; the limit is %d bytes", what, size, limit)
 }
 
+// relicTotalSizeError is relicSizeError for several things measured together,
+// as in "the relic's properties are 70000 bytes".
+func relicTotalSizeError(what string, size, limit int) error {
+	return Errorf(CategoryValidation, "%s are %d bytes; the limit is %d bytes", what, size, limit)
+}
+
 // ValidateRelicTitle trims a title and checks it, returning the trimmed form.
 func ValidateRelicTitle(title string) (string, error) {
 	if !utf8.ValidString(title) {
@@ -114,9 +120,12 @@ func ValidateRelicBodyFormat(label string) error {
 // "field" and only shapes the message.
 //
 // A name is at most MaxRelicNameBytes of valid UTF-8, not empty, without '='
-// or a control character, and with no white space at either end, by Unicode's
-// White_Space property: two names that differ only by a space nobody can see
-// would be two properties. White space inside a name is the name's own. The
+// or a control character, and with no white space at either end. A control
+// character is one in Unicode's category Cc: U+0000 to U+001F, U+007F, and
+// U+0080 to U+009F. White space is Unicode's White_Space property: two names
+// that differ only by a space nobody can see would be two properties. White
+// space inside a name is the name's own, unless it is a control character, as
+// a tab is. The
 // name is not required to be in a Unicode normalization form; nothing here
 // compares names except byte for byte. A name over the limit is reported by
 // its size, never repeated.
@@ -131,7 +140,7 @@ func ValidateRelicName(kind, name string) error {
 		return Errorf(CategoryValidation, "a %s name must be valid UTF-8", kind)
 	}
 	for _, r := range name {
-		if r < 0x20 || r == 0x7f || r == '=' {
+		if unicode.IsControl(r) || r == '=' {
 			return Errorf(CategoryValidation,
 				"a %s name must not contain '=' or control characters", kind)
 		}

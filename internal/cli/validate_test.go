@@ -678,7 +678,7 @@ func TestValidateNamesARelicCommitThatDoesNotFollowFromItsHistory(t *testing.T) 
 	for _, want := range []string{
 		"Validated 1 task(s):",
 		"Validated 2 relic(s): 6 commit(s) checked; 1 valid, 1 invalid.\n",
-		"Invalid " + tip.Operation.RelicID + " at " + forged + " [corrupt-data]: " + failure.Message + "\n",
+		"Invalid " + tip.Operation.RelicID + " at " + forged + " [corrupt-data]: " + relicFailureCause(failure) + "\n",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("validate output = %q, want it to contain %q", stdout, want)
@@ -903,13 +903,17 @@ func TestValidateReportsARelicWithAMissingObjectAndEverythingElse(t *testing.T) 
 				"Validated 1 task(s):",
 				"Validated 2 relic(s):",
 				"1 valid, 1 invalid.\n",
-				"Invalid " + relicID + " at " + at + " [corrupt-data]: " + failure.Message + "\n",
+				"Invalid " + relicID + " at " + at + " [corrupt-data]: " + relicFailureCause(failure) + "\n",
 			} {
 				if !strings.Contains(stdout, want) {
 					t.Fatalf("validate output = %q, want it to contain %q", stdout, want)
 				}
 			}
 			requireNoRawGitText(t, "validate's output", stdout+stderr)
+			// The line names the relic and the commit, so its message does not.
+			if strings.Count(stdout, relicID) != 1 || strings.Count(stdout, at) != 1 {
+				t.Fatalf("validate output = %q, want relic %s and commit %s named once each", stdout, relicID, at)
+			}
 
 			code, stdout, stderr = run(t, repository, "relic", "show", relicID, "--json")
 			if code != showCode {

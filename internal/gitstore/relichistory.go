@@ -237,7 +237,7 @@ func (r *Repository) readRelicPartObjects(
 		// damage, and Git's own words for it are not the user's to decode.
 		if gitExitedWithFailure(ctx, err) {
 			return nil, corruptRelic(state.RelicID,
-				"commit %s: its tree cannot be listed; a directory it names is missing from Git or cannot be read", commit)
+				"commit %s: a directory it names is missing from Git or cannot be read", commit)
 		}
 		return nil, err
 	}
@@ -393,8 +393,9 @@ func (r *Repository) VerifyRelicTransition(ctx context.Context, parent *RelicCom
 		if core.CategoryOf(err) == core.CategoryNewerWriter {
 			return err
 		}
-		return core.Wrap(core.CategoryCorruptData,
-			fmt.Sprintf("relic %s: the stored relic is not what the commit's operations produce", relicID), err)
+		// The fold's refusal is the whole cause: what the pack may not do, or
+		// that the stored relic is not what its operations produce.
+		return corruptRelic(relicID, "%s", err.Error())
 	}
 
 	named := make(map[string]struct{})
@@ -636,7 +637,7 @@ func (r *Repository) relicHistoryGap(ctx context.Context, config core.ProjectCon
 				return "", nil
 			}
 			return objectID, corruptRelic(head.RelicID,
-				"the history cannot be followed past commit %s: its parent %s is missing from Git", objectID, commit.Parent)
+				"commit %s: its parent %s is missing from Git, so the history cannot be followed past it", objectID, commit.Parent)
 		}
 		objectID = commit.Parent
 	}

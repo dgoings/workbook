@@ -1833,7 +1833,8 @@ func writeValidationResult(output io.Writer, result historyvalidation.Result) {
 			if core.Category(failure.Category) == core.CategoryNewerWriter {
 				label = "Newer"
 			}
-			fmt.Fprintf(output, "%s %s at %s [%s]: %s\n", label, failure.RelicID, failure.Commit, failure.Category, failure.Message)
+			fmt.Fprintf(output, "%s %s at %s [%s]: %s\n", label, failure.RelicID, failure.Commit, failure.Category,
+				relicFailureCause(failure))
 		}
 	}
 	// Advisories are printed after the verdict and never change it: they
@@ -1842,6 +1843,15 @@ func writeValidationResult(output io.Writer, result historyvalidation.Result) {
 	for _, advisory := range result.Advisories {
 		fmt.Fprintf(output, "Advisory:\t%s\t%s\n", advisory.Code, advisory.Message)
 	}
+}
+
+// relicFailureCause is a relic failure's message without the relic and the
+// commit it opens with. A message names both so that it stands alone, in JSON
+// and from the commands that read one relic; validate's text line has just
+// named both itself.
+func relicFailureCause(failure historyvalidation.RelicFailure) string {
+	cause := strings.TrimPrefix(failure.Message, "relic "+failure.RelicID+": ")
+	return strings.TrimPrefix(cause, "commit "+failure.Commit+": ")
 }
 
 // defaultServeAddr is where the board prefers to live, so the common

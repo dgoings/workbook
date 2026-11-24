@@ -420,3 +420,53 @@ func TestRelicValueEncodingIsPinnedToTheseBytes(t *testing.T) {
 		t.Fatalf("the stored state reads back as %q, %v", decoded.Relic.Properties["golden"], err)
 	}
 }
+
+// A name holds no control character, by Unicode's category Cc: U+0000 to
+// U+001F, U+007F, and U+0080 to U+009F. The last range was accepted inside a
+// name, where no terminal shows it and two names could differ by it unseen.
+func TestARelicNameHoldsNoControlCharacter(t *testing.T) {
+	bad := map[string]string{
+		"U+0000 inside":     "sta\x00tus",
+		"U+001F inside":     "sta\x1ftus",
+		"U+007F inside":     "sta\x7ftus",
+		"U+0080 inside":     "sta\xc2\x80tus",
+		"U+0085 inside":     "sta\xc2\x85tus",
+		"U+009B inside":     "sta\xc2\x9btus",
+		"U+009F inside":     "sta\xc2\x9ftus",
+		"U+0080 at the end": "status\xc2\x80",
+	}
+	good := map[string]string{
+		"U+00A0, the first character after the range": "sta\xc2\xa0tus",
+		"U+00AD, a format character":                  "sta\xc2\xadtus",
+	}
+	for _, kind := range []string{"property", "field"} {
+		for label, name := range good {
+			if err := ValidateRelicName(kind, name); err != nil {
+				t.Errorf("%s name with %s: %v", kind, label, err)
+			}
+		}
+		for label, name := range bad {
+			err := ValidateRelicName(kind, name)
+			requireValidation(t, kind+" name with "+label, err)
+			if err != nil && !strings.Contains(err.Error(), "control characters") {
+				t.Errorf("%s name with %s: message %q, want it to say a name holds no control characters", kind, label, err)
+			}
+		}
+	}
+
+	// On read each is corrupt data.
+	for label, name := range bad {
+		state := goldenRelicState()
+		state.Relic.Properties = map[string]json.RawMessage{name: json.RawMessage(`1`)}
+		requireRelicStateRefused(t, "a stored property name with "+label, state)
+
+		fields := NewRelicFields(map[string]json.RawMessage{name: json.RawMessage(`1`)})
+		_, err := DecodeRelicFieldsDocument(marshalRelicDocument(t, fields))
+		requireCorruptData(t, "a stored field name with "+label, err)
+	}
+	for label, name := range good {
+		state := goldenRelicState()
+		state.Relic.Properties = map[string]json.RawMessage{name: json.RawMessage(`1`)}
+		requireRelicStateRoundTrips(t, "a stored property name with "+label, state)
+	}
+}
