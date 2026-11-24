@@ -44,7 +44,25 @@ const subtreeMode = "40000"
 // keeps its new blobs in while Git hashes them.
 const relicWriteDirectoryPrefix = "relic-write-"
 
+// relicRefChanged opens the refusal a write gets when the relic's ref moved
+// under it. See relicLostRace.
 const relicRefChanged = "relic ref changed concurrently"
+
+// relicLostRace is the refusal for a write that lost: the relic's ref no
+// longer pointed where the write started from, so another change was saved
+// first and this one was not. Nothing retries it. The command read the relic
+// before that change, so only running it again judges the change it wants
+// against the relic as it now is, and the message ends by saying so. cause is
+// Git's refusal of the ref move when there was one; a command shows only the
+// message.
+func relicLostRace(ref string, cause error) error {
+	message := fmt.Sprintf("%s: another change to relic %s was saved first, so this one was not; run the command again",
+		relicRefChanged, strings.TrimPrefix(ref, relicRefPrefix))
+	if cause == nil {
+		return core.Errorf(core.CategoryStaleWrite, "%s", message)
+	}
+	return core.Wrap(core.CategoryStaleWrite, message, cause)
+}
 
 func corruptRelic(relicID, format string, args ...any) error {
 	return core.Errorf(core.CategoryCorruptData, "relic %s: %s", relicID, fmt.Sprintf(format, args...))
@@ -705,7 +723,7 @@ func (r *Repository) WriteRelic(
 		return core.RelicSnapshot{}, err
 	}
 	if current != parentHead {
-		return core.RelicSnapshot{}, core.Errorf(core.CategoryStaleWrite, relicRefChanged)
+		return core.RelicSnapshot{}, relicLostRace(ref, nil)
 	}
 
 	head, err := r.writeRelicObjects(ctx, parent, pack, record, content, reason)
@@ -745,7 +763,7 @@ func (r *Repository) moveRelicRef(ctx context.Context, ref, head, expected, reas
 	case readErr != nil && core.CategoryOf(readErr) == core.CategoryCorruptData:
 		return readErr
 	case readErr == nil && current != expected:
-		return core.Wrap(core.CategoryStaleWrite, relicRefChanged, err)
+		return relicLostRace(ref, err)
 	}
 	return err
 }

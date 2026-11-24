@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -675,6 +676,19 @@ func TestWriteRelicUsesABoundedNumberOfGitProcesses(t *testing.T) {
 	}
 }
 
+// assertRelicLostRace asserts the refusal a write gets when another change to
+// the relic landed first: a stale write that names the relic and ends by
+// saying what to do. A command shows only the error's own message, so the
+// advice has to be in that and not in a cause behind it.
+func assertRelicLostRace(t *testing.T, err error, relicID string) {
+	t.Helper()
+	assertRelicCategory(t, err, core.CategoryStaleWrite, "relic ref changed concurrently", relicID)
+	var typed *core.Error
+	if !errors.As(err, &typed) || !strings.HasSuffix(typed.Message, "; run the command again") {
+		t.Fatalf("a lost race says %q; it must end by saying to run the command again", err)
+	}
+}
+
 func TestWriteRelicRefusesAStaleParent(t *testing.T) {
 	t.Parallel()
 	repo, config := relicRepository(t, testrepo.FormatSHA1)
@@ -686,7 +700,7 @@ func TestWriteRelicRefusesAStaleParent(t *testing.T) {
 
 	secondPack := relicChildPack(root, relicTitleSet(700002, "The second writer's title"))
 	_, err := repo.WriteRelic(ctx, config, &root, secondPack, foldRelic(t, &root, secondPack), nil, "update relic")
-	assertRelicCategory(t, err, core.CategoryStaleWrite, "relic ref changed concurrently")
+	assertRelicLostRace(t, err, secondPack.RelicID)
 	if got := refValue(t, repo, relicRef(secondPack.RelicID)); got != first.Head {
 		t.Fatalf("relic ref = %q after a refused write, want the first write's %q", got, first.Head)
 	}
@@ -695,7 +709,7 @@ func TestWriteRelicRefusesAStaleParent(t *testing.T) {
 	// A second create of the same relic never replaces the first.
 	createPack, createContent := relicRootPack(config, 1, part)
 	_, err = repo.WriteRelic(ctx, config, nil, createPack, foldRelic(t, nil, createPack), createContent, "create relic")
-	assertRelicCategory(t, err, core.CategoryStaleWrite, "relic ref changed concurrently")
+	assertRelicLostRace(t, err, createPack.RelicID)
 	if got := refValue(t, repo, relicRef(createPack.RelicID)); got != first.Head {
 		t.Fatalf("relic ref = %q after a refused create, want %q", got, first.Head)
 	}
@@ -723,7 +737,7 @@ func TestRelicRefMoveIsACompareAndSwap(t *testing.T) {
 		t.Fatalf("moveRelicRef(first) error = %v", err)
 	}
 	err := repo.moveRelicRef(ctx, ref, commits[1], root.Head, "update relic")
-	assertRelicCategory(t, err, core.CategoryStaleWrite, "relic ref changed concurrently")
+	assertRelicLostRace(t, err, root.Operation.RelicID)
 	if got := refValue(t, repo, ref); got != commits[0] {
 		t.Fatalf("relic ref = %q, want the first mover's %q", got, commits[0])
 	}
@@ -743,7 +757,7 @@ func TestRelicRefMoveIsACompareAndSwap(t *testing.T) {
 		t.Fatalf("moveRelicRef(first create) error = %v", err)
 	}
 	err = repo.moveRelicRef(ctx, createRef, roots[1], "", "create relic")
-	assertRelicCategory(t, err, core.CategoryStaleWrite, "relic ref changed concurrently")
+	assertRelicLostRace(t, err, relicTestRelicID(2))
 	if got := refValue(t, repo, createRef); got != roots[0] {
 		t.Fatalf("relic ref = %q, want the first create's %q", got, roots[0])
 	}
@@ -796,6 +810,8 @@ func TestConcurrentRelicWritesLandExactlyOne(t *testing.T) {
 			winners = append(winners, result.snapshot)
 		case core.CategoryOf(result.err) != core.CategoryStaleWrite:
 			t.Fatalf("writer %d failed with %q, want a stale write: %v", index, core.CategoryOf(result.err), result.err)
+		default:
+			assertRelicLostRace(t, result.err, root.Operation.RelicID)
 		}
 	}
 	if len(winners) != 1 {
