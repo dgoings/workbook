@@ -1,7 +1,9 @@
 package scripts_test
 
 import (
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -279,5 +281,79 @@ func TestCheckReleaseChangelogOnALineComparesAgainstThatLine(t *testing.T) {
 	}
 	if !strings.Contains(output, "newest CHANGELOG entry is v0.5.2") {
 		t.Errorf("output = %q, want the disagreement named", output)
+	}
+}
+
+// The entry is published as the release notes, so its lead, the prose ahead of
+// its first "### " section, is the first thing every reader meets. v0.7.0
+// shipped with 270 lines of it, every feature narrated in a paragraph of its
+// own, before "### Added". The check counts the lead's non-blank lines.
+func TestCheckReleaseChangelogLimitsTheLeadBeforeTheFirstSection(t *testing.T) {
+	t.Parallel()
+	lead := func(lines int) string {
+		return strings.Repeat("A sentence of summary.\n", lines)
+	}
+	entry := func(body string) string {
+		return "# Changelog\n\n## v0.5.0 — 2026-08-08\n\n" + body + "\n## v0.4.1\n\n" + lead(40) + "\n### Added\n- the previous release\n"
+	}
+	for _, testCase := range []struct {
+		name      string
+		changelog string
+		wantCut   bool
+	}{
+		{name: "a lead at the limit", changelog: entry(lead(15) + "\n### Added\n- a note\n"), wantCut: true},
+		// Production mutation: blank lines between paragraphs counted toward
+		// the limit would refuse a short lead written as several paragraphs.
+		{name: "blank lines do not count", changelog: entry(strings.Repeat(lead(3)+"\n\n", 5) + "### Added\n- a note\n"), wantCut: true},
+		{name: "an entry with no sections", changelog: entry(lead(15)), wantCut: true},
+		// Production mutation: a check that never ran would let the v0.7.0
+		// shape through again.
+		{name: "a lead past the limit", changelog: entry(lead(16) + "\n### Added\n- a note\n"), wantCut: false},
+		{name: "an entry of prose alone", changelog: entry(lead(16)), wantCut: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeChangelog(t, testCase.changelog)
+			output, err := runCheckReleaseChangelog(t,
+				"--bump", "minor",
+				"--version", "0.5.0",
+				"--previous", "v0.4.1",
+				"--changelog", path)
+			if testCase.wantCut && err != nil {
+				t.Fatalf("check refused a short lead: %v\n%s", err, output)
+			}
+			if !testCase.wantCut {
+				if err == nil {
+					t.Fatalf("check accepted a long lead:\n%s", output)
+				}
+				if !strings.Contains(output, "16 lines of prose") {
+					t.Errorf("output = %q, want the lead's length named", output)
+				}
+			}
+		})
+	}
+}
+
+// The repository's own newest entry has to pass the check it will be held to.
+// Entries are written newest first and a forward-ported one goes in version
+// order, so the topmost version heading is the newest.
+func TestCheckReleaseChangelogAcceptsThisRepositorysNewestEntry(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join("..", "CHANGELOG.md")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?m)^## v([0-9]+\.[0-9]+\.[0-9]+)( |$)`).FindSubmatch(contents)
+	if match == nil {
+		t.Fatal("CHANGELOG.md has no version heading")
+	}
+	output, err := runCheckReleaseChangelog(t,
+		"--bump", "minor",
+		"--version", string(match[1]),
+		"--previous", "v0.0.1",
+		"--changelog", path)
+	if err != nil {
+		t.Fatalf("check refused CHANGELOG.md's v%s entry: %v\n%s", match[1], err, output)
 	}
 }
