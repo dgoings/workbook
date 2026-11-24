@@ -67,6 +67,8 @@ type RelicOperation struct {
 	PartType string             `json:"partType,omitempty"`
 	Position string             `json:"position,omitempty"`
 	Body     *RelicBodyChange   `json:"body,omitempty"`
+	Link     *RelicLinkChange   `json:"link,omitempty"`
+	LinkID   string             `json:"linkId,omitempty"`
 }
 
 // RelicOperationPack is a relic commit's operation.json.
@@ -128,12 +130,12 @@ type RelicStateDocument struct {
 	Relic        RelicData `json:"relic"`
 }
 
-// RelicLinksDocument is a relic commit's links.json. Links is never nil, and
-// is always empty in this story.
+// RelicLinksDocument is a relic commit's links.json: the relic's live links,
+// ordered by ID. Links is never nil. A removed link is kept only in history.
 type RelicLinksDocument struct {
-	Format  string            `json:"format"`
-	Version int               `json:"version"`
-	Links   []json.RawMessage `json:"links"`
+	Format  string      `json:"format"`
+	Version int         `json:"version"`
+	Links   []RelicLink `json:"links"`
 }
 
 // RelicFieldsDocument is a part's parts/<part-id>/fields.json. Fields is never
@@ -189,6 +191,8 @@ var relicOperationMinReader = map[RelicOperationType]int{
 	RelicOperationPartMove:       RelicMinReader,
 	RelicOperationPartRemove:     RelicMinReader,
 	RelicOperationPartRestore:    RelicMinReader,
+	RelicOperationLinkAdd:        RelicMinReader,
+	RelicOperationLinkRemove:     RelicMinReader,
 }
 
 // NewRelicOperationPack builds a pack whose generation is derived from its
@@ -219,10 +223,9 @@ func NewRelicOperationPack(
 	}
 }
 
-// EmptyRelicLinks is the links document every relic commit stores in this
-// story.
+// EmptyRelicLinks is the links document of a relic with no links.
 func EmptyRelicLinks() RelicLinksDocument {
-	return RelicLinksDocument{Format: relicLinksFormat, Version: documentVersion, Links: []json.RawMessage{}}
+	return RelicLinksDocument{Format: relicLinksFormat, Version: documentVersion, Links: []RelicLink{}}
 }
 
 // NewRelicFields wraps a part's fields in their document. A nil map becomes the
@@ -449,7 +452,7 @@ func validateRelicOperationPackDocument(pack RelicOperationPack) error {
 // operation type carries. Anything outside its list must be absent, which is
 // what stops a future build's operation from being folded as an older one.
 type relicOperationMembers struct {
-	relic, title, name, value, part, partType, position, body bool
+	relic, title, name, value, part, partType, position, body, link, linkID bool
 }
 
 var relicOperationShapes = map[RelicOperationType]relicOperationMembers{
@@ -466,6 +469,8 @@ var relicOperationShapes = map[RelicOperationType]relicOperationMembers{
 	RelicOperationPartMove:       {part: true, position: true},
 	RelicOperationPartRemove:     {part: true},
 	RelicOperationPartRestore:    {part: true},
+	RelicOperationLinkAdd:        {link: true},
+	RelicOperationLinkRemove:     {linkID: true},
 }
 
 func validateRelicOperationDocument(operation RelicOperation) error {
@@ -485,6 +490,8 @@ func validateRelicOperationDocument(operation RelicOperation) error {
 		partType: operation.PartType != "",
 		position: operation.Position != "",
 		body:     operation.Body != nil,
+		link:     operation.Link != nil,
+		linkID:   operation.LinkID != "",
 	}
 	// part.add is the one type with an optional member: a part may be added
 	// without a body.
@@ -545,6 +552,16 @@ func validateRelicOperationDocument(operation RelicOperation) error {
 	if operation.Position != "" {
 		if _, err := ParsePartPosition(operation.Position); err != nil {
 			return Wrap(CategoryCorruptData, string(operation.Type)+" carries an invalid position", err)
+		}
+	}
+	if operation.Link != nil {
+		if err := validateRelicLinkChange("link.add", *operation.Link); err != nil {
+			return err
+		}
+	}
+	if operation.LinkID != "" {
+		if err := validateCanonicalULID("link.remove link ID", operation.LinkID); err != nil {
+			return err
 		}
 	}
 	if operation.Body != nil {
@@ -774,10 +791,7 @@ func validateRelicLinksDocument(links RelicLinksDocument) error {
 	if links.Links == nil {
 		return corrupt("relic links must be a list")
 	}
-	if len(links.Links) != 0 {
-		return corrupt("relic links are unsupported; a relic stores no links yet")
-	}
-	return nil
+	return validateRelicLinkList(links.Links)
 }
 
 func validateRelicFieldsDocument(fields RelicFieldsDocument) error {

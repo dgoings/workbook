@@ -36,8 +36,11 @@ func foldedRelicMinReader(parent *RelicRecord, pack RelicOperationPack) int {
 // a base that is not the part's current version, an operation naming a part
 // the relic does not have, removing a removed part, restoring a live part and
 // clearing an absent name all change nothing, and the operation stays in
-// history. Tombstone and restore keep the task rules and are corrupt data
-// when misused.
+// history. So does removing a link the relic does not have. Tombstone and
+// restore keep the task rules and are corrupt data when misused.
+//
+// The parent's links are carried forward, link operations apply in order,
+// and the links are kept sorted by ID.
 //
 // It is not tolerant of an ID used twice where the state shows it: see
 // refuseReusedRelicID.
@@ -53,6 +56,7 @@ func ApplyRelic(parent *RelicRecord, pack RelicOperationPack) (RelicRecord, erro
 
 	var (
 		relic      RelicData
+		links      RelicLinksDocument
 		history    History
 		operations []RelicOperation
 	)
@@ -62,6 +66,7 @@ func ApplyRelic(parent *RelicRecord, pack RelicOperationPack) (RelicRecord, erro
 			return RelicRecord{}, err
 		}
 		relic = root
+		links = EmptyRelicLinks()
 		history = History{Generation: pack.HistoryGeneration}
 		operations = pack.Operations[1:]
 	} else {
@@ -69,6 +74,7 @@ func ApplyRelic(parent *RelicRecord, pack RelicOperationPack) (RelicRecord, erro
 			return RelicRecord{}, err
 		}
 		relic = copyRelicData(parent.State.Relic)
+		links = copyRelicLinks(parent.Links)
 		history = parent.State.History
 		operations = pack.Operations
 	}
@@ -80,8 +86,15 @@ func ApplyRelic(parent *RelicRecord, pack RelicOperationPack) (RelicRecord, erro
 		if err := refuseReusedRelicID(relic, operation); err != nil {
 			return RelicRecord{}, err
 		}
+		if err := refuseReusedRelicLinkID(relic, links, operation); err != nil {
+			return RelicRecord{}, err
+		}
 		applyRelicOperation(&relic, operation)
+		if err := applyRelicLinkOperation(&links, relic, operation); err != nil {
+			return RelicRecord{}, err
+		}
 	}
+	sortRelicLinks(links.Links)
 
 	if err := sortRelicParts(relic.Parts); err != nil {
 		return RelicRecord{}, Wrap(CategoryCorruptData, "relic operation pack produced an invalid relic", err)
@@ -100,7 +113,13 @@ func ApplyRelic(parent *RelicRecord, pack RelicOperationPack) (RelicRecord, erro
 	if err := validateRelicStateDocument(state); err != nil {
 		return RelicRecord{}, Wrap(CategoryCorruptData, "relic operation pack produced an invalid relic", err)
 	}
-	return RelicRecord{State: state, Links: EmptyRelicLinks()}, nil
+	if err := validateRelicLinksDocument(links); err != nil {
+		return RelicRecord{}, Wrap(CategoryCorruptData, "relic operation pack produced invalid links", err)
+	}
+	if err := ValidateRelicLinks(state, links); err != nil {
+		return RelicRecord{}, Wrap(CategoryCorruptData, "relic operation pack produced invalid links", err)
+	}
+	return RelicRecord{State: state, Links: links}, nil
 }
 
 // startRelic checks a root pack and builds the relic its relic.create
@@ -188,7 +207,8 @@ func checkRelicChild(parent RelicStateDocument, pack RelicOperationPack) error {
 // text its author never saw. A part.add that took a part's ID or a body's
 // current version would make one name stand for two things the same way. The
 // state does not keep a body's earlier versions or any other operation's ID,
-// so the fold cannot see those reused; the full history walk does.
+// so the fold cannot see those reused; the full history walk does. A live
+// link's ID is refused by refuseReusedRelicLinkID.
 func refuseReusedRelicID(relic RelicData, operation RelicOperation) error {
 	switch operation.Type {
 	case RelicOperationPartBodySet:
@@ -260,6 +280,8 @@ func applyRelicOperation(relic *RelicData, operation RelicOperation) {
 		}
 	case RelicOperationPartFieldSet, RelicOperationPartFieldClear:
 		// Fields live in the commit's tree; see ApplyRelicFields.
+	case RelicOperationLinkAdd, RelicOperationLinkRemove:
+		// Links live in links.json; see applyRelicLinkOperation.
 	}
 }
 

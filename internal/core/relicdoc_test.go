@@ -197,6 +197,9 @@ func validRelicOperations() []RelicOperation {
 		{ID: relicTestID(110), Type: RelicOperationPartMove, Part: part, Position: "5/1"},
 		{ID: relicTestID(111), Type: RelicOperationPartRemove, Part: part},
 		{ID: relicTestID(112), Type: RelicOperationPartRestore, Part: part},
+		{ID: relicTestID(113), Type: RelicOperationLinkAdd, Link: &RelicLinkChange{From: part,
+			To: RelicLinkTarget{Task: "WB-" + relicTestID(114)}, Rel: "implemented-by"}},
+		{ID: relicTestID(115), Type: RelicOperationLinkRemove, LinkID: relicTestID(113)},
 	}
 }
 
@@ -207,8 +210,8 @@ func singleRelicOperationPack(operation RelicOperation) RelicOperationPack {
 
 func TestRelicOperationMembersAreExact(t *testing.T) {
 	shapes := validRelicOperations()
-	if len(shapes) != 13 {
-		t.Fatalf("%d shapes, want one for each of the 13 types", len(shapes))
+	if len(shapes) != 15 {
+		t.Fatalf("%d shapes, want one for each of the 15 types", len(shapes))
 	}
 	valid := append(shapes,
 		RelicOperation{ID: relicTestID(120), Type: RelicOperationPartAdd, PartType: "section", Position: "1/1",
@@ -566,12 +569,12 @@ func TestRelicFieldsCanonicalForm(t *testing.T) {
 	}
 }
 
-func TestRelicLinksMustBeEmpty(t *testing.T) {
+func TestRelicLinksEnvelopeRules(t *testing.T) {
 	cases := map[string]RelicLinksDocument{
-		"one link":     {Format: "workbook.relic-links", Version: 1, Links: []json.RawMessage{json.RawMessage(`{}`)}},
-		"null links":   {Format: "workbook.relic-links", Version: 1},
-		"wrong format": {Format: "workbook.relic-part-fields", Version: 1, Links: []json.RawMessage{}},
-		"version 2":    {Format: "workbook.relic-links", Version: 2, Links: []json.RawMessage{}},
+		"an empty link": {Format: "workbook.relic-links", Version: 1, Links: []RelicLink{{}}},
+		"null links":    {Format: "workbook.relic-links", Version: 1},
+		"wrong format":  {Format: "workbook.relic-part-fields", Version: 1, Links: []RelicLink{}},
+		"version 2":     {Format: "workbook.relic-links", Version: 2, Links: []RelicLink{}},
 	}
 	for label, links := range cases {
 		_, err := EncodeDocument(links)

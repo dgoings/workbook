@@ -222,7 +222,7 @@ func staleRelicBody(parent RelicData, pack RelicOperationPack, sameBody map[stri
 
 // RelicRemovedPartWarnings warns, once per part removed in result, when one
 // side of a synchronization removed the part and the other edited it: set or
-// cleared a field, saved its body or moved it. An operation both sides hold
+// cleared a field, saved its body, moved it or linked from it. An operation both sides hold
 // was not made apart from the other side, so it counts for neither.
 func RelicRemovedPartWarnings(relicID string, local, remote []RelicOperationPack, result RelicRecord) []Warning {
 	localIDs, remoteIDs := relicOperationIDs(local), relicOperationIDs(remote)
@@ -279,6 +279,11 @@ func relicPartChanges(packs []RelicOperationPack, other map[string]bool) relicPa
 				changes.removed[operation.Part] = true
 			case RelicOperationPartFieldSet, RelicOperationPartFieldClear, RelicOperationPartBodySet, RelicOperationPartMove:
 				changes.edited[operation.Part] = true
+			case RelicOperationLinkAdd:
+				// A link from a part is an edit of that part.
+				if operation.Link != nil && operation.Link.From != "" {
+					changes.edited[operation.Link.From] = true
+				}
 			}
 		}
 	}
@@ -287,11 +292,11 @@ func relicPartChanges(packs []RelicOperationPack, other map[string]bool) relicPa
 
 // RelicOverLimitWarnings warns for each count or total that after passes and
 // before did not: the live parts, the parts counting removed ones, the bodies
-// of the live parts together and the properties together. Each is measured as
+// of the live parts together, the properties together and the live links. Each is measured as
 // the growth check on save measures it. A relic already over a limit is not
 // reported again, and the message never holds a value.
 func RelicOverLimitWarnings(relicID string, before, after RelicRecord) []Warning {
-	was, now := relicPartTotalsOf(before.State.Relic), relicPartTotalsOf(after.State.Relic)
+	was, now := relicTotalsOf(before), relicTotalsOf(after)
 	advice := "; both changes are kept, and the next change that makes it larger is refused"
 	var messages []string
 	if now.live > MaxRelicLiveParts && was.live <= MaxRelicLiveParts {
@@ -310,6 +315,10 @@ func RelicOverLimitWarnings(relicID string, before, after RelicRecord) []Warning
 		relicPropertiesSize(before.State.Relic.Properties) <= MaxRelicPropertiesBytes {
 		messages = append(messages, fmt.Sprintf("the relic's properties are %d bytes; the limit is %d bytes%s; clear or shorten a property",
 			size, MaxRelicPropertiesBytes, advice))
+	}
+	if now.links > MaxRelicLinks && was.links <= MaxRelicLinks {
+		messages = append(messages, fmt.Sprintf("the relic has %d links; the limit is %d%s; remove a link to bring it back",
+			now.links, MaxRelicLinks, advice))
 	}
 	warnings := make([]Warning, 0, len(messages))
 	for _, message := range messages {

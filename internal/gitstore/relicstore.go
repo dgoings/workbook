@@ -416,6 +416,9 @@ func validateRelicTipObjects(
 	if err := requireCanonicalRelicDocument("relic links", linksBlob.contents, links); err != nil {
 		return core.RelicSnapshot{}, err
 	}
+	if err := core.ValidateRelicLinks(state, links); err != nil {
+		return core.RelicSnapshot{}, err
+	}
 	if pack.Operations[0].Type == core.RelicOperationCreate {
 		if parentCount != 0 {
 			return core.RelicSnapshot{}, corruptRelic(head.RelicID, "the commit that creates the relic must have no parent")

@@ -522,7 +522,7 @@ func (r *Repository) writeReplayedRelic(
 			changedSubtree = true
 		}
 	}
-	if !changedSubtree && !relicStateChanged(parent.Record.State, record.State) {
+	if !changedSubtree && !relicRecordChanged(parent.Record, record) {
 		return parent, nil, nil
 	}
 
@@ -611,15 +611,20 @@ func (r *Repository) writeReplayedRelic(
 	return written, warnings, nil
 }
 
-// relicStateChanged reports whether next records any change from previous
-// beyond the logical clock and the time of the last change, which every pack
-// moves.
-func relicStateChanged(previous, next core.RelicStateDocument) bool {
-	next.LogicalClock = previous.LogicalClock
-	next.Relic.UpdatedAt = previous.Relic.UpdatedAt
-	before, errBefore := core.EncodeDocument(previous)
-	after, errAfter := core.EncodeDocument(next)
-	return errBefore != nil || errAfter != nil || !bytes.Equal(before, after)
+// relicRecordChanged reports whether next records any change from previous,
+// in its state or its links, beyond the logical clock and the time of the
+// last change, which every pack moves.
+func relicRecordChanged(previous, next core.RelicRecord) bool {
+	next.State.LogicalClock = previous.State.LogicalClock
+	next.State.Relic.UpdatedAt = previous.State.Relic.UpdatedAt
+	for _, documents := range [][2]any{{previous.State, next.State}, {previous.Links, next.Links}} {
+		before, errBefore := core.EncodeDocument(documents[0])
+		after, errAfter := core.EncodeDocument(documents[1])
+		if errBefore != nil || errAfter != nil || !bytes.Equal(before, after) {
+			return true
+		}
+	}
+	return false
 }
 
 // readRelicFieldsBlobs reads the fields.json commit stores for each part,

@@ -59,6 +59,8 @@ type RelicEdit struct {
 type relicPartTotals struct {
 	live, all     int
 	liveBodyBytes int64
+	// links is the count of live links; see relicTotalsOf.
+	links int
 }
 
 func relicPartTotalsOf(relic RelicData) relicPartTotals {
@@ -101,6 +103,11 @@ func checkRelicGrowth(before, after relicPartTotals) error {
 			"the bodies of the relic's live parts would total %d bytes; the limit is %d bytes; shorten a body or remove a part first, or use another relic",
 			after.liveBodyBytes, MaxRelicLiveBodyBytes)
 	}
+	if after.links > MaxRelicLinks && after.links > before.links {
+		return Errorf(CategoryValidation,
+			"the relic would have %d links; the limit is %d; remove a link first, or use another relic",
+			after.links, MaxRelicLinks)
+	}
 	return nil
 }
 
@@ -136,7 +143,7 @@ func (s RelicService) writeRelicChange(
 	if err != nil {
 		return RelicSnapshot{}, err
 	}
-	if err := checkRelicGrowth(relicPartTotalsOf(state.Relic), relicPartTotalsOf(record.State.Relic)); err != nil {
+	if err := checkRelicGrowth(relicTotalsOf(parent.Record), relicTotalsOf(record)); err != nil {
 		return RelicSnapshot{}, err
 	}
 	return s.Writer.WriteRelic(ctx, s.Config, &parent, pack, record, content, reason)
