@@ -65,6 +65,9 @@ func TestMeasureGitStorageClassifiesEveryReachableObjectExactlyOnce(t *testing.T
 		ObjectClassOperationBlob:    commits,
 		ObjectClassStateBlob:        commits,
 		ObjectClassIdentityDocument: 1,
+		ObjectClassRelicBody:        0,
+		ObjectClassRelicFields:      0,
+		ObjectClassRelicLinks:       0,
 		ObjectClassOtherBlob:        0,
 		ObjectClassAnnotatedTag:     0,
 	}

@@ -30,7 +30,8 @@ const (
 
 // Durable object classes. Every reachable object lands in exactly one class:
 // the Git object type decides commit, tree, and annotated tag, and a blob's
-// path inside the task tree decides operation, state, or other.
+// path inside the task or relic tree decides operation, state, relic body,
+// fields or links, or other.
 const (
 	ObjectClassOperationBlob = "operation-blob"
 	ObjectClassStateBlob     = "state-blob"
@@ -39,10 +40,15 @@ const (
 	// object per project rather than one per operation, and lumping it into the
 	// "other" bucket would leave an unexplained object in every account.
 	ObjectClassIdentityDocument = "identity-document"
-	ObjectClassOtherBlob        = "other-blob"
-	ObjectClassTree             = "tree"
-	ObjectClassCommit           = "commit"
-	ObjectClassAnnotatedTag     = "annotated-tag"
+	// A relic tree holds a part's body at parts/<id>/body, its fields at
+	// parts/<id>/fields.json and the relic's links at links.json.
+	ObjectClassRelicBody    = "relic-body"
+	ObjectClassRelicFields  = "relic-fields"
+	ObjectClassRelicLinks   = "relic-links"
+	ObjectClassOtherBlob    = "other-blob"
+	ObjectClassTree         = "tree"
+	ObjectClassCommit       = "commit"
+	ObjectClassAnnotatedTag = "annotated-tag"
 )
 
 // Measured resource command names.
@@ -55,6 +61,11 @@ const (
 	operationDocumentPath = "operation.json"
 	stateDocumentPath     = "state.json"
 	identityDocumentPath  = "project.json"
+	// The paths gitstore writes a relic's tree with.
+	relicLinksDocumentPath = "links.json"
+	relicPartsPathPrefix   = "parts/"
+	relicBodyFileName      = "body"
+	relicFieldsFileName    = "fields.json"
 
 	projectionCacheFilename = "cache.sqlite"
 	validationCacheFilename = "validation.sqlite"
@@ -69,6 +80,9 @@ var objectClassOrder = []string{
 	ObjectClassOperationBlob,
 	ObjectClassStateBlob,
 	ObjectClassIdentityDocument,
+	ObjectClassRelicBody,
+	ObjectClassRelicFields,
+	ObjectClassRelicLinks,
 	ObjectClassOtherBlob,
 	ObjectClassTree,
 	ObjectClassCommit,
@@ -472,9 +486,18 @@ func classifyReachableObject(object reachableObject) (string, error) {
 			return ObjectClassStateBlob, nil
 		case identityDocumentPath:
 			return ObjectClassIdentityDocument, nil
-		default:
-			return ObjectClassOtherBlob, nil
+		case relicLinksDocumentPath:
+			return ObjectClassRelicLinks, nil
 		}
+		if part, found := strings.CutPrefix(object.path, relicPartsPathPrefix); found {
+			switch {
+			case strings.HasSuffix(part, "/"+relicBodyFileName):
+				return ObjectClassRelicBody, nil
+			case strings.HasSuffix(part, "/"+relicFieldsFileName):
+				return ObjectClassRelicFields, nil
+			}
+		}
+		return ObjectClassOtherBlob, nil
 	default:
 		return "", fmt.Errorf("unknown Git object type %q", object.objectType)
 	}
