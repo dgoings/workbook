@@ -627,7 +627,7 @@ func TestRelicUpdateTextOutput(t *testing.T) {
 	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
 	notes := writeRelicBodyFile(t, "notes.md", "# Notes\n")
 	code, stdout, stderr := run(t, repository, "relic", "update", id, "--title", "Archive plan, revised",
-		"--add-part", "--part-type", "note", "--body-file", notes, "--add-part", "--part-type", "decision")
+		"--add-part", "--part-type", "note", "--body-file", notes, "--add-part", "--part-type", "decision", "--no-sync")
 	if code != 0 || stderr != "" {
 		t.Fatalf("relic update = (%d, %q, %q)", code, stdout, stderr)
 	}
@@ -865,7 +865,7 @@ func TestRelicUpdateThatChangesNothing(t *testing.T) {
 	if repeated.Changed || len(repeated.Parts) != 0 || repeated.Relic.Head != head {
 		t.Fatalf("repeated update = %+v, want changed false at the same head", repeated)
 	}
-	code, stdout, stderr := run(t, repository, append([]string{"relic", "update", id}, args...)...)
+	code, stdout, stderr := run(t, repository, append(append([]string{"relic", "update", id}, args...), "--no-sync")...)
 	if code != 0 || stderr != "" || stdout != "No change: "+id+"\n" {
 		t.Fatalf("repeated update in text = (%d, %q, %q), want No change", code, stdout, stderr)
 	}
@@ -1187,11 +1187,11 @@ func TestRelicUpdateRefusesBadInvocations(t *testing.T) {
 func TestRelicUpdateHelp(t *testing.T) {
 	t.Parallel()
 	output := assertHelpOutput(t, []string{"relic", "update", "--help"},
-		"Usage: workbook relic update <relic> [--title <title>] [--set <name>=<value>]... [--set-json <name>=<json>]... [--clear <name>]... [--json]\n"+
-			"       workbook relic update <relic> --add-part --part-type <type> [--field <name>=<value>]... [--field-json <name>=<json>]... [--body-file <file> [--body-format <label>]] [--before <part> | --after <part>]\n"+
-			"       workbook relic update <relic> --part <part> [--field <name>=<value>]... [--field-json <name>=<json>]... [--clear-field <name>]... [--body-file <file> [--body-format <label>] [--base <version>]]\n"+
-			"       workbook relic update <relic> --move-part <part> (--before <part> | --after <part>)\n"+
-			"       workbook relic update <relic> [--remove-part <part>]... [--restore-part <part>]...\n")
+		"Usage: workbook relic update <relic> [--title <title>] [--set <name>=<value>]... [--set-json <name>=<json>]... [--clear <name>]... [--no-sync] [--json]\n"+
+			"       workbook relic update <relic> --add-part --part-type <type> [--field <name>=<value>]... [--field-json <name>=<json>]... [--body-file <file> [--body-format <label>]] [--before <part> | --after <part>] [--no-sync]\n"+
+			"       workbook relic update <relic> --part <part> [--field <name>=<value>]... [--field-json <name>=<json>]... [--clear-field <name>]... [--body-file <file> [--body-format <label>] [--base <version>]] [--no-sync]\n"+
+			"       workbook relic update <relic> --move-part <part> (--before <part> | --after <part>) [--no-sync]\n"+
+			"       workbook relic update <relic> [--remove-part <part>]... [--restore-part <part>]... [--no-sync]\n")
 	for _, want := range []string{
 		"Change a relic. Every change given in one command is recorded together, or none is.",
 		"--add-part, --part, --move-part, --remove-part and --restore-part each start a group,",
@@ -1212,7 +1212,7 @@ func TestRelicUpdateHelp(t *testing.T) {
 	for _, option := range metadata.Options {
 		names = append(names, option.Name)
 		want := stringFlag
-		if option.Name == "add-part" || option.Name == "json" {
+		if option.Name == "add-part" || option.Name == "no-sync" || option.Name == "json" {
 			want = boolFlag
 		}
 		if option.Kind != want || option.Description == "" || (want == stringFlag) != (option.Value != "") {
@@ -1223,7 +1223,7 @@ func TestRelicUpdateHelp(t *testing.T) {
 		}
 	}
 	want := []string{"title", "set", "set-json", "clear", "add-part", "part-type", "field", "field-json", "clear-field",
-		"body-file", "body-format", "base", "before", "after", "part", "move-part", "remove-part", "restore-part", "json"}
+		"body-file", "body-format", "base", "before", "after", "part", "move-part", "remove-part", "restore-part", "no-sync", "json"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("relic update options = %q, want %q", names, want)
 	}

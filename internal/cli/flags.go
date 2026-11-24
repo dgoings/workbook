@@ -865,14 +865,15 @@ var commandSchemas = map[string]commandMetadata{
 		Synopsis: "workbook relic <command> [options]",
 		Description: "Create, read and change relics: records that hold specs, plans, decisions and similar material as named parts.\n\n" +
 			"A relic ID looks like WB-R-01M9… and a part is addressed as <relic>#<part>. Any\n" +
-			"unambiguous prefix of either works. Relics are kept in this checkout only; they\n" +
-			"are not shared with the tasks remote yet.",
+			"unambiguous prefix of either works. Relics are shared through the tasks remote\n" +
+			"(origin unless configured) as tasks are: a command that changes a relic fetches\n" +
+			"first and publishes the relic after, unless --no-sync is given or auto-sync is off.",
 		Positionals:     []string{"<command>"},
 		SubcommandOrder: []string{"create", "list", "show", "update", "delete", "restore", "export"},
 		Subcommands: map[string]commandMetadata{
 			"create": {
 				Name:     "create",
-				Synopsis: "workbook relic create [<title>] [--type <type>] [--from-file <file>] [--json]",
+				Synopsis: "workbook relic create [<title>] [--type <type>] [--from-file <file>] [--no-sync] [--json]",
 				Description: "Create a relic.\n\n" +
 					"Without --from-file the title and --type are both required and the relic has\n" +
 					"no parts. With it, the relic is created from a whole workbook.relic document,\n" +
@@ -882,6 +883,7 @@ var commandSchemas = map[string]commandMetadata{
 				Options: []optionMetadata{
 					{Name: "type", Kind: stringFlag, Value: "<type>", Description: "relic type, such as spec or plan"},
 					{Name: "from-file", Kind: stringFlag, Value: "<file>", Description: "create from a whole relic in one JSON document (- reads standard input)"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},
@@ -915,11 +917,11 @@ var commandSchemas = map[string]commandMetadata{
 				// One form per kind of change. They combine freely in one command;
 				// a merged line would not show which part options follow which
 				// group option.
-				Synopsis: "workbook relic update <relic> [--title <title>] [--set <name>=<value>]... [--set-json <name>=<json>]... [--clear <name>]... [--json]\n" +
-					"workbook relic update <relic> --add-part --part-type <type> [--field <name>=<value>]... [--field-json <name>=<json>]... [--body-file <file> [--body-format <label>]] [--before <part> | --after <part>]\n" +
-					"workbook relic update <relic> --part <part> [--field <name>=<value>]... [--field-json <name>=<json>]... [--clear-field <name>]... [--body-file <file> [--body-format <label>] [--base <version>]]\n" +
-					"workbook relic update <relic> --move-part <part> (--before <part> | --after <part>)\n" +
-					"workbook relic update <relic> [--remove-part <part>]... [--restore-part <part>]...",
+				Synopsis: "workbook relic update <relic> [--title <title>] [--set <name>=<value>]... [--set-json <name>=<json>]... [--clear <name>]... [--no-sync] [--json]\n" +
+					"workbook relic update <relic> --add-part --part-type <type> [--field <name>=<value>]... [--field-json <name>=<json>]... [--body-file <file> [--body-format <label>]] [--before <part> | --after <part>] [--no-sync]\n" +
+					"workbook relic update <relic> --part <part> [--field <name>=<value>]... [--field-json <name>=<json>]... [--clear-field <name>]... [--body-file <file> [--body-format <label>] [--base <version>]] [--no-sync]\n" +
+					"workbook relic update <relic> --move-part <part> (--before <part> | --after <part>) [--no-sync]\n" +
+					"workbook relic update <relic> [--remove-part <part>]... [--restore-part <part>]... [--no-sync]",
 				Description: "Change a relic. Every change given in one command is recorded together, or none is.\n\n" +
 					"--add-part, --part, --move-part, --remove-part and --restore-part each start a group,\n" +
 					"and the part options after one belong to it. Changes apply in the order given.\n" +
@@ -951,24 +953,27 @@ var commandSchemas = map[string]commandMetadata{
 					{Name: "move-part", Kind: stringFlag, Value: "<part>", Description: "move this part to where --before or --after says"},
 					{Name: "remove-part", Kind: stringFlag, Value: "<part>", Description: "remove this part; --restore-part brings it back"},
 					{Name: "restore-part", Kind: stringFlag, Value: "<part>", Description: "restore this removed part"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},
 			"delete": {
 				Name:        "delete",
-				Synopsis:    "workbook relic delete <relic> [--json]",
+				Synopsis:    "workbook relic delete <relic> [--no-sync] [--json]",
 				Description: "Delete a relic. Its history is kept, and relic restore brings it back.",
 				Positionals: []string{"<relic>"},
 				Options: []optionMetadata{
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},
 			"restore": {
 				Name:        "restore",
-				Synopsis:    "workbook relic restore <relic> [--json]",
+				Synopsis:    "workbook relic restore <relic> [--no-sync] [--json]",
 				Description: "Restore a deleted relic.",
 				Positionals: []string{"<relic>"},
 				Options: []optionMetadata{
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},

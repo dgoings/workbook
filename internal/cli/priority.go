@@ -1236,7 +1236,9 @@ func writePriorityMutation(
 	writeSyncReport(stdout, &session.report)
 	writeConflicts(stdout, session.conflicts)
 	writeConfigConflicts(stdout, session.report.configConflicts)
+	writeRelicConflicts(stdout, session.relicConflicts)
 	writeWarnings(stderr, warnings)
+	writeRelicWarnings(stderr, session.relicWarnings)
 	writeIdentityWarning(stderr, session.report.Identity)
 	writeConfigWarning(stderr, session.report.Config)
 }
@@ -1255,7 +1257,8 @@ func writePriorityEnvelope(
 		Data:           result,
 		Conflict:       session.conflicts,
 		ConfigConflict: session.report.configConflicts,
-		Warnings:       warnings,
+		RelicConflict:  session.relicConflicts,
+		Warnings:       withRelicWarnings(warnings, session.relicWarnings),
 		Sync:           &session.report,
 	}
 	_ = json.NewEncoder(stdout).Encode(envelope)

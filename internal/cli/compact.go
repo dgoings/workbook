@@ -268,8 +268,10 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 	writeSyncReport(stdout, &session.report)
 	writeConflicts(stdout, session.conflicts)
 	writeConfigConflicts(stdout, session.report.configConflicts)
+	writeRelicConflicts(stdout, session.relicConflicts)
 	writeCompactHints(stdout, summary, session.repository.TasksRemoteName())
 	writeWarnings(stderr, warnings)
+	writeRelicWarnings(stderr, session.relicWarnings)
 	writeIdentityWarning(stderr, session.report.Identity)
 	writeConfigWarning(stderr, session.report.Config)
 	return nil

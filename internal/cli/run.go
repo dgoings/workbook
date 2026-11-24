@@ -314,11 +314,14 @@ func runFetch(ctx context.Context, args []string, cwd string, stdout, stderr io.
 	result, syncErr := repository.Fetch(ctx, config)
 	warnings := settleFetchedHistories(ctx, repository, config, result)
 	warnings = append(warnings, fetchSharingWarnings(ctx, repository, config, &result)...)
-	writeSyncPhaseResultWithConfig(stdout, "fetch", result, result.Conflicts, result.ConfigConflicts, warnings, *jsonMode,
+	relicConflicts, relicWarnings := relicReport(ctx, repository, result)
+	writeSyncPhaseResultWithConfig(stdout, "fetch", result, result.Conflicts, result.ConfigConflicts, relicConflicts,
+		withRelicWarnings(warnings, relicWarnings), *jsonMode,
 		func(output io.Writer) {
 			writeSyncResult(output, result)
 			writeConfigWarning(stderr, result.Config)
 			writeWarnings(stderr, warnings)
+			writeRelicWarnings(stderr, relicWarnings)
 		})
 	return syncErr
 }
@@ -492,12 +495,15 @@ func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	warnings := settleFetchedHistories(ctx, repository, config, result.Fetch)
 	warnings = append(warnings, fetchSharingWarnings(ctx, repository, config, &result.Fetch)...)
 	warnings = append(warnings, repository.PublicationWarnings()...)
-	writeSyncPhaseResultWithConfig(stdout, "sync", result, result.Fetch.Conflicts, result.Fetch.ConfigConflicts, warnings, *jsonMode,
+	relicConflicts, relicWarnings := relicReport(ctx, repository, result.Fetch)
+	writeSyncPhaseResultWithConfig(stdout, "sync", result, result.Fetch.Conflicts, result.Fetch.ConfigConflicts,
+		relicConflicts, withRelicWarnings(warnings, relicWarnings), *jsonMode,
 		func(output io.Writer) {
 			writeSyncRunResult(output, result)
 			writeIdentityWarning(stderr, result.Identity)
 			writeConfigWarning(stderr, result.Config)
 			writeWarnings(stderr, warnings)
+			writeRelicWarnings(stderr, relicWarnings)
 		})
 	return syncErr
 }
@@ -1552,7 +1558,9 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		writeShow(stdout, *task)
 	}
 	writeConflicts(stdout, session.conflicts)
+	writeRelicConflicts(stdout, session.relicConflicts)
 	writeWarnings(stderr, warnings)
+	writeRelicWarnings(stderr, session.relicWarnings)
 	return nil
 }
 
@@ -1600,7 +1608,9 @@ func writeNextCandidates(
 		return err
 	}
 	writeConflicts(stdout, session.conflicts)
+	writeRelicConflicts(stdout, session.relicConflicts)
 	writeWarnings(stderr, warnings)
+	writeRelicWarnings(stderr, session.relicWarnings)
 	return nil
 }
 
@@ -1726,7 +1736,9 @@ func writeNothingClaimed(
 	}
 	fmt.Fprintln(stdout, "No eligible task.")
 	writeConflicts(stdout, session.conflicts)
+	writeRelicConflicts(stdout, session.relicConflicts)
 	writeWarnings(stderr, warnings)
+	writeRelicWarnings(stderr, session.relicWarnings)
 	return nil
 }
 

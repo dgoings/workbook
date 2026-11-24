@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -581,7 +582,7 @@ func (r *Repository) publishRelics(
 	})
 	if len(accepted) > 0 {
 		sort.Strings(accepted)
-		publication.Stranded = r.strandedPublication(ctx, accepted)
+		publication.Stranded = r.strandedRelicPublication(ctx, accepted)
 	}
 	return publication, nil
 }
@@ -681,7 +682,7 @@ func (r *Repository) pushRelic(ctx context.Context, config core.ProjectConfig, r
 	}
 	result = pushed[relicID]
 	if result.Status == SyncPublished {
-		if err := r.strandedPublication(ctx, []string{relicID}); err != nil {
+		if err := r.strandedRelicPublication(ctx, []string{relicID}); err != nil {
 			return result, err
 		}
 	}
@@ -689,4 +690,91 @@ func (r *Repository) pushRelic(ctx context.Context, config core.ProjectConfig, r
 		return result, core.Errorf(core.CategoryOperational, "%s", result.Detail)
 	}
 	return result, nil
+}
+
+// FillRelicConflictBodies returns conflicts with the content of every body
+// version a body conflict names, read from the blob its Object names: the
+// text when the bytes are UTF-8 and their base64 when they are not, as
+// core.SetRelicBodyVersionContent fills them. A synchronization never opens a
+// body; this is the one read of them, made only to print the report, in one
+// `cat-file --batch`.
+//
+// Each blob is refused above core.MaxRelicBodyBytes from its batch header,
+// before anything is allocated for it. A version that is refused, missing or
+// not a blob keeps no content and is named in the error, which says every
+// such version; the conflicts returned beside it hold all the content that
+// could be read, so a caller can still report them. The conflicts passed in
+// are not changed.
+func (r *Repository) FillRelicConflictBodies(ctx context.Context, conflicts []core.RelicConflict) ([]core.RelicConflict, error) {
+	filled := append([]core.RelicConflict(nil), conflicts...)
+	type request struct {
+		relicID, part, side string
+		version             *core.RelicBodyVersion
+	}
+	var requests []request
+	var problems []string
+	for index := range filled {
+		conflict := &filled[index]
+		if conflict.Body == nil {
+			continue
+		}
+		body := *conflict.Body
+		conflict.Body = &body
+		if body.Base != nil {
+			base := *body.Base
+			body.Base = &base
+			requests = append(requests, request{conflict.RelicID, conflict.Part, "base", body.Base})
+		}
+		requests = append(requests,
+			request{conflict.RelicID, conflict.Part, "ours", &body.Ours},
+			request{conflict.RelicID, conflict.Part, "theirs", &body.Theirs})
+	}
+	var valid []request
+	var input bytes.Buffer
+	for _, item := range requests {
+		if _, err := decodeObjectID(item.version.Object); err != nil {
+			problems = append(problems, fmt.Sprintf("relic %s: part %s: the %s body names no valid Git object",
+				item.relicID, item.part, item.side))
+			continue
+		}
+		valid = append(valid, item)
+		input.WriteString(item.version.Object)
+		input.WriteByte('\n')
+	}
+	if len(valid) > 0 {
+		batch, err := r.startObjectBatch(ctx, func(writer io.Writer) error {
+			_, err := writer.Write(input.Bytes())
+			return err
+		})
+		if err != nil {
+			return filled, err
+		}
+		defer batch.Close()
+		for _, item := range valid {
+			object, err := readBatchObjectWithin(batch.Reader(), core.MaxRelicBodyBytes)
+			if err != nil {
+				return filled, batch.ReadFailure("cannot read relic bodies from Git batch", err)
+			}
+			switch {
+			case object.missing:
+				problems = append(problems, fmt.Sprintf("relic %s: part %s: the %s body %s is missing",
+					item.relicID, item.part, item.side, item.version.Object))
+			case object.refused != nil:
+				problems = append(problems, fmt.Sprintf("relic %s: part %s: the %s body is %d bytes, over the %d byte limit for a body",
+					item.relicID, item.part, item.side, object.size, core.MaxRelicBodyBytes))
+			case object.kind != "blob":
+				problems = append(problems, fmt.Sprintf("relic %s: part %s: the %s body %s is a %s, not a blob",
+					item.relicID, item.part, item.side, item.version.Object, object.kind))
+			default:
+				core.SetRelicBodyVersionContent(item.version, object.contents)
+			}
+		}
+		if err := batch.Finish(); err != nil {
+			return filled, err
+		}
+	}
+	if len(problems) > 0 {
+		return filled, core.Errorf(core.CategoryCorruptData, "%s", strings.Join(problems, "; "))
+	}
+	return filled, nil
 }

@@ -224,6 +224,17 @@ func repeatedOperation(chain []OperationCommit) (string, bool) {
 // push itself succeeded, so it is reported as a warning beside the success
 // (PublicationWarnings) rather than as a failure.
 func (r *Repository) strandedPublication(ctx context.Context, taskIDs []string) error {
+	return r.strandedPublicationOf(ctx, taskIDs, false)
+}
+
+// strandedRelicPublication is strandedPublication after the remote accepted
+// relic refs. Its refusal names them as relics, in the refusal's Relics member
+// rather than in Tasks.
+func (r *Repository) strandedRelicPublication(ctx context.Context, relicIDs []string) error {
+	return r.strandedPublicationOf(ctx, relicIDs, true)
+}
+
+func (r *Repository) strandedPublicationOf(ctx context.Context, taskIDs []string, relics bool) error {
 	remote := r.remote()
 	listing, err := r.Git(ctx, nil, "ls-remote", "--refs", remote, identityRef)
 	if err != nil {
@@ -260,7 +271,7 @@ func (r *Repository) strandedPublication(ctx context.Context, taskIDs []string) 
 	moved := *record.Moved
 	r.originMoved = &moved
 	r.metadataMu.Unlock()
-	return r.strandedRefusal(ctx, remote, moved, taskIDs)
+	return r.strandedRefusal(ctx, remote, moved, taskIDs, relics)
 }
 
 // noteUnconfirmed records that remote accepted taskIDs and that the look
@@ -291,7 +302,7 @@ func (r *Repository) PublicationWarnings() []core.Warning {
 
 // strandedRefusal is the report for task refs a remote accepted just as it was
 // marked as moved.
-func (r *Repository) strandedRefusal(ctx context.Context, remote string, moved TasksMoved, taskIDs []string) error {
+func (r *Repository) strandedRefusal(ctx context.Context, remote string, moved TasksMoved, ids []string, relics bool) error {
 	if path := r.followMoved(ctx, moved); !path.Loop {
 		moved = path.Current
 	}
@@ -301,18 +312,29 @@ func (r *Repository) strandedRefusal(ctx context.Context, remote string, moved T
 		command = "workbook setup --tasks-only " + moved.URL
 		next = "run " + command + " in this folder, which points it at the new place and publishes it there"
 	}
-	return core.TasksRemoteError(core.CategoryNotInitialized,
-		core.TasksRemoteRefusal{
-			Reason:  core.TasksRemotePublishedAfterMove,
-			Remote:  remote,
-			MovedTo: &core.TasksRemoteTarget{Remote: moved.Remote, URL: moved.URL},
-			Command: command,
-			Tasks:   append([]string(nil), taskIDs...),
-		},
-		"%s accepted %s just as this project's tasks moved from there to %s (remote %q), so nobody reads it there any more; "+
+	refusal := core.TasksRemoteRefusal{
+		Reason:  core.TasksRemotePublishedAfterMove,
+		Remote:  remote,
+		MovedTo: &core.TasksRemoteTarget{Remote: moved.Remote, URL: moved.URL},
+		Command: command,
+	}
+	accepted := remote + " accepted " + strings.Join(ids, ", ")
+	if relics {
+		refusal.Relics = append([]string(nil), ids...)
+		// Every relic error names the relic first.
+		if len(ids) == 1 {
+			accepted = "relic " + ids[0] + ": " + remote + " accepted it"
+		} else {
+			accepted = "relics " + strings.Join(ids, ", ") + ": " + remote + " accepted them"
+		}
+	} else {
+		refusal.Tasks = append([]string(nil), ids...)
+	}
+	return core.TasksRemoteError(core.CategoryNotInitialized, refusal,
+		"%s just as this project's tasks moved from there to %s (remote %q), so nobody reads it there any more; "+
 			"the change is kept in this checkout: %s; and whoever moved the tasks runs workbook move-tasks again, "+
 			"which carries it from %s",
-		remote, strings.Join(taskIDs, ", "), moved.URL, moved.Remote, next, remote)
+		accepted, moved.URL, moved.Remote, next, remote)
 }
 
 // CheckRemoteNotMoved reads, without asking the remote anything, whether this

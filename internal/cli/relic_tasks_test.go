@@ -304,7 +304,7 @@ func TestResetBundlesRelics(t *testing.T) {
 	if code, stdout, stderr := run(t, clone, "setup"); code != 0 {
 		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
 	}
-	relic := mustCreateRelic(t, clone, "Only here", "--type", "spec").Relic
+	relic := mustCreateRelic(t, clone, "Only here", "--type", "spec", "--no-sync").Relic
 	ref := relicRef(relic.ID)
 	before := refTips(t, clone)
 
@@ -351,7 +351,7 @@ func TestResetRemoteLeavesALocalRelic(t *testing.T) {
 	if code, stdout, stderr := run(t, clone, "setup"); code != 0 {
 		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
 	}
-	relic := mustCreateRelic(t, clone, "Only here", "--type", "spec").Relic
+	relic := mustCreateRelic(t, clone, "Only here", "--type", "spec", "--no-sync").Relic
 	summary := resetJSON(t, clone, "--remote", "origin", "--confirm", "origin")
 	for _, ref := range summary.Refs {
 		if strings.Contains(ref.Ref, "relics/") {
@@ -521,7 +521,7 @@ func TestResetRefusalOffersSyncOnlyForWhatSyncPublishes(t *testing.T) {
 		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
 	}
 	const relicSentence = "workbook sync does not publish relics yet, so a relic is kept only by the bundle."
-	mustCreateRelic(t, clone, "Only here", "--type", "spec")
+	mustCreateRelic(t, clone, "Only here", "--type", "spec", "--no-sync")
 
 	relicsOnly, _ := resetRefusalJSON(t, clone, 5, "--no-backup")
 	if strings.Contains(relicsOnly, "workbook sync to publish") || !strings.Contains(relicsOnly, relicSentence) ||

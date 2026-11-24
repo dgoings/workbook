@@ -131,8 +131,11 @@ type ResultEnvelope struct {
 	// merging them would give every consumer of one a member that can never be
 	// populated for it.
 	ConfigConflict []core.ConfigConflict `json:"configConflict,omitempty"`
-	Warnings       []core.Warning        `json:"warnings,omitempty"`
-	Sync           *syncReport           `json:"sync,omitempty"`
+	// RelicConflict lists every relic whose local changes could not be
+	// replayed, a third list for the same reason: it names a relic and a part.
+	RelicConflict []core.RelicConflict `json:"relicConflict,omitempty"`
+	Warnings      []core.Warning       `json:"warnings,omitempty"`
+	Sync          *syncReport          `json:"sync,omitempty"`
 }
 
 type ErrorBody struct {
@@ -206,7 +209,7 @@ func writeSyncPhaseResult(
 	jsonMode bool,
 	renderText func(io.Writer),
 ) {
-	writeSyncPhaseResultWithConfig(output, command, data, conflicts, nil, nil, jsonMode, renderText)
+	writeSyncPhaseResultWithConfig(output, command, data, conflicts, nil, nil, nil, jsonMode, renderText)
 }
 
 // writeSyncPhaseResultWithConfig carries warnings for the same reason
@@ -221,6 +224,7 @@ func writeSyncPhaseResultWithConfig(
 	data any,
 	conflicts []core.Conflict,
 	configConflicts []core.ConfigConflict,
+	relicConflicts []core.RelicConflict,
 	warnings []core.Warning,
 	jsonMode bool,
 	renderText func(io.Writer),
@@ -233,6 +237,7 @@ func writeSyncPhaseResultWithConfig(
 			Data:           data,
 			Conflict:       conflicts,
 			ConfigConflict: configConflicts,
+			RelicConflict:  relicConflicts,
 			Warnings:       warnings,
 		})
 		return
@@ -240,6 +245,7 @@ func writeSyncPhaseResultWithConfig(
 	renderText(output)
 	writeConflicts(output, conflicts)
 	writeConfigConflicts(output, configConflicts)
+	writeRelicConflicts(output, relicConflicts)
 }
 
 // writeConfigConflicts renders the same list the JSON envelope carries. Every
@@ -312,8 +318,11 @@ func writeThreadMutationResult(
 	changes []core.FieldChange,
 ) {
 	var configConflicts []core.ConfigConflict
+	var relicConflicts []core.RelicConflict
+	var relicWarnings []core.Warning
 	if sync != nil {
 		configConflicts = sync.configConflicts
+		relicConflicts, relicWarnings = sync.relicConflicts, sync.relicWarnings
 	}
 	if jsonMode {
 		_ = json.NewEncoder(stdout).Encode(ResultEnvelope{
@@ -323,7 +332,8 @@ func writeThreadMutationResult(
 			Data:           result.Task,
 			Conflict:       conflicts,
 			ConfigConflict: configConflicts,
-			Warnings:       result.Warnings,
+			RelicConflict:  relicConflicts,
+			Warnings:       withRelicWarnings(result.Warnings, relicWarnings),
 			Sync:           sync,
 		})
 		return
@@ -334,9 +344,11 @@ func writeThreadMutationResult(
 	writeSyncReport(stdout, sync)
 	writeConflicts(stdout, conflicts)
 	writeConfigConflicts(stdout, configConflicts)
+	writeRelicConflicts(stdout, relicConflicts)
 	for _, warning := range result.Warnings {
 		fmt.Fprintf(stderr, "workbook: warning: %s\n", warning.Message)
 	}
+	writeRelicWarnings(stderr, relicWarnings)
 	if sync != nil {
 		writeIdentityWarning(stderr, sync.Identity)
 		writeConfigWarning(stderr, sync.Config)
@@ -383,7 +395,8 @@ func writeThreadMutationOutcome(
 		if core.CategoryOf(err) != core.CategoryConflict {
 			return err
 		}
-		writeSyncPhaseResult(stdout, command, nil, session.conflicts, jsonMode, func(io.Writer) {})
+		writeSyncPhaseResultWithConfig(stdout, command, nil, session.conflicts, nil, session.relicConflicts, nil, jsonMode,
+			func(io.Writer) {})
 		return err
 	}
 	writeThreadMutationResult(stdout, stderr, command, result, &session.report, session.conflicts, jsonMode, changes)
@@ -449,8 +462,11 @@ func writeSyncedResult(
 	// The configuration conflicts the command's fetch met ride the envelope's
 	// own member, as they do for every mutation (writeThreadMutationResult).
 	var configConflicts []core.ConfigConflict
+	var relicConflicts []core.RelicConflict
+	var relicWarnings []core.Warning
 	if sync != nil {
 		configConflicts = sync.configConflicts
+		relicConflicts, relicWarnings = sync.relicConflicts, sync.relicWarnings
 	}
 	_ = json.NewEncoder(output).Encode(ResultEnvelope{
 		Format:         "workbook.result",
@@ -459,7 +475,8 @@ func writeSyncedResult(
 		Data:           data,
 		Conflict:       conflicts,
 		ConfigConflict: configConflicts,
-		Warnings:       warnings,
+		RelicConflict:  relicConflicts,
+		Warnings:       withRelicWarnings(warnings, relicWarnings),
 		Sync:           sync,
 	})
 }
@@ -551,7 +568,6 @@ func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
 	writeIgnoredRefs(output, result.Remote, result.Ignored)
 	if len(result.Tasks) == 0 {
 		fmt.Fprintf(output, "No task refs on %s.\n", result.Remote)
-		return
 	}
 	for _, task := range result.Tasks {
 		fmt.Fprintf(output, "%s\t%s", task.TaskID, task.Status)
@@ -560,6 +576,25 @@ func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
 		}
 		fmt.Fprintln(output)
 	}
+	// One line per relic the phase changed or could not change, in the form
+	// of the task lines. A relic's detail can quote what origin holds, so every
+	// column passes through the control-byte filter.
+	for _, relic := range result.Relics {
+		fmt.Fprintf(output, "%s\t%s", singleLine(relic.RelicID), singleLine(string(relic.Status)))
+		if relic.Detail != "" {
+			fmt.Fprintf(output, "\t%s", singleLine(relic.Detail))
+		}
+		fmt.Fprintln(output)
+	}
+}
+
+// withRelicWarnings is warnings followed by relicWarnings, for one envelope
+// member, leaving both lists as they were.
+func withRelicWarnings(warnings, relicWarnings []core.Warning) []core.Warning {
+	if len(relicWarnings) == 0 {
+		return warnings
+	}
+	return append(append([]core.Warning(nil), warnings...), relicWarnings...)
 }
 
 // Every ignored ref carries one of these verdicts in its own line, so the

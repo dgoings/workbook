@@ -363,9 +363,12 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	}
 	var conflicts []core.Conflict
 	var configConflicts []core.ConfigConflict
+	var relicConflicts []core.RelicConflict
+	var relicWarnings []core.Warning
 	if result.Sync.Result != nil {
 		conflicts = result.Sync.Result.Fetch.Conflicts
 		configConflicts = result.Sync.Result.Fetch.ConfigConflicts
+		relicConflicts, relicWarnings = relicReport(ctx, repository, result.Sync.Result.Fetch)
 	}
 	if result.Docs != nil {
 		if err := refreshFetchedGuidelines(ctx, repository, config, docsOptions, state.Head, result.Docs); err != nil {
@@ -391,7 +394,8 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	result.Key = post.Keys.Current()
 
 	if *jsonMode {
-		writeSyncPhaseResultWithConfig(stdout, "setup", result, conflicts, configConflicts, nil, true, func(io.Writer) {})
+		writeSyncPhaseResultWithConfig(stdout, "setup", result, conflicts, configConflicts, relicConflicts, relicWarnings, true,
+			func(io.Writer) {})
 		return syncErr
 	}
 	fmt.Fprintf(stdout, "Repository:\t%s\n", result.Repository)
@@ -468,6 +472,12 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	}
 	writeConflicts(stdout, conflicts)
 	writeConfigConflicts(stdout, configConflicts)
+	writeRelicConflicts(stdout, relicConflicts)
+	// Setup has no standard error of its own: everything it has to say about
+	// the synchronization is a line of its report.
+	for _, warning := range relicWarnings {
+		fmt.Fprintf(stdout, "Warning:\t%s\n", singleLine(warning.Message))
+	}
 	return syncErr
 }
 

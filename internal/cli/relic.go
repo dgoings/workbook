@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -51,16 +50,10 @@ func runRelic(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	}
 }
 
-// openRelicService opens the repository and returns a service whose Reader and
-// Writer are the repository, recording changes under the acting person. A
-// checkout with no acting person is refused before anything is read, as a task
-// mutation refuses one.
-func openRelicService(ctx context.Context, cwd string, stderr io.Writer) (core.RelicService, error) {
-	return openRelicServiceFor(ctx, cwd, stderr, true)
-}
-
-// openRelicReadService is openRelicService for a command that only reads, so
-// a checkout with no acting person can still read its relics.
+// openRelicReadService opens the repository and returns a service whose
+// Reader is the repository, for a command that only reads, so a checkout with
+// no acting person can still read its relics. A command that changes a relic
+// opens a task session instead (see mutateRelic).
 func openRelicReadService(ctx context.Context, cwd string, stderr io.Writer) (core.RelicService, error) {
 	return openRelicServiceFor(ctx, cwd, stderr, false)
 }
@@ -81,17 +74,7 @@ func openRelicServiceFor(ctx context.Context, cwd string, stderr io.Writer, with
 	if err != nil {
 		return core.RelicService{}, err
 	}
-	return core.RelicService{
-		Config: config,
-		Keys:   state.Keys,
-		Reader: repository,
-		Writer: repository,
-		IDs:    core.CryptoULIDSource{Now: recordedNow},
-		// Relic documents record their times in UTC, as the stored format
-		// shows them.
-		Now:   func() time.Time { return recordedNow().UTC() },
-		Actor: actor,
-	}, nil
+	return newRelicService(repository, config, state.Keys, actor), nil
 }
 
 func runRelicCreate(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -102,6 +85,7 @@ func runRelicCreate(ctx context.Context, args []string, cwd string, stdin io.Rea
 	flags := newFlagSet("relic", "create")
 	relicType := flags.String("type", "", "relic type, such as spec or plan")
 	fromFile := flags.String("from-file", "", "create from a whole relic in one JSON document (- reads standard input)")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with the tasks remote (origin unless configured)")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -143,16 +127,15 @@ func runRelicCreate(ctx context.Context, args []string, cwd string, stdin io.Rea
 		input.Type = *relicType
 	}
 
-	service, err := openRelicService(ctx, cwd, stderr)
+	session, err := openTaskSession(ctx, cwd, *noSync, true, stderr)
 	if err != nil {
 		return err
 	}
-	result, err := service.Create(ctx, input)
-	if err != nil {
-		return err
-	}
-	writeRelicMutation(stdout, "relic create", result, *jsonMode)
-	return nil
+	defer session.Close()
+	result, err := session.mutateRelic(ctx, "", func(ctx context.Context, service core.RelicService) (core.RelicMutationResult, error) {
+		return service.Create(ctx, input)
+	})
+	return writeRelicMutationOutcome(stdout, stderr, "relic create", session, result, err, *jsonMode)
 }
 
 // maxRelicDocumentBytes is the largest workbook.relic document relic create
@@ -308,24 +291,23 @@ func runRelicSetDeleted(ctx context.Context, verb string, args []string, cwd str
 		return err
 	}
 	flags := newFlagSet("relic", verb)
+	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with the tasks remote (origin unless configured)")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	service, err := openRelicService(ctx, cwd, stderr)
+	session, err := openTaskSession(ctx, cwd, *noSync, true, stderr)
 	if err != nil {
 		return err
 	}
-	change := service.Delete
-	if verb == "restore" {
-		change = service.Restore
-	}
-	result, err := change(ctx, values[0])
-	if err != nil {
-		return err
-	}
-	writeRelicMutation(stdout, command, result, *jsonMode)
-	return nil
+	defer session.Close()
+	result, err := session.mutateRelic(ctx, values[0], func(ctx context.Context, service core.RelicService) (core.RelicMutationResult, error) {
+		if verb == "restore" {
+			return service.Restore(ctx, values[0])
+		}
+		return service.Delete(ctx, values[0])
+	})
+	return writeRelicMutationOutcome(stdout, stderr, command, session, result, err, *jsonMode)
 }
 
 func runRelicExport(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {

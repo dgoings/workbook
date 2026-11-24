@@ -22,6 +22,9 @@ type relicUpdateRequest struct {
 	Relic string
 	Edits []core.RelicEdit
 	JSON  bool
+	// NoSync is --no-sync: the command records its change here and neither
+	// fetches nor publishes.
+	NoSync bool
 	// PartRelics holds the relic side of each --part given as <relic>#<part>.
 	// Either side may be a prefix, so only a look at the repository can say
 	// whether one names the relic being changed; the command checks.
@@ -84,7 +87,7 @@ func parseRelicUpdateArgs(args []string, readFile func(string) ([]byte, error)) 
 	if err != nil {
 		return relicUpdateRequest{}, err
 	}
-	changes, jsonMode, err := splitRelicUpdateArgs(args)
+	changes, jsonMode, noSync, err := splitRelicUpdateArgs(args)
 	if err != nil {
 		return relicUpdateRequest{}, err
 	}
@@ -97,7 +100,7 @@ func parseRelicUpdateArgs(args []string, readFile func(string) ([]byte, error)) 
 		}
 	}
 
-	request := relicUpdateRequest{Relic: values[0], JSON: jsonMode}
+	request := relicUpdateRequest{Relic: values[0], JSON: jsonMode, NoSync: noSync}
 	if err := checkRelicUpdateID("<relic>", request.Relic); err != nil {
 		return relicUpdateRequest{}, err
 	}
@@ -118,7 +121,7 @@ func parseRelicUpdateArgs(args []string, readFile func(string) ([]byte, error)) 
 // option into the change it belongs to. The schema says which options take a
 // value; one that does takes the next argument whatever it looks like, as the
 // flag package has it.
-func splitRelicUpdateArgs(args []string) (changes []relicUpdateChange, jsonMode bool, err error) {
+func splitRelicUpdateArgs(args []string) (changes []relicUpdateChange, jsonMode, noSync bool, err error) {
 	schema, exists := commandMetadataFor([]string{"relic", "update"})
 	if !exists {
 		panic("missing flag schema for relic update")
@@ -132,27 +135,32 @@ func splitRelicUpdateArgs(args []string) (changes []relicUpdateChange, jsonMode 
 			if args[index] == "--" && index == len(args)-1 {
 				break
 			}
-			return nil, false, core.Errorf(core.CategoryInvocation, "relic update accepts no additional positional arguments")
+			return nil, false, false, core.Errorf(core.CategoryInvocation, "relic update accepts no additional positional arguments")
 		}
 		kind, known := schema.optionKind(name)
 		if !known {
-			return nil, false, core.Errorf(core.CategoryInvocation, "relic update has no option %s", relicUpdateTyped("--"+name))
+			return nil, false, false, core.Errorf(core.CategoryInvocation, "relic update has no option %s", relicUpdateTyped("--"+name))
 		}
 
 		if kind == boolFlag {
-			if name == "json" {
-				jsonMode = true
+			if name == "json" || name == "no-sync" {
+				set := true
 				if hasValue {
-					if jsonMode, err = strconv.ParseBool(value); err != nil {
-						return nil, false, core.Errorf(core.CategoryInvocation, "relic update --json=<value> takes true or false")
+					if set, err = strconv.ParseBool(value); err != nil {
+						return nil, false, false, core.Errorf(core.CategoryInvocation, "relic update --%s=<value> takes true or false", name)
 					}
+				}
+				if name == "json" {
+					jsonMode = set
+				} else {
+					noSync = set
 				}
 				continue
 			}
 			// --add-part. A value on it is most likely the type, put where
 			// none goes.
 			if hasValue {
-				return nil, false, core.Errorf(core.CategoryInvocation,
+				return nil, false, false, core.Errorf(core.CategoryInvocation,
 					"relic update --add-part takes no value; give the part's type with --part-type <type>")
 			}
 			changes = append(changes, relicUpdateChange{option: name})
@@ -162,7 +170,7 @@ func splitRelicUpdateArgs(args []string) (changes []relicUpdateChange, jsonMode 
 
 		if !hasValue {
 			if index+1 >= len(args) {
-				return nil, false, core.Errorf(core.CategoryInvocation, "relic update --%s requires a value", name)
+				return nil, false, false, core.Errorf(core.CategoryInvocation, "relic update --%s requires a value", name)
 			}
 			index++
 			value = args[index]
@@ -170,14 +178,14 @@ func splitRelicUpdateArgs(args []string) (changes []relicUpdateChange, jsonMode 
 		switch name {
 		case "title":
 			if titled {
-				return nil, false, core.Errorf(core.CategoryInvocation, "relic update accepts --title once")
+				return nil, false, false, core.Errorf(core.CategoryInvocation, "relic update accepts --title once")
 			}
 			titled = true
 			changes = append(changes, relicUpdateChange{option: name, value: value})
 		case "set", "set-json":
 			property, text, err := splitRelicNameValue(name, value)
 			if err != nil {
-				return nil, false, err
+				return nil, false, false, err
 			}
 			changes = append(changes, relicUpdateChange{option: name, name: property, value: text})
 		case "clear":
@@ -189,15 +197,15 @@ func splitRelicUpdateArgs(args []string) (changes []relicUpdateChange, jsonMode 
 				continue
 			}
 			if group < 0 {
-				return nil, false, core.Errorf(core.CategoryInvocation,
+				return nil, false, false, core.Errorf(core.CategoryInvocation,
 					"relic update --%s applies to one part; give it after %s", name, relicUpdateGroupsTaking(name))
 			}
 			if err := changes[group].add(name, value); err != nil {
-				return nil, false, err
+				return nil, false, false, err
 			}
 		}
 	}
-	return changes, jsonMode, nil
+	return changes, jsonMode, noSync, nil
 }
 
 // relicUpdateGroupsTaking names the group options a part option may follow,
@@ -487,17 +495,16 @@ func runRelicUpdate(ctx context.Context, args []string, cwd string, stdout, stde
 	if err != nil {
 		return err
 	}
-	service, err := openRelicService(ctx, cwd, stderr)
+	session, err := openTaskSession(ctx, cwd, request.NoSync, true, stderr)
 	if err != nil {
 		return err
 	}
-	if err := checkRelicUpdatePartRelics(ctx, service, request); err != nil {
-		return err
-	}
-	result, err := service.Update(ctx, request.Relic, request.Edits)
-	if err != nil {
-		return err
-	}
-	writeRelicMutation(stdout, "relic update", result, request.JSON)
-	return nil
+	defer session.Close()
+	result, err := session.mutateRelic(ctx, request.Relic, func(ctx context.Context, service core.RelicService) (core.RelicMutationResult, error) {
+		if err := checkRelicUpdatePartRelics(ctx, service, request); err != nil {
+			return core.RelicMutationResult{}, err
+		}
+		return service.Update(ctx, request.Relic, request.Edits)
+	})
+	return writeRelicMutationOutcome(stdout, stderr, "relic update", session, result, err, request.JSON)
 }

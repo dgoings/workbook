@@ -37,6 +37,9 @@ type syncReport struct {
 	Detail  string                   `json:"detail,omitempty"`
 	Fetch   *gitstore.SyncResult     `json:"fetch,omitempty"`
 	Push    *gitstore.SyncTaskResult `json:"push,omitempty"`
+	// PushRelic reports the publication of the one relic a relic command
+	// changed, as Push reports a task's.
+	PushRelic *gitstore.SyncRelicResult `json:"pushRelic,omitempty"`
 	// Pushed reports a publication of several tasks at once, which only
 	// compact makes: it publishes every checkpoint the run wrote in one push.
 	// A single-task mutation reports through Push instead.
@@ -55,6 +58,11 @@ type syncReport struct {
 	// envelope carries the list, exactly as it carries the task conflict list,
 	// so one command reports one list of each kind.
 	configConflicts []core.ConfigConflict
+	// relicConflicts and relicWarnings travel the same way: the envelope
+	// carries them, so a task command reports the relic conflicts and warnings
+	// its fetch met exactly as a relic command does.
+	relicConflicts []core.RelicConflict
+	relicWarnings  []core.Warning
 }
 
 // taskSession carries the repository, service, and resolved synchronization
@@ -70,11 +78,20 @@ type taskSession struct {
 	report    syncReport
 	fetched   *gitstore.SyncResult
 	conflicts []core.Conflict
+	// relicConflicts and relicWarnings are what the fetch reported about
+	// relics, the conflicts with every body version's content filled in. A
+	// relic command stops on its own relic's conflict, as mutate stops on its
+	// task's.
+	relicConflicts []core.RelicConflict
+	relicWarnings  []core.Warning
 	// defects carries what a fetch that still ran to completion reported about
 	// refs it could not validate. Publication follows such a fetch, so this is
 	// a warning the caller hears alongside a synchronized change rather than
 	// the failure that used to stand in for it.
 	defects string
+	// relicDefectsOnly reports that every defect the fetch found was a
+	// relic's, so the warning about them says relics rather than task refs.
+	relicDefectsOnly bool
 	// compactedOnOrigin names the tasks the fetch kept on the old history
 	// because origin compacted them and their local changes would not replay.
 	// That is each task's own state rather than a defect of the fetch, so it
@@ -314,7 +331,9 @@ func (session *taskSession) fetchBefore(ctx context.Context) error {
 	session.report.Status = syncStatusCompleted
 	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
 		session.defects = err.Error()
+		session.relicDefectsOnly = onlyRelicDefects(result)
 	}
+	session.noteRelicReport(ctx, result)
 	for _, item := range result.Tasks {
 		if item.Status == gitstore.SyncCompactedOnOrigin {
 			session.compactedOnOrigin = append(session.compactedOnOrigin, item.TaskID)
@@ -748,22 +767,34 @@ func (session *taskSession) mutate(
 	if err := session.publicationRefusal(); err != nil {
 		return core.MutationResult{}, err
 	}
+	result.Warnings = append(result.Warnings, session.mutationWarnings()...)
+	return result, nil
+}
+
+// mutationWarnings is what a command that recorded and published one change
+// says beside it about the synchronization around it.
+func (session *taskSession) mutationWarnings() []core.Warning {
+	var warnings []core.Warning
 	switch {
 	case session.report.Status == syncStatusFailed:
-		result.Warnings = append(result.Warnings, core.Warning{
+		warnings = append(warnings, core.Warning{
 			Code:    core.WarningAutoSync,
 			Message: "the change was recorded locally, but " + session.report.Detail,
 		})
+	case session.defects != "" && session.relicDefectsOnly:
+		warnings = append(warnings, core.Warning{
+			Code:    core.WarningAutoSync,
+			Message: "the change synchronized, but origin holds relics this fetch could not check: " + session.defects,
+		})
 	case session.defects != "":
-		result.Warnings = append(result.Warnings, core.Warning{
+		warnings = append(warnings, core.Warning{
 			Code: core.WarningAutoSync,
 			Message: "the change synchronized, but origin holds task refs this fetch could not " +
 				"validate: " + session.defects,
 		})
 	}
 	if warning, found := session.compactedOnOriginWarning("the change synchronized, but "); found {
-		result.Warnings = append(result.Warnings, warning)
+		warnings = append(warnings, warning)
 	}
-	result.Warnings = append(result.Warnings, session.unsettledWarnings()...)
-	return result, nil
+	return append(warnings, session.unsettledWarnings()...)
 }

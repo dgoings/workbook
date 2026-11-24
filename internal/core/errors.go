@@ -84,6 +84,9 @@ type TasksRemoteRefusal struct {
 	// Tasks names the tasks a refusal is about, when it is about some: the
 	// task refs a published-after-move report says reached the old place.
 	Tasks []string `json:"tasks,omitempty"`
+	// Relics names the relics a refusal is about, as Tasks names tasks: the
+	// relic refs a published-after-move report says reached the old place.
+	Relics []string `json:"relics,omitempty"`
 }
 
 // TasksRemoteTarget names a remote and its address.
