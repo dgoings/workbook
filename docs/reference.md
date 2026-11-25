@@ -646,7 +646,7 @@ Properties:
   heading: Keep a backup bundle
 ```
 
-**Relics are shared with the tasks.** The relic commands, `workbook fetch`,
+**Relics are shared with the tasks.** A relic command that changes a relic, `workbook fetch`,
 `push`, `sync`, `setup` and `move-tasks` carry relic refs to and from the
 tasks remote, and a fresh clone gets every relic from `workbook setup`. The
 synchronization a task command runs carries none; see
@@ -1498,7 +1498,9 @@ relic, `workbook show <task>` lists the relics that link to the task (see
 The synchronization a task command runs before and after its change fetches
 and pushes no relic ref, so it meets no relic conflict. The `Relics:` section
 of `workbook show <task>` lists the relics this checkout holds, so it is as
-fresh as the last relic command, `workbook fetch` or `workbook sync` run here.
+fresh as the last command here that fetched relics: a relic command that
+changes a relic, `workbook fetch`, `workbook sync` (including a running
+`sync --watch`), `workbook setup` or `workbook move-tasks`.
 A task command handed to a running watcher reports the relic conflicts the
 watcher recorded, with the same `relicConflict` member a relic command uses.
 
@@ -1516,13 +1518,13 @@ Relics travel with the tasks, to and from the tasks remote: `origin`, unless
 the project's settings name another (see
 [A tasks remote other than origin](#a-tasks-remote-other-than-origin)).
 `workbook fetch`, `push` and `sync` carry relic refs as they carry task refs,
-and so do the relic commands, a running `workbook sync --watch`, the board's
+and so do a relic command that changes a relic, a running `workbook sync --watch`, the board's
 own loop under `workbook serve`, the pre-push hook, `workbook setup` and
 `workbook move-tasks`. The synchronization a task command such as `create`,
 `update` or `next` runs before and after its change does not: it fetches and
 pushes the task refs and the project's settings only, so its cost does not
 grow with the number of relics. A relic another clone published arrives here
-with the next relic command, `workbook fetch` or `workbook sync`, and a relic
+with the next relic command that changes a relic, `workbook fetch` or `workbook sync`, and a relic
 recorded here with `--no-sync` goes out with the next `workbook push`,
 `workbook sync` or relic command that changes it. A fresh clone has every
 relic once `workbook setup` has run there:

@@ -482,7 +482,7 @@ such as `create`, `update` or `next` runs before and after its change fetches
 with the three refspecs a fetch named before relics existed and pushes only
 what it changed, so it fetches, replays, parks and pushes no relic, and the
 refs Workbook names to Git do not grow with the number of relics. A relic
-reaches a checkout with the next relic command, `workbook fetch` or
+reaches a checkout with the next relic command that changes a relic, `workbook fetch` or
 `workbook sync` there, and `workbook show <task>` lists the linked relics the
 checkout holds until then. A task command handed to a watcher waits only for
 the watcher to receive the request, never for the round that carries relics.
