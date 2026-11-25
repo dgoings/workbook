@@ -59,8 +59,9 @@ type syncReport struct {
 	// so one command reports one list of each kind.
 	configConflicts []core.ConfigConflict
 	// relicConflicts and relicWarnings travel the same way: the envelope
-	// carries them, so a task command reports the relic conflicts and warnings
-	// its fetch met exactly as a relic command does.
+	// carries them. A relic command's fetch meets them; a task command's
+	// fetch carries no relic, so it carries only the relic conflicts a running
+	// watcher recorded (see probeWatcher).
 	relicConflicts []core.RelicConflict
 	relicWarnings  []core.Warning
 }
@@ -104,6 +105,12 @@ type taskSession struct {
 	// deferred reports that a trustworthy watcher answered, so this command
 	// writes locally and hands publication to it.
 	deferred bool
+	// relics makes the session's fetch carry relic refs, which only a relic
+	// command's does (see mutateRelic). A task command's fetch names no relic
+	// ref, so its Git work does not grow with the number of relics: it moves,
+	// parks and reports no relic, and a relic arrives with the next relic
+	// command, fetch or sync instead.
+	relics bool
 	// refusal is a publication refusal the command fails on; see noteRefusal.
 	refusal error
 	watcher syncloop.Status
@@ -335,7 +342,11 @@ func (session *taskSession) fetchBefore(ctx context.Context) error {
 		session.report.Detail = "no " + session.repository.TasksRemoteName() + " remote configured"
 		return nil
 	}
-	result, err := session.repository.Fetch(ctx, session.config)
+	fetch := session.repository.FetchTasks
+	if session.relics {
+		fetch = session.repository.Fetch
+	}
+	result, err := fetch(ctx, session.config)
 	session.report.Fetch = &result
 	session.report.Config = result.Config
 	// A configuration conflict never blocks the mutation. The two clones

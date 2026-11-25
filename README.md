@@ -148,9 +148,11 @@ and `sync` commands.
 
 Workbook also keeps relics: records for specs, plans and decisions, each made
 of typed parts with fields and bodies. `workbook relic` creates, shows and
-edits them. Relics are shared with the tasks: every command that synchronizes
-tasks carries them, a relic command synchronizes the relic it changes, and a
-fresh clone gets them from `workbook setup`. Two clones' changes to one relic
+edits them. Relics are shared with the tasks: `workbook fetch`, `push` and
+`sync` carry them, a relic command synchronizes the relic it changes, and a
+fresh clone gets them from `workbook setup`. A task command's own
+synchronization carries no relic, so run a relic command or `workbook sync` to
+get the latest ones. Two clones' changes to one relic
 are combined, and the one kind that cannot be, two saves over the same body
 version or an edit to a relic deleted elsewhere, is reported as a relic
 conflict that keeps the change that did not apply. A relic, or one of its

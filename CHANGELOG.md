@@ -56,6 +56,9 @@ never repaired, and `relic create --from-file` reads at most 64 MiB.
 Relics are shared with the tasks. `workbook fetch`, `push`, `sync`, `setup`,
 `move-tasks` and `sync --watch` carry relic refs to and from the tasks
 remote, through tracking refs under `refs/workbook/remotes/<remote>/relics/`.
+The synchronization a task command runs before and after its change carries
+no relic ref, so its cost does not grow with the number of relics, and
+`workbook show <task>` lists the linked relics this checkout holds.
 `relic create`, `update`, `delete` and `restore` fetch first, push the one
 relic they changed, and print a `Sync:` line; `--no-sync` skips both, and the
 read commands contact no remote. A relic changed in two clones is combined by

@@ -65,7 +65,9 @@ A relic holds a spec, a plan, a decision record or similar material, made of
 typed parts with fields and an optional body. A relic ID is `<KEY>-R-<ULID>`
 and a task ID `<KEY>-<ULID>`; a part is addressed as `<relic>#<part>`, and any
 unambiguous prefix of either ID works. `workbook next` and `workbook list`
-never return relics.
+never return relics. Task commands do not fetch relics, so `workbook show`
+lists the relics this checkout holds; run `workbook sync` or any relic command
+first to get the latest relics.
 
 Read a part with `workbook relic show <relic>#<part> --body --json`: the body
 is at `data.parts[0].body.text` (`base64` when it is not text) and its version

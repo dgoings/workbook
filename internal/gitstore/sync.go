@@ -563,7 +563,7 @@ func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncR
 		Push:   r.skippedSyncPhase("push not run"),
 	}
 
-	state, fetched, fetchErr := r.fetch(ctx, config, true, true)
+	state, fetched, fetchErr := r.fetch(ctx, config, true, true, true)
 	result.Fetch = fetched
 	result.Identity = state.Identity
 	result.Config = state.Config
@@ -606,15 +606,29 @@ func failedSyncPhase(result SyncResult, detail string, err error) (SyncResult, e
 // It runs the identity stage but never publishes: a download is not the moment
 // to write to origin. Sync, which already has a publication phase, is.
 func (r *Repository) Fetch(ctx context.Context, config core.ProjectConfig) (SyncResult, error) {
-	_, result, err := r.fetch(ctx, config, false, false)
+	_, result, err := r.fetch(ctx, config, false, false, true)
 	return result, err
 }
 
+// FetchTasks is Fetch without the relics, for the synchronization a task
+// command runs before its change. It names the refspecs a fetch named before
+// relics existed, so its Git work does not grow with the number of relics
+// origin or this checkout holds: it fetches no relic ref, moves none, parks
+// none, and reports no relic. The relic commands, fetch, sync and setup carry
+// relics instead.
+func (r *Repository) FetchTasks(ctx context.Context, config core.ProjectConfig) (SyncResult, error) {
+	_, result, err := r.fetch(ctx, config, false, false, false)
+	return result, err
+}
+
+// fetch runs the fetch phase. relics adds the relic refspec to the one
+// `git fetch` and runs the relic stage after the task refs have moved.
 func (r *Repository) fetch(
 	ctx context.Context,
 	config core.ProjectConfig,
 	publishIdentity bool,
 	announceIdentity bool,
+	relics bool,
 ) (fetchState, SyncResult, error) {
 	state := fetchState{
 		Canonical: make(map[string]core.Snapshot),
@@ -637,18 +651,23 @@ func (r *Repository) fetch(
 		return state, result, err
 	}
 
-	// One fetch carries all four namespaces. Each of the two singleton refs is
-	// worth nothing if learning it costs a round trip of its own on every
-	// synchronization, and a separate fetch could also observe a different
-	// moment than the tasks it is supposed to describe. Both singleton refspecs
-	// are globs, because Git fails a whole fetch when an explicitly named source
-	// ref is missing and most origins have neither ref yet.
-	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", r.remote(),
-		"+"+taskRefPrefix+"*:"+r.remoteTaskRefPrefix()+"*",
+	// One fetch carries all four namespaces, or the first three for a task
+	// command. Each of the two singleton refs is worth nothing if learning it
+	// costs a round trip of its own on every synchronization, and a separate
+	// fetch could also observe a different moment than the tasks it is supposed
+	// to describe. Both singleton refspecs are globs, because Git fails a whole
+	// fetch when an explicitly named source ref is missing and most origins
+	// have neither ref yet. --prune applies only to the refspecs named, so a
+	// fetch without the relic refspec leaves the relic tracking refs alone.
+	fetchArgs := []string{"fetch", "--no-tags", "--prune", "--no-auto-maintenance", r.remote(),
+		"+" + taskRefPrefix + "*:" + r.remoteTaskRefPrefix() + "*",
 		r.identityFetchRefspec(),
 		r.configFetchRefspec(),
-		relicFetchRefspecFor(r.remote()),
-	); err != nil {
+	}
+	if relics {
+		fetchArgs = append(fetchArgs, relicFetchRefspecFor(r.remote()))
+	}
+	if _, err := r.Git(ctx, nil, fetchArgs...); err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
 		return state, result, err
 	}
@@ -969,9 +988,12 @@ func (r *Repository) fetch(
 
 	// Relics come after every task ref has moved, in a transaction of their
 	// own, so nothing a relic does can change a task's outcome. Whatever the
-	// stage reports, the phase stays completed.
-	relics, relicStage := r.syncFetchedRelics(ctx, config)
-	state.Relics = relics
+	// stage reports, the phase stays completed. A fetch without relics runs no
+	// stage, and the zero stage reports nothing.
+	var relicStage relicStage
+	if relics {
+		state.Relics, relicStage = r.syncFetchedRelics(ctx, config)
+	}
 	result.Relics = relicStage.Results
 	result.RelicConflicts = relicStage.Conflicts
 	result.RelicWarnings = relicStage.Warnings

@@ -232,7 +232,8 @@ func fetchConfigBefore(
 	if publisher.watcherAnswers() || !repository.HasTasksRemote(ctx) {
 		return
 	}
-	_, _ = repository.Fetch(ctx, config)
+	// Tasks and the ledger only: the board's own loop shares relics.
+	_, _ = repository.FetchTasks(ctx, config)
 }
 
 // staleVocabularyWrite refuses a change composed against statuses that have

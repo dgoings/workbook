@@ -57,9 +57,11 @@ var (
 		"git ls-remote --refs origin refs/workbook/project",
 	}
 	publishingCommands = map[string]bool{"create Unconfigured --json": true, "next --claim --json": true}
-	// Every fetch also carries origin's relic refs, with a fourth refspec, and
-	// lists both relic namespaces once afterwards to find the relics that
-	// changed.
+	// The fetch of a command that carries relics (relicCommands) also
+	// carries origin's relic refs, with a fourth refspec, and lists both relic
+	// namespaces once afterwards to find the relics that changed. A task
+	// command's fetch is the one the release before ran.
+	relicCommands = map[string]bool{"setup --json": true, "fetch --json": true, "sync --json": true}
 	fetchBefore   = "git fetch --no-tags --prune --no-auto-maintenance origin "
 	relicRefspec  = " +refs/workbook/relics/*:refs/workbook/remotes/origin/relics/*"
 	relicsListing = "git for-each-ref --format=%(refname)%00%(objectname)%00%(symref) refs/workbook/relics/ refs/workbook/remotes/origin/relics/"
@@ -312,7 +314,7 @@ func withThisBranchsChecks(t *testing.T, report string) string {
 			continue
 		}
 		if sorting {
-			if strings.HasPrefix(line, fetchBefore) {
+			if strings.HasPrefix(line, fetchBefore) && relicCommands[command] {
 				section = append(section, line+relicRefspec, relicsListing)
 				continue
 			}

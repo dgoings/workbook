@@ -107,6 +107,48 @@ func TestFetchCreatesAndFastForwardsRelics(t *testing.T) {
 	})
 }
 
+// FetchTasks, a task command's fetch, leaves every relic where it is: it
+// fetches no relic ref, moves none, parks none and reports none, so a relic
+// that diverged waits for the next Fetch.
+func TestFetchTasksLeavesRelicsWhereTheyAre(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		shared := sharedRelic(t, first, second, config, 1)
+		sharedID := shared.Operation.RelicID
+		theirs := writeRelicChild(t, first, config, shared, nil, relicTitleSet(700001, "Their title"))
+		ours := writeRelicChild(t, second, config, shared, nil, relicTitleSet(700002, "Our title"))
+		created := writeRelicRootNumbered(t, first, config, 2)
+		createdID := created.Operation.RelicID
+		publishRelicRefs(t, first)
+
+		fetched, err := second.FetchTasks(context.Background(), config)
+		if err != nil {
+			t.Fatalf("FetchTasks() error = %v; result = %+v", err, fetched)
+		}
+		if len(fetched.Relics) != 0 || len(fetched.RelicConflicts) != 0 || len(fetched.RelicWarnings) != 0 {
+			t.Fatalf("FetchTasks() reported relics: %+v", fetched)
+		}
+		if got := relicRefHead(t, second, sharedID); got != ours.Head {
+			t.Fatalf("second's relic ref = %s after FetchTasks, want its own %s", got, ours.Head)
+		}
+		if got := refValue(t, second, relicTrackingRef(sharedID)); got != shared.Head {
+			t.Fatalf("second's tracking ref = %s after FetchTasks, want the root %s", got, shared.Head)
+		}
+		for _, ref := range []string{relicRefPrefix + createdID, relicTrackingRef(createdID)} {
+			if refExists(t, second, ref) {
+				t.Fatalf("FetchTasks() created %s", ref)
+			}
+		}
+
+		fetched = fetchRelics(t, second, config)
+		assertRelicSyncOutcome(t, fetched, createdID, SyncCreated)
+		assertRelicSyncOutcome(t, fetched, sharedID, SyncReconciled)
+		if got := refValue(t, second, relicTrackingRef(sharedID)); got != theirs.Head {
+			t.Fatalf("second's tracking ref = %s after Fetch, want %s", got, theirs.Head)
+		}
+	})
+}
+
 func TestFetchListsOnlyRelicsThatChanged(t *testing.T) {
 	t.Parallel()
 	first, second, config := syncRepositories(t)
@@ -482,7 +524,7 @@ func TestSyncLeavesADamagedLocalRelicWhereItIs(t *testing.T) {
 // from publication.
 func relicsWithheldByFetch(t *testing.T, repo *Repository, config core.ProjectConfig) map[string]struct{} {
 	t.Helper()
-	state, _, _ := repo.fetch(context.Background(), config, false, false)
+	state, _, _ := repo.fetch(context.Background(), config, false, false, true)
 	return state.Relics.Withheld
 }
 

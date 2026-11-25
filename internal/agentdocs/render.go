@@ -281,6 +281,9 @@ func relicGuidelines(keys core.KeySet) string {
 		"`--body` carries the body at `data.parts[0].body.text`, or at\n" +
 		"`data.parts[0].body.base64` when it is not text, and its version at\n" +
 		"`data.parts[0].body.version`.\n\n" +
+		"Task commands do not fetch relics, so `workbook show` lists the relics this\n" +
+		"checkout holds. Run `workbook sync` or any relic command first to get the\n" +
+		"latest relics.\n\n" +
 		"To save, write the whole new body to a file and pass the version you read\n" +
 		"as `--base`. Two edits to the same body are never merged.\n\n" +
 		"A save whose `--base` is no longer the current version exits 6\n" +

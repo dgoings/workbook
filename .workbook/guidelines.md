@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=3d05eac9 sha256=f067f57680da31e6a3494469900532f8d67fd4b0e797549cdfa9cd96961abdc6 -->
+<!-- workbook:begin generator=e4733839 sha256=02c96fd8ed31345a43da048f5609642f9624b8509165988bdd279333a01dbed7 -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`
@@ -143,6 +143,10 @@ relic) and the `rel`, such as `implemented-by`. `workbook relic list
 `--body` carries the body at `data.parts[0].body.text`, or at
 `data.parts[0].body.base64` when it is not text, and its version at
 `data.parts[0].body.version`.
+
+Task commands do not fetch relics, so `workbook show` lists the relics this
+checkout holds. Run `workbook sync` or any relic command first to get the
+latest relics.
 
 To save, write the whole new body to a file and pass the version you read
 as `--base`. Two edits to the same body are never merged.

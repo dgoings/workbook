@@ -36,6 +36,9 @@ type gitCost struct {
 	// commands are the processes' Git subcommands, for saying where two
 	// costs differ.
 	commands []string
+	// lines are the processes' whole command lines, for asserting on the
+	// refs and refspecs they name.
+	lines []string
 }
 
 func (cost gitCost) String() string {
@@ -84,6 +87,7 @@ func (cursor *gitTraceCursor) next(t *testing.T) gitCost {
 		}
 		cursor.running[event.SID] = true
 		cost.processes++
+		cost.lines = append(cost.lines, strings.Join(event.Argv, " "))
 		argv := event.Argv
 		if len(argv) > 2 && argv[1] == "-C" {
 			argv = append([]string{argv[0]}, argv[3:]...)
@@ -200,6 +204,7 @@ func (cursor *gitTraceCursor) settleAfter(t *testing.T, connection string) gitCo
 		total.processes += cost.processes
 		total.connections = append(total.connections, cost.connections...)
 		total.commands = append(total.commands, cost.commands...)
+		total.lines = append(total.lines, cost.lines...)
 		for _, made := range cost.connections {
 			seen = seen || made == connection
 		}

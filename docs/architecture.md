@@ -447,9 +447,9 @@ other is refused as `stale-write`, told that another change was saved first
 and to run the command again. Nothing retries it. A write interrupted before
 the ref moves leaves unreferenced objects and changes nothing.
 
-**Relic refs are shared with the task refs.** The one `git fetch` every
-synchronization makes carries a fourth refspec beside the task, identity and
-settings refspecs:
+**Relic refs are shared with the task refs.** The one `git fetch` of a relic
+command, `workbook fetch`, `sync`, `setup` or a watcher's round carries a
+fourth refspec beside the task, identity and settings refspecs:
 
 ```text
 +refs/workbook/relics/*:refs/workbook/remotes/<remote>/relics/*
@@ -476,6 +476,16 @@ that holds newer commits refuses it, and the next fetch replays this clone's
 commits onto them. Relic refs move in their own transaction after the task
 refs, so a relic can never roll back a task; a sync stopped between the two
 leaves the relics one sync behind, which the next sync repairs.
+
+**A task command moves no relic ref.** The synchronization a task command
+such as `create`, `update` or `next` runs before and after its change fetches
+with the three refspecs a fetch named before relics existed and pushes only
+what it changed, so it fetches, replays, parks and pushes no relic, and the
+refs Workbook names to Git do not grow with the number of relics. A relic
+reaches a checkout with the next relic command, `workbook fetch` or
+`workbook sync` there, and `workbook show <task>` lists the linked relics the
+checkout holds until then. A task command handed to a watcher waits only for
+the watcher to receive the request, never for the round that carries relics.
 
 **What a fetch reads.** One `for-each-ref` over both relic namespaces finds
 the relics whose ref and tracking ref differ, and nothing of any other relic

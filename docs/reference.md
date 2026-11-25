@@ -646,9 +646,10 @@ Properties:
   heading: Keep a backup bundle
 ```
 
-**Relics are shared with the tasks.** Every command that sends task refs to
-the tasks remote or reads them from it carries relic refs too, and a fresh
-clone gets every relic from `workbook setup`; see
+**Relics are shared with the tasks.** The relic commands, `workbook fetch`,
+`push`, `sync`, `setup` and `move-tasks` carry relic refs to and from the
+tasks remote, and a fresh clone gets every relic from `workbook setup`. The
+synchronization a task command runs carries none; see
 [Sharing relics](#sharing-relics). No task command returns a relic:
 `workbook list` and `next` answer as they did before relics existed. There
 are no schemas, no history or diff commands, no retiring, no compaction and no
@@ -1494,9 +1495,12 @@ its Workbook refs, after writing them to its bundle.
 relic, `workbook show <task>` lists the relics that link to the task (see
 [Links to tasks](#links-to-tasks)), and `workbook compact` leaves relic refs alone. `workbook fetch`,
 `push`, `sync` and `move-tasks` carry them; see [Sharing relics](#sharing-relics).
-`workbook status`, `priority`, `key`, `config`, `compact` and `next` report a
-relic conflict their own fetch met, beside the task conflicts, with the same
-`relicConflict` member.
+The synchronization a task command runs before and after its change fetches
+and pushes no relic ref, so it meets no relic conflict. The `Relics:` section
+of `workbook show <task>` lists the relics this checkout holds, so it is as
+fresh as the last relic command, `workbook fetch` or `workbook sync` run here.
+A task command handed to a running watcher reports the relic conflicts the
+watcher recorded, with the same `relicConflict` member a relic command uses.
 
 **A newer Workbook.** The relic formats carry the same `minReader` marker task
 histories do; see [Mixed Workbook versions](architecture.md#mixed-workbook-versions).
@@ -1512,10 +1516,16 @@ Relics travel with the tasks, to and from the tasks remote: `origin`, unless
 the project's settings name another (see
 [A tasks remote other than origin](#a-tasks-remote-other-than-origin)).
 `workbook fetch`, `push` and `sync` carry relic refs as they carry task refs,
-and so do the synchronization a command runs before and after a change, a
-running `workbook sync --watch`, the board's own loop under `workbook serve`,
-the pre-push hook, `workbook setup` and `workbook move-tasks`. A fresh clone
-has every relic once `workbook setup` has run there:
+and so do the relic commands, a running `workbook sync --watch`, the board's
+own loop under `workbook serve`, the pre-push hook, `workbook setup` and
+`workbook move-tasks`. The synchronization a task command such as `create`,
+`update` or `next` runs before and after its change does not: it fetches and
+pushes the task refs and the project's settings only, so its cost does not
+grow with the number of relics. A relic another clone published arrives here
+with the next relic command, `workbook fetch` or `workbook sync`, and a relic
+recorded here with `--no-sync` goes out with the next `workbook push`,
+`workbook sync` or relic command that changes it. A fresh clone has every
+relic once `workbook setup` has run there:
 
 ```sh
 workbook relic list
@@ -1545,12 +1555,12 @@ a112b0c1b8059dfafa88aefc65ad45d447da7426 commit	refs/workbook/remotes/origin/rel
 ```
 
 `relic create`, `relic update`, `relic delete` and `relic restore` synchronize
-as a task command does. Each fetches first, records its change, and pushes the
-one relic ref it moved, and its output ends with the `Sync:` line every
+as a task command does, and their fetch carries relics as well as tasks. Each
+fetches first, records its change, and pushes the one relic ref it moved, and its output ends with the `Sync:` line every
 synchronizing command prints; with `--json` the result carries it as `sync`.
 `--no-sync`, or the setting `auto-sync` turned off, skips both: the change is
 recorded in this checkout only, no `Sync:` line is printed, and the next
-`workbook sync`, `push`, or synchronizing command publishes it. While a
+`workbook sync`, `push`, or relic command that changes the relic publishes it. While a
 watcher is running, a change is handed to it to publish, as a task change is;
 see [Continuous synchronization](#continuous-synchronization). `relic list`,
 `relic show` and `relic export` never contact the remote: they read what this

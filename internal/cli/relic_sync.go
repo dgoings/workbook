@@ -46,6 +46,9 @@ func (session *taskSession) mutateRelic(
 	target string,
 	apply func(context.Context, core.RelicService) (core.RelicMutationResult, error),
 ) (core.RelicMutationResult, error) {
+	// A relic command fetches the relics as well as the tasks, which its links
+	// are checked against.
+	session.relics = true
 	if err := session.fetchBefore(ctx); err != nil {
 		return core.RelicMutationResult{}, err
 	}
