@@ -290,8 +290,11 @@ func planRelicWrite(
 			// The part keeps the body the parent stores, which has to be the
 			// size the state records. The fold leaves the size alone unless it
 			// gives the body a new version, and a pack is refused before this
-			// if a body edit in it names itself as its base, so only a record
-			// that does not follow from the pack is refused here.
+			// if a body edit in it names itself as its base. A pack can still
+			// end on the parent's version with another size: a later
+			// part.body.set in it that takes that version as its own ID, which
+			// the fold cannot see is reused. This refuses that pack, and a
+			// record that does not follow from its pack.
 			kept := int64(-1)
 			if parentRecord != nil {
 				if before, existed := parentRecord.State.Relic.Part(partID); existed && before.Body != nil {

@@ -1074,11 +1074,11 @@ func TestWriteRelicKeepsFieldsWithoutAFieldOperation(t *testing.T) {
 }
 
 // A part that keeps the body its parent stores has to keep the size the parent
-// records. No pack folds to anything else since a body edit may not name
-// itself as its base, so WriteRelic refuses that pack outright and the guard in
-// planRelicWrite is reached here with a forged record: a move whose state
-// records another size for the part. That is a commit no read accepts, so the
-// writer refuses to store it.
+// records. A body edit that names itself as its base is refused outright, and
+// the guard in planRelicWrite is reached here with a forged record: a move
+// whose state records another size for the part. That is a commit no read
+// accepts, so the writer refuses to store it. The next test reaches the same
+// guard through WriteRelic with a pack the fold accepts.
 func TestWriteRelicRefusesABodySizeNoSavedBodyBacks(t *testing.T) {
 	t.Parallel()
 	repo, config := relicRepository(t, testrepo.FormatSHA1)
@@ -1116,6 +1116,38 @@ func TestWriteRelicRefusesABodySizeNoSavedBodyBacks(t *testing.T) {
 	}
 
 	// Nothing landed, and the relic still reads as it did.
+	got, err := repo.GetRelic(ctx, config, relicID)
+	if err != nil {
+		t.Fatalf("GetRelic() error = %v", err)
+	}
+	assertSameRelicSnapshot(t, got, edited)
+}
+
+// A pack whose last part.body.set takes as its ID the body version the parent
+// records folds back to that version with another size. The fold cannot see
+// the ID is reused, so planRelicWrite is what keeps WriteRelic from storing
+// a body under a version that already named other text.
+func TestWriteRelicRefusesAPackThatEndsOnTheParentsBodyVersion(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	part := relicTestPartNumbered(1).withBody("md", []byte("the first text\n"))
+	root := writeRelicRoot(t, repo, config, part)
+	relicID := root.Operation.RelicID
+	second := []byte("the second text\n")
+	edited := writeRelicChild(t, repo, config, root,
+		map[string]core.RelicPartContent{part.id: {Body: second, HasBody: true}},
+		relicBodySet(700001, part.id, part.id, second))
+	last := []byte("a third text, longer than the second\n")
+	pack := relicChildPack(edited,
+		relicBodySet(700002, part.id, relicTestID(700001), []byte("between\n")),
+		relicBodySet(700001, part.id, relicTestID(700002), last))
+	record := foldRelic(t, &edited, pack)
+
+	_, err := repo.WriteRelic(ctx, config, &edited, pack, record,
+		map[string]core.RelicPartContent{part.id: {Body: last, HasBody: true}}, "update relic")
+	assertRelicCategory(t, err, core.CategoryValidation, part.id, fmt.Sprintf("%d bytes", len(last)), "without saving one")
+
 	got, err := repo.GetRelic(ctx, config, relicID)
 	if err != nil {
 		t.Fatalf("GetRelic() error = %v", err)
