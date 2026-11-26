@@ -80,6 +80,11 @@ func ApplyRelic(parent *RelicRecord, pack RelicOperationPack) (RelicRecord, erro
 	}
 
 	for _, operation := range operations {
+		// The deleted-relic rule is held in two places. checkRelicChild
+		// refuses a pack whose parent is deleted unless it opens with
+		// relic.restore and never tombstones it again; this refuses any
+		// operation after a tombstone in the same pack, which that check
+		// cannot see. Together they mean nothing changes a deleted relic.
 		if relic.Deleted && operation.Type != RelicOperationRestore {
 			return RelicRecord{}, corrupt("cannot change a deleted relic")
 		}
@@ -182,7 +187,9 @@ func checkRelicChild(parent RelicStateDocument, pack RelicOperationPack) error {
 		}
 	}
 	// A pack against a deleted relic restores it first and may then edit it,
-	// but a pack restores or deletes, never both.
+	// but a pack restores or deletes, never both. ApplyRelic's loop holds the
+	// other half of the deleted-relic rule: no operation after a tombstone in
+	// the pack itself.
 	if parent.Relic.Deleted {
 		if pack.Operations[0].Type != RelicOperationRestore {
 			return corrupt("cannot change a deleted relic")
