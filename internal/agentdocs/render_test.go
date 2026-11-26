@@ -802,6 +802,7 @@ func TestRenderGuidelinesRemediesNameRelics(t *testing.T) {
 	for _, want := range []string{
 		"| 4 | `not-found` | use an existing task or relic ID |\n",
 		"| 6 | `stale-write` | retry the identical command; it will probably succeed. A relic save refused for its `--base` needs a fresh read first |\n",
+		"| 8 | `conflict` | read the envelope's `conflict` list (`relicConflict` for a relic), change the input, then retry |\n",
 	} {
 		if !strings.Contains(exits, want) {
 			t.Errorf("exit codes missing row %q:\n%s", want, exits)

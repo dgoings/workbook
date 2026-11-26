@@ -182,7 +182,7 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary, pr
 		{core.CategoryValidation, "change the input; it fails the same way on every retry"},
 		{core.CategoryStaleWrite, "retry the identical command; it will probably succeed. A relic save refused for its `--base` needs a fresh read first"},
 		{core.CategoryCorruptData, "read the message; repair or rebuild before continuing"},
-		{core.CategoryConflict, "read the envelope's `conflict` list, change the input, then retry"},
+		{core.CategoryConflict, "read the envelope's `conflict` list (`relicConflict` for a relic), change the input, then retry"},
 		{core.CategoryAssigned, "somebody else holds that task; pick another one, or `--force` to share it"},
 	} {
 		builder.WriteString("| " + strconv.Itoa(core.ExitCode(core.Errorf(category.category, "x"))) +
