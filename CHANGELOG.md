@@ -45,8 +45,8 @@ A relic's limits are part of its stored format. One property value is at most
 64 KiB and one field value at most 16 KiB, measured on the stored JSON, where
 each `<`, `>` or `&` in a string counts six bytes. A value nests lists and
 objects at most 32 levels deep. A property or field name is 1 to 100 bytes of
-valid UTF-8 with no `=`, no control character and no white space at either
-end, and names are compared byte for byte. A relic's properties together, one
+valid UTF-8 with no `=`, no control character, no format character (such as
+U+200B or U+202E) and no white space at either end, and names are compared byte for byte. A relic's properties together, one
 part's fields together, its part counts and its live bodies together are
 totals: a change is refused only when it leaves a total over its limit and
 larger than it was, and a total is never checked when a relic is read. Text
