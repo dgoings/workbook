@@ -9,11 +9,11 @@ import (
 )
 
 // requireNoTerminalControl fails when text holds a character a terminal acts
-// on, other than the newline that ends each line.
+// on, other than the newline that ends each line and the tab that indents one.
 func requireNoTerminalControl(t *testing.T, label, text string) {
 	t.Helper()
 	for _, r := range text {
-		if r == '\n' {
+		if r == '\n' || r == '\t' {
 			continue
 		}
 		if r < 0x20 || (r >= 0x7f && r < 0xa0) || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) {
@@ -24,8 +24,9 @@ func requireNoTerminalControl(t *testing.T, label, text string) {
 
 // One part's body under `relic show <relic>#<part> --body` is the exact stored
 // bytes when standard output is a file or a pipe, which is the case that needs
-// them, and is filtered line by line like every other stored text when
-// standard output is a terminal.
+// them. On a terminal its control characters become spaces, a Windows line
+// end becomes one line break, and its indentation, tabs and blank lines are
+// kept, as the whole relic shows it.
 //
 // No test here has a terminal to write to, and no other test in this package
 // stands in for one, so the terminal case is asked of writeRelicPartBody
@@ -79,8 +80,8 @@ func TestRelicShowPartBodyIsExactForAPipeAndFilteredForATerminal(t *testing.T) {
 	if shown != want.String() {
 		t.Fatalf("a body shown on a terminal = %q, want the whole relic's lines of it, %q", shown, want.String())
 	}
-	if !strings.Contains(shown, "RED") || !strings.Contains(shown, "pwned") || !strings.Contains(shown, "second") {
-		t.Fatalf("a body shown on a terminal = %q, want its text kept", shown)
+	if wantShown := " [31mRED [0m  ]0;pwned \nsecond  line\n\n  indented\twith a tab\n"; shown != wantShown {
+		t.Fatalf("a body shown on a terminal = %q, want %q: its text and layout kept", shown, wantShown)
 	}
 
 	if got := toTerminal(empty); got != "" {

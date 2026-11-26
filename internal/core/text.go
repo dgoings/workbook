@@ -32,3 +32,23 @@ func DisplayLine(value string) string {
 	}, value)
 	return strings.Join(strings.Fields(value), " ")
 }
+
+// DisplayText makes text of several lines safe for a terminal and keeps its
+// spaces, tabs and line breaks, where DisplayLine joins them into one line. A
+// Windows line end becomes one line break, so no line ends in a space; every
+// other control character, a lone carriage return included, becomes a space,
+// and so does each bidi control, for the reasons DisplayLine gives. It is for
+// text whose layout carries meaning, such as a relic body of Markdown, YAML or
+// code, shown on a terminal.
+func DisplayText(value string) string {
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\t':
+			return r
+		case unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r):
+			return ' '
+		}
+		return r
+	}, value)
+}

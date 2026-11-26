@@ -280,12 +280,12 @@ func writeRelicPartBody(stdout io.Writer, document core.RelicDocument, terminal 
 	if len(content) == 0 {
 		return nil
 	}
-	for _, line := range descriptionLines(string(content)) {
-		if _, err := fmt.Fprintln(stdout, line); err != nil {
-			return err
-		}
+	shown := core.DisplayText(string(content))
+	if !strings.HasSuffix(shown, "\n") {
+		shown += "\n"
 	}
-	return nil
+	_, err := io.WriteString(stdout, shown)
+	return err
 }
 
 func runRelicSetDeleted(ctx context.Context, verb string, args []string, cwd string, stdout, stderr io.Writer) error {

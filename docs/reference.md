@@ -984,12 +984,14 @@ Where that body goes decides how it is written:
 
 - **Into a file or a pipe**, the body is written byte for byte, so it can be
   redirected and saved again.
-- **On a terminal**, the body is printed for reading, a line at a time
-  through the terminal filter described under
-  [Text-mode output safety](#text-mode-output-safety). Each control character
-  becomes a space, runs of white space become one space, and indentation at
-  the start of a line is dropped, so a body cannot move the cursor, color the
-  screen or retitle the window. A body that is not valid UTF-8 is not written
+- **On a terminal**, the body is printed for reading with its layout kept:
+  spaces, tabs, indentation and blank lines stay as written, so nested lists
+  and code blocks keep their shape. A Windows line end becomes one line break,
+  and every other control character, a lone carriage return included, becomes
+  a space, as do the bidi controls described under
+  [Text-mode output safety](#text-mode-output-safety), so a body cannot move
+  the cursor, color the screen or retitle the window. The full `relic show
+  --body` prints each text body the same way, under an indent of four spaces. A body that is not valid UTF-8 is not written
   to a terminal at all: one line says so, gives its size, and says to send
   the output to a file or a pipe.
 

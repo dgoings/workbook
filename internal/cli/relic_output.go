@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -13,8 +14,9 @@ import (
 
 // Text output for the relic commands. Every stored string passes through
 // singleLine, so nothing a relic holds can move the cursor, color the terminal
-// or forge a line of its own; --json is the interface for exact values. The
-// one exception is a single part's body under `relic show <relic>#<part>
+// or forge a line of its own; --json is the interface for exact values. A
+// body's text passes through core.DisplayText instead, which removes the same
+// characters but keeps its spaces, tabs and line breaks. The one exception is a single part's body under `relic show <relic>#<part>
 // --body` when standard output is not a terminal, which is written byte for
 // byte so it can be redirected (see writeRelicPartBody).
 
@@ -130,7 +132,9 @@ func writeRelicBodyText(stdout io.Writer, body core.RelicDocumentBody) {
 		return
 	}
 	fmt.Fprintln(stdout, "  Body:")
-	for _, line := range descriptionLines(*body.Text) {
+	// The body's own layout is kept, as relic show <relic>#<part> --body
+	// shows it on a terminal, under an indent of four spaces.
+	for _, line := range strings.Split(strings.TrimSuffix(core.DisplayText(*body.Text), "\n"), "\n") {
 		if line == "" {
 			fmt.Fprintln(stdout)
 			continue
