@@ -1764,6 +1764,13 @@ A move concerns this project's refs only, by name. A ref under
 `refs/workbook/tasks/` or `refs/workbook/relics/` is this project's when its
 name is one of its task or relic IDs under any key it has, active or retired,
 the rule a fetch reads a ref as this project's by; deciding it reads nothing.
+Its keys are this checkout's and, when the old place's configuration ledger
+has diverged from this checkout's and so is not carried, that ledger's too:
+the move reads the old place's ledger tip for its keys in that case only, so a
+key a teammate added there is not mistaken for another project's. A task or
+relic under such a key cannot be carried until the key is added here
+(`workbook key add`), so it leaves the move unverified, exit 8, and the
+refusal names the key and that command.
 Any other is another project's, on a remote the two share, or a name that fits
 no project. Verification leaves it out, so it neither blocks nor is counted,
 and the move says nothing about it. `--clean-up` plans its deletions as `reset

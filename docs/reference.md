@@ -4042,7 +4042,10 @@ deletes nothing, and its `Cleaned up:` line names the
 A move concerns this project's refs only. A ref under `refs/workbook/tasks/`
 or `refs/workbook/relics/` at the old place whose name is not one of this
 project's task or relic IDs, under any of its keys, active or retired, is
-another project's or no project's: on a tasks remote another project shares,
+another project's or no project's. This project's keys are the ones this
+checkout's configuration has and, when the old place's configuration has
+diverged from it (`config` is `not-carried`), the ones that configuration has
+too: on a tasks remote another project shares,
 that project's refs are such refs. The move leaves it where it is. It does not
 carry or count it, does not keep the move from being verified, and says
 nothing about it, in text or JSON, and `--clean-up` leaves it there too. The
@@ -4050,6 +4053,22 @@ name alone decides, and nothing is read to decide it. A ref whose name is one
 of this project's that the move cannot carry, such as another project's task
 under the same key, is not left out: the run stops or stays unverified, naming
 it, and `--clean-up` deletes nothing.
+
+A key only the old place's diverged configuration has, such as one a teammate
+added there and created tasks or relics under, is this project's key that this
+checkout cannot yet carry anything under. The run is not verified and exits 8,
+naming each task and relic under it and the key, `--clean-up` deletes nothing,
+the old place's `refs/workbook/config` included, and the message says what to
+run:
+
+```text
+tasks does not hold everything origin holds: CC-01M… (absent); relic CC-R-01M… (lacks 1 change(s)); origin's configuration has project key CC, which this checkout's does not because the two configurations have diverged, so nothing under it was carried; run workbook key add CC here, then workbook move-tasks again
+```
+
+For a key the old place has retired it says
+`run workbook key add CC, then workbook key retire CC here`. Once the key is in
+this checkout's configuration, the next run carries what is under it and
+verifies.
 
 A conflicting edit that reaches the old place late is reported only to whoever
 runs `workbook move-tasks`, in the clone they run it from: setup and sync read
@@ -4102,7 +4121,8 @@ were some, lists each set-aside task with its `title`, its `operations` and,
 when this run parked them, its `parkedRef`. `config` is `unchanged`, `carried`
 when this run took the old place's configuration ledger, or `not-carried` when
 it holds changes this checkout's ledger has diverged from, which a move does not
-combine; make those changes again with `workbook config set`. `copy` and
+combine; make the ones still wanted again here with the command that made
+them, such as `workbook key add` or `workbook status add`. `copy` and
 `recopy` are the two synchronizations, in the shape `workbook sync --json`
 reports, and `verified` says step 7 passed. A run that stops reports only its
 error; the old place keeps every ref it had, and nothing is deleted anywhere.

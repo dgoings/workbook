@@ -75,6 +75,10 @@ a task or relic ref at the old place whose name is not one of this project's
 task or relic IDs, under any key it has had, is another project's or no
 project's, and the move and its `--clean-up` leave it there without a word,
 where it used to leave the move unverified; `reset --remote` still deletes it.
+A key the old place's configuration has, when it has diverged from this
+checkout's, counts as this project's too: a task or relic under it leaves the
+move unverified, exit 8, naming the key and the `workbook key add` that lets
+the next run carry it, and `--clean-up` deletes nothing meanwhile.
 The watcher's status document is now version 2; a command does not hand a change
 to an older watcher. Relics are not on the board, and
 there are no schemas, history or diff commands, retiring or compaction

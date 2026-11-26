@@ -293,7 +293,8 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 	}
 	if result.Config == "not-carried" {
 		fmt.Fprintf(stdout, "Config:\tnot carried\t(%s holds configuration changes this checkout's have diverged from; "+
-			"make them again with workbook config set)\n", result.From.Remote)
+			"make the ones still wanted again here with the command that made them, such as workbook key add or workbook status add)\n",
+			result.From.Remote)
 	}
 	if summary.CleanUpNext != "" {
 		fmt.Fprintf(stdout, "Cleaned up:\tnothing, because edits were set aside\t(once they are dealt with, run %s)\n", summary.CleanUpNext)

@@ -75,6 +75,11 @@ type Repository struct {
 	// every task tip a leased push replaces at its destination
 	// (tasksmove_backup.go).
 	moveBackup *moveBackup
+	// moveSourceKeys is the key set of the configuration a move found at the
+	// place it leaves, when that configuration has diverged from this
+	// checkout's (carryConfig): its keys are this project's too, so a move
+	// and its clean-up decide ownership by both sets (moveKeySet).
+	moveSourceKeys core.KeySet
 	// requireFinishedMove makes synchronization check a remote the tasks
 	// came back to (RequireFinishedMove).
 	requireFinishedMove bool

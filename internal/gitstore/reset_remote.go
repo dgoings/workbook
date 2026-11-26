@@ -323,21 +323,23 @@ func (r *Repository) pushDeletions(ctx context.Context, remote string, refs []Re
 // with no more than it carries them: the clean-up does not delete, bundle,
 // count or name them, and does not report them as remaining when the host
 // refuses a deletion. Plain reset --remote plans with PlanRemoteReset and
-// still deletes them. The key set is the one the move just verified with, so
-// a run that has one in memory starts no Git process for it.
+// still deletes them. The key set is the one the move just verified with
+// (moveKeySet): this checkout's, joined with the old place's configuration's
+// when the two have diverged, so a run that has them in memory starts no Git
+// process for them.
 func (r *Repository) PlanMoveCleanUp(ctx context.Context, config core.ProjectConfig, remote string) (RemoteResetPlan, error) {
 	plan, err := r.PlanRemoteReset(ctx, remote)
 	if err != nil {
 		return RemoteResetPlan{}, err
 	}
-	keys, err := r.keySet(ctx, config)
+	keys, err := r.moveKeySet(ctx, config)
 	if err != nil {
 		return RemoteResetPlan{}, err
 	}
 	refs := plan.Refs[:0:0]
 	plan.Tasks = 0
 	for _, ref := range plan.Refs {
-		if !ownsWorkbookRef(keys, ref.Ref) {
+		if !keys.owns(ref.Ref) {
 			plan.left = append(plan.left, ref.Ref)
 			continue
 		}

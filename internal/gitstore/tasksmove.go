@@ -208,6 +208,7 @@ func (r *Repository) moveTasks(ctx context.Context, config core.ProjectConfig, o
 	}
 	defer r.switchRemote("")
 	defer r.setReturning("")
+	r.moveSourceKeys = core.KeySet{}
 	if err := r.beginMoveBackup(to.Name, options); err != nil {
 		return MoveTasksResult{}, r.forgetAddedRemote(ctx, setup, err)
 	}
@@ -340,10 +341,16 @@ func (r *Repository) moveTasks(ctx context.Context, config core.ProjectConfig, o
 	if err := r.moveStep("verify"); err != nil {
 		return result, err
 	}
-	if err := r.verifyMovedTasks(ctx, config, from, to.Name, &result); err != nil {
+	// Both are compared before either is reported, so one refusal names
+	// every task and relic the new place lacks.
+	shortfall := &moveShortfall{}
+	if err := r.verifyMovedTasks(ctx, config, from, to.Name, &result, shortfall); err != nil {
 		return result, err
 	}
-	if err := r.verifyMovedRelics(ctx, config, from, to.Name, &result); err != nil {
+	if err := r.verifyMovedRelics(ctx, config, from, to.Name, &result, shortfall); err != nil {
+		return result, err
+	}
+	if err := shortfall.refusal(from, to.Name); err != nil {
 		return result, err
 	}
 	result.Verified = true
@@ -1036,6 +1043,17 @@ func (r *Repository) carryConfig(ctx context.Context, config core.ProjectConfig,
 			return false, nil
 		}
 		if _, err := r.Git(ctx, nil, "merge-base", "--is-ancestor", localHead, remoteHead); err != nil {
+			// The old place's configuration is not combined, but its keys are
+			// still this project's: a teammate may have added one there and
+			// created tasks or relics under it, which the verification and
+			// the clean-up must count as this project's (moveKeySet). Only
+			// this case reads the old place's configuration, so a move whose
+			// configuration has not diverged starts no Git process for it.
+			record, err := r.readConfigRecordAt(ctx, config, tracking, remoteHead)
+			if err != nil {
+				return false, wrapKeepingCategory("cannot read the configuration "+from+" holds", err)
+			}
+			r.moveSourceKeys = record.State.KeySet(config.Key)
 			result.Config = "not-carried"
 			return false, nil
 		}
@@ -1347,7 +1365,9 @@ func (r *Repository) markTasksReturned(ctx context.Context, to, from string) (st
 // else is compared by operation ID, because a task carried by replay holds
 // the same operations under other commits. A history at the new place that
 // records an operation twice fails the run too.
-func (r *Repository) verifyMovedTasks(ctx context.Context, config core.ProjectConfig, from, to string, result *MoveTasksResult) error {
+func (r *Repository) verifyMovedTasks(
+	ctx context.Context, config core.ProjectConfig, from, to string, result *MoveTasksResult, shortfall *moveShortfall,
+) error {
 	for _, remote := range []string{from, to} {
 		if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", remote,
 			"+"+taskRefPrefix+"*:"+remoteTaskRefPrefixFor(remote)+"*", relicFetchRefspecFor(remote)); err != nil {
@@ -1363,13 +1383,13 @@ func (r *Repository) verifyMovedTasks(ctx context.Context, config core.ProjectCo
 	if err != nil {
 		return err
 	}
-	keys, err := r.keySet(ctx, config)
+	keys, err := r.moveKeySet(ctx, config)
 	if err != nil {
 		return err
 	}
 	names := make([]string, 0, len(source))
 	for name := range source {
-		if ownsWorkbookRef(keys, taskRefPrefix+name) {
+		if keys.owns(taskRefPrefix + name) {
 			names = append(names, name)
 		}
 	}
@@ -1455,19 +1475,127 @@ func (r *Repository) verifyMovedTasks(ctx context.Context, config core.ProjectCo
 			result.Carried++
 		}
 	}
-	return moveVerificationError(from, to, missing)
+	shortfall.add(missing, keys.unseen(taskRefPrefix, names, destination))
+	return nil
 }
 
 // moveVerificationError is the refusal of a move whose verification found the
 // new place lacking something of this project's that the old place holds.
-// Running move-tasks again carries it.
-func moveVerificationError(from, to string, missing []string) error {
+// Running move-tasks again carries it, unless it is under a key only the old
+// place's diverged configuration has (unseen): nothing carries a task or a
+// relic under a key this checkout does not have, so the person is told to add
+// each such key here first, and retire again one the old place has retired.
+func moveVerificationError(from, to string, missing []string, unseen []unseenKey) error {
 	if len(missing) == 0 {
 		return nil
 	}
+	if len(unseen) == 0 {
+		return core.Errorf(core.CategoryConflict,
+			"%s does not hold everything %s holds: %s; run workbook move-tasks again",
+			to, from, strings.Join(missing, "; "))
+	}
+	names := make([]string, 0, len(unseen))
+	var commands []string
+	for _, key := range unseen {
+		names = append(names, key.key)
+		commands = append(commands, "workbook key add "+key.key)
+		if key.retired {
+			commands = append(commands, "workbook key retire "+key.key)
+		}
+	}
+	noun, verb := "project key", "it"
+	if len(names) > 1 {
+		noun, verb = "project keys", "them"
+	}
 	return core.Errorf(core.CategoryConflict,
-		"%s does not hold everything %s holds: %s; run workbook move-tasks again",
-		to, from, strings.Join(missing, "; "))
+		"%s does not hold everything %s holds: %s; %s's configuration has %s %s, which this checkout's does not "+
+			"because the two configurations have diverged, so nothing under %s was carried; "+
+			"run %s here, then workbook move-tasks again",
+		to, from, strings.Join(missing, "; "), from, noun, strings.Join(names, ", "), verb,
+		strings.Join(commands, ", then "))
+}
+
+// moveShortfall is what the verification found the new place lacking, tasks
+// first and then relics, and the keys only the old place's configuration has
+// among them.
+type moveShortfall struct {
+	missing []string
+	unseen  []unseenKey
+}
+
+func (shortfall *moveShortfall) add(missing []string, unseen []unseenKey) {
+	shortfall.missing = append(shortfall.missing, missing...)
+	for _, key := range unseen {
+		if !slices.Contains(shortfall.unseen, key) {
+			shortfall.unseen = append(shortfall.unseen, key)
+		}
+	}
+}
+
+func (shortfall *moveShortfall) refusal(from, to string) error {
+	sort.Slice(shortfall.unseen, func(i, j int) bool { return shortfall.unseen[i].key < shortfall.unseen[j].key })
+	return moveVerificationError(from, to, shortfall.missing, shortfall.unseen)
+}
+
+// moveKeys is the key set a move decides ownership by: this checkout's, and,
+// when the configuration at the place left has diverged from it, that
+// configuration's too (Repository.moveSourceKeys). A key the old place's own
+// configuration has is this project's key even when this checkout has not
+// seen it, so its tasks and relics are counted, verified and never left
+// behind unmentioned, and the clean-up deletes nothing while they are not
+// carried.
+type moveKeys struct {
+	own, source core.KeySet
+}
+
+// moveKeySet is this checkout's key set joined with the old place's, for the
+// move running now or the clean-up after it. It starts no Git process beyond
+// the memoized read of this checkout's.
+func (r *Repository) moveKeySet(ctx context.Context, config core.ProjectConfig) (moveKeys, error) {
+	own, err := r.keySet(ctx, config)
+	if err != nil {
+		return moveKeys{}, err
+	}
+	return moveKeys{own: own, source: r.moveSourceKeys}, nil
+}
+
+// owns is ownsWorkbookRef against either set.
+func (keys moveKeys) owns(ref string) bool {
+	return ownsWorkbookRef(keys.own, ref) || (!keys.source.IsZero() && ownsWorkbookRef(keys.source, ref))
+}
+
+// unseenKey is a key only the old place's configuration has.
+type unseenKey struct {
+	key     string
+	retired bool
+}
+
+// unseen is every key, in order, that only the old place's configuration has
+// and that names one of names (under prefix) the destination lacks.
+func (keys moveKeys) unseen(prefix string, names []string, destination map[string]string) []unseenKey {
+	if keys.source.IsZero() {
+		return nil
+	}
+	found := map[string]bool{}
+	for _, name := range names {
+		if _, held := destination[name]; held || ownsWorkbookRef(keys.own, prefix+name) {
+			continue
+		}
+		var key string
+		if prefix == relicRefPrefix {
+			key, _, _ = core.ParseRelicID(name)
+		} else {
+			key, _, _ = core.ParseTaskID(name)
+		}
+		state, _ := keys.source.State(key)
+		found[key] = state == core.KeyStateRetired
+	}
+	unseen := make([]unseenKey, 0, len(found))
+	for key, retired := range found {
+		unseen = append(unseen, unseenKey{key: key, retired: retired})
+	}
+	sort.Slice(unseen, func(i, j int) bool { return unseen[i].key < unseen[j].key })
+	return unseen
 }
 
 // ownsWorkbookRef reports whether a move concerns ref: every ref outside the
@@ -1497,7 +1625,9 @@ func ownsWorkbookRef(keys core.KeySet, ref string) bool {
 // A name under the relic namespace that is not one of this project's relic
 // IDs (ownsWorkbookRef) is left out, as verifyMovedTasks leaves such a task
 // ref out, and --clean-up leaves it at the old place.
-func (r *Repository) verifyMovedRelics(ctx context.Context, config core.ProjectConfig, from, to string, result *MoveTasksResult) error {
+func (r *Repository) verifyMovedRelics(
+	ctx context.Context, config core.ProjectConfig, from, to string, result *MoveTasksResult, shortfall *moveShortfall,
+) error {
 	source, err := r.trackingRefHeads(ctx, relicTrackingRefPrefixFor(from))
 	if err != nil {
 		return err
@@ -1506,14 +1636,14 @@ func (r *Repository) verifyMovedRelics(ctx context.Context, config core.ProjectC
 	if err != nil {
 		return err
 	}
-	keys, err := r.keySet(ctx, config)
+	keys, err := r.moveKeySet(ctx, config)
 	if err != nil {
 		return err
 	}
 	names := make([]string, 0, len(source))
 	var missing []string
 	for name := range source {
-		if ownsWorkbookRef(keys, relicRefPrefix+name) {
+		if keys.owns(relicRefPrefix + name) {
 			names = append(names, name)
 		}
 	}
@@ -1546,7 +1676,8 @@ func (r *Repository) verifyMovedRelics(ctx context.Context, config core.ProjectC
 		}
 		result.RelicsCarried++
 	}
-	return moveVerificationError(from, to, missing)
+	shortfall.add(missing, keys.unseen(relicRefPrefix, names, destination))
+	return nil
 }
 
 // parkedRelicTips is every parked relic tip in this checkout, by relic ID.

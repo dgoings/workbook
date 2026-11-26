@@ -761,3 +761,23 @@ func sorted(values []string) []string {
 	sort.Strings(values)
 	return values
 }
+
+// A shortfall under keys only the old place's configuration has names each
+// key once, in order, and the commands that get it here: key add, and key
+// retire again for one the old place retired.
+func TestMoveVerificationErrorNamesKeysOnlyTheOldPlaceHas(t *testing.T) {
+	t.Parallel()
+	err := moveVerificationError("origin", "tasks", []string{"CC-1 (absent)", "relic EE-R-1 (lacks 1 change(s))"},
+		[]unseenKey{{key: "CC"}, {key: "EE", retired: true}})
+	want := "tasks does not hold everything origin holds: CC-1 (absent); relic EE-R-1 (lacks 1 change(s)); " +
+		"origin's configuration has project keys CC, EE, which this checkout's does not because the two configurations have diverged, " +
+		"so nothing under them was carried; run workbook key add CC, then workbook key add EE, then workbook key retire EE here, " +
+		"then workbook move-tasks again"
+	if err == nil || err.Error() != want || core.ExitCode(err) != 8 {
+		t.Fatalf("moveVerificationError = %v (exit %d), want %q", err, core.ExitCode(err), want)
+	}
+	if err := moveVerificationError("origin", "tasks", []string{"AA-1 (absent)"}, nil); err == nil ||
+		err.Error() != "tasks does not hold everything origin holds: AA-1 (absent); run workbook move-tasks again" {
+		t.Fatalf("moveVerificationError with no unseen key = %v", err)
+	}
+}
