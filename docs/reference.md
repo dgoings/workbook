@@ -2490,7 +2490,8 @@ fails the same way. A sync that meets another clone's save reports a
 [relic conflict](#a-relic-conflict), exit `8`. Either way the agent reads the
 part again and, when its intent is clear, applies its change to the current
 text and saves from the current version. Otherwise it shows the user both
-versions and asks. The exit-code table in the guidelines says that a relic
+versions and asks. A relic change that exits `8` this way recorded nothing,
+and is run again once the body is resolved. The exit-code table in the guidelines says that a relic
 save refused for its `--base` needs a fresh read first, where most exit `6`
 refusals succeed when retried, and its exit `8` row names `relicConflict` for
 a relic.

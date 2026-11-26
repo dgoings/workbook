@@ -88,7 +88,9 @@ Two edits to the same body are never merged:
   it in the result envelope's `relicConflict` list, an entry of `type` `body`
   whose `body` carries `base`, `ours` and `theirs`; your text is kept at
   `parkedRef`. Other local changes the sync did not apply are listed in
-  `unapplied`; make them again after saving the body.
+  `unapplied`; make them again after saving the body. When a relic change
+  exits 8 this way, it recorded nothing; run it again after you resolve the
+  body.
 
 On either, read the part again. When your intent is clear, apply your change
 to the current text and save with `--base` set to the current version.
