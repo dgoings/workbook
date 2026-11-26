@@ -306,48 +306,80 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	// origin does with a relic can change a task's outcome. Every relic tip is
 	// checked here: no fetch in this command read them.
 	var relics relicPublication
+	var relicPushErr error
 	if relicListErr == nil {
-		kept, withheld, err := r.withholdRelicsOriginAlreadyJudged(ctx, config, relicCandidates, remoteRelics)
-		if err != nil {
-			return failedSyncPhase(result, "push failed before publishing relics", err)
-		}
-		unchecked := make(map[string]bool, len(kept))
-		for _, candidate := range kept {
-			unchecked[candidate.RelicID] = true
-		}
-		if relics, err = r.publishRelics(ctx, config, kept, unchecked); err != nil {
-			return failedSyncPhase(result, "push failed before publishing relics", err)
-		}
-		for _, outcome := range withheld {
-			relics.Results = append(relics.Results, outcome)
-			relics.Invalid = append(relics.Invalid, outcome.Detail)
-		}
-		sort.Slice(relics.Results, func(i, j int) bool { return relics.Results[i].RelicID < relics.Results[j].RelicID })
-		result.Relics = relics.Results
+		relicPushErr = func() error {
+			kept, withheld, err := r.withholdRelicsOriginAlreadyJudged(ctx, config, relicCandidates, remoteRelics)
+			if err != nil {
+				return err
+			}
+			unchecked := make(map[string]bool, len(kept))
+			for _, candidate := range kept {
+				unchecked[candidate.RelicID] = true
+			}
+			if relics, err = r.publishRelics(ctx, config, kept, unchecked); err != nil {
+				return err
+			}
+			for _, outcome := range withheld {
+				relics.Results = append(relics.Results, outcome)
+				relics.Invalid = append(relics.Invalid, outcome.Detail)
+			}
+			sort.Slice(relics.Results, func(i, j int) bool { return relics.Results[i].RelicID < relics.Results[j].RelicID })
+			result.Relics = relics.Results
+			return nil
+		}()
 	}
 	result.Status = SyncPhaseCompleted
-	if relics.Stranded != nil {
-		return result, relics.Stranded
-	}
-	if invalid > 0 {
-		return result, core.Errorf(core.CategoryCorruptData, "%d local task ref(s) failed validation", invalid)
-	}
-	if relicListErr != nil {
-		return result, relicListErr
-	}
-	if err := relics.invalidError(); err != nil {
+	return relicPushFailed(result, relicPushErr, func() error {
+		if relics.Stranded != nil {
+			return relics.Stranded
+		}
+		if invalid > 0 {
+			return core.Errorf(core.CategoryCorruptData, "%d local task ref(s) failed validation", invalid)
+		}
+		if relicListErr != nil {
+			return relicListErr
+		}
+		if err := relics.invalidError(); err != nil {
+			return err
+		}
+		if len(rejected) > 0 {
+			return r.rejectedByRemote(rejected)
+		}
+		if err := relics.rejectedError(r.remote()); err != nil {
+			return err
+		}
+		if changed > 0 {
+			return core.Errorf(core.CategoryStaleWrite, "%d local task ref(s) changed during push", changed)
+		}
+		return nil
+	}())
+}
+
+// relicPushFailedDetail opens the report of a relic push that could not run.
+const relicPushFailedDetail = "push failed before publishing relics"
+
+// relicPushFailed finishes a push phase whose task refs went out, given the
+// error the relic push failed with, if it did, and the error the rest of the
+// phase ends with. The relic push runs after the task push, so its failure
+// changes nothing the task push did: the phase stays completed, says the
+// relics were not published in its detail, and returns the relic failure
+// after every task error, in the one error, so neither hides the other. The
+// error keeps the category, and so the exit code, of the first error it
+// names.
+func relicPushFailed(result SyncResult, relicErr, err error) (SyncResult, error) {
+	if relicErr == nil {
 		return result, err
 	}
-	if len(rejected) > 0 {
-		return result, r.rejectedByRemote(rejected)
+	result.Detail = relicPushFailedDetail + ": " + relicErr.Error()
+	if err == nil {
+		return result, core.Wrap(core.CategoryOf(relicErr), relicPushFailedDetail, relicErr)
 	}
-	if err := relics.rejectedError(r.remote()); err != nil {
-		return result, err
+	category := core.CategoryOf(err)
+	if category == "" {
+		category = core.CategoryOperational
 	}
-	if changed > 0 {
-		return result, core.Errorf(core.CategoryStaleWrite, "%d local task ref(s) changed during push", changed)
-	}
-	return result, nil
+	return result, core.Wrap(category, err.Error()+"; "+relicPushFailedDetail, relicErr)
 }
 
 // publishedSyncStatus reports an outcome in which origin now holds the tip the
@@ -1240,32 +1272,31 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 	// every relic origin holds that changed; only a relic origin does not hold
 	// is checked here.
 	relicCandidates, unchecked := fetchedRelicPushCandidates(state.Relics)
-	relics, err := r.publishRelics(ctx, config, relicCandidates, unchecked)
-	if err != nil {
-		return failedSyncPhase(result, "push failed before publishing relics", err)
-	}
+	relics, relicPushErr := r.publishRelics(ctx, config, relicCandidates, unchecked)
 	result.Relics = relics.Results
 	result.Status = SyncPhaseCompleted
-	if relics.Stranded != nil {
-		return result, relics.Stranded
-	}
-	if duplicated > 0 {
-		return result, core.Errorf(core.CategoryCorruptData,
-			"%d local task ref(s) record an operation twice and were not published", duplicated)
-	}
-	if err := relics.invalidError(); err != nil {
-		return result, err
-	}
-	if len(rejected) > 0 {
-		return result, r.rejectedByRemote(rejected)
-	}
-	if err := relics.rejectedError(r.remote()); err != nil {
-		return result, err
-	}
-	if changed > 0 {
-		return result, core.Errorf(core.CategoryStaleWrite, "%d local task ref(s) changed during push", changed)
-	}
-	return result, nil
+	return relicPushFailed(result, relicPushErr, func() error {
+		if relics.Stranded != nil {
+			return relics.Stranded
+		}
+		if duplicated > 0 {
+			return core.Errorf(core.CategoryCorruptData,
+				"%d local task ref(s) record an operation twice and were not published", duplicated)
+		}
+		if err := relics.invalidError(); err != nil {
+			return err
+		}
+		if len(rejected) > 0 {
+			return r.rejectedByRemote(rejected)
+		}
+		if err := relics.rejectedError(r.remote()); err != nil {
+			return err
+		}
+		if changed > 0 {
+			return core.Errorf(core.CategoryStaleWrite, "%d local task ref(s) changed during push", changed)
+		}
+		return nil
+	}())
 }
 
 // rejectedByRemote is the error for a push origin refused some task refs of.
