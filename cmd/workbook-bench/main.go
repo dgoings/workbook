@@ -156,7 +156,7 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *options) {
 	flags.IntVar(&options.tombstones, "tombstones", 0, "tombstoned task refs (default depends on --tasks)")
 	flags.IntVar(&options.operations, "operations", 20, "operations per task")
 	flags.IntVar(&options.samples, "samples", 1, "samples per scenario")
-	flags.DurationVar(&options.timeout, "timeout", 60*time.Second, "per-command timeout")
+	flags.DurationVar(&options.timeout, "timeout", 60*time.Second, "per-command timeout; with --relics the default is 5m0s")
 	flags.StringVar(&options.objectFormat, "object-format", "sha1", "Git object format (sha1 or sha256)")
 	flags.StringVar(&options.outputJSON, "output-json", "", "JSON report path")
 	flags.StringVar(&options.outputMarkdown, "output-markdown", "", "Markdown report path")

@@ -148,3 +148,44 @@ func TestRunRelicBenchmarkSmokeEndToEnd(t *testing.T) {
 		t.Fatal("Markdown report has no ## Relics section")
 	}
 }
+
+// Mutation witness: keeping the 60-second default for --relics lets the
+// documented command time out on relic-validate-full, which takes minutes at
+// full scale; letting the relic default override an explicit --timeout would
+// take the operator's choice away.
+func TestRelicsDefaultTimeoutIsFiveMinutes(t *testing.T) {
+	t.Parallel()
+	binary := buildWorkbookBinary(t)
+	timeoutFor := func(extra ...string) time.Duration {
+		t.Helper()
+		outputRoot := t.TempDir()
+		var stdout, stderr bytes.Buffer
+		var got time.Duration
+		args := append([]string{
+			"--workbook", binary,
+			"--output-json", filepath.Join(outputRoot, "report.json"),
+			"--output-markdown", filepath.Join(outputRoot, "report.md"),
+		}, extra...)
+		runWithBenchmark(context.Background(), args, &stdout, &stderr, func(_ context.Context, options options) (perf.Report, error) {
+			got = options.timeout
+			return perf.Report{}, context.Canceled
+		})
+		if got == 0 {
+			t.Fatalf("%v: the benchmark did not run; stderr %q", extra, stderr.String())
+		}
+		return got
+	}
+	for _, test := range []struct {
+		args []string
+		want time.Duration
+	}{
+		{[]string{"--relics"}, 300 * time.Second},
+		{[]string{"--relics", "--timeout", "45s"}, 45 * time.Second},
+		{[]string{"--relics", "--timeout", "60s"}, 60 * time.Second},
+		{[]string{"--scenario", "cli-list"}, 60 * time.Second},
+	} {
+		if got := timeoutFor(test.args...); got != test.want {
+			t.Fatalf("%v: timeout = %s, want %s", test.args, got, test.want)
+		}
+	}
+}

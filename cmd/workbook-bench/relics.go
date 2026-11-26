@@ -14,6 +14,9 @@ import (
 const (
 	relicScaleFull  = "full"
 	relicScaleSmoke = "smoke"
+	// relicDefaultTimeout is --timeout's default with --relics: at full scale
+	// relic-validate-full alone takes minutes, past the 60-second default.
+	relicDefaultTimeout = 300 * time.Second
 )
 
 // relicRefusedFlags are the flags whose meaning the relic scale owns.
@@ -36,6 +39,9 @@ func configureRelicOptions(flags *flag.FlagSet, options *options) (bool, error) 
 	}
 	if _, err := relicFixtureSpec(options.relicScale); err != nil {
 		return true, err
+	}
+	if _, set := explicit["timeout"]; !set {
+		options.timeout = relicDefaultTimeout
 	}
 	return true, resolveReportPaths(options)
 }
