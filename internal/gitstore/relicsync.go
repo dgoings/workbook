@@ -625,6 +625,14 @@ func (r *Repository) withholdRelicsOriginAlreadyJudged(
 	candidates []relicPushCandidate,
 	remote map[string]string,
 ) ([]relicPushCandidate, []SyncRelicResult, error) {
+	listed := false
+	for _, candidate := range candidates {
+		listed = listed || remote[candidate.RelicID] != ""
+	}
+	if !listed {
+		// Nothing origin holds to compare with, so no read of the tracking refs.
+		return candidates, nil, nil
+	}
 	trackingPrefix := r.remoteRelicRefPrefix()
 	records, err := r.relicRefRecords(ctx, trackingPrefix)
 	if err != nil {
