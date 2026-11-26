@@ -1418,10 +1418,14 @@ func TestRelicUpdateChecksPropertyAndFieldTotalsOnlyWhenTheyGrow(t *testing.T) {
 		edits     []RelicEdit
 		fragments []string
 	}{
-		{"add a property", []RelicEdit{setProperty("e", 10)}, []string{"the relic's properties are ", "65536"}},
-		{"set a property to a larger value", []RelicEdit{setProperty("a", 40001)}, []string{"the relic's properties are ", "65536"}},
-		{"add a field", []RelicEdit{setField(partID, "e", 10)}, []string{"the fields of part ", " are ", "16384"}},
-		{"set a field to a larger value", []RelicEdit{setField(partID, "a", 9001)}, []string{"the fields of part ", " are ", "16384"}},
+		{"add a property", []RelicEdit{setProperty("e", 10)},
+			[]string{"the relic's properties are ", "65536", "; they were already ", " bytes, over the limit, and only growth is refused"}},
+		{"set a property to a larger value", []RelicEdit{setProperty("a", 40001)},
+			[]string{"the relic's properties are ", "65536", "only growth is refused"}},
+		{"add a field", []RelicEdit{setField(partID, "e", 10)},
+			[]string{"the fields of part ", " are ", "16384", "; they were already ", " bytes, over the limit, and only growth is refused"}},
+		{"set a field to a larger value", []RelicEdit{setField(partID, "a", 9001)},
+			[]string{"the fields of part ", " are ", "16384", "only growth is refused"}},
 		{"one property value past the limit for one value, with the total shrinking",
 			[]RelicEdit{{Kind: RelicEditClearProperty, Name: "a"}, setProperty("b", MaxRelicPropertyValueBytes+1)},
 			[]string{"65537", "65536"}},

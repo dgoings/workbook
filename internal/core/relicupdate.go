@@ -94,23 +94,24 @@ func relicPartTotalsOf(relic RelicData) relicPartTotals {
 func checkRelicGrowth(before, after relicPartTotals) error {
 	if after.live > MaxRelicLiveParts && after.live > before.live {
 		return Errorf(CategoryValidation,
-			"the relic would have %d live parts; the limit is %d; remove a part first, or use another relic",
-			after.live, MaxRelicLiveParts)
+			"the relic would have %d live parts; the limit is %d%s; remove a part first, or use another relic",
+			after.live, MaxRelicLiveParts, relicAlreadyOver(before.live, MaxRelicLiveParts, "it already had %d"))
 	}
 	if after.all > MaxRelicParts && after.all > before.all {
 		return Errorf(CategoryValidation,
-			"the relic would hold %d parts counting removed ones; the limit is %d; put new parts in another relic",
-			after.all, MaxRelicParts)
+			"the relic would hold %d parts counting removed ones; the limit is %d%s; put new parts in another relic",
+			after.all, MaxRelicParts, relicAlreadyOver(before.all, MaxRelicParts, "it already held %d"))
 	}
 	if after.liveBodyBytes > MaxRelicLiveBodyBytes && after.liveBodyBytes > before.liveBodyBytes {
 		return Errorf(CategoryValidation,
-			"the bodies of the relic's live parts would total %d bytes; the limit is %d bytes; shorten a body or remove a part first, or use another relic",
-			after.liveBodyBytes, MaxRelicLiveBodyBytes)
+			"the bodies of the relic's live parts would total %d bytes; the limit is %d bytes%s; shorten a body or remove a part first, or use another relic",
+			after.liveBodyBytes, MaxRelicLiveBodyBytes,
+			relicAlreadyOver(int(before.liveBodyBytes), MaxRelicLiveBodyBytes, "they already totaled %d bytes"))
 	}
 	if after.links > MaxRelicLinks && after.links > before.links {
 		return Errorf(CategoryValidation,
-			"the relic would have %d links; the limit is %d; remove a link first, or use another relic",
-			after.links, MaxRelicLinks)
+			"the relic would have %d links; the limit is %d%s; remove a link first, or use another relic",
+			after.links, MaxRelicLinks, relicAlreadyOver(before.links, MaxRelicLinks, "it already had %d"))
 	}
 	return nil
 }

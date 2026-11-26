@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"path/filepath"
 	"regexp"
@@ -64,9 +65,23 @@ func relicSizeError(what string, size, limit int) error {
 }
 
 // relicTotalSizeError is relicSizeError for several things measured together,
-// as in "the relic's properties are 70000 bytes".
-func relicTotalSizeError(what string, size, limit int) error {
-	return Errorf(CategoryValidation, "%s are %d bytes; the limit is %d bytes", what, size, limit)
+// as in "the relic's properties are 70000 bytes". was is their size before
+// the change; a total is refused only when it grows past its limit, so when
+// they were already over it the message says so.
+func relicTotalSizeError(what string, size, was, limit int) error {
+	return Errorf(CategoryValidation, "%s are %d bytes; the limit is %d bytes%s",
+		what, size, limit, relicAlreadyOver(was, limit, "they were already %d bytes"))
+}
+
+// relicAlreadyOver is the clause a refused total or count carries when the
+// relic was already over the limit before the change, which two clones can
+// leave it: the relic still reads, and only growth is refused. already holds
+// one %d for the size before. It is empty when the relic was within the limit.
+func relicAlreadyOver(was, limit int, already string) string {
+	if was <= limit {
+		return ""
+	}
+	return "; " + fmt.Sprintf(already, was) + ", over the limit, and only growth is refused"
 }
 
 // ValidateRelicTitle trims a title and checks it, returning the trimmed form.

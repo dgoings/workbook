@@ -275,7 +275,7 @@ func checkRelicPropertiesGrowth(before, after map[string]json.RawMessage) error 
 	if len(encoded) <= was {
 		return nil
 	}
-	return relicTotalSizeError("the relic's properties", len(encoded), MaxRelicPropertiesBytes)
+	return relicTotalSizeError("the relic's properties", len(encoded), was, MaxRelicPropertiesBytes)
 }
 
 // relicFieldsSize is the size of the fields.json that would store fields,
@@ -306,7 +306,7 @@ func checkRelicFieldsGrowth(what string, before, after map[string]json.RawMessag
 	if size <= was {
 		return nil
 	}
-	return relicTotalSizeError("the fields of "+what, size, MaxRelicPartFieldsBytes)
+	return relicTotalSizeError("the fields of "+what, size, was, MaxRelicPartFieldsBytes)
 }
 
 // checkRelicBodyInput checks a body to save: its format label and its size.

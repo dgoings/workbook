@@ -1452,6 +1452,12 @@ refuse only growth. A change is refused for one only when it leaves the total
 over its limit and larger than it was. A relic that is already over one can
 still be read and edited, and brought back under: clearing a property,
 setting a smaller value, removing a part or removing a link is always saved.
+A change refused on such a relic says that it was already over and that only
+growth is refused:
+
+```text
+workbook: the relic's properties are 80026 bytes; the limit is 65536 bytes; they were already 80009 bytes, over the limit, and only growth is refused
+```
 
 `relic create --from-file` also reads at most 67,108,864 bytes (64 MiB) of
 document. That is a limit on one command's input, not on what is stored. The

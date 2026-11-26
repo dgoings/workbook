@@ -389,7 +389,7 @@ func TestRelicLinkGrowthIsCheckedOnlyOnAdd(t *testing.T) {
 	oneMore := mustApplyRelic(t, atLimit, add)
 	err := checkRelicGrowth(relicTotalsOf(atLimit), relicTotalsOf(oneMore))
 	if CategoryOf(err) != CategoryValidation ||
-		!strings.Contains(err.Error(), "the relic would have 2001 links; the limit is 2000; remove a link first, or use another relic") {
+		err.Error() != "the relic would have 2001 links; the limit is 2000; remove a link first, or use another relic" {
 		t.Errorf("one link past the limit: %v", err)
 	}
 
@@ -408,7 +408,8 @@ func TestRelicLinkGrowthIsCheckedOnlyOnAdd(t *testing.T) {
 	}
 	added := mustApplyRelic(t, over, add)
 	if err := checkRelicGrowth(relicTotalsOf(over), relicTotalsOf(added)); CategoryOf(err) != CategoryValidation ||
-		!strings.Contains(err.Error(), "2006 links") {
+		err.Error() != "the relic would have 2006 links; the limit is 2000; it already had 2005, over the limit, "+
+			"and only growth is refused; remove a link first, or use another relic" {
 		t.Errorf("an add at 2,005 links: %v", err)
 	}
 	// A change that adds no link to a relic over the limit is not refused.
