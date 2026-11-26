@@ -23,9 +23,13 @@ var relicScenarioNames = []string{
 	"relic-edit-part-large",
 	"relic-show-large",
 	"relic-move-part-large",
+	"relic-create-16mib",
+	"relic-show-16mib",
+	"relic-edit-part-16mib",
 	"relic-show-part-2kib",
 	"relic-body-2kib",
 	"relic-body-1mib",
+	"relic-edit-body-1mib",
 	"relic-list",
 	"relic-list-type",
 	"relic-linked-to-hot",
@@ -42,10 +46,10 @@ var relicScenarioNames = []string{
 	"relic-validate-full",
 }
 
-// RelicScenarioNames returns the relic family's scenarios in the order they
-// run. The names are the story's, at every scale: at the smoke scale
-// relic-body-1mib reads the smoke body and relic-push-100 pushes the smoke
-// count.
+// RelicScenarioNames returns the relic family's scenarios in report order.
+// The names are the story's, at every scale: at the smoke scale
+// relic-body-1mib reads the smoke body, relic-create-16mib writes the smoke
+// FullBodiesBytes and relic-push-100 pushes the smoke count.
 func RelicScenarioNames() []string {
 	return append([]string(nil), relicScenarioNames...)
 }
@@ -264,6 +268,73 @@ func verifyRelicShowParts(parts int, bodyBytes int64) relicVerifier {
 		}
 		return nil
 	}
+}
+
+// verifyRelicLiveBodies checks a relic create or show that reports parts
+// bodies of totalBytes together. A create must also report a change.
+func verifyRelicLiveBodies(parts int, totalBytes int64) relicVerifier {
+	return func(stdout []byte) error {
+		var result struct {
+			Changed *bool                    `json:"changed"`
+			Parts   []core.RelicDocumentPart `json:"parts"`
+		}
+		if err := resultData(stdout, &result); err != nil {
+			return err
+		}
+		if result.Changed != nil && !*result.Changed {
+			return fmt.Errorf("the relic did not change")
+		}
+		if len(result.Parts) != parts {
+			return fmt.Errorf("reports %d parts, want %d", len(result.Parts), parts)
+		}
+		var total int64
+		for _, part := range result.Parts {
+			if part.Body != nil {
+				total += part.Body.Bytes
+			}
+		}
+		if total != totalBytes {
+			return fmt.Errorf("live bodies are %d bytes, want %d", total, totalBytes)
+		}
+		return nil
+	}
+}
+
+// relicPartBase reads one part's body version, untimed, as the edit after it
+// names with --base.
+func (r *relicRun) relicPartBase(what, directory, address string) (string, error) {
+	shown, err := r.untimed(what, directory, []string{"relic", "show", address, "--json"}, verifyRelicShowParts(1, -1))
+	if err != nil {
+		return "", err
+	}
+	var current core.RelicDocument
+	if err := resultData(shown, &current); err != nil {
+		return "", err
+	}
+	if current.Parts[0].Body == nil {
+		return "", fmt.Errorf("%s: part %s has no body", what, address)
+	}
+	return current.Parts[0].Body.Version, nil
+}
+
+// measureBodySave measures one sample of saving a new body of size bytes over
+// a part, with an untimed read for its base first.
+func (b *relicBench) measureBodySave(name, directory, relicID, partID string, size int, seed int64) error {
+	base, err := b.run.relicPartBase(name+" base", directory, relicID+"#"+partID)
+	if err != nil {
+		return err
+	}
+	body := filepath.Join(b.root, fmt.Sprintf("%s-%d.md", name, seed))
+	if err := os.WriteFile(body, seededWords(rand.New(rand.NewSource(seed)), size), 0o644); err != nil {
+		return err
+	}
+	_, err = b.run.measure(name, directory, []string{
+		"relic", "update", relicID, "--part", partID, "--body-file", body, "--base", base, "--no-sync", "--json",
+	}, verifyRelicChanged(-1))
+	if removeErr := os.Remove(body); err == nil {
+		err = removeErr
+	}
+	return err
 }
 
 func verifyTaskRelicLinks(want int) relicVerifier {
@@ -575,6 +646,65 @@ func (b *relicBench) measureCreates() error {
 		if _, err := run.measure("relic-create-large", b.creates,
 			[]string{"relic", "create", "--from-file", documentPath, "--no-sync", "--json"},
 			verifyRelicChanged(relics.LargeParts)); err != nil {
+			return err
+		}
+	}
+
+	// A relic at the live-body limit: create one per sample, then show and
+	// edit the first. The edit replaces the small last part with a body of
+	// the same size, so the total stays at the limit.
+	full, err := FullBodiesRelicDocument(relics)
+	if err != nil {
+		return err
+	}
+	fullPath := filepath.Join(b.root, "bodies-16mib.json")
+	if err := os.WriteFile(fullPath, full, 0o644); err != nil {
+		return err
+	}
+	fullParts, fullBytes := FullBodiesRelicParts(relics), int64(relics.FullBodiesBytes)
+	var fullRelic, fullSmallPart string
+	for range spec.Samples {
+		created, err := run.measure("relic-create-16mib", b.creates,
+			[]string{"relic", "create", "--from-file", fullPath, "--no-sync", "--json"},
+			verifyRelicLiveBodies(fullParts, fullBytes))
+		if err != nil {
+			return err
+		}
+		if fullRelic != "" || !sampleSucceeded(created.Sample) {
+			continue
+		}
+		var result core.RelicMutationResult
+		if err := resultData(created.Stdout, &result); err != nil {
+			return err
+		}
+		fullRelic, fullSmallPart = result.Relic.ID, result.Parts[len(result.Parts)-1].ID
+	}
+	if err := os.Remove(fullPath); err != nil {
+		return err
+	}
+	if fullRelic == "" {
+		// Every create failed; the report fails the run on those samples.
+		return os.RemoveAll(b.creates)
+	}
+	for range spec.Samples {
+		if err := run.warm("relic-show-16mib", b.creates, []string{"relic", "show", fullRelic, "--json"},
+			verifyRelicLiveBodies(fullParts, fullBytes)); err != nil {
+			return err
+		}
+	}
+	for sample := range spec.Samples {
+		if err := b.measureBodySave("relic-edit-part-16mib", b.creates, fullRelic, fullSmallPart,
+			relics.SmallBodyBytes, relics.Seed+int64(sample)+3000); err != nil {
+			return err
+		}
+	}
+
+	// A new version of the body relic's 1 MiB body. It runs here, not in the
+	// main repository, so the megabyte each sample saves is in no storage
+	// figure; the copy's body relic is the main repository's.
+	for sample := range spec.Samples {
+		if err := b.measureBodySave("relic-edit-body-1mib", b.creates, b.fixture.BodyRelic, b.fixture.LargeBodyPart,
+			relics.LargeBodyBytes, relics.Seed+int64(sample)+4000); err != nil {
 			return err
 		}
 	}
@@ -910,6 +1040,8 @@ func writeRelicMarkdown(w io.Writer, report *RelicBenchmarkReport) error {
 		fixture.Relics, fixture.PartsPerRelic, fixture.BodyBytes, fixture.LinksPerRelic,
 		fixture.LargeParts, fixture.LargePartBodyBytes, fixture.LargeBodyBytes, fixture.SmallBodyBytes,
 		fixture.Moves, fixture.MovesPerUpdate, fixture.ChangedRelics, fixture.Seed)
+	fmt.Fprintf(&out, "relic-create-16mib writes a relic of %d parts whose live bodies total %d bytes; relic-edit-part-16mib replaces its last part, of %d bytes, with as many. relic-edit-body-1mib saves a new %d-byte body over the body relic's large part.\n",
+		FullBodiesRelicParts(fixture), fixture.FullBodiesBytes, fixture.SmallBodyBytes, fixture.LargeBodyBytes)
 	fmt.Fprintln(&out, "Moves are written as several moves per commit, so storage per move is a lower bound.")
 
 	fmt.Fprintln(&out, "\n| Fixture step | Untimed (ms) |")

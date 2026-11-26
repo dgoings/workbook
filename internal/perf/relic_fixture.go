@@ -48,6 +48,11 @@ type RelicFixtureSpec struct {
 	MovesPerUpdate     int   `json:"movesPerUpdate"`
 	ChangedRelics      int   `json:"changedRelics"`
 	Seed               int64 `json:"seed"`
+	// FullBodiesBytes is the live body total of the relic relic-create-16mib
+	// writes: parts of LargeBodyBytes each, then one that makes up the rest,
+	// then one of SmallBodyBytes that relic-edit-part-16mib replaces. At the
+	// full scale it is the live-body limit, core.MaxRelicLiveBodyBytes.
+	FullBodiesBytes int `json:"fullBodiesBytes"`
 }
 
 // FullRelicFixtureSpec is the story's scale.
@@ -57,6 +62,7 @@ func FullRelicFixtureSpec() RelicFixtureSpec {
 		LargeParts: 2000, LargePartBodyBytes: 524,
 		LargeBodyBytes: 1024 * 1024, SmallBodyBytes: 2 * 1024,
 		Moves: 10000, MovesPerUpdate: 100, ChangedRelics: 100, Seed: 1,
+		FullBodiesBytes: core.MaxRelicLiveBodyBytes,
 	}
 }
 
@@ -67,6 +73,7 @@ func SmokeRelicFixtureSpec() RelicFixtureSpec {
 		LargeParts: 50, LargePartBodyBytes: 524,
 		LargeBodyBytes: 64 * 1024, SmallBodyBytes: 2 * 1024,
 		Moves: 200, MovesPerUpdate: 50, ChangedRelics: 5, Seed: 1,
+		FullBodiesBytes: 256 * 1024,
 	}
 }
 
@@ -97,6 +104,10 @@ func validateRelicFixtureSpec(spec RelicFixtureSpec, tasks Fixture) error {
 	}
 	if spec.Moves < 0 || spec.ChangedRelics < 0 {
 		return fmt.Errorf("relic fixture moves and changed relics must not be negative")
+	}
+	if spec.FullBodiesBytes <= spec.SmallBodyBytes {
+		return fmt.Errorf("relic fixture full bodies bytes (%d) must exceed small body bytes (%d): its last part is the small one",
+			spec.FullBodiesBytes, spec.SmallBodyBytes)
 	}
 	if spec.LinksPerRelic > spec.PartsPerRelic {
 		return fmt.Errorf("relic fixture links per relic (%d) must not exceed parts per relic (%d): link k is from part k",
@@ -381,6 +392,48 @@ func LargeRelicDocument(spec RelicFixtureSpec) ([]byte, error) {
 	document, err := builder.largeRelicDocument()
 	if err != nil {
 		return nil, err
+	}
+	return encodeRelicDocument(document)
+}
+
+// fullBodiesSizes are the body sizes of the relic relic-create-16mib writes:
+// LargeBodyBytes each until FullBodiesBytes less SmallBodyBytes is reached,
+// the last of those holding what is left, then SmallBodyBytes.
+func fullBodiesSizes(spec RelicFixtureSpec) []int {
+	var sizes []int
+	for left := spec.FullBodiesBytes - spec.SmallBodyBytes; left > 0; left -= spec.LargeBodyBytes {
+		sizes = append(sizes, min(left, spec.LargeBodyBytes))
+	}
+	return append(sizes, spec.SmallBodyBytes)
+}
+
+// FullBodiesRelicParts is how many parts the FullBodiesRelicDocument relic has.
+func FullBodiesRelicParts(spec RelicFixtureSpec) int { return len(fullBodiesSizes(spec)) }
+
+// FullBodiesRelicDocument is the workbook.relic document relic-create-16mib
+// reads: a relic whose live bodies total FullBodiesBytes, as one JSON line.
+// Its last part is the small one relic-edit-part-16mib replaces.
+func FullBodiesRelicDocument(spec RelicFixtureSpec) ([]byte, error) {
+	builder := &relicFixtureBuilder{words: rand.New(rand.NewSource(spec.Seed + 16))}
+	sizes := fullBodiesSizes(spec)
+	document := core.RelicDocument{
+		Format:     core.RelicDocumentFormat,
+		Version:    relicDocumentVersion,
+		Title:      "Benchmark relic at the live-body limit",
+		Type:       "note",
+		Schema:     json.RawMessage("null"),
+		Properties: map[string]json.RawMessage{},
+		Parts:      make([]core.RelicDocumentPart, len(sizes)),
+		Links:      []core.RelicDocumentLink{},
+	}
+	for index, size := range sizes {
+		part := builder.part(index, size)
+		text := string(part.Body.Content)
+		document.Parts[index] = core.RelicDocumentPart{
+			Type:   part.Type,
+			Fields: part.Fields,
+			Body:   &core.RelicDocumentBody{Format: part.Body.Format, Bytes: int64(len(text)), Text: &text},
+		}
 	}
 	return encodeRelicDocument(document)
 }

@@ -3,6 +3,7 @@ package perf
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,8 +29,15 @@ func TestRelicScenariosAreNotInTheDefaultRegistry(t *testing.T) {
 	if !reflect.DeepEqual(resolved, ScenarioNames()) {
 		t.Fatalf("ResolveScenarios(nil) = %v, want the registry", resolved)
 	}
-	if len(RelicScenarioNames()) != 21 {
-		t.Fatalf("relic scenarios = %d, want the plan's 21", len(RelicScenarioNames()))
+	// The plan's 21, and the four that measure the 1 MiB body save and the
+	// relic at the 16 MiB live-body limit.
+	if len(RelicScenarioNames()) != 25 {
+		t.Fatalf("relic scenarios = %d, want 25", len(RelicScenarioNames()))
+	}
+	for _, name := range []string{"relic-edit-body-1mib", "relic-create-16mib", "relic-show-16mib", "relic-edit-part-16mib"} {
+		if !slices.Contains(RelicScenarioNames(), name) {
+			t.Fatalf("relic scenarios %v lack %s", RelicScenarioNames(), name)
+		}
 	}
 }
 
@@ -69,12 +77,24 @@ func TestRelicScenariosCheckTheirOutput(t *testing.T) {
 		{"relic-list", listOf(21), verifyRelicListCount(22)},
 		{"relic-rebuild-fresh-clone", `{"format":"workbook.result","version":1,"command":"rebuild","data":{"taskCount":10,"relicCount":21}}`, verifyRebuildRelicCount(22)},
 		{"relic-body-2kib", strings.Repeat("x", 2047), verifyBodyLength(2048)},
+		{"relic-create-16mib", `{"format":"workbook.result","version":1,"command":"relic create","data":{"changed":true,"parts":[{"body":{"bytes":10}},{"body":{"bytes":5}}]}}`, verifyRelicLiveBodies(2, 16)},
+		{"relic-show-16mib", `{"format":"workbook.result","version":1,"command":"relic show","data":{"parts":[{"body":{"bytes":10}},{"body":{"bytes":6}},{"body":{"bytes":1}}]}}`, verifyRelicLiveBodies(2, 16)},
 	}
 	for _, test := range tests {
 		run := fakeRelicRun(test.stdout)
 		_, err := run.measure(test.name, t.TempDir(), []string{"relic", "list", "--json"}, test.verify)
 		if err == nil || !strings.Contains(err.Error(), test.name) {
 			t.Fatalf("%s: error = %v, want a failure naming the scenario", test.name, err)
+		}
+	}
+
+	// The live-body total is the right answer for a create and a show.
+	for _, stdout := range []string{
+		`{"format":"workbook.result","version":1,"command":"relic create","data":{"changed":true,"parts":[{"body":{"bytes":10}},{"body":{"bytes":6}}]}}`,
+		`{"format":"workbook.result","version":1,"command":"relic show","data":{"parts":[{"body":{"bytes":10}},{"body":{"bytes":6}}]}}`,
+	} {
+		if err := verifyRelicLiveBodies(2, 16)([]byte(stdout)); err != nil {
+			t.Fatalf("%s: %v", stdout, err)
 		}
 	}
 

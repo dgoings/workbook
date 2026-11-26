@@ -284,6 +284,56 @@ func TestLargeRelicDocumentIsTheLargeRelic(t *testing.T) {
 	}
 }
 
+// Mutation witness: a document whose bodies fall short of the spec's total, a
+// part over the one-body limit, or a last part that is not the small one the
+// edit replaces would make relic-create-16mib, relic-show-16mib and
+// relic-edit-part-16mib measure some other relic than one at the live-body
+// limit.
+func TestFullBodiesRelicDocumentHoldsTheLiveBodyLimit(t *testing.T) {
+	t.Parallel()
+	for _, spec := range []RelicFixtureSpec{SmokeRelicFixtureSpec(), FullRelicFixtureSpec()} {
+		encoded, err := FullBodiesRelicDocument(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		document, err := core.DecodeRelicDocument(bytes.TrimSuffix(encoded, []byte("\n")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		input, err := core.RelicCreateInputFromDocument(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		total := 0
+		for index, part := range input.Parts {
+			if part.Body == nil || len(part.Body.Content) > spec.LargeBodyBytes || len(part.Body.Content) > core.MaxRelicBodyBytes {
+				t.Fatalf("part %d body is missing or over %d bytes", index, spec.LargeBodyBytes)
+			}
+			total += len(part.Body.Content)
+		}
+		if total != spec.FullBodiesBytes {
+			t.Fatalf("live bodies = %d bytes, want %d", total, spec.FullBodiesBytes)
+		}
+		if last := input.Parts[len(input.Parts)-1]; len(last.Body.Content) != spec.SmallBodyBytes {
+			t.Fatalf("last part body = %d bytes, want the small %d", len(last.Body.Content), spec.SmallBodyBytes)
+		}
+		if got := FullBodiesRelicParts(spec); got != len(input.Parts) {
+			t.Fatalf("FullBodiesRelicParts = %d, document has %d", got, len(input.Parts))
+		}
+		again, err := FullBodiesRelicDocument(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(encoded, again) {
+			t.Fatal("FullBodiesRelicDocument is not deterministic")
+		}
+	}
+	if full := FullRelicFixtureSpec(); full.FullBodiesBytes != core.MaxRelicLiveBodyBytes || full.LargeBodyBytes != core.MaxRelicBodyBytes {
+		t.Fatalf("full spec bodies = %d live, %d per body; want the limits %d and %d",
+			full.FullBodiesBytes, full.LargeBodyBytes, core.MaxRelicLiveBodyBytes, core.MaxRelicBodyBytes)
+	}
+}
+
 // Mutation witness: a full spec that drifts from the story's table makes the
 // benchmark measure a different population than the one the budgets name.
 func TestRelicFixtureSpecsMatchTheStoryTable(t *testing.T) {
@@ -293,6 +343,7 @@ func TestRelicFixtureSpecsMatchTheStoryTable(t *testing.T) {
 		Relics: 1000, PartsPerRelic: 20, BodyBytes: 1024, LinksPerRelic: 10,
 		LargeParts: 2000, LargePartBodyBytes: 524, LargeBodyBytes: 1 << 20, SmallBodyBytes: 2048,
 		Moves: 10000, MovesPerUpdate: 100, ChangedRelics: 100, Seed: full.Seed,
+		FullBodiesBytes: core.MaxRelicLiveBodyBytes,
 	}
 	if full != wantFull {
 		t.Fatalf("full spec = %+v, want %+v", full, wantFull)
@@ -302,6 +353,7 @@ func TestRelicFixtureSpecsMatchTheStoryTable(t *testing.T) {
 		Relics: 20, PartsPerRelic: 4, BodyBytes: 1024, LinksPerRelic: 2,
 		LargeParts: 50, LargePartBodyBytes: 524, LargeBodyBytes: 64 << 10, SmallBodyBytes: 2048,
 		Moves: 200, MovesPerUpdate: 50, ChangedRelics: 5, Seed: smoke.Seed,
+		FullBodiesBytes: 256 << 10,
 	}
 	if smoke != wantSmoke {
 		t.Fatalf("smoke spec = %+v, want %+v", smoke, wantSmoke)
