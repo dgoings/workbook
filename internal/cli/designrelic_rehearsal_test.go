@@ -28,6 +28,7 @@ func TestDesignRelicStepsRehearsal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the rehearsal document does not decode: %v", err)
 	}
+	statusSections := requireDecidedShape(t, document)
 
 	// An origin and clone A, set up as a checkout is, with three tasks
 	// standing for the stories, published.
@@ -79,12 +80,19 @@ func TestDesignRelicStepsRehearsal(t *testing.T) {
 		t.Fatalf("H2 relic show has %d parts, want %d", len(shown.Parts), len(document.Parts))
 	}
 	partByTitle := map[string]string{}
+	shownStatuses := 0
 	for _, part := range shown.Parts {
 		var title string
 		if err := json.Unmarshal(part.Fields["title"], &title); err != nil {
 			t.Fatalf("H2 part %s title: %v", part.ID, err)
 		}
 		partByTitle[title] = part.ID
+		if _, found := part.Fields["status"]; found && part.Type == "section" {
+			shownStatuses++
+		}
+	}
+	if shownStatuses != statusSections {
+		t.Fatalf("H2 shows %d sections with a status, want the document's %d", shownStatuses, statusSections)
 	}
 	// The stories link from section parts; the last two share one, as stories
 	// 13 and 14 do.
@@ -201,6 +209,69 @@ func TestDesignRelicStepsRehearsal(t *testing.T) {
 			t.Errorf("H7 description of %s in the fresh clone = %q, want it to end with %q", story, task.Description, newNotes[story])
 		}
 	}
+}
+
+// requireDecidedShape checks that the sample has the shape the design relic
+// was decided to take: a heading tagged Decided or Proposed is a section part
+// whose fields carry status decided or proposed, and it makes no decision part
+// of its own. A decision part stands for one tagged list item, so it never
+// shares a section's title or repeats a section's body. It returns how many
+// sections carry a status, at least one.
+func requireDecidedShape(t *testing.T, document core.RelicDocument) int {
+	t.Helper()
+	fieldString := func(part core.RelicDocumentPart, name string) (string, bool) {
+		raw, found := part.Fields[name]
+		if !found {
+			return "", false
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			t.Fatalf("part %s field %s = %s, want a string", part.Type, name, raw)
+		}
+		return value, true
+	}
+	bodyText := func(part core.RelicDocumentPart) string {
+		if part.Body == nil || part.Body.Text == nil {
+			return ""
+		}
+		return *part.Body.Text
+	}
+	sections := map[string]core.RelicDocumentPart{}
+	statuses := 0
+	for _, part := range document.Parts {
+		if part.Type != "section" {
+			continue
+		}
+		title, _ := fieldString(part, "title")
+		sections[title] = part
+		if status, found := fieldString(part, "status"); found {
+			if status != "decided" && status != "proposed" {
+				t.Fatalf("section %q status = %q, want decided or proposed", title, status)
+			}
+			statuses++
+		}
+	}
+	if statuses == 0 {
+		t.Fatal("no section part carries a status field; the decided shape tags sections, not decision parts")
+	}
+	for _, part := range document.Parts {
+		if part.Type != "decision" {
+			continue
+		}
+		title, _ := fieldString(part, "title")
+		if _, clash := sections[title]; clash {
+			t.Fatalf("decision %q repeats a section's title", title)
+		}
+		name, _ := fieldString(part, "section")
+		section, found := sections[name]
+		if !found {
+			t.Fatalf("decision %q names section %q, which the document lacks", title, name)
+		}
+		if text := bodyText(part); text == "" || text == bodyText(section) {
+			t.Fatalf("decision %q body repeats its section %q or is empty", title, name)
+		}
+	}
+	return statuses
 }
 
 // rehearsalResult is a command's JSON result with its sync report.

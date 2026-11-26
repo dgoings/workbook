@@ -12,32 +12,27 @@
     {
       "type": "section",
       "fields": {"title": "Goals"},
-      "body": {"format": "md", "text": "# Goals\n\nKeep specs, plans and decisions in the repository as records\nthat agents can find from the task they are working on.\n"}
+      "body": {"format": "md", "text": "Keep specs, plans and decisions in the repository as records\nthat agents can find from the task they are working on.\n"}
     },
     {
       "type": "section",
       "fields": {"title": "IDs and addresses"},
-      "body": {"format": "md", "text": "# IDs and addresses\n\nA relic ID is `<KEY>-R-<ULID>`. A part is `<relic>#<part>`.\n"}
+      "body": {"format": "md", "text": "A relic ID is `<KEY>-R-<ULID>`. A part is `<relic>#<part>`.\n\n- **Decided:** Relics live under their own refs. Each relic is one ref\n  under `refs/workbook/relics/`.\n- Part IDs never change once given.\n"}
     },
     {
       "type": "section",
-      "fields": {"title": "When two edits meet"},
-      "body": {"format": "md", "text": "# When two edits meet\n\nTwo saves of one body are never merged. The second is refused\nor reported as a conflict, and nothing is lost.\n"}
+      "fields": {"title": "When two edits meet", "status": "decided"},
+      "body": {"format": "md", "text": "Two saves of one body are never merged. The second is refused\nor reported as a conflict, and nothing is lost. A save names the\nversion it started from with `--base`.\n"}
     },
     {
       "type": "section",
-      "fields": {"title": "Command line"},
-      "body": {"format": "md", "text": "# Command line\n\n`workbook relic create`, `list`, `show`, `update`, `delete`,\n`restore` and `export`.\n"}
+      "fields": {"title": "Command line", "status": "proposed"},
+      "body": {"format": "md", "text": "`workbook relic create`, `list`, `show`, `update`, `delete`,\n`restore` and `export`.\n"}
     },
     {
       "type": "decision",
       "fields": {"title": "Relics live under their own refs", "status": "decided", "section": "IDs and addresses"},
-      "body": {"format": "md", "text": "Each relic is one ref under `refs/workbook/relics/`.\n"}
-    },
-    {
-      "type": "decision",
-      "fields": {"title": "Bodies carry versions", "status": "proposed", "section": "When two edits meet"},
-      "body": {"format": "md", "text": "A save names the version it started from with `--base`.\n"}
+      "body": {"format": "md", "text": "Relics live under their own refs. Each relic is one ref under\n`refs/workbook/relics/`.\n"}
     },
     {
       "type": "open-question",
