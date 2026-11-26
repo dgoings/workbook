@@ -419,11 +419,12 @@ commit (none for the first) and its stored state and links:
    adds, it is a canonical fields document that agrees with any field
    operations P carries for it.
 
-Rules 1 to 6 are judged from object IDs and sizes, without opening anything
-under `parts/`, except the limit on one field value, which takes reading the
-`fields.json` that holds it. So is one case of rule 7: a part that P names
-without setting or clearing a field keeps the `fields.json` object it had. The
-rest of rule 7 reads the `fields.json` of the parts P names.
+Rules 1 to 6 are judged from object IDs and sizes: the `parts` tree and each
+part's subtree are read, but no `fields.json` or `body` blob is opened. The
+exception is the limit on one field value, which takes reading the
+`fields.json` that holds it. One case of rule 7 is also judged from object IDs:
+a part that P names without setting or clearing a field keeps the `fields.json`
+object it had. The rest of rule 7 reads the `fields.json` of the parts P names.
 
 No rule limits how large one relic's properties are together, or one part's
 fields, or how many parts a relic has. Those are totals. The commands refuse a
