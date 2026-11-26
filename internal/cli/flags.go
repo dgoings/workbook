@@ -803,9 +803,11 @@ var commandSchemas = map[string]commandMetadata{
 			"checkpoint, after a backup bundle of the copy is written, as compact writes one;\n" +
 			"--no-backup and --backup <path> work as they do for compact.\n\n" +
 			"With --clean-up, once the move is complete and verified, it does to the place\n" +
-			"the tasks left what `workbook reset --remote` does there: it writes a bundle of\n" +
-			"that place's Workbook refs, unless --no-backup, and deletes every one of them\n" +
-			"but the moved marker. A move that stops early, or sets an edit aside, cleans\n" +
+			"the tasks left what `workbook reset --remote` does there, for this project's\n" +
+			"refs only: it writes a bundle of them, unless --no-backup, and deletes them,\n" +
+			"keeping the moved marker. A task or relic ref there that is not this project's,\n" +
+			"another project's or a name that fits no project, is left there, unbundled.\n" +
+			"A move that stops early, or sets an edit aside, cleans\n" +
 			"nothing; run `workbook move-tasks --clean-up` again afterwards, which also\n" +
 			"finishes a clean-up a host stopped by refusing deletions.\n\n" +
 			"It refuses a new place that is the same repository as the old one, however its\n" +
@@ -818,7 +820,7 @@ var commandSchemas = map[string]commandMetadata{
 		Options: []optionMetadata{
 			{Name: "from", Kind: stringFlag, Value: "<remote>", Description: "the Git remote the tasks are in now (default: the place the moved markers lead to)"},
 			{Name: "allow-branches", Kind: boolFlag, Description: "accept a tasks remote that holds branches; never a mirror of the code repository"},
-			{Name: "clean-up", Kind: boolFlag, Description: "after a verified move, delete the Workbook refs at the place left, all but its moved marker"},
+			{Name: "clean-up", Kind: boolFlag, Description: "after a verified move, delete this project's Workbook refs at the place left, all but its moved marker"},
 			{Name: "no-backup", Kind: boolFlag, Description: "write no backup bundle of the copies a move back replaces or a clean-up deletes"},
 			{Name: "backup", Kind: stringFlag, Value: "<path>", Description: "write the backup bundle here, or into this directory"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},

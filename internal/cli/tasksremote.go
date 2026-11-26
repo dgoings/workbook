@@ -175,7 +175,7 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 	flags := newFlagSet("move-tasks")
 	from := flags.String("from", "", "the remote the tasks are in now (default: the place the moved markers lead to)")
 	allowBranches := flags.Bool("allow-branches", false, "accept a tasks remote that holds branches; never a mirror of the code repository")
-	cleanUp := flags.Bool("clean-up", false, "after a verified move, delete the Workbook refs at the place left, all but its moved marker")
+	cleanUp := flags.Bool("clean-up", false, "after a verified move, delete this project's Workbook refs at the place left, all but its moved marker")
 	noBackup := flags.Bool("no-backup", false, "write no backup bundle of the copies a move back replaces")
 	backup := flags.String("backup", "", "write the backup bundle here, or into this directory")
 	jsonMode := flags.Bool("json", false, "emit JSON")

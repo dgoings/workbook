@@ -240,8 +240,9 @@ from the code, move the tasks to a repository of their own first: `workbook
 config set tasks-remote tasks --url <address>`, then `workbook move-tasks`,
 then commit `.workbook/config.json`; everyone else runs `workbook setup` after
 pulling it. The tasks move back the same way, with `workbook config unset
-tasks-remote` and `workbook move-tasks`. Add `--clean-up` to remove the copies the move leaves at
-the old place, keeping only the marker that points to the new one. See [Keep the tasks in their own repository](docs/hosting.md#keep-the-tasks-in-their-own-repository).
+tasks-remote` and `workbook move-tasks`. Add `--clean-up` to remove the copies of this project's tasks and relics the
+move leaves at the old place, keeping the marker that points to the new one
+and any other project's task and relic refs there. See [Keep the tasks in their own repository](docs/hosting.md#keep-the-tasks-in-their-own-repository).
 
 The board works on a phone. On a screen that narrow it shows one column at a
 time, under a row of the columns' names and counts, and a task's page takes
