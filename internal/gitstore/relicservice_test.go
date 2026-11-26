@@ -544,6 +544,9 @@ func assertRelicMatchesModel(
 func TestRelicManyPartLifecycle(t *testing.T) {
 	t.Parallel()
 	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		if testing.Short() && strings.HasSuffix(t.Name(), "/"+testrepo.FormatSHA256) {
+			t.Skip("the SHA-256 lifecycle of a 200-part relic runs without -short; -short keeps the SHA-1 one")
+		}
 		ctx := context.Background()
 		service := relicServiceFor(repo, config, 100000)
 		const partCount = 200
