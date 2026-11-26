@@ -90,6 +90,9 @@ func TestAddRelicFixtureBuildsTheSmokeSet(t *testing.T) {
 	for _, objectFormat := range []string{"sha1", "sha256"} {
 		t.Run(objectFormat, func(t *testing.T) {
 			t.Parallel()
+			if objectFormat == "sha256" && testing.Short() {
+				t.Skip("builds a SHA-256 relic fixture of its own; the run without -short covers it")
+			}
 			if objectFormat == "sha256" && !supportsObjectFormat(t, objectFormat) {
 				testenv.MissingCapability(t, "Git does not support SHA-256 repositories")
 			}
@@ -208,6 +211,9 @@ func TestAddRelicFixtureBuildsTheSmokeSet(t *testing.T) {
 // left out of the comparison.
 func TestAddRelicFixtureIsDeterministic(t *testing.T) {
 	t.Parallel()
+	if testing.Short() {
+		t.Skip("builds a second smoke relic fixture; the run without -short covers it")
+	}
 	// The second build first, so it runs beside the shared one rather than
 	// after it.
 	second := buildSmokeRelicFixture(t, "sha1")
