@@ -1667,6 +1667,19 @@ that tip has nothing to publish and is not listed, and one that diverged from
 a tip that fails its check is reported `invalid`, says it was not pushed, and
 makes the push exit `7`.
 
+A relic push that fails on the wire, a dropped connection or a remote that
+cannot be reached after the task push went out, changes nothing the task push
+did. The push phase, `data` for `push` and `data.push` for `sync`, stays
+`completed` and lists every task as before, and its `detail` begins `push
+failed before publishing relics:` with Git's reason. The error names the task
+errors of the same run first, a `rejected`, `invalid` or `local-changed`
+task among them, and then that relic failure, joined by `; `, so neither hides
+the other, in text on standard error and in the JSON error's `message`. The
+exit code is the first error's: a run with a task `origin` rejected and a
+relic push that failed exits `1`, as a rejected task alone does, and a run
+whose relic push failed with no task error exits `1`. The next push or sync
+publishes the relics again.
+
 `workbook fetch --remote <remote>`, which fills another remote's tracking refs
 for inspection, does not fetch relics.
 
