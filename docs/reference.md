@@ -1656,16 +1656,18 @@ the task refs and only when a relic changed. A relic ref is never pushed with
 force, deleted at the remote, or moved locally except by compare-and-swap. A
 push the remote refuses because it holds newer commits is reported
 `rejected`, and the next sync replays this checkout's changes onto them and
-pushes again. A relic the last fetch withheld is not pushed at all, because
-the remote would refuse it and the next sync would withhold it again rather
-than replay onto it. A relic command whose own fetch reported its relic
+pushes again. A relic command whose own fetch reported its relic
 `invalid` or `needs-upgrade` records the change, skips the push, and reports
 `sync.status` `failed` with a detail saying the relic was not pushed and why;
-the command still exits `0` with that warning. A `workbook push` compares each
-relic with the tip the last fetch left for it: a relic that is only behind
-that tip has nothing to publish and is not listed, and one that diverged from
-a tip that fails its check is reported `invalid`, says it was not pushed, and
-makes the push exit `7`.
+the command still exits `0` with that warning. A `workbook push` runs no fetch,
+so it compares each relic with the tip the last fetch left for it, when origin
+still holds that tip. A relic that is only behind that tip has nothing to
+publish and is not listed. One that diverged from a tip that fails its check
+is not pushed: it is reported `invalid`, says it was not pushed, and makes the
+push exit `7`. Every other relic is pushed, a relic whose tip at origin was
+written by a newer Workbook among them. Origin refuses that one as `rejected`
+when it diverged from that tip, and the next sync withholds it and reports it
+`needs-upgrade`, as a fetch does, rather than replaying onto it.
 
 A relic push that fails on the wire, a dropped connection or a remote that
 cannot be reached after the task push went out, changes nothing the task push
