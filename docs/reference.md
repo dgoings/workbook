@@ -1635,7 +1635,16 @@ the task refs and only when a relic changed. A relic ref is never pushed with
 force, deleted at the remote, or moved locally except by compare-and-swap. A
 push the remote refuses because it holds newer commits is reported
 `rejected`, and the next sync replays this checkout's changes onto them and
-pushes again.
+pushes again. A relic the last fetch withheld is not pushed at all, because
+the remote would refuse it and the next sync would withhold it again rather
+than replay onto it. A relic command whose own fetch reported its relic
+`invalid` or `needs-upgrade` records the change, skips the push, and reports
+`sync.status` `failed` with a detail saying the relic was not pushed and why;
+the command still exits `0` with that warning. A `workbook push` compares each
+relic with the tip the last fetch left for it: a relic that is only behind
+that tip has nothing to publish and is not listed, and one that diverged from
+a tip that fails its check is reported `invalid`, says it was not pushed, and
+makes the push exit `7`.
 
 `workbook fetch --remote <remote>`, which fills another remote's tracking refs
 for inspection, does not fetch relics.
@@ -2411,7 +2420,8 @@ they ran and the push of the one relic they changed, as `sync.pushRelic`:
 {"enabled":true,"source":"default","status":"completed","fetch":{"remote":"origin","status":"completed","tasks":[{"taskId":"WB-01M87F19RB1PVEE87F7PS1D1FJ","status":"unchanged"}]},"pushRelic":{"relicId":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","status":"published"}}
 ```
 
-`pushRelic` has `relicId`, `status` (`published`, `rejected` or `invalid`)
+`pushRelic` has `relicId`, `status` (`published`, `rejected`, `invalid` or
+`needs-upgrade`)
 and, when it did not publish, `detail`. It is absent with `--no-sync`, when
 the command changed nothing, when the fetch did not complete, and when a
 running watcher was handed the change to publish. `relic list`, `relic show` and `relic export` contact no remote and

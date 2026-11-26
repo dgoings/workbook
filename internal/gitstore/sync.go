@@ -307,13 +307,22 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	// checked here: no fetch in this command read them.
 	var relics relicPublication
 	if relicListErr == nil {
-		unchecked := make(map[string]bool, len(relicCandidates))
-		for _, candidate := range relicCandidates {
-			unchecked[candidate.RelicID] = true
-		}
-		if relics, err = r.publishRelics(ctx, config, relicCandidates, unchecked); err != nil {
+		kept, withheld, err := r.withholdRelicsOriginAlreadyJudged(ctx, config, relicCandidates, remoteRelics)
+		if err != nil {
 			return failedSyncPhase(result, "push failed before publishing relics", err)
 		}
+		unchecked := make(map[string]bool, len(kept))
+		for _, candidate := range kept {
+			unchecked[candidate.RelicID] = true
+		}
+		if relics, err = r.publishRelics(ctx, config, kept, unchecked); err != nil {
+			return failedSyncPhase(result, "push failed before publishing relics", err)
+		}
+		for _, outcome := range withheld {
+			relics.Results = append(relics.Results, outcome)
+			relics.Invalid = append(relics.Invalid, outcome.Detail)
+		}
+		sort.Slice(relics.Results, func(i, j int) bool { return relics.Results[i].RelicID < relics.Results[j].RelicID })
 		result.Relics = relics.Results
 	}
 	result.Status = SyncPhaseCompleted

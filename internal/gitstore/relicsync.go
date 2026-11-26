@@ -490,7 +490,7 @@ func (r *Repository) pushRelicHeads(ctx context.Context, candidates []relicPushC
 	for relicID, item := range pushed {
 		outcome := SyncRelicResult{RelicID: relicID, Status: item.Status}
 		if item.Status == SyncRejected {
-			outcome.Detail = fmt.Sprintf("relic %s: %s refused it %s; the next sync replays the local changes onto %s's tip",
+			outcome.Detail = fmt.Sprintf("relic %s: %s refused it %s; the next sync replays any local changes onto %s's tip",
 				relicID, r.remote(), item.Detail, r.remote())
 		}
 		outcomes[relicID] = outcome
@@ -603,6 +603,78 @@ func localRelicPushCandidates(keys core.KeySet, records []relicRefRecord, remote
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].RelicID < candidates[j].RelicID })
 	return candidates, nil
+}
+
+// withholdRelicsOriginAlreadyJudged drops from a plain push's candidates the
+// relics whose push origin would refuse for a reason the last fetch already
+// saw: origin's tip, as listed, is the tip that fetch left in the tracking
+// ref, and either the local tip is an ancestor of it, so there is nothing to
+// publish, or the two diverged and origin's tip fails its check, so the next
+// sync withholds the relic rather than replaying onto it. The second kind is
+// returned as an invalid result that says it was not pushed. A tip origin
+// holds that this clone never fetched is left to the push, whose refusal the
+// next sync acts on.
+func (r *Repository) withholdRelicsOriginAlreadyJudged(
+	ctx context.Context,
+	config core.ProjectConfig,
+	candidates []relicPushCandidate,
+	remote map[string]string,
+) ([]relicPushCandidate, []SyncRelicResult, error) {
+	trackingPrefix := r.remoteRelicRefPrefix()
+	records, err := r.relicRefRecords(ctx, trackingPrefix)
+	if err != nil {
+		return nil, nil, err
+	}
+	tracking := make(map[string]string, len(records))
+	for _, record := range records {
+		tracking[strings.TrimPrefix(record.name, trackingPrefix)] = record.objectID
+	}
+	var pairs []relicReconcileRequest
+	for _, candidate := range candidates {
+		if head := remote[candidate.RelicID]; head != "" && tracking[candidate.RelicID] == head {
+			pairs = append(pairs, relicReconcileRequest{RelicID: candidate.RelicID, Local: candidate.Head, Remote: head})
+		}
+	}
+	if len(pairs) == 0 {
+		return candidates, nil, nil
+	}
+	_, behind, diverged, _, err := r.classifyRelicHeads(ctx, pairs)
+	if err != nil {
+		return nil, nil, err
+	}
+	dropped := make(map[string]bool, len(behind)+len(diverged))
+	for _, pair := range behind {
+		dropped[pair.RelicID] = true
+	}
+	var withheld []SyncRelicResult
+	if len(diverged) > 0 {
+		heads := make([]core.RelicHead, len(diverged))
+		for index, pair := range diverged {
+			heads[index] = core.RelicHead{RelicID: pair.RelicID, ObjectID: pair.Remote}
+		}
+		_, errs := r.verifyRelicTips(ctx, config, heads)
+		for index, pair := range diverged {
+			err := errs[index]
+			if err == nil || core.CategoryOf(err) == core.CategoryNewerWriter {
+				continue
+			}
+			dropped[pair.RelicID] = true
+			reason := strings.TrimPrefix(relicDetail(pair.RelicID, err), "relic "+pair.RelicID+": ")
+			withheld = append(withheld, SyncRelicResult{
+				RelicID: pair.RelicID,
+				Status:  SyncInvalid,
+				Detail: fmt.Sprintf("relic %s: not pushed, because %s's tip of it fails its check and the next sync withholds it: %s",
+					pair.RelicID, r.remote(), reason),
+			})
+		}
+	}
+	kept := candidates[:0:0]
+	for _, candidate := range candidates {
+		if !dropped[candidate.RelicID] {
+			kept = append(kept, candidate)
+		}
+	}
+	return kept, withheld, nil
 }
 
 // fetchedRelicPushCandidates returns the relics a sync's push phase

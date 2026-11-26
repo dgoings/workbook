@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -127,6 +128,21 @@ func (session *taskSession) publishRelic(ctx context.Context, relicID string) {
 }
 
 func (session *taskSession) pushRelicInline(ctx context.Context, relicID string) {
+	if withheld, found := session.withheldRelic(relicID); found {
+		// Origin would refuse the push, and the next sync withholds the relic
+		// again rather than replaying the change onto origin's tip, so the
+		// change stays here and the report says why.
+		detail := strings.TrimPrefix(withheld.Detail, "relic "+relicID+": ")
+		skipped := gitstore.SyncRelicResult{
+			RelicID: relicID,
+			Status:  withheld.Status,
+			Detail:  "relic " + relicID + " was not pushed, because the fetch withheld it: " + detail,
+		}
+		session.report.PushRelic = &skipped
+		session.report.Status = syncStatusFailed
+		session.report.Detail = skipped.Detail
+		return
+	}
 	push := session.repository.PushRelic
 	if session.fetched != nil {
 		push = session.repository.PushRelicAfterFetch
@@ -144,6 +160,22 @@ func (session *taskSession) pushRelicInline(ctx context.Context, relicID string)
 		return
 	}
 	session.report.Status = syncStatusCompleted
+}
+
+// withheldRelic is the fetch's result for relicID when the fetch withheld it
+// from publication: origin's tip of it failed its check, or waits on a newer
+// workbook.
+func (session *taskSession) withheldRelic(relicID string) (gitstore.SyncRelicResult, bool) {
+	if session.fetched == nil {
+		return gitstore.SyncRelicResult{}, false
+	}
+	for _, relic := range session.fetched.Relics {
+		if relic.RelicID == relicID &&
+			(relic.Status == gitstore.SyncInvalid || relic.Status == gitstore.SyncNeedsUpgrade) {
+			return relic, true
+		}
+	}
+	return gitstore.SyncRelicResult{}, false
 }
 
 // noteRelicReport keeps what a completed fetch reported about relics, with
