@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testrepo"
 )
 
 func TestGlobalHelpListsHelpAndTopLevelCommands(t *testing.T) {
@@ -333,5 +334,31 @@ func assertInOrder(t *testing.T, output string, values []string) {
 			t.Errorf("output = %q, %q appears before its predecessor", output, value)
 		}
 		previous = index
+	}
+}
+
+// relic --help gives its example ID in the project's own key, and still works,
+// with a sensible example, where there is no project to read one from.
+func TestRelicHelpExampleUsesTheProjectKey(t *testing.T) {
+	t.Parallel()
+	repository := testrepo.New(t)
+	if code, _, stderr := run(t, repository, "setup", "--key", "AW"); code != 0 {
+		t.Fatalf("setup code = %d; stderr = %q", code, stderr)
+	}
+	for _, args := range [][]string{{"relic", "--help"}, {"help", "relic"}} {
+		code, stdout, stderr := run(t, repository, args...)
+		if code != 0 || stderr != "" || !strings.Contains(stdout, "A relic ID looks like AW-R-01M9… and") || strings.Contains(stdout, "WB-R-") {
+			t.Fatalf("%v in a project keyed AW = (%d, %q, %q), want the example in its key", args, code, stdout, stderr)
+		}
+	}
+
+	outside := t.TempDir()
+	code, stdout, stderr := run(t, outside, "relic", "--help")
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "A relic ID looks like WB-R-01M9… and") {
+		t.Fatalf("relic --help outside a repository = (%d, %q, %q), want the help with a WB example", code, stdout, stderr)
+	}
+	if code, stdout, stderr := run(t, testrepo.New(t), "relic", "--help"); code != 0 || stderr != "" ||
+		!strings.Contains(stdout, "A relic ID looks like WB-R-01M9… and") {
+		t.Fatalf("relic --help in a repository with no project = (%d, %q, %q), want the help with a WB example", code, stdout, stderr)
 	}
 }

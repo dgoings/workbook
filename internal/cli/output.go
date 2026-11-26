@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,7 +65,45 @@ func renderGlobalHelp(output io.Writer) {
 	fmt.Fprintln(output, "  help [command]")
 }
 
+// helpProjectKey marks where a help text gives an example ID, which
+// renderCommandHelpFor fills with the project's key.
+const helpProjectKey = "\x00project-key\x00"
+
+// defaultHelpProjectKey fills an example ID where no project key can be read,
+// as outside a repository.
+const defaultHelpProjectKey = "WB"
+
+// helpKeyAt is the project key the help for cwd gives its example IDs in: the
+// key of the project there, or defaultHelpProjectKey when there is none or it
+// cannot be read. Help must work anywhere, so no failure here is reported.
+func helpKeyAt(ctx context.Context, cwd string) string {
+	repository, err := gitstore.Open(ctx, cwd)
+	if err != nil {
+		return defaultHelpProjectKey
+	}
+	config, err := repository.LoadConfig()
+	if err != nil || config.Key == "" {
+		return defaultHelpProjectKey
+	}
+	return config.Key
+}
+
 func renderCommandHelp(output io.Writer, helpTarget []string) error {
+	return renderCommandHelpFor(output, helpTarget, defaultHelpProjectKey)
+}
+
+// renderCommandHelpFor renders a command's help with its example IDs in the
+// project key projectKey.
+func renderCommandHelpFor(output io.Writer, helpTarget []string, projectKey string) error {
+	var rendered bytes.Buffer
+	if err := renderCommandHelpText(&rendered, helpTarget); err != nil {
+		return err
+	}
+	_, err := io.WriteString(output, strings.ReplaceAll(rendered.String(), helpProjectKey, projectKey))
+	return err
+}
+
+func renderCommandHelpText(output io.Writer, helpTarget []string) error {
 	if len(helpTarget) == 0 {
 		renderGlobalHelp(output)
 		return nil

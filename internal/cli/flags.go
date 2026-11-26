@@ -864,7 +864,7 @@ var commandSchemas = map[string]commandMetadata{
 		Name:     "relic",
 		Synopsis: "workbook relic <command> [options]",
 		Description: "Create, read and change relics: records that hold specs, plans, decisions and similar material as named parts.\n\n" +
-			"A relic ID looks like WB-R-01M9… and a part is addressed as <relic>#<part>. Any\n" +
+			"A relic ID looks like " + helpProjectKey + "-R-01M9… and a part is addressed as <relic>#<part>. Any\n" +
 			"unambiguous prefix of either works. Relics are shared through the tasks remote\n" +
 			"(origin unless configured) as tasks are: a command that changes a relic fetches\n" +
 			"first and publishes the relic after, unless --no-sync is given or auto-sync is off.",

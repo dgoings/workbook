@@ -65,7 +65,11 @@ func runWithEnvironment(
 	help, handled, helpErr := parseHelpRequest(args)
 	if handled {
 		if helpErr == nil {
-			helpErr = renderCommandHelp(stdout, help.Target)
+			projectKey := defaultHelpProjectKey
+			if len(help.Target) > 0 && help.Target[0] == "relic" {
+				projectKey = helpKeyAt(ctx, cwd)
+			}
+			helpErr = renderCommandHelpFor(stdout, help.Target, projectKey)
 		}
 		if helpErr != nil {
 			writeError(stderr, helpErr, false)
