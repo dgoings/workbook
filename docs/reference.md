@@ -4340,10 +4340,14 @@ inline instead, so a relic change is never handed to a watcher that would not
 push it.
 
 `workbook sync --status` reports whether a watcher is running, what it last did,
-any task conflicts it is holding, and the refs its last synchronization skipped under
-`origin`'s task namespace. It does not list the relic conflicts the watcher
-holds; those reach a person through the watcher's terminal and the next
-command that hands it a change. That last set is what the watcher observed rather
+any task conflicts and relic conflicts it is holding, and the refs its last
+synchronization skipped under `origin`'s task namespace. With `--json` the
+relic conflicts are the `relicConflicts` member of `data`, each in the shape
+of an entry in a command's `relicConflict` list, and in text each is a
+`Relic conflict:` line, as a relic command prints it. Neither carries body
+text: the watcher keeps none and the status reads none, so a body conflict
+names each version's blob and size, and the next command that hands the
+watcher a change shows the three texts. The refs skipped are what the watcher observed rather
 than an accumulating memory: the tracking namespace is pruned against `origin`
 on every fetch, so a name `origin` no longer holds leaves the report on the next
 synchronization. `workbook serve` runs the same loop, so the board reflects

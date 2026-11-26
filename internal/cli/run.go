@@ -526,6 +526,12 @@ type watcherStatusResult struct {
 	LastSyncOK bool            `json:"lastSyncOk,omitempty"`
 	LastError  string          `json:"lastSyncError,omitempty"`
 	Conflicts  []core.Conflict `json:"conflicts,omitempty"`
+	// RelicConflicts are the relic conflicts the watcher holds, in the shape a
+	// command's relicConflict list gives them. The watcher keeps no body text
+	// and the status reads none, so a body conflict names each version's blob
+	// and size without its text; a relic command on that relic shows the
+	// texts.
+	RelicConflicts []core.RelicConflict `json:"relicConflicts,omitempty"`
 	// IgnoredRefs carries what the watcher's last synchronization skipped under
 	// origin's task namespace, so asking a watcher what it has been doing
 	// reports it the same way a foreground fetch does.
@@ -547,6 +553,9 @@ func runSyncStatus(repository *gitstore.Repository, stdout io.Writer, jsonMode b
 			result.IgnoredRefs = status.IgnoredRefs
 			for _, entry := range status.Conflicts {
 				result.Conflicts = append(result.Conflicts, entry.Conflict)
+			}
+			for _, entry := range status.RelicConflicts {
+				result.RelicConflicts = append(result.RelicConflicts, entry.RelicConflict)
 			}
 		}
 	}
@@ -574,6 +583,7 @@ func runSyncStatus(repository *gitstore.Repository, stdout io.Writer, jsonMode b
 	if len(result.Conflicts) > 0 {
 		writeConflicts(stdout, result.Conflicts)
 	}
+	writeRelicConflicts(stdout, result.RelicConflicts)
 	return nil
 }
 
