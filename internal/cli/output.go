@@ -345,9 +345,9 @@ func writeThreadMutationResult(
 	writeConflicts(stdout, conflicts)
 	writeConfigConflicts(stdout, configConflicts)
 	writeRelicConflicts(stdout, relicConflicts)
-	for _, warning := range result.Warnings {
-		fmt.Fprintf(stderr, "workbook: warning: %s\n", warning.Message)
-	}
+	// Filtered as the relic warnings are: the fetch's relic defect, one of
+	// these, can quote what a relic on origin holds.
+	writeRelicWarnings(stderr, result.Warnings)
 	writeRelicWarnings(stderr, relicWarnings)
 	if sync != nil {
 		writeIdentityWarning(stderr, sync.Identity)
