@@ -1317,8 +1317,12 @@ workbook relic export WB-R-01M87F0S
 ```
 
 Without `--json` the output is the document alone, indented, and nothing else.
-With `--json` the document is the `data` of the usual result envelope, on one
-line. `relic show --json` writes the same document, for the parts it was asked
+In it a string holding `<`, `>` or `&`, such as a title or a body's text, has
+those characters as they are written. A property or field value is written as
+it is stored, so `<`, `>` and `&` inside one keep their six-byte escapes, as in
+the `owner` property above. With `--json` the document is the `data` of the
+usual result envelope, on one line, where every string writes `<`, `>` and `&`
+as `\u003c`, `\u003e` and `\u0026`, as all JSON output does. `relic show --json` writes the same document, for the parts it was asked
 for, with body content only under `--body`.
 
 | Member | Value |
@@ -1450,7 +1454,12 @@ still be read and edited, and brought back under: clearing a property,
 setting a smaller value, removing a part or removing a link is always saved.
 
 `relic create --from-file` also reads at most 67,108,864 bytes (64 MiB) of
-document. That is a limit on one command's input, not on what is stored.
+document. That is a limit on one command's input, not on what is stored. The
+export of a relic of ordinary text at every stored limit fits under it. A text
+body is a JSON string in the document, though, where a control character other
+than a tab or a line break takes six bytes, so a relic whose bodies are mostly
+such characters can export to more, and `--from-file` refuses that document
+with exit `5`.
 
 Treat the numbers in the table as part of the storage format, as the task
 limits are. One can be raised later. None can be lowered, because a relic

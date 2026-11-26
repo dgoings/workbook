@@ -234,6 +234,46 @@ func TestRelicCreateFromFileAndExportRoundTrip(t *testing.T) {
 	}
 }
 
+// relic export writes '<', '>' and '&' in strings as themselves, not as the
+// six-byte escapes json.Marshal uses, so a Markdown or HTML body reads as it
+// was written and is no larger than its text. A stored property or field
+// value is written as it is stored, in its canonical form. The document still
+// reads back as the same relic.
+func TestRelicExportWritesHTMLCharactersAsThemselves(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	body := "# <Title> & more\n\n<details>a -> b && c</details>\n"
+	id := mustCreateRelic(t, repository, "Tags <and> & ampersands", "--type", "spec").Relic.ID
+	mustUpdateRelic(t, repository, id, "--set", "owner=Alice <alice@example.com>",
+		"--add-part", "--part-type", "note", "--body-file", writeRelicBodyFile(t, "body.md", body))
+
+	exported := exportRelic(t, repository, id)
+	for _, want := range []string{`"title": "Tags <and> & ampersands"`, `"text": "# <Title> & more\n\n<details>a -> b && c</details>\n"`,
+		`"owner": "Alice \u003calice@example.com\u003e"`} {
+		if !bytes.Contains(exported, []byte(want)) {
+			t.Fatalf("export = %s, want it to hold %s", exported, want)
+		}
+	}
+	if count := bytes.Count(exported, []byte(`\u003c`)); count != 1 {
+		t.Fatalf("export holds %d escapes of '<', want only the stored property's: %s", count, exported)
+	}
+
+	document, err := core.DecodeRelicDocument(exported)
+	if err != nil {
+		t.Fatalf("DecodeRelicDocument(export): %v", err)
+	}
+	second := mustCreateRelicWithInput(t, repository, string(exported), "--from-file", "-")
+	again := exportRelic(t, repository, second.Relic.ID)
+	copied, err := core.DecodeRelicDocument(again)
+	if err != nil {
+		t.Fatalf("DecodeRelicDocument(second export): %v", err)
+	}
+	assertSameRelicContent(t, document, copied)
+	if *copied.Parts[0].Body.Text != body {
+		t.Fatalf("the copied body = %q, want %q", *copied.Parts[0].Body.Text, body)
+	}
+}
+
 func mustCreateRelicWithInput(t *testing.T, repository, input string, args ...string) core.RelicMutationResult {
 	t.Helper()
 	var created core.RelicMutationResult

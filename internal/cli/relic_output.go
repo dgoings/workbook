@@ -176,11 +176,19 @@ func relicValueText(value json.RawMessage) string {
 
 // writeRelicExport writes the bare workbook.relic document, indented by two
 // spaces, and nothing else.
+//
+// It writes '<', '>' and '&' as themselves rather than as the six-byte escapes
+// json.Marshal uses for HTML, so a Markdown or HTML body reads as it was
+// written and is no larger than its text. A property or field value is
+// already canonical JSON and is written exactly as it is stored.
 func writeRelicExport(stdout io.Writer, document core.RelicDocument) error {
-	encoded, err := json.MarshalIndent(document, "", "  ")
-	if err != nil {
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(document); err != nil {
 		return core.Wrap(core.CategoryOperational, "the relic document cannot be encoded", err)
 	}
-	_, err = stdout.Write(append(encoded, '\n'))
+	_, err := stdout.Write(encoded.Bytes())
 	return err
 }

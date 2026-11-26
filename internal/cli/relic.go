@@ -131,15 +131,23 @@ func runRelicCreate(ctx context.Context, args []string, cwd string, stdin io.Rea
 }
 
 // maxRelicDocumentBytes is the largest workbook.relic document relic create
-// --from-file reads. It is an input limit, not part of the stored format, and
-// is set to hold the largest relic the stored limits allow with room to spare:
+// --from-file reads. It is an input limit, not part of the stored format. It
+// holds the export of a relic of ordinary text at the stored limits with room
+// to spare:
 //
-//	16 MiB of bodies, which a document may carry as base64    22.4 MiB
-//	2,000 parts with 16 KiB of fields each                    31.3 MiB
-//	64 KiB of properties                                       0.1 MiB
+//	16 MiB of live bodies, which a document may carry as base64  22.4 MiB
+//	2,000 live parts with 16 KiB of fields each                 31.3 MiB
+//	64 KiB of properties                                         0.1 MiB
 //
-// which is under 54 MiB before the document's own punctuation and any
-// indentation.
+// which is under 54 MiB before the document's own punctuation, its links and
+// any indentation. Stored values are measured with their escapes, so the
+// fields and properties cannot grow on the way out. A text body can: it is a
+// JSON string, where relic export writes '<', '>' and '&' as themselves (see
+// writeRelicExport) but a quote, a backslash, a tab or a line break takes two
+// bytes, every other control character six, and U+2028 or U+2029 six for its
+// three. A relic whose bodies are mostly such characters, or one over a total
+// after two clones merged, can export to a document over this limit, which
+// --from-file then refuses with exit 5 like any other.
 const maxRelicDocumentBytes = 64 * 1024 * 1024
 
 // readRelicDocument reads and decodes the workbook.relic document at path, or
