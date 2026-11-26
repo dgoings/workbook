@@ -847,7 +847,10 @@ var commandSchemas = map[string]commandMetadata{
 			"With --remote it deletes that remote's refs under refs/workbook/ instead: the\n" +
 			"only Workbook command that deletes shared refs. At a place the tasks moved away\n" +
 			"from it keeps refs/workbook/project, which carries the moved marker, so a\n" +
-			"checkout still on old settings is still refused and told where the tasks went.\n" +
+			"checkout still on old settings is still refused and told where the tasks went,\n" +
+			"and deletes every other Workbook ref there, another project's task and relic\n" +
+			"refs included, without asking; `workbook move-tasks --clean-up` deletes only\n" +
+			"this project's.\n" +
 			"A remote that holds the project's tasks is wiped only when --confirm names it\n" +
 			"again, and always after the bundle is written. A checkout that still holds the\n" +
 			"tasks publishes them back to a wiped remote on its next sync.\n\n" +

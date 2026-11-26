@@ -5156,8 +5156,14 @@ What it removes depends on what the remote is:
 - **A place the tasks moved away from**, whose `refs/workbook/project` holds
   the [moved marker](#the-moved-marker): every Workbook ref but that one. The
   marker stays, listed on a `Kept:` line, so a checkout still on the old
-  settings keeps being refused and sent to where the tasks went. Its tasks
-  live elsewhere, so no confirmation is needed and `--no-backup` is allowed.
+  settings keeps being refused and sent to where the tasks went. This
+  project's tasks live elsewhere, so no confirmation is needed and
+  `--no-backup` is allowed. A move carries only this project's refs, though,
+  so such a place can still hold task and relic refs that are not this
+  project's: another project's, on a remote the two share, or names that fit
+  no project. The reset deletes those too, with no bundle under
+  `--no-backup`, and nothing asks first. To delete only this project's refs
+  there, run `workbook move-tasks --clean-up` instead, which leaves them.
 - **The place the tasks live**: every Workbook ref there, which removes the
   project's tasks for everyone. It is refused, exit 5, reason `confirm`, unless
   `--confirm` repeats the remote's name. The refusal says how many tasks would
