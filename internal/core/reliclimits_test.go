@@ -137,3 +137,38 @@ func TestBodyFormatFromFileName(t *testing.T) {
 		}
 	}
 }
+
+// Mutation witness: lowering any relic limit refuses relics that a released
+// Workbook wrote, and raising one is a decision the relic benchmarks have to
+// support (docs/architecture.md, "Relic benchmarks"). The benchmarks confirmed
+// these as the starting limits, so a change to any of them has to change this
+// table too.
+func TestRelicLimitsAreTheConfirmedStartingLimits(t *testing.T) {
+	limits := []struct {
+		name      string
+		got, want int
+	}{
+		{"MaxRelicTitleBytes", MaxRelicTitleBytes, 500},
+		{"MaxRelicTypeBytes", MaxRelicTypeBytes, 100},
+		{"MaxRelicPartTypeBytes", MaxRelicPartTypeBytes, 100},
+		{"MaxRelicBodyFormatBytes", MaxRelicBodyFormatBytes, 16},
+		{"MaxRelicPartPositionBytes", MaxRelicPartPositionBytes, 256},
+		{"MaxRelicPropertyValueBytes", MaxRelicPropertyValueBytes, 65536},
+		{"MaxRelicFieldValueBytes", MaxRelicFieldValueBytes, 16384},
+		{"MaxRelicPropertiesBytes", MaxRelicPropertiesBytes, 65536},
+		{"MaxRelicPartFieldsBytes", MaxRelicPartFieldsBytes, 16384},
+		{"MaxRelicBodyBytes", MaxRelicBodyBytes, 1048576},
+		{"MaxRelicLiveParts", MaxRelicLiveParts, 2000},
+		{"MaxRelicParts", MaxRelicParts, 4000},
+		{"MaxRelicLiveBodyBytes", MaxRelicLiveBodyBytes, 16777216},
+		{"MaxRelicNameBytes", MaxRelicNameBytes, 100},
+		{"MaxRelicValueDepth", MaxRelicValueDepth, 32},
+		{"MaxRelicRelationBytes", MaxRelicRelationBytes, 100},
+		{"MaxRelicLinks", MaxRelicLinks, 2000},
+	}
+	for _, limit := range limits {
+		if limit.got != limit.want {
+			t.Errorf("%s = %d, want %d", limit.name, limit.got, limit.want)
+		}
+	}
+}
