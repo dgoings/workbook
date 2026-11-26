@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/gitstore"
 )
 
 // relicSubcommands lists the verbs, for the error a bare `workbook relic`
@@ -50,23 +51,26 @@ func runRelic(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	}
 }
 
-func openRelicServiceFor(ctx context.Context, cwd string, stderr io.Writer, withActor bool) (core.RelicService, error) {
+// openRelicServiceFor opens the repository and a relic service whose Reader is
+// that repository, and returns the repository too, for a caller that puts
+// another reader in front of it.
+func openRelicServiceFor(ctx context.Context, cwd string, stderr io.Writer, withActor bool) (core.RelicService, *gitstore.Repository, error) {
 	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
-		return core.RelicService{}, err
+		return core.RelicService{}, nil, err
 	}
 	var actor string
 	if withActor {
 		actor, err = repository.Actor(ctx)
 		if err != nil {
-			return core.RelicService{}, err
+			return core.RelicService{}, nil, err
 		}
 	}
 	state, err := repository.LoadVocabularyState(ctx, config)
 	if err != nil {
-		return core.RelicService{}, err
+		return core.RelicService{}, nil, err
 	}
-	return newRelicService(repository, config, state.Keys, actor), nil
+	return newRelicService(repository, config, state.Keys, actor), repository, nil
 }
 
 func runRelicCreate(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) error {
