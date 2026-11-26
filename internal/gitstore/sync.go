@@ -366,7 +366,7 @@ const relicPushFailedDetail = "push failed before publishing relics"
 // relics were not published in its detail, and returns the relic failure
 // after every task error, in the one error, so neither hides the other. The
 // error keeps the category, and so the exit code, of the first error it
-// names.
+// names, and its message names the relic failure's reason in every category.
 func relicPushFailed(result SyncResult, relicErr, err error) (SyncResult, error) {
 	if relicErr == nil {
 		return result, err
@@ -379,7 +379,37 @@ func relicPushFailed(result SyncResult, relicErr, err error) (SyncResult, error)
 	if category == "" {
 		category = core.CategoryOperational
 	}
-	return result, core.Wrap(category, err.Error()+"; "+relicPushFailedDetail, relicErr)
+	return result, &relicPushError{
+		head:  &core.Error{Category: category, Message: err.Error() + "; " + result.Detail},
+		relic: relicErr,
+	}
+}
+
+// relicPushError is a task error and the relic push failure of the same run.
+// Its text names both. It reads as the task error's category to errors.As,
+// so it exits with the task error's code, and it unwraps to the relic failure,
+// so anything that failure carries, a tasks-remote refusal included, is still
+// found. A core.Error wrapping the relic failure could not do both: its
+// message is all a caller prints for a category other than operational, and
+// putting the reason in the message as well would print it twice wherever the
+// whole error is printed.
+type relicPushError struct {
+	head  *core.Error
+	relic error
+}
+
+func (e *relicPushError) Error() string { return e.head.Message }
+
+func (e *relicPushError) Unwrap() error { return e.relic }
+
+// As answers a request for a *core.Error with the task error's category and
+// the whole text, before errors.As reaches the relic failure's own.
+func (e *relicPushError) As(target any) bool {
+	typed, ok := target.(**core.Error)
+	if ok {
+		*typed = e.head
+	}
+	return ok
 }
 
 // publishedSyncStatus reports an outcome in which origin now holds the tip the

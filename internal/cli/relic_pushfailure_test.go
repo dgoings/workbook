@@ -124,3 +124,56 @@ func TestAFailedRelicPushDoesNotHideATaskRejection(t *testing.T) {
 		t.Fatalf("push stdout %q, want the rejected task", stdout)
 	}
 }
+
+// A push whose task error is not operational, here a local task ref that
+// fails validation, which is corrupt data, and whose relic push then failed on
+// the wire names Git's reason for the relic failure too, in text and in JSON.
+// It exits with the task error's code.
+func TestAFailedRelicPushKeepsItsReasonBesideCorruptTaskData(t *testing.T) {
+	t.Parallel()
+	binary := buildWorkbookBinary(t)
+	_, second := cliSyncRepositories(t)
+	broken := cliCreateTask(t, second, "Broken here")
+	cliCreateTask(t, second, "Goes out")
+	cliGit(t, second, "update-ref", "refs/workbook/tasks/"+broken.ID,
+		cliGitOutput(t, second, "commit-tree", "-m", "not a task", cliGitOutput(t, second, "hash-object", "-t", "tree", "-w", "/dev/null")))
+	mustCreateRelic(t, second, "Waiting here", "--type", "spec", "--no-sync")
+	path := "PATH=" + relicPushFailingGit(t) + string(os.PathListSeparator) + os.Getenv("PATH")
+
+	for _, args := range [][]string{{"push", "--json"}, {"push"}} {
+		command := exec.Command(binary, args...)
+		command.Dir = second
+		command.Env = append(os.Environ(), path)
+		var stdout, stderr bytes.Buffer
+		command.Stdout, command.Stderr = &stdout, &stderr
+		err := command.Run()
+		exit, ok := err.(*exec.ExitError)
+		if !ok || exit.ExitCode() != 7 {
+			t.Fatalf("%v = %v; stdout %s stderr %s, want exit 7", args, err, stdout.String(), stderr.String())
+		}
+		message := stderr.String()
+		if len(args) == 2 {
+			var envelope struct {
+				Error struct {
+					Category string `json:"category"`
+					Message  string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(stderr.Bytes(), &envelope); err != nil {
+				t.Fatalf("decode %s: %v", stderr.String(), err)
+			}
+			if envelope.Error.Category != "corrupt-data" {
+				t.Fatalf("error = %+v, want corrupt-data", envelope.Error)
+			}
+			message = envelope.Error.Message
+		}
+		for _, want := range []string{"failed validation", "push failed before publishing relics: ", "hung up"} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("%v error message %q, want it to say %q", args, message, want)
+			}
+		}
+		if strings.Count(message, "hung up") != 1 {
+			t.Fatalf("%v error message %q, want Git's reason once", args, message)
+		}
+	}
+}

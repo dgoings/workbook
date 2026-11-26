@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -44,5 +45,45 @@ func TestSyncKeepsThePushPhaseWhenOnlyTheRelicPushFails(t *testing.T) {
 	}
 	if len(result.Push.Tasks) != 1 || result.Push.Tasks[0].TaskID != task.ID || result.Push.Tasks[0].Status != SyncPublished {
 		t.Fatalf("push tasks = %+v, want %s published", result.Push.Tasks, task.ID)
+	}
+}
+
+// A relic push that fails on the wire in the same run as a task error that is
+// not operational, corrupt data or a stale write, is named with its reason in
+// the error's message, which is all a command prints for those categories,
+// and only once in the whole text. The exit code stays the task error's, and
+// the relic failure stays reachable in the chain.
+func TestARelicPushFailureKeepsItsReasonBesideEveryTaskError(t *testing.T) {
+	t.Parallel()
+	refusal := core.TasksRemoteRefusal{Reason: "tasks-remote-missing"}
+	relicErr := core.Wrap(core.CategoryOperational, "cannot push relic refs to origin",
+		core.TasksRemoteError(core.CategoryOperational, refusal, "fatal: the remote end hung up unexpectedly"))
+	for _, taskErr := range []error{
+		core.Errorf(core.CategoryCorruptData, "1 local task ref(s) failed validation"),
+		core.Errorf(core.CategoryCorruptData, "1 local task ref(s) record an operation twice and were not published"),
+		core.Errorf(core.CategoryStaleWrite, "1 local task ref(s) changed during push"),
+		core.Errorf(core.CategoryOperational, "origin rejected 1 task ref(s)"),
+	} {
+		result, err := relicPushFailed(SyncResult{Status: SyncPhaseCompleted}, relicErr, taskErr)
+		want := taskErr.Error() + "; " + relicPushFailedDetail + ": " + relicErr.Error()
+		var typed *core.Error
+		if err == nil || err.Error() != want || !errors.As(err, &typed) || typed.Message != want {
+			t.Fatalf("relicPushFailed(%v) = %v (message %+v), want %q as both text and message", taskErr, err, typed, want)
+		}
+		if strings.Count(err.Error(), "hung up") != 1 {
+			t.Fatalf("relicPushFailed(%v) = %q, want the relic reason once", taskErr, err)
+		}
+		if core.CategoryOf(err) != core.CategoryOf(taskErr) || core.ExitCode(err) != core.ExitCode(taskErr) {
+			t.Fatalf("relicPushFailed(%v) category = %q, want the task error's %q", taskErr, core.CategoryOf(err), core.CategoryOf(taskErr))
+		}
+		if found, ok := core.TasksRemoteRefusalOf(err); !ok || found.Reason != refusal.Reason {
+			t.Fatalf("relicPushFailed(%v) refusal = %+v, want the relic failure's", taskErr, found)
+		}
+		if !errors.Is(err, relicErr) {
+			t.Fatalf("relicPushFailed(%v) = %v, want it to wrap the relic failure", taskErr, err)
+		}
+		if result.Detail != relicPushFailedDetail+": "+relicErr.Error() {
+			t.Fatalf("push detail = %q", result.Detail)
+		}
 	}
 }

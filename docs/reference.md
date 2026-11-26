@@ -1673,8 +1673,9 @@ did. The push phase, `data` for `push` and `data.push` for `sync`, stays
 `completed` and lists every task as before, and its `detail` begins `push
 failed before publishing relics:` with Git's reason. The error names the task
 errors of the same run first, a `rejected`, `invalid` or `local-changed`
-task among them, and then that relic failure, joined by `; `, so neither hides
-the other, in text on standard error and in the JSON error's `message`. The
+task among them, and then that relic failure with Git's reason, joined by
+`; `, so neither hides the other, in text on standard error and in the JSON
+error's `message`, whatever the task error's category. The
 exit code is the first error's: a run with a task `origin` rejected and a
 relic push that failed exits `1`, as a rejected task alone does, and a run
 whose relic push failed with no task error exits `1`. The next push or sync
