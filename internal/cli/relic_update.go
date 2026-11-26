@@ -31,25 +31,45 @@ type relicUpdateRequest struct {
 	PartRelics []string
 }
 
-// relicUpdateGroups holds, for each option that starts a group, the edit the
-// group becomes and the part options that may follow it. Every other option
-// with a value belongs to the relic and may appear anywhere.
-var relicUpdateGroups = map[string]struct {
-	kind  core.RelicEditKind
-	takes []string
-}{
-	"add-part":     {core.RelicEditAddPart, []string{"part-type", "field", "field-json", "body-file", "body-format", "before", "after"}},
-	"part":         {core.RelicEditPart, []string{"field", "field-json", "clear-field", "body-file", "body-format", "base"}},
-	"move-part":    {core.RelicEditMovePart, []string{"before", "after"}},
-	"remove-part":  {core.RelicEditRemovePart, nil},
-	"restore-part": {core.RelicEditRestorePart, nil},
-	"link":         {core.RelicEditAddLink, []string{"from", "rel"}},
-	"unlink":       {core.RelicEditRemoveLink, nil},
+// relicUpdateGroup is one option that starts a group: the edit the group
+// becomes and the part options that may follow it. Every other option with a
+// value belongs to the relic and may appear anywhere.
+type relicUpdateGroup struct {
+	option string
+	kind   core.RelicEditKind
+	takes  []string
 }
+
+// relicUpdateGroupList holds every group option, in the order help lists them.
+// relicUpdateGroups and relicUpdateGroupOrder are built from it.
+var relicUpdateGroupList = []relicUpdateGroup{
+	{"add-part", core.RelicEditAddPart, []string{"part-type", "field", "field-json", "body-file", "body-format", "before", "after"}},
+	{"part", core.RelicEditPart, []string{"field", "field-json", "clear-field", "body-file", "body-format", "base"}},
+	{"move-part", core.RelicEditMovePart, []string{"before", "after"}},
+	{"remove-part", core.RelicEditRemovePart, nil},
+	{"restore-part", core.RelicEditRestorePart, nil},
+	{"link", core.RelicEditAddLink, []string{"from", "rel"}},
+	{"unlink", core.RelicEditRemoveLink, nil},
+}
+
+// relicUpdateGroups finds a group by the option that starts it.
+var relicUpdateGroups = func() map[string]relicUpdateGroup {
+	groups := make(map[string]relicUpdateGroup, len(relicUpdateGroupList))
+	for _, group := range relicUpdateGroupList {
+		groups[group.option] = group
+	}
+	return groups
+}()
 
 // relicUpdateGroupOrder lists the group options in the order help does, for
 // a message that names the ones a part option may follow.
-var relicUpdateGroupOrder = []string{"add-part", "part", "move-part", "remove-part", "restore-part", "link", "unlink"}
+var relicUpdateGroupOrder = func() []string {
+	order := make([]string, 0, len(relicUpdateGroupList))
+	for _, group := range relicUpdateGroupList {
+		order = append(order, group.option)
+	}
+	return order
+}()
 
 // relicUpdateGroupSubject is what the group an option belongs to is about, "part"
 // or "link", for a refusal that says so.
