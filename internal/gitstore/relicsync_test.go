@@ -379,11 +379,12 @@ func TestFetchRefusesARelicThatBreaksAStrictFormOrReusesAnID(t *testing.T) {
 			},
 		},
 		{
-			name: "a pack time with an offset",
+			// Any other offset is kept; a zero one has the one form Z.
+			name: "a pack time with a zero offset written +00:00",
 			forge: func(t *testing.T, repo *Repository, parent core.RelicSnapshot) string {
 				return replacedRelicChild(t, repo, parent, nil,
 					[]core.RelicOperation{relicTitleSet(700001, "A new title")},
-					`"2026-11-23T10:01:00Z"`, `"2026-11-23T12:01:00+02:00"`)
+					`"2026-11-23T10:01:00Z"`, `"2026-11-23T10:01:00+00:00"`)
 			},
 		},
 		{
