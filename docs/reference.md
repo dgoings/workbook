@@ -775,7 +775,8 @@ when it has no body.
 `--restore-part` each start a group, and the part options typed after one
 belong to it until the next group starts. `--title`, `--set`, `--set-json` and
 `--clear` always act on the relic, wherever they are typed, even between a
-group's options. `--part` takes a part ID, a prefix, or a whole part address
+group's options: `--part P --field a=b --clear old` clears the relic's
+property `old`, and `--clear-field old` is what clears a field of the part. `--part` takes a part ID, a prefix, or a whole part address
 of the relic being changed. Every other part option (`--move-part`,
 `--remove-part`, `--restore-part`, `--before` and `--after`) takes a part ID
 or a prefix, not an address.
