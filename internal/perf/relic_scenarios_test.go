@@ -2,6 +2,8 @@ package perf
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -122,5 +124,86 @@ func TestRelicScenariosCheckTheirOutput(t *testing.T) {
 	}
 	if failed.results["relic-list"].Samples[0].ExitCode != 1 {
 		t.Fatal("the failed sample was not retained")
+	}
+}
+
+// Mutation witness: an origin left loose when the run asks for it packed, or
+// packed when it does not, would report one origin's cost under the other's
+// label.
+func TestScenarioOriginIsPackedOnlyWhenAsked(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const timeout = 30 * time.Second
+	for _, packed := range []bool{false, true} {
+		root := filepath.Join(t.TempDir(), "fixture")
+		if _, _, err := runRepositoryGit(ctx, timeout, "", "init", "--quiet", root); err != nil {
+			t.Fatal(err)
+		}
+		if err := configureFixtureRepository(ctx, root); err != nil {
+			t.Fatal(err)
+		}
+		for _, args := range [][]string{
+			{"commit", "--quiet", "--allow-empty", "-m", "task"},
+			{"update-ref", "refs/workbook/tasks/a", "HEAD"},
+			{"update-ref", "refs/workbook/relics/b", "HEAD"},
+		} {
+			if _, _, err := runRepositoryGit(ctx, timeout, root, args...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := publishScenarioOrigin(ctx, scenarioDependencies{packOrigin: packed}, timeout, root); err != nil {
+			t.Fatal(err)
+		}
+		origin := filepath.Join(root, "benchmark-origin.git")
+		format, _, err := runRepositoryGit(ctx, timeout, origin, "rev-parse", "--show-ref-format")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(string(format)) != "files" {
+			t.Fatalf("origin ref format = %q; this test reads packed-refs, which only the files format writes", format)
+		}
+		packedRefs, err := os.ReadFile(filepath.Join(origin, "packed-refs"))
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		for _, ref := range []string{"refs/workbook/tasks/a", "refs/workbook/relics/b"} {
+			if got := strings.Contains(string(packedRefs), ref); got != packed {
+				t.Fatalf("packOrigin %v: %s in packed-refs = %v; packed-refs %q", packed, ref, got, packedRefs)
+			}
+		}
+	}
+}
+
+// Mutation witness: a report that drops the packed-origin rows, or prints
+// them without saying which origin each table measured, leaves a reader
+// unable to tell the two costs apart.
+func TestRelicMarkdownLabelsTheOriginOfEachTaskComparison(t *testing.T) {
+	t.Parallel()
+	summary := func(median float64) Summary { return Summary{MedianMilliseconds: median} }
+	report := &RelicBenchmarkReport{
+		Fixture: SmokeRelicFixtureSpec(),
+		TaskScenarios: []RelicTaskComparison{
+			{Name: "cli-list", Without: summary(1), With: summary(2)},
+			{Name: "cli-next", Without: summary(3), With: summary(4)},
+		},
+		PackedOriginTaskScenarios: []RelicTaskComparison{
+			{Name: "cli-next", Without: summary(5), With: summary(6)},
+		},
+	}
+	var out strings.Builder
+	if err := writeRelicMarkdown(&out, report); err != nil {
+		t.Fatal(err)
+	}
+	markdown := out.String()
+	for _, want := range []string{
+		"| cli-list | 1.00 | 2.00 |",
+		"| cli-next, origin refs loose | 3.00 | 4.00 |",
+		"| cli-next, origin refs packed | 5.00 | 6.00 |",
+		"`git pack-refs --all`",
+		"holds no created relic",
+	} {
+		if !strings.Contains(markdown, want) {
+			t.Fatalf("Markdown lacks %q:\n%s", want, markdown)
+		}
 	}
 }

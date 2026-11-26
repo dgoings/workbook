@@ -96,6 +96,10 @@ type scenarioDependencies struct {
 	prepareProjection func(context.Context, CommandSpec, int) error
 	measureCommand    func(context.Context, CommandSpec) CommandMeasurement
 	cleanupFixture    func(string) error
+	// packOrigin packs the refs of the origin cli-next and
+	// cli-update-autosync publish to, as a hosted or maintained origin keeps
+	// them. Otherwise they stay loose, as a push writes them.
+	packOrigin bool
 }
 
 type warmHTTPTasks struct {
@@ -364,7 +368,7 @@ func measureColdNext(ctx context.Context, dependencies scenarioDependencies, spe
 			"prepare an acquirable task: exit code %d: %s", setup.ExitCode, setup.Error,
 		)
 	}
-	if err := publishFixtureToLocalOrigin(ctx, spec.CommandTimeout, fixture.Root); err != nil {
+	if err := publishScenarioOrigin(ctx, dependencies, spec.CommandTimeout, fixture.Root); err != nil {
 		return Sample{}, err
 	}
 	if err := dependencies.prepareProjection(ctx, CommandSpec{
@@ -458,7 +462,7 @@ func measureColdUpdateAutoSync(ctx context.Context, dependencies scenarioDepende
 	if err != nil {
 		return Sample{}, err
 	}
-	if err := publishFixtureToLocalOrigin(ctx, spec.CommandTimeout, fixture.Root); err != nil {
+	if err := publishScenarioOrigin(ctx, dependencies, spec.CommandTimeout, fixture.Root); err != nil {
 		return Sample{}, err
 	}
 	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{
@@ -582,6 +586,20 @@ func waitForWatcherSync(ctx context.Context, binary, directory string, timeout t
 func (w *syncWatcher) stop() {
 	terminateWarmServer(w.command)
 	<-w.wait
+}
+
+// publishScenarioOrigin publishes the fixture to a local origin and, when the
+// run asks for it, packs the origin's refs with git pack-refs --all. It never
+// packs the fixture: the product keeps its own refs.
+func publishScenarioOrigin(ctx context.Context, dependencies scenarioDependencies, timeout time.Duration, fixtureRoot string) error {
+	if err := publishFixtureToLocalOrigin(ctx, timeout, fixtureRoot); err != nil {
+		return err
+	}
+	if !dependencies.packOrigin {
+		return nil
+	}
+	_, _, err := runRepositoryGit(ctx, timeout, filepath.Join(fixtureRoot, "benchmark-origin.git"), "pack-refs", "--all")
+	return err
 }
 
 // publishFixtureToLocalOrigin gives the fixture an origin holding its current

@@ -140,6 +140,13 @@ func TestRunRelicBenchmarkSmokeEndToEnd(t *testing.T) {
 	if strings.Join(compared, ",") != strings.Join(want, ",") {
 		t.Fatalf("task comparison = %v, want %v", compared, want)
 	}
+	var packed []string
+	for _, comparison := range relics.PackedOriginTaskScenarios {
+		packed = append(packed, comparison.Name)
+	}
+	if strings.Join(packed, ",") != "cli-next,cli-update-autosync" {
+		t.Fatalf("packed-origin task comparison = %v, want cli-next and cli-update-autosync", packed)
+	}
 	markdown, err := os.ReadFile(filepath.Join(outputRoot, "report.md"))
 	if err != nil {
 		t.Fatal(err)

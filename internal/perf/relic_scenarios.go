@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -91,8 +92,18 @@ type RelicBenchmarkReport struct {
 	StorageBefore              GitStorageAccount         `json:"storageBefore"`
 	StorageAfter               GitStorageAccount         `json:"storageAfter"`
 	Cache                      DisposableCacheAccount    `json:"cache"`
-	TaskScenarios              []RelicTaskComparison     `json:"taskScenarios"`
+	// TaskScenarios are every cli-* scenario; the two that synchronize,
+	// cli-next and cli-update-autosync, publish to an origin whose refs are
+	// loose, as a push leaves them. PackedOriginTaskScenarios are those two
+	// again with origin's refs packed by git pack-refs --all, as a hosted or
+	// maintained origin keeps them. Neither packs the clone being measured.
+	TaskScenarios             []RelicTaskComparison `json:"taskScenarios"`
+	PackedOriginTaskScenarios []RelicTaskComparison `json:"packedOriginTaskScenarios"`
 }
+
+// relicSyncingTaskScenarios are the cli-* scenarios that synchronize with an
+// origin, measured with that origin's refs loose and packed.
+var relicSyncingTaskScenarios = []string{"cli-next", "cli-update-autosync"}
 
 type relicDependencies struct {
 	measureCommand func(context.Context, CommandSpec) CommandMeasurement
@@ -968,7 +979,8 @@ func (b *relicBench) accountStorage() error {
 }
 
 // compareTaskScenarios runs every cli-* scenario on the task fixture alone and
-// on a copy of the relic fixture, with the same spec and samples.
+// on a copy of the relic fixture, with the same spec and samples, and then the
+// ones that synchronize again with their origin's refs packed.
 func (b *relicBench) compareTaskScenarios() error {
 	var names []string
 	for _, name := range scenarioRegistry {
@@ -976,18 +988,31 @@ func (b *relicBench) compareTaskScenarios() error {
 			names = append(names, name)
 		}
 	}
+	comparisons, err := b.compareTaskScenariosOnce("task-scenarios", names, false)
+	if err != nil {
+		return err
+	}
+	b.report.TaskScenarios = comparisons
+	b.report.PackedOriginTaskScenarios, err = b.compareTaskScenariosOnce("task-scenarios-packed-origin", relicSyncingTaskScenarios, true)
+	return err
+}
+
+// compareTaskScenariosOnce runs names without and with relics, recording the
+// two fixture stages under stage plus -without and -with.
+func (b *relicBench) compareTaskScenariosOnce(stage string, names []string, packOrigin bool) ([]RelicTaskComparison, error) {
 	base := scenarioDependencies{
 		buildFixture:      BuildFixture,
 		prepareProjection: prepareProjection,
 		measureCommand:    b.run.dependencies.measureCommand,
 		cleanupFixture:    os.RemoveAll,
+		packOrigin:        packOrigin,
 	}
 	var without, with []ScenarioResult
-	if err := b.stage("task-scenarios-without", func(ctx context.Context) (err error) {
-		without, err = runColdCLI(b.run.ctx, b.run.spec.RunSpec, filepath.Join(b.root, "tasks-without"), names, base)
+	if err := b.stage(stage+"-without", func(ctx context.Context) (err error) {
+		without, err = runColdCLI(b.run.ctx, b.run.spec.RunSpec, filepath.Join(b.root, stage+"-without"), names, base)
 		return err
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	withRelics := base
 	withRelics.buildFixture = func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
@@ -1005,25 +1030,26 @@ func (b *relicBench) compareTaskScenarios() error {
 		fixture.Root = absRoot
 		return fixture, nil
 	}
-	if err := b.stage("task-scenarios-with", func(ctx context.Context) (err error) {
-		with, err = runColdCLI(b.run.ctx, b.run.spec.RunSpec, filepath.Join(b.root, "tasks-with"), names, withRelics)
+	if err := b.stage(stage+"-with", func(ctx context.Context) (err error) {
+		with, err = runColdCLI(b.run.ctx, b.run.spec.RunSpec, filepath.Join(b.root, stage+"-with"), names, withRelics)
 		return err
 	}); err != nil {
-		return err
+		return nil, err
 	}
+	comparisons := make([]RelicTaskComparison, 0, len(names))
 	for index, name := range names {
 		for _, result := range []ScenarioResult{without[index], with[index]} {
 			for _, sample := range result.Samples {
 				if !sampleSucceeded(sample) {
-					return fmt.Errorf("task comparison %s failed: exit code %d: %s", name, sample.ExitCode, sample.Error)
+					return nil, fmt.Errorf("%s comparison %s failed: exit code %d: %s", stage, name, sample.ExitCode, sample.Error)
 				}
 			}
 		}
-		b.report.TaskScenarios = append(b.report.TaskScenarios, RelicTaskComparison{
+		comparisons = append(comparisons, RelicTaskComparison{
 			Name: name, Without: without[index].Summary, With: with[index].Summary,
 		})
 	}
-	return nil
+	return comparisons, nil
 }
 
 // writeRelicMarkdown writes the ## Relics section: the fixture, the reorder
@@ -1089,13 +1115,24 @@ func writeRelicMarkdown(w io.Writer, report *RelicBenchmarkReport) error {
 	fmt.Fprintf(&out, "\nDisposable cache: %d bytes (projection %d, validation %d).\n",
 		report.Cache.TotalBytes, report.Cache.ProjectionBytes, report.Cache.ValidationBytes)
 
+	fmt.Fprintf(&out, "\nTask scenarios without and with the relic set. %s synchronize with a local bare origin, so they appear twice: \"origin refs loose\" is origin as a push leaves it, every ref a loose file; \"origin refs packed\" is origin after `git pack-refs --all`, as a hosted or maintained origin keeps it. The clone being measured is never packed by the harness; its refs are as Workbook leaves them.\n",
+		strings.Join(relicSyncingTaskScenarios, " and "))
 	fmt.Fprintln(&out, "\n| Task scenario | Median without (ms) | Median with (ms) | P95 Git processes without | P95 Git processes with |")
 	fmt.Fprintln(&out, "| --- | ---: | ---: | ---: | ---: |")
-	for _, comparison := range report.TaskScenarios {
-		fmt.Fprintf(&out, "| %s | %.2f | %.2f | %d | %d |\n", comparison.Name,
-			comparison.Without.MedianMilliseconds, comparison.With.MedianMilliseconds,
-			comparison.Without.P95GitProcesses, comparison.With.P95GitProcesses)
+	writeComparisons := func(comparisons []RelicTaskComparison, label func(string) string) {
+		for _, comparison := range comparisons {
+			fmt.Fprintf(&out, "| %s | %.2f | %.2f | %d | %d |\n", label(comparison.Name),
+				comparison.Without.MedianMilliseconds, comparison.With.MedianMilliseconds,
+				comparison.Without.P95GitProcesses, comparison.With.P95GitProcesses)
+		}
 	}
+	writeComparisons(report.TaskScenarios, func(name string) string {
+		if slices.Contains(relicSyncingTaskScenarios, name) {
+			return name + ", origin refs loose"
+		}
+		return name
+	})
+	writeComparisons(report.PackedOriginTaskScenarios, func(name string) string { return name + ", origin refs packed" })
 	_, err := io.WriteString(w, out.String())
 	return err
 }
