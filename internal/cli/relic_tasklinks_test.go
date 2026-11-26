@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"slices"
@@ -245,5 +246,22 @@ func TestReverseLookupsSurviveDeletingTheIndex(t *testing.T) {
 			mustRun(t, repository, "rebuild")
 			assertSameOutputs(t, "after rebuild", outputs(), want)
 		})
+	}
+}
+
+// A service whose tasks were not read from a store has no relic index to ask,
+// so show says the links are not listed rather than leaving them out silently.
+func TestTaskRelicLinksWarnsWhenTheReaderIsNotAStore(t *testing.T) {
+	t.Parallel()
+	links, warnings, err := taskRelicLinks(context.Background(), core.Service{}, "WB-1")
+	if err != nil || links != nil {
+		t.Fatalf("taskRelicLinks() = (%v, %v, %v), want no links and no error", links, warnings, err)
+	}
+	want := []core.Warning{{
+		Code:    core.WarningRelicLinksUnread,
+		Message: "relics cannot be read, so their links are not listed: the task was not read from the local index",
+	}}
+	if !slices.Equal(warnings, want) {
+		t.Fatalf("taskRelicLinks() warnings = %#v, want %#v", warnings, want)
 	}
 }

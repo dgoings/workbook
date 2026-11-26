@@ -51,11 +51,16 @@ func writeRelicLinkMatches(stdout io.Writer, matches []core.RelicLinkMatch) {
 // taskRelicLinks reads the links relics have to a task, for workbook show,
 // through the relic index on the store the task was read from. It never
 // fails the show: a relic, or every relic, that cannot be read is a warning.
-// Only the caller's own cancellation is returned.
+// Only the caller's own cancellation is returned. A task not read from a
+// store has no relic index to ask, which is a warning too, so links are never
+// left out without one.
 func taskRelicLinks(ctx context.Context, service core.Service, taskID string) ([]core.TaskRelicLink, []core.Warning, error) {
 	store, ok := service.Reader.(*projection.Store)
 	if !ok {
-		return nil, nil, nil
+		return nil, []core.Warning{{
+			Code:    core.WarningRelicLinksUnread,
+			Message: "relics cannot be read, so their links are not listed: the task was not read from the local index",
+		}}, nil
 	}
 	index := store.RelicReader()
 	relics := core.RelicService{Config: service.Config, Keys: service.Keys, Reader: index, Links: index}
