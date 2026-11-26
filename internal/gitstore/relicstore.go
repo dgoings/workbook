@@ -426,7 +426,7 @@ func validateRelicTipObjects(
 		return core.RelicSnapshot{}, err
 	}
 	if err := core.ValidateRelicLinks(state, links); err != nil {
-		return core.RelicSnapshot{}, err
+		return core.RelicSnapshot{}, corruptRelic(head.RelicID, "%v", err)
 	}
 	if pack.Operations[0].Type == core.RelicOperationCreate {
 		if parentCount != 0 {

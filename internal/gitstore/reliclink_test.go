@@ -114,6 +114,33 @@ func TestReadRefusesLinksNamingAMissingPart(t *testing.T) {
 		requireNamedCorrupt("GetRelic()", err)
 		_, err = repo.ReadRelicTips(context.Background(), config, []core.RelicHead{{RelicID: relicID, ObjectID: commit}})
 		requireNamedCorrupt("ReadRelicTips()", err)
+		want := "relic " + relicID + ": relic link " + relicTestID(20) + " is from part " + relicTestID(99) +
+			", which the relic does not have"
+		if err.Error() != want {
+			t.Fatalf("ReadRelicTips() error = %q, want %q", err, want)
+		}
+
+		// The check that judges a tip's objects names the relic itself, as
+		// the checks beside it do, rather than leaving that to its caller.
+		var input bytes.Buffer
+		requestRelicTipObjects(&input, commit)
+		batch, err := repo.startRelicObjectBatch(context.Background(), input.Bytes())
+		if err != nil {
+			t.Fatalf("startRelicObjectBatch() error = %v", err)
+		}
+		defer batch.Close()
+		objects, err := readRelicTipObjects(batch)
+		if err != nil {
+			t.Fatalf("readRelicTipObjects() error = %v", err)
+		}
+		decoded, err := decodeObjectID(commit)
+		if err != nil {
+			t.Fatalf("decodeObjectID(%s) error = %v", commit, err)
+		}
+		_, err = validateRelicTipObjects(objects, config, core.RelicHead{RelicID: relicID, ObjectID: commit}, len(decoded))
+		if core.CategoryOf(err) != core.CategoryCorruptData || err.Error() != want {
+			t.Fatalf("validateRelicTipObjects() error = %v, want corrupt data %q", err, want)
+		}
 	})
 }
 
