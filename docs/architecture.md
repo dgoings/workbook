@@ -1700,10 +1700,12 @@ alternating between two places never writes a relic operation twice. The two
 synchronizations with the new place then publish them. Verification lists
 both places' relic refs and requires the new place to hold every operation of
 every relic the old place holds, at the same commit, under other commits, or in
-a relic tip parked in this checkout. A name under `refs/workbook/relics/` at
-the old place that is not one of this project's relics cannot be carried, so it
-leaves the move unverified, and `--clean-up`, which deletes only after a
-verified move, deletes nothing. A relic conflict met while carrying parks the
+a relic tip parked in this checkout. A name under `refs/workbook/relics/` or
+`refs/workbook/tasks/` at the old place that is not one of this project's
+relics or tasks cannot be carried, so it leaves the move unverified, and
+`--clean-up`, which deletes only after a verified move, deletes nothing. The
+refusal names each such ref and the `git push <old place> --delete <ref>` that
+removes it, since running the move again never carries it. A relic conflict met while carrying parks the
 local tip as any fetch does; the run is verified but exits 8, and `--clean-up`
 waits until a person has looked at it.
 

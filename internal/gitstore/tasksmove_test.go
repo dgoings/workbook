@@ -570,40 +570,63 @@ func TestMoveVerificationNamesARelicTheNewPlaceLacks(t *testing.T) {
 	assertSameRelics(t, fixture)
 }
 
-// A ref under the relic namespace at the old place that is not one of this
-// project's relics, whether another key's relic or a name that is no relic ID,
-// is one the move cannot carry. The verification fails naming it, so that
-// --clean-up never deletes it at the old place, and a rerun fails the same way.
-func TestMoveVerificationNamesARelicRefTheMoveCannotCarry(t *testing.T) {
+// A ref under the relic or task namespace at the old place that is not one of
+// this project's records, whether another key's or a name that is no ID, is
+// one the move cannot carry. The verification fails naming the ref and how to
+// remove it at the old place, so that --clean-up never deletes it there, a
+// rerun fails the same way, and the run after following that advice verifies.
+func TestMoveVerificationNamesARefTheMoveCannotCarry(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
-		ref  func(relicID string) string
+		ref  func(fixture moveFixture, relicID string) (stray, target string)
 	}{
-		{"another key's relic", func(relicID string) string {
+		{"another key's relic", func(_ moveFixture, relicID string) (string, string) {
 			_, body, _ := core.ParseRelicID(relicID)
-			return core.NewRelicID("OTHER", body)
+			return relicRef(core.NewRelicID("OTHER", body)), relicRef(relicID)
 		}},
-		{"not a relic ID", func(string) string { return "not-a-relic" }},
+		{"not a relic ID", func(_ moveFixture, relicID string) (string, string) {
+			return relicRef("not-a-relic"), relicRef(relicID)
+		}},
+		{"another key's task", func(fixture moveFixture, _ string) (string, string) {
+			_, body, _ := strings.Cut(fixture.ids[0], "-")
+			return taskRef("OTHER-" + body), taskRef(fixture.ids[0])
+		}},
+		{"not a task ID", func(fixture moveFixture, _ string) (string, string) {
+			return taskRef("notes"), taskRef(fixture.ids[0])
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 			fixture := newMoveFixture(t, testrepo.FormatSHA1)
 			relics := moveRelics(t, fixture)
-			stray := tc.ref(relics[0])
-			syncGit(t, fixture.origin, "update-ref", relicRef(stray), syncGit(t, fixture.origin, "rev-parse", relicRef(relics[0])))
-			want := "tasks does not hold everything origin holds: relic ref " + stray +
-				" (not one of this project's relics, so the move cannot carry it); run workbook move-tasks again"
+			stray, target := tc.ref(fixture, relics[0])
+			syncGit(t, fixture.origin, "update-ref", stray, syncGit(t, fixture.origin, "rev-parse", target))
+			wants := []string{
+				"origin holds a ref the move cannot carry, because it is not one of this project's tasks or relics: " + stray,
+				"git push origin --delete " + stray,
+			}
 			for round := 0; round < 2; round++ {
 				result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
-				if core.CategoryOf(err) != core.CategoryConflict || err == nil || !strings.Contains(err.Error(), want) || result.Verified {
-					t.Fatalf("MoveTasks() run %d with %s at the old place = (%+v, %v), want the verification to fail with %q",
-						round, stray, result, err, want)
+				if core.CategoryOf(err) != core.CategoryConflict || err == nil || result.Verified {
+					t.Fatalf("MoveTasks() run %d with %s at the old place = (%+v, %v), want the verification to fail", round, stray, result, err)
+				}
+				for _, want := range wants {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("MoveTasks() run %d error = %q, want %q", round, err, want)
+					}
+				}
+				if strings.Contains(err.Error(), "does not hold everything") {
+					t.Fatalf("MoveTasks() run %d error = %q, want only the stray ref named", round, err)
 				}
 			}
-			if got := refListing(t, fixture.tasks, relicRef(stray)); got != "" {
+			if got := refListing(t, fixture.tasks, stray); got != "" {
 				t.Fatalf("tasks holds %s after the move: %s", stray, got)
+			}
+			syncGit(t, fixture.first.Root, "push", "--no-verify", "origin", "--delete", stray)
+			if result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{}); err != nil || !result.Verified {
+				t.Fatalf("MoveTasks() after deleting %s = (%+v, %v), want it verified", stray, result, err)
 			}
 		})
 	}

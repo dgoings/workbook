@@ -577,7 +577,7 @@ func TestMoveTasksCleanUpKeepsARelicRefTheMoveCannotCarry(t *testing.T) {
 	if code, stdout, stderr := run(t, project.seed, "config", "set", "tasks-remote", "tasks", "--url", project.tasks); code != 0 {
 		t.Fatalf("config set tasks-remote = (%d, %q, %q)", code, stdout, stderr)
 	}
-	want := "relic ref " + stray + " (not one of this project's relics, so the move cannot carry it)"
+	want := "origin holds a ref the move cannot carry, because it is not one of this project's tasks or relics: " + relicRef(stray)
 	code, stdout, stderr := run(t, project.seed, "move-tasks", "--clean-up", "--json")
 	if code != 8 || stdout != "" || !strings.Contains(stderr, want) {
 		t.Fatalf("move-tasks --clean-up with %s at the old place = (%d, %q, %q), want 8 naming it", stray, code, stdout, stderr)

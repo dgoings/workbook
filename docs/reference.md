@@ -3970,11 +3970,18 @@ A relic change that cannot be replayed is a
 verified, and it exits 8 with the conflict's detail. `--clean-up` then
 deletes nothing, and its `Cleaned up:` line names the
 `workbook reset --remote <remote>` to run once the conflict is dealt with. A ref
-under `refs/workbook/relics/` at the old place that is not one of this
-project's relics cannot be carried, so the run is not verified: it exits 8
-naming `relic ref <name> (not one of this project's relics, so the move cannot
-carry it)`, and `--clean-up` deletes nothing. Remove or rename such a ref at
-the old place by hand once you know what it holds, and run the command again.
+under `refs/workbook/relics/` or `refs/workbook/tasks/` at the old place that
+is not one of this project's relics or tasks cannot be carried, so the run is
+not verified: it exits 8, and `--clean-up` deletes nothing. Running the command
+again cannot change that, so the error names each such ref and the command that
+removes it at the old place:
+
+```text
+workbook: origin holds a ref the move cannot carry, because it is not one of this project's tasks or relics: refs/workbook/relics/not-a-relic; the move stays unverified while it is there, so remove it there, after keeping a copy if another project needs it, with git push origin --delete refs/workbook/relics/not-a-relic, then run workbook move-tasks again
+```
+
+Look at what such a ref holds first: on a remote shared with another project it
+may be that project's task or relic.
 
 A conflicting edit that reaches the old place late is reported only to whoever
 runs `workbook move-tasks`, in the clone they run it from: setup and sync read

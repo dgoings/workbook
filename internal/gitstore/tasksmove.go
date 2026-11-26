@@ -1356,12 +1356,22 @@ func (r *Repository) verifyMovedTasks(ctx context.Context, config core.ProjectCo
 	if err != nil {
 		return err
 	}
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		return err
+	}
 	names := make([]string, 0, len(source))
+	var stray []string
 	for name := range source {
-		names = append(names, name)
+		if keys.RequireOwned(name) == nil {
+			names = append(names, name)
+		} else if have, found := destination[name]; !found || have != source[name] {
+			stray = append(stray, taskRefPrefix+name)
+		}
 	}
 	sort.Strings(names)
-	result.Tasks = len(source)
+	sort.Strings(stray)
+	result.Tasks = len(names)
 	result.Identical, result.Carried = 0, 0
 
 	var differing []string
@@ -1442,12 +1452,40 @@ func (r *Repository) verifyMovedTasks(ctx context.Context, config core.ProjectCo
 			result.Carried++
 		}
 	}
+	return moveVerificationError(from, to, missing, stray)
+}
+
+// moveVerificationError is the refusal of a move whose verification found the
+// new place lacking something the old place holds (missing), or found refs at
+// the old place the move cannot carry because they are not this project's
+// (stray). Running move-tasks again carries what is missing; it never carries
+// a stray ref, so that one is named with the command that removes it there.
+func moveVerificationError(from, to string, missing, stray []string) error {
+	var parts []string
 	if len(missing) > 0 {
-		return core.Errorf(core.CategoryConflict,
-			"%s does not hold everything %s holds: %s; run workbook move-tasks again",
-			to, from, strings.Join(missing, "; "))
+		part := fmt.Sprintf("%s does not hold everything %s holds: %s", to, from, strings.Join(missing, "; "))
+		if len(stray) == 0 {
+			part += "; run workbook move-tasks again"
+		}
+		parts = append(parts, part)
 	}
-	return nil
+	switch len(stray) {
+	case 0:
+	case 1:
+		parts = append(parts, fmt.Sprintf("%s holds a ref the move cannot carry, because it is not one of this project's "+
+			"tasks or relics: %s; the move stays unverified while it is there, so remove it there, after keeping a copy "+
+			"if another project needs it, with git push %s --delete %s, then run workbook move-tasks again",
+			from, stray[0], from, stray[0]))
+	default:
+		parts = append(parts, fmt.Sprintf("%s holds refs the move cannot carry, because they are not this project's "+
+			"tasks or relics: %s; the move stays unverified while they are there, so remove them there, after keeping a "+
+			"copy if another project needs them, with git push %s --delete %s, then run workbook move-tasks again",
+			from, strings.Join(stray, ", "), from, strings.Join(stray, " ")))
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return core.Errorf(core.CategoryConflict, "%s", strings.Join(parts, "; "))
 }
 
 // verifyMovedRelics proves, after verifyMovedTasks has fetched both places'
@@ -1476,16 +1514,16 @@ func (r *Repository) verifyMovedRelics(ctx context.Context, config core.ProjectC
 		return err
 	}
 	names := make([]string, 0, len(source))
-	var missing []string
+	var missing, stray []string
 	for name := range source {
 		if core.ValidateRelicIDShape(name) == nil && keys.OwnsRelic(name) {
 			names = append(names, name)
 		} else if have, found := destination[name]; !found || have != source[name] {
-			missing = append(missing, "relic ref "+name+" (not one of this project's relics, so the move cannot carry it)")
+			stray = append(stray, relicRefPrefix+name)
 		}
 	}
 	sort.Strings(names)
-	sort.Strings(missing)
+	sort.Strings(stray)
 	result.Relics, result.RelicsIdentical, result.RelicsCarried = len(names), 0, 0
 
 	var parked map[string][]string
@@ -1514,12 +1552,7 @@ func (r *Repository) verifyMovedRelics(ctx context.Context, config core.ProjectC
 		}
 		result.RelicsCarried++
 	}
-	if len(missing) > 0 {
-		return core.Errorf(core.CategoryConflict,
-			"%s does not hold everything %s holds: %s; run workbook move-tasks again",
-			to, from, strings.Join(missing, "; "))
-	}
-	return nil
+	return moveVerificationError(from, to, missing, stray)
 }
 
 // parkedRelicTips is every parked relic tip in this checkout, by relic ID.
