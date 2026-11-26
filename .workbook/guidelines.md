@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=be8af5dc sha256=d32c507e4d862d04d56d3d132f4cce0075d72bf6fc386bf5a478217d5843e3c4 -->
+<!-- workbook:begin generator=987114c4 sha256=82ea3365824f8e6841f83920c2aeccfd9fbdaf58fd236986af1ae1e241ad3bff -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`
@@ -123,8 +123,9 @@ A relic holds a spec, a plan, a decision record or similar material that is
 longer or more structured than a task. It is made of typed parts, each with
 fields and an optional body. A relic ID is `WB-R-<ULID>` and a task ID
 `WB-<ULID>`. A part is addressed as `<relic>#<part>`, and any unambiguous
-prefix of either ID works. `workbook next`, `workbook list` and the board
-`workbook serve` runs never return relics.
+prefix of either ID works. Parts added by one command start alike, so a
+part prefix may need 16 characters or more. `workbook next`, `workbook list`
+and the board `workbook serve` runs never return relics.
 
 Read the relics linked to a task, one part at a time, and save an edit
 naming the version you read:
@@ -158,12 +159,18 @@ the same way. A sync that meets another clone's edit of the same body exits
 8 and reports it in the result envelope's `relicConflict` list: an entry of
 `type` `body` whose `body` carries `base`, `ours` and `theirs`, with your
 text kept at `parkedRef`. Other local changes the sync did not apply are
-listed in `unapplied`; make them again after saving the body.
+listed in `unapplied`; make them again after saving the body. When a relic
+change exits 8 this way, it recorded nothing; run it again after you
+resolve the body.
 
 On either, read the part again. When your intent is clear, apply your
 change to the current text and save with `--base` set to the current
 version. Otherwise show the user both versions and ask; never save over
 text you have not read.
+
+For other edits (the title, a property or field, or adding, moving,
+removing or restoring a part), run `workbook relic update --help`; for
+export, see `workbook relic --help`.
 
 ## Machine-readable output
 
@@ -184,7 +191,7 @@ Check the result of every mutation; do not assume it succeeded.
 | 5 | `validation` | change the input; it fails the same way on every retry |
 | 6 | `stale-write` | retry the identical command; it will probably succeed. A relic save refused for its `--base` needs a fresh read first |
 | 7 | `corrupt-data` | read the message; repair or rebuild before continuing |
-| 8 | `conflict` | read the envelope's `conflict` list, change the input, then retry |
+| 8 | `conflict` | read the envelope's `conflict` list (`relicConflict` for a relic), change the input, then retry |
 | 10 | `assigned` | somebody else holds that task; pick another one, or `--force` to share it |
 
 ## Publication is automatic
