@@ -98,6 +98,10 @@ to the current text and save with `--base` set to the current version.
 Otherwise show the user both versions and ask; never save over text you have
 not read.
 
+For other edits (the title, a property or field, or adding, moving, removing or
+restoring a part), run `workbook relic update --help`; for export, see
+`workbook relic --help`.
+
 ## Statuses belong to the project
 
 A project's statuses are its own configuration, not a fixed list. Workbook gives

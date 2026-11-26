@@ -300,7 +300,10 @@ func relicGuidelines(keys core.KeySet) string {
 		"On either, read the part again. When your intent is clear, apply your\n" +
 		"change to the current text and save with `--base` set to the current\n" +
 		"version. Otherwise show the user both versions and ask; never save over\n" +
-		"text you have not read.\n\n"
+		"text you have not read.\n\n" +
+		"For other edits (the title, a property or field, or adding, moving,\n" +
+		"removing or restoring a part), run `workbook relic update --help`; for\n" +
+		"export, see `workbook relic --help`.\n\n"
 }
 
 // authoredText renders a value somebody wrote for prose inside a generated

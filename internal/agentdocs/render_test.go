@@ -756,7 +756,10 @@ const defaultRelicSection = "## Relics\n\n" +
 	"On either, read the part again. When your intent is clear, apply your\n" +
 	"change to the current text and save with `--base` set to the current\n" +
 	"version. Otherwise show the user both versions and ask; never save over\n" +
-	"text you have not read.\n"
+	"text you have not read.\n\n" +
+	"For other edits (the title, a property or field, or adding, moving,\n" +
+	"removing or restoring a part), run `workbook relic update --help`; for\n" +
+	"export, see `workbook relic --help`.\n"
 
 func TestRenderGuidelinesPinsTheRelicSection(t *testing.T) {
 	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{})
@@ -829,6 +832,9 @@ func TestSkillTeachesRelics(t *testing.T) {
 		// The ID shapes.
 		"`<KEY>-R-<ULID>`",
 		"a part prefix may need 16 characters or more",
+		// The edits other than a body save.
+		"`workbook relic update --help`",
+		"`workbook relic --help`",
 		// Restated where agents look for it.
 		"Save a relic body only with the `--base` you read.",
 	} {
