@@ -5006,10 +5006,14 @@ they reach commits it no longer holds and so hide work that exists only here.
 The bundle keeps that work, so a plain reset goes ahead with it. `--no-backup`
 writes no bundle, so a reset with `--no-backup` of a checkout that holds such
 work is refused, exit 5, reason `unpublished`. The refusal names each task and
-relic and ends with what can be done, whatever the work is: `Run workbook
-sync to publish it, or reset without --no-backup to keep it in a bundle, or
-add --discard-unpublished to lose it.` A parked tip, task or relic, is never
-published, so only the bundle keeps it. `--discard-unpublished` is the only
+relic, marks a damaged ref `damaged`, and ends with what can be done. When
+everything listed is work sync can publish, that is `Run workbook sync to
+publish it, or reset without --no-backup to keep it in a bundle, or add
+--discard-unpublished to lose it.` A parked tip, task or relic, and a damaged
+ref are never published, so only the bundle keeps them: when the work is only
+of that kind the refusal says `Nothing publishes set-aside edits or a damaged
+ref, so workbook sync cannot help`, and when it is mixed it says sync publishes
+only the rest. `--discard-unpublished` is the only
 way to lose such work on purpose, and it needs `--no-backup`. While the check cannot be made,
 `--no-backup` is refused, exit 5, reason `unchecked`, with or without
 `--discard-unpublished`: a bundle is cheap, and the tracking refs cannot say

@@ -593,3 +593,41 @@ func TestResetRefusalWithoutARelicIsUnchanged(t *testing.T) {
 		t.Fatalf("refusal with only a task = %q", message)
 	}
 }
+
+// Nothing publishes a damaged relic ref or a parked tip, so the refusal of
+// reset --no-backup does not offer sync for them: it offers the bundle and
+// --discard-unpublished, and offers sync only beside work sync can publish.
+func TestResetRefusalOffersSyncOnlyForWorkItPublishes(t *testing.T) {
+	t.Parallel()
+	const syncRemedy = "Run workbook sync to publish it"
+	t.Run("a damaged relic ref", func(t *testing.T) {
+		t.Parallel()
+		clone, relicID, _ := cloneWithAHandMadeRelicTip(t)
+		message, refusal := resetRefusalJSON(t, clone, 5, "--no-backup")
+		if strings.Contains(message, syncRemedy) || !strings.Contains(message, "relic "+relicID) ||
+			!strings.Contains(message, "damaged") || !strings.Contains(message, "without --no-backup") ||
+			!strings.Contains(message, "--discard-unpublished") || len(refusal.Unpublished) != 1 {
+			t.Fatalf("refusal = %q, %+v, want the damaged relic named and no sync offered", message, refusal)
+		}
+	})
+	t.Run("a parked task tip beside a new task", func(t *testing.T) {
+		t.Parallel()
+		project := codeProject(t, "sha1")
+		clone := cloneCode(t, project)
+		if code, stdout, stderr := run(t, clone, "setup"); code != 0 {
+			t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
+		}
+		parked := "refs/workbook/reconciled/" + project.ids[0] + "/1"
+		cliGit(t, clone, "update-ref", parked, cliGitOutput(t, clone, "rev-parse", "refs/workbook/tasks/"+project.ids[0]))
+		message, _ := resetRefusalJSON(t, clone, 5, "--no-backup")
+		if strings.Contains(message, syncRemedy) || !strings.Contains(message, "set-aside edits at "+parked) ||
+			!strings.Contains(message, "without --no-backup") {
+			t.Fatalf("refusal with only a parked tip = %q, want no sync offered", message)
+		}
+		cliCreateTask(t, clone, "Created here only")
+		mixed, _ := resetRefusalJSON(t, clone, 5, "--no-backup")
+		if !strings.Contains(mixed, "workbook sync publishes") || !strings.Contains(mixed, "nothing publishes") {
+			t.Fatalf("refusal with a parked tip and a new task = %q, want sync offered for the task only", mixed)
+		}
+	})
+}

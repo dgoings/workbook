@@ -222,16 +222,48 @@ func refuseLocalReset(plan gitstore.LocalResetPlan, options gitstore.ResetOption
 			Unpublished: plan.Unpublished,
 			SetAside:    plan.SetAside,
 		}, "this checkout holds work that exists only here, which %s does not hold: %s. %s%s",
-			plan.Remote, describeLocalOnly(plan), localOnlyRemedies, stopped)
+			plan.Remote, describeLocalOnly(plan), localOnlyRemedies(plan), stopped)
 	}
 	return nil
 }
 
 // localOnlyRemedies says what can be done about the work a refused reset
-// would lose. Sync publishes relics as it publishes tasks, so the remedies
-// are the same whatever the work is.
-const localOnlyRemedies = "Run workbook sync to publish it, or reset without --no-backup to keep it in a bundle, " +
-	"or add --discard-unpublished to lose it."
+// would lose. Sync publishes relics as it publishes tasks, but it never
+// publishes set-aside edits or a damaged ref, so it is offered only for the
+// rest.
+func localOnlyRemedies(plan gitstore.LocalResetPlan) string {
+	damaged := damagedRefs(plan)
+	publishable, unpublishable := 0, len(plan.SetAside)
+	for _, item := range plan.Unpublished {
+		if damaged[item.Ref] {
+			unpublishable++
+		} else {
+			publishable++
+		}
+	}
+	switch {
+	case unpublishable == 0:
+		return "Run workbook sync to publish it, or reset without --no-backup to keep it in a bundle, " +
+			"or add --discard-unpublished to lose it."
+	case publishable == 0:
+		return "Nothing publishes set-aside edits or a damaged ref, so workbook sync cannot help: " +
+			"reset without --no-backup to keep it in a bundle, or add --discard-unpublished to lose it."
+	default:
+		return "workbook sync publishes the work that is not set aside or damaged, and nothing publishes the rest: " +
+			"reset without --no-backup to keep it all in a bundle, or add --discard-unpublished to lose it."
+	}
+}
+
+// damagedRefs is the set of the plan's refs that are damaged.
+func damagedRefs(plan gitstore.LocalResetPlan) map[string]bool {
+	damaged := map[string]bool{}
+	for _, ref := range plan.Refs {
+		if ref.Damaged != "" {
+			damaged[ref.Ref] = true
+		}
+	}
+	return damaged
+}
 
 // runResetRemote wipes one remote's Workbook refs. A remote the tasks live
 // on, rather than a marked place they left, is wiped only when --confirm
@@ -328,8 +360,13 @@ func emptyIfNil[T any](values []T) []T {
 // describeLocalOnly names what exists only in this checkout, for a refusal.
 func describeLocalOnly(plan gitstore.LocalResetPlan) string {
 	var parts []string
+	damaged := damagedRefs(plan)
 	for _, item := range plan.Unpublished {
-		parts = append(parts, describeUnpublished(item))
+		text := describeUnpublished(item)
+		if damaged[item.Ref] {
+			text += ", damaged"
+		}
+		parts = append(parts, text)
 	}
 	for _, ref := range plan.SetAside {
 		parts = append(parts, "set-aside edits at "+ref)
