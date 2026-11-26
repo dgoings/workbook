@@ -245,8 +245,8 @@ text, so object members are sorted and `<`, `>` and `&` inside a string are
 `\u003c`, `\u003e` and `\u0026`. It nests arrays and objects at
 most 32 levels deep, and it is at most 65,536 bytes as a property's value and
 16,384 bytes as a field's. A `name` is 1 to 100 bytes of valid UTF-8 with no
-`=`, no control character (Unicode category Cc), and no white space (Unicode
-`White_Space`) at either end. Names are not normalized, and are compared byte
+`=`, no control character (Unicode category Cc), no format character
+(category Cf), and no white space (Unicode `White_Space`) at either end. Names are not normalized, and are compared byte
 for byte. `part.add` and `part.body.set` carry a body's label and size and
 never its content, and a new part's fields are not in the pack either: both
 are in the commit's tree. An operation pack therefore does not grow with the

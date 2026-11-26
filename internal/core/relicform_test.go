@@ -155,9 +155,8 @@ func TestARelicNameIsAtMost100BytesWithNoWhiteSpaceAtItsEnds(t *testing.T) {
 		strings.Repeat("n", 100),
 		strings.Repeat("é", 50), // 100 bytes
 		"reviewer name",
-		"a\u00a0b",         // white space inside a name is the name's own
-		"a\u3000b",         //
-		"\u200bzero-width", // ZERO WIDTH SPACE is not White_Space
+		"a\u00a0b", // white space inside a name is the name's own
+		"a\u3000b", //
 		"x",
 	}
 	bad := map[string]string{
@@ -464,7 +463,6 @@ func TestARelicNameHoldsNoControlCharacter(t *testing.T) {
 	}
 	good := map[string]string{
 		"U+00A0, the first character after the range": "sta\xc2\xa0tus",
-		"U+00AD, a format character":                  "sta\xc2\xadtus",
 	}
 	for _, kind := range []string{"property", "field"} {
 		for label, name := range good {
@@ -495,5 +493,48 @@ func TestARelicNameHoldsNoControlCharacter(t *testing.T) {
 		state := goldenRelicState()
 		state.Relic.Properties = map[string]json.RawMessage{name: json.RawMessage(`1`)}
 		requireRelicStateRoundTrips(t, "a stored property name with "+label, state)
+	}
+}
+
+// A name holds no format character, by Unicode's category Cf. None of them is
+// seen on a terminal, so two names that differ by one look the same: a
+// zero-width space or a byte-order mark at an end, a right-to-left override
+// that reverses what follows, a soft hyphen.
+func TestARelicNameHoldsNoFormatCharacter(t *testing.T) {
+	bad := map[string]string{
+		"U+200B at the end":     "status\u200b",
+		"U+FEFF at the start":   "\ufeffstatus",
+		"U+202E inside":         "sta\u202etus",
+		"U+00AD inside":         "sta\u00adtus",
+		"U+2060 inside":         "sta\u2060tus",
+		"U+E0001, a tag":        "status\U000e0001",
+		"U+0600, Arabic":        "\u0600status",
+		"U+200D, a zero joiner": "sta\u200dtus",
+	}
+	for _, kind := range []string{"property", "field"} {
+		for label, name := range bad {
+			err := ValidateRelicName(kind, name)
+			requireValidation(t, kind+" name with "+label, err)
+			if err != nil && !strings.Contains(err.Error(), "format characters") {
+				t.Errorf("%s name with %s: message %q, want it to say a name holds no format characters", kind, label, err)
+			}
+		}
+		// Letters outside ASCII and visible marks are kept.
+		for _, name := range []string{"stätus", "статус", "状態", "status·2"} {
+			if err := ValidateRelicName(kind, name); err != nil {
+				t.Errorf("%s name %q: %v", kind, name, err)
+			}
+		}
+	}
+
+	// On read each is corrupt data, in the state and in a part's fields.
+	for label, name := range bad {
+		state := goldenRelicState()
+		state.Relic.Properties = map[string]json.RawMessage{name: json.RawMessage(`1`)}
+		requireRelicStateRefused(t, "a stored property name with "+label, state)
+
+		fields := NewRelicFields(map[string]json.RawMessage{name: json.RawMessage(`1`)})
+		_, err := DecodeRelicFieldsDocument(marshalRelicDocument(t, fields))
+		requireCorruptData(t, "a stored field name with "+label, err)
 	}
 }

@@ -801,9 +801,12 @@ workbook: this update sets field "accepted" of part 01M87F0T8ZDXPZV8WNS006CBKV t
 ```
 
 **Names.** A property name or a field name is 1 to 100 bytes of valid UTF-8.
-It must not contain `=` or a control character, and it must not begin or end
-with white space. A control character is one in Unicode's category Cc: U+0000
-to U+001F, U+007F, and U+0080 to U+009F. White space is a character with
+It must not contain `=`, a control character or a format character, and it
+must not begin or end with white space. A control character is one in
+Unicode's category Cc: U+0000 to U+001F, U+007F, and U+0080 to U+009F. A
+format character is one in category Cf, which nothing shows: U+200B ZERO WIDTH
+SPACE, U+FEFF ZERO WIDTH NO-BREAK SPACE, U+00AD SOFT HYPHEN and the direction
+marks and overrides such as U+202E among them. White space is a character with
 Unicode's `White_Space` property, which includes the no-break space. White
 space inside a name is allowed unless it is a control character, as a tab is:
 `review status` is a name. Names are compared byte for byte. Letter case

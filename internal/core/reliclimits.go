@@ -124,10 +124,11 @@ func ValidateRelicBodyFormat(label string) error {
 // ValidateRelicName checks a property or field name. kind is "property" or
 // "field" and only shapes the message.
 //
-// A name is at most MaxRelicNameBytes of valid UTF-8, not empty, without '='
-// or a control character, and with no white space at either end. A control
-// character is one in Unicode's category Cc: U+0000 to U+001F, U+007F, and
-// U+0080 to U+009F. White space is Unicode's White_Space property: two names
+// A name is at most MaxRelicNameBytes of valid UTF-8, not empty, without '=',
+// a control character or a format character, and with no white space at either
+// end. A control character is one in Unicode's category Cc: U+0000 to U+001F,
+// U+007F, and U+0080 to U+009F. A format character is one in category Cf, such
+// as U+200B, U+FEFF, U+202E and U+00AD. White space is Unicode's White_Space property: two names
 // that differ only by a space nobody can see would be two properties. White
 // space inside a name is the name's own, unless it is a control character, as
 // a tab is. The
@@ -148,6 +149,13 @@ func ValidateRelicName(kind, name string) error {
 		if unicode.IsControl(r) || r == '=' {
 			return Errorf(CategoryValidation,
 				"a %s name must not contain '=' or control characters", kind)
+		}
+		// A format character (category Cf, such as U+200B, U+FEFF, U+202E
+		// or U+00AD) is not seen, so two names that differ by one look the
+		// same, and a bidirectional one reorders what is shown after it.
+		if unicode.Is(unicode.Cf, r) {
+			return Errorf(CategoryValidation,
+				"a %s name must not contain invisible format characters, such as U+%04X", kind, r)
 		}
 	}
 	first, _ := utf8.DecodeRuneInString(name)
