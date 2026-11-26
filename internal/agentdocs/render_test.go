@@ -720,8 +720,9 @@ const defaultRelicSection = "## Relics\n\n" +
 	"longer or more structured than a task. It is made of typed parts, each with\n" +
 	"fields and an optional body. A relic ID is `WB-R-<ULID>` and a task ID\n" +
 	"`WB-<ULID>`. A part is addressed as `<relic>#<part>`, and any unambiguous\n" +
-	"prefix of either ID works. `workbook next`, `workbook list` and the board\n" +
-	"`workbook serve` runs never return relics.\n\n" +
+	"prefix of either ID works. Parts added by one command start alike, so a\n" +
+	"part prefix may need 16 characters or more. `workbook next`, `workbook list`\n" +
+	"and the board `workbook serve` runs never return relics.\n\n" +
 	"Read the relics linked to a task, one part at a time, and save an edit\n" +
 	"naming the version you read:\n\n" +
 	"```sh\n" +
@@ -827,6 +828,7 @@ func TestSkillTeachesRelics(t *testing.T) {
 		"exits 8 this way, it recorded nothing",
 		// The ID shapes.
 		"`<KEY>-R-<ULID>`",
+		"a part prefix may need 16 characters or more",
 		// Restated where agents look for it.
 		"Save a relic body only with the `--base` you read.",
 	} {

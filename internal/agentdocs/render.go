@@ -264,8 +264,9 @@ func relicGuidelines(keys core.KeySet) string {
 		"longer or more structured than a task. It is made of typed parts, each with\n" +
 		"fields and an optional body. A relic ID is `" + key + "-R-<ULID>` and a task ID\n" +
 		"`" + key + "-<ULID>`. A part is addressed as `<relic>#<part>`, and any unambiguous\n" +
-		"prefix of either ID works. `workbook next`, `workbook list` and the board\n" +
-		"`workbook serve` runs never return relics.\n\n" +
+		"prefix of either ID works. Parts added by one command start alike, so a\n" +
+		"part prefix may need 16 characters or more. `workbook next`, `workbook list`\n" +
+		"and the board `workbook serve` runs never return relics.\n\n" +
 		"Read the relics linked to a task, one part at a time, and save an edit\n" +
 		"naming the version you read:\n\n" +
 		"```sh\n" +
