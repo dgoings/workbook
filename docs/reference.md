@@ -1804,7 +1804,7 @@ WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	reconciled	relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
 Push:
 WB-01M87F19RB1PVEE87F7PS1D1FJ	up-to-date
 WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	published
-workbook: warning: relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: part 01M87F11V42NP3MEYSJ017ZDDA was edited here and removed in another clone; it stays removed and holds the edit; restore it with `workbook relic update WB-R-01M87F0SQYHP3HCR4QEN3RTVEX --restore-part 01M87F11V42NP3MEYSJ017ZDDA` to see the edit
+workbook: warning: relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: part 01M87F11V42NP3MEYSJ017ZDDA was edited here and removed in another clone; it stays removed and holds the edit; `workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F11V42NP3MEYSJ017ZDDA` shows the part with the edit, and `workbook relic update WB-R-01M87F0SQYHP3HCR4QEN3RTVEX --restore-part 01M87F11V42NP3MEYSJ017ZDDA` restores it for everyone
 WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
 Author:	alice@example.com
 Updated:	2026-11-24T19:03:20Z

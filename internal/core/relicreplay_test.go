@@ -704,6 +704,13 @@ func TestRelicRemovedPartWarnings(t *testing.T) {
 				!strings.Contains(warning.Message, "part "+relicDocPartA) {
 				t.Errorf("%s: message %q does not name the relic and the part", label, warning.Message)
 			}
+			// Showing the part is the read that changes nothing, so it comes
+			// first; restoring it is a shared change.
+			show := strings.Index(warning.Message, "`workbook relic show "+relicDocRelic+"#"+relicDocPartA+"`")
+			restore := strings.Index(warning.Message, "--restore-part")
+			if show < 0 || (restore >= 0 && restore < show) {
+				t.Errorf("%s: message %q does not point at relic show before --restore-part", label, warning.Message)
+			}
 		}
 	}
 

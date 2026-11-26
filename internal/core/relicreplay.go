@@ -252,8 +252,9 @@ func RelicRemovedPartWarnings(relicID string, local, remote []RelicOperationPack
 		warnings = append(warnings, Warning{
 			Code: WarningRelicEditOnRemovedPart,
 			Message: "relic " + relicID + ": part " + part.ID + " was " + where +
-				"; it stays removed and holds the edit; restore it with `workbook relic update " + relicID +
-				" --restore-part " + part.ID + "` to see the edit",
+				"; it stays removed and holds the edit; `workbook relic show " + relicID + "#" + part.ID +
+				"` shows the part with the edit, and `workbook relic update " + relicID +
+				" --restore-part " + part.ID + "` restores it for everyone",
 		})
 	}
 	return warnings
