@@ -204,6 +204,44 @@ func TestAddRelicFixtureBuildsTheSmokeSet(t *testing.T) {
 	}
 }
 
+// Mutation witness: a fixture that ends without the pack a relic command runs
+// leaves every relic ref a loose file. No checkout that made its relics with
+// Workbook is in that state, and the task comparison would then charge the
+// relic set for refs the product packs. The test looks at the repository's
+// files, which only a test may do, to tell a loose ref from a packed one.
+func TestAddRelicFixtureLeavesNoRelicRefLoose(t *testing.T) {
+	t.Parallel()
+	fixture := sharedSmokeRelicFixtureFor(t)
+	_, repository := relicFixtureService(t, fixture)
+	root := filepath.Join(repository.CommonGitDir, filepath.FromSlash(relicRefPrefix))
+	var loose []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if os.IsNotExist(err) {
+			return filepath.SkipDir
+		}
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			loose = append(loose, entry.Name())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loose) != 0 {
+		t.Fatalf("%d relic refs are loose files after the fixture is built, want none: %v", len(loose), loose)
+	}
+	refs, err := repository.Git(context.Background(), nil, "for-each-ref", "--format=%(refname)", relicRefPrefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := countRefLines(refs), fixture.Spec.Relics+2; got != want {
+		t.Fatalf("relic refs = %d, want %d", got, want)
+	}
+}
+
 // Mutation witness: an ID source seeded from the clock, a body drawn from an
 // unseeded generator, or a link or move order taken from map iteration makes
 // two builds of one spec disagree. Git dates each commit from the clock, so the
@@ -393,4 +431,51 @@ func TestStorageClassifiesRelicObjects(t *testing.T) {
 	if account.UnclassifiedObjects != 0 {
 		t.Fatalf("unclassified objects = %d", account.UnclassifiedObjects)
 	}
+}
+
+// Mutation witness: a packFixtureObjects that leaves an object loose keeps the
+// task comparison charging the relic set for how its objects are stored, and
+// one that packs or moves a ref measures a checkout Workbook does not leave.
+func TestPackFixtureObjectsLeavesNoLooseObjectAndNoRefChanged(t *testing.T) {
+	t.Parallel()
+	fixture := sharedSmokeRelicFixtureFor(t)
+	root := filepath.Join(t.TempDir(), "copy")
+	if err := os.CopyFS(root, os.DirFS(fixture.Root)); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	git := func(args ...string) string {
+		t.Helper()
+		output, _, err := runRepositoryGit(ctx, time.Minute, root, args...)
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return string(output)
+	}
+	refs := git("for-each-ref")
+	if loose := git("count-objects"); strings.HasPrefix(loose, "0 objects") {
+		t.Fatalf("the fixture has no loose object to pack: %q", loose)
+	}
+	packedRefs, err := os.ReadFile(filepath.Join(root, ".git", "packed-refs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := packFixtureObjects(ctx, time.Minute, root); err != nil {
+		t.Fatal(err)
+	}
+	if loose := git("count-objects"); !strings.HasPrefix(loose, "0 objects") {
+		t.Fatalf("loose objects after the pack = %q, want none", loose)
+	}
+	if after := git("for-each-ref"); after != refs {
+		t.Fatalf("refs changed:\nbefore:\n%s\nafter:\n%s", refs, after)
+	}
+	afterPackedRefs, err := os.ReadFile(filepath.Join(root, ".git", "packed-refs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(afterPackedRefs, packedRefs) {
+		t.Fatal("the pack of objects changed which refs are packed")
+	}
+	git("fsck", "--connectivity-only")
 }

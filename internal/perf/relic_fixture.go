@@ -185,7 +185,10 @@ func newRelicFixtureBuilder(ctx context.Context, tasks Fixture, spec RelicFixtur
 			Fixture: tasks,
 			Spec:    spec,
 			Types:   append([]string(nil), relicFixtureTypes...),
-			HotTask: tasks.ActiveTaskIDs[0],
+			// The last active task, so that the task comparison's cli-*
+			// scenarios, which act on the first ones, measure a task with a
+			// typical number of links. task-show-linked-hot measures this one.
+			HotTask: tasks.ActiveTaskIDs[len(tasks.ActiveTaskIDs)-1],
 		},
 		repository: repository,
 		service: core.RelicService{
@@ -256,10 +259,11 @@ func (b *relicFixtureBuilder) createRelics(ctx context.Context) error {
 //
 // Link 0 of every relic points at the hot task; links 1 and on are spread in
 // turn over the other active tasks, and link k is from part k. The typical
-// task is the first of those others.
+// task is the first of those others, which is the first active task: the task
+// the cli-* scenarios of the task comparison show and edit.
 func (b *relicFixtureBuilder) linkAndMove(ctx context.Context) error {
 	spec := b.fixture.Spec
-	others := b.fixture.ActiveTaskIDs[1:]
+	others := b.fixture.ActiveTaskIDs[:len(b.fixture.ActiveTaskIDs)-1]
 	b.fixture.TypicalTask = others[0]
 	spread := 0
 	for index, relicID := range b.fixture.RelicIDs {
@@ -332,8 +336,13 @@ func randomPartPair(random *rand.Rand, parts int) (moved, anchor int) {
 	return moved, anchor
 }
 
-// finish checks that every relic has its ref.
+// finish packs the relic refs as a relic command does and checks that every
+// relic has its ref.
 func (b *relicFixtureBuilder) finish(ctx context.Context) (RelicFixture, error) {
+	// The builder writes through the service in this process, so nothing has
+	// run the pack every relic command ends with. Run it here: the fixture's
+	// relic refs are then as a checkout that made them with Workbook has them.
+	b.repository.PackMovedRelicRefs(ctx)
 	refs, err := b.repository.Git(ctx, nil, "for-each-ref", "--format=%(refname)", relicRefPrefix)
 	if err != nil {
 		return RelicFixture{}, err
