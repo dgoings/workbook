@@ -71,10 +71,13 @@ type RelicTaskComparison struct {
 // GitCommands holds, per scenario, the highest count of each Git subcommand
 // over its samples. StorageBefore is the main repository packed after the
 // relics are created; StorageAfter is the same repository packed after the
-// links, the moves and every scenario's edits. The syncs run in the clones,
-// which hold no more than the main repository. The fixture writes its moves
-// as MovesPerUpdate moves per commit, so the storage a move costs is a lower
-// bound on what one move per commit would cost.
+// links, the moves and the small edits relic-edit-part-large and
+// relic-move-part-large make there. The scenarios that create relics run in a
+// copy of the fixture, so no created relic is in either figure, and after
+// minus before is what the links and moves cost with those few edits. The
+// syncs run in the clones, which hold no more than the main repository. The
+// fixture writes its moves as MovesPerUpdate moves per commit, so the storage
+// a move costs is a lower bound on what one move per commit would cost.
 type RelicBenchmarkReport struct {
 	Fixture                    RelicFixtureSpec          `json:"fixture"`
 	FixtureMilliseconds        map[string]float64        `json:"fixtureMilliseconds"`
@@ -368,6 +371,7 @@ func runRelicBenchmark(ctx context.Context, spec RelicRunSpec, root string, depe
 	for _, step := range []func() error{
 		bench.buildFixture,
 		bench.publishAndClone,
+		bench.measureCreates,
 		bench.measureMain,
 		bench.measureRemote,
 		bench.measureFreshClones,
@@ -400,9 +404,13 @@ type relicBench struct {
 	fixture  RelicFixture
 	main     string
 	template string
-	origin   string
-	cloneA   string
-	cloneB   string
+	// creates is a copy of the fixture the scenarios that create relics run
+	// in, so the relics they add are in no other scenario's repository and in
+	// neither storage figure.
+	creates string
+	origin  string
+	cloneA  string
+	cloneB  string
 	// changes numbers the body edits made in clone B, so each is new text.
 	changes int
 }
@@ -543,12 +551,18 @@ func (b *relicBench) countRelicRefs(directory string) (int, error) {
 	return countRefLines(refs), nil
 }
 
-// measureMain runs the scenarios on the main repository, in the plan's order.
-func (b *relicBench) measureMain() error {
+// measureCreates runs the scenarios that create relics in a copy of the
+// fixture as it stood before it had an origin, the same state the main
+// repository holds, and removes the copy when they are done.
+func (b *relicBench) measureCreates() error {
 	spec := b.run.spec
-	relics, fixture, run := spec.Relics, b.fixture, b.run
-	samples := spec.Samples
-
+	relics, run := spec.Relics, b.run
+	b.creates = filepath.Join(b.root, "creates")
+	if err := b.stage("creates-copy", func(context.Context) error {
+		return os.CopyFS(b.creates, os.DirFS(b.template))
+	}); err != nil {
+		return err
+	}
 	document, err := LargeRelicDocument(relics)
 	if err != nil {
 		return err
@@ -557,13 +571,21 @@ func (b *relicBench) measureMain() error {
 	if err := os.WriteFile(documentPath, document, 0o644); err != nil {
 		return err
 	}
-	for range samples {
-		if _, err := run.measure("relic-create-large", b.main,
+	for range spec.Samples {
+		if _, err := run.measure("relic-create-large", b.creates,
 			[]string{"relic", "create", "--from-file", documentPath, "--no-sync", "--json"},
 			verifyRelicChanged(relics.LargeParts)); err != nil {
 			return err
 		}
 	}
+	return os.RemoveAll(b.creates)
+}
+
+// measureMain runs the scenarios on the main repository, in the plan's order.
+func (b *relicBench) measureMain() error {
+	spec := b.run.spec
+	relics, fixture, run := spec.Relics, b.fixture, b.run
+	samples := spec.Samples
 
 	part := fixture.LargeRelic + "#" + fixture.LargeMovedPart
 	for sample := range samples {
@@ -635,9 +657,13 @@ func (b *relicBench) measureMain() error {
 		}
 	}
 
-	listed, err := b.countRelicRefs(b.main)
-	if err != nil {
+	// The main repository holds the fixture's relics and no created one: a
+	// relic created here would also be in the storage figures.
+	listed := b.relicCount()
+	if refs, err := b.countRelicRefs(b.main); err != nil {
 		return err
+	} else if refs != listed {
+		return fmt.Errorf("the main repository holds %d relic refs, want the fixture's %d", refs, listed)
 	}
 	plans := 0
 	for index := range relics.Relics {
@@ -927,6 +953,7 @@ func writeRelicMarkdown(w io.Writer, report *RelicBenchmarkReport) error {
 	}
 	fmt.Fprintf(&out, "| **Object directory bytes** | | %d | | %d |\n",
 		report.StorageBefore.ObjectDirectoryBytes, report.StorageAfter.ObjectDirectoryBytes)
+	fmt.Fprintln(&out, "\nBoth figures are the main repository, packed. Before is after the relics are created; after adds the links, the moves and the few small edits relic-edit-part-large and relic-move-part-large make. The scenarios that create relics run in a copy, so after minus before holds no created relic.")
 	fmt.Fprintf(&out, "\nDisposable cache: %d bytes (projection %d, validation %d).\n",
 		report.Cache.TotalBytes, report.Cache.ProjectionBytes, report.Cache.ValidationBytes)
 
