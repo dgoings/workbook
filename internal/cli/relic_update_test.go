@@ -153,13 +153,6 @@ func TestParseRelicUpdateArgsAcceptsEveryFlagForm(t *testing.T) {
 			}},
 		},
 		{
-			name: "both anchors are passed on for the relic to refuse",
-			args: []string{"WB-R-X", "--move-part", "P1", "--before", "P2", "--after", "P3"},
-			want: relicUpdateRequest{Relic: "WB-R-X", Edits: []core.RelicEdit{
-				{Kind: core.RelicEditMovePart, Part: "P1", Before: "P2", After: "P3"},
-			}},
-		},
-		{
 			name: "the body format is the file ending unless --body-format is given, before or after the file",
 			args: []string{"WB-R-X",
 				"--add-part", "--part-type", "a", "--body-file", "Notes.MD",
@@ -266,6 +259,10 @@ func TestParseRelicUpdateArgsRefusals(t *testing.T) {
 			[]string{"--part", "--field"}},
 		{"--move-part with nowhere to go", []string{"WB-R-X", "--move-part", "P"}, core.CategoryInvocation,
 			[]string{"--move-part", "--before", "--after"}},
+		{"--move-part with both anchors", []string{"WB-R-X", "--move-part", "P1", "--before", "P2", "--after", "P3"},
+			core.CategoryInvocation, []string{"--move-part", "--before or --after, not both"}},
+		{"--add-part with both anchors", []string{"WB-R-X", "--add-part", "--part-type", "a", "--after", "P3", "--before", "P2"},
+			core.CategoryInvocation, []string{"--add-part", "--before or --after, not both"}},
 		{"--set with no equals sign", []string{"WB-R-X", "--set", "novalue"}, core.CategoryInvocation,
 			[]string{"--set", "<name>=<value>"}},
 		{"--set-json with no equals sign", []string{"WB-R-X", "--set-json", "novalue"}, core.CategoryInvocation,
@@ -734,10 +731,16 @@ func TestRelicUpdateReordersParts(t *testing.T) {
 	if !strings.Contains(message, "--before") || !strings.Contains(message, "--after") {
 		t.Fatalf("--move-part with nowhere to go message = %q, want --before and --after", message)
 	}
-	relicErrorMessage(t, repository, 5, core.CategoryValidation,
-		"update", id, "--add-part", "--part-type", "note", "--before", a, "--after", b)
-	relicErrorMessage(t, repository, 5, core.CategoryValidation,
-		"update", id, "--move-part", c, "--before", a, "--after", b)
+	// Both anchors is a mistake in the command line, as no anchor is.
+	for _, args := range [][]string{
+		{"--add-part", "--part-type", "note", "--before", a, "--after", b},
+		{"--move-part", c, "--before", a, "--after", b},
+	} {
+		message := relicErrorMessage(t, repository, 2, core.CategoryInvocation, append([]string{"update", id}, args...)...)
+		if !strings.Contains(message, "--before or --after, not both") {
+			t.Fatalf("%v message = %q, want it to say to give one anchor", args, message)
+		}
+	}
 	if after := relicHeadOf(t, repository, id); after != head {
 		t.Fatalf("a refused update moved the relic from %s to %s", head, after)
 	}

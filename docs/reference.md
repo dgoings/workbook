@@ -1143,8 +1143,8 @@ The new part went between `1/1` and `2/1`, at `3/2`, so it is now the second
 of three.
 
 `--move-part` needs `--before` or `--after`; without one it is
-`invalid-invocation` (exit `2`). Both together are refused with exit `5`. A
-part cannot be placed beside itself, and the part named by `--before` or
+`invalid-invocation` (exit `2`). Both together, after `--move-part` or after
+`--add-part`, are `invalid-invocation` too (exit `2`). A part cannot be placed beside itself, and the part named by `--before` or
 `--after` must be live. Moving a part to where it already is changes nothing.
 
 Because a placement looks at live parts only, a new or moved part can be given

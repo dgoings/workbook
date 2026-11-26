@@ -302,6 +302,10 @@ func (change relicUpdateChange) check() error {
 
 	_, hasBefore := change.once["before"]
 	_, hasAfter := change.once["after"]
+	if hasBefore && hasAfter {
+		return core.Errorf(core.CategoryInvocation,
+			"relic update --%s accepts --before or --after, not both", change.option)
+	}
 	switch change.option {
 	case "add-part":
 		if _, given := change.once["part-type"]; !given {
@@ -317,7 +321,6 @@ func (change relicUpdateChange) check() error {
 			return core.Errorf(core.CategoryInvocation, "relic update --link requires --rel <rel>, such as implemented-by")
 		}
 	case "move-part":
-		// Both at once is left to the relic to refuse, as it is for --add-part.
 		if !hasBefore && !hasAfter {
 			return core.Errorf(core.CategoryInvocation, "relic update --move-part requires --before <part> or --after <part>")
 		}
