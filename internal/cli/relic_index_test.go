@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/testrepo"
@@ -285,4 +286,58 @@ func TestRelicReadsAnswerFromGitWhenTheCacheCannotBeOpened(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSameOutputs(t, "with no usable cache", relicReadOutputs(t, repository, ids), want)
+}
+
+// A relic stored with times in a zone of its own, as a tool other than
+// Workbook may write it, reads as valid. JSON output, the export and the
+// index keep the offset; the text of relic show gives the time in UTC. An
+// edit through Workbook records its own time in UTC and leaves the creation
+// time as stored.
+func TestARelicStoredWithAnOffsetKeepsIt(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	fixture := openRelicFixture(t, repository)
+	zone := time.FixedZone("", -(3*60+30)*60)
+	stored := relicTestTime.In(zone)
+	relicID := relicTestRelicID(1)
+	pack := core.NewRelicOperationPack(fixture.config.ProjectID, relicID, relicTestID(900001), relicTestActor, 1, stored,
+		[]core.RelicOperation{{
+			ID:    relicTestID(800001),
+			Type:  core.RelicOperationCreate,
+			Relic: &core.RelicCreateData{Title: "Kept in a zone", Type: "spec", CreatedAt: stored},
+		}})
+	fixture.write(t, nil, pack, nil)
+	const offset = `"2026-11-23T06:30:00-03:30"`
+
+	outputs := relicReadOutputs(t, repository, []string{relicID})
+	for index, output := range outputs {
+		if strings.Count(output, `"createdAt":`+offset) != 1 || strings.Count(output, `"updatedAt":`+offset) != 1 {
+			t.Fatalf("output %d does not keep the stored offset: %s", index, output)
+		}
+	}
+	if err := os.Remove(relicCachePath(t, repository)); err != nil {
+		t.Fatalf("remove the cache: %v", err)
+	}
+	assertSameOutputs(t, "after the cache was deleted", relicReadOutputs(t, repository, []string{relicID}), outputs)
+
+	code, stdout, stderr := run(t, repository, "relic", "show", relicID)
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "Updated:\t2026-11-23T10:00:00Z\n") {
+		t.Fatalf("relic show = (%d, %q, %q), want the update time in UTC", code, stdout, stderr)
+	}
+	if code, stdout, stderr := run(t, repository, "validate"); code != 0 {
+		t.Fatalf("validate = (%d, %q, %q)", code, stdout, stderr)
+	}
+
+	mustRelic(t, repository, nil, "update", relicID, "--title", "Edited here")
+	code, stdout, stderr = run(t, repository, "relic", "show", relicID, "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("relic show --json = (%d, %q, %q)", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, `"createdAt":`+offset) || strings.Contains(stdout, `"updatedAt":`+offset) ||
+		!strings.Contains(stdout, `Z","properties"`) {
+		t.Fatalf("after an edit, relic show --json = %s; want the creation time as stored and the update time in UTC", stdout)
+	}
+	if code, stdout, stderr := run(t, repository, "validate"); code != 0 {
+		t.Fatalf("validate after an edit = (%d, %q, %q)", code, stdout, stderr)
+	}
 }

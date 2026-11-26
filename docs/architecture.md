@@ -158,8 +158,13 @@ the members in the order shown here. A stored document that is not byte for
 byte what this build writes for the same content is `corrupt-data`. No relic
 document records a Git object ID, so the format is the same in SHA-1 and
 SHA-256 repositories. `wallTime`, `createdAt` and `updatedAt` are display
-metadata. They are written in UTC with a `Z`, and a reader refuses any other
-form, an offset of `+00:00` included, as `corrupt-data`.
+metadata. Workbook writes them in UTC with a `Z`, but a reader accepts any
+RFC 3339 offset, so a project or a tool built on Workbook may store them in a
+zone of its own. The offset is kept: Go reads such a time and writes it back in
+the same bytes, so folding, replay, the index and JSON output all carry it
+unchanged, and two clones holding the same commits agree. A zero offset has one
+form, `Z`. Go writes `+00:00` and `-00:00` back as `Z`, so a document holding
+either is not its own re-encoding, and a reader refuses it as `corrupt-data`.
 
 `operation.json` of that commit, stored as one line and shown here through
 `jq .`:

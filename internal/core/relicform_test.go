@@ -269,10 +269,12 @@ func TestRelicServiceRefusesANameItCouldNotReadBack(t *testing.T) {
 	}
 }
 
-// A stored time is UTC written with Z, in the form the writer produces. A time
-// with an offset names the same instant in other bytes, and Go reads and
-// writes it back unchanged, so nothing but this rule refuses it.
-func TestARelicStoresItsTimesInUTC(t *testing.T) {
+// A stored time may carry any RFC 3339 offset: the writer records UTC, but a
+// project may keep its relics in a zone of its own. The offset is kept, so a
+// document reads back as the bytes it was stored in. A zero offset has one
+// form, Z: Go writes +00:00 and -00:00 back as Z, so those bytes cannot be the
+// document's own re-encoding, and they are refused with a reason.
+func TestARelicKeepsTheOffsetOfAStoredTime(t *testing.T) {
 	offset := time.FixedZone("", 5*60*60)
 	elsewhere := relicDocTime.In(offset)
 	if encoded, _ := json.Marshal(elsewhere); string(encoded) != `"2026-11-23T15:00:00+05:00"` {
@@ -281,44 +283,69 @@ func TestARelicStoresItsTimesInUTC(t *testing.T) {
 
 	pack := goldenRelicPack()
 	pack.WallTime = elsewhere
-	requireRelicPackRefused(t, "a wall time with an offset", pack)
-
-	pack = goldenRelicPack()
 	created := *pack.Operations[0].Relic
 	created.CreatedAt = elsewhere
 	pack.Operations = append([]RelicOperation(nil), pack.Operations...)
 	pack.Operations[0].Relic = &created
-	requireRelicPackRefused(t, "a creation time with an offset in relic.create", pack)
-
-	for label, change := range map[string]func(*RelicStateDocument){
-		"a creation time with an offset": func(state *RelicStateDocument) { state.Relic.CreatedAt = elsewhere },
-		"an update time with an offset":  func(state *RelicStateDocument) { state.Relic.UpdatedAt = elsewhere },
-	} {
-		state := goldenRelicState()
-		change(&state)
-		requireRelicStateRefused(t, label, state)
+	if _, err := EncodeDocument(pack); err != nil {
+		t.Fatalf("EncodeDocument(a pack whose times have an offset): %v", err)
+	}
+	state := goldenRelicState()
+	state.Relic.CreatedAt, state.Relic.UpdatedAt = elsewhere, elsewhere
+	if _, err := EncodeDocument(state); err != nil {
+		t.Fatalf("EncodeDocument(a state whose times have an offset): %v", err)
 	}
 
-	// The reviewer's forgery, as bytes: the golden documents with one time
-	// rewritten.
+	// A zero offset that is not UTC is what +00:00 and -00:00 decode to. It
+	// would be written Z, so it is refused before it is written.
+	zero := relicDocTime.In(time.FixedZone("", 0))
+	pack = goldenRelicPack()
+	pack.WallTime = zero
+	_, err := EncodeDocument(pack)
+	requireCorruptData(t, "a wall time with a zero offset that is not UTC", err)
+	state = goldenRelicState()
+	state.Relic.UpdatedAt = zero
+	_, err = EncodeDocument(state)
+	requireCorruptData(t, "an update time with a zero offset that is not UTC", err)
+
+	// As bytes: the golden documents with one time rewritten.
 	for label, document := range map[string]any{"pack": goldenRelicPack(), "state": goldenRelicState()} {
 		encoded, err := EncodeDocument(document)
 		if err != nil {
 			t.Fatalf("EncodeDocument(%s): %v", label, err)
 		}
-		for _, other := range []string{"2026-11-23T15:00:00+05:00", "2026-11-23T05:00:00-05:00", "2026-11-23T10:00:00+00:00", "2026-11-23T10:00:00-00:00"} {
+		decode := func(data []byte) ([]byte, error) {
+			var decoded any
+			if label == "pack" {
+				decoded, err = DecodeRelicOperationPack(data)
+			} else {
+				decoded, err = DecodeRelicStateDocument(data)
+			}
+			if err != nil {
+				return nil, err
+			}
+			return EncodeDocument(decoded)
+		}
+		for _, other := range []string{"2026-11-23T15:00:00+05:00", "2026-11-23T05:00:00-05:00", "2026-11-23T15:45:00+05:45", "2026-11-22T21:00:00.5-13:00"} {
 			forged := bytes.Replace(encoded, []byte("2026-11-23T10:00:00Z"), []byte(other), 1)
 			if bytes.Equal(forged, encoded) {
 				t.Fatalf("the %s holds no time to rewrite", label)
 			}
-			if label == "pack" {
-				_, err = DecodeRelicOperationPack(forged)
-			} else {
-				_, err = DecodeRelicStateDocument(forged)
+			again, err := decode(forged)
+			if err != nil {
+				t.Errorf("a %s with a time written %s: %v", label, other, err)
+				continue
 			}
+			if !bytes.Equal(again, forged) {
+				t.Errorf("a %s with a time written %s encodes again as\n%s\nnot\n%s", label, other, again, forged)
+			}
+		}
+		for _, other := range []string{"2026-11-23T10:00:00+00:00", "2026-11-23T10:00:00-00:00"} {
+			forged := bytes.Replace(encoded, []byte("2026-11-23T10:00:00Z"), []byte(other), 1)
+			_, err := decode(forged)
 			requireCorruptData(t, "a "+label+" with a time written "+other, err)
-			if err != nil && !strings.Contains(err.Error(), "not canonical") {
-				t.Errorf("a %s with a time written %s: error %q does not say it is not canonical", label, other, err)
+			if err != nil && !strings.Contains(err.Error(), "a zero offset is written Z") {
+				t.Errorf("a %s with a time written %s: error %q does not say how a zero offset is written", label, other, err)
 			}
 		}
 	}

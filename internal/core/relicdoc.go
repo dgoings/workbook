@@ -603,14 +603,17 @@ func validateStoredRelicTitle(title string) error {
 	return nil
 }
 
-// validateRelicTimeZone requires a stored time to be in UTC, which is written
-// with Z. A relic's writer records every time in UTC, and a time with an
-// offset is the same instant in other bytes: Go reads it and writes it back
-// unchanged, so comparing a document with its own re-encoding does not catch
-// it. An offset of zero written as +00:00 or -00:00 is refused here too.
+// validateRelicTimeZone accepts a stored time with any RFC 3339 offset. The
+// writer records UTC, but a project may store its relics in a zone of its own,
+// and Go reads a time with an offset and writes it back in the same bytes, so
+// the offset survives folding, replay, the index and every re-encoding. A
+// stored document is canonical only while it is its own re-encoding, and a
+// zero offset has one form there: Go writes +00:00 and -00:00 back as Z. A
+// zero offset in any other location is what those decode to, and is refused
+// here with that reason rather than later as bytes that do not match.
 func validateRelicTimeZone(what string, stored time.Time) error {
-	if stored.Location() != time.UTC {
-		return corrupt("%s is not canonical: a stored time is UTC, written with Z", what)
+	if _, offset := stored.Zone(); offset == 0 && stored.Location() != time.UTC {
+		return corrupt("%s is not canonical: a zero offset is written Z, not +00:00 or -00:00", what)
 	}
 	return nil
 }

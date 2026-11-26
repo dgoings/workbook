@@ -1325,7 +1325,7 @@ for, with body content only under `--body`.
 | `author` | Who created the relic. |
 | `retired` | Always `false`. |
 | `deleted` | Whether the relic is deleted. |
-| `createdAt`, `updatedAt` | UTC times. `updatedAt` is the time of the newest commit. |
+| `createdAt`, `updatedAt` | RFC 3339 times, in the offset they are stored with. Workbook records UTC, written with `Z`; a relic written by another tool may carry another offset, which is kept. `updatedAt` is the time of the newest commit. The `Updated:` line of `relic show` text gives it in UTC. |
 | `properties` | An object of the relic's properties. |
 | `parts` | The parts, in order. Each has `id`, `type`, `position`, `fields`, `removed` only when it is `true`, and `body` when the part has one. |
 | `parts[].body` | `format` when the body has a label, `version`, `bytes`, and the content as `text`, or as `base64` when the bytes are not valid UTF-8. An empty body is `"text": ""`. |
