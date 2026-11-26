@@ -1757,16 +1757,22 @@ replay skips every commit whose operations the other side already holds, so
 alternating between two places never writes a relic operation twice. The two
 synchronizations with the new place then publish them. Verification lists
 both places' relic refs and requires the new place to hold every operation of
-every relic the old place holds, at the same commit, under other commits, or in
-a relic tip parked in this checkout. A name under `refs/workbook/relics/` or
-`refs/workbook/tasks/` at the old place that is not one of this project's
-relics or tasks cannot be carried, so it leaves the move unverified, and
-`--clean-up`, which deletes only after a verified move, deletes nothing. The
-refusal names each such ref with the verdict a fetch gives it. Only a name
-that fits no project's task ID is named with the `git push <old place> --delete
-<ref>` that removes it, since running the move again never carries it. Any
-other, which on a remote shared with another project is that project's live
-history, is reported as kept, so such a move stays unverified. A relic
+every relic of this project's the old place holds, at the same commit, under
+other commits, or in a relic tip parked in this checkout.
+
+A move concerns this project's refs only, by name. A ref under
+`refs/workbook/tasks/` or `refs/workbook/relics/` is this project's when its
+name is one of its task or relic IDs under any key it has, active or retired,
+the rule a fetch reads a ref as this project's by; deciding it reads nothing.
+Any other is another project's, on a remote the two share, or a name that fits
+no project. Verification leaves it out, so it neither blocks nor is counted,
+and the move says nothing about it. `--clean-up` plans its deletions as `reset
+--remote` does and then drops those refs from the plan, so they stay at the
+old place, unbundled and unmentioned, and a host refusing a deletion is not
+told they remain. Plain `reset --remote` keeps its plan whole and deletes
+them. The tradeoff is that a name alone decides: another project's ref named
+under one of this project's keys is read as this project's, cannot be
+carried, and keeps the move from finishing, as before. A relic
 conflict met while carrying parks the
 local tip as any fetch does; the run is verified but exits 8, and `--clean-up`
 waits until a person has looked at it.

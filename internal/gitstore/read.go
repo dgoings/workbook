@@ -195,9 +195,8 @@ type IgnoredRef struct {
 }
 
 // Every ignored ref is reported with one of these verdicts, chosen by its
-// PlausibleTask, wherever Workbook names a ref it will not read: the fetch
-// report and a move's refusal alike. Only a ref given IgnoredRefRemovable is
-// ever named with a deletion command.
+// PlausibleTask, wherever Workbook names a ref it will not read. Only a ref
+// given IgnoredRefRemovable is ever named with a deletion command.
 const (
 	IgnoredRefRemovable = "no project's task"
 	IgnoredRefPlausible = "may be another Workbook's task"

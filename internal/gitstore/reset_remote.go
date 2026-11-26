@@ -31,6 +31,9 @@ type RemoteResetPlan struct {
 	// Unreadable is why the remote's identity ref could not be read, when it
 	// could not; such a remote is treated as holding the tasks.
 	Unreadable string
+	// left names the refs PlanMoveCleanUp leaves at the remote because they
+	// are not this project's: neither deleted nor reported as remaining.
+	left []string
 }
 
 // Live reports a remote that is not marked as a place the tasks left: wiping
@@ -223,8 +226,8 @@ func appendOnce(values []string, value string) []string {
 }
 
 // remainingAfterReset is every ref the remote still holds under
-// refs/workbook/, other than the ones plan keeps, as its tracking refs show
-// it after the reset's last fetch.
+// refs/workbook/, other than the ones plan keeps or leaves, as its tracking
+// refs show it after the reset's last fetch.
 func (r *Repository) remainingAfterReset(ctx context.Context, plan RemoteResetPlan) ([]string, error) {
 	output, err := r.Git(ctx, nil, "for-each-ref", "--format=%(refname)", remoteTrackingPrefix(plan.Remote))
 	if err != nil {
@@ -236,7 +239,7 @@ func (r *Repository) remainingAfterReset(ctx context.Context, plan RemoteResetPl
 			continue
 		}
 		name = workbookRefRoot + strings.TrimPrefix(name, remoteTrackingPrefix(plan.Remote))
-		if containsName(plan.Kept, name) {
+		if containsName(plan.Kept, name) || containsName(plan.left, name) {
 			continue
 		}
 		remaining = append(remaining, name)
@@ -311,4 +314,38 @@ func (r *Repository) pushDeletions(ctx context.Context, remote string, refs []Re
 		return deleted, nil, "", core.Errorf(core.CategoryOperational, "Git returned %d push outcomes, want %d", len(deleted)+len(rejected), len(refs))
 	}
 	return deleted, rejected, strings.Join(said, " "), nil
+}
+
+// PlanMoveCleanUp is the plan of the clean-up after a move: PlanRemoteReset's,
+// less every ref under the task and relic namespaces whose name is not one of
+// this project's task or relic IDs (ownsWorkbookRef). Those are another
+// project's refs, or names that fit no project, which a move concerns itself
+// with no more than it carries them: the clean-up does not delete, bundle,
+// count or name them, and does not report them as remaining when the host
+// refuses a deletion. Plain reset --remote plans with PlanRemoteReset and
+// still deletes them. The key set is the one the move just verified with, so
+// a run that has one in memory starts no Git process for it.
+func (r *Repository) PlanMoveCleanUp(ctx context.Context, config core.ProjectConfig, remote string) (RemoteResetPlan, error) {
+	plan, err := r.PlanRemoteReset(ctx, remote)
+	if err != nil {
+		return RemoteResetPlan{}, err
+	}
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		return RemoteResetPlan{}, err
+	}
+	refs := plan.Refs[:0:0]
+	plan.Tasks = 0
+	for _, ref := range plan.Refs {
+		if !ownsWorkbookRef(keys, ref.Ref) {
+			plan.left = append(plan.left, ref.Ref)
+			continue
+		}
+		refs = append(refs, ref)
+		if strings.HasPrefix(ref.Ref, taskRefPrefix) {
+			plan.Tasks++
+		}
+	}
+	plan.Refs = refs
+	return plan, nil
 }

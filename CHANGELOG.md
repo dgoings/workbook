@@ -70,9 +70,12 @@ conflict, exit 8, in text and in a new `relicConflict` envelope member that
 carries all three bodies. A deletion that synchronizes second applies with no
 report. Two changes that each fit a total but pass it together are both kept,
 with a `relic-over-limit` warning, and an edit to a part removed elsewhere
-gives `relic-edit-on-removed-part`. A relic at the old place that a move
-cannot carry leaves the move unverified, so `--clean-up` deletes nothing. The
-watcher's status document is now version 2; a command does not hand a change
+gives `relic-edit-on-removed-part`. A move concerns this project's refs only:
+a task or relic ref at the old place whose name is not one of this project's
+task or relic IDs, under any key it has had, is another project's or no
+project's, and the move and its `--clean-up` leave it there without a word,
+where it used to leave the move unverified; `reset --remote` still deletes it.
+The watcher's status document is now version 2; a command does not hand a change
 to an older watcher. Relics are not on the board, and
 there are no schemas, history or diff commands, retiring or compaction
 for them yet.

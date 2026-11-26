@@ -233,7 +233,7 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 		summary.CleanUpNext = "workbook reset --remote " + result.From.Remote
 	}
 	if err == nil && *cleanUp {
-		cleaned, cleanErr := cleanUpAfterMove(ctx, repository, config.ProjectID, result, gitstore.ResetOptions{
+		cleaned, cleanErr := cleanUpAfterMove(ctx, repository, config, result, gitstore.ResetOptions{
 			NoBackup: *noBackup, Backup: *backup, Flags: given,
 		})
 		if cleanErr != nil {
@@ -321,14 +321,16 @@ type moveTasksSummary struct {
 }
 
 // cleanUpAfterMove does to the place a finished move left what reset
-// --remote does there. The place is marked by then, so its identity ref is
-// kept and no confirmation is needed; a place that somehow is not marked is
-// refused as reset refuses a live remote. A --backup file the move itself
-// wrote is never overwritten: the clean-up's bundle goes beside it.
+// --remote does there, for this project's refs only: a task or relic ref that
+// is not this project's is left there and not mentioned (PlanMoveCleanUp).
+// The place is marked by then, so its identity ref is kept and no
+// confirmation is needed; a place that somehow is not marked is refused as
+// reset refuses a live remote. A --backup file the move itself wrote is never
+// overwritten: the clean-up's bundle goes beside it.
 func cleanUpAfterMove(
 	ctx context.Context,
 	repository *gitstore.Repository,
-	projectID string,
+	config core.ProjectConfig,
 	result gitstore.MoveTasksResult,
 	options gitstore.ResetOptions,
 ) (resetSummary, error) {
@@ -338,11 +340,11 @@ func cleanUpAfterMove(
 			options.Backup = strings.TrimSuffix(options.Backup, extension) + "-clean-up" + extension
 		}
 	}
-	plan, err := repository.PlanRemoteReset(ctx, result.From.Remote)
+	plan, err := repository.PlanMoveCleanUp(ctx, config, result.From.Remote)
 	if err != nil {
 		return resetSummary{}, err
 	}
-	return resetRemote(ctx, repository, projectID, plan, "", false, options)
+	return resetRemote(ctx, repository, config.ProjectID, plan, "", false, options)
 }
 
 // sameAddress reports two spellings of one address: equal once a trailing

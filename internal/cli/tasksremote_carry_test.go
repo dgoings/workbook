@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/testenv"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
@@ -553,126 +553,239 @@ func TestMoveTasksCleanUpRemovesRelicsOnlyAfterTheyAreCarried(t *testing.T) {
 	}
 }
 
-// A ref under the relic namespace at the place left that is not one of this
-// project's relics is never carried, so move-tasks --clean-up fails its
-// verification naming it and deletes nothing at the old place.
-func TestMoveTasksCleanUpKeepsARelicRefTheMoveCannotCarry(t *testing.T) {
+// workbookRefTips is every ref repository holds under refs/workbook/, by name, at
+// its commit.
+func workbookRefTips(t *testing.T, repository string) map[string]string {
+	t.Helper()
+	refs := map[string]string{}
+	for _, line := range strings.Split(refsUnder(t, repository, "refs/workbook/"), "\n") {
+		if name, tip, found := strings.Cut(line, " "); found {
+			refs[name] = tip
+		}
+	}
+	return refs
+}
+
+// otherProject is a second, real Workbook project under key, whose task and
+// relic refs are pushed into the code repository this project shares tasks
+// through. It returns the two refs.
+func otherProject(t *testing.T, project tasksRemoteProject, key string) []string {
+	t.Helper()
+	other := testrepo.New(t, testrepo.WithObjectFormat(testrepo.FormatSHA1))
+	if code, _, stderr := run(t, other, "setup", "--key", key, "--no-sync"); code != 0 {
+		t.Fatalf("other project's setup = %d; stderr = %q", code, stderr)
+	}
+	refs := []string{
+		"refs/workbook/tasks/" + cliCreateTask(t, other, "Another project's task").ID,
+		relicRef(mustCreateRelic(t, other, "Another project's relic", "--type", "spec").Relic.ID),
+	}
+	for _, ref := range refs {
+		cliGit(t, other, "push", "--quiet", "--no-verify", project.code, ref+":"+ref)
+	}
+	return refs
+}
+
+// A move concerns this project's refs only. A ref under the task or relic
+// namespace at the place left that is not this project's, another real
+// project's or a name that fits no project, nested names among them, is left
+// where it is: the move verifies and exits 0, counts only this project's
+// tasks and relics, and neither its text nor its JSON mentions such a ref;
+// --clean-up deletes this project's refs there and leaves exactly those, and
+// says nothing about them either. Plain reset --remote still deletes them.
+func TestMoveTasksLeavesRefsThatAreNotThisProjects(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		refs func(t *testing.T, project tasksRemoteProject, relics []string) []string
+	}{
+		{"another project's", func(t *testing.T, project tasksRemoteProject, _ []string) []string {
+			return otherProject(t, project, "CD")
+		}},
+		{"no project's", func(t *testing.T, project tasksRemoteProject, relics []string) []string {
+			task := cliGitOutput(t, project.code, "rev-parse", "refs/workbook/tasks/"+project.ids[0])
+			relic := cliGitOutput(t, project.code, "rev-parse", relicRef(relics[0]))
+			refs := map[string]string{
+				"refs/workbook/tasks/notes":                    task,
+				"refs/workbook/tasks/nested/" + project.ids[0]: task,
+				"refs/workbook/relics/not-a-relic":             relic,
+				"refs/workbook/relics/nested/" + relics[0]:     relic,
+			}
+			names := make([]string, 0, len(refs))
+			for name, tip := range refs {
+				cliGit(t, project.code, "update-ref", name, tip)
+				names = append(names, name)
+			}
+			return names
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			project := codeProject(t, testrepo.FormatSHA1)
+			relics := createThreeRelics(t, project.seed)
+			if code, stdout, stderr := run(t, project.seed, "push"); code != 0 {
+				t.Fatalf("push = (%d, %q, %q)", code, stdout, stderr)
+			}
+			names := tc.refs(t, project, relics)
+			held := workbookRefTips(t, project.code)
+			left := map[string]string{}
+			for _, name := range names {
+				if held[name] == "" {
+					t.Fatalf("origin does not hold %s", name)
+				}
+				left[name] = held[name]
+			}
+			// Each ref is named in output by its full name or the name below
+			// its namespace, so neither may appear.
+			mentions := func(output string) string {
+				for name := range left {
+					short := strings.TrimPrefix(strings.TrimPrefix(name, "refs/workbook/tasks/"), "refs/workbook/relics/")
+					if strings.Contains(output, short) {
+						return name
+					}
+				}
+				return ""
+			}
+			if code, stdout, stderr := run(t, project.seed, "config", "set", "tasks-remote", "tasks", "--url", project.tasks); code != 0 {
+				t.Fatalf("config set tasks-remote = (%d, %q, %q)", code, stdout, stderr)
+			}
+			for _, args := range [][]string{
+				{"move-tasks", "--json"},
+				{"move-tasks"},
+				{"move-tasks", "--clean-up", "--json"},
+				{"move-tasks", "--clean-up"},
+			} {
+				code, stdout, stderr := run(t, project.seed, args...)
+				if code != 0 {
+					t.Fatalf("%v = (%d, %q, %q), want exit 0", args, code, stdout, stderr)
+				}
+				if name := mentions(stdout + stderr); name != "" {
+					t.Fatalf("%v mentions %s: (%q, %q)", args, name, stdout, stderr)
+				}
+				if args[len(args)-1] == "--json" {
+					var moved moveTasksSummary
+					if err := json.Unmarshal(assertJSONResult(t, stdout, "move-tasks").Data, &moved); err != nil {
+						t.Fatal(err)
+					}
+					if !moved.Verified || moved.Tasks != len(project.ids) || moved.Relics != len(relics) {
+						t.Fatalf("%v = %+v, want %d tasks and %d relics verified", args, moved.MoveTasksResult, len(project.ids), len(relics))
+					}
+					if args[1] == "--clean-up" {
+						cleaned := moved.CleanUp
+						if cleaned == nil || cleaned.Tasks != len(project.ids) ||
+							len(cleaned.Refs) != len(project.ids)+len(relics)+1 ||
+							!reflect.DeepEqual(cleaned.Kept, []string{"refs/workbook/project"}) {
+							t.Fatalf("%v cleanUp = %+v, want this project's %d tasks, %d relics and configuration deleted, the marker kept",
+								args, cleaned, len(project.ids), len(relics))
+						}
+					}
+				}
+				for name := range left {
+					if got := refsUnder(t, project.tasks, name); got != "" {
+						t.Fatalf("the new place holds %s after %v: %s", name, args, got)
+					}
+				}
+			}
+
+			// The move marked origin, so its marker is read afresh.
+			want := map[string]string{"refs/workbook/project": cliGitOutput(t, project.code, "rev-parse", "refs/workbook/project")}
+			for name, tip := range left {
+				want[name] = tip
+			}
+			if got := workbookRefTips(t, project.code); !reflect.DeepEqual(got, want) {
+				t.Fatalf("origin holds after the clean-up:\n%v\nwant\n%v", got, want)
+			}
+
+			resetJSON(t, project.seed, "--remote", "origin")
+			if got := workbookRefTips(t, project.code); !reflect.DeepEqual(got, map[string]string{"refs/workbook/project": want["refs/workbook/project"]}) {
+				t.Fatalf("origin holds after reset --remote:\n%v\nwant only its marker", got)
+			}
+		})
+	}
+}
+
+// A project that changed keys owns every task and relic under each key it has
+// had, retired ones included: the move carries and verifies all of them, and
+// --clean-up deletes all of them at the place left, none read as another
+// project's or as no project's.
+func TestMoveTasksCarriesTasksAndRelicsUnderARetiredKey(t *testing.T) {
 	t.Parallel()
 	project := codeProject(t, testrepo.FormatSHA1)
-	relics := createThreeRelics(t, project.seed)
+	old, _, _ := strings.Cut(project.ids[0], "-")
+	relics := []string{mustCreateRelic(t, project.seed, "Under the old key", "--type", "spec").Relic.ID}
+	for _, args := range [][]string{{"key", "add", "NEW", "--current"}, {"key", "retire", old}} {
+		mustRunKey(t, project.seed, args...)
+	}
+	if got, want := keyStates(t, project.seed), []string{old + " retired", "NEW current"}; !equalStrings(got, want) {
+		t.Fatalf("keys = %v, want %v", got, want)
+	}
+	ids := append(append([]string(nil), project.ids...), cliCreateTask(t, project.seed, "Under the new key").ID)
+	relics = append(relics, mustCreateRelic(t, project.seed, "Under the new key", "--type", "spec").Relic.ID)
+	if !strings.HasPrefix(ids[len(ids)-1], "NEW-") || !strings.HasPrefix(relics[0], old+"-R-") || !strings.HasPrefix(relics[1], "NEW-R-") {
+		t.Fatalf("tasks %v and relics %v, want the last of each under NEW and the first relic under %s", ids, relics, old)
+	}
 	if code, stdout, stderr := run(t, project.seed, "push"); code != 0 {
 		t.Fatalf("push = (%d, %q, %q)", code, stdout, stderr)
 	}
-	_, body, _ := core.ParseRelicID(relics[0])
-	stray := core.NewRelicID("OTHER", body)
-	cliGit(t, project.code, "update-ref", relicRef(stray), cliGitOutput(t, project.code, "rev-parse", relicRef(relics[0])))
-	// The move marks the old place, so only its task and relic refs are compared.
+	before := workbookRefTips(t, project.code)
+	if code, stdout, stderr := run(t, project.seed, "config", "set", "tasks-remote", "tasks", "--url", project.tasks); code != 0 {
+		t.Fatalf("config set tasks-remote = (%d, %q, %q)", code, stdout, stderr)
+	}
+	code, stdout, stderr := run(t, project.seed, "move-tasks", "--clean-up", "--json")
+	if code != 0 {
+		t.Fatalf("move-tasks --clean-up = (%d, %q, %q)", code, stdout, stderr)
+	}
+	var moved moveTasksSummary
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "move-tasks").Data, &moved); err != nil {
+		t.Fatal(err)
+	}
+	if !moved.Verified || moved.Tasks != len(ids) || moved.Relics != len(relics) || moved.CleanUp == nil || moved.CleanUp.Tasks != len(ids) {
+		t.Fatalf("move-tasks --clean-up = %+v, cleanUp %+v; want %d tasks and %d relics", moved.MoveTasksResult, moved.CleanUp, len(ids), len(relics))
+	}
+	carried := workbookRefTips(t, project.tasks)
+	var refs []string
+	for _, id := range ids {
+		refs = append(refs, "refs/workbook/tasks/"+id)
+	}
+	for _, id := range relics {
+		refs = append(refs, relicRef(id))
+	}
+	for _, ref := range refs {
+		if carried[ref] == "" || carried[ref] != before[ref] {
+			t.Fatalf("the new place holds %s at %q, want %q", ref, carried[ref], before[ref])
+		}
+	}
+	if got := workbookRefTips(t, project.code); len(got) != 1 || got["refs/workbook/project"] == "" {
+		t.Fatalf("origin holds after the clean-up: %v, want only its marker", got)
+	}
+}
+
+// Ownership is decided by name alone, so a ref whose name is one of this
+// project's task IDs is never left out silently. Another project sharing
+// origin under this project's own key has such a ref there, whose documents a
+// fetch reads as the other project's, so the move cannot carry it: it stops
+// before the copy, naming the ref, and --clean-up deletes nothing at the
+// place left.
+func TestMoveTasksCleanUpDeletesNothingWhileARefNamedForThisProjectCannotBeCarried(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA1)
+	key, _, _ := strings.Cut(project.ids[0], "-")
+	ref := otherProject(t, project, key)[0]
+	id := strings.TrimPrefix(ref, "refs/workbook/tasks/")
+	if code, stdout, stderr := run(t, project.seed, "config", "set", "tasks-remote", "tasks", "--url", project.tasks); code != 0 {
+		t.Fatalf("config set tasks-remote = (%d, %q, %q)", code, stdout, stderr)
+	}
 	held := func() string {
 		return refsUnder(t, project.code, "refs/workbook/tasks/") + "\n" + refsUnder(t, project.code, "refs/workbook/relics/")
 	}
 	before := held()
-	if !strings.Contains(before, relicRef(stray)+" ") {
-		t.Fatalf("origin before the move:\n%s\nwant %s", before, stray)
-	}
-	if code, stdout, stderr := run(t, project.seed, "config", "set", "tasks-remote", "tasks", "--url", project.tasks); code != 0 {
-		t.Fatalf("config set tasks-remote = (%d, %q, %q)", code, stdout, stderr)
-	}
-	want := "origin holds a ref the move cannot carry, because it is not one of this project's tasks or relics: " + relicRef(stray)
-	code, stdout, stderr := run(t, project.seed, "move-tasks", "--clean-up", "--json")
-	if code != 8 || stdout != "" || !strings.Contains(stderr, want) {
-		t.Fatalf("move-tasks --clean-up with %s at the old place = (%d, %q, %q), want 8 naming it", stray, code, stdout, stderr)
-	}
-	if after := held(); after != before {
-		t.Fatalf("origin's task and relic refs after the stopped run:\n%s\nwant\n%s", after, before)
-	}
-}
-
-// On a tasks remote another project shares, the old place holds that
-// project's live task and relic refs. A fetch reports such a ref as one that
-// may be another Workbook's and keeps it, so a move must never tell anyone to
-// delete it: the run stays unverified and exits 8, as it always did, names the
-// ref as kept on origin in the fetch report's own terms, offers no deletion
-// command in text or JSON, does not say a rerun helps, and --clean-up leaves
-// the old place as it was.
-func TestMoveTasksNeverOffersToDeleteAnotherProjectsRef(t *testing.T) {
-	t.Parallel()
-	for _, kind := range []string{"task", "relic"} {
-		t.Run(kind, func(t *testing.T) {
-			t.Parallel()
-			project := codeProject(t, testrepo.FormatSHA1)
-			other := testrepo.New(t, testrepo.WithObjectFormat(testrepo.FormatSHA1))
-			if code, _, stderr := run(t, other, "setup", "--key", "CD", "--no-sync"); code != 0 {
-				t.Fatalf("other project's setup = %d; stderr = %q", code, stderr)
-			}
-			var ref string
-			if kind == "task" {
-				ref = "refs/workbook/tasks/" + cliCreateTask(t, other, "Another project's task").ID
-			} else {
-				ref = relicRef(mustCreateRelic(t, other, "Another project's relic", "--type", "spec").Relic.ID)
-			}
-			if strings.HasPrefix(project.ids[0], "CD-") {
-				t.Fatalf("this project's task %s shares the other project's key", project.ids[0])
-			}
-			cliGit(t, other, "push", "--quiet", "--no-verify", project.code, ref+":"+ref)
-
-			code, stdout, stderr := run(t, project.seed, "fetch")
-			if code != 0 || !strings.Contains(stdout, "Ignored:\t"+ref+"\t"+ignoredRefPlausible+"\t") || strings.Contains(stdout, "--delete") {
-				t.Fatalf("fetch = (%d, %q, %q), want %s reported as kept", code, stdout, stderr, ref)
-			}
-
-			held := func() string {
-				return refsUnder(t, project.code, "refs/workbook/tasks/") + "\n" + refsUnder(t, project.code, "refs/workbook/relics/")
-			}
-			before := held()
-			if code, stdout, stderr := run(t, project.seed, "config", "set", "tasks-remote", "tasks", "--url", project.tasks); code != 0 {
-				t.Fatalf("config set tasks-remote = (%d, %q, %q)", code, stdout, stderr)
-			}
-			wants := []string{
-				"origin holds a ref the move cannot carry, because it is not one of this project's tasks or relics: " +
-					ref + " (" + ignoredRefPlausible + ")",
-				`the "` + ignoredRefPlausible + `" ref is kept on origin, because Workbook deletes no ref there`,
-				"the move stays unverified, so --clean-up deletes nothing at origin",
-			}
-			for _, args := range [][]string{
-				{"move-tasks", "--no-backup"},
-				{"move-tasks", "--no-backup", "--json"},
-				{"move-tasks", "--clean-up", "--no-backup"},
-				{"move-tasks", "--clean-up", "--no-backup", "--json"},
-			} {
-				code, stdout, stderr := run(t, project.seed, args...)
-				if code != 8 {
-					t.Fatalf("%v = (%d, %q, %q), want exit 8", args, code, stdout, stderr)
-				}
-				output := stdout + stderr
-				if args[len(args)-1] == "--json" {
-					var envelope struct {
-						Error struct {
-							Category string `json:"category"`
-							Message  string `json:"message"`
-						} `json:"error"`
-					}
-					if err := json.Unmarshal([]byte(stderr), &envelope); err != nil || stdout != "" {
-						t.Fatalf("%v = (%q, %q), want the error envelope alone: %v", args, stdout, stderr, err)
-					}
-					if envelope.Error.Category != string(core.CategoryConflict) {
-						t.Fatalf("%v error = %+v, want a conflict", args, envelope.Error)
-					}
-					output = envelope.Error.Message
-				}
-				for _, want := range wants {
-					if !strings.Contains(output, want) {
-						t.Fatalf("%v output = %q, want %q", args, output, want)
-					}
-				}
-				for _, absent := range []string{"--delete", "move-tasks again"} {
-					if strings.Contains(stdout+stderr, absent) {
-						t.Fatalf("%v output = %q, want no %q", args, stdout+stderr, absent)
-					}
-				}
-				if after := held(); after != before {
-					t.Fatalf("origin's task and relic refs after %v:\n%s\nwant\n%s", args, after, before)
-				}
-			}
-		})
+	want := "origin holds task " + id + " at a commit this checkout cannot read, so it was not carried"
+	for _, args := range [][]string{{"move-tasks", "--clean-up", "--json"}, {"move-tasks", "--clean-up"}} {
+		code, stdout, stderr := run(t, project.seed, args...)
+		if code != 7 || !strings.Contains(stderr, want) {
+			t.Fatalf("%v with %s at the old place = (%d, %q, %q), want 7 naming it", args, ref, code, stdout, stderr)
+		}
+		if after := held(); after != before {
+			t.Fatalf("origin's task and relic refs after %v:\n%s\nwant\n%s", args, after, before)
+		}
 	}
 }

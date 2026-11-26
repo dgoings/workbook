@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testenv"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
 
@@ -570,112 +574,190 @@ func TestMoveVerificationNamesARelicTheNewPlaceLacks(t *testing.T) {
 	assertSameRelics(t, fixture)
 }
 
-// A ref under the relic or task namespace at the old place that is not one of
-// this project's records, whether another key's or a name that is no ID, is
-// one the move cannot carry, so the verification fails naming it and a rerun
-// fails the same way; --clean-up therefore never deletes it there. The ref is
-// judged as the fetch report judges it. A name that fits no project is named
-// with the command that removes it at the old place, and the run after
-// following that advice verifies. A name that may be another Workbook's task
-// or relic, which on a shared remote is another project's live history, is
-// named as kept with no deletion command, and nothing says a rerun helps.
-func TestMoveVerificationNamesARefTheMoveCannotCarry(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name      string
-		ref       func(fixture moveFixture, relicID string) (stray, target string)
-		removable bool
-	}{
-		{"another key's relic", func(_ moveFixture, relicID string) (string, string) {
-			_, body, _ := core.ParseRelicID(relicID)
-			return relicRef(core.NewRelicID("OTHER", body)), relicRef(relicID)
-		}, false},
-		// A fetch reports every relic ref it cannot read as one that may be
-		// another Workbook's, even a name no relic ID format produces.
-		{"not a relic ID", func(_ moveFixture, relicID string) (string, string) {
-			return relicRef("not-a-relic"), relicRef(relicID)
-		}, false},
-		{"another key's task", func(fixture moveFixture, _ string) (string, string) {
-			_, body, _ := strings.Cut(fixture.ids[0], "-")
-			return taskRef("OTHER-" + body), taskRef(fixture.ids[0])
-		}, false},
-		{"not a task ID", func(fixture moveFixture, _ string) (string, string) {
-			return taskRef("notes"), taskRef(fixture.ids[0])
-		}, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			ctx := context.Background()
-			fixture := newMoveFixture(t, testrepo.FormatSHA1)
-			relics := moveRelics(t, fixture)
-			stray, target := tc.ref(fixture, relics[0])
-			syncGit(t, fixture.origin, "update-ref", stray, syncGit(t, fixture.origin, "rev-parse", target))
-			header := "origin holds a ref the move cannot carry, because it is not one of this project's tasks or relics: " + stray
-			wants := []string{header + ` (may be another Workbook's task); the "may be another Workbook's task" ref is kept on origin`}
-			unwanted := []string{"--delete", "move-tasks again"}
-			if tc.removable {
-				wants = []string{header + " (no project's task)", "git push origin --delete " + stray + ", then run workbook move-tasks again"}
-				unwanted = []string{"kept on origin"}
-			}
-			for round := 0; round < 2; round++ {
-				result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
-				if core.CategoryOf(err) != core.CategoryConflict || err == nil || result.Verified {
-					t.Fatalf("MoveTasks() run %d with %s at the old place = (%+v, %v), want the verification to fail", round, stray, result, err)
-				}
-				for _, want := range wants {
-					if !strings.Contains(err.Error(), want) {
-						t.Fatalf("MoveTasks() run %d error = %q, want %q", round, err, want)
-					}
-				}
-				for _, absent := range append(unwanted, "does not hold everything") {
-					if strings.Contains(err.Error(), absent) {
-						t.Fatalf("MoveTasks() run %d error = %q, want no %q", round, err, absent)
-					}
-				}
-			}
-			if got := refListing(t, fixture.tasks, stray); got != "" {
-				t.Fatalf("tasks holds %s after the move: %s", stray, got)
-			}
-			if got := refListing(t, fixture.origin, stray); got == "" {
-				t.Fatalf("origin lost %s", stray)
-			}
-			if !tc.removable {
-				return
-			}
-			syncGit(t, fixture.first.Root, "push", "--no-verify", "origin", "--delete", stray)
-			if result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{}); err != nil || !result.Verified {
-				t.Fatalf("MoveTasks() after deleting %s = (%+v, %v), want it verified", stray, result, err)
-			}
-		})
+// notThisProjectsRefs are refs under the task and relic namespaces whose names
+// are not one of this project's task or relic IDs: another key's task and
+// relic, names that fit no project, and nested names, each pointing at one of
+// this project's commits so that only its name tells it apart.
+func notThisProjectsRefs(fixture moveFixture, relicID string) map[string]string {
+	_, taskBody, _ := strings.Cut(fixture.ids[0], "-")
+	_, relicBody, _ := core.ParseRelicID(relicID)
+	return map[string]string{
+		taskRef("OTHER-" + taskBody):                  taskRef(fixture.ids[0]),
+		taskRef("notes"):                              taskRef(fixture.ids[0]),
+		taskRef("nested/" + fixture.ids[0]):           taskRef(fixture.ids[0]),
+		relicRef(core.NewRelicID("OTHER", relicBody)): relicRef(relicID),
+		relicRef("not-a-relic"):                       relicRef(relicID),
+		relicRef("nested/" + relicID):                 relicRef(relicID),
 	}
 }
 
-// A refusal naming refs of both kinds offers the deletion command for the
-// removable ones only, keeps the others, and does not say a rerun verifies
-// the move, since the kept ones keep it unverified. Neither does a refusal
-// that also lists what the new place lacks.
-func TestMoveVerificationErrorOffersRemovalOnlyForNoProjectsRef(t *testing.T) {
+// writeNotThisProjectsRefs writes notThisProjectsRefs at the old place and
+// returns them by name, at the commit each points at.
+func writeNotThisProjectsRefs(t *testing.T, fixture moveFixture, relicID string) map[string]string {
+	t.Helper()
+	written := map[string]string{}
+	for name, target := range notThisProjectsRefs(fixture, relicID) {
+		tip := syncGit(t, fixture.origin, "rev-parse", target)
+		syncGit(t, fixture.origin, "update-ref", name, tip)
+		written[name] = tip
+	}
+	return written
+}
+
+// requireHeldAt requires bare to hold every ref in refs at its commit.
+func requireHeldAt(t *testing.T, bare string, refs map[string]string) {
+	t.Helper()
+	for name, tip := range refs {
+		if got := refListing(t, bare, name); got != name+" "+tip {
+			t.Fatalf("%s holds %q for %s, want it at %s", bare, got, name, tip)
+		}
+	}
+}
+
+// A move concerns this project's refs only. A ref under the task or relic
+// namespace at the old place whose name is not one of this project's task or
+// relic IDs is left where it is: the move verifies, does not count it, does
+// not carry it, and its error-free result names nothing about it, run after
+// run.
+func TestMoveVerificationLeavesRefsThatAreNotThisProjects(t *testing.T) {
 	t.Parallel()
-	stray := []IgnoredRef{
-		{Ref: "refs/workbook/tasks/CD-01M8CJ0XCPK69G68QC0Q6QWH8D", PlausibleTask: true},
-		{Ref: "refs/workbook/tasks/junk"},
-		{Ref: "refs/workbook/relics/not-a-relic", PlausibleTask: true},
-		{Ref: "refs/workbook/tasks/notes"},
+	ctx := context.Background()
+	fixture := newMoveFixture(t, testrepo.FormatSHA1)
+	relics := moveRelics(t, fixture)
+	left := writeNotThisProjectsRefs(t, fixture, relics[0])
+	for round := 0; round < 2; round++ {
+		result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
+		if err != nil || !result.Verified || result.Tasks != len(fixture.ids) || result.Relics != len(relics) {
+			t.Fatalf("MoveTasks() run %d with refs that are not this project's at the old place = (%+v, %v), "+
+				"want %d tasks and %d relics verified", round, result, err, len(fixture.ids), len(relics))
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name := range left {
+			if strings.Contains(string(encoded), strings.TrimPrefix(strings.TrimPrefix(name, taskRefPrefix), relicRefPrefix)) {
+				t.Fatalf("MoveTasks() run %d result names %s: %s", round, name, encoded)
+			}
+			if got := refListing(t, fixture.tasks, name); got != "" {
+				t.Fatalf("tasks holds %s after the move: %s", name, got)
+			}
+		}
+		requireHeldAt(t, fixture.origin, left)
 	}
-	err := moveVerificationError("origin", "tasks", []string{"AB-01M8CJ0XCPK69G68QC0Q6QWH8E (absent)"}, stray)
-	want := "tasks does not hold everything origin holds: AB-01M8CJ0XCPK69G68QC0Q6QWH8E (absent); " +
-		"origin holds refs the move cannot carry, because they are not this project's tasks or relics: " +
-		"refs/workbook/tasks/CD-01M8CJ0XCPK69G68QC0Q6QWH8D (may be another Workbook's task), " +
-		"refs/workbook/tasks/junk (no project's task), " +
-		"refs/workbook/relics/not-a-relic (may be another Workbook's task), " +
-		"refs/workbook/tasks/notes (no project's task); " +
-		`the "may be another Workbook's task" refs are kept on origin, because Workbook deletes no ref there and ` +
-		`deleting a "may be another Workbook's task" ref would destroy a newer Workbook's or another project's history; ` +
-		"the move stays unverified, so --clean-up deletes nothing at origin; " +
-		`remove the "no project's task" refs there, ` +
-		"after keeping a copy if you need what they hold, " +
-		"with git push origin --delete refs/workbook/tasks/junk refs/workbook/tasks/notes"
-	if core.CategoryOf(err) != core.CategoryConflict || err == nil || err.Error() != want {
-		t.Fatalf("moveVerificationError() = %v\nwant %s", err, want)
+}
+
+// One of this project's own refs that the new place lacks still leaves the
+// move unverified when refs that are not this project's sit beside it, and
+// the refusal names only the one that is.
+func TestMoveVerificationNamesOnlyThisProjectsRefTheNewPlaceLacks(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newMoveFixture(t, testrepo.FormatSHA1)
+	relics := moveRelics(t, fixture)
+	left := writeNotThisProjectsRefs(t, fixture, relics[0])
+	for _, lost := range []string{taskRef(fixture.ids[1]), relicRef(relics[1])} {
+		fixture.first.moveStepHook = func(at string) error {
+			if at == "verify" {
+				syncGit(t, fixture.tasks, "update-ref", "-d", lost)
+			}
+			return nil
+		}
+		result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
+		fixture.first.moveStepHook = nil
+		want := "tasks does not hold everything origin holds: " + fixture.ids[1] + " (absent); run workbook move-tasks again"
+		if lost == relicRef(relics[1]) {
+			want = "tasks does not hold everything origin holds: relic " + relics[1] + " (lacks 1 change(s)); run workbook move-tasks again"
+		}
+		if core.CategoryOf(err) != core.CategoryConflict || err == nil || err.Error() != want || result.Verified {
+			t.Fatalf("MoveTasks() with %s missing at the new place = (%+v, %v), want the verification to fail with exactly %q",
+				lost, result, err, want)
+		}
+		requireHeldAt(t, fixture.origin, left)
 	}
+	if result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{}); err != nil || !result.Verified {
+		t.Fatalf("MoveTasks() after the losses = (%+v, %v), want them put back and verified", result, err)
+	}
+}
+
+// The clean-up after a move plans to delete this project's task and relic
+// refs at the place left, and every other Workbook ref there but its marker,
+// and leaves the refs that are not this project's out of the plan: they are
+// not deleted, not bundled, not counted, and not named as kept. When the host
+// refuses a deletion, what the refusal says remains is only what the plan was
+// to delete.
+func TestMoveCleanUpPlanLeavesRefsThatAreNotThisProjects(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newMoveFixture(t, testrepo.FormatSHA1)
+	relics := moveRelics(t, fixture)
+	left := writeNotThisProjectsRefs(t, fixture, relics[0])
+	if result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{}); err != nil || !result.Verified {
+		t.Fatalf("MoveTasks() = (%+v, %v)", result, err)
+	}
+	plan, err := fixture.first.PlanMoveCleanUp(ctx, fixture.config, "origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var planned []string
+	for _, ref := range plan.Refs {
+		planned = append(planned, ref.Ref)
+	}
+	sort.Strings(planned)
+	// This fixture's project has no configuration ledger, so its task and
+	// relic refs are all the plan deletes.
+	var want []string
+	for _, relicID := range relics {
+		want = append(want, relicRef(relicID))
+	}
+	for _, id := range fixture.ids {
+		want = append(want, taskRef(id))
+	}
+	sort.Strings(want)
+	if !reflect.DeepEqual(planned, want) || plan.Tasks != len(fixture.ids) ||
+		!reflect.DeepEqual(plan.Kept, []string{identityRef}) || plan.Live() {
+		t.Fatalf("PlanMoveCleanUp() = %+v, refs %v; want refs %v, %d tasks, the marker kept", plan, planned, want, len(fixture.ids))
+	}
+
+	testenv.WriteExecutable(t, filepath.Join(fixture.origin, "hooks", "update"), []byte("#!/bin/sh\n"+
+		"case \"$3\" in *[!0]*) exit 0 ;; esac\n"+
+		"echo \"rule: no deletions\" >&2\n"+
+		"exit 1\n"))
+	_, err = fixture.first.ResetRemote(ctx, fixture.config.ProjectID, plan, ResetOptions{NoBackup: true})
+	var refusal *ResetRefusalError
+	if !errors.As(err, &refusal) || refusal.Refusal.Reason != ResetDeletionRefused || !reflect.DeepEqual(refusal.Refusal.Remaining, want) {
+		t.Fatalf("ResetRemote() with deletions refused = %v, want a refusal naming only %v remaining", err, want)
+	}
+	for name := range left {
+		if strings.Contains(err.Error(), name) {
+			t.Fatalf("ResetRemote() refusal names %s: %v", name, err)
+		}
+	}
+	if err := os.Remove(filepath.Join(fixture.origin, "hooks", "update")); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := fixture.first.ResetRemote(ctx, fixture.config.ProjectID, plan, ResetOptions{NoBackup: true})
+	if err != nil || !reflect.DeepEqual(sorted(result.Removed), want) {
+		t.Fatalf("ResetRemote() = (%+v, %v), want %v removed", result, err, want)
+	}
+	requireHeldAt(t, fixture.origin, left)
+	var remaining []string
+	for _, line := range strings.Split(refListing(t, fixture.origin, "refs/workbook/"), "\n") {
+		name, _, _ := strings.Cut(line, " ")
+		remaining = append(remaining, name)
+	}
+	wantRemaining := []string{identityRef}
+	for name := range left {
+		wantRemaining = append(wantRemaining, name)
+	}
+	if sort.Strings(remaining); !reflect.DeepEqual(remaining, sorted(wantRemaining)) {
+		t.Fatalf("origin holds %v after the clean-up, want %v", remaining, sorted(wantRemaining))
+	}
+}
+
+func sorted(values []string) []string {
+	values = append([]string(nil), values...)
+	sort.Strings(values)
+	return values
 }
