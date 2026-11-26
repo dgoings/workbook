@@ -664,7 +664,28 @@ func (r *Repository) GetRelic(ctx context.Context, config core.ProjectConfig, re
 	snapshot, err := r.verifiedRelicTip(ctx, config, relicID, head)
 	err = namedRelicError(relicID, err)
 	if core.CategoryOf(err) == core.CategoryCorruptData {
-		return core.RelicSnapshot{}, core.Errorf(core.CategoryCorruptData, "%v; run \"workbook validate\" for details", err)
+		return core.RelicSnapshot{}, &relicValidateRefusal{cause: err}
 	}
 	return snapshot, err
+}
+
+// relicValidateRefusal is GetRelic's refusal of a relic commit that breaks a
+// rule: the reason, which it keeps as its cause, then a pointer to `workbook
+// validate`.
+type relicValidateRefusal struct{ cause error }
+
+func (e *relicValidateRefusal) Error() string {
+	return e.cause.Error() + `; run "workbook validate" for details`
+}
+
+func (e *relicValidateRefusal) Unwrap() error { return e.cause }
+
+// As gives a caller looking for a *core.Error, as the category and a command's
+// message do, the whole refusal, so neither loses the pointer to validate.
+func (e *relicValidateRefusal) As(target any) bool {
+	typed, ok := target.(**core.Error)
+	if ok {
+		*typed = &core.Error{Category: core.CategoryCorruptData, Message: e.Error()}
+	}
+	return ok
 }

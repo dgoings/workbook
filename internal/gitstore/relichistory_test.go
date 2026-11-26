@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -1232,5 +1233,35 @@ func TestVerifyRelicTipsChecksEachTipAgainstItsParent(t *testing.T) {
 		case (err == nil) != (errs[index] == nil) || core.CategoryOf(err) != core.CategoryOf(errs[index]):
 			t.Fatalf("GetRelic() of head %d error = %v, but verifyRelicTips() said %v", index, err, errs[index])
 		}
+	}
+}
+
+// GetRelic's refusal of a commit that breaks a rule keeps the reason as its
+// cause, for errors.Is and errors.As, and still reads as one refusal that ends
+// by pointing at validate, to a caller looking for a *core.Error as well.
+func TestGetRelicKeepsTheCauseOfARefusal(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	ctx := context.Background()
+	part := relicTestPartNumbered(1).withField("heading", "Goals")
+	pack, _ := relicRootPack(config, 1, part)
+	parts := map[string]forgedPart{part.id: {fields: forgedFields(t, "heading", "Goals")}}
+	state := foldRelic(t, nil, pack).State
+	state.Relic.Title = "A title no operation set"
+	forged := forgeRelicCommit(t, repo, "", encodedRelicDocument(t, pack), encodedRelicDocument(t, state), parts)
+	pointRelicRef(t, repo, pack.RelicID, forged)
+
+	_, err := repo.GetRelic(ctx, config, pack.RelicID)
+	assertGetRelicRefused(t, err)
+	cause := errors.Unwrap(err)
+	if cause == nil || cause.Error()+relicValidateHint != err.Error() || core.CategoryOf(cause) != core.CategoryCorruptData {
+		t.Fatalf("GetRelic() error %q has cause %v, want the reason without the pointer to validate", err, cause)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("errors.Is(%q, its cause) = false", err)
+	}
+	var typed *core.Error
+	if !errors.As(err, &typed) || typed.Category != core.CategoryCorruptData || typed.Message != err.Error() {
+		t.Fatalf("errors.As(%q) = %+v, want corrupt data with the whole refusal as its message", err, typed)
 	}
 }
