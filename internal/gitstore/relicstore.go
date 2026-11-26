@@ -33,8 +33,13 @@ const (
 	relicBodyPath      = "body"
 )
 
-// subtreeMode is how a raw tree object records an entry that is a tree.
-const subtreeMode = "40000"
+// subtreeMode is how a raw tree object records an entry that is a tree, and
+// mktreeSubtreeMode is how one is written for git mktree. Both name the same
+// mode; Git drops the leading zero when it stores it.
+const (
+	subtreeMode       = "40000"
+	mktreeSubtreeMode = "040000"
+)
 
 func corruptRelic(relicID, format string, args ...any) error {
 	return core.Errorf(core.CategoryCorruptData, "relic %s: %s", relicID, fmt.Sprintf(format, args...))
@@ -163,26 +168,22 @@ func (r *Repository) relicRefRecords(ctx context.Context, patterns ...string) ([
 	if len(contents) == 0 {
 		return nil, nil
 	}
-	if contents[len(contents)-1] != '\n' {
-		return nil, core.Errorf(core.CategoryCorruptData, "Git returned an unterminated relic ref record")
-	}
-	lines := bytes.Split(contents[:len(contents)-1], []byte{'\n'})
-	records := make([]relicRefRecord, 0, len(lines))
-	for _, line := range lines {
-		parts := bytes.Split(line, []byte{0})
-		if len(parts) != 3 || len(parts[0]) == 0 || len(parts[1]) == 0 {
-			return nil, core.Errorf(core.CategoryCorruptData, "Git returned an invalid relic ref record")
-		}
-		record := relicRefRecord{name: string(parts[0]), objectID: string(parts[1]), symbolicTarget: string(parts[2])}
+	records := make([]relicRefRecord, 0, bytes.Count(contents, []byte{'\n'}))
+	err = eachRefRecord(contents, "relic ref", func(refName, objectID, symbolicTarget string) error {
+		record := relicRefRecord{name: refName, objectID: objectID, symbolicTarget: symbolicTarget}
 		if !slices.ContainsFunc(patterns, func(pattern string) bool { return strings.HasPrefix(record.name, pattern) }) {
-			return nil, core.Errorf(core.CategoryCorruptData, "Git returned a ref outside the relic namespace")
+			return core.Errorf(core.CategoryCorruptData, "Git returned a ref outside the relic namespace")
 		}
 		// The width comes from Git's own full-width %(objectname), and every
 		// later ID in this process is held to it.
 		if err := r.rememberGitObjectID(record.objectID); err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "relic ref object ID is invalid", err)
+			return core.Wrap(core.CategoryCorruptData, "relic ref object ID is invalid", err)
 		}
 		records = append(records, record)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return records, nil
 }

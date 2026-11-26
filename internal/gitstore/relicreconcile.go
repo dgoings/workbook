@@ -606,13 +606,13 @@ func (r *Repository) writeReplayedRelic(
 	if len(record.State.Relic.Parts) > 0 {
 		entries := make([]relicTreeEntry, 0, len(record.State.Relic.Parts))
 		for _, part := range record.State.Relic.Parts {
-			entries = append(entries, relicTreeEntry{mode: "040000", kind: "tree", objectID: parts[part.ID].Tree, name: part.ID})
+			entries = append(entries, relicTreeEntry{mode: mktreeSubtreeMode, kind: "tree", objectID: parts[part.ID].Tree, name: part.ID})
 		}
 		partsTree, err := r.writeRelicTrees(ctx, [][]relicTreeEntry{entries})
 		if err != nil {
 			return RelicCommit{}, nil, err
 		}
-		top = append(top, relicTreeEntry{mode: "040000", kind: "tree", objectID: partsTree[0], name: relicPartsPath})
+		top = append(top, relicTreeEntry{mode: mktreeSubtreeMode, kind: "tree", objectID: partsTree[0], name: relicPartsPath})
 	}
 	tree, err := r.writeRelicTrees(ctx, [][]relicTreeEntry{top})
 	if err != nil {

@@ -643,18 +643,7 @@ func (r *Repository) listIdentityRefs(ctx context.Context, refs ...string) (iden
 
 func parseIdentityRefRecords(refs []string, contents []byte) (identityRefListing, error) {
 	listing := identityRefListing{Heads: make(map[string]string, len(refs))}
-	if len(contents) == 0 {
-		return listing, nil
-	}
-	if contents[len(contents)-1] != '\n' {
-		return identityRefListing{}, core.Errorf(core.CategoryCorruptData, "Git returned an unterminated project identity ref record")
-	}
-	for _, line := range bytes.Split(contents[:len(contents)-1], []byte{'\n'}) {
-		parts := bytes.Split(line, []byte{0})
-		if len(parts) != 3 || len(parts[0]) == 0 || len(parts[1]) == 0 {
-			return identityRefListing{}, core.Errorf(core.CategoryCorruptData, "Git returned an invalid project identity ref record")
-		}
-		refName, objectID, symbolicTarget := string(parts[0]), string(parts[1]), string(parts[2])
+	err := eachRefRecord(contents, "project identity ref", func(refName, objectID, symbolicTarget string) error {
 		requested := ""
 		for _, ref := range refs {
 			if refName == ref {
@@ -665,17 +654,21 @@ func parseIdentityRefRecords(refs []string, contents []byte) (identityRefListing
 		if requested == "" {
 			if name, mirrored := mirroredIdentityChild(refName); mirrored {
 				listing.Ignored = append(listing.Ignored, name)
-				continue
+				return nil
 			}
-			return identityRefListing{}, identityRefChildError(identityRefAncestorOf(refs, refName))
+			return identityRefChildError(identityRefAncestorOf(refs, refName))
 		}
 		if symbolicTarget != "" {
-			return identityRefListing{}, core.Errorf(core.CategoryCorruptData, "project identity ref %q must not be symbolic", refName)
+			return core.Errorf(core.CategoryCorruptData, "project identity ref %q must not be symbolic", refName)
 		}
 		if _, duplicate := listing.Heads[requested]; duplicate {
-			return identityRefListing{}, core.Errorf(core.CategoryCorruptData, "project identity ref %q was returned more than once", refName)
+			return core.Errorf(core.CategoryCorruptData, "project identity ref %q was returned more than once", refName)
 		}
 		listing.Heads[requested] = objectID
+		return nil
+	})
+	if err != nil {
+		return identityRefListing{}, err
 	}
 	return listing, nil
 }
@@ -829,7 +822,7 @@ func parseRawIdentityTree(contents []byte, objectIDBytes int, withParent bool) (
 	entries := make(map[string]string, 2)
 	err := scanRawTreeEntries(contents, objectIDBytes, "project identity tree",
 		func(mode, name, objectID string) error {
-			if mode != "100644" {
+			if mode != regularBlobMode {
 				return core.Errorf(core.CategoryCorruptData, "project identity tree entry %q is not a regular blob", name)
 			}
 			if name != identityDocumentPath && !(moved && name == tasksMovedDocumentPath) {

@@ -415,7 +415,7 @@ func (r *Repository) writeRelicObjects(
 		entries := make([]relicTreeEntry, 0, len(record.State.Relic.Parts))
 		for _, part := range record.State.Relic.Parts {
 			entries = append(entries, relicTreeEntry{
-				mode: "040000", kind: "tree", objectID: inherited.parts[part.ID], name: part.ID,
+				mode: mktreeSubtreeMode, kind: "tree", objectID: inherited.parts[part.ID], name: part.ID,
 			})
 		}
 		trees, err := r.writeRelicTrees(ctx, [][]relicTreeEntry{entries})
@@ -431,7 +431,7 @@ func (r *Repository) writeRelicObjects(
 		{mode: regularBlobMode, kind: "blob", objectID: blobs[2], name: relicLinksPath},
 	}
 	if partsTree != "" {
-		top = append(top, relicTreeEntry{mode: "040000", kind: "tree", objectID: partsTree, name: relicPartsPath})
+		top = append(top, relicTreeEntry{mode: mktreeSubtreeMode, kind: "tree", objectID: partsTree, name: relicPartsPath})
 	}
 	trees, err := r.writeRelicTrees(ctx, [][]relicTreeEntry{top})
 	if err != nil {

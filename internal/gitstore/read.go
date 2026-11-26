@@ -20,6 +20,30 @@ type TaskHead struct {
 
 const taskRefFormat = "%(refname)%00%(objectname)%00%(symref)"
 
+// eachRefRecord walks a for-each-ref listing written with taskRefFormat and
+// calls visit with each record's ref name, object ID and symbolic target, in
+// Git's order, stopping at the first error. A listing that does not end in a
+// newline, or a record without three fields, a name and an object ID, is
+// corrupt data; what names the refs in that refusal, as in "relic ref".
+func eachRefRecord(contents []byte, what string, visit func(refName, objectID, symbolicTarget string) error) error {
+	if len(contents) == 0 {
+		return nil
+	}
+	if contents[len(contents)-1] != '\n' {
+		return core.Errorf(core.CategoryCorruptData, "Git returned an unterminated %s record", what)
+	}
+	for _, line := range bytes.Split(contents[:len(contents)-1], []byte{'\n'}) {
+		parts := bytes.Split(line, []byte{0})
+		if len(parts) != 3 || len(parts[0]) == 0 || len(parts[1]) == 0 {
+			return core.Errorf(core.CategoryCorruptData, "Git returned an invalid %s record", what)
+		}
+		if err := visit(string(parts[0]), string(parts[1]), string(parts[2])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ListTaskHeads returns every Workbook task ref tip, ordered by task ID. It
 // uses Git's ref enumeration so packed and loose refs behave the same way.
 func (r *Repository) ListTaskHeads(ctx context.Context, config core.ProjectConfig) ([]TaskHead, error) {
@@ -277,55 +301,51 @@ func (r *Repository) parseOwnedRefRecords(
 	if len(contents) == 0 {
 		return nil, nil, nil
 	}
-	if contents[len(contents)-1] != '\n' {
-		return nil, nil, core.Errorf(core.CategoryCorruptData, "Git returned an unterminated task ref record")
-	}
 
-	lines := bytes.Split(contents[:len(contents)-1], []byte{'\n'})
-	refs := make([]taskRefRecord, 0, len(lines))
+	lines := bytes.Count(contents, []byte{'\n'})
+	refs := make([]taskRefRecord, 0, lines)
 	var ignored []IgnoredRef
-	seen := make(map[string]struct{}, len(lines))
-	for _, line := range lines {
-		parts := bytes.Split(line, []byte{0})
-		if len(parts) != 3 || len(parts[0]) == 0 || len(parts[1]) == 0 {
-			return nil, nil, core.Errorf(core.CategoryCorruptData, "Git returned an invalid task ref record")
-		}
-		refName, objectID, symbolicTarget := string(parts[0]), string(parts[1]), string(parts[2])
+	seen := make(map[string]struct{}, lines)
+	err := eachRefRecord(contents, "task ref", func(refName, objectID, symbolicTarget string) error {
 		if !strings.HasPrefix(refName, prefix) {
-			return nil, nil, core.Errorf(core.CategoryCorruptData, "Git returned a ref outside the task namespace")
+			return core.Errorf(core.CategoryCorruptData, "Git returned a ref outside the task namespace")
 		}
 		taskID := strings.TrimPrefix(refName, prefix)
 		if taskID == "" || strings.Contains(taskID, "/") {
 			if tolerateUnrecognizedNames {
 				ignored = append(ignored, ignoredTaskRef(keys, prefix, refName, "the ref does not name one task"))
-				continue
+				return nil
 			}
-			return nil, nil, core.Errorf(core.CategoryCorruptData, "task ref %q does not name one task", refName)
+			return core.Errorf(core.CategoryCorruptData, "task ref %q does not name one task", refName)
 		}
 		if err := keys.RequireOwned(taskID); err != nil {
 			if tolerateUnrecognizedNames {
 				ignored = append(ignored, ignoredTaskRef(keys, prefix, refName, err.Error()))
-				continue
+				return nil
 			}
-			return nil, nil, core.Wrap(core.CategoryCorruptData, "task ref ID is invalid", err)
+			return core.Wrap(core.CategoryCorruptData, "task ref ID is invalid", err)
 		}
 		if expectedTaskID != "" && taskID != expectedTaskID {
-			return nil, nil, core.Errorf(core.CategoryCorruptData, "task ref %q has nested entries", prefix+expectedTaskID)
+			return core.Errorf(core.CategoryCorruptData, "task ref %q has nested entries", prefix+expectedTaskID)
 		}
 		if symbolicTarget != "" {
-			return nil, nil, core.Errorf(core.CategoryCorruptData, "task ref %q must not be symbolic", refName)
+			return core.Errorf(core.CategoryCorruptData, "task ref %q must not be symbolic", refName)
 		}
 		if err := r.validateFullObjectID(objectID); err != nil {
-			return nil, nil, core.Wrap(core.CategoryCorruptData, "task ref object ID is invalid", err)
+			return core.Wrap(core.CategoryCorruptData, "task ref object ID is invalid", err)
 		}
 		if err := r.rememberGitObjectID(objectID); err != nil {
-			return nil, nil, core.Wrap(core.CategoryCorruptData, "task ref object ID is invalid", err)
+			return core.Wrap(core.CategoryCorruptData, "task ref object ID is invalid", err)
 		}
 		if _, duplicate := seen[taskID]; duplicate {
-			return nil, nil, core.Errorf(core.CategoryCorruptData, "task ref %q was returned more than once", refName)
+			return core.Errorf(core.CategoryCorruptData, "task ref %q was returned more than once", refName)
 		}
 		seen[taskID] = struct{}{}
 		refs = append(refs, taskRefRecord{taskID: taskID, objectID: objectID})
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 	return refs, ignored, nil
 }

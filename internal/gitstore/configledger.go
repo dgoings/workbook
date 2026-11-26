@@ -1201,18 +1201,7 @@ func (r *Repository) listConfigRefs(ctx context.Context, refs ...string) (config
 
 func parseConfigRefRecords(refs []string, contents []byte) (configRefListing, error) {
 	listing := configRefListing{Heads: make(map[string]string, len(refs))}
-	if len(contents) == 0 {
-		return listing, nil
-	}
-	if contents[len(contents)-1] != '\n' {
-		return configRefListing{}, core.Errorf(core.CategoryCorruptData, "Git returned an unterminated configuration ref record")
-	}
-	for _, line := range bytes.Split(contents[:len(contents)-1], []byte{'\n'}) {
-		parts := bytes.Split(line, []byte{0})
-		if len(parts) != 3 || len(parts[0]) == 0 || len(parts[1]) == 0 {
-			return configRefListing{}, core.Errorf(core.CategoryCorruptData, "Git returned an invalid configuration ref record")
-		}
-		refName, objectID, symbolicTarget := string(parts[0]), string(parts[1]), string(parts[2])
+	err := eachRefRecord(contents, "configuration ref", func(refName, objectID, symbolicTarget string) error {
 		requested := ""
 		for _, ref := range refs {
 			if refName == ref {
@@ -1223,17 +1212,21 @@ func parseConfigRefRecords(refs []string, contents []byte) (configRefListing, er
 		if requested == "" {
 			if name, mirrored := mirroredConfigChild(refName); mirrored {
 				listing.Ignored = append(listing.Ignored, name)
-				continue
+				return nil
 			}
-			return configRefListing{}, configRefChildError(configRefAncestorOf(refs, refName))
+			return configRefChildError(configRefAncestorOf(refs, refName))
 		}
 		if symbolicTarget != "" {
-			return configRefListing{}, core.Errorf(core.CategoryCorruptData, "configuration ref %q must not be symbolic", refName)
+			return core.Errorf(core.CategoryCorruptData, "configuration ref %q must not be symbolic", refName)
 		}
 		if _, duplicate := listing.Heads[requested]; duplicate {
-			return configRefListing{}, core.Errorf(core.CategoryCorruptData, "configuration ref %q was returned more than once", refName)
+			return core.Errorf(core.CategoryCorruptData, "configuration ref %q was returned more than once", refName)
 		}
 		listing.Heads[requested] = objectID
+		return nil
+	})
+	if err != nil {
+		return configRefListing{}, err
 	}
 	return listing, nil
 }
