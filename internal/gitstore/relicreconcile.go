@@ -525,7 +525,9 @@ func (r *Repository) writeReplayedRelic(
 			if bytes.Equal(encoded, stored[index]) {
 				continue
 			}
-			if len(encoded) > core.MaxRelicPartFieldsBytes && parent.Parts[partID].FieldsBytes <= core.MaxRelicPartFieldsBytes {
+			// A part already over the total that grew warns too: the warning
+			// is about the bytes this replay wrote, not about crossing.
+			if len(encoded) > core.MaxRelicPartFieldsBytes {
 				warnings = append(warnings, core.RelicFieldsOverLimitWarning(relicID, partID, int64(len(encoded))))
 			}
 			fieldBlobs = append(fieldBlobs, encoded)

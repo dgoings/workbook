@@ -530,6 +530,35 @@ func TestReplayCombinedFieldsOverTheTotalApplyAndWarn(t *testing.T) {
 	})
 }
 
+// A replay that grows a part whose fields were already over the total warns
+// as one that takes them over it does: the part only grew further.
+func TestReplayGrowingFieldsAlreadyOverTheTotalWarns(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	p := relicTestPartNumbered(1)
+	root := writeRelicRoot(t, repo, config, p)
+	relicID := root.Record.State.RelicID
+	// Two clones' 9 KiB fields, already combined on the remote's side.
+	there := strings.Repeat("t", 9*1024)
+	local := relicHistoryFrom(t, repo, config, root, relicOps(relicFieldSet(101, p.id, "here", "more")))
+	remote := relicHistoryFrom(t, repo, config, root, relicOps(
+		relicFieldSet(201, p.id, "there", there), relicFieldSet(202, p.id, "also", there)))
+	if size := relicObjectSize(t, repo, remote.Head+":parts/"+p.id+"/fields.json"); size <= core.MaxRelicPartFieldsBytes {
+		t.Fatalf("the remote's fields are %d bytes, want them over %d already", size, core.MaxRelicPartFieldsBytes)
+	}
+
+	outcome := replayDivergedSnapshots(t, repo, config, local, remote)
+	requireReplayed(t, outcome)
+	if outcome.Conflict != nil || outcome.Replayed != 1 {
+		t.Fatalf("outcome = %+v, want the field replayed without a conflict", outcome)
+	}
+	if len(outcome.Warnings) != 1 || outcome.Warnings[0].Code != core.WarningRelicOverLimit ||
+		!strings.Contains(outcome.Warnings[0].Message, "part "+p.id) {
+		t.Fatalf("warnings = %+v, want one %s naming part %s", outcome.Warnings, core.WarningRelicOverLimit, p.id)
+	}
+	assertReplayedHistory(t, repo, config, relicID, outcome.Next)
+}
+
 func TestReplayNeverRecordsAnOperationTwice(t *testing.T) {
 	t.Parallel()
 	repo, config := relicRepository(t, testrepo.FormatSHA1)
