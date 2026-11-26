@@ -1418,8 +1418,8 @@ workbook: this is the JSON result of a command, not a relic document: it has "co
 | One field value | 16,384 bytes (16 KiB) | The value as stored JSON. | When saved and when read |
 | Nesting inside one value | 32 levels | Lists and objects inside one another. | When saved and when read |
 | Body | 1,048,576 bytes (1 MiB) | One part's body. | When saved and when read |
-| Properties together | 65,536 bytes (64 KiB) | The relic's properties object as stored JSON. | Only when a change makes the total larger |
-| Fields of one part together | 16,384 bytes (16 KiB) | The part's stored fields document, with the few bytes that wrap it. | Only when a change makes the total larger |
+| Properties together | 65,536 bytes (64 KiB) | The relic's properties object as stored JSON, names and punctuation included, so a value of 65,536 bytes is already over this total. | Only when a change makes the total larger |
+| Fields of one part together | 16,384 bytes (16 KiB) | The part's stored fields document, with names, punctuation and the few bytes that wrap it, so a value of 16,384 bytes is already over this total. | Only when a change makes the total larger |
 | Live parts | 2,000 | Parts that are not removed. | Only when a change adds or restores a part |
 | Parts | 4,000 | Parts, counting removed ones. | Only when a change adds a part |
 | Live bodies | 16,777,216 bytes (16 MiB) | The bodies of the live parts, added together. | Only when a change makes the total larger |

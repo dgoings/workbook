@@ -608,6 +608,9 @@ func TestReferenceDocumentsSharedRelics(t *testing.T) {
 		"--no-sync", "relicConflict", "relic-over-limit", "git cat-file blob", "body", "tombstone",
 		// The other local changes a conflict did not apply, and how to see each.
 		"`unapplied`", ":operation.json",
+		// That a total binds before the limit on one value.
+		"a value of 65,536 bytes is already over this total",
+		"a value of 16,384 bytes is already over this total",
 		// The limits, as the table writes them.
 		"500", "100", "16", "256", "64 KiB", "16 KiB", "1 MiB", "2,000", "4,000", "16 MiB",
 		// What relic update's help says about where a relic option may be typed.
