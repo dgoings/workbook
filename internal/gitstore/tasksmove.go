@@ -159,6 +159,7 @@ func (r *Repository) switchRemote(name string) {
 // command (strandedPublication), and running this again carries the edit.
 func (r *Repository) MoveTasks(ctx context.Context, config core.ProjectConfig, options MoveTasksOptions) (MoveTasksResult, error) {
 	result, err := r.moveTasks(ctx, config, options)
+	r.PackMovedRelicRefs(ctx)
 	// The bundles a run wrote are reported however it ended: a person who
 	// has to look for a replaced copy needs to know where it is.
 	if backup := r.endMoveBackup(); backup != nil {
@@ -595,6 +596,8 @@ func (r *Repository) moveReadSource(ctx context.Context, config core.ProjectConf
 		relicFetchRefspecFor(from)); err != nil {
 		return nil, core.Wrap(core.CategoryOperational, "cannot read the relics from "+from, err)
 	}
+	// The old place's relics now have tracking refs here, usually new ones.
+	r.noteRelicRefsMoved()
 	_, stage := r.syncFetchedRelics(ctx, config)
 	for _, failure := range []error{stage.corruptError(), stage.newerWriterError(), stage.otherError()} {
 		if failure != nil {
@@ -1347,6 +1350,7 @@ func (r *Repository) verifyMovedTasks(ctx context.Context, config core.ProjectCo
 			"+"+taskRefPrefix+"*:"+remoteTaskRefPrefixFor(remote)+"*", relicFetchRefspecFor(remote)); err != nil {
 			return core.Wrap(core.CategoryOperational, "cannot list the task and relic refs "+remote+" holds", err)
 		}
+		r.noteRelicRefsMoved()
 	}
 	source, err := r.trackingRefHeads(ctx, remoteTaskRefPrefixFor(from))
 	if err != nil {

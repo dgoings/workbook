@@ -317,6 +317,7 @@ func runFetch(ctx context.Context, args []string, cwd string, stdout, stderr io.
 		return err
 	}
 	result, syncErr := repository.Fetch(ctx, config)
+	repository.PackMovedRelicRefs(ctx)
 	warnings := settleFetchedHistories(ctx, repository, config, result)
 	warnings = append(warnings, fetchSharingWarnings(ctx, repository, config, &result)...)
 	relicConflicts, relicWarnings := relicReport(ctx, repository, result)
@@ -497,6 +498,7 @@ func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	}
 
 	result, syncErr := repository.Sync(ctx, config)
+	repository.PackMovedRelicRefs(ctx)
 	warnings := settleFetchedHistories(ctx, repository, config, result.Fetch)
 	warnings = append(warnings, fetchSharingWarnings(ctx, repository, config, &result.Fetch)...)
 	warnings = append(warnings, repository.PublicationWarnings()...)

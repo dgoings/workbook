@@ -50,6 +50,9 @@ func (session *taskSession) mutateRelic(
 	// A relic command fetches the relics as well as the tasks, which its links
 	// are checked against.
 	session.relics = true
+	// Whatever the command moved, the fetch or its own write, is packed once
+	// it is over (gitstore.Repository.PackMovedRelicRefs).
+	defer session.repository.PackMovedRelicRefs(ctx)
 	if err := session.fetchBefore(ctx); err != nil {
 		return core.RelicMutationResult{}, err
 	}

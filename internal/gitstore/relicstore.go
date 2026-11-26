@@ -789,6 +789,7 @@ func (r *Repository) moveRelicRef(ctx context.Context, ref, head, expected, reas
 	input.WriteString("prepare\ncommit\n")
 	_, err := r.Git(ctx, input.Bytes(), "update-ref", "--no-deref", "--create-reflog", "-m", reflogReason, "--stdin")
 	if err == nil {
+		r.noteRelicRefsMoved()
 		return nil
 	}
 	// Git refused the move. Why is read from the ref itself rather than from

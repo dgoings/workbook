@@ -781,6 +781,8 @@ func (f *fakeSyncer) PublicationWarnings() []core.Warning {
 	return warnings
 }
 
+func (f *fakeSyncer) PackMovedRelicRefs(context.Context) {}
+
 func (f *fakeSyncer) Sync(ctx context.Context, _ core.ProjectConfig) (gitstore.SyncRunResult, error) {
 	f.mu.Lock()
 	f.syncs++

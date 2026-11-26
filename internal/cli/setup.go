@@ -678,6 +678,7 @@ func setupSync(
 		return setupSyncResult{Status: "skipped", Detail: "no " + repository.TasksRemoteName() + " remote configured"}, nil
 	}
 	run, err := repository.Sync(ctx, config)
+	repository.PackMovedRelicRefs(ctx)
 	// Re-running setup on a clone that already has a projection can adopt a
 	// teammate's compaction like any sync. Setup reports one detail and no
 	// warnings, so a cache that could not take the move is said there.

@@ -48,6 +48,7 @@ type Syncer interface {
 	InspectRelicHead(context.Context, core.ProjectConfig, string) (core.RelicHead, bool, error)
 	HasTasksRemote(context.Context) bool
 	PublicationWarnings() []core.Warning
+	PackMovedRelicRefs(context.Context)
 }
 
 // Refresher warms the read projection after refs move.
@@ -249,6 +250,9 @@ func (l *loop) syncOnce(ctx context.Context) {
 	}
 
 	result, err := l.options.Repository.Sync(ctx, l.options.Config)
+	// A round that moved a relic ref packs the relic namespaces; any other
+	// round runs nothing for it.
+	l.options.Repository.PackMovedRelicRefs(ctx)
 	conflicts := append(append([]core.Conflict{}, result.Fetch.Conflicts...), result.Push.Conflicts...)
 	l.recordConflicts(ctx, conflicts)
 	l.recordRelicConflicts(ctx, append(append([]core.RelicConflict{}, result.Fetch.RelicConflicts...), result.Push.RelicConflicts...))

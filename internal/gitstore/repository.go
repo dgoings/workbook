@@ -100,6 +100,15 @@ type Repository struct {
 	// trackedIdentity is where this checkout last saw its tasks remote's
 	// identity ref, as resolving the identity listed it.
 	trackedIdentity trackedIdentityHead
+	// relicPackMu guards the fields below, which decide whether a run packs
+	// the relic namespaces (relicpack.go): relicRefsMoved is set when this
+	// handle moved a relic ref since it last packed, relicPackFormatKnown once
+	// the ref backend was read, and relicPackRefused when that backend has no
+	// loose refs or this Git refuses pack-refs --include.
+	relicPackMu          sync.Mutex
+	relicRefsMoved       bool
+	relicPackFormatKnown bool
+	relicPackRefused     bool
 	// moveStepHook, set only by tests, runs before each step of MoveTasks and
 	// stops the run where it returns an error, standing in for a process
 	// killed at that point.
