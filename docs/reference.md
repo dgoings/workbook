@@ -1692,12 +1692,13 @@ in this checkout, by running
 
 ```sh
 git pack-refs --include 'refs/workbook/relics/*' \
-  --include 'refs/workbook/remotes/*/relics/*' \
-  --include 'refs/workbook/reconciled-relics/*'
+  --include 'refs/workbook/reconciled-relics/*' \
+  --include 'refs/workbook/remotes/origin/relics/*'
 ```
 
-which packs the relic refs, their tracking refs and parked relic tips and
-nothing else: branches, tags and every other ref under `refs/workbook/` are
+with one `refs/workbook/remotes/<remote>/relics/*` for each remote whose
+relics the run fetched, which packs the relic refs, those tracking refs and
+parked relic tips and nothing else: branches, tags and every other ref under `refs/workbook/` are
 left as they are. A run that moved no relic ref runs nothing for it, and a
 task command, `push` and the relic read commands never pack. The pack is
 maintenance: it changes no ref's value, and when it fails, because another
@@ -1706,7 +1707,9 @@ Git process holds the `packed-refs` lock or the Git in use refuses
 exits exactly as it would have. A repository on the reftable backend, which
 keeps no loose refs, is not packed. The tracking ref of a relic this
 checkout published is written by the next fetch and packed by the next run
-that moves a relic ref here. See [Relic refs](architecture.md#relic-refs)
+that moves a relic ref here, and the tracking refs of a remote this
+checkout no longer fetches relics from stay as they are. See
+[Relic refs](architecture.md#relic-refs)
 for why and how it is detected.
 
 `workbook fetch --remote <remote>`, which fills another remote's tracking refs

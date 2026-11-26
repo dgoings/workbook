@@ -503,9 +503,19 @@ namespaces, and nothing else, once at its end:
 
 ```text
 git pack-refs --include refs/workbook/relics/* \
-              --include refs/workbook/remotes/*/relics/* \
-              --include refs/workbook/reconciled-relics/*
+              --include refs/workbook/reconciled-relics/* \
+              --include refs/workbook/remotes/<remote>/relics/*
 ```
+
+The last pattern is given once for each remote whose relics the run fetched,
+with that remote's name in it. `pack-refs` matches these patterns without
+pathname rules, so a `*` crosses `/`, and one
+`refs/workbook/remotes/*/relics/*` would also match a ref such as
+`refs/workbook/remotes/origin/tasks/foo/relics/bar`, the mirror of a stray
+nested task name at origin. Naming each remote's whole relic tracking prefix
+cannot match anything outside it, because a remote name Workbook uses is a
+single path component. The tracking refs of a remote this checkout no longer
+fetches relics from are not packed.
 
 The runs that can move one are a relic command that changes a relic, `workbook
 fetch`, `sync` (one run, and each round of `sync --watch` or the board's

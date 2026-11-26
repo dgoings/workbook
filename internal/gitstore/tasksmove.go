@@ -597,7 +597,7 @@ func (r *Repository) moveReadSource(ctx context.Context, config core.ProjectConf
 		return nil, core.Wrap(core.CategoryOperational, "cannot read the relics from "+from, err)
 	}
 	// The old place's relics now have tracking refs here, usually new ones.
-	r.noteRelicRefsMoved()
+	r.noteRelicRefsMoved(from)
 	_, stage := r.syncFetchedRelics(ctx, config)
 	for _, failure := range []error{stage.corruptError(), stage.newerWriterError(), stage.otherError()} {
 		if failure != nil {
@@ -1350,7 +1350,7 @@ func (r *Repository) verifyMovedTasks(ctx context.Context, config core.ProjectCo
 			"+"+taskRefPrefix+"*:"+remoteTaskRefPrefixFor(remote)+"*", relicFetchRefspecFor(remote)); err != nil {
 			return core.Wrap(core.CategoryOperational, "cannot list the task and relic refs "+remote+" holds", err)
 		}
-		r.noteRelicRefsMoved()
+		r.noteRelicRefsMoved(remote)
 	}
 	source, err := r.trackingRefHeads(ctx, remoteTaskRefPrefixFor(from))
 	if err != nil {

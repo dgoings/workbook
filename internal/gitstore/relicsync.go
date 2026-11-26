@@ -434,7 +434,7 @@ func (r *Repository) moveFetchedRelicRefs(ctx context.Context, updates []relicRe
 		"-m", relicFetchReflogMessage+r.remote(), "--stdin"); err != nil {
 		return r.relicMovedDuringSync(ctx, updates, err)
 	}
-	r.noteRelicRefsMoved()
+	r.noteRelicRefsMoved(r.remote())
 	return nil
 }
 

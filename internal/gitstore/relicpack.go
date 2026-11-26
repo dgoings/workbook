@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"sort"
 	"strings"
 )
 
@@ -15,9 +16,10 @@ import (
 // ref packs Workbook's relic namespaces, and nothing else, once at its end:
 //
 //	git pack-refs --include refs/workbook/relics/*
-//	              --include refs/workbook/remotes/*/relics/*
 //	              --include refs/workbook/reconciled-relics/*
+//	              --include refs/workbook/remotes/<remote>/relics/*   (each remote)
 //
+// The last pattern is repeated for each remote whose relics the run fetched.
 // --include keeps every other ref as it is: the person's branches and tags,
 // and the rest of refs/workbook/, are not packed (a ref already packed stays
 // packed, as Git always leaves it). Only the files ref backend has loose refs;
@@ -30,13 +32,34 @@ import (
 // oldest Workbook supports) is remembered for the rest of the handle's life,
 // so a watcher does not ask again every round.
 
-// relicPackPatterns are the --include patterns of the pack. pack-refs matches
-// them as wildmatch globs without pathname semantics, so * crosses slashes and
-// the tracking pattern covers every remote the checkout fetched relics from.
-var relicPackPatterns = []string{
-	relicRefPrefix + "*",
-	remoteTrackingRoot + "*/relics/*",
-	relicParkedRefPrefix + "*",
+// relicPackPatterns are the --include patterns of a pack after the handle
+// fetched relics from remotes. pack-refs matches them as wildmatch globs
+// without pathname semantics, so a * crosses slashes. A single pattern for
+// every remote's tracking root, refs/workbook/remotes/*/relics/*, would
+// therefore match a remote's task tracking ref whose name holds "/relics/",
+// as a stray nested task name mirrored from the remote can. Each pattern
+// instead begins with one remote's whole relic tracking prefix, which no
+// other remote's tracking ref begins with, because a Workbook remote name is
+// a single path component; the name is escaped so that a glob character in
+// it matches only itself.
+func relicPackPatterns(remotes []string) []string {
+	patterns := []string{relicRefPrefix + "*", relicParkedRefPrefix + "*"}
+	for _, remote := range remotes {
+		patterns = append(patterns, escapeWildmatch(relicTrackingRefPrefixFor(remote))+"*")
+	}
+	return patterns
+}
+
+// escapeWildmatch makes text a wildmatch pattern that matches only itself.
+func escapeWildmatch(text string) string {
+	var escaped strings.Builder
+	for _, char := range text {
+		if strings.ContainsRune(`*?[]\`, char) {
+			escaped.WriteByte('\\')
+		}
+		escaped.WriteRune(char)
+	}
+	return escaped.String()
 }
 
 // gitUsageExitCode is the exit status Git's option parser gives a command line
@@ -44,10 +67,17 @@ var relicPackPatterns = []string{
 const gitUsageExitCode = 129
 
 // noteRelicRefsMoved records that this handle moved a relic ref, so the next
-// PackMovedRelicRefs packs.
-func (r *Repository) noteRelicRefsMoved() {
+// PackMovedRelicRefs packs, and names each remote whose relic tracking refs
+// the move may have written, so the pack covers them.
+func (r *Repository) noteRelicRefsMoved(remotes ...string) {
 	r.relicPackMu.Lock()
 	r.relicRefsMoved = true
+	for _, remote := range remotes {
+		if r.relicPackRemotes == nil {
+			r.relicPackRemotes = map[string]bool{}
+		}
+		r.relicPackRemotes[remote] = true
+	}
 	r.relicPackMu.Unlock()
 }
 
@@ -61,6 +91,12 @@ func (r *Repository) PackMovedRelicRefs(ctx context.Context) {
 		return
 	}
 	r.relicRefsMoved = false
+	remotes := make([]string, 0, len(r.relicPackRemotes))
+	for remote := range r.relicPackRemotes {
+		remotes = append(remotes, remote)
+	}
+	sort.Strings(remotes)
+	r.relicPackRemotes = nil
 	if !r.relicPackFormatKnown {
 		// Git before 2.45 knows one backend, files, and prints the unknown
 		// flag back instead of a format name.
@@ -76,7 +112,7 @@ func (r *Repository) PackMovedRelicRefs(ctx context.Context) {
 		}
 	}
 	args := []string{"pack-refs"}
-	for _, pattern := range relicPackPatterns {
+	for _, pattern := range relicPackPatterns(remotes) {
 		args = append(args, "--include", pattern)
 	}
 	result := r.gitWithEnvResult(ctx, nil, nil, args...)

@@ -104,9 +104,11 @@ type Repository struct {
 	// the relic namespaces (relicpack.go): relicRefsMoved is set when this
 	// handle moved a relic ref since it last packed, relicPackFormatKnown once
 	// the ref backend was read, and relicPackRefused when that backend has no
-	// loose refs or this Git refuses pack-refs --include.
+	// loose refs or this Git refuses pack-refs --include. relicPackRemotes
+	// names the remotes whose relic tracking refs the next pack covers.
 	relicPackMu          sync.Mutex
 	relicRefsMoved       bool
+	relicPackRemotes     map[string]bool
 	relicPackFormatKnown bool
 	relicPackRefused     bool
 	// moveStepHook, set only by tests, runs before each step of MoveTasks and

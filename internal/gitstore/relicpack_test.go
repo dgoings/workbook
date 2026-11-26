@@ -332,3 +332,66 @@ func TestACancelledPackRunsNothing(t *testing.T) {
 		t.Fatalf("a cancelled pack ran %q", *commands)
 	}
 }
+
+// The pack names each remote's whole relic tracking prefix, never a pattern
+// whose * could cross into another namespace. A stray nested task name at
+// origin whose path holds "/relics/" is mirrored into origin's task tracking
+// namespace by every fetch, and a tracking root under a remote name holding
+// "/relics/", which Workbook never uses but another tool could write, holds
+// task, settings and identity tracking refs: all of them stay loose and
+// unpacked, while origin's relic tracking refs are packed, in one pack-refs.
+func TestThePackLeavesTrackingRefsOutsideARelicNamespaceLoose(t *testing.T) {
+	t.Parallel()
+	first, second, config := syncRepositories(t)
+	ctx := context.Background()
+	head := syncGit(t, first.Root, "rev-parse", "HEAD")
+	syncGit(t, first.Root, "push", "--quiet", "--no-verify", "origin", head+":"+taskRefPrefix+"foo/relics/bar")
+	odd := remoteTrackingPrefix("team/relics/x")
+	kept := []string{
+		remoteTaskRefPrefixFor("origin") + "foo/relics/bar",
+		odd + "tasks/WB-01M8CJ0XCPK69G68QC0Q6QWH8D",
+		odd + "config",
+		odd + "project",
+	}
+	for _, ref := range kept[1:] {
+		syncGit(t, second.Root, "update-ref", ref, head)
+	}
+
+	relicsFetchedInto(t, first, second, config, 3)
+	if got := looseRefsUnder(t, second, kept[0]); len(got) != 1 {
+		t.Fatalf("the fetch left %v at %s, want the mirrored stray name", got, kept[0])
+	}
+	commands := observeCommands(second)
+	second.PackMovedRelicRefs(ctx)
+	second.commandObserver = nil
+	if len(*commands) != 2 || len(packCommands(*commands)) != 1 {
+		t.Fatalf("PackMovedRelicRefs ran %q, want the format read and one pack-refs", *commands)
+	}
+	want := []string{"pack-refs",
+		"--include", relicRefPrefix + "*",
+		"--include", relicParkedRefPrefix + "*",
+		"--include", relicTrackingRefPrefixFor("origin") + "*"}
+	if got := packCommands(*commands)[0]; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("pack-refs = %q, want %q", got, want)
+	}
+	packed := packedRefNames(t, second)
+	for _, ref := range kept {
+		if packed[ref] || len(looseRefsUnder(t, second, ref)) != 1 {
+			t.Fatalf("%s was packed", ref)
+		}
+	}
+	if got := looseRefsUnder(t, second, relicTrackingRefPrefixFor("origin")); len(got) != 0 {
+		t.Fatalf("origin's relic tracking refs still loose: %v", got)
+	}
+}
+
+// A glob character in a remote's name matches only itself in the pattern.
+func TestRelicPackPatternsEscapeAGlobCharacter(t *testing.T) {
+	t.Parallel()
+	got := relicPackPatterns([]string{"a*b", "c?[d]\\e"})
+	want := []string{relicRefPrefix + "*", relicParkedRefPrefix + "*",
+		remoteTrackingRoot + `a\*b/relics/*`, remoteTrackingRoot + `c\?\[d\]\\e/relics/*`}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("relicPackPatterns() = %q, want %q", got, want)
+	}
+}
