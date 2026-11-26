@@ -96,10 +96,8 @@ type RelicBenchmarkReport struct {
 	// cli-next and cli-update-autosync, publish to an origin whose refs are
 	// loose, as a push leaves them. PackedOriginTaskScenarios are those two
 	// again with origin's refs packed by git pack-refs --all, as a hosted or
-	// maintained origin keeps them. Both run on a copy of the fixture whose
-	// objects are in one pack, as the task fixture's are; its relic refs are
-	// packed when the fixture is built, by the pack every relic command ends
-	// with, and no other ref is packed.
+	// maintained origin keeps them. In both, each side is a copy of a checkout
+	// that git pack-refs --all and git gc were run on last.
 	TaskScenarios             []RelicTaskComparison `json:"taskScenarios"`
 	PackedOriginTaskScenarios []RelicTaskComparison `json:"packedOriginTaskScenarios"`
 }
@@ -489,9 +487,12 @@ type relicBench struct {
 	fixture  RelicFixture
 	main     string
 	template string
-	// taskTemplate is a copy of template with its objects packed, which the
-	// task comparison's "with" side copies.
-	taskTemplate string
+	// plainTemplate and taskTemplate are what the task comparison's two sides
+	// copy: the task fixture alone, and a copy of template. Both are packed
+	// with git pack-refs --all and git gc last.
+	plainTemplate string
+	plainFixture  Fixture
+	taskTemplate  string
 	// creates is a copy of the fixture the scenarios that create relics run
 	// in, so the relics they add are in no other scenario's repository and in
 	// neither storage figure.
@@ -994,19 +995,31 @@ func (b *relicBench) compareTaskScenarios() error {
 			names = append(names, name)
 		}
 	}
-	// The task fixture comes out of git fast-import as one pack, so the tip
-	// of every task ref is a packed object. The relic set is written by the
-	// service one object at a time, so the tip of every relic ref is a loose
-	// one, and Git reads the tip of every ref a checkout holds when it fetches
-	// and when it pushes. Left that way the comparison would charge the relic
-	// set for how its objects are stored and not for being there, so the
-	// copy the "with" side runs on has its objects packed as well.
-	b.taskTemplate = filepath.Join(b.root, "task-template")
-	if err := b.stage("task-template", func(ctx context.Context) error {
+	// The two sides have to differ by the relic set and nothing else. They
+	// did not: the relic fixture's repository is packed with git pack-refs
+	// --all and git gc for the storage figures and written to again after it,
+	// while a task fixture comes straight out of git fast-import. Git reads
+	// every ref a checkout holds, and the commit at its tip, when it fetches
+	// and when it pushes, and a loose ref or a loose commit costs more to read
+	// than a packed one, so how each side happened to be stored showed up as a
+	// difference between them. Both sides are therefore copies of a template
+	// that the same two commands were run on last.
+	spec := b.run.spec
+	b.plainTemplate = filepath.Join(b.root, "task-template-without")
+	if err := b.stage("task-template-without", func(ctx context.Context) (err error) {
+		if b.plainFixture, err = BuildFixture(ctx, b.plainTemplate, spec.Fixture); err != nil {
+			return err
+		}
+		return prepareStorageRepository(ctx, spec.FixtureTimeout, b.plainTemplate)
+	}); err != nil {
+		return err
+	}
+	b.taskTemplate = filepath.Join(b.root, "task-template-with")
+	if err := b.stage("task-template-with", func(ctx context.Context) error {
 		if err := os.CopyFS(b.taskTemplate, os.DirFS(b.template)); err != nil {
 			return err
 		}
-		return packFixtureObjects(ctx, b.run.spec.FixtureTimeout, b.taskTemplate)
+		return prepareStorageRepository(ctx, spec.FixtureTimeout, b.taskTemplate)
 	}); err != nil {
 		return err
 	}
@@ -1019,19 +1032,11 @@ func (b *relicBench) compareTaskScenarios() error {
 	return err
 }
 
-// packFixtureObjects puts every object of the repository at root into one
-// pack, as git fast-import leaves the task fixture's. It changes no ref and
-// packs none.
-func packFixtureObjects(ctx context.Context, timeout time.Duration, root string) error {
-	_, _, err := runRepositoryGit(ctx, timeout, root, "repack", "-a", "-d", "--quiet")
-	return err
-}
-
 // compareTaskScenariosOnce runs names without and with relics, recording the
 // two fixture stages under stage plus -without and -with.
 func (b *relicBench) compareTaskScenariosOnce(stage string, names []string, packOrigin bool) ([]RelicTaskComparison, error) {
 	base := scenarioDependencies{
-		buildFixture:      BuildFixture,
+		buildFixture:      copiedFixture(b.plainTemplate, b.plainFixture),
 		prepareProjection: prepareProjection,
 		measureCommand:    b.run.dependencies.measureCommand,
 		cleanupFixture:    os.RemoveAll,
@@ -1045,21 +1050,7 @@ func (b *relicBench) compareTaskScenariosOnce(stage string, names []string, pack
 		return nil, err
 	}
 	withRelics := base
-	withRelics.buildFixture = func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
-		absRoot, err := filepath.Abs(root)
-		if err != nil {
-			return Fixture{}, err
-		}
-		if err := os.MkdirAll(filepath.Dir(absRoot), 0o755); err != nil {
-			return Fixture{}, err
-		}
-		if err := os.CopyFS(absRoot, os.DirFS(b.taskTemplate)); err != nil {
-			return Fixture{}, fmt.Errorf("copy the relic fixture: %w", err)
-		}
-		fixture := b.fixture.Fixture
-		fixture.Root = absRoot
-		return fixture, nil
-	}
+	withRelics.buildFixture = copiedFixture(b.taskTemplate, b.fixture.Fixture)
 	if err := b.stage(stage+"-with", func(ctx context.Context) (err error) {
 		with, err = runColdCLI(b.run.ctx, b.run.spec.RunSpec, filepath.Join(b.root, stage+"-with"), names, withRelics)
 		return err
@@ -1080,6 +1071,25 @@ func (b *relicBench) compareTaskScenariosOnce(stage string, names []string, pack
 		})
 	}
 	return comparisons, nil
+}
+
+// copiedFixture returns a fixture builder that copies template to the root it
+// is given and describes the copy as fixture, with that root.
+func copiedFixture(template string, fixture Fixture) func(context.Context, string, FixtureSpec) (Fixture, error) {
+	return func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			return Fixture{}, err
+		}
+		if err := os.MkdirAll(filepath.Dir(absRoot), 0o755); err != nil {
+			return Fixture{}, err
+		}
+		if err := os.CopyFS(absRoot, os.DirFS(template)); err != nil {
+			return Fixture{}, fmt.Errorf("copy the fixture template: %w", err)
+		}
+		fixture.Root = absRoot
+		return fixture, nil
+	}
 }
 
 // writeRelicMarkdown writes the ## Relics section: the fixture, the reorder
@@ -1145,7 +1155,7 @@ func writeRelicMarkdown(w io.Writer, report *RelicBenchmarkReport) error {
 	fmt.Fprintf(&out, "\nDisposable cache: %d bytes (projection %d, validation %d).\n",
 		report.Cache.TotalBytes, report.Cache.ProjectionBytes, report.Cache.ValidationBytes)
 
-	fmt.Fprintf(&out, "\nTask scenarios without and with the relic set. %s synchronize with a local bare origin, so they appear twice: \"origin refs loose\" is origin as a push leaves it, every ref a loose file; \"origin refs packed\" is origin after `git pack-refs --all`, as a hosted or maintained origin keeps it. Both sides run on a checkout whose objects are in one pack: git fast-import leaves the task fixture that way, and the relic set is repacked to match, because Git reads the tip of every ref when it fetches and pushes and a loose tip costs more to read than a packed one. The relic refs are packed as the pack every relic command ends with leaves them; no other ref of the checkout is packed. The task shown and edited has a typical number of relic links; task-show-linked-hot above shows the task every relic links to.\n",
+	fmt.Fprintf(&out, "\nTask scenarios without and with the relic set. %s synchronize with a local bare origin, so they appear twice: \"origin refs loose\" is origin as a push leaves it, every ref a loose file; \"origin refs packed\" is origin after `git pack-refs --all`, as a hosted or maintained origin keeps it. Both sides are copies of a checkout that `git pack-refs --all` and `git gc` were run on last, so they differ by the relic set and nothing else. Git reads every ref a checkout holds, and the commit at its tip, when it fetches and pushes; a checkout written to since its last `git gc` holds loose refs and loose commits, which cost a synchronizing command more whether they belong to tasks or to relics. The task shown and edited has a typical number of relic links; task-show-linked-hot above shows the task every relic links to.\n",
 		strings.Join(relicSyncingTaskScenarios, " and "))
 	fmt.Fprintln(&out, "\n| Task scenario | Median without (ms) | Median with (ms) | P95 Git processes without | P95 Git processes with |")
 	fmt.Fprintln(&out, "| --- | ---: | ---: | ---: | ---: |")

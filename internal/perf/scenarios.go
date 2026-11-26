@@ -590,8 +590,7 @@ func (w *syncWatcher) stop() {
 
 // publishScenarioOrigin publishes the fixture to a local origin and, when the
 // run asks for it, packs the origin's refs with git pack-refs --all. It never
-// packs the fixture: a relic fixture comes with its relic refs packed as a
-// relic command leaves them, and every other ref stays as it was written.
+// packs the fixture: that is the fixture builder's to decide.
 func publishScenarioOrigin(ctx context.Context, dependencies scenarioDependencies, timeout time.Duration, fixtureRoot string) error {
 	if err := publishFixtureToLocalOrigin(ctx, timeout, fixtureRoot); err != nil {
 		return err
