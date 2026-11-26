@@ -1680,6 +1680,32 @@ relic push that failed exits `1`, as a rejected task alone does, and a run
 whose relic push failed with no task error exits `1`. The next push or sync
 publishes the relics again.
 
+**Relic refs are packed in the checkout.** Git keeps each new or moved ref
+as a file of its own until something packs it, and every `git fetch`, a task
+command's included, reads every ref the checkout holds. So a relic command
+that changes a relic, `workbook fetch`, `sync`, a round of `sync --watch` or
+of the board's loop, `setup` and `move-tasks` end, when they moved a relic ref
+in this checkout, by running
+
+```sh
+git pack-refs --include 'refs/workbook/relics/*' \
+  --include 'refs/workbook/remotes/*/relics/*' \
+  --include 'refs/workbook/reconciled-relics/*'
+```
+
+which packs the relic refs, their tracking refs and parked relic tips and
+nothing else: branches, tags and every other ref under `refs/workbook/` are
+left as they are. A run that moved no relic ref runs nothing for it, and a
+task command, `push` and the relic read commands never pack. The pack is
+maintenance: it changes no ref's value, and when it fails, because another
+Git process holds the `packed-refs` lock or the Git in use refuses
+`--include` (Git 2.29 has no such option), the command prints, answers and
+exits exactly as it would have. A repository on the reftable backend, which
+keeps no loose refs, is not packed. The tracking ref of a relic this
+checkout published is written by the next fetch and packed by the next run
+that moves a relic ref here. See [Relic refs](architecture.md#relic-refs)
+for why and how it is detected.
+
 `workbook fetch --remote <remote>`, which fills another remote's tracking refs
 for inspection, does not fetch relics.
 

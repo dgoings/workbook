@@ -736,6 +736,25 @@ were:
 
 Run the command again. Prefer the board, or your own clone, for edits.
 
+### A self-hosted origin keeps its refs loose
+
+A bare repository you host yourself, such as one on a server reached over
+SSH, keeps each ref a push creates or moves as a file of its own until a
+`git gc` runs there, by hand or automatically after a push once enough loose
+objects have collected, or until somebody runs `git pack-refs --all` there.
+Every push makes that repository list every ref it holds, so with many
+relics, each one a ref, every push from the board and from every clone
+takes longer while those refs are loose. Workbook packs its relic refs in
+the checkouts it runs in (see [Relic refs](architecture.md#relic-refs)) but
+never touches a remote's. Run, now and then, in the bare repository:
+
+```sh
+git pack-refs --all
+```
+
+This is about a bare repository you host. How a hosted service such as GitHub
+stores a repository's refs is not covered here.
+
 ## Updating and retiring
 
 To update Workbook, install the new version and restart the service with

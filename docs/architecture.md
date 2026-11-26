@@ -493,6 +493,48 @@ reaches a checkout with the next relic command that changes a relic, `workbook f
 checkout holds until then. A task command handed to a watcher waits only for
 the watcher to receive the request, never for the round that carries relics.
 
+**Relic refs are packed in the checkout.** A task command names no relic to
+Git, but its `git fetch` still reads every ref the checkout holds, and with
+the files ref backend Git keeps each new or moved ref as a file of its own
+until something packs it. A thousand loose relic refs and their thousand
+tracking refs made `workbook next` and `update` measurably slower than with
+no relics. So a run that moved a relic ref in this checkout packs Workbook's relic
+namespaces, and nothing else, once at its end:
+
+```text
+git pack-refs --include refs/workbook/relics/* \
+              --include refs/workbook/remotes/*/relics/* \
+              --include refs/workbook/reconciled-relics/*
+```
+
+The runs that can move one are a relic command that changes a relic, `workbook
+fetch`, `sync` (one run, and each round of `sync --watch` or the board's
+loop), `setup` and `move-tasks`; `push` moves no relic ref in the checkout and
+packs nothing. A run that moved no relic ref starts no Git process for it, and
+no task command or relic read ever packs. `--include` leaves every other ref
+as it is: the person's branches and tags and the rest of `refs/workbook/` are
+not packed, and a ref Git already packed stays packed, as it always does.
+Packing changes no ref's value, and every ref is still read and moved through
+Git, packed or not.
+
+It is best-effort maintenance. A pack that fails, for example because another
+Git process holds `packed-refs.lock`, is ignored: the command's output, JSON
+and exit code are what they would have been. Git 2.29, the oldest Workbook
+supports, has no `--include`. A Git without it refuses the option with its
+usage exit status, `129`, before doing anything, and Workbook then packs
+nothing and does not ask that Git again for the life of the process. Before
+its first pack a process asks `git rev-parse --show-ref-format` for the ref
+backend, and packs only on `files`; a Git too old to know that option prints
+it back, and that answer counts as `files`. With the reftable backend
+there are no loose refs, and `pack-refs` would rewrite the table of every ref
+the repository holds, so nothing is run.
+
+A tracking ref is written by `git fetch` and by nothing else, so the tracking
+copy of a relic this checkout published itself is written by the next fetch,
+while the relic's own ref does not move. That fetch moved no relic ref of
+this checkout's and packs nothing; the next run that moves a relic ref here
+packs those tracking refs with the rest.
+
 **What a fetch reads.** One `for-each-ref` over both relic namespaces finds
 the relics whose ref and tracking ref differ, and nothing of any other relic
 is read. For each changed relic, one batch reads its new commits' parents, and

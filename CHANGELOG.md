@@ -77,6 +77,20 @@ to an older watcher. Relics are not on the board, and
 there are no schemas, history or diff commands, retiring or compaction
 for them yet.
 
+A run that moved a relic ref in the checkout ends by packing the relic refs,
+their tracking refs and parked relic tips with `git pack-refs --include`, and
+no other ref, so a task command's fetch no longer reads a file per relic. A
+run that moved none runs nothing for it, and a task command, `push` and the
+relic reads never pack. A failed pack, a Git without `--include` and the
+reftable backend change nothing about the command's output or exit code. A
+relic push that fails on the wire after the task push now leaves the push
+phase `completed`, says so in its `detail`, and names the task errors of the
+same run before it instead of hiding them. `workbook sync --status` lists the
+relic conflicts a running watcher holds, as `relicConflicts` in JSON, without
+body text. A bare origin you host yourself keeps its refs loose until `git
+gc` or `git pack-refs --all` runs there; see
+[A self-hosted origin keeps its refs loose](docs/hosting.md#a-self-hosted-origin-keeps-its-refs-loose).
+
 `workbook validate` checks every commit of every relic history, and refuses a
 relic in which two commits record the same operation ID. `workbook reset`
 measures a relic as it measures a task: a change the tasks remote lacks is
