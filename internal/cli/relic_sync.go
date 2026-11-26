@@ -57,7 +57,11 @@ func (session *taskSession) mutateRelic(
 		return core.RelicMutationResult{}, err
 	}
 	service := newRelicService(session.repository, session.config, session.service.Keys, session.service.Actor)
-	if conflict := session.relicConflictFor(ctx, service, target); conflict != nil {
+	conflict, err := session.relicConflictFor(ctx, service, target)
+	if err != nil {
+		return core.RelicMutationResult{}, err
+	}
+	if conflict != nil {
 		session.acknowledgeRelic(*conflict)
 		return core.RelicMutationResult{}, core.RelicConflictError([]core.RelicConflict{*conflict})
 	}
@@ -77,25 +81,26 @@ func (session *taskSession) mutateRelic(
 
 // relicConflictFor reports whether the relic a command names is one the fetch
 // could not finish replaying. A target that does not resolve is left for the
-// command itself to report.
-func (session *taskSession) relicConflictFor(ctx context.Context, service core.RelicService, target string) *core.RelicConflict {
+// command itself to report; a lookup that fails is returned, since the command
+// cannot tell whether its relic is one of them.
+func (session *taskSession) relicConflictFor(ctx context.Context, service core.RelicService, target string) (*core.RelicConflict, error) {
 	if len(session.relicConflicts) == 0 || target == "" {
-		return nil
+		return nil, nil
 	}
 	heads, err := service.Reader.ListRelicHeads(ctx, service.Config)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	named, err := core.ResolveRelicPrefix(heads, target)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	for index := range session.relicConflicts {
 		if session.relicConflicts[index].RelicID == named.RelicID {
-			return &session.relicConflicts[index]
+			return &session.relicConflicts[index], nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // publishRelic sends exactly the relic ref the command changed, as publish
