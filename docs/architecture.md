@@ -542,8 +542,11 @@ the repository holds, so nothing is run.
 A tracking ref is written by `git fetch` and by nothing else, so the tracking
 copy of a relic this checkout published itself is written by the next fetch,
 while the relic's own ref does not move. That fetch moved no relic ref of
-this checkout's and packs nothing; the next run that moves a relic ref here
-packs those tracking refs with the rest.
+this checkout's and packs nothing. A remote's tracking refs are packed only by
+a run whose fetch from that remote moved a relic ref here, or by a
+`move-tasks` that read that remote: a run that moves only this checkout's own
+relic refs, a relic command with `--no-sync` among them, names no remote in
+its pack, so those tracking refs stay loose until such a fetch.
 
 **What a fetch reads.** One `for-each-ref` over both relic namespaces finds
 the relics whose ref and tracking ref differ, and nothing of any other relic

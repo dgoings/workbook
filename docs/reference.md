@@ -1705,10 +1705,15 @@ maintenance: it changes no ref's value, and when it fails, because another
 Git process holds the `packed-refs` lock or the Git in use refuses
 `--include` (Git 2.29 has no such option), the command prints, answers and
 exits exactly as it would have. A repository on the reftable backend, which
-keeps no loose refs, is not packed. The tracking ref of a relic this
-checkout published is written by the next fetch and packed by the next run
-that moves a relic ref here, and the tracking refs of a remote this
-checkout no longer fetches relics from stay as they are. See
+keeps no loose refs, is not packed. A remote's relic tracking refs are packed
+only by a run whose fetch from that remote moved a relic ref here, or by a
+`move-tasks` that read that remote. A run that moved only this checkout's own
+relic refs, such as a relic command run with `--no-sync`, or one whose fetch
+brought no relic change, packs the relic refs and parked relic tips and leaves
+every tracking ref as it is. So the tracking ref of a relic this checkout
+published, which the next fetch writes, stays loose until a fetch from that
+remote brings a relic change, and the tracking refs of a remote this checkout
+no longer fetches relics from stay as they are. See
 [Relic refs](architecture.md#relic-refs)
 for why and how it is detected.
 
