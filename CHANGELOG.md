@@ -37,8 +37,8 @@ the document `relic export` writes. Saving over a part's body needs `--base
 version is refused with exit 6 instead of overwriting the newer text. A save
 over a body keeps the body's format label unless `--body-format` gives
 another. `relic show <relic>#<part> --body` writes the body byte for byte
-into a file or a pipe, and prints it through the terminal filter on a
-terminal. Each relic is one ref under `refs/workbook/relics/`, a chain of
+into a file or a pipe, and on a terminal prints it with its indentation and
+line breaks kept and its control characters replaced. Each relic is one ref under `refs/workbook/relics/`, a chain of
 immutable commits in new formats that declare writer-format generation 6.
 
 A relic's limits are part of its stored format. One property value is at most
