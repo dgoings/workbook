@@ -186,10 +186,7 @@ func (r *Repository) readRelicCommitDocuments(
 		}
 		requests = append(requests, request{index: index, objectIDBytes: len(decoded)})
 		// The same five objects a tip read asks for, so the same check judges them.
-		fmt.Fprintf(&input, "%s\n%s^{tree}\n", head.ObjectID, head.ObjectID)
-		for _, path := range []string{relicOperationPath, relicStatePath, relicLinksPath} {
-			fmt.Fprintf(&input, "%s:%s\n", head.ObjectID, path)
-		}
+		requestRelicTipObjects(&input, head.ObjectID)
 	}
 	if len(requests) == 0 {
 		return commits, errs
@@ -209,14 +206,10 @@ func (r *Repository) readRelicCommitDocuments(
 	defer batch.Close()
 	for position, request := range requests {
 		head := heads[request.index]
-		var objects [5]batchObject
-		for slot := range objects {
-			object, err := readBatchObject(batch.Reader())
-			if err != nil {
-				fail(requests[position:], batch.ReadFailure("cannot read relic objects from Git batch", err))
-				return commits, errs
-			}
-			objects[slot] = object
+		objects, err := readRelicTipObjects(batch)
+		if err != nil {
+			fail(requests[position:], err)
+			return commits, errs
 		}
 		snapshot, err := validateRelicTip(objects, config, head, request.objectIDBytes)
 		if err != nil {

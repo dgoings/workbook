@@ -248,10 +248,7 @@ func (r *Repository) ReadRelicTips(
 				fmt.Sprintf("relic %s: head object ID is invalid", head.RelicID), err)
 		}
 		objectIDBytes[index] = len(decoded)
-		fmt.Fprintf(&input, "%s\n%s^{tree}\n", head.ObjectID, head.ObjectID)
-		for _, path := range []string{relicOperationPath, relicStatePath, relicLinksPath} {
-			fmt.Fprintf(&input, "%s:%s\n", head.ObjectID, path)
-		}
+		requestRelicTipObjects(&input, head.ObjectID)
 	}
 
 	batch, err := r.startRelicObjectBatch(ctx, input.Bytes())
@@ -261,14 +258,9 @@ func (r *Repository) ReadRelicTips(
 	defer batch.Close()
 
 	for index, head := range heads {
-		var objects [5]batchObject
-		for position := range objects {
-			object, err := readBatchObject(batch.Reader())
-			if err != nil {
-				return nil, namedRelicError(head.RelicID,
-					batch.ReadFailure("cannot read relic objects from Git batch", err))
-			}
-			objects[position] = object
+		objects, err := readRelicTipObjects(batch)
+		if err != nil {
+			return nil, namedRelicError(head.RelicID, err)
 		}
 		snapshot, err := validateRelicTip(objects, config, head, objectIDBytes[index])
 		if err != nil {
@@ -280,6 +272,30 @@ func (r *Repository) ReadRelicTips(
 		return nil, err
 	}
 	return snapshots, nil
+}
+
+// requestRelicTipObjects asks a Git batch for the five objects one relic
+// commit is judged from, in the order readRelicTipObjects returns them: the
+// commit, its tree, and its operation.json, state.json and links.json.
+func requestRelicTipObjects(input *bytes.Buffer, commit string) {
+	fmt.Fprintf(input, "%s\n%s^{tree}\n", commit, commit)
+	for _, path := range []string{relicOperationPath, relicStatePath, relicLinksPath} {
+		fmt.Fprintf(input, "%s:%s\n", commit, path)
+	}
+}
+
+// readRelicTipObjects reads from batch the five objects requestRelicTipObjects
+// asked for one commit.
+func readRelicTipObjects(batch *objectBatch) ([5]batchObject, error) {
+	var objects [5]batchObject
+	for position := range objects {
+		object, err := readBatchObject(batch.Reader())
+		if err != nil {
+			return [5]batchObject{}, batch.ReadFailure("cannot read relic objects from Git batch", err)
+		}
+		objects[position] = object
+	}
+	return objects, nil
 }
 
 // validateRelicTip judges the five objects read for one commit of a relic, and
