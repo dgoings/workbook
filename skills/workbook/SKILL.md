@@ -192,8 +192,11 @@ with `workbook config set auto-sync <true|false>`, never by editing
 `.workbook/config.json`. Read the `sync` member of the
 result envelope to confirm what happened: `status` is `completed`, `skipped`, or
 `failed`. A `failed` status still means the change was recorded locally, and the
-command exits 0. Exit code 6 means the task diverged from `origin` and was not
-published; report that rather than retrying the mutation.
+command exits 0. For a task command, exit code 6 means the task diverged from
+`origin` and was not published; report that rather than retrying the mutation.
+A relic body save refused for its `--base` also exits 6: follow
+[Relics](#relics), reading the part again and saving from its current version,
+or asking the user.
 
 Run `workbook fetch`, `workbook sync`, or `workbook push` only when explicitly
 asked, or to reconcile after exit code 6.

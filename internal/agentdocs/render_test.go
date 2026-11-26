@@ -835,6 +835,9 @@ func TestSkillTeachesRelics(t *testing.T) {
 		// The edits other than a body save.
 		"`workbook relic update --help`",
 		"`workbook relic --help`",
+		// A relic's exit 6 is not the task rule.
+		"For a task command, exit code 6",
+		"A relic body save refused for its `--base` also exits 6",
 		// Restated where agents look for it.
 		"Save a relic body only with the `--base` you read.",
 	} {
