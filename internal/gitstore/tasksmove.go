@@ -1365,16 +1365,18 @@ func (r *Repository) verifyMovedTasks(ctx context.Context, config core.ProjectCo
 		return err
 	}
 	names := make([]string, 0, len(source))
-	var stray []string
+	var stray []IgnoredRef
 	for name := range source {
 		if keys.RequireOwned(name) == nil {
 			names = append(names, name)
 		} else if have, found := destination[name]; !found || have != source[name] {
-			stray = append(stray, taskRefPrefix+name)
+			// Judged by the fetch report's own rule, so a name a fetch keeps
+			// is never named here with a deletion command.
+			stray = append(stray, ignoredTaskRef(keys, "", name, ""))
 		}
 	}
 	sort.Strings(names)
-	sort.Strings(stray)
+	sortIgnoredRefs(stray)
 	result.Tasks = len(names)
 	result.Identical, result.Carried = 0, 0
 
@@ -1463,8 +1465,16 @@ func (r *Repository) verifyMovedTasks(ctx context.Context, config core.ProjectCo
 // new place lacking something the old place holds (missing), or found refs at
 // the old place the move cannot carry because they are not this project's
 // (stray). Running move-tasks again carries what is missing; it never carries
-// a stray ref, so that one is named with the command that removes it there.
-func moveVerificationError(from, to string, missing, stray []string) error {
+// a stray ref.
+//
+// A stray ref is judged exactly as the fetch report judges it. One whose name
+// fits no project is named with the command that removes it at the old place.
+// One that may be another Workbook's task is never named with a deletion
+// command: on a tasks remote two projects share it is the other project's
+// live history. It is reported as kept, the move stays unverified, and nothing
+// tells the person to run the move again, which cannot verify it while that
+// ref is there.
+func moveVerificationError(from, to string, missing []string, stray []IgnoredRef) error {
 	var parts []string
 	if len(missing) > 0 {
 		part := fmt.Sprintf("%s does not hold everything %s holds: %s", to, from, strings.Join(missing, "; "))
@@ -1473,23 +1483,67 @@ func moveVerificationError(from, to string, missing, stray []string) error {
 		}
 		parts = append(parts, part)
 	}
-	switch len(stray) {
-	case 0:
-	case 1:
-		parts = append(parts, fmt.Sprintf("%s holds a ref the move cannot carry, because it is not one of this project's "+
-			"tasks or relics: %s; the move stays unverified while it is there, so remove it there, after keeping a copy "+
-			"if another project needs it, with git push %s --delete %s, then run workbook move-tasks again",
-			from, stray[0], from, stray[0]))
-	default:
-		parts = append(parts, fmt.Sprintf("%s holds refs the move cannot carry, because they are not this project's "+
-			"tasks or relics: %s; the move stays unverified while they are there, so remove them there, after keeping a "+
-			"copy if another project needs them, with git push %s --delete %s, then run workbook move-tasks again",
-			from, strings.Join(stray, ", "), from, strings.Join(stray, " ")))
+	if len(stray) > 0 {
+		parts = append(parts, strayRefRefusal(from, stray))
 	}
 	if len(parts) == 0 {
 		return nil
 	}
 	return core.Errorf(core.CategoryConflict, "%s", strings.Join(parts, "; "))
+}
+
+// strayRefRefusal names each ref the move cannot carry with its verdict, then
+// says what becomes of each kind.
+func strayRefRefusal(from string, stray []IgnoredRef) string {
+	listed := make([]string, len(stray))
+	var removable []string
+	kept := 0
+	for index, ref := range stray {
+		listed[index] = fmt.Sprintf("%s (%s)", ref.Ref, ref.Verdict())
+		if ref.PlausibleTask {
+			kept++
+		} else {
+			removable = append(removable, ref.Ref)
+		}
+	}
+	var text string
+	if len(stray) == 1 {
+		text = fmt.Sprintf("%s holds a ref the move cannot carry, because it is not one of this project's tasks or relics: %s",
+			from, listed[0])
+	} else {
+		text = fmt.Sprintf("%s holds refs the move cannot carry, because they are not this project's tasks or relics: %s",
+			from, strings.Join(listed, ", "))
+	}
+	if kept > 0 {
+		subject := fmt.Sprintf("the %q ref is", IgnoredRefPlausible)
+		if kept > 1 {
+			subject = fmt.Sprintf("the %q refs are", IgnoredRefPlausible)
+		}
+		text += fmt.Sprintf("; %s kept on %s, because Workbook deletes no ref there and deleting a %q ref would destroy "+
+			"a newer Workbook's or another project's history; the move stays unverified, so --clean-up deletes nothing at %s",
+			subject, from, IgnoredRefPlausible, from)
+	}
+	if len(removable) > 0 {
+		object, there, holds := fmt.Sprintf("the %q ref", IgnoredRefRemovable), "it is", "it holds"
+		if len(removable) > 1 {
+			object, there, holds = fmt.Sprintf("the %q refs", IgnoredRefRemovable), "they are", "they hold"
+		}
+		removal := fmt.Sprintf("remove %s there, after keeping a copy if you need what %s, with git push %s --delete %s",
+			object, holds, from, strings.Join(removable, " "))
+		if kept == 0 {
+			text += fmt.Sprintf("; the move stays unverified while %s there, so %s, then run workbook move-tasks again",
+				there, removal)
+		} else {
+			text += "; " + removal
+		}
+	}
+	return text
+}
+
+// sortIgnoredRefs orders refs by name, so a refusal names them the same way
+// on every run.
+func sortIgnoredRefs(refs []IgnoredRef) {
+	sort.Slice(refs, func(i, j int) bool { return refs[i].Ref < refs[j].Ref })
 }
 
 // verifyMovedRelics proves, after verifyMovedTasks has fetched both places'
@@ -1518,16 +1572,17 @@ func (r *Repository) verifyMovedRelics(ctx context.Context, config core.ProjectC
 		return err
 	}
 	names := make([]string, 0, len(source))
-	var missing, stray []string
+	var missing []string
+	var stray []IgnoredRef
 	for name := range source {
 		if core.ValidateRelicIDShape(name) == nil && keys.OwnsRelic(name) {
 			names = append(names, name)
 		} else if have, found := destination[name]; !found || have != source[name] {
-			stray = append(stray, relicRefPrefix+name)
+			stray = append(stray, ignoredRelicRef(name, ""))
 		}
 	}
 	sort.Strings(names)
-	sort.Strings(stray)
+	sortIgnoredRefs(stray)
 	result.Relics, result.RelicsIdentical, result.RelicsCarried = len(names), 0, 0
 
 	var parked map[string][]string

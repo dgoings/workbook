@@ -157,7 +157,7 @@ func (r *Repository) syncFetchedRelics(ctx context.Context, config core.ProjectC
 	for _, record := range records {
 		if tracked, isTracking := strings.CutPrefix(record.name, trackingPrefix); isTracking {
 			if reason := unreadableTrackedRelic(keys, tracked, record); reason != "" {
-				stage.Ignored = append(stage.Ignored, IgnoredRef{Ref: relicRefPrefix + tracked, Reason: reason, PlausibleTask: true})
+				stage.Ignored = append(stage.Ignored, ignoredRelicRef(tracked, reason))
 				continue
 			}
 			if err := r.validateFullObjectID(record.objectID); err != nil {
@@ -354,14 +354,19 @@ func unreadableTrackedRelic(keys core.KeySet, relicID string, record relicRefRec
 // ignoredForeignRelicRef reports a fetched relic whose documents name another
 // project, which is that project's history rather than damage to this one.
 func ignoredForeignRelicRef(config core.ProjectConfig, relicID, projectID string) IgnoredRef {
-	return IgnoredRef{
-		Ref: relicRefPrefix + relicID,
-		Reason: fmt.Sprintf(
-			"relic ID %q carries this project's key, but its documents carry project ID %s rather than this project's %s, "+
-				"so the ref belongs to another project sharing this origin",
-			relicID, projectID, config.ProjectID),
-		PlausibleTask: true,
-	}
+	return ignoredRelicRef(relicID, fmt.Sprintf(
+		"relic ID %q carries this project's key, but its documents carry project ID %s rather than this project's %s, "+
+			"so the ref belongs to another project sharing this origin",
+		relicID, projectID, config.ProjectID))
+}
+
+// ignoredRelicRef reports a ref under the relic namespace that is not one of
+// this project's relics. Every such ref is judged as one that may be another
+// Workbook's history and is never offered for removal: relic IDs are new, so
+// no rule yet tells a name no project can write from one a newer version or
+// another project wrote.
+func ignoredRelicRef(name, reason string) IgnoredRef {
+	return IgnoredRef{Ref: relicRefPrefix + name, Reason: reason, PlausibleTask: true}
 }
 
 // nameParkedRelicRefs gives each conflicted relic's update the next free

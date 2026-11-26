@@ -4034,16 +4034,35 @@ deletes nothing, and its `Cleaned up:` line names the
 `workbook reset --remote <remote>` to run once the conflict is dealt with. A ref
 under `refs/workbook/relics/` or `refs/workbook/tasks/` at the old place that
 is not one of this project's relics or tasks cannot be carried, so the run is
-not verified: it exits 8, and `--clean-up` deletes nothing. Running the command
-again cannot change that, so the error names each such ref and the command that
+not verified: it exits 8, and `--clean-up` deletes nothing. The new place
+holding the same ref at the same commit is the one exception. Running the
+command again cannot change that. The error names each such ref with the
+verdict a fetch gives it (see
+[Explicit task sharing](#explicit-task-sharing)), and only a ref whose name
+fits no project's task ID, `no project's task`, is named with the command that
 removes it at the old place:
 
 ```text
-workbook: origin holds a ref the move cannot carry, because it is not one of this project's tasks or relics: refs/workbook/relics/not-a-relic; the move stays unverified while it is there, so remove it there, after keeping a copy if another project needs it, with git push origin --delete refs/workbook/relics/not-a-relic, then run workbook move-tasks again
+workbook: origin holds a ref the move cannot carry, because it is not one of this project's tasks or relics: refs/workbook/tasks/notes (no project's task); the move stays unverified while it is there, so remove it there, after keeping a copy if you need what it holds, with git push origin --delete refs/workbook/tasks/notes, then run workbook move-tasks again
 ```
 
-Look at what such a ref holds first: on a remote shared with another project it
-may be that project's task or relic.
+A ref that may be another project's or another version's, `may be another
+Workbook's task`, is reported as kept, with no deletion command, as a fetch
+reports it. Every ref under `refs/workbook/relics/` that is not one of this
+project's relics gets that verdict, as it does in a fetch. On a tasks remote
+another project shares, that project's task and relic refs are such refs:
+
+```text
+workbook: origin holds a ref the move cannot carry, because it is not one of this project's tasks or relics: refs/workbook/tasks/CD-01M8CJSSMMX53K7VJ3S5GYZ0TQ (may be another Workbook's task); the "may be another Workbook's task" ref is kept on origin, because Workbook deletes no ref there and deleting a "may be another Workbook's task" ref would destroy a newer Workbook's or another project's history; the move stays unverified, so --clean-up deletes nothing at origin
+```
+
+So a move away from a remote another project shares does not verify while
+that project's refs are there, and its `--clean-up` deletes nothing there.
+Verification is the run's last step: the tasks and relics are already copied
+to the new place and the old place is marked as moved, so this project's work
+carries on at the new place. What stays undone is the clean-up of the old
+place, whose Workbook refs, this project's and the other's, are left as they
+were.
 
 A conflicting edit that reaches the old place late is reported only to whoever
 runs `workbook move-tasks`, in the clone they run it from: setup and sync read

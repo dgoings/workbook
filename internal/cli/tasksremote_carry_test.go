@@ -586,3 +586,93 @@ func TestMoveTasksCleanUpKeepsARelicRefTheMoveCannotCarry(t *testing.T) {
 		t.Fatalf("origin's task and relic refs after the stopped run:\n%s\nwant\n%s", after, before)
 	}
 }
+
+// On a tasks remote another project shares, the old place holds that
+// project's live task and relic refs. A fetch reports such a ref as one that
+// may be another Workbook's and keeps it, so a move must never tell anyone to
+// delete it: the run stays unverified and exits 8, as it always did, names the
+// ref as kept on origin in the fetch report's own terms, offers no deletion
+// command in text or JSON, does not say a rerun helps, and --clean-up leaves
+// the old place as it was.
+func TestMoveTasksNeverOffersToDeleteAnotherProjectsRef(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{"task", "relic"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			project := codeProject(t, testrepo.FormatSHA1)
+			other := testrepo.New(t, testrepo.WithObjectFormat(testrepo.FormatSHA1))
+			if code, _, stderr := run(t, other, "setup", "--key", "CD", "--no-sync"); code != 0 {
+				t.Fatalf("other project's setup = %d; stderr = %q", code, stderr)
+			}
+			var ref string
+			if kind == "task" {
+				ref = "refs/workbook/tasks/" + cliCreateTask(t, other, "Another project's task").ID
+			} else {
+				ref = relicRef(mustCreateRelic(t, other, "Another project's relic", "--type", "spec").Relic.ID)
+			}
+			if strings.HasPrefix(project.ids[0], "CD-") {
+				t.Fatalf("this project's task %s shares the other project's key", project.ids[0])
+			}
+			cliGit(t, other, "push", "--quiet", "--no-verify", project.code, ref+":"+ref)
+
+			code, stdout, stderr := run(t, project.seed, "fetch")
+			if code != 0 || !strings.Contains(stdout, "Ignored:\t"+ref+"\t"+ignoredRefPlausible+"\t") || strings.Contains(stdout, "--delete") {
+				t.Fatalf("fetch = (%d, %q, %q), want %s reported as kept", code, stdout, stderr, ref)
+			}
+
+			held := func() string {
+				return refsUnder(t, project.code, "refs/workbook/tasks/") + "\n" + refsUnder(t, project.code, "refs/workbook/relics/")
+			}
+			before := held()
+			if code, stdout, stderr := run(t, project.seed, "config", "set", "tasks-remote", "tasks", "--url", project.tasks); code != 0 {
+				t.Fatalf("config set tasks-remote = (%d, %q, %q)", code, stdout, stderr)
+			}
+			wants := []string{
+				"origin holds a ref the move cannot carry, because it is not one of this project's tasks or relics: " +
+					ref + " (" + ignoredRefPlausible + ")",
+				`the "` + ignoredRefPlausible + `" ref is kept on origin, because Workbook deletes no ref there`,
+				"the move stays unverified, so --clean-up deletes nothing at origin",
+			}
+			for _, args := range [][]string{
+				{"move-tasks", "--no-backup"},
+				{"move-tasks", "--no-backup", "--json"},
+				{"move-tasks", "--clean-up", "--no-backup"},
+				{"move-tasks", "--clean-up", "--no-backup", "--json"},
+			} {
+				code, stdout, stderr := run(t, project.seed, args...)
+				if code != 8 {
+					t.Fatalf("%v = (%d, %q, %q), want exit 8", args, code, stdout, stderr)
+				}
+				output := stdout + stderr
+				if args[len(args)-1] == "--json" {
+					var envelope struct {
+						Error struct {
+							Category string `json:"category"`
+							Message  string `json:"message"`
+						} `json:"error"`
+					}
+					if err := json.Unmarshal([]byte(stderr), &envelope); err != nil || stdout != "" {
+						t.Fatalf("%v = (%q, %q), want the error envelope alone: %v", args, stdout, stderr, err)
+					}
+					if envelope.Error.Category != string(core.CategoryConflict) {
+						t.Fatalf("%v error = %+v, want a conflict", args, envelope.Error)
+					}
+					output = envelope.Error.Message
+				}
+				for _, want := range wants {
+					if !strings.Contains(output, want) {
+						t.Fatalf("%v output = %q, want %q", args, output, want)
+					}
+				}
+				for _, absent := range []string{"--delete", "move-tasks again"} {
+					if strings.Contains(stdout+stderr, absent) {
+						t.Fatalf("%v output = %q, want no %q", args, stdout+stderr, absent)
+					}
+				}
+				if after := held(); after != before {
+					t.Fatalf("origin's task and relic refs after %v:\n%s\nwant\n%s", args, after, before)
+				}
+			}
+		})
+	}
+}

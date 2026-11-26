@@ -1752,8 +1752,12 @@ a relic tip parked in this checkout. A name under `refs/workbook/relics/` or
 `refs/workbook/tasks/` at the old place that is not one of this project's
 relics or tasks cannot be carried, so it leaves the move unverified, and
 `--clean-up`, which deletes only after a verified move, deletes nothing. The
-refusal names each such ref and the `git push <old place> --delete <ref>` that
-removes it, since running the move again never carries it. A relic conflict met while carrying parks the
+refusal names each such ref with the verdict a fetch gives it. Only a name
+that fits no project's task ID is named with the `git push <old place> --delete
+<ref>` that removes it, since running the move again never carries it. Any
+other, which on a remote shared with another project is that project's live
+history, is reported as kept, so such a move stays unverified. A relic
+conflict met while carrying parks the
 local tip as any fetch does; the run is verified but exits 8, and `--clean-up`
 waits until a person has looked at it.
 

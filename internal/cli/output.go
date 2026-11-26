@@ -643,8 +643,8 @@ func withRelicWarnings(warnings, relicWarnings []core.Warning) []core.Warning {
 // several listed names a command was meant for, and never has to infer it from
 // a validator's message.
 const (
-	ignoredRefRemovable = "no project's task"
-	ignoredRefPlausible = "may be another Workbook's task"
+	ignoredRefRemovable = gitstore.IgnoredRefRemovable
+	ignoredRefPlausible = gitstore.IgnoredRefPlausible
 )
 
 // writeIdentityWarning states what a command could not settle about the
@@ -692,9 +692,8 @@ func writeIgnoredRefs(output io.Writer, remote string, refs []gitstore.IgnoredRe
 	}
 	removable := 0
 	for _, ignored := range refs {
-		verdict := ignoredRefPlausible
+		verdict := ignored.Verdict()
 		if !ignored.PlausibleTask {
-			verdict = ignoredRefRemovable
 			removable++
 		}
 		fmt.Fprintf(output, "Ignored:\t%s\t%s\t%s\n", ignored.Ref, verdict, ignored.Reason)

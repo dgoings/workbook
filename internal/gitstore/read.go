@@ -194,6 +194,24 @@ type IgnoredRef struct {
 	PlausibleTask bool `json:"plausibleTask"`
 }
 
+// Every ignored ref is reported with one of these verdicts, chosen by its
+// PlausibleTask, wherever Workbook names a ref it will not read: the fetch
+// report and a move's refusal alike. Only a ref given IgnoredRefRemovable is
+// ever named with a deletion command.
+const (
+	IgnoredRefRemovable = "no project's task"
+	IgnoredRefPlausible = "may be another Workbook's task"
+)
+
+// Verdict is the one of IgnoredRefRemovable and IgnoredRefPlausible that
+// applies to the ref.
+func (ignored IgnoredRef) Verdict() string {
+	if ignored.PlausibleTask {
+		return IgnoredRefPlausible
+	}
+	return IgnoredRefRemovable
+}
+
 func (r *Repository) listTaskRefs(ctx context.Context) ([]taskRefRecord, error) {
 	config, err := r.LoadConfig()
 	if err != nil {
