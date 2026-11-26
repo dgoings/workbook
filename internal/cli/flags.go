@@ -806,7 +806,8 @@ var commandSchemas = map[string]commandMetadata{
 			"the tasks left what `workbook reset --remote` does there: it writes a bundle of\n" +
 			"that place's Workbook refs, unless --no-backup, and deletes every one of them\n" +
 			"but the moved marker. A move that stops early, or sets an edit aside, cleans\n" +
-			"nothing; run `workbook reset --remote <name>` afterwards instead.\n\n" +
+			"nothing; run `workbook move-tasks --clean-up` again afterwards, which also\n" +
+			"finishes a clean-up a host stopped by refusing deletions.\n\n" +
 			"It refuses a new place that is the same repository as the old one, however its\n" +
 			"address is spelled, and one that holds branches unless --allow-branches is given\n" +
 			"or it is the remote named origin and holds this checkout's code; a moved\n" +

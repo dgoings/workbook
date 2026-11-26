@@ -34,6 +34,24 @@ type RemoteResetPlan struct {
 	// left names the refs PlanMoveCleanUp leaves at the remote because they
 	// are not this project's: neither deleted nor reported as remaining.
 	left []string
+	// finish is the command that finishes a clean-up a refusal stopped, set
+	// by PlanMoveCleanUp: running plain reset --remote instead would delete
+	// the refs the clean-up leaves.
+	finish string
+}
+
+// FinishCommand is the command a refusal of this plan's reset tells the person
+// to run to finish it: the move's own clean-up for a plan PlanMoveCleanUp
+// made, and otherwise the reset of the remote, confirmed for a live one.
+func (plan RemoteResetPlan) FinishCommand() string {
+	if plan.finish != "" {
+		return plan.finish
+	}
+	command := "workbook reset --remote " + plan.Remote
+	if plan.Live() {
+		command += " --confirm " + plan.Remote
+	}
+	return command
 }
 
 // Live reports a remote that is not marked as a place the tasks left: wiping
@@ -184,10 +202,7 @@ func (r *Repository) ResetRemote(ctx context.Context, projectID string, plan Rem
 	if len(messages) > 0 {
 		rule += " (" + strings.Join(messages, " ") + ")"
 	}
-	command := "workbook reset --remote " + plan.Remote
-	if plan.Live() {
-		command += " --confirm " + plan.Remote
-	}
+	command := plan.FinishCommand()
 	return result, NewResetRefusal(core.CategoryOperational, ResetRefusal{
 		Reason:    ResetDeletionRefused,
 		Remote:    plan.Remote,
@@ -326,8 +341,9 @@ func (r *Repository) pushDeletions(ctx context.Context, remote string, refs []Re
 // still deletes them. The key set is the one the move just verified with
 // (moveKeySet): this checkout's, joined with the old place's configuration's
 // when the two have diverged, so a run that has them in memory starts no Git
-// process for them.
-func (r *Repository) PlanMoveCleanUp(ctx context.Context, config core.ProjectConfig, remote string) (RemoteResetPlan, error) {
+// process for them. finish is the command that runs this clean-up again, which
+// a refusal names (FinishCommand).
+func (r *Repository) PlanMoveCleanUp(ctx context.Context, config core.ProjectConfig, remote, finish string) (RemoteResetPlan, error) {
 	plan, err := r.PlanRemoteReset(ctx, remote)
 	if err != nil {
 		return RemoteResetPlan{}, err
@@ -349,5 +365,6 @@ func (r *Repository) PlanMoveCleanUp(ctx context.Context, config core.ProjectCon
 		}
 	}
 	plan.Refs = refs
+	plan.finish = finish
 	return plan, nil
 }

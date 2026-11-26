@@ -315,7 +315,7 @@ func resetRemote(
 		Unpublished: []gitstore.UnpublishedRef{}, SetAside: []string{}, Caches: []string{}, Next: []string{},
 		noBackup: options.NoBackup,
 	}
-	command := "workbook reset --remote " + plan.Remote + " --confirm " + plan.Remote
+	command := plan.FinishCommand()
 	if plan.Live() && len(plan.Refs) > 0 && !dryRun {
 		if options.NoBackup {
 			return summary, gitstore.NewResetRefusal(core.CategoryValidation, gitstore.ResetRefusal{

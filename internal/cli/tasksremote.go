@@ -227,22 +227,36 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 		return err
 	}
 	summary := moveTasksSummary{MoveTasksResult: result}
+	// Running the clean-up again is what finishes it: a later run reports
+	// edits it set aside without stopping, and plans the same deletions.
+	// Plain reset --remote would also delete the refs that are not this
+	// project's, which the clean-up leaves.
+	finish := "workbook move-tasks --clean-up"
+	if typed["from"] {
+		finish += " --from " + result.From.Remote
+	}
 	if err != nil && *cleanUp {
 		// The move finished but set edits aside: the place left is not
 		// cleaned up until the person has looked at them.
-		summary.CleanUpNext = "workbook reset --remote " + result.From.Remote
+		summary.CleanUpNext = finish
 	}
 	if err == nil && *cleanUp {
-		cleaned, cleanErr := cleanUpAfterMove(ctx, repository, config, result, gitstore.ResetOptions{
+		cleaned, cleanErr := cleanUpAfterMove(ctx, repository, config, result, finish, gitstore.ResetOptions{
 			NoBackup: *noBackup, Backup: *backup, Flags: given,
 		})
 		if cleanErr != nil {
-			err = core.Wrap(core.CategoryOf(cleanErr),
-				fmt.Sprintf("the move is complete, but cleaning up %s did not finish; run workbook reset --remote %s to finish it",
-					result.From.Remote, result.From.Remote), cleanErr)
 			var refusal *gitstore.ResetRefusalError
-			if errors.As(cleanErr, &refusal) && refusal.Refusal.Bundle != "" {
-				fmt.Fprintf(stderr, "Backup:\t%s\n", refusal.Refusal.Bundle)
+			if errors.As(cleanErr, &refusal) {
+				// The refusal names the command already.
+				err = core.Wrap(core.CategoryOf(cleanErr),
+					fmt.Sprintf("the move is complete, but cleaning up %s did not finish", result.From.Remote), cleanErr)
+				if refusal.Refusal.Bundle != "" {
+					fmt.Fprintf(stderr, "Backup:\t%s\n", refusal.Refusal.Bundle)
+				}
+			} else {
+				err = core.Wrap(core.CategoryOf(cleanErr),
+					fmt.Sprintf("the move is complete, but cleaning up %s did not finish; run %s again to finish it",
+						result.From.Remote, finish), cleanErr)
 			}
 		} else {
 			summary.CleanUp = &cleaned
@@ -333,6 +347,7 @@ func cleanUpAfterMove(
 	repository *gitstore.Repository,
 	config core.ProjectConfig,
 	result gitstore.MoveTasksResult,
+	finish string,
 	options gitstore.ResetOptions,
 ) (resetSummary, error) {
 	if options.Backup != "" {
@@ -341,7 +356,7 @@ func cleanUpAfterMove(
 			options.Backup = strings.TrimSuffix(options.Backup, extension) + "-clean-up" + extension
 		}
 	}
-	plan, err := repository.PlanMoveCleanUp(ctx, config, result.From.Remote)
+	plan, err := repository.PlanMoveCleanUp(ctx, config, result.From.Remote, finish)
 	if err != nil {
 		return resetSummary{}, err
 	}

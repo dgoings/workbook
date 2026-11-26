@@ -14,6 +14,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/syncloop"
+	"github.com/dgoings/workbook/internal/testenv"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
 
@@ -325,10 +326,71 @@ func TestMoveTasksCleanUpWaitsWhenTheMoveSetEditsAside(t *testing.T) {
 	if err := json.Unmarshal(assertJSONResult(t, stdout, "move-tasks").Data, &moved); err != nil {
 		t.Fatal(err)
 	}
-	if !moved.Verified || len(moved.SetAside) != 1 || moved.CleanUp != nil || moved.CleanUpNext != "workbook reset --remote origin" {
+	if !moved.Verified || len(moved.SetAside) != 1 || moved.CleanUp != nil || moved.CleanUpNext != "workbook move-tasks --clean-up" {
 		t.Fatalf("move-tasks --clean-up = %+v, cleanUp %+v, next %q", moved.MoveTasksResult, moved.CleanUp, moved.CleanUpNext)
 	}
 	if got := refsUnder(t, project.code, "refs/workbook/"); got != before {
 		t.Fatalf("origin was cleaned up after a move that set edits aside:\n%s\nwant\n%s", got, before)
+	}
+
+	// The command it names finishes the job once the edits are looked at: a
+	// later run reports them set aside without stopping, and cleans up.
+	code, stdout, stderr = run(t, project.seed, "move-tasks", "--clean-up")
+	if code != 0 || !strings.Contains(stdout, "parked earlier in this checkout") || !strings.Contains(stdout, "Cleaned up:\torigin") {
+		t.Fatalf("the named move-tasks --clean-up = (%d, %q, %q), want exit 0", code, stdout, stderr)
+	}
+	if got := refsUnder(t, project.code, "refs/workbook/"); !strings.HasPrefix(got, "refs/workbook/project ") || strings.Contains(got, "\n") {
+		t.Fatalf("origin holds after the named clean-up:\n%s\nwant only its marker", got)
+	}
+}
+
+// A clean-up a host stopped by refusing deletions names, as the command that
+// finishes it, move-tasks --clean-up run again, not plain reset --remote,
+// which would delete another project's refs the clean-up leaves. Run once the
+// host allows deletions, it finishes and leaves them.
+func TestMoveTasksCleanUpRefusedByTheHostNamesTheCleanUpToRunAgain(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA1)
+	others := otherProject(t, project, "ZZ")
+	hook := filepath.Join(project.code, "hooks", "update")
+	testenv.WriteExecutable(t, hook, []byte("#!/bin/sh\n"+
+		"case \"$3\" in *[!0]*) exit 0;; esac\necho \"deleting refs is not allowed here\"\nexit 1\n"))
+	if code, stdout, stderr := run(t, project.seed, "config", "set", "tasks-remote", "tasks", "--url", project.tasks); code != 0 {
+		t.Fatalf("config set tasks-remote = (%d, %q, %q)", code, stdout, stderr)
+	}
+	for _, args := range [][]string{{"move-tasks", "--clean-up"}, {"move-tasks", "--clean-up", "--json"}} {
+		code, stdout, stderr := run(t, project.seed, args...)
+		if code != 1 {
+			t.Fatalf("%v with deletions refused = (%d, %q, %q), want exit 1", args, code, stdout, stderr)
+		}
+		for _, want := range []string{
+			"the move is complete, but cleaning up origin did not finish",
+			"run workbook move-tasks --clean-up again to finish",
+		} {
+			if !strings.Contains(stderr, want) {
+				t.Fatalf("%v stderr = %q, want it to contain %q", args, stderr, want)
+			}
+		}
+		if strings.Contains(stderr, "reset --remote") {
+			t.Fatalf("%v stderr = %q, names reset --remote", args, stderr)
+		}
+		if args[len(args)-1] == "--json" && !strings.Contains(stderr, `"command":"workbook move-tasks --clean-up"`) {
+			t.Fatalf("%v stderr = %q, want the refusal's command to be the clean-up", args, stderr)
+		}
+	}
+	if err := os.Remove(hook); err != nil {
+		t.Fatal(err)
+	}
+	if code, stdout, stderr := run(t, project.seed, "move-tasks", "--clean-up"); code != 0 {
+		t.Fatalf("move-tasks --clean-up once deletions are allowed = (%d, %q, %q)", code, stdout, stderr)
+	}
+	held := workbookRefTips(t, project.code)
+	if len(held) != len(others)+1 || held["refs/workbook/project"] == "" {
+		t.Fatalf("origin holds after the clean-up: %v, want its marker and %v", held, others)
+	}
+	for _, ref := range others {
+		if held[ref] == "" {
+			t.Fatalf("the clean-up deleted %s: %v", ref, held)
+		}
 	}
 }

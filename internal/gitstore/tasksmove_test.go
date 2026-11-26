@@ -695,7 +695,7 @@ func TestMoveCleanUpPlanLeavesRefsThatAreNotThisProjects(t *testing.T) {
 	if result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{}); err != nil || !result.Verified {
 		t.Fatalf("MoveTasks() = (%+v, %v)", result, err)
 	}
-	plan, err := fixture.first.PlanMoveCleanUp(ctx, fixture.config, "origin")
+	plan, err := fixture.first.PlanMoveCleanUp(ctx, fixture.config, "origin", "workbook move-tasks --clean-up")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4036,8 +4036,9 @@ A relic change that cannot be replayed is a
 [relic conflict](#a-relic-conflict): its local tip is parked under
 `refs/workbook/reconciled-relics/<relic>/<n>`, the run finishes and is
 verified, and it exits 8 with the conflict's detail. `--clean-up` then
-deletes nothing, and its `Cleaned up:` line names the
-`workbook reset --remote <remote>` to run once the conflict is dealt with.
+deletes nothing, and its `Cleaned up:` line names
+`workbook move-tasks --clean-up` as the command to run once the conflict is
+dealt with.
 
 A move concerns this project's refs only. A ref under `refs/workbook/tasks/`
 or `refs/workbook/relics/` at the old place whose name is not one of this
@@ -5269,9 +5270,14 @@ clean-up's goes to the same name with `-clean-up` before the extension instead.
 `--no-backup` applies to both. A move that stops with an error cleans up
 nothing. A move that finished but set edits aside, exit 8, cleans up nothing
 either: its output says so on a `Cleaned up:` line, and its JSON names the
-command to run once the edits are dealt with as `cleanUpNext`, `workbook reset
---remote <place>`. A clean-up that fails after a finished move says the move is
-complete and to run `workbook reset --remote <place>` to finish. The JSON
+command to run once the edits are dealt with as `cleanUpNext`,
+`workbook move-tasks --clean-up`, with `--from <place>` when the run was given
+one. That run reports the edits set aside without stopping, and cleans up. A
+clean-up that fails after a finished move, such as one a host stops by
+refusing deletions, says the move is complete and names the same command to
+run again to finish; the refusal's `command` is that command too. Plain
+`workbook reset --remote <place>` would finish it as well, but it also deletes
+the refs the clean-up leaves, which may be another project's. The JSON
 result carries the clean-up as a `cleanUp` member shaped as above. The tasks can still move back to a place cleaned up this way:
 a move back works whether the old copies are there or gone.
 
