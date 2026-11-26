@@ -20,11 +20,18 @@ import (
 // push still lands, because nothing it updates changed.
 func holdTaskPushes(t *testing.T, bare string) (held <-chan struct{}, release func()) {
 	t.Helper()
+	return holdPushesTo(t, bare, "refs/workbook/tasks/*")
+}
+
+// holdPushesTo is holdTaskPushes for the first push that updates a ref
+// matching pattern, a shell case pattern.
+func holdPushesTo(t *testing.T, bare, pattern string) (held <-chan struct{}, release func()) {
+	t.Helper()
 	signals := t.TempDir()
 	holding := filepath.ToSlash(filepath.Join(signals, "holding"))
 	released := filepath.ToSlash(filepath.Join(signals, "released"))
 	hook := "#!/bin/sh\nheld=no\nwhile read old new ref; do\n" +
-		"  case \"$ref\" in refs/workbook/tasks/*) held=yes ;; esac\ndone\n" +
+		"  case \"$ref\" in " + pattern + ") held=yes ;; esac\ndone\n" +
 		"if [ \"$held\" = yes ] && [ ! -f '" + released + "' ]; then\n" +
 		"  : > '" + holding + "'\n" +
 		"  while [ ! -f '" + released + "' ]; do sleep 1; done\nfi\nexit 0\n"

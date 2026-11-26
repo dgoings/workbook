@@ -437,7 +437,8 @@ func (r *Repository) moveFetchedRelicRefs(ctx context.Context, updates []relicRe
 // read, or the first relic of the transaction when none can be found.
 func (r *Repository) relicMovedDuringSync(ctx context.Context, updates []relicRefUpdate, cause error) error {
 	if ctx.Err() != nil {
-		return core.Wrap(core.CategoryOperational, "relic refs were not moved", cause)
+		// Git's own text names lock files and paths; the cancel is the cause.
+		return core.Wrap(core.CategoryOperational, "relic refs were not moved, because the command was cancelled", ctx.Err())
 	}
 	relicID := updates[0].RelicID
 	if records, err := r.relicRefRecords(ctx, relicRefPrefix); err == nil {

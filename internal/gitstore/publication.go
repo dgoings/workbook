@@ -238,12 +238,12 @@ func (r *Repository) strandedPublicationOf(ctx context.Context, taskIDs []string
 	remote := r.remote()
 	listing, err := r.Git(ctx, nil, "ls-remote", "--refs", remote, identityRef)
 	if err != nil {
-		r.noteUnconfirmed(remote, taskIDs, err)
+		r.noteUnconfirmed(remote, taskIDs, relics, err)
 		return nil
 	}
 	head, err := parseRemoteIdentityHead(listing)
 	if err != nil {
-		r.noteUnconfirmed(remote, taskIDs, err)
+		r.noteUnconfirmed(remote, taskIDs, relics, err)
 		return nil
 	}
 	if head == "" {
@@ -254,7 +254,7 @@ func (r *Repository) strandedPublicationOf(ctx context.Context, taskIDs []string
 		return nil
 	}
 	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--no-auto-maintenance", remote, r.identityFetchRefspec()); err != nil {
-		r.noteUnconfirmed(remote, taskIDs, err)
+		r.noteUnconfirmed(remote, taskIDs, relics, err)
 		return nil
 	}
 	record, found, err := r.readIdentityRef(ctx, r.remoteIdentityRef())
@@ -274,14 +274,19 @@ func (r *Repository) strandedPublicationOf(ctx context.Context, taskIDs []string
 	return r.strandedRefusal(ctx, remote, moved, taskIDs, relics)
 }
 
-// noteUnconfirmed records that remote accepted taskIDs and that the look
-// afterwards failed, with Git's reason and no credential.
-func (r *Repository) noteUnconfirmed(remote string, taskIDs []string, cause error) {
+// noteUnconfirmed records that remote accepted ids, task or relic IDs as
+// relics says, and that the look afterwards failed, with Git's reason and no
+// credential.
+func (r *Repository) noteUnconfirmed(remote string, ids []string, relics bool, cause error) {
+	accepted := remote + " accepted " + strings.Join(ids, ", ")
+	if relics {
+		accepted = acceptedRelics(remote, ids)
+	}
 	warning := core.Warning{
 		Code: core.WarningPublicationUnconfirmed,
-		Message: fmt.Sprintf("%s accepted %s, but listing it again afterwards failed, so this command could not confirm "+
+		Message: fmt.Sprintf("%s, but listing it again afterwards failed, so this command could not confirm "+
 			"that %s is still where this project's tasks live: %s",
-			remote, strings.Join(taskIDs, ", "), remote, redactURLCredentials(cause.Error())),
+			accepted, remote, redactURLCredentials(cause.Error())),
 	}
 	r.metadataMu.Lock()
 	r.unconfirmed = append(r.unconfirmed, warning)
@@ -298,6 +303,15 @@ func (r *Repository) PublicationWarnings() []core.Warning {
 	warnings := r.unconfirmed
 	r.unconfirmed = nil
 	return warnings
+}
+
+// acceptedRelics says that remote accepted the relics ids, naming them first,
+// as every relic message does.
+func acceptedRelics(remote string, ids []string) string {
+	if len(ids) == 1 {
+		return "relic " + ids[0] + ": " + remote + " accepted it"
+	}
+	return "relics " + strings.Join(ids, ", ") + ": " + remote + " accepted them"
 }
 
 // strandedRefusal is the report for task refs a remote accepted just as it was
@@ -321,12 +335,7 @@ func (r *Repository) strandedRefusal(ctx context.Context, remote string, moved T
 	accepted := remote + " accepted " + strings.Join(ids, ", ")
 	if relics {
 		refusal.Relics = append([]string(nil), ids...)
-		// Every relic error names the relic first.
-		if len(ids) == 1 {
-			accepted = "relic " + ids[0] + ": " + remote + " accepted it"
-		} else {
-			accepted = "relics " + strings.Join(ids, ", ") + ": " + remote + " accepted them"
-		}
+		accepted = acceptedRelics(remote, ids)
 	} else {
 		refusal.Tasks = append([]string(nil), ids...)
 	}
