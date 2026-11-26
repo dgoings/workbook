@@ -287,6 +287,10 @@ func (r *Repository) syncFetchedRelics(ctx context.Context, config core.ProjectC
 			update.ParkedHead = outcome.ParkedHead
 			conflicts = append(conflicts, conflict)
 			planned[relicID] = SyncRelicResult{RelicID: relicID, Status: SyncConflicted}
+		} else if outcome.Replayed == 0 && outcome.Next == replays[index].Remote {
+			// Every local change was already on origin or changed nothing, so
+			// the ref simply moves to origin's tip.
+			planned[relicID] = SyncRelicResult{RelicID: relicID, Status: SyncFastForwarded}
 		} else {
 			planned[relicID] = SyncRelicResult{
 				RelicID: relicID,

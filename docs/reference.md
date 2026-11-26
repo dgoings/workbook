@@ -1699,6 +1699,7 @@ first and bob second:
 | Different parts, different fields of one part, or different properties | `reconciled` | both changes, even when together they pass a total | nothing, or the warning `relic-over-limit` when a total or a count is passed | `0` |
 | The same field or property, to different values | `reconciled` | bob's value; both operations in the history | nothing | `0` |
 | The title, or the position of the same part | `reconciled` | bob's value; both operations in the history | nothing | `0` |
+| The same body, to the same bytes, when that was all bob changed, or only changes origin already holds | `fast-forwarded` | alice's tip | nothing | `0` |
 | The same body, to different bytes | `conflicted` | alice's body; bob's old tip parked | a `relicConflict` entry of type `body` naming the part, with the base, bob's and alice's texts | `8` |
 | Alice removed a part, bob edited it | `reconciled` | the part stays removed and holds bob's edit | the warning `relic-edit-on-removed-part` naming the relic and the part | `0` |
 | Alice deleted the relic, bob edited it | `conflicted` | deleted; bob's old tip parked | a `relicConflict` entry of type `tombstone` | `8` |

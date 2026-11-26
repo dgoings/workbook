@@ -539,3 +539,28 @@ func TestSyncTextOutputNamesChangedRelics(t *testing.T) {
 		t.Fatalf("sync lines naming %s = %q, want one created line; output:\n%s", created, lines, stdout)
 	}
 }
+
+// A sync in which every local change was already on origin, here the same
+// body saved from the same version in both clones, moves the relic to
+// origin's tip and says so as a fast-forward: nothing was replayed.
+func TestSyncReportsAgreeingLocalChangesAsAFastForward(t *testing.T) {
+	t.Parallel()
+	state := newRelicBodyConflict(t, "Agreed", "one\n", "same\n", "same\n", "agreed.md")
+
+	code, stdout, stderr := run(t, state.second, "sync")
+	if code != 0 {
+		t.Fatalf("sync = (%d, %q, %q)", code, stdout, stderr)
+	}
+	var lines []string
+	for _, line := range strings.Split(stdout, "\n") {
+		if strings.HasPrefix(line, state.relicID+"\t") {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 || lines[0] != state.relicID+"\tfast-forwarded" {
+		t.Fatalf("sync lines naming %s = %q, want the fetch's to read fast-forwarded; output:\n%s", state.relicID, lines, stdout)
+	}
+	if local, remote := relicHeadOf(t, state.second, state.relicID), originRelicHead(t, state.second, state.relicID); local != remote {
+		t.Fatalf("the clone holds %s, origin %s; want origin's tip", local, remote)
+	}
+}
