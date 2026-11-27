@@ -194,6 +194,10 @@ func (u *relicUpdate) checkSchema(ctx context.Context, version RelicSchemaVersio
 			partID = operation.ID
 		case RelicOperationPartFieldSet, RelicOperationPartFieldClear, RelicOperationPartBodySet, RelicOperationPartRestore:
 			partID = operation.Part
+		case RelicOperationLinkAdd:
+			if operation.Link.Pointer != nil {
+				problem = schema.CheckLinkPointer(operation.Link.Pointer)
+			}
 		}
 		if partID != "" && !judged[partID] {
 			judged[partID] = true

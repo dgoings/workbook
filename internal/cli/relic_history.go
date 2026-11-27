@@ -295,7 +295,11 @@ func writeRelicDiffLinks(stdout io.Writer, mark string, links []core.RelicLink) 
 		if from == "" {
 			from = "relic"
 		}
-		fmt.Fprintf(stdout, "\t%s%s\t%s\t%s\t%s\n",
-			mark, singleLine(link.ID), singleLine(from), singleLine(link.Rel), singleLine(link.To.Task))
+		fmt.Fprintf(stdout, "\t%s%s\t%s\t%s\t%s",
+			mark, singleLine(link.ID), singleLine(from), singleLine(link.Rel), singleLine(link.To.Address()))
+		if link.Pointer != nil {
+			fmt.Fprintf(stdout, "\t%s", singleLine(string(link.Pointer)))
+		}
+		fmt.Fprintln(stdout)
 	}
 }

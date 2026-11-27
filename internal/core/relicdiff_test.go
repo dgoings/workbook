@@ -563,3 +563,21 @@ func TestRelicServiceDiffPassesOnAnUnreadBody(t *testing.T) {
 		t.Fatalf("Diff() = (%+v, %v), want an operational error", diff, err)
 	}
 }
+
+func TestDiffListsARelicLinkWithItsTargetAndPointer(t *testing.T) {
+	partA := relicTestID(221)
+	from := newDiffSide("T").part(partA, "1/1", false, nil, "", nil)
+	to := newDiffSide("T").part(partA, "1/1", false, nil, "", nil)
+	link := RelicLink{ID: relicTestID(222), From: partA, To: RelicLinkTarget{Relic: "WB-R-" + relicTestID(223), Part: relicTestID(224)},
+		Rel: "decided-in", Seen: relicTestID(225), Pointer: raw(`{"at":"00:14:32"}`)}
+	to.links = append(to.links, link)
+	diff := compareRead(from, to, "", 3)
+	if diff.Links == nil || len(diff.Links.Removed) != 0 || len(diff.Links.Added) != 1 || !reflect.DeepEqual(diff.Links.Added[0], link) {
+		t.Fatalf("links = %+v, want the link added with its target, seen and pointer", diff.Links)
+	}
+	encoded, err := json.Marshal(diff.Links.Added[0])
+	if err != nil || !strings.Contains(string(encoded), `"to":{"relic":"WB-R-`+relicTestID(223)+`","part":"`+relicTestID(224)+
+		`"},"rel":"decided-in","seen":"`+relicTestID(225)+`","pointer":{"at":"00:14:32"}`) {
+		t.Fatalf("diff link JSON = %s, %v", encoded, err)
+	}
+}

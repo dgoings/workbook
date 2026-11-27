@@ -67,9 +67,9 @@ func relicReaderFixture(t *testing.T, repository *gitstore.Repository, config co
 	// below, to a live task and to one deleted afterwards.
 	live, deletedTask := linkIndexTask(t, repository, config, 1), linkIndexTask(t, repository, config, 2)
 	if _, err := service.Update(ctx, shapes.Relic.ID, []core.RelicEdit{
-		{Kind: core.RelicEditAddLink, Task: live, Rel: "relates-to"},
-		{Kind: core.RelicEditAddLink, Task: deletedTask, From: shapes.Parts[0].ID, Rel: "implemented-by"},
-		{Kind: core.RelicEditAddLink, Task: live, From: gone, Rel: "decided-by"},
+		{Kind: core.RelicEditAddLink, Target: live, Rel: "relates-to"},
+		{Kind: core.RelicEditAddLink, Target: deletedTask, From: shapes.Parts[0].ID, Rel: "implemented-by"},
+		{Kind: core.RelicEditAddLink, Target: live, From: gone, Rel: "decided-by"},
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -56,11 +56,11 @@ func linkedRelics(t *testing.T, repository *gitstore.Repository, config core.Pro
 		relics = append(relics, createIndexRelic(t, service, fmt.Sprintf("Linked %d", number), 3))
 	}
 	linkRelic(t, service, relics[0],
-		core.RelicEdit{Kind: core.RelicEditAddLink, Task: tasks[0], Rel: "relates-to"},
-		core.RelicEdit{Kind: core.RelicEditAddLink, Task: tasks[1], From: relicPartIDOf(t, repository, config, relics[0], 0), Rel: "implemented-by"})
+		core.RelicEdit{Kind: core.RelicEditAddLink, Target: tasks[0], Rel: "relates-to"},
+		core.RelicEdit{Kind: core.RelicEditAddLink, Target: tasks[1], From: relicPartIDOf(t, repository, config, relics[0], 0), Rel: "implemented-by"})
 	linkRelic(t, service, relics[1],
-		core.RelicEdit{Kind: core.RelicEditAddLink, Task: tasks[0], From: relicPartIDOf(t, repository, config, relics[1], 1), Rel: "decided-by"})
-	linkRelic(t, service, relics[2], core.RelicEdit{Kind: core.RelicEditAddLink, Task: tasks[1], Rel: "relates-to"})
+		core.RelicEdit{Kind: core.RelicEditAddLink, Target: tasks[0], From: relicPartIDOf(t, repository, config, relics[1], 1), Rel: "decided-by"})
+	linkRelic(t, service, relics[2], core.RelicEdit{Kind: core.RelicEditAddLink, Target: tasks[1], Rel: "relates-to"})
 	return service, relics, tasks
 }
 
@@ -363,14 +363,14 @@ func relicLinkMutations(t *testing.T, repository *gitstore.Repository, config co
 	}
 	return []func(){
 		func() {
-			linkRelic(t, service, ids[1], core.RelicEdit{Kind: core.RelicEditAddLink, Task: task, Rel: "relates-to"})
+			linkRelic(t, service, ids[1], core.RelicEdit{Kind: core.RelicEditAddLink, Target: task, Rel: "relates-to"})
 		},
 		func() {
-			linkRelic(t, service, ids[2], core.RelicEdit{Kind: core.RelicEditAddLink, Task: task,
+			linkRelic(t, service, ids[2], core.RelicEdit{Kind: core.RelicEditAddLink, Target: task,
 				From: relicPartIDOf(t, repository, config, ids[2], 1), Rel: "implemented-by"})
 		},
 		func() {
-			linkRelic(t, service, ids[1], core.RelicEdit{Kind: core.RelicEditAddLink, Task: task,
+			linkRelic(t, service, ids[1], core.RelicEdit{Kind: core.RelicEditAddLink, Target: task,
 				From: relicPartIDOf(t, repository, config, ids[1], 0), Rel: "decided-by"})
 		},
 		func() {

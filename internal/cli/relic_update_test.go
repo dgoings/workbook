@@ -1230,7 +1230,7 @@ func TestRelicUpdateHelp(t *testing.T) {
 		}
 	}
 	want := []string{"title", "set", "set-json", "clear", "add-part", "part-type", "field", "field-json", "clear-field",
-		"body-file", "body-format", "base", "before", "after", "part", "move-part", "remove-part", "restore-part", "link", "from", "rel", "unlink", "no-sync", "json"}
+		"body-file", "body-format", "base", "before", "after", "part", "move-part", "remove-part", "restore-part", "link", "from", "rel", "pointer", "unlink", "no-sync", "json"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("relic update options = %q, want %q", names, want)
 	}

@@ -107,8 +107,10 @@ func writeRelicSchema(stdout io.Writer, document core.RelicDocument) {
 }
 
 // writeRelicLinks prints a relic's links after its parts, one line each: the
-// link's ID, the part it is from or "relic", its relationship and its task,
-// with "(removed)" after a task that is deleted or not there.
+// link's ID, the part it is from or "relic", its relationship and its target,
+// with "(removed)" after a target that is deleted or removed, "(not in this
+// clone)" after one this clone does not have and "(retired)" after a retired
+// relic, then its pointer when it has one.
 func writeRelicLinks(stdout io.Writer, links []core.RelicDocumentLink) {
 	if len(links) == 0 {
 		return
@@ -119,9 +121,17 @@ func writeRelicLinks(stdout io.Writer, links []core.RelicDocumentLink) {
 		if from == "" {
 			from = "relic"
 		}
-		fmt.Fprintf(stdout, "\t%s\t%s\t%s\t%s", singleLine(link.ID), singleLine(from), singleLine(link.Rel), singleLine(link.To.Task))
-		if link.TargetRemoved {
+		fmt.Fprintf(stdout, "\t%s\t%s\t%s\t%s", singleLine(link.ID), singleLine(from), singleLine(link.Rel), singleLine(link.To.Address()))
+		switch {
+		case link.TargetState == core.RelicLinkTargetMissing:
+			fmt.Fprint(stdout, " (not in this clone)")
+		case link.TargetState == core.RelicLinkTargetRetired:
+			fmt.Fprint(stdout, " (retired)")
+		case link.TargetRemoved:
 			fmt.Fprint(stdout, " (removed)")
+		}
+		if link.Pointer != nil {
+			fmt.Fprintf(stdout, "\t%s", singleLine(string(link.Pointer)))
 		}
 		fmt.Fprintln(stdout)
 	}

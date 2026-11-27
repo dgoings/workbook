@@ -42,7 +42,7 @@ workbook relic update <relic> --add-part --part-type <type> [--field <name>=<val
 workbook relic update <relic> --part <part> [--field <name>=<value>]... [--field-json <name>=<json>]... [--clear-field <name>]... [--body-file <file> [--body-format <label>] [--base <version>]] [--no-sync]
 workbook relic update <relic> --move-part <part> (--before <part> | --after <part>) [--no-sync]
 workbook relic update <relic> [--remove-part <part>]... [--restore-part <part>]... [--no-sync]
-workbook relic update <relic> [--link <task> [--from <part>] --rel <rel>]... [--unlink <link>]... [--no-sync]
+workbook relic update <relic> [--link <task|relic[#part]> [--from <part>] --rel <rel> [--pointer <json object>]]... [--unlink <link>]... [--no-sync]
 workbook relic migrate <relic> --to <target> [--no-sync] [--json]
 workbook relic delete <relic> [--no-sync] [--json]
 workbook relic restore <relic> [--no-sync] [--json]

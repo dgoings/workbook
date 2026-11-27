@@ -48,7 +48,7 @@ var relicUpdateGroupList = []relicUpdateGroup{
 	{"move-part", core.RelicEditMovePart, []string{"before", "after"}},
 	{"remove-part", core.RelicEditRemovePart, nil},
 	{"restore-part", core.RelicEditRestorePart, nil},
-	{"link", core.RelicEditAddLink, []string{"from", "rel"}},
+	{"link", core.RelicEditAddLink, []string{"from", "rel", "pointer"}},
 	{"unlink", core.RelicEditRemoveLink, nil},
 }
 
@@ -369,7 +369,15 @@ func (change relicUpdateChange) edit(readFile func(string) ([]byte, error)) (edi
 				return core.RelicEdit{}, "", err
 			}
 		}
-		return core.RelicEdit{Kind: core.RelicEditAddLink, Task: change.name, From: change.once["from"], Rel: change.once["rel"]}, "", nil
+		edit := core.RelicEdit{Kind: core.RelicEditAddLink, Target: change.name, From: change.once["from"], Rel: change.once["rel"]}
+		if typed, given := change.once["pointer"]; given {
+			pointer, err := core.CanonicalRelicLinkPointer([]byte(typed))
+			if err != nil {
+				return core.RelicEdit{}, "", core.Errorf(core.CategoryValidation, "relic update --pointer: %s", err.Error())
+			}
+			edit.Pointer = pointer
+		}
+		return edit, "", nil
 	case "unlink":
 		if err := checkRelicUpdateID("--unlink", change.name); err != nil {
 			return core.RelicEdit{}, "", err

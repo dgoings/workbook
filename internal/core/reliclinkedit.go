@@ -1,7 +1,9 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -12,26 +14,50 @@ const (
 	RelicEditRemoveLink RelicEditKind = "remove-link"
 )
 
+// The states a link's target can be in, as TargetState names them.
+const (
+	// RelicLinkTargetDeleted is a deleted task or relic.
+	RelicLinkTargetDeleted = "deleted"
+	// RelicLinkTargetRemoved is a removed part.
+	RelicLinkTargetRemoved = "removed"
+	// RelicLinkTargetMissing is a task or relic this clone does not have, or
+	// a part the local copy of its relic does not have.
+	RelicLinkTargetMissing = "missing"
+	// RelicLinkTargetRetired is a retired relic, which is not removed.
+	RelicLinkTargetRetired = "retired"
+)
+
 // RelicDocumentLink is one link in a relic document. TargetRemoved says that
-// the task it points at is deleted or not there; relic show sets it, and
+// what it points at is deleted, removed or not there, and TargetState says
+// which, or that a relic it points at is retired; relic show sets both, and
 // relic export never does.
 type RelicDocumentLink struct {
 	RelicLink
-	TargetRemoved bool `json:"targetRemoved,omitempty"`
+	TargetRemoved bool   `json:"targetRemoved,omitempty"`
+	TargetState   string `json:"targetState,omitempty"`
+}
+
+// markTarget records the state of a link's target.
+func (link *RelicDocumentLink) markTarget(state string) {
+	link.TargetState = state
+	link.TargetRemoved = state == RelicLinkTargetDeleted || state == RelicLinkTargetRemoved || state == RelicLinkTargetMissing
 }
 
 func errNoTaskReader() error {
 	return Errorf(CategoryOperational, "relic service has no task reader")
 }
 
+// typedRelicAddress reports whether what an add-link names is a relic or a
+// part of one: a task ID's ULID never starts with R, so <KEY>-R... can name
+// only a relic.
+func typedRelicAddress(typed string) bool {
+	key, rest, separated := strings.Cut(strings.ToUpper(typed), "-")
+	return separated && key != "" && strings.HasPrefix(rest, "R")
+}
+
 // linkTask resolves the task an add-link points at and refuses one that is
-// deleted, as workbook depend refuses a deleted dependency. A relic ID is
-// refused by its shape before any task is read: a task ID's ULID never starts
-// with R, so <KEY>-R... can name only a relic.
+// deleted, as workbook depend refuses a deleted dependency.
 func (s RelicService) linkTask(ctx context.Context, typed string) (string, error) {
-	if key, rest, separated := strings.Cut(strings.ToUpper(typed), "-"); separated && key != "" && strings.HasPrefix(rest, "R") {
-		return "", Errorf(CategoryValidation, "a relic links only to tasks so far; %s is not a task", relicTypedInMessage(typed))
-	}
 	if s.Tasks == nil {
 		return "", errNoTaskReader()
 	}
@@ -60,11 +86,19 @@ func relicTypedInMessage(typed string) string {
 }
 
 // addLink records a link.add, unless the relic already has a live link with
-// the same from, target and relationship, which an earlier edit in this
-// update may have added: a repeated command adds nothing.
+// the same from, target, relationship and pointer, which an earlier edit in
+// this update may have added: a repeated command adds nothing.
 func (u *relicUpdate) addLink(ctx context.Context, edit RelicEdit) error {
 	if err := ValidateRelicRelation(edit.Rel); err != nil {
 		return err
+	}
+	var pointer json.RawMessage
+	if edit.Pointer != nil {
+		canonical, err := CanonicalRelicLinkPointer(edit.Pointer)
+		if err != nil {
+			return err
+		}
+		pointer = canonical
 	}
 	var from string
 	if edit.From != "" {
@@ -74,17 +108,90 @@ func (u *relicUpdate) addLink(ctx context.Context, edit RelicEdit) error {
 		}
 		from = part.ID
 	}
-	taskID, err := u.service.linkTask(ctx, edit.Task)
+	target, seen, err := u.linkTarget(ctx, edit.Target)
 	if err != nil {
 		return err
 	}
-	change := RelicLinkChange{From: from, To: RelicLinkTarget{Task: taskID}, Rel: edit.Rel}
+	if target.Relic == u.relicID && target.Part == from {
+		return Errorf(CategoryValidation, "a link cannot point at what it starts from")
+	}
+	change := RelicLinkChange{From: from, To: target, Rel: edit.Rel, Seen: seen, Pointer: pointer}
 	for _, link := range u.links.Links {
-		if link.From == change.From && link.To == change.To && link.Rel == change.Rel {
+		if link.From == change.From && link.To == change.To && link.Rel == change.Rel && bytes.Equal(link.Pointer, change.Pointer) {
 			return nil
 		}
 	}
 	return u.record(RelicOperation{Type: RelicOperationLinkAdd, Link: &change})
+}
+
+// linkTarget resolves what an add-link points at, and for a relic target the
+// version it sees: the last operation ID of the relic's tip, or, for the
+// relic being updated, of the tip this update starts from. A relic target is
+// one of this project's relics, found by prefix and read once per update;
+// the relic being updated is its working copy, so a part an earlier edit
+// added can be the target. A deleted relic and a removed part are refused,
+// as a deleted task is.
+func (u *relicUpdate) linkTarget(ctx context.Context, typed string) (RelicLinkTarget, string, error) {
+	if !typedRelicAddress(typed) {
+		taskID, err := u.service.linkTask(ctx, typed)
+		return RelicLinkTarget{Task: taskID}, "", err
+	}
+	relicPrefix, partPrefix, hasPart, err := ParsePartAddress(typed)
+	if err != nil {
+		return RelicLinkTarget{}, "", err
+	}
+	if key, _, _ := strings.Cut(strings.ToUpper(relicPrefix), "-"); !u.service.keys().Contains(key) {
+		return RelicLinkTarget{}, "", Errorf(CategoryValidation,
+			"relic %s is in another project; a link stays within one project", relicTypedInMessage(relicPrefix))
+	}
+	if u.heads == nil {
+		heads, err := u.service.Reader.ListRelicHeads(ctx, u.service.Config)
+		if err != nil {
+			return RelicLinkTarget{}, "", err
+		}
+		u.heads = heads
+	}
+	head, err := ResolveRelicPrefix(u.heads, relicPrefix)
+	if err != nil {
+		return RelicLinkTarget{}, "", err
+	}
+	var relic RelicData
+	var tip RelicSnapshot
+	if head.RelicID == u.relicID {
+		relic, tip = u.relic, u.parent
+	} else {
+		snapshot, read := u.targets[head.RelicID]
+		if !read {
+			if snapshot, err = u.service.Reader.GetRelic(ctx, u.service.Config, head.RelicID); err != nil {
+				return RelicLinkTarget{}, "", err
+			}
+			if u.targets == nil {
+				u.targets = map[string]RelicSnapshot{}
+			}
+			u.targets[head.RelicID] = snapshot
+		}
+		relic, tip = snapshot.Record.State.Relic, snapshot
+	}
+	if relic.Deleted {
+		return RelicLinkTarget{}, "", Errorf(CategoryValidation, "relic %s is deleted; restore it first", head.RelicID)
+	}
+	target := RelicLinkTarget{Relic: head.RelicID}
+	if hasPart {
+		part, err := resolvePartPrefix(head.RelicID, relic.Parts, partPrefix)
+		if err != nil {
+			return RelicLinkTarget{}, "", err
+		}
+		if part.Removed {
+			return RelicLinkTarget{}, "", Errorf(CategoryValidation,
+				"part %s of relic %s is removed; restore it first", part.ID, head.RelicID)
+		}
+		target.Part = part.ID
+	}
+	operations := tip.Operation.Operations
+	if len(operations) == 0 {
+		return RelicLinkTarget{}, "", corrupt("relic %s has a tip that records no operation", head.RelicID)
+	}
+	return target, operations[len(operations)-1].ID, nil
 }
 
 // removeLink records a link.remove of the one live link whose ID is the one
@@ -122,44 +229,139 @@ func (u *relicUpdate) removeLink(edit RelicEdit) error {
 // relicDocumentLinks returns the links a document lists of the given parts:
 // on a whole-relic view (whole true) the links of the relic itself and of the
 // parts listed, and on a one-part view only that part's. With targets, each
-// link to a task that is deleted or not there is marked, from one task
-// listing made only when there is a link to mark. A task listing that fails
-// leaves the links unmarked, with a warning that says why: a relic read does
-// not fail because the tasks beside it cannot be read. Only the caller's
-// cancellation is returned.
+// link is marked with the state of what it points at: a task from one task
+// listing, made only when there is a link to a task, and a relic or part from
+// one relic listing and one read of each relic linked to, made only when
+// there is a link to a relic. A listing that fails leaves its links unmarked,
+// with a warning that says why: a relic read does not fail because the
+// records beside it cannot be read. Only the caller's cancellation is
+// returned.
 func (s RelicService) relicDocumentLinks(ctx context.Context, relicID string, links RelicLinksDocument, parts []RelicPart, whole, targets bool) ([]RelicDocumentLink, []Warning, error) {
 	listed := make(map[string]struct{}, len(parts))
 	for _, part := range parts {
 		listed[part.ID] = struct{}{}
 	}
 	presented := make([]RelicDocumentLink, 0, len(links.Links))
+	toTasks, toRelics := false, false
 	for _, link := range links.Links {
 		_, fromListed := listed[link.From]
 		if fromListed || (whole && link.From == "") {
 			presented = append(presented, RelicDocumentLink{RelicLink: link})
+			toTasks = toTasks || link.To.Task != ""
+			toRelics = toRelics || link.To.Relic != ""
 		}
 	}
 	if !targets || len(presented) == 0 {
 		return presented, nil, nil
 	}
+	var warnings []Warning
+	if toTasks {
+		warning, err := s.markTaskLinkTargets(ctx, relicID, presented)
+		if err != nil {
+			return nil, nil, err
+		}
+		warnings = append(warnings, warning...)
+	}
+	if toRelics {
+		warning, err := s.markRelicLinkTargets(ctx, relicID, presented)
+		if err != nil {
+			return nil, nil, err
+		}
+		warnings = append(warnings, warning...)
+	}
+	return presented, warnings, nil
+}
+
+// markTaskLinkTargets marks each link to a task that is deleted or not there.
+func (s RelicService) markTaskLinkTargets(ctx context.Context, relicID string, presented []RelicDocumentLink) ([]Warning, error) {
 	if s.Tasks == nil {
-		return nil, nil, errNoTaskReader()
+		return nil, errNoTaskReader()
 	}
 	tasks, err := s.Tasks.List(ctx, s.Config)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, nil, ctx.Err()
+			return nil, ctx.Err()
 		}
-		return presented, []Warning{relicLinkTargetsUnreadWarning(relicID, err)}, nil
+		return []Warning{relicLinkTargetsUnreadWarning(relicID, err)}, nil
 	}
-	live := make(map[string]bool, len(tasks))
+	deleted := make(map[string]bool, len(tasks))
 	for _, task := range tasks {
-		live[task.State.TaskID] = !task.State.Task.Deleted
+		deleted[task.State.TaskID] = task.State.Task.Deleted
 	}
 	for index := range presented {
-		presented[index].TargetRemoved = !live[presented[index].To.Task]
+		taskID := presented[index].To.Task
+		if taskID == "" {
+			continue
+		}
+		switch isDeleted, present := deleted[taskID]; {
+		case !present:
+			presented[index].markTarget(RelicLinkTargetMissing)
+		case isDeleted:
+			presented[index].markTarget(RelicLinkTargetDeleted)
+		}
 	}
-	return presented, nil, nil
+	return nil, nil
+}
+
+// markRelicLinkTargets marks each link to a relic or part that is deleted,
+// removed, retired or not in this clone. A relic linked to that cannot be
+// read is marked missing, with one warning naming it.
+func (s RelicService) markRelicLinkTargets(ctx context.Context, relicID string, presented []RelicDocumentLink) ([]Warning, error) {
+	heads, err := s.Reader.ListRelicHeads(ctx, s.Config)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return []Warning{relicLinkTargetsUnreadWarning(relicID, err)}, nil
+	}
+	present := make(map[string]bool, len(heads))
+	for _, head := range heads {
+		present[head.RelicID] = true
+	}
+	var warnings []Warning
+	read := map[string]*RelicData{}
+	for index := range presented {
+		target := presented[index].To
+		if target.Relic == "" {
+			continue
+		}
+		relic, done := read[target.Relic]
+		if !done && present[target.Relic] {
+			snapshot, err := s.Reader.GetRelic(ctx, s.Config, target.Relic)
+			switch {
+			case err == nil:
+				relic = &snapshot.Record.State.Relic
+			case ctx.Err() != nil:
+				return nil, ctx.Err()
+			default:
+				warnings = append(warnings, RelicLinksUnreadWarning(target.Relic))
+			}
+			read[target.Relic] = relic
+		}
+		if relic == nil {
+			presented[index].markTarget(RelicLinkTargetMissing)
+			continue
+		}
+		if relic.Deleted {
+			presented[index].markTarget(RelicLinkTargetDeleted)
+			continue
+		}
+		if target.Part != "" {
+			part, ok := relic.Part(target.Part)
+			if !ok {
+				presented[index].markTarget(RelicLinkTargetMissing)
+				continue
+			}
+			if part.Removed {
+				presented[index].markTarget(RelicLinkTargetRemoved)
+				continue
+			}
+		}
+		if relic.Retired {
+			presented[index].markTarget(RelicLinkTargetRetired)
+		}
+	}
+	return warnings, nil
 }
 
 // relicLinkTargetsUnreadWarning is the warning a relic read gives when the

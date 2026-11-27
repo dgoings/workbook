@@ -337,10 +337,10 @@ func (b *relicFixtureBuilder) linkAndMove(ctx context.Context) error {
 		for link := range edits {
 			edit := core.RelicEdit{Kind: core.RelicEditAddLink, From: b.fixtureParts[index][link]}
 			if link == 0 {
-				edit.Task, edit.Rel = b.fixture.HotTask, relicHotRelation
+				edit.Target, edit.Rel = b.fixture.HotTask, relicHotRelation
 				b.fixture.HotTaskLinks++
 			} else {
-				edit.Task, edit.Rel = others[spread%len(others)], relicSpreadRelation
+				edit.Target, edit.Rel = others[spread%len(others)], relicSpreadRelation
 				if spread%len(others) == 0 {
 					b.fixture.TypicalTaskLinks++
 				}

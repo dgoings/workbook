@@ -51,9 +51,10 @@ type RelicEdit struct {
 	Base          string           // edit-part with a body
 	BodyFile      string           // edit-part with a body and no format asked for
 	Before, After string           // add-part, move-part: anchor part ID or prefix
-	Task          string           // add-link: task ID or prefix
+	Target        string           // add-link: a task, <relic> or <relic>#<part>, each an ID or prefix
 	From          string           // add-link: part ID or prefix, or empty for the whole relic
 	Rel           string           // add-link
+	Pointer       json.RawMessage  // add-link: a JSON object, or nil for none
 	Link          string           // remove-link: link ID or prefix
 }
 
@@ -391,6 +392,10 @@ type relicUpdate struct {
 	// changed lists the parts an edit added or edited, in the order first
 	// changed.
 	changed []string
+	// heads and targets are what add-link edits read of other relics: the
+	// relic heads, listed once, and each relic linked to, read once.
+	heads   []RelicHead
+	targets map[string]RelicSnapshot
 }
 
 func (u *relicUpdate) apply(ctx context.Context, edit RelicEdit) error {

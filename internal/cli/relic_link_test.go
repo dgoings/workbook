@@ -56,7 +56,7 @@ func TestRelicUpdateLinkAndUnlinkJSON(t *testing.T) {
 	if message := relicErrorMessage(t, repository, 4, core.CategoryNotFound, "update", relicID, "--unlink", link.ID[:len(link.ID)-2]); !strings.Contains(message, "has no link") {
 		t.Fatalf("--unlink of a removed link's prefix message = %q", message)
 	}
-	if message := relicErrorMessage(t, repository, 5, core.CategoryValidation, "update", relicID, "--link", relicID, "--rel", "relates-to"); !strings.Contains(message, "a relic links only to tasks so far") {
+	if message := relicErrorMessage(t, repository, 5, core.CategoryValidation, "update", relicID, "--link", relicID, "--rel", "relates-to"); !strings.Contains(message, "a link cannot point at what it starts from") {
 		t.Fatalf("--link <relic> message = %q", message)
 	}
 	assertRelicHistoriesValid(t, repository, 1)
@@ -103,9 +103,9 @@ func TestRelicUpdateLinkInvocationErrors(t *testing.T) {
 		t.Fatalf("parseRelicUpdateArgs: %v", err)
 	}
 	want := []core.RelicEdit{
-		{Kind: core.RelicEditAddLink, Task: "WB-01", From: "P", Rel: "implemented-by"},
+		{Kind: core.RelicEditAddLink, Target: "WB-01", From: "P", Rel: "implemented-by"},
 		{Kind: core.RelicEditRemoveLink, Link: "L"},
-		{Kind: core.RelicEditAddLink, Task: "WB-02", Rel: "relates-to"},
+		{Kind: core.RelicEditAddLink, Target: "WB-02", Rel: "relates-to"},
 	}
 	if got := mustJSON(t, request.Edits); got != mustJSON(t, want) {
 		t.Fatalf("edits = %s, want %s", got, mustJSON(t, want))
@@ -354,5 +354,123 @@ func TestRelicShowOfALinkedRelicWarnsWhenTheTasksCannotBeRead(t *testing.T) {
 	export, stderr := exported()
 	if export != healthyExport || stderr != "" {
 		t.Fatalf("relic export with the tasks unread = (%q, %q), want (%q, \"\")", export, stderr, healthyExport)
+	}
+}
+
+func TestRelicUpdateRelicLinkJSON(t *testing.T) {
+	t.Parallel()
+	repository, _, y, from := linkedRelicRepository(t)
+	x := mustCreateRelic(t, repository, "Transcript", "--type", "transcript", "--no-sync").Relic.ID
+	turn := addRelicParts(t, repository, x, "turn")[0]
+	xHead := relicHeadOf(t, repository, x)
+	updated := mustUpdateRelic(t, repository, y, "--link", x+"#"+strings.ToLower(turn[:len(turn)-2]),
+		"--from", from[:len(from)-4], "--rel", "decided-in", "--pointer", `{"quote": "<q>", "at":"00:14:32"}`)
+	if !updated.Changed {
+		t.Fatalf("relic update --link <relic>#<part> = %+v, want a change", updated)
+	}
+	if relicHeadOf(t, repository, x) != xHead {
+		t.Fatal("linking to X moved X's ref")
+	}
+	shown := shownRelic(t, repository, y)
+	if len(shown.Links) != 1 {
+		t.Fatalf("relic show links = %+v", shown.Links)
+	}
+	link := shown.Links[0]
+	seen := relicHistoryOf(t, repository, x, "--limit", "1").Changes[0].Operations
+	if link.From != from || link.To != (core.RelicLinkTarget{Relic: x, Part: turn}) || link.Rel != "decided-in" ||
+		link.Seen != seen[len(seen)-1].ID || string(link.Pointer) != `{"at":"00:14:32","quote":"\u003cq\u003e"}` ||
+		link.TargetRemoved || link.TargetState != "" {
+		t.Fatalf("relic show link = %+v", link)
+	}
+	if message := relicErrorMessage(t, repository, 5, core.CategoryValidation, "update", y, "--link", x, "--rel", "r",
+		"--pointer", `[1]`); !strings.Contains(message, "a link pointer must be a JSON object") {
+		t.Fatalf("--pointer [1] message = %q", message)
+	}
+}
+
+func TestRelicUpdatePointerInvocationErrors(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"--pointer before any --link", []string{"WB-R-X", "--pointer", "{}", "--link", "T", "--rel", "r"}, []string{"--pointer", "--link"}},
+		{"--pointer twice", []string{"WB-R-X", "--link", "T", "--rel", "r", "--pointer", "{}", "--pointer", "{}"}, []string{"--pointer once"}},
+		{"--pointer with --unlink", []string{"WB-R-X", "--unlink", "L", "--pointer", "{}"}, []string{"--pointer", "--unlink"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			readFile, reads := relicBodyFiles(nil)
+			_, err := parseRelicUpdateArgs(test.args, readFile)
+			if core.CategoryOf(err) != core.CategoryInvocation {
+				t.Fatalf("parseRelicUpdateArgs(%q) error = %v, want an invocation error", test.args, err)
+			}
+			for _, want := range test.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("parseRelicUpdateArgs(%q) error = %q, want it to hold %q", test.args, err, want)
+				}
+			}
+			if *reads != 0 {
+				t.Errorf("parseRelicUpdateArgs(%q) read %d files", test.args, *reads)
+			}
+		})
+	}
+	request, err := parseRelicUpdateArgs([]string{"WB-R-X", "--link", "WB-R-Y#P", "--rel", "r", "--pointer", `{"b":1,"a":2}`}, nil)
+	if err != nil {
+		t.Fatalf("parseRelicUpdateArgs: %v", err)
+	}
+	want := []core.RelicEdit{{Kind: core.RelicEditAddLink, Target: "WB-R-Y#P", Rel: "r", Pointer: json.RawMessage(`{"a":2,"b":1}`)}}
+	if got := mustJSON(t, request.Edits); got != mustJSON(t, want) {
+		t.Fatalf("edits = %s, want %s", got, mustJSON(t, want))
+	}
+
+	repository, _, relicID, _ := linkedRelicRepository(t)
+	head := relicHeadOf(t, repository, relicID)
+	for _, args := range [][]string{
+		{"update", relicID, "--pointer", "{}", "--link", relicID, "--rel", "r"},
+		{"update", relicID, "--link", relicID, "--rel", "r", "--pointer", "{}", "--pointer", "{}"},
+		{"update", relicID, "--unlink", "L", "--pointer", "{}"},
+	} {
+		relicErrorMessage(t, repository, 2, core.CategoryInvocation, args...)
+	}
+	if after := relicHeadOf(t, repository, relicID); after != head {
+		t.Fatalf("a refused update moved the relic from %s to %s", head, after)
+	}
+}
+
+func TestRelicShowTextListsRelicLinks(t *testing.T) {
+	t.Parallel()
+	repository, _, y, from := linkedRelicRepository(t)
+	x := mustCreateRelic(t, repository, "Transcript", "--type", "transcript", "--no-sync").Relic.ID
+	turn := addRelicParts(t, repository, x, "turn")[0]
+	gone := mustCreateRelic(t, repository, "Elsewhere", "--type", "note", "--no-sync").Relic.ID
+	mustUpdateRelic(t, repository, y, "--link", x+"#"+turn, "--from", from, "--rel", "decided-in", "--pointer", `{"at":"00:14:32"}`,
+		"--link", gone, "--rel", "relates-to")
+	byTarget := map[string]string{}
+	for _, link := range shownRelic(t, repository, y).Links {
+		byTarget[link.To.Address()] = link.ID
+	}
+	// This clone loses the second target, as a clone that never fetched it.
+	gitOutput(t, repository, "update-ref", "-d", relicRef(gone))
+
+	code, stdout, stderr := run(t, repository, "relic", "show", y)
+	if code != 0 || stderr != "" {
+		t.Fatalf("relic show = (%d, %q, %q)", code, stdout, stderr)
+	}
+	lines := map[string]string{
+		x + "#" + turn: "\t" + byTarget[x+"#"+turn] + "\t" + from + "\tdecided-in\t" + x + "#" + turn + "\t" + `{"at":"00:14:32"}` + "\n",
+		gone:           "\t" + byTarget[gone] + "\trelic\trelates-to\t" + gone + " (not in this clone)\n",
+	}
+	for _, line := range lines {
+		if !strings.Contains(stdout, line) {
+			t.Fatalf("relic show text = %q, want it to hold %q", stdout, line)
+		}
+	}
+	shown := shownRelic(t, repository, y)
+	for _, link := range shown.Links {
+		if link.To.Relic == gone && (link.TargetState != core.RelicLinkTargetMissing || !link.TargetRemoved) {
+			t.Fatalf("the link to a relic not in this clone = %+v", link)
+		}
 	}
 }

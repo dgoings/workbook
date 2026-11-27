@@ -666,3 +666,26 @@ func (n relicNumber) compare(other relicNumber) int {
 	}
 	return magnitude * n.sign
 }
+
+// CheckLinkPointer judges one link's pointer against the schema's
+// links.pointer rule, and accepts any pointer when there is no rule. A fault
+// inside the pointer is named by its JSON pointer.
+func (s *RelicSchema) CheckLinkPointer(pointer json.RawMessage) *RelicSchemaProblem {
+	if s.pointer == nil {
+		return nil
+	}
+	const where = "link pointer"
+	decoded, ok := decodeSchemaInstance(pointer)
+	if !ok {
+		return &RelicSchemaProblem{Where: where, Message: "the value is not valid JSON"}
+	}
+	fault := checkValue(s.pointer, decoded, "member", nil)
+	if fault == nil {
+		return nil
+	}
+	message := fault.message
+	if len(fault.pointer) > 0 {
+		message = "at " + schemaPointerText(fault.pointer) + ": " + message
+	}
+	return &RelicSchemaProblem{Where: where, Keyword: fault.keyword, Message: message}
+}

@@ -367,3 +367,21 @@ func TestSchemaEnumAndConstCompareNumbersByValue(t *testing.T) {
 		t.Errorf("const message = %s", got)
 	}
 }
+
+func TestCheckLinkPointerWhere(t *testing.T) {
+	schema := mustCompileSchema(t, "transcript", `{"links":{"pointer":{"type":"object","properties":{"at":{"type":"string"}}}}}`)
+	if problem := schema.CheckLinkPointer(json.RawMessage(`{"at":"1"}`)); problem != nil {
+		t.Fatalf("a fitting pointer: %v", problem)
+	}
+	problem := schema.CheckLinkPointer(json.RawMessage(`{"at":1}`))
+	if problem == nil || problem.Where != "link pointer" || !strings.HasPrefix(problem.Message, "at /at: ") || problem.Keyword != "type" {
+		t.Fatalf("a nested fault = %#v", problem)
+	}
+	if !strings.HasPrefix(problem.String(), "link pointer: at /at: ") {
+		t.Fatalf("String() = %q", problem.String())
+	}
+	open := mustCompileSchema(t, "plan", `{}`)
+	if problem := open.CheckLinkPointer(json.RawMessage(`[1]`)); problem != nil {
+		t.Fatalf("a schema with no pointer rule judged %v", problem)
+	}
+}

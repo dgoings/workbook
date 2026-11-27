@@ -407,3 +407,30 @@ func TestRelicDiffShowsATypeChange(t *testing.T) {
 		t.Fatalf("diff text = (%d, %q, %q), want a Type line", code, stdout, stderr)
 	}
 }
+
+func TestRelicDiffTextShowsRelicLinkTargets(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	x := mustCreateRelic(t, repository, "Transcript", "--type", "transcript").Relic.ID
+	turn := addRelicParts(t, repository, x, "turn")[0]
+	y := mustCreateRelic(t, repository, "Decisions", "--type", "decisions").Relic.ID
+	start := relicHistoryOf(t, repository, y, "--limit", "1").Changes[0].Operations[0].ID
+	mustRelic(t, repository, nil, "update", y, "--link", x+"#"+turn, "--rel", "decided-in", "--pointer", `{"at":"1"}`,
+		"--link", x, "--rel", "relates-to")
+	links := map[string]string{}
+	for _, link := range shownRelic(t, repository, y).Links {
+		links[link.To.Address()] = link.ID
+	}
+	code, stdout, stderr := run(t, repository, "relic", "diff", y, start)
+	if code != 0 || stderr != "" {
+		t.Fatalf("diff = (%d, %q, %q)", code, stdout, stderr)
+	}
+	for _, line := range []string{
+		"\t+" + links[x+"#"+turn] + "\trelic\tdecided-in\t" + x + "#" + turn + "\t" + `{"at":"1"}` + "\n",
+		"\t+" + links[x] + "\trelic\trelates-to\t" + x + "\n",
+	} {
+		if !strings.Contains(stdout, line) {
+			t.Fatalf("diff text = %q, want it to hold %q", stdout, line)
+		}
+	}
+}
