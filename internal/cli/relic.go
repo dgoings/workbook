@@ -196,6 +196,7 @@ func runRelicList(ctx context.Context, args []string, cwd string, stdout, stderr
 	relicType := flags.String("type", "", "show only relics of this type")
 	all := flags.Bool("all", false, "include deleted relics, each marked deleted")
 	linkedTo := flags.String("linked-to", "", "show only relics that link to this task")
+	behind := flags.Bool("behind", false, "show only relics behind their type's newest schema version")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -205,7 +206,7 @@ func runRelicList(ctx context.Context, args []string, cwd string, stdout, stderr
 		return err
 	}
 	defer release()
-	filter := core.RelicListFilter{Type: *relicType, IncludeDeleted: *all}
+	filter := core.RelicListFilter{Type: *relicType, IncludeDeleted: *all, Behind: *behind}
 	if flagGiven(flags, "linked-to") {
 		return runRelicListLinkedTo(ctx, service, *linkedTo, filter, *jsonMode, stdout, stderr)
 	}

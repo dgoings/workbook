@@ -41,6 +41,7 @@ import (
 type relicSource interface {
 	core.RelicReader
 	core.RelicHistoryReader
+	core.RelicSchemaStore
 	ReadIndexedRelics(context.Context, core.ProjectConfig, []gitstore.RelicIndexRequest) ([]gitstore.IndexedRelic, []error)
 	ReadRelicOperations(context.Context, core.ProjectConfig, []gitstore.RelicHistoryRequest) ([]gitstore.RelicOperationsResult, error)
 	ReadRelicBodies(context.Context, core.ProjectConfig, []gitstore.RelicBodyRequest) ([][]byte, error)
@@ -66,6 +67,18 @@ func (s repositorySource) ReadRelicParts(
 	bodies bool,
 ) (map[string]core.RelicPartContent, error) {
 	return s.repository.ReadRelicParts(ctx, config, snapshot, partIDs, bodies)
+}
+
+func (s repositorySource) RelicSchemaListing(ctx context.Context, config core.ProjectConfig) (core.RelicSchemaListing, error) {
+	return s.repository.RelicSchemaListing(ctx, config)
+}
+
+func (s repositorySource) ReadRelicSchema(
+	ctx context.Context,
+	config core.ProjectConfig,
+	version core.RelicSchemaVersion,
+) (core.RelicSchemaDocument, *core.RelicSchema, error) {
+	return s.repository.ReadRelicSchema(ctx, config, version)
 }
 
 func (s repositorySource) ReadIndexedRelics(
@@ -95,7 +108,7 @@ func (s repositorySource) ReadRelicBodies(
 // relicSchemaChecks name every column of every relic table, for
 // requiredSchemaExists.
 var relicSchemaChecks = [4]string{
-	`SELECT relic_id, head, project_id, state_version, min_reader, history_generation, compacted_from, logical_clock, title, type, schema, author, retired, deleted, created_at, updated_at, part_count FROM relics LIMIT 0`,
+	`SELECT relic_id, head, project_id, state_version, min_reader, history_generation, compacted_from, logical_clock, title, type, schema, author, retired, deleted, created_at, updated_at, part_count, link_count, conformance, schema_problem FROM relics LIMIT 0`,
 	`SELECT relic_id, name, value FROM relic_properties LIMIT 0`,
 	`SELECT relic_id, part_id, ordinal, type, position, removed, fields_object, fields, body_object, body_format, body_version, body_bytes FROM relic_parts LIMIT 0`,
 	`SELECT relic_id, commit_id, chain_index, pack_index, operation_id, logical_clock, history_generation, min_reader, actor, wall_time, type, part, payload FROM relic_operations LIMIT 0`,
@@ -138,7 +151,7 @@ func (s *Store) RebuildWithRelics(ctx context.Context) (RebuildCounts, error) {
 	// The cache in place may be one another process installed instead, which
 	// can hold no relics yet. A pass brings it to the refs; on this build's own
 	// cache it only lists them.
-	if _, err := s.indexRelics(ctx, s.db); err != nil {
+	if _, err := s.indexRelics(ctx, s.db, true); err != nil {
 		return RebuildCounts{}, err
 	}
 	var relics int
@@ -149,12 +162,21 @@ func (s *Store) RebuildWithRelics(ctx context.Context) (RebuildCounts, error) {
 }
 
 // refreshRelicsActive brings the active cache's relic rows up to the relic
-// refs, with rebuildMu read-held and the cache validated.
+// refs, with rebuildMu read-held and the cache validated, judging each relic
+// it indexes.
 func (s *Store) refreshRelicsActive(ctx context.Context) (relicPass, error) {
+	return s.refreshRelics(ctx, true)
+}
+
+// refreshRelics is refreshRelicsActive, judging only when judging is set. A
+// pass that does not judge reads no schema listing and no schema; it writes
+// a changed relic that names a schema as not yet judged, for the next judging
+// pass to judge.
+func (s *Store) refreshRelics(ctx context.Context, judging bool) (relicPass, error) {
 	if s.relics == nil {
 		return relicPass{}, errNoRelicSource()
 	}
-	return s.indexRelics(ctx, s.db)
+	return s.indexRelics(ctx, s.db, judging)
 }
 
 // cachedRelic is one relic row as a pass first reads it.
@@ -162,6 +184,9 @@ type cachedRelic struct {
 	head                string
 	partCount, partRows int
 	linkCount, linkRows int
+	// schema is the version the row's relic names, empty for none, and
+	// conformance the judgment the row stores, empty when not yet judged.
+	schema, conformance string
 }
 
 // changed reports whether the row cannot answer for head: it names another
@@ -169,6 +194,22 @@ type cachedRelic struct {
 // a damaged cache leaves.
 func (row cachedRelic) changed(head string) bool {
 	return row.head != head || row.partCount != row.partRows || row.linkCount != row.linkRows
+}
+
+// judgedStands reports whether the row's judgment can stand under listing: an
+// open relic always can; a relic naming a version needs a judgment, and one
+// judged unknown exactly when the listing lacks the version. A version, once
+// listed, never changes, so any other judgment against it stands. A row that
+// cannot stand is indexed again, which judges it.
+func (row cachedRelic) judgedStands(listing core.RelicSchemaListing) bool {
+	if row.schema == "" {
+		return true
+	}
+	if row.conformance == "" || row.conformance == core.RelicConformanceOpen {
+		return false
+	}
+	_, known := listing.ByID(row.schema)
+	return known == (row.conformance != core.RelicConformanceUnknownSchema)
 }
 
 // indexRelics runs one relic pass against db, modeled on the task refresh.
@@ -182,7 +223,7 @@ func (row cachedRelic) changed(head string) bool {
 // fromGit for the caller to answer from. A relic Git refuses goes into failed,
 // and any row it had is deleted under the same compare-and-swap, so a verdict
 // is never cached. A row whose ref is gone is deleted.
-func (s *Store) indexRelics(ctx context.Context, db *sql.DB) (relicPass, error) {
+func (s *Store) indexRelics(ctx context.Context, db *sql.DB, judging bool) (relicPass, error) {
 	cached, err := cachedRelicRows(ctx, db)
 	if err != nil {
 		return relicPass{}, err
@@ -191,12 +232,22 @@ func (s *Store) indexRelics(ctx context.Context, db *sql.DB) (relicPass, error) 
 	if err != nil {
 		return relicPass{}, err
 	}
+	judge := &relicJudge{store: s, judging: judging}
 	pass := relicPass{heads: heads}
 	listed := make(map[string]struct{}, len(heads))
 	var changed []core.RelicHead
 	for _, head := range heads {
 		listed[head.RelicID] = struct{}{}
-		if row, found := cached[head.RelicID]; !found || row.changed(head.ObjectID) {
+		row, found := cached[head.RelicID]
+		if !found || row.changed(head.ObjectID) {
+			changed = append(changed, head)
+			continue
+		}
+		stands, err := judge.rowStands(ctx, row)
+		if err != nil {
+			return relicPass{}, err
+		}
+		if !stands {
 			changed = append(changed, head)
 		}
 	}
@@ -244,6 +295,21 @@ func (s *Store) indexRelics(ctx context.Context, db *sql.DB) (relicPass, error) 
 			relic, err := completeIndexedRelic(head, relics[index], previous[head.RelicID].fields)
 			if err != nil {
 				return relicPass{}, err
+			}
+			conformance, err := judge.judge(ctx, relic)
+			if err != nil {
+				switch core.CategoryOf(err) {
+				case "", core.CategoryOperational, core.CategoryStaleWrite:
+					return relicPass{}, err
+				}
+				if pass.failed == nil {
+					pass.failed = map[string]error{}
+				}
+				pass.failed[head.RelicID] = err
+				continue
+			}
+			if conformance.State != "" {
+				relic.Snapshot.Conformance = &conformance
 			}
 			indexed[head.RelicID] = relic
 			verified = append(verified, head)
@@ -340,14 +406,14 @@ func (s *Store) indexRelics(ctx context.Context, db *sql.DB) (relicPass, error) 
 // how many part and link rows each has.
 func cachedRelicRows(ctx context.Context, db *sql.DB) (map[string]cachedRelic, error) {
 	cached := map[string]cachedRelic{}
-	rows, err := db.QueryContext(ctx, `SELECT relic_id, head, part_count, link_count FROM relics`)
+	rows, err := db.QueryContext(ctx, `SELECT relic_id, head, part_count, link_count, schema, conformance FROM relics`)
 	if err != nil {
 		return nil, cacheError("query indexed relic heads", err)
 	}
 	for rows.Next() {
 		var relicID string
 		var row cachedRelic
-		if err := rows.Scan(&relicID, &row.head, &row.partCount, &row.linkCount); err != nil {
+		if err := rows.Scan(&relicID, &row.head, &row.partCount, &row.linkCount, &row.schema, &row.conformance); err != nil {
 			rows.Close()
 			return nil, cacheError("read indexed relic head", err)
 		}
@@ -525,8 +591,9 @@ func prepareRelicWriter(ctx context.Context, transaction *sql.Tx) (*relicWriter,
 		{&writer.selectHead, `SELECT head FROM relics WHERE relic_id = ?`},
 		{&writer.insertRelic, `INSERT INTO relics (
 			relic_id, head, project_id, state_version, min_reader, history_generation, compacted_from,
-			logical_clock, title, type, schema, author, retired, deleted, created_at, updated_at, part_count, link_count
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`},
+			logical_clock, title, type, schema, author, retired, deleted, created_at, updated_at, part_count, link_count,
+			conformance, schema_problem
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`},
 		{&writer.insertLink, `INSERT INTO relic_links (
 			relic_id, link_id, from_part, to_kind, to_id, to_part, rel
 		) VALUES (?, ?, ?, 'task', ?, '', ?)`},
@@ -608,14 +675,15 @@ func (w *relicWriter) writeRelic(ctx context.Context, relic gitstore.IndexedReli
 	if state.History.CompactedFrom != nil {
 		compactedFrom = sql.NullString{String: *state.History.CompactedFrom, Valid: true}
 	}
-	schema := data.Schema
-	if schema == "" {
-		schema = "null"
+	var conformance core.RelicConformance
+	if relic.Snapshot.Conformance != nil {
+		conformance = *relic.Snapshot.Conformance
 	}
 	if _, err := w.insertRelic.ExecContext(ctx,
 		relicID, relic.Snapshot.Head, state.ProjectID, state.Version, state.MinReader, state.History.Generation, compactedFrom,
-		int64(state.LogicalClock), data.Title, data.Type, schema, data.Author, sqlBool(data.Retired), sqlBool(data.Deleted),
+		int64(state.LogicalClock), data.Title, data.Type, data.Schema, data.Author, sqlBool(data.Retired), sqlBool(data.Deleted),
 		formatTime(data.CreatedAt), formatTime(data.UpdatedAt), len(data.Parts), len(relic.Snapshot.Record.Links.Links),
+		conformance.State, conformance.Problem,
 	); err != nil {
 		return cacheError("index relic", err)
 	}
@@ -764,14 +832,27 @@ const relicStateFormat = "workbook.relic-state"
 // missing cache needs, or when SQLite refuses the cache, the reader answers
 // every call from the repository, as a read without an index does. Only a
 // cancelled read is refused with its context's error.
+//
+// Its pass judges each relic it indexes against the schema version the relic
+// names, so its snapshots carry that judgment. RelicReaderForTasks is the
+// reader for a task command, whose pass judges nothing.
 func (s *Store) RelicReader() RelicIndex {
+	return &relicIndexReader{store: s, judging: true}
+}
+
+// RelicReaderForTasks is RelicReader for a task command, such as workbook show
+// listing the relics that link to a task: its pass reads no schema listing and
+// no schema, and judges no relic. A relic it indexes that names a schema is
+// stored as not yet judged, and the next relic read judges it.
+func (s *Store) RelicReaderForTasks() RelicIndex {
 	return &relicIndexReader{store: s}
 }
 
 type relicIndexReader struct {
-	store *Store
-	mu    sync.Mutex
-	pass  *relicPass
+	store   *Store
+	judging bool
+	mu      sync.Mutex
+	pass    *relicPass
 	// gitOnly is set when the pass failed: every call then answers from the
 	// repository.
 	gitOnly bool
@@ -797,7 +878,7 @@ func (r *relicIndexReader) refreshed(ctx context.Context, config core.ProjectCon
 	var pass relicPass
 	if err := r.store.withActiveDatabase(ctx, func(ctx context.Context) error {
 		var err error
-		pass, err = r.store.refreshRelicsActive(ctx)
+		pass, err = r.store.refreshRelics(ctx, r.judging)
 		return err
 	}); err != nil {
 		if !indexUnusable(ctx) {
@@ -1053,7 +1134,7 @@ func (s *Store) queryIndexedRelics(ctx context.Context, relicID string) (map[str
 	partCounts, linkCounts := map[string]int{}, map[string]int{}
 	rows, err := transaction.QueryContext(ctx, `SELECT relic_id, head, project_id, state_version, min_reader,
 		history_generation, compacted_from, logical_clock, title, type, schema, author, retired, deleted,
-		created_at, updated_at, part_count, link_count FROM relics`+where, args...)
+		created_at, updated_at, part_count, link_count, conformance, schema_problem FROM relics`+where, args...)
 	if err != nil {
 		return nil, s.databaseError("query indexed relics", err)
 	}
@@ -1145,6 +1226,7 @@ func (s *Store) queryIndexedRelics(ctx context.Context, relicID string) (map[str
 
 func scanIndexedRelic(scanner rowScanner) (core.RelicSnapshot, int, int, error) {
 	var head, schema, createdAt, updatedAt string
+	var conformance core.RelicConformance
 	var state core.RelicStateDocument
 	var compactedFrom sql.NullString
 	var clock int64
@@ -1152,7 +1234,7 @@ func scanIndexedRelic(scanner rowScanner) (core.RelicSnapshot, int, int, error) 
 	relic := &state.Relic
 	if err := scanner.Scan(&state.RelicID, &head, &state.ProjectID, &state.Version, &state.MinReader,
 		&state.History.Generation, &compactedFrom, &clock, &relic.Title, &relic.Type, &schema, &relic.Author,
-		&retired, &deleted, &createdAt, &updatedAt, &partCount, &linkCount); err != nil {
+		&retired, &deleted, &createdAt, &updatedAt, &partCount, &linkCount, &conformance.State, &conformance.Problem); err != nil {
 		return core.RelicSnapshot{}, 0, 0, cacheError("read indexed relic", err)
 	}
 	if clock < 0 {
@@ -1172,20 +1254,22 @@ func scanIndexedRelic(scanner rowScanner) (core.RelicSnapshot, int, int, error) 
 		from := compactedFrom.String
 		state.History.CompactedFrom = &from
 	}
-	if schema != "null" {
-		relic.Schema = schema
-	}
+	relic.Schema = schema
 	relic.Retired, relic.Deleted = retired != 0, deleted != 0
 	relic.CreatedAt, relic.UpdatedAt = created, updated
 	relic.Properties = map[string]json.RawMessage{}
 	relic.Parts = make([]core.RelicPart, 0, partCount)
-	return core.RelicSnapshot{
+	snapshot := core.RelicSnapshot{
 		Head: head,
 		Operation: core.RelicOperationPack{
 			ProjectID: state.ProjectID, RelicID: state.RelicID, HistoryGeneration: state.History.Generation,
 		},
 		Record: core.RelicRecord{State: state, Links: core.EmptyRelicLinks()},
-	}, partCount, linkCount, nil
+	}
+	if conformance.State != "" {
+		snapshot.Conformance = &conformance
+	}
+	return snapshot, partCount, linkCount, nil
 }
 
 // indexedPartContent is what the index holds of one part's content: its

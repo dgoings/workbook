@@ -895,14 +895,17 @@ var commandSchemas = map[string]commandMetadata{
 			},
 			"list": {
 				Name:     "list",
-				Synopsis: "workbook relic list [--type <type>] [--all] [--linked-to <task>] [--json]",
+				Synopsis: "workbook relic list [--type <type>] [--all] [--linked-to <task>] [--behind] [--json]",
 				Description: "List relics in ID order, which is the order they were created in under one\n" +
 					"project key. Deleted relics are left out unless --all is given.\n\n" +
-					"--linked-to lists only the relics that link to a task, each with its links to it.",
+					"--linked-to lists only the relics that link to a task, each with its links to it.\n\n" +
+					"--behind lists only the relics behind their type's newest schema version: those\n" +
+					"naming an older version, or none, of a type that has one.",
 				Options: []optionMetadata{
 					{Name: "type", Kind: stringFlag, Value: "<type>", Description: "show only relics of this type"},
 					{Name: "all", Kind: boolFlag, Description: "include deleted relics, each marked deleted"},
 					{Name: "linked-to", Kind: stringFlag, Value: "<task>", Description: "show only relics that link to this task"},
+					{Name: "behind", Kind: boolFlag, Description: "show only relics behind their type's newest schema version"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},

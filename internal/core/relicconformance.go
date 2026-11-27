@@ -254,6 +254,48 @@ func (s RelicService) judgeSnapshot(ctx context.Context, snapshot RelicSnapshot,
 	return JudgeRelic(relic, fields, listing, s.loadSchema(ctx))
 }
 
+// listedConformance is how a listed relic stands: the judgment the index
+// stored with the snapshot when it agrees with this listing on whether the
+// version is known, and otherwise judged from Git, so a list from the index
+// and one from Git answer the same.
+func (s RelicService) listedConformance(ctx context.Context, snapshot RelicSnapshot, listing RelicSchemaListing) (RelicConformance, error) {
+	if stored := snapshot.Conformance; stored != nil && conformanceAgrees(*stored, snapshot.Record.State.Relic.Schema, listing) {
+		return *stored, nil
+	}
+	return s.judgeSnapshot(ctx, snapshot, listing, nil)
+}
+
+// conformanceAgrees reports whether a stored judgment can stand under the
+// listing: an open relic is open, and a relic naming a version is judged
+// unknown exactly when the listing lacks the version. A version, once
+// listed, never changes, so a judgment against it stands.
+func conformanceAgrees(stored RelicConformance, schema string, listing RelicSchemaListing) bool {
+	if schema == "" {
+		return stored.State == RelicConformanceOpen
+	}
+	if stored.State == RelicConformanceOpen || stored.State == "" {
+		return false
+	}
+	_, known := listing.ByID(schema)
+	return known == (stored.State != RelicConformanceUnknownSchema)
+}
+
+// RelicBehind reports whether a relic is behind its type's newest schema
+// version: the type has one, and the relic names an older version of it or
+// none. A relic of a type with no schema, or naming a version the listing
+// lacks, is not behind.
+func RelicBehind(relic RelicData, listing RelicSchemaListing) bool {
+	newest, has := listing.Newest(relic.Type)
+	if !has {
+		return false
+	}
+	if relic.Schema == "" {
+		return true
+	}
+	named, known := listing.ByID(relic.Schema)
+	return known && named.Type == relic.Type && named.Version < newest.Version
+}
+
 // judgedAs is the conformance a save that has just checked the whole relic
 // reports: conforms under a schema, open under none.
 func judgedAs(checked bool) *RelicConformance {

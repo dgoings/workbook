@@ -103,6 +103,9 @@ type Store struct {
 	// transaction begins. It is a test seam for another writer moving a row in
 	// that window, and nil otherwise.
 	beforeRelicWrite func()
+	// relicSchemas holds the schema versions relic passes compiled, by blob
+	// ID, so each is read from Git once per Store. See relicconformance.go.
+	relicSchemas relicSchemaCache
 }
 
 var _ core.TaskReader = (*Store)(nil)
@@ -1772,7 +1775,7 @@ func (s *Store) buildTemporaryDatabase(ctx context.Context, heads []gitstore.Tas
 		return "", err
 	}
 	if withRelics {
-		if _, err := s.indexRelics(ctx, db); err != nil {
+		if _, err := s.indexRelics(ctx, db, true); err != nil {
 			_ = os.Remove(temporaryPath)
 			return "", err
 		}

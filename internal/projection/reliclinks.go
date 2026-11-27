@@ -138,7 +138,7 @@ func (s *Store) queryRelicLinksTo(ctx context.Context, target core.RelicLinkTarg
 		return nil, nil
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT l.relic_id, l.link_id, l.from_part, l.rel,
-		r.head, r.title, r.type, r.author, r.retired, r.deleted, r.created_at, r.updated_at,
+		r.head, r.title, r.type, r.schema, r.author, r.retired, r.deleted, r.created_at, r.updated_at,
 		(SELECT COUNT(*) FROM relic_parts live WHERE live.relic_id = l.relic_id AND live.removed = 0),
 		p.type, p.removed, p.ordinal
 		FROM relic_links l
@@ -153,13 +153,13 @@ func (s *Store) queryRelicLinksTo(ctx context.Context, target core.RelicLinkTarg
 	var sources []core.RelicLinkSource
 	for rows.Next() {
 		var source core.RelicLinkSource
-		var createdAt, updatedAt string
+		var createdAt, updatedAt, schema string
 		var retired, deleted int
 		var partType sql.NullString
 		var partRemoved, partOrdinal sql.NullInt64
 		summary := &source.Relic
 		if err := rows.Scan(&summary.ID, &source.Link.ID, &source.Link.From, &source.Link.Rel,
-			&summary.Head, &summary.Title, &summary.Type, &summary.Author, &retired, &deleted, &createdAt, &updatedAt,
+			&summary.Head, &summary.Title, &summary.Type, &schema, &summary.Author, &retired, &deleted, &createdAt, &updatedAt,
 			&summary.Parts, &partType, &partRemoved, &partOrdinal); err != nil {
 			return nil, s.databaseError("read relic link to a task", err)
 		}
@@ -170,6 +170,9 @@ func (s *Store) queryRelicLinksTo(ctx context.Context, target core.RelicLinkTarg
 			return nil, core.Wrap(core.CategoryCorruptData, "indexed relic "+summary.ID+" has an invalid update time", err)
 		}
 		summary.Retired, summary.Deleted = retired != 0, deleted != 0
+		if schema != "" {
+			summary.Schema = &core.RelicSchemaRef{Type: summary.Type, ID: schema}
+		}
 		source.Link.To = target
 		source.PartOrdinal = -1
 		if source.Link.From != "" {

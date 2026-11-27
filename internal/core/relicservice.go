@@ -59,6 +59,9 @@ type RelicSummary struct {
 	Type   string          `json:"type"`
 	Schema *RelicSchemaRef `json:"schema"`
 	*RelicConformance
+	// Behind is set only by list: the relic's type has a schema version newer
+	// than the one the relic names, or the relic names none.
+	Behind    bool      `json:"behind,omitempty"`
 	Author    string    `json:"author"`
 	Retired   bool      `json:"retired"`
 	Deleted   bool      `json:"deleted"`
@@ -104,9 +107,11 @@ type RelicCreateInput struct {
 }
 
 // RelicListFilter narrows relic list. An empty Type matches every type.
+// Behind keeps only the relics behind their type's newest schema version.
 type RelicListFilter struct {
 	Type           string
 	IncludeDeleted bool
+	Behind         bool
 }
 
 // RelicShowOptions says what relic show reads besides fields: bodies, and
@@ -474,7 +479,8 @@ func (s RelicService) Create(ctx context.Context, input RelicCreateInput) (Relic
 
 // List returns relic summaries in relic ID order, which is creation order. It
 // reads each relic's tip without checking it against its parent, and judges
-// each listed relic against the version it names.
+// each listed relic against the version it names: from the local index when
+// the snapshot carries its judgment, and otherwise from Git.
 func (s RelicService) List(ctx context.Context, filter RelicListFilter) ([]RelicSummary, error) {
 	heads, err := s.Reader.ListRelicHeads(ctx, s.Config)
 	if err != nil {
@@ -497,8 +503,13 @@ func (s RelicService) List(ctx context.Context, filter RelicListFilter) ([]Relic
 		if filter.Type != "" && relic.Type != filter.Type {
 			continue
 		}
+		behind := RelicBehind(relic, listing)
+		if filter.Behind && !behind {
+			continue
+		}
 		summary := relicSummaryUnder(snapshot, listing)
-		conformance, err := s.judgeSnapshot(ctx, snapshot, listing, nil)
+		summary.Behind = behind
+		conformance, err := s.listedConformance(ctx, snapshot, listing)
 		if err != nil {
 			return nil, err
 		}

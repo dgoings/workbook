@@ -62,7 +62,8 @@ func taskRelicLinks(ctx context.Context, service core.Service, taskID string) ([
 			Message: "relics cannot be read, so their links are not listed: the task was not read from the local index",
 		}}, nil
 	}
-	index := store.RelicReader()
+	// A task command judges no relic and reads no schema.
+	index := store.RelicReaderForTasks()
 	relics := core.RelicService{Config: service.Config, Keys: service.Keys, Reader: index, Links: index}
 	summaries, warnings, err := relics.LinkedToTask(ctx, taskID, core.RelicListFilter{})
 	if err != nil {

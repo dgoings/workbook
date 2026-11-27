@@ -697,6 +697,10 @@ func TestRelicIndexContentsDoNotDependOnReadOrder(t *testing.T) {
 			runRelicPass(t, stepwise)
 		}
 
+		// Relics under schemas, one in each conformance state.
+		conformanceFixture(t, repository, config)
+		runRelicPass(t, stepwise)
+
 		reversed := openRelicStore(t, orderedRelicSource{repositorySource{repository: repository}}, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 		runRelicPass(t, reversed)
 		forward := openRelicStore(t, repositorySource{repository: repository}, config, filepath.Join(t.TempDir(), "cache.sqlite"))
@@ -1123,8 +1127,8 @@ func TestSchemaVersionNineCacheIsReplaced(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT value FROM projection_meta WHERE key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != schemaVersion || schemaVersion != "10" {
-		t.Fatalf("schema version = %s (built %s), want 10", version, schemaVersion)
+	if version != schemaVersion || schemaVersion != "11" {
+		t.Fatalf("schema version = %s (built %s), want 11", version, schemaVersion)
 	}
 	countRows(t, store, `SELECT COUNT(link_count) FROM relics`)
 	for _, table := range []string{"relics", "relic_properties", "relic_parts", "relic_operations", "relic_links"} {

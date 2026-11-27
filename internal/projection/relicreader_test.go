@@ -88,6 +88,7 @@ func relicAnswers(t *testing.T, repository *gitstore.Repository, config core.Pro
 	service := func() core.RelicService {
 		service := relicServiceForIndex(repository, config, 900000)
 		service.Reader = reader()
+		service.Schemas = repository
 		return service
 	}
 	encode := func(label string, value any, err error) string {
@@ -153,6 +154,8 @@ func TestIndexAnswersEqualGitAnswers(t *testing.T) {
 	t.Parallel()
 	forBothRelicIndexFormats(t, func(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig) {
 		ids := relicReaderFixture(t, repository, config)
+		open, conforms, broken, unknown := conformanceFixture(t, repository, config)
+		ids = append(ids, open, conforms, broken, unknown)
 		store := openRelicStore(t, repositorySource{repository: repository}, config, filepath.Join(t.TempDir(), "cache.sqlite"))
 		fromGit := relicAnswers(t, repository, config, func() core.RelicReader { return repository }, ids)
 

@@ -1,6 +1,13 @@
 package projection
 
-// schemaVersion is bumped to 10 because the cache now holds relic links: a
+// schemaVersion is bumped to 11 because a relic row now keeps how the relic
+// stands against the schema version it names: its conformance and the first
+// problem found, judged when the relic pass indexes it, and its schema column
+// holds the version's ID or the empty string for a relic that names none. A
+// version 10 cache has no column for either and stored an open relic's schema
+// as 'null', so it is discarded and Git read again.
+//
+// Version 10 was bumped because the cache now holds relic links: a
 // relic_links row per live link, indexed by what the link points at so "what
 // links to this task?" is one query, and a link_count on each relic row, so a
 // relic whose link rows were cut short is read again as one missing part rows
@@ -51,7 +58,7 @@ package projection
 // checkpoint and every recorded pack, where a missing column reads as
 // generation zero — a claim rather than an absence, and the one claim that must
 // never be made wrongly.
-const schemaVersion = "10"
+const schemaVersion = "11"
 
 const schema = `
 CREATE TABLE projection_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -94,7 +101,8 @@ CREATE TABLE relics (
   logical_clock INTEGER NOT NULL, title TEXT NOT NULL, type TEXT NOT NULL,
   schema TEXT NOT NULL, author TEXT NOT NULL, retired INTEGER NOT NULL,
   deleted INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-  part_count INTEGER NOT NULL, link_count INTEGER NOT NULL
+  part_count INTEGER NOT NULL, link_count INTEGER NOT NULL,
+  conformance TEXT NOT NULL, schema_problem TEXT NOT NULL
 );
 CREATE INDEX relics_by_type ON relics (type, relic_id);
 CREATE TABLE relic_properties (

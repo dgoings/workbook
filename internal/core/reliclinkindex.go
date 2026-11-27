@@ -150,7 +150,18 @@ func (s RelicService) LinkedToTask(ctx context.Context, taskID string, filter Re
 		}
 		if len(summaries) == 0 || summaries[len(summaries)-1].ID != relic.ID {
 			relic.LinkedBy = nil
+			schemaID := ""
+			if relic.Schema != nil {
+				schemaID = relic.Schema.ID
+			}
+			relic.Behind = RelicBehind(RelicData{Type: relic.Type, Schema: schemaID}, listing)
+			if filter.Behind && !relic.Behind {
+				continue
+			}
 			numberLinkedSchema(&relic, listing)
+			if err := s.linkedConformance(ctx, &relic, schemaID, listing); err != nil {
+				return nil, nil, err
+			}
 			summaries = append(summaries, relic)
 		}
 		last := &summaries[len(summaries)-1]
@@ -180,4 +191,39 @@ func TaskRelicLinks(summaries []RelicSummary) []TaskRelicLink {
 		}
 	}
 	return links
+}
+
+// linkedConformance fills how a linked relic stands, as list does: a
+// judgment the lookup carried when it agrees with the listing, and otherwise
+// the one list gives for the relic as the reader reads it, which is the
+// judgment the index stored with the relic when it has one. A service with
+// no schema store, as workbook show of a task has, judges nothing, and a
+// relic that cannot be read now is listed unjudged rather than fail the list.
+func (s RelicService) linkedConformance(ctx context.Context, summary *RelicSummary, schemaID string, listing RelicSchemaListing) error {
+	if s.Schemas == nil {
+		summary.RelicConformance = nil
+		return nil
+	}
+	if stored := summary.RelicConformance; stored != nil && conformanceAgrees(*stored, schemaID, listing) {
+		return nil
+	}
+	var conformance RelicConformance
+	var err error
+	if _, known := listing.ByID(schemaID); !known {
+		conformance, err = JudgeRelic(RelicData{Schema: schemaID}, nil, listing, nil)
+	} else {
+		var snapshot RelicSnapshot
+		if snapshot, err = s.Reader.GetRelic(ctx, s.Config, summary.ID); err == nil {
+			conformance, err = s.listedConformance(ctx, snapshot, listing)
+		}
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		summary.RelicConformance = nil
+		return nil
+	}
+	summary.RelicConformance = &conformance
+	return nil
 }

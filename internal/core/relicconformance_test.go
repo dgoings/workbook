@@ -499,24 +499,105 @@ func TestRelicSummariesCarryConformanceOnlyWhereJudged(t *testing.T) {
 }
 
 // LinkedTo numbers the version a linked relic names from the listing, as list
-// does, without reading any schema.
+// does, without reading any schema, and keeps the conformance the index
+// stored; a relic the index stored no judgment for is judged as list judges.
 func TestLinkedToNumbersTheSchemaVersion(t *testing.T) {
-	_, schemas, service, versions := newSchemaTestService(t)
+	store, schemas, service, versions := newSchemaTestService(t)
 	ctx := context.Background()
-	relicID := serviceTestConfig.Key + "-R-" + relicTestID(1)
-	service.Links = &fixedRelicLinkIndex{lookup: RelicLinkLookup{Sources: []RelicLinkSource{{
-		Relic: RelicSummary{ID: relicID, Title: "Plan", Type: "spec", Schema: &RelicSchemaRef{Type: "spec", ID: versions.spec1.ID}},
-		Link:  RelicLink{ID: relicTestID(2), To: RelicLinkTarget{Task: linkTestTaskID(1)}, Rel: "relates-to"},
-	}}}}
+	judged := putRelicNaming(t, store, 1, "spec", versions.spec1.ID).Record.State.RelicID
+	unjudged := putRelicNaming(t, store, 2, "spec", versions.spec2.ID).Record.State.RelicID
+	link := func(relicID string, number int, conformance *RelicConformance) RelicLinkSource {
+		schema := versions.spec1.ID
+		if relicID == unjudged {
+			schema = versions.spec2.ID
+		}
+		return RelicLinkSource{
+			Relic: RelicSummary{ID: relicID, Title: "Plan", Type: "spec", Schema: &RelicSchemaRef{Type: "spec", ID: schema},
+				RelicConformance: conformance},
+			Link: RelicLink{ID: relicTestID(number), To: RelicLinkTarget{Task: linkTestTaskID(1)}, Rel: "relates-to"},
+		}
+	}
+	service.Links = &fixedRelicLinkIndex{lookup: RelicLinkLookup{Sources: []RelicLinkSource{
+		link(judged, 20, &RelicConformance{State: RelicConformanceConforms}),
+		link(unjudged, 21, nil),
+	}}}
 	reads := schemas.reads
 	summaries, _, err := service.LinkedToTask(ctx, linkTestTaskID(1), RelicListFilter{})
-	if err != nil || len(summaries) != 1 {
+	if err != nil || len(summaries) != 2 {
 		t.Fatalf("LinkedToTask = %+v, %v", summaries, err)
 	}
 	if ref := summaries[0].Schema; ref == nil || *ref != (RelicSchemaRef{Type: "spec", ID: versions.spec1.ID, Version: 1}) {
 		t.Errorf("linked relic names %+v, want spec version 1", ref)
 	}
-	if schemas.reads != reads {
-		t.Errorf("LinkedToTask read %d schema documents, want none", schemas.reads-reads)
+	if got := summaryJSON(t, summaries[0]); !strings.Contains(got, `"version":1},"conformance":"conforms","behind":true,"author":`) {
+		t.Errorf("linked relic = %s", got)
+	}
+	if schemas.reads != reads+1 {
+		t.Errorf("LinkedToTask read %d schema documents, want one, for the relic with no stored judgment", schemas.reads-reads)
+	}
+	if got := summaries[1].RelicConformance; got == nil || got.State != RelicConformanceNotConforming || summaries[1].Behind {
+		t.Errorf("unjudged linked relic = %+v, behind %t; want it judged not conforming", got, summaries[1].Behind)
+	}
+	behind, _, err := service.LinkedToTask(ctx, linkTestTaskID(1), RelicListFilter{Behind: true})
+	if err != nil || len(behind) != 1 || behind[0].ID != judged {
+		t.Fatalf("LinkedToTask(behind) = %+v, %v; want the relic on version 1", behind, err)
+	}
+
+	// Workbook show of a task has no schema store: nothing is judged.
+	service.Schemas = nil
+	shown, _, err := service.LinkedToTask(ctx, linkTestTaskID(1), RelicListFilter{})
+	if err != nil || len(shown) != 2 || shown[0].RelicConformance != nil || shown[1].RelicConformance != nil {
+		t.Fatalf("LinkedToTask with no schema store = %+v, %v", shown, err)
+	}
+}
+
+// List keeps the judgment a snapshot carries from the index when it agrees
+// with the listing, judges again when it does not, and keeps only the relics
+// behind their type's newest version when asked.
+func TestListUsesTheIndexJudgmentThatAgreesWithTheListing(t *testing.T) {
+	store, schemas, service, versions := newSchemaTestService(t)
+	ctx := context.Background()
+	stored := putRelicNaming(t, store, 1, "spec", versions.spec1.ID)
+	stored.Conformance = &RelicConformance{State: RelicConformanceNotConforming, Problem: "as the index stored it"}
+	store.put(stored)
+	stale := putRelicNaming(t, store, 2, "spec", versions.spec2.ID)
+	stale.Conformance = &RelicConformance{State: RelicConformanceUnknownSchema}
+	store.put(stale)
+	none := putRelicNaming(t, store, 3, "spec", "")
+	open := putRelicNaming(t, store, 4, "note", "")
+	unknown := putRelicNaming(t, store, 5, "spec", relicTestID(999))
+	schemas.reads = 0
+
+	listed, err := service.List(ctx, RelicListFilter{})
+	if err != nil || len(listed) != 5 {
+		t.Fatalf("List = %+v, %v", listed, err)
+	}
+	if got := *listed[0].RelicConformance; got != *stored.Conformance {
+		t.Errorf("relic with an agreeing stored judgment = %+v, want it kept", got)
+	}
+	if got := *listed[1].RelicConformance; got.State != RelicConformanceNotConforming {
+		t.Errorf("relic stored unknown under a listed version = %+v, want it judged again", got)
+	}
+	if schemas.reads != 1 {
+		t.Errorf("List read %d schemas, want one for the relic judged again", schemas.reads)
+	}
+	behind, err := service.List(ctx, RelicListFilter{Behind: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, summary := range behind {
+		if !summary.Behind {
+			t.Errorf("behind list holds %s not behind", summary.ID)
+		}
+		ids = append(ids, summary.ID)
+	}
+	want := []string{stored.Record.State.RelicID, none.Record.State.RelicID}
+	if fmt.Sprint(ids) != fmt.Sprint(want) {
+		t.Errorf("behind = %v, want %v (not %s or %s)", ids, want, open.Record.State.RelicID, unknown.Record.State.RelicID)
+	}
+	if summaryJSON(t, listed[2]) == "" || !strings.Contains(summaryJSON(t, listed[1]), `"schemaProblem"`) ||
+		strings.Contains(summaryJSON(t, listed[1]), `"behind"`) {
+		t.Errorf("listed = %s", summaryJSON(t, listed[1]))
 	}
 }

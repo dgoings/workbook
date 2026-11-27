@@ -208,6 +208,10 @@ type RelicSnapshot struct {
 	Head      string
 	Operation RelicOperationPack
 	Record    RelicRecord
+	// Conformance is how the relic stands against the schema version it
+	// names, as the local index judged it when it indexed this head. It is
+	// not stored in Git, and only the index fills it; nil means not judged.
+	Conformance *RelicConformance
 }
 
 // RelicPartContent is one part's content, in or out: what its fields.json and
