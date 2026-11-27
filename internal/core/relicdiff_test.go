@@ -88,15 +88,6 @@ func (b *diffSideBuilder) side(read []string) RelicVersionSide {
 	return RelicVersionSide{Record: &record, Objects: b.objects, Content: content}
 }
 
-func containsString(values []string, wanted string) bool {
-	for _, value := range values {
-		if value == wanted {
-			return true
-		}
-	}
-	return false
-}
-
 // compareRead compares two sides the way a caller does: with content read
 // only for the parts RelicPartsToRead lists.
 func compareRead(from, to *diffSideBuilder, partID string, context int) RelicDiff {
