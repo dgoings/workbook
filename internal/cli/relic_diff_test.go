@@ -189,6 +189,28 @@ func TestRelicDiffTextOfAWholeRelic(t *testing.T) {
 	}
 }
 
+func TestRelicDiffLeavesOutAPartAddedAndRemovedInside(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	relicID := mustCreateRelic(t, repository, "Brief", "--type", "spec").Relic.ID
+	created := relicHistoryOf(t, repository, relicID).Changes[0].Operations[0].ID
+	partID := mustUpdateRelic(t, repository, relicID, "--add-part", "--part-type", "section",
+		"--field", "heading=Q").Parts[0].ID
+	mustRelic(t, repository, nil, "update", relicID, "--remove-part", partID)
+
+	if diff := relicDiffOf(t, repository, relicID, created); len(diff.Parts) != 0 {
+		t.Errorf("whole diff parts = %+v, want none", diff.Parts)
+	}
+	for _, address := range []string{relicID, relicID + "#" + partID} {
+		diff := relicDiffOf(t, repository, address, created)
+		code, stdout, stderr := run(t, repository, "relic", "diff", address, created)
+		want := "Comparing:\t" + created + "\t→\t" + diff.To.Version + "\nThese two versions hold the same relic.\n"
+		if code != 0 || stderr != "" || stdout != want {
+			t.Errorf("diff %s = (%d, %q, %q), want %q", address, code, stdout, stderr, want)
+		}
+	}
+}
+
 func TestRelicDiffRefusesACommitID(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)

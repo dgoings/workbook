@@ -215,6 +215,30 @@ func TestCompareRelicVersionsWholeRelic(t *testing.T) {
 		t.Errorf("reversed parts = %+v", back.Parts)
 	}
 
+	// A part live on neither side is not listed, however it got that way; one
+	// live on one side is added, restored or removed.
+	gone, left, edited := relicTestID(216), relicTestID(217), relicTestID(218)
+	arrived, returned, dropped := relicTestID(219), relicTestID(220), relicTestID(224)
+	before := newDiffSide("R").
+		part(left, "2/1", true, map[string]json.RawMessage{"a": raw(`1`)}, "md", []byte("x\n")).
+		part(edited, "3/1", true, map[string]json.RawMessage{"a": raw(`1`)}, "md", []byte("x\n")).
+		part(returned, "5/1", true, nil, "", nil).
+		part(dropped, "6/1", false, nil, "", nil)
+	after := newDiffSide("R").
+		part(gone, "1/1", true, map[string]json.RawMessage{"a": raw(`1`)}, "md", []byte("x\n")).
+		part(edited, "7/1", true, map[string]json.RawMessage{"a": raw(`2`)}, "txt", []byte("y\n")).
+		part(arrived, "4/1", false, nil, "", nil).
+		part(returned, "5/1", false, nil, "", nil).
+		part(dropped, "6/1", true, nil, "", nil)
+	var listed []string
+	for _, part := range compareRead(before, after, "", 3).Parts {
+		listed = append(listed, part.ID+" "+string(part.Kind))
+	}
+	want := []string{arrived + " added", returned + " restored", dropped + " removed"}
+	if !reflect.DeepEqual(listed, want) {
+		t.Errorf("parts by liveness = %q, want %q", listed, want)
+	}
+
 	same := compareRead(from, from, "", 3)
 	if same.Changes != nil || same.Properties != nil || same.Parts != nil || same.Links != nil {
 		t.Errorf("equal versions = %+v", same)
@@ -242,6 +266,34 @@ func TestCompareRelicVersionsOfOnePart(t *testing.T) {
 	if len(added.Parts) != 1 || added.Parts[0].Kind != ChangeAdded || added.Parts[0].Body != nil ||
 		!reflect.DeepEqual(added.Parts[0].Fields, []RelicValueChange{{Name: "y", Kind: ChangeAdded, To: raw(`2`)}}) {
 		t.Fatalf("part absent on the from side = %+v", added.Parts)
+	}
+
+	live := newDiffSide("R").part(partA, "1/1", false, nil, "md", []byte("a\n"))
+	removed := newDiffSide("R").part(partA, "1/1", true, nil, "md", []byte("a\n"))
+	removedAndEdited := newDiffSide("R").part(partA, "2/1", true, map[string]json.RawMessage{"y": raw(`2`)}, "md", []byte("b\n"))
+	absent := newDiffSide("R")
+	for _, test := range []struct {
+		label    string
+		from, to *diffSideBuilder
+		want     ChangeKind
+	}{
+		{"absent to live", absent, live, ChangeAdded},
+		{"removed to live", removed, live, ChangeRestored},
+		{"live to removed", live, removed, ChangeRemoved},
+		{"live to absent", live, absent, ChangeRemoved},
+		{"absent to removed", absent, removed, ""},
+		{"removed to absent", removed, absent, ""},
+		{"removed to removed", removed, removedAndEdited, ""},
+		{"absent to absent", absent, absent, ""},
+	} {
+		parts := compareRead(test.from, test.to, partA, 3).Parts
+		if test.want == "" {
+			if parts != nil {
+				t.Errorf("%s = %+v, want no part", test.label, parts)
+			}
+		} else if len(parts) != 1 || parts[0].Kind != test.want {
+			t.Errorf("%s = %+v, want %s", test.label, parts, test.want)
+		}
 	}
 
 	unchanged := compareRead(to, to, partA, 3)
@@ -305,6 +357,28 @@ func TestRelicPartsToReadSkipsEqualObjects(t *testing.T) {
 	fromParts, toParts = RelicPartsToRead(to, from, added)
 	if !reflect.DeepEqual(fromParts, []string{added}) || toParts != nil {
 		t.Errorf("a part only on the from side = %v, %v", fromParts, toParts)
+	}
+}
+
+func TestRelicPartsToReadSkipsPartsLiveOnNeitherSide(t *testing.T) {
+	gone, left, edited := relicTestID(236), relicTestID(237), relicTestID(238)
+	from := newDiffSide("R").
+		part(left, "2/1", true, map[string]json.RawMessage{"a": raw(`1`)}, "md", []byte("x\n")).
+		part(edited, "3/1", true, map[string]json.RawMessage{"a": raw(`1`)}, "md", []byte("x\n")).
+		side(nil)
+	to := newDiffSide("R").
+		part(gone, "1/1", true, map[string]json.RawMessage{"a": raw(`1`)}, "md", []byte("x\n")).
+		part(edited, "3/1", true, map[string]json.RawMessage{"a": raw(`2`)}, "txt", []byte("y\n")).
+		side(nil)
+	for _, partID := range []string{"", gone, left, edited} {
+		fromParts, toParts := RelicPartsToRead(from, to, partID)
+		if fromParts != nil || toParts != nil {
+			t.Errorf("part %q = %v, %v; want nothing read", partID, fromParts, toParts)
+		}
+	}
+	all := []string{gone, left, edited}
+	if RelicBodiesToRead(from, to, all) || RelicBodiesToRead(to, from, all) {
+		t.Error("parts live on neither side need bodies")
 	}
 }
 

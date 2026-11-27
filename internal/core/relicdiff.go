@@ -45,14 +45,16 @@ type RelicBodyDiff struct {
 	Hunks       []RelicDiffHunk `json:"hunks,omitempty"`
 }
 
-// RelicPartChanged is the kind of a part diff whose part is live, or removed,
-// on both sides and differs in position, fields or body. The other kinds are
-// ChangeAdded, ChangeRemoved and ChangeRestored.
+// RelicPartChanged is the kind of a part diff whose part is live on both sides
+// and differs in position, fields or body. The other kinds are ChangeAdded,
+// ChangeRemoved and ChangeRestored.
 const RelicPartChanged ChangeKind = "changed"
 
-// RelicPartDiff is one part that differs between two versions. Kind is added
-// (absent on the from side), removed (live there and removed, or absent, on the
-// to side), restored (removed there and live here) or changed.
+// RelicPartDiff is one part that differs between two versions. A part is live
+// on a side that has it and has not removed it. Kind is added (absent on the
+// from side and live on the to side), restored (removed on the from side and
+// live on the to side), removed (live on the from side only) or changed. A part
+// live on neither side is not listed.
 type RelicPartDiff struct {
 	ID     string             `json:"id"`
 	Type   string             `json:"type"`
@@ -128,6 +130,13 @@ func (side RelicVersionSide) parts() []RelicPart {
 	return side.Record.State.Relic.Parts
 }
 
+// live reports whether the side has the part and has not removed it. A diff
+// treats an absent part and a removed one alike: both are not live.
+func (side RelicVersionSide) live(id string) bool {
+	part, ok := side.part(id)
+	return ok && !part.Removed
+}
+
 // comparedPartIDs lists the parts a comparison looks at: the one asked for,
 // or every part of either side, the to side's in its order and then those only
 // the from side has, in its order.
@@ -159,7 +168,8 @@ func relicBodyFormat(part RelicPart, exists bool) (string, bool) {
 
 // RelicPartsToRead returns, for each side, the parts whose content a
 // comparison must read: those whose fields or body object differs from the
-// other side's, including a part only one side has. Equal object IDs mean
+// other side's, including a part only one side has. A part live on neither side
+// is left out of the diff, so it is never listed. Equal object IDs mean
 // equal content, so those are never read, with one exception: a body whose
 // bytes are the same on both sides under a new format label is listed on the
 // to side alone, so the diff can tell whether the body is text. Whether a
@@ -167,6 +177,9 @@ func relicBodyFormat(part RelicPart, exists bool) (string, bool) {
 // differs; see RelicBodiesToRead.
 func RelicPartsToRead(from, to RelicVersionSide, partID string) (fromParts, toParts []string) {
 	for _, id := range comparedPartIDs(from, to, partID) {
+		if !from.live(id) && !to.live(id) {
+			continue
+		}
 		fromPart, onFrom := from.part(id)
 		toPart, onTo := to.part(id)
 		fromObjects, toObjects := from.Objects[id], to.Objects[id]
@@ -198,7 +211,7 @@ func RelicBodiesToRead(side, other RelicVersionSide, parts []string) bool {
 	for _, id := range parts {
 		part, exists := side.part(id)
 		format, hasBody := relicBodyFormat(part, exists)
-		if !hasBody {
+		if !hasBody || !side.live(id) && !other.live(id) {
 			continue
 		}
 		otherPart, otherExists := other.part(id)
@@ -384,33 +397,31 @@ func liveIndex(side RelicVersionSide, id string) int {
 // compareRelicPart compares one part, reporting whether it differs, and an
 // error when its changed body was not read.
 func compareRelicPart(from, to RelicVersionSide, id string, context int) (RelicPartDiff, bool, error) {
-	fromPart, onFrom := from.part(id)
-	toPart, onTo := to.part(id)
-	if !onFrom && !onTo {
+	fromLive, toLive := from.live(id), to.live(id)
+	if !fromLive && !toLive {
 		return RelicPartDiff{}, false, nil
 	}
-	diff := RelicPartDiff{ID: id}
+	fromPart, onFrom := from.part(id)
+	toPart, onTo := to.part(id)
+	diff := RelicPartDiff{ID: id, Type: toPart.Type}
+	if !onTo {
+		diff.Type = fromPart.Type
+	}
 	var err error
 	switch {
-	case !onFrom:
-		diff.Type, diff.Kind = toPart.Type, ChangeAdded
-	case !onTo:
-		diff.Type, diff.Kind = fromPart.Type, ChangeRemoved
+	case !toLive:
+		diff.Kind = ChangeRemoved
+	case fromLive:
+		diff.Kind = RelicPartChanged
+	case onFrom:
+		diff.Kind = ChangeRestored
 	default:
-		diff.Type = toPart.Type
-		switch {
-		case !fromPart.Removed && toPart.Removed:
-			diff.Kind = ChangeRemoved
-		case fromPart.Removed && !toPart.Removed:
-			diff.Kind = ChangeRestored
-		default:
-			diff.Kind = RelicPartChanged
-		}
-		if fromPart.Position != toPart.Position {
-			diff.Moved = &RelicPartMove{
-				From: fromPart.Position, To: toPart.Position,
-				FromIndex: liveIndex(from, id), ToIndex: liveIndex(to, id),
-			}
+		diff.Kind = ChangeAdded
+	}
+	if onFrom && onTo && fromPart.Position != toPart.Position {
+		diff.Moved = &RelicPartMove{
+			From: fromPart.Position, To: toPart.Position,
+			FromIndex: liveIndex(from, id), ToIndex: liveIndex(to, id),
 		}
 	}
 

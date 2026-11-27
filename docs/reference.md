@@ -1289,8 +1289,11 @@ A first change has no parent: the comparison starts before the relic, `from` is
 
 A part address compares that part's position, fields and body. A relic compares
 also its title, schema, retired and deleted flags, its properties and its links,
-and lists each part that differs, as `added` (not there on the from side),
-`removed`, `restored` or `changed`. A moved part says its position on each side
+and lists each part that differs. A part is live on a side that has it and has
+not removed it. A part live only on the to side is `added` when it is absent on
+the from side and `restored` when it is removed there, one live only on the from
+side is `removed`, and one live on both is `changed`. A part live on neither
+side is left out, and a part address then reports that nothing differs. A moved part says its position on each side
 and its place among the live parts, `-1` where it is not live. Parts that did not
 change are left out.
 
