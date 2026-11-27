@@ -173,7 +173,17 @@ var relicDocumentMembers = map[relicJSONPlace]struct {
 func jsonMemberNames(structure reflect.Type) map[string]struct{} {
 	names := make(map[string]struct{}, structure.NumField())
 	for index := 0; index < structure.NumField(); index++ {
-		name, _, _ := strings.Cut(structure.Field(index).Tag.Get("json"), ",")
+		field := structure.Field(index)
+		tag := field.Tag.Get("json")
+		// An embedded struct with no name of its own lends its members to
+		// the outer object, as the decoder reads them.
+		if field.Anonymous && tag == "" && field.Type.Kind() == reflect.Struct {
+			for name := range jsonMemberNames(field.Type) {
+				names[name] = struct{}{}
+			}
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
 		names[name] = struct{}{}
 	}
 	return names

@@ -181,6 +181,10 @@ func (s RelicService) Update(ctx context.Context, idOrPrefix string, edits []Rel
 		return RelicMutationResult{}, Errorf(CategoryValidation,
 			"relic %s is deleted; restore it first with \"workbook relic restore %s\"", relicID, relicID)
 	}
+	listing, version, schema, err := s.schemaForUpdate(ctx, snapshot.Record.State.Relic, relicID)
+	if err != nil {
+		return RelicMutationResult{}, err
+	}
 
 	update := relicUpdate{
 		service: s,
@@ -200,7 +204,10 @@ func (s RelicService) Update(ctx context.Context, idOrPrefix string, edits []Rel
 		}
 	}
 	if len(update.operations) == 0 {
-		return relicMutationOf(snapshot, false), nil
+		return relicMutationUnder(snapshot, false, listing), nil
+	}
+	if err := update.checkSchema(ctx, version, schema); err != nil {
+		return RelicMutationResult{}, err
 	}
 
 	// Totals are measured on what would be stored, once every edit has
@@ -236,7 +243,7 @@ func (s RelicService) Update(ctx context.Context, idOrPrefix string, edits []Rel
 		return RelicMutationResult{}, err
 	}
 	result := RelicMutationResult{
-		Relic:   relicSummaryOf(written),
+		Relic:   relicSummaryUnder(written, listing),
 		Parts:   make([]RelicDocumentPart, 0, len(update.changed)),
 		Changed: true,
 	}
@@ -264,8 +271,12 @@ func (s RelicService) setRelicDeleted(ctx context.Context, idOrPrefix string, de
 	if err != nil {
 		return RelicMutationResult{}, err
 	}
+	listing, err := s.schemaListing(ctx)
+	if err != nil {
+		return RelicMutationResult{}, err
+	}
 	if snapshot.Record.State.Relic.Deleted == deleted {
-		return relicMutationOf(snapshot, false), nil
+		return relicMutationUnder(snapshot, false, listing), nil
 	}
 	kind, verb := RelicOperationRestore, "restore"
 	if deleted {
@@ -280,7 +291,7 @@ func (s RelicService) setRelicDeleted(ctx context.Context, idOrPrefix string, de
 	if err != nil {
 		return RelicMutationResult{}, err
 	}
-	return relicMutationOf(written, true), nil
+	return relicMutationUnder(written, true, listing), nil
 }
 
 // relicMessageNameLimit is the longest property or field name a refusal

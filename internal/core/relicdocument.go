@@ -35,13 +35,14 @@ type RelicDocumentPart struct {
 // RelicDocument is a relic as show and export present it, and what create
 // --from-file reads. Show and export both name the format and its version.
 type RelicDocument struct {
-	Format     string                     `json:"format"`
-	Version    int                        `json:"version"`
-	ID         string                     `json:"id,omitempty"`
-	Head       string                     `json:"head,omitempty"`
-	Title      string                     `json:"title"`
-	Type       string                     `json:"type"`
-	Schema     *RelicSchemaRef            `json:"schema"`
+	Format  string          `json:"format"`
+	Version int             `json:"version"`
+	ID      string          `json:"id,omitempty"`
+	Head    string          `json:"head,omitempty"`
+	Title   string          `json:"title"`
+	Type    string          `json:"type"`
+	Schema  *RelicSchemaRef `json:"schema"`
+	RelicConformance
 	Author     string                     `json:"author,omitempty"`
 	Retired    bool                       `json:"retired"`
 	Deleted    bool                       `json:"deleted"`
@@ -108,8 +109,17 @@ func RelicCreateInputFromDocument(document RelicDocument) (RelicCreateInput, err
 		return RelicCreateInput{}, Errorf(CategoryValidation,
 			"the relic document is version %d; this version of workbook reads version %d", document.Version, documentVersion)
 	}
+	schema := ""
 	if document.Schema != nil {
-		return RelicCreateInput{}, Errorf(CategoryValidation, "this version of workbook cannot create a relic that names a schema")
+		// The ID names the version; its type and number are presentation, as
+		// the document's dates are, and the create checks the ID against the
+		// relic's type.
+		if !isCanonicalULID(document.Schema.ID) {
+			return RelicCreateInput{}, Errorf(CategoryValidation,
+				"the document's schema names version %q, which is not a schema version ID; give its \"id\", or null for the type's newest version",
+				document.Schema.ID)
+		}
+		schema = document.Schema.ID
 	}
 	if len(document.Links) != 0 {
 		return RelicCreateInput{}, Errorf(CategoryValidation,
@@ -118,6 +128,7 @@ func RelicCreateInputFromDocument(document RelicDocument) (RelicCreateInput, err
 	input := RelicCreateInput{
 		Title:      document.Title,
 		Type:       document.Type,
+		Schema:     schema,
 		Properties: document.Properties,
 		Parts:      make([]RelicPartInput, 0, len(document.Parts)),
 	}

@@ -36,9 +36,12 @@ type RelicService struct {
 	Tasks TaskReader
 	// Links answers which relics link to a task; only LinkedTo uses it.
 	Links RelicLinkIndex
-	IDs   IDSource
-	Now   func() time.Time
-	Actor string
+	// Schemas reads the project's relic schema versions. Nil leaves every
+	// type open.
+	Schemas RelicSchemaStore
+	IDs     IDSource
+	Now     func() time.Time
+	Actor   string
 
 	// HistoryReader serves relic history and diffs; only History and Diff
 	// use it.
@@ -47,17 +50,18 @@ type RelicService struct {
 
 // RelicSummary is one relic as relic list shows it. Parts counts live parts.
 type RelicSummary struct {
-	ID        string          `json:"id"`
-	Head      string          `json:"head"`
-	Title     string          `json:"title"`
-	Type      string          `json:"type"`
-	Schema    *RelicSchemaRef `json:"schema"`
-	Author    string          `json:"author"`
-	Retired   bool            `json:"retired"`
-	Deleted   bool            `json:"deleted"`
-	CreatedAt time.Time       `json:"createdAt"`
-	UpdatedAt time.Time       `json:"updatedAt"`
-	Parts     int             `json:"parts"`
+	ID     string          `json:"id"`
+	Head   string          `json:"head"`
+	Title  string          `json:"title"`
+	Type   string          `json:"type"`
+	Schema *RelicSchemaRef `json:"schema"`
+	RelicConformance
+	Author    string    `json:"author"`
+	Retired   bool      `json:"retired"`
+	Deleted   bool      `json:"deleted"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	Parts     int       `json:"parts"`
 	// LinkedBy is set only by LinkedTo: the relic's links to the task asked
 	// about.
 	LinkedBy []RelicLinkMatch `json:"linkedBy,omitempty"`
@@ -86,9 +90,12 @@ type RelicPartInput struct {
 	Body   *RelicBodyInput
 }
 
-// RelicCreateInput is a relic to create, with its parts in order.
+// RelicCreateInput is a relic to create, with its parts in order. Schema is
+// the ID of the schema version to write it under; empty names the type's
+// newest.
 type RelicCreateInput struct {
 	Title, Type string
+	Schema      string
 	Properties  map[string]json.RawMessage
 	Parts       []RelicPartInput
 }
@@ -387,6 +394,15 @@ func (s RelicService) Create(ctx context.Context, input RelicCreateInput) (Relic
 	if err != nil {
 		return RelicMutationResult{}, err
 	}
+	listing, version, schema, err := s.schemaForCreate(ctx, input.Type, input.Schema)
+	if err != nil {
+		return RelicMutationResult{}, err
+	}
+	if schema != nil {
+		if problem := checkRelicCreateSchema(schema, properties, parts); problem != nil {
+			return RelicMutationResult{}, RelicSchemaRefusal(version, *problem)
+		}
+	}
 	names := make([]string, 0, len(properties))
 	for name := range properties {
 		names = append(names, name)
@@ -405,7 +421,7 @@ func (s RelicService) Create(ctx context.Context, input RelicCreateInput) (Relic
 	operations = append(operations, RelicOperation{
 		ID:    operationIDs[0],
 		Type:  RelicOperationCreate,
-		Relic: &RelicCreateData{Title: title, Type: input.Type, CreatedAt: now},
+		Relic: &RelicCreateData{Title: title, Type: input.Type, Schema: version.ID, CreatedAt: now},
 	})
 	for index, name := range names {
 		operations = append(operations, RelicOperation{
@@ -441,7 +457,7 @@ func (s RelicService) Create(ctx context.Context, input RelicCreateInput) (Relic
 	}
 
 	result := RelicMutationResult{
-		Relic:   relicSummaryOf(written),
+		Relic:   relicSummaryUnder(written, listing),
 		Parts:   make([]RelicDocumentPart, 0, len(partIDs)),
 		Changed: true,
 	}
@@ -463,6 +479,10 @@ func (s RelicService) List(ctx context.Context, filter RelicListFilter) ([]Relic
 	if err != nil {
 		return nil, err
 	}
+	listing, err := s.schemaListing(ctx)
+	if err != nil {
+		return nil, err
+	}
 	summaries := make([]RelicSummary, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		relic := snapshot.Record.State.Relic
@@ -472,7 +492,7 @@ func (s RelicService) List(ctx context.Context, filter RelicListFilter) ([]Relic
 		if filter.Type != "" && relic.Type != filter.Type {
 			continue
 		}
-		summaries = append(summaries, relicSummaryOf(snapshot))
+		summaries = append(summaries, relicSummaryUnder(snapshot, listing))
 	}
 	sort.Slice(summaries, func(i, j int) bool { return summaries[i].ID < summaries[j].ID })
 	return summaries, nil
@@ -557,6 +577,9 @@ func (s RelicService) relicDocument(ctx context.Context, snapshot RelicSnapshot,
 	}
 	document := newRelicDocument(snapshot, parts, content)
 	document.Links = links
+	if err := s.presentSchema(ctx, &document, snapshot, content); err != nil {
+		return RelicDocument{}, err
+	}
 	return document, nil
 }
 
