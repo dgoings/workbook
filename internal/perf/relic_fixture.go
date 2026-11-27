@@ -1,10 +1,12 @@
 package perf
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,6 +24,12 @@ const (
 	// build reads. core.RelicCreateInputFromDocument refuses any other, so a
 	// change there fails TestLargeRelicDocumentIsTheLargeRelic.
 	relicDocumentVersion = 1
+	// relicFixtureExtraRelics are the relics the fixture adds beside the
+	// Relics fixture relics: the large, the body and the history relic.
+	relicFixtureExtraRelics = 3
+	// relicHistoryLinesPerEdit is how many lines each save of the history
+	// relic rewrites.
+	relicHistoryLinesPerEdit = 5
 )
 
 // relicFixtureTypes are the relic types the fixture relics take in turn.
@@ -53,6 +61,10 @@ type RelicFixtureSpec struct {
 	// then one of SmallBodyBytes that relic-edit-part-16mib replaces. At the
 	// full scale it is the live-body limit, core.MaxRelicLiveBodyBytes.
 	FullBodiesBytes int `json:"fullBodiesBytes"`
+	// HistoryBodyBytes is the body size of the history relic's one part, and
+	// HistoryEdits how many times it is saved after it is created.
+	HistoryBodyBytes int `json:"historyBodyBytes"`
+	HistoryEdits     int `json:"historyEdits"`
 }
 
 // FullRelicFixtureSpec is the story's scale.
@@ -62,7 +74,8 @@ func FullRelicFixtureSpec() RelicFixtureSpec {
 		LargeParts: 2000, LargePartBodyBytes: 524,
 		LargeBodyBytes: 1024 * 1024, SmallBodyBytes: 2 * 1024,
 		Moves: 10000, MovesPerUpdate: 100, ChangedRelics: 100, Seed: 1,
-		FullBodiesBytes: core.MaxRelicLiveBodyBytes,
+		FullBodiesBytes:  core.MaxRelicLiveBodyBytes,
+		HistoryBodyBytes: 100 * 1024, HistoryEdits: 100,
 	}
 }
 
@@ -73,7 +86,8 @@ func SmokeRelicFixtureSpec() RelicFixtureSpec {
 		LargeParts: 50, LargePartBodyBytes: 524,
 		LargeBodyBytes: 64 * 1024, SmallBodyBytes: 2 * 1024,
 		Moves: 200, MovesPerUpdate: 50, ChangedRelics: 5, Seed: 1,
-		FullBodiesBytes: 256 * 1024,
+		FullBodiesBytes:  256 * 1024,
+		HistoryBodyBytes: 16 * 1024, HistoryEdits: 10,
 	}
 }
 
@@ -97,6 +111,7 @@ func validateRelicFixtureSpec(spec RelicFixtureSpec, tasks Fixture) error {
 		{"links per relic", spec.LinksPerRelic}, {"large parts", spec.LargeParts},
 		{"large part body bytes", spec.LargePartBodyBytes}, {"large body bytes", spec.LargeBodyBytes},
 		{"small body bytes", spec.SmallBodyBytes}, {"moves per update", spec.MovesPerUpdate},
+		{"history body bytes", spec.HistoryBodyBytes}, {"history edits", spec.HistoryEdits},
 	} {
 		if count.value < 1 {
 			return fmt.Errorf("relic fixture %s must be positive", count.name)
@@ -123,22 +138,27 @@ func validateRelicFixtureSpec(spec RelicFixtureSpec, tasks Fixture) error {
 }
 
 // RelicFixture is a task fixture with the relic benchmark set added. RelicIDs
-// are the Relics fixture relics in creation order; LargeRelic and BodyRelic
-// are the two relics added beside them.
+// are the Relics fixture relics in creation order; LargeRelic, BodyRelic and
+// HistoryRelic are the three relics added beside them. HistoryFirstVersion and
+// HistoryLastVersion are the first and last body versions of HistoryPart.
 type RelicFixture struct {
 	Fixture
-	Spec             RelicFixtureSpec
-	RelicIDs         []string
-	Types            []string
-	LargeRelic       string
-	LargeMovedPart   string
-	BodyRelic        string
-	LargeBodyPart    string
-	SmallBodyPart    string
-	HotTask          string
-	TypicalTask      string
-	HotTaskLinks     int
-	TypicalTaskLinks int
+	Spec                RelicFixtureSpec
+	RelicIDs            []string
+	Types               []string
+	LargeRelic          string
+	LargeMovedPart      string
+	BodyRelic           string
+	LargeBodyPart       string
+	SmallBodyPart       string
+	HistoryRelic        string
+	HistoryPart         string
+	HistoryFirstVersion string
+	HistoryLastVersion  string
+	HotTask             string
+	TypicalTask         string
+	HotTaskLinks        int
+	TypicalTaskLinks    int
 }
 
 // relicFixtureBuilder writes the relic set in two stages, so a caller can
@@ -154,8 +174,8 @@ type relicFixtureBuilder struct {
 }
 
 // AddRelicFixture adds the relic benchmark set to a task fixture through one
-// in-process core.RelicService: the fixture relics, the large relic and the
-// body relic, then each fixture relic's links, then the large relic's moves.
+// in-process core.RelicService: the fixture relics, the large relic, the body
+// relic and the history relic with its saves, then each fixture relic's links, then the large relic's moves.
 // It checks the relic ref count at the end, as BuildFixture checks task refs.
 func AddRelicFixture(ctx context.Context, tasks Fixture, spec RelicFixtureSpec) (RelicFixture, error) {
 	builder, err := newRelicFixtureBuilder(ctx, tasks, spec)
@@ -205,7 +225,7 @@ func newRelicFixtureBuilder(ctx context.Context, tasks Fixture, spec RelicFixtur
 }
 
 // createRelics writes the fixture relics, then the large relic, then the body
-// relic, one commit each.
+// relic, one commit each, and then the history relic and its saves.
 func (b *relicFixtureBuilder) createRelics(ctx context.Context) error {
 	spec := b.fixture.Spec
 	for index := range spec.Relics {
@@ -251,7 +271,53 @@ func (b *relicFixtureBuilder) createRelics(ctx context.Context) error {
 	b.fixture.BodyRelic = body.Relic.ID
 	b.fixture.LargeBodyPart = body.Parts[0].ID
 	b.fixture.SmallBodyPart = body.Parts[1].ID
+	return b.createHistoryRelic(ctx)
+}
+
+// createHistoryRelic creates the relic the history and diff scenarios read,
+// one part of HistoryBodyBytes, and saves that body HistoryEdits times, each
+// save rewriting relicHistoryLinesPerEdit lines of the version before it.
+func (b *relicFixtureBuilder) createHistoryRelic(ctx context.Context) error {
+	spec := b.fixture.Spec
+	part := b.part(0, spec.HistoryBodyBytes)
+	created, err := b.service.Create(ctx, core.RelicCreateInput{
+		Title: "Benchmark history relic",
+		Type:  "note",
+		Parts: []core.RelicPartInput{part},
+	})
+	if err != nil {
+		return fmt.Errorf("create the history relic: %w", err)
+	}
+	relicID, partID := created.Relic.ID, created.Parts[0].ID
+	version := created.Parts[0].Body.Version
+	b.fixture.HistoryRelic, b.fixture.HistoryPart = relicID, partID
+	b.fixture.HistoryFirstVersion = version
+	text := part.Body.Content
+	for edit := range spec.HistoryEdits {
+		text = rewriteLines(b.words, text, relicHistoryLinesPerEdit)
+		saved, err := b.service.Update(ctx, relicID, []core.RelicEdit{{
+			Kind: core.RelicEditPart, Part: partID, Base: version,
+			Body: &core.RelicBodyInput{Format: relicFixtureBodyFormat, Content: text},
+		}})
+		if err != nil {
+			return fmt.Errorf("save %d of the history relic: %w", edit+1, err)
+		}
+		version = saved.Parts[0].Body.Version
+	}
+	b.fixture.HistoryLastVersion = version
 	return nil
+}
+
+// rewriteLines returns text with count of its lines, drawn from random,
+// replaced by other words of the same length. The size and the line count stay
+// as they are. A text of fewer lines has every line rewritten.
+func rewriteLines(random *rand.Rand, text []byte, count int) []byte {
+	lines := bytes.Split(slices.Clone(text), []byte{'\n'})
+	for _, index := range random.Perm(len(lines))[:min(count, len(lines))] {
+		words := seededWords(random, len(lines[index]))
+		lines[index] = bytes.ReplaceAll(words, []byte{'\n'}, []byte{' '})
+	}
+	return bytes.Join(lines, []byte{'\n'})
 }
 
 // linkAndMove gives every fixture relic its links, one update each, and then
@@ -347,7 +413,7 @@ func (b *relicFixtureBuilder) finish(ctx context.Context) (RelicFixture, error) 
 	if err != nil {
 		return RelicFixture{}, err
 	}
-	want := b.fixture.Spec.Relics + 2
+	want := b.fixture.Spec.Relics + relicFixtureExtraRelics
 	if got := countRefLines(refs); got != want {
 		return RelicFixture{}, fmt.Errorf("relic refs = %d, want %d", got, want)
 	}

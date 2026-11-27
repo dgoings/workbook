@@ -109,8 +109,8 @@ func TestAddRelicFixtureBuildsTheSmokeSet(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(summaries) != 22 {
-				t.Fatalf("relics = %d, want 22", len(summaries))
+			if len(summaries) != 23 {
+				t.Fatalf("relics = %d, want 23", len(summaries))
 			}
 			if len(fixture.RelicIDs) != 20 {
 				t.Fatalf("fixture relic IDs = %d, want 20", len(fixture.RelicIDs))
@@ -175,6 +175,8 @@ func TestAddRelicFixtureBuildsTheSmokeSet(t *testing.T) {
 				t.Fatalf("body relic part sizes = %v, want %s: 65536 and %s: 2048", sizes, fixture.LargeBodyPart, fixture.SmallBodyPart)
 			}
 
+			requireHistoryRelic(t, fixture, service, byID[fixture.HistoryRelic])
+
 			if fixture.HotTaskLinks != 20 {
 				t.Fatalf("hot task links = %d, want 20", fixture.HotTaskLinks)
 			}
@@ -201,6 +203,72 @@ func TestAddRelicFixtureBuildsTheSmokeSet(t *testing.T) {
 				t.Fatal("the typical task is the hot task")
 			}
 		})
+	}
+}
+
+// requireHistoryRelic checks the relic the history and diff scenarios read:
+// one part of HistoryBodyBytes saved HistoryEdits times, each save rewriting
+// five lines, so that its first and last versions still compare line by line.
+//
+// Mutation witness: a save that skips, resizes the body or rewrites most of it
+// would make relic-history-100 read a shorter chain, or the first-to-last diff
+// time the approximate fallback instead of a line diff.
+func requireHistoryRelic(t *testing.T, fixture RelicFixture, service core.RelicService, summary core.RelicSummary) {
+	t.Helper()
+	ctx := context.Background()
+	if summary.ID == "" || summary.Parts != 1 || summary.Title != "Benchmark history relic" {
+		t.Fatalf("history relic = %+v, want one part", summary)
+	}
+	spec := fixture.Spec
+	_, repository := relicFixtureService(t, fixture)
+	service.HistoryReader = repository
+	address := fixture.HistoryRelic + "#" + fixture.HistoryPart
+	history, err := service.History(ctx, address, core.RelicHistoryOptions{All: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions := history.BodyVersions
+	if history.Total != spec.HistoryEdits+1 || len(versions) != spec.HistoryEdits+1 {
+		t.Fatalf("history relic = %d changes, %d body versions; want %d of each", history.Total, len(versions), spec.HistoryEdits+1)
+	}
+	if versions[0].Version != fixture.HistoryFirstVersion || versions[len(versions)-1].Version != fixture.HistoryLastVersion {
+		t.Fatalf("history relic versions run %s to %s, fixture says %s to %s", versions[0].Version,
+			versions[len(versions)-1].Version, fixture.HistoryFirstVersion, fixture.HistoryLastVersion)
+	}
+	for _, version := range versions {
+		if version.Bytes != int64(spec.HistoryBodyBytes) {
+			t.Fatalf("version %s is %d bytes, want %d", version.Version, version.Bytes, spec.HistoryBodyBytes)
+		}
+	}
+	changedLines := func(from, to string) int {
+		t.Helper()
+		diff, err := service.Diff(ctx, address, []string{from, to}, core.RelicDiffOptions{Context: 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(diff.Parts) != 1 || diff.Parts[0].Body == nil || !diff.Parts[0].Body.Text || diff.Parts[0].Body.Approximate {
+			t.Fatalf("diff %s to %s = %+v, want one exact text body diff", from, to, diff.Parts)
+		}
+		deleted, inserted := 0, 0
+		for _, hunk := range diff.Parts[0].Body.Hunks {
+			deleted += hunk.FromLines
+			inserted += hunk.ToLines
+		}
+		if deleted != inserted {
+			t.Fatalf("diff %s to %s deletes %d lines and inserts %d; a rewrite keeps the line count", from, to, deleted, inserted)
+		}
+		// 2000 is the line diff's bound on inserted and deleted lines
+		// together.
+		if deleted+inserted >= 2000 {
+			t.Fatalf("diff %s to %s changes %d lines, past the line diff's bound", from, to, deleted+inserted)
+		}
+		return deleted
+	}
+	if got := changedLines(versions[0].Version, versions[1].Version); got != 5 {
+		t.Fatalf("one save rewrote %d lines, want 5", got)
+	}
+	if got := changedLines(fixture.HistoryFirstVersion, fixture.HistoryLastVersion); got <= 5 || got > 5*spec.HistoryEdits {
+		t.Fatalf("the first and last versions differ in %d lines, want over 5 and at most %d", got, 5*spec.HistoryEdits)
 	}
 }
 
@@ -237,7 +305,7 @@ func TestAddRelicFixtureLeavesNoRelicRefLoose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := countRefLines(refs), fixture.Spec.Relics+2; got != want {
+	if got, want := countRefLines(refs), fixture.Spec.Relics+3; got != want {
 		t.Fatalf("relic refs = %d, want %d", got, want)
 	}
 }
@@ -256,7 +324,9 @@ func TestAddRelicFixtureIsDeterministic(t *testing.T) {
 	// after it.
 	second := buildSmokeRelicFixture(t, "sha1")
 	first := sharedSmokeRelicFixtureFor(t)
-	if !reflect.DeepEqual(first.RelicIDs, second.RelicIDs) || first.LargeRelic != second.LargeRelic || first.BodyRelic != second.BodyRelic {
+	if !reflect.DeepEqual(first.RelicIDs, second.RelicIDs) || first.LargeRelic != second.LargeRelic || first.BodyRelic != second.BodyRelic ||
+		first.HistoryRelic != second.HistoryRelic || first.HistoryFirstVersion != second.HistoryFirstVersion ||
+		first.HistoryLastVersion != second.HistoryLastVersion {
 		t.Fatalf("relic IDs differ between builds")
 	}
 	ctx := context.Background()
@@ -387,7 +457,8 @@ func TestRelicFixtureSpecsMatchTheStoryTable(t *testing.T) {
 		Relics: 1000, PartsPerRelic: 20, BodyBytes: 1024, LinksPerRelic: 10,
 		LargeParts: 2000, LargePartBodyBytes: 524, LargeBodyBytes: 1 << 20, SmallBodyBytes: 2048,
 		Moves: 10000, MovesPerUpdate: 100, ChangedRelics: 100, Seed: full.Seed,
-		FullBodiesBytes: core.MaxRelicLiveBodyBytes,
+		FullBodiesBytes:  core.MaxRelicLiveBodyBytes,
+		HistoryBodyBytes: 100 << 10, HistoryEdits: 100,
 	}
 	if full != wantFull {
 		t.Fatalf("full spec = %+v, want %+v", full, wantFull)
@@ -397,7 +468,8 @@ func TestRelicFixtureSpecsMatchTheStoryTable(t *testing.T) {
 		Relics: 20, PartsPerRelic: 4, BodyBytes: 1024, LinksPerRelic: 2,
 		LargeParts: 50, LargePartBodyBytes: 524, LargeBodyBytes: 64 << 10, SmallBodyBytes: 2048,
 		Moves: 200, MovesPerUpdate: 50, ChangedRelics: 5, Seed: smoke.Seed,
-		FullBodiesBytes: 256 << 10,
+		FullBodiesBytes:  256 << 10,
+		HistoryBodyBytes: 16 << 10, HistoryEdits: 10,
 	}
 	if smoke != wantSmoke {
 		t.Fatalf("smoke spec = %+v, want %+v", smoke, wantSmoke)

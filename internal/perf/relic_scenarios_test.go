@@ -31,10 +31,15 @@ func TestRelicScenariosAreNotInTheDefaultRegistry(t *testing.T) {
 	if !reflect.DeepEqual(resolved, ScenarioNames()) {
 		t.Fatalf("ResolveScenarios(nil) = %v, want the registry", resolved)
 	}
-	// The plan's 21, and the four that measure the 1 MiB body save and the
-	// relic at the 16 MiB live-body limit.
-	if len(RelicScenarioNames()) != 25 {
-		t.Fatalf("relic scenarios = %d, want 25", len(RelicScenarioNames()))
+	// The plan's 21, the four that measure the 1 MiB body save and the
+	// relic at the 16 MiB live-body limit, and the three that measure history
+	// and diffs.
+	if len(RelicScenarioNames()) != 28 {
+		t.Fatalf("relic scenarios = %d, want 28", len(RelicScenarioNames()))
+	}
+	after := slices.Index(RelicScenarioNames(), "relic-body-1mib")
+	if want := []string{"relic-history-100", "relic-diff-latest-100kib", "relic-diff-first-last-100kib"}; !slices.Equal(RelicScenarioNames()[after+1:after+4], want) {
+		t.Fatalf("relic scenarios after relic-body-1mib = %v, want %v", RelicScenarioNames()[after+1:after+4], want)
 	}
 	for _, name := range []string{"relic-edit-body-1mib", "relic-create-16mib", "relic-show-16mib", "relic-edit-part-16mib"} {
 		if !slices.Contains(RelicScenarioNames(), name) {
@@ -71,6 +76,15 @@ func TestRelicScenariosCheckTheirOutput(t *testing.T) {
 		}
 		return `{"format":"workbook.result","version":1,"command":"relic list","data":[` + strings.Join(items, ",") + `]}`
 	}
+	result := func(command, data string) string {
+		return `{"format":"workbook.result","version":1,"command":"` + command + `","data":` + data + `}`
+	}
+	historyOf := func(changes, versions int) string {
+		list := func(count int) string { return "[" + strings.TrimSuffix(strings.Repeat("{},", count), ",") + "]" }
+		return result("relic show", `{"changes":`+list(changes)+`,"bodyVersions":`+list(versions)+`}`)
+	}
+	diffOf := func(parts string) string { return result("relic diff", `{"parts":[`+parts+`]}`) }
+	const exact = `{"kind":"changed","body":{"text":true,"hunks":[{}]}}`
 	tests := []struct {
 		name   string
 		stdout string
@@ -81,6 +95,15 @@ func TestRelicScenariosCheckTheirOutput(t *testing.T) {
 		{"relic-body-2kib", strings.Repeat("x", 2047), verifyBodyLength(2048)},
 		{"relic-create-16mib", `{"format":"workbook.result","version":1,"command":"relic create","data":{"changed":true,"parts":[{"body":{"bytes":10}},{"body":{"bytes":5}}]}}`, verifyRelicLiveBodies(2, 16)},
 		{"relic-show-16mib", `{"format":"workbook.result","version":1,"command":"relic show","data":{"parts":[{"body":{"bytes":10}},{"body":{"bytes":6}},{"body":{"bytes":1}}]}}`, verifyRelicLiveBodies(2, 16)},
+		{"relic-history-100", historyOf(10, 11), verifyRelicHistory(11)},
+		{"relic-history-100", historyOf(11, 10), verifyRelicHistory(11)},
+		{"relic-diff-latest-100kib", diffOf(""), verifyRelicBodyDiff},
+		{"relic-diff-latest-100kib", diffOf(exact + "," + exact), verifyRelicBodyDiff},
+		{"relic-diff-latest-100kib", diffOf(`{"kind":"added","body":{"text":true,"hunks":[{}]}}`), verifyRelicBodyDiff},
+		{"relic-diff-latest-100kib", diffOf(`{"kind":"changed"}`), verifyRelicBodyDiff},
+		{"relic-diff-first-last-100kib", diffOf(`{"kind":"changed","body":{"text":false}}`), verifyRelicBodyDiff},
+		{"relic-diff-first-last-100kib", diffOf(`{"kind":"changed","body":{"text":true}}`), verifyRelicBodyDiff},
+		{"relic-diff-first-last-100kib", diffOf(`{"kind":"changed","body":{"text":true,"approximate":true,"hunks":[{}]}}`), verifyRelicBodyDiff},
 	}
 	for _, test := range tests {
 		run := fakeRelicRun(test.stdout)
@@ -98,6 +121,13 @@ func TestRelicScenariosCheckTheirOutput(t *testing.T) {
 		if err := verifyRelicLiveBodies(2, 16)([]byte(stdout)); err != nil {
 			t.Fatalf("%s: %v", stdout, err)
 		}
+	}
+
+	if err := verifyRelicHistory(11)([]byte(historyOf(11, 11))); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyRelicBodyDiff([]byte(diffOf(exact))); err != nil {
+		t.Fatal(err)
 	}
 
 	// The right answer passes, records its sample and keeps the Git command

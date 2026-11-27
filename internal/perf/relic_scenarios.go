@@ -30,6 +30,9 @@ var relicScenarioNames = []string{
 	"relic-show-part-2kib",
 	"relic-body-2kib",
 	"relic-body-1mib",
+	"relic-history-100",
+	"relic-diff-latest-100kib",
+	"relic-diff-first-last-100kib",
 	"relic-edit-body-1mib",
 	"relic-list",
 	"relic-list-type",
@@ -50,7 +53,8 @@ var relicScenarioNames = []string{
 // RelicScenarioNames returns the relic family's scenarios in report order.
 // The names are the story's, at every scale: at the smoke scale
 // relic-body-1mib reads the smoke body, relic-create-16mib writes the smoke
-// FullBodiesBytes and relic-push-100 pushes the smoke count.
+// FullBodiesBytes, relic-push-100 pushes the smoke count and the history and
+// diff scenarios read the smoke history relic.
 func RelicScenarioNames() []string {
 	return append([]string(nil), relicScenarioNames...)
 }
@@ -241,6 +245,38 @@ func verifyBodyLength(want int) relicVerifier {
 		}
 		return nil
 	}
+}
+
+// verifyRelicHistory checks a part's whole history: want changes, each one a
+// body save, and so as many body versions.
+func verifyRelicHistory(want int) relicVerifier {
+	return func(stdout []byte) error {
+		var history core.RelicHistory
+		if err := resultData(stdout, &history); err != nil {
+			return err
+		}
+		if len(history.Changes) != want || len(history.BodyVersions) != want {
+			return fmt.Errorf("history lists %d changes and %d body versions, want %d of each",
+				len(history.Changes), len(history.BodyVersions), want)
+		}
+		return nil
+	}
+}
+
+// verifyRelicBodyDiff checks a part's diff: that one changed part, its body
+// compared line by line, with hunks and within the line diff's bound.
+func verifyRelicBodyDiff(stdout []byte) error {
+	var diff core.RelicDiff
+	if err := resultData(stdout, &diff); err != nil {
+		return err
+	}
+	if len(diff.Parts) != 1 || diff.Parts[0].Kind != core.RelicPartChanged {
+		return fmt.Errorf("diff lists %+v, want one changed part", diff.Parts)
+	}
+	if body := diff.Parts[0].Body; body == nil || !body.Text || body.Approximate || len(body.Hunks) == 0 {
+		return fmt.Errorf("body diff is %+v, want an exact text diff with hunks", body)
+	}
+	return nil
 }
 
 type relicChangeResult struct {
@@ -517,7 +553,9 @@ func (b *relicBench) stage(name string, step func(context.Context) error) error 
 	return nil
 }
 
-func (b *relicBench) relicCount() int { return b.run.spec.Relics.Relics + 2 }
+func (b *relicBench) relicCount() int {
+	return b.run.spec.Relics.Relics + relicFixtureExtraRelics
+}
 
 func (b *relicBench) buildFixture() error {
 	spec := b.run.spec
@@ -788,6 +826,7 @@ func (b *relicBench) measureMain() error {
 
 	small := fixture.BodyRelic + "#" + fixture.SmallBodyPart
 	large := fixture.BodyRelic + "#" + fixture.LargeBodyPart
+	history := fixture.HistoryRelic + "#" + fixture.HistoryPart
 	reads := []struct {
 		name   string
 		args   []string
@@ -796,6 +835,12 @@ func (b *relicBench) measureMain() error {
 		{"relic-show-part-2kib", []string{"relic", "show", small, "--json"}, verifyRelicShowParts(1, int64(relics.SmallBodyBytes))},
 		{"relic-body-2kib", []string{"relic", "show", small, "--body"}, verifyBodyLength(relics.SmallBodyBytes)},
 		{"relic-body-1mib", []string{"relic", "show", large, "--body"}, verifyBodyLength(relics.LargeBodyBytes)},
+		{"relic-history-100", []string{"relic", "show", history, "--history", "--all", "--json"},
+			verifyRelicHistory(relics.HistoryEdits + 1)},
+		{"relic-diff-latest-100kib", []string{"relic", "diff", history, "--json"}, verifyRelicBodyDiff},
+		{"relic-diff-first-last-100kib",
+			[]string{"relic", "diff", history, fixture.HistoryFirstVersion, fixture.HistoryLastVersion, "--json"},
+			verifyRelicBodyDiff},
 	}
 	for _, read := range reads {
 		for range samples {
@@ -1108,6 +1153,8 @@ func writeRelicMarkdown(w io.Writer, report *RelicBenchmarkReport) error {
 		fixture.Moves, fixture.MovesPerUpdate, fixture.ChangedRelics, fixture.Seed)
 	fmt.Fprintf(&out, "relic-create-16mib writes a relic of %d parts whose live bodies total %d bytes; relic-edit-part-16mib replaces its last part, of %d bytes, with as many. relic-edit-body-1mib saves a new %d-byte body over the body relic's large part.\n",
 		FullBodiesRelicParts(fixture), fixture.FullBodiesBytes, fixture.SmallBodyBytes, fixture.LargeBodyBytes)
+	fmt.Fprintf(&out, "The history and diff scenarios read a relic of one %d-byte part saved %d times after it was created, each save rewriting %d lines.\n",
+		fixture.HistoryBodyBytes, fixture.HistoryEdits, relicHistoryLinesPerEdit)
 	fmt.Fprintln(&out, "Moves are written as several moves per commit, so storage per move is a lower bound.")
 
 	fmt.Fprintln(&out, "\n| Fixture step | Untimed (ms) |")
