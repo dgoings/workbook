@@ -15,8 +15,9 @@ const (
 	relicPartFieldsFormat    = "workbook.relic-part-fields"
 )
 
-// RelicMinReader is the writer-format generation every relic operation type
-// declares. See SupportedFormatGeneration for what generation six means.
+// RelicMinReader is the writer-format generation the relic operation types of
+// the first relic stories declare. See SupportedFormatGeneration for what
+// generation six means; RelicCheckpointMinReader is seven.
 const RelicMinReader = 6
 
 type RelicOperationType string
@@ -36,6 +37,12 @@ const (
 	RelicOperationPartRemove     RelicOperationType = "part.remove"
 	RelicOperationPartRestore    RelicOperationType = "part.restore"
 	RelicOperationMigrate        RelicOperationType = "relic.migrate"
+	RelicOperationRetire         RelicOperationType = "relic.retire"
+	RelicOperationUnretire       RelicOperationType = "relic.unretire"
+	// RelicOperationCheckpoint is the root of a compacted relic: the sole
+	// operation of a parentless commit, carrying a summary of the history it
+	// replaced and none of the relic's content.
+	RelicOperationCheckpoint RelicOperationType = "history.checkpoint"
 )
 
 // RelicCreateData is what relic.create records about the new relic. Schema
@@ -77,6 +84,8 @@ type RelicOperation struct {
 	LinkID    string             `json:"linkId,omitempty"`
 	RelicType string             `json:"relicType,omitempty"`
 	Schema    string             `json:"schema,omitempty"`
+	// Checkpoint is the summary a history.checkpoint carries.
+	Checkpoint *RelicCheckpointData `json:"checkpoint,omitempty"`
 }
 
 // RelicOperationPack is a relic commit's operation.json.
@@ -103,16 +112,20 @@ type RelicBody struct {
 
 // RelicPart is one part as the state lists it, live or removed.
 type RelicPart struct {
-	ID       string     `json:"id"`
-	Type     string     `json:"type"`
-	Position string     `json:"position"`
-	Removed  bool       `json:"removed,omitempty"`
-	Body     *RelicBody `json:"body,omitempty"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Position string `json:"position"`
+	Removed  bool   `json:"removed,omitempty"`
+	// Dropped marks a stub: a removed part whose content a checkpoint dropped.
+	// A stub has no body, and its fields.json is the empty one.
+	Dropped *RelicPartDrop `json:"dropped,omitempty"`
+	Body    *RelicBody     `json:"body,omitempty"`
 }
 
 // RelicData is the folded relic a state document carries. Schema is the ID of
 // the schema version the relic names, empty for an open relic and written as
-// null then (see MarshalJSON). Retired is always false in this story;
+// null then (see MarshalJSON). Compacted is set once the relic's history
+// starts at a checkpoint, and is left out of the document until then.
 // Properties and Parts are never nil, and Parts is ordered by position, then
 // ID.
 type RelicData struct {
@@ -122,6 +135,7 @@ type RelicData struct {
 	Author     string                     `json:"author"`
 	Retired    bool                       `json:"retired"`
 	Deleted    bool                       `json:"deleted"`
+	Compacted  *RelicCompaction           `json:"compacted,omitempty"`
 	CreatedAt  time.Time                  `json:"createdAt"`
 	UpdatedAt  time.Time                  `json:"updatedAt"`
 	Properties map[string]json.RawMessage `json:"properties"`
@@ -138,6 +152,7 @@ type relicDataJSON struct {
 	Author     string                     `json:"author"`
 	Retired    bool                       `json:"retired"`
 	Deleted    bool                       `json:"deleted"`
+	Compacted  *RelicCompaction           `json:"compacted,omitempty"`
 	CreatedAt  time.Time                  `json:"createdAt"`
 	UpdatedAt  time.Time                  `json:"updatedAt"`
 	Properties map[string]json.RawMessage `json:"properties"`
@@ -153,6 +168,7 @@ func (data RelicData) MarshalJSON() ([]byte, error) {
 		Author:     data.Author,
 		Retired:    data.Retired,
 		Deleted:    data.Deleted,
+		Compacted:  data.Compacted,
 		CreatedAt:  data.CreatedAt,
 		UpdatedAt:  data.UpdatedAt,
 		Properties: data.Properties,
@@ -226,8 +242,8 @@ type RelicPartContent struct {
 }
 
 // relicOperationMinReader declares the generation each relic operation type
-// needs. Every type this story writes is generation six; a later story's types
-// take higher numbers.
+// needs. The first relic stories' types are generation six; retiring and
+// compaction are seven, and a later story's types take higher numbers.
 var relicOperationMinReader = map[RelicOperationType]int{
 	RelicOperationCreate:         RelicMinReader,
 	RelicOperationTitleSet:       RelicMinReader,
@@ -245,6 +261,21 @@ var relicOperationMinReader = map[RelicOperationType]int{
 	RelicOperationLinkAdd:        RelicMinReader,
 	RelicOperationLinkRemove:     RelicMinReader,
 	RelicOperationMigrate:        RelicMinReader,
+	RelicOperationRetire:         RelicCheckpointMinReader,
+	RelicOperationUnretire:       RelicCheckpointMinReader,
+	RelicOperationCheckpoint:     RelicCheckpointMinReader,
+}
+
+// relicPackMinReader is the generation a pack of these operations declares:
+// the largest any of them needs.
+func relicPackMinReader(operations []RelicOperation) int {
+	minReader := 0
+	for _, operation := range operations {
+		if required := relicOperationMinReader[operation.Type]; required > minReader {
+			minReader = required
+		}
+	}
+	return minReader
 }
 
 // NewRelicOperationPack builds a pack whose generation is derived from its
@@ -255,16 +286,10 @@ func NewRelicOperationPack(
 	wallTime time.Time,
 	operations []RelicOperation,
 ) RelicOperationPack {
-	minReader := 0
-	for _, operation := range operations {
-		if required := relicOperationMinReader[operation.Type]; required > minReader {
-			minReader = required
-		}
-	}
 	return RelicOperationPack{
 		Format:            relicOperationPackFormat,
 		Version:           documentVersion,
-		MinReader:         minReader,
+		MinReader:         relicPackMinReader(operations),
 		ProjectID:         projectID,
 		RelicID:           relicID,
 		HistoryGeneration: generation,
@@ -429,16 +454,17 @@ func DecodeRelicFieldsDocument(data []byte) (RelicFieldsDocument, error) {
 }
 
 // validateRelicMarker checks a relic document's generation: above this build's
-// it was written by a newer Workbook, and anything but six is corrupt.
+// it was written by a newer Workbook, and anything but six or seven is
+// corrupt.
 func validateRelicMarker(document string, minReader int, relicID string) error {
 	if minReader > SupportedFormatGeneration {
 		// This is also what stops EncodeDocument from writing a newer document
 		// back out with the members it could not decode silently dropped.
 		return newerWriterRelic(relicID)
 	}
-	if minReader != RelicMinReader {
-		return corrupt("%s minimum reader generation %d is invalid; a relic declares %d",
-			document, minReader, RelicMinReader)
+	if minReader != RelicMinReader && minReader != RelicCheckpointMinReader {
+		return corrupt("%s minimum reader generation %d is invalid; a relic declares %d or %d",
+			document, minReader, RelicMinReader, RelicCheckpointMinReader)
 	}
 	return nil
 }
@@ -487,6 +513,12 @@ func validateRelicOperationPackDocument(pack RelicOperationPack) error {
 		}
 		seen[operation.ID] = struct{}{}
 	}
+	// A pack declares exactly the generation its operations need, so a retire
+	// cannot reach a generation-six build marked as something it can fold.
+	if required := relicPackMinReader(pack.Operations); pack.MinReader != required {
+		return corrupt("relic operation pack minimum reader generation %d is not %d, the largest its operations need",
+			pack.MinReader, required)
+	}
 	return nil
 }
 
@@ -494,7 +526,7 @@ func validateRelicOperationPackDocument(pack RelicOperationPack) error {
 // operation type carries. Anything outside its list must be absent, which is
 // what stops a future build's operation from being folded as an older one.
 type relicOperationMembers struct {
-	relic, title, name, value, part, partType, position, body, link, linkID, relicType, schema bool
+	relic, title, name, value, part, partType, position, body, link, linkID, relicType, schema, checkpoint bool
 }
 
 var relicOperationShapes = map[RelicOperationType]relicOperationMembers{
@@ -514,6 +546,9 @@ var relicOperationShapes = map[RelicOperationType]relicOperationMembers{
 	RelicOperationLinkAdd:        {link: true},
 	RelicOperationLinkRemove:     {linkID: true},
 	RelicOperationMigrate:        {relicType: true, schema: true},
+	RelicOperationRetire:         {},
+	RelicOperationUnretire:       {},
+	RelicOperationCheckpoint:     {checkpoint: true},
 }
 
 func validateRelicOperationDocument(operation RelicOperation) error {
@@ -525,18 +560,19 @@ func validateRelicOperationDocument(operation RelicOperation) error {
 		return corrupt("unsupported relic operation type %q", operation.Type)
 	}
 	present := relicOperationMembers{
-		relic:     operation.Relic != nil,
-		title:     operation.Title != "",
-		name:      operation.Name != "",
-		value:     len(operation.Value) != 0,
-		part:      operation.Part != "",
-		partType:  operation.PartType != "",
-		position:  operation.Position != "",
-		body:      operation.Body != nil,
-		link:      operation.Link != nil,
-		linkID:    operation.LinkID != "",
-		relicType: operation.RelicType != "",
-		schema:    operation.Schema != "",
+		relic:      operation.Relic != nil,
+		title:      operation.Title != "",
+		name:       operation.Name != "",
+		value:      len(operation.Value) != 0,
+		part:       operation.Part != "",
+		partType:   operation.PartType != "",
+		position:   operation.Position != "",
+		body:       operation.Body != nil,
+		link:       operation.Link != nil,
+		linkID:     operation.LinkID != "",
+		relicType:  operation.RelicType != "",
+		schema:     operation.Schema != "",
+		checkpoint: operation.Checkpoint != nil,
 	}
 	// part.add and relic.migrate are the types with an optional member: a part
 	// may be added without a body, and a relic may move to a type with no
@@ -625,6 +661,11 @@ func validateRelicOperationDocument(operation RelicOperation) error {
 	}
 	if operation.LinkID != "" {
 		if err := validateCanonicalULID("link.remove link ID", operation.LinkID); err != nil {
+			return err
+		}
+	}
+	if operation.Checkpoint != nil {
+		if err := validateRelicCheckpointSummary(operation.ID, *operation.Checkpoint); err != nil {
 			return err
 		}
 	}
@@ -759,16 +800,20 @@ func validateRelicStateDocument(state RelicStateDocument) error {
 	if err := validateCanonicalULID("relic state history generation", state.History.Generation); err != nil {
 		return err
 	}
-	if state.History.CompactedFrom != nil {
-		return corrupt("relic state compaction metadata is unsupported")
+	// Not quoted, for the reason validateStateEnvelope gives.
+	if state.History.CompactedFrom != nil && !objectIDPattern.MatchString(*state.History.CompactedFrom) {
+		return corrupt("relic state history compactedFrom must be a Git object ID")
 	}
 	if state.LogicalClock == 0 {
 		return corrupt("relic state logical clock must be positive")
 	}
-	return validateRelicData(state.Relic)
+	return validateRelicData(state.Relic, state.History, state.MinReader)
 }
 
-func validateRelicData(relic RelicData) error {
+// validateRelicData checks the relic a state carries. history and minReader
+// are the state's, which the members that retiring and compaction brought
+// depend on.
+func validateRelicData(relic RelicData, history History, minReader int) error {
 	if err := validateStoredRelicTitle(relic.Title); err != nil {
 		return Wrap(CategoryCorruptData, "relic state carries an invalid title", err)
 	}
@@ -783,8 +828,22 @@ func validateRelicData(relic RelicData) error {
 	if strings.TrimSpace(relic.Author) == "" {
 		return corrupt("relic state author must not be blank")
 	}
-	if relic.Retired {
-		return corrupt("relic state retirement is unsupported")
+	// A generation-six build refuses both members, so a state carrying them
+	// must say it needs seven.
+	if relic.Retired && minReader < RelicCheckpointMinReader {
+		return corrupt("a retired relic state must declare minimum reader generation %d", RelicCheckpointMinReader)
+	}
+	if relic.Compacted != nil && minReader < RelicCheckpointMinReader {
+		return corrupt("a compacted relic state must declare minimum reader generation %d", RelicCheckpointMinReader)
+	}
+	// The checkpoint records both, and every state after it carries both.
+	if (relic.Compacted == nil) != (history.CompactedFrom == nil) {
+		return corrupt("relic state compacted and history compactedFrom must be present together")
+	}
+	if relic.Compacted != nil {
+		if err := validateRelicCompaction(*relic.Compacted); err != nil {
+			return err
+		}
 	}
 	if relic.CreatedAt.IsZero() || relic.UpdatedAt.IsZero() {
 		return corrupt("relic state creation and update times must be present")
@@ -804,7 +863,18 @@ func validateRelicData(relic RelicData) error {
 	if relic.Parts == nil {
 		return corrupt("relic state parts must be a list")
 	}
-	return validateRelicParts(relic.Parts)
+	if err := validateRelicParts(relic.Parts); err != nil {
+		return err
+	}
+	// Only a checkpoint makes a stub, so a relic never compacted has none.
+	if relic.Compacted == nil {
+		for _, part := range relic.Parts {
+			if part.Dropped != nil {
+				return corrupt("relic state part %s is a stub, but the relic was never compacted", part.ID)
+			}
+		}
+	}
+	return nil
 }
 
 // validateRelicParts checks each part and that the list is ordered by
@@ -835,6 +905,11 @@ func validateRelicParts(parts []RelicPart) error {
 			}
 		}
 		previous = position
+		if part.Dropped != nil {
+			if err := validateRelicPartDrop(part); err != nil {
+				return err
+			}
+		}
 		if part.Body != nil {
 			if err := ValidateRelicBodyFormat(part.Body.Format); err != nil {
 				return Wrap(CategoryCorruptData, "relic state part "+part.ID+" has an invalid body format", err)

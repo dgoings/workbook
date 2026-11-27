@@ -35,9 +35,17 @@ type RelicReplayStep struct {
 //  2. A pack whose every operation origin already holds, with the same
 //     content, is skipped. One held in part, or held with other content, is
 //     an error.
-//  3. A part.body.set whose base is not the part's current version stops on
+//  3. A pack with an operation naming a stub of the parent, a part whose
+//     content a checkpoint dropped, stops on a dropped conflict: the fold
+//     would ignore it, and the change it records has nothing left to apply
+//     to.
+//  4. A part.body.set whose base is not the part's current version stops on
 //     a body conflict, unless the saved body equals the parent's: then the
 //     two sides agree, and the fold ignores the operation.
+//
+// Retire and unretire need no rule: they set a mark as title.set sets a
+// title, so the replayed pack's mark stands and neither conflicts with an
+// edit.
 //
 // Counts and totals are never refused here; RelicOverLimitWarnings reports
 // them. Otherwise Record is the fold of the pack onto parent, at the clock of
@@ -59,6 +67,12 @@ func PlanRelicReplay(parent RelicRecord, pack RelicOperationPack, input RelicRep
 	}
 	if skip, err := relicPackHeld(pack, input.Held); err != nil || skip {
 		return RelicReplayStep{Skip: skip}, relicReplayError(relicID, err)
+	}
+	if operation, part := relicOperationOnStub(parent.State.Relic, pack); operation != "" {
+		return RelicReplayStep{
+			Conflict:          &RelicConflict{RelicID: relicID, Type: RelicConflictDropped, Part: part},
+			ConflictOperation: operation,
+		}, nil
 	}
 
 	child := pack
@@ -133,6 +147,31 @@ func planRelicReplayOnDeletion(parent RelicRecord, pack RelicOperationPack) (Rel
 	}, ConflictOperation: blocked.ID}, true
 }
 
+// relicOperationOnStub is rule 3: the first operation of the pack that names a
+// stub of the parent, as the part it changes or the part a link is from, and
+// that stub's ID; or two empty strings.
+func relicOperationOnStub(parent RelicData, pack RelicOperationPack) (operation, part string) {
+	stubs := map[string]bool{}
+	for _, candidate := range parent.Parts {
+		if candidate.Dropped != nil {
+			stubs[candidate.ID] = true
+		}
+	}
+	if len(stubs) == 0 {
+		return "", ""
+	}
+	for _, candidate := range pack.Operations {
+		named := candidate.Part
+		if candidate.Type == RelicOperationLinkAdd && candidate.Link != nil {
+			named = candidate.Link.From
+		}
+		if stubs[named] {
+			return candidate.ID, named
+		}
+	}
+	return "", ""
+}
+
 // relicPackOnly reports whether every operation of the pack has the type.
 func relicPackOnly(pack RelicOperationPack, kind RelicOperationType) bool {
 	for _, operation := range pack.Operations {
@@ -185,7 +224,7 @@ func sameRelicOperation(a, b RelicOperation) (bool, error) {
 	return bytes.Equal(encodedA, encodedB), nil
 }
 
-// staleRelicBody is rule 3. It walks the pack's body saves against the
+// staleRelicBody is rule 4. It walks the pack's body saves against the
 // parent's versions, as the fold will, and returns the first save that is
 // stale and disagrees with the parent's body, or nil when none is. A save
 // for a part neither the parent nor the pack has is an error: no honest

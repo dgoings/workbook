@@ -410,7 +410,7 @@ func damageRelic(t *testing.T, repository *gitstore.Repository, relicID string) 
 }
 
 // makeNewerRelic puts on relicID's tip what a later Workbook writes when it
-// retires the relic, marked generation 7.
+// archives and retires the relic, marked generation 8.
 func makeNewerRelic(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig, relicID string) {
 	t.Helper()
 	tip := relicIndexGit(t, repository, nil, "rev-parse", relicRefOf(relicID))
@@ -426,7 +426,7 @@ func makeNewerRelic(t *testing.T, repository *gitstore.Repository, config core.P
 	}
 	clock := parsed.LogicalClock
 	for _, replacement := range [][2]string{
-		{`"minReader":6`, `"minReader":7`},
+		{`"minReader":6`, `"minReader":8`},
 		{fmt.Sprintf(`"logicalClock":%d`, clock), fmt.Sprintf(`"logicalClock":%d`, clock+1)},
 		{`"retired":false`, `"retired":true`},
 	} {
@@ -435,11 +435,11 @@ func makeNewerRelic(t *testing.T, repository *gitstore.Repository, config core.P
 		}
 		state = strings.Replace(state, replacement[0], replacement[1], 1)
 	}
-	operation := `{"format":"workbook.relic-operation-pack","version":1,"minReader":7,` +
+	operation := `{"format":"workbook.relic-operation-pack","version":1,"minReader":8,` +
 		`"projectId":"` + config.ProjectID + `","relicId":"` + relicID + `",` +
 		`"historyGeneration":"` + parsed.History.Generation + `","actor":{"id":"` + relicIndexActor + `"},` +
 		fmt.Sprintf(`"logicalClock":%d,"wallTime":"2026-11-24T10:01:00Z",`, clock+1) +
-		`"operations":[{"id":"` + relicIndexTestID(990001) + `","type":"relic.retire"}]}` + "\n"
+		`"operations":[{"id":"` + relicIndexTestID(990001) + `","type":"relic.archive"}]}` + "\n"
 	forgeRelicTipOn(t, repository, relicID, tip, []byte(operation), []byte(state))
 }
 

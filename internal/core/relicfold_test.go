@@ -758,3 +758,158 @@ func TestApplyRelicFoldsMigrate(t *testing.T) {
 		RelicOperation{ID: relicTestID(63), Type: RelicOperationMigrate, RelicType: "spec", Schema: schemaA}))
 	requireCorruptData(t, "migrating a deleted relic", err)
 }
+
+// stateBytesWithoutClock encodes a relic state with its clock and update time
+// cleared, for comparing a state with its parent across a fold.
+func stateBytesWithoutClock(t *testing.T, state RelicStateDocument) string {
+	t.Helper()
+	state.LogicalClock = 1
+	state.Relic.UpdatedAt = relicDocTime
+	encoded, err := EncodeDocument(state)
+	if err != nil {
+		t.Fatalf("EncodeDocument(state): %v", err)
+	}
+	return string(encoded)
+}
+
+func TestRetireShapesAndFold(t *testing.T) {
+	retire := RelicOperation{ID: relicTestID(7300), Type: RelicOperationRetire}
+	unretire := RelicOperation{ID: relicTestID(7301), Type: RelicOperationUnretire}
+	for _, operation := range []RelicOperation{retire, unretire} {
+		pack := singleRelicOperationPack(operation)
+		encoded, err := EncodeDocument(pack)
+		if err != nil {
+			t.Fatalf("EncodeDocument(%s) = %v", operation.Type, err)
+		}
+		want := `"operations":[{"id":"` + operation.ID + `","type":"` + string(operation.Type) + `"}]}`
+		if !strings.Contains(string(encoded), want) {
+			t.Errorf("%s encodes as %s, want it to hold %s", operation.Type, encoded, want)
+		}
+		decoded, err := DecodeRelicOperationPack(encoded)
+		if err != nil || !reflect.DeepEqual(decoded, pack) {
+			t.Errorf("DecodeRelicOperationPack(%s) = %#v, %v", operation.Type, decoded, err)
+		}
+		for label, change := range map[string]func(*RelicOperation){
+			"title":      func(o *RelicOperation) { o.Title = "Retired" },
+			"name":       func(o *RelicOperation) { o.Name = "status" },
+			"part":       func(o *RelicOperation) { o.Part = relicDocPartA },
+			"checkpoint": func(o *RelicOperation) { o.Checkpoint = &RelicCheckpointData{RunID: relicTestID(7302)} },
+		} {
+			changed := operation
+			change(&changed)
+			refused := singleRelicOperationPack(changed)
+			requireRelicPackRefused(t, string(operation.Type)+" with a "+label, refused)
+		}
+	}
+
+	golden := goldenRelicRecord(t)
+	retired := mustApplyRelic(t, golden, relicFoldPack(2, retire))
+	if !retired.State.Relic.Retired {
+		t.Fatalf("a retire left the relic live")
+	}
+	again := mustApplyRelic(t, retired, relicFoldPack(3, RelicOperation{ID: relicTestID(7303), Type: RelicOperationRetire}))
+	if stateBytesWithoutClock(t, again.State) != stateBytesWithoutClock(t, retired.State) {
+		t.Errorf("retiring a retired relic changed more than its clock and update time")
+	}
+	if again.State.LogicalClock != 3 || !again.State.Relic.UpdatedAt.Equal(relicDocTime.Add(2*time.Minute)) {
+		t.Errorf("the repeated retire: clock %d, updatedAt %s", again.State.LogicalClock, again.State.Relic.UpdatedAt)
+	}
+	live := mustApplyRelic(t, again, relicFoldPack(4, unretire))
+	if live.State.Relic.Retired {
+		t.Fatalf("an unretire left the relic retired")
+	}
+	liveAgain := mustApplyRelic(t, live, relicFoldPack(5, RelicOperation{ID: relicTestID(7304), Type: RelicOperationUnretire}))
+	if stateBytesWithoutClock(t, liveAgain.State) != stateBytesWithoutClock(t, live.State) {
+		t.Errorf("unretiring a live relic changed more than its clock and update time")
+	}
+	requireRelicEqual(t, "an unretired relic", withoutUpdatedAt(live.State.Relic), withoutUpdatedAt(golden.State.Relic))
+
+	deleted := mustApplyRelic(t, golden, relicFoldPack(2, RelicOperation{ID: relicTestID(7305), Type: RelicOperationTombstone}))
+	for _, operation := range []RelicOperation{retire, unretire} {
+		_, err := ApplyRelic(&deleted, relicFoldPack(3, operation))
+		requireCorruptData(t, string(operation.Type)+" on a deleted relic", err)
+	}
+	_, err := ApplyRelic(&golden, relicFoldPack(2, retire, RelicOperation{ID: relicTestID(7306), Type: RelicOperationTombstone},
+		RelicOperation{ID: relicTestID(7307), Type: RelicOperationUnretire}))
+	requireCorruptData(t, "an unretire after a tombstone in one pack", err)
+
+	// A retired relic is deleted and restored as any other, and keeps its mark.
+	gone := mustApplyRelic(t, retired, relicFoldPack(3, RelicOperation{ID: relicTestID(7308), Type: RelicOperationTombstone}))
+	back := mustApplyRelic(t, gone, relicFoldPack(4, RelicOperation{ID: relicTestID(7309), Type: RelicOperationRestore}))
+	if !back.State.Relic.Retired || back.State.Relic.Deleted {
+		t.Errorf("a retired relic deleted and restored: retired %v, deleted %v", back.State.Relic.Retired, back.State.Relic.Deleted)
+	}
+
+	// A checkpoint never applies onto a parent, nor beside other operations.
+	checkpoint, _ := relicCheckpointForTest(RelicBoundaryRetired)
+	child := relicFoldPack(2, checkpoint.Operations[0])
+	_, err = ApplyRelic(&golden, child)
+	requireCorruptData(t, "a checkpoint with a parent", err)
+	withCreate := goldenRelicPack()
+	withCreate.Operations = append(withCreate.Operations, checkpoint.Operations[0])
+	withCreate = NewRelicOperationPack(withCreate.ProjectID, withCreate.RelicID, withCreate.HistoryGeneration,
+		withCreate.Actor.ID, 1, withCreate.WallTime, withCreate.Operations)
+	_, err = ApplyRelic(nil, withCreate)
+	requireCorruptData(t, "a create root with a checkpoint", err)
+}
+
+func TestFoldIgnoresChangesToStubs(t *testing.T) {
+	_, root := relicCheckpointForTest(RelicBoundaryRetired)
+	stub := relicDocPartB
+	pack := func(operations ...RelicOperation) RelicOperationPack {
+		return NewRelicOperationPack(relicDocProject, relicDocRelic, relicCheckpointGeneration, relicDocActor, 5,
+			relicCheckpointWall.Add(time.Minute), operations)
+	}
+	cases := map[string]RelicOperation{
+		"field set": {ID: relicTestID(7400), Type: RelicOperationPartFieldSet, Part: stub, Name: "heading",
+			Value: json.RawMessage(`"Back"`)},
+		"field clear": {ID: relicTestID(7401), Type: RelicOperationPartFieldClear, Part: stub, Name: "heading"},
+		"body set": {ID: relicTestID(7402), Type: RelicOperationPartBodySet, Part: stub,
+			Body: &RelicBodyChange{Format: "md", Bytes: 4}},
+		"move":    {ID: relicTestID(7403), Type: RelicOperationPartMove, Part: stub, Position: "1/2"},
+		"remove":  {ID: relicTestID(7404), Type: RelicOperationPartRemove, Part: stub},
+		"restore": {ID: relicTestID(7405), Type: RelicOperationPartRestore, Part: stub},
+	}
+	want := stateBytesWithoutClock(t, root.State)
+	for label, operation := range cases {
+		record, err := ApplyRelic(&root, pack(operation))
+		if err != nil {
+			t.Errorf("%s on a stub: ApplyRelic = %v", label, err)
+			continue
+		}
+		if got := stateBytesWithoutClock(t, record.State); got != want {
+			t.Errorf("%s on a stub changed the relic:\n got %s\nwant %s", label, got, want)
+		}
+		if record.State.MinReader != RelicCheckpointMinReader || record.State.History.CompactedFrom == nil ||
+			record.State.Relic.Compacted == nil {
+			t.Errorf("%s on a stub: the child lost the checkpoint's generation or compaction", label)
+		}
+	}
+
+	_, err := ApplyRelic(&root, pack(RelicOperation{ID: stub, Type: RelicOperationPartAdd, PartType: "note", Position: "3/1"}))
+	requireCorruptData(t, "a part.add reusing a stub's ID", err)
+
+	// Live parts of a compacted relic still change as usual.
+	edited, err := ApplyRelic(&root, pack(RelicOperation{ID: relicTestID(7406), Type: RelicOperationPartMove,
+		Part: relicDocPartA, Position: "3/1"}))
+	if err != nil || requirePartForTest(t, edited.State.Relic, relicDocPartA).Position != "3/1" {
+		t.Fatalf("a move of a live part of a compacted relic = %v", err)
+	}
+
+	// Restoring a compacted deleted relic leaves every part a stub.
+	_, deletedRoot := relicCheckpointForTest(RelicBoundaryDeleted)
+	restored, err := ApplyRelic(&deletedRoot, pack(RelicOperation{ID: relicTestID(7407), Type: RelicOperationRestore},
+		RelicOperation{ID: relicTestID(7408), Type: RelicOperationPartRestore, Part: relicDocPartA}))
+	if err != nil {
+		t.Fatalf("restoring a compacted deleted relic = %v", err)
+	}
+	if restored.State.Relic.Deleted || len(restored.State.Relic.LiveParts()) != 0 {
+		t.Fatalf("the restored relic: deleted %v, %d live parts; want false and 0",
+			restored.State.Relic.Deleted, len(restored.State.Relic.LiveParts()))
+	}
+	for _, part := range restored.State.Relic.Parts {
+		if part.Dropped == nil || !part.Removed {
+			t.Errorf("part %s of the restored relic is no longer a stub", part.ID)
+		}
+	}
+}

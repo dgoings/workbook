@@ -481,8 +481,9 @@ func TestValidateRelicHistoryStopsAtTheFirstBadCommit(t *testing.T) {
 }
 
 // forgeNewerRelicTip puts on top of root, as the relic's tip, what a later
-// Workbook writes when it retires the relic: an operation type and a state
-// this build has no rules for, marked generation 7. It returns that commit.
+// Workbook writes when it archives and retires the relic: an operation type
+// and a state this build has no rules for, marked generation 8. It returns
+// that commit.
 func forgeNewerRelicTip(t *testing.T, repo *Repository, config core.ProjectConfig, root core.RelicSnapshot) string {
 	t.Helper()
 	relicID := root.Operation.RelicID
@@ -496,13 +497,13 @@ func forgeNewerRelicTip(t *testing.T, repo *Repository, config core.ProjectConfi
 		}
 		return document
 	}
-	operationJSON := []byte(`{"format":"workbook.relic-operation-pack","version":1,"minReader":7,` +
+	operationJSON := []byte(`{"format":"workbook.relic-operation-pack","version":1,"minReader":8,` +
 		`"projectId":"` + config.ProjectID + `","relicId":"` + relicID + `",` +
 		`"historyGeneration":"` + root.Operation.HistoryGeneration + `","actor":{"id":"` + relicTestActor + `"},` +
 		`"logicalClock":2,"wallTime":"2026-11-23T10:01:00Z",` +
-		`"operations":[{"id":"` + relicTestID(700001) + `","type":"relic.retire"}]}` + "\n")
+		`"operations":[{"id":"` + relicTestID(700001) + `","type":"relic.archive"}]}` + "\n")
 	stateJSON := raise(relicBlob(t, repo, root.Head+":state.json"),
-		`"minReader":6`, `"minReader":7`,
+		`"minReader":6`, `"minReader":8`,
 		`"logicalClock":1`, `"logicalClock":2`,
 		`"retired":false`, `"retired":true`)
 	forged := forgeRelicCommit(t, repo, root.Head, operationJSON, stateJSON, forgedPartsOf(t, repo, root.Head))
@@ -527,8 +528,8 @@ func TestGetRelicReturnsANewerWritersRelicUnverified(t *testing.T) {
 		t.Fatalf("GetRelic() = %s with retired %t, want the newer commit %s with retired true",
 			got.Head, got.Record.State.Relic.Retired, forged)
 	}
-	if got.Operation.Operations[0].Type != "relic.retire" || !got.Operation.RequiresNewerReader() {
-		t.Fatalf("GetRelic() pack = %+v, want the newer writer's relic.retire", got.Operation)
+	if got.Operation.Operations[0].Type != "relic.archive" || !got.Operation.RequiresNewerReader() {
+		t.Fatalf("GetRelic() pack = %+v, want the newer writer's relic.archive", got.Operation)
 	}
 	assertRelicHistoryStopsAt(t, repo, config, relicID, forged, forged, 1, core.CategoryNewerWriter, relicID)
 

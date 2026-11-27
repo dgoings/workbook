@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // replayStepFor plans one replay step and fails the test on an error.
@@ -820,5 +821,110 @@ func TestRelicConflictJSONShape(t *testing.T) {
 			t.Errorf("content %q: a document says text %v base64 %v, a conflict text %v base64 %v", content,
 				part.Body.Text, part.Body.Base64, conflictVersion.Text, conflictVersion.Base64)
 		}
+	}
+}
+
+func TestReplayStopsOnAStubWithDroppedConflict(t *testing.T) {
+	_, parent := relicCheckpointForTest(RelicBoundaryRetired)
+	local := func(operations ...RelicOperation) RelicOperationPack {
+		return NewRelicOperationPack(relicDocProject, relicDocRelic, relicCheckpointGeneration, relicDocActor, 2,
+			relicDocTime.Add(time.Hour), operations)
+	}
+	restore := RelicOperation{ID: relicTestID(7500), Type: RelicOperationPartRestore, Part: relicDocPartB}
+	step := replayStepFor(t, parent, local(
+		RelicOperation{ID: relicTestID(7501), Type: RelicOperationPropertySet, Name: "q", Value: json.RawMessage(`1`)},
+		restore), RelicReplayInput{})
+	if RelicConflictDropped != "dropped" {
+		t.Fatalf("RelicConflictDropped = %q, want dropped", RelicConflictDropped)
+	}
+	if step.Conflict == nil || step.Conflict.Type != RelicConflictDropped ||
+		step.Conflict.Part != relicDocPartB || step.Conflict.RelicID != relicDocRelic {
+		t.Fatalf("a local restore of a stub: step %#v, conflict %#v; want a dropped conflict naming part B", step, step.Conflict)
+	}
+	if step.ConflictOperation != restore.ID || step.Skip {
+		t.Errorf("the dropped conflict names operation %q (skip %v), want %q", step.ConflictOperation, step.Skip, restore.ID)
+	}
+
+	// Every operation that names a stub stops the replay the same way, and a
+	// body save to one stops on that before it is judged stale.
+	for label, operation := range map[string]RelicOperation{
+		"field set": {ID: relicTestID(7502), Type: RelicOperationPartFieldSet, Part: relicDocPartB, Name: "h",
+			Value: json.RawMessage(`"x"`)},
+		"body set": {ID: relicTestID(7503), Type: RelicOperationPartBodySet, Part: relicDocPartB,
+			Body: &RelicBodyChange{Format: "md", Bytes: 2, Base: relicDocPartB}},
+		"move": {ID: relicTestID(7504), Type: RelicOperationPartMove, Part: relicDocPartB, Position: "9/1"},
+		"link from it": {ID: relicTestID(7505), Type: RelicOperationLinkAdd, Link: &RelicLinkChange{From: relicDocPartB,
+			To: RelicLinkTarget{Task: relicCheckpointLinkedTask}, Rel: "implements"}},
+	} {
+		step := replayStepFor(t, parent, local(operation), RelicReplayInput{})
+		if step.Conflict == nil || step.Conflict.Type != RelicConflictDropped || step.ConflictOperation != operation.ID {
+			t.Errorf("%s on a stub: conflict %#v, operation %q; want dropped naming %s",
+				label, step.Conflict, step.ConflictOperation, operation.ID)
+		}
+	}
+
+	// A pack that names only live parts replays as usual.
+	applied := replayStepFor(t, parent, local(RelicOperation{ID: relicTestID(7506), Type: RelicOperationPartMove,
+		Part: relicDocPartA, Position: "5/1"}), RelicReplayInput{})
+	requireReplayApplied(t, "a move of a live part of a compacted relic", parent, applied)
+
+	detail := RelicConflictDetail(RelicConflict{RelicID: relicDocRelic, Type: RelicConflictDropped, Part: relicDocPartB,
+		ParkedRef: "refs/workbook/reconciled-relics/" + relicDocRelic})
+	if !strings.Contains(detail, relicDocPartB) || !strings.Contains(detail, "dropped") ||
+		!strings.Contains(detail, "refs/workbook/reconciled-relics/") {
+		t.Errorf("RelicConflictDetail(dropped) = %q", detail)
+	}
+}
+
+func TestConcurrentRetireAndEditBothApply(t *testing.T) {
+	retire := RelicOperation{ID: relicTestID(7600), Type: RelicOperationRetire}
+	edit := RelicOperation{ID: relicTestID(7601), Type: RelicOperationPartFieldSet, Part: relicDocPartA, Name: "heading",
+		Value: json.RawMessage(`"Ours"`)}
+	property := RelicOperation{ID: relicTestID(7602), Type: RelicOperationPropertySet, Name: "status",
+		Value: json.RawMessage(`"superseded"`)}
+
+	// The remote retired; the local side edited.
+	remoteRetired := mustApplyRelic(t, goldenRelicRecord(t), relicFoldPack(2, retire))
+	step := replayStepFor(t, remoteRetired, relicFoldPack(2, edit, property), RelicReplayInput{})
+	requireReplayApplied(t, "a local edit onto a remote retire", remoteRetired, step)
+	if !step.Record.State.Relic.Retired || relicProperty(t, step.Record, "status") != `"superseded"` {
+		t.Errorf("a local edit onto a remote retire: retired %v, status %s; want both",
+			step.Record.State.Relic.Retired, relicProperty(t, step.Record, "status"))
+	}
+	if step.Record.State.MinReader != RelicCheckpointMinReader {
+		t.Errorf("the replayed edit declares %d, want 7", step.Record.State.MinReader)
+	}
+
+	// The remote edited; the local side retired.
+	remoteEdited := mustApplyRelic(t, goldenRelicRecord(t), relicFoldPack(2, edit, property))
+	step = replayStepFor(t, remoteEdited, relicFoldPack(2, retire), RelicReplayInput{})
+	requireReplayApplied(t, "a local retire onto a remote edit", remoteEdited, step)
+	if !step.Record.State.Relic.Retired || relicProperty(t, step.Record, "status") != `"superseded"` {
+		t.Errorf("a local retire onto a remote edit: retired %v, status %s; want both",
+			step.Record.State.Relic.Retired, relicProperty(t, step.Record, "status"))
+	}
+}
+
+func TestConcurrentRetireMarksLaterSyncWins(t *testing.T) {
+	retire := RelicOperation{ID: relicTestID(7700), Type: RelicOperationRetire}
+	unretire := RelicOperation{ID: relicTestID(7701), Type: RelicOperationUnretire}
+
+	// The remote retired; the local side, from the same live relic, unretired.
+	remoteRetired := mustApplyRelic(t, goldenRelicRecord(t), relicFoldPack(2, retire))
+	step := replayStepFor(t, remoteRetired, relicFoldPack(2, unretire), RelicReplayInput{})
+	requireReplayApplied(t, "a local unretire onto a remote retire", remoteRetired, step)
+	if step.Record.State.Relic.Retired {
+		t.Errorf("a local unretire replayed onto a remote retire left the relic retired")
+	}
+
+	// The relic was retired; the remote unretired it, and the local side
+	// retired it again.
+	base := mustApplyRelic(t, goldenRelicRecord(t), relicFoldPack(2, retire))
+	remoteUnretired := mustApplyRelic(t, base, relicFoldPack(3, unretire))
+	step = replayStepFor(t, remoteUnretired, relicFoldPack(3, RelicOperation{ID: relicTestID(7702), Type: RelicOperationRetire}),
+		RelicReplayInput{})
+	requireReplayApplied(t, "a local retire onto a remote unretire", remoteUnretired, step)
+	if !step.Record.State.Relic.Retired {
+		t.Errorf("a local retire replayed onto a remote unretire left the relic live")
 	}
 }

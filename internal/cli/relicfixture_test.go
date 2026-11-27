@@ -192,20 +192,20 @@ func (f relicFixture) forgeRelicOverwrite(t *testing.T, tip core.RelicSnapshot, 
 }
 
 // forgeNewerRelicCommit writes, on top of tip, what a later Workbook writes
-// when it retires the relic: an operation type and a state this build has no
-// rules for, marked generation 7. The relic's ref is moved to it, and it is
-// returned.
+// when it archives and retires the relic: an operation type and a state this
+// build has no rules for, marked generation 8. The relic's ref is moved to it,
+// and it is returned.
 func (f relicFixture) forgeNewerRelicCommit(t *testing.T, tip core.RelicSnapshot, operationNumber int) string {
 	t.Helper()
 	state := tip.Record.State
-	operationJSON := []byte(`{"format":"workbook.relic-operation-pack","version":1,"minReader":7,` +
+	operationJSON := []byte(`{"format":"workbook.relic-operation-pack","version":1,"minReader":8,` +
 		`"projectId":"` + f.config.ProjectID + `","relicId":"` + state.RelicID + `",` +
 		`"historyGeneration":"` + state.History.Generation + `","actor":{"id":"` + relicTestActor + `"},` +
 		fmt.Sprintf(`"logicalClock":%d,"wallTime":"2026-11-23T11:00:00Z",`, state.LogicalClock+1) +
-		`"operations":[{"id":"` + relicTestID(operationNumber) + `","type":"relic.retire"}]}` + "\n")
+		`"operations":[{"id":"` + relicTestID(operationNumber) + `","type":"relic.archive"}]}` + "\n")
 	stateJSON := []byte(gitOutput(t, f.path, "cat-file", "blob", tip.Head+":state.json") + "\n")
 	for _, replacement := range [][2]string{
-		{`"minReader":6`, `"minReader":7`},
+		{`"minReader":6`, `"minReader":8`},
 		{fmt.Sprintf(`"logicalClock":%d`, state.LogicalClock), fmt.Sprintf(`"logicalClock":%d`, state.LogicalClock+1)},
 		{`"retired":false`, `"retired":true`},
 	} {

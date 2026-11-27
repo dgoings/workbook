@@ -37,7 +37,15 @@ func foldedRelicMinReader(parent *RelicRecord, pack RelicOperationPack) int {
 // the relic does not have, removing a removed part, restoring a live part and
 // clearing an absent name all change nothing, and the operation stays in
 // history. So does removing a link the relic does not have. Tombstone and
-// restore keep the task rules and are corrupt data when misused.
+// restore keep the task rules and are corrupt data when misused. Retire and
+// unretire set and clear a mark, so repeating either changes nothing.
+//
+// A stub, a part whose content a checkpoint dropped, never changes: every
+// part operation naming one changes nothing, as one naming an absent part
+// does. A part.add reusing a stub's ID is refused like any reused part ID.
+//
+// A checkpoint is never folded. It roots a history on its own and is checked
+// against the record stored beside it; see ValidateRelicCheckpoint.
 //
 // The parent's links are carried forward, link operations apply in order,
 // and the links are kept sorted by ID.
@@ -52,6 +60,11 @@ func ApplyRelic(parent *RelicRecord, pack RelicOperationPack) (RelicRecord, erro
 	}
 	if err := validateRelicOperationPackDocument(pack); err != nil {
 		return RelicRecord{}, err
+	}
+	if parent == nil {
+		if _, ok := pack.Checkpoint(); ok {
+			return RelicRecord{}, corrupt("a checkpoint is validated against its stored record, not folded")
+		}
 	}
 
 	var (
@@ -140,6 +153,8 @@ func startRelic(pack RelicOperationPack) (RelicData, error) {
 		switch operation.Type {
 		case RelicOperationCreate:
 			return RelicData{}, corrupt("a relic operation pack must contain only one relic.create")
+		case RelicOperationCheckpoint:
+			return RelicData{}, corrupt("history.checkpoint must be the only operation of its pack")
 		case RelicOperationTombstone, RelicOperationRestore:
 			return RelicData{}, corrupt("root relic operation pack must not contain %s", operation.Type)
 		}
@@ -178,6 +193,8 @@ func checkRelicChild(parent RelicStateDocument, pack RelicOperationPack) error {
 		switch operation.Type {
 		case RelicOperationCreate:
 			return corrupt("relic.create requires no parent")
+		case RelicOperationCheckpoint:
+			return corrupt("history.checkpoint requires no parent")
 		case RelicOperationRestore:
 			if !parent.Relic.Deleted {
 				return corrupt("relic.restore requires a deleted relic")
@@ -246,6 +263,10 @@ func applyRelicOperation(relic *RelicData, operation RelicOperation) {
 		relic.Deleted = true
 	case RelicOperationRestore:
 		relic.Deleted = false
+	case RelicOperationRetire:
+		relic.Retired = true
+	case RelicOperationUnretire:
+		relic.Retired = false
 	case RelicOperationMigrate:
 		// A migration names the relic's type and schema version whole, so two
 		// that meet fold as two title edits do: the later one stands.
@@ -298,10 +319,14 @@ func applyRelicOperation(relic *RelicData, operation RelicOperation) {
 	}
 }
 
-// relicPartRef returns the part with the ID for changing in place, or nil.
+// relicPartRef returns the part with the ID for changing in place, or nil. A
+// stub is never changed, so it is nil for a stub too.
 func relicPartRef(relic *RelicData, id string) *RelicPart {
 	for index := range relic.Parts {
 		if relic.Parts[index].ID == id {
+			if relic.Parts[index].Dropped != nil {
+				return nil
+			}
 			return &relic.Parts[index]
 		}
 	}
@@ -345,8 +370,14 @@ func copyRelicData(data RelicData) RelicData {
 }
 
 // ValidateRelicCheckpoint verifies that a stored record is exactly what
-// folding the pack onto the parent computes, byte for byte.
+// folding the pack onto the parent computes, byte for byte. A parentless
+// history.checkpoint is not folded: ValidateRelicCheckpointRoot checks it.
 func ValidateRelicCheckpoint(parent *RelicRecord, pack RelicOperationPack, stored RelicRecord) error {
+	if parent == nil {
+		if _, ok := pack.Checkpoint(); ok {
+			return ValidateRelicCheckpointRoot(pack, stored)
+		}
+	}
 	computed, err := ApplyRelic(parent, pack)
 	if err != nil {
 		return err

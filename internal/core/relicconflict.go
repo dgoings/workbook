@@ -19,6 +19,9 @@ const (
 	// RelicConflictTombstone reports local changes to a relic the remote had
 	// already deleted.
 	RelicConflictTombstone RelicConflictType = "tombstone"
+	// RelicConflictDropped reports a local change to a part the remote's
+	// checkpoint turned into a stub, whose content is gone.
+	RelicConflictDropped RelicConflictType = "dropped"
 )
 
 // RelicBodyVersion is one version of a part's body in a conflict report: its
@@ -112,6 +115,15 @@ func RelicConflictDetail(conflict RelicConflict) string {
 		}
 		return relic + detail + "; to keep them, run `workbook relic restore " + conflict.RelicID +
 			"` and make the changes again" + relicUnappliedDetail(conflict, "the restore")
+	case RelicConflictDropped:
+		detail := "part " + conflict.Part + ": " + remote +
+			" compacted this relic and dropped the part's content, so the local change to it cannot apply"
+		if conflict.ParkedRef != "" {
+			detail += "; the local changes are kept at " + conflict.ParkedRef
+		}
+		detail += "; `workbook relic show " + conflict.RelicID + "#" + conflict.Part +
+			"` shows when it was removed and dropped"
+		return relic + detail + relicUnappliedDetail(conflict, "this sync")
 	default:
 		return relic + string(conflict.Type)
 	}

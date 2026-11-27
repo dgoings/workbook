@@ -467,3 +467,75 @@ func TestNewerWriterHasItsOwnExitCode(t *testing.T) {
 		t.Fatal("corrupt data shares the newer-writer exit code")
 	}
 }
+
+// A relic pack or state at generation 8 comes from a Workbook newer than this
+// one. It is read leniently, with what this build cannot name kept rather
+// than dropped, and every fold or check refuses it as newer-writer, never as
+// corrupt data.
+func TestNewerThanSevenIsNewerWriter(t *testing.T) {
+	checkpoint, stored := relicCheckpointForTest(RelicBoundaryRetired)
+	encodedPack, err := EncodeDocument(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newerPack := strings.Replace(string(encodedPack), `"minReader":7,`, `"minReader":8,`, 1)
+	newerPack = strings.Replace(newerPack, `"type":"history.checkpoint"`, `"type":"history.checkpoint","window":"P30D"`, 1)
+	newerPack = strings.Replace(newerPack, `]}`+"\n",
+		`,{"id":"`+relicTestID(7200)+`","type":"relic.archive","shelf":"cold"}]}`+"\n", 1)
+	assertOneMarker(t, "the forged relic pack", newerPack)
+	pack, err := DecodeRelicOperationPack([]byte(newerPack))
+	if err != nil {
+		t.Fatalf("DecodeRelicOperationPack(generation 8) = %v", err)
+	}
+	if pack.MinReader != 8 || len(pack.Operations) != 2 || pack.Operations[1].Type != "relic.archive" ||
+		pack.Operations[1].ID != relicTestID(7200) {
+		t.Fatalf("the generation-8 pack decoded as %#v", pack)
+	}
+
+	encodedState, err := EncodeDocument(stored.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newerState := strings.Replace(string(encodedState), `"minReader":7,`, `"minReader":8,`, 1)
+	newerState = strings.Replace(newerState, `"retired":true,`, `"retired":true,"shelf":"cold",`, 1)
+	assertOneMarker(t, "the forged relic state", newerState)
+	state, err := DecodeRelicStateDocument([]byte(newerState))
+	if err != nil {
+		t.Fatalf("DecodeRelicStateDocument(generation 8) = %v", err)
+	}
+	if state.MinReader != 8 || !state.Relic.Retired || state.Relic.Compacted == nil || len(state.Relic.Parts) != 2 {
+		t.Fatalf("the generation-8 state decoded as %#v", state)
+	}
+
+	requireNewer := func(label string, err error) {
+		t.Helper()
+		if CategoryOf(err) != CategoryNewerWriter {
+			t.Errorf("%s = %v, want newer-writer", label, err)
+		}
+	}
+	_, err = EncodeDocument(pack)
+	requireNewer("EncodeDocument(generation-8 pack)", err)
+	_, err = EncodeDocument(state)
+	requireNewer("EncodeDocument(generation-8 state)", err)
+	_, err = ApplyRelic(nil, pack)
+	requireNewer("ApplyRelic(nil, generation-8 pack)", err)
+	newerParent := RelicRecord{State: state, Links: stored.Links}
+	_, err = ApplyRelic(&newerParent, relicFoldPack(5, RelicOperation{ID: relicTestID(7201), Type: RelicOperationRetire}))
+	requireNewer("ApplyRelic(generation-8 parent)", err)
+	err = ValidateRelicCheckpointRoot(pack, stored)
+	requireNewer("ValidateRelicCheckpointRoot(generation-8 pack)", err)
+	err = ValidateRelicCheckpointRoot(checkpoint, newerParent)
+	requireNewer("ValidateRelicCheckpointRoot(generation-8 state)", err)
+	err = ValidateRelicCheckpoint(nil, pack, stored)
+	requireNewer("ValidateRelicCheckpoint(nil, generation-8 pack)", err)
+	_, err = PlanRelicReplay(newerParent, relicFoldPack(5, RelicOperation{ID: relicTestID(7202), Type: RelicOperationUnretire}),
+		RelicReplayInput{})
+	requireNewer("PlanRelicReplay(generation-8 parent)", err)
+
+	// The same unknown type without the marker is not from a newer writer,
+	// and is corrupt.
+	_, err = DecodeRelicOperationPack([]byte(strings.Replace(newerPack, `"minReader":8,`, `"minReader":7,`, 1)))
+	if CategoryOf(err) != CategoryCorruptData {
+		t.Errorf("the unknown type at generation 7 = %v, want corrupt data", err)
+	}
+}

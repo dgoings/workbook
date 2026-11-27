@@ -272,7 +272,7 @@ func TestRelicOperationMembersAreExact(t *testing.T) {
 		"no body on body.set":      with(RelicOperationPartBodySet, func(o *RelicOperation) { o.Body = nil }),
 		"no position on part.move": with(RelicOperationPartMove, func(o *RelicOperation) { o.Position = "" }),
 		"no part on part.restore":  with(RelicOperationPartRestore, func(o *RelicOperation) { o.Part = "" }),
-		"unknown type":             {ID: relicTestID(130), Type: "relic.retire"},
+		"unknown type":             {ID: relicTestID(130), Type: "relic.archive"},
 		"untrimmed title":          with(RelicOperationTitleSet, func(o *RelicOperation) { o.Title = " New title" }),
 		"non-canonical value": with(RelicOperationPropertySet, func(o *RelicOperation) {
 			o.Value = json.RawMessage(`{"b":1,"a":2}`)
@@ -590,15 +590,15 @@ func TestRelicDocumentsFromANewerWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newerPack := strings.Replace(string(encodedPack), `"minReader":6,`, `"minReader":7,`, 1)
+	newerPack := strings.Replace(string(encodedPack), `"minReader":6,`, `"minReader":8,`, 1)
 	newerPack = strings.Replace(newerPack, `]}`+"\n",
-		`,{"id":"`+relicTestID(8)+`","type":"relic.retire","reason":"superseded"}]}`+"\n", 1)
+		`,{"id":"`+relicTestID(8)+`","type":"relic.archive","reason":"superseded"}]}`+"\n", 1)
 	pack, err := DecodeRelicOperationPack([]byte(newerPack))
 	if err != nil {
 		t.Fatalf("DecodeRelicOperationPack(newer) = %v", err)
 	}
-	if !pack.RequiresNewerReader() || pack.MinReader != 7 || len(pack.Operations) != 5 ||
-		pack.Operations[4].Type != "relic.retire" {
+	if !pack.RequiresNewerReader() || pack.MinReader != 8 || len(pack.Operations) != 5 ||
+		pack.Operations[4].Type != "relic.archive" {
 		t.Fatalf("newer pack decoded as %#v", pack)
 	}
 	_, err = EncodeDocument(pack)
@@ -606,15 +606,15 @@ func TestRelicDocumentsFromANewerWriter(t *testing.T) {
 		err.Error() != "relic "+relicDocRelic+" was written by a newer workbook; upgrade workbook to change it" {
 		t.Fatalf("EncodeDocument(newer pack) = %v, want the newer-writer refusal", err)
 	}
-	_, err = DecodeRelicOperationPack([]byte(strings.Replace(newerPack, `"minReader":7,`, "", 1)))
+	_, err = DecodeRelicOperationPack([]byte(strings.Replace(newerPack, `"minReader":8,`, "", 1)))
 	requireCorruptData(t, "the newer pack without its marker", err)
 
 	encodedState, err := EncodeDocument(goldenRelicState())
 	if err != nil {
 		t.Fatal(err)
 	}
-	newerState := strings.Replace(string(encodedState), `"minReader":6,`, `"minReader":7,`, 1)
-	newerState = strings.Replace(newerState, `"retired":false,`, `"retired":true,"retiredBy":"x",`, 1)
+	newerState := strings.Replace(string(encodedState), `"minReader":6,`, `"minReader":8,`, 1)
+	newerState = strings.Replace(newerState, `"retired":false,`, `"retired":true,"archivedBy":"x",`, 1)
 	state, err := DecodeRelicStateDocument([]byte(newerState))
 	if err != nil {
 		t.Fatalf("DecodeRelicStateDocument(newer) = %v", err)
@@ -627,7 +627,7 @@ func TestRelicDocumentsFromANewerWriter(t *testing.T) {
 	if CategoryOf(err) != CategoryNewerWriter {
 		t.Fatalf("EncodeDocument(newer state) = %v, want newer writer", err)
 	}
-	_, err = DecodeRelicStateDocument([]byte(strings.Replace(newerState, `"minReader":7,`, "", 1)))
+	_, err = DecodeRelicStateDocument([]byte(strings.Replace(newerState, `"minReader":8,`, "", 1)))
 	requireCorruptData(t, "the newer state without its marker", err)
 
 	// A newer state whose lists are null still reads as a total value.
@@ -638,15 +638,112 @@ func TestRelicDocumentsFromANewerWriter(t *testing.T) {
 	}
 }
 
-func TestSupportedFormatGenerationIsSix(t *testing.T) {
-	if SupportedFormatGeneration != 6 || RelicMinReader != 6 {
-		t.Fatalf("SupportedFormatGeneration = %d, RelicMinReader = %d, want 6 and 6",
-			SupportedFormatGeneration, RelicMinReader)
+func TestRelicGenerationSevenMarkers(t *testing.T) {
+	if SupportedFormatGeneration != 7 || RelicMinReader != 6 || RelicCheckpointMinReader != 7 {
+		t.Fatalf("SupportedFormatGeneration = %d, RelicMinReader = %d, RelicCheckpointMinReader = %d, want 7, 6 and 7",
+			SupportedFormatGeneration, RelicMinReader, RelicCheckpointMinReader)
 	}
 	for _, operation := range validRelicOperations() {
 		if got := singleRelicOperationPack(operation).MinReader; got != 6 {
 			t.Errorf("a %s pack declares minReader %d, want 6", operation.Type, got)
 		}
+	}
+	retire := RelicOperation{ID: relicTestID(7100), Type: RelicOperationRetire}
+	unretire := RelicOperation{ID: relicTestID(7101), Type: RelicOperationUnretire}
+	checkpoint, _ := relicCheckpointForTest(RelicBoundaryRetired)
+	for label, pack := range map[string]RelicOperationPack{
+		"relic.retire":       singleRelicOperationPack(retire),
+		"relic.unretire":     singleRelicOperationPack(unretire),
+		"history.checkpoint": checkpoint,
+	} {
+		if pack.MinReader != 7 {
+			t.Errorf("a %s pack declares minReader %d, want 7", label, pack.MinReader)
+		}
+	}
+	mixed := relicFoldPack(2, RelicOperation{ID: relicTestID(7102), Type: RelicOperationTitleSet, Title: "Mixed"}, retire)
+	if mixed.MinReader != 7 {
+		t.Errorf("a pack with a title edit and a retire declares %d, want the largest, 7", mixed.MinReader)
+	}
+
+	// The state declares the larger of its parent's and its pack's, so every
+	// state after a retire stays at 7, an unretire included.
+	record := goldenRelicRecord(t)
+	if record.State.MinReader != 6 {
+		t.Fatalf("the golden state declares %d, want 6", record.State.MinReader)
+	}
+	record = mustApplyRelic(t, record, relicFoldPack(2, retire))
+	if record.State.MinReader != 7 || !record.State.Relic.Retired {
+		t.Fatalf("after a retire: minReader %d, retired %v; want 7 and true", record.State.MinReader, record.State.Relic.Retired)
+	}
+	record = mustApplyRelic(t, record, relicFoldPack(3, unretire))
+	if record.State.MinReader != 7 || record.State.Relic.Retired {
+		t.Fatalf("after an unretire: minReader %d, retired %v; want 7 and false", record.State.MinReader, record.State.Relic.Retired)
+	}
+	record = mustApplyRelic(t, record, relicFoldPack(4, RelicOperation{ID: relicTestID(7103), Type: RelicOperationTitleSet, Title: "After"}))
+	if record.State.MinReader != 7 {
+		t.Fatalf("a title edit after an unretire declares %d, want 7", record.State.MinReader)
+	}
+	encoded, err := EncodeDocument(record.State)
+	if err != nil || !strings.Contains(string(encoded), `"minReader":7,`) {
+		t.Fatalf("EncodeDocument(state after unretire) = %s, %v", encoded, err)
+	}
+
+	retiredAtSix := goldenRelicState()
+	retiredAtSix.Relic.Retired = true
+	requireRelicStateRefused(t, "a retired state at generation 6", retiredAtSix)
+	retiredAtSeven := retiredAtSix
+	retiredAtSeven.MinReader = 7
+	requireRelicStateRoundTrips(t, "a retired state at generation 7", retiredAtSeven)
+
+	retireAtSix := singleRelicOperationPack(retire)
+	retireAtSix.MinReader = 6
+	requireRelicPackRefused(t, "a retire pack declaring 6", retireAtSix)
+	createAtSeven := goldenRelicPack()
+	createAtSeven.MinReader = 7
+	requireRelicPackRefused(t, "a pack of generation-6 operations declaring 7", createAtSeven)
+	for _, generation := range []int{0, 5} {
+		state := goldenRelicState()
+		state.MinReader = generation
+		requireRelicStateRefused(t, "a state declaring "+itoa(generation), state)
+	}
+}
+
+// Every state, pack and links document this build wrote before the retire
+// and checkpoint members existed keeps its bytes.
+func TestRelicStateWithoutNewMembersKeepsItsBytes(t *testing.T) {
+	want := `{"format":"workbook.relic-state","version":1,"minReader":6,"projectId":"` + relicDocProject +
+		`","relicId":"` + relicDocRelic + `","history":{"generation":"` + relicDocGeneration + `","compactedFrom":null},` +
+		`"logicalClock":1,"relic":{"title":"Task archive compaction","type":"spec","schema":null,"author":"dylan@example.com",` +
+		`"retired":false,"deleted":false,"createdAt":"2026-11-23T10:00:00Z","updatedAt":"2026-11-23T10:00:00Z",` +
+		`"properties":{"status":"approved"},"parts":[` +
+		`{"id":"` + relicDocPartA + `","type":"section","position":"1/1","body":{"format":"md","version":"` + relicDocPartA + `","bytes":1840}},` +
+		`{"id":"` + relicDocPartB + `","type":"decision","position":"2/1"}]}}` + "\n"
+	encoded, err := EncodeDocument(goldenRelicState())
+	if err != nil || string(encoded) != want {
+		t.Fatalf("EncodeDocument(golden state):\n got %s (%v)\nwant %s", encoded, err, want)
+	}
+	decoded, err := DecodeRelicStateDocument([]byte(want))
+	if err != nil {
+		t.Fatalf("DecodeRelicStateDocument(golden) = %v", err)
+	}
+	again, err := EncodeDocument(decoded)
+	if err != nil || string(again) != want {
+		t.Fatalf("the golden state re-encodes as %s (%v)", again, err)
+	}
+
+	removed := goldenRelicState()
+	removed.Relic.Parts[1].Removed = true
+	encoded, err = EncodeDocument(removed)
+	if err != nil || !strings.Contains(string(encoded), `{"id":"`+relicDocPartB+`","type":"decision","position":"2/1","removed":true}]`) {
+		t.Fatalf("a removed part encodes as %s (%v)", encoded, err)
+	}
+	if strings.Contains(string(encoded), "compacted\":{") || strings.Contains(string(encoded), "dropped") {
+		t.Fatalf("a state with no compaction writes the new members: %s", encoded)
+	}
+
+	pack, err := EncodeDocument(goldenRelicPack())
+	if err != nil || strings.Contains(string(pack), "checkpoint") {
+		t.Fatalf("the golden pack encodes as %s (%v)", pack, err)
 	}
 }
 
