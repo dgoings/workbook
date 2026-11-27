@@ -39,6 +39,10 @@ type RelicService struct {
 	IDs   IDSource
 	Now   func() time.Time
 	Actor string
+
+	// HistoryReader serves relic history and diffs; only History and Diff
+	// use it.
+	HistoryReader RelicHistoryReader
 }
 
 // RelicSummary is one relic as relic list shows it. Parts counts live parts.

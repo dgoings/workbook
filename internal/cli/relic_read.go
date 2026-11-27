@@ -28,6 +28,7 @@ func openRelicReadService(ctx context.Context, cwd string, stderr io.Writer) (co
 	index := store.RelicReader()
 	service.Reader = index
 	service.Links = index
+	service.HistoryReader = index
 	service.Tasks = indexedTaskReader{index: store, repository: repository}
 	return service, release, nil
 }

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 )
@@ -366,4 +367,197 @@ func LatestRelicPoints(chain RelicChain, partID string) (from, to RelicPoint, er
 		}
 	}
 	return relicPointAt(chain, latest-1), relicPointAt(chain, latest), nil
+}
+
+// RelicHistoryOptions chooses the window of changes History lists: the last
+// Limit (DefaultChangeLimit when it is not positive), or every one with All.
+type RelicHistoryOptions struct {
+	Limit int
+	All   bool
+}
+
+// RelicDiffOptions says how a body's line diff is shown: Context lines around
+// each change, or one hunk of every line when it is negative.
+type RelicDiffOptions struct {
+	Context int
+}
+
+// historyReader returns the reader history and diffs read through.
+func (s RelicService) historyReader() (RelicHistoryReader, error) {
+	if s.HistoryReader == nil {
+		return nil, Errorf(CategoryOperational, "relic service has no history reader")
+	}
+	return s.HistoryReader, nil
+}
+
+// relicChainAt resolves an address as Show does, a removed part included, and
+// reads the relic's chain at the head it read. partID is empty when the
+// address names no part.
+func (s RelicService) relicChainAt(ctx context.Context, address string) (RelicSnapshot, string, RelicChain, error) {
+	reader, err := s.historyReader()
+	if err != nil {
+		return RelicSnapshot{}, "", RelicChain{}, err
+	}
+	relicPrefix, partPrefix, hasPart, err := ParsePartAddress(address)
+	if err != nil {
+		return RelicSnapshot{}, "", RelicChain{}, err
+	}
+	snapshot, err := s.getRelic(ctx, relicPrefix)
+	if err != nil {
+		return RelicSnapshot{}, "", RelicChain{}, err
+	}
+	relicID := snapshot.Record.State.RelicID
+	partID := ""
+	if hasPart {
+		part, err := resolvePartPrefix(relicID, snapshot.Record.State.Relic.Parts, partPrefix)
+		if err != nil {
+			return RelicSnapshot{}, "", RelicChain{}, err
+		}
+		partID = part.ID
+	}
+	chain, err := reader.RelicChain(ctx, s.Config, RelicHead{RelicID: relicID, ObjectID: snapshot.Head})
+	if err != nil {
+		return RelicSnapshot{}, "", RelicChain{}, err
+	}
+	return snapshot, partID, chain, nil
+}
+
+// History lists the changes of a relic addressed as <relic> or <relic>#<part>,
+// either of them a prefix, oldest first, and for a part every body version.
+// It works on a deleted relic and on a removed part.
+func (s RelicService) History(ctx context.Context, address string, options RelicHistoryOptions) (RelicHistory, error) {
+	snapshot, partID, chain, err := s.relicChainAt(ctx, address)
+	if err != nil {
+		return RelicHistory{}, err
+	}
+	return BuildRelicHistory(chain, relicSummaryOf(snapshot), partID, options.Limit, options.All), nil
+}
+
+// Diff compares two points of a relic's history, or of one part's, in the
+// order given: from the first version to the second; from the one version to
+// the head; or, with none, the latest change against its parent. Versions are
+// change IDs or prefixes of them. Both versions are read from Git by commit,
+// and only the parts whose objects differ are opened.
+func (s RelicService) Diff(ctx context.Context, address string, versions []string, options RelicDiffOptions) (RelicDiff, error) {
+	if len(versions) > 2 {
+		return RelicDiff{}, Errorf(CategoryInvocation, "relic diff takes at most two versions")
+	}
+	_, partID, chain, err := s.relicChainAt(ctx, address)
+	if err != nil {
+		return RelicDiff{}, err
+	}
+	relicID := chain.RelicID
+	if truncation := chain.Truncated; truncation != nil {
+		category := CategoryCorruptData
+		if truncation.Category == CategoryNewerWriter {
+			category = CategoryNewerWriter
+		}
+		message := truncation.Message
+		if !strings.Contains(message, relicID) {
+			message = "relic " + relicID + ": " + message
+		}
+		return RelicDiff{}, Errorf(category, "%s", message)
+	}
+
+	var from, to RelicPoint
+	switch len(versions) {
+	case 0:
+		from, to, err = LatestRelicPoints(chain, partID)
+	default:
+		from, err = ResolveRelicVersion(chain, relicID, versions[0])
+		if err != nil {
+			break
+		}
+		if len(versions) == 2 {
+			to, err = ResolveRelicVersion(chain, relicID, versions[1])
+		} else if len(chain.Commits) > 0 {
+			to = relicPointAt(chain, len(chain.Commits)-1)
+		}
+	}
+	if err != nil {
+		return RelicDiff{}, err
+	}
+
+	fromVersion, toVersion, err := s.readRelicPoints(ctx, relicID, from, to)
+	if err != nil {
+		return RelicDiff{}, err
+	}
+	fromSide, toSide := fromVersion.side(), toVersion.side()
+	fromParts, toParts := RelicPartsToRead(fromSide, toSide, partID)
+	if fromSide.Content, err = s.readRelicSideParts(ctx, fromVersion, fromSide, toSide, fromParts); err != nil {
+		return RelicDiff{}, err
+	}
+	if toSide.Content, err = s.readRelicSideParts(ctx, toVersion, toSide, fromSide, toParts); err != nil {
+		return RelicDiff{}, err
+	}
+	diff := CompareRelicVersions(fromSide, toSide, partID, options.Context)
+	diff.Relic = relicID
+	diff.From = relicDiffPointOf(from)
+	if point := relicDiffPointOf(to); point != nil {
+		diff.To = *point
+	}
+	return diff, nil
+}
+
+// readRelicPoints reads the commits of the two points, each once. The side
+// before the relic is nil.
+func (s RelicService) readRelicPoints(ctx context.Context, relicID string, from, to RelicPoint) (*RelicVersion, *RelicVersion, error) {
+	var commits []string
+	for _, point := range []RelicPoint{from, to} {
+		if point.Index >= 0 && !slices.Contains(commits, point.Commit.Commit) {
+			commits = append(commits, point.Commit.Commit)
+		}
+	}
+	read, err := s.HistoryReader.ReadRelicVersions(ctx, s.Config, relicID, commits)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(read) != len(commits) {
+		return nil, nil, Errorf(CategoryCorruptData, "relic version read returned %d versions, want %d", len(read), len(commits))
+	}
+	version := func(point RelicPoint) *RelicVersion {
+		if point.Index < 0 {
+			return nil
+		}
+		return &read[slices.Index(commits, point.Commit.Commit)]
+	}
+	return version(from), version(to), nil
+}
+
+// side is the version as one side of a comparison, before any part is read:
+// the empty side for nil.
+func (version *RelicVersion) side() RelicVersionSide {
+	if version == nil {
+		return RelicVersionSide{}
+	}
+	return RelicVersionSide{Record: &version.Snapshot.Record, Objects: version.Parts}
+}
+
+// readRelicSideParts reads the parts listed for one side through the relic
+// reader, with bodies only when one of them has a body that differs from the
+// other side's. It reads nothing when no part is listed.
+func (s RelicService) readRelicSideParts(
+	ctx context.Context,
+	version *RelicVersion,
+	side, other RelicVersionSide,
+	parts []string,
+) (map[string]RelicPartContent, error) {
+	if len(parts) == 0 || version == nil {
+		return nil, nil
+	}
+	return s.Reader.ReadRelicParts(ctx, s.Config, version.Snapshot, parts, RelicBodiesToRead(side, other, parts))
+}
+
+// relicDiffPointOf describes a point for a diff: nil for the side before the
+// relic.
+func relicDiffPointOf(point RelicPoint) *RelicDiffPoint {
+	if point.Index < 0 {
+		return nil
+	}
+	return &RelicDiffPoint{
+		Version:  point.Version,
+		Commit:   point.Commit.Commit,
+		Actor:    point.Commit.Operation.Actor.ID,
+		WallTime: point.Commit.Operation.WallTime,
+	}
 }

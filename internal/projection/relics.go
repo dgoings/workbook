@@ -40,6 +40,7 @@ import (
 // readers a relic pass indexes with.
 type relicSource interface {
 	core.RelicReader
+	core.RelicHistoryReader
 	ReadIndexedRelics(context.Context, core.ProjectConfig, []gitstore.RelicIndexRequest) ([]gitstore.IndexedRelic, []error)
 	ReadRelicOperations(context.Context, core.ProjectConfig, []gitstore.RelicHistoryRequest) ([]gitstore.RelicOperationsResult, error)
 	ReadRelicBodies(context.Context, core.ProjectConfig, []gitstore.RelicBodyRequest) ([][]byte, error)

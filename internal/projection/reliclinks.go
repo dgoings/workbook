@@ -12,10 +12,11 @@ import (
 )
 
 // RelicIndex is what the local index answers for relics: every relic read,
-// and which relics link to a target.
+// which relics link to a target, and relic history.
 type RelicIndex interface {
 	core.RelicReader
 	core.RelicLinkIndex
+	core.RelicHistoryReader
 }
 
 var _ RelicIndex = (*relicIndexReader)(nil)

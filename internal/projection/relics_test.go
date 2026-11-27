@@ -159,6 +159,7 @@ type countingRelicSource struct {
 	indexCalls       int
 	operationCalls   int
 	bodyCalls        int
+	chainCalls       int
 	indexRequests    [][]gitstore.RelicIndexRequest
 	operationRequest [][]gitstore.RelicHistoryRequest
 }
