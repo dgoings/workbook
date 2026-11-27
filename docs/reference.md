@@ -1658,7 +1658,7 @@ allowed:
 | `title`, `description` | Text for people and agents. It changes no check. |
 | `properties` | A schema (see [Supported words](#supported-words)) for the relic's properties, taken together as one object. |
 | `parts` | An object of part rules keyed by part type. Without it a relic may have parts of any type. With it, only the types it lists are allowed, so `{}` allows none. |
-| `links` | An object with `relationships`, a list of distinct relationship names, and `pointer`, a schema; both optional. They are checked as part of the schema when it is saved. No relic's link is checked against them yet. |
+| `links` | An object with `relationships`, a list of distinct relationship names, and `pointer`, a schema; both optional. They are checked as part of the schema when it is saved. `pointer` judges the pointer of each link `relic update --link ... --pointer` adds. No link's relationship is checked against `relationships` yet. |
 | `$defs` | Named schemas that `$ref` refers to. A name is 1 to 100 letters, digits, `-` or `_`. |
 
 A part rule has these members, all optional:
@@ -1802,11 +1802,15 @@ schema names none and stays open until it is migrated.
 | --- | --- |
 | `relic create` | The whole new relic: its properties, then each part. |
 | `relic create --from-file` | The same, under the version the document's `schema` names, or the type's newest when that is `null`. |
-| `relic update` | Only what the update saves: each property set, against its rule and `additionalProperties`; each property cleared, which must not be required; and each part added, edited or restored, judged whole as the update leaves it (its type, all its fields, its body and the body's format). |
+| `relic update` | Only what the update saves: each property set, against its rule and `additionalProperties`; each property cleared, which must not be required; each part added, edited or restored, judged whole as the update leaves it (its type, all its fields, its body and the body's format); and the pointer of each link added with `--pointer`, against the schema's `links.pointer` rule when it has one. |
 | `relic migrate` | The whole relic, removed parts aside, under the version it moves to. |
 
-An update does not check a title, a move, a removal, a link or an unlink, nor a
-part it leaves removed, and an update that changes nothing is not checked. Other
+An update does not check a title, a move, a removal, an unlink, a link added
+with no pointer or a link's relationship, nor a part it leaves removed, and an
+update that changes nothing is not checked. A link is judged only when it is
+added: `relic create`, `relic migrate` and `conformance` do not judge the links
+a relic already holds, so a relic whose link pointer does not fit the version it
+moves to still migrates and reads `conforms`. Other
 words that judge the properties as a whole, such as an `enum` of whole objects,
 apply on `create`, on `migrate` and when a relic is judged for `conformance`,
 not on `update`. `relic delete` and `relic restore` check nothing. No read,
@@ -1825,7 +1829,9 @@ workbook: relic does not fit schema spec version 1: property "status": the value
 ```
 
 The place is `property "<name>"`, `part <id> (<part type>)`,
-`part <id> (<part type>) field "<name>"` or `part <id> (<part type>) body`. A
+`part <id> (<part type>) field "<name>"`, `part <id> (<part type>) body` or
+`link pointer`, which gives the place inside the pointer as
+`link pointer: at <JSON pointer>: <what is wrong>`. A
 new relic names a part by where it comes, as `part 1 (<part type>)`, and a
 problem with the properties as a whole names `properties`. The first problem
 found refuses the save.

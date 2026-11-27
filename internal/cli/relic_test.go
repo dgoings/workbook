@@ -870,6 +870,8 @@ func TestDocsDocumentRelicSchemas(t *testing.T) {
 		"relic create", "relic update", "relic migrate", "No read",
 		"names a schema version for", "workbook sync",
 		"the schema is too costly to check against this value",
+		// A link's pointer is the one part of a link that is checked.
+		"`link pointer: at <JSON pointer>: <what is wrong>`", "the pointer of each link added with `--pointer`",
 		groupedDigits(core.MaxRelicSchemaBytes) + " bytes (64 KiB)",
 		groupedDigits(core.MaxRelicSchemaVersionsPerType),
 		groupedDigits(core.MaxRelicSchemaVersions),
@@ -879,7 +881,8 @@ func TestDocsDocumentRelicSchemas(t *testing.T) {
 			t.Errorf("the reference's \"### Relic schemas\" is missing %q", required)
 		}
 	}
-	for _, stale := range []string{"| `schema` | Always `null`. |", "there are no schemas", "There are no schemas"} {
+	for _, stale := range []string{"| `schema` | Always `null`. |", "there are no schemas", "There are no schemas",
+		"No relic's link is checked"} {
 		if strings.Contains(reference, stale) {
 			t.Errorf("the reference's relic section still says %q", stale)
 		}
