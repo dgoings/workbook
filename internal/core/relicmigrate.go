@@ -90,8 +90,9 @@ func (s RelicService) Migrate(ctx context.Context, idOrPrefix, target string) (R
 	} else if version, found = listing.Number(wanted.relicType, wanted.number); !found {
 		return RelicMutationResult{}, Errorf(CategoryNotFound, "type %s has no schema version %d", wanted.relicType, wanted.number)
 	}
-	if relic.Type == wanted.relicType && relic.Schema == version.ID {
-		return relicMutationUnder(snapshot, false, listing), nil
+	unchanged := relic.Type == wanted.relicType && relic.Schema == version.ID
+	if unchanged && !found {
+		return relicMigrationResult(snapshot, false, listing, judgedAs(false)), nil
 	}
 
 	if found {
@@ -112,7 +113,17 @@ func (s RelicService) Migrate(ctx context.Context, idOrPrefix, target string) (R
 		for partID, read := range content {
 			fields[partID] = read.Fields
 		}
-		if problem := schema.CheckRelic(relic, fields); problem != nil {
+		problem := schema.CheckRelic(relic, fields)
+		// A relic that already names the version is not refused for not
+		// fitting it; it is reported as it stands.
+		if unchanged {
+			conformance := judgedAs(true)
+			if problem != nil {
+				conformance = &RelicConformance{State: RelicConformanceNotConforming, Problem: problem.String()}
+			}
+			return relicMigrationResult(snapshot, false, listing, conformance), nil
+		}
+		if problem != nil {
 			return RelicMutationResult{}, RelicSchemaRefusal(version, *problem)
 		}
 	}
@@ -126,5 +137,13 @@ func (s RelicService) Migrate(ctx context.Context, idOrPrefix, target string) (R
 	if err != nil {
 		return RelicMutationResult{}, err
 	}
-	return relicMutationUnder(written, true, listing), nil
+	return relicMigrationResult(written, true, listing, judgedAs(found)), nil
+}
+
+// relicMigrationResult is a migration's result, which carries the
+// conformance its check of the whole relic found.
+func relicMigrationResult(snapshot RelicSnapshot, changed bool, listing RelicSchemaListing, conformance *RelicConformance) RelicMutationResult {
+	result := relicMutationUnder(snapshot, changed, listing)
+	result.Relic.RelicConformance = conformance
+	return result
 }

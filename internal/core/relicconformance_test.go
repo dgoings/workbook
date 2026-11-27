@@ -381,3 +381,142 @@ func TestJudgeRelicStates(t *testing.T) {
 		}
 	}
 }
+
+// summaryJSON is a summary's JSON object, for tests that pin which members
+// it carries.
+func summaryJSON(t *testing.T, summary RelicSummary) string {
+	t.Helper()
+	encoded, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
+}
+
+// A summary carries a conformance state only where the whole relic was just
+// judged: list, and the results of create and migrate, whose check has just
+// run. An update, delete or restore judges no whole relic, so its result
+// leaves the member out; an empty state is never written.
+func TestRelicSummariesCarryConformanceOnlyWhereJudged(t *testing.T) {
+	store, _, service, versions := newSchemaTestService(t)
+	ctx := context.Background()
+	draft := map[string]json.RawMessage{"status": relicRawString("draft")}
+
+	created, err := service.Create(ctx, RelicCreateInput{Title: "Spec", Type: "spec", Properties: draft})
+	if err != nil {
+		t.Fatalf("Create(spec): %v", err)
+	}
+	spec := summaryJSON(t, created.Relic)
+	if want := `"schema":{"type":"spec","id":"` + versions.spec2.ID + `","version":2},"conformance":"conforms","author":`; !strings.Contains(spec, want) {
+		t.Errorf("create result = %s, want %s", spec, want)
+	}
+	opened, err := service.Create(ctx, RelicCreateInput{Title: "Note", Type: "note"})
+	if err != nil {
+		t.Fatalf("Create(note): %v", err)
+	}
+	if note := summaryJSON(t, opened.Relic); !strings.Contains(note, `"schema":null,"conformance":"open","author":`) {
+		t.Errorf("open create result = %s, want conformance open", note)
+	}
+
+	specID := created.Relic.ID
+	for _, step := range []struct {
+		label string
+		run   func() (RelicMutationResult, error)
+	}{
+		{"update", func() (RelicMutationResult, error) {
+			return service.Update(ctx, specID, []RelicEdit{{Kind: RelicEditTitle, Title: "Renamed"}})
+		}},
+		{"unchanged update", func() (RelicMutationResult, error) {
+			return service.Update(ctx, specID, []RelicEdit{{Kind: RelicEditTitle, Title: "Renamed"}})
+		}},
+		{"delete", func() (RelicMutationResult, error) { return service.Delete(ctx, specID) }},
+		{"restore", func() (RelicMutationResult, error) { return service.Restore(ctx, specID) }},
+	} {
+		label := step.label
+		result, err := step.run()
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if got := summaryJSON(t, result.Relic); strings.Contains(got, `"conformance"`) || strings.Contains(got, `"schemaProblem"`) ||
+			!strings.Contains(got, `"version":2},"author":`) {
+			t.Errorf("%s result = %s, want no conformance member and the schema then the author", label, got)
+		}
+	}
+
+	migrated, err := service.Migrate(ctx, specID, "1")
+	if err != nil || !migrated.Changed {
+		t.Fatalf("Migrate(1) = %+v, %v", migrated, err)
+	}
+	if got := summaryJSON(t, migrated.Relic); !strings.Contains(got, `"version":1},"conformance":"conforms","author":`) {
+		t.Errorf("migrate result = %s, want conforms", got)
+	}
+	unchanged, err := service.Migrate(ctx, specID, "1")
+	if err != nil || unchanged.Changed {
+		t.Fatalf("Migrate(1) again = %+v, %v", unchanged, err)
+	}
+	if got := summaryJSON(t, unchanged.Relic); !strings.Contains(got, `"conformance":"conforms"`) {
+		t.Errorf("unchanged migrate result = %s, want conforms", got)
+	}
+	toOpen, err := service.Migrate(ctx, opened.Relic.ID, "memo")
+	if err != nil {
+		t.Fatalf("Migrate(memo): %v", err)
+	}
+	if got := summaryJSON(t, toOpen.Relic); !strings.Contains(got, `"schema":null,"conformance":"open"`) {
+		t.Errorf("migrate to an open type = %s, want open", got)
+	}
+
+	// A relic two edits left not fitting, and one naming a version this clone
+	// lacks, are listed with their states.
+	broken := putRelicNaming(t, store, 3, "spec", versions.spec2.ID)
+	unknown := putRelicNaming(t, store, 4, "spec", relicTestID(999))
+	listed, err := service.List(ctx, RelicListFilter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	states := map[string]RelicConformance{}
+	for _, summary := range listed {
+		if summary.RelicConformance == nil {
+			t.Fatalf("listed %s with no conformance: %s", summary.ID, summaryJSON(t, summary))
+		}
+		states[summary.ID] = *summary.RelicConformance
+	}
+	want := map[string]RelicConformance{
+		specID:                       {State: RelicConformanceConforms},
+		opened.Relic.ID:              {State: RelicConformanceOpen},
+		broken.Record.State.RelicID:  {State: RelicConformanceNotConforming, Problem: `property "status": ` + missingRequiredMessage(t) + ` (required)`},
+		unknown.Record.State.RelicID: {State: RelicConformanceUnknownSchema},
+	}
+	if fmt.Sprint(states) != fmt.Sprint(want) {
+		t.Errorf("listed states = %+v, want %+v", states, want)
+	}
+	for _, summary := range listed {
+		if summary.ID == broken.Record.State.RelicID {
+			if got := summaryJSON(t, summary); !strings.Contains(got, `"conformance":"not-conforming","schemaProblem":"property \"status\": `) {
+				t.Errorf("listed broken relic = %s", got)
+			}
+		}
+	}
+}
+
+// LinkedTo numbers the version a linked relic names from the listing, as list
+// does, without reading any schema.
+func TestLinkedToNumbersTheSchemaVersion(t *testing.T) {
+	_, schemas, service, versions := newSchemaTestService(t)
+	ctx := context.Background()
+	relicID := serviceTestConfig.Key + "-R-" + relicTestID(1)
+	service.Links = &fixedRelicLinkIndex{lookup: RelicLinkLookup{Sources: []RelicLinkSource{{
+		Relic: RelicSummary{ID: relicID, Title: "Plan", Type: "spec", Schema: &RelicSchemaRef{Type: "spec", ID: versions.spec1.ID}},
+		Link:  RelicLink{ID: relicTestID(2), To: RelicLinkTarget{Task: linkTestTaskID(1)}, Rel: "relates-to"},
+	}}}}
+	reads := schemas.reads
+	summaries, _, err := service.LinkedToTask(ctx, linkTestTaskID(1), RelicListFilter{})
+	if err != nil || len(summaries) != 1 {
+		t.Fatalf("LinkedToTask = %+v, %v", summaries, err)
+	}
+	if ref := summaries[0].Schema; ref == nil || *ref != (RelicSchemaRef{Type: "spec", ID: versions.spec1.ID, Version: 1}) {
+		t.Errorf("linked relic names %+v, want spec version 1", ref)
+	}
+	if schemas.reads != reads {
+		t.Errorf("LinkedToTask read %d schema documents, want none", schemas.reads-reads)
+	}
+}

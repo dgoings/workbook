@@ -1346,7 +1346,7 @@ The members of `data`, each left out when it has nothing:
 | --- | --- |
 | `relic`, `part` | The relic ID, and the part ID for a part address. |
 | `from`, `to` | Each point: `version`, `commit`, `actor` and `wallTime`. `from` is `null` before the relic and is always present. |
-| `changes` | The relic's `title`, `schema`, `retired` and `deleted`, each with `name`, `kind` (`added`, `removed` or `set`), `from` and `to`. |
+| `changes` | The relic's `type`, `title`, `schema`, `retired` and `deleted`, each with `name`, `kind` (`added`, `removed` or `set`), `from` and `to`. A `type` change comes from `relic migrate` moving the relic to another type, and text output prints it as `Type:`. |
 | `properties` | Properties that differ, by name, in the same shape. |
 | `parts` | Each has `id`, `type`, `kind`, `moved` (`from`, `to`, `fromIndex`, `toIndex`), `fields` (as `changes`) and `body`. |
 | `links` | `added` and `removed` links, each with `id`, `from` (absent for the whole relic), `to` and `rel`. |

@@ -213,19 +213,25 @@ func (u *relicUpdate) checkSchema(ctx context.Context, version RelicSchemaVersio
 }
 
 // presentSchema numbers the version the document's relic names and judges the
-// whole relic. content holds the parts the document already read; the fields
-// of any other live part are read once, and only when there is a schema to
-// judge them by.
+// whole relic. content holds the parts the document already read.
 func (s RelicService) presentSchema(ctx context.Context, document *RelicDocument, snapshot RelicSnapshot, content map[string]RelicPartContent) error {
-	relic := snapshot.Record.State.Relic
 	listing, err := s.schemaListing(ctx)
 	if err != nil {
 		return err
 	}
-	document.Schema = ResolveRelicSchemaRef(relic, listing)
+	document.Schema = ResolveRelicSchemaRef(snapshot.Record.State.Relic, listing)
+	document.RelicConformance, err = s.judgeSnapshot(ctx, snapshot, listing, content)
+	return err
+}
+
+// judgeSnapshot judges a whole relic read from Git. content holds parts the
+// caller already read; the fields of any other live part are read once, and
+// only when the relic names a version the listing has, so a relic that is open
+// or names an unknown version reads no part and no schema.
+func (s RelicService) judgeSnapshot(ctx context.Context, snapshot RelicSnapshot, listing RelicSchemaListing, content map[string]RelicPartContent) (RelicConformance, error) {
+	relic := snapshot.Record.State.Relic
 	if _, known := listing.ByID(relic.Schema); !known || s.Schemas == nil {
-		document.RelicConformance, err = JudgeRelic(relic, nil, listing, nil)
-		return err
+		return JudgeRelic(relic, nil, listing, nil)
 	}
 	fields := make(map[string]map[string]json.RawMessage, len(relic.Parts))
 	var missing []string
@@ -239,12 +245,32 @@ func (s RelicService) presentSchema(ctx context.Context, document *RelicDocument
 	if len(missing) != 0 {
 		read, err := s.Reader.ReadRelicParts(ctx, s.Config, snapshot, missing, false)
 		if err != nil {
-			return err
+			return RelicConformance{}, err
 		}
 		for _, partID := range missing {
 			fields[partID] = read[partID].Fields
 		}
 	}
-	document.RelicConformance, err = JudgeRelic(relic, fields, listing, s.loadSchema(ctx))
-	return err
+	return JudgeRelic(relic, fields, listing, s.loadSchema(ctx))
+}
+
+// judgedAs is the conformance a save that has just checked the whole relic
+// reports: conforms under a schema, open under none.
+func judgedAs(checked bool) *RelicConformance {
+	if checked {
+		return &RelicConformance{State: RelicConformanceConforms}
+	}
+	return &RelicConformance{State: RelicConformanceOpen}
+}
+
+// numberLinkedSchema numbers the version a linked relic's summary names from
+// the listing, as list does, on a copy of the summary's reference, which the
+// link index may share. It reads no schema.
+func numberLinkedSchema(summary *RelicSummary, listing RelicSchemaListing) {
+	if summary.Schema == nil {
+		return
+	}
+	if version, known := listing.ByID(summary.Schema.ID); known {
+		summary.Schema = &RelicSchemaRef{Type: version.Type, ID: version.ID, Version: version.Version}
+	}
 }

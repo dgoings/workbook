@@ -138,6 +138,10 @@ func (s RelicService) LinkedToTask(ctx context.Context, taskID string, filter Re
 	if err != nil {
 		return nil, nil, err
 	}
+	listing, err := s.schemaListing(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
 	summaries := []RelicSummary{}
 	for _, source := range lookup.Sources {
 		relic := source.Relic
@@ -146,6 +150,7 @@ func (s RelicService) LinkedToTask(ctx context.Context, taskID string, filter Re
 		}
 		if len(summaries) == 0 || summaries[len(summaries)-1].ID != relic.ID {
 			relic.LinkedBy = nil
+			numberLinkedSchema(&relic, listing)
 			summaries = append(summaries, relic)
 		}
 		last := &summaries[len(summaries)-1]

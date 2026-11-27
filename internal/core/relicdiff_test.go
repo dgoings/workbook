@@ -243,6 +243,18 @@ func TestCompareRelicVersionsWholeRelic(t *testing.T) {
 	if same.Changes != nil || same.Properties != nil || same.Parts != nil || same.Links != nil {
 		t.Errorf("equal versions = %+v", same)
 	}
+
+	// A migration to another type is a relic-level change, listed first.
+	retyped := newDiffSide("New title")
+	retyped.data.Type, retyped.data.Schema = "plan", relicTestID(225)
+	wantRetyped := []RelicValueChange{
+		{Name: "type", Kind: ChangeSet, From: raw(`"spec"`), To: raw(`"plan"`)},
+		{Name: "title", Kind: ChangeSet, From: raw(`"Old title"`), To: raw(`"New title"`)},
+		{Name: "schema", Kind: ChangeAdded, To: raw(`"` + relicTestID(225) + `"`)},
+	}
+	if got := compareRead(newDiffSide("Old title"), retyped, "", 3).Changes; !reflect.DeepEqual(got, wantRetyped) {
+		t.Errorf("a type change = %+v, want %+v", got, wantRetyped)
+	}
 }
 
 func TestCompareRelicVersionsOfOnePart(t *testing.T) {
@@ -308,7 +320,10 @@ func TestCompareRelicVersionsOfOnePart(t *testing.T) {
 	if empty.Parts[0].Body == nil || empty.Parts[0].Body.From != nil || empty.Parts[0].Body.Hunks[0].FromStart != 0 {
 		t.Errorf("from the empty side, body = %+v", empty.Parts[0].Body)
 	}
-	if !reflect.DeepEqual(empty.Changes, []RelicValueChange{{Name: "title", Kind: ChangeAdded, To: raw(`"New"`)}}) ||
+	if !reflect.DeepEqual(empty.Changes, []RelicValueChange{
+		{Name: "type", Kind: ChangeAdded, To: raw(`"spec"`)},
+		{Name: "title", Kind: ChangeAdded, To: raw(`"New"`)},
+	}) ||
 		!reflect.DeepEqual(empty.Properties, []RelicValueChange{{Name: "status", Kind: ChangeAdded, To: raw(`"done"`)}}) ||
 		empty.Links == nil || len(empty.Links.Added) != 1 {
 		t.Errorf("from the empty side = changes %+v, properties %+v, links %+v", empty.Changes, empty.Properties, empty.Links)

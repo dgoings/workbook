@@ -49,13 +49,16 @@ type RelicService struct {
 }
 
 // RelicSummary is one relic as relic list shows it. Parts counts live parts.
+// RelicConformance is set only where the whole relic was judged: on list, and
+// on the results of create and migrate, whose check has just run. Nil leaves
+// the conformance members out.
 type RelicSummary struct {
 	ID     string          `json:"id"`
 	Head   string          `json:"head"`
 	Title  string          `json:"title"`
 	Type   string          `json:"type"`
 	Schema *RelicSchemaRef `json:"schema"`
-	RelicConformance
+	*RelicConformance
 	Author    string    `json:"author"`
 	Retired   bool      `json:"retired"`
 	Deleted   bool      `json:"deleted"`
@@ -461,6 +464,7 @@ func (s RelicService) Create(ctx context.Context, input RelicCreateInput) (Relic
 		Parts:   make([]RelicDocumentPart, 0, len(partIDs)),
 		Changed: true,
 	}
+	result.Relic.RelicConformance = judgedAs(schema != nil)
 	for index, partID := range partIDs {
 		part, _ := written.Record.State.Relic.Part(partID)
 		result.Parts = append(result.Parts, newRelicDocumentPart(part, RelicPartContent{Fields: parts[index].fields}))
@@ -469,7 +473,8 @@ func (s RelicService) Create(ctx context.Context, input RelicCreateInput) (Relic
 }
 
 // List returns relic summaries in relic ID order, which is creation order. It
-// reads each relic's tip without checking it against its parent.
+// reads each relic's tip without checking it against its parent, and judges
+// each listed relic against the version it names.
 func (s RelicService) List(ctx context.Context, filter RelicListFilter) ([]RelicSummary, error) {
 	heads, err := s.Reader.ListRelicHeads(ctx, s.Config)
 	if err != nil {
@@ -492,7 +497,13 @@ func (s RelicService) List(ctx context.Context, filter RelicListFilter) ([]Relic
 		if filter.Type != "" && relic.Type != filter.Type {
 			continue
 		}
-		summaries = append(summaries, relicSummaryUnder(snapshot, listing))
+		summary := relicSummaryUnder(snapshot, listing)
+		conformance, err := s.judgeSnapshot(ctx, snapshot, listing, nil)
+		if err != nil {
+			return nil, err
+		}
+		summary.RelicConformance = &conformance
+		summaries = append(summaries, summary)
 	}
 	sort.Slice(summaries, func(i, j int) bool { return summaries[i].ID < summaries[j].ID })
 	return summaries, nil

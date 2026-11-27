@@ -81,8 +81,9 @@ func TestRelicDiffDefaultsAndOneVersion(t *testing.T) {
 		t.Fatalf("diff of a one-commit relic = (%d, %q, %q), want from null", code, stdout, stderr)
 	}
 	diff := relicDiffOf(t, repository, alone)
-	if diff.From != nil || len(diff.Changes) != 1 || diff.Changes[0].Name != "title" || diff.Changes[0].Kind != core.ChangeAdded {
-		t.Fatalf("diff = %+v, want the title added", diff)
+	if diff.From != nil || len(diff.Changes) != 2 || diff.Changes[0].Name != "type" || diff.Changes[0].Kind != core.ChangeAdded ||
+		diff.Changes[1].Name != "title" || diff.Changes[1].Kind != core.ChangeAdded {
+		t.Fatalf("diff = %+v, want the type and the title added", diff)
 	}
 
 	relicID, partID, versions := savedRelicPart(t, repository, "one\n", "two\n")
@@ -386,5 +387,23 @@ func TestRelicDiffTextMarksAMissingFinalNewline(t *testing.T) {
 	want = "\t@@ -1,2 +1,2 @@\n\t-old\n\t+new\n\t last\n" + marker
 	if code != 0 || stderr != "" || !strings.HasSuffix(stdout, want) {
 		t.Fatalf("diff with an unterminated context line = (%d, %q, %q), want it to end %q", code, stdout, stderr, want)
+	}
+}
+
+// relic migrate can change a relic's type, and a whole-relic diff lists that
+// change first among the relic-level ones.
+func TestRelicDiffShowsATypeChange(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	relicID := mustCreateRelic(t, repository, "Notes", "--type", "note").Relic.ID
+	mustRelic(t, repository, nil, "migrate", relicID, "--to", "memo")
+	diff := relicDiffOf(t, repository, relicID)
+	if len(diff.Changes) != 1 || diff.Changes[0].Name != "type" || diff.Changes[0].Kind != core.ChangeSet ||
+		string(diff.Changes[0].From) != `"note"` || string(diff.Changes[0].To) != `"memo"` {
+		t.Fatalf("diff changes = %+v, want the type set from note to memo", diff.Changes)
+	}
+	code, stdout, stderr := run(t, repository, "relic", "diff", relicID)
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "\nType:\tnote → memo\n") {
+		t.Fatalf("diff text = (%d, %q, %q), want a Type line", code, stdout, stderr)
 	}
 }

@@ -269,22 +269,26 @@ func relicProperties(data *RelicData) map[string]json.RawMessage {
 }
 
 // compareRelicMembers compares the relic-level members a diff reports. The side
-// before the relic has no title and no schema, and is neither retired nor
-// deleted: a flag is always a value, so it is only ever set.
+// before the relic has no type, no title and no schema, and is neither retired
+// nor deleted: a flag is always a value, so it is only ever set.
 func compareRelicMembers(from, to *RelicData) []RelicValueChange {
-	values := func(data *RelicData) (title, schema json.RawMessage, retired, deleted bool) {
+	values := func(data *RelicData) (relicType, title, schema json.RawMessage, retired, deleted bool) {
 		if data == nil {
-			return nil, nil, false, false
+			return nil, nil, nil, false, false
 		}
+		relicType, _ = json.Marshal(data.Type)
 		title, _ = json.Marshal(data.Title)
 		if data.Schema != "" {
 			schema, _ = json.Marshal(data.Schema)
 		}
-		return title, schema, data.Retired, data.Deleted
+		return relicType, title, schema, data.Retired, data.Deleted
 	}
-	fromTitle, fromSchema, fromRetired, fromDeleted := values(from)
-	toTitle, toSchema, toRetired, toDeleted := values(to)
+	fromType, fromTitle, fromSchema, fromRetired, fromDeleted := values(from)
+	toType, toTitle, toSchema, toRetired, toDeleted := values(to)
 	var changes []RelicValueChange
+	if change, differs := compareRelicValue("type", fromType, fromType != nil, toType, toType != nil); differs {
+		changes = append(changes, change)
+	}
 	if change, differs := compareRelicValue("title", fromTitle, fromTitle != nil, toTitle, toTitle != nil); differs {
 		changes = append(changes, change)
 	}

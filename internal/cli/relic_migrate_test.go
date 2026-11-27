@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -144,5 +145,53 @@ func TestRelicShowTextNamesTheSchema(t *testing.T) {
 		if !strings.Contains(output.String(), shown.want) {
 			t.Errorf("%s: output = %q, want %q", name, output.String(), shown.want)
 		}
+	}
+}
+
+// Results carry a conformance state where the whole relic was judged (list,
+// create, migrate) and leave the member out where it was not (update,
+// delete, restore); an empty state is never written.
+func TestRelicResultsCarryConformanceOnlyWhereJudged(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	mustPutSchema(t, repository, "spec", specSchemaOne)
+	jsonOf := func(args ...string) string {
+		t.Helper()
+		code, stdout, stderr := run(t, repository, append(append([]string{"relic"}, args...), "--json")...)
+		if code != 0 {
+			t.Fatalf("relic %v = (%d, %q, %q)", args, code, stdout, stderr)
+		}
+		if strings.Contains(stdout, `"conformance":""`) {
+			t.Fatalf("relic %v wrote an empty conformance: %s", args, stdout)
+		}
+		return stdout
+	}
+	created := jsonOf("create", "--from-file", specRelicFile(t, "draft"))
+	if !strings.Contains(created, `"version":1},"conformance":"conforms","author":`) {
+		t.Errorf("create = %s, want conforms", created)
+	}
+	if opened := jsonOf("create", "Notes", "--type", "note"); !strings.Contains(opened, `"schema":null,"conformance":"open","author":`) {
+		t.Errorf("open create = %s, want open", opened)
+	}
+	var envelope struct{ Data core.RelicMutationResult }
+	if err := json.Unmarshal([]byte(created), &envelope); err != nil || envelope.Data.Relic.ID == "" {
+		t.Fatalf("decoding the create result %s: %v", created, err)
+	}
+	relicID := envelope.Data.Relic.ID
+	for _, args := range [][]string{
+		{"update", relicID, "--title", "Renamed"},
+		{"delete", relicID},
+		{"restore", relicID},
+	} {
+		if got := jsonOf(args...); strings.Contains(got, `"conformance"`) || !strings.Contains(got, `"version":1},"author":`) {
+			t.Errorf("relic %v = %s, want no conformance member", args, got)
+		}
+	}
+	if got := jsonOf("migrate", relicID, "--to", "note"); !strings.Contains(got, `"schema":null,"conformance":"open","author":`) {
+		t.Errorf("migrate = %s, want open", got)
+	}
+	listed := jsonOf("list")
+	if strings.Count(listed, `"conformance":"open"`) != 2 {
+		t.Errorf("list = %s, want both relics open", listed)
 	}
 }
