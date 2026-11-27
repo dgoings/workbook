@@ -53,6 +53,17 @@ const (
 	// checked only when a change makes it grow.
 	MaxRelicRelationBytes = 100
 	MaxRelicLinks         = 2000
+	// MaxRelicSchemaBytes bounds one stored schema document, the blob a
+	// schema.put adds, checked when it is saved and when it is read.
+	MaxRelicSchemaBytes = 64 * 1024
+	// MaxRelicSchemaVersionsPerType and MaxRelicSchemaVersions are counts:
+	// the versions of one type, and of every type in a project. They are
+	// checked only when a version is saved, never when the settings are read.
+	MaxRelicSchemaVersionsPerType = 500
+	MaxRelicSchemaVersions        = 1000
+	// MaxRelicSchemaRefDepth bounds how many $ref steps a schema follows
+	// from any one place, counting the steps inside another type's schema.
+	MaxRelicSchemaRefDepth = 32
 )
 
 var (

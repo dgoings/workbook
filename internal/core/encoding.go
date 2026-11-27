@@ -56,6 +56,11 @@ func EncodeDocument(value any) ([]byte, error) {
 			return nil, err
 		}
 		document = typed
+	case RelicSchemaDocument:
+		if err := validateRelicSchemaDocument(typed); err != nil {
+			return nil, err
+		}
+		document = typed
 	default:
 		return nil, Errorf(CategoryValidation, "cannot encode unsupported document type %T", value)
 	}

@@ -165,6 +165,10 @@ func TestRelicLimitsAreTheConfirmedStartingLimits(t *testing.T) {
 		{"MaxRelicValueDepth", MaxRelicValueDepth, 32},
 		{"MaxRelicRelationBytes", MaxRelicRelationBytes, 100},
 		{"MaxRelicLinks", MaxRelicLinks, 2000},
+		{"MaxRelicSchemaBytes", MaxRelicSchemaBytes, 65536},
+		{"MaxRelicSchemaVersionsPerType", MaxRelicSchemaVersionsPerType, 500},
+		{"MaxRelicSchemaVersions", MaxRelicSchemaVersions, 1000},
+		{"MaxRelicSchemaRefDepth", MaxRelicSchemaRefDepth, 32},
 	}
 	for _, limit := range limits {
 		if limit.got != limit.want {
