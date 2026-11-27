@@ -18,7 +18,7 @@ import (
 // A limit on one stored item is checked when the item is saved and again when
 // it is read: the title, a type name, a body format label, a position, one
 // property value, one field value, how deep a value nests, a property or field
-// name, one body and a link's relationship name. A count or a total is checked
+// name, one body, a link's relationship name and a link's pointer. A count or a total is checked
 // only when a change makes it grow, and never when a relic is read, so that no
 // sequence of changes that were each allowed can add up to a relic nothing
 // will read: the live parts, the parts counting removed ones, the bodies of
@@ -53,6 +53,9 @@ const (
 	// checked only when a change makes it grow.
 	MaxRelicRelationBytes = 100
 	MaxRelicLinks         = 2000
+	// MaxRelicLinkPointerBytes bounds one link's pointer, measured as its
+	// canonical bytes, checked on save and on read.
+	MaxRelicLinkPointerBytes = 512
 	// MaxRelicSchemaBytes bounds one stored schema document, the blob a
 	// schema.put adds, checked when it is saved and when it is read.
 	MaxRelicSchemaBytes = 64 * 1024

@@ -1,34 +1,74 @@
 package core
 
-import "sort"
+import (
+	"bytes"
+	"encoding/json"
+	"sort"
+)
 
 const (
 	RelicOperationLinkAdd    RelicOperationType = "link.add"
 	RelicOperationLinkRemove RelicOperationType = "link.remove"
 )
 
-// RelicLinkTarget is what a link points at. It has exactly one member: Task,
-// a task ID, in this generation. A later generation may add relic and part
-// targets as members of their own.
+// RelicLinkTarget is what a link points at: a task, named by Task, or a
+// relic, named by Relic, and optionally one of its parts, named by Part. It
+// has exactly one of Task or Relic, and Part only with Relic.
 type RelicLinkTarget struct {
-	Task string `json:"task,omitempty"`
+	Task  string `json:"task,omitempty"`
+	Relic string `json:"relic,omitempty"`
+	Part  string `json:"part,omitempty"`
+}
+
+// Address is the target as a command names it: the task ID, the relic ID, or
+// <relic>#<part>.
+func (t RelicLinkTarget) Address() string {
+	switch {
+	case t.Task != "":
+		return t.Task
+	case t.Part != "":
+		return t.Relic + "#" + t.Part
+	}
+	return t.Relic
+}
+
+// Covers reports whether a lookup for t finds a link to other: other is t,
+// or t is a whole relic and other is that relic or one of its parts.
+func (t RelicLinkTarget) Covers(other RelicLinkTarget) bool {
+	if t == other {
+		return true
+	}
+	return t.Relic != "" && t.Part == "" && other.Relic == t.Relic
 }
 
 // RelicLinkChange is what a link.add records: the link without its ID, which
 // is the operation's own. From is a part ID, or empty for the whole relic.
+// Seen is the last operation ID of the target relic when the link was made,
+// present exactly when the target is a relic. Pointer is an optional JSON
+// object locating something inside the target, which Workbook stores and
+// does not interpret.
 type RelicLinkChange struct {
-	From string          `json:"from,omitempty"`
-	To   RelicLinkTarget `json:"to"`
-	Rel  string          `json:"rel"`
+	From    string          `json:"from,omitempty"`
+	To      RelicLinkTarget `json:"to"`
+	Rel     string          `json:"rel"`
+	Seen    string          `json:"seen,omitempty"`
+	Pointer json.RawMessage `json:"pointer,omitempty"`
 }
 
 // RelicLink is one live link as links.json lists it. Its ID is the ID of the
 // link.add that made it, as a part's ID is its part.add's.
 type RelicLink struct {
-	ID   string          `json:"id"`
-	From string          `json:"from,omitempty"`
-	To   RelicLinkTarget `json:"to"`
-	Rel  string          `json:"rel"`
+	ID      string          `json:"id"`
+	From    string          `json:"from,omitempty"`
+	To      RelicLinkTarget `json:"to"`
+	Rel     string          `json:"rel"`
+	Seen    string          `json:"seen,omitempty"`
+	Pointer json.RawMessage `json:"pointer,omitempty"`
+}
+
+// change is the link without its ID, as the link.add that made it records it.
+func (link RelicLink) change() RelicLinkChange {
+	return RelicLinkChange{From: link.From, To: link.To, Rel: link.Rel, Seen: link.Seen, Pointer: link.Pointer}
 }
 
 // Link finds a live link by ID.
@@ -47,13 +87,60 @@ func ValidateRelicRelation(rel string) error {
 	return validateRelicToken("link relationship", rel, MaxRelicRelationBytes)
 }
 
-// ValidateRelicLinkTarget checks what a link points at: a task, named by a
-// valid task ID.
+// ValidateRelicLinkTarget checks what a link points at: exactly one of a
+// task or a relic, a part only with its relic, each a valid ID.
 func ValidateRelicLinkTarget(target RelicLinkTarget) error {
-	if target.Task == "" {
-		return Errorf(CategoryValidation, "a link must point at a task")
+	switch {
+	case target.Part != "" && target.Relic == "":
+		return Errorf(CategoryValidation, "a link to a part must name its relic")
+	case target.Task != "" && target.Relic != "":
+		return Errorf(CategoryValidation, "a link points at a task or a relic, not both")
+	case target.Task != "":
+		return ValidateTaskIDShape(target.Task)
+	case target.Relic == "":
+		return Errorf(CategoryValidation, "a link must point at a task or a relic")
 	}
-	return ValidateTaskIDShape(target.Task)
+	if err := ValidateRelicIDShape(target.Relic); err != nil {
+		return err
+	}
+	if target.Part != "" {
+		return ValidatePartID(target.Part)
+	}
+	return nil
+}
+
+// CanonicalRelicLinkPointer turns a pointer as given into its stored form:
+// the canonical form CanonicalRelicValue gives, which must be a JSON object
+// of at most MaxRelicLinkPointerBytes.
+func CanonicalRelicLinkPointer(raw []byte) (json.RawMessage, error) {
+	canonical, err := CanonicalRelicValue(raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(canonical) == 0 || canonical[0] != '{' {
+		return nil, Errorf(CategoryValidation, "a link pointer must be a JSON object")
+	}
+	if len(canonical) > MaxRelicLinkPointerBytes {
+		return nil, relicSizeError("the link pointer", len(canonical), MaxRelicLinkPointerBytes)
+	}
+	return canonical, nil
+}
+
+// validateStoredRelicLinkPointer requires a stored pointer to be within the
+// limit, judged first from the stored bytes alone, and exactly its canonical
+// form.
+func validateStoredRelicLinkPointer(pointer json.RawMessage) error {
+	if len(pointer) > MaxRelicLinkPointerBytes {
+		return relicSizeError("the link pointer", len(pointer), MaxRelicLinkPointerBytes)
+	}
+	canonical, err := CanonicalRelicLinkPointer(pointer)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(canonical, pointer) {
+		return Errorf(CategoryValidation, "the link pointer is not in canonical form")
+	}
+	return nil
 }
 
 // ValidateRelicLinks checks the links against the state stored beside them:
@@ -84,6 +171,21 @@ func validateRelicLinkChange(what string, link RelicLinkChange) error {
 	if err := ValidateRelicRelation(link.Rel); err != nil {
 		return Wrap(CategoryCorruptData, what+" has an invalid relationship", err)
 	}
+	switch {
+	case link.To.Relic != "" && link.Seen == "":
+		return corrupt("%s: a link to a relic must record the version it saw", what)
+	case link.To.Relic == "" && link.Seen != "":
+		return corrupt("%s: only a link to a relic records the version it saw", what)
+	case link.Seen != "":
+		if err := validateCanonicalULID(what+" seen version", link.Seen); err != nil {
+			return err
+		}
+	}
+	if link.Pointer != nil {
+		if err := validateStoredRelicLinkPointer(link.Pointer); err != nil {
+			return Wrap(CategoryCorruptData, what+" has an invalid pointer", err)
+		}
+	}
 	return nil
 }
 
@@ -100,7 +202,7 @@ func validateRelicLinkList(links []RelicLink) error {
 			}
 			return corrupt("relic links are not ordered by ID")
 		}
-		if err := validateRelicLinkChange("relic link "+link.ID, RelicLinkChange{From: link.From, To: link.To, Rel: link.Rel}); err != nil {
+		if err := validateRelicLinkChange("relic link "+link.ID, link.change()); err != nil {
 			return err
 		}
 	}
@@ -131,10 +233,12 @@ func applyRelicLinkOperation(links *RelicLinksDocument, relic RelicData, operati
 			}
 		}
 		links.Links = append(links.Links, RelicLink{
-			ID:   operation.ID,
-			From: operation.Link.From,
-			To:   operation.Link.To,
-			Rel:  operation.Link.Rel,
+			ID:      operation.ID,
+			From:    operation.Link.From,
+			To:      operation.Link.To,
+			Rel:     operation.Link.Rel,
+			Seen:    operation.Link.Seen,
+			Pointer: operation.Link.Pointer,
 		})
 	case RelicOperationLinkRemove:
 		kept := links.Links[:0]

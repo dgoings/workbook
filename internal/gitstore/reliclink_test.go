@@ -3,6 +3,7 @@ package gitstore
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -17,6 +18,19 @@ func relicLinkAddOp(operationNumber int, from, task, rel string) core.RelicOpera
 		Link: &core.RelicLinkChange{From: from, To: core.RelicLinkTarget{Task: task}, Rel: rel},
 	}
 }
+
+// relicRelicLinkAddOp links to relic, or to its part when part is not
+// empty, with a seen version and the pointer given (none when empty).
+func relicRelicLinkAddOp(operationNumber int, from, relic, part, rel, pointer string) core.RelicOperation {
+	change := &core.RelicLinkChange{From: from, To: core.RelicLinkTarget{Relic: relic, Part: part}, Rel: rel,
+		Seen: relicTestID(800000)}
+	if pointer != "" {
+		change.Pointer = json.RawMessage(pointer)
+	}
+	return core.RelicOperation{ID: relicTestID(operationNumber), Type: core.RelicOperationLinkAdd, Link: change}
+}
+
+func relicLinkRelicID(n int) string { return "WB-R-" + relicTestID(750000+n) }
 
 func relicLinkRemoveOp(operationNumber, linkNumber int) core.RelicOperation {
 	return core.RelicOperation{ID: relicTestID(operationNumber), Type: core.RelicOperationLinkRemove, LinkID: relicTestID(linkNumber)}
@@ -46,7 +60,8 @@ func TestRelicLinksRoundTripThroughGit(t *testing.T) {
 		linked := writeRelicChild(t, repo, config, root, nil,
 			relicLinkAddOp(13, "", relicLinkTaskID(1), "relates-to"),
 			relicLinkAddOp(11, p.id, relicLinkTaskID(2), "implemented-by"),
-			relicLinkAddOp(12, q.id, relicLinkTaskID(1), "implemented-by"))
+			relicLinkAddOp(12, q.id, relicLinkTaskID(1), "implemented-by"),
+			relicRelicLinkAddOp(15, q.id, relicLinkRelicID(1), relicTestID(751000), "decided-in", `{"at":"00:14:32","quote":"q"}`))
 
 		read, err := repo.GetRelic(context.Background(), config, relicID)
 		if err != nil {
@@ -56,6 +71,8 @@ func TestRelicLinksRoundTripThroughGit(t *testing.T) {
 			{ID: relicTestID(11), From: p.id, To: core.RelicLinkTarget{Task: relicLinkTaskID(2)}, Rel: "implemented-by"},
 			{ID: relicTestID(12), From: q.id, To: core.RelicLinkTarget{Task: relicLinkTaskID(1)}, Rel: "implemented-by"},
 			{ID: relicTestID(13), To: core.RelicLinkTarget{Task: relicLinkTaskID(1)}, Rel: "relates-to"},
+			{ID: relicTestID(15), From: q.id, To: core.RelicLinkTarget{Relic: relicLinkRelicID(1), Part: relicTestID(751000)},
+				Rel: "decided-in", Seen: relicTestID(800000), Pointer: json.RawMessage(`{"at":"00:14:32","quote":"q"}`)},
 		}
 		if !reflect.DeepEqual(read.Record.Links.Links, want) {
 			t.Fatalf("GetRelic() links = %#v, want %#v", read.Record.Links.Links, want)
@@ -76,7 +93,7 @@ func TestRelicLinksRoundTripThroughGit(t *testing.T) {
 		assertRelicHistoryValid(t, repo, config, relicID, linked.Head, 2)
 
 		unlinked := writeRelicChild(t, repo, config, linked, nil, relicLinkRemoveOp(14, 11))
-		if got := relicLinkIDsAt(t, repo, unlinked.Head); !reflect.DeepEqual(got, []string{relicTestID(12), relicTestID(13)}) {
+		if got := relicLinkIDsAt(t, repo, unlinked.Head); !reflect.DeepEqual(got, []string{relicTestID(12), relicTestID(13), relicTestID(15)}) {
 			t.Fatalf("links after the remove = %v", got)
 		}
 		assertRelicHistoryValid(t, repo, config, relicID, unlinked.Head, 3)
@@ -219,5 +236,76 @@ func TestReplayOfALinkFromAPartRemovedElsewhereWarns(t *testing.T) {
 			t.Fatalf("warnings = %#v, want one relic-edit-on-removed-part naming %s", outcome.Warnings, p.id)
 		}
 		assertReplayedHistory(t, repo, config, relicID, outcome.Next)
+	})
+}
+
+func TestReplayKeepsConcurrentRelicLinkChanges(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		p := relicTestPartNumbered(1)
+		x, p1, p2 := relicLinkRelicID(2), relicTestID(752001), relicTestID(752002)
+		root := writeRelicRoot(t, repo, config, p)
+		relicID := root.Record.State.RelicID
+		shared := relicHistoryFrom(t, repo, config, root, relicOps(relicRelicLinkAddOp(11, p.id, x, p1, "decided-in", "")))
+		local := relicHistoryFrom(t, repo, config, shared, relicOps(
+			relicRelicLinkAddOp(12, p.id, x, p2, "decided-in", `{"at":"00:00:02"}`),
+			relicLinkRemoveOp(101, 11)))
+		remote := relicHistoryFrom(t, repo, config, shared, relicOps(
+			relicRelicLinkAddOp(13, "", x, "", "supersedes", ""),
+			relicLinkRemoveOp(201, 11)))
+
+		outcome := replayDivergedSnapshots(t, repo, config, local, remote)
+		requireReplayed(t, outcome)
+		links, err := core.DecodeRelicLinksDocument(relicBlob(t, repo, outcome.Next+":links.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []core.RelicLink{
+			{ID: relicTestID(12), From: p.id, To: core.RelicLinkTarget{Relic: x, Part: p2}, Rel: "decided-in",
+				Seen: relicTestID(800000), Pointer: json.RawMessage(`{"at":"00:00:02"}`)},
+			{ID: relicTestID(13), To: core.RelicLinkTarget{Relic: x}, Rel: "supersedes", Seen: relicTestID(800000)},
+		}
+		if !reflect.DeepEqual(links.Links, want) {
+			t.Fatalf("links after the replay = %#v, want %#v", links.Links, want)
+		}
+		assertReplayedHistory(t, repo, config, relicID, outcome.Next)
+	})
+}
+
+func TestReadRefusesAForgedRelicLink(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		pack, _ := relicRootPack(config, 1, relicTestPartNumbered(1))
+		record := foldRelic(t, nil, pack)
+		relicID := pack.RelicID
+		links := []byte(`{"format":"workbook.relic-links","version":1,"links":[{"id":"` + relicTestID(20) +
+			`","to":{"relic":"` + relicLinkRelicID(3) + `"},"rel":"relates-to","seen":"` + relicTestID(21) +
+			`","pointer":{"b":1,"a":2}}]}` + "\n")
+		partTree := forgeRelicTree(t, repo, []string{
+			"100644 blob " + forgeRelicBlob(t, repo, encodedRelicDocument(t, core.NewRelicFields(nil))) + "\tfields.json"})
+		tree := forgeRelicTree(t, repo, []string{
+			"100644 blob " + forgeRelicBlob(t, repo, encodedRelicDocument(t, pack)) + "\toperation.json",
+			"100644 blob " + forgeRelicBlob(t, repo, encodedRelicDocument(t, record.State)) + "\tstate.json",
+			"100644 blob " + forgeRelicBlob(t, repo, links) + "\tlinks.json",
+			"040000 tree " + forgeRelicTree(t, repo, []string{"040000 tree " + partTree + "\t" + relicTestID(1)}) + "\tparts",
+		})
+		commit := forgeRelicCommitOf(t, repo, tree)
+		pointRelicRef(t, repo, relicID, commit)
+
+		for label, read := range map[string]func() error{
+			"GetRelic()": func() error {
+				_, err := repo.GetRelic(context.Background(), config, relicID)
+				return err
+			},
+			"ReadRelicTips()": func() error {
+				_, err := repo.ReadRelicTips(context.Background(), config, []core.RelicHead{{RelicID: relicID, ObjectID: commit}})
+				return err
+			},
+		} {
+			if err := read(); core.CategoryOf(err) != core.CategoryCorruptData || !strings.Contains(err.Error(), relicID) ||
+				!strings.Contains(err.Error(), "pointer") {
+				t.Errorf("%s error = %v, want corrupt data naming the relic and the pointer", label, err)
+			}
+		}
 	})
 }

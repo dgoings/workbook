@@ -59,13 +59,14 @@ type TaskRelicLink struct {
 }
 
 // RelicLinkSourcesOf returns the links of one relic that point at target, as
-// a reverse lookup reports them.
+// a reverse lookup reports them. A whole-relic target covers links to its
+// parts too.
 func RelicLinkSourcesOf(snapshot RelicSnapshot, target RelicLinkTarget) []RelicLinkSource {
 	var sources []RelicLinkSource
 	var summary *RelicSummary
 	parts := snapshot.Record.State.Relic.Parts
 	for _, link := range snapshot.Record.Links.Links {
-		if link.To != target {
+		if !target.Covers(link.To) {
 			continue
 		}
 		if summary == nil {

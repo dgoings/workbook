@@ -177,3 +177,9 @@ func TestRelicLimitsAreTheConfirmedStartingLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestRelicLinkPointerLimitIsPinned(t *testing.T) {
+	if MaxRelicLinkPointerBytes != 512 {
+		t.Errorf("MaxRelicLinkPointerBytes = %d, want 512", MaxRelicLinkPointerBytes)
+	}
+}

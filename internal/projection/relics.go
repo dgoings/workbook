@@ -689,7 +689,10 @@ func (w *relicWriter) writeRelic(ctx context.Context, relic gitstore.IndexedReli
 	}
 	for _, link := range relic.Snapshot.Record.Links.Links {
 		if link.To.Task == "" {
-			return core.Errorf(core.CategoryCorruptData, "relic %s: link %s points at no task", relicID, link.ID)
+			// A link to a relic has no row yet. The relic's row still counts
+			// it, so the relic is read from Git rather than from rows that
+			// leave it out.
+			continue
 		}
 		if _, err := w.insertLink.ExecContext(ctx, relicID, link.ID, link.From, link.To.Task, link.Rel); err != nil {
 			return cacheError("index relic link", err)

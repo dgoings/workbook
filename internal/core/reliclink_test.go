@@ -254,7 +254,7 @@ func TestApplyRelicFoldsLinkAddAndRemove(t *testing.T) {
 	root := goldenRelicRecord(t)
 	linked := relicWithLinks(t)
 	requireRelicLinkIDs(t, "after two adds", linked.Links, relicLinkL1, relicLinkL2)
-	if got := linked.Links.Links[1]; got != (RelicLink{ID: relicLinkL2, From: relicDocPartB,
+	if got := linked.Links.Links[1]; !reflect.DeepEqual(got, RelicLink{ID: relicLinkL2, From: relicDocPartB,
 		To: RelicLinkTarget{Task: relicLinkTask2}, Rel: "implemented-by"}) {
 		t.Errorf("L2 = %#v", got)
 	}
@@ -456,5 +456,279 @@ func TestRelicLinkJSONMembers(t *testing.T) {
 	encoded, err = json.Marshal(RelicLinkChange{To: RelicLinkTarget{Task: "t"}, Rel: "r"})
 	if err != nil || string(encoded) != `{"to":{"task":"t"},"rel":"r"}` {
 		t.Errorf("RelicLinkChange encodes as %s, %v", encoded, err)
+	}
+}
+
+var (
+	relicLinkRelicX = "WB-R-" + relicTestID(5201)
+	relicLinkRelicY = "WB-R-" + relicTestID(5202)
+	relicLinkPartP1 = relicTestID(5211)
+	relicLinkPartP2 = relicTestID(5212)
+	relicLinkSeen   = relicTestID(5221)
+)
+
+// relicLinkToRelic is a link.add to relic, or to its part when part is not
+// empty, with the seen version and pointer given.
+func relicLinkToRelic(id, from, relic, part, rel string, pointer string) RelicOperation {
+	change := &RelicLinkChange{From: from, To: RelicLinkTarget{Relic: relic, Part: part}, Rel: rel, Seen: relicLinkSeen}
+	if pointer != "" {
+		change.Pointer = json.RawMessage(pointer)
+	}
+	return RelicOperation{ID: id, Type: RelicOperationLinkAdd, Link: change}
+}
+
+func goldenRelicTargetLinksJSON() []byte {
+	return relicLinksJSON(
+		`{"id":"`+relicLinkL1+`","from":"`+relicDocPartB+`","to":{"task":"`+relicLinkTask1+`"},"rel":"implemented-by"}`,
+		`{"id":"`+relicLinkL2+`","to":{"relic":"`+relicLinkRelicX+`"},"rel":"supersedes","seen":"`+relicLinkSeen+`"}`,
+		`{"id":"`+relicLinkL3+`","from":"`+relicDocPartB+`","to":{"relic":"`+relicLinkRelicX+`","part":"`+relicLinkPartP1+
+			`"},"rel":"decided-in","seen":"`+relicLinkSeen+`","pointer":{"at":"00:14:32","quote":"we agreed \u003c"}}`,
+	)
+}
+
+func TestRelicLinkTargetsAreStrict(t *testing.T) {
+	golden := goldenRelicTargetLinksJSON()
+	decoded, err := DecodeRelicLinksDocument(golden)
+	if err != nil {
+		t.Fatalf("DecodeRelicLinksDocument(golden): %v", err)
+	}
+	want := []RelicLink{
+		{ID: relicLinkL1, From: relicDocPartB, To: RelicLinkTarget{Task: relicLinkTask1}, Rel: "implemented-by"},
+		{ID: relicLinkL2, To: RelicLinkTarget{Relic: relicLinkRelicX}, Rel: "supersedes", Seen: relicLinkSeen},
+		{ID: relicLinkL3, From: relicDocPartB, To: RelicLinkTarget{Relic: relicLinkRelicX, Part: relicLinkPartP1},
+			Rel: "decided-in", Seen: relicLinkSeen, Pointer: json.RawMessage(`{"at":"00:14:32","quote":"we agreed \u003c"}`)},
+	}
+	if !reflect.DeepEqual(decoded.Links, want) {
+		t.Fatalf("decoded golden = %#v, want %#v", decoded.Links, want)
+	}
+	if encoded := encodedRelicLinks(t, decoded); !bytes.Equal(encoded, golden) {
+		t.Fatalf("golden links re-encoded:\n got %s\nwant %s", encoded, golden)
+	}
+	// A document holding only task links is stored exactly as before relic
+	// targets existed.
+	taskOnly := []byte(`{"format":"workbook.relic-links","version":1,"links":[{"id":"` + relicLinkL1 + `","from":"` +
+		relicDocPartB + `","to":{"task":"` + relicLinkTask1 + `"},"rel":"implemented-by"},{"id":"` + relicLinkL2 +
+		`","to":{"task":"` + relicLinkTask2 + `"},"rel":"relates-to"}]}` + "\n")
+	if encoded := encodedRelicLinks(t, RelicLinksDocument{Format: "workbook.relic-links", Version: 1, Links: []RelicLink{
+		{ID: relicLinkL1, From: relicDocPartB, To: RelicLinkTarget{Task: relicLinkTask1}, Rel: "implemented-by"},
+		{ID: relicLinkL2, To: RelicLinkTarget{Task: relicLinkTask2}, Rel: "relates-to"},
+	}}); !bytes.Equal(encoded, taskOnly) {
+		t.Fatalf("task-only links encode as\n%s\nwant\n%s", encoded, taskOnly)
+	}
+
+	link := func(members string) []byte { return relicLinksJSON(`{"id":"` + relicLinkL1 + `",` + members + `}`) }
+	seen := `,"seen":"` + relicLinkSeen + `"`
+	for label, document := range map[string][]byte{
+		"a task and a relic":     link(`"to":{"task":"` + relicLinkTask1 + `","relic":"` + relicLinkRelicX + `"},"rel":"a"` + seen),
+		"a part alone":           link(`"to":{"part":"` + relicLinkPartP1 + `"},"rel":"a"` + seen),
+		"a part with a task":     link(`"to":{"task":"` + relicLinkTask1 + `","part":"` + relicLinkPartP1 + `"},"rel":"a"`),
+		"a bad relic ID":         link(`"to":{"relic":"WB-` + relicTestID(5201) + `"},"rel":"a"` + seen),
+		"a non-canonical part":   link(`"to":{"relic":"` + relicLinkRelicX + `","part":"` + strings.ToLower(relicLinkPartP1) + `"},"rel":"a"` + seen),
+		"a relic with no seen":   link(`"to":{"relic":"` + relicLinkRelicX + `"},"rel":"a"`),
+		"a task with seen":       link(`"to":{"task":"` + relicLinkTask1 + `"},"rel":"a"` + seen),
+		"a bad seen":             link(`"to":{"relic":"` + relicLinkRelicX + `"},"rel":"a","seen":"v1"`),
+		"an unknown to member":   link(`"to":{"relic":"` + relicLinkRelicX + `","quote":"x"},"rel":"a"` + seen),
+		"an unknown link member": link(`"to":{"relic":"` + relicLinkRelicX + `"},"rel":"a"` + seen + `,"changed":true`),
+	} {
+		_, err := DecodeRelicLinksDocument(document)
+		requireCorruptData(t, label, err)
+	}
+
+	// The same targets are refused when saved and when an operation holds them.
+	for label, target := range map[string]RelicLinkTarget{
+		"neither":            {},
+		"both":               {Task: relicLinkTask1, Relic: relicLinkRelicX},
+		"a part alone":       {Part: relicLinkPartP1},
+		"a part with a task": {Task: relicLinkTask1, Part: relicLinkPartP1},
+		"a bad part":         {Relic: relicLinkRelicX, Part: "p1"},
+	} {
+		if err := ValidateRelicLinkTarget(target); CategoryOf(err) != CategoryValidation {
+			t.Errorf("ValidateRelicLinkTarget(%s) = %v, want a validation error", label, err)
+		}
+		_, err := EncodeDocument(RelicLinksDocument{Format: "workbook.relic-links", Version: 1, Links: []RelicLink{
+			{ID: relicLinkL1, To: target, Rel: "a", Seen: relicLinkSeen}}})
+		requireCorruptData(t, label+" (encode)", err)
+		requireRelicPackRefused(t, label+" (operation)", singleRelicOperationPack(RelicOperation{ID: relicLinkL1,
+			Type: RelicOperationLinkAdd, Link: &RelicLinkChange{To: target, Rel: "a", Seen: relicLinkSeen}}))
+	}
+	for target, message := range map[RelicLinkTarget]string{
+		{}: "a link must point at a task or a relic",
+		{Task: relicLinkTask1, Relic: relicLinkRelicX}: "a link points at a task or a relic, not both",
+		{Part: relicLinkPartP1}:                        "a link to a part must name its relic",
+	} {
+		if err := ValidateRelicLinkTarget(target); err == nil || err.Error() != message {
+			t.Errorf("ValidateRelicLinkTarget(%#v) = %v, want %q", target, err, message)
+		}
+	}
+	noSeen := relicLinkToRelic(relicLinkL1, "", relicLinkRelicX, "", "a", "")
+	noSeen.Link.Seen = ""
+	pack := singleRelicOperationPack(noSeen)
+	requireRelicPackRefused(t, "a link.add to a relic with no seen", pack)
+	if _, err := EncodeDocument(pack); err == nil || !strings.Contains(err.Error(), "a link to a relic must record the version it saw") {
+		t.Errorf("a link.add to a relic with no seen: %v", err)
+	}
+	withSeen := relicLinkAdd(relicLinkL1, "", relicLinkTask1, "a")
+	withSeen.Link.Seen = relicLinkSeen
+	requireRelicPackRefused(t, "a link.add to a task with seen", singleRelicOperationPack(withSeen))
+
+	// The stored operation names the target, seen and pointer as written.
+	add := relicLinkToRelic(relicLinkL1, relicDocPartA, relicLinkRelicX, relicLinkPartP1, "decided-in", `{"at":"1"}`)
+	encoded, err := EncodeDocument(singleRelicOperationPack(add))
+	if err != nil {
+		t.Fatalf("EncodeDocument(link.add to a part): %v", err)
+	}
+	wantOperation := `{"id":"` + relicLinkL1 + `","type":"link.add","link":{"from":"` + relicDocPartA + `","to":{"relic":"` +
+		relicLinkRelicX + `","part":"` + relicLinkPartP1 + `"},"rel":"decided-in","seen":"` + relicLinkSeen + `","pointer":{"at":"1"}}}`
+	if !strings.Contains(string(encoded), `"operations":[`+wantOperation+`]`) {
+		t.Errorf("encoded %s, want the operation %s", encoded, wantOperation)
+	}
+	if decoded, err := DecodeRelicOperationPack(encoded); err != nil || !reflect.DeepEqual(decoded.Operations[0], add) {
+		t.Errorf("DecodeRelicOperationPack = %#v, %v", decoded, err)
+	}
+}
+
+func TestRelicLinkPointerIsStrict(t *testing.T) {
+	stored := func(pointer string) []byte {
+		return relicLinksJSON(`{"id":"` + relicLinkL1 + `","to":{"relic":"` + relicLinkRelicX + `"},"rel":"a","seen":"` +
+			relicLinkSeen + `","pointer":` + pointer + `}`)
+	}
+	deep := strings.Repeat(`{"a":`, 33) + `1` + strings.Repeat(`}`, 33)
+	for label, pointer := range map[string]string{
+		"an array":         `[1]`,
+		"a string":         `"x"`,
+		"null":             `null`,
+		"a number":         `1`,
+		"unsorted members": `{"b":1,"a":2}`,
+		"spaced":           `{"a": 1}`,
+		"a bare <":         `{"a":"<"}`,
+		"513 bytes":        `{"a":"` + strings.Repeat("x", 505) + `"}`,
+		"nested 33 deep":   deep,
+	} {
+		_, err := DecodeRelicLinksDocument(stored(pointer))
+		requireCorruptData(t, label, err)
+		pack := singleRelicOperationPack(relicLinkToRelic(relicLinkL1, "", relicLinkRelicX, "", "a", pointer))
+		if label == "spaced" || label == "a bare <" {
+			// json.Marshal compacts and escapes a raw value, so only a
+			// writer handing these over as they are can be refused.
+			_, err := EncodeDocument(pack)
+			requireCorruptData(t, label+" (operation)", err)
+			continue
+		}
+		requireRelicPackRefused(t, label+" (operation)", pack)
+	}
+	limit := `{"a":"` + strings.Repeat("x", 504) + `"}`
+	if len(limit) != 512 {
+		t.Fatalf("the limit pointer is %d bytes", len(limit))
+	}
+	if _, err := DecodeRelicLinksDocument(stored(limit)); err != nil {
+		t.Errorf("a 512-byte pointer: %v", err)
+	}
+	// A pointer is allowed on a task target too.
+	task := relicLinksJSON(`{"id":"` + relicLinkL1 + `","to":{"task":"` + relicLinkTask1 + `"},"rel":"a","pointer":{"at":"1"}}`)
+	if _, err := DecodeRelicLinksDocument(task); err != nil {
+		t.Errorf("a pointer on a task link: %v", err)
+	}
+
+	canonical, err := CanonicalRelicLinkPointer([]byte(`{"b":1, "a":"<"}`))
+	if err != nil || string(canonical) != `{"a":"\u003c","b":1}` {
+		t.Errorf("CanonicalRelicLinkPointer = %s, %v", canonical, err)
+	}
+	for label, test := range map[string]struct{ raw, message string }{
+		"an array":  {`[1]`, "a link pointer must be a JSON object"},
+		"null":      {`null`, "a link pointer must be a JSON object"},
+		"513 bytes": {`{"a":"` + strings.Repeat("x", 505) + `"}`, "the link pointer is 513 bytes; the limit is 512 bytes"},
+		"not JSON":  {`{`, "the value is not valid JSON"},
+	} {
+		_, err := CanonicalRelicLinkPointer([]byte(test.raw))
+		if CategoryOf(err) != CategoryValidation || !strings.Contains(err.Error(), test.message) {
+			t.Errorf("CanonicalRelicLinkPointer(%s) = %v, want a validation error %q", label, err, test.message)
+		}
+	}
+	// Escapes count: the size is of the canonical bytes.
+	escaped := `{"a":"` + strings.Repeat("<", 85) + `"}`
+	if _, err := CanonicalRelicLinkPointer([]byte(escaped)); err == nil || !strings.Contains(err.Error(), "512 bytes") {
+		t.Errorf("a pointer whose escapes take it past 512 bytes: %v", err)
+	}
+}
+
+func TestApplyRelicFoldsRelicLinks(t *testing.T) {
+	root := goldenRelicRecord(t)
+	self := RelicOperation{ID: relicLinkL3, Type: RelicOperationLinkAdd, Link: &RelicLinkChange{From: relicDocPartA,
+		To: RelicLinkTarget{Relic: relicDocRelic, Part: relicDocPartB}, Rel: "relates-to", Seen: relicLinkSeen}}
+	linked := mustApplyRelic(t, root, relicFoldPack(2,
+		relicLinkToRelic(relicLinkL1, "", relicLinkRelicX, "", "supersedes", ""),
+		relicLinkToRelic(relicLinkL2, relicDocPartB, relicLinkRelicX, relicLinkPartP1, "decided-in", `{"at":"00:14:32","quote":"q"}`),
+		self))
+	requireRelicLinkIDs(t, "after three adds", linked.Links, relicLinkL1, relicLinkL2, relicLinkL3)
+	unlinked := mustApplyRelic(t, linked, relicFoldPack(3, relicLinkRemove(relicTestID(5230), relicLinkL1)))
+	want := relicLinksJSON(
+		`{"id":"`+relicLinkL2+`","from":"`+relicDocPartB+`","to":{"relic":"`+relicLinkRelicX+`","part":"`+relicLinkPartP1+
+			`"},"rel":"decided-in","seen":"`+relicLinkSeen+`","pointer":{"at":"00:14:32","quote":"q"}}`,
+		`{"id":"`+relicLinkL3+`","from":"`+relicDocPartA+`","to":{"relic":"`+relicDocRelic+`","part":"`+relicDocPartB+
+			`"},"rel":"relates-to","seen":"`+relicLinkSeen+`"}`,
+	)
+	if got := encodedRelicLinks(t, unlinked.Links); !bytes.Equal(got, want) {
+		t.Errorf("links.json\n got %s\nwant %s", got, want)
+	}
+	if err := ValidateRelicCheckpoint(&linked, relicFoldPack(3, relicLinkRemove(relicTestID(5230), relicLinkL1)), unlinked); err != nil {
+		t.Errorf("ValidateRelicCheckpoint: %v", err)
+	}
+	// A link to a part the target relic may not have, or to a relic this
+	// clone lacks, folds the same: the fold reads no target.
+	missing := mustApplyRelic(t, root, relicFoldPack(2,
+		relicLinkToRelic(relicLinkL4, "", relicLinkRelicY, relicTestID(5999), "a", "")))
+	requireRelicLinkIDs(t, "a link to an unknown part", missing.Links, relicLinkL4)
+}
+
+func TestRelicLinkSourcesCoverPartsOfAWholeRelicTarget(t *testing.T) {
+	record := mustApplyRelic(t, goldenRelicRecord(t), relicFoldPack(2,
+		relicLinkToRelic(relicLinkL1, "", relicLinkRelicX, "", "a", ""),
+		relicLinkToRelic(relicLinkL2, relicDocPartA, relicLinkRelicX, relicLinkPartP1, "a", `{"at":"1"}`),
+		relicLinkToRelic(relicLinkL3, "", relicLinkRelicX, relicLinkPartP2, "a", ""),
+		relicLinkToRelic(relicLinkL4, "", relicLinkRelicY, relicLinkPartP1, "a", "")))
+	snapshot := RelicSnapshot{Record: record}
+	ids := func(sources []RelicLinkSource) []string {
+		got := []string{}
+		for _, source := range sources {
+			got = append(got, source.Link.ID)
+		}
+		return got
+	}
+	for label, test := range map[string]struct {
+		target RelicLinkTarget
+		want   []string
+	}{
+		"X":    {RelicLinkTarget{Relic: relicLinkRelicX}, []string{relicLinkL1, relicLinkL2, relicLinkL3}},
+		"X#P1": {RelicLinkTarget{Relic: relicLinkRelicX, Part: relicLinkPartP1}, []string{relicLinkL2}},
+		"Y":    {RelicLinkTarget{Relic: relicLinkRelicY}, []string{relicLinkL4}},
+		"Y#P2": {RelicLinkTarget{Relic: relicLinkRelicY, Part: relicLinkPartP2}, []string{}},
+		"task": {RelicLinkTarget{Task: relicLinkTask1}, []string{}},
+	} {
+		if got := ids(RelicLinkSourcesOf(snapshot, test.target)); !reflect.DeepEqual(got, test.want) {
+			t.Errorf("RelicLinkSourcesOf(%s) = %v, want %v", label, got, test.want)
+		}
+	}
+	if sources := RelicLinkSourcesOf(snapshot, RelicLinkTarget{Relic: relicLinkRelicX, Part: relicLinkPartP1}); len(sources) != 1 ||
+		string(sources[0].Link.Pointer) != `{"at":"1"}` || sources[0].Link.From != relicDocPartA {
+		t.Errorf("the X#P1 source = %#v", sources)
+	}
+
+	for label, test := range map[string]struct {
+		target RelicLinkTarget
+		want   string
+	}{
+		"task": {RelicLinkTarget{Task: relicLinkTask1}, relicLinkTask1},
+		"X":    {RelicLinkTarget{Relic: relicLinkRelicX}, relicLinkRelicX},
+		"X#P1": {RelicLinkTarget{Relic: relicLinkRelicX, Part: relicLinkPartP1}, relicLinkRelicX + "#" + relicLinkPartP1},
+	} {
+		if got := test.target.Address(); got != test.want {
+			t.Errorf("%s.Address() = %q, want %q", label, got, test.want)
+		}
+	}
+	whole, part := RelicLinkTarget{Relic: relicLinkRelicX}, RelicLinkTarget{Relic: relicLinkRelicX, Part: relicLinkPartP1}
+	if !whole.Covers(whole) || !whole.Covers(part) || part.Covers(whole) || !part.Covers(part) ||
+		part.Covers(RelicLinkTarget{Relic: relicLinkRelicX, Part: relicLinkPartP2}) ||
+		whole.Covers(RelicLinkTarget{Relic: relicLinkRelicY}) || whole.Covers(RelicLinkTarget{Task: relicLinkTask1}) {
+		t.Error("Covers does not cover exactly the relic and its parts")
 	}
 }
