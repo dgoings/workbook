@@ -84,7 +84,17 @@ func TestRelicScenariosCheckTheirOutput(t *testing.T) {
 		return result("relic show", `{"changes":`+list(changes)+`,"bodyVersions":`+list(versions)+`}`)
 	}
 	diffOf := func(parts string) string { return result("relic diff", `{"parts":[`+parts+`]}`) }
-	const exact = `{"kind":"changed","body":{"text":true,"hunks":[{}]}}`
+	// changed is an exact body diff with that many deleted and inserted lines,
+	// split over two hunks beside a context line.
+	changed := func(deleted, inserted int) string {
+		lines := []string{`{"kind":"equal"}`}
+		lines = append(lines, slices.Repeat([]string{`{"kind":"delete"}`}, deleted)...)
+		inserts := slices.Repeat([]string{`{"kind":"insert"}`}, inserted)
+		return `{"kind":"changed","body":{"text":true,"hunks":[{"lines":[` + strings.Join(lines, ",") +
+			`]},{"lines":[` + strings.Join(inserts, ",") + `]}]}}`
+	}
+	exact := changed(5, 5)
+	latest, firstLast := verifyRelicBodyDiff(5), verifyRelicBodyDiff(50)
 	tests := []struct {
 		name   string
 		stdout string
@@ -97,13 +107,19 @@ func TestRelicScenariosCheckTheirOutput(t *testing.T) {
 		{"relic-show-16mib", `{"format":"workbook.result","version":1,"command":"relic show","data":{"parts":[{"body":{"bytes":10}},{"body":{"bytes":6}},{"body":{"bytes":1}}]}}`, verifyRelicLiveBodies(2, 16)},
 		{"relic-history-100", historyOf(10, 11), verifyRelicHistory(11)},
 		{"relic-history-100", historyOf(11, 10), verifyRelicHistory(11)},
-		{"relic-diff-latest-100kib", diffOf(""), verifyRelicBodyDiff},
-		{"relic-diff-latest-100kib", diffOf(exact + "," + exact), verifyRelicBodyDiff},
-		{"relic-diff-latest-100kib", diffOf(`{"kind":"added","body":{"text":true,"hunks":[{}]}}`), verifyRelicBodyDiff},
-		{"relic-diff-latest-100kib", diffOf(`{"kind":"changed"}`), verifyRelicBodyDiff},
-		{"relic-diff-first-last-100kib", diffOf(`{"kind":"changed","body":{"text":false}}`), verifyRelicBodyDiff},
-		{"relic-diff-first-last-100kib", diffOf(`{"kind":"changed","body":{"text":true}}`), verifyRelicBodyDiff},
-		{"relic-diff-first-last-100kib", diffOf(`{"kind":"changed","body":{"text":true,"approximate":true,"hunks":[{}]}}`), verifyRelicBodyDiff},
+		{"relic-diff-latest-100kib", diffOf(""), latest},
+		{"relic-diff-latest-100kib", diffOf(exact + "," + exact), latest},
+		{"relic-diff-latest-100kib", diffOf(`{"kind":"added","body":{"text":true,"hunks":[{}]}}`), latest},
+		{"relic-diff-latest-100kib", diffOf(`{"kind":"changed"}`), latest},
+		{"relic-diff-first-last-100kib", diffOf(`{"kind":"changed","body":{"text":false}}`), firstLast},
+		{"relic-diff-first-last-100kib", diffOf(`{"kind":"changed","body":{"text":true}}`), firstLast},
+		{"relic-diff-first-last-100kib", diffOf(`{"kind":"changed","body":{"text":true,"approximate":true,"hunks":[{}]}}`), firstLast},
+		{"relic-diff-latest-100kib", diffOf(changed(6, 5)), latest},
+		{"relic-diff-latest-100kib", diffOf(changed(5, 6)), latest},
+		{"relic-diff-latest-100kib", diffOf(changed(0, 1)), latest},
+		{"relic-diff-latest-100kib", diffOf(changed(1, 0)), latest},
+		{"relic-diff-first-last-100kib", diffOf(changed(51, 50)), firstLast},
+		{"relic-diff-first-last-100kib", diffOf(changed(50, 51)), firstLast},
 	}
 	for _, test := range tests {
 		run := fakeRelicRun(test.stdout)
@@ -126,8 +142,13 @@ func TestRelicScenariosCheckTheirOutput(t *testing.T) {
 	if err := verifyRelicHistory(11)([]byte(historyOf(11, 11))); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyRelicBodyDiff([]byte(diffOf(exact))); err != nil {
-		t.Fatal(err)
+	for _, test := range []struct {
+		stdout string
+		verify relicVerifier
+	}{{diffOf(exact), latest}, {diffOf(changed(1, 1)), latest}, {diffOf(changed(50, 50)), firstLast}} {
+		if err := test.verify([]byte(test.stdout)); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// The right answer passes, records its sample and keeps the Git command

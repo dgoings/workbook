@@ -264,19 +264,38 @@ func verifyRelicHistory(want int) relicVerifier {
 }
 
 // verifyRelicBodyDiff checks a part's diff: that one changed part, its body
-// compared line by line, with hunks and within the line diff's bound.
-func verifyRelicBodyDiff(stdout []byte) error {
-	var diff core.RelicDiff
-	if err := resultData(stdout, &diff); err != nil {
-		return err
+// compared line by line, with hunks and within the line diff's bound, and with
+// from one to maxLines deleted lines and from one to maxLines inserted lines.
+func verifyRelicBodyDiff(maxLines int) relicVerifier {
+	return func(stdout []byte) error {
+		var diff core.RelicDiff
+		if err := resultData(stdout, &diff); err != nil {
+			return err
+		}
+		if len(diff.Parts) != 1 || diff.Parts[0].Kind != core.RelicPartChanged {
+			return fmt.Errorf("diff lists %+v, want one changed part", diff.Parts)
+		}
+		body := diff.Parts[0].Body
+		if body == nil || !body.Text || body.Approximate || len(body.Hunks) == 0 {
+			return fmt.Errorf("body diff is %+v, want an exact text diff with hunks", body)
+		}
+		var deleted, inserted int
+		for _, hunk := range body.Hunks {
+			for _, line := range hunk.Lines {
+				switch line.Kind {
+				case core.DiffDelete:
+					deleted++
+				case core.DiffInsert:
+					inserted++
+				}
+			}
+		}
+		if deleted < 1 || deleted > maxLines || inserted < 1 || inserted > maxLines {
+			return fmt.Errorf("body diff deletes %d lines and inserts %d, want 1 to %d of each",
+				deleted, inserted, maxLines)
+		}
+		return nil
 	}
-	if len(diff.Parts) != 1 || diff.Parts[0].Kind != core.RelicPartChanged {
-		return fmt.Errorf("diff lists %+v, want one changed part", diff.Parts)
-	}
-	if body := diff.Parts[0].Body; body == nil || !body.Text || body.Approximate || len(body.Hunks) == 0 {
-		return fmt.Errorf("body diff is %+v, want an exact text diff with hunks", body)
-	}
-	return nil
 }
 
 type relicChangeResult struct {
@@ -837,10 +856,11 @@ func (b *relicBench) measureMain() error {
 		{"relic-body-1mib", []string{"relic", "show", large, "--body"}, verifyBodyLength(relics.LargeBodyBytes)},
 		{"relic-history-100", []string{"relic", "show", history, "--history", "--all", "--json"},
 			verifyRelicHistory(relics.HistoryEdits + 1)},
-		{"relic-diff-latest-100kib", []string{"relic", "diff", history, "--json"}, verifyRelicBodyDiff},
+		{"relic-diff-latest-100kib", []string{"relic", "diff", history, "--json"},
+			verifyRelicBodyDiff(relicHistoryLinesPerEdit)},
 		{"relic-diff-first-last-100kib",
 			[]string{"relic", "diff", history, fixture.HistoryFirstVersion, fixture.HistoryLastVersion, "--json"},
-			verifyRelicBodyDiff},
+			verifyRelicBodyDiff(relics.HistoryEdits * relicHistoryLinesPerEdit)},
 	}
 	for _, read := range reads {
 		for range samples {

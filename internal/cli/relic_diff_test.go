@@ -201,13 +201,48 @@ func TestRelicDiffLeavesOutAPartAddedAndRemovedInside(t *testing.T) {
 	if diff := relicDiffOf(t, repository, relicID, created); len(diff.Parts) != 0 {
 		t.Errorf("whole diff parts = %+v, want none", diff.Parts)
 	}
-	for _, address := range []string{relicID, relicID + "#" + partID} {
+	for address, noun := range map[string]string{relicID: "relic", relicID + "#" + partID: "part"} {
 		diff := relicDiffOf(t, repository, address, created)
 		code, stdout, stderr := run(t, repository, "relic", "diff", address, created)
-		want := "Comparing:\t" + created + "\t→\t" + diff.To.Version + "\nThese two versions hold the same relic.\n"
+		want := "Comparing:\t" + created + "\t→\t" + diff.To.Version + "\nThese two versions hold the same " + noun + ".\n"
 		if code != 0 || stderr != "" || stdout != want {
 			t.Errorf("diff %s = (%d, %q, %q), want %q", address, code, stdout, stderr, want)
 		}
+	}
+}
+
+// A part whose position string changed without changing its place among the
+// live parts gets no moved note.
+func TestRelicDiffTextNotesOnlyAChangedPlace(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	relicID := mustCreateRelic(t, repository, "Places", "--type", "spec").Relic.ID
+	var parts []string
+	for range 2 {
+		parts = append(parts, mustUpdateRelic(t, repository, relicID, "--add-part", "--part-type", "section").Parts[0].ID)
+	}
+	start := relicHistoryOf(t, repository, relicID, "--limit", "1").Changes[0].Operations[0].ID
+	mustRelic(t, repository, nil, "update", relicID, "--move-part", parts[0], "--after", parts[1])
+	mustRelic(t, repository, nil, "update", relicID, "--move-part", parts[1], "--after", parts[0])
+
+	// Each part went to the end in turn, so both hold new positions in the
+	// same order.
+	diff := relicDiffOf(t, repository, relicID, start)
+	if len(diff.Parts) != 2 {
+		t.Fatalf("parts = %+v, want both moved in place", diff.Parts)
+	}
+	for index, part := range diff.Parts {
+		if part.ID != parts[index] || part.Moved == nil || part.Moved.From == part.Moved.To ||
+			part.Moved.FromIndex != index || part.Moved.ToIndex != index {
+			t.Fatalf("part %d = %+v, moved %+v; want it moved in place", index, part, part.Moved)
+		}
+	}
+	code, stdout, stderr := run(t, repository, "relic", "diff", relicID, start)
+	want := "Comparing:\t" + start + "\t→\t" + diff.To.Version + "\n" +
+		"Part " + parts[0] + "\tsection\tchanged\n" +
+		"Part " + parts[1] + "\tsection\tchanged\n"
+	if code != 0 || stderr != "" || stdout != want {
+		t.Fatalf("diff = (%d, %q, %q), want %q", code, stdout, stderr, want)
 	}
 }
 
@@ -298,7 +333,7 @@ func TestRelicDiffTextOutput(t *testing.T) {
 		t.Fatalf("diff of a one-commit relic = (%d, %q, %q)", code, stdout, stderr)
 	}
 	code, stdout, stderr = run(t, repository, "relic", "diff", relicID+"#"+partID, versions[0], versions[0])
-	if code != 0 || stderr != "" || !strings.HasSuffix(stdout, "These two versions hold the same relic.\n") {
+	if code != 0 || stderr != "" || !strings.HasSuffix(stdout, "These two versions hold the same part.\n") {
 		t.Fatalf("diff of a version with itself = (%d, %q, %q)", code, stdout, stderr)
 	}
 	added := mustUpdateRelic(t, repository, alone, "--add-part", "--part-type", "section",

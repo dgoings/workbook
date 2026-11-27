@@ -151,7 +151,7 @@ func TestRelicShowHistoryText(t *testing.T) {
 	want := relicID + "\tspec\tEdited\n" +
 		"Showing all 2 change(s).\n" +
 		stamp(0) + "\t" + relicTestActor + "\tpart.add\n" +
-		"\t" + versions[0] + "\tpart.add\n" +
+		"\t" + versions[0] + "\tpart.add\t" + partID + "\n" +
 		stamp(1) + "\t" + relicTestActor + "\tpart.body.set\n" +
 		"\t" + versions[1] + "\tpart.body.set\t" + partID + "\n" +
 		"Body versions:\n" +
@@ -165,6 +165,37 @@ func TestRelicShowHistoryText(t *testing.T) {
 	if code != 0 || stderr != "" || !strings.Contains(stdout, "Showing 1 most recent changes out of 3.\n") ||
 		strings.Contains(stdout, "Body versions:") {
 		t.Fatalf("show --history --limit 1 = (%d, %q, %q)", code, stdout, stderr)
+	}
+}
+
+// A part.add and a link.add from a part name no part member; their text lines
+// still show the part.
+func TestRelicShowHistoryTextNamesThePartAddedOrLinkedFrom(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	task := cliCreateTask(t, repository, "Build it")
+	relicID, partID, versions := savedRelicPart(t, repository, "one\n")
+	mustRelic(t, repository, nil, "update", relicID, "--link", task.ID, "--rel", "tracked-by", "--from", partID)
+	mustRelic(t, repository, nil, "update", relicID, "--link", task.ID, "--rel", "implemented-by")
+	history := relicHistoryOf(t, repository, relicID)
+	ids := historyOperationIDs(history)
+	if len(ids) != 4 || ids[1] != versions[0] {
+		t.Fatalf("operation IDs = %q", ids)
+	}
+
+	code, stdout, stderr := run(t, repository, "relic", "show", relicID, "--history")
+	if code != 0 || stderr != "" {
+		t.Fatalf("show --history = (%d, %q, %q)", code, stdout, stderr)
+	}
+	for _, line := range []string{
+		"\t" + ids[0] + "\trelic.create\n",
+		"\t" + ids[1] + "\tpart.add\t" + partID + "\n",
+		"\t" + ids[2] + "\tlink.add\t" + partID + "\n",
+		"\t" + ids[3] + "\tlink.add\n",
+	} {
+		if !strings.Contains(stdout, line) {
+			t.Errorf("text = %q, want the line %q", stdout, line)
+		}
 	}
 }
 

@@ -140,8 +140,8 @@ func writeRelicHistory(stdout io.Writer, history core.RelicHistory) {
 			relicTime(change.WallTime), singleLine(change.Actor), singleLine(change.Summary))
 		for _, operation := range change.Operations {
 			fmt.Fprintf(stdout, "\t%s\t%s", singleLine(operation.ID), singleLine(string(operation.Type)))
-			if operation.Part != "" {
-				fmt.Fprintf(stdout, "\t%s", singleLine(operation.Part))
+			if part := relicHistoryPartColumn(operation.RelicOperation); part != "" {
+				fmt.Fprintf(stdout, "\t%s", singleLine(part))
 			}
 			if operation.Applied != nil && !*operation.Applied {
 				fmt.Fprint(stdout, " (not applied)")
@@ -168,6 +168,19 @@ func writeRelicHistory(stdout io.Writer, history core.RelicHistory) {
 	}
 }
 
+// relicHistoryPartColumn is the part a history line shows for an operation: the
+// one it names, the one a part.add makes, which is the operation's own ID, or
+// the one a link is added from. It is empty when the operation concerns no part.
+func relicHistoryPartColumn(operation core.RelicOperation) string {
+	switch {
+	case operation.Type == core.RelicOperationPartAdd:
+		return operation.ID
+	case operation.Type == core.RelicOperationLinkAdd && operation.Link != nil:
+		return operation.Link.From
+	}
+	return operation.Part
+}
+
 func relicTime(moment time.Time) string {
 	return moment.UTC().Format(time.RFC3339)
 }
@@ -192,7 +205,11 @@ func writeRelicDiff(stdout io.Writer, diff core.RelicDiff) {
 	}
 	fmt.Fprintf(stdout, "Comparing:\t%s\t→\t%s\n", from, singleLine(diff.To.Version))
 	if len(diff.Changes) == 0 && len(diff.Properties) == 0 && len(diff.Parts) == 0 && diff.Links == nil {
-		fmt.Fprintln(stdout, "These two versions hold the same relic.")
+		compared := "relic"
+		if diff.Part != "" {
+			compared = "part"
+		}
+		fmt.Fprintf(stdout, "These two versions hold the same %s.\n", compared)
 		return
 	}
 	for _, change := range diff.Changes {
@@ -230,7 +247,7 @@ func relicValueChangeText(change core.RelicValueChange) string {
 
 func writeRelicPartDiff(stdout io.Writer, part core.RelicPartDiff) {
 	fmt.Fprintf(stdout, "Part %s\t%s\t%s", singleLine(part.ID), singleLine(part.Type), singleLine(string(part.Kind)))
-	if moved := part.Moved; moved != nil {
+	if moved := part.Moved; moved != nil && moved.FromIndex != moved.ToIndex {
 		fmt.Fprintf(stdout, "\tmoved %d → %d", moved.FromIndex, moved.ToIndex)
 	}
 	fmt.Fprintln(stdout)

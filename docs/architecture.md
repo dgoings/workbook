@@ -1743,7 +1743,10 @@ Spotlight indexing used about two and a half cores during the run.
 The last three scenarios were added after that run and are not part of it. They
 list the history, with `--all`, of a part whose 100 KiB body was saved 100 times
 after it was added, compare its newest change with the one before, and compare
-its first and last versions.
+its first and last versions. The history relic, 101 commits at full scale, is
+part of every fixture from this version on, so list, rebuild, cold-index and
+fetch scenarios of a later run are not directly comparable with figures
+measured before it.
 
 Every measured budget was met. What the table does not show:
 

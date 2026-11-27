@@ -1204,7 +1204,7 @@ Showing all 4 change(s).
 2026-11-27T15:01:00Z	alice@example.com	relic.create
 	01M8ERC8Z01PVC6W4JF20KHMBS	relic.create
 2026-11-27T15:02:00Z	alice@example.com	part.add
-	01M8ERE3J06CHHJXXN7TEXAZXS	part.add
+	01M8ERE3J06CHHJXXN7TEXAZXS	part.add	01M8ERE3J06CHHJXXN7TEXAZXS
 2026-11-27T15:04:00Z	alice@example.com	part.body.set
 	01M8ERHRR0EKET0S3GG29FR4XK	part.body.set	01M8ERE3J06CHHJXXN7TEXAZXS
 2026-11-27T15:03:00Z	bob@example.com	part.body.set, property.set
@@ -1224,7 +1224,7 @@ workbook relic show WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX#01M8ERE3J06CHHJXXN7TEXAZXS -
 WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX	spec	Task archive compaction
 Showing all 3 change(s).
 2026-11-27T15:02:00Z	alice@example.com	part.add
-	01M8ERE3J06CHHJXXN7TEXAZXS	part.add
+	01M8ERE3J06CHHJXXN7TEXAZXS	part.add	01M8ERE3J06CHHJXXN7TEXAZXS
 2026-11-27T15:04:00Z	alice@example.com	part.body.set
 	01M8ERHRR0EKET0S3GG29FR4XK	part.body.set	01M8ERE3J06CHHJXXN7TEXAZXS
 2026-11-27T15:03:00Z	bob@example.com	part.body.set
@@ -1287,7 +1287,9 @@ A first change has no parent: the comparison starts before the relic, `from` is
 `null`, and every part, property and link is added. More than two versions are
 `invocation` (exit `2`).
 
-A part address compares that part's position, fields and body. A relic compares
+A part address compares that part's position, fields and body. A part diff
+covers the part's fields and body, and a link added from the part appears in the
+whole-relic diff. A relic compares
 also its title, schema, retired and deleted flags, its properties and its links,
 and lists each part that differs. A part is live on a side that has it and has
 not removed it. A part live only on the to side is `added` when it is absent on
@@ -1314,7 +1316,8 @@ A relic's own changes print as `Title:`, `Schema:`, `Retired:`, `Deleted:` and
 `Property <name>:` lines, a part's fields as `Field <name>:` lines, with `+` before
 an added value and `-` before a removed one, and links under `Links:`. A
 comparison with nothing different prints `These two versions hold the same
-relic.` The newest change to this part is the stale save, so with no version
+relic.`, or `These two versions hold the same part.` for a part
+address. The newest change to this part is the stale save, so with no version
 there is nothing to show:
 
 ```sh
@@ -1323,7 +1326,7 @@ workbook relic diff WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX#01M8ERE3J06CHHJXXN7TEXAZXS
 
 ```text
 Comparing:	01M8ERHRR0EKET0S3GG29FR4XK	→	01M8ERFY507ZHPYBRZ39VHWYF3
-These two versions hold the same relic.
+These two versions hold the same part.
 ```
 
 The first comparison above with `--json`:
