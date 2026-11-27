@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=v0.7.0-151-g2e8e47ce sha256=2b7771e0eb83d0fdbca04a6db92842635f5c74a58b1c5e034e4a9beb59b34144 -->
+<!-- workbook:begin generator=v0.7.0-172-gfd3b76ca sha256=262fc462cead5268a70bfb139c217d0a6fb01765e60aeb77c66fa21801761326 -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`
@@ -144,6 +144,10 @@ relic) and the `rel`, such as `implemented-by`. `workbook relic list
 `--body` carries the body at `data.parts[0].body.text`, or at
 `data.parts[0].body.base64` when it is not text, and its version at
 `data.parts[0].body.version`.
+
+To see what links to a part, run `workbook relic list --linked-to
+<relic>#<part> --json`; `workbook relic show` of that part lists each link
+in `data.linkedFrom`.
 
 Task commands and the relic read commands (`workbook relic list`,
 `workbook relic show`, `workbook relic export`) do not fetch relics, so
