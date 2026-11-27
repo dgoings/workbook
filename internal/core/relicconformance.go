@@ -119,7 +119,7 @@ func (s RelicService) schemaForCreate(ctx context.Context, relicType, given stri
 		named, known := listing.ByID(given)
 		if !known {
 			return listing, RelicSchemaVersion{}, nil, Errorf(CategoryStaleWrite,
-				"the relic names schema version %s, which this clone has not synced; run `workbook sync` and try again", given)
+				"the document names schema version %s, which this clone has not synced; run `workbook sync` and try again", given)
 		}
 		if named.Type != relicType {
 			return listing, RelicSchemaVersion{}, nil, Errorf(CategoryValidation,

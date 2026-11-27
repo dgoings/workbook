@@ -484,6 +484,23 @@ func TestWatcherReportsEachRelicConflictAndWarningToItsTerminalOnce(t *testing.T
 	}
 }
 
+// A replay of the configuration ledger can renumber a schema version saved
+// here, and a watcher's synchronization is then the only place to say so.
+func TestWatcherReportsEachConfigWarningToItsTerminal(t *testing.T) {
+	syncer := &fakeSyncer{
+		origin: true,
+		configWarnings: []core.Warning{{
+			Code:    core.WarningRelicSchemaRenumbered,
+			Message: "the schema for spec saved here as version 1 is now version 2; a teammate saved version 1 first",
+		}},
+	}
+	_, output := startWatcher(t, syncer, func(options *Options) {
+		options.Interval = time.Hour
+		options.Quiet = 10 * time.Millisecond
+	})
+	waitForOutput(t, output, "workbook: "+core.WarningRelicSchemaRenumbered+": the schema for spec")
+}
+
 // A failed synchronization reaches the watcher's terminal, which for a board is
 // serve's log: once when it starts failing, again when the failure changes,
 // and once more when it clears. It is not repeated on every tick, which would
@@ -771,6 +788,7 @@ type fakeSyncer struct {
 	relicHeads     map[string]string
 	relicConflicts []core.RelicConflict
 	relicWarnings  []core.Warning
+	configWarnings []core.Warning
 }
 
 func (f *fakeSyncer) PublicationWarnings() []core.Warning {
@@ -794,6 +812,7 @@ func (f *fakeSyncer) Sync(ctx context.Context, _ core.ProjectConfig) (gitstore.S
 	err := f.err
 	relicConflicts := append([]core.RelicConflict{}, f.relicConflicts...)
 	relicWarnings := append([]core.Warning{}, f.relicWarnings...)
+	configWarnings := append([]core.Warning{}, f.configWarnings...)
 	f.mu.Unlock()
 
 	if blocker != nil {
@@ -814,6 +833,9 @@ func (f *fakeSyncer) Sync(ctx context.Context, _ core.ProjectConfig) (gitstore.S
 			RelicWarnings:  relicWarnings,
 		},
 		Push: gitstore.SyncResult{Remote: "origin", Status: gitstore.SyncPhaseCompleted},
+	}
+	if len(configWarnings) > 0 {
+		result.Fetch.Config = &gitstore.SyncConfigResult{Status: gitstore.SyncConfigReconciled, Warnings: configWarnings}
 	}
 	if len(conflicts) > 0 && err == nil {
 		err = core.ConflictError(conflicts)

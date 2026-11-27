@@ -229,6 +229,7 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"setup":    {"key": stringFlag, "no-docs": boolFlag, "no-sync": boolFlag, "skill-dir": stringFlag, "no-skill": boolFlag, "force": boolFlag, "tasks-only": stringFlag, "json": boolFlag},
 		"config":   {},
 		"docs":     {},
+		"schema":   {},
 		"status":   {},
 		"priority": {},
 		"key":      {},

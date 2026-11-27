@@ -201,6 +201,9 @@ type VocabularyState struct {
 	// keys reports the founding key alone, which is the set that project
 	// actually has.
 	Keys core.KeySet
+	// Schemas lists the saved relic schema versions of the same tip. It names
+	// each version's document and holds none, so reading it reads no schema.
+	Schemas core.RelicSchemaListing
 }
 
 // LoadVocabularyState reads the project's statuses and reports whether a ledger
@@ -263,6 +266,7 @@ func vocabularyStateAt(head string, decoded decodedConfig) VocabularyState {
 		Display:    decoded.display,
 		Priorities: decoded.priorities,
 		Keys:       decoded.keys,
+		Schemas:    decoded.schemas,
 	}
 }
 

@@ -299,7 +299,8 @@ func TestCreateFromFileSchemaMember(t *testing.T) {
 	}
 	writes := len(store.writes)
 	_, err := service.Create(ctx, document(`{"type":"spec","id":"`+relicTestID(999)+`"}`))
-	requireRelicCategory(t, "an unknown version", err, CategoryStaleWrite, relicTestID(999), "workbook sync")
+	requireRelicCategory(t, "an unknown version", err, CategoryStaleWrite,
+		"the document names schema version "+relicTestID(999), "workbook sync")
 	_, err = service.Create(ctx, document(ref(versions.plan1)))
 	requireRelicCategory(t, "another type's version", err, CategoryValidation, versions.plan1.ID, "plan")
 	requireRelicWrites(t, "refused creates", store, writes)

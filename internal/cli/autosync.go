@@ -75,7 +75,10 @@ type taskSession struct {
 	service    core.Service
 	// store is the projection the service reads and writes through, for a
 	// command such as compact that has to move it directly.
-	store     *projection.Store
+	store *projection.Store
+	// schemas is the relic schema listing of the settings the service's
+	// vocabulary and keys were read from.
+	schemas   core.RelicSchemaListing
 	report    syncReport
 	fetched   *gitstore.SyncResult
 	conflicts []core.Conflict
@@ -208,6 +211,7 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 		store:             store,
 		report:            syncReport{Enabled: policy.Enabled, Source: policy.Source, Status: syncStatusSkipped},
 		releaseProjection: releaseProjection,
+		schemas:           state.Schemas,
 	}
 	if !policy.Enabled {
 		session.report.Detail = "automatic synchronization is disabled"
@@ -685,6 +689,7 @@ func (session *taskSession) refreshConfiguration(ctx context.Context) error {
 	session.service.Vocabulary = state.Vocabulary
 	session.service.Priorities = state.Priorities
 	session.service.Keys = state.Keys
+	session.schemas = state.Schemas
 	return nil
 }
 

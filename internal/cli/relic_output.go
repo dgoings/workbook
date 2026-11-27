@@ -70,6 +70,7 @@ func writeRelicDocument(stdout io.Writer, document core.RelicDocument, bodies bo
 	if document.Deleted {
 		fmt.Fprintln(stdout, "Deleted:\tyes")
 	}
+	writeRelicSchema(stdout, document)
 	if len(document.Properties) > 0 {
 		fmt.Fprintln(stdout, "Properties:")
 		writeRelicValues(stdout, "  ", document.Properties)
@@ -86,6 +87,23 @@ func writeRelicDocument(stdout io.Writer, document core.RelicDocument, bodies bo
 		}
 	}
 	writeRelicLinks(stdout, document.Links)
+}
+
+// writeRelicSchema prints the schema version the relic names, or that it names
+// none, and for a relic that does not fit that version the first thing that
+// does not.
+func writeRelicSchema(stdout io.Writer, document core.RelicDocument) {
+	switch schema := document.Schema; {
+	case schema == nil:
+		fmt.Fprintln(stdout, "Schema:\topen")
+	case schema.Version == 0:
+		fmt.Fprintf(stdout, "Schema:\tunknown version %s\n", singleLine(schema.ID))
+	default:
+		fmt.Fprintf(stdout, "Schema:\t%s version %d\n", singleLine(schema.Type), schema.Version)
+	}
+	if document.State == core.RelicConformanceNotConforming {
+		fmt.Fprintf(stdout, "Does not fit:\t%s\n", singleLine(document.Problem))
+	}
 }
 
 // writeRelicLinks prints a relic's links after its parts, one line each: the

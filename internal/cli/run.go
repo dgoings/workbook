@@ -162,6 +162,8 @@ func runWithEnvironment(
 		err = runSync(ctx, commandArgs, cwd, stdout, stderr)
 	case "relic":
 		err = runRelic(ctx, commandArgs, cwd, stdin, stdout, stderr)
+	case "schema":
+		err = runSchema(ctx, commandArgs, cwd, stdin, stdout, stderr)
 	case "status":
 		err = runStatus(ctx, commandArgs, cwd, stdout, stderr)
 	case "priority":

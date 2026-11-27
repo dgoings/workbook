@@ -19,15 +19,23 @@ import (
 // publishes the one relic ref it moved.
 
 // newRelicService is the service a relic command reads and writes through:
-// the repository, under the project's keys, recording changes under actor.
-func newRelicService(repository *gitstore.Repository, config core.ProjectConfig, keys core.KeySet, actor string) core.RelicService {
+// the repository, under the project's keys and relic schemas as the command
+// read them from the settings, recording changes under actor.
+func newRelicService(
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	keys core.KeySet,
+	schemas core.RelicSchemaListing,
+	actor string,
+) core.RelicService {
 	return core.RelicService{
-		Config: config,
-		Keys:   keys,
-		Reader: repository,
-		Writer: repository,
-		Tasks:  repository,
-		IDs:    core.CryptoULIDSource{Now: recordedNow},
+		Config:  config,
+		Keys:    keys,
+		Reader:  repository,
+		Writer:  repository,
+		Tasks:   repository,
+		IDs:     core.CryptoULIDSource{Now: recordedNow},
+		Schemas: decodedRelicSchemas{repository: repository, listing: schemas},
 		// Relic documents record their times in UTC, as the stored format
 		// shows them.
 		Now:   func() time.Time { return recordedNow().UTC() },
@@ -59,7 +67,8 @@ func (session *taskSession) mutateRelic(
 	if err := session.refreshConfiguration(ctx); err != nil {
 		return core.RelicMutationResult{}, err
 	}
-	service := newRelicService(session.repository, session.config, session.service.Keys, session.service.Actor)
+	service := newRelicService(session.repository, session.config, session.service.Keys, session.schemas,
+		session.service.Actor)
 	conflict, err := session.relicConflictFor(ctx, service, target)
 	if err != nil {
 		return core.RelicMutationResult{}, err
@@ -196,11 +205,17 @@ func (session *taskSession) noteRelicReport(ctx context.Context, fetched gitstor
 }
 
 // relicReport is a fetch's relic conflicts, with the content of each body
-// version filled in, and its relic warnings. A body that cannot be read is
-// left without content and said in one more warning: the conflict is still
-// reported, and the report names the blob that holds each body.
+// version filled in, and its warnings: the relic warnings, after any the
+// configuration stage raised about a relic schema version saved here. A body
+// that cannot be read is left without content and said in one more warning:
+// the conflict is still reported, and the report names the blob that holds
+// each body.
 func relicReport(ctx context.Context, repository *gitstore.Repository, fetched gitstore.SyncResult) ([]core.RelicConflict, []core.Warning) {
-	warnings := append([]core.Warning(nil), fetched.RelicWarnings...)
+	var warnings []core.Warning
+	if fetched.Config != nil {
+		warnings = append(warnings, fetched.Config.Warnings...)
+	}
+	warnings = append(warnings, fetched.RelicWarnings...)
 	if len(fetched.RelicConflicts) == 0 {
 		return nil, warnings
 	}

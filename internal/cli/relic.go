@@ -42,6 +42,8 @@ func runRelic(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 		return runRelicDiff(ctx, args, cwd, stdout, stderr)
 	case "update":
 		return runRelicUpdate(ctx, args, cwd, stdout, stderr)
+	case "migrate":
+		return runRelicMigrate(ctx, args, cwd, stdout, stderr)
 	case "delete":
 		return runRelicSetDeleted(ctx, "delete", args, cwd, stdout, stderr)
 	case "restore":
@@ -72,7 +74,7 @@ func openRelicServiceFor(ctx context.Context, cwd string, stderr io.Writer, with
 	if err != nil {
 		return core.RelicService{}, nil, err
 	}
-	return newRelicService(repository, config, state.Keys, actor), repository, nil
+	return newRelicService(repository, config, state.Keys, state.Schemas, actor), repository, nil
 }
 
 func runRelicCreate(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -336,6 +338,33 @@ func runRelicSetDeleted(ctx context.Context, verb string, args []string, cwd str
 		return service.Delete(ctx, values[0])
 	})
 	return writeRelicMutationOutcome(stdout, stderr, command, session, result, err, *jsonMode)
+}
+
+func runRelicMigrate(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
+	values, args, err := requiredArguments("relic migrate", []string{"<relic>"}, args)
+	if err != nil {
+		return err
+	}
+	flags := newFlagSet("relic", "migrate")
+	target := flags.String("to", "", "the schema version to move to: N, <type> or <type>@N")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with the tasks remote (origin unless configured)")
+	jsonMode := flags.Bool("json", false, "emit JSON")
+	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+	if !flagGiven(flags, "to") {
+		return core.Errorf(core.CategoryInvocation,
+			"relic migrate needs --to <target>: N for version N of the relic's type, <type> for that type's newest version, or <type>@N")
+	}
+	session, err := openTaskSession(ctx, cwd, *noSync, true, stderr)
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	result, err := session.mutateRelic(ctx, values[0], func(ctx context.Context, service core.RelicService) (core.RelicMutationResult, error) {
+		return service.Migrate(ctx, values[0], *target)
+	})
+	return writeRelicMutationOutcome(stdout, stderr, "relic migrate", session, result, err, *jsonMode)
 }
 
 func runRelicExport(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {

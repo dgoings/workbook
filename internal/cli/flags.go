@@ -150,7 +150,7 @@ func deepestPositionals(root commandMetadata) commandMetadata {
 // leaving the options behind for a scan that only understands options.
 func trimPositionals(metadata commandMetadata, args []string) []string {
 	for range metadata.Positionals {
-		if len(args) == 0 || !isRequiredFirstArgument(args[0]) {
+		if len(args) == 0 || !isRequiredFirstArgument(args[0]) && args[0] != "-" {
 			break
 		}
 		args = args[1:]
@@ -875,7 +875,7 @@ var commandSchemas = map[string]commandMetadata{
 			"(origin unless configured) as tasks are: a command that changes a relic fetches\n" +
 			"first and publishes the relic after, unless --no-sync is given or auto-sync is off.",
 		Positionals:     []string{"<command>"},
-		SubcommandOrder: []string{"create", "list", "show", "diff", "update", "delete", "restore", "export"},
+		SubcommandOrder: []string{"create", "list", "show", "diff", "update", "migrate", "delete", "restore", "export"},
 		Subcommands: map[string]commandMetadata{
 			"create": {
 				Name:     "create",
@@ -996,6 +996,21 @@ var commandSchemas = map[string]commandMetadata{
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},
+			"migrate": {
+				Name:     "migrate",
+				Synopsis: "workbook relic migrate <relic> --to <target> [--no-sync] [--json]",
+				Description: "Move a relic to another schema version.\n\n" +
+					"--to takes N, for version N of the relic's type; <type>, for that type's newest\n" +
+					"version, or an open relic when the type has no schema; or <type>@N. An older\n" +
+					"version may be the target. The whole relic, its removed parts aside, must fit the\n" +
+					"version it moves to. Moving to the version it already names changes nothing.",
+				Positionals: []string{"<relic>"},
+				Options: []optionMetadata{
+					{Name: "to", Kind: stringFlag, Value: "<target>", Description: "the version to move to: N, <type> or <type>@N"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
 			"delete": {
 				Name:        "delete",
 				Synopsis:    "workbook relic delete <relic> [--no-sync] [--json]",
@@ -1023,6 +1038,53 @@ var commandSchemas = map[string]commandMetadata{
 					"document that relic create --from-file reads.",
 				Positionals: []string{"<relic>"},
 				Options: []optionMetadata{
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+		},
+	},
+	"schema": {
+		Name:     "schema",
+		Synopsis: "workbook schema <command> [options]",
+		Description: "Read and save the project's relic schemas, which say what each relic type holds.\n\n" +
+			"Schemas are project settings, recorded in their own synchronized history and\n" +
+			"shared with everyone who fetches. Saving one adds a version to its type, and\n" +
+			"every version is kept: a relic names the version it was written under and is\n" +
+			"checked against it when it is saved, until relic migrate moves it to another.\n" +
+			"A type with no schema accepts anything. Reading or synchronizing a relic never\n" +
+			"refuses it for not fitting its schema.",
+		Positionals:     []string{"<command>"},
+		SubcommandOrder: []string{"list", "show", "put"},
+		Subcommands: map[string]commandMetadata{
+			"list": {
+				Name:        "list",
+				Synopsis:    "workbook schema list [--json]",
+				Description: "List the relic types that have a schema, with each one's newest version.",
+				Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+			},
+			"show": {
+				Name:        "show",
+				Synopsis:    "workbook schema show <type> [--version <n>] [--json]",
+				Description: "Show a relic type's schema: its newest version, or the one --version names.",
+				Positionals: []string{"<type>"},
+				Options: []optionMetadata{
+					{Name: "version", Kind: stringFlag, Value: "<n>", Description: "show this version instead of the newest"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"put": {
+				Name:     "put",
+				Synopsis: "workbook schema put <type> <file|-> [--no-sync] [--no-docs] [--json]",
+				Description: "Save the schema in a file (- reads standard input) as a relic type's next\n" +
+					"version.\n\n" +
+					"A reference to another type's definition is fixed to that type's newest version.\n" +
+					"Saving the schema the newest version already holds changes nothing. Where two\n" +
+					"people save a version for one type at once, both are kept, and the one that\n" +
+					"synchronizes second takes the next number.",
+				Positionals: []string{"<type>", "<file|->"},
+				Options: []optionMetadata{
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
+					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},
@@ -1170,7 +1232,7 @@ var commandSchemas = map[string]commandMetadata{
 }
 
 var commandOrder = []string{
-	"setup", "create", "list", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "compact", "version", "fetch", "push", "sync", "move-tasks", "reset", "relic", "status", "priority", "key", "config", "docs", "hooks", "serve", "completion",
+	"setup", "create", "list", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "compact", "version", "fetch", "push", "sync", "move-tasks", "reset", "relic", "schema", "status", "priority", "key", "config", "docs", "hooks", "serve", "completion",
 }
 
 type commandFlagSet struct {

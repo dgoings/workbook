@@ -262,6 +262,13 @@ func (l *loop) syncOnce(ctx context.Context) {
 	for _, warning := range append(append([]core.Warning{}, result.Fetch.RelicWarnings...), result.Push.RelicWarnings...) {
 		fmt.Fprintf(l.options.Stderr, "workbook: %s: %s\n", core.DisplayLine(warning.Code), core.DisplayLine(warning.Message))
 	}
+	// A configuration replay's warning, such as a relic schema version saved
+	// here taking another number, comes from the one replay too.
+	if result.Fetch.Config != nil {
+		for _, warning := range result.Fetch.Config.Warnings {
+			fmt.Fprintf(l.options.Stderr, "workbook: %s: %s\n", core.DisplayLine(warning.Code), core.DisplayLine(warning.Message))
+		}
+	}
 	// A round has no command to carry a warning, so one about a publication
 	// that could not be checked afterwards is written here. Taking them every
 	// round also keeps them from collecting in a long-lived watcher, and from

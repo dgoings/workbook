@@ -42,6 +42,7 @@ Commands:
   reset [--dry-run] [--no-backup [--discard-unpublished] | --backup <path>] [--json]
   reset --remote <remote> [--confirm <remote>] [--dry-run] [--no-backup | --backup <path>] [--json]
   relic <command> [options]
+  schema <command> [options]
   status <command> [options]
   priority <command> [options]
   key <command> [options]
