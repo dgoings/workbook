@@ -1681,6 +1681,7 @@ func NewHandler(options Options) http.Handler {
 	handler.mux.HandleFunc("GET /api/relics/{id}/history", handler.serveRelicHistory)
 	handler.mux.HandleFunc("GET /api/relics/{id}/diff", handler.serveRelicDiff)
 	handler.mux.HandleFunc("GET /api/tasks/{id}/relics", handler.serveTaskRelics)
+	handler.mux.HandleFunc("GET /relics/{id}/parts/{part}/body", handler.serveRelicBody)
 	handler.mux.HandleFunc("GET /api/sync", handler.serveSyncState)
 	handler.mux.HandleFunc("PUT /api/sync", handler.updateSyncMode)
 	handler.mux.HandleFunc("GET /healthz", handler.serveHealth)
@@ -1855,7 +1856,7 @@ func allowedMethod(path string) (string, bool) {
 		if taskHistoryPathID(path) != "" {
 			return http.MethodGet, true
 		}
-		if relicAPIPath(path) || taskRelicsPathID(path) != "" {
+		if relicAPIPath(path) || taskRelicsPathID(path) != "" || relicBodyPathShaped(path) {
 			return http.MethodGet, true
 		}
 		if taskPathID(path) != "" {

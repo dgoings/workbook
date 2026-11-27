@@ -416,6 +416,8 @@ func malformedRelicPath(path string) bool {
 		})
 	case strings.HasPrefix(path, "/api/tasks/") && len(segments) == 5 && segments[4] == "relics":
 		return unnamedSegment(segments[3])
+	case strings.HasPrefix(path, "/relics/"):
+		return malformedRelicBodyPath(path)
 	default:
 		return false
 	}

@@ -103,6 +103,20 @@ type browserPage struct {
 	// answers what it found beside the script's own result: the result is
 	// then {"page": <the script's value>, "manifest": <Page.getAppManifest>}.
 	Manifest bool
+	// Opened, when set, follows a page that Script opens in a window of its
+	// own. Script is then evaluated as if a reader's click ran it, so the
+	// browser lets it open a window.
+	Opened *openedPage
+}
+
+// openedPage is a window the page's script opened: Script is evaluated in it
+// once its address holds URL, and Then is evaluated back in the first page
+// after that. The result is then {"page": <Script's value>, "opened": <the
+// opened page's value>, "then": <Then's value>}.
+type openedPage struct {
+	URL    string
+	Script string
+	Then   string
 }
 
 // browserLaunches caps how many Chromes the package runs at once. The layout
@@ -202,6 +216,7 @@ func driveBrowser(node, chrome, profile, base string, page browserPage, deadline
 		"beforeLoad": page.BeforeLoad,
 		"reload":     page.Reload,
 		"manifest":   page.Manifest,
+		"opened":     page.Opened,
 	})
 	if err != nil {
 		return nil, err
@@ -296,6 +311,31 @@ const phoneInput = ` + "`" + `
 })();
 ` + "`" + `;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Finds the page another page opened, by its address, and evaluates
+// opened.Script in it.
+async function evaluateInOpened(port, openerID, opened) {
+  let found = null;
+  for (let attempt = 0; attempt < 400 && !found; attempt++) {
+    try {
+      const targets = await (await fetch("http://127.0.0.1:" + port + "/json/list")).json();
+      found = targets.find((candidate) => candidate.type === "page" && candidate.id !== openerID && candidate.url.includes(opened.URL));
+    } catch (_) {}
+    if (!found) await sleep(50);
+  }
+  if (!found) throw new Error("no page was opened at " + opened.URL);
+  const socket = new WebSocket(found.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = () => reject(new Error("the opened page's DevTools socket did not open")); });
+  const answer = new Promise((resolve) => { socket.onmessage = (event) => { const message = JSON.parse(event.data); if (message.id === 1) resolve(message); }; });
+  socket.send(JSON.stringify({ id: 1, method: "Runtime.evaluate", params: { expression: opened.Script, awaitPromise: true, returnByValue: true } }));
+  const message = await answer;
+  socket.close();
+  if (message.error) throw new Error(message.error.message);
+  if (message.result.exceptionDetails) {
+    const details = message.result.exceptionDetails;
+    throw new Error((details.exception && details.exception.description) || details.text);
+  }
+  return message.result.result.value === undefined ? null : message.result.result.value;
+}
 (async () => {
   if (typeof WebSocket !== "function") throw new Error("this node has no WebSocket client; node 22 or later is needed");
   let port = "";
@@ -394,8 +434,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const loaded = once("Page.loadEventFired");
   await send("Page.navigate", { url: request.url });
   await loaded;
-  const evaluate = async (expression) => {
-    const evaluated = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+  const evaluate = async (expression, userGesture = false) => {
+    const evaluated = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true, userGesture });
     if (evaluated.exceptionDetails) {
       const details = evaluated.exceptionDetails;
       throw new Error((details.exception && details.exception.description) || details.text);
@@ -422,12 +462,20 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     await reloaded;
   }
   const manifest = request.manifest ? await send("Page.getAppManifest", {}) : null;
-  const evaluated = await evaluate(request.expression);
+  const evaluated = await evaluate(request.expression, !!request.opened);
   if (request.screenshot) {
     const shot = await send("Page.captureScreenshot", { format: "png" });
     fs.writeFileSync(request.screenshot, Buffer.from(shot.data, "base64"));
   }
   const value = evaluated.result.value === undefined ? null : evaluated.result.value;
+  if (request.opened) {
+    const valueOf = (result) => result.result.value === undefined ? null : result.result.value;
+    const opened = await evaluateInOpened(port, target.id, request.opened);
+    const then = request.opened.Then ? valueOf(await evaluate(request.opened.Then)) : null;
+    process.stdout.write(JSON.stringify({ page: value, opened, then }));
+    socket.close();
+    process.exit(0);
+  }
   process.stdout.write(JSON.stringify(request.manifest ? { page: value, manifest } : value));
   socket.close();
   process.exit(0);
