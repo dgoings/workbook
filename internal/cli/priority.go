@@ -375,7 +375,7 @@ func runPriorityMutation(
 	// documents both sections, so a priority change that let the statuses
 	// default would overwrite a project's configured columns with the built-in
 	// set — the mirror of the mistake that function's own comment describes.
-	docs, docsErr := regenerateGuidelines(session, session.service.Vocabulary, after, session.service.KeySet(), noDocs)
+	docs, docsErr := regenerateGuidelines(ctx, session, session.service.Vocabulary, after, session.service.KeySet(), noDocs)
 	result.Docs = docs
 	writePriorityMutation(stdout, stderr, command, result, session, docsErr, jsonMode)
 	return nil

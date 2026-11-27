@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dgoings/workbook/internal/agentdocs"
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
@@ -290,6 +291,96 @@ func TestSchemaPutRefreshesTheGuidelines(t *testing.T) {
 	}
 }
 
+// Saving a schema lists the type in the guidelines, and every command that
+// writes or judges them agrees with that rendering.
+func TestDocsUpdateAfterSchemaPut(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	guidelines := func() string {
+		t.Helper()
+		return readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	}
+	mustRun := func(args ...string) string {
+		t.Helper()
+		code, stdout, stderr := run(t, repository, args...)
+		if code != 0 {
+			t.Fatalf("%v = (%d, %q, %q)", args, code, stdout, stderr)
+		}
+		return stdout
+	}
+	assertCurrent := func(what string) {
+		t.Helper()
+		if status := mustRun("docs", "status"); strings.Contains(status, string(agentdocs.StateStale)) {
+			t.Fatalf("docs status after %s called the guidelines stale:\n%s", what, status)
+		}
+	}
+	before := guidelines()
+
+	mustPutSchema(t, repository, "spec", specSchemaOne, "--no-docs")
+	if guidelines() != before {
+		t.Fatal("schema put --no-docs changed the guidelines")
+	}
+	mustRun("docs", "update")
+	if got := guidelines(); !strings.Contains(got, "- `spec`, version 1\n  - Title: Spec\n") {
+		t.Fatalf("docs update did not list the spec type:\n%s", got)
+	}
+	assertCurrent("docs update")
+
+	mustPutSchema(t, repository, "spec", specSchemaTwo)
+	want := "- `spec`, version 2\n  - Title: Spec\n" +
+		"  - Required properties: `status` (one of `draft`, `approved`)\n"
+	if got := guidelines(); !strings.Contains(got, want) {
+		t.Fatalf("schema put did not refresh the guidelines to version 2:\n%s", got)
+	}
+	assertCurrent("schema put")
+
+	// The other writers of the guidelines keep the relic types.
+	for _, args := range [][]string{
+		{"status", "add", "icebox"},
+		{"priority", "add", "urgent", "--before", "high"},
+		{"key", "add", "NEW", "--current"},
+		{"setup"},
+	} {
+		mustRun(args...)
+		if got := guidelines(); !strings.Contains(got, want) {
+			t.Fatalf("%v dropped the relic types from the guidelines:\n%s", args, got)
+		}
+		assertCurrent(strings.Join(args, " "))
+	}
+
+	// The board compares with the same rendering, so it finds nothing stale.
+	ctx := t.Context()
+	board := openBoardVocabulary(t, ctx, repository)
+	state, err := board.repository.LoadVocabularyState(ctx, board.config)
+	if err != nil {
+		t.Fatalf("load the project's configuration: %v", err)
+	}
+	if warnings := staleGuidelinesWarnings(ctx, board, state.Vocabulary, state.Priorities, state.Keys); len(warnings) != 0 {
+		t.Fatalf("board status warnings = %#v, want none", warnings)
+	}
+	priorityBoard := openBoardPriorities(t, ctx, repository)
+	if warnings := stalePriorityGuidelinesWarnings(ctx, priorityBoard, state.Vocabulary, state.Priorities, state.Keys); len(warnings) != 0 {
+		t.Fatalf("board priority warnings = %#v, want none", warnings)
+	}
+	keyBoard := &boardKeys{repository: board.repository, config: board.config}
+	if warnings := staleKeyGuidelinesWarnings(ctx, keyBoard, state.Vocabulary, state.Priorities, state.Keys); len(warnings) != 0 {
+		t.Fatalf("board key warnings = %#v, want none", warnings)
+	}
+}
+
+// A fresh clone's setup fetches the settings and documents their relic types.
+func TestDocsUpdateAfterSchemaPutReachesAClonesSetup(t *testing.T) {
+	t.Parallel()
+	first, second := schemaSharedClones(t)
+	mustPutSchema(t, first, "spec", specSchemaOne)
+	if code, stdout, stderr := run(t, second, "setup"); code != 0 {
+		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
+	}
+	if got := readProjectFile(t, second, agentdocs.GuidelinesPath); !strings.Contains(got, "- `spec`, version 1\n") {
+		t.Fatalf("setup did not list the fetched spec type:\n%s", got)
+	}
+}
+
 func TestSchemaHelp(t *testing.T) {
 	t.Parallel()
 	output := assertHelpOutput(t, []string{"help", "schema"}, "Usage: workbook schema <command> [options]")
@@ -438,6 +529,15 @@ func TestStatusesWorkWithSchemaBlobsMissing(t *testing.T) {
 		}
 	}
 	schemaErrorMessage(t, repository, 7, core.CategoryCorruptData, "show", "spec")
+
+	// The guidelines say the type cannot be read rather than failing.
+	if code, stdout, stderr := run(t, repository, "docs", "update"); code != 0 {
+		t.Fatalf("docs update = (%d, %q, %q)", code, stdout, stderr)
+	}
+	want := "- `spec`, version 1: schema unreadable; run `workbook validate`\n"
+	if got := readProjectFile(t, repository, agentdocs.GuidelinesPath); !strings.Contains(got, want) {
+		t.Fatalf("guidelines missing %q:\n%s", want, got)
+	}
 }
 
 // A relic command's schema listing is the one decoded with the settings the

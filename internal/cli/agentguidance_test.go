@@ -228,7 +228,7 @@ func TestGuidanceScannerReportsUnbuiltCommands(t *testing.T) {
 	}
 
 	guidelines := agentdocs.RenderGuidelines(core.ProjectConfig{ProjectID: "01KY8964C8TQVBKVACB45DYTNY", Key: "WB"},
-		core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{})
+		core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{}, nil)
 	block := relicGuidanceBlock(t, guidelines)
 	if len(block) != 4 {
 		t.Fatalf("relic guidance block = %q, want four lines", block)
@@ -254,7 +254,7 @@ func TestAgentGuidanceUsesOnlyImplementedCommandsAndOptions(t *testing.T) {
 	t.Parallel()
 	for name, text := range map[string]string{
 		"guidelines": agentdocs.RenderGuidelines(core.ProjectConfig{ProjectID: "01KY8964C8TQVBKVACB45DYTNY", Key: "WB"},
-			core.DefaultVocabulary(), core.PriorityVocabulary{}, core.KeySet{}),
+			core.DefaultVocabulary(), core.PriorityVocabulary{}, core.KeySet{}, nil),
 		"skill":     skills.SkillMarkdown,
 		"reference": agentdocs.RenderReference(),
 	} {
@@ -340,7 +340,7 @@ func TestGuidelinesNameRealRelicJSONMembers(t *testing.T) {
 	}}, keys)
 
 	guidelines := agentdocs.RenderGuidelines(core.ProjectConfig{ProjectID: "01KY8964C8TQVBKVACB45DYTNY", Key: "WB"},
-		core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{})
+		core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{}, nil)
 	start := strings.Index(guidelines, "\n## Relics\n")
 	if start < 0 {
 		t.Fatalf("guidelines have no Relics section:\n%s", guidelines)
@@ -388,7 +388,7 @@ func TestGuidelinesRelicWorkflowRunsAsWritten(t *testing.T) {
 	}
 
 	guidelines := agentdocs.RenderGuidelines(core.ProjectConfig{ProjectID: "01KY8964C8TQVBKVACB45DYTNY", Key: "WB"},
-		core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{})
+		core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{}, nil)
 	block := relicGuidanceBlock(t, guidelines)
 	if len(block) != 4 {
 		t.Fatalf("relic guidance block = %q, want four lines", block)

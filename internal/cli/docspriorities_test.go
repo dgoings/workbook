@@ -214,7 +214,7 @@ func TestBoardDoesNotCallTheProjectsOwnPrioritiesStale(t *testing.T) {
 		t.Fatalf("load the project's configuration: %v", err)
 	}
 
-	warnings := staleGuidelinesWarnings(board, state.Vocabulary, state.Priorities, state.Keys)
+	warnings := staleGuidelinesWarnings(ctx, board, state.Vocabulary, state.Priorities, state.Keys)
 
 	if len(warnings) != 0 {
 		t.Fatalf("warnings = %#v, want none for guidelines that match this project's configuration", warnings)
@@ -242,7 +242,7 @@ func TestBoardDoesNotCallTheProjectsOwnKeysStale(t *testing.T) {
 		t.Fatalf("current key = %q, want NEW", state.Keys.Current())
 	}
 
-	warnings := staleGuidelinesWarnings(board, state.Vocabulary, state.Priorities, state.Keys)
+	warnings := staleGuidelinesWarnings(ctx, board, state.Vocabulary, state.Priorities, state.Keys)
 
 	if len(warnings) != 0 {
 		t.Fatalf("warnings = %#v, want none for guidelines that already name the moved key", warnings)

@@ -310,7 +310,7 @@ func runSchemaPut(ctx context.Context, args []string, cwd string, stdin io.Reade
 	if err := session.publicationRefusal(); err != nil {
 		return err
 	}
-	docs, docsErr := regenerateGuidelines(session, session.service.Vocabulary, session.service.Priorities,
+	docs, docsErr := regenerateGuidelines(ctx, session, session.service.Vocabulary, session.service.Priorities,
 		session.service.KeySet(), *noDocs)
 	writeSchemaPut(stdout, stderr, result, session, docs, docsErr, *jsonMode)
 	return nil

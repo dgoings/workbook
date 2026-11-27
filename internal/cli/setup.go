@@ -332,12 +332,17 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	if err != nil {
 		return err
 	}
+	relicTypes, err := guidelinesRelicTypes(ctx, repository, config, state.Schemas)
+	if err != nil {
+		return err
+	}
 	docsOptions := agentdocs.Options{
 		Root:       repository.Root,
 		Project:    config,
 		Vocabulary: state.Vocabulary,
 		Priorities: state.Priorities,
 		Keys:       state.Keys,
+		RelicTypes: relicTypes,
 		User:       user,
 		Generator:  release.Version,
 		Force:      *force,
@@ -648,6 +653,11 @@ func refreshFetchedGuidelines(
 	// this half behind would document the founding key over the one new tasks
 	// actually mint under.
 	options.Keys = state.Keys
+	// And the relic types, whose schemas the fetch may have delivered.
+	options.RelicTypes, err = guidelinesRelicTypes(ctx, repository, config, state.Schemas)
+	if err != nil {
+		return err
+	}
 	refreshed, err := agentdocs.ApplyGuidelines(options)
 	if err != nil {
 		return err
@@ -755,12 +765,18 @@ func runDocs(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		return err
 	}
 
+	relicTypes, err := guidelinesRelicTypes(ctx, repository, config, state.Schemas)
+	if err != nil {
+		return err
+	}
+
 	options := agentdocs.Options{
 		Root:       repository.Root,
 		Project:    config,
 		Vocabulary: state.Vocabulary,
 		Priorities: state.Priorities,
 		Keys:       state.Keys,
+		RelicTypes: relicTypes,
 		User:       user,
 		Generator:  release.Version,
 		Create:     create.values,

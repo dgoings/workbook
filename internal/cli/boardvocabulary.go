@@ -205,7 +205,7 @@ func (board *boardVocabulary) apply(
 		// is about the change, and the others are about the repository.
 		Warnings: append(append(reresolutionWarnings(plan.change, plan.reresolved),
 			board.publisher.publishConfig(ctx)...),
-			staleGuidelinesWarnings(board, after, priorities, keys)...),
+			staleGuidelinesWarnings(ctx, board, after, priorities, keys)...),
 	}, nil
 }
 
@@ -266,17 +266,23 @@ func staleVocabularyWrite(expected string) error {
 // after every board change — including a change that left them exactly as the
 // installed file describes.
 func staleGuidelinesWarnings(
+	ctx context.Context,
 	board *boardVocabulary,
 	vocabulary core.Vocabulary,
 	priorities core.PriorityVocabulary,
 	keys core.KeySet,
 ) []core.Warning {
+	relicTypes, err := currentRelicTypes(ctx, board.repository, board.config)
+	if err != nil {
+		return nil
+	}
 	state, err := agentdocs.GuidelinesState(agentdocs.Options{
 		Root:       board.repository.Root,
 		Project:    board.config,
 		Vocabulary: vocabulary,
 		Priorities: priorities,
 		Keys:       keys,
+		RelicTypes: relicTypes,
 		Generator:  release.Version,
 	})
 	if err != nil {

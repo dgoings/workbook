@@ -1038,7 +1038,7 @@ func runStatusMutation(
 	if position := result.Change.Position; position != nil {
 		position.Order = after.Order(plan.change.Status) + 1
 	}
-	docs, docsErr := regenerateGuidelines(session, after, session.service.Priorities, session.service.KeySet(), noDocs)
+	docs, docsErr := regenerateGuidelines(ctx, session, after, session.service.Priorities, session.service.KeySet(), noDocs)
 	result.Docs = docs
 	writeStatusMutation(stdout, stderr, command, result, session, docsErr, jsonMode)
 	return nil

@@ -541,7 +541,7 @@ func TestBoardDoesNotCallTheProjectsOwnKeysStaleThroughThePriorityBoard(t *testi
 		t.Fatalf("current key = %q, want NEW", state.Keys.Current())
 	}
 
-	warnings := stalePriorityGuidelinesWarnings(board, state.Vocabulary, state.Priorities, state.Keys)
+	warnings := stalePriorityGuidelinesWarnings(ctx, board, state.Vocabulary, state.Priorities, state.Keys)
 
 	if len(warnings) != 0 {
 		t.Fatalf("warnings = %#v, want none for guidelines that already name the moved key", warnings)

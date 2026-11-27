@@ -365,7 +365,7 @@ func (board *boardPriorities) apply(
 		},
 		Tasks: plan.tasks,
 		Warnings: append(board.publisher.publishConfig(ctx),
-			stalePriorityGuidelinesWarnings(board, vocabulary, after, keys)...),
+			stalePriorityGuidelinesWarnings(ctx, board, vocabulary, after, keys)...),
 	}, nil
 }
 
@@ -398,17 +398,23 @@ func stalePriorityWrite(expected string) error {
 // priorities: the comparison renders the whole document, so a reader supplied
 // with only the part that moved would find a difference it had just invented.
 func stalePriorityGuidelinesWarnings(
+	ctx context.Context,
 	board *boardPriorities,
 	vocabulary core.Vocabulary,
 	priorities core.PriorityVocabulary,
 	keys core.KeySet,
 ) []core.Warning {
+	relicTypes, err := currentRelicTypes(ctx, board.repository, board.config)
+	if err != nil {
+		return nil
+	}
 	state, err := agentdocs.GuidelinesState(agentdocs.Options{
 		Root:       board.repository.Root,
 		Project:    board.config,
 		Vocabulary: vocabulary,
 		Priorities: priorities,
 		Keys:       keys,
+		RelicTypes: relicTypes,
 		Generator:  release.Version,
 	})
 	if err != nil {

@@ -33,6 +33,10 @@ type Options struct {
 	// current, which is what a project whose ledger records no key change is
 	// using.
 	Keys core.KeySet
+	// RelicTypes supplies the relic types with a schema, sorted by type. Empty
+	// means the project has none. A caller that leaves it out for a project
+	// that has some renders guidelines without them.
+	RelicTypes []RelicTypeRules
 	// User supplies the documentation targets and skill destination.
 	User userconfig.Config
 	// Generator is the Workbook version recorded in each stamp.
@@ -98,7 +102,8 @@ func guidelinesTarget(options Options) target {
 		display: GuidelinesPath,
 		document: Document{
 			Generator: options.Generator,
-			Body:      RenderGuidelines(options.Project, options.Vocabulary, options.Priorities, options.Keys),
+			Body: RenderGuidelines(options.Project, options.Vocabulary, options.Priorities, options.Keys,
+				options.RelicTypes),
 		},
 		owned: true,
 	}

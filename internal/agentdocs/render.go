@@ -12,6 +12,17 @@ import (
 // GuidelinesPath is the project-relative location of the managed guidelines.
 const GuidelinesPath = ".workbook/guidelines.md"
 
+// RelicTypeRules is what the guidelines say about one relic type that has a
+// schema: its newest version and that version's rules.
+type RelicTypeRules struct {
+	Type    string
+	Version int
+	Summary core.RelicSchemaSummary
+	// Unreadable marks a version whose stored schema could not be read, which
+	// the guidelines say instead of listing rules. Summary is then empty.
+	Unreadable bool
+}
+
 // RenderGuidelines produces the managed guidelines body for a project. Every
 // canonical value comes from the same definitions the CLI validates against, so
 // there is no second list to maintain.
@@ -39,7 +50,16 @@ const GuidelinesPath = ".workbook/guidelines.md"
 // reason: a caller that read no configuration ledger is a project that has
 // recorded no key change, and that project is using its founding key alone,
 // active and current.
-func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary, priorities core.PriorityVocabulary, keys core.KeySet) string {
+//
+// relicTypes lists the relic types that have a schema, sorted by type. With
+// none, the guidelines say nothing about schemas.
+func RenderGuidelines(
+	project core.ProjectConfig,
+	vocabulary core.Vocabulary,
+	priorities core.PriorityVocabulary,
+	keys core.KeySet,
+	relicTypes []RelicTypeRules,
+) string {
 	if vocabulary.IsZero() {
 		vocabulary = core.LegacyVocabulary()
 	}
@@ -160,7 +180,7 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary, pr
 	builder.WriteString("and both were kept. The work was recorded; decide with the other party\n")
 	builder.WriteString("rather than removing their assignment, which Workbook refuses anyway.\n\n")
 
-	builder.WriteString(relicGuidelines(keys))
+	builder.WriteString(relicGuidelines(keys, relicTypes))
 
 	builder.WriteString("## Machine-readable output\n\n")
 	builder.WriteString("Every command accepts `--json` except `serve`. Success is a single compact\n")
@@ -257,7 +277,9 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary, pr
 // in internal/cli, and every command and option in it is held to the command
 // schemas there, so the block cannot name a command or an option that does not
 // exist.
-func relicGuidelines(keys core.KeySet) string {
+//
+// A project with relic schemas gets a list of them at the end of the section.
+func relicGuidelines(keys core.KeySet, relicTypes []RelicTypeRules) string {
 	key := keys.Current()
 	return "## Relics\n\n" +
 		"A relic holds a spec, a plan, a decision record or similar material that is\n" +
@@ -305,7 +327,93 @@ func relicGuidelines(keys core.KeySet) string {
 		"`workbook relic diff <relic>#<part> <version> --json` with that version.\n\n" +
 		"For other edits (the title, a property or field, or adding, moving,\n" +
 		"removing or restoring a part), run `workbook relic update --help`; for\n" +
-		"export, see `workbook relic --help`.\n\n"
+		"export, see `workbook relic --help`.\n\n" +
+		relicTypeGuidelines(relicTypes)
+}
+
+// relicTypeGuidelines lists the project's relic types that have a schema, with
+// what a save is checked for. It is empty for a project with none.
+//
+// Everything a schema says is written by whoever can push the shared settings,
+// so each such value passes through authoredText and sits inside a list item
+// that Workbook opens, where it can start no line, heading or paragraph of its
+// own.
+func relicTypeGuidelines(relicTypes []RelicTypeRules) string {
+	if len(relicTypes) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString("### This project's relic types\n\n")
+	builder.WriteString("A relic save is checked against the schema version the relic names, and a\n")
+	builder.WriteString("refusal names the rule it broke. `workbook relic migrate <relic> --to <target>`\n")
+	builder.WriteString("moves a relic to a newer version. Each type below shows its newest version;\n")
+	builder.WriteString("`workbook schema show <type> --json` gives the full rules.\n\n")
+	for _, rules := range relicTypes {
+		builder.WriteString("- " + schemaName(rules.Type) + ", version " + strconv.Itoa(rules.Version))
+		if rules.Unreadable {
+			builder.WriteString(": schema unreadable; run `workbook validate`\n")
+			continue
+		}
+		builder.WriteString("\n")
+		if title := authoredText(rules.Summary.Title); title != "" {
+			builder.WriteString("  - Title: " + title + "\n")
+		}
+		if description := authoredText(rules.Summary.Description); description != "" {
+			builder.WriteString("  - Description: " + description + "\n")
+		}
+		if len(rules.Summary.Required) > 0 {
+			properties := make([]string, 0, len(rules.Summary.Required))
+			for _, property := range rules.Summary.Required {
+				rendered := schemaName(property.Name)
+				if len(property.Allowed) > 0 {
+					rendered += " (one of " + schemaNames(property.Allowed) + ")"
+				}
+				properties = append(properties, rendered)
+			}
+			builder.WriteString("  - Required properties: " + strings.Join(properties, ", ") + "\n")
+		}
+		for _, part := range rules.Summary.Parts {
+			builder.WriteString("  - Part " + schemaName(part.Type) + ": ")
+			if len(part.RequiredFields) > 0 {
+				builder.WriteString("required fields " + schemaNames(part.RequiredFields) + "; ")
+			}
+			builder.WriteString(partBodyRule(part) + "\n")
+		}
+	}
+	builder.WriteString("\n")
+	return builder.String()
+}
+
+// partBodyRule says whether a part of a type takes a body, and in which
+// formats.
+func partBodyRule(part core.RelicSchemaPartSummary) string {
+	if part.Body == "none" {
+		return "no body"
+	}
+	rule := "body " + authoredText(part.Body)
+	if len(part.BodyFormats) > 0 {
+		rule += " (" + schemaNames(part.BodyFormats) + ")"
+	}
+	return rule
+}
+
+// schemaName renders a name or an allowed value from a schema as a code span.
+// One with nothing to show is written as an empty string, because an empty code
+// span is two literal backticks.
+func schemaName(value string) string {
+	text := authoredText(value)
+	if text == "" {
+		return `""`
+	}
+	return codeSpan(text)
+}
+
+func schemaNames(values []string) string {
+	rendered := make([]string, len(values))
+	for index, value := range values {
+		rendered[index] = schemaName(value)
+	}
+	return strings.Join(rendered, ", ")
 }
 
 // authoredText renders a value somebody wrote for prose inside a generated

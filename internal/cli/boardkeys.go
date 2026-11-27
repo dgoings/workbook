@@ -186,7 +186,7 @@ func (board *boardKeys) apply(
 			Vocabulary: vocabulary, Head: written.Head, Display: display, Priorities: priorities, Keys: after,
 		},
 		Warnings: append(board.publisher.publishConfig(ctx),
-			staleKeyGuidelinesWarnings(board, vocabulary, priorities, after)...),
+			staleKeyGuidelinesWarnings(ctx, board, vocabulary, priorities, after)...),
 	}, nil
 }
 
@@ -218,17 +218,23 @@ func staleKeyWrite(expected string) error {
 // statuses: the comparison renders the whole document, so a reader supplied with
 // only the part that moved would find a difference it had just invented.
 func staleKeyGuidelinesWarnings(
+	ctx context.Context,
 	board *boardKeys,
 	vocabulary core.Vocabulary,
 	priorities core.PriorityVocabulary,
 	keys core.KeySet,
 ) []core.Warning {
+	relicTypes, err := currentRelicTypes(ctx, board.repository, board.config)
+	if err != nil {
+		return nil
+	}
 	state, err := agentdocs.GuidelinesState(agentdocs.Options{
 		Root:       board.repository.Root,
 		Project:    board.config,
 		Vocabulary: vocabulary,
 		Priorities: priorities,
 		Keys:       keys,
+		RelicTypes: relicTypes,
 		Generator:  release.Version,
 	})
 	if err != nil {

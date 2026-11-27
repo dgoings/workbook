@@ -98,6 +98,13 @@ to the current text and save with `--base` set to the current version.
 Otherwise show the user both versions and ask; never save over text you have
 not read.
 
+A project may give a relic type a schema; `.workbook/guidelines.md` lists
+those types. A save is checked against the version the relic names, and a
+refusal names the rule it broke: change the input rather than retrying. Read
+the full rules with `workbook schema show <type> --json`. To move a relic to a
+newer version, run `workbook relic migrate <relic> --to <target>`, where the
+target is a version number, a type or `<type>@<number>`.
+
 For other edits (the title, a property or field, or adding, moving, removing or
 restoring a part), run `workbook relic update --help`; for export, see
 `workbook relic --help`.

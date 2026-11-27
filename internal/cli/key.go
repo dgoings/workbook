@@ -577,7 +577,7 @@ func runKeyMutation(
 	// their own change did not touch. Keys is the fresh set this write just
 	// produced, not the session's pre-write one, for the reason status and
 	// priority mutations pass their own freshly-written vocabulary.
-	docs, docsErr := regenerateGuidelines(session, session.service.Vocabulary, session.service.Priorities, after, noDocs)
+	docs, docsErr := regenerateGuidelines(ctx, session, session.service.Vocabulary, session.service.Priorities, after, noDocs)
 	result.Docs = docs
 	writeKeyMutation(stdout, stderr, command, result, session, docsErr, jsonMode)
 	return nil

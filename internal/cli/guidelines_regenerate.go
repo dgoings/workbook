@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"context"
+
 	"github.com/dgoings/workbook/internal/agentdocs"
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/release"
 )
 
@@ -29,11 +32,16 @@ import (
 // and reads the other two off the session's own service, which is what it
 // opened the fetch-then-refresh with.
 //
+// The relic types are read here, after the change, because no caller changes
+// them without this being the first to see the result: schema put adds a
+// version, and publication can renumber it.
+//
 // It returns its failure rather than raising it. The configuration change is
 // already recorded and published by the time this runs, so a documentation
 // refresh that could not finish is news to report beside a success, not a
 // reason to exit non-zero on a durable write — the same trade `sync` makes.
 func regenerateGuidelines(
+	ctx context.Context,
 	session *taskSession,
 	vocabulary core.Vocabulary,
 	priorities core.PriorityVocabulary,
@@ -43,13 +51,60 @@ func regenerateGuidelines(
 	if noDocs {
 		return nil, nil
 	}
+	relicTypes, err := currentRelicTypes(ctx, session.repository, session.config)
+	if err != nil {
+		return &agentdocs.Report{}, err
+	}
 	report, err := agentdocs.ApplyGuidelines(agentdocs.Options{
 		Root:       session.repository.Root,
 		Project:    session.config,
 		Vocabulary: vocabulary,
 		Priorities: priorities,
 		Keys:       keys,
+		RelicTypes: relicTypes,
 		Generator:  release.Version,
 	})
 	return &report, err
+}
+
+// guidelinesRelicTypes describes the newest schema of each relic type in the
+// listing, for the guidelines. A type whose schema cannot be read is described
+// as unreadable, so that one bad version does not keep the rest of the file
+// from being written. Only a canceled command is an error: its reads fail for a
+// reason that says nothing about the schemas.
+func guidelinesRelicTypes(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	listing core.RelicSchemaListing,
+) ([]agentdocs.RelicTypeRules, error) {
+	var types []agentdocs.RelicTypeRules
+	for _, relicType := range listing.Types() {
+		newest, _ := listing.Newest(relicType)
+		rules := agentdocs.RelicTypeRules{Type: relicType, Version: newest.Version}
+		if _, schema, err := repository.ReadRelicSchema(ctx, config, newest); err != nil {
+			rules.Unreadable = true
+		} else {
+			rules.Summary = schema.Summary()
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, core.Wrap(core.CategoryOperational, "read the relic schemas", err)
+		}
+		types = append(types, rules)
+	}
+	return types, nil
+}
+
+// currentRelicTypes is guidelinesRelicTypes over the settings the repository
+// holds now.
+func currentRelicTypes(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+) ([]agentdocs.RelicTypeRules, error) {
+	listing, err := repository.RelicSchemaListing(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	return guidelinesRelicTypes(ctx, repository, config, listing)
 }
