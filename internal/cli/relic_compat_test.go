@@ -26,6 +26,9 @@ func TestReleasedV061IgnoresRelicsOnOrigin(t *testing.T) {
 	first := cliCreateTask(t, writer, "Before the relics")
 	relicOne := mustCreateRelic(t, writer, "First relic", "--type", "spec")
 	relicTwo := mustCreateRelic(t, writer, "Second relic", "--type", "spec")
+	// A link from one relic to another, with a pointer: v0.6.1 knows neither.
+	mustUpdateRelic(t, writer, relicTwo.Relic.ID, "--link", relicOne.Relic.ID, "--rel", "supersedes",
+		"--pointer", `{"quote":"all of it"}`)
 	last := cliCreateTask(t, writer, "After the relics")
 	if code, _, stderr := run(t, writer, "push"); code != 0 {
 		t.Fatalf("writer push code = %d; stderr = %q", code, stderr)

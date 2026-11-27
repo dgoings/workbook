@@ -34,7 +34,7 @@ workbook move-tasks [--from <remote>] [--allow-branches] [--clean-up] [--no-back
 workbook reset [--dry-run] [--no-backup [--discard-unpublished] | --backup <path>] [--json]
 workbook reset --remote <remote> [--confirm <remote>] [--dry-run] [--no-backup | --backup <path>] [--json]
 workbook relic create [<title>] [--type <type>] [--from-file <file>] [--no-sync] [--json]
-workbook relic list [--type <type>] [--all] [--linked-to <task>] [--behind] [--json]
+workbook relic list [--type <type>] [--all] [--linked-to <task|relic[#part]>] [--behind] [--json]
 workbook relic show <relic>[#<part>] [--body] [--removed] [--history [--limit <n> | --all]] [--json]
 workbook relic diff <relic>[#<part>] [<version> [<version>]] [--context <n>|all] [--json]
 workbook relic update <relic> [--title <title>] [--set <name>=<value>]... [--set-json <name>=<json>]... [--clear <name>]... [--no-sync] [--json]

@@ -2,8 +2,10 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // WarningRelicLinksUnread says that a relic that may link to the task could
@@ -39,12 +41,34 @@ type RelicLinkIndex interface {
 	RelicLinksTo(context.Context, ProjectConfig, RelicLinkTarget) (RelicLinkLookup, error)
 }
 
-// RelicLinkMatch is one link a listed relic has to the task asked about.
+// RelicLinkMatch is one link a listed relic has to the task, relic or part
+// asked about. ToPart is the part of the target relic it points at, and
+// Pointer where in the target it points, when it records one.
 type RelicLinkMatch struct {
-	Link     string `json:"link"`
-	Part     string `json:"part,omitempty"`
-	PartType string `json:"partType,omitempty"`
-	Rel      string `json:"rel"`
+	Link     string          `json:"link"`
+	Part     string          `json:"part,omitempty"`
+	PartType string          `json:"partType,omitempty"`
+	Rel      string          `json:"rel"`
+	ToPart   string          `json:"toPart,omitempty"`
+	Pointer  json.RawMessage `json:"pointer,omitempty"`
+}
+
+// RelicIncomingLink is one link another relic, or a part of one, has to the
+// relic or part relic show presents: the relic it is on, with its title and
+// type, the part it is from and that part's type, the part of the shown relic
+// it points at, its relationship, the version of the shown relic it saw and
+// its pointer.
+type RelicIncomingLink struct {
+	Relic    string          `json:"relic"`
+	Title    string          `json:"title"`
+	Type     string          `json:"type"`
+	Link     string          `json:"link"`
+	From     string          `json:"from,omitempty"`
+	FromType string          `json:"fromType,omitempty"`
+	ToPart   string          `json:"toPart,omitempty"`
+	Rel      string          `json:"rel"`
+	Seen     string          `json:"seen"`
+	Pointer  json.RawMessage `json:"pointer,omitempty"`
 }
 
 // TaskRelicLink is one link to a task, as workbook show lists it.
@@ -110,23 +134,79 @@ func RelicLinksUnreadWarning(relicID string) Warning {
 	}
 }
 
-// LinkedTo lists the relics that link to a task, each with the links it has
-// to it, in relic ID order. The task may be deleted. Links from removed parts
+// LinkedTo lists the relics that link to a task, a relic or a part of one,
+// each with the links it has to it, in relic ID order. A link to a part of a
+// relic counts as a link to the relic. The target may be deleted or removed.
+// A relic or part is found by prefix among this clone's relics; a full relic
+// ID this clone lacks, and a full part ID under it, are looked up as given,
+// so links to a relic not fetched yet are listed. Links from removed parts
 // are left out, and so are deleted relics unless filter.IncludeDeleted;
 // filter.Type keeps only relics of that type. A relic the index cannot read
 // is a warning, not a failure.
-func (s RelicService) LinkedTo(ctx context.Context, taskIDOrPrefix string, filter RelicListFilter) ([]RelicSummary, []Warning, error) {
-	if s.Tasks == nil {
-		return nil, nil, errNoTaskReader()
-	}
+func (s RelicService) LinkedTo(ctx context.Context, target string, filter RelicListFilter) ([]RelicSummary, []Warning, error) {
 	if s.Links == nil {
 		return nil, nil, Errorf(CategoryOperational, "relic service has no link index")
 	}
-	taskID, err := s.Tasks.Resolve(ctx, s.Config, taskIDOrPrefix)
+	if typedRelicAddress(target) {
+		resolved, err := s.linkedToRelicTarget(ctx, target)
+		if err != nil {
+			return nil, nil, err
+		}
+		return s.linkedToTarget(ctx, resolved, filter)
+	}
+	if s.Tasks == nil {
+		return nil, nil, errNoTaskReader()
+	}
+	taskID, err := s.Tasks.Resolve(ctx, s.Config, target)
 	if err != nil {
 		return nil, nil, err
 	}
 	return s.LinkedToTask(ctx, taskID, filter)
+}
+
+// linkedToRelicTarget resolves the relic or part relic list --linked-to
+// names. A deleted relic and a removed part resolve; a full ID this clone
+// lacks is taken as given; another project's key is refused.
+func (s RelicService) linkedToRelicTarget(ctx context.Context, typed string) (RelicLinkTarget, error) {
+	relicPrefix, partPrefix, hasPart, err := ParsePartAddress(typed)
+	if err != nil {
+		return RelicLinkTarget{}, err
+	}
+	if key, _, _ := strings.Cut(strings.ToUpper(relicPrefix), "-"); !s.keys().Contains(key) {
+		return RelicLinkTarget{}, Errorf(CategoryValidation,
+			"relic %s is in another project; a link stays within one project", relicTypedInMessage(relicPrefix))
+	}
+	heads, err := s.Reader.ListRelicHeads(ctx, s.Config)
+	if err != nil {
+		return RelicLinkTarget{}, err
+	}
+	head, err := ResolveRelicPrefix(heads, relicPrefix)
+	if err != nil {
+		if CategoryOf(err) != CategoryNotFound || ValidateRelicIDShape(relicPrefix) != nil ||
+			hasPart && ValidatePartID(partPrefix) != nil {
+			return RelicLinkTarget{}, err
+		}
+		return RelicLinkTarget{Relic: relicPrefix, Part: partPrefix}, nil
+	}
+	target := RelicLinkTarget{Relic: head.RelicID}
+	if !hasPart {
+		return target, nil
+	}
+	snapshot, err := s.Reader.GetRelic(ctx, s.Config, head.RelicID)
+	if err != nil {
+		return RelicLinkTarget{}, err
+	}
+	part, err := resolvePartPrefix(head.RelicID, snapshot.Record.State.Relic.Parts, partPrefix)
+	if err != nil {
+		if CategoryOf(err) != CategoryNotFound || ValidatePartID(partPrefix) != nil {
+			return RelicLinkTarget{}, err
+		}
+		// The local copy lacks a part a newer copy may have.
+		target.Part = partPrefix
+		return target, nil
+	}
+	target.Part = part.ID
+	return target, nil
 }
 
 // LinkedToTask is LinkedTo for a task ID the caller has already resolved, as
@@ -135,7 +215,13 @@ func (s RelicService) LinkedToTask(ctx context.Context, taskID string, filter Re
 	if s.Links == nil {
 		return nil, nil, Errorf(CategoryOperational, "relic service has no link index")
 	}
-	lookup, err := s.Links.RelicLinksTo(ctx, s.Config, RelicLinkTarget{Task: taskID})
+	return s.linkedToTarget(ctx, RelicLinkTarget{Task: taskID}, filter)
+}
+
+// linkedToTarget is LinkedTo for a resolved target: one reverse lookup, then
+// the summaries, each judged as list judges it.
+func (s RelicService) linkedToTarget(ctx context.Context, target RelicLinkTarget, filter RelicListFilter) ([]RelicSummary, []Warning, error) {
+	lookup, err := s.Links.RelicLinksTo(ctx, s.Config, target)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -168,15 +254,61 @@ func (s RelicService) LinkedToTask(ctx context.Context, taskID string, filter Re
 		last := &summaries[len(summaries)-1]
 		last.LinkedBy = append(last.LinkedBy, RelicLinkMatch{
 			Link: source.Link.ID, Part: source.Link.From, PartType: source.PartType, Rel: source.Link.Rel,
+			ToPart: source.Link.To.Part, Pointer: source.Link.Pointer,
 		})
 	}
-	unread := append([]string(nil), lookup.Unread...)
-	sort.Strings(unread)
+	return summaries, relicLinksUnreadWarnings(lookup.Unread), nil
+}
+
+// relicLinksUnreadWarnings is one warning per relic a lookup could not read,
+// in relic ID order.
+func relicLinksUnreadWarnings(unread []string) []Warning {
+	sorted := append([]string(nil), unread...)
+	sort.Strings(sorted)
 	var warnings []Warning
-	for _, relicID := range unread {
+	for _, relicID := range sorted {
 		warnings = append(warnings, RelicLinksUnreadWarning(relicID))
 	}
-	return summaries, warnings, nil
+	return warnings
+}
+
+// relicIncomingLinks lists the live links other relics have to relicID, or to
+// one of its parts: with whole, links to the relic itself and to the parts
+// listed, and otherwise links to the one part listed. Links from removed parts
+// and from deleted relics are left out, as LinkedTo leaves them out. One
+// reverse lookup answers it; a service with no link index lists none.
+func (s RelicService) relicIncomingLinks(ctx context.Context, relicID string, parts []RelicPart, whole bool) ([]RelicIncomingLink, []Warning, error) {
+	if s.Links == nil {
+		return nil, nil, nil
+	}
+	target := RelicLinkTarget{Relic: relicID}
+	if !whole && len(parts) == 1 {
+		target.Part = parts[0].ID
+	}
+	lookup, err := s.Links.RelicLinksTo(ctx, s.Config, target)
+	if err != nil {
+		return nil, nil, err
+	}
+	listed := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		listed[part.ID] = struct{}{}
+	}
+	var incoming []RelicIncomingLink
+	for _, source := range lookup.Sources {
+		if source.Relic.Deleted || source.PartRemoved {
+			continue
+		}
+		toPart := source.Link.To.Part
+		if _, partListed := listed[toPart]; toPart == "" && !whole || toPart != "" && !partListed {
+			continue
+		}
+		incoming = append(incoming, RelicIncomingLink{
+			Relic: source.Relic.ID, Title: source.Relic.Title, Type: source.Relic.Type,
+			Link: source.Link.ID, From: source.Link.From, FromType: source.PartType, ToPart: toPart,
+			Rel: source.Link.Rel, Seen: source.Link.Seen, Pointer: source.Link.Pointer,
+		})
+	}
+	return incoming, relicLinksUnreadWarnings(lookup.Unread), nil
 }
 
 // TaskRelicLinks flattens LinkedTo's answer into the links workbook show

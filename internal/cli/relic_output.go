@@ -43,7 +43,8 @@ func writeRelicMutation(stdout io.Writer, command string, result core.RelicMutat
 // writeRelicList prints one line per relic. A deleted relic, which only relic
 // list --all lists, gets a last column saying so, as a removed part does in
 // writeRelicDocument; a live relic's line is the same with or without --all.
-func writeRelicList(stdout io.Writer, summaries []core.RelicSummary) {
+// toRelic says that the links listed under each line point at a relic.
+func writeRelicList(stdout io.Writer, summaries []core.RelicSummary, toRelic bool) {
 	for _, summary := range summaries {
 		parts := "parts"
 		if summary.Parts == 1 {
@@ -55,7 +56,7 @@ func writeRelicList(stdout io.Writer, summaries []core.RelicSummary) {
 			fmt.Fprint(stdout, "\tdeleted")
 		}
 		fmt.Fprintln(stdout)
-		writeRelicLinkMatches(stdout, summary.LinkedBy)
+		writeRelicLinkMatches(stdout, summary.LinkedBy, toRelic)
 	}
 }
 
@@ -87,6 +88,7 @@ func writeRelicDocument(stdout io.Writer, document core.RelicDocument, bodies bo
 		}
 	}
 	writeRelicLinks(stdout, document.Links)
+	writeRelicIncomingLinks(stdout, document.LinkedFrom)
 }
 
 // writeRelicSchema prints the schema version the relic names, or that it names
@@ -130,6 +132,32 @@ func writeRelicLinks(stdout io.Writer, links []core.RelicDocumentLink) {
 		case link.TargetRemoved:
 			fmt.Fprint(stdout, " (removed)")
 		}
+		if link.Pointer != nil {
+			fmt.Fprintf(stdout, "\t%s", singleLine(string(link.Pointer)))
+		}
+		fmt.Fprintln(stdout)
+	}
+}
+
+// writeRelicIncomingLinks prints the links other relics have to the relic
+// shown, after its own: one line each with the link's ID, the relic it is on
+// with the part it is from, its relationship and the part of the shown relic
+// it points at or "relic", then its pointer when it has one.
+func writeRelicIncomingLinks(stdout io.Writer, links []core.RelicIncomingLink) {
+	if len(links) == 0 {
+		return
+	}
+	fmt.Fprintln(stdout, "Linked from:")
+	for _, link := range links {
+		from := link.Relic
+		if link.From != "" {
+			from += "#" + link.From
+		}
+		to := link.ToPart
+		if to == "" {
+			to = "relic"
+		}
+		fmt.Fprintf(stdout, "\t%s\t%s\t%s\t%s", singleLine(link.Link), singleLine(from), singleLine(link.Rel), singleLine(to))
 		if link.Pointer != nil {
 			fmt.Fprintf(stdout, "\t%s", singleLine(string(link.Pointer)))
 		}

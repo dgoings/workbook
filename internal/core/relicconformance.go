@@ -175,8 +175,10 @@ func (s RelicService) schemaForUpdate(ctx context.Context, relic RelicData, reli
 
 // checkSchema judges the pieces the update saves, in the order its edits
 // saved them: each property set or cleared, and each part added, edited or
-// restored, judged whole as the update leaves it. A title, a move, a removal
-// and a link are not judged, nor is a part the update leaves removed.
+// restored, judged whole as the update leaves it, and the pointer of each link
+// added, against the schema's links.pointer rule. A title, a move, a removal,
+// a link's relationship and target, and an unlink are not judged, nor is a
+// part the update leaves removed.
 func (u *relicUpdate) checkSchema(ctx context.Context, version RelicSchemaVersion, schema *RelicSchema) error {
 	if schema == nil {
 		return nil

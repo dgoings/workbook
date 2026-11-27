@@ -523,7 +523,8 @@ func (s RelicService) List(ctx context.Context, filter RelicListFilter) ([]Relic
 // Show returns a relic addressed as <relic> or <relic>#<part>, either of them
 // a prefix. Without a part it returns the live parts in order, and the removed
 // ones too when options.Removed; with one it returns that part, removed or
-// not. Bodies are read only when options.Bodies.
+// not. Bodies are read only when options.Bodies. LinkedFrom lists the links
+// other relics have to what is shown, from one reverse lookup.
 func (s RelicService) Show(ctx context.Context, address string, options RelicShowOptions) (RelicDocument, error) {
 	relicPrefix, partPrefix, hasPart, err := ParsePartAddress(address)
 	if err != nil {
@@ -547,7 +548,11 @@ func (s RelicService) Show(ctx context.Context, address string, options RelicSho
 	default:
 		parts = relic.LiveParts()
 	}
-	links, warnings, err := s.relicDocumentLinks(ctx, snapshot.Record.State.RelicID, snapshot.Record.Links, parts, !hasPart, true)
+	links, warnings, err := s.relicDocumentLinks(ctx, snapshot, parts, !hasPart, true)
+	if err != nil {
+		return RelicDocument{}, err
+	}
+	incoming, unread, err := s.relicIncomingLinks(ctx, snapshot.Record.State.RelicID, parts, !hasPart)
 	if err != nil {
 		return RelicDocument{}, err
 	}
@@ -555,7 +560,8 @@ func (s RelicService) Show(ctx context.Context, address string, options RelicSho
 	if err != nil {
 		return RelicDocument{}, err
 	}
-	document.Warnings = warnings
+	document.LinkedFrom = incoming
+	document.Warnings = append(warnings, unread...)
 	return document, nil
 }
 

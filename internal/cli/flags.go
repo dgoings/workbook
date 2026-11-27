@@ -895,16 +895,17 @@ var commandSchemas = map[string]commandMetadata{
 			},
 			"list": {
 				Name:     "list",
-				Synopsis: "workbook relic list [--type <type>] [--all] [--linked-to <task>] [--behind] [--json]",
+				Synopsis: "workbook relic list [--type <type>] [--all] [--linked-to <task|relic[#part]>] [--behind] [--json]",
 				Description: "List relics in ID order, which is the order they were created in under one\n" +
 					"project key. Deleted relics are left out unless --all is given.\n\n" +
-					"--linked-to lists only the relics that link to a task, each with its links to it.\n\n" +
+					"--linked-to lists only the relics that link to a task, a relic or a part of one,\n" +
+					"each with its links to it. A link to a part counts as a link to its relic.\n\n" +
 					"--behind lists only the relics behind their type's newest schema version: those\n" +
 					"naming an older version, or none, of a type that has one.",
 				Options: []optionMetadata{
 					{Name: "type", Kind: stringFlag, Value: "<type>", Description: "show only relics of this type"},
 					{Name: "all", Kind: boolFlag, Description: "include deleted relics, each marked deleted"},
-					{Name: "linked-to", Kind: stringFlag, Value: "<task>", Description: "show only relics that link to this task"},
+					{Name: "linked-to", Kind: stringFlag, Value: "<task|relic[#part]>", Description: "show only relics that link to this task, relic or part"},
 					{Name: "behind", Kind: boolFlag, Description: "show only relics behind their type's newest schema version"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -955,7 +956,7 @@ var commandSchemas = map[string]commandMetadata{
 					"workbook relic update <relic> --part <part> [--field <name>=<value>]... [--field-json <name>=<json>]... [--clear-field <name>]... [--body-file <file> [--body-format <label>] [--base <version>]] [--no-sync]\n" +
 					"workbook relic update <relic> --move-part <part> (--before <part> | --after <part>) [--no-sync]\n" +
 					"workbook relic update <relic> [--remove-part <part>]... [--restore-part <part>]... [--no-sync]\n" +
-					"workbook relic update <relic> [--link <task> [--from <part>] --rel <rel>]... [--unlink <link>]... [--no-sync]",
+					"workbook relic update <relic> [--link <task|relic[#part]> [--from <part>] --rel <rel> [--pointer <json object>]]... [--unlink <link>]... [--no-sync]",
 				Description: "Change a relic. Every change given in one command is recorded together, or none is.\n\n" +
 					"--add-part, --part, --move-part, --remove-part and --restore-part each start a group,\n" +
 					"and the part options after one belong to it. Changes apply in the order given.\n" +
@@ -969,7 +970,9 @@ var commandSchemas = map[string]commandMetadata{
 					"--set and --field store text. --set-json and --field-json store any JSON value.\n" +
 					"One command names a property once, and a field of a part once; naming one twice is refused.\n\n" +
 					"--link starts a group too: it links the relic, or with --from one of its parts, to a task,\n" +
-					"named by --rel, such as implemented-by. Linking what is already linked changes nothing.\n" +
+					"a relic or a part of one, named by --rel, such as implemented-by. --pointer adds a JSON\n" +
+					"object saying where in the target the link points, such as a quote or a time.\n" +
+					"Linking what is already linked changes nothing.\n" +
 					"--unlink removes one link, named by the ID relic show lists.",
 				Positionals: []string{"<relic>"},
 				Options: []optionMetadata{

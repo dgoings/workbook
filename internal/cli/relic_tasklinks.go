@@ -10,20 +10,20 @@ import (
 )
 
 // runRelicListLinkedTo is relic list --linked-to: the relics that link to a
-// task, each with its links to it. A relic the index cannot read is a
-// warning, on stderr or in the envelope.
+// task, a relic or a part of one, each with its links to it. A relic the
+// index cannot read is a warning, on stderr or in the envelope.
 func runRelicListLinkedTo(
 	ctx context.Context,
 	service core.RelicService,
-	task string,
+	target string,
 	filter core.RelicListFilter,
 	jsonMode bool,
 	stdout, stderr io.Writer,
 ) error {
-	if err := checkRelicUpdateID("--linked-to", task); err != nil {
+	if err := checkRelicUpdateID("--linked-to", target); err != nil {
 		return err
 	}
-	summaries, warnings, err := service.LinkedTo(ctx, task, filter)
+	summaries, warnings, err := service.LinkedTo(ctx, target, filter)
 	if err != nil {
 		return err
 	}
@@ -31,20 +31,33 @@ func runRelicListLinkedTo(
 		writeResultWithWarnings(stdout, "relic list", summaries, warnings)
 		return nil
 	}
-	writeRelicList(stdout, summaries)
+	writeRelicList(stdout, summaries, core.IsRelicAddress(target))
 	writeWarnings(stderr, warnings)
 	return nil
 }
 
 // writeRelicLinkMatches prints, under a relic's line, each of its links to
-// the task relic list --linked-to asked about.
-func writeRelicLinkMatches(stdout io.Writer, matches []core.RelicLinkMatch) {
+// what relic list --linked-to asked about: the link, the part it is from or
+// "relic", and its relationship; for a link to a relic, the part it points at
+// or "relic"; then its pointer when it has one.
+func writeRelicLinkMatches(stdout io.Writer, matches []core.RelicLinkMatch, toRelic bool) {
 	for _, match := range matches {
 		from := match.Part
 		if from == "" {
 			from = "relic"
 		}
-		fmt.Fprintf(stdout, "\t%s\t%s\t%s\n", singleLine(match.Link), singleLine(from), singleLine(match.Rel))
+		fmt.Fprintf(stdout, "\t%s\t%s\t%s", singleLine(match.Link), singleLine(from), singleLine(match.Rel))
+		if toRelic {
+			to := match.ToPart
+			if to == "" {
+				to = "relic"
+			}
+			fmt.Fprintf(stdout, "\t%s", singleLine(to))
+		}
+		if match.Pointer != nil {
+			fmt.Fprintf(stdout, "\t%s", singleLine(string(match.Pointer)))
+		}
+		fmt.Fprintln(stdout)
 	}
 }
 

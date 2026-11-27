@@ -595,8 +595,8 @@ func prepareRelicWriter(ctx context.Context, transaction *sql.Tx) (*relicWriter,
 			conformance, schema_problem
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`},
 		{&writer.insertLink, `INSERT INTO relic_links (
-			relic_id, link_id, from_part, to_kind, to_id, to_part, rel
-		) VALUES (?, ?, ?, 'task', ?, '', ?)`},
+			relic_id, link_id, from_part, to_kind, to_id, to_part, rel, seen, pointer
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`},
 		{&writer.insertProp, `INSERT INTO relic_properties (relic_id, name, value) VALUES (?, ?, ?)`},
 		{&writer.insertPart, `INSERT INTO relic_parts (
 			relic_id, part_id, ordinal, type, position, removed, fields_object, fields,
@@ -687,14 +687,15 @@ func (w *relicWriter) writeRelic(ctx context.Context, relic gitstore.IndexedReli
 	); err != nil {
 		return cacheError("index relic", err)
 	}
+	// Every link gets a row, whatever it points at, so the rows number what
+	// the relic row counts and a read back from them is the whole link.
 	for _, link := range relic.Snapshot.Record.Links.Links {
-		if link.To.Task == "" {
-			// A link to a relic has no row yet. The relic's row still counts
-			// it, so the relic is read from Git rather than from rows that
-			// leave it out.
-			continue
+		kind, to := relicLinkKindTask, link.To.Task
+		if link.To.Relic != "" {
+			kind, to = relicLinkKindRelic, link.To.Relic
 		}
-		if _, err := w.insertLink.ExecContext(ctx, relicID, link.ID, link.From, link.To.Task, link.Rel); err != nil {
+		if _, err := w.insertLink.ExecContext(ctx, relicID, link.ID, link.From, kind, to, link.To.Part,
+			link.Rel, link.Seen, string(link.Pointer)); err != nil {
 			return cacheError("index relic link", err)
 		}
 	}
@@ -1199,17 +1200,17 @@ func (s *Store) queryIndexedRelics(ctx context.Context, relicID string) (map[str
 	if err := errors.Join(parts.Err(), parts.Close()); err != nil {
 		return nil, s.databaseError("read indexed relic parts", err)
 	}
-	links, err := transaction.QueryContext(ctx, `SELECT relic_id, link_id, from_part, to_id, rel FROM relic_links`+
-		where+` ORDER BY relic_id, link_id`, args...)
+	links, err := transaction.QueryContext(ctx, `SELECT relic_id, link_id, from_part, to_kind, to_id, to_part, rel, seen, pointer
+		FROM relic_links`+where+` ORDER BY relic_id, link_id`, args...)
 	if err != nil {
 		return nil, s.databaseError("query indexed relic links", err)
 	}
 	for links.Next() {
 		var id string
-		var link core.RelicLink
-		if err := links.Scan(&id, &link.ID, &link.From, &link.To.Task, &link.Rel); err != nil {
+		link, err := scanIndexedRelicLink(links, &id)
+		if err != nil {
 			links.Close()
-			return nil, s.databaseError("read indexed relic link", err)
+			return nil, err
 		}
 		if snapshot, found := snapshots[id]; found {
 			snapshot.Record.Links.Links = append(snapshot.Record.Links.Links, link)
@@ -1225,6 +1226,36 @@ func (s *Store) queryIndexedRelics(ctx context.Context, relicID string) (map[str
 		}
 	}
 	return snapshots, nil
+}
+
+// The to_kind values of a relic_links row.
+const (
+	relicLinkKindTask  = "task"
+	relicLinkKindRelic = "relic"
+)
+
+// scanIndexedRelicLink reads the relic ID into relicID and the link a
+// relic_links row holds, from its columns relic_id, link_id, from_part,
+// to_kind, to_id, to_part, rel, seen and pointer, in that order.
+func scanIndexedRelicLink(scanner rowScanner, relicID *string) (core.RelicLink, error) {
+	var link core.RelicLink
+	var kind, to, toPart, pointer string
+	if err := scanner.Scan(relicID, &link.ID, &link.From, &kind, &to, &toPart, &link.Rel, &link.Seen, &pointer); err != nil {
+		return core.RelicLink{}, cacheError("read indexed relic link", err)
+	}
+	switch {
+	case kind == relicLinkKindTask && toPart == "":
+		link.To.Task = to
+	case kind == relicLinkKindRelic:
+		link.To = core.RelicLinkTarget{Relic: to, Part: toPart}
+	default:
+		return core.RelicLink{}, core.Errorf(core.CategoryCorruptData,
+			"indexed relic %s has link %s with a target this build cannot read", *relicID, link.ID)
+	}
+	if pointer != "" {
+		link.Pointer = json.RawMessage(pointer)
+	}
+	return link, nil
 }
 
 func scanIndexedRelic(scanner rowScanner) (core.RelicSnapshot, int, int, error) {

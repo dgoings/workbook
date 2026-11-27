@@ -1,6 +1,14 @@
 package projection
 
-// schemaVersion is bumped to 11 because a relic row now keeps how the relic
+// schemaVersion is bumped to 12 because a relic link now points at a relic
+// or a part of one as well as a task, and records the version of the relic it
+// saw and an optional pointer. relic_links gains a row for every link, with
+// to_kind 'relic', to_id the relic and to_part the part or the empty
+// string, and seen and pointer columns, empty when absent, so a snapshot read
+// back from the index keeps every link whole. A version 11 cache wrote no row for a link to a
+// relic and no pointer for any link, so it is discarded and Git read again.
+//
+// Version 11 was bumped because a relic row now keeps how the relic
 // stands against the schema version it names: its conformance and the first
 // problem found, judged when the relic pass indexes it, and its schema column
 // holds the version's ID or the empty string for a relic that names none. A
@@ -58,7 +66,7 @@ package projection
 // checkpoint and every recorded pack, where a missing column reads as
 // generation zero — a claim rather than an absence, and the one claim that must
 // never be made wrongly.
-const schemaVersion = "11"
+const schemaVersion = "12"
 
 const schema = `
 CREATE TABLE projection_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -129,6 +137,7 @@ CREATE INDEX relic_operations_by_id ON relic_operations (operation_id);
 CREATE TABLE relic_links (
   relic_id TEXT NOT NULL, link_id TEXT NOT NULL, from_part TEXT NOT NULL,
   to_kind TEXT NOT NULL, to_id TEXT NOT NULL, to_part TEXT NOT NULL,
-  rel TEXT NOT NULL, PRIMARY KEY (relic_id, link_id)
+  rel TEXT NOT NULL, seen TEXT NOT NULL, pointer TEXT NOT NULL,
+  PRIMARY KEY (relic_id, link_id)
 );
 CREATE INDEX relic_links_by_target ON relic_links (to_kind, to_id, to_part, relic_id, link_id);`

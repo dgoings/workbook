@@ -3,6 +3,7 @@ package projection
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"sort"
 	"time"
@@ -133,21 +134,32 @@ func (r *relicIndexReader) relicLinksFromGit(ctx context.Context, config core.Pr
 
 // queryRelicLinksTo is the reverse lookup's one query: the links to target
 // with the relic each is on, its live part count, and the part each is from.
+// A task target matches its rows; a relic target matches its rows and those
+// of its parts, and a part target only that part's.
 func (s *Store) queryRelicLinksTo(ctx context.Context, target core.RelicLinkTarget) ([]core.RelicLinkSource, error) {
-	if target.Task == "" {
+	var where string
+	var args []any
+	switch {
+	case target.Task != "":
+		where, args = `l.to_kind = 'task' AND l.to_id = ? AND l.to_part = ''`, []any{target.Task}
+	case target.Relic != "" && target.Part != "":
+		where, args = `l.to_kind = 'relic' AND l.to_id = ? AND l.to_part = ?`, []any{target.Relic, target.Part}
+	case target.Relic != "":
+		where, args = `l.to_kind = 'relic' AND l.to_id = ?`, []any{target.Relic}
+	default:
 		return nil, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT l.relic_id, l.link_id, l.from_part, l.rel,
+	rows, err := s.db.QueryContext(ctx, `SELECT l.relic_id, l.link_id, l.from_part, l.to_kind, l.to_id, l.to_part, l.rel, l.seen, l.pointer,
 		r.head, r.title, r.type, r.schema, r.author, r.retired, r.deleted, r.created_at, r.updated_at,
 		(SELECT COUNT(*) FROM relic_parts live WHERE live.relic_id = l.relic_id AND live.removed = 0),
 		p.type, p.removed, p.ordinal
 		FROM relic_links l
 		JOIN relics r ON r.relic_id = l.relic_id
 		LEFT JOIN relic_parts p ON p.relic_id = l.relic_id AND p.part_id = l.from_part
-		WHERE l.to_kind = 'task' AND l.to_id = ? AND l.to_part = ''
-		ORDER BY l.relic_id, l.link_id`, target.Task)
+		WHERE `+where+`
+		ORDER BY l.relic_id, l.link_id`, args...)
 	if err != nil {
-		return nil, s.databaseError("query relic links to a task", err)
+		return nil, s.databaseError("query relic links to a target", err)
 	}
 	defer rows.Close()
 	var sources []core.RelicLinkSource
@@ -158,10 +170,12 @@ func (s *Store) queryRelicLinksTo(ctx context.Context, target core.RelicLinkTarg
 		var partType sql.NullString
 		var partRemoved, partOrdinal sql.NullInt64
 		summary := &source.Relic
-		if err := rows.Scan(&summary.ID, &source.Link.ID, &source.Link.From, &source.Link.Rel,
+		var kind, to, toPart, pointer string
+		if err := rows.Scan(&summary.ID, &source.Link.ID, &source.Link.From, &kind, &to, &toPart, &source.Link.Rel,
+			&source.Link.Seen, &pointer,
 			&summary.Head, &summary.Title, &summary.Type, &schema, &summary.Author, &retired, &deleted, &createdAt, &updatedAt,
 			&summary.Parts, &partType, &partRemoved, &partOrdinal); err != nil {
-			return nil, s.databaseError("read relic link to a task", err)
+			return nil, s.databaseError("read relic link to a target", err)
 		}
 		if summary.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
 			return nil, core.Wrap(core.CategoryCorruptData, "indexed relic "+summary.ID+" has an invalid creation time", err)
@@ -173,7 +187,14 @@ func (s *Store) queryRelicLinksTo(ctx context.Context, target core.RelicLinkTarg
 		if schema != "" {
 			summary.Schema = &core.RelicSchemaRef{Type: summary.Type, ID: schema}
 		}
-		source.Link.To = target
+		if kind == relicLinkKindTask {
+			source.Link.To = core.RelicLinkTarget{Task: to}
+		} else {
+			source.Link.To = core.RelicLinkTarget{Relic: to, Part: toPart}
+		}
+		if pointer != "" {
+			source.Link.Pointer = json.RawMessage(pointer)
+		}
 		source.PartOrdinal = -1
 		if source.Link.From != "" {
 			if !partOrdinal.Valid {
@@ -185,7 +206,7 @@ func (s *Store) queryRelicLinksTo(ctx context.Context, target core.RelicLinkTarg
 		sources = append(sources, source)
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return nil, s.databaseError("read relic links to a task", err)
+		return nil, s.databaseError("read relic links to a target", err)
 	}
 	return sources, nil
 }

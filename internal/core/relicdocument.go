@@ -51,6 +51,10 @@ type RelicDocument struct {
 	Properties map[string]json.RawMessage `json:"properties"`
 	Parts      []RelicDocumentPart        `json:"parts"`
 	Links      []RelicDocumentLink        `json:"links"`
+	// LinkedFrom lists other relics' links to this relic or its parts. Only
+	// show sets it; it is not part of the relic, so export leaves it out and
+	// create --from-file refuses it.
+	LinkedFrom []RelicIncomingLink `json:"linkedFrom,omitempty"`
 	// Warnings is what a read has to say beside the document, such as links
 	// whose targets could not be checked. It is not part of the document.
 	Warnings []Warning `json:"-"`
@@ -120,6 +124,10 @@ func RelicCreateInputFromDocument(document RelicDocument) (RelicCreateInput, err
 				document.Schema.ID)
 		}
 		schema = document.Schema.ID
+	}
+	if len(document.LinkedFrom) != 0 {
+		return RelicCreateInput{}, Errorf(CategoryValidation,
+			"linkedFrom lists other relics' links and is not part of a relic; remove it")
 	}
 	if len(document.Links) != 0 {
 		return RelicCreateInput{}, Errorf(CategoryValidation,

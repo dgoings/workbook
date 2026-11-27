@@ -1195,7 +1195,7 @@ func TestRelicUpdateHelp(t *testing.T) {
 			"       workbook relic update <relic> --part <part> [--field <name>=<value>]... [--field-json <name>=<json>]... [--clear-field <name>]... [--body-file <file> [--body-format <label>] [--base <version>]] [--no-sync]\n"+
 			"       workbook relic update <relic> --move-part <part> (--before <part> | --after <part>) [--no-sync]\n"+
 			"       workbook relic update <relic> [--remove-part <part>]... [--restore-part <part>]... [--no-sync]\n"+
-			"       workbook relic update <relic> [--link <task> [--from <part>] --rel <rel>]... [--unlink <link>]... [--no-sync]\n")
+			"       workbook relic update <relic> [--link <task|relic[#part]> [--from <part>] --rel <rel> [--pointer <json object>]]... [--unlink <link>]... [--no-sync]\n")
 	for _, want := range []string{
 		"Change a relic. Every change given in one command is recorded together, or none is.",
 		"--add-part, --part, --move-part, --remove-part and --restore-part each start a group,",
