@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=v0.6.1-420-g5b8ebcc4 sha256=c962474c83ced6659066d73832e4204ed73c06ff6ed3f1929d946ebda5798732 -->
+<!-- workbook:begin generator=v0.7.0-151-g2e8e47ce sha256=2b7771e0eb83d0fdbca04a6db92842635f5c74a58b1c5e034e4a9beb59b34144 -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`
@@ -167,6 +167,9 @@ On either, read the part again. When your intent is clear, apply your
 change to the current text and save with `--base` set to the current
 version. Otherwise show the user both versions and ask; never save over
 text you have not read.
+
+To see what changed since the version you passed as `--base`, run
+`workbook relic diff <relic>#<part> <version> --json` with that version.
 
 For other edits (the title, a property or field, or adding, moving,
 removing or restoring a part), run `workbook relic update --help`; for
