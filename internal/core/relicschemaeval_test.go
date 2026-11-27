@@ -2,8 +2,11 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 func problemString(problem *RelicSchemaProblem) string {
@@ -215,5 +218,152 @@ func TestRelicSchemaSummary(t *testing.T) {
 	}
 	if got := schema.Summary(); !reflect.DeepEqual(got, want) {
 		t.Errorf("summary =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+// fanOutDefs is $defs d1…d32 where each di refers to d(i+1) both as its own
+// $ref and as the rule for member "a". Checking a value nested under "a"
+// without remembering what was already judged visits about C(32+L, L) nodes
+// for L levels.
+func fanOutDefs(prefix string) string {
+	var defs []string
+	for index := 1; index < 32; index++ {
+		next := fmt.Sprintf("%s#/$defs/d%d", prefix, index+1)
+		defs = append(defs, fmt.Sprintf(`"d%d":{"$ref":%q,"properties":{"a":{"$ref":%q}}}`, index, next, next))
+	}
+	defs = append(defs, `"d32":{"type":"object"}`)
+	return `"$defs":{` + strings.Join(defs, ",") + `}`
+}
+
+// nestedUnderA is levels objects nested under "a", with leaf at the bottom.
+func nestedUnderA(levels int, leaf string) string {
+	return strings.Repeat(`{"a":`, levels) + leaf + strings.Repeat(`}`, levels)
+}
+
+func requireQuickCheck(t *testing.T, label string, check func() *RelicSchemaProblem, want string) {
+	t.Helper()
+	start := time.Now()
+	got := problemString(check())
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("%s took %s", label, elapsed)
+	}
+	if got != want {
+		t.Errorf("%s: %s, want %s", label, got, want)
+	}
+}
+
+func TestSchemaCheckWithFanningRefsIsQuick(t *testing.T) {
+	schema := mustCompileSchema(t, "spec", `{"properties":{"$ref":"#/$defs/d1"},`+fanOutDefs("")+`}`)
+	for _, levels := range []int{20, MaxRelicValueDepth} {
+		value := json.RawMessage(nestedUnderA(levels-1, `{}`))
+		requireQuickCheck(t, fmt.Sprintf("property, %d levels, fits", levels),
+			func() *RelicSchemaProblem { return schema.CheckProperty("a", value) }, "<nil>")
+		relic := RelicData{Type: "spec", Properties: map[string]json.RawMessage{"a": value}}
+		requireQuickCheck(t, fmt.Sprintf("relic, %d levels, fits", levels),
+			func() *RelicSchemaProblem { return schema.CheckRelic(relic, nil) }, "<nil>")
+
+		// d32, the last rule, judges the value 31 levels below the
+		// properties; the property itself is the first of them.
+		bad := json.RawMessage(nestedUnderA(levels-2, `1`))
+		want := `property "a": at ` + strings.Repeat("/a", levels-2) + `: the value must be an object (type)`
+		requireQuickCheck(t, fmt.Sprintf("property, %d levels, does not fit", levels),
+			func() *RelicSchemaProblem { return schema.CheckProperty("a", bad) }, want)
+		relic = RelicData{Type: "spec", Properties: map[string]json.RawMessage{"a": bad}}
+		requireQuickCheck(t, fmt.Sprintf("relic, %d levels, does not fit", levels),
+			func() *RelicSchemaProblem { return schema.CheckRelic(relic, nil) }, want)
+	}
+}
+
+func TestSchemaCheckWithFanningCrossTypeRefsIsQuick(t *testing.T) {
+	// Types t32…t1, each with one definition d that refers to the next
+	// type's d as its own $ref and as the rule for member "a".
+	set := newTestSchemaSet()
+	set.put(t, "t32", `{"$defs":{"d":{"type":"object"}}}`)
+	for index := 31; index >= 1; index-- {
+		next := fmt.Sprintf("t%d#/$defs/d", index+1)
+		set.put(t, fmt.Sprintf("t%d", index), fmt.Sprintf(`{"$defs":{"d":{"$ref":%q,"properties":{"a":{"$ref":%q}}}}}`, next, next))
+	}
+	_, _, schema := set.put(t, "spec", `{"properties":{"$ref":"t1#/$defs/d"},
+	  "parts":{"step":{"fields":{"$ref":"t1#/$defs/d"}}}}`)
+	levels := MaxRelicValueDepth
+	value := json.RawMessage(nestedUnderA(levels-1, `{}`))
+	requireQuickCheck(t, "property fits",
+		func() *RelicSchemaProblem { return schema.CheckProperty("a", value) }, "<nil>")
+	fields := map[string]json.RawMessage{"a": value}
+	requireQuickCheck(t, "part fits",
+		func() *RelicSchemaProblem {
+			return schema.CheckPart("part X", RelicPart{ID: "X", Type: "step"}, fields)
+		}, "<nil>")
+	bad := map[string]json.RawMessage{"a": json.RawMessage(nestedUnderA(levels-2, `"x"`))}
+	requireQuickCheck(t, "part does not fit",
+		func() *RelicSchemaProblem { return schema.CheckPart("part X", RelicPart{ID: "X", Type: "step"}, bad) },
+		`part X (step) field "a": at `+strings.Repeat("/a", levels-2)+`: the value must be an object (type)`)
+}
+
+func TestSchemaCheckPastItsBudgetIsTooCostly(t *testing.T) {
+	schema := mustCompileSchema(t, "spec", `{"properties":{"$ref":"#/$defs/d1"},`+fanOutDefs("")+`}`)
+	decoded, ok := decodeSchemaInstance([]byte(nestedUnderA(10, `{}`)))
+	if !ok {
+		t.Fatal("decode")
+	}
+	check := newSchemaCheck(10)
+	fault := check.value(schema.properties, map[string]any{"a": decoded}, "property", nil)
+	if got := problemString(propertyProblem(fault)); got != "properties: the schema is too costly to check against this value" {
+		t.Errorf("past the budget: %s", got)
+	}
+	if got := problemString(propertyProblem(newSchemaCheck(MaxRelicSchemaCheckSteps).value(schema.properties, map[string]any{"a": decoded}, "property", nil))); got != "<nil>" {
+		t.Errorf("within the budget: %s", got)
+	}
+}
+
+func TestSchemaEnumAndConstCompareNumbersByValue(t *testing.T) {
+	schema := mustCompileSchema(t, "spec", `{"properties":{"properties":{
+	  "one":{"const":1},
+	  "e":{"enum":[100,"a"]},
+	  "obj":{"const":{"n":[1,{"m":2.5}],"s":"x"}},
+	  "tenth":{"const":0.3},
+	  "zero":{"const":0},
+	  "huge":{"const":1e99999999999999}}}}`)
+	cases := []struct {
+		name, value string
+		keyword     string
+	}{
+		{"one", `1`, ""},
+		{"one", `1.0`, ""},
+		{"one", `1e0`, ""},
+		{"one", `10E-1`, ""},
+		{"one", `2`, "const"},
+		{"one", `"1"`, "const"},
+		{"one", `true`, "const"},
+		{"e", `1e2`, ""},
+		{"e", `100.000`, ""},
+		{"e", `"a"`, ""},
+		{"e", `"100"`, "enum"},
+		{"e", `101`, "enum"},
+		{"obj", `{"s":"x","n":[1.0,{"m":25e-1}]}`, ""},
+		{"obj", `{"s":"x","n":[{"m":2.5},1]}`, "const"},
+		{"obj", `{"s":"x","n":[1,{"m":2.5}],"t":1}`, "const"},
+		{"obj", `{"s":"x","n":[1,{"m":2.51}]}`, "const"},
+		{"tenth", `0.30000000000000001`, "const"},
+		{"tenth", `3e-1`, ""},
+		{"zero", `-0`, ""},
+		{"zero", `0.0e5`, ""},
+		{"huge", `1e99999999999999`, ""},
+		{"huge", `1e99999999999998`, "const"},
+	}
+	for _, c := range cases {
+		problem := schema.CheckProperty(c.name, json.RawMessage(c.value))
+		switch {
+		case c.keyword == "" && problem != nil:
+			t.Errorf("%s = %s: refused: %s", c.name, c.value, problem)
+		case c.keyword != "" && (problem == nil || problem.Keyword != c.keyword):
+			t.Errorf("%s = %s: %s, want a %s problem", c.name, c.value, problemString(problem), c.keyword)
+		}
+	}
+	if got := problemString(schema.CheckProperty("e", json.RawMessage(`7`))); got != `property "e": the value must be one of 100, "a" (enum)` {
+		t.Errorf("enum message = %s", got)
+	}
+	if got := problemString(schema.CheckProperty("one", json.RawMessage(`2`))); got != `property "one": the value must be 1 (const)` {
+		t.Errorf("const message = %s", got)
 	}
 }

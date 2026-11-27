@@ -100,9 +100,11 @@ type schemaNode struct {
 	maximum         *relicNumber
 	minimumText     string
 	maximumText     string
-	enum            []string // canonical JSON of each allowed value
+	enum            []string // canonical JSON of each allowed value, for messages
+	enumValues      []any    // each allowed value, decoded, for comparing
 	hasConst        bool
 	constValue      string
+	constParsed     any
 	title           string
 	description     string
 
@@ -647,12 +649,12 @@ func (p *schemaParser) schema(value any, path string) (*schemaNode, error) {
 			if !ok || len(list) == 0 {
 				return nil, schemaFail(child, "enum must be a non-empty list of values")
 			}
-			node.enum = make([]string, len(list))
+			node.enum, node.enumValues = make([]string, len(list)), list
 			for index, item := range list {
 				node.enum[index] = canonicalSchemaValue(item)
 			}
 		case "const":
-			node.hasConst, node.constValue = true, canonicalSchemaValue(member)
+			node.hasConst, node.constValue, node.constParsed = true, canonicalSchemaValue(member), member
 		case "$ref":
 			text, ok := member.(string)
 			if !ok {

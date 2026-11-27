@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,8 +14,9 @@ import (
 
 // How a compiled schema judges a relic. Evaluation follows JSON Schema:
 // lengths count Unicode code points, an integer is any number with no
-// fraction, numbers compare exactly on their written text, enum and const
-// compare canonical JSON, and required checks only that a name is present.
+// fraction, numbers compare exactly by value, enum and const compare values
+// as JSON Schema does (numbers by value, at any depth), and required checks
+// only that a name is present.
 
 // RelicSchemaProblem is the first thing about a relic, or a piece of one, that
 // does not fit a schema: where it is, the word it breaks and what is wrong.
@@ -62,12 +64,82 @@ func appendPointer(pointer []string, token string) []string {
 	return append(append(make([]string, 0, len(pointer)+1), pointer...), token)
 }
 
+// schemaCheck is one check of one value. It remembers what it has judged, so
+// each schema node is judged against each object or list in the value once
+// however many $ref paths lead to it, and it counts its work: past budget
+// steps every judgement is a problem saying the schema is too costly to
+// check, never a pass.
+type schemaCheck struct {
+	memo    map[schemaCheckKey]*schemaFault
+	steps   int64
+	budget  int64
+	started bool
+	root    []string // where the check began, which a too costly problem names
+}
+
+// schemaCheckKey is one schema node and one object or list in the value, by
+// identity: a decoded value holds each container once, at one place, so its
+// identity stands for its place.
+type schemaCheckKey struct {
+	node      *schemaNode
+	container uintptr
+}
+
+func newSchemaCheck(budget int64) *schemaCheck {
+	return &schemaCheck{memo: map[schemaCheckKey]*schemaFault{}, budget: budget}
+}
+
+// step counts one piece of work and reports whether the budget is spent.
+func (c *schemaCheck) step() bool {
+	c.steps++
+	return c.steps > c.budget
+}
+
+func (c *schemaCheck) tooCostly() *schemaFault {
+	return &schemaFault{c.root, "", "the schema is too costly to check against this value"}
+}
+
 // checkValue judges one value against a node and every node its $ref chain
 // reaches. noun names the members of the value when it is an object:
 // "property", "field" or "member".
 func checkValue(node *schemaNode, value any, noun string, at []string) *schemaFault {
+	return newSchemaCheck(MaxRelicSchemaCheckSteps).value(node, value, noun, at)
+}
+
+// value is checkValue within one check. A non-empty object or list is judged
+// against a node once; scalars and empty containers cost no more than their
+// node's chain, so they are not remembered.
+func (c *schemaCheck) value(node *schemaNode, value any, noun string, at []string) *schemaFault {
+	if !c.started {
+		c.started, c.root = true, at
+	}
+	var key schemaCheckKey
+	remember := false
+	switch typed := value.(type) {
+	case map[string]any:
+		remember = len(typed) > 0
+	case []any:
+		remember = len(typed) > 0
+	}
+	if remember {
+		key = schemaCheckKey{node, reflect.ValueOf(value).Pointer()}
+		if fault, judged := c.memo[key]; judged {
+			return fault
+		}
+	}
+	fault := c.judge(node, value, noun, at)
+	if remember {
+		c.memo[key] = fault
+	}
+	return fault
+}
+
+func (c *schemaCheck) judge(node *schemaNode, value any, noun string, at []string) *schemaFault {
 	chain := node.chain()
 	for _, each := range chain {
+		if c.step() {
+			return c.tooCostly()
+		}
 		if fault := each.checkWords(value, at); fault != nil {
 			return fault
 		}
@@ -93,6 +165,9 @@ func checkValue(node *schemaNode, value any, noun string, at []string) *schemaFa
 			member, present := typed[name]
 			memberAt := appendPointer(at, name)
 			for _, each := range chain {
+				if c.step() {
+					return c.tooCostly()
+				}
 				rule, ruled := each.properties[name]
 				switch {
 				case !present:
@@ -100,7 +175,7 @@ func checkValue(node *schemaNode, value any, noun string, at []string) *schemaFa
 						return &schemaFault{memberAt, "required", "the " + noun + " is required"}
 					}
 				case ruled:
-					if fault := checkValue(rule, member, "member", memberAt); fault != nil {
+					if fault := c.value(rule, member, "member", memberAt); fault != nil {
 						return fault
 					}
 				case each.additionalFalse:
@@ -112,10 +187,13 @@ func checkValue(node *schemaNode, value any, noun string, at []string) *schemaFa
 		for index, item := range typed {
 			itemAt := appendPointer(at, strconv.Itoa(index))
 			for _, each := range chain {
+				if c.step() {
+					return c.tooCostly()
+				}
 				if each.items == nil {
 					continue
 				}
-				if fault := checkValue(each.items, item, "member", itemAt); fault != nil {
+				if fault := c.value(each.items, item, "member", itemAt); fault != nil {
 					return fault
 				}
 			}
@@ -139,10 +217,10 @@ func (n *schemaNode) checkWords(value any, at []string) *schemaFault {
 	if len(n.types) > 0 && !schemaTypeMatches(n.types, value) {
 		return &schemaFault{at, "type", "the value must be " + describeSchemaTypes(n.types)}
 	}
-	if n.enum != nil && !containsString(n.enum, canonicalSchemaValue(value)) {
+	if n.enum != nil && !schemaValueListed(n.enumValues, value) {
 		return &schemaFault{at, "enum", "the value must be one of " + strings.Join(n.enum, ", ")}
 	}
-	if n.hasConst && canonicalSchemaValue(value) != n.constValue {
+	if n.hasConst && !schemaValuesEqual(n.constParsed, value) {
 		return &schemaFault{at, "const", "the value must be " + n.constValue}
 	}
 	switch typed := value.(type) {
@@ -175,6 +253,69 @@ func (n *schemaNode) checkWords(value any, at []string) *schemaFault {
 		}
 	}
 	return nil
+}
+
+func schemaValueListed(list []any, value any) bool {
+	for _, item := range list {
+		if schemaValuesEqual(item, value) {
+			return true
+		}
+	}
+	return false
+}
+
+// schemaValuesEqual compares two decoded values as JSON Schema's enum and
+// const do: numbers by value, lists in order, objects by name, and anything
+// else as written.
+func schemaValuesEqual(a, b any) bool {
+	switch x := a.(type) {
+	case json.Number:
+		y, ok := b.(json.Number)
+		return ok && schemaNumbersEqual(x.String(), y.String())
+	case string:
+		y, ok := b.(string)
+		return ok && x == y
+	case bool:
+		y, ok := b.(bool)
+		return ok && x == y
+	case nil:
+		return b == nil
+	case []any:
+		y, ok := b.([]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for index := range x {
+			if !schemaValuesEqual(x[index], y[index]) {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		y, ok := b.(map[string]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for name, member := range x {
+			other, present := y[name]
+			if !present || !schemaValuesEqual(member, other) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// schemaNumbersEqual compares two numbers by value. A number whose exponent
+// was too large to hold exactly equals only the same text.
+func schemaNumbersEqual(a, b string) bool {
+	x, okX := parseRelicNumber(a)
+	y, okY := parseRelicNumber(b)
+	if !okX || !okY || x.clamped || y.clamped {
+		return a == b
+	}
+	return x.compare(y) == 0
 }
 
 func countNoun(count int64, noun string) string {
@@ -318,11 +459,12 @@ func (s *RelicSchema) CheckProperty(name string, value json.RawMessage) *RelicSc
 	if !ok {
 		return &RelicSchemaProblem{Where: where, Message: "the value is not valid JSON"}
 	}
+	check := newSchemaCheck(MaxRelicSchemaCheckSteps)
 	for _, node := range s.properties.chain() {
 		rule, ruled := node.properties[name]
 		switch {
 		case ruled:
-			if problem := propertyProblem(checkValue(rule, decoded, "member", []string{name})); problem != nil {
+			if problem := propertyProblem(check.value(rule, decoded, "member", []string{name})); problem != nil {
 				return problem
 			}
 		case node.additionalFalse:
@@ -399,6 +541,9 @@ type relicNumber struct {
 	sign   int // -1, 0 or 1; 0 means the number is zero and digits is empty
 	digits string
 	exp    int64
+	// clamped is set when the written exponent was past
+	// relicNumberExponentLimit, so exp holds the limit, not the exponent.
+	clamped bool
 }
 
 // relicNumberExponentLimit bounds an exponent as read. Any exponent past it
@@ -432,6 +577,7 @@ func parseRelicNumber(text string) (relicNumber, bool) {
 		}
 	}
 	var exponent int64
+	clamped := false
 	if index < len(text) && (text[index] == 'e' || text[index] == 'E') {
 		index++
 		exponentNegative := false
@@ -445,10 +591,12 @@ func parseRelicNumber(text string) (relicNumber, bool) {
 		}
 		written := strings.TrimLeft(raw, "0")
 		if len(written) > 13 {
-			exponent = relicNumberExponentLimit
+			exponent, clamped = relicNumberExponentLimit, true
 		} else if written != "" {
 			exponent, _ = strconv.ParseInt(written, 10, 64)
-			exponent = min(exponent, relicNumberExponentLimit)
+			if exponent > relicNumberExponentLimit {
+				exponent, clamped = relicNumberExponentLimit, true
+			}
 		}
 		if exponentNegative {
 			exponent = -exponent
@@ -464,7 +612,7 @@ func parseRelicNumber(text string) (relicNumber, bool) {
 	if trimmed == "" {
 		return relicNumber{}, true
 	}
-	number := relicNumber{sign: 1, digits: trimmed, exp: exponent}
+	number := relicNumber{sign: 1, digits: trimmed, exp: exponent, clamped: clamped}
 	if negative {
 		number.sign = -1
 	}

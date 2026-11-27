@@ -64,6 +64,15 @@ const (
 	// MaxRelicSchemaRefDepth bounds how many $ref steps a schema follows
 	// from any one place, counting the steps inside another type's schema.
 	MaxRelicSchemaRefDepth = 32
+	// MaxRelicSchemaCheckSteps bounds the work of checking one value against
+	// a schema: a relic's properties, one property or one part's fields. A
+	// step is one node's own words judged on one value, or one member or item
+	// looked at by one node. A check judges each schema node against each
+	// object or list once, so a real schema stays far below it: the largest
+	// value judged by 64 distinct chains of 32 references at every place is
+	// about 2^26 steps, about a second. It is a backstop, and a check that
+	// reaches it reports the schema too costly to check, never a pass.
+	MaxRelicSchemaCheckSteps = 1 << 26
 )
 
 var (
