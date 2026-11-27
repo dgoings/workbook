@@ -214,10 +214,10 @@ func guidanceInvocationViolation(words []string) string {
 func TestGuidanceScannerReportsUnbuiltCommands(t *testing.T) {
 	t.Parallel()
 	for _, text := range []string{
-		"Compare with `workbook relic diff <relic>`.",
-		"Read it with `workbook relic show <relic> --history`.",
+		"Compare with `workbook relic frobnicate <relic>`.",
+		"Read it with `workbook relic show <relic> --made-up`.",
 		"Every relic command is `workbook relic`.",
-		"List them with `workbook schema list`.",
+		"List them with `workbook widget list`.",
 		"```sh\nworkbook relic show <relic>#<part> --pointer <path> --json\n```",
 		"Run `workbook relic update <relic>\n--part <part> --body-file <file> --made-up --json`.",
 		"```sh\ngit cat-file -p HEAD | workbook relic create --from-file - --template\n```",
@@ -245,7 +245,7 @@ func TestGuidanceScannerReportsUnbuiltCommands(t *testing.T) {
 			t.Errorf("guidanceCommandViolations(%q) = %q, want none", text, violations)
 		}
 	}
-	if got := guidanceCommandViolations("one\n\ntwo `workbook relic diff`"); len(got) != 1 || !strings.HasPrefix(got[0], "line 3: `relic diff`") {
+	if got := guidanceCommandViolations("one\n\ntwo `workbook relic frobnicate`"); len(got) != 1 || !strings.HasPrefix(got[0], "line 3: `relic frobnicate`") {
 		t.Errorf("violation = %q, want it to name line 3 and the invocation", got)
 	}
 }
