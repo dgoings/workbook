@@ -38,7 +38,8 @@ type RelicReplayStep struct {
 //  3. A pack with an operation naming a stub of the parent, a part whose
 //     content a checkpoint dropped, stops on a dropped conflict: the fold
 //     would ignore it, and the change it records has nothing left to apply
-//     to.
+//     to. A part.remove of a stub is the exception: both sides wanted the
+//     part gone, so it replays as the no-op the fold makes it.
 //  4. A part.body.set whose base is not the part's current version stops on
 //     a body conflict, unless the saved body equals the parent's: then the
 //     two sides agree, and the fold ignores the operation.
@@ -147,9 +148,9 @@ func planRelicReplayOnDeletion(parent RelicRecord, pack RelicOperationPack) (Rel
 	}, ConflictOperation: blocked.ID}, true
 }
 
-// relicOperationOnStub is rule 3: the first operation of the pack that names a
-// stub of the parent, as the part it changes or the part a link is from, and
-// that stub's ID; or two empty strings.
+// relicOperationOnStub is rule 3: the first operation of the pack, other than
+// a part.remove, that names a stub of the parent, as the part it changes or
+// the part a link is from, and that stub's ID; or two empty strings.
 func relicOperationOnStub(parent RelicData, pack RelicOperationPack) (operation, part string) {
 	stubs := map[string]bool{}
 	for _, candidate := range parent.Parts {
@@ -161,6 +162,9 @@ func relicOperationOnStub(parent RelicData, pack RelicOperationPack) (operation,
 		return "", ""
 	}
 	for _, candidate := range pack.Operations {
+		if candidate.Type == RelicOperationPartRemove {
+			continue
+		}
 		named := candidate.Part
 		if candidate.Type == RelicOperationLinkAdd && candidate.Link != nil {
 			named = candidate.Link.From

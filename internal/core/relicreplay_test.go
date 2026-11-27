@@ -868,6 +868,30 @@ func TestReplayStopsOnAStubWithDroppedConflict(t *testing.T) {
 		Part: relicDocPartA, Position: "5/1"}), RelicReplayInput{})
 	requireReplayApplied(t, "a move of a live part of a compacted relic", parent, applied)
 
+	// A part.remove of a stub agrees with the checkpoint: both sides wanted
+	// the part gone, so it replays as the no-op the fold makes it.
+	remove := RelicOperation{ID: relicTestID(7507), Type: RelicOperationPartRemove, Part: relicDocPartB}
+	removed := replayStepFor(t, parent, local(remove), RelicReplayInput{})
+	requireReplayApplied(t, "a local removal of a stub", parent, removed)
+	if got, want := removed.Record.State.Relic.Parts, parent.State.Relic.Parts; !reflect.DeepEqual(got, want) {
+		t.Errorf("a local removal of a stub changed the parts: %#v, want %#v", got, want)
+	}
+	// Beside another operation on the same stub, the pack still stops, on
+	// that other operation.
+	field := RelicOperation{ID: relicTestID(7508), Type: RelicOperationPartFieldSet, Part: relicDocPartB, Name: "h",
+		Value: json.RawMessage(`"x"`)}
+	for label, pack := range map[string]RelicOperationPack{
+		"remove then field set": local(remove, field),
+		"field set then remove": local(field, remove),
+	} {
+		step := replayStepFor(t, parent, pack, RelicReplayInput{})
+		if step.Conflict == nil || step.Conflict.Type != RelicConflictDropped || step.ConflictOperation != field.ID ||
+			step.Conflict.Part != relicDocPartB {
+			t.Errorf("%s on a stub: conflict %#v, operation %q; want dropped naming %s",
+				label, step.Conflict, step.ConflictOperation, field.ID)
+		}
+	}
+
 	detail := RelicConflictDetail(RelicConflict{RelicID: relicDocRelic, Type: RelicConflictDropped, Part: relicDocPartB,
 		ParkedRef: "refs/workbook/reconciled-relics/" + relicDocRelic})
 	if !strings.Contains(detail, relicDocPartB) || !strings.Contains(detail, "dropped") ||

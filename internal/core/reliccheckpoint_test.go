@@ -105,6 +105,17 @@ func TestCheckpointRootRules(t *testing.T) {
 		requireRelicStateRoundTrips(t, boundary+" root state", stored.State)
 	}
 
+	// Wall clocks are display metadata: a stub kept from an earlier
+	// compaction by a clone whose clock ran fast may carry a droppedAt after
+	// this checkpoint's wall time, and the root is still valid.
+	for _, boundary := range []string{RelicBoundaryRetired, RelicBoundaryDeleted} {
+		pack, stored := relicCheckpointForTest(boundary)
+		stored.State.Relic.Parts[1].Dropped.DroppedAt = pack.WallTime.Add(time.Hour)
+		if err := ValidateRelicCheckpointRoot(pack, stored); err != nil {
+			t.Errorf("%s root with a stub dropped after its wall time: ValidateRelicCheckpointRoot = %v", boundary, err)
+		}
+	}
+
 	retiredPack, _ := relicCheckpointForTest(RelicBoundaryRetired)
 	_, err := ApplyRelic(nil, retiredPack)
 	requireCorruptData(t, "ApplyRelic(nil, checkpoint)", err)
@@ -184,9 +195,6 @@ func TestCheckpointRootRules(t *testing.T) {
 		}},
 		"R5 stub with a body": {retired, func(_ *RelicOperationPack, r *RelicRecord) {
 			r.State.Relic.Parts[1].Body = &RelicBody{Format: "md", Version: relicDocPartB, Bytes: 3}
-		}},
-		"R5 dropped after the run": {retired, func(_ *RelicOperationPack, r *RelicRecord) {
-			r.State.Relic.Parts[1].Dropped.DroppedAt = relicCheckpointWall.Add(time.Second)
 		}},
 		"R5 unsorted list": {retired, func(p *RelicOperationPack, _ *RelicRecord) {
 			list := checkpointSummaryOf(p).CompactedOperations

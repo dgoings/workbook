@@ -81,8 +81,9 @@ func (pack RelicOperationPack) Checkpoint() (RelicCheckpointData, bool) {
 //	R4. The boundary agrees with the relic. A retired root is retired and not
 //	    deleted, and every removed part is a stub. A deleted root is deleted,
 //	    has no properties, and every part is a stub.
-//	R5. Every stub is removed, has no body, and was dropped no later than the
-//	    pack's wall time. The list of replaced operations is sorted, unique,
+//	R5. Every stub is removed, has no body, and has both dates, well formed.
+//	    The dates are not compared with the pack's wall time, which is
+//	    display metadata. The list of replaced operations is sorted, unique,
 //	    made of ULIDs, and does not hold the checkpoint's own ID.
 //	R6. The links are valid against the state.
 //
@@ -142,14 +143,12 @@ func ValidateRelicCheckpointRoot(pack RelicOperationPack, stored RelicRecord) er
 		return corrupt("the relic checkpoint's state does not record the compaction its checkpoint describes")
 	}
 
-	// R4 and R5.
+	// R4. R5's stub rules were checked with the state; its dates are not
+	// compared with the pack's wall time, because wall clocks are display
+	// metadata and a stub kept from an earlier compaction may carry another
+	// clone's clock.
 	if err := checkRelicCheckpointBoundary(summary.Boundary, relic); err != nil {
 		return err
-	}
-	for _, part := range relic.Parts {
-		if part.Dropped != nil && part.Dropped.DroppedAt.After(pack.WallTime) {
-			return corrupt("relic state part %s was dropped after the checkpoint that dropped it", part.ID)
-		}
 	}
 
 	// R6.
