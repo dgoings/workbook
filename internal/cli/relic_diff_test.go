@@ -262,7 +262,7 @@ func TestRelicDiffTextOutput(t *testing.T) {
 		"\t@@ -1,3 +1,3 @@\n" +
 		"\t keep\n" +
 		"\t-old\n" +
-		"\t+new [31mred\n" +
+		"\t+new  [31mred\n" +
 		"\t end\n"
 	if stdout != want {
 		t.Fatalf("text =\n%q\nwant\n%q", stdout, want)
@@ -284,5 +284,50 @@ func TestRelicDiffTextOutput(t *testing.T) {
 	code, stdout, stderr = run(t, repository, "relic", "diff", alone)
 	if code != 0 || stderr != "" || !strings.Contains(stdout, "Part "+added+"\tsection\tadded\n\tBody:\tno body → - 2 bytes\n\t@@ -0,0 +1,1 @@\n\t+x\n") {
 		t.Fatalf("diff adding a part = (%d, %q, %q)", code, stdout, stderr)
+	}
+}
+
+func TestRelicDiffTextKeepsIndentation(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	relicID, partID, _ := savedRelicPart(t, repository,
+		"root:\n  two\n  tab\n", "root:\n    two\n\ttab\n")
+
+	code, stdout, stderr := run(t, repository, "relic", "diff", relicID+"#"+partID)
+	want := "\t@@ -1,3 +1,3 @@\n" +
+		"\t root:\n" +
+		"\t-  two\n" +
+		"\t-  tab\n" +
+		"\t+    two\n" +
+		"\t+\ttab\n"
+	if code != 0 || stderr != "" || !strings.HasSuffix(stdout, want) {
+		t.Fatalf("diff = (%d, %q, %q), want it to end %q", code, stdout, stderr, want)
+	}
+}
+
+func TestRelicDiffTextMarksAMissingFinalNewline(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	relicID, partID, versions := savedRelicPart(t, repository, "keep\nend", "keep\nend\n")
+	marker := "\t\\ No newline at end of file\n"
+
+	code, stdout, stderr := run(t, repository, "relic", "diff", relicID+"#"+partID)
+	want := "\t@@ -1,2 +1,2 @@\n\t keep\n\t-end\n" + marker + "\t+end\n"
+	if code != 0 || stderr != "" || !strings.HasSuffix(stdout, want) {
+		t.Fatalf("diff = (%d, %q, %q), want it to end %q", code, stdout, stderr, want)
+	}
+
+	// Removing it again marks the added line, and a context line that has none
+	// on either side is marked once.
+	code, stdout, stderr = run(t, repository, "relic", "diff", relicID+"#"+partID, versions[1], versions[0])
+	want = "\t@@ -1,2 +1,2 @@\n\t keep\n\t-end\n\t+end\n" + marker
+	if code != 0 || stderr != "" || !strings.HasSuffix(stdout, want) {
+		t.Fatalf("reverse diff = (%d, %q, %q), want it to end %q", code, stdout, stderr, want)
+	}
+	relicID, partID, _ = savedRelicPart(t, repository, "old\nlast", "new\nlast")
+	code, stdout, stderr = run(t, repository, "relic", "diff", relicID+"#"+partID)
+	want = "\t@@ -1,2 +1,2 @@\n\t-old\n\t+new\n\t last\n" + marker
+	if code != 0 || stderr != "" || !strings.HasSuffix(stdout, want) {
+		t.Fatalf("diff with an unterminated context line = (%d, %q, %q), want it to end %q", code, stdout, stderr, want)
 	}
 }

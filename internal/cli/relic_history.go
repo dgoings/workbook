@@ -182,7 +182,9 @@ func relicFormatLabel(format string) string {
 }
 
 // writeRelicDiff prints a diff: the two points, the relic's own changes and
-// properties, each changed part with its fields and body, and the links.
+// properties, each changed part with its fields and body, and the links. Body
+// lines pass through core.DisplayText, so indentation is kept; every other
+// stored string passes through singleLine.
 func writeRelicDiff(stdout io.Writer, diff core.RelicDiff) {
 	from := "(before the relic)"
 	if diff.From != nil {
@@ -261,7 +263,11 @@ func writeRelicPartDiff(stdout io.Writer, part core.RelicPartDiff) {
 			case core.DiffInsert:
 				mark = "+"
 			}
-			fmt.Fprintf(stdout, "\t%s%s\n", mark, singleLine(line.Text))
+			// A body line keeps its layout, as relic show --body prints it.
+			fmt.Fprintf(stdout, "\t%s%s\n", mark, core.DisplayText(line.Text))
+			if line.NoNewline {
+				fmt.Fprintln(stdout, "\t\\ No newline at end of file")
+			}
 		}
 	}
 }
