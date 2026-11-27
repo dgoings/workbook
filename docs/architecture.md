@@ -235,7 +235,7 @@ An operation's members are always written in one order, `id`, `type`,
 | `part.body.set` | `part`, and `body`: `format` when it has a label, then `bytes`, then `base`, the body version the save started from, left out when the part had no body |
 | `part.move` | `part`, `position` |
 | `part.remove`, `part.restore` | `part` |
-| `link.add` | `link`: `from` when the link is from a part, `to` as `{"task": "<task-id>"}`, then `rel`. The operation's `id` is the new link's ID. |
+| `link.add` | `link`: `from` when the link is from a part, `to` (`{"task": "<task-id>"}`, or `{"relic": "<relic-id>"}` with `part` after `relic` for a link to a part), then `rel`, then `seen` for a link to a relic, then `pointer` when there is one. The operation's `id` is the new link's ID. |
 | `link.remove` | `linkId`, the ID of the link it removes |
 | `relic.migrate` | `relicType`, then `schema`, the version the relic moves to, left out when it becomes open |
 
@@ -338,11 +338,18 @@ with C2's `links.json`, as stored:
 {"format":"workbook.relic-links","version":1,"links":[{"id":"01M87F2KR522KBJ4CWWSRHRY4G","from":"01M87F0T8ZDXPZV8WNS006CBKV","to":{"task":"WB-01M87F2JJT7ERPBSGFX8XTZ4NW"},"rel":"implemented-by"}]}
 ```
 
-A link has `id`, `from` only when it is from a part, `to` and `rel`. `to` is an
-object with exactly one member, `task`, so that later generations can add
-other kinds of target as members of their own. `rel` is 1 to 100 bytes of
-lowercase letters and digits with single hyphens between words. Any other
-member is `corrupt-data` on read. A `link.add` is `corrupt-data` when its ID
+A link has `id`, `from` only when it is from a part, `to`, `rel`, `seen` only
+when it points at a relic, and `pointer` only when it has one. `rel` is 1 to
+100 bytes of lowercase letters and digits with single hyphens between words.
+
+| Member | Stored form |
+| --- | --- |
+| `to` | An object with exactly one of `task` (a task ID) or `relic` (`to.relic`, a relic ID), and, only with `relic`, optionally `part` (`to.part`, a part ID). |
+| `seen` | Required with `to.relic` and absent otherwise: the ID of the last operation in the target relic's newest change when the link was added, or, for a link to the relic itself, in its newest change before the one that adds the link. |
+| `pointer` | Optional on any target: one JSON object in the canonical form of a value (see above), at most 512 bytes in that form, nesting at most 32 levels. A reader refuses one that is not canonical, not an object or too large. |
+
+Any other member is `corrupt-data` on read, and the same checks are made when a
+link is saved. A `link.add` is `corrupt-data` when its ID
 is already a live link's, a part's or a current body version's, or when its
 `from` names a part the relic does not have. A `link.remove` that names no
 live link changes nothing: the link was removed in another clone, or the
@@ -350,14 +357,50 @@ remove was delivered twice. A link stays when its task is deleted, and a link
 from a removed part stays in `links.json`; readers hide it wherever they hide
 the part. No task commit records anything about a link.
 
+**Links to relics and parts.** A link is stored once, on the relic it starts
+from, and nothing is written on the target, whether it is a task, a relic or a
+part: one relic's ref is the only thing a link changes, so adding one never
+conflicts with an edit to its target. The decision relic of the
+[reference's second session](reference.md#links-to-relics-and-parts) after one
+command that added two links:
+
+```text
+refs/workbook/relics/WB-R-01M8FNC4Y9… (decisions)  →  commit D3 (parent D2)
+  tree: operation.json  [link.add 01M8FNC6ZR… → WB-R-01M8FNC40G…#01M8FNC4E4…,
+                         link.add 01M8FNC725… → WB-R-01M8FNC5V9…#01M8FNC69Q…]
+        links.json      [01M8FNC6ZR…, 01M8FNC725…]
+        state.json      (new logical clock and update time; the parts are unchanged)
+        parts/…         (unchanged)
+refs/workbook/relics/WB-R-01M8FNC40G… (transcript)  →  unchanged
+refs/workbook/relics/WB-R-01M8FNC5V9… (spec)        →  unchanged
+```
+
+D3's `links.json`, as stored:
+
+```json
+{"format":"workbook.relic-links","version":1,"links":[{"id":"01M8FNC6ZRCDBFDN2Y8MMKD43C","from":"01M8FNC5BNK2SV4A47G38AB5Y2","to":{"relic":"WB-R-01M8FNC40GNSPEJF1YEZQMV7MF","part":"01M8FNC4E4EZFGME2ZNF9NAM80"},"rel":"decided-in","seen":"01M8FNC4E48J13Q44GQD4NR2BD","pointer":{"at":"00:14:32","quote":"by hand"}},{"id":"01M8FNC7256KH6HRKR57JKYA3D","from":"01M8FNC5BNK2SV4A47G38AB5Y2","to":{"relic":"WB-R-01M8FNC5V9NMQTZ105DPV173BC","part":"01M8FNC69QHEMTG2FA0F80KBKR"},"rel":"changes","seen":"01M8FNC69QHEMTG2FA0F80KBKR"}]}
+```
+
+The fold and every read treat a target as data they never resolve, so a link to
+a relic this clone lacks, to a deleted relic or to a removed part folds like any
+other, and so do a link to the relic itself and links that close a cycle. Only
+`relic update` checks that a target exists, and a read says how it stands (see
+[When a target is removed](reference.md#when-a-target-is-removed)). At most
+2,000 live links with 512-byte pointers make `links.json` about 1.7 MiB, under
+the 4,194,304-byte limit on one object.
+
 **Concurrent links.** Each `link.add` mints its own ID, so every add either
 clone makes survives a replay, and a `link.remove` removes only the ID it
 names. These are guarantees. An add in one clone and a removal of an older
 link with the same `from`, `to` and `rel` in another leave the new link; two
 removals of one link fold to one; two clones adding the same link at once
 leave two links with two IDs, both listed, until somebody unlinks one. A
-command adding a link that is already live records nothing, so only clones
-that had not seen each other's add can make that pair. A link change stops a
+command adding a link that is already live (the same `from`, `to`, `rel` and
+pointer bytes) records nothing, so only clones that had not seen each other's add
+can make that pair. A link to a relic or part follows the same observed-remove
+rules. A link added in one clone and the target part's removal or the target
+relic's deletion in another change two different refs, so both apply, and the
+link reads as pointing at something removed. A link change stops a
 replay only as any edit does: a link added onto a relic the other clone
 deleted is a `tombstone` conflict. A link added from a part the other clone removed is
 kept with the `relic-edit-on-removed-part` warning, and links that together
@@ -375,6 +418,17 @@ pass the 2,000-link limit are kept with `relic-over-limit`.
 that declares less is `corrupt-data`. One that declares more was written by a
 newer Workbook: it is read as far as it can be, shown, and neither changed nor
 judged by the rules below.
+
+Links to relics and pointers added members at generation 6 without raising it,
+because no release that reads relics has shipped; releases from before relics
+never fetch relic refs. The cost falls on an unreleased build of this format from
+before relic links. It reads a relic holding a link to a relic, or any link with
+a pointer, as `corrupt-data`: `relic show` and `relic update` refuse that relic,
+`relic list` fails, and `workbook validate` reports it invalid. Its task
+commands still run, and `workbook show` warns that it cannot read the relic.
+Nothing is lost or rewritten, and a current build reads the relic. A links
+document that holds only task links without pointers is byte for byte what such
+a build writes.
 
 **The fold.** `state.json` is what folding the commit's operations onto its
 parent's state computes. Some operations fold to no change and stay in the
@@ -1667,7 +1721,7 @@ or write.
 | `relic_properties` | property | the name and the stored JSON value |
 | `relic_parts` | part | order, type, position, removed, the `fields.json` object ID and bytes, and the body's format, version, size and `body_object` |
 | `relic_operations` | recorded operation | commit, place in the chain, operation ID, actor, wall time, type, the part it names and its payload |
-| `relic_links` | live link | the link ID, the part it is from or `''`, the target as `to_kind` (`task`), `to_id` and `to_part` (`''`), and `rel` |
+| `relic_links` | live link | the link ID, the part it is from or `''`, the target as `to_kind` (`task` or `relic`), `to_id` (the task or relic) and `to_part` (the part, or `''`), `rel`, and `seen` and `pointer`, each `''` when the link has none (a pointer as its canonical text) |
 
 Body bytes are never copied into the cache. A part row holds the ID of the
 `body` blob in the relic's commit tree, and a command that shows a body reads
@@ -1713,10 +1767,15 @@ Git. Relic mutations always read the relic from Git and never fold onto a
 cached row; they do not warm the index, so the next read reads that relic
 once.
 
-`relic_links` is indexed by its target, so `relic list --linked-to <task>`
-and `workbook show <task>` find the links to a task with one indexed lookup
-after the relic pass, and never by reading relic objects. Its rows for the
-reference's session:
+`relic_links` is indexed by its target, `(to_kind, to_id, to_part)`, so what
+points at a task, a relic or a part is found with one query after the relic
+pass, and never by reading relic objects: `relic list --linked-to`,
+`workbook show <task>`, and the `Linked from:` list of `relic show` all use it. A
+whole-relic lookup matches `to_kind` and `to_id`, so it covers links to the
+relic's parts; a part lookup matches `to_part` too. With an index that cannot be
+used, the same lookup reads every relic from Git and answers the same. Its rows
+for the first of the reference's sessions, with the empty `to_part`, `seen` and
+`pointer` columns left out:
 
 ```text
 relic_id|link_id|from_part|to_kind|to_id|rel
@@ -1725,9 +1784,17 @@ WB-R-01M87F0SQYHP3HCR4QEN3RTVEX|01M87F2KR522KBJ4CWWSRHRY4G|01M87F0T8ZDXPZV8WNS00
 WB-R-01M87F0YHZ1852KPS55KCDPXG2|01M87F2PV71CCDX34JPK969NYV||task|WB-01M87F19RB1PVEE87F7PS1D1FJ|relates-to
 ```
 
-The cache, with the relic tables and `relic_links`, is schema version 11; a
+And for the two links to parts above:
+
+```text
+relic_id|link_id|from_part|to_kind|to_id|to_part|rel|seen|pointer
+WB-R-01M8FNC4Y9ZSCQ6E309E1H65GQ|01M8FNC6ZRCDBFDN2Y8MMKD43C|01M8FNC5BNK2SV4A47G38AB5Y2|relic|WB-R-01M8FNC40GNSPEJF1YEZQMV7MF|01M8FNC4E4EZFGME2ZNF9NAM80|decided-in|01M8FNC4E48J13Q44GQD4NR2BD|{"at":"00:14:32","quote":"by hand"}
+WB-R-01M8FNC4Y9ZSCQ6E309E1H65GQ|01M8FNC7256KH6HRKR57JKYA3D|01M8FNC5BNK2SV4A47G38AB5Y2|relic|WB-R-01M8FNC5V9NMQTZ105DPV173BC|01M8FNC69QHEMTG2FA0F80KBKR|changes|01M8FNC69QHEMTG2FA0F80KBKR|
+```
+
+The cache, with the relic tables and `relic_links`, is schema version 12; a
 cache of another version is replaced by the first command this build runs, and
-an older build replaces a version 11 cache the same way.
+an older build replaces a version 12 cache the same way.
 A relic the index cannot hold is reported by a reverse lookup as unread, with
 a `relic-links-unread` warning, rather than read from Git, so the lookup stays
 one query and a damaged relic's links stay out of sight from the task until it
@@ -1791,12 +1858,15 @@ scripts/benchmark.sh --relics
 ```
 
 It has two scales. The full scale, the default, is 1,000 relics of 20 parts
-with 1,024-byte bodies and 10 links each, added to the 500-task fixture; a
+with 1,024-byte bodies, 10 links to tasks each and 5 links to parts of other
+relics each, added to the 500-task fixture; every relic but the first has one of
+those 5 on the first part of the first relic, with a pointer. Then come a
 large relic of 2,000 parts; bodies of 1 MiB and 2 KiB; 10,000 moves of the
 large relic's parts, written in updates of 100; and 100 changed relics for
 each synchronization scenario. Building it takes minutes, so a run with
 `--relics` defaults `--timeout` to 300 seconds. `--relic-scale smoke` builds 20
-relics of 4 parts on an 11-task fixture, the scale the tests run end to end.
+relics of 4 parts, each with 2 links to tasks and 1 to a relic part, on an
+11-task fixture, the scale the tests run end to end.
 The default `scripts/benchmark.sh` run measures no relic scenario.
 
 Like every report, a relic report has no pass or fail. The budgets below are
@@ -1816,6 +1886,8 @@ Spotlight indexing used about two and a half cores during the run.
 | Reverse lookup | `relic-linked-to-hot` | 121 ms | 200 ms | design (no relic read from Git); time: benchmark |
 | | `relic-linked-to-typical` | 114 ms | 200 ms | as above |
 | | `task-show-linked-hot` | 145 ms | 200 ms | as above |
+| | `relic-linked-to-part-hot` | not yet measured | 200 ms | design (no linking relic read from Git); time: benchmark |
+| | `relic-show-linked-part-hot` | not yet measured | 200 ms | as above |
 | Cost follows the change | `relic-refresh-0` | 125 ms | within 20 ms of `relic-list` (121 ms) | benchmark |
 | | `relic-refresh-1` | 221 ms | at most 150 ms above `relic-refresh-0` | benchmark |
 | | `relic-refresh-100` | 285 ms | at most 30 % of `relic-first-read-fresh-clone`, 417 ms | benchmark |
@@ -1847,6 +1919,14 @@ its first and last versions. The history relic, 101 commits at full scale, is
 part of every fixture from this version on, so list, rebuild, cold-index and
 fetch scenarios of a later run are not directly comparable with figures
 measured before it.
+
+`relic-linked-to-part-hot` and `relic-show-linked-part-hot` were added later too.
+They ask what links to that first part of the first relic, which 999 relics do at
+full scale, with `relic list --linked-to` and with `relic show`. The relic show
+also marks that part's own link to a task, so it lists the tasks. The 5,000 links
+between relics are in every fixture from this version on, so
+`task-show-linked-hot` and the other relic scenarios of a later run are timed
+beside them and are not directly comparable with the figures above.
 
 Every measured budget was met. What the table does not show:
 

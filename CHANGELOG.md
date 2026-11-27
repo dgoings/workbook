@@ -111,6 +111,19 @@ versions below.
   `relic-edit-on-removed-part`. `workbook sync --status` lists the relic
   conflicts a running watcher holds, as `relicConflicts` in JSON, without body
   text.
+- **Links between relics and parts.** `relic update --link <task|relic[#part]>`
+  now also links a relic, or one of its parts, to another relic or to one part
+  of one, with an optional `--pointer`: a JSON object of at most 512 bytes, such
+  as a quote or a time, which a schema's `links.pointer` can constrain. A link to
+  a relic records `seen`, the target's version when it was made, so `relic diff
+  <target> <seen>` shows what changed since. `relic show` lists links coming in
+  (`linkedFrom` in JSON), `relic list --linked-to <task|relic[#part]>` answers
+  what links to something, from one index query, and a link whose target is
+  deleted, removed or not in this clone is marked (`targetState`, on task links
+  too) and fails no command. Relic links are stored in the existing
+  `links.json`, at writer-format generation 6, and the cache moves to schema
+  version 12, which is rebuilt once. See [Links](docs/reference.md#links) and
+  [Relic refs](docs/architecture.md#relic-refs).
 - **A relic, or one of its parts, can link to a task.** `relic update --link
   <task> --rel <rel>`, with `--from <part>` for a link from a part, adds a
   link, and `--unlink <link>` removes one by its ID. `rel` is up to 100 bytes
@@ -120,7 +133,7 @@ versions below.
   `link.remove` operations; the task's history does not change. Linking what is
   already linked and unlinking a full ID already gone record nothing, so
   retries are safe, and every link two clones add survives their sync. A
-  deleted task, a missing task and a relic ID are refused as targets, and
+  new link to a deleted task or a missing task is refused, and
   `relic create --from-file` still refuses a document with links.
 - **Links show from both ends.** `relic show` lists links under `Links:`, and
   marks a link whose task was deleted since `(removed)`, `targetRemoved` in

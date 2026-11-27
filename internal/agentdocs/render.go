@@ -304,6 +304,9 @@ func relicGuidelines(keys core.KeySet, relicTypes []RelicTypeRules) string {
 		"`--body` carries the body at `data.parts[0].body.text`, or at\n" +
 		"`data.parts[0].body.base64` when it is not text, and its version at\n" +
 		"`data.parts[0].body.version`.\n\n" +
+		"To see what links to a part, run `workbook relic list --linked-to\n" +
+		"<relic>#<part> --json`; `workbook relic show` of that part lists each link\n" +
+		"in `data.linkedFrom`.\n\n" +
 		"Task commands and the relic read commands (`workbook relic list`,\n" +
 		"`workbook relic show`, `workbook relic export`) do not fetch relics, so\n" +
 		"they show the relics this checkout holds. Run `workbook sync` or\n" +

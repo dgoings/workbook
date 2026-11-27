@@ -156,10 +156,14 @@ get the latest ones. Two clones' changes to one relic
 are combined, and the one kind that cannot be, two saves over the same body
 version or an edit to a relic deleted elsewhere, is reported as a relic
 conflict that keeps the change that did not apply. A relic, or one of its
-parts, links to tasks with `workbook relic update --link <task> --rel <rel>`,
-and `workbook show <task>` lists the relics that link to it. The generated
-`.workbook/guidelines.md` and the Workbook skill teach agents to use them: to
-find the relics linked to their task, read one part with `workbook relic show
+parts, links to a task, a relic or a part of a relic with `workbook relic update
+<relic> --link <task|relic[#part]> --rel <rel>`, and an optional `--pointer` says
+where in the target it points. A link is followed from both ends: `workbook relic
+show` lists links going out and coming in, `workbook relic list --linked-to
+<task|relic[#part]>` lists what links to something, and `workbook show <task>`
+lists the relics that link to a task; see [Links](docs/reference.md#links).
+The generated `.workbook/guidelines.md` and the Workbook skill teach agents to
+use them: to find the relics linked to their task, read one part with `workbook relic show
 <relic>#<part> --body --json`, and save an edit with `--base` naming the
 version they read; see [Relics for agents](docs/reference.md#relics-for-agents).
 `workbook relic show <relic> --history` lists the changes to a

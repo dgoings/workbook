@@ -844,6 +844,77 @@ func TestDocsDocumentRelicHistoryAndDiffs(t *testing.T) {
 	}
 }
 
+// Links to relics and parts add a stored form, members a reader meets in JSON
+// and a promise about what a broken target does, so the reference states each,
+// the architecture states how they are stored and indexed, and no document says
+// a relic links only to tasks.
+func TestDocsDocumentRelicLinks(t *testing.T) {
+	t.Parallel()
+	reference := repositoryDoc(t, "docs", "reference.md")
+	links := docSection(reference, "### Links")
+	if links == "" {
+		t.Fatal("docs/reference.md has no \"### Links\" section")
+	}
+	for _, required := range []string{
+		"--link <task|relic[#part]>", "--pointer <json object>", "--linked-to <task|relic[#part]>",
+		"`seen`", "`pointer`", "`targetState`", "`targetRemoved`",
+		"`deleted`", "`removed`", "`missing`", "`retired`", "reserved",
+		"`linkedFrom`", "`toPart`", "`fromType`", "`linkedBy`", "512 bytes",
+		"workbook relic diff <target> <seen>", "(not in this clone)",
+		"a link cannot point at what it starts from", "is in another project",
+		"[When a relic is checked](#when-a-relic-is-checked)",
+	} {
+		if !strings.Contains(links, required) {
+			t.Errorf("the reference's \"### Links\" is missing %q", required)
+		}
+	}
+	checked := docSection(reference, "#### When a relic is checked")
+	if !strings.Contains(checked, "[Links](#links)") {
+		t.Error("the reference's \"#### When a relic is checked\" does not point to the links section")
+	}
+
+	architecture := repositoryDoc(t, "docs", "architecture.md")
+	refs := docSection(architecture, "### Relic refs")
+	for _, required := range []string{"`to.relic`", "`to.part`", "`seen`", "`pointer`", "nothing is written on the target"} {
+		if !strings.Contains(refs, required) {
+			t.Errorf("the architecture's relic section is missing %q", required)
+		}
+	}
+	projection := docSection(architecture, "## SQLite projection")
+	for _, required := range []string{"`seen`", "`pointer`", "schema version 12", "one query"} {
+		if !strings.Contains(projection, required) {
+			t.Errorf("the architecture's SQLite projection section is missing %q", required)
+		}
+	}
+	benchmarks := docSection(architecture, "### Relic benchmarks")
+	for _, scenario := range []string{"relic-linked-to-part-hot", "relic-show-linked-part-hot"} {
+		if row := "| `" + scenario + "` | not yet measured | 200 ms |"; !strings.Contains(benchmarks, row) {
+			t.Errorf("the architecture's relic benchmark table is missing the row %q", row)
+		}
+	}
+
+	readme := repositoryDoc(t, "README.md")
+	changelog := repositoryDoc(t, "CHANGELOG.md")
+	for name, document := range map[string]string{"README.md": readme, "CHANGELOG.md": changelog} {
+		if !strings.Contains(strings.Join(strings.Fields(document), " "), "--link <task|relic[#part]>") {
+			t.Errorf("%s does not show a link to a relic or part", name)
+		}
+	}
+	for name, document := range map[string]string{
+		"docs/reference.md": reference, "docs/architecture.md": architecture, "README.md": readme, "CHANGELOG.md": changelog,
+	} {
+		collapsed := strings.Join(strings.Fields(document), " ")
+		for _, stale := range []string{
+			"links only to tasks", "#links-to-tasks", "a relic ID are refused as targets",
+			"relic links only to tasks", "schema version 11",
+		} {
+			if strings.Contains(collapsed, stale) {
+				t.Errorf("%s still says %q", name, stale)
+			}
+		}
+	}
+}
+
 // A schema is a stored format and a promise about what a save is held to, so
 // the reference states the file, the words, the checking points and the limits,
 // and the architecture states how a version is stored.
@@ -907,7 +978,7 @@ func TestDocsDocumentRelicSchemas(t *testing.T) {
 
 	architecture := strings.Join(strings.Fields(repositoryDoc(t, "docs", "architecture.md")), " ")
 	for _, required := range []string{
-		"schema.put", "relic-schema-", "relic.migrate", "schema version 11", "workbook.relic-schema",
+		"schema.put", "relic-schema-", "relic.migrate", "schema version 12", "workbook.relic-schema",
 		"relic-schema-renumbered",
 	} {
 		if !strings.Contains(architecture, required) {

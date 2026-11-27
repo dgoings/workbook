@@ -1335,7 +1335,9 @@ Part 01M8ERE3J06CHHJXXN7TEXAZXS	section	changed
 A relic's own changes print as `Type:`, `Title:`, `Schema:`, `Retired:`,
 `Deleted:` and
 `Property <name>:` lines, a part's fields as `Field <name>:` lines, with `+` before
-an added value and `-` before a removed one, and links under `Links:`. A
+an added value and `-` before a removed one, and links under `Links:`, each
+with its target and, when it has one, its [pointer](#pointers); in JSON a link
+there carries `to`, `seen` and `pointer`, and no `targetState`. A
 comparison with nothing different prints `These two versions hold the same
 relic.`, or `These two versions hold the same part.` for a part
 address. The newest change to this part is the stale save, so with no version
@@ -1805,8 +1807,8 @@ schema names none and stays open until it is migrated.
 | `relic update` | Only what the update saves: each property set, against its rule and `additionalProperties`; each property cleared, which must not be required; each part added, edited or restored, judged whole as the update leaves it (its type, all its fields, its body and the body's format); and the pointer of each link added with `--pointer`, against the schema's `links.pointer` rule when it has one. |
 | `relic migrate` | The whole relic, removed parts aside, under the version it moves to. |
 
-An update does not check a title, a move, a removal, an unlink, a link added
-with no pointer or a link's relationship, nor a part it leaves removed, and an
+The pointer rules are under [Links](#links). An update does not check a title, a
+move, a removal, an unlink, a link added with no pointer or a link's relationship, nor a part it leaves removed, and an
 update that changes nothing is not checked. A link is judged only when it is
 added: `relic create`, `relic migrate` and `conformance` do not judge the links
 a relic already holds, so a relic whose link pointer does not fit the version it
@@ -2030,7 +2032,8 @@ for, with body content only under `--body`.
 | `properties` | An object of the relic's properties. |
 | `parts` | The parts, in order. Each has `id`, `type`, `position`, `fields`, `removed` only when it is `true`, and `body` when the part has one. |
 | `parts[].body` | `format` when the body has a label, `version`, `bytes`, and the content as `text`, or as `base64` when the bytes are not valid UTF-8. An empty body is `"text": ""`. |
-| `links` | The relic's live links, ordered by ID: each with `id`, `from` when it is from a part, `to` as `{"task": "<task-id>"}`, and `rel`. `relic show` lists only the links of the parts it shows, and adds `targetRemoved: true` to a link whose task is deleted or not in this clone. See [Links to tasks](#links-to-tasks). |
+| `links` | The relic's live links, ordered by ID: each with `id`, `from` when it is from a part, `to` as `{"task": …}` or `{"relic": …}` with an optional `part`, `rel`, `seen` on a link to a relic, and `pointer` when it has one. `relic show` lists only the links of the parts it shows, and adds `targetState`, and for a target that is deleted, removed or missing `targetRemoved: true`; `relic export` adds neither. See [Links](#links). |
+| `linkedFrom` | `relic show` only, and only when something links to what is shown: other relics' links to it. See [What links to a relic](#what-links-to-a-relic). Never exported, and refused by `relic create --from-file`. |
 
 `workbook relic create --from-file <file>` creates a relic from such a
 document, and `-` reads it from standard input:
@@ -2217,7 +2220,7 @@ its Workbook refs, after writing them to its bundle.
 
 **Task commands** do not return relics. `workbook list` and `next` read no
 relic, `workbook show <task>` lists the relics that link to the task (see
-[Links to tasks](#links-to-tasks)), and `workbook compact` leaves relic refs alone. `workbook fetch`,
+[Links](#links)), and `workbook compact` leaves relic refs alone. `workbook fetch`,
 `push`, `sync` and `move-tasks` carry them; see [Sharing relics](#sharing-relics).
 The synchronization a task command runs before and after its change fetches
 and pushes no relic ref, so it meets no relic conflict. The `Relics:` section
@@ -2901,14 +2904,46 @@ existed. A relic read never fails because of the cache: if the cache cannot
 be built or read, as when a damaged task ref stops the rebuild, relic reads
 answer from Git.
 
-### Links to tasks
+### Links
 
-A relic, or one of its parts, can link to a task. A link has its own ID, the
-part it is from or none for the whole relic, the task it points at, and a
-relationship, `rel`, such as `implemented-by`. It is stored once, on the
-relic: the task's history does not change. Alice made a second task and
-linked the relic to the first and its decision part to the second, in one
-command:
+A relic, or one of its parts, can link to a task, to a relic, or to one part of
+a relic. A link has its own ID; the part it is from, or none for the whole
+relic; the target; a relationship, `rel`, such as `implemented-by`; for a
+target that is a relic or a part, `seen`, the version of that relic when the
+link was made; and optionally a `pointer`. It is stored once, on the relic it
+starts from. Nothing is written on the target, so the task's or the target
+relic's history does not change.
+
+| Option | Meaning |
+| --- | --- |
+| `--link <task|relic[#part]>` | Start a link to this target. Each `--link` is its own group, so one update adds several links. |
+| `--from <part>` | Given after `--link`: make the link from this part rather than the whole relic. |
+| `--rel <rel>` | Given after `--link`, and required: the relationship. |
+| `--pointer <json object>` | Given after `--link`: where in the target the link points. See [Pointers](#pointers). |
+| `--unlink <link>` | Remove one link. See [Removing a link](#removing-a-link). |
+
+The command that adds them is
+`workbook relic update <relic> --link <task|relic[#part]> [--from <part>] --rel <rel> [--pointer <json object>]`.
+A task is named by any unambiguous prefix of its ID, as a task command takes
+it, and a relic or a part by any unambiguous prefix of its ID, written
+`<relic>#<part>`. A `<KEY>-R` start means a relic: a task ID never has one.
+Links stay within one project: a relic ID under a key that is not one of the
+project's is refused as being in another project. The target relic must be in
+this clone when the link is added.
+
+`relic show` lists the links under `Links:`, one per line: the link's ID,
+`relic` or the part it is from, the relationship, the target and, when it has
+one, the pointer. A whole-relic `relic show` lists every link, and `relic show
+<relic>#<part>` only that part's. It lists links coming in under
+[`Linked from:`](#what-links-to-a-relic).
+
+A `rel` is 1 to 100 bytes of lowercase letters and digits, with single hyphens
+between words. Workbook does not check it against any list of names.
+
+#### Links to tasks
+
+Alice made a second task and linked the relic to the first and its decision
+part to the second, in one command:
 
 ```sh
 workbook create "Bundle the old history"
@@ -2942,19 +2977,11 @@ Links:
 	01M87F2KR522KBJ4CWWSRHRY4G	01M87F0T8ZDXPZV8WNS006CBKV	implemented-by	WB-01M87F2JJT7ERPBSGFX8XTZ4NW
 ```
 
-`--link <task>` starts a link and needs `--rel <rel>`; `--from <part>`, given
-after `--link`, makes the link from that part rather than the whole relic.
-Each `--link` is its own group, so one update adds several links. A task is named by
-any unambiguous prefix of its ID, as a task command takes it. `relic show`
-lists the links under `Links:`, one per line: the link's ID, `relic` or the
-part it is from, the relationship and the task. A whole-relic `relic show`
-lists every link, and `relic show <relic>#<part>` only that part's.
-
-A `rel` is 1 to 100 bytes of lowercase letters and digits, with single hyphens
-between words. Linking what is already linked, the same part or the whole
-relic to the same task with the same relationship, records nothing and says
-`No change`, so a retried command is safe. The same task under another
-relationship is a second link:
+Linking what is already linked records nothing and says `No change`, so a
+retried command is safe. "Already linked" means a live link from the same part,
+or the whole relic, to the same target with the same relationship and the same
+[pointer](#pointers). The same task under another relationship is a second
+link:
 
 ```sh
 workbook relic update WB-R-01M87F0S --link WB-01M87F19RB1 --rel implemented-by
@@ -3011,9 +3038,10 @@ Relics:
 ```
 
 In `relic list --json`, each relic carries `linkedBy`, the links to the task
-as `link`, `part` and `partType` for a link from a part, and `rel`. Each entry
+as `link`, `part` and `partType` for a link from a part, `rel`, and `pointer`
+when the link has one. Each entry
 of the task's `relics` has `relic`, `title`, `type`, `part` and `partType` for
-a link from a part, `link` and `rel`. A deleted relic is listed by
+a link from a part, `link` and `rel`, and no pointer. A deleted relic is listed by
 `--linked-to` only with `--all`, and neither lists a link from a removed part:
 a link from a part is hidden wherever the part is, and comes back with it.
 `workbook show` never fails because of relics. A relic it cannot read, one
@@ -3021,8 +3049,11 @@ that is damaged or written by a newer Workbook, is left out with a
 `relic-links-unread` warning that names it.
 
 **In the relic's own form.** `relic show --json` lists the links of the parts
-it shows in `links`, each with `id`, `from` for a link from a part, `to` with
-the task, and `rel`. The relic's commit stores the live links in
+it shows in `links`, each with `id`, `from` for a link from a part, `to` as
+`{"task": "<task-id>"}`, `{"relic": "<relic-id>"}` or `{"relic": "<relic-id>",
+"part": "<part-id>"}`, `rel`, and where they apply `seen` and `pointer`, and
+[`targetRemoved` and `targetState`](#when-a-target-is-removed). The relic's
+commit stores the live links in
 `links.json`, ordered by ID, and the commit's operations record the change:
 
 ```sh
@@ -3054,37 +3085,12 @@ Links:
 [{"id":"01M87F2KNMJKQA2AYXXF2ZQ5C4","type":"link.add","link":{"to":{"task":"WB-01M87F19RB1PVEE87F7PS1D1FJ"},"rel":"implemented-by"}},{"id":"01M87F2KR522KBJ4CWWSRHRY4G","type":"link.add","link":{"from":"01M87F0T8ZDXPZV8WNS006CBKV","to":{"task":"WB-01M87F2JJT7ERPBSGFX8XTZ4NW"},"rel":"implemented-by"}}]
 ```
 
-**Refused** (nothing is written): a `rel` that is not a lowercase word list
-(exit `5`); a relic ID, since a relic links only to tasks so far (exit `5`); a
-task that does not exist (exit `4`); `--link` with no `--rel`, and `--from`
-before any `--link` (exit `2`); a `--from` part that does not exist (exit `4`)
-or is removed (exit `5`); and a deleted task (exit `5`), shown further on:
-
-```sh
-workbook relic update WB-R-01M87F0S --link WB-01M87F19RB1 --rel "Implemented By"
-workbook relic update WB-R-01M87F0S --link WB-R-01M87F0YHZ1852KPS55KCDPXG2 --rel relates-to
-workbook relic update WB-R-01M87F0S --link WB-7ZZZZ --rel relates-to
-workbook relic update WB-R-01M87F0S --link WB-01M87F19RB1
-workbook relic update WB-R-01M87F0S --from 01M87F0T8ZD --rel implemented-by
-```
-
-```text
-workbook: the link relationship "Implemented By" must be lowercase letters and digits, with single hyphens between words
-workbook: a relic links only to tasks so far; "WB-R-01M87F0YHZ1852KPS55KCDPXG2" is not a task
-workbook: no task matches "WB-7ZZZZ"
-workbook: relic update --link requires --rel <rel>, such as implemented-by
-workbook: relic update --from applies to one link; give it after --link
-```
-
-The two invocation errors are followed by the command's usage, left out here.
-A relic holds at most 2,000 live links, checked only when a change adds one; a
-relic over the limit, which two clones' links together can make, can still be
-read and changed, and any link can be removed.
-
 **A task that is removed later.** A link stays when its task is deleted.
-`relic show` marks it `(removed)`, and `targetRemoved: true` in JSON; the
-same holds for a task this clone does not have. The deleted task cannot be
-linked again until it is restored, and `--linked-to` still finds the relic:
+`relic show` marks it `(removed)`, and `targetRemoved: true` with `targetState:
+"deleted"` in JSON; a task this clone does not have is marked `(not in this
+clone)`, `missing`. The deleted task cannot be given a new link until it is
+restored, and `--linked-to` still finds the relic. See also
+[When a target is removed](#when-a-target-is-removed):
 
 ```sh
 workbook delete WB-01M87F2JJT7
@@ -3116,18 +3122,384 @@ Properties:
 Links:
 	01M87F2KNMJKQA2AYXXF2ZQ5C4	relic	implemented-by	WB-01M87F19RB1PVEE87F7PS1D1FJ
 	01M87F2KR522KBJ4CWWSRHRY4G	01M87F0T8ZDXPZV8WNS006CBKV	implemented-by	WB-01M87F2JJT7ERPBSGFX8XTZ4NW (removed)
-[{"id":"01M87F2KNMJKQA2AYXXF2ZQ5C4","to":{"task":"WB-01M87F19RB1PVEE87F7PS1D1FJ"},"rel":"implemented-by"},{"id":"01M87F2KR522KBJ4CWWSRHRY4G","from":"01M87F0T8ZDXPZV8WNS006CBKV","to":{"task":"WB-01M87F2JJT7ERPBSGFX8XTZ4NW"},"rel":"implemented-by","targetRemoved":true}]
+[{"id":"01M87F2KNMJKQA2AYXXF2ZQ5C4","to":{"task":"WB-01M87F19RB1PVEE87F7PS1D1FJ"},"rel":"implemented-by"},{"id":"01M87F2KR522KBJ4CWWSRHRY4G","from":"01M87F0T8ZDXPZV8WNS006CBKV","to":{"task":"WB-01M87F2JJT7ERPBSGFX8XTZ4NW"},"rel":"implemented-by","targetRemoved":true,"targetState":"deleted"}]
 workbook: task WB-01M87F2JJT7ERPBSGFX8XTZ4NW is deleted; restore it first
 WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	2 parts	Task archive compaction, second draft
 	01M87F2KR522KBJ4CWWSRHRY4G	01M87F0T8ZDXPZV8WNS006CBKV	implemented-by
 ```
 
 When the task list cannot be read, `relic show` still answers: the links are
-listed without `targetRemoved`, and a `relic-link-targets-unread` warning says
-that links to removed tasks are not marked.
+listed without `targetRemoved` or `targetState`, and a
+`relic-link-targets-unread` warning says that links to removed tasks are not
+marked.
 
-**Removing a link.** `--unlink <link>` removes one link, named by its ID or an
-unambiguous prefix of it, by recording a `link.remove` that names the ID. The
+#### Links to relics and parts
+
+These examples are a session of their own, in a project with the key `WB`. Alice
+had made a transcript relic, "Compaction meeting", with one part for each of two
+turns; a decision relic with one part; and a spec relic with one part. The
+decision links back to the turn it came from, with a pointer, and on to the part
+of the spec it changes:
+
+```sh
+workbook relic update WB-R-01M8FN85STWE68X6WXYBK12G6S --link 'WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ#01M8FN858Z0EF1171XEDKQWXSD' --from 01M8FN868BEYH85QMKCDZSHEF9 --rel decided-in --pointer '{"quote": "by hand", "at": "00:14:32"}' --link 'WB-R-01M8FN86RAKFKPJDR4T3Q7BGGJ#01M8FN8772W3QXG36RN5GEVFYS' --from 01M8FN868BEYH85QMKCDZSHEF9 --rel changes
+workbook relic show WB-R-01M8FN85STWE68X6WXYBK12G6S
+```
+
+```text
+WB-R-01M8FN85STWE68X6WXYBK12G6S	decision	Compaction decisions
+Sync:	completed
+WB-R-01M8FN85STWE68X6WXYBK12G6S	decision	Compaction decisions
+Author:	alice@example.com
+Updated:	2026-11-27T23:25:36Z
+Schema:	open
+#01M8FN868BEYH85QMKCDZSHEF9	decision	no body
+  heading: Compact by hand
+Links:
+	01M8FN87W70YSQJZZ1W3QWZFP3	01M8FN868BEYH85QMKCDZSHEF9	decided-in	WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ#01M8FN858Z0EF1171XEDKQWXSD	{"at":"00:14:32","quote":"by hand"}
+	01M8FN87YBDVCRJT1GRCRP84BJ	01M8FN868BEYH85QMKCDZSHEF9	changes	WB-R-01M8FN86RAKFKPJDR4T3Q7BGGJ#01M8FN8772W3QXG36RN5GEVFYS
+```
+
+A link to a relic records `seen` and shows its target as `<relic>#<part>`, or as
+the relic ID for a link to the whole relic. In JSON:
+
+```sh
+workbook relic show WB-R-01M8FN85STWE68X6WXYBK12G6S --json | jq -c '.data.links'
+```
+
+```text
+[{"id":"01M8FN87W70YSQJZZ1W3QWZFP3","from":"01M8FN868BEYH85QMKCDZSHEF9","to":{"relic":"WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ","part":"01M8FN858Z0EF1171XEDKQWXSD"},"rel":"decided-in","seen":"01M8FN858Z1Q6SP1PWH1SZR6CH","pointer":{"at":"00:14:32","quote":"by hand"}},{"id":"01M8FN87YBDVCRJT1GRCRP84BJ","from":"01M8FN868BEYH85QMKCDZSHEF9","to":{"relic":"WB-R-01M8FN86RAKFKPJDR4T3Q7BGGJ","part":"01M8FN8772W3QXG36RN5GEVFYS"},"rel":"changes","seen":"01M8FN8772W3QXG36RN5GEVFYS"}]
+```
+
+A link can point at the relic it is on or at one of its parts, and two relics
+can link to each other: nothing follows links from one to the next, so a cycle
+costs nothing. A part can link to another part of its own relic, including one
+that an earlier `--add-part` in the same command adds. The one link refused is a
+link to exactly what it starts from: the whole relic to itself, or a part to
+itself (`a link cannot point at what it starts from`, exit `5`). A link from the
+whole relic to one of its parts, or from a part to the whole relic, is allowed.
+
+Repeating a link that exists changes nothing, whatever the order of the
+pointer's members, and so does repeating it
+[after its target was removed or deleted](#when-a-target-is-removed):
+
+```sh
+workbook relic update WB-R-01M8FN85STWE68X6WXYBK12G6S --link 'WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ#01M8FN858Z0EF1171XEDKQWXSD' --from 01M8FN868BEYH85QMKCDZSHEF9 --rel decided-in --pointer '{"at":"00:14:32","quote":"by hand"}'
+```
+
+```text
+No change: WB-R-01M8FN85STWE68X6WXYBK12G6S
+Sync:	completed
+```
+
+#### Pointers
+
+A pointer says where inside the target a link points, such as a quote or a time.
+It is one JSON object, given with `--pointer` on any link, to a task as well as
+to a relic or a part. Workbook stores it and never interprets it.
+
+- It is stored in canonical form: no spaces, members sorted by name, and `<`,
+  `>` and `&` inside a string as `\u003c`, `\u003e` and `\u0026`. That form is
+  at most 512 bytes, and nests at most 32 levels deep. A value that is not an
+  object, or is over a limit, is refused (exit `5`) before anything is fetched
+  or written.
+  What `relic show` prints is the stored form.
+- A [schema](#relic-schemas) of the *linking* relic's type can constrain it with
+  `links.pointer`. It is checked only when the link is added, as
+  [When a relic is checked](#when-a-relic-is-checked) describes; a link already
+  held is never judged again, and a link with no pointer is never judged.
+- Two links that differ only in their pointer are two links.
+
+#### What a link saw
+
+`seen` is written on a link to a relic or a part, and on no link to a task. It is
+the ID of the last operation in the target relic's newest change when the link
+was added, of the whole relic and not only of the linked part; for a link to the
+relic being updated, of its newest change before this command. It is a version
+`relic diff` takes, so to see what changed since the link was made, run:
+
+```text
+workbook relic diff <target> <seen>
+```
+
+`<target>` is the link's relic or `<relic>#<part>`. Alice edits the first turn,
+then compares it with what the decision saw:
+
+```sh
+workbook relic update WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ --part 01M8FN858Z0EF1171XEDKQWXSD --body-file turn1.md --base 01M8FN858Z0EF1171XEDKQWXSD
+workbook relic diff 'WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ#01M8FN858Z0EF1171XEDKQWXSD' 01M8FN858Z1Q6SP1PWH1SZR6CH
+```
+
+```text
+WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ	transcript	Compaction meeting
+part	01M8FN858Z0EF1171XEDKQWXSD	turn	01M8FN89MSA7BTXN5VMAJ1QDM3
+Sync:	completed
+Comparing:	01M8FN858Z1Q6SP1PWH1SZR6CH	→	01M8FN89MSA7BTXN5VMAJ1QDM3
+Part 01M8FN858Z0EF1171XEDKQWXSD	turn	changed
+	Body:	md 32 bytes → md 50 bytes
+	@@ -1,1 +1,1 @@
+	-Compact finished tasks by hand.
+	+Compact finished tasks by hand, never on a timer.
+```
+
+Nothing checks `seen` after the link is made: no read, `validate` or sync
+compares it with the target, and a link has no flag saying the target changed.
+Repeating a link does not refresh it; remove the link and add it again. If a
+clone does not have the change `seen` names, `relic diff` answers that the relic
+has no such change (exit `4`). That can happen when the link was made against a
+change not yet published.
+
+#### What links to a relic
+
+**`relic show` lists incoming links.** `relic show` lists, after its own links,
+the links other relics (and the relic itself) have to what it shows, under
+`Linked from:`: the link's ID, the relic it is on with the part it is from, the
+relationship, the part of the shown relic it points at or `relic`, and the
+pointer when it has one:
+
+```sh
+workbook relic show 'WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ#01M8FN858Z0EF1171XEDKQWXSD'
+workbook relic show 'WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ#01M8FN858Z0EF1171XEDKQWXSD' --json | jq -c '.data.linkedFrom'
+```
+
+```text
+WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ	transcript	Compaction meeting
+Author:	alice@example.com
+Updated:	2026-11-27T23:25:33Z
+Schema:	open
+#01M8FN858Z0EF1171XEDKQWXSD	turn	md, 32 bytes, version 01M8FN858Z0EF1171XEDKQWXSD
+Linked from:
+	01M8FN87W70YSQJZZ1W3QWZFP3	WB-R-01M8FN85STWE68X6WXYBK12G6S#01M8FN868BEYH85QMKCDZSHEF9	decided-in	01M8FN858Z0EF1171XEDKQWXSD	{"at":"00:14:32","quote":"by hand"}
+[{"relic":"WB-R-01M8FN85STWE68X6WXYBK12G6S","title":"Compaction decisions","type":"decision","link":"01M8FN87W70YSQJZZ1W3QWZFP3","from":"01M8FN868BEYH85QMKCDZSHEF9","fromType":"decision","toPart":"01M8FN858Z0EF1171XEDKQWXSD","rel":"decided-in","seen":"01M8FN858Z1Q6SP1PWH1SZR6CH","pointer":{"at":"00:14:32","quote":"by hand"}}]
+```
+
+In JSON these are `data.linkedFrom`, left out when there is none. Each has
+`relic`, `title` and `type` of the linking relic; `link`, the link's ID; `from`
+and `fromType` for a link from a part; `toPart` for a link to a part of the
+shown relic; `rel`; `seen`; and `pointer` when there is one. They are ordered by
+linking relic ID, then the whole relic before its parts in order, then link ID.
+
+| `relic show` of | Lists links to |
+| --- | --- |
+| a relic | the relic itself and its live parts |
+| a relic, with `--removed` | those and its removed parts |
+| `<relic>#<part>` | that part only, removed or not; not links to the whole relic |
+
+A link from a removed part, or on a deleted relic, is never listed, with
+`--removed` or without: no option of `relic show` adds it. A relic that cannot
+be read is left out with a `relic-links-unread` warning. `linkedFrom` is other
+relics' data, so `relic export` never writes it, and `relic create --from-file`
+refuses a document that has it (exit `5`), which a saved `relic show --json`
+document can:
+
+```text
+workbook: linkedFrom lists other relics' links and is not part of a relic; remove it
+```
+
+**`relic list --linked-to <task|relic[#part]>`** lists the relics that link to a
+target, each with its links to it. For a relic, links to the relic and to any of
+its parts match, a removed part included; for `<relic>#<part>`, only links to
+that part. The target may be deleted or removed. A match line is the link's ID,
+the part it is from or `relic`, the relationship, then, for a relic target, the
+part it points at or `relic`, then the pointer when it has one, whether the
+target is a task or a relic. In JSON each relic's `linkedBy` entry has `link`,
+`part` and `partType` for a link from a part, `rel`, `toPart` for a link to a
+part, and `pointer` when there is one:
+
+```sh
+workbook relic list --linked-to WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ
+workbook relic list --linked-to 'WB-R-01M8FN86RAKFKPJDR4T3Q7BGGJ#01M8FN8772W3QXG36RN5GEVFYS'
+workbook relic list --linked-to WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ --json | jq -c '.data[].linkedBy'
+```
+
+```text
+WB-R-01M8FN85STWE68X6WXYBK12G6S	decision	1 part	Compaction decisions
+	01M8FN87W70YSQJZZ1W3QWZFP3	01M8FN868BEYH85QMKCDZSHEF9	decided-in	01M8FN858Z0EF1171XEDKQWXSD	{"at":"00:14:32","quote":"by hand"}
+WB-R-01M8FN85STWE68X6WXYBK12G6S	decision	1 part	Compaction decisions
+	01M8FN87YBDVCRJT1GRCRP84BJ	01M8FN868BEYH85QMKCDZSHEF9	changes	01M8FN8772W3QXG36RN5GEVFYS
+[{"link":"01M8FN87W70YSQJZZ1W3QWZFP3","part":"01M8FN868BEYH85QMKCDZSHEF9","partType":"decision","rel":"decided-in","toPart":"01M8FN858Z0EF1171XEDKQWXSD","pointer":{"at":"00:14:32","quote":"by hand"}}]
+```
+
+A link from a removed part is never listed, and a deleted linking relic only with
+`--all`. `--type` and `--behind` apply as they do without `--linked-to`.
+
+A relic or part is found by prefix among this clone's relics. A full relic ID
+this clone does not have, written in capitals as `relic show` prints it, is
+looked up as given, with a full part ID under it if you give one, and so is a
+full part ID that this clone's copy of the relic does not have: the answer is
+whatever links to it, possibly nothing, and is not an error. A mistyped full ID
+therefore lists nothing without saying so. A shorter prefix that matches nothing
+is `not-found` (exit `4`), and one that matches two is `validation` (exit `5`).
+A relic ID under another project's key is refused (exit `5`).
+
+Both directions answer from the [relic index](#the-relic-index) with one query,
+once the index is up to date with the relic refs, and give the same answer from
+Git when the index cannot be used.
+
+#### When a target is removed
+
+A link stays when its target is deleted, removed or not there, and no read fails
+because of it. `relic show` says so on the link: in text after the target, and in
+JSON as `targetState`, beside `targetRemoved`:
+
+| `targetState` | The target | In `relic show` text | `targetRemoved` |
+| --- | --- | --- | --- |
+| absent | is there | nothing | absent |
+| `deleted` | is a deleted task or relic | `(removed)` | `true` |
+| `removed` | is a removed part | `(removed)` | `true` |
+| `missing` | is a task or relic this clone does not have, a part its copy of the relic lacks, or a relic that cannot be read | `(not in this clone)` | `true` |
+| `retired` | is a retired relic, or a part of one | `(retired)` | absent |
+
+`retired` is reserved: there is no command that retires a relic yet, so no relic
+is retired. A retired target is not removed. A deleted relic is `deleted`
+whatever its part, and a removed part is `removed` even in a retired relic.
+Task links carry `targetState` too. Only `relic show` marks links: `relic export`,
+`--history` and `relic diff` list them as stored. When the tasks, or the list of
+relics, cannot be read, `relic show` lists those links unmarked with a
+`relic-link-targets-unread` warning; a target relic that alone cannot be read is
+marked `missing` with a `relic-links-unread` warning.
+
+```sh
+workbook relic update WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ --remove-part 01M8FN858Z0EF1171XEDKQWXSD
+workbook relic delete WB-R-01M8FN86RAKFKPJDR4T3Q7BGGJ
+workbook relic show WB-R-01M8FN85STWE68X6WXYBK12G6S
+workbook relic show WB-R-01M8FN85STWE68X6WXYBK12G6S --json | jq -c '.data.links[] | {rel, targetRemoved, targetState}'
+```
+
+```text
+WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ	transcript	Compaction meeting
+Sync:	completed
+WB-R-01M8FN86RAKFKPJDR4T3Q7BGGJ	spec	Compaction spec
+Sync:	completed
+WB-R-01M8FN85STWE68X6WXYBK12G6S	decision	Compaction decisions
+Author:	alice@example.com
+Updated:	2026-11-27T23:25:36Z
+Schema:	open
+#01M8FN868BEYH85QMKCDZSHEF9	decision	no body
+  heading: Compact by hand
+Links:
+	01M8FN87W70YSQJZZ1W3QWZFP3	01M8FN868BEYH85QMKCDZSHEF9	decided-in	WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ#01M8FN858Z0EF1171XEDKQWXSD (removed)	{"at":"00:14:32","quote":"by hand"}
+	01M8FN87YBDVCRJT1GRCRP84BJ	01M8FN868BEYH85QMKCDZSHEF9	changes	WB-R-01M8FN86RAKFKPJDR4T3Q7BGGJ#01M8FN8772W3QXG36RN5GEVFYS (removed)
+{"rel":"decided-in","targetRemoved":true,"targetState":"removed"}
+{"rel":"changes","targetRemoved":true,"targetState":"deleted"}
+```
+
+A *new* link to a deleted relic, a removed part or a deleted task is refused
+(exit `5`); restore it first. Repeating the link that already exists still
+changes nothing:
+
+```sh
+workbook relic update WB-R-01M8FN85STWE68X6WXYBK12G6S --link 'WB-R-01M8FN86RAKFKPJDR4T3Q7BGGJ#01M8FN8772W3QXG36RN5GEVFYS' --from 01M8FN868BEYH85QMKCDZSHEF9 --rel changes
+workbook relic update WB-R-01M8FN85STWE68X6WXYBK12G6S --link 'WB-R-01M8FN86RAKFKPJDR4T3Q7BGGJ#01M8FN8772W3QXG36RN5GEVFYS' --rel changes
+workbook relic update WB-R-01M8FN85STWE68X6WXYBK12G6S --link 'WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ#01M8FN858Z0EF1171XEDKQWXSD' --rel decided-in
+```
+
+```text
+No change: WB-R-01M8FN85STWE68X6WXYBK12G6S
+Sync:	completed
+workbook: relic WB-R-01M8FN86RAKFKPJDR4T3Q7BGGJ is deleted; restore it first
+workbook: part 01M8FN858Z0EF1171XEDKQWXSD of relic WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ is removed; restore it first
+```
+
+**A relic this clone has not fetched.** A relic can arrive before the relic it
+links to, when the target was saved with `--no-sync` or not yet published.
+Alice made a relic with `--no-sync` and linked the decision to a part of it,
+which published the decision only. In Bob's new clone the link is there and
+every command that reads the linking relic succeeds: `relic show` marks it
+`(not in this clone)` (`missing` in JSON), `relic show --history`, `relic diff`
+and `relic export` give it as stored, and `workbook sync`, `validate`,
+`rebuild` and `workbook show` run as usual. Looking up links to the missing relic
+by its full ID works; by a prefix it is `not-found`; and a *new* link to it,
+or a repeat of the one that exists, is `not-found` (exit `4`), because a link's
+target must be in the clone that adds it. The first command below is Alice's,
+in the same session; the others are Bob's:
+
+```sh
+workbook relic update WB-R-01M8FN85STWE68X6WXYBK12G6S --link 'WB-R-01M8FN8DSNNHC6QHS5BAHS1BFB#01M8FN8E1HRAB6EHHY20AY8F4D' --from 01M8FN868BEYH85QMKCDZSHEF9 --rel decided-in
+workbook relic show WB-R-01M8FN85STWE68X6WXYBK12G6S
+workbook relic list --linked-to 'WB-R-01M8FN8DSNNHC6QHS5BAHS1BFB#01M8FN8E1HRAB6EHHY20AY8F4D'
+workbook relic list --linked-to WB-R-01M8FN8DSNN
+workbook relic update WB-R-01M8FN85STWE68X6WXYBK12G6S --link 'WB-R-01M8FN8DSNNHC6QHS5BAHS1BFB#01M8FN8E1HRAB6EHHY20AY8F4D' --from 01M8FN868BEYH85QMKCDZSHEF9 --rel decided-in
+```
+
+```text
+WB-R-01M8FN85STWE68X6WXYBK12G6S	decision	Compaction decisions
+Sync:	completed
+WB-R-01M8FN85STWE68X6WXYBK12G6S	decision	Compaction decisions
+Author:	alice@example.com
+Updated:	2026-11-27T23:25:43Z
+Schema:	open
+#01M8FN868BEYH85QMKCDZSHEF9	decision	no body
+  heading: Compact by hand
+Links:
+	01M8FN87W70YSQJZZ1W3QWZFP3	01M8FN868BEYH85QMKCDZSHEF9	decided-in	WB-R-01M8FN84TVRA8YFQ4FENFPRMGQ#01M8FN858Z0EF1171XEDKQWXSD (removed)	{"at":"00:14:32","quote":"by hand"}
+	01M8FN87YBDVCRJT1GRCRP84BJ	01M8FN868BEYH85QMKCDZSHEF9	changes	WB-R-01M8FN86RAKFKPJDR4T3Q7BGGJ#01M8FN8772W3QXG36RN5GEVFYS (removed)
+	01M8FN8EJ9QX4F3MEMV3WRS7DB	01M8FN868BEYH85QMKCDZSHEF9	decided-in	WB-R-01M8FN8DSNNHC6QHS5BAHS1BFB#01M8FN8E1HRAB6EHHY20AY8F4D (not in this clone)
+WB-R-01M8FN85STWE68X6WXYBK12G6S	decision	1 part	Compaction decisions
+	01M8FN8EJ9QX4F3MEMV3WRS7DB	01M8FN868BEYH85QMKCDZSHEF9	decided-in	01M8FN8E1HRAB6EHHY20AY8F4D
+workbook: no relic matches "WB-R-01M8FN8DSNN"
+workbook: no relic matches "WB-R-01M8FN8DSNNHC6QHS5BAHS1BFB"
+```
+
+Once the target is published and Bob synchronizes, the mark goes and the target
+lists the link under `Linked from:`.
+
+#### Refused links
+
+Nothing is written. These are refused:
+
+| Refused | Exit |
+| --- | --- |
+| A `rel` that is not a lowercase word list | `5` |
+| `--link` with no `--rel`; `--from` or `--pointer` before any `--link`; `--pointer` twice for one link, or after `--unlink` | `2` |
+| A `--pointer` that is not a JSON object, is not valid JSON, or is over 512 bytes or 32 levels deep | `5` |
+| A pointer the linking relic's [schema](#when-a-relic-is-checked) refuses | `5` |
+| A `--from` part that does not exist / is removed | `4` / `5` |
+| A task, relic or target part that does not exist, including a relic this clone has not fetched | `4` |
+| A prefix that matches more than one target, or an address such as `<relic>#` | `5` |
+| A relic under another project's key | `5` |
+| A new link to a deleted task or relic, or to a removed part | `5` |
+| A link to exactly what it starts from | `5` |
+
+```sh
+workbook relic update WB-R-01M8FN85STWE68X6WXYBK12G6S --link WB-R-01M8FN85STWE68X6WXYBK12G6S --rel relates-to
+workbook relic update WB-R-01M8FN85STWE68X6WXYBK12G6S --link 'WB-R-01M8FN85STWE68X6WXYBK12G6S#01M8FN868BEYH85QMKCDZSHEF9' --from 01M8FN868BEYH85QMKCDZSHEF9 --rel relates-to
+workbook relic update WB-R-01M8FN85STWE68X6WXYBK12G6S --link ACME-R-01M87F0SQYHP3HCR4QEN3RTVEX --rel relates-to
+workbook relic update WB-R-01M8FN85STWE68X6WXYBK12G6S --link WB-R-01M8FN86RAKFKPJDR4T3Q7BGGJ --rel relates-to --pointer '["00:14:32"]'
+```
+
+```text
+workbook: a link cannot point at what it starts from
+workbook: a link cannot point at what it starts from
+workbook: relic "ACME-R-01M87F0SQYHP3HCR4QEN3RTVEX" is in another project; a link stays within one project
+workbook: relic update --pointer: a link pointer must be a JSON object
+```
+
+In the first session, for tasks:
+
+```sh
+workbook relic update WB-R-01M87F0S --link WB-01M87F19RB1 --rel "Implemented By"
+workbook relic update WB-R-01M87F0S --link WB-7ZZZZ --rel relates-to
+workbook relic update WB-R-01M87F0S --link WB-01M87F19RB1
+workbook relic update WB-R-01M87F0S --from 01M87F0T8ZD --rel implemented-by
+```
+
+```text
+workbook: the link relationship "Implemented By" must be lowercase letters and digits, with single hyphens between words
+workbook: no task matches "WB-7ZZZZ"
+workbook: relic update --link requires --rel <rel>, such as implemented-by
+workbook: relic update --from applies to one link; give it after --link
+```
+
+The two invocation errors are followed by the command's usage, left out here.
+A relic holds at most 2,000 live links, checked only when a change adds one; a
+relic over the limit, which two clones' links together can make, can still be
+read and changed, and any link can be removed.
+
+#### Removing a link
+
+`--unlink <link>` removes one link, named by its ID or an unambiguous prefix of
+it, by recording a `link.remove` that names the ID. The
 link is no longer in `links.json`; its `link.add` stays in the history.
 `relic update --json` reports the relic as any update does, with no link
 member, so read a new link's ID from `relic show`. A full-length link ID the
@@ -3172,13 +3544,18 @@ workbook relic export WB-R-01M87F0S | workbook relic create --from-file - --type
 
 The second command's message says that this version cannot create a relic
 with links, and to empty the document's `"links"` list, create the relic, then
-add each link with `relic update <relic> --link <task> --rel <rel>`.
+add each link with `relic update <relic> --link <task> --rel <rel>`. (The
+message names a task, and `--link` takes a relic or part the same way.) A
+document with a `linkedFrom` list is refused first, as
+[above](#what-links-to-a-relic). Links come only from `relic update --link`.
 
 **Links are shared with the relic.** A link travels in the relic's commits,
 so the next sync brings it to every clone, and two clones' link changes are
 combined as any two relic changes are: every link either clone adds is kept,
 two clones adding the same link at once keep two links with two IDs, and a
-removal removes only the link it names. Bob, in his clone, after alice's
+removal removes only the link it names. A link added on one clone and the
+target's removal or deletion on another both apply, and the link reads as
+pointing at something removed. Bob, in his clone, after alice's
 changes:
 
 ```sh
@@ -3254,7 +3631,9 @@ workbook relic update <relic> --part <part> --body-file <file> --base <version> 
 ```
 
 The links are the task's `data.relics`, as under
-[Links to tasks](#links-to-tasks), and the part's body and its version are
+[Links](#links). To see what links to one part, run `workbook relic list
+--linked-to <relic>#<part> --json`; `workbook relic show` of that part lists the
+links in `data.linkedFrom`. The part's body and its version are
 `data.parts[0].body.text` and `data.parts[0].body.version`, as under
 [The relic document](#the-relic-document). The skill tells an agent to read
 each linked part before editing files, as part of the task's context.
