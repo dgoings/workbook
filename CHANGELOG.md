@@ -32,9 +32,9 @@ and similar material. A relic has a title, a type, properties and an ordered
 list of parts, and a part has a type, fields and an optional body. Relics are
 shared through the tasks remote as tasks are, can link to tasks, and are taught
 to agents by the generated guidelines and the skill. Relics are not on the
-board, and there are no schemas, history or diff commands, retiring or
-compaction for them yet. Upgrade every Workbook on a machine before creating
-one; see Compatibility across versions below.
+board, and there are no schemas, retiring or compaction for them yet. Upgrade
+every Workbook on a machine before creating one; see Compatibility across
+versions below.
 
 ### Added
 - **Relic history and diffs.** `relic show <relic>[#<part>] --history` lists the
