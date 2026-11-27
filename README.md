@@ -162,6 +162,9 @@ and `workbook show <task>` lists the relics that link to it. The generated
 find the relics linked to their task, read one part with `workbook relic show
 <relic>#<part> --body --json`, and save an edit with `--base` naming the
 version they read; see [Relics for agents](docs/reference.md#relics-for-agents).
+`workbook relic show <relic> --history` lists the changes to a
+relic or one of its parts, and `workbook relic diff <relic>` compares two of
+its versions; see [History and diffs](docs/reference.md#history-and-diffs).
 Relics are not on the board. Upgrade every Workbook on a machine before
 creating relics there,
 because a `workbook reset` run by a Workbook from before relics can lose a

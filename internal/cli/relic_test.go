@@ -800,6 +800,50 @@ func TestDocsRecordTheRelicBenchmarkDecisions(t *testing.T) {
 	}
 }
 
+// History and diffs read what is already stored, so the reference states how a
+// version is named and what the JSON members mean, and the architecture states
+// where the history comes from and what is measured.
+func TestDocsDocumentRelicHistoryAndDiffs(t *testing.T) {
+	t.Parallel()
+	reference := docSection(repositoryDoc(t, "docs", "reference.md"), "## Relics")
+	for _, required := range []string{
+		"### History and diffs", "relic diff", "--history", "--context", "bodyVersions", "applied",
+		"approximate", "noNewline", "fromStart",
+		"the operation's members", "not a Git commit", "1,000,000", "2,000 inserted plus deleted lines",
+		`\ No newline at end of file`,
+	} {
+		if !strings.Contains(reference, required) {
+			t.Errorf("the reference's relic section is missing %q", required)
+		}
+	}
+	if strings.Contains(reference, "no history or diff commands") {
+		t.Error("the reference still says there are no history or diff commands")
+	}
+	architecture := docSection(repositoryDoc(t, "docs", "architecture.md"), "### Relic refs")
+	for _, required := range []string{"relic_operations", "relic diff", "point"} {
+		if !strings.Contains(architecture, required) {
+			t.Errorf("the architecture's relic section is missing %q", required)
+		}
+	}
+	projection := docSection(repositoryDoc(t, "docs", "architecture.md"), "## SQLite projection")
+	for _, required := range []string{"history from `relic_operations`", "from Git otherwise"} {
+		if !strings.Contains(projection, required) {
+			t.Errorf("the architecture's SQLite projection section is missing %q", required)
+		}
+	}
+	benchmarks := docSection(repositoryDoc(t, "docs", "architecture.md"), "### Relic benchmarks")
+	for _, required := range []string{
+		"`relic-history-100`", "`relic-diff-latest-100kib`", "`relic-diff-first-last-100kib`", "not yet measured",
+	} {
+		if !strings.Contains(benchmarks, required) {
+			t.Errorf("the architecture's relic benchmark section is missing %q", required)
+		}
+	}
+	if readme := strings.Join(strings.Fields(repositoryDoc(t, "README.md")), " "); !strings.Contains(readme, "`workbook relic diff") {
+		t.Error("the README's relic text does not name workbook relic diff")
+	}
+}
+
 // groupedDigits writes a count as the reference does: digits, with a comma
 // before each group of three.
 func groupedDigits(number int) string {

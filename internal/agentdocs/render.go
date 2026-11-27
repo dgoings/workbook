@@ -301,6 +301,8 @@ func relicGuidelines(keys core.KeySet) string {
 		"change to the current text and save with `--base` set to the current\n" +
 		"version. Otherwise show the user both versions and ask; never save over\n" +
 		"text you have not read.\n\n" +
+		"To see what changed since the version you passed as `--base`, run\n" +
+		"`workbook relic diff <relic>#<part> <version> --json` with that version.\n\n" +
 		"For other edits (the title, a property or field, or adding, moving,\n" +
 		"removing or restoring a part), run `workbook relic update --help`; for\n" +
 		"export, see `workbook relic --help`.\n\n"

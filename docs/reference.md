@@ -35,7 +35,8 @@ workbook reset [--dry-run] [--no-backup [--discard-unpublished] | --backup <path
 workbook reset --remote <remote> [--confirm <remote>] [--dry-run] [--no-backup | --backup <path>] [--json]
 workbook relic create [<title>] [--type <type>] [--from-file <file>] [--no-sync] [--json]
 workbook relic list [--type <type>] [--all] [--linked-to <task>] [--json]
-workbook relic show <relic>[#<part>] [--body] [--removed] [--json]
+workbook relic show <relic>[#<part>] [--body] [--removed] [--history [--limit <n> | --all]] [--json]
+workbook relic diff <relic>[#<part>] [<version> [<version>]] [--context <n>|all] [--json]
 workbook relic update <relic> [--title <title>] [--set <name>=<value>]... [--set-json <name>=<json>]... [--clear <name>]... [--no-sync] [--json]
 workbook relic update <relic> --add-part --part-type <type> [--field <name>=<value>]... [--field-json <name>=<json>]... [--body-file <file> [--body-format <label>]] [--before <part> | --after <part>] [--no-sync]
 workbook relic update <relic> --part <part> [--field <name>=<value>]... [--field-json <name>=<json>]... [--clear-field <name>]... [--body-file <file> [--body-format <label>] [--base <version>]] [--no-sync]
@@ -652,7 +653,7 @@ tasks remote, and a fresh clone gets every relic from `workbook setup`. The
 synchronization a task command runs carries none; see
 [Sharing relics](#sharing-relics). No task command returns a relic:
 `workbook list` and `next` answer as they did before relics existed. There
-are no schemas, no history or diff commands, no retiring, no compaction and no
+are no schemas, no retiring, no compaction and no
 web page for relics yet.
 
 **Upgrade every Workbook on the machine before creating relics.** A Workbook
@@ -1116,6 +1117,310 @@ first command also saved, which is then a save from a stale base. Both kinds
 of refusal are category `stale-write` and carry no other member in JSON, so a
 script tells them apart by the message: only the one a retry gets past begins
 `relic ref changed concurrently`.
+
+### History and diffs
+
+`workbook relic show <relic> --history` lists the changes recorded for a relic,
+and with a part address the changes to one part. `workbook relic diff` compares
+two points of that history. Both read what is already stored: neither writes a
+ref, a commit or an object, and no diff or text is stored for them. Neither
+contacts a remote or reports a `sync`, so they answer from the relics this
+checkout holds. Both work on a deleted relic and on a removed part.
+
+```text
+workbook relic show <relic>[#<part>] --history [--limit <n> | --all] [--json]
+workbook relic diff <relic>[#<part>] [<version> [<version>]] [--context <n>|all] [--json]
+```
+
+#### Points and versions
+
+A **change** is one commit of the relic, with the operations it records. A
+**point** is the relic as it stands after a whole change. Operations written
+together are applied together or not at all, so there is no point between two
+of them.
+
+A **version** names a point. It is the ID of any operation of the change, as
+`--history` lists it, and not a Git commit ID. Operation IDs stay the same when
+a sync replays a change, and commit IDs do not, so a version noted before a
+sync names the same change afterwards. Where Workbook chose the point, output
+names it by the last operation ID of its change.
+
+Any unambiguous prefix of an operation ID in the relic's history works as a
+version, and letter case is ignored. (`--base` is different: it is a write, and
+needs the full ID.) A prefix that matches several operations of one change names
+that change. The refusals are:
+
+| Given | Category, exit | Message |
+| --- | --- | --- |
+| A version no change has, including a commit ID | `not-found`, `4` | `relic <relic-id> has no change "<version>" in its history; a version is a change ID from "workbook relic show <relic-id> --history", not a Git commit` |
+| A prefix of more than one change | `validation`, `5` | `change prefix "<prefix>" matches <n> changes of <relic-id>; use more characters` |
+| An empty version | `validation`, `5` | `give a change ID, or a prefix of one` |
+
+#### Listing history
+
+`--history` lists changes oldest first, in the order of the relic's commits. Wall
+time is display only, so after a replay the times can read out of order. The
+last ten changes are shown unless `--limit <n>` or `--all` asks for more or
+fewer, and the second line says what was left out. For a part address, only the
+changes with an operation naming the part are listed, each with only those
+operations: the part's `part.add`, every operation on it, and a link added from
+it.
+
+An operation that saves a body is **applied** or not. A `part.add` with a body
+is applied. A `part.body.set` is applied when its base was the part's body
+version at that point; one whose base was out of date changed nothing and is
+marked `(not applied)`. A replay records such a save when the text equals the
+one already there and its change holds something else to keep. Only its author,
+time, base, format and size are stored for it, not its text.
+
+For a part, the list ends with the part's **body versions**: every applied body
+save, oldest first, the last marked `current`. The list is never shortened by
+`--limit`.
+
+These examples are a session of their own. In it `alice@example.com` creates a
+relic and a part with a one-line body, and bob synchronizes. Both then add the
+same second line to `goals.md`. Bob saves it first, setting a property too, with
+`--no-sync`; alice saves it and publishes; and bob synchronizes again:
+
+```sh
+workbook relic create "Task archive compaction" --type spec
+workbook relic update WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX --add-part --part-type section --field heading=Goals --body-file goals.md
+workbook sync
+workbook relic update WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX --part 01M8ERE3J06CHHJXXN7TEXAZXS --body-file goals.md --base 01M8ERE3J06CHHJXXN7TEXAZXS --set status=review --no-sync
+workbook relic update WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX --part 01M8ERE3J06CHHJXXN7TEXAZXS --body-file goals.md --base 01M8ERE3J06CHHJXXN7TEXAZXS
+workbook sync
+```
+
+The third, fourth and last commands are bob's, the others alice's. After alice
+synchronizes as well, both have the same history:
+
+```sh
+workbook relic show WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX --history
+```
+
+```text
+WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX	spec	Task archive compaction
+Showing all 4 change(s).
+2026-11-27T15:01:00Z	alice@example.com	relic.create
+	01M8ERC8Z01PVC6W4JF20KHMBS	relic.create
+2026-11-27T15:02:00Z	alice@example.com	part.add
+	01M8ERE3J06CHHJXXN7TEXAZXS	part.add
+2026-11-27T15:04:00Z	alice@example.com	part.body.set
+	01M8ERHRR0EKET0S3GG29FR4XK	part.body.set	01M8ERE3J06CHHJXXN7TEXAZXS
+2026-11-27T15:03:00Z	bob@example.com	part.body.set, property.set
+	01M8ERFY50CH0R3B0VFQHCM3SE	part.body.set	01M8ERE3J06CHHJXXN7TEXAZXS (not applied)
+	01M8ERFY507ZHPYBRZ39VHWYF3	property.set
+```
+
+Each change is its time, its author and its summary, the distinct operation
+types in order, followed by one line per operation: ID, type and, when it names
+one, the part. A part's history ends with its body versions:
+
+```sh
+workbook relic show WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX#01M8ERE3J06CHHJXXN7TEXAZXS --history
+```
+
+```text
+WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX	spec	Task archive compaction
+Showing all 3 change(s).
+2026-11-27T15:02:00Z	alice@example.com	part.add
+	01M8ERE3J06CHHJXXN7TEXAZXS	part.add
+2026-11-27T15:04:00Z	alice@example.com	part.body.set
+	01M8ERHRR0EKET0S3GG29FR4XK	part.body.set	01M8ERE3J06CHHJXXN7TEXAZXS
+2026-11-27T15:03:00Z	bob@example.com	part.body.set
+	01M8ERFY50CH0R3B0VFQHCM3SE	part.body.set	01M8ERE3J06CHHJXXN7TEXAZXS (not applied)
+Body versions:
+	01M8ERE3J06CHHJXXN7TEXAZXS	2026-11-27T15:02:00Z	alice@example.com	md	48 bytes
+	01M8ERHRR0EKET0S3GG29FR4XK	2026-11-27T15:04:00Z	alice@example.com	md	102 bytes	current
+```
+
+A body with no format label shows `-`. With `--json`, here with `--limit 1`, the
+one change is the stale save and `bodyVersions` still lists both versions:
+
+```sh
+workbook relic show WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX#01M8ERE3J06CHHJXXN7TEXAZXS --history --limit 1 --json
+```
+
+```json
+{"format":"workbook.result","version":1,"command":"relic show","data":{"relic":{"id":"WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX","head":"0a503d81185a852c9fe324e14dfec5c05a2f4a03","title":"Task archive compaction","type":"spec","author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-27T15:01:00Z","updatedAt":"2026-11-27T15:03:00Z","parts":1},"part":"01M8ERE3J06CHHJXXN7TEXAZXS","total":3,"showing":1,"changes":[{"commit":"0a503d81185a852c9fe324e14dfec5c05a2f4a03","actor":"bob@example.com","wallTime":"2026-11-27T15:03:00Z","logicalClock":4,"summary":"part.body.set","operations":[{"id":"01M8ERFY50CH0R3B0VFQHCM3SE","type":"part.body.set","part":"01M8ERE3J06CHHJXXN7TEXAZXS","body":{"format":"md","bytes":102,"base":"01M8ERE3J06CHHJXXN7TEXAZXS"},"applied":false}]}],"bodyVersions":[{"version":"01M8ERE3J06CHHJXXN7TEXAZXS","format":"md","bytes":48,"actor":"alice@example.com","wallTime":"2026-11-27T15:02:00Z","commit":"89c3b9169ab5b00ba22427c3069f341d0eae5efd"},{"version":"01M8ERHRR0EKET0S3GG29FR4XK","base":"01M8ERE3J06CHHJXXN7TEXAZXS","format":"md","bytes":102,"actor":"alice@example.com","wallTime":"2026-11-27T15:04:00Z","commit":"a64e67611c3eb38ee85848716d0552b5a602f146","current":true}]}}
+```
+
+The members of `data`:
+
+| Member | Value |
+| --- | --- |
+| `relic` | The relic now, with the members `relic list --json` gives. |
+| `part` | The part ID, for a part address only. |
+| `total`, `showing` | How many changes there are, and how many `changes` lists. |
+| `changes` | The window, oldest first. Each has `commit`, `actor`, `wallTime`, `logicalClock`, `summary` and `operations`. |
+| `bodyVersions` | For a part with a saved body: each has `version`, `base` (absent for a first body), `format` (absent without a label), `bytes`, `actor`, `wallTime`, `commit` and, on the last, `current`. |
+| `truncated` | Present when the listing stopped early: `commit`, `message` and, for a change a newer Workbook wrote, `category` `newer-writer`. |
+
+An entry in `operations` carries the operation's members: `id` and `type`, those
+the type uses (`relic`, `title`, `name`, `value`, `part`, `partType`,
+`position`, `body` with `format`, `bytes` and `base`, `link`, `linkId`), and
+`applied` on an operation that saves a body. It is not the stored JSON itself.
+Commit IDs appear in output as information only.
+
+A history that meets a change a newer Workbook wrote ends before it, and one that
+meets a change that cannot be read ends there too; both say so, in `truncated`
+and in a line of text. When Git is missing a commit of the history, no change is
+listed.
+
+These are refused as `invocation` (exit `2`) before anything is read:
+`--limit` or `--all` without `--history`, `--limit` with `--all`, `--history`
+with `--body` or `--removed`, and a `--limit` that is not a positive whole
+number.
+
+#### Comparing two points
+
+What `relic diff` compares depends on how many versions are given:
+
+| Versions | From | To |
+| --- | --- | --- |
+| Two | the first | the second, in the order given, never sorted |
+| One | that version | the newest change |
+| None, a relic | the newest change's parent | the newest change |
+| None, a part | the parent of the newest change naming the part | that change |
+
+A first change has no parent: the comparison starts before the relic, `from` is
+`null`, and every part, property and link is added. More than two versions are
+`invocation` (exit `2`).
+
+A part address compares that part's position, fields and body. A relic compares
+also its title, schema, retired and deleted flags, its properties and its links,
+and lists each part that differs, as `added` (not there on the from side),
+`removed`, `restored` or `changed`. A moved part says its position on each side
+and its place among the live parts, `-1` where it is not live. Parts that did not
+change are left out.
+
+```sh
+workbook relic diff WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX#01M8ERE3J06CHHJXXN7TEXAZXS 01M8ERE3J06CHHJXXN7TEXAZXS 01M8ERHRR0EKET0S3GG29FR4XK
+```
+
+```text
+Comparing:	01M8ERE3J06CHHJXXN7TEXAZXS	→	01M8ERHRR0EKET0S3GG29FR4XK
+Part 01M8ERE3J06CHHJXXN7TEXAZXS	section	changed
+	Body:	md 48 bytes → md 102 bytes
+	@@ -1,1 +1,2 @@
+	 Finished tasks keep every commit they ever had.
+	+Compaction replaces that history with one checkpoint.
+```
+
+A relic's own changes print as `Title:`, `Schema:`, `Retired:`, `Deleted:` and
+`Property <name>:` lines, a part's fields as `Field <name>:` lines, with `+` before
+an added value and `-` before a removed one, and links under `Links:`. A
+comparison with nothing different prints `These two versions hold the same
+relic.` The newest change to this part is the stale save, so with no version
+there is nothing to show:
+
+```sh
+workbook relic diff WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX#01M8ERE3J06CHHJXXN7TEXAZXS
+```
+
+```text
+Comparing:	01M8ERHRR0EKET0S3GG29FR4XK	→	01M8ERFY507ZHPYBRZ39VHWYF3
+These two versions hold the same relic.
+```
+
+The first comparison above with `--json`:
+
+```json
+{"format":"workbook.result","version":1,"command":"relic diff","data":{"relic":"WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX","part":"01M8ERE3J06CHHJXXN7TEXAZXS","from":{"version":"01M8ERE3J06CHHJXXN7TEXAZXS","commit":"89c3b9169ab5b00ba22427c3069f341d0eae5efd","actor":"alice@example.com","wallTime":"2026-11-27T15:02:00Z"},"to":{"version":"01M8ERHRR0EKET0S3GG29FR4XK","commit":"a64e67611c3eb38ee85848716d0552b5a602f146","actor":"alice@example.com","wallTime":"2026-11-27T15:04:00Z"},"parts":[{"id":"01M8ERE3J06CHHJXXN7TEXAZXS","type":"section","kind":"changed","body":{"from":{"format":"md","version":"01M8ERE3J06CHHJXXN7TEXAZXS","bytes":48},"to":{"format":"md","version":"01M8ERHRR0EKET0S3GG29FR4XK","bytes":102},"text":true,"hunks":[{"fromStart":1,"fromLines":1,"toStart":1,"toLines":2,"lines":[{"kind":"equal","text":"Finished tasks keep every commit they ever had.","from":1,"to":1},{"kind":"insert","text":"Compaction replaces that history with one checkpoint.","to":2}]}]}}]}}
+```
+
+The members of `data`, each left out when it has nothing:
+
+| Member | Value |
+| --- | --- |
+| `relic`, `part` | The relic ID, and the part ID for a part address. |
+| `from`, `to` | Each point: `version`, `commit`, `actor` and `wallTime`. `from` is `null` before the relic and is always present. |
+| `changes` | The relic's `title`, `schema`, `retired` and `deleted`, each with `name`, `kind` (`added`, `removed` or `set`), `from` and `to`. |
+| `properties` | Properties that differ, by name, in the same shape. |
+| `parts` | Each has `id`, `type`, `kind`, `moved` (`from`, `to`, `fromIndex`, `toIndex`), `fields` (as `changes`) and `body`. |
+| `links` | `added` and `removed` links, each with `id`, `from` (absent for the whole relic), `to` and `rel`. |
+
+`relic`, `from` and `to` are always present. A part's `body` is there when the
+body was added, removed or changed. It has `from` and `to`, each `format`,
+`version` and `bytes` or `null` where the part has no body, then `text`,
+`approximate` and `hunks`. A hunk has `fromStart`, `fromLines`, `toStart`,
+`toLines` and `lines`, and a line has `kind` (`equal`, `delete` or `insert`),
+`text`, `from` and `to` line numbers, counted from 1 and absent on the side the
+line is not on, and `noNewline`. A start is the number of the hunk's first line
+on that side, or, when the hunk has no line there, of the line before it.
+
+#### Lines of a body
+
+A body is split into lines at each newline. A line's `text` has no newline; a
+carriage return stays in it. The last line of a body that does not end in a
+newline carries `noNewline`, and an empty body has no lines. With all context,
+joining the `equal` and `delete` lines with newlines, and adding a final newline
+unless the last of them has `noNewline`, rebuilds the from text exactly; the
+`equal` and `insert` lines rebuild the to text.
+
+Hunks are as in a unified diff, with 3 lines of context, and hunks whose context
+touches are merged. `--context <n>` takes a whole number from `0` to
+`1,000,000`, or `all` for one hunk of every line, which is enough to draw a
+side-by-side view. Anything else, a larger number included, is `invocation`
+(exit `2`): `relic diff --context must be a whole number or "all"`.
+
+The line search is bounded at 2,000 inserted plus deleted lines, counted after
+the lines the two bodies share at the start and end are set aside. Past that,
+what differs is one run of deleted lines and one of inserted lines, and the body
+carries `approximate`, which only JSON reports. The hunks still rebuild both
+texts.
+
+In text output, each body line keeps its spaces, tabs and indentation, and every
+other control character, escape sequences included, becomes a space, as `relic
+show --body` prints it. A carriage return that ends a line prints as a trailing
+space. A line without a final newline is followed by
+`\ No newline at end of file`. Every other value is on one line, as elsewhere.
+
+```sh
+printf 'no newline at end' > n.md
+workbook relic update WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX --part 01M8ERE3J06CHHJXXN7TEXAZXS --body-file n.md --body-format txt --base 01M8ERHRR0EKET0S3GG29FR4XK
+workbook relic diff WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX#01M8ERE3J06CHHJXXN7TEXAZXS
+```
+
+```text
+WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX	spec	Task archive compaction
+part	01M8ERE3J06CHHJXXN7TEXAZXS	section	01M8ERNDY0YYSR7WVMBERJ5ZSP
+Sync:	completed
+Comparing:	01M8ERFY507ZHPYBRZ39VHWYF3	→	01M8ERNDY0YYSR7WVMBERJ5ZSP
+Part 01M8ERE3J06CHHJXXN7TEXAZXS	section	changed
+	Body:	md 102 bytes → txt 17 bytes
+	@@ -1,2 +1,1 @@
+	-Finished tasks keep every commit they ever had.
+	-Compaction replaces that history with one checkpoint.
+	+no newline at end
+	\ No newline at end of file
+```
+
+A body is text when its bytes are valid UTF-8; its format label does not decide.
+When either side is not text, `text` is `false`, there are no hunks, and the
+text output gives the two formats and sizes and ends the line with `not text`.
+No byte of such a body is printed. A body whose only change is its format label
+is reported with both formats and no hunks:
+
+```sh
+workbook relic update WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX --part 01M8ERE3J06CHHJXXN7TEXAZXS --body-file n.md --body-format md --base 01M8ERNDY0YYSR7WVMBERJ5ZSP
+workbook relic diff WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX#01M8ERE3J06CHHJXXN7TEXAZXS
+```
+
+```text
+WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX	spec	Task archive compaction
+part	01M8ERE3J06CHHJXXN7TEXAZXS	section	01M8ERQ8H0B690VPW8W6C0WVRA
+Sync:	completed
+Comparing:	01M8ERNDY0YYSR7WVMBERJ5ZSP	→	01M8ERQ8H0B690VPW8W6C0WVRA
+Part 01M8ERE3J06CHHJXXN7TEXAZXS	section	changed
+	Body:	txt 17 bytes → md 17 bytes
+```
+
+Each commit compared is read as the newest commit of a relic is, without checking
+it against its parent; `workbook validate` checks whole histories. A history
+that cannot be read to the newest change fails the diff, as `corrupt-data` (exit
+`7`) naming the relic, or as `newer-writer` (exit `9`) for a change a newer
+Workbook wrote.
 
 ### Part order
 
@@ -2506,8 +2811,10 @@ Relics:
 
 Every relic command takes `--json` and uses the result and error envelopes
 described below. The `command` member is `relic create`, `relic list`,
-`relic show`, `relic update`, `relic delete`, `relic restore` or
-`relic export`.
+`relic show`, `relic update`, `relic delete`, `relic restore`,
+`relic export` or `relic diff`. The data of `relic show --history` and of
+`relic diff` is described under [History and diffs](#history-and-diffs); neither
+contacts a remote or reports a `sync`.
 
 `relic create`, `relic update`, `relic delete` and `relic restore` report the
 same three members, as in the `--add-part` result under

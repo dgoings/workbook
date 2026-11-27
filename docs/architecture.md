@@ -619,6 +619,28 @@ because a sync never publishes a relic it cannot read; only one whose object is
 missing or is not a commit is deleted with nothing kept. A reset of a remote
 writes the remote's relic refs to its bundle and deletes them with the rest.
 
+**History and diffs.** `workbook relic show --history` and `workbook relic diff`
+add nothing to this format. Both work from the first-parent chain, where each
+point is the state after one commit and is named by an operation ID, never a
+commit ID, because a replay keeps operation IDs and rewrites commits:
+
+```text
+refs/workbook/relics/WB-R-01M9…  →  C3 ── C2 ── C1 (root)
+C1 operation.json  [relic.create 01A, part.add 01B (body)]      point 01A ≡ 01B
+C2 operation.json  [part.body.set 01C base 01B]                  body version 01C, applied
+C3 operation.json  [part.body.set 01D base 01B, title.set 01E]   01D stale: not applied
+```
+
+Whether a body save was applied is computed from the chain's packs alone, by the
+fold's rule: the save's base was the part's body version at that point. The
+packs come from the index's `relic_operations` rows or from Git, under the rule
+in [SQLite projection](#sqlite-projection), with equal answers. A stale
+save's text was never stored. Nothing derived is stored: no diff, no cached text,
+no index table. The two versions a diff compares are read from Git by commit, and
+only the part objects whose IDs differ between them are opened, so equal
+`fields.json` or `body` object IDs cost no read. A line diff is computed on each
+run and bounded; see [History and diffs](reference.md#history-and-diffs).
+
 ### Operation pack
 
 Each task mutation creates one versioned operation pack. A pack can hold multiple
@@ -1642,6 +1664,16 @@ new cache before installing it and reports the count as `relicCount`. On a
 fresh clone of 1,000 relics that first pass took 1,389 ms; see
 [Relic benchmarks](#relic-benchmarks).
 
+`workbook relic show --history` and `workbook relic diff` take a relic's
+history from `relic_operations` when its rows are complete for the head the
+command read: the relic row names that head, the chain places run from the first
+without a gap, and the last row's commit is the head, and from Git otherwise,
+including when there are no rows at all. So a missing, damaged or unusable index
+changes how long the command takes and not what it answers. Equal
+answers are guaranteed; the speed of the index path is best effort. The two
+versions a diff compares are always read from Git. No table was added for this,
+and the schema version is unchanged.
+
 The cache can be deleted at any time and rebuilt entirely from Workbook refs.
 Semantic validation results live in a separate `validation.sqlite` beside it, so
 a validator-version bump does not force a projection rebuild and a long
@@ -1704,8 +1736,16 @@ Spotlight indexing used about two and a half cores during the run.
 | | `relic-edit-body-1mib` | 354 ms | | |
 | Descriptive | `relic-push-100` | 1,433 ms | none | |
 | | `relic-validate-full` | 144.7 s, one sample | none | |
+| History and diffs | `relic-history-100` | not yet measured | 300 ms | benchmark |
+| | `relic-diff-latest-100kib` | not yet measured | 300 ms | benchmark |
+| | `relic-diff-first-last-100kib` | not yet measured | 500 ms | benchmark |
 
-Every budget was met. What the table does not show:
+The last three scenarios were added after that run and are not part of it. They
+list the history, with `--all`, of a part whose 100 KiB body was saved 100 times
+after it was added, compare its newest change with the one before, and compare
+its first and last versions.
+
+Every measured budget was met. What the table does not show:
 
 - `relic-create-large` has a P95 of 2,450 ms, over its median budget; the
   budget is on the median.

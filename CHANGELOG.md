@@ -37,6 +37,13 @@ compaction for them yet. Upgrade every Workbook on a machine before creating
 one; see Compatibility across versions below.
 
 ### Added
+- **Relic history and diffs.** `relic show <relic>[#<part>] --history` lists the
+  changes with author and time, a part's body versions, and a stale body save
+  marked as not applied. `relic diff <relic>[#<part>] [<version> [<version>]]`
+  compares two versions, line by line for a text body and field by field, in
+  text or `--json`. A version is a change ID, so one noted before a sync still
+  works, and nothing new is stored. See
+  [History and diffs](docs/reference.md#history-and-diffs).
 - **Relics.** `workbook relic create`, `list`, `show`, `update`, `delete`,
   `restore` and `export` work with them, and `relic create --from-file` creates
   one from the document `relic export` writes. Each relic is one ref under
