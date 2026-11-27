@@ -346,7 +346,8 @@ func relicTypeGuidelines(relicTypes []RelicTypeRules) string {
 	builder.WriteString("### This project's relic types\n\n")
 	builder.WriteString("A relic save is checked against the schema version the relic names, and a\n")
 	builder.WriteString("refusal names the rule it broke. `workbook relic migrate <relic> --to <target>`\n")
-	builder.WriteString("moves a relic to a newer version. Each type below shows its newest version;\n")
+	builder.WriteString("moves a relic to a newer version, and `workbook relic list --behind` lists the\n")
+	builder.WriteString("relics behind. Each type below shows its newest version;\n")
 	builder.WriteString("`workbook schema show <type> --json` gives the full rules.\n\n")
 	for _, rules := range relicTypes {
 		builder.WriteString("- " + schemaName(rules.Type) + ", version " + strconv.Itoa(rules.Version))

@@ -890,7 +890,8 @@ func TestGuidelinesWithoutSchemasAreUnchanged(t *testing.T) {
 const defaultRelicTypesBlock = "### This project's relic types\n\n" +
 	"A relic save is checked against the schema version the relic names, and a\n" +
 	"refusal names the rule it broke. `workbook relic migrate <relic> --to <target>`\n" +
-	"moves a relic to a newer version. Each type below shows its newest version;\n" +
+	"moves a relic to a newer version, and `workbook relic list --behind` lists the\n" +
+	"relics behind. Each type below shows its newest version;\n" +
 	"`workbook schema show <type> --json` gives the full rules.\n\n" +
 	"- `plan`, version 1\n" +
 	"  - Part `note`: body optional\n" +
@@ -955,7 +956,7 @@ func TestGuidelinesNeutralizeSchemaText(t *testing.T) {
 			t.Errorf("relic types block contains %q:\n%s", forbidden, block)
 		}
 	}
-	for _, line := range strings.Split(strings.TrimSuffix(block, "\n"), "\n")[7:] {
+	for _, line := range strings.Split(strings.TrimSuffix(block, "\n"), "\n")[8:] {
 		if !strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "  - ") {
 			t.Errorf("a line of schema text is not a list item: %q", line)
 		}

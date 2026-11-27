@@ -224,7 +224,7 @@ An operation's members are always written in one order, `id`, `type`,
 
 | Operation type | Members after `id` and `type`, in stored order |
 | --- | --- |
-| `relic.create` | `relic`: `title`, `type`, `createdAt` |
+| `relic.create` | `relic`: `title`, `type`, `schema` when the relic names a [schema version](#relic-schemas), `createdAt` |
 | `title.set` | `title` |
 | `relic.tombstone`, `relic.restore` | none |
 | `property.set` | `name`, `value` |
@@ -237,6 +237,7 @@ An operation's members are always written in one order, `id`, `type`,
 | `part.remove`, `part.restore` | `part` |
 | `link.add` | `link`: `from` when the link is from a part, `to` as `{"task": "<task-id>"}`, then `rel`. The operation's `id` is the new link's ID. |
 | `link.remove` | `linkId`, the ID of the link it removes |
+| `relic.migrate` | `relicType`, then `schema`, the version the relic moves to, left out when it becomes open |
 
 An operation that carries any other member, lacks one of its own, or writes
 them in another order is `corrupt-data`. A `value` is a JSON value in
@@ -304,7 +305,9 @@ when it is `true`, and a body has `format` only when it has a label. A body's
 `version` is the ID of the operation that saved it: the `part.add` for a
 part's first body, which is why it equals the part's ID above, and the
 `part.body.set` after that. `author` is the actor of the creating commit, and
-`updatedAt` is the `wallTime` of this one. `schema` is always `null`,
+`updatedAt` is the `wallTime` of this one. `schema` is `null` for a relic that
+names no [schema version](#relic-schemas), and otherwise the version's ID, a
+string; `relic.create` sets it and `relic.migrate` sets it with `type`.
 `retired` is always `false` and `history.compactedFrom` is always `null`.
 
 `links.json` holds the relic's live links, ordered by ID, and is these 57
@@ -435,7 +438,7 @@ checks one when a relic is read, so a relic over a total still reads. See
 - A **write** computes the state by folding and refuses to store a record
   that is not the fold's. A part the pack does not name keeps its subtree
   object, so a commit stores only what it changed.
-- **`relic show`, `export`, `update`, `delete` and `restore`** check the
+- **`relic show`, `export`, `update`, `migrate`, `delete` and `restore`** check the
   relic's newest commit against its parent by rules 1 to 6 and the case of
   rule 7 that needs no read, and check the limit on one field value for the
   parts whose fields they read.
@@ -640,6 +643,76 @@ no index table. The two versions a diff compares are read from Git by commit, an
 only the part objects whose IDs differ between them are opened, so equal
 `fields.json` or `body` object IDs cost no read. A line diff is computed on each
 run and bounded; see [History and diffs](reference.md#history-and-diffs).
+
+### Relic schemas
+
+A [relic schema](reference.md#relic-schemas) is a project setting. Saving a
+version is one `schema.put` operation in the configuration history, and the
+stored schema document is a blob in the tree of the commit that adds it, as a
+task attachment is stored:
+
+```text
+refs/workbook/config  →  commit K7 (parent K6)
+  tree: operation.json             [schema.put 01M8FHMJ…]
+        state.json                 (lists every version, reads no blob)
+        relic-schema-01M8FHMJ…     blob: the stored schema document
+```
+
+The operation, in that commit's `operation.json`, names the type, the
+document's size and its object ID. Its `id` is the version's permanent ID, and
+the tree entry is `relic-schema-<id>`:
+
+```json
+{"id":"01M8FHMJ4KMSBVZXP7XRMP4ZXZ","type":"schema.put","relicSchema":{"type":"spec","bytes":623,"blob":"22ac66cabba4b50c146822c0a9542c55e8e96a43"}}
+```
+
+The blob is a `workbook.relic-schema` document, version 1: `type`, then
+`references` when the schema refers to other types (each type's name mapped to
+the ID of the version it is pinned to), then `schema`, the saved file in
+canonical form. The checkpoint in `state.json` gains a `schemas` section, left
+out while a project has none, which lists every version sorted by type and then
+number:
+
+```json
+"schemas":{"versions":[{"type":"spec","version":1,"id":"01M8FHMJ4KMSBVZXP7XRMP4ZXZ","bytes":623,"blob":"22ac66cabba4b50c146822c0a9542c55e8e96a43"}]}
+```
+
+The checkpoint holds pointers and not schema content, so reading statuses,
+priorities or keys reads no schema object, and the checkpoint every command
+decodes grows by one short entry for each version. The blob lives in the ledger
+commit's tree so that it is reachable from `refs/workbook/config`: a fetch of
+that ref brings every version, and a push publishes it. A reader refuses a
+configuration commit whose tree lacks an entry a `schema.put` of its pack names,
+holds another object under that name, or has a `relic-schema-` entry none of its
+operations names. A version whose blob is missing, or is not the size the
+checkpoint lists, is `corrupt-data` when it is read.
+
+**ID and number.** A relic names a version by the ID. The number is the
+version's position among its type's versions in ledger order, so it can change
+only while a version is unpublished: two clones that each save a version of one
+type never conflict, both versions are kept, and the replayed one is numbered
+after the one already at the remote, with a `relic-schema-renumbered` warning.
+Whichever number a version ends with, every relic still names exactly the one it
+was written under. Nothing removes or changes a version. The limit on one
+document is checked when it is saved and read; the counts of versions are
+checked only when one is saved, so the fold never refuses settings that two
+clones took past a count together.
+
+**Migration.** `relic.migrate` is a relic operation that sets the relic's `type`
+and `schema`. It rewrites nothing, and of two migrations the later one in the
+relic's history wins, as for a title:
+
+```text
+refs/workbook/relics/<relic-id>  →  C3 ── C2 ── C1 (root)
+C1 operation.json  [relic.create … "type":"spec","schema":"<version 1 ID>"]
+C3 operation.json  [relic.migrate "relicType":"spec","schema":"<version 2 ID>"]
+```
+
+The writer holds `create`, `update` and `migrate` to the schema; see
+[When a relic is checked](reference.md#when-a-relic-is-checked). The fold, a
+fetch, a replay and `validate` never do, so edits that were each allowed can
+meet in a relic that does not fit its version. Such a relic is kept, read and
+reported as `not-conforming`.
 
 ### Operation pack
 
@@ -963,16 +1036,25 @@ than per release:
 | 3 | `priority.add`, `priority.rename`, `priority.relabel`, `priority.remove`, `priority.reorder`, `priority.tag`, `priority.untag`, `priority.recolor`, `key.add`, `key.current`, `key.retire` |
 | 4 | `history.checkpoint` |
 | 5 | `field.set` of `due`, and a `task.create` or `history.checkpoint` whose task carries a due date |
-| 6 | Every relic operation: `relic.create`, `title.set`, `relic.tombstone`, `relic.restore`, `property.set`, `property.clear`, `part.add`, `part.field.set`, `part.field.clear`, `part.body.set`, `part.move`, `part.remove`, `part.restore`, `link.add`, `link.remove` |
+| 6 | `schema.put`, and every relic operation: `relic.migrate`, `relic.create`, `title.set`, `relic.tombstone`, `relic.restore`, `property.set`, `property.clear`, `part.add`, `part.field.set`, `part.field.clear`, `part.body.set`, `part.move`, `part.remove`, `part.restore`, `link.add`, `link.remove` |
 
 Generation 5 is the one row decided by an operation's payload rather than its
 type: a `field.set` of any other field is still generation 0, and so is a create
 with no due date. See [Due dates](#due-dates) for why.
 
-Generation 6 belongs to relics alone. It marks no task pack and no
-configuration pack, so a task or a configuration history is written exactly as
-before, and every relic pack and state carries it. See
-[Relic refs](#relic-refs).
+Generation 6 belongs to relics and their schemas. It marks no task pack, so a
+task history is written exactly as before, and every relic pack and state
+carries it. It marks a configuration pack only when the pack holds a
+`schema.put`, or is a genesis that carries a `schemas` section; a configuration
+history with no schema is written exactly as before. See
+[Relic refs](#relic-refs) and [Relic schemas](#relic-schemas).
+
+**Schemas and an older Workbook.** A project's first schema puts generation 6
+on its configuration history, and the checkpoint keeps it from then on. A
+release of generation 5 or below, such as v0.6.1, still reads the settings, so
+`setup`, `sync`, `status list` and `list` work, and it is told to upgrade when
+it tries to change them. It ignores the schemas themselves. A tested run of the
+v0.6.1 release holds it to this.
 
 **Relics and an older Workbook.** A release from before relics, v0.6.1
 included, never sees one. Its fetch names only the task, identity and
@@ -1440,7 +1522,8 @@ holds. What each pair of concurrent changes gives:
 | Concurrent changes | Result | Stops the replay |
 | --- | --- | --- |
 | Different properties, parts, or fields of one part | both kept | no |
-| The same property, field, title or part position | the second syncer's value; both operations in history | no |
+| The same property, field, title or part position, or two migrations | the second syncer's value; both operations in history | no |
+| Edits and a migration that together do not fit the schema version | both kept; the relic reads `not-conforming` | no |
 | Two changes that each fit a total and together pass it | both kept, `relic-over-limit` warning | no |
 | An edit to a part removed elsewhere | the part stays removed and holds the edit, `relic-edit-on-removed-part` warning | no |
 | A deletion that syncs second, over an edit | deleted, holding the edit, no report | no |
@@ -1580,7 +1663,7 @@ or write.
 
 | Table | One row per | Holds |
 | --- | --- | --- |
-| `relics` | relic | the head commit it was read from, title, type, author, times, deleted, and `part_count` and `link_count`, the number of part and link rows it must have |
+| `relics` | relic | the head commit it was read from, title, type, `schema` (the version ID, or `''`), `conformance` and `schema_problem`, author, times, deleted, and `part_count` and `link_count`, the number of part and link rows it must have |
 | `relic_properties` | property | the name and the stored JSON value |
 | `relic_parts` | part | order, type, position, removed, the `fields.json` object ID and bytes, and the body's format, version, size and `body_object` |
 | `relic_operations` | recorded operation | commit, place in the chain, operation ID, actor, wall time, type, the part it names and its payload |
@@ -1642,9 +1725,9 @@ WB-R-01M87F0SQYHP3HCR4QEN3RTVEX|01M87F2KR522KBJ4CWWSRHRY4G|01M87F0T8ZDXPZV8WNS00
 WB-R-01M87F0YHZ1852KPS55KCDPXG2|01M87F2PV71CCDX34JPK969NYV||task|WB-01M87F19RB1PVEE87F7PS1D1FJ|relates-to
 ```
 
-The relic tables, `relic_links` included, are schema version 10; a cache of
-an older version, from a build without them, is replaced by the first command
-this build runs, and an older build replaces a version 10 cache the same way.
+The cache, with the relic tables and `relic_links`, is schema version 11; a
+cache of another version is replaced by the first command this build runs, and
+an older build replaces a version 11 cache the same way.
 A relic the index cannot hold is reported by a reverse lookup as unread, with
 a `relic-links-unread` warning, rather than read from Git, so the lookup stays
 one query and a damaged relic's links stay out of sight from the task until it
@@ -1664,6 +1747,23 @@ new cache before installing it and reports the count as `relicCount`. On a
 fresh clone of 1,000 relics that first pass took 1,389 ms; see
 [Relic benchmarks](#relic-benchmarks).
 
+**Conformance.** A relic's row also stores how it stands against the
+[schema version](#relic-schemas) it names: `conformance` is `open`, `conforms`,
+`not-conforming` or `unknown-schema`, and `schema_problem` the first problem for
+one that does not fit. The relic pass judges a relic when it indexes it, from the
+fields it holds, and reads each schema it needs once; a project with no schema
+reads none. The pass `workbook show <task>` runs reads no schema: it stores a
+changed relic that names a version as not yet judged, an empty `conformance`,
+and the next relic read judges it. A version, once listed, never changes, so a
+stored judgment stands while the relic does. The exceptions are judged again by
+the next relic read: a row judged `unknown-schema` once its version is listed,
+and a row whose version the settings no longer list. A version listed with a
+document that cannot be read stays `unknown-schema` and is judged again on each
+read. A read from Git judges the same way, and a deleted and rebuilt index gives
+the same answers. The judgment is only reported: no read refuses a relic for not
+fitting, because a relic can stop fitting through edits that were each allowed,
+and refusing to read it would hide the work needed to repair it.
+
 `workbook relic show --history` and `workbook relic diff` take a relic's
 history from `relic_operations` when its rows are complete for the head the
 command read: the relic row names that head, the chain places run from the first
@@ -1671,8 +1771,8 @@ without a gap, and the last row's commit is the head, and from Git otherwise,
 including when there are no rows at all. So a missing, damaged or unusable index
 changes how long the command takes and not what it answers. Equal
 answers are guaranteed; the speed of the index path is best effort. The two
-versions a diff compares are always read from Git. No table was added for this,
-and the schema version is unchanged.
+versions a diff compares are always read from Git. No table is kept for this
+alone.
 
 The cache can be deleted at any time and rebuilt entirely from Workbook refs.
 Semantic validation results live in a separate `validation.sqlite` beside it, so

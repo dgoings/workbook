@@ -844,6 +844,84 @@ func TestDocsDocumentRelicHistoryAndDiffs(t *testing.T) {
 	}
 }
 
+// A schema is a stored format and a promise about what a save is held to, so
+// the reference states the file, the words, the checking points and the limits,
+// and the architecture states how a version is stored.
+func TestDocsDocumentRelicSchemas(t *testing.T) {
+	t.Parallel()
+	document := repositoryDoc(t, "docs", "reference.md")
+	reference := docSection(document, "## Relics")
+	schemas := docSection(document, "### Relic schemas")
+	if schemas == "" {
+		t.Fatal("docs/reference.md has no \"### Relic schemas\" section")
+	}
+	for _, required := range []string{
+		"workbook schema list", "workbook schema show", "workbook schema put",
+		"workbook relic migrate", "--behind", "`conformance`", "`schemaProblem`", "`behind`",
+		"`open`", "`conforms`", "`not-conforming`", "`unknown-schema`",
+		`{"type":"spec","id":"`, "relic-schema-renumbered", "not a security boundary",
+		// The words a rule may use.
+		"`type`", "`properties`", "`required`", "`additionalProperties`", "`items`",
+		"`minItems`", "`maxItems`", "`minLength`", "`maxLength`", "`minimum`", "`maximum`",
+		"`enum`", "`const`", "`$ref`", "`title`", "`description`", "`$defs`",
+		// The envelope, the part rule and the reference forms.
+		"`parts`", "`links`", "`bodyFormats`", "`#/$defs/<name>`", "`<type>#/$defs/<name>`",
+		// The checking points, and what is never checked.
+		"relic create", "relic update", "relic migrate", "No read",
+		"names a schema version for", "workbook sync",
+		"the schema is too costly to check against this value",
+		groupedDigits(core.MaxRelicSchemaBytes) + " bytes (64 KiB)",
+		groupedDigits(core.MaxRelicSchemaVersionsPerType),
+		groupedDigits(core.MaxRelicSchemaVersions),
+		strconv.Itoa(core.MaxRelicSchemaRefDepth) + " deep",
+	} {
+		if !strings.Contains(schemas, required) {
+			t.Errorf("the reference's \"### Relic schemas\" is missing %q", required)
+		}
+	}
+	for _, stale := range []string{"| `schema` | Always `null`. |", "there are no schemas", "There are no schemas"} {
+		if strings.Contains(reference, stale) {
+			t.Errorf("the reference's relic section still says %q", stale)
+		}
+	}
+	if !strings.Contains(reference, "`relic migrate`") {
+		t.Error("the reference's relic section does not name relic migrate among the results")
+	}
+
+	// The example schema file is one the checker accepts.
+	_, after, found := strings.Cut(document, "\n#### The schema file\n")
+	if !found {
+		t.Fatal("docs/reference.md has no \"#### The schema file\" section")
+	}
+	_, after, found = strings.Cut(after, "```json\n")
+	example, _, closed := strings.Cut(after, "\n```")
+	if !found || !closed {
+		t.Fatal("\"#### The schema file\" has no json example")
+	}
+	if _, _, err := core.CompileRelicSchema("spec", []byte(example), nil); err != nil {
+		t.Errorf("the reference's example schema is refused: %v", err)
+	}
+
+	architecture := strings.Join(strings.Fields(repositoryDoc(t, "docs", "architecture.md")), " ")
+	for _, required := range []string{
+		"schema.put", "relic-schema-", "relic.migrate", "schema version 11", "workbook.relic-schema",
+		"relic-schema-renumbered",
+	} {
+		if !strings.Contains(architecture, required) {
+			t.Errorf("the architecture is missing %q", required)
+		}
+	}
+	if strings.Contains(architecture, "`schema` is always `null`") {
+		t.Error("the architecture still says a relic's schema is always null")
+	}
+	readme := strings.Join(strings.Fields(repositoryDoc(t, "README.md")), " ")
+	for _, required := range []string{"`workbook schema put", "`workbook relic migrate"} {
+		if !strings.Contains(readme, required) {
+			t.Errorf("the README's relic text is missing %q", required)
+		}
+	}
+}
+
 // groupedDigits writes a count as the reference does: digits, with a comma
 // before each group of three.
 func groupedDigits(number int) string {

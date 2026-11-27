@@ -32,11 +32,33 @@ and similar material. A relic has a title, a type, properties and an ordered
 list of parts, and a part has a type, fields and an optional body. Relics are
 shared through the tasks remote as tasks are, can link to tasks, and are taught
 to agents by the generated guidelines and the skill. Relics are not on the
-board, and there are no schemas, retiring or compaction for them yet. Upgrade
+board, and there is no retiring or compaction for them yet. Upgrade
 every Workbook on a machine before creating one; see Compatibility across
 versions below.
 
 ### Added
+- **Relic schemas.** `workbook schema put <type> <file|->` saves a versioned
+  schema for a relic type in the project's settings, and `schema list` and
+  `schema show` read them. A schema is a file of properties, part types and
+  links whose rules use a closed list of JSON Schema words. `relic create`,
+  `update` and `migrate` hold a relic to the version it names and refuse a save
+  that breaks it, with exit 5; no read or sync ever refuses one, and a relic
+  naming a version this checkout lacks cannot be updated until it syncs (exit
+  6). Two clones that save a version at once both keep theirs, and the one
+  renumbered is reported as `relic-schema-renumbered`. A version is at most
+  64 KiB, a type has at most 500 versions and a project 1,000. A schema guides
+  honest tools and is not a security boundary. The generated guidelines list
+  each type with a schema. See [Relic schemas](docs/reference.md#relic-schemas)
+  and [the stored format](docs/architecture.md#relic-schemas).
+- **Moving a relic to another schema version.** `workbook relic migrate <relic>
+  --to <target>` moves a relic to a version of its type, or to another type,
+  if the whole relic fits, and `relic diff` shows a type change. It synchronizes
+  as `relic update` does.
+- **Relics behind and not fitting.** `relic list --behind` lists the relics
+  behind their type's newest version. In JSON, `relic list`, `show`, `export`,
+  `create` and `migrate` report `conformance` (`open`, `conforms`,
+  `not-conforming` with `schemaProblem`, or `unknown-schema`), a relic's
+  `schema` names its version, and `relic list` adds `behind`.
 - **Relic history and diffs.** `relic show <relic>[#<part>] --history` lists the
   changes with author and time, a part's body versions, and a stale body save
   marked as not applied. `relic diff <relic>[#<part>] [<version> [<version>]]`
@@ -176,7 +198,7 @@ versions below.
   next run carry it, and `--clean-up` deletes nothing meanwhile.
 - **`workbook rebuild` indexes relics too.** Its text line now reads `Rebuilt
   <n> task(s) and <m> relic(s) at <path>.`, and its JSON gains `relicCount`.
-  The cache's schema is version 10, so the first command run by this build
+  The cache's schema is version 11, so the first command run by this build
   replaces an older cache.
 - **A relic push that fails on the wire after the task push** now leaves the
   push phase `completed`, says so in its `detail`, and names the task errors of
@@ -191,6 +213,12 @@ versions below.
   command its plain `workbook reset` prints does not fetch them back from the
   bundle it wrote. A relic the tasks remote holds comes back with the next
   sync; a change not yet published can be lost.
+- **A project's first relic schema makes its settings read-only to an older
+  Workbook.** `schema put` marks the settings history as writer-format
+  generation 6. A release from before relics, v0.6.1 and v0.7.0 among them,
+  still reads the settings, tasks and statuses, and is told to upgrade when it
+  tries to change a status, a priority, a key or another setting kept there.
+  Upgrade every clone before saving a schema.
 - **A Workbook from before relics works beside them otherwise.** v0.6.1 and
   v0.7.0 read, change and synchronize tasks in a checkout that holds relics,
   and leave the relics at a remote alone.

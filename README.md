@@ -165,6 +165,12 @@ version they read; see [Relics for agents](docs/reference.md#relics-for-agents).
 `workbook relic show <relic> --history` lists the changes to a
 relic or one of its parts, and `workbook relic diff <relic>` compares two of
 its versions; see [History and diffs](docs/reference.md#history-and-diffs).
+A project can give a relic type a versioned schema with `workbook schema put
+<type> <file>`, and a relic save is then checked against the version the relic
+names; `workbook relic migrate <relic> --to <target>` moves it to another, and
+`workbook relic list --behind` finds those behind. A schema guides honest tools
+and is not a security boundary; see
+[Relic schemas](docs/reference.md#relic-schemas).
 Relics are not on the board. Upgrade every Workbook on a machine before
 creating relics there,
 because a `workbook reset` run by a Workbook from before relics can lose a

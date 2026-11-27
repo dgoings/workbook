@@ -642,6 +642,7 @@ workbook relic show WB-R-01M87F0S
 WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction
 Author:	alice@example.com
 Updated:	2026-11-24T19:02:46Z
+Schema:	open
 Properties:
   status: draft
 #01M87F0T8ZACFWH3F27EK4CYVH	section	md, 102 bytes, version 01M87F0T8ZACFWH3F27EK4CYVH
@@ -656,9 +657,9 @@ Properties:
 tasks remote, and a fresh clone gets every relic from `workbook setup`. The
 synchronization a task command runs carries none; see
 [Sharing relics](#sharing-relics). No task command returns a relic:
-`workbook list` and `next` answer as they did before relics existed. There
-are no schemas, no retiring, no compaction and no
-web page for relics yet.
+`workbook list` and `next` answer as they did before relics existed. A project
+can save a [schema](#relic-schemas) for a relic type. There is no retiring, no
+compaction and no web page for relics yet.
 
 **Upgrade every Workbook on the machine before creating relics.** A Workbook
 from before relics does not know the refs that hold them. Its `workbook reset
@@ -729,8 +730,10 @@ at most 500 bytes.
 A relic type and a part type are lowercase names:
 `^[a-z0-9]+(-[a-z0-9]+)*$`, at most 100 bytes. That is lowercase ASCII letters
 and digits, in words joined by single hyphens, such as `spec`, `plan` or
-`decision-record`. Workbook gives no type a meaning yet. Any other name is
-refused with exit `5`:
+`decision-record`. A type means only what the project's
+[schema](#relic-schemas) for it says: a new relic names its type's newest
+version and is checked against it, and a type with no schema is open. Any other
+name is refused with exit `5`:
 
 ```sh
 workbook relic create "Too loud" --type "Design Doc"
@@ -851,6 +854,7 @@ Sync:	completed
 WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
 Author:	alice@example.com
 Updated:	2026-11-24T19:02:48Z
+Schema:	open
 Properties:
   approved: null
   owner: Alice <alice@example.com>
@@ -897,7 +901,8 @@ A body has a format label, or none:
 A label is at most 16 bytes of `^[a-z0-9][a-z0-9.+-]*$`: lowercase ASCII
 letters, digits, `.`, `+` and `-`, starting with a letter or a digit. A label
 given with `--body-format` is not lowercased, so `--body-format MD` is refused
-with exit `5`. Workbook gives no label a meaning yet. `relic show` prints a
+with exit `5`. Workbook gives no label a meaning of its own, though a schema
+may limit which labels a part type takes. `relic show` prints a
 body with no label as `txt`; in JSON such a body has no `format` member.
 Saving over a body that exists needs `--base`; see
 [Body versions](#body-versions).
@@ -908,7 +913,10 @@ refused: a part option before any group, an option its group does not take,
 `--add-part` without `--part-type`, `--part` with no change after it,
 `--move-part` without `--before` or `--after`, `--body-format` or `--base`
 without `--body-file` in the same group, or no change at all. A deleted relic
-cannot be changed until it is restored (exit `5`).
+cannot be changed until it is restored (exit `5`). A change the relic's schema
+refuses is exit `5` too, and a relic naming a version this checkout does not
+have cannot be updated until it is synchronized; see
+[When a relic is checked](#when-a-relic-is-checked).
 
 ### Listing relics
 
@@ -934,11 +942,15 @@ keys' own order, so a relic created under the key `AB` comes before every
 `WB` relic, whenever it was created. `--type <type>` keeps the relics of
 exactly that type. Deleted relics are left out unless `--all` is given, which
 marks each deleted relic with one more column, `deleted`; see
-[Deleting and restoring a relic](#deleting-and-restoring-a-relic).
+[Deleting and restoring a relic](#deleting-and-restoring-a-relic). `--behind`
+keeps the relics behind their type's newest schema version; see
+[Relics behind their schema](#relics-behind-their-schema).
 
 `relic list --json` carries a list of relics, each with `id`, `head`, `title`,
-`type`, `author`, `retired`, `deleted`, `createdAt`, `updatedAt` and `parts`,
-the number of live parts. `head` is the commit the relic's ref points at.
+`type`, `schema`, `conformance`, `author`, `retired`, `deleted`, `createdAt`,
+`updatedAt` and `parts`, the number of live parts, and where they apply
+`schemaProblem` and `behind`; see [Conformance](#conformance). `head` is the
+commit the relic's ref points at.
 
 `relic list` reads every relic. One relic whose stored data is damaged fails
 the whole listing, with exit `7` and a message that names that relic; see
@@ -965,6 +977,7 @@ workbook relic show WB-R-01M87F0S#01M87F0T8ZA
 WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
 Author:	alice@example.com
 Updated:	2026-11-24T19:02:48Z
+Schema:	open
 Properties:
   approved: null
   owner: Alice <alice@example.com>
@@ -1009,15 +1022,15 @@ text output, which says so in its place, and JSON carries it as `base64`.
 
 ### A damaged relic
 
-`relic show`, `relic export`, `relic update`, `relic delete` and
-`relic restore` each check the relic's newest commit against its parent before
+`relic show`, `relic export`, `relic update`, `relic migrate`, `relic delete`
+and `relic restore` each check the relic's newest commit against its parent before
 they answer. A newest commit whose stored relic or whose bodies do not follow
 from its operations is `corrupt-data` (exit `7`). `relic list` reads each
 relic's newest commit without that check, and refuses one that is not the
 bytes Workbook writes.
 
 Every message about one relic's stored data begins `relic <relic-id>: ` and
-says the cause once. From the five commands above it ends with a pointer to
+says the cause once. From the six commands above it ends with a pointer to
 `workbook validate`, which checks the whole history and names the commit.
 Workbook writes no such relic; the one below had its newest `state.json`
 rewritten with Git alone, after the session:
@@ -1246,14 +1259,14 @@ workbook relic show WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX#01M8ERE3J06CHHJXXN7TEXAZXS -
 ```
 
 ```json
-{"format":"workbook.result","version":1,"command":"relic show","data":{"relic":{"id":"WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX","head":"0a503d81185a852c9fe324e14dfec5c05a2f4a03","title":"Task archive compaction","type":"spec","author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-27T15:01:00Z","updatedAt":"2026-11-27T15:03:00Z","parts":1},"part":"01M8ERE3J06CHHJXXN7TEXAZXS","total":3,"showing":1,"changes":[{"commit":"0a503d81185a852c9fe324e14dfec5c05a2f4a03","actor":"bob@example.com","wallTime":"2026-11-27T15:03:00Z","logicalClock":4,"summary":"part.body.set","operations":[{"id":"01M8ERFY50CH0R3B0VFQHCM3SE","type":"part.body.set","part":"01M8ERE3J06CHHJXXN7TEXAZXS","body":{"format":"md","bytes":102,"base":"01M8ERE3J06CHHJXXN7TEXAZXS"},"applied":false}]}],"bodyVersions":[{"version":"01M8ERE3J06CHHJXXN7TEXAZXS","format":"md","bytes":48,"actor":"alice@example.com","wallTime":"2026-11-27T15:02:00Z","commit":"89c3b9169ab5b00ba22427c3069f341d0eae5efd"},{"version":"01M8ERHRR0EKET0S3GG29FR4XK","base":"01M8ERE3J06CHHJXXN7TEXAZXS","format":"md","bytes":102,"actor":"alice@example.com","wallTime":"2026-11-27T15:04:00Z","commit":"a64e67611c3eb38ee85848716d0552b5a602f146","current":true}]}}
+{"format":"workbook.result","version":1,"command":"relic show","data":{"relic":{"id":"WB-R-01M8ERC8Z07MKGK3RBNTN8ABJX","head":"0a503d81185a852c9fe324e14dfec5c05a2f4a03","title":"Task archive compaction","type":"spec","schema":null,"author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-27T15:01:00Z","updatedAt":"2026-11-27T15:03:00Z","parts":1},"part":"01M8ERE3J06CHHJXXN7TEXAZXS","total":3,"showing":1,"changes":[{"commit":"0a503d81185a852c9fe324e14dfec5c05a2f4a03","actor":"bob@example.com","wallTime":"2026-11-27T15:03:00Z","logicalClock":4,"summary":"part.body.set","operations":[{"id":"01M8ERFY50CH0R3B0VFQHCM3SE","type":"part.body.set","part":"01M8ERE3J06CHHJXXN7TEXAZXS","body":{"format":"md","bytes":102,"base":"01M8ERE3J06CHHJXXN7TEXAZXS"},"applied":false}]}],"bodyVersions":[{"version":"01M8ERE3J06CHHJXXN7TEXAZXS","format":"md","bytes":48,"actor":"alice@example.com","wallTime":"2026-11-27T15:02:00Z","commit":"89c3b9169ab5b00ba22427c3069f341d0eae5efd"},{"version":"01M8ERHRR0EKET0S3GG29FR4XK","base":"01M8ERE3J06CHHJXXN7TEXAZXS","format":"md","bytes":102,"actor":"alice@example.com","wallTime":"2026-11-27T15:04:00Z","commit":"a64e67611c3eb38ee85848716d0552b5a602f146","current":true}]}}
 ```
 
 The members of `data`:
 
 | Member | Value |
 | --- | --- |
-| `relic` | The relic now, with the members `relic list --json` gives. |
+| `relic` | The relic now, with the members `relic list --json` gives, except that it has no `conformance`, `schemaProblem` or `behind`, and its `schema` has no `version`. |
 | `part` | The part ID, for a part address only. |
 | `total`, `showing` | How many changes there are, and how many `changes` lists. |
 | `changes` | The window, oldest first. Each has `commit`, `actor`, `wallTime`, `logicalClock`, `summary` and `operations`. |
@@ -1262,7 +1275,8 @@ The members of `data`:
 
 An entry in `operations` carries the operation's members: `id` and `type`, those
 the type uses (`relic`, `title`, `name`, `value`, `part`, `partType`,
-`position`, `body` with `format`, `bytes` and `base`, `link`, `linkId`), and
+`position`, `body` with `format`, `bytes` and `base`, `link`, `linkId`,
+`relicType`, `schema`), and
 `applied` on an operation that saves a body. It is not the stored JSON itself.
 Commit IDs appear in output as information only.
 
@@ -1293,7 +1307,8 @@ A first change has no parent: the comparison starts before the relic, `from` is
 
 A part address compares that part's position, fields and body. A link added
 from the part is not part of that comparison; it appears in the whole-relic
-diff. A relic compares also its title, schema, retired and deleted flags, its
+diff. A relic compares also its type, title, schema version ID, retired and
+deleted flags, its
 properties and its links, and lists each part that differs. A part is live on a
 side that has it and has not removed it. A part live only on the to side is
 `added` when it is absent on the from side and `restored` when it is removed
@@ -1317,7 +1332,8 @@ Part 01M8ERE3J06CHHJXXN7TEXAZXS	section	changed
 	+Compaction replaces that history with one checkpoint.
 ```
 
-A relic's own changes print as `Title:`, `Schema:`, `Retired:`, `Deleted:` and
+A relic's own changes print as `Type:`, `Title:`, `Schema:`, `Retired:`,
+`Deleted:` and
 `Property <name>:` lines, a part's fields as `Field <name>:` lines, with `+` before
 an added value and `-` before a removed one, and links under `Links:`. A
 comparison with nothing different prints `These two versions hold the same
@@ -1453,7 +1469,7 @@ workbook relic update WB-R-01M87F0S --add-part --part-type section --field headi
 ```
 
 ```json
-{"format":"workbook.result","version":1,"command":"relic update","data":{"relic":{"id":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","head":"c5ed20941945d1b370927f125911e5909890c80c","title":"Task archive compaction, second draft","type":"spec","author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-24T19:02:45.75869Z","updatedAt":"2026-11-24T19:02:54.052091Z","parts":3},"parts":[{"id":"01M87F11V42NP3MEYSJ017ZDDA","type":"section","position":"3/2","fields":{"heading":"Non-goals"}}],"changed":true},"sync":{"enabled":true,"source":"default","status":"completed","fetch":{"remote":"origin","status":"completed","tasks":[]},"pushRelic":{"relicId":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","status":"published"}}}
+{"format":"workbook.result","version":1,"command":"relic update","data":{"relic":{"id":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","head":"c5ed20941945d1b370927f125911e5909890c80c","title":"Task archive compaction, second draft","type":"spec","schema":null,"author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-24T19:02:45.75869Z","updatedAt":"2026-11-24T19:02:54.052091Z","parts":3},"parts":[{"id":"01M87F11V42NP3MEYSJ017ZDDA","type":"section","position":"3/2","fields":{"heading":"Non-goals"}}],"changed":true},"sync":{"enabled":true,"source":"default","status":"completed","fetch":{"remote":"origin","status":"completed","tasks":[]},"pushRelic":{"relicId":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","status":"published"}}}
 ```
 
 The new part went between `1/1` and `2/1`, at `3/2`, so it is now the second
@@ -1503,6 +1519,7 @@ Sync:	completed
 WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
 Author:	alice@example.com
 Updated:	2026-11-24T19:02:54Z
+Schema:	open
 Properties:
   approved: null
   owner: Alice <alice@example.com>
@@ -1578,6 +1595,342 @@ Sync:	completed
 Deleting a deleted relic, or restoring a live one, changes nothing and prints
 `No change: <relic-id>`.
 
+### Relic schemas
+
+A project can save a **schema** for a relic type, which says what a relic of
+that type holds: its properties, the part types it may have with their fields
+and bodies, and rules for its links. A type with no schema is **open**: a relic
+of it holds anything within the [limits](#what-a-relic-may-hold). Saving a
+changed schema adds a numbered **version**, no version is ever changed or
+removed, and each relic names the version it is written under.
+
+A schema guides honest tools. It is not a security boundary: anyone who can push
+can write a relic that does not fit it, or save a new version, and Workbook
+reads what they wrote.
+
+Schemas are project settings. They are recorded in the configuration history
+under `refs/workbook/config` beside the statuses and priorities, so every
+command that synchronizes the settings brings them. A project's first schema
+also changes what an older Workbook may do: it can still read the settings, and
+is told to upgrade before it changes them; see
+[Mixed Workbook versions](architecture.md#mixed-workbook-versions).
+
+The examples under this heading come from a separate project, not from the
+session above.
+
+#### The schema file
+
+A schema is one JSON object. Every member is optional, and no other member is
+allowed:
+
+```json
+{
+  "title": "Spec",
+  "description": "A design for one feature.",
+  "properties": {
+    "type": "object",
+    "required": ["status"],
+    "properties": {
+      "status": {"enum": ["draft", "approved", "superseded"]},
+      "owner": {"$ref": "#/$defs/person"}
+    }
+  },
+  "parts": {
+    "section": {
+      "description": "One section of the design.",
+      "fields": {
+        "type": "object",
+        "required": ["heading"],
+        "properties": {"heading": {"type": "string", "maxLength": 200}}
+      },
+      "body": "required",
+      "bodyFormats": ["md"]
+    },
+    "decision": {"body": "optional"}
+  },
+  "links": {"relationships": ["implemented-by"]},
+  "$defs": {"person": {"type": "string", "minLength": 1}}
+}
+```
+
+| Member | Value |
+| --- | --- |
+| `title`, `description` | Text for people and agents. It changes no check. |
+| `properties` | A schema (see [Supported words](#supported-words)) for the relic's properties, taken together as one object. |
+| `parts` | An object of part rules keyed by part type. Without it a relic may have parts of any type. With it, only the types it lists are allowed, so `{}` allows none. |
+| `links` | An object with `relationships`, a list of distinct relationship names, and `pointer`, a schema; both optional. They are checked as part of the schema when it is saved. No relic's link is checked against them yet. |
+| `$defs` | Named schemas that `$ref` refers to. A name is 1 to 100 letters, digits, `-` or `_`. |
+
+A part rule has these members, all optional:
+
+| Member | Value |
+| --- | --- |
+| `description` | Text about the part type. |
+| `fields` | A schema for the part's fields, taken together as one object. Without it any fields are allowed. |
+| `body` | `"required"`, `"optional"` (the default) or `"none"`. |
+| `bodyFormats` | A non-empty list of distinct body format labels a body may have. Without it any label is allowed. A body with no label counts as `txt`. |
+
+#### Supported words
+
+A schema inside the file is a JSON object that uses only these words, which are
+a part of JSON Schema. Any other word, at any depth, is refused when the schema
+is saved.
+
+| Word | Accepts | What it checks |
+| --- | --- | --- |
+| `type` | `string`, `number`, `integer`, `boolean`, `object`, `array` or `null`, or a non-empty list of distinct ones | The value's kind. `integer` is any number with no fraction, so `1.0` is one. |
+| `properties` | An object of schemas | Each named member that is present. |
+| `required` | A list of distinct names | That each name is present. A member holding `null` is present. |
+| `additionalProperties` | `true` or `false` | With `false`, a member `properties` does not name is refused. |
+| `items` | One schema | Every item of a list. |
+| `minItems`, `maxItems` | A non-negative integer | A list's length. |
+| `minLength`, `maxLength` | A non-negative integer | A string's length in Unicode code points. |
+| `minimum`, `maximum` | A number | A number, compared exactly by value. |
+| `enum` | A non-empty list | That the value equals one of them. Numbers compare by value, at any depth, so `1` equals `1.0`. |
+| `const` | Any value | That the value equals it, compared as `enum` compares. |
+| `$ref` | A [reference](#references-between-schemas) | The named definition, together with any other words beside `$ref`. |
+| `title`, `description` | A string | Nothing. |
+| `$defs` | An object of schemas | Allowed only at the top of the file. |
+
+As in JSON Schema, a word about one kind of value says nothing about another:
+`maxLength` does not refuse a number. Use `type` for that.
+
+#### References between schemas
+
+A `$ref` has one of two forms:
+
+- `#/$defs/<name>` names a definition in the same file.
+- `<type>#/$defs/<name>` names a definition in the schema of another relic type,
+  which must have at least one version. Saving pins that type to its newest
+  version at that moment, and the stored document records the pin in
+  `references`. A later version of that type changes nothing in this one.
+
+Refused are a reference to the type being saved (use `#/$defs/<name>`); any
+other form, such as a web address, a file path or a pointer outside `$defs`; a
+name that is not defined; a loop of references, including a definition that
+refers to itself through `properties` or `items`; and a chain more than 32 deep,
+counting the steps inside another type's schema.
+
+#### Saving and reading schemas
+
+```text
+workbook schema list [--json]
+workbook schema show <type> [--version <n>] [--json]
+workbook schema put <type> <file|-> [--no-sync] [--no-docs] [--json]
+```
+
+`schema put` saves the schema in a file (`-` reads standard input) as the type's
+next version. It is stored in a canonical form, with object members sorted. The
+command synchronizes the settings as `status add` does, so `--no-sync` and the
+`auto-sync` setting apply, and it refreshes the generated guidelines unless
+`--no-docs` is given.
+
+```sh
+workbook schema put spec spec.json
+workbook schema put spec spec.json
+```
+
+```text
+spec	version 1	01M8FHMJ4KMSBVZXP7XRMP4ZXZ	623 bytes
+	docs:	.workbook/guidelines.md	written
+Sync:	completed
+No change: spec version 1 already holds this schema
+	docs:	.workbook/guidelines.md	unchanged
+Sync:	completed
+```
+
+A put whose stored document equals the type's newest version writes nothing, so a
+retry is safe. The same file becomes a new version only when a type it refers to
+has a newer version since, because the pin differs.
+
+A file that is not an allowed schema is refused with exit `5` and nothing is
+recorded. The message is `schema for <type>: <path>: <message>`, where the path
+is a JSON Pointer to the place in the file, left out when the problem is not at
+one place:
+
+```text
+workbook: schema for memo: /properties/properties/a/pattern: the word "pattern" is not supported in a relic schema
+```
+
+A file that does not exist is `not-found` (exit `4`). A change another process
+made to the settings while the command was writing is `stale-write` (exit `6`),
+with nothing recorded.
+
+With `--json`, `data` holds `type`, `version`, `id`, `bytes` (the size of the
+stored document), `references` (the pinned version ID for each other type the
+schema refers to, `{}` when there is none), `schema` and `changed`. The envelope
+carries `sync` and `warnings` as other settings changes do; a `docs-refresh`
+warning means the schema was recorded but the guidelines were not regenerated.
+
+`schema list` lists each type that has a schema, with its newest version:
+
+```text
+spec	version 1	1 version	623 bytes
+```
+
+Its `--json` data is a list of entries with `type`, `version` (the newest),
+`versions` (how many there are), `bytes` and `id` (both of the newest).
+`schema show` prints one line with the type, version, ID and size, then the
+schema, indented. It shows the newest version unless `--version <n>` names one,
+and its `--json` data is `type`, `version`, `id`, `bytes`, `references` and
+`schema`. A type with no schema, or with no version `n`, is `not-found` (exit
+`4`); a `--version` that is not 1 or more is `invalid-invocation` (exit `2`).
+`list` and `show` read this checkout's settings, contact no remote and report no
+`sync`.
+
+**Numbers and IDs.** A version's permanent name is its ID, and a relic stores
+the ID. Its number is its place among its type's versions in the order of the
+settings history. Two people who save a version of one type at once both keep
+theirs: the one that synchronizes second is numbered after the other, and its
+relics still name exactly the version they were written under. The
+synchronization that renumbers a version reports a `relic-schema-renumbered`
+warning, which a running `sync --watch` prints too:
+
+```text
+the schema for spec saved here as version 3 is now version 4; a teammate saved version 3 first
+```
+
+A version that has been pushed keeps its number.
+
+#### When a relic is checked
+
+A relic names a version from the moment it is created: `relic create` records its
+type's newest, or none for an open type. A relic created before its type had a
+schema names none and stays open until it is migrated.
+
+| Command | What is checked |
+| --- | --- |
+| `relic create` | The whole new relic: its properties, then each part. |
+| `relic create --from-file` | The same, under the version the document's `schema` names, or the type's newest when that is `null`. |
+| `relic update` | Only what the update saves: each property set, against its rule and `additionalProperties`; each property cleared, which must not be required; and each part added, edited or restored, judged whole as the update leaves it (its type, all its fields, its body and the body's format). |
+| `relic migrate` | The whole relic, removed parts aside, under the version it moves to. |
+
+An update does not check a title, a move, a removal, a link or an unlink, nor a
+part it leaves removed, and an update that changes nothing is not checked. Other
+words that judge the properties as a whole, such as an `enum` of whole objects,
+apply on `create`, on `migrate` and when a relic is judged for `conformance`,
+not on `update`. `relic delete` and `relic restore` check nothing. No read,
+fetch, sync, replay or `workbook validate` refuses a relic for not fitting its
+schema.
+
+A relic created from a title alone has no properties and no parts, so under a
+schema that requires a property `relic create <title> --type <type>` is refused;
+create such a relic with `--from-file`.
+
+A refused save is `validation` (exit `5`) and writes nothing. The message names
+the version, where the problem is, what is wrong and the word that was broken:
+
+```text
+workbook: relic does not fit schema spec version 1: property "status": the value must be one of "draft", "approved", "superseded" (enum)
+```
+
+The place is `property "<name>"`, `part <id> (<part type>)`,
+`part <id> (<part type>) field "<name>"` or `part <id> (<part type>) body`. A
+new relic names a part by where it comes, as `part 1 (<part type>)`, and a
+problem with the properties as a whole names `properties`. The first problem
+found refuses the save.
+
+**A version this checkout does not have.** A relic can name a version that
+another clone saved and this one has not fetched. It can still be read.
+`relic update` refuses it with exit `6` (`stale-write`) before the edits run, so
+even an update that would change nothing is refused:
+
+```text
+workbook: relic <relic-id> names a schema version for spec this clone has not synced; run `workbook sync` and try again
+```
+
+`workbook sync` fetches the version. `relic delete`, `relic restore` and
+`relic migrate` are allowed, so a relic whose version is lost can still be
+moved. `relic create --from-file` with a document naming an unfetched version is
+refused the same way, exit `6`, and one naming another type's version is exit
+`5`.
+
+#### Conformance
+
+A relic's `schema` member is `null` when it names no version, and otherwise
+`{"type":"spec","id":"<version ID>","version":1}`. How the relic stands against
+that version is reported as `conformance`:
+
+| `conformance` | Meaning |
+| --- | --- |
+| `open` | The relic names no version. |
+| `conforms` | The relic fits the version it names. |
+| `not-conforming` | The relic does not fit. `schemaProblem` holds the first problem found: properties by name, then live parts in order, each part's fields by name. Two edits that were each allowed can leave a relic so when they meet. |
+| `unknown-schema` | This checkout cannot judge the relic: it does not have the version the relic names, or cannot read that version's stored document. |
+
+`schemaProblem` appears only with `not-conforming`. Removed parts are not
+judged. Which results carry these members:
+
+| Result | `conformance` |
+| --- | --- |
+| `relic list`, `relic show` and `relic export` | Always. The one exception: `relic list --linked-to` lists a relic it cannot read at that moment without it. |
+| `relic create`, `relic migrate` | Present. A migration to the version the relic already names reports how the relic stands, which may be `not-conforming`. |
+| `relic update`, `relic delete`, `relic restore`, `relic show --history` | Left out. |
+
+`relic show` text prints a `Schema:` line, `<type> version <n>`, `open` or
+`unknown version <id>`, and for a relic that does not fit a `Does not fit:` line
+with the problem.
+
+#### Moving a relic to another version
+
+```text
+workbook relic migrate <relic> --to <target> [--no-sync] [--json]
+```
+
+`<target>` is one of:
+
+| Target | The relic moves to |
+| --- | --- |
+| `<n>` | Version `n` of the relic's type. |
+| `<type>` | That type's newest version. When the type has no schema, the relic becomes an open relic of that type. |
+| `<type>@<n>` | Version `n` of that type. |
+
+Any version this checkout has may be the target, an older one too. A target of
+another type changes the relic's type. The whole relic, its live parts only,
+must fit the version it moves to, or the command is refused with exit `5` and
+writes nothing; change the relic first. The version the relic names now is not
+read, so a relic naming a version this checkout does not have can be moved.
+Moving to what the relic already names writes nothing and reports
+`"changed": false`. A deleted relic is refused (exit `5`) until it is restored.
+A missing `--to`, or a target that has none of these forms (version `0`
+included), is `invalid-invocation` (exit `2`), and a version number the type
+does not have is `not-found` (exit `4`).
+
+The change is one `relic.migrate` operation: nothing already recorded is
+rewritten, and `relic diff` shows the new type and the new version ID. A
+migration synchronizes as `relic update` does and takes `--no-sync`. When two
+clones migrate one relic, it ends on the target of the one that synchronizes
+second, and both operations stay in the history.
+
+#### Relics behind their schema
+
+`workbook relic list --behind` lists only the relics **behind** their type's
+newest schema version: the type has a saved version, and the relic names an
+older version of that type or none. A relic of a type with no schema, or naming
+a version this checkout does not have, is not behind. It combines with `--type`,
+`--all` (without which deleted relics are left out) and `--linked-to`. In JSON a
+relic that is behind carries `"behind": true`, and other relics have no `behind`
+member. `relic list` text output marks neither a relic that is behind nor one
+that does not fit; both are in the JSON only.
+
+#### Schema limits
+
+| Limit | Value | Checked |
+| --- | --- | --- |
+| One stored schema version | 65,536 bytes (64 KiB); the file given to `schema put` is held to the same size | When saved and when read |
+| Versions of one type | 500 | Only when a version is saved |
+| Versions in a project, all types together | 1,000 | Only when a version is saved |
+| References followed in a row | 32 deep | When saved and when read |
+| Nesting in the schema file | 32 levels of objects and lists, which is about 15 schemas inside one another | When saved |
+| Work to check one value | 67,108,864 steps for the properties, for one property or for one part's fields | At every check |
+
+A save past a limit is refused with exit `5`. Two clones can each save within a
+version count and together pass it; the settings still read, and only a further
+save is refused. A check that passes the work limit stops, and a save is refused
+with a message ending
+`the schema is too costly to check against this value`; a relic judged that way
+reads as `not-conforming`. A real schema stays far below the limit.
+
 ### The relic document
 
 `workbook relic export <relic>` writes the whole relic as one JSON document of
@@ -1596,6 +1949,7 @@ workbook relic export WB-R-01M87F0S
   "title": "Task archive compaction, second draft",
   "type": "spec",
   "schema": null,
+  "conformance": "open",
   "author": "alice@example.com",
   "retired": false,
   "deleted": false,
@@ -1661,7 +2015,8 @@ for, with body content only under `--body`.
 | `format`, `version` | `"workbook.relic"` and `1`. |
 | `id`, `head` | The relic's ID, and the commit its ref points at. |
 | `title`, `type` | As stored. |
-| `schema` | Always `null`. |
+| `schema` | `null` for a relic that names no schema version, or the version it names: `type`, `id` and `version`. `version` is left out when this checkout's settings do not list the ID, and `type` is then the relic's own. |
+| `conformance`, `schemaProblem` | How the relic stands against that version; `schemaProblem` only with `not-conforming`. See [Conformance](#conformance). |
 | `author` | Who created the relic. |
 | `retired` | Always `false`. |
 | `deleted` | Whether the relic is deleted. |
@@ -1693,8 +2048,13 @@ one commit.
 - **Read:** `format` and `version`, which must be `workbook.relic` and `1`;
   `title`, `type` and `properties`; and each part's `type`, `fields`, and
   body `format` with exactly one of `text` and `base64`.
-- **Ignored:** `id`, `head`, `author`, `retired`, `deleted`, `createdAt` and
-  `updatedAt`; each part's `id`, `position` and `removed`; and each body's
+- **Read, when given:** `schema`. `null` names the type's newest version. An
+  object names the version with its `id`, which must be a version of the relic's
+  type that this checkout has; its `type` and `version` are ignored. To create a
+  relic of another type from a document that names a version, set `schema` to
+  `null`.
+- **Ignored:** `id`, `head`, `author`, `retired`, `deleted`, `createdAt`,
+  `updatedAt`, `conformance` and `schemaProblem`; each part's `id`, `position` and `removed`; and each body's
   `version` and `bytes`. Parts are placed in the order the document lists
   them, and every one is live.
 - **Refused** (exit `5`), with nothing created:
@@ -1710,9 +2070,12 @@ one commit.
     a body, `properties`, one part's `fields`, or an object inside a value;
   - a member the format does not have. Member names are matched exactly, so
     `"Title"` is not `"title"`;
-  - a `schema` that is not `null`, and a `links` list that is not empty: the
-    new relic's parts get new IDs, so add each link afterwards with
-    `relic update --link`;
+  - a `schema` that is neither `null` nor an object whose `id` is a schema
+    version ID, or that names another type's version;
+  - a relic that does not fit the [schema version](#when-a-relic-is-checked) it
+    is created under. A version this checkout does not have is exit `6` instead;
+  - a `links` list that is not empty: the new relic's parts get new IDs, so add
+    each link afterwards with `relic update --link`;
   - a body with both `text` and `base64`, or with neither.
 
 A title given first on the command line, or `--type`, replaces the document's.
@@ -1863,7 +2226,7 @@ watcher recorded, with the same `relicConflict` member a relic command uses.
 histories do; see [Mixed Workbook versions](architecture.md#mixed-workbook-versions).
 A relic whose newest commit was written by a newer Workbook than this one can
 still be shown, as far as this build can read it. `relic update`,
-`relic delete` and `relic restore` refuse it as `newer-writer` (exit `9`),
+`relic migrate`, `relic delete` and `relic restore` refuse it as `newer-writer` (exit `9`),
 naming the relic and saying to upgrade, and write nothing. `workbook validate`
 counts it under `newerWriter` rather than as invalid.
 
@@ -1911,8 +2274,8 @@ a112b0c1b8059dfafa88aefc65ad45d447da7426 commit	refs/workbook/relics/WB-R-01M87F
 a112b0c1b8059dfafa88aefc65ad45d447da7426 commit	refs/workbook/remotes/origin/relics/WB-R-01M87F17QTWKQKT6MZWX54HFY8
 ```
 
-`relic create`, `relic update`, `relic delete` and `relic restore` synchronize
-as a task command does, and their fetch carries relics as well as tasks. Each
+`relic create`, `relic update`, `relic migrate`, `relic delete` and
+`relic restore` synchronize as a task command does, and their fetch carries relics as well as tasks. Each
 fetches first, records its change, and pushes the one relic ref it moved, and its output ends with the `Sync:` line every
 synchronizing command prints; with `--json` the result carries it as `sync`.
 `--no-sync`, or the setting `auto-sync` turned off, skips both: the change is
@@ -2214,6 +2577,7 @@ workbook: warning: relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: part 01M87F11V42NP3MEY
 WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
 Author:	alice@example.com
 Updated:	2026-11-24T19:03:20Z
+Schema:	open
 Properties:
   approved: null
   owner: Alice <alice@example.com>
@@ -2457,8 +2821,8 @@ WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	Release checklist
 Sync:	completed
 ```
 
-**A conflict met by a relic command.** `relic update`, `relic delete` and
-`relic restore` fetch before they change anything. When that fetch parks a
+**A conflict met by a relic command.** `relic update`, `relic migrate`,
+`relic delete` and `relic restore` fetch before they change anything. When that fetch parks a
 conflict on the relic the command names, the command records nothing, reports
 the conflict as above, and exits `8`; run it again to make the change on top
 of what now stands. A conflict that fetch meets on another relic is reported
@@ -2474,8 +2838,8 @@ cache task reads use, and never from a copy of a body: a body is read from
 Git by its object ID when it is shown or exported. Before answering, a relic
 read brings the cache up to the relic refs, reading from Git only the relics
 that changed since, so a change made in another clone, worktree or process is
-seen without a rebuild. `relic create`, `update`, `delete` and `restore` read
-the relic from Git, as they always did. See
+seen without a rebuild. `relic create`, `update`, `migrate`, `delete` and
+`restore` read the relic from Git, as they always did. See
 [SQLite projection](architecture.md#sqlite-projection) for what the cache
 holds.
 
@@ -2554,6 +2918,7 @@ Sync:	completed
 WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
 Author:	alice@example.com
 Updated:	2026-11-24T19:03:45Z
+Schema:	open
 Properties:
   approved: null
   owner: Alice <alice@example.com>
@@ -2615,7 +2980,7 @@ WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	2 parts	Task archive compaction, second dra
 	01M87F2KNMJKQA2AYXXF2ZQ5C4	relic	implemented-by
 WB-R-01M87F0YHZ1852KPS55KCDPXG2	plan	0 parts	Release checklist
 	01M87F2PV71CCDX34JPK969NYV	relic	relates-to
-{"format":"workbook.result","version":1,"command":"relic list","data":[{"id":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","head":"9838201adc215ebdae1780fef049d03763273df7","title":"Task archive compaction, second draft","type":"spec","author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-24T19:02:45.75869Z","updatedAt":"2026-11-24T19:03:45.157964Z","parts":2,"linkedBy":[{"link":"01M87F2KNMJKQA2AYXXF2ZQ5C4","rel":"implemented-by"}]},{"id":"WB-R-01M87F0YHZ1852KPS55KCDPXG2","head":"2582439f3202d7b0e539ae782f0b83facf090182","title":"Release checklist","type":"plan","author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-24T19:02:50.687794Z","updatedAt":"2026-11-24T19:03:48.327344Z","parts":0,"linkedBy":[{"link":"01M87F2PV71CCDX34JPK969NYV","rel":"relates-to"}]}]}
+{"format":"workbook.result","version":1,"command":"relic list","data":[{"id":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","head":"9838201adc215ebdae1780fef049d03763273df7","title":"Task archive compaction, second draft","type":"spec","schema":null,"conformance":"open","author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-24T19:02:45.75869Z","updatedAt":"2026-11-24T19:03:45.157964Z","parts":2,"linkedBy":[{"link":"01M87F2KNMJKQA2AYXXF2ZQ5C4","rel":"implemented-by"}]},{"id":"WB-R-01M87F0YHZ1852KPS55KCDPXG2","head":"2582439f3202d7b0e539ae782f0b83facf090182","title":"Release checklist","type":"plan","schema":null,"conformance":"open","author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-24T19:02:50.687794Z","updatedAt":"2026-11-24T19:03:48.327344Z","parts":0,"linkedBy":[{"link":"01M87F2PV71CCDX34JPK969NYV","rel":"relates-to"}]}]}
 ID:	WB-01M87F19RB1PVEE87F7PS1D1FJ
 Project ID:	01M87F0RVXDCDBV34NDN8Z3Y5E
 Title:	Write the compaction command
@@ -2665,6 +3030,7 @@ git cat-file blob 9838201adc215ebdae1780fef049d03763273df7:operation.json | jq -
 WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
 Author:	alice@example.com
 Updated:	2026-11-24T19:03:45Z
+Schema:	open
 Properties:
   approved: null
   owner: Alice <alice@example.com>
@@ -2728,6 +3094,7 @@ Sync:	completed
 WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
 Author:	alice@example.com
 Updated:	2026-11-24T19:03:45Z
+Schema:	open
 Properties:
   approved: null
   owner: Alice <alice@example.com>
@@ -2778,7 +3145,7 @@ WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
 Sync:	completed
 [{"id":"01M87F2Z6246AY8E00388DH9SS","type":"link.remove","linkId":"01M87F2KNMJKQA2AYXXF2ZQ5C4"}]
 {"format":"workbook.relic-links","version":1,"links":[{"id":"01M87F2KR522KBJ4CWWSRHRY4G","from":"01M87F0T8ZDXPZV8WNS006CBKV","to":{"task":"WB-01M87F2JJT7ERPBSGFX8XTZ4NW"},"rel":"implemented-by"}]}
-{"relic":{"id":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","head":"ecab03238f99a74eb0366e7dbd69e889028f623a","title":"Task archive compaction, second draft","type":"spec","author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-24T19:02:45.75869Z","updatedAt":"2026-11-24T19:03:58.380464Z","parts":2},"parts":[],"changed":true}
+{"relic":{"id":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","head":"ecab03238f99a74eb0366e7dbd69e889028f623a","title":"Task archive compaction, second draft","type":"spec","schema":null,"author":"alice@example.com","retired":false,"deleted":false,"createdAt":"2026-11-24T19:02:45.75869Z","updatedAt":"2026-11-24T19:03:58.380464Z","parts":2},"parts":[],"changed":true}
 No change: WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
 Sync:	completed
 workbook: relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX has no link "01M0000"
@@ -2822,22 +3189,22 @@ Relics:
 
 Every relic command takes `--json` and uses the result and error envelopes
 described below. The `command` member is `relic create`, `relic list`,
-`relic show`, `relic update`, `relic delete`, `relic restore`,
+`relic show`, `relic update`, `relic migrate`, `relic delete`, `relic restore`,
 `relic export` or `relic diff`. The data of `relic show --history` and of
 `relic diff` is described under [History and diffs](#history-and-diffs); neither
 contacts a remote or reports a `sync`.
 
-`relic create`, `relic update`, `relic delete` and `relic restore` report the
-same three members, as in the `--add-part` result under
+`relic create`, `relic update`, `relic migrate`, `relic delete` and
+`relic restore` report the same three members, as in the `--add-part` result under
 [Part order](#part-order):
 
 | Member | Value |
 | --- | --- |
-| `relic` | The relic after the command, with the members `relic list --json` gives. |
+| `relic` | The relic after the command, with the members `relic list --json` gives, never `behind`. `conformance` and `schemaProblem` are given by `create` and `migrate` only; see [Conformance](#conformance). |
 | `parts` | The parts the command added or edited, in the order it first changed them, each with `id`, `type`, `position`, `fields`, and `body` without its content. A part that was only moved, removed or restored is not listed. Always present, and empty when there is none. |
 | `changed` | `false` when the command recorded nothing. |
 
-Those four commands also report, in the envelope's `sync` member, the fetch
+Those five commands also report, in the envelope's `sync` member, the fetch
 they ran and the push of the one relic they changed, as `sync.pushRelic`:
 
 ```json
@@ -2867,7 +3234,8 @@ and a relic over a limit after a merge gives a `relic-over-limit` warning in
 ### Relics for agents
 
 The generated guidelines, `.workbook/guidelines.md`, have a `Relics` section,
-and the Workbook skill the same steps; `workbook setup` installs both and
+which also lists each relic type that has a schema with its newest version,
+required properties and part types, and the Workbook skill has the same steps; `workbook setup` installs both and
 `workbook docs update` refreshes them. They teach an agent to find the relics
 linked to a task, read one part, and save an edit naming the version it read,
 with these commands, in this order:
@@ -2963,6 +3331,10 @@ Two commands changing one relic at the same moment are a concurrent writer
 too. One is recorded and the other is refused with exit `6`, with a message
 that begins `relic ref changed concurrently` and says to run the command
 again. Running it again gets past that refusal.
+
+A relic naming a schema version this checkout does not have is exit `6` too,
+and `workbook sync`, not a retry, gets past it; see
+[When a relic is checked](#when-a-relic-is-checked).
 
 Three relic refusals are exit `6` and are not got past by a retry of the
 identical command. All three are about `--base` when a body is saved with
