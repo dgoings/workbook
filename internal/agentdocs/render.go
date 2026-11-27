@@ -290,13 +290,13 @@ func relicGuidelines(keys core.KeySet) string {
 		"as `--base`. Two edits to the same body are never merged.\n\n" +
 		"A save whose `--base` is no longer the current version exits 6\n" +
 		"(`stale-write`) and writes nothing; repeating the identical command fails\n" +
-		"the same way. A sync that meets another clone's edit of the same body exits\n" +
-		"8 and reports it in the result envelope's `relicConflict` list: an entry of\n" +
-		"`type` `body` whose `body` carries `base`, `ours` and `theirs`, with your\n" +
-		"text kept at `parkedRef`. Other local changes the sync did not apply are\n" +
-		"listed in `unapplied`; make them again after saving the body. When a relic\n" +
-		"change exits 8 this way, it recorded nothing; run it again after you\n" +
-		"resolve the body.\n\n" +
+		"the same way. A sync that meets another clone's different edit of the same\n" +
+		"body exits 8 and reports it in the result envelope's `relicConflict` list:\n" +
+		"an entry of `type` `body` whose `body` carries `base`, `ours` and `theirs`,\n" +
+		"with your text kept at `parkedRef`. Other local changes the sync did not\n" +
+		"apply are listed in `unapplied`; make them again after saving the body.\n" +
+		"When a relic change exits 8 this way, it recorded nothing; run it again\n" +
+		"after you resolve the body.\n\n" +
 		"On either, read the part again. When your intent is clear, apply your\n" +
 		"change to the current text and save with `--base` set to the current\n" +
 		"version. Otherwise show the user both versions and ask; never save over\n" +

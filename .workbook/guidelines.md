@@ -155,13 +155,13 @@ as `--base`. Two edits to the same body are never merged.
 
 A save whose `--base` is no longer the current version exits 6
 (`stale-write`) and writes nothing; repeating the identical command fails
-the same way. A sync that meets another clone's edit of the same body exits
-8 and reports it in the result envelope's `relicConflict` list: an entry of
-`type` `body` whose `body` carries `base`, `ours` and `theirs`, with your
-text kept at `parkedRef`. Other local changes the sync did not apply are
-listed in `unapplied`; make them again after saving the body. When a relic
-change exits 8 this way, it recorded nothing; run it again after you
-resolve the body.
+the same way. A sync that meets another clone's different edit of the same
+body exits 8 and reports it in the result envelope's `relicConflict` list:
+an entry of `type` `body` whose `body` carries `base`, `ours` and `theirs`,
+with your text kept at `parkedRef`. Other local changes the sync did not
+apply are listed in `unapplied`; make them again after saving the body.
+When a relic change exits 8 this way, it recorded nothing; run it again
+after you resolve the body.
 
 On either, read the part again. When your intent is clear, apply your
 change to the current text and save with `--base` set to the current

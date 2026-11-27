@@ -85,11 +85,11 @@ Two edits to the same body are never merged:
 - A save whose `--base` is no longer the current version exits 6
   (`stale-write`) and writes nothing. Repeating the identical command fails
   the same way.
-- A sync that meets another clone's edit of the same body exits 8 and reports
-  it in the result envelope's `relicConflict` list, an entry of `type` `body`
-  whose `body` carries `base`, `ours` and `theirs`; your text is kept at
-  `parkedRef`. Other local changes the sync did not apply are listed in
-  `unapplied`; make them again after saving the body. When a relic change
+- A sync that meets another clone's different edit of the same body exits 8
+  and reports it in the result envelope's `relicConflict` list, an entry of
+  `type` `body` whose `body` carries `base`, `ours` and `theirs`; your text is
+  kept at `parkedRef`. Other local changes the sync did not apply are listed
+  in `unapplied`; make them again after saving the body. When a relic change
   exits 8 this way, it recorded nothing; run it again after you resolve the
   body.
 
@@ -199,7 +199,8 @@ A relic body save refused for its `--base` also exits 6: follow
 or asking the user.
 
 Run `workbook fetch`, `workbook sync`, or `workbook push` only when explicitly
-asked, or to reconcile after exit code 6.
+asked, to reconcile after exit code 6, or to get the latest relics before
+reading one.
 
 ## Common mistakes
 
