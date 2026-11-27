@@ -85,6 +85,11 @@ type schemaCheckKey struct {
 	container uintptr
 }
 
+// maxSchemaCheckMemo bounds what one check remembers, so a schema built to
+// reach the step budget cannot also take gigabytes. Past it a judgement is
+// made again when it comes up again, which costs steps and changes no result.
+const maxSchemaCheckMemo = 1 << 20
+
 func newSchemaCheck(budget int64) *schemaCheck {
 	return &schemaCheck{memo: map[schemaCheckKey]*schemaFault{}, budget: budget}
 }
@@ -128,7 +133,7 @@ func (c *schemaCheck) value(node *schemaNode, value any, noun string, at []strin
 		}
 	}
 	fault := c.judge(node, value, noun, at)
-	if remember {
+	if remember && len(c.memo) < maxSchemaCheckMemo {
 		c.memo[key] = fault
 	}
 	return fault
