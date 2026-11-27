@@ -1166,13 +1166,13 @@ workbook: placing the part there needs a position of <n> bytes, and a position m
 
 Workbook does not renumber part positions. No command rewrites the positions
 a relic holds: a part keeps its position until it is moved, and a part placed
-into a narrow gap gets a longer one. Ordinary reordering stays short: in the relic benchmark, 10,000 random
-moves among 2,000 parts left no position longer than 12 bytes, and 10,000
-moves to the front none longer than 7. What reaches 256 bytes is moving three
-parts in turn, each into the gap between the two placed last, so the gap
-narrows from both ends on every move: in the same benchmark that pattern was
-first refused at move 608, and every later try of the same move was refused
-too.
+into a narrow gap gets a longer one. Ordinary reordering stays short: in the
+relic benchmark, 10,000 random moves among 2,000 parts left no position longer
+than 12 bytes, and 10,000 moves to the front none longer than 7. What reaches
+256 bytes is moving three parts in turn, each into the gap between the two
+placed last, so the gap narrows from both ends on every move: in the same
+benchmark that pattern was first refused at move 608, and every later try of
+the same move was refused too.
 
 ### Removing and restoring parts
 
