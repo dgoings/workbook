@@ -368,7 +368,7 @@ func TestRelicShowRefusesATaskID(t *testing.T) {
 	mustCreateRelic(t, repository, "A relic", "--type", "spec")
 	before := gitOutput(t, repository, "rev-parse", "refs/workbook/tasks/"+task.ID)
 
-	for _, command := range []string{"show", "delete", "restore", "export"} {
+	for _, command := range []string{"show", "diff", "delete", "restore", "export"} {
 		message := relicErrorMessage(t, repository, 4, core.CategoryNotFound, command, task.ID)
 		if !strings.Contains(message, "no relic matches") {
 			t.Errorf("relic %s <task> message = %q, want no relic matches", command, message)
@@ -389,6 +389,7 @@ func TestRelicCommandsRefuseBadInvocations(t *testing.T) {
 		{"create", "T"},
 		{"create", "--type", "spec"},
 		{"show"},
+		{"diff"},
 		{"delete"},
 		{"restore"},
 		{"export"},
@@ -396,7 +397,7 @@ func TestRelicCommandsRefuseBadInvocations(t *testing.T) {
 		relicErrorMessage(t, repository, 2, core.CategoryInvocation, args...)
 	}
 	message := relicErrorMessage(t, repository, 2, core.CategoryInvocation)
-	for _, subcommand := range []string{"create", "list", "show", "update", "delete", "restore", "export"} {
+	for _, subcommand := range []string{"create", "list", "show", "diff", "update", "delete", "restore", "export"} {
 		if !strings.Contains(message, subcommand) {
 			t.Errorf("relic with no subcommand message = %q, want it to name %s", message, subcommand)
 		}
@@ -429,13 +430,15 @@ func TestRelicPrefixResolution(t *testing.T) {
 func TestRelicHelp(t *testing.T) {
 	t.Parallel()
 	output := assertHelpOutput(t, []string{"help", "relic"}, "Usage: workbook relic <command> [options]")
-	for _, subcommand := range []string{"create", "list", "show", "update", "delete", "restore", "export"} {
+	for _, subcommand := range []string{"create", "list", "show", "diff", "update", "delete", "restore", "export"} {
 		if !strings.Contains(output, "\n  "+subcommand+" ") {
 			t.Errorf("relic help = %q, want subcommand %s", output, subcommand)
 		}
 	}
 	assertHelpOutput(t, []string{"relic", "show", "--help"},
-		"Usage: workbook relic show <relic>[#<part>] [--body] [--removed] [--json]")
+		"Usage: workbook relic show <relic>[#<part>] [--body] [--removed] [--history [--limit <n> | --all]] [--json]")
+	assertHelpOutput(t, []string{"relic", "diff", "--help"},
+		"Usage: workbook relic diff <relic>[#<part>] [<version> [<version>]] [--context <n>|all] [--json]")
 	global := assertHelpOutput(t, []string{"help"}, "relic")
 	// The rendered help pads each command name into a column; the usage text
 	// printed beside an unknown command does not.

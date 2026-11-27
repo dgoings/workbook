@@ -2,7 +2,9 @@ package core
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -283,6 +285,22 @@ func TestLineDiffFallsBackPastTheEditBound(t *testing.T) {
 	edited = strings.Replace(edited, "line 2500\n", "LINE 2500\n", 1)
 	if _, approximate := LineDiff([]byte(base), []byte(edited), -1); !approximate {
 		t.Fatal("2,001 changed lines are exact")
+	}
+}
+
+// A context larger than the bodies is every line: it must not overflow.
+func TestLineDiffClampsAHugeContext(t *testing.T) {
+	from := []byte(numberedLines(40, "line %d\n"))
+	to := []byte(strings.Replace(string(from), "line 20\n", "changed\n", 1))
+	want, _ := LineDiff(from, to, -1)
+	if len(want) != 1 {
+		t.Fatalf("LineDiff(context -1) = %+v, want one hunk", want)
+	}
+	for _, context := range []int{math.MaxInt, math.MaxInt - 1, 41} {
+		got, approximate := LineDiff(from, to, context)
+		if approximate || !reflect.DeepEqual(got, want) {
+			t.Errorf("LineDiff(context %d) = %+v (approximate %v), want the whole body %+v", context, got, approximate, want)
+		}
 	}
 }
 

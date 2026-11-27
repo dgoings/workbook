@@ -1234,8 +1234,8 @@ func TestRelicUpdateHelp(t *testing.T) {
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("relic update options = %q, want %q", names, want)
 	}
-	if order := relicSubcommands(); !reflect.DeepEqual(order, []string{"create", "list", "show", "update", "delete", "restore", "export"}) {
-		t.Fatalf("relic subcommands = %q, want update after show", order)
+	if order := relicSubcommands(); !reflect.DeepEqual(order, []string{"create", "list", "show", "diff", "update", "delete", "restore", "export"}) {
+		t.Fatalf("relic subcommands = %q, want diff and update after show", order)
 	}
 }
 

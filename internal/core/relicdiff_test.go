@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"sort"
@@ -371,5 +372,105 @@ func TestRelicDiffJSONMembers(t *testing.T) {
 	encoded, _ = json.Marshal(RelicDiff{Relic: relicDocRelic, Part: part})
 	if strings.Contains(string(encoded), "parts") || strings.Contains(string(encoded), "changes") || !strings.Contains(string(encoded), `"part":`) {
 		t.Errorf("equal part diff JSON = %s", encoded)
+	}
+}
+
+// A body whose object differs between the sides must have been read: a side
+// read without it is a programming error, reported rather than shown as a text
+// body with no changes.
+func TestCompareRelicVersionsRefusesAnUnreadChangedBody(t *testing.T) {
+	part := relicTestID(201)
+	from := newDiffSide("R").part(part, "1/1", false, nil, "md", []byte("old\n"))
+	to := newDiffSide("R").part(part, "1/1", false, nil, "md", []byte("new\n"))
+	if err := CompareRelicVersions(from.side(nil), to.side(nil), part, 3).Err(); err != nil {
+		t.Fatalf("a comparison with both bodies read: Err() = %v", err)
+	}
+	withoutBody := func(side RelicVersionSide) RelicVersionSide {
+		content := side.Content[part]
+		content.Body, content.HasBody = nil, false
+		side.Content = map[string]RelicPartContent{part: content}
+		return side
+	}
+	unread := func(side RelicVersionSide) RelicVersionSide {
+		side.Content = nil
+		return side
+	}
+	for label, sides := range map[string][2]RelicVersionSide{
+		"from read without its body": {withoutBody(from.side(nil)), to.side(nil)},
+		"to read without its body":   {from.side(nil), withoutBody(to.side(nil))},
+		"from not read":              {unread(from.side(nil)), to.side(nil)},
+		"to not read":                {from.side(nil), unread(to.side(nil))},
+		"neither read":               {unread(from.side(nil)), unread(to.side(nil))},
+	} {
+		for _, partID := range []string{part, ""} {
+			err := CompareRelicVersions(sides[0], sides[1], partID, 3).Err()
+			if CategoryOf(err) != CategoryOperational {
+				t.Errorf("%s (part %q): Err() = %v, want an operational error", label, partID, err)
+			}
+		}
+	}
+}
+
+// bodylessRelicReader drops every body, as a reader with a bug would.
+type bodylessRelicReader struct{ *memoryRelicStore }
+
+func (r bodylessRelicReader) ReadRelicParts(
+	ctx context.Context, config ProjectConfig, snapshot RelicSnapshot, partIDs []string, _ bool,
+) (map[string]RelicPartContent, error) {
+	return r.memoryRelicStore.ReadRelicParts(ctx, config, snapshot, partIDs, false)
+}
+
+type fixedHistoryReader struct {
+	chain    RelicChain
+	versions map[string]RelicVersion
+}
+
+func (r fixedHistoryReader) RelicChain(context.Context, ProjectConfig, RelicHead) (RelicChain, error) {
+	return r.chain, nil
+}
+
+func (r fixedHistoryReader) ReadRelicVersions(_ context.Context, _ ProjectConfig, _ string, commits []string) ([]RelicVersion, error) {
+	versions := make([]RelicVersion, len(commits))
+	for index, commit := range commits {
+		versions[index] = r.versions[commit]
+	}
+	return versions, nil
+}
+
+func TestRelicServiceDiffPassesOnAnUnreadBody(t *testing.T) {
+	partID := relicTestID(11)
+	root := relicFoldPack(1,
+		RelicOperation{ID: relicTestID(1), Type: RelicOperationCreate,
+			Relic: &RelicCreateData{Title: "R", Type: "spec", CreatedAt: relicDocTime}},
+		RelicOperation{ID: partID, Type: RelicOperationPartAdd, PartType: "section", Position: "1/1",
+			Body: &RelicBodyChange{Format: "md", Bytes: 4}})
+	first, err := ApplyRelic(nil, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := relicFoldPack(2, RelicOperation{ID: relicTestID(12), Type: RelicOperationPartBodySet, Part: partID,
+		Body: &RelicBodyChange{Format: "md", Bytes: 4, Base: partID}})
+	second := mustApplyRelic(t, first, edit)
+
+	store := newMemoryRelicStore()
+	tip := RelicSnapshot{Head: "c2", Operation: edit, Record: second}
+	store.put(tip)
+	store.content[relicDocRelic][partID] = RelicPartContent{Body: []byte("new\n"), HasBody: true}
+	history := fixedHistoryReader{
+		chain: RelicChain{RelicID: relicDocRelic, Head: "c2", Commits: []RelicChainCommit{
+			{Commit: "c1", Operation: root}, {Commit: "c2", Parent: "c1", Operation: edit},
+		}},
+		versions: map[string]RelicVersion{
+			"c1": {Snapshot: RelicSnapshot{Head: "c1", Operation: root, Record: first},
+				Parts: map[string]RelicPartObjectIDs{partID: {Fields: "f", Body: "old"}}},
+			"c2": {Snapshot: tip, Parts: map[string]RelicPartObjectIDs{partID: {Fields: "f", Body: "new"}}},
+		},
+	}
+	service := newRelicTestService(store, nil)
+	service.Reader = bodylessRelicReader{store}
+	service.HistoryReader = history
+	diff, err := service.Diff(context.Background(), relicDocRelic+"#"+partID, nil, RelicDiffOptions{Context: 3})
+	if CategoryOf(err) != CategoryOperational {
+		t.Fatalf("Diff() = (%+v, %v), want an operational error", diff, err)
 	}
 }

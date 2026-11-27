@@ -491,6 +491,9 @@ func (s RelicService) Diff(ctx context.Context, address string, versions []strin
 		return RelicDiff{}, err
 	}
 	diff := CompareRelicVersions(fromSide, toSide, partID, options.Context)
+	if err := diff.Err(); err != nil {
+		return RelicDiff{}, err
+	}
 	diff.Relic = relicID
 	diff.From = relicDiffPointOf(from)
 	if point := relicDiffPointOf(to); point != nil {

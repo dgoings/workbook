@@ -63,6 +63,9 @@ func LineDiff(from, to []byte, context int) (hunks []RelicDiffHunk, approximate 
 	fromLines, toLines := splitRelicLines(from), splitRelicLines(to)
 	kinds, approximate := relicLineEdits(fromLines, toLines)
 	lines := relicDiffLines(fromLines, toLines, kinds)
+	// No hunk reaches further than every line, and the bound keeps the hunk
+	// arithmetic from overflowing.
+	context = min(context, len(lines))
 	return relicDiffHunks(lines, context), approximate
 }
 

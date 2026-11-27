@@ -91,6 +91,16 @@ type RelicDiff struct {
 	Properties []RelicValueChange `json:"properties,omitempty"`
 	Parts      []RelicPartDiff    `json:"parts,omitempty"`
 	Links      *RelicLinksDiff    `json:"links,omitempty"`
+
+	// unread records a changed body the comparison was not given; see Err.
+	unread error
+}
+
+// Err reports that the comparison could not be made: a body that differs
+// between the sides was not read on a side that has one. That is a fault of
+// the caller, and the diff must not be shown, because it would lack the change.
+func (d RelicDiff) Err() error {
+	return d.unread
 }
 
 // RelicVersionSide is one side of a comparison: the record at that point, nil
@@ -203,7 +213,8 @@ func RelicBodiesToRead(side, other RelicVersionSide, parts []string) bool {
 // CompareRelicVersions compares two versions of a relic, or one part of it when
 // partID is set, from the first side to the second. The caller fills in the
 // points. Only parts that differ are listed, and the content of a part is read
-// from the sides' Content, which must hold what RelicPartsToRead lists.
+// from the sides' Content, which must hold what RelicPartsToRead lists; the
+// diff's Err reports a changed body that is not there.
 func CompareRelicVersions(from, to RelicVersionSide, partID string, context int) RelicDiff {
 	diff := RelicDiff{Part: partID}
 	if to.Record != nil {
@@ -212,7 +223,11 @@ func CompareRelicVersions(from, to RelicVersionSide, partID string, context int)
 		diff.Relic = from.Record.State.RelicID
 	}
 	for _, id := range comparedPartIDs(from, to, partID) {
-		if part, differs := compareRelicPart(from, to, id, context); differs {
+		part, differs, err := compareRelicPart(from, to, id, context)
+		if err != nil {
+			diff.unread = err
+		}
+		if differs {
 			diff.Parts = append(diff.Parts, part)
 		}
 	}
@@ -366,14 +381,16 @@ func liveIndex(side RelicVersionSide, id string) int {
 	return -1
 }
 
-// compareRelicPart compares one part, reporting whether it differs.
-func compareRelicPart(from, to RelicVersionSide, id string, context int) (RelicPartDiff, bool) {
+// compareRelicPart compares one part, reporting whether it differs, and an
+// error when its changed body was not read.
+func compareRelicPart(from, to RelicVersionSide, id string, context int) (RelicPartDiff, bool, error) {
 	fromPart, onFrom := from.part(id)
 	toPart, onTo := to.part(id)
 	if !onFrom && !onTo {
-		return RelicPartDiff{}, false
+		return RelicPartDiff{}, false, nil
 	}
 	diff := RelicPartDiff{ID: id}
+	var err error
 	switch {
 	case !onFrom:
 		diff.Type, diff.Kind = toPart.Type, ChangeAdded
@@ -404,19 +421,20 @@ func compareRelicPart(from, to RelicVersionSide, id string, context int) (RelicP
 	fromFormat, fromHasBody := relicBodyFormat(fromPart, onFrom)
 	toFormat, toHasBody := relicBodyFormat(toPart, onTo)
 	if fromHasBody != toHasBody || fromFormat != toFormat || (fromHasBody && fromObjects.Body != toObjects.Body) {
-		diff.Body = compareRelicBodies(from, to, id, fromPart, toPart, context)
+		diff.Body, err = compareRelicBodies(from, to, id, fromPart, toPart, context)
 	}
 	if diff.Kind == RelicPartChanged && diff.Moved == nil && diff.Fields == nil && diff.Body == nil {
-		return RelicPartDiff{}, false
+		return RelicPartDiff{}, false, nil
 	}
-	return diff, true
+	return diff, true, err
 }
 
 // compareRelicBodies compares a part's body on two sides that differ in
 // presence, format or bytes. Bytes on a side whose content was not read are
 // the other side's: RelicPartsToRead leaves a side unread only when its body
-// object is the other's.
-func compareRelicBodies(from, to RelicVersionSide, id string, fromPart, toPart RelicPart, context int) *RelicBodyDiff {
+// object is the other's. When the objects differ, a side that has a body must
+// have been read with it.
+func compareRelicBodies(from, to RelicVersionSide, id string, fromPart, toPart RelicPart, context int) (*RelicBodyDiff, error) {
 	diff := &RelicBodyDiff{}
 	if fromPart.Body != nil {
 		body := *fromPart.Body
@@ -428,6 +446,11 @@ func compareRelicBodies(from, to RelicVersionSide, id string, fromPart, toPart R
 	}
 	fromContent, fromRead := from.Content[id]
 	toContent, toRead := to.Content[id]
+	if from.Objects[id].Body != to.Objects[id].Body &&
+		(diff.From != nil && !fromContent.HasBody || diff.To != nil && !toContent.HasBody) {
+		return diff, Errorf(CategoryOperational,
+			"relic diff of part %s was not given a body that changed", id)
+	}
 	fromBytes, toBytes := fromContent.Body, toContent.Body
 	if !fromRead && diff.From != nil {
 		fromBytes = toBytes
@@ -439,5 +462,5 @@ func compareRelicBodies(from, to RelicVersionSide, id string, fromPart, toPart R
 	if diff.Text {
 		diff.Hunks, diff.Approximate = LineDiff(fromBytes, toBytes, context)
 	}
-	return diff
+	return diff, nil
 }

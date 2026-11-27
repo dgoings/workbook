@@ -875,7 +875,7 @@ var commandSchemas = map[string]commandMetadata{
 			"(origin unless configured) as tasks are: a command that changes a relic fetches\n" +
 			"first and publishes the relic after, unless --no-sync is given or auto-sync is off.",
 		Positionals:     []string{"<command>"},
-		SubcommandOrder: []string{"create", "list", "show", "update", "delete", "restore", "export"},
+		SubcommandOrder: []string{"create", "list", "show", "diff", "update", "delete", "restore", "export"},
 		Subcommands: map[string]commandMetadata{
 			"create": {
 				Name:     "create",
@@ -908,15 +908,37 @@ var commandSchemas = map[string]commandMetadata{
 			},
 			"show": {
 				Name:     "show",
-				Synopsis: "workbook relic show <relic>[#<part>] [--body] [--removed] [--json]",
+				Synopsis: "workbook relic show <relic>[#<part>] [--body] [--removed] [--history [--limit <n> | --all]] [--json]",
 				Description: "Show a relic, or one of its parts.\n\n" +
 					"Bodies are left out unless --body is given. With <relic>#<part> and --body,\n" +
 					"and without --json, only that part's body is written: byte for byte into a file\n" +
-					"or a pipe, and with control characters replaced on a terminal.",
+					"or a pipe, and with control characters replaced on a terminal.\n\n" +
+					"--history lists the recorded changes instead, oldest first, the last ten unless\n" +
+					"--limit or --all is given: each change's time, author and operations, and for\n" +
+					"<relic>#<part> only the changes to that part, with every version of its body. A\n" +
+					"save from an out-of-date version is listed and marked as not applied.",
 				Positionals: []string{"<relic>[#<part>]"},
 				Options: []optionMetadata{
 					{Name: "body", Kind: boolFlag, Description: "include body text"},
 					{Name: "removed", Kind: boolFlag, Description: "include removed parts"},
+					{Name: "history", Kind: boolFlag, Description: "list this relic's changes, or one part's"},
+					{Name: "limit", Kind: stringFlag, Value: "<n>", Description: "show this many recent changes"},
+					{Name: "all", Kind: boolFlag, Description: "show every change"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"diff": {
+				Name:     "diff",
+				Synopsis: "workbook relic diff <relic>[#<part>] [<version> [<version>]] [--context <n>|all] [--json]",
+				Description: "Compare two versions of a relic, or of one part, line by line and field by field.\n\n" +
+					"A version is the ID of a change, as relic show --history lists it, or an\n" +
+					"unambiguous prefix of one; a Git commit ID is not a version. With two versions\n" +
+					"the first is compared with the second. With one, it is compared with the current\n" +
+					"relic. With none, the latest change is shown, for a part the latest change to it.\n" +
+					"The address and the versions come before the options.",
+				Positionals: []string{"<relic>[#<part>]", "[<version>]", "[<version>]"},
+				Options: []optionMetadata{
+					{Name: "context", Kind: stringFlag, Value: "<n>|all", Description: "lines of context around each change (3 unless given), or all"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},

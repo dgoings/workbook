@@ -38,6 +38,8 @@ func runRelic(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 		return runRelicList(ctx, args, cwd, stdout, stderr)
 	case "show":
 		return runRelicShow(ctx, args, cwd, stdout, stderr)
+	case "diff":
+		return runRelicDiff(ctx, args, cwd, stdout, stderr)
 	case "update":
 		return runRelicUpdate(ctx, args, cwd, stdout, stderr)
 	case "delete":
@@ -225,11 +227,21 @@ func runRelicShow(ctx context.Context, args []string, cwd string, stdout, stderr
 	flags := newFlagSet("relic", "show")
 	bodies := flags.Bool("body", false, "include body text")
 	removed := flags.Bool("removed", false, "include removed parts")
+	history := flags.Bool("history", false, "list this relic's changes, or one part's")
+	limit := flags.String("limit", "", "show this many recent changes")
+	all := flags.Bool("all", false, "show every change")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
 	address := values[0]
+	window, err := relicHistoryRequest(flags, *history, *bodies, *removed, *all, *limit)
+	if err != nil {
+		return err
+	}
+	if *history {
+		return runRelicHistory(ctx, address, cwd, window, *jsonMode, stdout, stderr)
+	}
 	service, release, err := openRelicReadService(ctx, cwd, stderr)
 	if err != nil {
 		return err

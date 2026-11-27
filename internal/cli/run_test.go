@@ -1197,7 +1197,7 @@ func TestREADMECommandPolicyRejectsUnimplementedCommandOutsideProposedSection(t 
 	// A command that has subcommands is held to them inside code, in a span
 	// or a fenced block, and prose may still name the command alone.
 	for _, unbuilt := range []string{
-		"## Relics\n\nCompare two versions with `workbook relic diff <relic>`.\n",
+		"## Relics\n\nMerge two versions with `workbook relic merge <relic>`.\n",
 		"## Relics\n\n```sh\nworkbook relic history <relic> --json\n```\n",
 	} {
 		if violations := readmeCommandPolicyViolations(unbuilt); len(violations) != 1 || !strings.Contains(violations[0], `"relic`) {
@@ -1206,8 +1206,8 @@ func TestREADMECommandPolicyRejectsUnimplementedCommandOutsideProposedSection(t 
 	}
 	for _, allowed := range []string{
 		"## Relics\n\n`workbook relic` creates them; `workbook relic show <relic>` reads one.\n",
-		"## Relics\n\nThe workbook relic diff command does not exist yet.\n",
-		"## Proposed relic history\n\nA future release may add `workbook relic diff <relic>`.\n",
+		"## Relics\n\nThe workbook relic merge command does not exist yet.\n",
+		"## Proposed relic history\n\nA future release may add `workbook relic merge <relic>`.\n",
 		"## Statuses\n\n```sh\nworkbook status list --json\nworkbook relic <command> --help\n```\n",
 	} {
 		if violations := readmeCommandPolicyViolations(allowed); len(violations) != 0 {
