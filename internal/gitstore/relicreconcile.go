@@ -449,7 +449,7 @@ func (r *Repository) writeReplayedRelic(
 	for _, partID := range core.RelicPartsNamedBy(pack) {
 		named[partID] = struct{}{}
 	}
-	fieldsEdited := relicPartsWithFieldOperations(pack)
+	fieldsEdited := relicPartsWithFieldOperations(pack, record.State.Relic)
 	parts := make(map[string]RelicPartObjects, len(record.State.Relic.Parts))
 	var combine []string
 	for _, part := range record.State.Relic.Parts {

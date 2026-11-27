@@ -44,6 +44,9 @@ type Repository struct {
 	identityVerified bool
 	configLoaded     bool
 	config           core.ProjectConfig
+	// emptyRelicFields memoizes the object ID of the canonical empty
+	// fields.json, which a relic checkpoint's stubs store.
+	emptyRelicFields string
 	// identityLoaded and the fields below memoize the canonical project
 	// identity for an opened repository, exactly as configLoaded does for the
 	// tracked configuration. Resolving it can publish a ref, so doing it once

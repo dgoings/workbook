@@ -1266,3 +1266,108 @@ func TestGetRelicKeepsTheCauseOfARefusal(t *testing.T) {
 		t.Fatalf("errors.As(%q) = %+v, want corrupt data with the whole refusal as its message", err, typed)
 	}
 }
+
+func TestValidateWalksFromCheckpoint(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		tip := relicToCompact(t, repo, config, 1, false)
+		checkpoint := writeRelicCheckpoint(t, repo, config, tip, core.RelicBoundaryRetired)
+		relicID := tip.Record.State.RelicID
+		first := writeRelicChild(t, repo, config, checkpoint, nil, relicTitleSet(730001, "Kept for the record"))
+		second := writeRelicChild(t, repo, config, first,
+			map[string]core.RelicPartContent{relicTestID(1): {Fields: relicFieldsAfter(t, repo, config, first, relicTestID(1),
+				relicFieldSet(730002, relicTestID(1), "status", "closed"))}},
+			relicFieldSet(730002, relicTestID(1), "status", "closed"))
+		assertRelicHistoryValid(t, repo, config, relicID, second.Head, 3)
+
+		// A later commit that records an operation ID the checkpoint lists.
+		listed, ok := checkpoint.Operation.Checkpoint()
+		if !ok {
+			t.Fatal("the checkpoint carries no summary")
+		}
+		reused := listed.CompactedOperations[0]
+		pack := relicChildPack(second, core.RelicOperation{ID: reused, Type: core.RelicOperationTitleSet, Title: "Again"})
+		forged := forgeRelicChild(t, repo, second, pack, forgedPartsOf(t, repo, second.Head))
+		forged = forgeRelicCommitOf(t, repo, forgeRelicTree(t, repo, replaceRelicTreeEntry(t,
+			relicLines(gitOutput(t, repo, "ls-tree", forged)), "links.json",
+			"100644 blob "+gitOutput(t, repo, "rev-parse", second.Head+":links.json")+"\tlinks.json")), second.Head)
+		assertRelicHistoryStopsAt(t, repo, config, relicID, forged, forged, 3, core.CategoryCorruptData,
+			reused, checkpoint.Head)
+	})
+}
+
+func TestRelicChainFromGitStartsAtCheckpoint(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		tip := relicToCompact(t, repo, config, 1, false)
+		checkpoint := writeRelicCheckpoint(t, repo, config, tip, core.RelicBoundaryRetired)
+		relicID := tip.Record.State.RelicID
+		first := writeRelicChild(t, repo, config, checkpoint, nil, relicTitleSet(740001, "First after"))
+		second := writeRelicChild(t, repo, config, first, nil, relicTitleSet(740002, "Second after"))
+
+		chain, err := repo.RelicChain(context.Background(), config, core.RelicHead{RelicID: relicID, ObjectID: second.Head})
+		if err != nil {
+			t.Fatalf("RelicChain() error = %v", err)
+		}
+		if chain.Truncated != nil {
+			t.Fatalf("RelicChain() truncated at %#v", chain.Truncated)
+		}
+		var got []string
+		for _, commit := range chain.Commits {
+			got = append(got, commit.Commit)
+		}
+		if want := []string{checkpoint.Head, first.Head, second.Head}; !slices.Equal(got, want) {
+			t.Fatalf("RelicChain() commits = %q, want %q", got, want)
+		}
+		if chain.Commits[0].Parent != "" || chain.Commits[1].Parent != checkpoint.Head {
+			t.Fatalf("RelicChain() parents = %q, %q", chain.Commits[0].Parent, chain.Commits[1].Parent)
+		}
+		if _, ok := chain.Commits[0].Operation.Checkpoint(); !ok {
+			t.Fatalf("RelicChain() root is %#v, want the checkpoint", chain.Commits[0].Operation.Operations)
+		}
+	})
+}
+
+// TestPreCheckpointRelicStillValidates holds every kind of history this
+// build wrote before checkpoints existed to the rules unchanged: rooted at
+// relic.create, through field, body, part, link, retire, delete and restore
+// changes.
+func TestPreCheckpointRelicStillValidates(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		part := relicTestID(1)
+		tip := relicToCompact(t, repo, config, 1, false)
+		body := []byte("a second version\n")
+		steps := [][]core.RelicOperation{
+			{relicFieldSet(750001, part, "status", "closed")},
+			{relicBodySet(750002, part, tip.Record.State.Relic.Parts[0].Body.Version, body)},
+			{relicPartChange(750003, core.RelicOperationPartRestore, relicTestID(2))},
+			{{ID: relicTestID(750004), Type: core.RelicOperationUnretire}},
+			{{ID: relicTestID(750005), Type: core.RelicOperationTombstone}},
+			{{ID: relicTestID(750006), Type: core.RelicOperationRestore}},
+		}
+		for _, operations := range steps {
+			var content map[string]core.RelicPartContent
+			switch operations[0].Type {
+			case core.RelicOperationPartFieldSet:
+				content = map[string]core.RelicPartContent{part: {Fields: relicFieldsAfter(t, repo, config, tip, part, operations...)}}
+			case core.RelicOperationPartBodySet:
+				content = map[string]core.RelicPartContent{part: {Body: body, HasBody: true}}
+			}
+			tip = writeRelicChild(t, repo, config, tip, content, operations...)
+		}
+		relicID := tip.Record.State.RelicID
+		assertRelicHistoryValid(t, repo, config, relicID, tip.Head, 5+len(steps))
+		if _, err := repo.GetRelic(ctx, config, relicID); err != nil {
+			t.Fatalf("GetRelic() error = %v", err)
+		}
+		chain, err := repo.RelicChain(ctx, config, core.RelicHead{RelicID: relicID, ObjectID: tip.Head})
+		if err != nil || chain.Truncated != nil {
+			t.Fatalf("RelicChain() = %#v, %v", chain.Truncated, err)
+		}
+		if root := chain.Commits[0].Operation.Operations[0].Type; root != core.RelicOperationCreate {
+			t.Fatalf("the chain is rooted at %s, want relic.create", root)
+		}
+	})
+}

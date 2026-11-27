@@ -46,14 +46,19 @@ func relicLostRace(ref string, cause error) error {
 // pack adds takes its fields.json from Fields, an empty one when Fields is nil.
 // A part the parent has keeps its fields.json unless the pack carries a
 // part.field.set or part.field.clear for it and Fields is not nil, whatever
-// content holds otherwise. A body is stored only when this change saved it, as
-// core.RelicBodySavedBy judges: the record's body version for the part is the
-// ID of an operation in the pack, and the part is new or that version is not
-// the one parent records. Otherwise the part keeps the body it had, whatever
-// content holds, so text from an edit the fold ignored, or beside a repeated
-// part.body.set, is never stored. A part the pack does not name
-// keeps its subtree object, and content given for one is refused rather than
-// dropped.
+// content holds otherwise. A stub, a part whose content a checkpoint dropped,
+// always keeps its fields.json, the empty one: the fold ignores a field
+// operation naming it, and so does this. A body is stored only when this
+// change saved it, as core.RelicBodySavedBy judges: the record's body version
+// for the part is the ID of an operation in the pack, and the part is new or
+// that version is not the one parent records. Otherwise the part keeps the
+// body it had, whatever content holds, so text from an edit the fold ignored,
+// or beside a repeated part.body.set, is never stored. A part the pack does
+// not name keeps its subtree object, and content given for one is refused
+// rather than dropped.
+//
+// A history.checkpoint is refused: its parts are the subtrees of the tip it
+// replaces, which a relic change never sees.
 //
 // Nothing is visible until the ref moves, and the ref moves only if it still
 // points at parent's head: a write interrupted before that leaves unreferenced
@@ -100,6 +105,12 @@ func (r *Repository) WriteRelic(
 			return core.RelicSnapshot{}, core.Wrap(core.CategoryValidation, "parent head must be a canonical object ID", err)
 		}
 		parentRecord, parentHead = &parent.Record, parent.Head
+	}
+	if _, isCheckpoint := pack.Checkpoint(); isCheckpoint {
+		// A checkpoint's parts are the subtrees of the tip it replaces, which
+		// this writer never sees.
+		return core.RelicSnapshot{}, core.Errorf(core.CategoryValidation,
+			"a relic checkpoint is written by the compaction, not as a relic change")
 	}
 	if err := core.ValidateRelicCheckpoint(parentRecord, pack, record); err != nil {
 		return core.RelicSnapshot{}, err
@@ -223,7 +234,7 @@ func planRelicWrite(
 		parentRecord = &parent.Record
 	}
 	named := core.RelicPartsNamedBy(pack)
-	fieldsEdited := relicPartsWithFieldOperations(pack)
+	fieldsEdited := relicPartsWithFieldOperations(pack, record.State.Relic)
 	isNamed := make(map[string]struct{}, len(named))
 	for _, partID := range named {
 		isNamed[partID] = struct{}{}

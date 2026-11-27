@@ -50,7 +50,7 @@ func relicHistoryFrom(
 		for id, stored := range step.content {
 			content[id] = stored
 		}
-		for partID := range relicPartsWithFieldOperations(core.RelicOperationPack{Operations: step.operations}) {
+		for partID := range relicPartsWithFieldOperations(core.RelicOperationPack{Operations: step.operations}, tip.Record.State.Relic) {
 			if _, existed := tip.Record.State.Relic.Part(partID); !existed {
 				continue
 			}

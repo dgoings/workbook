@@ -17,8 +17,9 @@ import (
 //	R1  S is what folding P onto the parent's record computes, byte for byte.
 //	R2  The tree holds operation.json, state.json and links.json as regular
 //	    blobs and, exactly when the state lists a part, the tree parts. A root
-//	    commit has no parent and opens with relic.create; every other commit
-//	    has exactly one parent.
+//	    commit has no parent and opens with relic.create or, for a compacted
+//	    relic, is one history.checkpoint; every other commit has exactly one
+//	    parent.
 //	R3  parts/ holds one subtree per part the state lists, named by part ID.
 //	    Each holds fields.json, body exactly when the state records a body,
 //	    and nothing else.
@@ -36,6 +37,20 @@ import (
 //	    applied in order. For a part P adds, it is a canonical fields document
 //	    that agrees with any field operations P carries for it.
 //
+// A stub, a part whose content a checkpoint dropped, has a subtree that never
+// changes after the checkpoint: the fold ignores every operation naming one,
+// so R5 holds it to its parent's subtree whether P names it or not, and R7
+// never applies P's field operations to it.
+//
+// A checkpoint root has no parent to follow from, so R1, R5, R6 and R7 give
+// way to the root rules core.ValidateRelicCheckpointRoot holds its pack and
+// record to, and to one more judged by object ID:
+//
+//	R7  Each stub's fields.json is the canonical empty fields document, the
+//	    object Git names it by in this repository's format. Every other
+//	    part's fields.json is a canonical fields document, which takes a read
+//	    and is checked where the rest of R7 is.
+//
 // R1 to R6 are judged from object IDs and sizes, except the limit on one field
 // value, which takes reading the fields.json that holds it. So is one case of
 // R7: a part that P names without setting or clearing a field, and that the
@@ -50,11 +65,12 @@ import (
 // never when a relic is read, like the number of parts.
 //
 // One thing no rule about a commit and its parent can hold: an operation ID
-// is used once in a relic's history. The fold refuses the reuse the parent's
-// state shows, a part's ID or a body's current version taken again. Any other
-// reuse is seen only by the walk over the whole history, ValidateRelicHistory,
-// which keeps every ID it has passed along that one history and compares
-// nothing across refs.
+// is used once in a relic's history, the operations a checkpoint lists as
+// replaced included. The fold refuses the reuse the parent's state shows, a
+// part's ID or a body's current version taken again. Any other reuse is seen
+// only by the walk over the whole history, ValidateRelicHistory, which keeps
+// every ID it has passed along that one history, and every ID the checkpoint
+// it is rooted at lists, and compares nothing across refs.
 //
 // The rules are this build's. A commit whose pack or state declares a newer
 // generation is not judged by them: it is neither valid nor corrupt here, and
@@ -334,14 +350,26 @@ func (r *Repository) VerifyRelicTransition(ctx context.Context, parent *RelicCom
 		return corruptRelic(relicID, "%s", err.Error())
 	}
 
+	if _, isCheckpoint := commit.Operation.Checkpoint(); parent == nil && isCheckpoint {
+		return r.verifyRelicCheckpointRoot(ctx, commit, deep)
+	}
+
 	named := make(map[string]struct{})
 	for _, partID := range core.RelicPartsNamedBy(commit.Operation) {
 		named[partID] = struct{}{}
 	}
-	fieldsEdited := relicPartsWithFieldOperations(commit.Operation)
+	fieldsEdited := relicPartsWithFieldOperations(commit.Operation, commit.Record.State.Relic)
 	for _, part := range commit.Record.State.Relic.Parts {
 		objects := commit.Parts[part.ID]
 		before, existed := parentParts[part.ID]
+		if part.Dropped != nil {
+			// Only a checkpoint makes a stub, so the parent has it too.
+			if !existed || objects.Tree != before.Tree {
+				return corruptRelic(relicID, "part %s changed, but its content was dropped when the relic was compacted",
+					part.ID)
+			}
+			continue
+		}
 		if _, isNamed := named[part.ID]; !isNamed {
 			if !existed || objects.Tree != before.Tree {
 				return corruptRelic(relicID, "part %s changed, but no operation in the commit names it", part.ID)
@@ -363,16 +391,88 @@ func (r *Repository) VerifyRelicTransition(ctx context.Context, parent *RelicCom
 	if !deep {
 		return nil
 	}
-	return r.verifyRelicFields(ctx, parentParts, commit, fieldsEdited)
+	return r.verifyRelicFields(ctx, parentParts, commit, core.RelicPartsNamedBy(commit.Operation), fieldsEdited)
+}
+
+// verifyRelicCheckpointRoot checks the part of a checkpoint root's rules that
+// is Git's to judge, once core has held its pack and record to the root
+// rules: each stub's subtree holds the empty fields.json and nothing else,
+// which R3 has already held to fields.json and no body, and, when deep is
+// true, every other part's fields.json is a canonical fields document.
+func (r *Repository) verifyRelicCheckpointRoot(ctx context.Context, commit RelicCommit, deep bool) error {
+	relicID := commit.Record.State.RelicID
+	var live []string
+	var emptyFields string
+	for _, part := range commit.Record.State.Relic.Parts {
+		if part.Dropped == nil {
+			live = append(live, part.ID)
+			continue
+		}
+		if emptyFields == "" {
+			var err error
+			if emptyFields, err = r.emptyRelicFieldsObjectID(ctx); err != nil {
+				return err
+			}
+		}
+		if objects := commit.Parts[part.ID]; objects.Fields != emptyFields || objects.Body != "" {
+			return corruptRelic(relicID,
+				"part %s was dropped when the relic was compacted, so its %s must be the empty one, alone",
+				part.ID, relicFieldsPath)
+		}
+	}
+	if !deep {
+		return nil
+	}
+	// Every live part is held to its fields as a part a commit adds is: they
+	// arrive in the tree, and nothing in the pack says otherwise.
+	return r.verifyRelicFields(ctx, nil, commit, live, nil)
+}
+
+// emptyRelicFieldsObjectID returns the object ID Git gives the canonical
+// fields.json of a part with no fields, the one a stub stores, in this
+// repository's object format. Git computes it without writing the object, once
+// for each opened repository.
+func (r *Repository) emptyRelicFieldsObjectID(ctx context.Context) (string, error) {
+	r.metadataMu.RLock()
+	known := r.emptyRelicFields
+	r.metadataMu.RUnlock()
+	if known != "" {
+		return known, nil
+	}
+	encoded, err := core.EncodeDocument(core.NewRelicFields(nil))
+	if err != nil {
+		return "", err
+	}
+	output, err := r.Git(ctx, encoded, "hash-object", "--no-filters", "--stdin")
+	if err != nil {
+		return "", err
+	}
+	objectID, err := gitSingleLine(output)
+	if err == nil {
+		_, err = decodeObjectID(objectID)
+	}
+	if err != nil {
+		return "", core.Wrap(core.CategoryOperational, "Git returned an invalid object ID", err)
+	}
+	r.metadataMu.Lock()
+	r.emptyRelicFields = objectID
+	r.metadataMu.Unlock()
+	return objectID, nil
 }
 
 // relicPartsWithFieldOperations returns the parts a pack sets or clears a
-// field of.
-func relicPartsWithFieldOperations(pack core.RelicOperationPack) map[string]struct{} {
+// field of, leaving out every stub of relic, the record the pack folds to. A
+// stub's fields never change: the fold ignores an operation naming one, and so
+// do the writer, the replay and the rules that read fields.json, which all
+// take the parts to rewrite from here.
+func relicPartsWithFieldOperations(pack core.RelicOperationPack, relic core.RelicData) map[string]struct{} {
 	edited := make(map[string]struct{})
 	for _, operation := range pack.Operations {
 		switch operation.Type {
 		case core.RelicOperationPartFieldSet, core.RelicOperationPartFieldClear:
+			if part, listed := relic.Part(operation.Part); listed && part.Dropped != nil {
+				continue
+			}
 			edited[operation.Part] = struct{}{}
 		}
 	}
@@ -388,20 +488,22 @@ type relicFieldsCheck struct {
 }
 
 // verifyRelicFields checks the part of rule R7 that has to read fields.json:
-// the parts a commit's pack adds, and the ones it sets or clears a field of.
-// VerifyRelicTransition has already held every other part the pack names to
-// the fields.json object it had. The blobs are read two at a time, so the
-// check holds one part's fields in memory however many parts the pack names.
+// of the parts given, which are the parts a commit's pack names, the ones it
+// adds, and the ones it sets or clears a field of. VerifyRelicTransition has
+// already held every other part the pack names to the fields.json object it
+// had. The blobs are read two at a time, so the check holds one part's fields
+// in memory however many parts the pack names.
 func (r *Repository) verifyRelicFields(
 	ctx context.Context,
 	parentParts map[string]RelicPartObjects,
 	commit RelicCommit,
+	parts []string,
 	fieldsEdited map[string]struct{},
 ) error {
 	relicID := commit.Record.State.RelicID
 	var checks []relicFieldsCheck
 	var input bytes.Buffer
-	for _, partID := range core.RelicPartsNamedBy(commit.Operation) {
+	for _, partID := range parts {
 		objects, listed := commit.Parts[partID]
 		if !listed {
 			// The fold ignored an operation naming a part the relic does not have.
@@ -690,6 +792,10 @@ func (r *Repository) ValidateRelicHistory(
 	// in. It covers this one walk and nothing else: another ref may hold the
 	// same commits, and so the same IDs, and that is no fault of either.
 	usedIn := map[string]string{}
+	// compactedBy is the checkpoint the history is rooted at, when it is, and
+	// compacted the operations that checkpoint replaced. No later commit may
+	// record one of them again.
+	compactedBy, compacted := "", map[string]struct{}{}
 	var previous *RelicCommit
 	for _, objectID := range commits {
 		commit, err := r.readRelicCommit(ctx, config, head.RelicID, objectID)
@@ -717,6 +823,17 @@ func (r *Repository) ValidateRelicHistory(
 				return failed(objectID, corruptRelic(head.RelicID,
 					"operation ID %s is used in commit %s and again in commit %s; an operation ID is used once in a relic's history",
 					operation.ID, first, objectID))
+			}
+			if _, replaced := compacted[operation.ID]; replaced {
+				return failed(objectID, corruptRelic(head.RelicID,
+					"operation ID %s is used in commit %s, but checkpoint %s lists it among the changes it replaced; an operation ID is used once in a relic's history",
+					operation.ID, objectID, compactedBy))
+			}
+		}
+		if summary, isCheckpoint := commit.Operation.Checkpoint(); previous == nil && isCheckpoint {
+			compactedBy = objectID
+			for _, id := range summary.CompactedOperations {
+				compacted[id] = struct{}{}
 			}
 		}
 		for _, operation := range commit.Operation.Operations {

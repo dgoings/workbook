@@ -428,12 +428,21 @@ func validateRelicTipObjects(
 	if err := core.ValidateRelicLinks(state, links); err != nil {
 		return core.RelicSnapshot{}, corruptRelic(head.RelicID, "%v", err)
 	}
-	if pack.Operations[0].Type == core.RelicOperationCreate {
+	// A history is rooted at the commit that creates the relic or, once the
+	// relic is compacted, at the checkpoint that holds what it kept.
+	switch pack.Operations[0].Type {
+	case core.RelicOperationCreate:
 		if parentCount != 0 {
 			return core.RelicSnapshot{}, corruptRelic(head.RelicID, "the commit that creates the relic must have no parent")
 		}
-	} else if parentCount != 1 {
-		return core.RelicSnapshot{}, corruptRelic(head.RelicID, "a commit that changes the relic must have exactly one parent")
+	case core.RelicOperationCheckpoint:
+		if parentCount != 0 {
+			return core.RelicSnapshot{}, corruptRelic(head.RelicID, "a checkpoint commit must have no parent")
+		}
+	default:
+		if parentCount != 1 {
+			return core.RelicSnapshot{}, corruptRelic(head.RelicID, "a commit that changes the relic must have exactly one parent")
+		}
 	}
 	return core.RelicSnapshot{
 		Head:      head.ObjectID,

@@ -1802,3 +1802,198 @@ func TestConcurrentMigrationsFoldLastSyncWins(t *testing.T) {
 		}
 	})
 }
+
+// relicToCompact writes relic number relicNumber with two parts, part 1 with
+// a body and a field and part 2 with a field, links from part 1 and from the
+// relic, removes part 2 and sets a property, then retires the relic or, when
+// deleted is set, deletes it. It returns the tip.
+func relicToCompact(t *testing.T, repo *Repository, config core.ProjectConfig, relicNumber int, deleted bool) core.RelicSnapshot {
+	t.Helper()
+	base := 710000 + relicNumber*100
+	tip := writeRelicRootNumbered(t, repo, config, relicNumber,
+		relicTestPartNumbered(1).withBody("md", []byte("the decision we kept\n")).withField("status", "open"),
+		relicTestPartNumbered(2).withField("status", "draft"))
+	tip = writeRelicChild(t, repo, config, tip, nil,
+		relicLinkAddOp(base+1, relicTestID(1), relicLinkTaskID(1), "implemented-by"),
+		relicLinkAddOp(base+2, "", relicLinkTaskID(2), "relates-to"))
+	tip = writeRelicChild(t, repo, config, tip, nil, relicPartChange(base+3, core.RelicOperationPartRemove, relicTestID(2)))
+	tip = writeRelicChild(t, repo, config, tip, nil, relicPropertySet(base+4, "outcome", "superseded"))
+	if deleted {
+		return writeRelicChild(t, repo, config, tip, nil,
+			core.RelicOperation{ID: relicTestID(base + 5), Type: core.RelicOperationTombstone})
+	}
+	return writeRelicChild(t, repo, config, tip, nil,
+		core.RelicOperation{ID: relicTestID(base + 5), Type: core.RelicOperationRetire})
+}
+
+// relicSubtree returns the object ID of one part's subtree in a commit.
+func relicSubtree(t *testing.T, repo *Repository, commit, partID string) string {
+	t.Helper()
+	return gitOutput(t, repo, "rev-parse", commit+":parts/"+partID)
+}
+
+func TestReadRelicTipAcceptsCheckpointRoot(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		emptyFields := forgeRelicBlob(t, repo, encodedRelicDocument(t, core.NewRelicFields(nil)))
+		for number, boundary := range map[int]string{1: core.RelicBoundaryRetired, 2: core.RelicBoundaryDeleted} {
+			tip := relicToCompact(t, repo, config, number, boundary == core.RelicBoundaryDeleted)
+			checkpoint := writeRelicCheckpoint(t, repo, config, tip, boundary)
+			relicID := tip.Record.State.RelicID
+
+			read, err := repo.GetRelic(ctx, config, relicID)
+			if err != nil {
+				t.Fatalf("%s: GetRelic() error = %v", boundary, err)
+			}
+			assertSameRelicSnapshot(t, read, checkpoint)
+			assertSameRelicSnapshot(t, readRelicTip(t, repo, config, relicID), checkpoint)
+			if parents := relicParents(t, repo, checkpoint.Head); len(parents) != 0 {
+				t.Fatalf("%s: the checkpoint has parents %q", boundary, parents)
+			}
+
+			// Each stub holds the empty fields.json alone; at retired the live
+			// part keeps the subtree object it had.
+			for _, part := range checkpoint.Record.State.Relic.Parts {
+				if part.Dropped == nil {
+					if got, want := relicSubtree(t, repo, checkpoint.Head, part.ID), relicSubtree(t, repo, tip.Head, part.ID); got != want {
+						t.Errorf("%s: live part %s has subtree %s, want the tip's %s", boundary, part.ID, got, want)
+					}
+					continue
+				}
+				listing := gitOutput(t, repo, "ls-tree", checkpoint.Head+":parts/"+part.ID)
+				if want := "100644 blob " + emptyFields + "\tfields.json"; listing != want {
+					t.Errorf("%s: stub %s stores %q, want %q", boundary, part.ID, listing, want)
+				}
+			}
+		}
+	})
+}
+
+func TestCheckpointWithParentIsCorrupt(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		tip := relicToCompact(t, repo, config, 1, false)
+		checkpoint := writeRelicCheckpoint(t, repo, config, tip, core.RelicBoundaryRetired)
+		relicID := tip.Record.State.RelicID
+
+		// The checkpoint's own tree, on top of the tip it replaced.
+		withParent := forgeRelicCommitOf(t, repo, gitOutput(t, repo, "rev-parse", checkpoint.Head+"^{tree}"), tip.Head)
+		pointRelicRef(t, repo, relicID, withParent)
+		_, err := repo.GetRelic(ctx, config, relicID)
+		assertGetRelicRefused(t, err)
+		assertRelicCategory(t, err, core.CategoryCorruptData, "a checkpoint commit must have no parent")
+		_, err = repo.ReadRelicTips(ctx, config, []core.RelicHead{{RelicID: relicID, ObjectID: withParent}})
+		assertRelicCategory(t, err, core.CategoryCorruptData, "a checkpoint commit must have no parent")
+	})
+}
+
+func TestStubSubtreeMustBeEmptyFields(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		tip := relicToCompact(t, repo, config, 1, false)
+		checkpoint := writeRelicCheckpoint(t, repo, config, tip, core.RelicBoundaryRetired)
+		relicID := tip.Record.State.RelicID
+		stub := relicTestID(2)
+		emptyFields := forgeRelicBlob(t, repo, encodedRelicDocument(t, core.NewRelicFields(nil)))
+		for label, forged := range map[string]string{
+			"a stub with a body": forgeRelicPart(t, repo, checkpoint, stub, emptyFields,
+				forgeRelicBlob(t, repo, []byte("dropped text\n"))),
+			"a stub with fields": forgeRelicPart(t, repo, checkpoint, stub,
+				forgeRelicBlob(t, repo, forgedFields(t, "status", "draft")), ""),
+			"a stub with fields not written canonically": forgeRelicPart(t, repo, checkpoint, stub,
+				forgeRelicBlob(t, repo, []byte(`{"format":"workbook.relic-part-fields","version":1, "fields":{}}`+"\n")), ""),
+		} {
+			pointRelicRef(t, repo, relicID, forged)
+			_, err := repo.GetRelic(ctx, config, relicID)
+			if core.CategoryOf(err) != core.CategoryCorruptData {
+				t.Errorf("%s: GetRelic() error = %v, want corrupt data", label, err)
+			}
+			_, failure, err := repo.ValidateRelicHistory(ctx, config, core.RelicHead{RelicID: relicID, ObjectID: forged})
+			if err != nil || failure == nil || failure.Commit != forged || core.CategoryOf(failure.Err) != core.CategoryCorruptData {
+				t.Errorf("%s: ValidateRelicHistory() = %#v, %v; want it to name the forged root", label, failure, err)
+			}
+		}
+
+		// A live part of the root whose fields.json no writer stores is refused
+		// by the deep check.
+		live := relicTestID(1)
+		forged := forgeRelicPart(t, repo, checkpoint, live,
+			forgeRelicBlob(t, repo, []byte(`{"format":"workbook.relic-part-fields","version":1, "fields":{}}`+"\n")),
+			gitOutput(t, repo, "rev-parse", checkpoint.Head+":parts/"+live+"/body"))
+		assertRelicHistoryStopsAt(t, repo, config, relicID, forged, forged, 0, core.CategoryCorruptData, live)
+
+		// The root rules of core apply: a removed part that is not a stub.
+		state := checkpoint.Record.State
+		state.Relic.Parts = slices.Clone(state.Relic.Parts)
+		state.Relic.Parts[1].Dropped = nil
+		notStub := forgeRelicCommit(t, repo, "", encodedRelicDocument(t, checkpoint.Operation),
+			encodedRelicDocument(t, state), forgedPartsOf(t, repo, checkpoint.Head))
+		pointRelicRef(t, repo, relicID, notStub)
+		_, err := repo.GetRelic(ctx, config, relicID)
+		assertRelicCategory(t, err, core.CategoryCorruptData)
+	})
+}
+
+func TestStubFieldsNeverChange(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		tip := relicToCompact(t, repo, config, 1, false)
+		checkpoint := writeRelicCheckpoint(t, repo, config, tip, core.RelicBoundaryRetired)
+		relicID := tip.Record.State.RelicID
+		stub := relicTestID(2)
+		stubTree := relicSubtree(t, repo, checkpoint.Head, stub)
+
+		// A field set and a body save naming the stub, with content given for
+		// it: the fold ignores both, and the stub's subtree stays the empty
+		// fields.json.
+		edited := writeRelicChild(t, repo, config, checkpoint,
+			map[string]core.RelicPartContent{stub: {
+				Fields:  map[string]json.RawMessage{"status": json.RawMessage(`"revived"`)},
+				Body:    []byte("text for a dropped part\n"),
+				HasBody: true,
+			}},
+			relicFieldSet(720001, stub, "status", "revived"),
+			relicBodySet(720002, stub, stub, []byte("text for a dropped part\n")))
+		if got := relicSubtree(t, repo, edited.Head, stub); got != stubTree {
+			t.Fatalf("a field set and a body save naming a stub changed its subtree from %s to %s", stubTree, got)
+		}
+		if _, err := repo.GetRelic(ctx, config, relicID); err != nil {
+			t.Fatalf("GetRelic() after edits naming a stub error = %v", err)
+		}
+		assertRelicHistoryValid(t, repo, config, relicID, edited.Head, 2)
+
+		// A forged commit that does change the stub's fields is corrupt, on a
+		// read and in validation.
+		pack := relicChildPack(checkpoint, relicFieldSet(720003, stub, "status", "revived"))
+		forgedParts := withForgedPart(forgedPartsOf(t, repo, checkpoint.Head), stub,
+			forgedPart{fields: forgedFields(t, "status", "revived")})
+		forged := forgeRelicCommit(t, repo, checkpoint.Head, encodedRelicDocument(t, pack),
+			encodedRelicDocument(t, foldRelic(t, &checkpoint, pack).State), forgedParts)
+		// forgeRelicCommit writes no links; the relic has some.
+		forged = forgeRelicCommitOf(t, repo, forgeRelicTree(t, repo, replaceRelicTreeEntry(t,
+			relicLines(gitOutput(t, repo, "ls-tree", forged)), "links.json",
+			"100644 blob "+gitOutput(t, repo, "rev-parse", checkpoint.Head+":links.json")+"\tlinks.json")), checkpoint.Head)
+		pointRelicRef(t, repo, relicID, forged)
+		_, err := repo.GetRelic(ctx, config, relicID)
+		assertGetRelicRefused(t, err)
+		assertRelicCategory(t, err, core.CategoryCorruptData, stub)
+		assertRelicHistoryStopsAt(t, repo, config, relicID, forged, forged, 1, core.CategoryCorruptData, stub)
+	})
+}
+
+func TestWriteRelicRefusesACheckpointPack(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	tip := relicToCompact(t, repo, config, 1, false)
+	checkpoint := writeRelicCheckpoint(t, repo, config, tip, core.RelicBoundaryRetired)
+	pointRelicRef(t, repo, tip.Record.State.RelicID, tip.Head)
+	_, err := repo.WriteRelic(context.Background(), config, nil, checkpoint.Operation, checkpoint.Record, nil, "compact")
+	assertRelicCategory(t, err, core.CategoryValidation, "a relic checkpoint is written by the compaction")
+	if head := gitOutput(t, repo, "rev-parse", relicRef(tip.Record.State.RelicID)); head != tip.Head {
+		t.Fatalf("the refused checkpoint moved the ref to %s", head)
+	}
+}
