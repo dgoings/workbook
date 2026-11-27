@@ -75,6 +75,11 @@ type SyncConfigResult struct {
 	// lift it to the result envelope's configuration conflict member, so one
 	// command reports one list whatever mix of phases produced it.
 	Conflicts []core.ConfigConflict `json:"-"`
+	// Warnings travels the same way: callers lift it to the result
+	// envelope's warnings. A replay that renumbers a relic schema version
+	// saved here reports it, because the version a person saved as one
+	// number now has another.
+	Warnings []core.Warning `json:"-"`
 }
 
 // Warning returns what a command should tell the user about this configuration
@@ -252,7 +257,9 @@ func (r *Repository) reconcileObservedConfig(
 	}
 	r.rememberConfigObservation(outcome.Head, remoteHead)
 	r.replaceVocabulary(outcome.State.Vocabulary(), outcome.Head)
-	return configStageOutcome{Result: reconciledConfigResult(outcome), Deferred: configReplayError(outcome)}
+	result := reconciledConfigResult(outcome)
+	result.Warnings = renumberedRelicSchemas(local.State, outcome.State)
+	return configStageOutcome{Result: result, Deferred: configReplayError(outcome)}
 }
 
 func reconciledConfigResult(outcome configReconcileOutcome) *SyncConfigResult {

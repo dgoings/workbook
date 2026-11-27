@@ -169,6 +169,11 @@ type Repository struct {
 	// configuration that changes once a month.
 	stateHead   string
 	stateConfig decodedConfig
+	// relicSchemaCache holds compiled relic schema versions by the object ID
+	// of their stored document. A blob never changes, so an entry is never
+	// stale; ReadRelicSchema fills it.
+	relicSchemaMu    sync.Mutex
+	relicSchemaCache map[string]cachedRelicSchema
 	// The four fields below record what this command last saw of the
 	// configuration ledger on each side. The synchronization stage sets both
 	// from the ref listing it already makes, and Push sets the remote side from

@@ -584,19 +584,35 @@ func validateTaskTreeEntries(tree workbookTree) error {
 }
 
 // validateConfigTreeEntries is the same rule for the configuration ledger,
-// whose trees hold the two documents and nothing else.
+// whose trees hold the two documents and, beside a pack that saves relic
+// schema versions, one `relic-schema-<operation-id>` blob per schema.put in
+// that pack, holding exactly the object the operation names.
 //
 // Attachment names are deliberately not accepted here. The ledger shares this
 // parser with task refs, and while the shape check lived inside the parser it
 // silently inherited the task tree's allowance: a configuration commit carrying
 // an `attachment-<ULID>` blob read as valid, in a document where an attachment
 // means nothing at all. Nothing writes one, so nothing accepts one.
-func validateConfigTreeEntries(tree workbookTree) error {
-	for name := range tree.modes {
+func validateConfigTreeEntries(tree workbookTree, pack core.ConfigOperationPack) error {
+	schemas := relicSchemaTreeEntries(pack)
+	for name, mode := range tree.modes {
 		if name == configOperationPath || name == configStatePath {
 			continue
 		}
-		return core.Errorf(core.CategoryCorruptData, "the Workbook configuration tree has an unexpected entry")
+		blob, named := schemas[name]
+		if !named {
+			return core.Errorf(core.CategoryCorruptData, "the Workbook configuration tree has an unexpected entry")
+		}
+		if mode != regularBlobMode || tree.objectID(name) != blob {
+			return core.Errorf(core.CategoryCorruptData,
+				"the Workbook configuration tree entry %s does not hold the schema its schema.put names", name)
+		}
+	}
+	for name := range schemas {
+		if _, carried := tree.modes[name]; !carried {
+			return core.Errorf(core.CategoryCorruptData,
+				"the Workbook configuration commit saves a relic schema but its tree does not carry %s", name)
+		}
 	}
 	return nil
 }

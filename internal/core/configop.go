@@ -119,6 +119,12 @@ const (
 	// ConfigKeyRetire stops a key minting new tasks, leaving every task
 	// already under it owned by this project.
 	ConfigKeyRetire ConfigOperationType = "key.retire"
+
+	// ConfigRelicSchemaPut saves a new version of one relic type's schema. The
+	// stored schema document is a blob in the tree of the commit that adds
+	// it; the operation names the blob, and its own ID is the version's
+	// permanent identity. A version is never changed or removed.
+	ConfigRelicSchemaPut ConfigOperationType = "schema.put"
 )
 
 // ConfigOperation is one immutable configuration change.
@@ -201,6 +207,10 @@ type ConfigOperation struct {
 	// all three types because a key is a bare token: there is no rename pair to
 	// keep apart, and the operation's type says what is being done to it.
 	Key string `json:"key,omitempty"`
+
+	// RelicSchema is the version a schema.put saves: its type, the stored
+	// document's size and the document's object ID.
+	RelicSchema *RelicSchemaChange `json:"relicSchema,omitempty"`
 }
 
 // ConfigOperationPack is one commit's worth of configuration changes.
@@ -275,6 +285,12 @@ type ConfigData struct {
 	// fold reads nil as "the founding key alone", and the first key.add records
 	// the founding key explicitly — see gitstore.prependFoundingKey.
 	Keys *KeyDocument `json:"keys,omitempty"`
+	// Schemas lists every saved relic schema version: type, number, ID, size
+	// and object ID, never the schema itself, so reading the settings reads
+	// no schema. It is a pointer with omitempty, and nil is the canonical
+	// value for a project that has saved none, so every checkpoint written
+	// before this section existed keeps its bytes.
+	Schemas *RelicSchemaListing `json:"schemas,omitempty"`
 }
 
 // ConfigStateDocument is a resolved configuration checkpoint, written beside
@@ -348,6 +364,11 @@ var configOperationMinReader = map[ConfigOperationType]int{
 	ConfigKeyAdd:          3,
 	ConfigKeyCurrent:      3,
 	ConfigKeyRetire:       3,
+	// A schema.put needs generation 6, the generation relics arrived in: a
+	// build without the schema section would compute a different
+	// configuration from a checkpoint listing versions, so it is told to
+	// upgrade before changing the settings.
+	ConfigRelicSchemaPut: 6,
 }
 
 // ConfigPackMinReader returns the generation a reader needs to fold these
@@ -394,6 +415,11 @@ func ConfigPackMinReader(operations []ConfigOperation) int {
 		}
 		if operation.Config != nil && operation.Config.Keys != nil {
 			if required := configOperationMinReader[ConfigKeyAdd]; required > generation {
+				generation = required
+			}
+		}
+		if operation.Config != nil && operation.Config.Schemas != nil {
+			if required := configOperationMinReader[ConfigRelicSchemaPut]; required > generation {
 				generation = required
 			}
 		}
@@ -562,6 +588,7 @@ func ApplyConfig(parent *ConfigStateDocument, pack ConfigOperationPack) (ConfigS
 			Display:    folded.display.canonical(),
 			Priorities: priorities,
 			Keys:       keys,
+			Schemas:    folded.schemas.document(),
 		},
 	}, nil
 }
@@ -672,7 +699,7 @@ func ValidateConfigAuthoring(parent *ConfigStateDocument, pack ConfigOperationPa
 			return err
 		}
 	}
-	return nil
+	return validateRelicSchemaGrowth(parent, folded.schemas)
 }
 
 // ValidateConfigCheckpoint verifies that a stored configuration state is the
@@ -713,6 +740,9 @@ type configFold struct {
 	// repairs after the fold — here, that the current key is one of the active
 	// ones.
 	keys *configKeys
+	// schemas is the working form of the relic schema listing. It has no
+	// arity and nothing to repair: a schema.put only ever appends.
+	schemas *configSchemas
 }
 
 // applyConfigOperations folds a pack over its parent and returns the raw
@@ -811,7 +841,11 @@ func newConfigFold(config ConfigData) (configFold, error) {
 	if err != nil {
 		return configFold{}, err
 	}
-	return configFold{vocabulary: vocabulary, display: display, priorities: priorities, keys: keys}, nil
+	schemas, err := newConfigSchemas(config.Schemas)
+	if err != nil {
+		return configFold{}, err
+	}
+	return configFold{vocabulary: vocabulary, display: display, priorities: priorities, keys: keys, schemas: schemas}, nil
 }
 
 // apply routes one operation to the section that owns it.
@@ -829,6 +863,8 @@ func (folded configFold) apply(operation ConfigOperation) error {
 		return folded.priorities.apply(operation)
 	case operation.Type.TouchesKeys():
 		return folded.keys.apply(operation)
+	case operation.Type.TouchesRelicSchemas():
+		return folded.schemas.apply(operation)
 	default:
 		return folded.vocabulary.apply(operation)
 	}
@@ -2015,6 +2051,8 @@ type configOperationMembers struct {
 	// key is the key section's only member, carried by all three of its
 	// operation types — see ConfigOperation.Key.
 	key bool
+	// relicSchema is the schema section's only member, carried by schema.put.
+	relicSchema bool
 }
 
 var configOperationShapes = map[ConfigOperationType]configOperationMembers{
@@ -2039,6 +2077,7 @@ var configOperationShapes = map[ConfigOperationType]configOperationMembers{
 	ConfigKeyAdd:          {key: true},
 	ConfigKeyCurrent:      {key: true},
 	ConfigKeyRetire:       {key: true},
+	ConfigRelicSchemaPut:  {relicSchema: true},
 }
 
 func validateConfigOperationDocument(operation ConfigOperation) error {
@@ -2070,6 +2109,7 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 		priorityTag:         operation.PriorityTag != "",
 		priorityTags:        operation.PriorityTags != nil,
 		key:                 operation.Key != "",
+		relicSchema:         operation.RelicSchema != nil,
 	}
 	// status.add and priority.add are the two types with an optional member:
 	// a status or priority may legitimately carry no tags, and an absent list
@@ -2113,6 +2153,11 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 	if operation.Key != "" {
 		if err := ValidateProjectKey(operation.Key); err != nil {
 			return Wrap(CategoryCorruptData, string(operation.Type)+" names an invalid project key", err)
+		}
+	}
+	if operation.RelicSchema != nil {
+		if err := validateRelicSchemaChange(*operation.RelicSchema); err != nil {
+			return err
 		}
 	}
 	if operation.Label != "" {
@@ -2231,6 +2276,9 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 		if !reflect.DeepEqual(operation.Config.Keys, keys) {
 			return corrupt("config.genesis configuration is not canonical")
 		}
+		if err := validateRelicSchemaListing(operation.Config.Schemas); err != nil {
+			return Wrap(CategoryCorruptData, "config.genesis carries an invalid relic schema listing", err)
+		}
 	}
 	return nil
 }
@@ -2287,6 +2335,9 @@ func validateConfigStateDocument(state ConfigStateDocument) error {
 	}
 	if !reflect.DeepEqual(state.Config.Keys, keys) {
 		return corrupt("configuration state is not canonical")
+	}
+	if err := validateRelicSchemaListing(state.Config.Schemas); err != nil {
+		return Wrap(CategoryCorruptData, "configuration state contains an invalid relic schema listing", err)
 	}
 	return nil
 }

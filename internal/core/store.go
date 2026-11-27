@@ -180,6 +180,12 @@ const WarningRelicEditOnRemovedPart = "relic-edit-on-removed-part"
 // larger still is refused when it is saved.
 const WarningRelicOverLimit = "relic-over-limit"
 
+// WarningRelicSchemaRenumbered reports that a synchronization replayed a
+// schema version saved here after one a teammate saved for the same type
+// first, so the version saved here has a higher number than it had. Its ID,
+// which relics name, is unchanged, so no relic changes the version it names.
+const WarningRelicSchemaRenumbered = "relic-schema-renumbered"
+
 type Warning struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`

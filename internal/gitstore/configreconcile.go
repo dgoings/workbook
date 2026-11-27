@@ -804,6 +804,11 @@ func classifyConfigOperation(view configView, operation core.ConfigOperation) *c
 	case core.ConfigPriorityRelabel, core.ConfigPriorityReorder, core.ConfigPriorityTag,
 		core.ConfigPriorityUntag, core.ConfigPriorityRecolor:
 		return classifyConfigPrioritySubject(view, operation)
+	case core.ConfigRelicSchemaPut:
+		// Two saves for one type never conflict: both versions are kept, the
+		// replayed one numbered after origin's, and the sync reports the new
+		// number. A relic names a version by its ID, which does not change.
+		return nil
 	default:
 		return nil
 	}

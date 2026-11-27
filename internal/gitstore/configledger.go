@@ -235,15 +235,22 @@ func (r *Repository) LoadVocabularyState(ctx context.Context, config core.Projec
 	if err != nil {
 		return VocabularyState{}, unreadableConfigLedger(err)
 	}
-	decoded := decodedConfig{
-		vocabulary: record.State.Vocabulary(),
-		display:    record.State.Display(),
-		priorities: record.State.PriorityVocabulary(),
-		keys:       record.State.KeySet(config.Key),
-		founding:   config.Key,
-	}
+	decoded := decodedConfigOf(record.State, config.Key)
 	r.rememberDecodedConfig(head, decoded)
 	return vocabularyStateAt(head, decoded), nil
+}
+
+// decodedConfigOf resolves every section of one checkpoint, so each reader
+// that fills the memo fills all of it.
+func decodedConfigOf(state core.ConfigStateDocument, founding string) decodedConfig {
+	return decodedConfig{
+		vocabulary: state.Vocabulary(),
+		display:    state.Display(),
+		priorities: state.PriorityVocabulary(),
+		keys:       state.KeySet(founding),
+		schemas:    state.RelicSchemas(),
+		founding:   founding,
+	}
 }
 
 // vocabularyStateAt assembles the state from a decoded tip, so the memo hit and
@@ -276,6 +283,9 @@ type decodedConfig struct {
 	// and a memo holding the un-substituted section would hand every reader the
 	// same substitution to make — and the chance to make it differently.
 	keys core.KeySet
+	// schemas is the relic schema listing of the same tip: pointers to each
+	// version's blob, never a schema itself.
+	schemas core.RelicSchemaListing
 	// founding records which founding key the set above was resolved against.
 	// It is part of the memo's key, not part of its answer: every other section
 	// is a function of the commit alone, so the tip identifies it, while an
@@ -1141,7 +1151,10 @@ func (r *Repository) writeConfigObjects(
 	if err != nil {
 		return "", err
 	}
-	tree, err := r.writeTaskTree(ctx, operationBlob, stateBlob)
+	// A schema.put's document rides in the tree of the commit that saves it,
+	// so a first write and a replay both carry it, and fetching the ledger
+	// brings every version.
+	tree, err := r.writeTaskTree(ctx, operationBlob, stateBlob, relicSchemaTreeEntryList(pack)...)
 	if err != nil {
 		return "", err
 	}
@@ -1409,7 +1422,7 @@ func validateConfigObjects(
 	// and the marker exists so that such a commit reads as newer rather than as
 	// broken.
 	if !pack.RequiresNewerReader() {
-		if err := validateConfigTreeEntries(entries); err != nil {
+		if err := validateConfigTreeEntries(entries, pack); err != nil {
 			return configRecord{}, err
 		}
 	}
