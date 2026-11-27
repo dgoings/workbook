@@ -1,0 +1,20 @@
+Sharing works as it does for tasks. A push that is refused because someone else got there first replays the pusher's unpublished changes on top of what it fetched, then pushes again.
+
+| What both sides changed | Result |
+| --- | --- |
+| Different parts, different fields, or different properties | Both apply. Nothing is reported. |
+| The same field or property, to different values | The later sync wins, as for a task's fields today. Both edits stay in history. |
+| The title, the retired mark, or the position of the same part | The later sync wins, as for a task's title today. |
+| The same body, on different lines | Merged automatically. History records that a merge happened and the three versions that went into it. |
+| The same body, on overlapping lines | A conflict. The command stops and returns the starting version, the local version and the other version. |
+| A body that is not text, or whose starting version was compacted away | A conflict. |
+| One side removed a part and the other edited it | Both apply. The part stays removed and keeps the edit. The sync warns that an edit landed on a removed part. |
+| One side deleted the relic and the other edited it | A conflict, as for a deleted task today. |
+| One side retired the relic or moved it to a new schema version, and the other edited it | Both apply. The relic is flagged if it no longer fits its schema. |
+| Links added or removed on both sides | All apply. Every link has its own ID, so two links never collide. |
+
+- On a conflict, the agent resolves it when the intent is clear and saves again. Otherwise it shows the user both versions and asks. [Decided]
+- Workbook never stores conflict markers or a half-merged value.
+- The merge runs once, on the clone that syncs second, and its result is stored. Other clones read the stored result and never re-run the merge, so the merge method can improve later without changing old relics.
+- Until the merge story lands, two edits to the same body are always a conflict. That is how task descriptions behave today.
+- Once merging is proven on relics, the same merge is offered for task descriptions. [Decided]

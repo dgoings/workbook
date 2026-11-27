@@ -1,0 +1,12 @@
+- Exact names of the recorded change types, flags and JSON members, following existing Workbook conventions.
+- The names of the tracking and parked ref namespaces for relics.
+- How much of the task storage code is shared with relics and how much is written beside it. The last new record type, project settings, was written beside it.
+- The SQLite table layout and the index version bump.
+- The line-merge method. Git's own three-way file merge is available and is the expected choice.
+- How the three stored objects (`state.json`, `links.json`, the parts tree) are checked against each other when history is validated.
+- How schema versions are numbered when two people save a schema for the same type at once, provided every relic still names exactly one version.
+- How a schema reference names another type and version, and how deep references may nest.
+- How the built-in default schema versions are named so they can never collide with a project's own version numbers.
+- How a body opened in a new tab is kept apart from the board.
+- The writer-format marker the new change types carry, following the existing rule that each new type declares the lowest version able to read it.
+- Test coverage, following the priorities in `AGENTS.md`: temporary bare remotes for sync, projection and merge rules tested apart from Git, and both hash formats.

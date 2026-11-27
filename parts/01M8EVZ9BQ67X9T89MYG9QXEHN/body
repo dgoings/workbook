@@ -1,0 +1,16 @@
+| Purpose | JSON Schema words |
+| --- | --- |
+| Kind of value | `type` (string, number, integer, boolean, object, array, null) |
+| Shape of an object | `properties`, `required`, `additionalProperties` (true or false) |
+| Shape of a list | `items`, `minItems`, `maxItems` |
+| Allowed values | `enum`, `const` |
+| Size | `minLength`, `maxLength`, `minimum`, `maximum` |
+| Reuse | `$ref` and `$defs`, within the project only |
+| Notes for people and agents | `title`, `description` |
+
+- **References within the project are supported from the start**, so one relic type can be composed from pieces of another. [Decided]
+- A schema can reuse a definition from inside itself, or from another relic type in the same project. [Proposed]
+- A reference to another type is fixed to that type's version at the moment the schema is saved. A saved schema version therefore never changes meaning when the other type moves on. [Proposed]
+- References to web addresses, to anything outside the project, or in a loop are refused when the schema is saved. [Proposed]
+
+Left out at first: pattern matching, format checks, and combining schemas with `allOf`, `anyOf`, `oneOf` or `not`.

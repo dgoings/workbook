@@ -1,0 +1,14 @@
+| Step | Stories that can be built at the same time |
+| --- | --- |
+| 1 | Local relics |
+| 2 | Shared relics, Relic index |
+| 3 | Links to tasks |
+| 4 | Benchmarks and limits, Agents use relics |
+| 5 | Project schemas, Links between relics, History and diffs, Retiring and compaction |
+| 6 | Default spec and plan schemas, Relics on the web |
+| 7 | Automatic merging, then Merging for task descriptions |
+
+- Relics created before story 7 name no schema. They stay valid under the open built-in rules until someone migrates them.
+- Links made before story 8 accept any relationship name. Story 8 starts checking the name against the default list and the project's schema.
+- Comments and attachments on relics have no story. That is decided once people are using relics.
+- The exploration story is finished now that this page is approved and the stories exist.

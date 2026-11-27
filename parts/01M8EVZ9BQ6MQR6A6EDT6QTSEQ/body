@@ -1,0 +1,8 @@
+The generated agent guidelines and the Workbook skill explain: [Decided]
+
+- how to find the relics linked to a task and read one part;
+- how to edit a part safely, naming the version it was read at;
+- that Workbook merges what it can;
+- that on a conflict the agent resolves it when the intent is clear, and otherwise takes both versions to the user;
+- how to write a spec or a plan with the default schemas;
+- the project's own relic types and their rules, drawn from its schemas.

@@ -1,0 +1,6 @@
+- **Title** and **type**.
+- **Author**, recorded from whoever creates the relic. Every later edit carries its own author. It is not an editable field.
+- **Links** to tasks and to other relics.
+- **History** of every change.
+- **Retired** and **deleted** marks, both reversible.
+- **Schema version** the relic was written under.

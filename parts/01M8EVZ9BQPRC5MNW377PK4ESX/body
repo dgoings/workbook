@@ -1,0 +1,8 @@
+| Story | What it delivers | Needs |
+| --- | --- | --- |
+| 1. Local relics | The record format, its changes, the Git layout, relic IDs and the starting limits. Create, show, list, update, delete and restore on one machine, with `--json`, `create --from-file` and `export`. Parts with fields, bodies and body formats, placed with `--before` and `--after`. Body edits record their starting version, and an edit from an out-of-date version is refused. `validate` covers relics. | The tasks-only folder story |
+| 2. Shared relics | Fetch, push and automatic sync of relic refs, including `setup` on a fresh clone, a tasks-only folder, and the sync watcher. Unpublished changes replay onto fetched ones. Two edits to the same body are reported as a conflict. Tests that an older version is unaffected. | 1 |
+| 3. Relic index | Relics, parts and recorded changes in the local SQLite index. Relic reads served from it. `rebuild` covers relics. | 1 |
+| 4. Links to tasks | A relic or part links to a task. The link is followed from both ends: `relic show`, `relic list --linked-to`, and `workbook show <task>`. | 3 |
+| 5. Benchmarks and limits | The relic benchmark family. The speed targets met. Starting limits confirmed or raised. Proof that task commands did not slow down. The decisions on body caching and on renumbering parts. | 2, 3, 4 |
+| 6. Agents use relics | Reference, architecture and README sections. Generated guidelines and skill. Then this design is stored as the first relic and the stories below are linked to its parts. | 2, 4 |

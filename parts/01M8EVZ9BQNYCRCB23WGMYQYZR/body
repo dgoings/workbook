@@ -1,0 +1,1 @@
+**Syntax.** JSON Schema, limited to a short documented list of rules. A schema that uses anything else is refused when it is saved. The list can grow later and can never shrink. [Decided]

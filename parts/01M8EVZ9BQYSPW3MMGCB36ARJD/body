@@ -1,0 +1,17 @@
+```
+{ "id":      "01M9…L",
+  "from":    "<part of this relic, or omitted for the whole relic>",
+  "to":      { "relic": "WB-R-01M8…", "part": "01M8…C" },   // or { "task": "WB-01M2…" }
+  "rel":     "decided-in",
+  "pointer": { "quote": "we agreed to compact by hand", "at": "00:14:32" } }
+```
+
+- **Ends.** A link starts from a relic or one of its parts. It points at a task, a relic, or a part of a relic. [Decided]
+- **Named relationship.** `rel` is a word from a list. Workbook ships a default list, and a project's schema can add to it. [Decided]
+- **Pointer.** A link may carry an optional pointer inside its target part, such as a quote or a timestamp. The schema defines its shape. Workbook stores it and does not interpret it. [Decided]
+- **Stored once.** A link is written only on the relic it starts from. Nothing is written on the other end, and tasks do not change. [Decided]
+- **Followed both ways.** The local index keeps every link searchable by either end. "What points at this part?" is one lookup, with no crawl and no background job.
+- **This depends on a fast index.** The speed target is in Local index and speed, and it is measured before any feature beyond the first working version is built. [Decided]
+- **Live.** A link points at its target as it is now. History can show whether the target changed after the link was made.
+- **Checked when saved.** The target must exist when the link is added. If it is later removed or deleted, the link stays and is shown as pointing at something removed.
+- **Concurrent adds both survive**, the way labels and assignments do today.

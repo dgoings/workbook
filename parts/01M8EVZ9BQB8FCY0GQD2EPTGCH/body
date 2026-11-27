@@ -1,0 +1,5 @@
+**The check in step 4 is made twice.** [Proposed]
+
+- First by the command, when Bob saves.
+- Again every time any copy of Workbook works out a relic's current text from its history. A body edit counts only if the version it says it started from was the current one at that point. An edit that fails this test stays in history under its author's name, and it does not change the text.
+- The second check exists because the first can be skipped: by a bug, by another tool, or by someone writing to Git directly. Without it, such an edit would quietly replace newer text, and two clones could disagree about what the current text is. With it, every clone arrives at the same text.

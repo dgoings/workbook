@@ -1,0 +1,28 @@
+```
+{
+  "id": "WB-R-01M9…",
+  "title": "Task archive compaction",
+  "type": "spec",
+  "schema": { "type": "spec", "version": 3 },
+  "author": "dylan@example.com",
+  "retired": false,
+  "deleted": false,
+
+  "properties": { "status": "approved", "reviewer": "sam@example.com" },
+
+  "parts": [
+    { "id": "01M9…A", "type": "section",
+      "fields": { "heading": "Goals" },
+      "body":   { "format": "md", "version": "…", "bytes": 1840 } },
+    { "id": "01M9…B", "type": "decision",
+      "fields": { "question": "Compact by hand or on a timer?", "chosen": "by hand" } }
+  ],
+
+  "links": [
+    { "id": "01M9…L", "from": "01M9…B",
+      "to": { "task": "WB-01M2…" }, "rel": "implemented-by" }
+  ]
+}
+```
+
+Values are illustrative. A part's body text is returned on request, not inline in every listing.

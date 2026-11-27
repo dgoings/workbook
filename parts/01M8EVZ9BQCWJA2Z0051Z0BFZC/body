@@ -1,0 +1,8 @@
+- **On create.** The whole new relic must fit, including every required property.
+- **On update.** The piece being saved (a property, a part, a link) is checked, and a required property cannot be cleared. A save that breaks the schema is refused with a message naming the rule.
+- **On migrate.** The whole relic must fit the version it is moving to.
+- **The not-conforming flag** is worked out for the whole relic when the local index picks up a change to it.
+- **Never on read or sync.** A relic that does not fit its schema stays readable and is flagged as not conforming. This can happen after two valid edits meet, or when a teammate saved before syncing a newer schema.
+- **Unknown version.** A relic that names a schema version this clone has not synced yet can be read. Editing it is refused until the clone syncs.
+
+Anyone with push access can write to the repository without the Workbook command, so the schema guides honest tools. It is not a security boundary. The same is true of every other rule in Workbook.

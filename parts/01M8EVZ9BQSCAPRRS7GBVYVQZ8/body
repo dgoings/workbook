@@ -1,0 +1,5 @@
+You asked whether frequently read bodies should be cached.
+
+- **No extra copy at first.** Reading a body is one direct read from Git by its object ID, with no search.
+- **The web server may keep recently shown bodies in memory.** An object ID always means the same text, so such a copy can never go stale.
+- **Each command-line call is a new process**, so the only cache it could use is a copy of the text inside the index. The benchmark story measures a body read from the command line. If it is slow, bodies under a size threshold are copied into the index.

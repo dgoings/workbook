@@ -1,0 +1,5 @@
+- A relic ID is the project key, `-R-`, and a unique ID: `WB-R-01M9…`. A task ID is `WB-01M2…`. Any tool can tell the two apart by looking at the ID. [Decided]
+- The two can never be confused. A project key cannot contain a hyphen, and the unique part of a task ID always starts with a digit, so `WB-R-` is never the start of a task ID.
+- A part ID is minted when the part is created. Editing, moving or retyping the part never changes it.
+- A part is addressed as `<relic-id>#<part-id>`. Any unambiguous prefix works on the command line, as it does for tasks.
+- Removing a part hides it. It is not destroyed, so links to it still resolve.

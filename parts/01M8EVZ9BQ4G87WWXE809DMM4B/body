@@ -1,0 +1,1 @@
+**A part is placed with `--before` or `--after`**, as `workbook move` does for tasks. `--before` the first part puts it at the beginning. With neither, a new part goes at the end. [Decided]

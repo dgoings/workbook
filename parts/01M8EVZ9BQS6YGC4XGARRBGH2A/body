@@ -1,0 +1,1 @@
+A reference to another type is fixed to that type's version at the moment the schema is saved. A saved schema version therefore never changes meaning when the other type moves on. [Proposed]

@@ -1,0 +1,1 @@
+Test coverage, following the priorities in `AGENTS.md`: temporary bare remotes for sync, projection and merge rules tested apart from Git, and both hash formats.

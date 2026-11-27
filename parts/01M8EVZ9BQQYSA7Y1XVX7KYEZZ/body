@@ -1,0 +1,4 @@
+- **Every change is kept** with its author and time, as for tasks.
+- **Diffs are computed when asked.** Git keeps every version of every part, so any two versions can be compared. A viewer can build a pull-request-style view from that. [Decided]
+- **Each saved text of a body has a version name**, and every body edit says which version it started from. The example below shows why. [Decided]
+- **There is no overwrite option.** To replace a body on purpose, read the current version and save over it. [Decided]

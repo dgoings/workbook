@@ -1,0 +1,9 @@
+| Area | Changes |
+| --- | --- |
+| Relic | create, set title, delete, restore, retire, unretire, move to a schema version |
+| Properties | set one, clear one |
+| Parts | add, set one field, clear one field, set body (with its format and the version it started from), record a merged body, move, remove, restore |
+| Links | add, remove |
+| History | checkpoint (written by compaction) |
+
+One command may record several of these together. They are stored as one commit and applied together or not at all.

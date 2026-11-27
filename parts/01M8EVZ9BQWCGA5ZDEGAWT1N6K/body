@@ -1,0 +1,11 @@
+- **Properties**: named values on the relic as a whole, such as a status or a reviewer.
+- **Parts**: an ordered, flat list. Each part has a permanent ID, a part type, and two halves. [Decided]
+  - **Fields** are small structured values checked against the schema.
+  - **Body** is optional text in any format, stored exactly as written.
+- **Body format.** A body carries a short label that says what it holds, written like a file ending: `md`, `html`, `txt`, `json`, `ts`. A viewer reads the label to know how to draw the body. Workbook stores it and never checks the text against it. [Decided]
+  - The label is saved together with the text. `--body-file notes.md` takes it from the file ending unless `--body-format` says otherwise. [Proposed]
+  - A body with no label is treated as plain text. [Proposed]
+  - A schema may list the formats a part type accepts. [Proposed]
+- **Starting shapes.** Workbook ships default schemas for specs and plans. They are described under Schemas. [Decided]
+
+The body is separate from the fields because line-by-line comparison and merging only work on text stored as plain text.

@@ -1,0 +1,4 @@
+**Parts**: an ordered, flat list. Each part has a permanent ID, a part type, and two halves. [Decided]
+
+- **Fields** are small structured values checked against the schema.
+- **Body** is optional text in any format, stored exactly as written.

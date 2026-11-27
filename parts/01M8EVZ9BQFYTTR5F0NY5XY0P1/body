@@ -1,0 +1,15 @@
+A relic has no "Done" status to mark the end of its useful life, so someone retires it. Only retired and deleted relics can be compacted. Compaction is always run by hand, with a dry run and a backup bundle written first, as for tasks.
+
+| Boundary | How a relic gets there | Compacting keeps | Compacting drops |
+| --- | --- | --- | --- |
+| **Retired** [Decided] | Someone marks it retired. This can be undone. | Current content and links. It stays readable. | Step-by-step history and the text of removed parts |
+| **Deleted** [Decided] | Someone deletes it. | A stub: title, type, author, dates and links | All content and history |
+
+- **Retired** is the "no longer relevant" state. A retired relic leaves default lists and is shown as retired wherever something links to it.
+- **Relics are compacted only when asked.** The existing `workbook compact` keeps compacting only tasks unless relics are named. [Decided]
+- **A relic still in use is never compacted.** Compacting relics that nobody has changed for a while was considered and left out. [Decided]
+- **Links never break.** A dropped part or relic leaves a stub, so a link to it says "removed on \<date>".
+- **A deleted relic stays fully recoverable until someone compacts it.** After that, the backup bundle is the only copy of its content.
+- **Restoring after compaction.** Restoring a compacted deleted relic brings back the stub and says its content was dropped on that date. Restoring a removed part whose text was dropped is refused with the same explanation. Dropped file attachments on tasks behave this way today. [Decided]
+
+Compacting a retired relic has two costs. Diffs reach back only to the compaction point. If someone un-retires it, an unpublished edit that started from a dropped version cannot be merged automatically and becomes a conflict.

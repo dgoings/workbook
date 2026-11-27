@@ -1,0 +1,5 @@
+- **Reads come from the local SQLite index**: lists, a relic's page, link lookups in both directions, and history. [Decided]
+- **Git stays the source of truth.** The index can be deleted at any time and rebuilt from the refs.
+- **What the index holds**: relics, their properties, parts with their fields and each body's format, size and object ID, links searchable by either end, and the list of recorded changes.
+- **Body text is read from Git** by its object ID when it is shown, one read per body. It is not copied into the index. [Decided]
+- **The index is updated only for relics that changed**, as for tasks today.

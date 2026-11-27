@@ -1,0 +1,6 @@
+- The first working version has no web page. Relics are reached through the command line and its JSON. [Decided]
+- A later story adds a Relics page to `workbook serve`: a list, a relic page, links in both directions, and history with diffs. The desktop app loads the same pages, so it gets them too.
+- The page draws what Workbook understands: the enforced fields, Markdown bodies, and fields as labeled values. Other bodies are shown as text. Stored HTML is shown as source and is never run inside Workbook.
+- **Any body can be opened by itself in a new browser tab**, where an HTML body is drawn as a page. [Decided]
+- **The opened tab is cut off from the board.** A script inside a stored body cannot read or change Workbook data. A relic written by a teammate is therefore safe to open. [Proposed]
+- The same data is available over the local web API, so a project can build its own viewer.

@@ -1,0 +1,4 @@
+- **Once the index exists**, "which relics link to this one?" is answered from it alone, without reading Git.
+- **On a fresh clone**, building the index for the full benchmark set (1,000 relics, 20,000 parts, 10,000 links) takes under 5 seconds on the benchmark machine. It must never take minutes.
+- **After a sync**, only the relics that changed are re-read, so the cost follows the size of the change and not the size of the project.
+- The benchmark reports stay descriptive, as they are for tasks. These targets are acceptance checks for the benchmark story itself. If one is missed, it is fixed before any story after the first working version starts.

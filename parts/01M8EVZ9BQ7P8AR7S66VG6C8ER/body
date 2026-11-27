@@ -1,0 +1,8 @@
+- A relic is never lost to a stray delete, and never has to live in the code tree.
+- The content format is open. A project decides what its specs, plans, decisions or transcripts contain.
+- Parallel agents can update one relic without overwriting each other's text.
+- Links between tasks, relics and parts are first-class and can be followed in both directions.
+- Every change is kept, attributed, and comparable with any earlier version.
+- Everything works from the command line with JSON output, with no service and no background process.
+- Relic commands stay fast on large relics, and task commands do not get slower.
+- A fresh clone can answer "what links to this?" within seconds.

@@ -1,0 +1,8 @@
+A **relic** is a new kind of record in Workbook, separate from tasks. It holds a title, a type, an author, links, and content made of named **parts**.
+
+- Workbook stores relics in Git, shares them through `origin`, and keeps every change, as it does for tasks.
+- Workbook enforces a small set of fields. Each project defines everything else with a schema kept in the shared project settings.
+- Workbook ships default schemas for specs and plans, so a new or upgraded project has a working shape from the first day.
+- A relic or one of its parts can link to tasks and to other relics or their parts.
+- Two people editing the same text are merged automatically where possible. A real conflict goes to the acting agent.
+- Workbook is the place the data lives. Skills and viewers built on top decide what a relic looks like.

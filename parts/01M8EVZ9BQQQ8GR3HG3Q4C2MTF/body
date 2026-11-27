@@ -1,0 +1,7 @@
+You asked whether the ordering used for tasks holds up for very large part lists with a lot of movement. It is always correct. Its weak spot is that positions can grow long.
+
+- **How it works.** Each part's position is an exact fraction. A part placed between two others gets a fraction between theirs. There is always room, at any list size, so two people inserting at the same moment both succeed and nothing else has to be renumbered.
+- **Where it strains.** Tasks use the midpoint of the gap. Each new placement into the same gap makes the fraction one binary digit longer. Adding 2,000 parts one after another at the front of a relic would end with positions several hundred bytes long. Adding at the end costs nothing.
+- **Relics use the shortest fraction that fits the gap instead of the midpoint.** Repeated inserts at one spot then grow very slowly: the 2,000th insert at the front is about 5 bytes, not about 600. Only alternating back and forth inside one tiny gap still grows quickly. [Proposed]
+- **A part's position is limited to 256 bytes**, so the part list has a known largest size. A placement that would pass the limit is refused with a message. [Proposed]
+- **The benchmark story measures heavy reordering** (2,000 parts, 10,000 moves) and reports the longest position. If real use can reach the limit, that story adds a "renumber parts" change that resets every position to a whole number. [Proposed]

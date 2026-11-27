@@ -1,0 +1,3 @@
+The first six stories are the shortest path to a working version whose speed is known. It is reached when this design is stored as a relic, shared through `origin`, readable from a fresh clone, every remaining story links to the part it builds, and the benchmark targets are met.
+
+Every story is in Workbook with the labels `v1.0.0` and `relics`.

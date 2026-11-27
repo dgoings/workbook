@@ -1,0 +1,1 @@
+**Body text is read from Git** by its object ID when it is shown, one read per body. It is not copied into the index. [Decided]

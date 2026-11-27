@@ -1,0 +1,1 @@
+**One schema per relic type.** A project defines its types, such as `spec`, `plan`, `decision` and `transcript`. [Decided]

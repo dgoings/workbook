@@ -1,0 +1,15 @@
+The existing benchmark harness gets a relic family. It is part of the first working version, so speed is known and can keep being measured before more features are added.
+
+| Measured | At this size |
+| --- | --- |
+| Create a relic, edit one part, open a relic | A 2,000-part relic holding 1 MiB of text |
+| Read one body from the command line | A 1 MiB body and a 2 KiB body |
+| List relics, filter by type | 1,000 relics of 20 parts each |
+| Find everything that links to one part or task | 10,000 links |
+| Reorder parts heavily, and report the longest position | 2,000 parts, 10,000 moves |
+| Sync changed relics | 100 changed relics |
+| Rebuild the index, and fetch into a fresh clone | The full set above |
+| Storage growth | Repository size before and after the edits above |
+| Task commands with relics present | The existing task scenarios, re-run beside 1,000 relics |
+
+Showing history and comparing two versions is measured by the history and diffs story, which adds those commands.

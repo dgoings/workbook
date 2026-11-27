@@ -1,0 +1,4 @@
+- Relic refs are fetched and pushed in the same step as task refs, by every command that syncs today, including `setup` on a fresh clone.
+- A sync checks only the relics that changed since the last one. An unchanged relic costs one line in the list of refs that `origin` sends. The benchmark story measures what this adds to a task command.
+- A clone with unpublished relic changes replays them onto what it fetched, following the table in History, diffs and merging.
+- **A folder that holds only Workbook data and no code holds relics too.** The tasks-only folder story is built before relics, and relic tests cover that setup. [Decided]

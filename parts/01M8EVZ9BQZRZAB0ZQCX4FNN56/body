@@ -1,0 +1,5 @@
+- An edit to a part's body text silently overwrites someone else's edit.
+- An agent asking for its next task is handed a relic.
+- A teammate on an older Workbook loses the ability to work on tasks.
+- A schema change makes existing relics unreadable.
+- Reading or syncing a relic fails because its content breaks a schema.

@@ -1,0 +1,1 @@
+How the three stored objects (`state.json`, `links.json`, the parts tree) are checked against each other when history is validated.

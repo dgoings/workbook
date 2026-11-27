@@ -1,0 +1,1 @@
+**The benchmark story measures heavy reordering** (2,000 parts, 10,000 moves) and reports the longest position. If real use can reach the limit, that story adds a "renumber parts" change that resets every position to a whole number. [Proposed]

@@ -1,0 +1,1 @@
+**A part's position is limited to 256 bytes**, so the part list has a known largest size. A placement that would pass the limit is refused with a message. [Proposed]

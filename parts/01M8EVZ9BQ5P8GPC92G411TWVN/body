@@ -1,0 +1,14 @@
+Your comments settled every earlier open call. Applying some of them meant making a further choice. Those are listed here and marked [Proposed] where they appear. Each one is also written into the story that builds it, so changing one means editing that story.
+
+1. **The body format label lives on the body** and is saved with the text. It is taken from the file ending when a file is given. A schema may list the formats a part type accepts.
+2. **The default schemas are built into Workbook** and are not written into each project's settings. A project's own schema for `spec` or `plan` takes over from the default.
+3. **The starting content of the default schemas** and **the seven default relationship names**. Both are settled for good in the default schemas story.
+4. **A schema reference to another type is fixed to a version** when the schema is saved, and loops are refused.
+5. **Part positions use the shortest fraction that fits**, limited to 256 bytes. Renumbering is added only if the benchmark shows it is needed.
+6. **Bodies are not cached at first.** The benchmark story decides whether small bodies are copied into the index.
+7. **The speed target**: a fresh clone builds the index for the full benchmark set in under 5 seconds.
+8. **The stored-history check on stale edits** stays as designed. It is the one earlier call you asked to have explained and did not accept outright.
+9. **A body opened in a new tab is cut off from the board.**
+10. **Stories 7 to 14 all wait for the benchmark story and the first relic.** Automatic merging and merging for task descriptions are low priority. The rest are medium.
+11. **Local relics waits for the tasks-only folder story**, because you said that story is built before relics.
+12. **`AGENTS.md` still gets a wording update in the compaction story.** Its compaction rule names Done and Deleted tasks only, so retired and deleted relics have to be added to it. The warning about widening the rule is gone with quiet compaction.

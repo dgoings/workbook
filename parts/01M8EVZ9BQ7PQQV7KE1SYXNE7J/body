@@ -1,0 +1,11 @@
+| Name | Read as |
+| --- | --- |
+| `implemented-by` | This part of a spec or plan is built by that task. |
+| `derived-from` | This was drawn from that source. |
+| `summarizes` | This is a summary of that. |
+| `decided-in` | This decision was made in that meeting or transcript turn. |
+| `changes` | This decision changes that part of a spec. |
+| `supersedes` | This relic replaces that one. |
+| `relates-to` | A general connection with no stronger meaning. |
+
+The workflow this is built for: a meeting transcript is stored as a relic with one part per speaker turn. Decisions drawn from it are a second relic whose parts link back to the turns they came from. Each decision links on to the part of the spec it changes, and the spec's parts link to the tasks that build them.

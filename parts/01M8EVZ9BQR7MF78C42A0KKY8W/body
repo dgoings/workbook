@@ -1,0 +1,9 @@
+- Workbook drawing project-defined content, or running stored HTML inside the board.
+- Several people typing in the same part at the same moment.
+- Links between different projects.
+- Search across the text of relic bodies. It can come later.
+- Parts nested inside parts.
+- The whole of JSON Schema.
+- Compaction that runs by itself, and compaction of relics still in use. [Decided]
+- Comments and attachments on relics. This is decided once people are using relics. [Decided]
+- Checking that an author is who they say they are.

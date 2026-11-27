@@ -1,0 +1,5 @@
+- Agents now write spec and plan files as part of normal work. Those files either get committed to the code repository or get deleted when the feature is done.
+- Committed files drift between branches, the way a `TODO.md` does. Several agents updating one spec in parallel have no good way to stay in sync.
+- Deleted files lose decisions the code does not record. Files that aren't tracked can be deleted by accident without anyone noticing.
+- Many teams do not want these files in their repository at all, for the same reasons Workbook keeps tasks out of it.
+- Markdown files carry no metadata. They cannot link to tasks or to each other, and they do not suit richer formats such as review pages written in HTML.

@@ -1,0 +1,24 @@
+Relics follow the task model: one private ref per relic, a chain of unchangeable commits, each holding the change that was made and the resulting state. Shared history is only ever added to.
+
+```
+refs/workbook/relics/WB-R-01M9…
+ └── commit                      (parent: the previous change)
+      └── tree
+           ├── operation.json    the change that was made
+           ├── state.json        the relic after the change: enforced fields, properties,
+           │                     and the part list (ID, type, position, body format,
+           │                     current version)
+           ├── links.json        the relic's links
+           └── parts/
+                ├── 01M9…A/
+                │    ├── fields.json   part A's fields
+                │    └── body          part A's body text, exactly as written
+                └── 01M9…B/
+                     └── fields.json   part B has no body
+```
+
+- **Each part's fields and body are their own Git objects.** Editing one part of a 500-part transcript writes that part's objects. Git reuses the other 499 unchanged. [Decided]
+- **Every commit lists all current parts.** Any Git tool can then compare a part between two commits, and a relic at any point in its history is complete on its own. [Decided]
+- **No stored object grows with the relic's whole content.** Workbook refuses to read any single object over 4 MiB. The part list and the links are kept small, and the content sits beside them.
+- **Syncing reads `state.json`, `links.json` and the sizes of the part objects.** It does not read the content.
+- **Deleting a relic** records a delete marker. The ref is never removed, and `restore` brings the relic back.

@@ -1,0 +1,12 @@
+Every story below waits for stories 5 and 6, so nothing new is built until speed is measured and the design is a relic.
+
+| Story | What it delivers | Also needs |
+| --- | --- | --- |
+| 7. Project schemas | Schemas in the shared settings with versions. The limited JSON Schema rules, including references within the project. Checking on save, the not-conforming flag, `relic migrate`, `relic list --behind`, the `schema` commands, and project types in the generated guidelines. | — |
+| 8. Default spec and plan schemas | The built-in `spec` and `plan` schemas and the default relationship names. This design moved onto the default `spec` schema. Guidelines and skill teach agents to write specs and plans as relics. | 7 |
+| 9. Links between relics | Relic-to-relic and part-to-part links, pointers, and the display of links whose target was removed. | — |
+| 10. History and diffs | `relic show --history` and `relic diff`, per-part version lists, and JSON output a viewer can build on. | — |
+| 11. Relics on the web | The Relics page in `workbook serve`, linked relics on a task's page, opening a body in a new tab, and the local web API. | 10 |
+| 12. Retiring and compaction | Retire and unretire. `workbook compact --relics` for retired and deleted relics, with stubs and the backup bundle. | — |
+| 13. Automatic merging | Line-by-line merging of body edits, the conflict report with three versions, merge records in history, and the conflict flow in the docs and skill. Lower priority than the stories above. | — |
+| 14. Merging for task descriptions | The same automatic merge for task descriptions. | 13 |

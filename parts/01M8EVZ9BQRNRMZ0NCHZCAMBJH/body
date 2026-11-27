@@ -1,0 +1,6 @@
+- Saving a schema for a type adds a new version. Every old version stays in the settings for good.
+- Each relic names its type and the schema version it was written under.
+- A relic stays editable under the version it names.
+- Moving a relic to a newer version is an explicit step that an agent or skill performs. The relic must fit the new version for the step to succeed.
+- Workbook lists which relics are behind the newest version of their type.
+- Changing a relic's type is done the same way, as a migration.

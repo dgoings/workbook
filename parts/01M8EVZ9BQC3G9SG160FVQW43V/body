@@ -1,0 +1,1 @@
+**Each part's fields and body are their own Git objects.** Editing one part of a 500-part transcript writes that part's objects. Git reuses the other 499 unchanged. [Decided]

@@ -1,0 +1,1 @@
+**Restoring after compaction.** Restoring a compacted deleted relic brings back the stub and says its content was dropped on that date. Restoring a removed part whose text was dropped is refused with the same explanation. Dropped file attachments on tasks behave this way today. [Decided]

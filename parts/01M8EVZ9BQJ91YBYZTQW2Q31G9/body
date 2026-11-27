@@ -1,0 +1,7 @@
+| Approach | For | Against |
+| --- | --- | --- |
+| A relic is a kind of task | Smallest build. Comments, attachments, history and sync come for free. | Every task surface has to exclude relics forever. Older versions would show relics on the board as tasks. |
+| A separate record whose content is one open document | Most format-agnostic. Older versions never see it. | Two agents editing one relic collide every time. History can only say "the document changed". |
+| **A separate record whose content is named parts** [Decided] | Content inside a part is still up to the project. Different parts never collide. History is per part. | Agents address parts by ID. More to design. |
+
+Two more were dropped early. Files kept on one hidden branch would bring back the single shared state that per-task refs were built to avoid. Files attached to a task have no history inside the file and belong to only one task.

@@ -1,0 +1,1 @@
+**`relic diff` is its own command.** With two versions it compares them. With one it compares that version with the current one. With none it shows the latest change. [Decided]

@@ -1,0 +1,21 @@
+Limits are part of the storage format. Raising one later is safe and lowering one is not, so these start low. The benchmark story confirms or raises them.
+
+| Limit | Value |
+| --- | --- |
+| Title | 500 bytes |
+| Type name, part type name, relationship name | 100 bytes each |
+| Body format label [Proposed] | 16 bytes |
+| One part's position [Proposed] | 256 bytes |
+| All properties of one relic | 64 KiB |
+| One part's fields | 16 KiB |
+| One part's body | 1 MiB |
+| One link's pointer | 512 bytes |
+| One schema version | 64 KiB |
+| Live parts per relic | 2,000 |
+| Links per relic | 2,000 |
+| All current bodies of one relic together | 16 MiB |
+| Schema versions per type | 500 |
+
+- **The size of one item** (the first nine rows) is checked when it is saved and again when it is read, as task fields are today.
+- **Counts and totals** (the last four rows) are checked only when something is being added, never when a relic is read. Two people adding at the same moment can pass a count without either doing anything wrong, and the relic must stay readable.
+- At these numbers the part list comes to about 1.1 MiB at most and the links to about 1.6 MiB, both under the 4 MiB ceiling on a single object.

@@ -1,0 +1,11 @@
+- Workbook ships opinionated schemas for the types `spec` and `plan`. They are the shapes we use for Workbook's own specs and plans while building this feature, starting with this design.
+- **They are built into Workbook**, the way the default statuses are. A new project and a project that just upgraded both have them with nothing to set up, and nobody has to write them into the shared settings. [Proposed]
+- **A project that saves its own schema for `spec` or `plan` takes over** from the default for that type. [Proposed]
+- **Each released default has a fixed version name and never changes.** A later Workbook release can add a newer default beside it. A relic written under a default names that version, as it would for a project schema. [Proposed]
+
+| Type | Properties | Part types |
+| --- | --- | --- |
+| `spec` | `status`: draft, approved or superseded | `section` (a heading and a body), `decision` (a question, what was chosen, and a body for the reasoning), `open-question` (a question and a body) |
+| `plan` | `status`: draft, approved, in progress or done | `section` (a heading and a body), `step` (a title, the steps it needs first, and a body). A step links to the task that builds it. |
+
+This is the starting point. [Proposed] The story that ships the defaults settles the final content by using them on this design and on its own plan.

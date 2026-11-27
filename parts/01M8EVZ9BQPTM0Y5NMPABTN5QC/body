@@ -1,0 +1,3 @@
+- An older version only asks `origin` for task, settings and project refs. It never fetches relics, so it neither shows them nor breaks on them.
+- Tasks do not change format, so an older version keeps full use of tasks.
+- Once a project saves its first relic schema, the shared settings contain a kind of change older versions do not know. From then on an older version can read the settings but is told to upgrade before changing them. This is the existing behavior for any newer settings change.

@@ -1,0 +1,1 @@
+**A project that saves its own schema for `spec` or `plan` takes over** from the default for that type. [Proposed]

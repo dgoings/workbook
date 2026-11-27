@@ -1,0 +1,1 @@
+**Pointer.** A link may carry an optional pointer inside its target part, such as a quote or a timestamp. The schema defines its shape. Workbook stores it and does not interpret it. [Decided]

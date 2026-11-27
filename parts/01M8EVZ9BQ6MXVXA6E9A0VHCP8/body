@@ -1,0 +1,27 @@
+Relics get their own command group so that no task command changes meaning. Every command takes `--json`.
+
+```
+workbook relic create "Title" --type spec [--from-file relic.json]
+workbook relic list   [--type T] [--linked-to <task or relic>] [--retired] [--behind]
+workbook relic show   <relic>[#part] [--body] [--history]
+workbook relic diff   <relic>[#part] [<version> [<version>]]
+workbook relic update <relic> [--title …] [--set name=value] [--clear name]
+                      [--add-part --part-type T --field k=v --body-file f --body-format F
+                                  (--before <part> | --after <part>)]
+                      [--part <part> --field k=v --body-file f --body-format F --base <version>]
+                      [--move-part <part> (--before <part> | --after <part>)]
+                      [--remove-part <part>]
+                      [--link <target> --from <part> --rel R --pointer '{…}'] [--unlink <link>]
+workbook relic delete | restore | retire | unretire <relic>
+workbook relic migrate <relic> --to <version>
+workbook relic export <relic>            # the whole relic as one JSON document
+
+workbook schema list | show <type> | put <type> <file>
+workbook compact --relics [--retired-only | --deleted-only]
+```
+
+- **`relic diff` is its own command.** With two versions it compares them. With one it compares that version with the current one. With none it shows the latest change. [Decided]
+- **A part is placed with `--before` or `--after`**, as `workbook move` does for tasks. `--before` the first part puts it at the beginning. With neither, a new part goes at the end. [Decided]
+- `workbook show <task>` gains a list of the relics and parts linked to that task.
+- `workbook next`, `list` and `board` never return relics.
+- `create --from-file` takes a whole relic as one JSON document. It is how an agent turns a finished draft into a relic in one step.

@@ -1,0 +1,1 @@
+**Relics use the shortest fraction that fits the gap instead of the midpoint.** Repeated inserts at one spot then grow very slowly: the 2,000th insert at the front is about 5 bytes, not about 600. Only alternating back and forth inside one tiny gap still grows quickly. [Proposed]

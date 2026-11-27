@@ -1,0 +1,1 @@
+**How they are stored there.** Each schema version is its own stored object in the settings history. The settings document lists only each version's type, number and size, so reading statuses never reads schemas and the settings document stays small. [Decided]

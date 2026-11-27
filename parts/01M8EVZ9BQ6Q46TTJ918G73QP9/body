@@ -1,0 +1,1 @@
+A schema can reuse a definition from inside itself, or from another relic type in the same project. [Proposed]
