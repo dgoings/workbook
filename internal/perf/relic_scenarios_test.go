@@ -32,10 +32,10 @@ func TestRelicScenariosAreNotInTheDefaultRegistry(t *testing.T) {
 		t.Fatalf("ResolveScenarios(nil) = %v, want the registry", resolved)
 	}
 	// The plan's 21, the four that measure the 1 MiB body save and the
-	// relic at the 16 MiB live-body limit, and the three that measure history
-	// and diffs.
-	if len(RelicScenarioNames()) != 28 {
-		t.Fatalf("relic scenarios = %d, want 28", len(RelicScenarioNames()))
+	// relic at the 16 MiB live-body limit, the three that measure history
+	// and diffs, and the two that look up what links to a part.
+	if len(RelicScenarioNames()) != 30 {
+		t.Fatalf("relic scenarios = %d, want 30", len(RelicScenarioNames()))
 	}
 	after := slices.Index(RelicScenarioNames(), "relic-body-1mib")
 	if want := []string{"relic-history-100", "relic-diff-latest-100kib", "relic-diff-first-last-100kib"}; !slices.Equal(RelicScenarioNames()[after+1:after+4], want) {
@@ -44,6 +44,72 @@ func TestRelicScenariosAreNotInTheDefaultRegistry(t *testing.T) {
 	for _, name := range []string{"relic-edit-body-1mib", "relic-create-16mib", "relic-show-16mib", "relic-edit-part-16mib"} {
 		if !slices.Contains(RelicScenarioNames(), name) {
 			t.Fatalf("relic scenarios %v lack %s", RelicScenarioNames(), name)
+		}
+	}
+}
+
+// Mutation witness: a part lookup that is not registered, is not measured,
+// drops out of the report's reverse-lookup table or accepts a wrong count
+// would leave the 200 ms reverse-lookup budget unchecked for parts.
+func TestRelicScenariosIncludePartLookups(t *testing.T) {
+	t.Parallel()
+	names := []string{"relic-linked-to-part-hot", "relic-show-linked-part-hot"}
+	for _, name := range names {
+		if !slices.Contains(RelicScenarioNames(), name) {
+			t.Fatalf("relic scenarios %v lack %s", RelicScenarioNames(), name)
+		}
+	}
+
+	shared := sharedSmokeRelicFixtureFor(t)
+	fixture := shared
+	fixture.Root = filepath.Join(t.TempDir(), "fixture")
+	if err := os.CopyFS(fixture.Root, os.DirFS(shared.Root)); err != nil {
+		t.Fatal(err)
+	}
+	run := &relicRun{
+		ctx:          context.Background(),
+		spec:         RelicRunSpec{RunSpec: RunSpec{WorkbookBinary: buildWorkbookBinary(t), Samples: 1, CommandTimeout: 120 * time.Second}},
+		dependencies: relicDependencies{measureCommand: MeasureCommandOutput},
+		environment:  []string{"XDG_CONFIG_HOME=" + filepath.Join(t.TempDir(), "config")},
+		results:      map[string]*ScenarioResult{},
+		gitCommands:  map[string]map[string]int{},
+	}
+	measured := map[string]bool{}
+	for _, read := range relicReverseLookups(fixture) {
+		if !slices.Contains(names, read.name) {
+			continue
+		}
+		if err := run.warm(read.name, fixture.Root, read.args, read.verify); err != nil {
+			t.Fatal(err)
+		}
+		if sample := run.results[read.name].Samples[0]; !sampleSucceeded(sample) {
+			t.Fatalf("%s failed: exit code %d: %s", read.name, sample.ExitCode, sample.Error)
+		}
+		measured[read.name] = true
+		// A verifier that passes any answer would pass the wrong fixture.
+		wrong := fixture
+		wrong.HotRelicPartLinks++
+		for _, other := range relicReverseLookups(wrong) {
+			if other.name != read.name {
+				continue
+			}
+			if _, err := run.untimed(other.name, fixture.Root, other.args, other.verify); err == nil {
+				t.Fatalf("%s accepted %d links to the hot part", other.name, wrong.HotRelicPartLinks)
+			}
+		}
+	}
+	if len(measured) != len(names) {
+		t.Fatalf("measured %v, want %v", measured, names)
+	}
+
+	var markdown strings.Builder
+	report := &RelicBenchmarkReport{Fixture: fixture.Spec, GitCommands: run.gitCommands}
+	if err := writeRelicMarkdown(&markdown, report); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if !strings.Contains(markdown.String(), "| "+name+" | ") {
+			t.Fatalf("Markdown lacks the Git commands of %s:\n%s", name, markdown.String())
 		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -137,8 +138,8 @@ func TestAddRelicFixtureBuildsTheSmokeSet(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if len(document.Links) != 2 {
-					t.Fatalf("relic %s has %d links, want 2", relicID, len(document.Links))
+				if len(document.Links) != 3 {
+					t.Fatalf("relic %s has %d links, want 2 to tasks and 1 to a relic", relicID, len(document.Links))
 				}
 				for _, part := range document.Parts {
 					if part.Body == nil || part.Body.Bytes != 1024 || part.Body.Format != "md" {
@@ -203,6 +204,98 @@ func TestAddRelicFixtureBuildsTheSmokeSet(t *testing.T) {
 				t.Fatal("the typical task is the hot task")
 			}
 		})
+	}
+}
+
+// Mutation witness: a fixture whose relic links miss the hot part, point a
+// relic at itself, take the task links' parts or leave the hot task's relics
+// without relic links would time the part lookups on the wrong population, or
+// time task-show-linked-hot where no relic link could slow it.
+func TestRelicFixtureLinksRelicsToTheHotPart(t *testing.T) {
+	t.Parallel()
+	fixture := sharedSmokeRelicFixtureFor(t)
+	ctx := context.Background()
+	service, repository := relicFixtureService(t, fixture)
+	hotRelic, hotPart, found := strings.Cut(fixture.HotRelicPart, "#")
+	if !found || hotRelic != fixture.RelicIDs[0] {
+		t.Fatalf("hot relic part = %q, want a part of the first fixture relic %s", fixture.HotRelicPart, fixture.RelicIDs[0])
+	}
+	if want := fixture.Spec.Relics - 1; fixture.HotRelicPartLinks != want {
+		t.Fatalf("hot part links = %d, want %d", fixture.HotRelicPartLinks, want)
+	}
+
+	toHotPart := 0
+	for index, relicID := range fixture.RelicIDs {
+		document, err := service.Export(ctx, relicID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if index == 0 && document.Parts[0].ID != hotPart {
+			t.Fatalf("hot part = %s, want the first relic's first part %s", hotPart, document.Parts[0].ID)
+		}
+		tasks, relics := 0, 0
+		for _, link := range document.Links {
+			if link.To.Task != "" {
+				tasks++
+				continue
+			}
+			relics++
+			if link.To.Relic == relicID {
+				t.Fatalf("relic %s links to itself: %+v", relicID, link)
+			}
+			// Relic link k is from the part after the task links' parts.
+			if from := document.Parts[fixture.Spec.LinksPerRelic+relics-1].ID; link.From != from {
+				t.Fatalf("relic %s relic link %d is from %s, want part %s", relicID, relics, link.From, from)
+			}
+			if link.To.Relic == hotRelic && link.To.Part == hotPart {
+				toHotPart++
+				if link.Rel != relicHotRelation || string(link.Pointer) != `{"at":"00:00:01"}` {
+					t.Fatalf("relic %s hot part link = %+v, pointer %s", relicID, link, link.Pointer)
+				}
+			} else if link.Rel != relicSpreadRelation || link.To.Part == "" {
+				t.Fatalf("relic %s spread link = %+v, want %s to a part", relicID, link, relicSpreadRelation)
+			}
+		}
+		if tasks != fixture.Spec.LinksPerRelic || relics != fixture.Spec.RelicLinksPerRelic {
+			t.Fatalf("relic %s has %d task and %d relic links, want %d and %d",
+				relicID, tasks, relics, fixture.Spec.LinksPerRelic, fixture.Spec.RelicLinksPerRelic)
+		}
+	}
+	if toHotPart != fixture.HotRelicPartLinks {
+		t.Fatalf("links to the hot part = %d, fixture says %d", toHotPart, fixture.HotRelicPartLinks)
+	}
+
+	store, err := projection.Open(ctx, repository, fixture.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	service.Reader, service.Links = store.RelicReader(), store.RelicReader()
+	listed, warnings, err := service.LinkedTo(ctx, fixture.HotRelicPart, core.RelicListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != fixture.HotRelicPartLinks || len(warnings) != 0 {
+		t.Fatalf("linked to the hot part = %d relics, %v; want %d", len(listed), warnings, fixture.HotRelicPartLinks)
+	}
+
+	// task-show-linked-hot times the task every relic links to: all of those
+	// relics hold relic links too.
+	lookup, err := store.RelicReader().RelicLinksTo(ctx, fixture.Config, core.RelicLinkTarget{Task: fixture.HotTask})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lookup.Sources) != fixture.Spec.Relics {
+		t.Fatalf("relics linking to the hot task = %d, want %d", len(lookup.Sources), fixture.Spec.Relics)
+	}
+	for _, source := range lookup.Sources {
+		document, err := service.Export(ctx, source.Relic.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.ContainsFunc(document.Links, func(link core.RelicDocumentLink) bool { return link.To.Relic != "" }) {
+			t.Fatalf("relic %s links to the hot task and holds no relic link", source.Relic.ID)
+		}
 	}
 }
 
@@ -454,7 +547,7 @@ func TestRelicFixtureSpecsMatchTheStoryTable(t *testing.T) {
 	t.Parallel()
 	full := FullRelicFixtureSpec()
 	wantFull := RelicFixtureSpec{
-		Relics: 1000, PartsPerRelic: 20, BodyBytes: 1024, LinksPerRelic: 10,
+		Relics: 1000, PartsPerRelic: 20, BodyBytes: 1024, LinksPerRelic: 10, RelicLinksPerRelic: 5,
 		LargeParts: 2000, LargePartBodyBytes: 524, LargeBodyBytes: 1 << 20, SmallBodyBytes: 2048,
 		Moves: 10000, MovesPerUpdate: 100, ChangedRelics: 100, Seed: full.Seed,
 		FullBodiesBytes:  core.MaxRelicLiveBodyBytes,
@@ -465,7 +558,7 @@ func TestRelicFixtureSpecsMatchTheStoryTable(t *testing.T) {
 	}
 	smoke := SmokeRelicFixtureSpec()
 	wantSmoke := RelicFixtureSpec{
-		Relics: 20, PartsPerRelic: 4, BodyBytes: 1024, LinksPerRelic: 2,
+		Relics: 20, PartsPerRelic: 4, BodyBytes: 1024, LinksPerRelic: 2, RelicLinksPerRelic: 1,
 		LargeParts: 50, LargePartBodyBytes: 524, LargeBodyBytes: 64 << 10, SmallBodyBytes: 2048,
 		Moves: 200, MovesPerUpdate: 50, ChangedRelics: 5, Seed: smoke.Seed,
 		FullBodiesBytes:  256 << 10,

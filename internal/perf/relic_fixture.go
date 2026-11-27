@@ -19,7 +19,9 @@ const (
 	relicFixturePartType   = "section"
 	relicHotRelation       = "implemented-by"
 	relicSpreadRelation    = "relates-to"
-	relicRefPrefix         = "refs/workbook/relics/"
+	// relicHotPartPointer is the pointer every link to the hot part carries.
+	relicHotPartPointer = `{"at":"00:00:01"}`
+	relicRefPrefix      = "refs/workbook/relics/"
 	// relicDocumentVersion is the version of the workbook.relic document this
 	// build reads. core.RelicCreateInputFromDocument refuses any other, so a
 	// change there fails TestLargeRelicDocumentIsTheLargeRelic.
@@ -44,10 +46,13 @@ var relicFixtureOrigin = benchmarkOrigin.AddDate(1, 0, 0)
 // table: FullRelicFixtureSpec is what scripts/benchmark.sh --relics measures,
 // and SmokeRelicFixtureSpec is what the tests build.
 type RelicFixtureSpec struct {
-	Relics             int   `json:"relics"`
-	PartsPerRelic      int   `json:"partsPerRelic"`
-	BodyBytes          int   `json:"bodyBytes"`
+	Relics        int `json:"relics"`
+	PartsPerRelic int `json:"partsPerRelic"`
+	BodyBytes     int `json:"bodyBytes"`
+	// LinksPerRelic is how many links to tasks each fixture relic has, and
+	// RelicLinksPerRelic how many to parts of other relics, beside those.
 	LinksPerRelic      int   `json:"linksPerRelic"`
+	RelicLinksPerRelic int   `json:"relicLinksPerRelic"`
 	LargeParts         int   `json:"largeParts"`
 	LargePartBodyBytes int   `json:"largePartBodyBytes"`
 	LargeBodyBytes     int   `json:"largeBodyBytes"`
@@ -70,7 +75,7 @@ type RelicFixtureSpec struct {
 // FullRelicFixtureSpec is the story's scale.
 func FullRelicFixtureSpec() RelicFixtureSpec {
 	return RelicFixtureSpec{
-		Relics: 1000, PartsPerRelic: 20, BodyBytes: 1024, LinksPerRelic: 10,
+		Relics: 1000, PartsPerRelic: 20, BodyBytes: 1024, LinksPerRelic: 10, RelicLinksPerRelic: 5,
 		LargeParts: 2000, LargePartBodyBytes: 524,
 		LargeBodyBytes: 1024 * 1024, SmallBodyBytes: 2 * 1024,
 		Moves: 10000, MovesPerUpdate: 100, ChangedRelics: 100, Seed: 1,
@@ -82,7 +87,7 @@ func FullRelicFixtureSpec() RelicFixtureSpec {
 // SmokeRelicFixtureSpec is the scale the tests build.
 func SmokeRelicFixtureSpec() RelicFixtureSpec {
 	return RelicFixtureSpec{
-		Relics: 20, PartsPerRelic: 4, BodyBytes: 1024, LinksPerRelic: 2,
+		Relics: 20, PartsPerRelic: 4, BodyBytes: 1024, LinksPerRelic: 2, RelicLinksPerRelic: 1,
 		LargeParts: 50, LargePartBodyBytes: 524,
 		LargeBodyBytes: 64 * 1024, SmallBodyBytes: 2 * 1024,
 		Moves: 200, MovesPerUpdate: 50, ChangedRelics: 5, Seed: 1,
@@ -108,7 +113,8 @@ func validateRelicFixtureSpec(spec RelicFixtureSpec, tasks Fixture) error {
 		value int
 	}{
 		{"relics", spec.Relics}, {"parts per relic", spec.PartsPerRelic}, {"body bytes", spec.BodyBytes},
-		{"links per relic", spec.LinksPerRelic}, {"large parts", spec.LargeParts},
+		{"links per relic", spec.LinksPerRelic}, {"relic links per relic", spec.RelicLinksPerRelic},
+		{"large parts", spec.LargeParts},
 		{"large part body bytes", spec.LargePartBodyBytes}, {"large body bytes", spec.LargeBodyBytes},
 		{"small body bytes", spec.SmallBodyBytes}, {"moves per update", spec.MovesPerUpdate},
 		{"history body bytes", spec.HistoryBodyBytes}, {"history edits", spec.HistoryEdits},
@@ -124,9 +130,13 @@ func validateRelicFixtureSpec(spec RelicFixtureSpec, tasks Fixture) error {
 		return fmt.Errorf("relic fixture full bodies bytes (%d) must exceed small body bytes (%d): its last part is the small one",
 			spec.FullBodiesBytes, spec.SmallBodyBytes)
 	}
-	if spec.LinksPerRelic > spec.PartsPerRelic {
-		return fmt.Errorf("relic fixture links per relic (%d) must not exceed parts per relic (%d): link k is from part k",
-			spec.LinksPerRelic, spec.PartsPerRelic)
+	if spec.LinksPerRelic+spec.RelicLinksPerRelic > spec.PartsPerRelic {
+		return fmt.Errorf("relic fixture links and relic links per relic (%d and %d) must not exceed parts per relic (%d): each is from a part of its own",
+			spec.LinksPerRelic, spec.RelicLinksPerRelic, spec.PartsPerRelic)
+	}
+	if spec.RelicLinksPerRelic >= spec.Relics {
+		return fmt.Errorf("relic fixture relic links per relic (%d) must be fewer than relics (%d): they point at other relics",
+			spec.RelicLinksPerRelic, spec.Relics)
 	}
 	if spec.LargeParts < 2 {
 		return fmt.Errorf("relic fixture large parts must be at least 2 to move one")
@@ -159,6 +169,10 @@ type RelicFixture struct {
 	TypicalTask         string
 	HotTaskLinks        int
 	TypicalTaskLinks    int
+	// HotRelicPart is the address of the part every other fixture relic links
+	// to, <relic>#<part>: the first part of the first fixture relic.
+	HotRelicPart      string
+	HotRelicPartLinks int
 }
 
 // relicFixtureBuilder writes the relic set in two stages, so a caller can
@@ -327,10 +341,15 @@ func rewriteLines(random *rand.Rand, text []byte, count int) []byte {
 // turn over the other active tasks, and link k is from part k. The typical
 // task is the first of those others, which is the first active task: the task
 // the cli-* scenarios of the task comparison show and edit.
+//
+// The links to relics come after those, in the same update, each from the next
+// part. The first of them points at the hot part, in every relic but the one
+// that holds it; the rest are spread over other relics' parts.
 func (b *relicFixtureBuilder) linkAndMove(ctx context.Context) error {
 	spec := b.fixture.Spec
 	others := b.fixture.ActiveTaskIDs[:len(b.fixture.ActiveTaskIDs)-1]
 	b.fixture.TypicalTask = others[0]
+	b.fixture.HotRelicPart = b.fixture.RelicIDs[0] + "#" + b.fixtureParts[0][0]
 	spread := 0
 	for index, relicID := range b.fixture.RelicIDs {
 		edits := make([]core.RelicEdit, spec.LinksPerRelic)
@@ -348,11 +367,36 @@ func (b *relicFixtureBuilder) linkAndMove(ctx context.Context) error {
 			}
 			edits[link] = edit
 		}
+		edits = append(edits, b.relicLinks(index)...)
 		if _, err := b.service.Update(ctx, relicID, edits); err != nil {
 			return fmt.Errorf("link benchmark relic %s: %w", relicID, err)
 		}
 	}
 	return b.moveLargeRelicParts(ctx)
+}
+
+// relicLinks are the links fixture relic index has to other relics' parts,
+// link k from part LinksPerRelic+k. In every relic but the first, link 0 points
+// at the hot part, the first relic's part 0. Every other link points at part 1
+// or on of the k+1th relic after this one, so none reaches the hot part or the
+// relic it starts from.
+func (b *relicFixtureBuilder) relicLinks(index int) []core.RelicEdit {
+	spec := b.fixture.Spec
+	edits := make([]core.RelicEdit, spec.RelicLinksPerRelic)
+	for link := range edits {
+		edit := core.RelicEdit{Kind: core.RelicEditAddLink, From: b.fixtureParts[index][spec.LinksPerRelic+link]}
+		if link == 0 && index != 0 {
+			edit.Target, edit.Rel = b.fixture.HotRelicPart, relicHotRelation
+			edit.Pointer = json.RawMessage(relicHotPartPointer)
+			b.fixture.HotRelicPartLinks++
+		} else {
+			other := (index + link + 1) % spec.Relics
+			part := 1 + (index+link)%(spec.PartsPerRelic-1)
+			edit.Target, edit.Rel = b.fixture.RelicIDs[other]+"#"+b.fixtureParts[other][part], relicSpreadRelation
+		}
+		edits[link] = edit
+	}
+	return edits
 }
 
 // moveLargeRelicParts makes spec.Moves seeded random moves of the large

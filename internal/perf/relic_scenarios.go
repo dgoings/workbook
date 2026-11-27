@@ -39,6 +39,8 @@ var relicScenarioNames = []string{
 	"relic-linked-to-hot",
 	"relic-linked-to-typical",
 	"task-show-linked-hot",
+	"relic-linked-to-part-hot",
+	"relic-show-linked-part-hot",
 	"relic-push-100",
 	"relic-fetch-100",
 	"relic-refresh-0",
@@ -414,6 +416,22 @@ func verifyTaskRelicLinks(want int) relicVerifier {
 		}
 		if len(task.Relics) != want {
 			return fmt.Errorf("the task shows %d relic links, want %d", len(task.Relics), want)
+		}
+		return nil
+	}
+}
+
+// verifyRelicIncomingLinks checks a part show: the one part, and want links to
+// it from other relics.
+func verifyRelicIncomingLinks(want int) relicVerifier {
+	return func(stdout []byte) error {
+		var document core.RelicDocument
+		if err := resultData(stdout, &document); err != nil {
+			return err
+		}
+		if len(document.Parts) != 1 || len(document.LinkedFrom) != want {
+			return fmt.Errorf("shows %d parts and %d incoming links, want 1 and %d",
+				len(document.Parts), len(document.LinkedFrom), want)
 		}
 		return nil
 	}
@@ -846,11 +864,7 @@ func (b *relicBench) measureMain() error {
 	small := fixture.BodyRelic + "#" + fixture.SmallBodyPart
 	large := fixture.BodyRelic + "#" + fixture.LargeBodyPart
 	history := fixture.HistoryRelic + "#" + fixture.HistoryPart
-	reads := []struct {
-		name   string
-		args   []string
-		verify relicVerifier
-	}{
+	reads := []relicRead{
 		{"relic-show-part-2kib", []string{"relic", "show", small, "--json"}, verifyRelicShowParts(1, int64(relics.SmallBodyBytes))},
 		{"relic-body-2kib", []string{"relic", "show", small, "--body"}, verifyBodyLength(relics.SmallBodyBytes)},
 		{"relic-body-1mib", []string{"relic", "show", large, "--body"}, verifyBodyLength(relics.LargeBodyBytes)},
@@ -884,17 +898,11 @@ func (b *relicBench) measureMain() error {
 			plans++
 		}
 	}
-	for _, read := range []struct {
-		name   string
-		args   []string
-		verify relicVerifier
-	}{
+	lists := []relicRead{
 		{"relic-list", []string{"relic", "list", "--json"}, verifyRelicListCount(listed)},
 		{"relic-list-type", []string{"relic", "list", "--type", "plan", "--json"}, verifyRelicListCount(plans)},
-		{"relic-linked-to-hot", []string{"relic", "list", "--linked-to", fixture.HotTask, "--json"}, verifyRelicListCount(fixture.HotTaskLinks)},
-		{"relic-linked-to-typical", []string{"relic", "list", "--linked-to", fixture.TypicalTask, "--json"}, verifyRelicListCount(fixture.TypicalTaskLinks)},
-		{"task-show-linked-hot", []string{"show", fixture.HotTask, "--json"}, verifyTaskRelicLinks(fixture.HotTaskLinks)},
-	} {
+	}
+	for _, read := range append(lists, relicReverseLookups(fixture)...) {
 		for range samples {
 			if err := run.warm(read.name, b.main, read.args, read.verify); err != nil {
 				return err
@@ -902,6 +910,27 @@ func (b *relicBench) measureMain() error {
 		}
 	}
 	return nil
+}
+
+// relicRead is a read scenario: the command it times and how its answer is
+// checked.
+type relicRead struct {
+	name   string
+	args   []string
+	verify relicVerifier
+}
+
+// relicReverseLookups are the scenarios that ask what links to something: the
+// hot and a typical task, and the hot relic part. All are judged against the
+// reverse-lookup budget.
+func relicReverseLookups(fixture RelicFixture) []relicRead {
+	return []relicRead{
+		{"relic-linked-to-hot", []string{"relic", "list", "--linked-to", fixture.HotTask, "--json"}, verifyRelicListCount(fixture.HotTaskLinks)},
+		{"relic-linked-to-typical", []string{"relic", "list", "--linked-to", fixture.TypicalTask, "--json"}, verifyRelicListCount(fixture.TypicalTaskLinks)},
+		{"task-show-linked-hot", []string{"show", fixture.HotTask, "--json"}, verifyTaskRelicLinks(fixture.HotTaskLinks)},
+		{"relic-linked-to-part-hot", []string{"relic", "list", "--linked-to", fixture.HotRelicPart, "--json"}, verifyRelicListCount(fixture.HotRelicPartLinks)},
+		{"relic-show-linked-part-hot", []string{"relic", "show", fixture.HotRelicPart, "--json"}, verifyRelicIncomingLinks(fixture.HotRelicPartLinks)},
+	}
 }
 
 // editInCloneB gives count fixture relics, starting at first, one body edit
@@ -1167,14 +1196,15 @@ func writeRelicMarkdown(w io.Writer, report *RelicBenchmarkReport) error {
 	var out strings.Builder
 	fixture := report.Fixture
 	fmt.Fprintln(&out, "\n## Relics")
-	fmt.Fprintf(&out, "\nFixture: %d relics × %d parts of %d bytes, %d links each; a large relic of %d parts × %d bytes; body parts of %d and %d bytes; %d moves in updates of %d; %d changed relics per sync; seed %d.\n",
-		fixture.Relics, fixture.PartsPerRelic, fixture.BodyBytes, fixture.LinksPerRelic,
+	fmt.Fprintf(&out, "\nFixture: %d relics × %d parts of %d bytes, %d links to tasks and %d to parts of other relics each; a large relic of %d parts × %d bytes; body parts of %d and %d bytes; %d moves in updates of %d; %d changed relics per sync; seed %d.\n",
+		fixture.Relics, fixture.PartsPerRelic, fixture.BodyBytes, fixture.LinksPerRelic, fixture.RelicLinksPerRelic,
 		fixture.LargeParts, fixture.LargePartBodyBytes, fixture.LargeBodyBytes, fixture.SmallBodyBytes,
 		fixture.Moves, fixture.MovesPerUpdate, fixture.ChangedRelics, fixture.Seed)
 	fmt.Fprintf(&out, "relic-create-16mib writes a relic of %d parts whose live bodies total %d bytes; relic-edit-part-16mib replaces its last part, of %d bytes, with as many. relic-edit-body-1mib saves a new %d-byte body over the body relic's large part.\n",
 		FullBodiesRelicParts(fixture), fixture.FullBodiesBytes, fixture.SmallBodyBytes, fixture.LargeBodyBytes)
 	fmt.Fprintf(&out, "The history and diff scenarios read a relic of one %d-byte part saved %d times after it was created, each save rewriting %d lines.\n",
 		fixture.HistoryBodyBytes, fixture.HistoryEdits, relicHistoryLinesPerEdit)
+	fmt.Fprintln(&out, "relic-linked-to-part-hot and relic-show-linked-part-hot look up the first part of the first relic, which every other relic links to once.")
 	fmt.Fprintln(&out, "Moves are written as several moves per commit, so storage per move is a lower bound.")
 
 	fmt.Fprintln(&out, "\n| Fixture step | Untimed (ms) |")
@@ -1194,7 +1224,8 @@ func writeRelicMarkdown(w io.Writer, report *RelicBenchmarkReport) error {
 	fmt.Fprintln(&out, "\n| Scenario | Git commands (highest per sample) |")
 	fmt.Fprintln(&out, "| --- | --- |")
 	for _, name := range relicSortedKeys(report.GitCommands) {
-		if !strings.HasPrefix(name, "relic-linked-to-") && !strings.HasPrefix(name, "relic-refresh-") && name != "task-show-linked-hot" {
+		if !strings.HasPrefix(name, "relic-linked-to-") && !strings.HasPrefix(name, "relic-refresh-") &&
+			name != "task-show-linked-hot" && name != "relic-show-linked-part-hot" {
 			continue
 		}
 		commands := report.GitCommands[name]
