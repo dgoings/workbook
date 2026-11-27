@@ -1638,14 +1638,143 @@ the board and the other task paths read none; the web API's
 rebuild a missing or outdated cache triggers: after a cache loss the
 relic tables stay empty until the first relic read, which finds every relic
 changed and indexes them all. `workbook rebuild` indexes every relic into the
-new cache before installing it and reports the count as `relicCount`. How long
-that first pass takes on a fresh clone with many relics is not measured yet. A
-relic benchmark is planned, and nothing here promises a time.
+new cache before installing it and reports the count as `relicCount`. On a
+fresh clone of 1,000 relics that first pass took 1,389 ms; see
+[Relic benchmarks](#relic-benchmarks).
 
 The cache can be deleted at any time and rebuilt entirely from Workbook refs.
 Semantic validation results live in a separate `validation.sqlite` beside it, so
 a validator-version bump does not force a projection rebuild and a long
 validation pass does not hold the projection's writer lock against mutations.
+
+### Relic benchmarks
+
+The relic family of the `workbook-bench` harness measures relic commands, and
+the task commands beside relics, on a relic set of its own. One command runs
+it and writes a dated report pair under `bench-reports/`, as the default run
+does:
+
+```sh
+scripts/benchmark.sh --relics
+```
+
+It has two scales. The full scale, the default, is 1,000 relics of 20 parts
+with 1,024-byte bodies and 10 links each, added to the 500-task fixture; a
+large relic of 2,000 parts; bodies of 1 MiB and 2 KiB; 10,000 moves of the
+large relic's parts, written in updates of 100; and 100 changed relics for
+each synchronization scenario. Building it takes minutes, so a run with
+`--relics` defaults `--timeout` to 300 seconds. `--relic-scale smoke` builds 20
+relics of 4 parts on an 11-task fixture, the scale the tests run end to end.
+The default `scripts/benchmark.sh` run measures no relic scenario.
+
+Like every report, a relic report has no pass or fail. The budgets below are
+what the measurements were judged against. A budget whose source is the
+design was set when relics were designed; one whose source is the benchmark
+is a figure chosen for it, at about three times a cold Workbook command.
+
+These are the medians of one full-scale run with `--samples 15`, at commit
+`bbc88078`, on an Apple M5 Pro with 18 cores and 64 GB of memory, macOS
+27.0.1, Git 2.54.0 (Apple Git-157) and Go 1.27.3. The machine was not idle:
+Spotlight indexing used about two and a half cores during the run.
+
+| What | Scenario | Median | Budget | Source |
+| --- | --- | ---: | --- | --- |
+| Fresh-clone index build | `relic-rebuild-fresh-clone` | 1,372 ms | under 5,000 ms | design |
+| | `relic-first-read-fresh-clone` | 1,389 ms | under 5,000 ms | design |
+| Reverse lookup | `relic-linked-to-hot` | 121 ms | 200 ms | design (no relic read from Git); time: benchmark |
+| | `relic-linked-to-typical` | 114 ms | 200 ms | as above |
+| | `task-show-linked-hot` | 145 ms | 200 ms | as above |
+| Cost follows the change | `relic-refresh-0` | 125 ms | within 20 ms of `relic-list` (121 ms) | benchmark |
+| | `relic-refresh-1` | 221 ms | at most 100 ms above `relic-refresh-0` | benchmark |
+| | `relic-refresh-100` | 285 ms | at most 30 % of `relic-first-read-fresh-clone`, 417 ms | benchmark |
+| Body read | `relic-show-part-2kib` | 92 ms | | |
+| | `relic-body-2kib` | 110 ms | at most 20 ms above `relic-show-part-2kib`, and one more Git process | benchmark |
+| | `relic-body-1mib` | 106 ms | at most 100 ms above `relic-show-part-2kib` | benchmark |
+| Large relic, 2,000 parts | `relic-create-large` | 1,124 ms | 2,000 ms | benchmark |
+| | `relic-edit-part-large` | 413 ms | 1,000 ms | benchmark |
+| | `relic-move-part-large` | 368 ms | 1,000 ms | benchmark |
+| | `relic-show-large` | 113 ms | 1,000 ms | benchmark |
+| Lists | `relic-list` | 121 ms | 500 ms | benchmark |
+| | `relic-list-type` | 124 ms | 500 ms | benchmark |
+| Fetch | `relic-clone-setup` | 2,802 ms | under 60 s | design ("never minutes") |
+| | `relic-fetch-100` | 774 ms | under 60 s | design |
+| Bodies at their limits | `relic-create-16mib` | 333 ms | | |
+| | `relic-show-16mib` | 98 ms | | |
+| | `relic-edit-part-16mib` | 340 ms | | |
+| | `relic-edit-body-1mib` | 354 ms | | |
+| Descriptive | `relic-push-100` | 1,433 ms | none | |
+| | `relic-validate-full` | 144.7 s, one sample | none | |
+
+Every budget was met. What the table does not show:
+
+- `relic-create-large` has a P95 of 2,450 ms, over its median budget; the
+  budget is on the median.
+- The Git command table shows no `rev-list` and no `ls-tree` for the reverse
+  lookups, and one `cat-file` process, as many as the no-change refresh
+  `relic-refresh-0` starts.
+- `relic-refresh-1`, 96 ms above `relic-refresh-0`, starts seven more Git
+  processes, 13 against 6.
+- `relic-body-2kib` and `relic-body-1mib` start 7 Git processes, one more than
+  `relic-show-part-2kib`'s 6.
+- `relic-validate-full` started 10,543 Git processes. Relic validation is not
+  cached, so `workbook validate --full` checks every relic on every run.
+- Ordering: after 10,000 moves of 2,000 parts, the longest position was 12
+  bytes with random moves and 7 bytes with the last part moved to the front
+  every time. The adversarial pattern, three parts moved in turn, each into the
+  gap between the two placed last, reached the 256-byte position limit: 9,393
+  of its 10,000 moves were refused, the first at move 608, since it tries a
+  refused move again.
+- Storage: the main repository's object directory, packed, was 22,986,693
+  bytes after the relics were created and 26,017,428 bytes after their links
+  and moves. The disposable cache was 41,357,312 bytes: 36,982,784 of
+  projection and 4,374,528 of validation.
+
+**Task commands beside relics.** Every `cli-*` scenario runs twice, without
+and with the relic set. Both sides are copies of a checkout that `git
+pack-refs --all` and `git gc` were run on last, so they differ by the relic set
+and nothing else. The task the `cli-*` scenarios show and edit has a typical
+number of relic links, about 19; `task-show-linked-hot` shows the task all
+1,000 relics link to. The budget is equal P95 Git processes and a median
+within 10 % or 5 ms, whichever is larger, read from the design's "not
+measurably slower". Every row had equal P95 Git processes, and every median
+was within 10 %; the largest differences were `cli-free` +7.3 %, `cli-show`
++6.9 % and `cli-move` +5.5 %. The two scenarios that synchronize run against an
+origin with its refs loose, as a push leaves a bare repository, and against
+one with them packed: `cli-update-autosync` was +4.0 % loose and +2.9 %
+packed, and `cli-next` 0.0 % and +2.7 %. Their time budget is judged against
+the packed origin. A self-hosted origin with loose refs costs every
+synchronizing command more than a packed one, with or without relics; see
+[A self-hosted origin keeps its refs loose](hosting.md#a-self-hosted-origin-keeps-its-refs-loose).
+
+**A known cost outside the benchmark: loose objects in the checkout.** Git
+reads every ref a checkout holds, and the commit at its tip, when it fetches
+and when it pushes, and a loose commit costs more to read than a packed one.
+This holds for task refs as much as for relic refs. Workbook packs its relic
+refs but not objects, and its fetches pass `--no-auto-maintenance`, so
+Workbook alone never starts Git's automatic packing; a checkout's objects are
+packed when another Git command's automatic maintenance runs, or a `git gc`.
+Measured by hand, not by the harness, in a scratch project on the machine
+above, with a build of commit `6f67ae11`, 15 runs each, `workbook update` with
+automatic synchronization took 559 ms with no relics, 714 ms with 1,000 relics
+whose objects were loose files, and 553 ms after one `git repack -a -d` of
+that checkout. `git gc` in the checkout removes the cost. Nothing in Workbook
+changes this today, and no change is decided.
+
+**Decisions made on these measurements.**
+
+1. **Bodies are not cached.** A body is read from Git by its object ID, which
+   adds one Git process: 18 ms for a 2 KiB body and 14 ms for a 1 MiB one over
+   `relic-show-part-2kib`, inside budgets of 20 ms and 100 ms.
+2. **Part positions are not renumbered.** Random and front-insert ordering
+   reached 12 and 7 bytes after 10,000 moves, far below the 256-byte limit.
+   Only the adversarial pattern reaches the limit, and Workbook then
+   refuses the move, as the [reference](reference.md#part-order) describes.
+3. **Every relic limit is confirmed as a starting limit**, as the reference's
+   [table](reference.md#what-a-relic-may-hold) gives them. A limit can be
+   raised later and never lowered, because a lower limit would refuse relics
+   a released Workbook wrote. Every measured row met its budget, the 1 MiB
+   body and 2,000-part relic among them, and the 16 MiB live-body limit was
+   written, read and edited with medians under 400 ms.
 
 ## Bootstrap and portability
 

@@ -1157,8 +1157,22 @@ command is refused with exit `5` and says to move one of them first.
 
 A position is at most 256 bytes. Placing a part into the same shrinking gap
 again and again makes positions longer, and a placement that would need a
-longer one is refused with exit `5`, saying to place the part somewhere else
-or to move a neighboring part first.
+longer one is refused as `validation` (exit `5`) and writes nothing. The
+message gives, as `<n>`, the size the position would need:
+
+```text
+workbook: placing the part there needs a position of <n> bytes, and a position must not exceed 256; place it somewhere else, or move a neighboring part first
+```
+
+Workbook does not renumber part positions. No command rewrites the positions
+a relic holds: a part keeps its position until it is moved, and a part placed
+into a narrow gap gets a longer one. Ordinary reordering stays short: in the relic benchmark, 10,000 random
+moves among 2,000 parts left no position longer than 12 bytes, and 10,000
+moves to the front none longer than 7. What reaches 256 bytes is moving three
+parts in turn, each into the gap between the two placed last, so the gap
+narrows from both ends on every move: in the same benchmark that pattern was
+first refused at move 608, and every later try of the same move was refused
+too.
 
 ### Removing and restoring parts
 
@@ -1470,7 +1484,11 @@ with exit `5`.
 
 Treat the numbers in the table as part of the storage format, as the task
 limits are. One can be raised later. None can be lowered, because a relic
-already stored at the old size would stop reading.
+already stored at the old size would stop reading. The relic benchmark, run
+on 1,000 relics, a 2,000-part relic and a 1 MiB body, met every budget it was
+judged against, and wrote, read and edited a relic at the 16 MiB live-body
+limit. These limits are therefore confirmed as starting limits: a later
+release may raise one, and none will be lowered.
 
 ### Relics in other commands
 
@@ -2144,6 +2162,22 @@ seen without a rebuild. `relic create`, `update`, `delete` and `restore` read
 the relic from Git, as they always did. See
 [SQLite projection](architecture.md#sqlite-projection) for what the cache
 holds.
+
+Bodies are not cached. A body is read from Git by the object ID its part row
+holds, each time it is shown or exported, and that read starts one more Git
+process than a read without the body. In the relic benchmark, `relic show
+<relic>#<part> --body` of a 2 KiB body took 18 ms longer than the same
+`relic show` without `--body`, and of a 1 MiB body 106 ms in all.
+
+How fast relic commands are with 1,000 relics, and how the task commands
+compare with and without them, is measured with:
+
+```sh
+scripts/benchmark.sh --relics
+```
+
+See [Relic benchmarks](architecture.md#relic-benchmarks) for the scenarios,
+the budgets and the last measured run.
 
 `workbook rebuild` indexes every relic into the new cache beside the tasks
 and counts them. Alice, in her clone, after the session above:

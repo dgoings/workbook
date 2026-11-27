@@ -143,6 +143,23 @@ document with links. The web board's task API does not list links. See
 [Relics](docs/reference.md#relics) and
 [Relic refs](docs/architecture.md#relic-refs).
 
+Relics are measured. `scripts/benchmark.sh --relics` runs a relic benchmark
+family on 1,000 relics of 20 parts, a 2,000-part relic and bodies at the 1 MiB
+and 16 MiB limits, and compares every task command without and with that set;
+`--relic-scale smoke` runs a small set. On the measured run every budget was
+met: the first relic read on a fresh clone took 1,389 ms, a reverse lookup
+from a task 121 ms, and every task command kept its P95 count of Git
+processes, with a median within 10 % of its time without relics. Three
+outcomes follow. The relic limits are confirmed as starting limits: a later
+release may raise one and will lower none. Bodies are not cached; a body read
+is one more Git process. Part positions are not renumbered; a placement that
+would need a position over 256 bytes is refused with exit 5, which in the
+benchmark only repeated placement into one narrowing gap reached. A checkout
+whose objects are loose files, as Workbook leaves them until a `git gc` or
+another Git command's automatic maintenance packs them, makes a synchronizing
+command slower, with tasks or relics; `git gc` removes the cost. See
+[Relic benchmarks](docs/architecture.md#relic-benchmarks).
+
 The generated guidelines and the Workbook skill teach agents to use relics.
 `.workbook/guidelines.md` gains a `Relics` section: what a relic is, its ID
 under the project's current key, the four commands that find the relics

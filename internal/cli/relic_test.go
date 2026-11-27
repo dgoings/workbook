@@ -755,6 +755,48 @@ func TestReferenceDocumentsSharedRelics(t *testing.T) {
 	}
 }
 
+// The relic benchmarks decided that bodies are not cached and that part
+// positions are never renumbered, and confirmed the limits. Those outcomes
+// are behaviour a user relies on, so the reference states them, and the
+// architecture keeps the measurement they were decided on.
+func TestDocsRecordTheRelicBenchmarkDecisions(t *testing.T) {
+	t.Parallel()
+	reference := docSection(repositoryDoc(t, "docs", "reference.md"), "## Relics")
+	for _, required := range []string{
+		"scripts/benchmark.sh --relics",
+		"Bodies are not cached",
+		"Workbook does not renumber part positions.",
+		"place it somewhere else, or move a neighboring part first",
+		"confirmed as starting limits",
+	} {
+		if !strings.Contains(reference, required) {
+			t.Errorf("the reference's relic section is missing %q", required)
+		}
+	}
+	benchmarks := docSection(repositoryDoc(t, "docs", "architecture.md"), "### Relic benchmarks")
+	if benchmarks == "" {
+		t.Fatal("docs/architecture.md has no \"### Relic benchmarks\" section")
+	}
+	for _, required := range []string{
+		"scripts/benchmark.sh --relics",
+		"--relic-scale smoke",
+		"`relic-first-read-fresh-clone`",
+		"1,389",
+		"git gc",
+	} {
+		if !strings.Contains(benchmarks, required) {
+			t.Errorf("the architecture's relic benchmark section is missing %q", required)
+		}
+	}
+	if projection := docSection(repositoryDoc(t, "docs", "architecture.md"), "## SQLite projection"); strings.Contains(projection, "not measured yet") {
+		t.Error("the architecture still says the first relic pass on a fresh clone is not measured yet")
+	}
+	performance := docSection(repositoryDoc(t, "README.md"), "## Performance")
+	if !strings.Contains(performance, "scripts/benchmark.sh --relics") {
+		t.Error("the README's performance section does not mention scripts/benchmark.sh --relics")
+	}
+}
+
 // groupedDigits writes a count as the reference does: digits, with a comma
 // before each group of three.
 func groupedDigits(number int) string {

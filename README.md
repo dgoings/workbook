@@ -296,6 +296,9 @@ directory:
 scripts/benchmark.sh
 ```
 
+`scripts/benchmark.sh --relics` runs the relic family instead, on a set of
+1,000 relics; its setup takes minutes.
+
 Reports are descriptive — no thresholds, no pass/fail — and name the commit
 they measured; comparing a run's report with an earlier one is how a baseline
 shift is noticed. The [command reference](docs/reference.md) documents the
