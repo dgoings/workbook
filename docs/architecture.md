@@ -220,7 +220,8 @@ part's, and its `operation.json` is, as stored:
 
 An operation's members are always written in one order, `id`, `type`,
 `relic`, `title`, `name`, `value`, `part`, `partType`, `position`, `body`, `link`,
-`linkId`, `relicType`, `schema`, and an operation has only the ones its type takes:
+`linkId`, `relicType`, `schema`, `checkpoint`, and an operation has only the ones its
+type takes:
 
 | Operation type | Members after `id` and `type`, in stored order |
 | --- | --- |
