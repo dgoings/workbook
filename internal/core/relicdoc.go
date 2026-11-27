@@ -35,12 +35,16 @@ const (
 	RelicOperationPartMove       RelicOperationType = "part.move"
 	RelicOperationPartRemove     RelicOperationType = "part.remove"
 	RelicOperationPartRestore    RelicOperationType = "part.restore"
+	RelicOperationMigrate        RelicOperationType = "relic.migrate"
 )
 
-// RelicCreateData is what relic.create records about the new relic.
+// RelicCreateData is what relic.create records about the new relic. Schema
+// is the ID of the schema version the relic is written under, left out when
+// its type has none.
 type RelicCreateData struct {
 	Title     string    `json:"title"`
 	Type      string    `json:"type"`
+	Schema    string    `json:"schema,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -55,20 +59,24 @@ type RelicBodyChange struct {
 
 // RelicOperation is one recorded change to a relic. Which members it carries
 // depends on its type; see relicOperationShapes. A part.add creates the part
-// whose ID is the operation's own ID.
+// whose ID is the operation's own ID. A relic.migrate names the relic's new
+// type in RelicType and the schema version it moves to in Schema, which is
+// left out when the new type has no schema.
 type RelicOperation struct {
-	ID       string             `json:"id"`
-	Type     RelicOperationType `json:"type"`
-	Relic    *RelicCreateData   `json:"relic,omitempty"`
-	Title    string             `json:"title,omitempty"`
-	Name     string             `json:"name,omitempty"`
-	Value    json.RawMessage    `json:"value,omitempty"`
-	Part     string             `json:"part,omitempty"`
-	PartType string             `json:"partType,omitempty"`
-	Position string             `json:"position,omitempty"`
-	Body     *RelicBodyChange   `json:"body,omitempty"`
-	Link     *RelicLinkChange   `json:"link,omitempty"`
-	LinkID   string             `json:"linkId,omitempty"`
+	ID        string             `json:"id"`
+	Type      RelicOperationType `json:"type"`
+	Relic     *RelicCreateData   `json:"relic,omitempty"`
+	Title     string             `json:"title,omitempty"`
+	Name      string             `json:"name,omitempty"`
+	Value     json.RawMessage    `json:"value,omitempty"`
+	Part      string             `json:"part,omitempty"`
+	PartType  string             `json:"partType,omitempty"`
+	Position  string             `json:"position,omitempty"`
+	Body      *RelicBodyChange   `json:"body,omitempty"`
+	Link      *RelicLinkChange   `json:"link,omitempty"`
+	LinkID    string             `json:"linkId,omitempty"`
+	RelicType string             `json:"relicType,omitempty"`
+	Schema    string             `json:"schema,omitempty"`
 }
 
 // RelicOperationPack is a relic commit's operation.json.
@@ -102,13 +110,15 @@ type RelicPart struct {
 	Body     *RelicBody `json:"body,omitempty"`
 }
 
-// RelicData is the folded relic a state document carries. Schema is always
-// nil (written as null) and Retired always false in this story; Properties and
-// Parts are never nil, and Parts is ordered by position, then ID.
+// RelicData is the folded relic a state document carries. Schema is the ID of
+// the schema version the relic names, empty for an open relic and written as
+// null then (see MarshalJSON). Retired is always false in this story;
+// Properties and Parts are never nil, and Parts is ordered by position, then
+// ID.
 type RelicData struct {
 	Title      string                     `json:"title"`
 	Type       string                     `json:"type"`
-	Schema     json.RawMessage            `json:"schema"`
+	Schema     string                     `json:"schema"`
 	Author     string                     `json:"author"`
 	Retired    bool                       `json:"retired"`
 	Deleted    bool                       `json:"deleted"`
@@ -116,6 +126,43 @@ type RelicData struct {
 	UpdatedAt  time.Time                  `json:"updatedAt"`
 	Properties map[string]json.RawMessage `json:"properties"`
 	Parts      []RelicPart                `json:"parts"`
+}
+
+// relicDataJSON is RelicData as it is written: the same members in the same
+// order, with an empty Schema written as null. A null schema decodes into
+// RelicData as the empty string, so only encoding needs it.
+type relicDataJSON struct {
+	Title      string                     `json:"title"`
+	Type       string                     `json:"type"`
+	Schema     *string                    `json:"schema"`
+	Author     string                     `json:"author"`
+	Retired    bool                       `json:"retired"`
+	Deleted    bool                       `json:"deleted"`
+	CreatedAt  time.Time                  `json:"createdAt"`
+	UpdatedAt  time.Time                  `json:"updatedAt"`
+	Properties map[string]json.RawMessage `json:"properties"`
+	Parts      []RelicPart                `json:"parts"`
+}
+
+// MarshalJSON writes the relic with an open relic's schema as null, so the
+// state of a relic that names no schema keeps the bytes it always had.
+func (data RelicData) MarshalJSON() ([]byte, error) {
+	written := relicDataJSON{
+		Title:      data.Title,
+		Type:       data.Type,
+		Author:     data.Author,
+		Retired:    data.Retired,
+		Deleted:    data.Deleted,
+		CreatedAt:  data.CreatedAt,
+		UpdatedAt:  data.UpdatedAt,
+		Properties: data.Properties,
+		Parts:      data.Parts,
+	}
+	if data.Schema != "" {
+		schema := data.Schema
+		written.Schema = &schema
+	}
+	return json.Marshal(written)
 }
 
 // RelicStateDocument is a relic commit's state.json.
@@ -193,6 +240,7 @@ var relicOperationMinReader = map[RelicOperationType]int{
 	RelicOperationPartRestore:    RelicMinReader,
 	RelicOperationLinkAdd:        RelicMinReader,
 	RelicOperationLinkRemove:     RelicMinReader,
+	RelicOperationMigrate:        RelicMinReader,
 }
 
 // NewRelicOperationPack builds a pack whose generation is derived from its
@@ -324,7 +372,6 @@ func DecodeRelicStateDocument(data []byte) (RelicStateDocument, error) {
 		}
 		state.MinReader = generation
 	}
-	state.Relic.Schema = normalizeRelicSchema(state.Relic.Schema)
 	if state.RequiresNewerReader() {
 		if state.Format != relicStateFormat {
 			return RelicStateDocument{}, corrupt("unsupported relic state format %q", state.Format)
@@ -375,15 +422,6 @@ func DecodeRelicFieldsDocument(data []byte) (RelicFieldsDocument, error) {
 		return RelicFieldsDocument{}, err
 	}
 	return fields, nil
-}
-
-// normalizeRelicSchema reads a stored null schema as absent, which is how a
-// state built in memory holds it.
-func normalizeRelicSchema(schema json.RawMessage) json.RawMessage {
-	if string(schema) == "null" {
-		return nil
-	}
-	return schema
 }
 
 // validateRelicMarker checks a relic document's generation: above this build's
@@ -452,7 +490,7 @@ func validateRelicOperationPackDocument(pack RelicOperationPack) error {
 // operation type carries. Anything outside its list must be absent, which is
 // what stops a future build's operation from being folded as an older one.
 type relicOperationMembers struct {
-	relic, title, name, value, part, partType, position, body, link, linkID bool
+	relic, title, name, value, part, partType, position, body, link, linkID, relicType, schema bool
 }
 
 var relicOperationShapes = map[RelicOperationType]relicOperationMembers{
@@ -471,6 +509,7 @@ var relicOperationShapes = map[RelicOperationType]relicOperationMembers{
 	RelicOperationPartRestore:    {part: true},
 	RelicOperationLinkAdd:        {link: true},
 	RelicOperationLinkRemove:     {linkID: true},
+	RelicOperationMigrate:        {relicType: true, schema: true},
 }
 
 func validateRelicOperationDocument(operation RelicOperation) error {
@@ -482,21 +521,27 @@ func validateRelicOperationDocument(operation RelicOperation) error {
 		return corrupt("unsupported relic operation type %q", operation.Type)
 	}
 	present := relicOperationMembers{
-		relic:    operation.Relic != nil,
-		title:    operation.Title != "",
-		name:     operation.Name != "",
-		value:    len(operation.Value) != 0,
-		part:     operation.Part != "",
-		partType: operation.PartType != "",
-		position: operation.Position != "",
-		body:     operation.Body != nil,
-		link:     operation.Link != nil,
-		linkID:   operation.LinkID != "",
+		relic:     operation.Relic != nil,
+		title:     operation.Title != "",
+		name:      operation.Name != "",
+		value:     len(operation.Value) != 0,
+		part:      operation.Part != "",
+		partType:  operation.PartType != "",
+		position:  operation.Position != "",
+		body:      operation.Body != nil,
+		link:      operation.Link != nil,
+		linkID:    operation.LinkID != "",
+		relicType: operation.RelicType != "",
+		schema:    operation.Schema != "",
 	}
-	// part.add is the one type with an optional member: a part may be added
-	// without a body.
-	if operation.Type == RelicOperationPartAdd {
+	// part.add and relic.migrate are the types with an optional member: a part
+	// may be added without a body, and a relic may move to a type with no
+	// schema.
+	switch operation.Type {
+	case RelicOperationPartAdd:
 		present.body = true
+	case RelicOperationMigrate:
+		present.schema = true
 	}
 	if present != shape {
 		return corrupt("%s carries the wrong members", operation.Type)
@@ -509,10 +554,25 @@ func validateRelicOperationDocument(operation RelicOperation) error {
 		if err := ValidateRelicType(operation.Relic.Type); err != nil {
 			return Wrap(CategoryCorruptData, "relic.create carries an invalid type", err)
 		}
+		if operation.Relic.Schema != "" {
+			if err := validateCanonicalULID("relic.create schema", operation.Relic.Schema); err != nil {
+				return err
+			}
+		}
 		if operation.Relic.CreatedAt.IsZero() {
 			return corrupt("relic.create creation time must be present")
 		}
 		if err := validateRelicTimeZone("relic.create creation time", operation.Relic.CreatedAt); err != nil {
+			return err
+		}
+	}
+	if operation.RelicType != "" {
+		if err := ValidateRelicType(operation.RelicType); err != nil {
+			return Wrap(CategoryCorruptData, "relic.migrate carries an invalid type", err)
+		}
+	}
+	if operation.Schema != "" {
+		if err := validateCanonicalULID("relic.migrate schema", operation.Schema); err != nil {
 			return err
 		}
 	}
@@ -711,8 +771,10 @@ func validateRelicData(relic RelicData) error {
 	if err := ValidateRelicType(relic.Type); err != nil {
 		return Wrap(CategoryCorruptData, "relic state carries an invalid type", err)
 	}
-	if len(relic.Schema) != 0 && string(relic.Schema) != "null" {
-		return corrupt("relic state schema is unsupported")
+	if relic.Schema != "" {
+		if err := validateCanonicalULID("relic state schema", relic.Schema); err != nil {
+			return err
+		}
 	}
 	if strings.TrimSpace(relic.Author) == "" {
 		return corrupt("relic state author must not be blank")

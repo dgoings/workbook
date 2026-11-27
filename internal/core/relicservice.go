@@ -47,16 +47,17 @@ type RelicService struct {
 
 // RelicSummary is one relic as relic list shows it. Parts counts live parts.
 type RelicSummary struct {
-	ID        string    `json:"id"`
-	Head      string    `json:"head"`
-	Title     string    `json:"title"`
-	Type      string    `json:"type"`
-	Author    string    `json:"author"`
-	Retired   bool      `json:"retired"`
-	Deleted   bool      `json:"deleted"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
-	Parts     int       `json:"parts"`
+	ID        string          `json:"id"`
+	Head      string          `json:"head"`
+	Title     string          `json:"title"`
+	Type      string          `json:"type"`
+	Schema    *RelicSchemaRef `json:"schema"`
+	Author    string          `json:"author"`
+	Retired   bool            `json:"retired"`
+	Deleted   bool            `json:"deleted"`
+	CreatedAt time.Time       `json:"createdAt"`
+	UpdatedAt time.Time       `json:"updatedAt"`
+	Parts     int             `json:"parts"`
 	// LinkedBy is set only by LinkedTo: the relic's links to the task asked
 	// about.
 	LinkedBy []RelicLinkMatch `json:"linkedBy,omitempty"`
@@ -566,6 +567,7 @@ func relicSummaryOf(snapshot RelicSnapshot) RelicSummary {
 		Head:      snapshot.Head,
 		Title:     relic.Title,
 		Type:      relic.Type,
+		Schema:    ResolveRelicSchemaRef(relic, RelicSchemaListing{}),
 		Author:    relic.Author,
 		Retired:   relic.Retired,
 		Deleted:   relic.Deleted,

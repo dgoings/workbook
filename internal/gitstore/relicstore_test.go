@@ -1736,3 +1736,69 @@ func TestWriteRelicRefusesAParentThatIsNotTheStoredCommit(t *testing.T) {
 		t.Fatal("a relic under another project's key was written")
 	}
 }
+
+func relicMigrate(operationNumber int, relicType, schema string) core.RelicOperation {
+	return core.RelicOperation{ID: relicTestID(operationNumber), Type: core.RelicOperationMigrate, RelicType: relicType, Schema: schema}
+}
+
+func TestReplayAppliesMigrateAndEditTogether(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		p := relicTestPartNumbered(1).withField("heading", "Goals")
+		root := writeRelicRoot(t, repo, config, p)
+		relicID := root.Record.State.RelicID
+		remote := relicHistoryFrom(t, repo, config, root, relicOps(relicMigrate(301, "plan", relicTestID(350))))
+		local := relicHistoryFrom(t, repo, config, root,
+			relicOps(relicPropertySet(101, "status", "draft"), relicFieldSet(102, p.id, "heading", "Aims")))
+
+		outcome := replayDivergedSnapshots(t, repo, config, local, remote)
+		requireReplayed(t, outcome)
+		if outcome.Conflict != nil || outcome.Replayed != 1 {
+			t.Fatalf("outcome = %+v, want one pack replayed and no conflict", outcome)
+		}
+		next := relicCommitAt(t, repo, config, relicID, outcome.Next)
+		relic := next.Record.State.Relic
+		if relic.Type != "plan" || relic.Schema != relicTestID(350) || string(relic.Properties["status"]) != `"draft"` {
+			t.Fatalf("replayed relic type %q, schema %q, properties %v; want both sides applied", relic.Type, relic.Schema, relic.Properties)
+		}
+		assertRelicFieldValue(t, relicFieldsAt(t, repo, outcome.Next, p.id), "heading", "Aims")
+		assertReplayedHistory(t, repo, config, relicID, outcome.Next)
+	})
+}
+
+func TestConcurrentMigrationsFoldLastSyncWins(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		root := writeRelicRoot(t, repo, config, relicTestPartNumbered(1))
+		relicID := root.Record.State.RelicID
+		first := relicHistoryFrom(t, repo, config, root, relicOps(relicMigrate(101, "spec", relicTestID(350))))
+		second := relicHistoryFrom(t, repo, config, root, relicOps(relicMigrate(201, "plan", relicTestID(351))))
+
+		// The clone that syncs second replays its migration onto the other's
+		// and ends on its own.
+		for label, test := range map[string]struct {
+			local, remote core.RelicSnapshot
+			wantType      string
+			wantSchema    string
+		}{
+			"second clone syncs last": {second, first, "plan", relicTestID(351)},
+			"first clone syncs last":  {first, second, "spec", relicTestID(350)},
+		} {
+			outcome := replayDivergedSnapshots(t, repo, config, test.local, test.remote)
+			requireReplayed(t, outcome)
+			if outcome.Conflict != nil || outcome.Replayed != 1 {
+				t.Fatalf("%s: outcome = %+v, want one pack replayed and no conflict", label, outcome)
+			}
+			relic := relicCommitAt(t, repo, config, relicID, outcome.Next).Record.State.Relic
+			if relic.Type != test.wantType || relic.Schema != test.wantSchema {
+				t.Fatalf("%s: replayed relic = %s %s, want %s %s", label, relic.Type, relic.Schema, test.wantType, test.wantSchema)
+			}
+			assertReplayedHistory(t, repo, config, relicID, outcome.Next)
+			// The other clone's tip is the replayed tip's parent, so its next
+			// sync moves it forward to the same relic.
+			if parents := relicParents(t, repo, outcome.Next); len(parents) != 1 || parents[0] != test.remote.Head {
+				t.Fatalf("%s: replayed tip's parents = %v, want %s", label, parents, test.remote.Head)
+			}
+		}
+	})
+}

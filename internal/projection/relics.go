@@ -608,7 +608,7 @@ func (w *relicWriter) writeRelic(ctx context.Context, relic gitstore.IndexedReli
 	if state.History.CompactedFrom != nil {
 		compactedFrom = sql.NullString{String: *state.History.CompactedFrom, Valid: true}
 	}
-	schema := string(data.Schema)
+	schema := data.Schema
 	if schema == "" {
 		schema = "null"
 	}
@@ -1173,7 +1173,7 @@ func scanIndexedRelic(scanner rowScanner) (core.RelicSnapshot, int, int, error) 
 		state.History.CompactedFrom = &from
 	}
 	if schema != "null" {
-		relic.Schema = json.RawMessage(schema)
+		relic.Schema = schema
 	}
 	relic.Retired, relic.Deleted = retired != 0, deleted != 0
 	relic.CreatedAt, relic.UpdatedAt = created, updated

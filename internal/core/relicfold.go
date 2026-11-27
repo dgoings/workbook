@@ -148,6 +148,7 @@ func startRelic(pack RelicOperationPack) (RelicData, error) {
 	return RelicData{
 		Title:      create.Relic.Title,
 		Type:       create.Relic.Type,
+		Schema:     create.Relic.Schema,
 		Author:     pack.Actor.ID,
 		CreatedAt:  create.Relic.CreatedAt,
 		Properties: map[string]json.RawMessage{},
@@ -245,6 +246,11 @@ func applyRelicOperation(relic *RelicData, operation RelicOperation) {
 		relic.Deleted = true
 	case RelicOperationRestore:
 		relic.Deleted = false
+	case RelicOperationMigrate:
+		// A migration names the relic's type and schema version whole, so two
+		// that meet fold as two title edits do: the later one stands.
+		relic.Type = operation.RelicType
+		relic.Schema = operation.Schema
 	case RelicOperationPropertySet:
 		relic.Properties[operation.Name] = operation.Value
 	case RelicOperationPropertyClear:

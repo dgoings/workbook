@@ -264,8 +264,8 @@ func compareRelicMembers(from, to *RelicData) []RelicValueChange {
 			return nil, nil, false, false
 		}
 		title, _ = json.Marshal(data.Title)
-		if len(data.Schema) > 0 && string(data.Schema) != "null" {
-			schema = data.Schema
+		if data.Schema != "" {
+			schema, _ = json.Marshal(data.Schema)
 		}
 		return title, schema, data.Retired, data.Deleted
 	}

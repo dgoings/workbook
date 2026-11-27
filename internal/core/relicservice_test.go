@@ -608,7 +608,7 @@ func TestRelicDocumentRefusals(t *testing.T) {
 	}{
 		"wrong format": {replace(`"format":"workbook.relic"`, `"format":"workbook.task"`), []string{"workbook.relic"}},
 		"version 2":    {replace(`"version":1,"id"`, `"version":2,"id"`), []string{"2"}},
-		"schema": {replace(`"schema":null`, `"schema":{"name":"spec"}`),
+		"schema": {replace(`"schema":null`, `"schema":{"type":"spec","id":"`+relicTestID(50)+`"}`),
 			[]string{"this version of workbook cannot create a relic that names a schema"}},
 		"one link": {replace(`"links":[]`, `"links":[{"id":"x","to":{"task":"WB-1"},"rel":"relates-to"}]`),
 			[]string{"this version of workbook cannot create a relic with links"}},

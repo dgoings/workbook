@@ -723,3 +723,38 @@ func TestApplyRelicRefusesAnIDUsedAgainForAPartOrABodyVersion(t *testing.T) {
 		t.Errorf("parts = %d, want 3", len(next.State.Relic.Parts))
 	}
 }
+
+func TestApplyRelicFoldsMigrate(t *testing.T) {
+	schemaA, schemaB := relicTestID(50), relicTestID(51)
+	root := goldenRelicPack()
+	root.Operations[0].Relic.Schema = schemaA
+	created, err := ApplyRelic(nil, root)
+	if err != nil {
+		t.Fatalf("ApplyRelic(root naming a schema): %v", err)
+	}
+	if created.State.Relic.Schema != schemaA || created.State.Relic.Type != "spec" {
+		t.Fatalf("created relic type, schema = %q, %q; want spec, %s", created.State.Relic.Type, created.State.Relic.Schema, schemaA)
+	}
+
+	toPlan := mustApplyRelic(t, created, relicFoldPack(2,
+		RelicOperation{ID: relicTestID(60), Type: RelicOperationMigrate, RelicType: "plan", Schema: schemaB}))
+	want := copyRelicData(created.State.Relic)
+	want.Type, want.Schema = "plan", schemaB
+	requireRelicEqual(t, "migrated to plan", withoutUpdatedAt(toPlan.State.Relic), withoutUpdatedAt(want))
+	if toPlan.State.LogicalClock != 2 || !toPlan.State.Relic.UpdatedAt.Equal(relicDocTime.Add(time.Minute)) {
+		t.Errorf("migrated clock, updatedAt = %d, %v", toPlan.State.LogicalClock, toPlan.State.Relic.UpdatedAt)
+	}
+
+	open := mustApplyRelic(t, toPlan, relicFoldPack(3,
+		RelicOperation{ID: relicTestID(61), Type: RelicOperationMigrate, RelicType: "plan"}))
+	want.Schema = ""
+	requireRelicEqual(t, "migrated to open plan", withoutUpdatedAt(open.State.Relic), withoutUpdatedAt(want))
+	if encoded, err := EncodeDocument(open.State); err != nil || !strings.Contains(string(encoded), `"type":"plan","schema":null`) {
+		t.Errorf("an open migrated relic's state = %s, %v", encoded, err)
+	}
+
+	deleted := mustApplyRelic(t, open, relicFoldPack(4, RelicOperation{ID: relicTestID(62), Type: RelicOperationTombstone}))
+	_, err = ApplyRelic(&deleted, relicFoldPack(5,
+		RelicOperation{ID: relicTestID(63), Type: RelicOperationMigrate, RelicType: "spec", Schema: schemaA}))
+	requireCorruptData(t, "migrating a deleted relic", err)
+}

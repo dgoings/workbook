@@ -41,7 +41,7 @@ type RelicDocument struct {
 	Head       string                     `json:"head,omitempty"`
 	Title      string                     `json:"title"`
 	Type       string                     `json:"type"`
-	Schema     json.RawMessage            `json:"schema"`
+	Schema     *RelicSchemaRef            `json:"schema"`
 	Author     string                     `json:"author,omitempty"`
 	Retired    bool                       `json:"retired"`
 	Deleted    bool                       `json:"deleted"`
@@ -53,6 +53,29 @@ type RelicDocument struct {
 	// Warnings is what a read has to say beside the document, such as links
 	// whose targets could not be checked. It is not part of the document.
 	Warnings []Warning `json:"-"`
+}
+
+// RelicSchemaRef names the schema version a relic is written under, as a
+// relic document and a relic summary present it. Version is the version's
+// number, left out when this clone's settings do not list the ID. A relic that
+// names no schema has no RelicSchemaRef, which is written as null.
+type RelicSchemaRef struct {
+	Type    string `json:"type"`
+	ID      string `json:"id"`
+	Version int    `json:"version,omitempty"`
+}
+
+// ResolveRelicSchemaRef presents the schema version the relic names, with its
+// type and number from the listing when the listing has it, and the relic's
+// own type and no number when it does not. It is nil for an open relic.
+func ResolveRelicSchemaRef(relic RelicData, listing RelicSchemaListing) *RelicSchemaRef {
+	if relic.Schema == "" {
+		return nil
+	}
+	if version, known := listing.ByID(relic.Schema); known {
+		return &RelicSchemaRef{Type: version.Type, ID: version.ID, Version: version.Version}
+	}
+	return &RelicSchemaRef{Type: relic.Type, ID: relic.Schema}
 }
 
 // DecodeRelicDocument reads exactly one relic document. It refuses a member
@@ -85,7 +108,7 @@ func RelicCreateInputFromDocument(document RelicDocument) (RelicCreateInput, err
 		return RelicCreateInput{}, Errorf(CategoryValidation,
 			"the relic document is version %d; this version of workbook reads version %d", document.Version, documentVersion)
 	}
-	if len(document.Schema) != 0 && string(document.Schema) != "null" {
+	if document.Schema != nil {
 		return RelicCreateInput{}, Errorf(CategoryValidation, "this version of workbook cannot create a relic that names a schema")
 	}
 	if len(document.Links) != 0 {
@@ -151,7 +174,7 @@ func newRelicDocument(snapshot RelicSnapshot, parts []RelicPart, content map[str
 		Head:       snapshot.Head,
 		Title:      relic.Title,
 		Type:       relic.Type,
-		Schema:     json.RawMessage("null"),
+		Schema:     ResolveRelicSchemaRef(relic, RelicSchemaListing{}),
 		Author:     relic.Author,
 		Retired:    relic.Retired,
 		Deleted:    relic.Deleted,

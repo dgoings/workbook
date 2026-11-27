@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"strings"
@@ -477,7 +478,7 @@ func TestRelicStateCanonicalForm(t *testing.T) {
 		"non-canonical value":   func(s *RelicStateDocument) { s.Relic.Properties["status"] = json.RawMessage(`{"b":1,"a":2}`) },
 		"invalid property name": func(s *RelicStateDocument) { s.Relic.Properties["a\x01"] = json.RawMessage(`1`) },
 		"retired":               func(s *RelicStateDocument) { s.Relic.Retired = true },
-		"a schema":              func(s *RelicStateDocument) { s.Relic.Schema = json.RawMessage(`{}`) },
+		"a schema not a ULID":   func(s *RelicStateDocument) { s.Relic.Schema = "spec" },
 		"compacted": func(s *RelicStateDocument) {
 			from := relicTestID(9)
 			s.History.CompactedFrom = &from
@@ -661,5 +662,185 @@ func TestRelicDataParts(t *testing.T) {
 	}
 	if _, ok := data.Part(relicTestID(99)); ok {
 		t.Fatal("Part(unknown) found a part")
+	}
+}
+
+func TestRelicStateSchemaMember(t *testing.T) {
+	open := goldenRelicState()
+	encoded, err := EncodeDocument(open)
+	if err != nil {
+		t.Fatalf("EncodeDocument(open): %v", err)
+	}
+	if !strings.Contains(string(encoded), `"type":"spec","schema":null,"author"`) {
+		t.Fatalf("an open relic's state = %s, want \"schema\":null after the type", encoded)
+	}
+	decoded, err := DecodeRelicStateDocument(encoded)
+	if err != nil || decoded.Relic.Schema != "" {
+		t.Fatalf("DecodeRelicStateDocument(open) = %q, %v", decoded.Relic.Schema, err)
+	}
+	if again, err := EncodeDocument(decoded); err != nil || string(again) != string(encoded) {
+		t.Fatalf("an open relic's state does not round-trip byte for byte:\n got %s\nwant %s (%v)", again, encoded, err)
+	}
+
+	named := goldenRelicState()
+	named.Relic.Schema = relicTestID(50)
+	encoded, err = EncodeDocument(named)
+	if err != nil {
+		t.Fatalf("EncodeDocument(named): %v", err)
+	}
+	if !strings.Contains(string(encoded), `"type":"spec","schema":"`+relicTestID(50)+`","author"`) {
+		t.Fatalf("a relic naming a schema = %s, want the ID after the type", encoded)
+	}
+	decoded, err = DecodeRelicStateDocument(encoded)
+	if err != nil || !reflect.DeepEqual(decoded, named) {
+		t.Fatalf("DecodeRelicStateDocument(named) = %#v, %v", decoded.Relic, err)
+	}
+	if again, err := EncodeDocument(decoded); err != nil || string(again) != string(encoded) {
+		t.Fatalf("a relic naming a schema does not round-trip byte for byte (%v)", err)
+	}
+
+	for label, member := range map[string]string{"an object": `{}`, "a number": `3`, "a type name": `"spec"`} {
+		stored := strings.Replace(string(marshalRelicDocument(t, open)), `"schema":null`, `"schema":`+member, 1)
+		_, err := DecodeRelicStateDocument([]byte(stored))
+		requireCorruptData(t, label, err)
+	}
+	notAnID := goldenRelicState()
+	notAnID.Relic.Schema = "spec"
+	_, err = EncodeDocument(notAnID)
+	requireCorruptData(t, "a type name (encode)", err)
+}
+
+func TestMigrateShapes(t *testing.T) {
+	migrate := func(change func(*RelicOperation)) RelicOperationPack {
+		operation := RelicOperation{ID: relicTestID(60), Type: RelicOperationMigrate, RelicType: "plan", Schema: relicTestID(61)}
+		change(&operation)
+		return NewRelicOperationPack(relicDocProject, relicDocRelic, relicDocGeneration, relicDocActor, 2,
+			relicDocTime.Add(time.Minute), []RelicOperation{operation})
+	}
+	for label, change := range map[string]func(*RelicOperation){
+		"no relic type":       func(o *RelicOperation) { o.RelicType = "" },
+		"a bad relic type":    func(o *RelicOperation) { o.RelicType = "Not A Type" },
+		"a part":              func(o *RelicOperation) { o.Part = relicDocPartA },
+		"a name":              func(o *RelicOperation) { o.Name = "status" },
+		"a schema not a ULID": func(o *RelicOperation) { o.Schema = "spec" },
+	} {
+		requireRelicPackRefused(t, label, migrate(change))
+	}
+	for label, operation := range map[string]RelicOperation{
+		"relicType on property.set": {ID: relicTestID(60), Type: RelicOperationPropertySet, Name: "a", Value: json.RawMessage(`1`), RelicType: "plan"},
+		"schema on title.set":       {ID: relicTestID(60), Type: RelicOperationTitleSet, Title: "A", Schema: relicTestID(61)},
+	} {
+		requireRelicPackRefused(t, label, NewRelicOperationPack(relicDocProject, relicDocRelic, relicDocGeneration,
+			relicDocActor, 2, relicDocTime.Add(time.Minute), []RelicOperation{operation}))
+	}
+
+	for label, pack := range map[string]RelicOperationPack{
+		"to a version": migrate(func(*RelicOperation) {}),
+		"to open":      migrate(func(o *RelicOperation) { o.Schema = "" }),
+	} {
+		if pack.MinReader != 6 {
+			t.Errorf("%s: a pack with relic.migrate declares %d, want 6", label, pack.MinReader)
+		}
+		encoded, err := EncodeDocument(pack)
+		if err != nil {
+			t.Fatalf("%s: EncodeDocument: %v", label, err)
+		}
+		decoded, err := DecodeRelicOperationPack(encoded)
+		if err != nil || !reflect.DeepEqual(decoded, pack) {
+			t.Fatalf("%s: DecodeRelicOperationPack = %#v, %v", label, decoded, err)
+		}
+	}
+	encoded, _ := EncodeDocument(migrate(func(*RelicOperation) {}))
+	if want := `{"id":"` + relicTestID(60) + `","type":"relic.migrate","relicType":"plan","schema":"` + relicTestID(61) + `"}`; !strings.Contains(string(encoded), want) {
+		t.Errorf("relic.migrate encodes as %s, want %s", encoded, want)
+	}
+
+	named := goldenRelicPack()
+	named.Operations[0].Relic.Schema = relicTestID(61)
+	encoded, err := EncodeDocument(named)
+	if err != nil {
+		t.Fatalf("EncodeDocument(create naming a schema): %v", err)
+	}
+	if want := `"relic":{"title":"Task archive compaction","type":"spec","schema":"` + relicTestID(61) + `","createdAt"`; !strings.Contains(string(encoded), want) {
+		t.Errorf("relic.create naming a schema encodes as %s, want %s", encoded, want)
+	}
+	badCreate := goldenRelicPack()
+	badCreate.Operations[0].Relic.Schema = "spec"
+	requireRelicPackRefused(t, "relic.create naming a schema by type", badCreate)
+}
+
+func TestRelicDocumentSchemaRef(t *testing.T) {
+	listing := RelicSchemaListing{Versions: []RelicSchemaVersion{
+		{Type: "spec", Version: 1, ID: relicTestID(50), Bytes: 10, Blob: "aa"},
+		{Type: "spec", Version: 2, ID: relicTestID(51), Bytes: 10, Blob: "bb"},
+	}}
+	open := RelicData{Type: "spec"}
+	if ref := ResolveRelicSchemaRef(open, listing); ref != nil {
+		t.Errorf("ResolveRelicSchemaRef(open) = %+v, want nil", ref)
+	}
+	known := ResolveRelicSchemaRef(RelicData{Type: "spec", Schema: relicTestID(51)}, listing)
+	if known == nil || *known != (RelicSchemaRef{Type: "spec", ID: relicTestID(51), Version: 2}) {
+		t.Errorf("ResolveRelicSchemaRef(known) = %+v", known)
+	}
+	unknown := ResolveRelicSchemaRef(RelicData{Type: "spec", Schema: relicTestID(52)}, listing)
+	if unknown == nil || *unknown != (RelicSchemaRef{Type: "spec", ID: relicTestID(52)}) {
+		t.Errorf("ResolveRelicSchemaRef(unknown) = %+v", unknown)
+	}
+	for label, test := range map[string]struct {
+		ref  *RelicSchemaRef
+		want string
+	}{
+		"open":    {nil, `"schema":null`},
+		"known":   {known, `"schema":{"type":"spec","id":"` + relicTestID(51) + `","version":2}`},
+		"unknown": {unknown, `"schema":{"type":"spec","id":"` + relicTestID(52) + `"}`},
+	} {
+		for kind, value := range map[string]any{
+			"document": RelicDocument{Format: RelicDocumentFormat, Version: 1, Type: "spec", Schema: test.ref},
+			"summary":  RelicSummary{Type: "spec", Schema: test.ref},
+		} {
+			encoded, err := json.Marshal(value)
+			if err != nil || !strings.Contains(string(encoded), `"type":"spec",`+test.want) {
+				t.Errorf("%s %s = %s, %v; want %s after the type", label, kind, encoded, err, test.want)
+			}
+		}
+	}
+
+	// Show, export and list present what the relic names; with no listing to
+	// consult, a version is unknown.
+	store := newMemoryRelicStore()
+	openSnapshot := relicSnapshotForTest(t, 1, "spec", []string{relicTestID(11)}, false, false)
+	store.put(openSnapshot)
+	namedSnapshot := relicSnapshotForTest(t, 2, "spec", []string{relicTestID(12)}, false, false)
+	namedSnapshot.Record.State.Relic.Schema = relicTestID(51)
+	store.put(namedSnapshot)
+	service := newRelicTestService(store, nil)
+	ctx := context.Background()
+	for label, test := range map[string]struct {
+		relicID string
+		want    string
+	}{
+		"open":  {openSnapshot.Record.State.RelicID, `"schema":null`},
+		"named": {namedSnapshot.Record.State.RelicID, `"schema":{"type":"spec","id":"` + relicTestID(51) + `"}`},
+	} {
+		shown, err := service.Show(ctx, test.relicID, RelicShowOptions{})
+		if err != nil {
+			t.Fatalf("%s: Show: %v", label, err)
+		}
+		exported, err := service.Export(ctx, test.relicID)
+		if err != nil {
+			t.Fatalf("%s: Export: %v", label, err)
+		}
+		for kind, document := range map[string]RelicDocument{"show": shown, "export": exported} {
+			if encoded, _ := json.Marshal(document); !strings.Contains(string(encoded), test.want) {
+				t.Errorf("%s %s = %s, want %s", label, kind, encoded, test.want)
+			}
+		}
+	}
+	summaries, err := service.List(ctx, RelicListFilter{})
+	if err != nil || len(summaries) != 2 {
+		t.Fatalf("List = %+v, %v", summaries, err)
+	}
+	if summaries[0].Schema != nil || summaries[1].Schema == nil || summaries[1].Schema.ID != relicTestID(51) {
+		t.Errorf("listed schemas = %+v, %+v", summaries[0].Schema, summaries[1].Schema)
 	}
 }
