@@ -1067,6 +1067,17 @@ type Options struct {
 	// in each task's presentation; one given neither shows none.
 	SetAside        SetAsideReader
 	DismissSetAside SetAsideDismisser
+	// The relic reads, all of them GET routes under /api/relics. A board needs
+	// ListRelics, ShowRelic and RelicPart together to show relics at all, and
+	// answers every address under /api/relics as not found without them.
+	// RelicHistory and RelicDiff add their own routes. TaskRelics answers
+	// GET /api/tasks/{id}/relics.
+	ListRelics   RelicLister
+	ShowRelic    RelicShower
+	RelicPart    RelicPartReader
+	RelicHistory RelicHistoryLister
+	RelicDiff    RelicDiffer
+	TaskRelics   TaskRelicReader
 	// Hosted is set for a board opened at a public address, by people other
 	// than whoever runs the server. Its answers then never carry the
 	// server's folder, its remote's address or Git's own output: a failure
@@ -1312,6 +1323,9 @@ type pageData struct {
 	// status mutations and a section served onto a page nobody can reach is a
 	// section that is never seen.
 	KeysAdministrable bool
+	// RelicsReadable is whether this board was built to show relics. See
+	// handler.relicsReadable.
+	RelicsReadable bool
 }
 
 // expectedHead is the task tip the browser rendered before proposing a change.
@@ -1661,6 +1675,12 @@ func NewHandler(options Options) http.Handler {
 	handler.mux.HandleFunc("GET /api/tasks/{id}/attachments/{attachment}", handler.serveTaskAttachment)
 	handler.mux.HandleFunc("DELETE /api/tasks/{id}/attachments/{attachment}", handler.removeTaskAttachment)
 	handler.mux.HandleFunc("DELETE /api/tasks/{id}/set-aside", handler.dismissSetAside)
+	handler.mux.HandleFunc("GET /api/relics", handler.serveRelics)
+	handler.mux.HandleFunc("GET /api/relics/{id}", handler.serveRelic)
+	handler.mux.HandleFunc("GET /api/relics/{id}/parts/{part}", handler.serveRelicPart)
+	handler.mux.HandleFunc("GET /api/relics/{id}/history", handler.serveRelicHistory)
+	handler.mux.HandleFunc("GET /api/relics/{id}/diff", handler.serveRelicDiff)
+	handler.mux.HandleFunc("GET /api/tasks/{id}/relics", handler.serveTaskRelics)
 	handler.mux.HandleFunc("GET /api/sync", handler.serveSyncState)
 	handler.mux.HandleFunc("PUT /api/sync", handler.updateSyncMode)
 	handler.mux.HandleFunc("GET /healthz", handler.serveHealth)
@@ -1695,7 +1715,8 @@ func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Requ
 	// ResponseWriter so a sender that ignores the limit loses its connection
 	// rather than keeping it to try again.
 	request.Body = http.MaxBytesReader(writer, request.Body, requestBodyLimit(request.URL.Path))
-	if malformedTaskDependencyRequestPath(request.URL.Path, request.URL.EscapedPath()) {
+	if malformedTaskDependencyRequestPath(request.URL.Path, request.URL.EscapedPath()) ||
+		malformedRelicPath(request.URL.Path) {
 		http.NotFound(writer, request)
 		return
 	}
@@ -1832,6 +1853,9 @@ func allowedMethod(path string) (string, bool) {
 			return http.MethodPost, true
 		}
 		if taskHistoryPathID(path) != "" {
+			return http.MethodGet, true
+		}
+		if relicAPIPath(path) || taskRelicsPathID(path) != "" {
 			return http.MethodGet, true
 		}
 		if taskPathID(path) != "" {
@@ -2129,6 +2153,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		Keys:              pageKeys(vocabulary.Keys),
 		CurrentKey:        vocabulary.Keys.Current(),
 		KeysAdministrable: handler.keysAdministrable(),
+		RelicsReadable:    handler.relicsReadable(),
 	}); err != nil {
 		return
 	}
