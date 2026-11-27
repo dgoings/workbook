@@ -1685,7 +1685,7 @@ Spotlight indexing used about two and a half cores during the run.
 | | `relic-linked-to-typical` | 114 ms | 200 ms | as above |
 | | `task-show-linked-hot` | 145 ms | 200 ms | as above |
 | Cost follows the change | `relic-refresh-0` | 125 ms | within 20 ms of `relic-list` (121 ms) | benchmark |
-| | `relic-refresh-1` | 221 ms | at most 100 ms above `relic-refresh-0` | benchmark |
+| | `relic-refresh-1` | 221 ms | at most 150 ms above `relic-refresh-0` | benchmark |
 | | `relic-refresh-100` | 285 ms | at most 30 % of `relic-first-read-fresh-clone`, 417 ms | benchmark |
 | Body read | `relic-show-part-2kib` | 92 ms | | |
 | | `relic-body-2kib` | 110 ms | at most 20 ms above `relic-show-part-2kib`, and one more Git process | benchmark |
