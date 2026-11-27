@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=987114c4 sha256=82ea3365824f8e6841f83920c2aeccfd9fbdaf58fd236986af1ae1e241ad3bff -->
+<!-- workbook:begin generator=v0.6.1-420-g5b8ebcc4 sha256=c962474c83ced6659066d73832e4204ed73c06ff6ed3f1929d946ebda5798732 -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`
