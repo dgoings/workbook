@@ -29,154 +29,164 @@ release counts as no entry, so it never blocks the next release. See
 
 Workbook has a second kind of record, the relic, for specs, plans, decisions
 and similar material. A relic has a title, a type, properties and an ordered
-list of parts, and a part has a type, fields and an optional body of up to
-1 MiB. `workbook relic create`, `list`, `show`, `update`, `delete`, `restore`
-and `export` work with them, and `relic create --from-file` creates one from
-the document `relic export` writes. Saving over a part's body needs `--base
-<version>`, the body version the edit started from, and a save from an older
-version is refused with exit 6 instead of overwriting the newer text. A save
-over a body keeps the body's format label unless `--body-format` gives
-another. `relic show <relic>#<part> --body` writes the body byte for byte
-into a file or a pipe, and on a terminal prints it with its indentation and
-line breaks kept and its control characters replaced. Each relic is one ref under `refs/workbook/relics/`, a chain of
-immutable commits in new formats that declare writer-format generation 6.
+list of parts, and a part has a type, fields and an optional body. Relics are
+shared through the tasks remote as tasks are, can link to tasks, and are taught
+to agents by the generated guidelines and the skill. Relics are not on the
+board, and there are no schemas, history or diff commands, retiring or
+compaction for them yet. Upgrade every Workbook on a machine before creating
+one; see Compatibility across versions below.
 
-A relic's limits are part of its stored format. One property value is at most
-64 KiB and one field value at most 16 KiB, measured on the stored JSON, where
-each `<`, `>` or `&` in a string counts six bytes. A value nests lists and
-objects at most 32 levels deep. A property or field name is 1 to 100 bytes of
-valid UTF-8 with no `=`, no control character, no format character (such as
-U+200B or U+202E) and no white space at either end, and names are compared byte for byte. A relic's properties together, one
-part's fields together, its part counts and its live bodies together are
-totals: a change is refused only when it leaves a total over its limit and
-larger than it was, and a total is never checked when a relic is read. Text
-that is not valid UTF-8 and an object that names a member twice are refused,
-never repaired, and `relic create --from-file` reads at most 64 MiB.
+### Added
+- **Relics.** `workbook relic create`, `list`, `show`, `update`, `delete`,
+  `restore` and `export` work with them, and `relic create --from-file` creates
+  one from the document `relic export` writes. Each relic is one ref under
+  `refs/workbook/relics/`, a chain of immutable commits in new formats that
+  declare writer-format generation 6. See [Relics](docs/reference.md#relics)
+  and [Relic refs](docs/architecture.md#relic-refs).
+- **A save over a part's body names the version it started from.** `--base
+  <version>` is required, and a save from an older version is refused with exit
+  6 instead of overwriting the newer text. The body keeps its format label
+  unless `--body-format` gives another. `relic show <relic>#<part> --body`
+  writes the body byte for byte into a file or a pipe, and on a terminal prints
+  it with its indentation and line breaks kept and its control characters
+  replaced.
+- **A relic's limits are part of its stored format.** A body is at most 1 MiB,
+  one property value 64 KiB and one field value 16 KiB, measured on the stored
+  JSON, where each `<`, `>` or `&` in a string counts six bytes. A value nests
+  lists and objects at most 32 levels deep. A property or field name is 1 to
+  100 bytes of valid UTF-8 with no `=`, no control character, no format
+  character (such as U+200B or U+202E) and no white space at either end, and
+  names are compared byte for byte. A relic's properties together, one part's
+  fields together, its part counts and its live bodies together are totals: a
+  change is refused only when it leaves a total over its limit and larger than
+  it was, and a total is never checked when a relic is read. Text that is not
+  valid UTF-8 and an object that names a member twice are refused, never
+  repaired, and `relic create --from-file` reads at most 64 MiB.
+- **Relics are shared with the tasks.** `workbook fetch`, `push`, `sync`,
+  `setup`, `move-tasks` and `sync --watch` carry relic refs to and from the
+  tasks remote, through tracking refs under
+  `refs/workbook/remotes/<remote>/relics/`. `relic create`, `update`, `delete`
+  and `restore` fetch first, push the one relic they changed, and print a
+  `Sync:` line; `--no-sync` skips both, and the read commands contact no
+  remote. The synchronization a task command runs before and after its change
+  carries no relic ref, so its cost does not grow with the number of relics.
+- **A relic changed in two clones is combined** by replaying one clone's
+  commits onto the other's, operation by operation. Two saves over the same
+  body version, and an edit to a relic the remote has deleted, stop the replay:
+  the remote's version stands, the local tip is parked under
+  `refs/workbook/reconciled-relics/`, and the command reports a relic conflict,
+  exit 8, in text and in a new `relicConflict` envelope member that carries all
+  three bodies. A deletion that synchronizes second applies with no report. Two
+  changes that each fit a total but pass it together are both kept, with a
+  `relic-over-limit` warning, and an edit to a part removed elsewhere gives
+  `relic-edit-on-removed-part`. `workbook sync --status` lists the relic
+  conflicts a running watcher holds, as `relicConflicts` in JSON, without body
+  text.
+- **A relic, or one of its parts, can link to a task.** `relic update --link
+  <task> --rel <rel>`, with `--from <part>` for a link from a part, adds a
+  link, and `--unlink <link>` removes one by its ID. `rel` is up to 100 bytes
+  of lowercase words joined by hyphens, such as `implemented-by`, and a relic
+  holds at most 2,000 live links, checked only when one is added. A link is
+  stored once, on the relic, in `links.json` and as `link.add` and
+  `link.remove` operations; the task's history does not change. Linking what is
+  already linked and unlinking a full ID already gone record nothing, so
+  retries are safe, and every link two clones add survives their sync. A
+  deleted task, a missing task and a relic ID are refused as targets, and
+  `relic create --from-file` still refuses a document with links.
+- **Links show from both ends.** `relic show` lists links under `Links:`, and
+  marks a link whose task was deleted since `(removed)`, `targetRemoved` in
+  JSON. `relic list --linked-to <task>` lists the relics that link to a task,
+  with `linkedBy` in JSON, and `workbook show <task>` ends with a `Relics:`
+  section, `relics` in JSON, listing the linked relics this checkout holds; a
+  relic it cannot read gives a `relic-links-unread` warning instead of a
+  failure. The web board's task API does not list links.
+- **Relic reads are served from the SQLite cache.** `relic list`, `relic show`
+  and `relic export` answer from four new relic tables and a `relic_links`
+  table, refreshing only the relics whose ref changed since, so a change made
+  in another clone or worktree is seen without a rebuild. The cache holds each
+  body's object ID, never its bytes; a body is read from Git when it is shown.
+  A relic the cache cannot hold, damaged or written by a newer Workbook, is
+  read from Git as before, and a relic read answers from Git when the cache
+  cannot be built at all. Task commands other than `workbook show` read no
+  relic, and the automatic rebuild a missing cache triggers leaves the relic
+  tables to the first relic read.
+- **Relic refs are packed after a run that moved one.** Such a run ends by
+  packing the relic refs, their tracking refs and parked relic tips with `git
+  pack-refs --include`, and no other ref, so a task command's fetch no longer
+  reads a file per relic. A run that moved none runs nothing for it, and a task
+  command, `push` and the relic reads never pack. A failed pack, a Git without
+  `--include` and the reftable backend change nothing about the command's
+  output or exit code. A bare origin you host yourself keeps its refs loose
+  until `git gc` or `git pack-refs --all` runs there; see [A self-hosted origin
+  keeps its refs
+  loose](docs/hosting.md#a-self-hosted-origin-keeps-its-refs-loose).
+- **`workbook validate` and `workbook reset` cover relics.** `validate` checks
+  every commit of every relic history, and refuses a relic in which two commits
+  record the same operation ID. `reset` measures a relic as it measures a task:
+  a change the tasks remote lacks is work that exists only in the checkout, and
+  a parked relic tip is set aside. It writes relic refs and parked relic tips
+  to its bundle, a damaged relic ref that still resolves to a commit included,
+  and `--no-backup` is refused while such work exists unless
+  `--discard-unpublished` is given. In a checkout with no tasks remote to check
+  against, which a local-only project is, `--no-backup` is refused with
+  `--discard-unpublished` or without it.
+- **The generated guidelines and the Workbook skill teach agents to use
+  relics.** `.workbook/guidelines.md` gains a `Relics` section: what a relic
+  is, its ID under the project's current key, the four commands that find the
+  relics linked to a task, read one part and save an edit with `--base`, and
+  what to do when that save is refused as `stale-write` (exit 6) or meets
+  another clone's edit as a relic conflict (exit 8). Its exit-code table says a
+  relic save refused for its `--base` needs a fresh read first. The skill tells
+  an agent to read each linked part before editing files. Run `workbook docs
+  update` to refresh both. See [Relics for
+  agents](docs/reference.md#relics-for-agents).
+- **Relics are measured.** `scripts/benchmark.sh --relics` runs a relic
+  benchmark family on 1,000 relics of 20 parts, a 2,000-part relic and bodies
+  at the 1 MiB and 16 MiB limits, and compares every task command without and
+  with that set; `--relic-scale smoke` runs a small set. On the measured run
+  every budget was met: the first relic read on a fresh clone took 1,389 ms, a
+  reverse lookup from a task 121 ms, and every task command kept its P95 count
+  of Git processes, with a median within 10 % of its time without relics. Three
+  outcomes follow. The relic limits are confirmed as starting limits: a later
+  release may raise one and will lower none. Bodies are not cached; a body read
+  is one more Git process. Part positions are not renumbered; a placement that
+  would need a position over 256 bytes is refused with exit 5, which in the
+  benchmark only repeated placement into one narrowing gap reached. A checkout
+  whose objects are loose files, as Workbook leaves them until a `git gc` or
+  another Git command's automatic maintenance packs them, makes a synchronizing
+  command slower, with tasks or relics; `git gc` removes the cost. See [Relic
+  benchmarks](docs/architecture.md#relic-benchmarks).
 
-Relics are shared with the tasks. `workbook fetch`, `push`, `sync`, `setup`,
-`move-tasks` and `sync --watch` carry relic refs to and from the tasks
-remote, through tracking refs under `refs/workbook/remotes/<remote>/relics/`.
-The synchronization a task command runs before and after its change carries
-no relic ref, so its cost does not grow with the number of relics, and
-`workbook show <task>` lists the linked relics this checkout holds.
-`relic create`, `update`, `delete` and `restore` fetch first, push the one
-relic they changed, and print a `Sync:` line; `--no-sync` skips both, and the
-read commands contact no remote. A relic changed in two clones is combined by
-replaying one clone's commits onto the other's, operation by operation. Two
-saves over the same body version, and an edit to a relic the remote has
-deleted, stop the replay: the remote's version stands, the local tip is parked
-under `refs/workbook/reconciled-relics/`, and the command reports a relic
-conflict, exit 8, in text and in a new `relicConflict` envelope member that
-carries all three bodies. A deletion that synchronizes second applies with no
-report. Two changes that each fit a total but pass it together are both kept,
-with a `relic-over-limit` warning, and an edit to a part removed elsewhere
-gives `relic-edit-on-removed-part`. A move concerns this project's refs only:
-a task or relic ref at the old place whose name is not one of this project's
-task or relic IDs, under any key it has had, is another project's or no
-project's, and the move and its `--clean-up` leave it there without a word,
-where it used to leave the move unverified; `reset --remote` still deletes it.
-A key the old place's configuration has, when it has diverged from this
-checkout's, counts as this project's too: a task or relic under it leaves the
-move unverified, exit 8, naming the key and the `workbook key add` that lets
-the next run carry it, and `--clean-up` deletes nothing meanwhile.
-The watcher's status document is now version 2; a command does not hand a change
-to an older watcher. Relics are not on the board, and
-there are no schemas, history or diff commands, retiring or compaction
-for them yet.
+### Changed
+- **A move concerns this project's refs only.** A task or relic ref at the old
+  place whose name is not one of this project's task or relic IDs, under any
+  key it has had, is another project's or no project's, and `workbook
+  move-tasks` and its `--clean-up` leave it there without a word, where it used
+  to leave the move unverified; `reset --remote` still deletes it. A key the
+  old place's configuration has, when it has diverged from this checkout's,
+  counts as this project's too: a task or relic under it leaves the move
+  unverified, exit 8, naming the key and the `workbook key add` that lets the
+  next run carry it, and `--clean-up` deletes nothing meanwhile.
+- **`workbook rebuild` indexes relics too.** Its text line now reads `Rebuilt
+  <n> task(s) and <m> relic(s) at <path>.`, and its JSON gains `relicCount`.
+  The cache's schema is version 10, so the first command run by this build
+  replaces an older cache.
+- **A relic push that fails on the wire after the task push** now leaves the
+  push phase `completed`, says so in its `detail`, and names the task errors of
+  the same run before it instead of hiding them.
+- **The watcher's status document is now version 2.** A command does not hand a
+  change to an older watcher.
 
-A run that moved a relic ref in the checkout ends by packing the relic refs,
-their tracking refs and parked relic tips with `git pack-refs --include`, and
-no other ref, so a task command's fetch no longer reads a file per relic. A
-run that moved none runs nothing for it, and a task command, `push` and the
-relic reads never pack. A failed pack, a Git without `--include` and the
-reftable backend change nothing about the command's output or exit code. A
-relic push that fails on the wire after the task push now leaves the push
-phase `completed`, says so in its `detail`, and names the task errors of the
-same run before it instead of hiding them. `workbook sync --status` lists the
-relic conflicts a running watcher holds, as `relicConflicts` in JSON, without
-body text. A bare origin you host yourself keeps its refs loose until `git
-gc` or `git pack-refs --all` runs there; see
-[A self-hosted origin keeps its refs loose](docs/hosting.md#a-self-hosted-origin-keeps-its-refs-loose).
-
-`workbook validate` checks every commit of every relic history, and refuses a
-relic in which two commits record the same operation ID. `workbook reset`
-measures a relic as it measures a task: a change the tasks remote lacks is
-work that exists only in the checkout, and a parked relic tip is set aside.
-It writes relic refs and parked relic tips to its bundle, a damaged relic ref
-that still resolves to a commit included, and `--no-backup` is refused while
-such work exists unless `--discard-unpublished` is given. In a checkout with
-no tasks remote to check against, which a local-only project is,
-`--no-backup` is refused with `--discard-unpublished` or without it. A
-Workbook from before relics, v0.6.1 included, works beside them and leaves
-the relics at a remote alone.
-
-Relic reads are served from the SQLite cache. `relic list`, `relic show` and
-`relic export` answer from four new relic tables, refreshing only the relics
-whose ref changed since, so a change made in another clone or worktree is
-seen without a rebuild. The cache holds each body's object ID, never its
-bytes; a body is read from Git when it is shown. A relic the cache cannot
-hold, damaged or written by a newer Workbook, is read from Git as before, and
-a relic read answers from Git when the cache cannot be built at all. Task
-commands other than `workbook show` read no relic, and the automatic rebuild a missing cache triggers
-leaves the relic tables to the first relic read. `workbook rebuild` indexes
-relics too: its text line now reads `Rebuilt <n> task(s) and <m> relic(s) at
-<path>.`, and its JSON gains `relicCount`. The cache's schema changed, so the
-first command run by this build replaces an older cache.
-
-A relic, or one of its parts, can link to a task. `relic update --link <task>
---rel <rel>`, with `--from <part>` for a link from a part, adds a link, and
-`--unlink <link>` removes one by its ID. `rel` is up to 100 bytes of lowercase
-words joined by hyphens, such as `implemented-by`, and a relic holds at most
-2,000 live links, checked only when one is added. A link is stored once, on
-the relic, in `links.json` and as `link.add` and `link.remove` operations; the
-task's history does not change. Linking what is already linked and unlinking
-a full ID already gone record nothing, so retries are safe, and every link
-two clones add survives their sync. A deleted task, a missing task and a
-relic ID are refused as targets. `relic show` lists links under `Links:`, and
-marks a link whose task was deleted since `(removed)`, `targetRemoved` in
-JSON. `relic list --linked-to <task>` lists the relics that link to a task,
-with `linkedBy` in JSON, and `workbook show <task>` ends with a `Relics:`
-section, `relics` in JSON; a relic it cannot read gives a `relic-links-unread`
-warning instead of a failure. Both answer from a new `relic_links` table, and
-the cache's schema is version 10. `relic create --from-file` still refuses a
-document with links. The web board's task API does not list links. See
-[Relics](docs/reference.md#relics) and
-[Relic refs](docs/architecture.md#relic-refs).
-
-Relics are measured. `scripts/benchmark.sh --relics` runs a relic benchmark
-family on 1,000 relics of 20 parts, a 2,000-part relic and bodies at the 1 MiB
-and 16 MiB limits, and compares every task command without and with that set;
-`--relic-scale smoke` runs a small set. On the measured run every budget was
-met: the first relic read on a fresh clone took 1,389 ms, a reverse lookup
-from a task 121 ms, and every task command kept its P95 count of Git
-processes, with a median within 10 % of its time without relics. Three
-outcomes follow. The relic limits are confirmed as starting limits: a later
-release may raise one and will lower none. Bodies are not cached; a body read
-is one more Git process. Part positions are not renumbered; a placement that
-would need a position over 256 bytes is refused with exit 5, which in the
-benchmark only repeated placement into one narrowing gap reached. A checkout
-whose objects are loose files, as Workbook leaves them until a `git gc` or
-another Git command's automatic maintenance packs them, makes a synchronizing
-command slower, with tasks or relics; `git gc` removes the cost. See
-[Relic benchmarks](docs/architecture.md#relic-benchmarks).
-
-The generated guidelines and the Workbook skill teach agents to use relics.
-`.workbook/guidelines.md` gains a `Relics` section: what a relic is, its ID
-under the project's current key, the four commands that find the relics
-linked to a task, read one part and save an edit with `--base`, and what to do
-when that save is refused as `stale-write` (exit 6) or meets another clone's
-edit as a relic conflict (exit 8). Its exit-code table says a relic save
-refused for its `--base` needs a fresh read first. The skill tells an agent to
-read each linked part before editing files. Run `workbook docs update` to
-refresh both. See
-[Relics for agents](docs/reference.md#relics-for-agents).
-
-**Upgrade every Workbook on the machine before creating relics.** A Workbook
-from before relics does not know the refs that hold them. Its `workbook reset
---no-backup` deletes the relic refs without writing a bundle, and the restore
-command its plain `workbook reset` prints does not fetch them back from the
-bundle it wrote. A relic the tasks remote holds comes back with the next sync;
-a change not yet published can be lost.
+### Compatibility across versions
+- **Upgrade every Workbook on the machine before creating relics.** A Workbook
+  from before relics does not know the refs that hold them. Its `workbook reset
+  --no-backup` deletes the relic refs without writing a bundle, and the restore
+  command its plain `workbook reset` prints does not fetch them back from the
+  bundle it wrote. A relic the tasks remote holds comes back with the next
+  sync; a change not yet published can be lost.
+- **A Workbook from before relics works beside them otherwise.** v0.6.1 and
+  v0.7.0 read, change and synchronize tasks in a checkout that holds relics,
+  and leave the relics at a remote alone.
 
 ## v0.7.0 — 2026-11-23
 
