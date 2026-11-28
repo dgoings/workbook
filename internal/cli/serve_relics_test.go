@@ -48,7 +48,7 @@ func createServedRelics(t *testing.T, repository string) servedRelics {
 	t.Helper()
 	task := cliCreateTask(t, repository, "Archive finished tasks")
 	created := mustCreateRelic(t, repository, "--from-file", writeRelicDocumentFile(t, servedRelicDocument(t)))
-	mustRelic(t, repository, nil, "update", created.Relic.ID, "--link", task.ID, "--rel", "tracks")
+	mustRelic(t, repository, nil, "update", created.Relic.ID, "--link", task.ID, "--rel", "relates-to")
 	var shown core.RelicDocument
 	mustRelic(t, repository, &shown, "show", created.Relic.ID)
 	if len(shown.Parts) != 3 || len(shown.Links) != 1 {
