@@ -734,6 +734,18 @@ func (r *Repository) publishRelics(
 	if err := r.leaseRelicCheckpoints(ctx, config, kept, tracking); err != nil {
 		return publication, err
 	}
+	// A move back onto an older copy of a compacted relic replaces that copy
+	// only after it is in the move's bundle. The bundle is written here,
+	// between the lease and the push, because the lease names the tracking tip
+	// the fetch of this same synchronization wrote and the bundle has to hold
+	// exactly that tip. Outside a move this changes nothing.
+	kept, setAside, err := r.backUpRelicLeases(ctx, config, kept)
+	if err != nil {
+		return publication, err
+	}
+	for relicID, outcome := range setAside {
+		results[relicID] = outcome
+	}
 	pushed, err := r.pushRelicHeads(ctx, kept)
 	if err != nil {
 		return publication, err
