@@ -1,0 +1,45 @@
+{
+  "title": "Spec",
+  "description": "A design for one feature or change: titled sections, the decisions it makes and the questions it leaves open.",
+  "properties": {
+    "type": "object",
+    "required": ["status"],
+    "properties": {
+      "status": {"enum": ["draft", "approved", "superseded"]}
+    }
+  },
+  "parts": {
+    "section": {
+      "description": "A titled piece of the spec. The body holds its text.",
+      "fields": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "decision": {
+      "description": "A question the spec settles. The title states it, chosen says what was picked, status says whether it is proposed or decided, and the body gives the reasoning.",
+      "fields": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": {"type": "string", "minLength": 1},
+          "chosen": {"type": "string", "minLength": 1},
+          "status": {"enum": ["proposed", "decided"]}
+        }
+      }
+    },
+    "open-question": {
+      "description": "A question the spec leaves open. The body says what is known so far.",
+      "fields": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "format": "workbook.relic",
+  "version": 1,
+  "title": "Relics 08: Default Spec and Plan Schemas",
+  "type": "plan",
+  "schema": null,
+  "properties": {
+    "status": "draft"
+  },
+  "parts": [
+    {
+      "type": "section",
+      "fields": {"title": "Global Constraints"},
+      "body": {"format": "md", "text": "Built-in schemas never enter the configuration ledger."}
+    },
+    {
+      "type": "section",
+      "fields": {"title": "Decisions"},
+      "body": {"format": "md", "text": "1. Built-ins are embedded files compiled once."}
+    },
+    {
+      "type": "step",
+      "fields": {"title": "Task 1: Move tests off the built-in types and unlisted relationships"},
+      "body": {"format": "md", "text": "Rename spec and plan in tests that are not about schemas."}
+    },
+    {
+      "type": "step",
+      "fields": {"title": "Task 2: Built-in schemas, their names and generation 8"},
+      "body": {"format": "md", "text": "Embed the two schema files and name them."}
+    },
+    {
+      "type": "step",
+      "fields": {"title": "Task 3: The service and the index use the built-ins", "needs": ["Task 1: Move tests off the built-in types and unlisted relationships", "Task 2: Built-in schemas, their names and generation 8"]},
+      "body": {"format": "md", "text": "Add the built-ins beside the listing."}
+    }
+  ],
+  "links": []
+}

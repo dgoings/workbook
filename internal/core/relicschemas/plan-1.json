@@ -1,0 +1,34 @@
+{
+  "title": "Plan",
+  "description": "How a spec gets built: titled sections of context and the steps that build it. Link each step to the task that builds it with implemented-by.",
+  "properties": {
+    "type": "object",
+    "required": ["status"],
+    "properties": {
+      "status": {"enum": ["draft", "approved", "in-progress", "done"]}
+    }
+  },
+  "parts": {
+    "section": {
+      "description": "A titled piece of the plan. The body holds its text.",
+      "fields": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "step": {
+      "description": "One piece of work. needs lists the titles of the steps it needs first. The body says what to do.",
+      "fields": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": {"type": "string", "minLength": 1},
+          "needs": {"type": "array", "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    }
+  }
+}

@@ -138,7 +138,7 @@ func (r *Repository) BuildRelicCheckpoint(ctx context.Context, config core.Proje
 
 	compactedFrom := input.Tip.Head
 	state := before
-	state.MinReader = core.RelicCheckpointMinReader
+	state.MinReader = max(core.RelicCheckpointMinReader, before.MinReader)
 	state.History = core.History{Generation: input.Generation, CompactedFrom: &compactedFrom}
 	state.LogicalClock = before.LogicalClock + 1
 	state.Relic = relic

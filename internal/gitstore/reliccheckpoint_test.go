@@ -507,3 +507,42 @@ func buildRelicCheckpointOf(
 	}
 	return checkpoint
 }
+
+// A relic whose state names a built-in schema declares generation 8, and its
+// checkpoint state keeps it, as does every state after it; an ordinary
+// relic's checkpoint stays at 7. The checkpoint pack is 7 either way, because
+// it names no schema.
+func TestRelicCheckpointOfABuiltInRelicKeepsGeneration8(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		base := 730000
+		tip := writeRelicRootNumbered(t, repo, config, 3, relicTestPartNumbered(1).withBody("md", []byte("kept\n")))
+		tip = writeRelicChild(t, repo, config, tip, nil, core.RelicOperation{ID: relicTestID(base + 1),
+			Type: core.RelicOperationMigrate, RelicType: tip.Record.State.Relic.Type, Schema: "workbook:spec:1"})
+		if tip.Operation.MinReader != 8 || tip.Record.State.MinReader != 8 {
+			t.Fatalf("the migrate to a built-in declares pack %d, state %d; want 8 and 8",
+				tip.Operation.MinReader, tip.Record.State.MinReader)
+		}
+		tip = writeRelicChild(t, repo, config, tip, nil, core.RelicOperation{ID: relicTestID(base + 2), Type: core.RelicOperationRetire})
+		if tip.Operation.MinReader != 7 || tip.Record.State.MinReader != 8 {
+			t.Fatalf("the retire declares pack %d, state %d; want 7 and 8", tip.Operation.MinReader, tip.Record.State.MinReader)
+		}
+		checkpoint := writeRelicCheckpoint(t, repo, config, tip, core.RelicBoundaryRetired)
+		if checkpoint.Operation.MinReader != 7 || checkpoint.Record.State.MinReader != 8 ||
+			checkpoint.Record.State.Relic.Schema != "workbook:spec:1" {
+			t.Fatalf("the checkpoint declares pack %d, state %d, schema %q; want 7, 8 and workbook:spec:1",
+				checkpoint.Operation.MinReader, checkpoint.Record.State.MinReader, checkpoint.Record.State.Relic.Schema)
+		}
+		after := writeRelicChild(t, repo, config, checkpoint, nil,
+			core.RelicOperation{ID: relicTestID(base + 3), Type: core.RelicOperationUnretire})
+		if after.Record.State.MinReader != 8 {
+			t.Fatalf("the state after the checkpoint declares %d, want 8", after.Record.State.MinReader)
+		}
+
+		plain := writeRelicCheckpoint(t, repo, config, relicToCompact(t, repo, config, 4, false), core.RelicBoundaryRetired)
+		if plain.Operation.MinReader != 7 || plain.Record.State.MinReader != 7 {
+			t.Fatalf("an ordinary checkpoint declares pack %d, state %d; want 7 and 7",
+				plain.Operation.MinReader, plain.Record.State.MinReader)
+		}
+	})
+}

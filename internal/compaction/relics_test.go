@@ -303,7 +303,7 @@ func sortedSkips(skipped []RelicSkip) bool {
 }
 
 // writeNewerRelicTip appends a commit to a relic ref that only a newer
-// Workbook could have written: a pack and state declaring generation 8.
+// Workbook could have written: a pack and state declaring generation 9.
 func writeNewerRelicTip(t *testing.T, f *relicFixture, relicID string) {
 	t.Helper()
 	tip := f.relicTip(relicID)
@@ -325,12 +325,12 @@ func writeNewerRelicTip(t *testing.T, f *relicFixture, relicID string) {
 	}
 	clock := float64(tip.Record.State.LogicalClock + 1)
 	operation := rewrite("operation.json", func(document map[string]any) {
-		document["minReader"] = 8
+		document["minReader"] = 9
 		document["logicalClock"] = clock
 		document["operations"] = []any{map[string]any{"id": "01M9A000000000000000999999", "type": "relic.archive"}}
 	})
 	state := rewrite("state.json", func(document map[string]any) {
-		document["minReader"] = 8
+		document["minReader"] = 9
 		document["logicalClock"] = clock
 	})
 	tree := f.git("ls-tree", tip.Head)

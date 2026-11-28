@@ -1565,7 +1565,7 @@ func TestReadRelicTipsServesANewerGenerationWithoutJudgingItsTree(t *testing.T) 
 
 	newer := func(name string) string {
 		contents := relicBlob(t, repo, root.Head+":"+name)
-		raised := bytes.Replace(contents, []byte(`"minReader":6`), []byte(`"minReader":8`), 1)
+		raised := bytes.Replace(contents, []byte(`"minReader":6`), []byte(`"minReader":9`), 1)
 		if bytes.Equal(raised, contents) {
 			t.Fatalf("%s carries no generation marker to raise", name)
 		}

@@ -468,43 +468,43 @@ func TestNewerWriterHasItsOwnExitCode(t *testing.T) {
 	}
 }
 
-// A relic pack or state at generation 8 comes from a Workbook newer than this
+// A relic pack or state at generation 9 comes from a Workbook newer than this
 // one. It is read leniently, with what this build cannot name kept rather
 // than dropped, and every fold or check refuses it as newer-writer, never as
 // corrupt data.
-func TestNewerThanSevenIsNewerWriter(t *testing.T) {
+func TestNewerThanEightIsNewerWriter(t *testing.T) {
 	checkpoint, stored := relicCheckpointForTest(RelicBoundaryRetired)
 	encodedPack, err := EncodeDocument(checkpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
-	newerPack := strings.Replace(string(encodedPack), `"minReader":7,`, `"minReader":8,`, 1)
+	newerPack := strings.Replace(string(encodedPack), `"minReader":7,`, `"minReader":9,`, 1)
 	newerPack = strings.Replace(newerPack, `"type":"history.checkpoint"`, `"type":"history.checkpoint","window":"P30D"`, 1)
 	newerPack = strings.Replace(newerPack, `]}`+"\n",
 		`,{"id":"`+relicTestID(7200)+`","type":"relic.archive","shelf":"cold"}]}`+"\n", 1)
 	assertOneMarker(t, "the forged relic pack", newerPack)
 	pack, err := DecodeRelicOperationPack([]byte(newerPack))
 	if err != nil {
-		t.Fatalf("DecodeRelicOperationPack(generation 8) = %v", err)
+		t.Fatalf("DecodeRelicOperationPack(generation 9) = %v", err)
 	}
-	if pack.MinReader != 8 || len(pack.Operations) != 2 || pack.Operations[1].Type != "relic.archive" ||
+	if pack.MinReader != 9 || len(pack.Operations) != 2 || pack.Operations[1].Type != "relic.archive" ||
 		pack.Operations[1].ID != relicTestID(7200) {
-		t.Fatalf("the generation-8 pack decoded as %#v", pack)
+		t.Fatalf("the generation-9 pack decoded as %#v", pack)
 	}
 
 	encodedState, err := EncodeDocument(stored.State)
 	if err != nil {
 		t.Fatal(err)
 	}
-	newerState := strings.Replace(string(encodedState), `"minReader":7,`, `"minReader":8,`, 1)
+	newerState := strings.Replace(string(encodedState), `"minReader":7,`, `"minReader":9,`, 1)
 	newerState = strings.Replace(newerState, `"retired":true,`, `"retired":true,"shelf":"cold",`, 1)
 	assertOneMarker(t, "the forged relic state", newerState)
 	state, err := DecodeRelicStateDocument([]byte(newerState))
 	if err != nil {
-		t.Fatalf("DecodeRelicStateDocument(generation 8) = %v", err)
+		t.Fatalf("DecodeRelicStateDocument(generation 9) = %v", err)
 	}
-	if state.MinReader != 8 || !state.Relic.Retired || state.Relic.Compacted == nil || len(state.Relic.Parts) != 2 {
-		t.Fatalf("the generation-8 state decoded as %#v", state)
+	if state.MinReader != 9 || !state.Relic.Retired || state.Relic.Compacted == nil || len(state.Relic.Parts) != 2 {
+		t.Fatalf("the generation-9 state decoded as %#v", state)
 	}
 
 	requireNewer := func(label string, err error) {
@@ -514,28 +514,28 @@ func TestNewerThanSevenIsNewerWriter(t *testing.T) {
 		}
 	}
 	_, err = EncodeDocument(pack)
-	requireNewer("EncodeDocument(generation-8 pack)", err)
+	requireNewer("EncodeDocument(generation-9 pack)", err)
 	_, err = EncodeDocument(state)
-	requireNewer("EncodeDocument(generation-8 state)", err)
+	requireNewer("EncodeDocument(generation-9 state)", err)
 	_, err = ApplyRelic(nil, pack)
-	requireNewer("ApplyRelic(nil, generation-8 pack)", err)
+	requireNewer("ApplyRelic(nil, generation-9 pack)", err)
 	newerParent := RelicRecord{State: state, Links: stored.Links}
 	_, err = ApplyRelic(&newerParent, relicFoldPack(5, RelicOperation{ID: relicTestID(7201), Type: RelicOperationRetire}))
-	requireNewer("ApplyRelic(generation-8 parent)", err)
+	requireNewer("ApplyRelic(generation-9 parent)", err)
 	err = ValidateRelicCheckpointRoot(pack, stored)
-	requireNewer("ValidateRelicCheckpointRoot(generation-8 pack)", err)
+	requireNewer("ValidateRelicCheckpointRoot(generation-9 pack)", err)
 	err = ValidateRelicCheckpointRoot(checkpoint, newerParent)
-	requireNewer("ValidateRelicCheckpointRoot(generation-8 state)", err)
+	requireNewer("ValidateRelicCheckpointRoot(generation-9 state)", err)
 	err = ValidateRelicCheckpoint(nil, pack, stored)
-	requireNewer("ValidateRelicCheckpoint(nil, generation-8 pack)", err)
+	requireNewer("ValidateRelicCheckpoint(nil, generation-9 pack)", err)
 	_, err = PlanRelicReplay(newerParent, relicFoldPack(5, RelicOperation{ID: relicTestID(7202), Type: RelicOperationUnretire}),
 		RelicReplayInput{})
-	requireNewer("PlanRelicReplay(generation-8 parent)", err)
+	requireNewer("PlanRelicReplay(generation-9 parent)", err)
 
 	// The same unknown type without the marker is not from a newer writer,
 	// and is corrupt.
-	_, err = DecodeRelicOperationPack([]byte(strings.Replace(newerPack, `"minReader":8,`, `"minReader":7,`, 1)))
+	_, err = DecodeRelicOperationPack([]byte(strings.Replace(newerPack, `"minReader":9,`, `"minReader":8,`, 1)))
 	if CategoryOf(err) != CategoryCorruptData {
-		t.Errorf("the unknown type at generation 7 = %v, want corrupt data", err)
+		t.Errorf("the unknown type at generation 8 = %v, want corrupt data", err)
 	}
 }

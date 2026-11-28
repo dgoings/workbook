@@ -63,24 +63,35 @@ type RelicDocument struct {
 }
 
 // RelicSchemaRef names the schema version a relic is written under, as a
-// relic document and a relic summary present it. Version is the version's
-// number, left out when this clone's settings do not list the ID. A relic that
-// names no schema has no RelicSchemaRef, which is written as null.
+// relic document and a relic summary present it. Version is a project
+// version's number, left out when this clone's settings do not list the ID.
+// BuiltIn is true for a built-in name, shipped or not, and a built-in never
+// carries a number. A relic that names no schema has no RelicSchemaRef, which
+// is written as null.
 type RelicSchemaRef struct {
 	Type    string `json:"type"`
 	ID      string `json:"id"`
 	Version int    `json:"version,omitempty"`
+	BuiltIn bool   `json:"builtIn,omitempty"`
 }
 
 // ResolveRelicSchemaRef presents the schema version the relic names, with its
 // type and number from the listing when the listing has it, and the relic's
-// own type and no number when it does not. It is nil for an open relic.
+// own type and no number when it does not. A built-in name is marked built
+// in, with its type from this build when it ships it. It is nil for an open
+// relic.
 func ResolveRelicSchemaRef(relic RelicData, listing RelicSchemaListing) *RelicSchemaRef {
 	if relic.Schema == "" {
 		return nil
 	}
 	if version, known := listing.ByID(relic.Schema); known {
-		return &RelicSchemaRef{Type: version.Type, ID: version.ID, Version: version.Version}
+		return version.ref()
+	}
+	if version, _, _, known := BuiltInRelicSchema(relic.Schema); known {
+		return version.ref()
+	}
+	if IsBuiltInRelicSchemaID(relic.Schema) {
+		return &RelicSchemaRef{Type: relic.Type, ID: relic.Schema, BuiltIn: true}
 	}
 	return &RelicSchemaRef{Type: relic.Type, ID: relic.Schema}
 }
@@ -121,7 +132,7 @@ func RelicCreateInputFromDocument(document RelicDocument) (RelicCreateInput, err
 		// The ID names the version; its type and number are presentation, as
 		// the document's dates are, and the create checks the ID against the
 		// relic's type.
-		if !isCanonicalULID(document.Schema.ID) {
+		if !isCanonicalULID(document.Schema.ID) && !IsBuiltInRelicSchemaID(document.Schema.ID) {
 			return RelicCreateInput{}, Errorf(CategoryValidation,
 				"the document's schema names version %q, which is not a schema version ID; give its \"id\", or null for the type's newest version",
 				document.Schema.ID)

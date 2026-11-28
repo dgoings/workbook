@@ -20,6 +20,11 @@ const (
 // generation six means; RelicCheckpointMinReader is seven.
 const RelicMinReader = 6
 
+// RelicBuiltInSchemaMinReader is the writer-format generation a relic pack or
+// state declares when it names a built-in schema in a schema member. See
+// SupportedFormatGeneration for what generation eight means.
+const RelicBuiltInSchemaMinReader = 8
+
 type RelicOperationType string
 
 const (
@@ -267,11 +272,21 @@ var relicOperationMinReader = map[RelicOperationType]int{
 }
 
 // relicPackMinReader is the generation a pack of these operations declares:
-// the largest any of them needs.
+// the largest any of them needs. A type's generation comes from
+// relicOperationMinReader, and a relic.create or relic.migrate that names a
+// built-in schema needs RelicBuiltInSchemaMinReader as well.
 func relicPackMinReader(operations []RelicOperation) int {
 	minReader := 0
 	for _, operation := range operations {
-		if required := relicOperationMinReader[operation.Type]; required > minReader {
+		required := relicOperationMinReader[operation.Type]
+		schema := operation.Schema
+		if operation.Type == RelicOperationCreate && operation.Relic != nil {
+			schema = operation.Relic.Schema
+		}
+		if named := relicSchemaMinReader(schema); named > required {
+			required = named
+		}
+		if required > minReader {
 			minReader = required
 		}
 	}
@@ -454,7 +469,7 @@ func DecodeRelicFieldsDocument(data []byte) (RelicFieldsDocument, error) {
 }
 
 // validateRelicMarker checks a relic document's generation: above this build's
-// it was written by a newer Workbook, and anything but six or seven is
+// it was written by a newer Workbook, and anything but six, seven or eight is
 // corrupt.
 func validateRelicMarker(document string, minReader int, relicID string) error {
 	if minReader > SupportedFormatGeneration {
@@ -462,9 +477,9 @@ func validateRelicMarker(document string, minReader int, relicID string) error {
 		// back out with the members it could not decode silently dropped.
 		return newerWriterRelic(relicID)
 	}
-	if minReader != RelicMinReader && minReader != RelicCheckpointMinReader {
-		return corrupt("%s minimum reader generation %d is invalid; a relic declares %d or %d",
-			document, minReader, RelicMinReader, RelicCheckpointMinReader)
+	if minReader != RelicMinReader && minReader != RelicCheckpointMinReader && minReader != RelicBuiltInSchemaMinReader {
+		return corrupt("%s minimum reader generation %d is invalid; a relic declares %d, %d or %d",
+			document, minReader, RelicMinReader, RelicCheckpointMinReader, RelicBuiltInSchemaMinReader)
 	}
 	return nil
 }
@@ -514,7 +529,8 @@ func validateRelicOperationPackDocument(pack RelicOperationPack) error {
 		seen[operation.ID] = struct{}{}
 	}
 	// A pack declares exactly the generation its operations need, so a retire
-	// cannot reach a generation-six build marked as something it can fold.
+	// cannot reach a generation-six build marked as something it can fold, nor
+	// a built-in name a generation-seven build.
 	if required := relicPackMinReader(pack.Operations); pack.MinReader != required {
 		return corrupt("relic operation pack minimum reader generation %d is not %d, the largest its operations need",
 			pack.MinReader, required)
@@ -595,7 +611,7 @@ func validateRelicOperationDocument(operation RelicOperation) error {
 			return Wrap(CategoryCorruptData, "relic.create carries an invalid type", err)
 		}
 		if operation.Relic.Schema != "" {
-			if err := validateCanonicalULID("relic.create schema", operation.Relic.Schema); err != nil {
+			if err := validateRelicSchemaID("relic.create schema", operation.Relic.Schema); err != nil {
 				return err
 			}
 		}
@@ -612,7 +628,7 @@ func validateRelicOperationDocument(operation RelicOperation) error {
 		}
 	}
 	if operation.Schema != "" {
-		if err := validateCanonicalULID("relic.migrate schema", operation.Schema); err != nil {
+		if err := validateRelicSchemaID("relic.migrate schema", operation.Schema); err != nil {
 			return err
 		}
 	}
@@ -821,9 +837,15 @@ func validateRelicData(relic RelicData, history History, minReader int) error {
 		return Wrap(CategoryCorruptData, "relic state carries an invalid type", err)
 	}
 	if relic.Schema != "" {
-		if err := validateCanonicalULID("relic state schema", relic.Schema); err != nil {
+		if err := validateRelicSchemaID("relic state schema", relic.Schema); err != nil {
 			return err
 		}
+	}
+	// A generation-seven build validates the member as a ULID, so a state
+	// naming a built-in must say it needs eight.
+	if required := relicSchemaMinReader(relic.Schema); minReader < required {
+		return corrupt("a relic state naming the built-in schema %s must declare minimum reader generation %d",
+			relic.Schema, required)
 	}
 	if strings.TrimSpace(relic.Author) == "" {
 		return corrupt("relic state author must not be blank")

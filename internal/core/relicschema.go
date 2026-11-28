@@ -328,8 +328,7 @@ func LoadRelicSchema(version RelicSchemaVersion, stored []byte, pinned RelicSche
 // RelicSchemaRefusal is the validation error for a relic save that does not
 // fit the version it names.
 func RelicSchemaRefusal(version RelicSchemaVersion, problem RelicSchemaProblem) error {
-	return Errorf(CategoryValidation, "relic does not fit schema %s version %d: %s",
-		version.Type, version.Version, problem.String())
+	return Errorf(CategoryValidation, "relic does not fit schema %s: %s", version.Name(), problem.String())
 }
 
 // compileRelicSchemaSource compiles canonical schema text. A problem with the

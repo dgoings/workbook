@@ -1,0 +1,36 @@
+{
+  "format": "workbook.relic",
+  "version": 1,
+  "title": "Relics design",
+  "type": "spec",
+  "schema": null,
+  "properties": {
+    "status": "approved",
+    "date": "2026-11-20",
+    "approved": "2026-11-20",
+    "release": "v0.9.0",
+    "story": "WB-01M7ZFJDSA6Q8JTAAZVT9VN9F1"
+  },
+  "parts": [
+    {
+      "type": "section",
+      "fields": {"title": "About this design"},
+      "body": {"format": "md", "text": "What relics are and why they sit beside tasks."}
+    },
+    {
+      "type": "section",
+      "fields": {"title": "Default schemas for specs and plans", "status": "decided"}
+    },
+    {
+      "type": "decision",
+      "fields": {"title": "Built-in schemas are named workbook:<type>:<n>", "status": "proposed", "section": "Default schemas for specs and plans"},
+      "body": {"format": "md", "text": "A name no ULID can take, so a built-in and a project version are never confused."}
+    },
+    {
+      "type": "open-question",
+      "fields": {"title": "Should a step's needs name part IDs?", "section": "Left to the builder"},
+      "body": {"format": "md", "text": "Titles for now; part IDs are minted at create."}
+    }
+  ],
+  "links": []
+}

@@ -590,14 +590,14 @@ func TestRelicDocumentsFromANewerWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newerPack := strings.Replace(string(encodedPack), `"minReader":6,`, `"minReader":8,`, 1)
+	newerPack := strings.Replace(string(encodedPack), `"minReader":6,`, `"minReader":9,`, 1)
 	newerPack = strings.Replace(newerPack, `]}`+"\n",
 		`,{"id":"`+relicTestID(8)+`","type":"relic.archive","reason":"superseded"}]}`+"\n", 1)
 	pack, err := DecodeRelicOperationPack([]byte(newerPack))
 	if err != nil {
 		t.Fatalf("DecodeRelicOperationPack(newer) = %v", err)
 	}
-	if !pack.RequiresNewerReader() || pack.MinReader != 8 || len(pack.Operations) != 5 ||
+	if !pack.RequiresNewerReader() || pack.MinReader != 9 || len(pack.Operations) != 5 ||
 		pack.Operations[4].Type != "relic.archive" {
 		t.Fatalf("newer pack decoded as %#v", pack)
 	}
@@ -606,14 +606,14 @@ func TestRelicDocumentsFromANewerWriter(t *testing.T) {
 		err.Error() != "relic "+relicDocRelic+" was written by a newer workbook; upgrade workbook to change it" {
 		t.Fatalf("EncodeDocument(newer pack) = %v, want the newer-writer refusal", err)
 	}
-	_, err = DecodeRelicOperationPack([]byte(strings.Replace(newerPack, `"minReader":8,`, "", 1)))
+	_, err = DecodeRelicOperationPack([]byte(strings.Replace(newerPack, `"minReader":9,`, "", 1)))
 	requireCorruptData(t, "the newer pack without its marker", err)
 
 	encodedState, err := EncodeDocument(goldenRelicState())
 	if err != nil {
 		t.Fatal(err)
 	}
-	newerState := strings.Replace(string(encodedState), `"minReader":6,`, `"minReader":8,`, 1)
+	newerState := strings.Replace(string(encodedState), `"minReader":6,`, `"minReader":9,`, 1)
 	newerState = strings.Replace(newerState, `"retired":false,`, `"retired":true,"archivedBy":"x",`, 1)
 	state, err := DecodeRelicStateDocument([]byte(newerState))
 	if err != nil {
@@ -627,7 +627,7 @@ func TestRelicDocumentsFromANewerWriter(t *testing.T) {
 	if CategoryOf(err) != CategoryNewerWriter {
 		t.Fatalf("EncodeDocument(newer state) = %v, want newer writer", err)
 	}
-	_, err = DecodeRelicStateDocument([]byte(strings.Replace(newerState, `"minReader":8,`, "", 1)))
+	_, err = DecodeRelicStateDocument([]byte(strings.Replace(newerState, `"minReader":9,`, "", 1)))
 	requireCorruptData(t, "the newer state without its marker", err)
 
 	// A newer state whose lists are null still reads as a total value.
@@ -639,8 +639,8 @@ func TestRelicDocumentsFromANewerWriter(t *testing.T) {
 }
 
 func TestRelicGenerationSevenMarkers(t *testing.T) {
-	if SupportedFormatGeneration != 7 || RelicMinReader != 6 || RelicCheckpointMinReader != 7 {
-		t.Fatalf("SupportedFormatGeneration = %d, RelicMinReader = %d, RelicCheckpointMinReader = %d, want 7, 6 and 7",
+	if SupportedFormatGeneration != 8 || RelicMinReader != 6 || RelicCheckpointMinReader != 7 {
+		t.Fatalf("SupportedFormatGeneration = %d, RelicMinReader = %d, RelicCheckpointMinReader = %d, want 8, 6 and 7",
 			SupportedFormatGeneration, RelicMinReader, RelicCheckpointMinReader)
 	}
 	for _, operation := range validRelicOperations() {
@@ -796,7 +796,8 @@ func TestRelicStateSchemaMember(t *testing.T) {
 		t.Fatalf("a relic naming a schema does not round-trip byte for byte (%v)", err)
 	}
 
-	for label, member := range map[string]string{"an object": `{}`, "a number": `3`, "a type name": `"spec"`} {
+	for label, member := range map[string]string{"an object": `{}`, "a number": `3`, "a type name": `"spec"`,
+		"a built-in name without its number": `"workbook:spec"`} {
 		stored := strings.Replace(string(marshalRelicDocument(t, open)), `"schema":null`, `"schema":`+member, 1)
 		_, err := DecodeRelicStateDocument([]byte(stored))
 		requireCorruptData(t, label, err)
@@ -805,6 +806,10 @@ func TestRelicStateSchemaMember(t *testing.T) {
 	notAnID.Relic.Schema = "spec"
 	_, err = EncodeDocument(notAnID)
 	requireCorruptData(t, "a type name (encode)", err)
+	notAnID.Relic.Schema = "workbook:spec"
+	notAnID.MinReader = RelicBuiltInSchemaMinReader
+	_, err = EncodeDocument(notAnID)
+	requireCorruptData(t, "a built-in name without its number (encode)", err)
 }
 
 func TestMigrateShapes(t *testing.T) {

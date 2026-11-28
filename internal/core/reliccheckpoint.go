@@ -72,7 +72,9 @@ func (pack RelicOperationPack) Checkpoint() (RelicCheckpointData, bool) {
 // no content, so the record cannot be folded from nothing; these root rules
 // take the place of that fold:
 //
-//	R1. The pack is one history.checkpoint, and pack and state are at 7.
+//	R1. The pack is one history.checkpoint at 7, and the state is at 7 or
+//	    more: it keeps the watermark of the tip it replaced, and a state
+//	    naming a built-in schema is at 8, as every state naming one is.
 //	R2. The state is in the pack's generation, which is not the one it
 //	    replaced; it names the tip the checkpoint replaced; and its clock is
 //	    the pack's.
@@ -113,9 +115,9 @@ func ValidateRelicCheckpointRoot(pack RelicOperationPack, stored RelicRecord) er
 	if !ok {
 		return corrupt("a relic checkpoint commit must hold exactly one history.checkpoint")
 	}
-	if pack.MinReader != RelicCheckpointMinReader || state.MinReader != RelicCheckpointMinReader {
-		return corrupt("a relic checkpoint and its state must declare minimum reader generation %d",
-			RelicCheckpointMinReader)
+	if pack.MinReader != RelicCheckpointMinReader || state.MinReader < RelicCheckpointMinReader {
+		return corrupt("a relic checkpoint must declare minimum reader generation %d, and its state at least %d",
+			RelicCheckpointMinReader, RelicCheckpointMinReader)
 	}
 
 	// R2. The summary and the operation pack were checked above, including

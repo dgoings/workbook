@@ -24,9 +24,11 @@ type RelicSchemaChange struct {
 }
 
 // RelicSchemaListing is every saved schema version, sorted by type and then
-// by version number.
+// by version number. BuiltIn holds this build's built-in versions beside them
+// once WithBuiltIns adds them; it is never stored.
 type RelicSchemaListing struct {
 	Versions []RelicSchemaVersion `json:"versions"`
+	BuiltIn  []RelicSchemaVersion `json:"-"`
 }
 
 // RelicSchemas reads the checkpoint's schema listing. A checkpoint with none
@@ -38,11 +40,19 @@ func (state ConfigStateDocument) RelicSchemas() RelicSchemaListing {
 	return RelicSchemaListing{Versions: append([]RelicSchemaVersion(nil), state.Config.Schemas.Versions...)}
 }
 
-// Newest returns the newest version of a type.
+// Newest returns the newest version of a type: the project's newest, or the
+// newest built-in when the project has none of its own.
 func (listing RelicSchemaListing) Newest(relicType string) (RelicSchemaVersion, bool) {
+	if newest, found := newestRelicSchemaVersion(listing.Versions, relicType); found {
+		return newest, true
+	}
+	return newestRelicSchemaVersion(listing.BuiltIn, relicType)
+}
+
+func newestRelicSchemaVersion(versions []RelicSchemaVersion, relicType string) (RelicSchemaVersion, bool) {
 	var newest RelicSchemaVersion
 	found := false
-	for _, version := range listing.Versions {
+	for _, version := range versions {
 		if version.Type == relicType && (!found || version.Version > newest.Version) {
 			newest, found = version, true
 		}
@@ -50,17 +60,20 @@ func (listing RelicSchemaListing) Newest(relicType string) (RelicSchemaVersion, 
 	return newest, found
 }
 
-// ByID returns the version a schema.put with this ID saved.
+// ByID returns the version a schema.put with this ID saved, or the built-in
+// with this name.
 func (listing RelicSchemaListing) ByID(id string) (RelicSchemaVersion, bool) {
-	for _, version := range listing.Versions {
-		if version.ID == id {
-			return version, true
+	for _, versions := range [][]RelicSchemaVersion{listing.Versions, listing.BuiltIn} {
+		for _, version := range versions {
+			if version.ID == id {
+				return version, true
+			}
 		}
 	}
 	return RelicSchemaVersion{}, false
 }
 
-// Number returns version number version of a type.
+// Number returns version number version of a type the project saved.
 func (listing RelicSchemaListing) Number(relicType string, version int) (RelicSchemaVersion, bool) {
 	for _, candidate := range listing.Versions {
 		if candidate.Type == relicType && candidate.Version == version {
@@ -70,7 +83,8 @@ func (listing RelicSchemaListing) Number(relicType string, version int) (RelicSc
 	return RelicSchemaVersion{}, false
 }
 
-// Types returns the types with at least one version, sorted.
+// Types returns the types with at least one version the project saved,
+// sorted.
 func (listing RelicSchemaListing) Types() []string {
 	var types []string
 	seen := map[string]bool{}

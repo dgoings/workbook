@@ -319,6 +319,6 @@ func numberLinkedSchema(summary *RelicSummary, listing RelicSchemaListing) {
 		return
 	}
 	if version, known := listing.ByID(summary.Schema.ID); known {
-		summary.Schema = &RelicSchemaRef{Type: version.Type, ID: version.ID, Version: version.Version}
+		summary.Schema = version.ref()
 	}
 }

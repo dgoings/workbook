@@ -124,6 +124,19 @@ const (
 // included. Every other relic is written exactly as before, at six, and so is
 // every task and configuration pack.
 //
+// Eight is the generation built-in relic schemas introduce. It belongs to a
+// value rather than to an operation type: a relic.create or relic.migrate
+// whose schema member names a built-in (workbook:<type>:<n>) needs it, and so
+// does a state whose relic names one. A build that folds generation seven
+// validates the member as a ULID and would call the relic corrupt data; with
+// the marker it shows the relic from its stored state, warns that a newer
+// Workbook wrote it, and refuses to change it. A state carries the larger of
+// its parent's and its pack's, so a relic stays at eight after it migrates to
+// a project version, and a checkpoint state keeps the watermark of the tip it
+// replaced. Every other relic is written exactly as before, at six or seven,
+// and so is every task and configuration pack. A later built-in version needs
+// no new generation.
+//
 // Raising this constant is the last step of shipping a new operation type, not
 // the first: the build has to be able to fold generation N before it may claim
 // to. It is also inseparable from the table that declares N — a pack this build
@@ -139,7 +152,7 @@ const (
 // has already happened, from cache, while the mutations it refused now succeed.
 // See historyvalidation.readerGeneration. Any future cache of a fold's outcome
 // owes the same.
-const SupportedFormatGeneration = 7
+const SupportedFormatGeneration = 8
 
 type Actor struct {
 	ID string `json:"id"`
