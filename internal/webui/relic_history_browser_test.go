@@ -315,8 +315,9 @@ func richDiff(t *testing.T) core.RelicDiff {
 				Body: &core.RelicBodyDiff{From: relicBody("bin", 3), To: relicBody("bin", 5)}},
 		},
 		Links: &core.RelicLinksDiff{
-			Added:   []core.RelicLink{{ID: "l2", To: core.RelicLinkTarget{Task: pageRelicTask}, Rel: "tracks"}},
-			Removed: []core.RelicLink{{ID: "l1", To: core.RelicLinkTarget{Relic: pageRelicPlan}, Rel: "follows"}},
+			Added: []core.RelicLink{{ID: "l2", To: core.RelicLinkTarget{Task: pageRelicTask}, Rel: "tracks"}},
+			Removed: []core.RelicLink{{ID: "l1", From: pagePartMD, To: core.RelicLinkTarget{Relic: pageRelicPlan}, Rel: "follows",
+				Pointer: json.RawMessage(`{"lines":"pointer-in-the-diff"}`)}},
 		},
 	}
 }
@@ -354,13 +355,15 @@ func TestBrowserRelicDiffDrawsHunksSideBySideAndInline(t *testing.T) {
   await waitForDiffState("ready");
   const text = diffRoot().textContent.replace(/\s+/g, " ");
   return { mode: mode(), rows: hunkRows(), text, toggleShown: !!toggle("inline") && toggle("inline").offsetParent !== null,
-    links: [...diffRoot().querySelectorAll("[data-relic-link]")].map((item) => item.textContent) };
+    links: [...diffRoot().querySelectorAll("[data-relic-link]")].map((item) => item.textContent),
+    hrefs: [...diffRoot().querySelectorAll("[data-relic-link] a")].map((anchor) => anchor.getAttribute("href")) };
 })()`
 	type answer struct {
 		Mode, Text  string
 		Rows        [][]drawnLine
 		ToggleShown bool
 		Links       []string
+		Hrefs       []string
 	}
 	open := func(t *testing.T, fake *historyFake, page browserPage) answer {
 		t.Helper()
@@ -414,6 +417,12 @@ func TestBrowserRelicDiffDrawsHunksSideBySideAndInline(t *testing.T) {
 		}
 		if len(result.Links) != 2 {
 			t.Errorf("links drawn = %q", result.Links)
+		}
+		if strings.Count(result.Text, "pointer-in-the-diff") != 1 || strings.Count(result.Text, "from part "+pagePartMD) != 1 {
+			t.Errorf("the removed link's pointer and source part are not each drawn once: %s", result.Text)
+		}
+		if !slices.Equal(result.Hrefs, []string{"/tasks/" + pageRelicTask, "/relics/" + pageRelicPlan}) {
+			t.Errorf("the diff's links go to %q", result.Hrefs)
 		}
 	})
 	t.Run("narrow", func(t *testing.T) {

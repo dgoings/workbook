@@ -147,37 +147,87 @@
         return list;
       }
 
-      // One link a relic or a part has, drawn as `<rel> → <target>`.
+      // The words a link is marked with for each state its target can be in. A
+      // missing target is one this checkout does not hold, so it gets no link.
+      const relicTargetMarks = new Map([
+        ["removed", "removed"], ["deleted", "deleted"], ["missing", "not in this checkout"], ["retired", "retired"],
+      ]);
+      // A link's pointer, a JSON object locating something inside its target,
+      // which Workbook does not interpret: its members as labelled values.
+      function relicPointer(pointer) {
+        if (!pointer || typeof pointer !== "object" || Object.keys(pointer).length === 0) return null;
+        const box = relicElement("div", "relic-link__pointer");
+        box.append(relicElement("span", "relic-link__pointer-label", "Pointer"), relicValues(pointer, "relicPointer"));
+        return box;
+      }
+      // A target's address as an anchor when href names one, else as text.
+      function relicLinkTarget(label, href) {
+        const target = relicElement(href ? "a" : "span", "relic-link__target", label);
+        if (href) target.href = href;
+        return target;
+      }
+      // One link a relic or a part has, drawn as `<rel> → <target>`, with the
+      // mark of its target's state, then note, when given, and its pointer.
       //
-      // This is the one place a link is drawn, so it is the one place to change
-      // when links between relics become followable. A task target links to the
-      // task's page, with its title when this board holds the task. A relic or a
-      // part target is drawn as its address, as text, for now.
-      function relicLinkItem(link) {
+      // This is the one place a link out is drawn, for a relic's page and for a
+      // diff alike. A task target links to the task's page, with its title when
+      // this board holds the task; a relic or a part target links to its page,
+      // a removed part's with the removed parts shown, since the page without
+      // them does not hold it.
+      function relicLinkItem(link, note) {
         const item = relicElement("li", "relic-link");
         item.dataset.relicLink = "";
         item.append(relicElement("span", "relic-link__rel", link.rel || ""), document.createTextNode(" → "));
         const to = link.to || {};
+        const state = link.targetState || (link.targetRemoved ? "removed" : "");
+        const held = state !== "missing";
         if (to.task) {
           const task = relicAddressableID(to.task) ? latestTasks.find((candidate) => candidate.id === to.task) : null;
           const label = to.task + (task && task.title ? " " + task.title : "");
-          if (relicAddressableID(to.task)) {
-            const anchor = relicElement("a", "relic-link__target", label);
-            anchor.href = taskPath(to.task);
-            item.append(anchor);
-          } else {
-            item.append(relicElement("span", "relic-link__target", label));
-          }
+          item.append(relicLinkTarget(label, held && relicAddressableID(to.task) ? taskPath(to.task) : ""));
         } else {
           const address = to.part ? (to.relic || "") + "#" + to.part : (to.relic || "");
-          item.append(relicElement("span", "relic-link__target", address));
+          let href = "";
+          if (held && relicAddressableID(to.relic)) {
+            if (!to.part) href = relicPath(to.relic);
+            else if (relicAddressableID(to.part)) {
+              href = relicPartPath(to.relic, to.part) + (state === "removed" ? "?removed=1" : "");
+            }
+          }
+          item.append(relicLinkTarget(address, href));
         }
-        if (link.targetRemoved) item.append(document.createTextNode(" (removed)"));
+        if (relicTargetMarks.has(state)) item.append(document.createTextNode(" (" + relicTargetMarks.get(state) + ")"));
+        if (note) item.append(document.createTextNode(" " + note));
+        const pointer = relicPointer(link.pointer);
+        if (pointer) item.append(pointer);
         return item;
       }
       function relicLinkList(links) {
         const list = relicElement("ul", "relic-links");
         links.forEach((link) => list.append(relicLinkItem(link)));
+        return list;
+      }
+      // One link another relic, or a part of one, has to what is shown, drawn
+      // as `<relic title> · <from part type> <rel>`, linking to where it is
+      // from, with its pointer.
+      function relicIncomingItem(entry) {
+        const item = relicElement("li", "relic-link");
+        item.dataset.relicLinkedFrom = "";
+        const label = (entry.title || entry.relic || "Untitled relic") + (entry.fromType ? " · " + entry.fromType : "");
+        let href = "";
+        if (relicAddressableID(entry.relic)) {
+          if (!entry.from) href = relicPath(entry.relic);
+          else if (relicAddressableID(entry.from)) href = relicPartPath(entry.relic, entry.from);
+        }
+        item.append(relicLinkTarget(label, href), document.createTextNode(" "),
+          relicElement("span", "relic-link__rel", entry.rel || ""));
+        const pointer = relicPointer(entry.pointer);
+        if (pointer) item.append(pointer);
+        return item;
+      }
+      function relicIncomingList(entries) {
+        const list = relicElement("ul", "relic-links");
+        entries.forEach((entry) => list.append(relicIncomingItem(entry)));
         return list;
       }
 

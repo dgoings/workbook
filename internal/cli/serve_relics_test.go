@@ -659,3 +659,78 @@ func TestServeRelicBodyOpensFromTheRepository(t *testing.T) {
 		t.Errorf("Content-Type = %q", got)
 	}
 }
+
+// A chain of relics, a call's turns, the decisions made in them and the paper
+// section they change, read from both ends over the board's routes as relic
+// show reads it. The part route reads no link, so a part's incoming links are
+// the relic's, narrowed by the part they point at.
+func TestServeRelicChainFollowsBothWays(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	create := func(title string) string {
+		return mustCreateRelic(t, repository, title, "--type", "paper", "--no-sync").Relic.ID
+	}
+	call := create("Planning call")
+	turns := addRelicParts(t, repository, call, "turn", "turn")
+	paper := create("Archive paper")
+	section := addRelicParts(t, repository, paper, "section")[0]
+	decisions := create("Decisions")
+	decided := addRelicParts(t, repository, decisions, "decision", "decision")
+	mustUpdateRelic(t, repository, decisions, "--no-sync",
+		"--link", call+"#"+turns[0], "--from", decided[0], "--rel", "decided-in", "--pointer", `{"at":"00:01:00"}`,
+		"--link", call+"#"+turns[1], "--from", decided[1], "--rel", "decided-in", "--pointer", `{"at":"00:02:00"}`,
+		"--link", call, "--rel", "summarizes",
+		"--link", paper+"#"+section, "--from", decided[0], "--rel", "changes")
+	address := startServeBoard(t, repository)
+
+	// linkedFrom is a relic document's incoming links, from a command's data or
+	// from the document the relic route answers.
+	linkedFrom := func(document any) []any {
+		t.Helper()
+		object, ok := document.(map[string]any)
+		if !ok {
+			t.Fatalf("not a relic document: %s", mustJSON(t, document))
+		}
+		links, _ := object["linkedFrom"].([]any)
+		return links
+	}
+	served := linkedFrom(boardJSON(t, address, "/api/relics/"+call)["relic"])
+	if len(served) != 3 {
+		t.Fatalf("/api/relics/<call> linkedFrom = %s, want the decision log's three links", mustJSON(t, served))
+	}
+	for _, link := range served {
+		if link.(map[string]any)["relic"] != decisions {
+			t.Errorf("linkedFrom names %s, want the decision log", mustJSON(t, link))
+		}
+	}
+	assertSameJSON(t, "linkedFrom of the call", served,
+		linkedFrom(commandData(t, repository, "relic", "show", call)))
+
+	for _, turn := range turns {
+		var toTurn []any
+		for _, link := range served {
+			if link.(map[string]any)["toPart"] == turn {
+				toTurn = append(toTurn, link)
+			}
+		}
+		if len(toTurn) != 1 {
+			t.Fatalf("links to the turn %s = %s, want one", turn, mustJSON(t, toTurn))
+		}
+		assertSameJSON(t, "linkedFrom of a turn", toTurn,
+			linkedFrom(commandData(t, repository, "relic", "show", call+"#"+turn)))
+		part := boardJSON(t, address, "/api/relics/"+call+"/parts/"+turn)
+		if part["format"] != "workbook.relic-part" || strings.Contains(mustJSON(t, part), "linkedFrom") {
+			t.Errorf("the part route answers %s, want the part and no links", mustJSON(t, part))
+		}
+	}
+
+	// And the other way: the decision log's links out, with their targets'
+	// states, and the one link into the paper's section.
+	assertSameJSON(t, "links of the decisions",
+		boardJSON(t, address, "/api/relics/"+decisions)["relic"].(map[string]any)["links"],
+		commandData(t, repository, "relic", "show", decisions).(map[string]any)["links"])
+	if into := linkedFrom(boardJSON(t, address, "/api/relics/"+paper)["relic"]); len(into) != 1 ||
+		into[0].(map[string]any)["toPart"] != section {
+		t.Errorf("linkedFrom of the paper = %s", mustJSON(t, into))
+	}
+}

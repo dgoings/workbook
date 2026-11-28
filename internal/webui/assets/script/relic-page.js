@@ -62,7 +62,7 @@
       // One part, with the place its body is drawn once read. The heading's
       // id is the part's place in the list rather than its ID, so nothing a
       // relic holds becomes an id.
-      function relicPartSection(relic, part, index, links) {
+      function relicPartSection(relic, part, index, links, incoming) {
         const section = relicElement("section", "relic-part");
         section.dataset.relicPart = part.id || "";
         const headingID = "relic-part-" + index;
@@ -78,6 +78,7 @@
         const fields = part.fields || {};
         if (Object.keys(fields).length) section.append(relicValues(fields, "relicField"));
         if (links.length) section.append(relicLinkList(links));
+        if (incoming.length) section.append(relicElement("h4", "relic-part__linked-from", "Linked from"), relicIncomingList(incoming));
         if (relicAddressableID(relic.id) && relicAddressableID(part.id)) {
           const past = relicElement("p", "relic-part__history");
           const anchor = relicElement("a", "", "History of this part");
@@ -327,6 +328,13 @@
         return row;
       }
 
+      // What a relic's page was drawn from, as far as it can change: the
+      // relic's head, and what other tasks and relics decide — the states of
+      // its links' targets, the links into it and the warnings.
+      function relicPageSignature(viewDocument) {
+        const relic = viewDocument.relic || {};
+        return JSON.stringify([relic.head, relic.links, relic.linkedFrom, viewDocument.warnings]);
+      }
       function drawRelicPage(current, viewDocument, draw) {
         const relic = viewDocument.relic || {};
         const parts = Array.isArray(relic.parts) ? relic.parts : [];
@@ -374,6 +382,11 @@
         const partIDs = new Set(parts.map((part) => part.id));
         const ownLinks = links.filter((link) => !link.from || !partIDs.has(link.from));
         if (ownLinks.length) nodes.push(relicSection("relic-own-links", "Links", relicLinkList(ownLinks)));
+        // A link into a part is drawn under that part; one into the whole
+        // relic is listed here.
+        const incoming = Array.isArray(relic.linkedFrom) ? relic.linkedFrom : [];
+        const ownIncoming = incoming.filter((entry) => !entry.toPart || !partIDs.has(entry.toPart));
+        if (ownIncoming.length) nodes.push(relicSection("relic-linked-from", "Linked from", relicIncomingList(ownIncoming)));
         if (parts.length) {
           const contents = relicElement("nav", "relic-contents");
           contents.setAttribute("aria-label", "Parts");
@@ -397,7 +410,8 @@
         const loader = relicBodyLoader(relic.id || current.id, draw, relicKeepPinnedPart);
         relicBodies = loader;
         const sections = parts.map((part, index) => {
-          const drawn = relicPartSection(relic, part, index, links.filter((link) => link.from && link.from === part.id));
+          const drawn = relicPartSection(relic, part, index, links.filter((link) => link.from && link.from === part.id),
+            incoming.filter((entry) => entry.toPart && entry.toPart === part.id));
           if (drawn.body) loader.watch(drawn.section, drawn.body, part.id || "");
           return drawn.section;
         });
@@ -416,7 +430,8 @@
           return;
         }
         const relic = read.document.relic || {};
-        if (quiet && relicShown && relicShown.signature === relic.head) return;
+        const signature = relicPageSignature(read.document);
+        if (quiet && relicShown && relicShown.signature === signature) return;
         // A prefix is accepted wherever an ID is, and the address is put back
         // with the full IDs once they are known, so an address copied from here
         // always names them.
@@ -427,6 +442,6 @@
           relicDrawnAddress = full;
         }
         if (quiet) stopRelicBodies();
-        relicShown = { address: relicDrawnAddress, signature: relic.head, current, relicID: relic.id };
+        relicShown = { address: relicDrawnAddress, signature, current, relicID: relic.id };
         drawRelicPage(current, read.document, draw);
       }

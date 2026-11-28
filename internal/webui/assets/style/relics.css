@@ -29,7 +29,13 @@
     .relic-section h3, .relic-contents h3 { margin: 0; font-size: .88rem; }
     .relic-links { display: grid; gap: .2rem; margin: 0; padding-left: 1.1rem; font-size: .8rem; }
     .relic-link__rel { font-weight: 750; }
-    .relic-link__target { color: var(--wb-primary); }
+    /* Only a target that can be followed is colored as a link. */
+    a.relic-link__target { color: var(--wb-primary); }
+    /* A link's pointer, set under the link it belongs to, and the heading over
+       the links into a part. */
+    .relic-link__pointer { display: grid; gap: .15rem; margin: .15rem 0 .25rem; min-width: 0; }
+    .relic-link__pointer-label { color: var(--wb-ink-muted); font-size: .72rem; font-weight: 750; }
+    .relic-part__linked-from { margin: 0; font-size: .8rem; }
     .relic-contents { display: grid; gap: .35rem; font-size: .8rem; }
     /* A relic of two thousand parts has a contents list two thousand lines
        long, which would push its first part tens of thousands of pixels down.

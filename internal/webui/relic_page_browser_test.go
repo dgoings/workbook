@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -520,6 +521,15 @@ func hostileRelicFake(t *testing.T) *relicPageFake {
 			{RelicLink: core.RelicLink{ID: "l2", From: pagePartMD, To: core.RelicLinkTarget{Relic: "javascript:window.__hostile=6", Part: hostileText}, Rel: hostileText}},
 		},
 	}
+	pointer := rawJSON(t, map[string]any{hostileText: hostileText, "nested": []string{hostileText}})
+	document.Links[1].Pointer, document.Links[1].TargetState = pointer, hostileText
+	document.Links = append(document.Links, core.RelicDocumentLink{RelicLink: core.RelicLink{ID: "l3",
+		To: core.RelicLinkTarget{Relic: pageRelicPlan, Part: pagePartMD}, Rel: hostileText, Pointer: pointer}})
+	document.LinkedFrom = []core.RelicIncomingLink{
+		{Relic: pageRelicPlan, Title: hostileText, Type: hostileText, Link: "l4", From: pagePartMD, FromType: hostileText,
+			Rel: hostileText, Pointer: pointer},
+		{Relic: "javascript:window.__hostile=7", Title: hostileText, Link: "l5", ToPart: pagePartMD, Rel: hostileText},
+	}
 	return &relicPageFake{
 		summaries: []core.RelicSummary{{ID: pageRelicID, Head: "head-hostile", Title: hostileText, Type: hostileText, Author: hostileText,
 			CreatedAt: pageRelicStamp, UpdatedAt: pageRelicStamp, Parts: 3}},
@@ -811,6 +821,204 @@ func TestBrowserRelicPagesFitPhoneAndDesktop(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+const (
+	pageRelicDecisions = "WB-R-01M8EW0000DECIDE00000000004"
+	pageRelicCall      = "WB-R-01M8EW0000CALL0000000000005"
+	pageRelicMissing   = "WB-R-01M8EW0000MISSING000000006"
+	pagePartDecision   = "01M8EVZ9BQ20NDMR0F09K3DEC01"
+	pagePartTurn       = "01M8EVZ9BQ20NDMR0F09K3TRN01"
+	pagePartOtherTurn  = "01M8EVZ9BQ20NDMR0F09K3TRN02"
+)
+
+// linkedRelicsFake is a decision log whose decision links to one turn of a
+// call, with a link in each state a target can be in, and the call, which
+// lists what links to it.
+func linkedRelicsFake(t *testing.T) *relicPageFake {
+	t.Helper()
+	link := func(id, from string, to core.RelicLinkTarget, rel, state string) core.RelicDocumentLink {
+		return core.RelicDocumentLink{
+			RelicLink:     core.RelicLink{ID: id, From: from, To: to, Rel: rel},
+			TargetRemoved: state == "removed" || state == "deleted" || state == "missing",
+			TargetState:   state,
+		}
+	}
+	toTurn := link("d1", pagePartDecision, core.RelicLinkTarget{Relic: pageRelicCall, Part: pagePartTurn}, "decided-in", "")
+	toTurn.Pointer = rawJSON(t, map[string]any{"at": "00:01:00", "line": 12})
+	decisions := core.RelicDocument{Format: core.RelicDocumentFormat, Version: 1, ID: pageRelicDecisions, Head: "head-decisions",
+		Title: "Decisions", Type: "paper",
+		Parts: []core.RelicDocumentPart{{ID: pagePartDecision, Type: "decision", Fields: map[string]json.RawMessage{}}},
+		Links: []core.RelicDocumentLink{
+			toTurn,
+			link("d2", "", core.RelicLinkTarget{Relic: pageRelicCall}, "summarizes", "retired"),
+			link("d3", "", core.RelicLinkTarget{Relic: pageRelicCall, Part: pagePartOtherTurn}, "derived-from", "removed"),
+			link("d4", "", core.RelicLinkTarget{Relic: pageRelicPlan}, "supersedes", "deleted"),
+			link("d5", "", core.RelicLinkTarget{Relic: pageRelicMissing, Part: pagePartTurn}, "relates-to", "missing"),
+			link("d6", "", core.RelicLinkTarget{Task: pageRelicTask}, "implemented-by", "missing"),
+		},
+		LinkedFrom: []core.RelicIncomingLink{{Relic: pageRelicCall, Title: "Planning call", Type: "paper", Link: "c1",
+			ToPart: pagePartDecision, Rel: "relates-to"}},
+	}
+	call := core.RelicDocument{Format: core.RelicDocumentFormat, Version: 1, ID: pageRelicCall, Head: "head-call",
+		Title: "Planning call", Type: "paper",
+		Parts: []core.RelicDocumentPart{
+			{ID: pagePartTurn, Type: "turn", Fields: map[string]json.RawMessage{}},
+			{ID: pagePartOtherTurn, Type: "turn", Fields: map[string]json.RawMessage{}},
+		},
+		LinkedFrom: []core.RelicIncomingLink{
+			{Relic: pageRelicDecisions, Title: "Decisions", Type: "paper", Link: "d1", From: pagePartDecision, FromType: "decision",
+				ToPart: pagePartTurn, Rel: "decided-in", Pointer: rawJSON(t, map[string]any{"at": "00:01:00"})},
+			{Relic: pageRelicDecisions, Title: "Decisions", Type: "paper", Link: "d2", Rel: "summarizes"},
+			{Relic: pageRelicPlan, Title: "Plan", Type: "paper", Link: "p1", ToPart: pagePartOtherTurn, Rel: "changes"},
+		},
+	}
+	return &relicPageFake{documents: []core.RelicDocument{decisions, call}}
+}
+
+func TestBrowserRelicPageFollowsRelicLinksBothWays(t *testing.T) {
+	t.Parallel()
+	type drawn struct {
+		Text, Href, Where string
+	}
+	type step struct {
+		Address string
+		Current []string
+		Out, In []drawn
+	}
+	var result struct {
+		Decisions, Turn, Back step
+		TurnPointer           string
+	}
+	openInBrowser(t, linkedRelicsFake(t).handler(t), browserPage{Width: 1440, Height: 900, Path: "/relics/" + pageRelicDecisions,
+		Script: relicPageHelpers + `
+(async () => {
+  const drawn = (selector) => [...relicView().querySelectorAll(selector)].map((item) => {
+    const anchor = item.querySelector("a");
+    const part = item.closest("[data-relic-part]");
+    return { text: item.textContent, href: anchor ? anchor.getAttribute("href") : "", where: part ? part.dataset.relicPart : "" };
+  });
+  const step = () => ({
+    address: location.pathname + location.search,
+    current: [...document.querySelectorAll("[data-relic-part][aria-current=\"true\"]")].map((element) => element.dataset.relicPart),
+    out: drawn("[data-relic-link]"),
+    in: drawn("[data-relic-linked-from]"),
+  });
+  const shows = (title) => waitFor(() => relicState() === "ready" && relicView().querySelector("h2").textContent === title, title);
+  await shows("Decisions");
+  const decisions = step();
+  partSection("` + pagePartDecision + `").querySelector("[data-relic-link] a").click();
+  await shows("Planning call");
+  const turn = step();
+  const turnPointer = partSection("` + pagePartTurn + `").querySelector("[data-relic-linked-from] dl").textContent;
+  partSection("` + pagePartTurn + `").querySelector("[data-relic-linked-from] a").click();
+  await shows("Decisions");
+  return { decisions, turn, back: step(), turnPointer };
+})()`}, &result)
+	find := func(items []drawn, with string) drawn {
+		t.Helper()
+		for _, item := range items {
+			if strings.Contains(item.Text, with) {
+				return item
+			}
+		}
+		t.Errorf("no link says %q in %+v", with, items)
+		return drawn{}
+	}
+	call := "/relics/" + pageRelicCall
+	for _, want := range []struct {
+		rel, href, where, mark string
+	}{
+		{"decided-in", call + "/parts/" + pagePartTurn, pagePartDecision, ""},
+		{"summarizes", call, "", "(retired)"},
+		{"derived-from", call + "/parts/" + pagePartOtherTurn + "?removed=1", "", "(removed)"},
+		{"supersedes", "/relics/" + pageRelicPlan, "", "(deleted)"},
+		{"relates-to", "", "", "(not in this checkout)"},
+		{"implemented-by", "", "", "(not in this checkout)"},
+	} {
+		got := find(result.Decisions.Out, want.rel)
+		if got.Href != want.href || got.Where != want.where {
+			t.Errorf("%s links to %q under %q, want %q under %q", want.rel, got.Href, got.Where, want.href, want.where)
+		}
+		if want.mark == "" && strings.Contains(got.Text, "(") || !strings.Contains(got.Text, want.mark) {
+			t.Errorf("%s reads %q, want the mark %q", want.rel, got.Text, want.mark)
+		}
+	}
+	if len(result.Decisions.Out) != 6 {
+		t.Errorf("links out = %+v", result.Decisions.Out)
+	}
+	pointed := find(result.Decisions.Out, "decided-in").Text
+	for _, want := range []string{"Pointer", "at", "00:01:00", "line", "12"} {
+		if !strings.Contains(pointed, want) {
+			t.Errorf("the pointed link %q does not say %q", pointed, want)
+		}
+	}
+	if in := result.Decisions.In; len(in) != 1 || in[0].Where != pagePartDecision || in[0].Href != call {
+		t.Errorf("links into the decisions = %+v", in)
+	}
+
+	if want := call + "/parts/" + pagePartTurn; result.Turn.Address != want || !slices.Equal(result.Turn.Current, []string{pagePartTurn}) {
+		t.Errorf("at the turn: %q, current %v", result.Turn.Address, result.Turn.Current)
+	}
+	// Each incoming link is drawn once: a part's under that part, the whole
+	// relic's in the relic's own section.
+	if len(result.Turn.In) != 3 {
+		t.Fatalf("links into the call = %+v", result.Turn.In)
+	}
+	var underTurn []drawn
+	for _, item := range result.Turn.In {
+		if item.Where == pagePartTurn {
+			underTurn = append(underTurn, item)
+		}
+	}
+	decision := "/relics/" + pageRelicDecisions + "/parts/" + pagePartDecision
+	if len(underTurn) != 1 || underTurn[0].Href != decision || !strings.Contains(underTurn[0].Text, "Decisions · decision") ||
+		!strings.Contains(underTurn[0].Text, "decided-in") {
+		t.Errorf("under the turn = %+v, want the decision's link alone", underTurn)
+	}
+	if whole := find(result.Turn.In, "summarizes"); whole.Where != "" || whole.Href != "/relics/"+pageRelicDecisions {
+		t.Errorf("the whole relic's incoming link = %+v", whole)
+	}
+	if other := find(result.Turn.In, "changes"); other.Where != pagePartOtherTurn {
+		t.Errorf("the other turn's incoming link = %+v", other)
+	}
+	if !strings.Contains(result.TurnPointer, "00:01:00") {
+		t.Errorf("the incoming link's pointer = %q", result.TurnPointer)
+	}
+	if result.Back.Address != decision || !slices.Equal(result.Back.Current, []string{pagePartDecision}) {
+		t.Errorf("back at the decision: %q, current %v", result.Back.Address, result.Back.Current)
+	}
+}
+
+// A tab that comes back into sight draws a link made meanwhile on another
+// relic, which moves no head of the one shown.
+func TestBrowserRelicPageRedrawsForNewLinksInto(t *testing.T) {
+	t.Parallel()
+	fake := linkedRelicsFake(t)
+	options := newPhoneBoard().options(t)
+	fake.apply(&options)
+	show := options.ShowRelic
+	var reads atomic.Int64
+	options.ShowRelic = func(ctx context.Context, id string, removed bool) (core.RelicDocument, error) {
+		document, err := show(ctx, id, removed)
+		if reads.Add(1) == 1 {
+			document.LinkedFrom = nil
+		}
+		return document, err
+	}
+	var result struct{ Before, After int }
+	openInBrowser(t, NewHandler(options), browserPage{Width: 1440, Height: 900, Path: "/relics/" + pageRelicCall, Script: relicPageHelpers + `
+(async () => {
+  await waitForRelicState("ready");
+  const drawn = () => document.querySelectorAll("[data-relic-linked-from]").length;
+  const before = drawn();
+  document.dispatchEvent(new Event("visibilitychange"));
+  await waitFor(() => drawn() === 3, "the new links into the relic");
+  return { before, after: drawn() };
+})()`}, &result)
+	if result.Before != 0 || result.After != 3 {
+		t.Errorf("links in drawn %d then %d, want 0 then 3", result.Before, result.After)
 	}
 }
 

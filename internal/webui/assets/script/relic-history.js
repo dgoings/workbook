@@ -371,10 +371,7 @@
       function relicDiffLinks(title, links) {
         const list = relicElement("ul", "relic-links");
         links.forEach((link) => {
-          const item = relicLinkItem(link);
-          if (link.from) item.append(relicElement("span", "", " (from part " + link.from + ")"));
-          if (link.pointer !== undefined) item.append(relicValue(link.pointer));
-          list.append(item);
+          list.append(relicLinkItem(link, link.from ? "(from part " + link.from + ")" : ""));
         });
         return relicSection("relic-diff__links", title, list);
       }
