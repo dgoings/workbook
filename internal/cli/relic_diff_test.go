@@ -75,7 +75,7 @@ func TestRelicDiffAnyTwoVersionsOfAPart(t *testing.T) {
 func TestRelicDiffDefaultsAndOneVersion(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	alone := mustCreateRelic(t, repository, "Alone", "--type", "spec").Relic.ID
+	alone := mustCreateRelic(t, repository, "Alone", "--type", "paper").Relic.ID
 	code, stdout, stderr := run(t, repository, "relic", "diff", alone, "--json")
 	if code != 0 || stderr != "" || !strings.Contains(stdout, `"from":null`) {
 		t.Fatalf("diff of a one-commit relic = (%d, %q, %q), want from null", code, stdout, stderr)
@@ -106,7 +106,7 @@ func TestRelicDiffWholeRelicJSON(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
 	task := cliCreateTask(t, repository, "Build it")
-	relicID := mustCreateRelic(t, repository, "Whole", "--type", "spec").Relic.ID
+	relicID := mustCreateRelic(t, repository, "Whole", "--type", "paper").Relic.ID
 	var parts []string
 	for _, name := range []string{"a", "b", "c"} {
 		parts = append(parts, mustUpdateRelic(t, repository, relicID, "--add-part", "--part-type", "section",
@@ -145,14 +145,14 @@ func TestRelicDiffTextOfAWholeRelic(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
 	task := cliCreateTask(t, repository, "Build it")
-	relicID := mustCreateRelic(t, repository, "Before", "--type", "spec").Relic.ID
+	relicID := mustCreateRelic(t, repository, "Before", "--type", "paper").Relic.ID
 	var parts []string
 	for _, name := range []string{"a", "b"} {
 		parts = append(parts, mustUpdateRelic(t, repository, relicID, "--add-part", "--part-type", "section",
 			"--field", "heading="+name).Parts[0].ID)
 	}
 	mustRelic(t, repository, nil, "update", relicID, "--set", "old=1", "--set", "kept=x",
-		"--link", task.ID, "--rel", "tracked-by")
+		"--link", task.ID, "--rel", "relates-to")
 	linked := shownRelic(t, repository, relicID).Links[0].ID
 	start := relicHistoryOf(t, repository, relicID, "--limit", "1").Changes[0].Operations[0].ID
 
@@ -179,7 +179,7 @@ func TestRelicDiffTextOfAWholeRelic(t *testing.T) {
 		"\tField heading:\ta → A\n" +
 		"Links:\n" +
 		"\t+" + added + "\trelic\timplemented-by\t" + task.ID + "\n" +
-		"\t-" + linked + "\trelic\ttracked-by\t" + task.ID + "\n"
+		"\t-" + linked + "\trelic\trelates-to\t" + task.ID + "\n"
 	if stdout != want {
 		t.Fatalf("text =\n%q\nwant\n%q", stdout, want)
 	}
@@ -193,7 +193,7 @@ func TestRelicDiffTextOfAWholeRelic(t *testing.T) {
 func TestRelicDiffLeavesOutAPartAddedAndRemovedInside(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	relicID := mustCreateRelic(t, repository, "Brief", "--type", "spec").Relic.ID
+	relicID := mustCreateRelic(t, repository, "Brief", "--type", "paper").Relic.ID
 	created := relicHistoryOf(t, repository, relicID).Changes[0].Operations[0].ID
 	partID := mustUpdateRelic(t, repository, relicID, "--add-part", "--part-type", "section",
 		"--field", "heading=Q").Parts[0].ID
@@ -217,7 +217,7 @@ func TestRelicDiffLeavesOutAPartAddedAndRemovedInside(t *testing.T) {
 func TestRelicDiffTextNotesOnlyAChangedPlace(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	relicID := mustCreateRelic(t, repository, "Places", "--type", "spec").Relic.ID
+	relicID := mustCreateRelic(t, repository, "Places", "--type", "paper").Relic.ID
 	var parts []string
 	for range 2 {
 		parts = append(parts, mustUpdateRelic(t, repository, relicID, "--add-part", "--part-type", "section").Parts[0].ID)
@@ -289,7 +289,7 @@ func TestRelicDiffTextOfABinaryBody(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
 	first, second := "\xff\xfeSECRETONE", "\xff\x00SECRETTWO, longer"
-	relicID := mustCreateRelic(t, repository, "Binary", "--type", "spec").Relic.ID
+	relicID := mustCreateRelic(t, repository, "Binary", "--type", "paper").Relic.ID
 	added := mustUpdateRelic(t, repository, relicID, "--add-part", "--part-type", "section",
 		"--body-file", writeRelicBodyFile(t, "body.bin", first))
 	partID, base := added.Parts[0].ID, added.Parts[0].Body.Version
@@ -327,7 +327,7 @@ func TestRelicDiffTextOutput(t *testing.T) {
 	}
 
 	// The side before the relic, and a part with a first body.
-	alone := mustCreateRelic(t, repository, "Alone", "--type", "spec").Relic.ID
+	alone := mustCreateRelic(t, repository, "Alone", "--type", "paper").Relic.ID
 	code, stdout, stderr = run(t, repository, "relic", "diff", alone)
 	if code != 0 || stderr != "" || !strings.HasPrefix(stdout, "Comparing:\t(before the relic)\t→\t") ||
 		!strings.Contains(stdout, "\nTitle:\t+Alone\n") {

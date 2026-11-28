@@ -65,7 +65,7 @@ func (f *compactedFixture) advance() { f.now = f.now.Add(24 * time.Hour) }
 func (f *compactedFixture) create() (relicID, bodied, plain string) {
 	f.t.Helper()
 	created, err := f.service.Create(context.Background(), core.RelicCreateInput{
-		Title: "Plan", Type: "plan",
+		Title: "Plan", Type: "agenda",
 		Parts: []core.RelicPartInput{
 			{Type: "section", Body: &core.RelicBodyInput{Format: "md", Content: []byte("one\n")}},
 			{Type: "note"},

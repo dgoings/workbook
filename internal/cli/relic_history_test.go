@@ -37,7 +37,7 @@ func historyOperationIDs(history core.RelicHistory) []string {
 // in order.
 func savedRelicPart(t *testing.T, repository string, texts ...string) (relicID, partID string, versions []string) {
 	t.Helper()
-	relicID = mustCreateRelic(t, repository, "Edited", "--type", "spec").Relic.ID
+	relicID = mustCreateRelic(t, repository, "Edited", "--type", "paper").Relic.ID
 	added := mustUpdateRelic(t, repository, relicID, "--add-part", "--part-type", "section",
 		"--body-file", writeRelicBodyFile(t, "body.md", texts[0]))
 	partID = added.Parts[0].ID
@@ -149,7 +149,7 @@ func TestRelicShowHistoryText(t *testing.T) {
 		t.Fatalf("show --history = (%d, %q, %q)", code, stdout, stderr)
 	}
 	stamp := func(index int) string { return history.Changes[index].WallTime.UTC().Format(time.RFC3339) }
-	want := relicID + "\tspec\tEdited\n" +
+	want := relicID + "\tpaper\tEdited\n" +
 		"Showing all 2 change(s).\n" +
 		stamp(0) + "\t" + relicTestActor + "\tpart.add\n" +
 		"\t" + versions[0] + "\tpart.add\t" + partID + "\n" +
@@ -176,7 +176,7 @@ func TestRelicShowHistoryTextNamesThePartAddedOrLinkedFrom(t *testing.T) {
 	repository := initializedRepository(t)
 	task := cliCreateTask(t, repository, "Build it")
 	relicID, partID, versions := savedRelicPart(t, repository, "one\n")
-	mustRelic(t, repository, nil, "update", relicID, "--link", task.ID, "--rel", "tracked-by", "--from", partID)
+	mustRelic(t, repository, nil, "update", relicID, "--link", task.ID, "--rel", "relates-to", "--from", partID)
 	mustRelic(t, repository, nil, "update", relicID, "--link", task.ID, "--rel", "implemented-by")
 	history := relicHistoryOf(t, repository, relicID)
 	ids := historyOperationIDs(history)
@@ -248,7 +248,7 @@ func TestStaleSaveIsListedAsNotApplied(t *testing.T) {
 func TestHistoryFromTwoClonesShowsEveryChangeOnce(t *testing.T) {
 	t.Parallel()
 	first, second := cliSyncRepositories(t)
-	relicID := mustCreateRelic(t, first, "Shared", "--type", "spec").Relic.ID
+	relicID := mustCreateRelic(t, first, "Shared", "--type", "paper").Relic.ID
 	addPart := func(text string) core.RelicDocumentPart {
 		updated := mustUpdateRelic(t, first, relicID, "--add-part", "--part-type", "section",
 			"--body-file", writeRelicBodyFile(t, "body.md", text))
@@ -385,7 +385,7 @@ func TestRelicHistoryTextAndJSONAfterCompaction(t *testing.T) {
 	line := fmt.Sprintf("Compacted on %s: %d earlier changes (%s to %s) were dropped; history starts at change %s.\n",
 		dateOf(compacted.At), compacted.Changes, dateOf(compacted.From), dateOf(compacted.To), compacted.Version)
 	text := mustRun(t, repository, "relic", "show", relicID, "--history")
-	if want := relicID + "\tspec\tEdited\nShowing all 0 change(s).\n" + line; text != want {
+	if want := relicID + "\tpaper\tEdited\nShowing all 0 change(s).\n" + line; text != want {
 		t.Fatalf("history text = %q, want %q", text, want)
 	}
 	part := relicHistoryOf(t, repository, relicID+"#"+partID)
