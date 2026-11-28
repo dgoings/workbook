@@ -444,6 +444,9 @@ type compactedOutcome struct {
 	// accounted for.
 	Withhold bool
 	Kind     compactedOutcomeKind
+	// Merges are the replay's description merges, as reconcileOutcome
+	// reports them, when Update lands them.
+	Merges []core.Operation
 }
 
 // reconcileCompactedTasks settles every fetched pair whose generations differ
@@ -633,6 +636,7 @@ func (r *Repository) adoptRemoteCheckpoint(
 	update.Next = replay.parent.Head
 	outcome.Update = &update
 	outcome.Snapshot = replay.parent
+	outcome.Merges = replay.merges
 	outcome.Result = SyncTaskResult{
 		TaskID: request.TaskID,
 		Status: SyncAdoptedReplayed,
@@ -863,7 +867,9 @@ func operationIDSet(ids []string) map[string]struct{} {
 }
 
 // replayOperations replays commits, oldest first, onto onto in generation. The
-// three-way base is the commit before the first of them on its own history.
+// ancestor of each commit's description edit is the state of its own Git
+// parent: the commit before it in the list when that is its parent, and
+// otherwise its parent read in the same batch, as for the first one.
 // originWins says the commits are origin's, so a conflict applies them over
 // onto's value rather than stopping (see taskReplay.originWins).
 // failure reports why the replay could not run cleanly: a commit with no
@@ -884,16 +890,34 @@ func (r *Repository) replayOperations(
 		return replay, core.Errorf(core.CategoryCorruptData,
 			"task %s operation %s has no history before it to replay from", taskID, commits[0].ObjectID), nil
 	}
+	// heads holds the first commit's parent, then every commit, then the
+	// parent of each commit whose parent is not the commit before it in the
+	// list. sourceParents[i] is the position of commit i's parent in heads.
 	heads := make([]TaskHead, 0, len(commits)+1)
 	heads = append(heads, TaskHead{TaskID: taskID, ObjectID: commits[0].Parent})
 	for _, commit := range commits {
 		heads = append(heads, TaskHead{TaskID: taskID, ObjectID: commit.ObjectID})
 	}
+	sourceParents := make([]int, len(commits))
+	for index, commit := range commits {
+		switch {
+		case index == 0:
+			sourceParents[index] = 0
+		case commit.Parent == commits[index-1].ObjectID:
+			sourceParents[index] = index
+		case commit.Parent == "":
+			return replay, core.Errorf(core.CategoryCorruptData,
+				"task %s operation %s has no history before it to replay from", taskID, commit.ObjectID), nil
+		default:
+			sourceParents[index] = len(heads)
+			heads = append(heads, TaskHead{TaskID: taskID, ObjectID: commit.Parent})
+		}
+	}
 	tips, err := r.readTaskHeadsPartial(ctx, config, heads)
 	if err != nil {
 		return replay, nil, err
 	}
-	subjects, err := r.readCommitSubjects(ctx, heads[1:])
+	subjects, err := r.readCommitSubjects(ctx, heads[1:len(commits)+1])
 	if err != nil {
 		return replay, nil, err
 	}
@@ -906,7 +930,6 @@ func (r *Repository) replayOperations(
 	replay = taskReplay{
 		config:       config,
 		taskID:       taskID,
-		base:         tips[0].Snapshot.State,
 		parent:       onto,
 		dependencies: taskDependencyGraph(dependencies, taskID, onto.State.Task),
 		subjects:     subjects,
@@ -915,8 +938,8 @@ func (r *Repository) replayOperations(
 		held:         held,
 		remote:       core.ConflictRemote(r.remote()),
 	}
-	for _, tip := range tips[1:] {
-		done, err := replay.next(ctx, r, tip.Snapshot)
+	for index, tip := range tips[1 : len(commits)+1] {
+		done, err := replay.next(ctx, r, tips[sourceParents[index]].Snapshot.State, tip.Snapshot)
 		if err != nil {
 			return replay, err, nil
 		}

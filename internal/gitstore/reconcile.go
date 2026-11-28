@@ -38,7 +38,10 @@ type reconcileRequest struct {
 // caller must move the task ref to: the remote tip when every local operation
 // was a no-op or the first one conflicted, and otherwise the last replayed
 // commit. Conflict and Err are mutually exclusive and both leave Head at the
-// furthest point replay reached before stopping.
+// furthest point replay reached before stopping. Merges lists the
+// description.merge operations the replayed commits recorded whose merged text
+// differs from the text they were merged onto, one per commit, oldest first:
+// the merges a person is told about.
 type reconcileOutcome struct {
 	TaskID    string
 	Head      string
@@ -48,6 +51,7 @@ type reconcileOutcome struct {
 	Skipped   int
 	Snapshot  core.Snapshot
 	Conflict  *core.Conflict
+	Merges    []core.Operation
 	Err       error
 }
 
@@ -156,15 +160,16 @@ func (r *Repository) reconcileDivergentTasks(
 		replay := taskReplay{
 			config:       config,
 			taskID:       request.TaskID,
-			base:         read[0].Snapshot.State,
 			parent:       request.Remote,
 			dependencies: taskDependencyGraph(dependencies, request.TaskID, request.Remote.State.Task),
 			subjects:     subjects,
 			held:         held[index],
 			remote:       core.ConflictRemote(r.remote()),
 		}
-		for _, tip := range read[1:] {
-			done, err := replay.next(ctx, r, tip.Snapshot)
+		// Each local commit's own parent is the one before it in the span:
+		// the shared base for the first, and the previous local commit after.
+		for position, tip := range read[1:] {
+			done, err := replay.next(ctx, r, read[position].Snapshot.State, tip.Snapshot)
 			if err != nil {
 				outcomes[index].Err = err
 				break
@@ -178,6 +183,7 @@ func (r *Repository) reconcileDivergentTasks(
 		outcomes[index].Replayed = replay.replayed
 		outcomes[index].Skipped = replay.skipped
 		outcomes[index].Conflict = replay.conflict
+		outcomes[index].Merges = replay.merges
 		outcomes[index].ParkedRef = fmt.Sprintf("%s%s/%d", reconciledRefPrefix, request.TaskID, parked[request.TaskID])
 	}
 	return outcomes, nil
@@ -257,13 +263,26 @@ func refuseNewerWriterReplay(request reconcileRequest) error {
 		request.TaskID)
 }
 
-// taskReplay carries the state one task's replay advances through. The base
-// checkpoint stays fixed because it is the three-way base every description
-// comparison is made against.
+// taskReplay carries the state one task's replay advances through.
+//
+// A description edit is compared three ways: the description in the replayed
+// commit's own Git parent (the ancestor the edit started from), the commit's
+// own description, and the description of the commit it is replayed onto. The
+// ancestor is per commit, not the base the two histories share, so a second
+// local edit is judged against the first one, which is what it changed. When
+// origin changed the text too and the two edits changed different lines, the
+// replayed commit's pack gains a description.merge holding the merged text,
+// and its tree and state are written as for any replayed pack:
+//
+//	c0 (description "one\ntwo\nthree\n")
+//	├── a1 (origin: field.set description "one\nTWO\nthree\n")
+//	│    └── b1' operation.json [field.set 01BOB "one\ntwo\nTHREE\n",
+//	│                            description.merge value "one\nTWO\nTHREE\n",
+//	│                              other 01BOB, ancestor c0's text, current a1's]  minReader 10
+//	└── b1 (local: field.set 01BOB), parked under refs/workbook/reconciled/
 type taskReplay struct {
 	config       core.ProjectConfig
 	taskID       string
-	base         core.StateDocument
 	parent       core.Snapshot
 	dependencies map[string][]string
 	subjects     map[string]string
@@ -301,12 +320,22 @@ type taskReplay struct {
 	// carried counts the packs whose operations held already recorded.
 	carried  int
 	conflict *core.Conflict
+	// merges are the description.merge operations of the commits written,
+	// those whose merged text differs from the text merged onto.
+	merges []core.Operation
 }
 
-// next replays one local operation pack. It reports done when replay must stop,
-// which happens only for a conflict; every other concurrent change is silent
-// last-syncer-wins.
-func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Snapshot) (bool, error) {
+// descriptionMerge is a merge classify found a pack needs: its ancestor and
+// current texts, and the merged text.
+type descriptionMerge struct {
+	ancestor, current, merged string
+}
+
+// next replays one local operation pack, whose commit's own Git parent has
+// state sourceParent. It reports done when replay must stop, which happens only
+// for a conflict. A description both sides changed on different lines is
+// merged (classify); every other concurrent change is silent last-syncer-wins.
+func (replay *taskReplay) next(ctx context.Context, r *Repository, sourceParent core.StateDocument, local core.Snapshot) (bool, error) {
 	if replay.held != nil {
 		recorded, err := replay.held.match(replay.taskID, local.Head, local.Operation)
 		if err != nil {
@@ -324,7 +353,8 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 				replay.taskID, local.Head)
 		}
 	}
-	if conflict := replay.classify(local.Operation); conflict != nil {
+	conflict, merge := replay.classify(sourceParent, local)
+	if conflict != nil {
 		conflict.Remote = replay.remote
 		if !replay.originWins || conflict.Type == core.ConflictTombstone {
 			replay.conflict = conflict
@@ -340,7 +370,8 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 	}
 
 	// Only the logical clock, and across a compaction the generation, are
-	// rewritten. Actor, wall time, and operation ULIDs are the record of what
+	// rewritten, and a description merge appended, with the minimum reader it
+	// needs. Actor, wall time, and operation ULIDs are the record of what
 	// someone actually did, and rewriting them would make the replayed history
 	// a different claim than the original.
 	pack := local.Operation
@@ -348,7 +379,16 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 	if replay.generation != "" {
 		pack.HistoryGeneration = replay.generation
 	}
-	state, err := core.Apply(&replay.parent.State, pack)
+	var state core.StateDocument
+	var err error
+	if merge != nil {
+		// A merged text equal to the current one is still appended: the
+		// field.set before it would otherwise overwrite the current text.
+		// With nothing else in the pack, the commit is then dropped below.
+		pack, state, err = core.AppendDescriptionMerge(replay.parent.State, pack, merge.ancestor, merge.current, merge.merged)
+	} else {
+		state, err = core.Apply(&replay.parent.State, pack)
+	}
 	if err != nil {
 		// A newer-writer refusal keeps its own category rather than being
 		// restated as corruption. reconcileDivergentTasks refuses such a
@@ -380,6 +420,9 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 	}
 	replay.parent = core.Snapshot{Head: head, Operation: pack, State: state}
 	replay.replayed++
+	if merge != nil && merge.merged != merge.current {
+		replay.merges = append(replay.merges, pack.Operations[len(pack.Operations)-1])
+	}
 	if replay.held != nil {
 		if err := replay.held.record(head, pack); err != nil {
 			return false, err
@@ -390,8 +433,18 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 }
 
 // classify reports the one situation, if any, in which this pack expresses
-// intent that the fetched history already contradicts.
-func (replay *taskReplay) classify(pack core.OperationPack) *core.Conflict {
+// intent that the fetched history already contradicts, or the description
+// merge it needs instead. sourceParent is the state of the local commit's own
+// Git parent, the ancestor of its description edit.
+//
+// The description is judged once per pack (core.PlanDescriptionReplay): a
+// pack whose text origin left alone, or already holds, replays as it is, and
+// one both sides changed is merged when the edits changed different lines.
+// Anything MergeDescription refuses is the description conflict, unchanged.
+// A replay of origin's packs (originWins) merges nothing: its conflict is
+// applied over, as before.
+func (replay *taskReplay) classify(sourceParent core.StateDocument, local core.Snapshot) (*core.Conflict, *descriptionMerge) {
+	pack := local.Operation
 	parent := replay.parent.State.Task
 	// Replaying origin's packs onto a task this clone deleted, even origin's
 	// own deletion conflicts: across a compaction a pack is recorded rather
@@ -413,27 +466,42 @@ func (replay *taskReplay) classify(pack core.OperationPack) *core.Conflict {
 				Field:       blocked.Field,
 				Value:       blocked.Value,
 			},
-		}
+		}, nil
 	}
 
+	var merge *descriptionMerge
+	judged := false
 	for _, operation := range pack.Operations {
 		switch {
-		case operation.Type == core.OperationFieldSet && operation.Field == "description":
+		case (operation.Type == core.OperationFieldSet && operation.Field == "description") ||
+			operation.Type == core.OperationDescriptionMerge:
+			if judged {
+				continue
+			}
+			judged = true
 			// Upstream leaving the description alone means nothing was
 			// concurrently written, and matching values mean both sides already
-			// agree. Only genuinely divergent prose needs a person.
-			if parent.Description == replay.base.Task.Description || operation.Value == parent.Description {
+			// agree. Only genuinely divergent prose needs merging, and a person
+			// when it cannot be merged.
+			plan := core.PlanDescriptionReplay(sourceParent.Task, local.State.Task, parent, pack)
+			if !plan.Merge {
 				continue
+			}
+			if !replay.originWins {
+				if merged, refusal := core.MergeDescription(plan.Ancestor, plan.Theirs, plan.Ours); refusal == "" {
+					merge = &descriptionMerge{ancestor: plan.Ancestor, current: plan.Theirs, merged: merged}
+					continue
+				}
 			}
 			return &core.Conflict{
 				TaskID: replay.taskID,
 				Type:   core.ConflictDescription,
 				Description: &core.DescriptionConflict{
-					Base:   replay.base.Task.Description,
-					Ours:   operation.Value,
-					Theirs: parent.Description,
+					Base:   plan.Ancestor,
+					Ours:   plan.Ours,
+					Theirs: plan.Theirs,
 				},
-			}
+			}, nil
 		case operation.Type == core.OperationSetAdd && operation.Field == "dependencies":
 			if hasValue(parent.Dependencies, operation.Value) {
 				continue
@@ -450,10 +518,10 @@ func (replay *taskReplay) classify(pack core.OperationPack) *core.Conflict {
 					To:   operation.Value,
 					Path: path,
 				},
-			}
+			}, nil
 		}
 	}
-	return nil
+	return nil, merge
 }
 
 // replayNoOp reports packs whose effect the fetched history already contains.

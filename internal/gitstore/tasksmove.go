@@ -72,6 +72,11 @@ type MoveTasksResult struct {
 	// first (tasksmove_backup.go). Both are absent when there were none.
 	Replaced []string `json:"replaced,omitempty"`
 	Bundles  []string `json:"bundles,omitempty"`
+	// TaskWarnings is every description-merged warning the run's
+	// synchronizations with the new place reported, including those of a
+	// synchronization a later one in the same step replaced in Copy or
+	// Recopy. Callers lift it to the result envelope, as for SyncResult.
+	TaskWarnings []core.Warning `json:"-"`
 }
 
 // MoveStragglers is what one run carried by operation identity.
@@ -626,7 +631,7 @@ func (r *Repository) moveCopy(
 	carried *moveCarry,
 	result *MoveTasksResult,
 ) (SyncRunResult, error) {
-	run, err := r.syncDestination(ctx, config, to)
+	run, err := r.syncDestination(ctx, config, to, result)
 	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
 		return run, wrapKeepingCategory("cannot copy the tasks to "+to, err)
 	}
@@ -637,7 +642,7 @@ func (r *Repository) moveCopy(
 	if !changed {
 		return run, nil
 	}
-	run, err = r.syncDestination(ctx, config, to)
+	run, err = r.syncDestination(ctx, config, to, result)
 	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
 		return run, wrapKeepingCategory("cannot copy the tasks to "+to, err)
 	}
@@ -648,11 +653,19 @@ func (r *Repository) moveCopy(
 // the tip it was taken on changed, or whose backup found it changed, pushed
 // nothing over it; the synchronization runs again, which reads the place
 // afresh, backs up what it holds now and leases on that, up to three times.
-// A tip that keeps changing is left for the verification to report.
-func (r *Repository) syncDestination(ctx context.Context, config core.ProjectConfig, to string) (SyncRunResult, error) {
+// A tip that keeps changing is left for the verification to report. Each
+// attempt's description-merged warnings are added to result's, since a merge
+// an attempt landed is not made again by the next.
+func (r *Repository) syncDestination(
+	ctx context.Context,
+	config core.ProjectConfig,
+	to string,
+	result *MoveTasksResult,
+) (SyncRunResult, error) {
 	for attempt := 0; ; attempt++ {
 		r.switchRemote(to)
 		run, err := r.Sync(ctx, config)
+		result.TaskWarnings = append(result.TaskWarnings, run.Fetch.TaskWarnings...)
 		if !r.takeStaleLease() || attempt == 2 {
 			return run, err
 		}

@@ -181,6 +181,18 @@ const WarningRelicEditOnRemovedPart = "relic-edit-on-removed-part"
 // be wrong in meaning; `workbook relic diff` shows what the merge did.
 const WarningRelicBodyMerged = "relic-body-merged"
 
+// WarningDescriptionMerged reports that a synchronization met a task
+// description changed both here and on the tasks remote, and merged the two
+// edits, which changed different lines, recording the result as a
+// description.merge.
+//
+// It is a warning rather than a conflict for WarningRelicBodyMerged's reason:
+// both edits stand, and nothing has to be decided. The person who edited here
+// is told because the text they wrote is no longer the text that stands, and
+// a clean line merge can still be wrong in meaning; `workbook show --history`
+// shows what the merge did.
+const WarningDescriptionMerged = "description-merged"
+
 // WarningRelicContentDropped says that a restored relic came back without the
 // content its compaction dropped.
 const WarningRelicContentDropped = "relic-content-dropped"

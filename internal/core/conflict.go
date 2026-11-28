@@ -52,8 +52,10 @@ func ConflictRemote(remote string) string {
 }
 
 // DescriptionConflict presents the three descriptions a caller needs to write
-// a replacement. Workbook never merges them and never writes a marker into a
-// commit; the values are reported and the local operation is dropped.
+// a replacement. A replay merges two edits that changed different lines (a
+// description.merge); these are the edits it could not merge. Workbook never
+// writes a marker or a half-merged text into a commit; the values are
+// reported and the local operation is dropped.
 type DescriptionConflict struct {
 	Base   string `json:"base"`
 	Ours   string `json:"ours"`

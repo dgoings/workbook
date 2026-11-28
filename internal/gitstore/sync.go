@@ -615,6 +615,10 @@ type SyncResult struct {
 	// them to the result envelope.
 	RelicConflicts []core.RelicConflict `json:"-"`
 	RelicWarnings  []core.Warning       `json:"-"`
+	// TaskWarnings travels like Conflicts too: one description-merged
+	// warning for each description merge a replay in this phase recorded
+	// and landed, in task ID order. Callers lift it to the result envelope.
+	TaskWarnings []core.Warning `json:"-"`
 }
 
 // Sync fetches and validates origin's Workbook refs, replays any divergent
@@ -1039,6 +1043,7 @@ func (r *Repository) fetch(
 			state.Canonical[outcome.TaskID] = outcome.Snapshot
 		}
 	}
+	result.TaskWarnings = r.descriptionMergedWarnings(reconciled, compactedOutcomes)
 	for _, outcome := range compactedOutcomes {
 		if outcome.Update == nil {
 			continue
@@ -1119,6 +1124,35 @@ func (r *Repository) fetch(
 		return state, result, configOutcome.Deferred
 	}
 	return state, result, nil
+}
+
+// descriptionMergedWarnings reports every description merge the replays of a
+// fetch landed, once the ref transaction moved the refs onto them: one
+// warning per merge, in task ID order and, within a task, oldest first.
+func (r *Repository) descriptionMergedWarnings(reconciled []reconcileOutcome, compacted []compactedOutcome) []core.Warning {
+	type landed struct {
+		taskID string
+		merges int
+	}
+	var tasks []landed
+	for _, outcome := range reconciled {
+		if outcome.Err == nil && len(outcome.Merges) > 0 {
+			tasks = append(tasks, landed{outcome.TaskID, len(outcome.Merges)})
+		}
+	}
+	for _, outcome := range compacted {
+		if outcome.Update != nil && len(outcome.Merges) > 0 {
+			tasks = append(tasks, landed{outcome.TaskID, len(outcome.Merges)})
+		}
+	}
+	sort.SliceStable(tasks, func(i, j int) bool { return tasks[i].taskID < tasks[j].taskID })
+	var warnings []core.Warning
+	for _, task := range tasks {
+		for range task.merges {
+			warnings = append(warnings, core.DescriptionMergedWarning(task.taskID, r.remote()))
+		}
+	}
+	return warnings
 }
 
 func reconciledSyncOutcome(outcome reconcileOutcome) SyncTaskResult {

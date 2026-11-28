@@ -403,3 +403,188 @@ func TestDescriptionMergeIDIsDeterministic(t *testing.T) {
 		t.Fatal("the random bits depend on the wall time")
 	}
 }
+
+func TestPlanDescriptionReplayTable(t *testing.T) {
+	described := func(text string) TaskData { return TaskData{Title: "Task", Description: text} }
+	set := Operation{ID: descriptionMergeSetID, Type: OperationFieldSet, Field: "description", Value: "B"}
+	title := Operation{ID: descriptionMergeTitleID, Type: OperationFieldSet, Field: "title", Value: "Renamed"}
+	merge := descriptionMergeOperation(descriptionMergeID, descriptionMergeSetID)
+	pack := func(operations ...Operation) OperationPack {
+		return OperationPack{TaskID: taskID, Operations: operations}
+	}
+	for _, row := range []struct {
+		name                       string
+		sourceParent, source, onto string
+		pack                       OperationPack
+		want                       DescriptionReplay
+	}{
+		{name: "origin left the text alone", sourceParent: "A", source: "B", onto: "A", pack: pack(set)},
+		{name: "both sides hold the same text", sourceParent: "A", source: "B", onto: "B", pack: pack(set)},
+		{name: "no description operation", sourceParent: "A", source: "A", onto: "C", pack: pack(title)},
+		{
+			name: "both sides changed it", sourceParent: "A", source: "B", onto: "C", pack: pack(title, set),
+			want: DescriptionReplay{Merge: true, Ancestor: "A", Ours: "B", Theirs: "C"},
+		},
+		{
+			name: "a pack merged before", sourceParent: "A", source: "M", onto: "C", pack: pack(set, merge),
+			want: DescriptionReplay{Merge: true, Ancestor: "A", Ours: "M", Theirs: "C"},
+		},
+		{
+			name: "a pack holding only a merge", sourceParent: "A", source: "M", onto: "C", pack: pack(merge),
+			want: DescriptionReplay{Merge: true, Ancestor: "A", Ours: "M", Theirs: "C"},
+		},
+		{name: "a merged pack origin already matches", sourceParent: "A", source: "M", onto: "M", pack: pack(set, merge)},
+	} {
+		got := PlanDescriptionReplay(described(row.sourceParent), described(row.source), described(row.onto), row.pack)
+		if got != row.want {
+			t.Errorf("%s: PlanDescriptionReplay = %+v, want %+v", row.name, got, row.want)
+		}
+	}
+}
+
+func TestMergeDescriptionRefusals(t *testing.T) {
+	merged, refusal := MergeDescription("one\ntwo\nthree\nfour\n", "one\nTWO\nthree\nfour\n", "one\ntwo\nthree\nFOUR\n")
+	if refusal != "" || merged != "one\nTWO\nthree\nFOUR\n" {
+		t.Fatalf("clean merge = %q, %q; want the two edits combined", merged, refusal)
+	}
+	// An empty ancestor is ordinary text: two additions meet at line 0.
+	if merged, refusal := MergeDescription("", "first\n", "second\n"); refusal != DescriptionMergeOverlap || merged != "" {
+		t.Errorf("two additions to an empty description = %q, %q; want an overlap", merged, refusal)
+	}
+
+	many := strings.Repeat("x\n", 3000)
+	long := strings.Repeat("a", MaxDescriptionBytes/2+16)
+	for _, row := range []struct {
+		name                     string
+		ancestor, current, other string
+		want                     DescriptionMergeRefusal
+	}{
+		{name: "same line", ancestor: "one\ntwo\n", current: "one\nTWO\n", other: "one\n2\n", want: DescriptionMergeOverlap},
+		{name: "touching lines", ancestor: "one\ntwo\n", current: "ONE\ntwo\n", other: "one\nTWO\n", want: DescriptionMergeOverlap},
+		{name: "too many changes", ancestor: many, current: strings.Repeat("y\n", 3000), other: many + "z\n", want: DescriptionMergeTooManyChanges},
+		{name: "too large", ancestor: "a\nb\nc\n", current: long + "\nb\nc\n", other: "a\nb\n" + long + "\n", want: DescriptionMergeTooLarge},
+		{name: "ancestor not text", ancestor: "one\n\xff\nthree\n", current: "ONE\n\xff\nthree\n", other: "one\n\xff\nTHREE\n", want: DescriptionMergeNotText},
+		{name: "current not text", ancestor: "one\ntwo\nthree\n", current: "\xff\ntwo\nthree\n", other: "one\ntwo\nTHREE\n", want: DescriptionMergeNotText},
+		{name: "other not text", ancestor: "one\ntwo\nthree\n", current: "ONE\ntwo\nthree\n", other: "one\ntwo\n\xff\n", want: DescriptionMergeNotText},
+	} {
+		merged, refusal := MergeDescription(row.ancestor, row.current, row.other)
+		if refusal != row.want || merged != "" {
+			t.Errorf("%s: MergeDescription = %d bytes, %q; want no text and %q", row.name, len(merged), refusal, row.want)
+		}
+	}
+	for _, refusal := range []DescriptionMergeRefusal{
+		DescriptionMergeOverlap, DescriptionMergeTooManyChanges, DescriptionMergeTooLarge, DescriptionMergeNotText,
+	} {
+		if refusal == "" {
+			t.Errorf("a refusal is empty")
+		}
+	}
+	if string(DescriptionMergeOverlap) != "overlap" || string(DescriptionMergeTooManyChanges) != "too-many-changes" ||
+		string(DescriptionMergeTooLarge) != "too-large" || string(DescriptionMergeNotText) != "not-text" {
+		t.Errorf("refusal values = %q, %q, %q, %q", DescriptionMergeOverlap, DescriptionMergeTooManyChanges,
+			DescriptionMergeTooLarge, DescriptionMergeNotText)
+	}
+}
+
+func TestAppendDescriptionMergeFoldsAtTheNextClock(t *testing.T) {
+	ancestor, current := "one\ntwo\nthree\n", "one\nTWO\nthree\n"
+	base := describedTask(t)
+	// The replay parent: origin changed line two.
+	parent, err := Apply(&base, NewOperationPack(projectID, taskID, generationID, "teammate@example.com",
+		base.LogicalClock+1, updatedAt, []Operation{{ID: descriptionMergeAbsent, Type: OperationFieldSet,
+			Field: "description", Value: current}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wall := updatedAt.Add(time.Minute)
+	local := NewOperationPack(projectID, taskID, generationID, "developer@example.com", base.LogicalClock+1, wall,
+		[]Operation{
+			{ID: descriptionMergeSetID, Type: OperationFieldSet, Field: "description", Value: "one\ntwo\nTHREE\n"},
+			{ID: descriptionMergeTitleID, Type: OperationFieldSet, Field: "title", Value: "Renamed"},
+		})
+	if local.MinReader != 0 {
+		t.Fatalf("local pack minReader = %d, want 0 before the merge", local.MinReader)
+	}
+
+	pack, state, err := AppendDescriptionMerge(parent, local, ancestor, current, "one\nTWO\nTHREE\n")
+	if err != nil {
+		t.Fatalf("AppendDescriptionMerge() error = %v", err)
+	}
+	if pack.MinReader != DescriptionMergeMinReader || state.MinReader != DescriptionMergeMinReader {
+		t.Errorf("minReader = pack %d, state %d; want %d", pack.MinReader, state.MinReader, DescriptionMergeMinReader)
+	}
+	if pack.LogicalClock != parent.LogicalClock+1 || state.LogicalClock != parent.LogicalClock+1 {
+		t.Errorf("clock = pack %d, state %d; want %d", pack.LogicalClock, state.LogicalClock, parent.LogicalClock+1)
+	}
+	if len(pack.Operations) != 3 || len(local.Operations) != 2 {
+		t.Fatalf("operations = %d (input left with %d), want 3 and the input untouched", len(pack.Operations), len(local.Operations))
+	}
+	want := Operation{
+		ID:    DescriptionMergeOperationID(taskID, descriptionMergeSetID, ancestor, current, DescriptionLineMergeMethod, wall),
+		Type:  OperationDescriptionMerge,
+		Value: "one\nTWO\nTHREE\n",
+		Merge: &DescriptionMerge{Other: descriptionMergeSetID, Ancestor: ancestor, Current: current, Method: DescriptionLineMergeMethod},
+	}
+	got := pack.Operations[2]
+	if got.ID != want.ID || got.Type != want.Type || got.Value != want.Value || got.Merge == nil || *got.Merge != *want.Merge {
+		t.Fatalf("merge = %+v %+v, want %+v %+v", got, got.Merge, want, want.Merge)
+	}
+	if state.Task.Description != "one\nTWO\nTHREE\n" || state.Task.Title != "Renamed" {
+		t.Errorf("state = %q / %q, want the merged text and the title", state.Task.Title, state.Task.Description)
+	}
+	if _, err := EncodeDocument(pack); err != nil {
+		t.Errorf("EncodeDocument(merged pack) error = %v", err)
+	}
+
+	// A pack merged before gains a second merge naming the first.
+	again, err := Apply(&parent, NewOperationPack(projectID, taskID, generationID, "carol@example.com",
+		parent.LogicalClock+1, updatedAt, []Operation{{ID: descriptionMergeLaterID, Type: OperationFieldSet,
+			Field: "description", Value: "ONE\nTWO\nthree\n"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repacked, restate, err := AppendDescriptionMerge(again, pack, current, "ONE\nTWO\nthree\n", "ONE\nTWO\nTHREE\n")
+	if err != nil {
+		t.Fatalf("AppendDescriptionMerge(merged pack) error = %v", err)
+	}
+	if len(repacked.Operations) != 4 || repacked.Operations[3].Merge.Other != got.ID {
+		t.Fatalf("second merge = %+v, want a fourth operation naming %s", repacked.Operations, got.ID)
+	}
+	if restate.Task.Description != "ONE\nTWO\nTHREE\n" || restate.LogicalClock != again.LogicalClock+1 {
+		t.Errorf("state = %q at %d, want the second merge's text at %d", restate.Task.Description,
+			restate.LogicalClock, again.LogicalClock+1)
+	}
+
+	if _, _, err := AppendDescriptionMerge(parent, NewOperationPack(projectID, taskID, generationID, "developer@example.com",
+		parent.LogicalClock+1, wall, []Operation{{ID: descriptionMergeTitleID, Type: OperationFieldSet,
+			Field: "title", Value: "Renamed"}}), ancestor, current, "x\n"); err == nil {
+		t.Errorf("AppendDescriptionMerge(pack without a description edit) error = nil")
+	}
+}
+
+func TestDescriptionMergeBoundsArePinned(t *testing.T) {
+	want := LineMergeLimits{EditLines: maxRelicDiffEditLines, Work: maxLineMergeWork, Bytes: MaxDescriptionBytes}
+	if DescriptionLineMergeLimits != want {
+		t.Errorf("DescriptionLineMergeLimits = %+v, want %+v", DescriptionLineMergeLimits, want)
+	}
+	if DescriptionLineMergeLimits.EditLines != 2000 || DescriptionLineMergeLimits.Work != 1<<26 ||
+		DescriptionLineMergeLimits.Bytes != 64<<10 {
+		t.Errorf("DescriptionLineMergeLimits = %+v, want 2,000 edit lines, 1<<26 work and 64 KiB: "+
+			"each may be raised, never lowered", DescriptionLineMergeLimits)
+	}
+}
+
+func TestDescriptionMergedWarning(t *testing.T) {
+	got := DescriptionMergedWarning("WB-1", "")
+	want := Warning{
+		Code: "description-merged",
+		Message: "task WB-1: the description was changed here and on origin; the two edits changed different lines " +
+			"and were merged; `workbook show WB-1 --history` shows the merge",
+	}
+	if got != want || WarningDescriptionMerged != "description-merged" {
+		t.Errorf("DescriptionMergedWarning = %+v, want %+v", got, want)
+	}
+	if got := DescriptionMergedWarning("WB-1", "upstream").Message; !strings.Contains(got, " on upstream;") {
+		t.Errorf("warning for remote upstream = %q, want it named", got)
+	}
+}

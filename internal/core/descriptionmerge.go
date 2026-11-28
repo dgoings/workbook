@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"time"
+	"unicode/utf8"
 
 	"github.com/oklog/ulid/v2"
 )
@@ -140,4 +141,137 @@ func validateDescriptionMergeOthers(pack OperationPack) error {
 		}
 	}
 	return nil
+}
+
+// DescriptionLineMergeLimits are the bounds a description merge runs under:
+// the relic diff's edit bound and work budget, and the description's own size
+// limit for the merged text. Each may be raised, never lowered.
+var DescriptionLineMergeLimits = LineMergeLimits{EditLines: maxRelicDiffEditLines, Work: maxLineMergeWork, Bytes: MaxDescriptionBytes}
+
+// DescriptionMergeRefusal says why two description edits were not merged. It
+// is empty for a clean merge. Every refusal is the description conflict a
+// replay reported before descriptions merged, unchanged.
+type DescriptionMergeRefusal string
+
+const (
+	// DescriptionMergeOverlap reports edits that changed the same or touching
+	// lines (LineMergeOverlaps).
+	DescriptionMergeOverlap DescriptionMergeRefusal = "overlap"
+	// DescriptionMergeTooManyChanges reports a diff of either edit that passed
+	// the edit bound or the work budget.
+	DescriptionMergeTooManyChanges DescriptionMergeRefusal = "too-many-changes"
+	// DescriptionMergeTooLarge reports a merged text longer than
+	// MaxDescriptionBytes.
+	DescriptionMergeTooLarge DescriptionMergeRefusal = "too-large"
+	// DescriptionMergeNotText reports a text that is not UTF-8. A description
+	// travels in a JSON string, so none can be; the refusal only fails safe.
+	DescriptionMergeNotText DescriptionMergeRefusal = "not-text"
+)
+
+// MergeDescription merges other, a description edit made from ancestor, onto
+// current, the description that stands, line by line with MergeLines under
+// DescriptionLineMergeLimits. It gives the merged text and an empty refusal,
+// or no text and the reason the two cannot be merged safely.
+func MergeDescription(ancestor, current, other string) (merged string, refusal DescriptionMergeRefusal) {
+	for _, text := range []string{ancestor, current, other} {
+		if !utf8.ValidString(text) {
+			return "", DescriptionMergeNotText
+		}
+	}
+	result := MergeLines([]byte(ancestor), []byte(current), []byte(other), DescriptionLineMergeLimits)
+	switch result.Reason {
+	case "":
+		return string(result.Text), ""
+	case LineMergeOverlaps:
+		return "", DescriptionMergeOverlap
+	case LineMergeTooManyChanges:
+		return "", DescriptionMergeTooManyChanges
+	case LineMergeTooLarge:
+		return "", DescriptionMergeTooLarge
+	default:
+		return "", DescriptionMergeRefusal(result.Reason)
+	}
+}
+
+// DescriptionReplay is what replaying one pack needs to do about the
+// description. Merge is false when the pack replays as it did before
+// descriptions merged; when it is true, the three texts are the merge's:
+// Ancestor the description the local edit started from, Ours the local
+// fold's result, and Theirs the description of the commit replayed onto.
+type DescriptionReplay struct {
+	Merge                  bool
+	Ancestor, Ours, Theirs string
+}
+
+// PlanDescriptionReplay decides, from the texts alone, whether a pack being
+// replayed must have its description merged. sourceParent is the state of the
+// local commit's own Git parent, source the local commit's state and parent
+// the state of the commit the pack is replayed onto.
+//
+// A pack that sets no description replays as before. So does one whose
+// description origin left alone since the local edit began (parent equals
+// sourceParent), and one whose text origin already holds (source equals
+// parent). Anything else needs MergeDescription to decide.
+func PlanDescriptionReplay(sourceParent, source, parent TaskData, pack OperationPack) DescriptionReplay {
+	touches := false
+	for _, operation := range pack.Operations {
+		if describesDescription(operation) {
+			touches = true
+			break
+		}
+	}
+	if !touches || parent.Description == sourceParent.Description || source.Description == parent.Description {
+		return DescriptionReplay{}
+	}
+	return DescriptionReplay{
+		Merge:    true,
+		Ancestor: sourceParent.Description,
+		Ours:     source.Description,
+		Theirs:   parent.Description,
+	}
+}
+
+// AppendDescriptionMerge records merged, the merge of the pack's description
+// edit onto current from ancestor, as a description.merge appended to the
+// pack, and folds the pack onto parent at parent's next logical clock. The
+// merge names the pack's last description operation, and the pack declares
+// the generation the merge needs. The pack passed in is not changed.
+func AppendDescriptionMerge(parent StateDocument, pack OperationPack, ancestor, current, merged string) (OperationPack, StateDocument, error) {
+	other := ""
+	for _, operation := range pack.Operations {
+		if describesDescription(operation) {
+			other = operation.ID
+		}
+	}
+	if other == "" {
+		return pack, StateDocument{}, Errorf(CategoryCorruptData,
+			"task %s pack has no description edit to record a merge of", pack.TaskID)
+	}
+	operations := make([]Operation, 0, len(pack.Operations)+1)
+	operations = append(operations, pack.Operations...)
+	operations = append(operations, Operation{
+		ID:    DescriptionMergeOperationID(pack.TaskID, other, ancestor, current, DescriptionLineMergeMethod, pack.WallTime),
+		Type:  OperationDescriptionMerge,
+		Value: merged,
+		Merge: &DescriptionMerge{Other: other, Ancestor: ancestor, Current: current, Method: DescriptionLineMergeMethod},
+	})
+	pack.Operations = operations
+	pack.MinReader = max(pack.MinReader, PackMinReader(operations))
+	pack.LogicalClock = parent.LogicalClock + 1
+	state, err := Apply(&parent, pack)
+	if err != nil {
+		return pack, StateDocument{}, err
+	}
+	return pack, state, nil
+}
+
+// DescriptionMergedWarning reports a replay that merged task taskID's
+// description edit made here with one made on remote.
+func DescriptionMergedWarning(taskID, remote string) Warning {
+	return Warning{
+		Code: WarningDescriptionMerged,
+		Message: "task " + taskID + ": the description was changed here and on " + conflictRemote(remote) +
+			"; the two edits changed different lines and were merged; `workbook show " + taskID +
+			" --history` shows the merge",
+	}
 }
