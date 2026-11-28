@@ -2256,3 +2256,47 @@ func TestRefusedRelicLeaseNamesNoTaskCommand(t *testing.T) {
 		})
 	}
 }
+
+// A commit holding a merge travels like any relic commit: a push carries its
+// merges/ blob, a fetch verifies it, and a local commit on top of it replays
+// onto a newer tip.
+func TestRelicSyncCarriesAMergeCommit(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		merge := relicMergeFor(t, first, config, 1)
+		relicID := merge.pack.RelicID
+		written := merge.write(t, first, config)
+		if pushed, err := first.PushRelic(ctx, config, relicID); err != nil || pushed.Status != SyncPublished {
+			t.Fatalf("PushRelic(merge) = %+v, %v; want it published", pushed, err)
+		}
+		assertRelicSyncOutcome(t, fetchRelics(t, second, config), relicID, SyncCreated)
+		if got := relicRefHead(t, second, relicID); got != written.Head {
+			t.Fatalf("second's relic ref = %s, want the merge %s", got, written.Head)
+		}
+		if got := relicBlob(t, second, written.Head+":merges/"+merge.mergeID); !bytes.Equal(got, merge.other) {
+			t.Fatalf("second holds merges/%s as %q, want %q", merge.mergeID, got, merge.other)
+		}
+		if _, err := second.GetRelic(ctx, config, relicID); err != nil {
+			t.Fatalf("second's GetRelic() of the merge error = %v", err)
+		}
+		assertRelicHistoryValid(t, second, config, relicID, written.Head, 3)
+
+		// Both clones change the relic on top of the merge; second's change
+		// replays onto first's, and the merge stays in the history.
+		theirs := writeRelicChild(t, first, config, written, nil, relicTitleSet(739501, "Their title"))
+		if pushed, err := first.PushRelic(ctx, config, relicID); err != nil || pushed.Status != SyncPublished {
+			t.Fatalf("PushRelic(title) = %+v, %v; want it published", pushed, err)
+		}
+		writeRelicChild(t, second, config, written, nil, relicPropertySet(739502, "outcome", "kept"))
+		assertRelicSyncOutcome(t, fetchRelics(t, second, config), relicID, SyncReconciled)
+		replayed := relicRefHead(t, second, relicID)
+		if parents := relicParents(t, second, replayed); len(parents) != 1 || parents[0] != theirs.Head {
+			t.Fatalf("the replayed commit has parents %q, want %s", parents, theirs.Head)
+		}
+		if listing := gitOutput(t, second, "ls-tree", "--name-only", replayed); strings.Contains(listing, "merges") {
+			t.Fatalf("the replayed commit lists %q, want no merges entry", listing)
+		}
+		assertRelicHistoryValid(t, second, config, relicID, replayed, 5)
+	})
+}

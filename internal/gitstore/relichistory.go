@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -37,6 +39,14 @@ import (
 //	    applied in order. For a part P adds, it is a canonical fields document
 //	    that agrees with any field operations P carries for it.
 //
+// And one rule about what a merge keeps (R-merges), since generation nine:
+//
+//	The tree holds merges, a tree, exactly when P holds a part.body.merge.
+//	merges/ holds one regular blob per part.body.merge of P, named by its
+//	ID, and nothing else. Each blob is the size the save its merge names as
+//	its other side records, and is UTF-8 text. No checkpoint root holds one,
+//	since its pack is one history.checkpoint.
+//
 // A stub, a part whose content a checkpoint dropped, has a subtree that never
 // changes after the checkpoint: the fold ignores every operation naming one,
 // so R5 holds it to its parent's subtree whether P names it or not, and R7
@@ -50,6 +60,9 @@ import (
 //	    object Git names it by in this repository's format. Every other
 //	    part's fields.json is a canonical fields document, which takes a read
 //	    and is checked where the rest of R7 is.
+//
+// R-merges is judged from the tree listing and sizes, except that each blob is
+// text, which takes reading it and is checked only by `workbook validate`.
 //
 // R1 to R6 are judged from object IDs and sizes, except the limit on one field
 // value, which takes reading the fields.json that holds it. So is one case of
@@ -85,16 +98,27 @@ type RelicPartObjects struct {
 	FieldsBytes, BodyBytes int64
 }
 
+// RelicMergeObject is one entry of a commit's merges/ tree: the blob that
+// keeps the other side's text of one part.body.merge, and its size as Git
+// reports it.
+type RelicMergeObject struct {
+	Blob  string
+	Bytes int64
+}
+
 // RelicCommit is one relic commit read for checking against the rules: its
 // documents, its parent and the objects of every part its state lists. Parent
 // is empty for a root. Parts is nil for a commit this build cannot judge
-// because it declares a newer generation.
+// because it declares a newer generation. Merges holds the entries of the
+// commit's merges/ tree by name, and is nil for a commit whose pack holds no
+// part.body.merge.
 type RelicCommit struct {
 	ObjectID  string
 	Parent    string
 	Operation core.RelicOperationPack
 	Record    core.RelicRecord
 	Parts     map[string]RelicPartObjects
+	Merges    map[string]RelicMergeObject
 }
 
 // RelicHistoryFailure names the first commit of a relic's history that breaks
@@ -114,9 +138,9 @@ func newerRelicHistory(relicID string) error {
 }
 
 // ReadRelicCommit reads one commit of the relic named relicID and checks what
-// can be checked from that commit alone: rules R2, R3 and R4, that its
-// documents are the bytes this build writes, and that they belong to this
-// project and this relic.
+// can be checked from that commit alone: rules R2, R3 and R4, R-merges short
+// of reading a blob, that its documents are the bytes this build writes, and
+// that they belong to this project and this relic.
 //
 // A commit that declares a newer generation is returned as far as it can be
 // read, with no Parts and none of this build's rules applied.
@@ -146,16 +170,14 @@ func (r *Repository) readRelicCommit(
 	if errs[0] != nil {
 		return RelicCommit{}, errs[0]
 	}
-	commit := commits[0]
-	if commit.needsNewerReader() {
-		return commit, nil
+	if commits[0].needsNewerReader() {
+		return commits[0], nil
 	}
-	parts, err := r.readRelicPartObjects(ctx, objectID, commit.Record.State)
-	if err != nil {
-		return RelicCommit{}, namedRelicError(relicID, err)
+	r.readRelicCommitParts(ctx, commits, errs)
+	if errs[0] != nil {
+		return RelicCommit{}, namedRelicError(relicID, errs[0])
 	}
-	commit.Parts = parts
-	return commit, nil
+	return commits[0], nil
 }
 
 // readRelicCommitsPartial is readRelicCommit for many commits at once, each
@@ -166,7 +188,8 @@ func (r *Repository) readRelicCommit(
 //
 // Git is started at most four times however many heads there are: once for
 // every commit's documents, and three times for their parts, as
-// readRelicPartObjectsBatch describes.
+// readRelicPartObjectsBatch describes. A commit whose pack holds a merge takes
+// two more, shared by every such commit: see readRelicMergeObjects.
 func (r *Repository) readRelicCommitsPartial(
 	ctx context.Context,
 	config core.ProjectConfig,
@@ -251,8 +274,10 @@ func (r *Repository) readRelicCommitDocuments(
 
 // readRelicCommitParts fills in Parts for every commit that was read, which is
 // one whose error is nil, and that this build can judge, through one call of
-// readRelicPartObjectsBatch. A commit whose parts break rule R3 or R4, or
-// cannot be read, becomes a zero commit with the error in its place.
+// readRelicPartObjectsBatch, and Merges for those whose pack holds a merge,
+// through readRelicMergeObjects. A commit whose parts break rule R3 or R4, or
+// whose merges break R-merges, or that cannot be read, becomes a zero commit
+// with the error in its place.
 func (r *Repository) readRelicCommitParts(ctx context.Context, commits []RelicCommit, errs []error) {
 	indexes := make([]int, 0, len(commits))
 	requests := make([]relicPartsRequest, 0, len(commits))
@@ -271,6 +296,232 @@ func (r *Repository) readRelicCommitParts(ctx context.Context, commits []RelicCo
 		}
 		commits[index].Parts = parts[position]
 	}
+	r.readRelicMergeObjects(ctx, commits, errs)
+}
+
+// readRelicMergeObjects fills in Merges for every commit that was read and
+// whose pack holds a part.body.merge, and holds each to R-merges short of
+// reading a blob. Git is started twice, however many such commits there are,
+// and never when there is none:
+//
+//  1. `cat-file --batch` for each commit's merges tree. Its size is known to
+//     the byte from the merges its pack holds, and a larger one is refused
+//     from Git's header, before it is read.
+//  2. `cat-file --batch-check` for the blobs those trees name, which gives
+//     their types and sizes without opening any.
+//
+// A tip read has already held the top tree to having a merges tree exactly
+// when the pack holds a merge. A commit that fails becomes a zero commit with
+// the error, naming its relic, in its place.
+func (r *Repository) readRelicMergeObjects(ctx context.Context, commits []RelicCommit, errs []error) {
+	type mergesRead struct {
+		index         int
+		merges        []relicPackMerge
+		objectIDBytes int
+		entries       map[string]RelicMergeObject
+	}
+	var reads []*mergesRead
+	var input bytes.Buffer
+	for index, commit := range commits {
+		if errs[index] != nil || commit.needsNewerReader() {
+			continue
+		}
+		merges := relicPackMerges(commit.Operation)
+		if len(merges) == 0 {
+			continue
+		}
+		decoded, err := decodeObjectID(commit.ObjectID)
+		if err != nil {
+			errs[index] = core.Wrap(core.CategoryValidation, "relic commit object ID is invalid", err)
+			continue
+		}
+		reads = append(reads, &mergesRead{index: index, merges: merges, objectIDBytes: len(decoded)})
+		fmt.Fprintf(&input, "%s:%s\n", commit.ObjectID, relicMergesPath)
+	}
+	if len(reads) == 0 {
+		return
+	}
+	fail := func(read *mergesRead, err error) {
+		commits[read.index], errs[read.index] = RelicCommit{}, err
+	}
+	failAll := func(remaining []*mergesRead, err error) {
+		for _, read := range remaining {
+			fail(read, namedRelicError(commits[read.index].Record.State.RelicID, err))
+		}
+	}
+
+	batch, err := r.startRelicObjectBatch(ctx, input.Bytes())
+	if err != nil {
+		failAll(reads, err)
+		return
+	}
+	defer batch.Close()
+	for position, read := range reads {
+		relicID := commits[read.index].Record.State.RelicID
+		var expected int64
+		for _, merge := range read.merges {
+			expected += rawTreeEntryBytes(regularBlobMode, merge.id, read.objectIDBytes)
+		}
+		object, err := readBatchObjectWithin(batch.Reader(), expected)
+		if err != nil {
+			failAll(reads[position:], batch.ReadFailure("cannot read relic merges trees from Git batch", err))
+			return
+		}
+		switch {
+		case object.missing || object.kind != "tree":
+			fail(read, relicDirectoryMissing(relicID, commits[read.index].ObjectID))
+			continue
+		case object.size > expected:
+			fail(read, corruptRelic(relicID, "the commit's %s directory holds more than one entry for each merge in its pack",
+				relicMergesPath))
+			continue
+		case object.refused != nil:
+			fail(read, namedRelicError(relicID, object.refused))
+			continue
+		}
+		read.entries = map[string]RelicMergeObject{}
+		err = scanRawTreeEntries(object.contents, read.objectIDBytes, "relic merges tree", func(mode, name, objectID string) error {
+			if mode != regularBlobMode {
+				return corruptRelic(relicID, "the commit's %s/%s is not one regular blob", relicMergesPath, name)
+			}
+			read.entries[name] = RelicMergeObject{Blob: objectID}
+			return nil
+		})
+		if err != nil {
+			fail(read, namedRelicError(relicID, err))
+		}
+	}
+	if err := batch.Finish(); err != nil {
+		failAll(reads, err)
+		return
+	}
+
+	var asked []string
+	seen := map[string]struct{}{}
+	input.Reset()
+	for _, read := range reads {
+		if errs[read.index] != nil {
+			continue
+		}
+		for _, entry := range read.entries {
+			if _, repeated := seen[entry.Blob]; !repeated {
+				seen[entry.Blob] = struct{}{}
+				asked = append(asked, entry.Blob)
+				fmt.Fprintf(&input, "%s\n", entry.Blob)
+			}
+		}
+	}
+	blobs := map[string]relicBlobInfo{}
+	if len(asked) > 0 {
+		output, err := r.Git(ctx, input.Bytes(), "cat-file", "--batch-check")
+		if err == nil {
+			blobs, err = parseRelicBlobInfo(output, asked)
+		}
+		if err != nil {
+			var live []*mergesRead
+			for _, read := range reads {
+				if errs[read.index] == nil {
+					live = append(live, read)
+				}
+			}
+			failAll(live, err)
+			return
+		}
+	}
+	for _, read := range reads {
+		if errs[read.index] != nil {
+			continue
+		}
+		relicID := commits[read.index].Record.State.RelicID
+		for name, entry := range read.entries {
+			blob := blobs[entry.Blob]
+			if blob.missing || blob.kind != "blob" {
+				fail(read, corruptRelic(relicID, "the commit's %s/%s is missing from Git or is not a blob", relicMergesPath, name))
+				break
+			}
+			entry.Bytes = blob.size
+			read.entries[name] = entry
+		}
+		if errs[read.index] != nil {
+			continue
+		}
+		commits[read.index].Merges = read.entries
+		if err := checkRelicMerges(relicID, commits[read.index].Operation, read.entries); err != nil {
+			fail(read, err)
+		}
+	}
+}
+
+// checkRelicMerges holds a commit's merges/ entries to the merges of its pack,
+// as R-merges does short of reading a blob: one regular blob per merge, named
+// by its ID, of the size of the save the merge names as its other side, and
+// nothing else. merges is nil for a commit with no merges tree.
+func checkRelicMerges(relicID string, pack core.RelicOperationPack, merges map[string]RelicMergeObject) error {
+	want := relicPackMerges(pack)
+	if len(want) == 0 {
+		if merges != nil {
+			return corruptRelic(relicID, "the commit stores %s, but its operation pack holds no part.body.merge", relicMergesPath)
+		}
+		return nil
+	}
+	if merges == nil {
+		return corruptRelic(relicID, "the commit stores no %s, though its operation pack holds a part.body.merge", relicMergesPath)
+	}
+	for _, merge := range want {
+		entry, stored := merges[merge.id]
+		if !stored {
+			return corruptRelic(relicID, "the commit's %s has no entry for merge %s", relicMergesPath, merge.id)
+		}
+		if entry.Bytes != merge.otherBytes {
+			return corruptRelic(relicID, "the commit's %s/%s is %d bytes, but the save it merges in records %d bytes",
+				relicMergesPath, merge.id, entry.Bytes, merge.otherBytes)
+		}
+	}
+	if len(merges) != len(want) {
+		return corruptRelic(relicID, "the commit's %s holds an entry for no merge in its operation pack", relicMergesPath)
+	}
+	return nil
+}
+
+// verifyRelicMergeTexts reads every blob of a commit's merges/ through one Git
+// batch process and refuses one that is not UTF-8 text, the part of R-merges
+// that takes a read. checkRelicMerges has already held each to the size its
+// merge records, which is within the limit for one body.
+func (r *Repository) verifyRelicMergeTexts(ctx context.Context, commit RelicCommit) error {
+	if len(commit.Merges) == 0 {
+		return nil
+	}
+	relicID := commit.Record.State.RelicID
+	names := make([]string, 0, len(commit.Merges))
+	for name := range commit.Merges {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var input bytes.Buffer
+	for _, name := range names {
+		fmt.Fprintf(&input, "%s\n", commit.Merges[name].Blob)
+	}
+	batch, err := r.startRelicObjectBatch(ctx, input.Bytes())
+	if err != nil {
+		return err
+	}
+	defer batch.Close()
+	for _, name := range names {
+		object, err := readBatchObjectWithin(batch.Reader(), core.MaxRelicBodyBytes)
+		if err != nil {
+			return batch.ReadFailure("cannot read relic merge texts from Git batch", err)
+		}
+		switch {
+		case object.missing || object.kind != "blob" || object.size > core.MaxRelicBodyBytes:
+			return corruptRelic(relicID, "the commit's %s/%s is missing from Git or is not a blob", relicMergesPath, name)
+		case object.refused != nil:
+			return object.refused
+		case !utf8.Valid(object.contents):
+			return corruptRelic(relicID, "the commit's %s/%s, the text merge %s merged in, is not UTF-8 text",
+				relicMergesPath, name, name)
+		}
+	}
+	return batch.Finish()
 }
 
 // startRelicObjectBatch starts one Git batch process for requests, which holds
@@ -315,10 +566,12 @@ func relicCommitParent(contents []byte) (string, error) {
 }
 
 // VerifyRelicTransition checks a commit against its parent, nil for a root.
-// Rules R1, R5 and R6, and the case of R7 that object IDs settle, need only
-// what ReadRelicCommit returned for the two, and are always checked. The rest
-// of R7 is checked when deep is true, by reading the fields.json of the parts
-// the commit's pack names through one Git batch process.
+// Rules R1, R5 and R6, the case of R7 that object IDs settle, and R-merges
+// short of reading a blob, need only what ReadRelicCommit returned for the
+// two, and are always checked. The rest of R7 is checked when deep is true, by
+// reading the fields.json of the parts the commit's pack names through one Git
+// batch process, and so is the rest of R-merges, by reading each blob of
+// merges/ through one more.
 //
 // Either commit declaring a newer generation is CategoryNewerWriter: this
 // build cannot say whether one follows from the other.
@@ -348,6 +601,9 @@ func (r *Repository) VerifyRelicTransition(ctx context.Context, parent *RelicCom
 		// The fold's refusal is the whole cause: what the pack may not do, or
 		// that the stored relic is not what its operations produce.
 		return corruptRelic(relicID, "%s", err.Error())
+	}
+	if err := checkRelicMerges(relicID, commit.Operation, commit.Merges); err != nil {
+		return err
 	}
 
 	if _, isCheckpoint := commit.Operation.Checkpoint(); parent == nil && isCheckpoint {
@@ -390,6 +646,9 @@ func (r *Repository) VerifyRelicTransition(ctx context.Context, parent *RelicCom
 	}
 	if !deep {
 		return nil
+	}
+	if err := r.verifyRelicMergeTexts(ctx, commit); err != nil {
+		return err
 	}
 	return r.verifyRelicFields(ctx, parentParts, commit, core.RelicPartsNamedBy(commit.Operation), fieldsEdited)
 }
@@ -625,7 +884,8 @@ func relicFieldsAre(stored []byte, fields map[string]json.RawMessage, partID str
 // The caller has checked the repository and its configuration. Git is started
 // at most five times however many heads there are: for the tips' documents,
 // for their parents' documents, and three times for the parts of both
-// together, so that a subtree a tip shares with its parent is read once.
+// together, so that a subtree a tip shares with its parent is read once, and
+// twice more when a tip or a parent holds a merge (see readRelicMergeObjects).
 func (r *Repository) verifyRelicTips(
 	ctx context.Context,
 	config core.ProjectConfig,

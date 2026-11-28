@@ -10,18 +10,6 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 )
 
-// readRelicPartObjects returns the objects of every part the state lists in
-// one commit, checked against rules R3 and R4. It is readRelicPartObjectsBatch
-// for a single commit.
-func (r *Repository) readRelicPartObjects(
-	ctx context.Context,
-	commit string,
-	state core.RelicStateDocument,
-) (map[string]RelicPartObjects, error) {
-	parts, errs := r.readRelicPartObjectsBatch(ctx, []relicPartsRequest{{Commit: commit, State: state}})
-	return parts[0], errs[0]
-}
-
 // relicPartsRequest asks for the objects of the parts one commit stores. State
 // is that commit's own state, which says which parts those are.
 type relicPartsRequest struct {

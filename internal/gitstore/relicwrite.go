@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -56,6 +57,17 @@ func relicLostRace(ref string, cause error) error {
 // or beside a repeated part.body.set, is never stored. A part the pack does
 // not name keeps its subtree object, and content given for one is refused
 // rather than dropped.
+//
+// A part.body.merge in the pack keeps the other side's text, the save it
+// names as its other, under merges/<merge ID> of this one commit. That text is
+// the MergeInput of the merge's part, whose size has to be that save's
+// body.bytes, and it is stored by content, so a text Git already holds, such
+// as the body of the commit the save was first recorded in, is not copied. A
+// pack holding one merge per part at most is written: a caller with two
+// merges of one part in one pack, which only a repeated replay makes, writes
+// its own tree. A merge with no input, an input with no merge for its part, an
+// input of another size and an input that is not UTF-8 text are each refused
+// as corrupt data before any object is written.
 //
 // A history.checkpoint is refused: its parts are the subtrees of the tip it
 // replaces, which a relic change never sees.
@@ -186,12 +198,20 @@ type relicPartWrite struct {
 	body   int
 }
 
+// relicMergeWrite is one entry of the merges tree a write stores: the merge's
+// ID, which names it, and the index of its blob among the write's new blobs.
+type relicMergeWrite struct {
+	id   string
+	blob int
+}
+
 // relicWritePlan is every new blob one relic write stores and what it does to
 // each part. The first three blobs are operation.json, state.json and
-// links.json.
+// links.json. merges is sorted by ID, and empty when the pack holds no merge.
 type relicWritePlan struct {
-	blobs [][]byte
-	parts []relicPartWrite
+	blobs  [][]byte
+	parts  []relicPartWrite
+	merges []relicMergeWrite
 }
 
 func (plan *relicWritePlan) add(blob []byte) int {
@@ -208,6 +228,10 @@ func planRelicWrite(
 	content map[string]core.RelicPartContent,
 ) (relicWritePlan, error) {
 	var plan relicWritePlan
+	merges, err := planRelicMergeInputs(pack, content)
+	if err != nil {
+		return relicWritePlan{}, err
+	}
 	for _, document := range []struct {
 		name   string
 		value  any
@@ -319,7 +343,52 @@ func planRelicWrite(
 		}
 		plan.parts = append(plan.parts, write)
 	}
+	for _, merge := range merges {
+		plan.merges = append(plan.merges, relicMergeWrite{id: merge.id, blob: plan.add(content[merge.part].MergeInput)})
+	}
 	return plan, nil
+}
+
+// planRelicMergeInputs holds content's merge inputs to pack's merges, one input
+// for each merge, of the size of the save it names, and none for a part the
+// pack merges nothing into, and returns the merges in ID order. Every refusal
+// is corrupt data: the caller built the input from the pack, so a mismatch is
+// a fault in what it computed rather than in what a person asked for.
+func planRelicMergeInputs(pack core.RelicOperationPack, content map[string]core.RelicPartContent) ([]relicPackMerge, error) {
+	merges := relicPackMerges(pack)
+	merged := make(map[string]relicPackMerge, len(merges))
+	for _, merge := range merges {
+		if _, twice := merged[merge.part]; twice {
+			return nil, core.Errorf(core.CategoryCorruptData,
+				"this change merges into part %s twice; a relic write stores one merge input per part", merge.part)
+		}
+		merged[merge.part] = merge
+		input := content[merge.part].MergeInput
+		switch {
+		case input == nil && merge.otherBytes != 0:
+			return nil, core.Errorf(core.CategoryCorruptData,
+				"this change merges a save into part %s as %s, but the save's text was not given", merge.part, merge.id)
+		case int64(len(input)) != merge.otherBytes:
+			return nil, core.Errorf(core.CategoryCorruptData,
+				"the text merged into part %s as %s is %d bytes, but the save it names records %d bytes",
+				merge.part, merge.id, len(input), merge.otherBytes)
+		case !utf8.Valid(input):
+			return nil, core.Errorf(core.CategoryCorruptData,
+				"the text merged into part %s as %s is not UTF-8 text", merge.part, merge.id)
+		}
+	}
+	given := make([]string, 0, len(content))
+	for partID := range content {
+		given = append(given, partID)
+	}
+	sort.Strings(given)
+	for _, partID := range given {
+		if _, isMerged := merged[partID]; !isMerged && content[partID].MergeInput != nil {
+			return nil, core.Errorf(core.CategoryCorruptData,
+				"a merge input was given for part %s, but this change merges nothing into it", partID)
+		}
+	}
+	return merges, nil
 }
 
 // encodeRelicPartFields returns a part's fields.json, refusing what a reader
@@ -350,8 +419,8 @@ func encodeRelicPartFields(partID string, fields map[string]json.RawMessage) ([]
 //
 // The number of Git processes does not depend on the number of parts: one
 // read of the parent's trees, one hash-object for every new blob, one mktree
-// for every rewritten part subtree, one each for the parts tree and the top
-// tree, and one commit-tree.
+// for every rewritten part subtree, one for the parts tree and the merges tree
+// together, one for the top tree, and one commit-tree.
 func (r *Repository) writeRelicObjects(
 	ctx context.Context,
 	parent *core.RelicSnapshot,
@@ -416,8 +485,10 @@ func (r *Repository) writeRelicObjects(
 	}
 
 	// The parts tree is the parent's unless a subtree changed, so a change
-	// that touches no part's content keeps the parent's parts tree object.
+	// that touches no part's content keeps the parent's parts tree object. The
+	// merges tree is this commit's alone: the parent's is never taken over.
 	partsTree := inherited.partsTree
+	var middle [][]relicTreeEntry
 	if len(rewritten) > 0 {
 		subtrees, err := r.writeRelicTrees(ctx, rewritten)
 		if err != nil {
@@ -432,11 +503,27 @@ func (r *Repository) writeRelicObjects(
 				mode: mktreeSubtreeMode, kind: "tree", objectID: inherited.parts[part.ID], name: part.ID,
 			})
 		}
-		trees, err := r.writeRelicTrees(ctx, [][]relicTreeEntry{entries})
+		middle = append(middle, entries)
+	}
+	if len(plan.merges) > 0 {
+		entries := make([]relicTreeEntry, 0, len(plan.merges))
+		for _, merge := range plan.merges {
+			entries = append(entries, relicTreeEntry{mode: regularBlobMode, kind: "blob", objectID: blobs[merge.blob], name: merge.id})
+		}
+		middle = append(middle, entries)
+	}
+	mergesTree := ""
+	if len(middle) > 0 {
+		trees, err := r.writeRelicTrees(ctx, middle)
 		if err != nil {
 			return "", err
 		}
-		partsTree = trees[0]
+		if len(rewritten) > 0 {
+			partsTree, trees = trees[0], trees[1:]
+		}
+		if len(plan.merges) > 0 {
+			mergesTree = trees[0]
+		}
 	}
 
 	top := []relicTreeEntry{
@@ -446,6 +533,9 @@ func (r *Repository) writeRelicObjects(
 	}
 	if partsTree != "" {
 		top = append(top, relicTreeEntry{mode: mktreeSubtreeMode, kind: "tree", objectID: partsTree, name: relicPartsPath})
+	}
+	if mergesTree != "" {
+		top = append(top, relicTreeEntry{mode: mktreeSubtreeMode, kind: "tree", objectID: mergesTree, name: relicMergesPath})
 	}
 	trees, err := r.writeRelicTrees(ctx, [][]relicTreeEntry{top})
 	if err != nil {
@@ -541,7 +631,7 @@ func (r *Repository) readRelicParentTrees(
 	if err != nil {
 		return relicParentTrees{}, err
 	}
-	if err := validateRelicTreeEntries(entries, hasParts); err != nil {
+	if err := validateRelicTreeEntries(entries, hasParts, relicPackMergeIDs(parent.Operation)); err != nil {
 		return relicParentTrees{}, err
 	}
 

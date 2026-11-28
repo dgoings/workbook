@@ -1568,3 +1568,96 @@ func TestSchemaVersionTwelveCacheIsReplaced(t *testing.T) {
 	countRows(t, store, `SELECT COUNT(compacted_run) + COUNT(compacted_at) + COUNT(compacted_boundary) + COUNT(compacted_since) FROM relics`)
 	countRows(t, store, `SELECT COUNT(dropped_removed_at) + COUNT(dropped_at) FROM relic_parts`)
 }
+
+// writeIndexRelicBody writes one relic commit of operations through the
+// repository's own writer, a minute after the tip, with content as given.
+func writeIndexRelicBody(
+	t *testing.T,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	tip core.RelicSnapshot,
+	content map[string]core.RelicPartContent,
+	build func(shape core.RelicOperationPack) []core.RelicOperation,
+) core.RelicSnapshot {
+	t.Helper()
+	ctx := context.Background()
+	state := tip.Record.State
+	pack := func(operations []core.RelicOperation) core.RelicOperationPack {
+		return core.NewRelicOperationPack(config.ProjectID, state.RelicID, state.History.Generation, relicIndexActor,
+			state.LogicalClock+1, tip.Operation.WallTime.Add(time.Minute), operations)
+	}
+	written := pack(build(pack(nil)))
+	record, err := core.ApplyRelic(&tip.Record, written)
+	if err != nil {
+		t.Fatalf("ApplyRelic(%s) error = %v", state.RelicID, err)
+	}
+	snapshot, err := repository.WriteRelic(ctx, config, &tip, written, record, content, "update relic "+state.RelicID)
+	if err != nil {
+		t.Fatalf("WriteRelic(%s) error = %v", state.RelicID, err)
+	}
+	return snapshot
+}
+
+// The index reads a commit holding a merge, and the merges/ entry beside its
+// parts, as Git does.
+func TestIndexedRelicEqualsGitWithAMerge(t *testing.T) {
+	t.Parallel()
+	forBothRelicIndexFormats(t, func(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		relicID := createIndexRelic(t, relicServiceForIndex(repository, config, 71000), "Merged", 1)
+		created, err := repository.GetRelic(ctx, config, relicID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		part := created.Record.State.Relic.Parts[0]
+		ours := []byte("# Merged 0\nours\n")
+		saved := writeIndexRelicBody(t, repository, config, created,
+			map[string]core.RelicPartContent{part.ID: {Body: ours, HasBody: true}},
+			func(core.RelicOperationPack) []core.RelicOperation {
+				return []core.RelicOperation{{ID: relicIndexTestID(71101), Type: core.RelicOperationPartBodySet, Part: part.ID,
+					Body: &core.RelicBodyChange{Format: "md", Bytes: int64(len(ours)), Base: part.Body.Version}}}
+			})
+		other := []byte("# Merged 0, the other side\n")
+		merged := []byte("# Merged 0, the other side\nours\n")
+		oursVersion := relicIndexTestID(71101)
+		save := core.RelicOperation{ID: relicIndexTestID(71102), Type: core.RelicOperationPartBodySet, Part: part.ID,
+			Body: &core.RelicBodyChange{Format: "md", Bytes: int64(len(other)), Base: part.Body.Version}}
+		mergedSnapshot := writeIndexRelicBody(t, repository, config, saved,
+			map[string]core.RelicPartContent{part.ID: {Body: merged, HasBody: true, MergeInput: other}},
+			func(shape core.RelicOperationPack) []core.RelicOperation {
+				return []core.RelicOperation{save, {
+					ID:   core.RelicMergeOperationID(relicID, part.ID, save.ID, oursVersion, core.RelicLineMergeMethod, shape.WallTime),
+					Type: core.RelicOperationPartBodyMerge, Part: part.ID,
+					Body:  &core.RelicBodyChange{Format: "md", Bytes: int64(len(merged)), Base: oursVersion},
+					Merge: &core.RelicBodyMerge{Ancestor: part.Body.Version, Other: save.ID, Method: core.RelicLineMergeMethod},
+				}}
+			})
+
+		store := openRelicStore(t, repositorySource{repository: repository}, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+		assertIndexedRelicsEqualGit(t, "merged", store, repository, config)
+		var bodyObject string
+		if err := store.db.QueryRowContext(ctx, `SELECT body_object FROM relic_parts WHERE relic_id = ? AND part_id = ?`,
+			relicID, part.ID).Scan(&bodyObject); err != nil {
+			t.Fatal(err)
+		}
+		if want := strings.TrimSpace(gitOutputForRelicIndex(t, repository, "rev-parse", mergedSnapshot.Head+":parts/"+part.ID+"/body")); bodyObject != want {
+			t.Fatalf("the index stores body object %s, want the merged text's %s", bodyObject, want)
+		}
+		bodies, err := store.RelicReader().ReadRelicParts(ctx, config, mergedSnapshot, []string{part.ID}, true)
+		if err != nil {
+			t.Fatalf("index ReadRelicParts() error = %v", err)
+		}
+		if got := bodies[part.ID]; !bytes.Equal(got.Body, merged) || got.MergeInput != nil {
+			t.Fatalf("the index reads body %q and merge input %q, want the merged text %q and none", got.Body, got.MergeInput, merged)
+		}
+	})
+}
+
+func gitOutputForRelicIndex(t *testing.T, repository *gitstore.Repository, args ...string) string {
+	t.Helper()
+	output, err := repository.Git(context.Background(), nil, args...)
+	if err != nil {
+		t.Fatalf("git %q: %v", args, err)
+	}
+	return string(output)
+}

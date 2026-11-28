@@ -39,7 +39,8 @@ type IndexedRelic struct {
 // only its own slot: a tip that fails its checks, or whose fields cannot be
 // read, leaves a zero IndexedRelic and an error naming the relic. A tip
 // written by a newer Workbook gets a CategoryNewerWriter error. Git is started
-// at most six times however many relics there are.
+// at most six times however many relics there are, and twice more when a tip
+// or its parent holds a merge.
 func (r *Repository) ReadIndexedRelics(
 	ctx context.Context,
 	config core.ProjectConfig,

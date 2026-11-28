@@ -24,6 +24,8 @@ const relicRefPrefix = "refs/workbook/relics/"
 //	links.json                    the relic's links
 //	parts/<part-id>/fields.json   one part's fields, always present
 //	parts/<part-id>/body          one part's body, only when it has one
+//	merges/<merge-id>             the other side's text of one part.body.merge
+//	                              in this commit's pack, only in that commit
 const (
 	relicOperationPath = "operation.json"
 	relicStatePath     = "state.json"
@@ -31,7 +33,55 @@ const (
 	relicPartsPath     = "parts"
 	relicFieldsPath    = "fields.json"
 	relicBodyPath      = "body"
+	relicMergesPath    = "merges"
 )
+
+// relicPackMerge is one part.body.merge of a pack as rule R-merges holds a
+// tree to it: its ID, which names its entry under merges/, the part it saves,
+// and the size of the save it names as its other side, which its entry has.
+type relicPackMerge struct {
+	id, part   string
+	otherBytes int64
+}
+
+// relicPackMerges returns the part.body.merge operations of pack, sorted by
+// ID. A merge whose other side is not an earlier save of the pack, which a
+// valid pack never holds, gets otherBytes -1, a size no entry has.
+func relicPackMerges(pack core.RelicOperationPack) []relicPackMerge {
+	var merges []relicPackMerge
+	saves := map[string]int64{}
+	for _, operation := range pack.Operations {
+		if operation.Type != core.RelicOperationPartBodySet && operation.Type != core.RelicOperationPartBodyMerge {
+			continue
+		}
+		if operation.Type == core.RelicOperationPartBodyMerge && operation.Merge != nil {
+			otherBytes, ok := saves[operation.Merge.Other]
+			if !ok {
+				otherBytes = -1
+			}
+			merges = append(merges, relicPackMerge{id: operation.ID, part: operation.Part, otherBytes: otherBytes})
+		}
+		if operation.Body != nil {
+			saves[operation.ID] = operation.Body.Bytes
+		}
+	}
+	sort.Slice(merges, func(i, j int) bool { return merges[i].id < merges[j].id })
+	return merges
+}
+
+// relicPackMergeIDs returns the IDs of the part.body.merge operations of pack,
+// sorted, which are the names its tree's merges/ holds.
+func relicPackMergeIDs(pack core.RelicOperationPack) []string {
+	merges := relicPackMerges(pack)
+	if len(merges) == 0 {
+		return nil
+	}
+	ids := make([]string, len(merges))
+	for index, merge := range merges {
+		ids[index] = merge.id
+	}
+	return ids
+}
 
 // subtreeMode is how a raw tree object records an entry that is a tree, and
 // mktreeSubtreeMode is how one is written for git mktree. Both name the same
@@ -409,7 +459,7 @@ func validateRelicTipObjects(
 	if err := requireCanonicalRelicDocument("relic state", stateBlob.contents, state); err != nil {
 		return core.RelicSnapshot{}, err
 	}
-	if err := validateRelicTreeEntries(entries, len(state.Relic.Parts) > 0); err != nil {
+	if err := validateRelicTreeEntries(entries, len(state.Relic.Parts) > 0, relicPackMergeIDs(pack)); err != nil {
 		return core.RelicSnapshot{}, err
 	}
 	if linksBlob.refused != nil {
@@ -466,9 +516,13 @@ func requireCanonicalRelicDocument(what string, contents []byte, document any) e
 
 // validateRelicTreeEntries checks the top of a relic commit's tree at this
 // build's generation: the three documents as regular blobs, the parts tree
-// exactly when the relic has a part, and nothing else. A caller runs it only
-// for a commit whose pack and state this build can fold.
-func validateRelicTreeEntries(tree workbookTree, hasParts bool) error {
+// exactly when the relic has a part, the merges tree exactly when the pack
+// holds a part.body.merge, and nothing else. merges is the IDs of the pack's
+// merges, sorted; what the merges tree holds is judged where the commit's
+// parts are (see checkRelicMerges). A caller runs it only for a commit whose
+// pack and state this build can fold, so a build older than generation nine
+// never meets the merges entry here: it refuses the commit as newer first.
+func validateRelicTreeEntries(tree workbookTree, hasParts bool, merges []string) error {
 	for name, mode := range tree.modes {
 		switch name {
 		case relicOperationPath, relicStatePath, relicLinksPath:
@@ -476,6 +530,14 @@ func validateRelicTreeEntries(tree workbookTree, hasParts bool) error {
 				return core.Errorf(core.CategoryCorruptData, "relic tree entry %q is not a regular blob", name)
 			}
 		case relicPartsPath:
+			if mode != subtreeMode {
+				return core.Errorf(core.CategoryCorruptData, "relic tree entry %q is not a tree", name)
+			}
+		case relicMergesPath:
+			if len(merges) == 0 {
+				return core.Errorf(core.CategoryCorruptData,
+					"relic tree has %s, but its operation pack holds no part.body.merge", relicMergesPath)
+			}
 			if mode != subtreeMode {
 				return core.Errorf(core.CategoryCorruptData, "relic tree entry %q is not a tree", name)
 			}
@@ -489,6 +551,10 @@ func validateRelicTreeEntries(tree workbookTree, hasParts bool) error {
 	if _, hasPartsTree := tree.objects[relicPartsPath]; hasPartsTree != hasParts {
 		return core.Errorf(core.CategoryCorruptData,
 			"relic tree must contain %s exactly when the relic has a part", relicPartsPath)
+	}
+	if _, hasMergesTree := tree.objects[relicMergesPath]; len(merges) > 0 && !hasMergesTree {
+		return core.Errorf(core.CategoryCorruptData,
+			"relic tree must contain %s, since its operation pack holds a part.body.merge", relicMergesPath)
 	}
 	return nil
 }

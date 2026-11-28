@@ -246,10 +246,16 @@ type RelicSnapshot struct {
 //
 // On a write, a nil Fields leaves an existing part's fields.json as it is and
 // gives a new part an empty one.
+//
+// MergeInput is only ever written. It is the text of the save that the pack's
+// part.body.merge for the part names as its other side, which the commit keeps
+// under merges/<merge ID>. It is nil when the pack merges nothing into the
+// part, and a read never sets it.
 type RelicPartContent struct {
-	Fields  map[string]json.RawMessage
-	Body    []byte
-	HasBody bool
+	Fields     map[string]json.RawMessage
+	Body       []byte
+	HasBody    bool
+	MergeInput []byte
 }
 
 // relicOperationMinReader declares the generation each relic operation type

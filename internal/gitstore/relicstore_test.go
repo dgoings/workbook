@@ -1997,3 +1997,367 @@ func TestWriteRelicRefusesACheckpointPack(t *testing.T) {
 		t.Fatalf("the refused checkpoint moved the ref to %s", head)
 	}
 }
+
+// relicMerge is a relic whose one part was saved from its first version on
+// two sides: the first save stands as saved, and pack holds the second, stale,
+// save followed by its part.body.merge onto the first. content is what a
+// caller hands WriteRelic for pack: the merged body, and the second save's
+// text as the merge input.
+type relicMerge struct {
+	part    string
+	saved   core.RelicSnapshot
+	pack    core.RelicOperationPack
+	record  core.RelicRecord
+	content map[string]core.RelicPartContent
+	// mergeID and otherID name the merge and the stale save it merges in.
+	mergeID, otherID string
+	merged, other    []byte
+}
+
+// relicMergeFor builds a relicMerge on a new relic numbered relicNumber.
+func relicMergeFor(t *testing.T, repo *Repository, config core.ProjectConfig, relicNumber int) relicMerge {
+	t.Helper()
+	base := 730000 + relicNumber*100
+	part := relicTestPartNumbered(base).withBody("md", []byte("one\ntwo\nthree\nfour\n"))
+	root := writeRelicRootNumbered(t, repo, config, relicNumber, part)
+	ours := []byte("ONE\ntwo\nthree\nfour\n")
+	saved := writeRelicChild(t, repo, config, root,
+		map[string]core.RelicPartContent{part.id: {Body: ours, HasBody: true}},
+		relicBodySet(base+1, part.id, part.id, ours))
+	other := []byte("one\ntwo\nthree\nFOUR, said the other side\n")
+	merged := []byte("ONE\ntwo\nthree\nFOUR, said the other side\n")
+	save := relicBodySet(base+2, part.id, part.id, other)
+	merge := relicMergeOperation(relicChildPack(saved), part.id, save.ID, relicTestID(base+1), part.id, merged)
+	pack := relicChildPack(saved, save, merge)
+	return relicMerge{
+		part:    part.id,
+		saved:   saved,
+		pack:    pack,
+		record:  foldRelic(t, &saved, pack),
+		content: map[string]core.RelicPartContent{part.id: {Body: merged, HasBody: true, MergeInput: other}},
+		mergeID: merge.ID,
+		otherID: save.ID,
+		merged:  merged,
+		other:   other,
+	}
+}
+
+// relicMergeOperation is the part.body.merge that merges the save other onto
+// version base of partID in a pack shaped like shape, with the ID a replay
+// derives for it.
+func relicMergeOperation(shape core.RelicOperationPack, partID, other, base, ancestor string, merged []byte) core.RelicOperation {
+	return core.RelicOperation{
+		ID:   core.RelicMergeOperationID(shape.RelicID, partID, other, base, core.RelicLineMergeMethod, shape.WallTime),
+		Type: core.RelicOperationPartBodyMerge,
+		Part: partID,
+		Body: &core.RelicBodyChange{Format: "md", Bytes: int64(len(merged)), Base: base},
+		Merge: &core.RelicBodyMerge{
+			Ancestor: ancestor, Other: other, Method: core.RelicLineMergeMethod,
+		},
+	}
+}
+
+// write stores the merge through WriteRelic.
+func (merge relicMerge) write(t *testing.T, repo *Repository, config core.ProjectConfig) core.RelicSnapshot {
+	t.Helper()
+	written, err := repo.WriteRelic(context.Background(), config, &merge.saved, merge.pack, merge.record, merge.content,
+		"merge relic "+merge.pack.RelicID)
+	if err != nil {
+		t.Fatalf("WriteRelic(merge) error = %v", err)
+	}
+	return written
+}
+
+func TestWriteRelicStoresTheMergeInput(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		merge := relicMergeFor(t, repo, config, 1)
+		relicID := merge.pack.RelicID
+		if merge.pack.MinReader != core.RelicMergeMinReader {
+			t.Fatalf("the merge pack declares %d, want %d", merge.pack.MinReader, core.RelicMergeMinReader)
+		}
+		written := merge.write(t, repo, config)
+
+		otherBlob := gitOutputWithInput(t, repo, merge.other, "hash-object", "--stdin")
+		if got, want := gitOutput(t, repo, "ls-tree", written.Head+":merges"), "100644 blob "+otherBlob+"\t"+merge.mergeID; got != want {
+			t.Fatalf("merges/ lists %q, want %q", got, want)
+		}
+		if got := relicBlob(t, repo, written.Head+":merges/"+merge.mergeID); !bytes.Equal(got, merge.other) {
+			t.Fatalf("merges/%s holds %q, want the other side's text %q", merge.mergeID, got, merge.other)
+		}
+		if got := relicBlob(t, repo, written.Head+":parts/"+merge.part+"/body"); !bytes.Equal(got, merge.merged) {
+			t.Fatalf("the body is %q, want the merged text %q", got, merge.merged)
+		}
+		names := relicLines(gitOutput(t, repo, "ls-tree", "--name-only", written.Head))
+		if want := []string{"links.json", "merges", "operation.json", "parts", "state.json"}; !slices.Equal(names, want) {
+			t.Fatalf("the merge commit's tree holds %q, want %q", names, want)
+		}
+		if stored, _ := written.Record.State.Relic.Part(merge.part); stored.Body.Version != merge.mergeID {
+			t.Fatalf("the body version is %s, want the merge %s", stored.Body.Version, merge.mergeID)
+		}
+		read, err := repo.GetRelic(ctx, config, relicID)
+		if err != nil {
+			t.Fatalf("GetRelic() of the merge error = %v", err)
+		}
+		assertSameRelicSnapshot(t, read, written)
+		assertSameRelicSnapshot(t, readRelicTip(t, repo, config, relicID), written)
+
+		// The next commit keeps the parts and has no merges entry.
+		next := writeRelicChild(t, repo, config, written, nil, relicTitleSet(739001, "After the merge"))
+		if listing := gitOutput(t, repo, "ls-tree", "--name-only", next.Head); strings.Contains(listing, "merges") {
+			t.Fatalf("the commit after the merge lists %q, want no merges entry", listing)
+		}
+		if got, want := gitOutput(t, repo, "rev-parse", next.Head+":parts"), gitOutput(t, repo, "rev-parse", written.Head+":parts"); got != want {
+			t.Fatalf("the commit after the merge has parts tree %s, want the merge's %s", got, want)
+		}
+		if _, err := repo.GetRelic(ctx, config, relicID); err != nil {
+			t.Fatalf("GetRelic() after the merge error = %v", err)
+		}
+		assertRelicHistoryValid(t, repo, config, relicID, next.Head, 4)
+	})
+}
+
+func TestWriteRelicRefusesAMergeWithoutItsInput(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		merge := relicMergeFor(t, repo, config, 1)
+		relicID := merge.pack.RelicID
+		plain := relicChildPack(merge.saved, relicTitleSet(739101, "No merge here"))
+		saveOnly := relicChildPack(merge.saved, relicBodySet(739102, merge.part, relicTestID(730101), merge.merged))
+		for label, test := range map[string]struct {
+			pack    core.RelicOperationPack
+			content map[string]core.RelicPartContent
+		}{
+			"a merge with no input": {
+				pack:    merge.pack,
+				content: map[string]core.RelicPartContent{merge.part: {Body: merge.merged, HasBody: true}},
+			},
+			"a merge input of another size than the save it names": {
+				pack: merge.pack,
+				content: map[string]core.RelicPartContent{merge.part: {
+					Body: merge.merged, HasBody: true, MergeInput: append(slices.Clone(merge.other), '!'),
+				}},
+			},
+			"a merge input that is not UTF-8": {
+				pack: merge.pack,
+				content: map[string]core.RelicPartContent{merge.part: {
+					Body: merge.merged, HasBody: true, MergeInput: append([]byte{0xff}, merge.other[1:]...),
+				}},
+			},
+			"an input with no merge in the pack": {
+				pack:    plain,
+				content: map[string]core.RelicPartContent{merge.part: {MergeInput: merge.other}},
+			},
+			"an input beside a save that is no merge": {
+				pack: saveOnly,
+				content: map[string]core.RelicPartContent{merge.part: {
+					Body: merge.merged, HasBody: true, MergeInput: merge.other,
+				}},
+			},
+			"an input for a part the pack does not name": {
+				pack: merge.pack,
+				content: map[string]core.RelicPartContent{
+					merge.part:          {Body: merge.merged, HasBody: true, MergeInput: merge.other},
+					relicTestID(739199): {MergeInput: merge.other},
+				},
+			},
+		} {
+			record := foldRelic(t, &merge.saved, test.pack)
+			_, err := repo.WriteRelic(ctx, config, &merge.saved, test.pack, record, test.content, "refused merge")
+			if core.CategoryOf(err) != core.CategoryCorruptData {
+				t.Errorf("%s: WriteRelic() error = %v, want corrupt data", label, err)
+			}
+			if head := gitOutput(t, repo, "rev-parse", relicRef(relicID)); head != merge.saved.Head {
+				t.Fatalf("%s: the refused write moved the ref to %s", label, head)
+			}
+		}
+		// Nothing was written: the merged text, which no earlier commit holds,
+		// is not in the object store.
+		mergedBlob := gitOutputWithInput(t, repo, merge.merged, "hash-object", "--stdin")
+		if _, err := repo.Git(ctx, nil, "cat-file", "-e", mergedBlob); err == nil {
+			t.Fatalf("a refused merge wrote its merged text %s", mergedBlob)
+		}
+		if leftovers := relicWriteLeftovers(t, repo); len(leftovers) != 0 {
+			t.Fatalf("a refused merge left %q behind", leftovers)
+		}
+	})
+}
+
+// forgeRelicMergesEntry returns a commit that is commit's tree with its merges
+// entry replaced by replacement, or dropped when replacement is empty, or added
+// when the tree has none, on commit's own parents.
+func forgeRelicMergesEntry(t *testing.T, repo *Repository, commit, replacement string) string {
+	t.Helper()
+	entries := relicLines(gitOutput(t, repo, "ls-tree", commit))
+	if strings.Contains(strings.Join(entries, "\n"), "\tmerges") {
+		entries = replaceRelicTreeEntry(t, entries, "merges", replacement)
+	} else if replacement != "" {
+		entries = append(entries, replacement)
+	}
+	return forgeRelicCommitOf(t, repo, forgeRelicTree(t, repo, entries), relicParents(t, repo, commit)...)
+}
+
+func TestRelicTreeWithMergesFollowsItsPack(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		merge := relicMergeFor(t, repo, config, 1)
+		relicID := merge.pack.RelicID
+		written := merge.write(t, repo, config)
+		next := writeRelicChild(t, repo, config, written, nil, relicTitleSet(739201, "After the merge"))
+
+		otherBlob := gitOutput(t, repo, "rev-parse", written.Head+":merges/"+merge.mergeID)
+		mergesTree := gitOutput(t, repo, "rev-parse", written.Head+":merges")
+		entry := func(mode, kind, objectID, name string) string {
+			return mode + " " + kind + " " + objectID + "\t" + name
+		}
+		merges := func(entries ...string) string {
+			return entry("040000", "tree", forgeRelicTree(t, repo, entries), "merges")
+		}
+		emptyTree := gitOutputWithInput(t, repo, nil, "mktree")
+		longer := forgeRelicBlob(t, repo, append(slices.Clone(merge.other), "and more\n"...))
+
+		for label, test := range map[string]struct {
+			head string
+			// tip is set for a shape a tip read sees from the top tree alone.
+			tip bool
+		}{
+			"merges with no merge in the pack": {
+				head: forgeRelicMergesEntry(t, repo, next.Head, entry("040000", "tree", mergesTree, "merges")), tip: true,
+			},
+			"no merges though the pack holds a merge": {
+				head: forgeRelicMergesEntry(t, repo, written.Head, ""), tip: true,
+			},
+			"merges as a blob": {
+				head: forgeRelicMergesEntry(t, repo, written.Head, entry("100644", "blob", otherBlob, "merges")), tip: true,
+			},
+			"a missing entry": {
+				head: forgeRelicMergesEntry(t, repo, written.Head, entry("040000", "tree", emptyTree, "merges")),
+			},
+			"an entry under another name": {
+				head: forgeRelicMergesEntry(t, repo, written.Head, merges(entry("100644", "blob", otherBlob, merge.otherID))),
+			},
+			"an extra entry": {
+				head: forgeRelicMergesEntry(t, repo, written.Head, merges(
+					entry("100644", "blob", otherBlob, merge.mergeID),
+					entry("100644", "blob", otherBlob, relicTestID(739299)))),
+			},
+			"an entry that is a tree": {
+				head: forgeRelicMergesEntry(t, repo, written.Head, merges(entry("040000", "tree", mergesTree, merge.mergeID))),
+			},
+			"an executable entry": {
+				head: forgeRelicMergesEntry(t, repo, written.Head, merges(entry("100755", "blob", otherBlob, merge.mergeID))),
+			},
+			"an entry of another size than the save it names": {
+				head: forgeRelicMergesEntry(t, repo, written.Head, merges(entry("100644", "blob", longer, merge.mergeID))),
+			},
+			"an entry Git does not have": {
+				head: forgeRelicMergesEntry(t, repo, written.Head, entry("040000", "tree", gitOutputWithInput(t, repo,
+					[]byte(entry("100644", "blob", strings.Repeat("0", len(otherBlob)-1)+"1", merge.mergeID)+"\n"),
+					"mktree", "--missing"), "merges")),
+			},
+		} {
+			pointRelicRef(t, repo, relicID, test.head)
+			_, err := repo.GetRelic(ctx, config, relicID)
+			if core.CategoryOf(err) != core.CategoryCorruptData || !strings.HasSuffix(fmt.Sprint(err), relicValidateHint) {
+				t.Errorf("%s: GetRelic() error = %v, want corrupt data", label, err)
+			}
+			checked, failure, err := repo.ValidateRelicHistory(ctx, config, core.RelicHead{RelicID: relicID, ObjectID: test.head})
+			if err != nil || failure == nil || failure.Commit != test.head || core.CategoryOf(failure.Err) != core.CategoryCorruptData {
+				t.Errorf("%s: ValidateRelicHistory() = %d, %#v, %v; want it to name the forged commit", label, checked, failure, err)
+			}
+			_, err = repo.ReadRelicCommit(ctx, config, relicID, test.head)
+			if core.CategoryOf(err) != core.CategoryCorruptData {
+				t.Errorf("%s: ReadRelicCommit() error = %v, want corrupt data", label, err)
+			}
+			if test.tip {
+				_, err := repo.ReadRelicTips(ctx, config, []core.RelicHead{{RelicID: relicID, ObjectID: test.head}})
+				if core.CategoryOf(err) != core.CategoryCorruptData {
+					t.Errorf("%s: ReadRelicTips() error = %v, want corrupt data", label, err)
+				}
+			}
+		}
+	})
+}
+
+func TestCheckpointRootHasNoMerges(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		merge := relicMergeFor(t, repo, config, 1)
+		relicID := merge.pack.RelicID
+		written := merge.write(t, repo, config)
+		retired := writeRelicChild(t, repo, config, written, nil,
+			core.RelicOperation{ID: relicTestID(739301), Type: core.RelicOperationRetire})
+		checkpoint := writeRelicCheckpoint(t, repo, config, retired, core.RelicBoundaryRetired)
+		if listing := gitOutput(t, repo, "ls-tree", "--name-only", checkpoint.Head); strings.Contains(listing, "merges") {
+			t.Fatalf("the checkpoint root lists %q, want no merges entry", listing)
+		}
+		if got, want := relicBlob(t, repo, checkpoint.Head+":parts/"+merge.part+"/body"), merge.merged; !bytes.Equal(got, want) {
+			t.Fatalf("the checkpoint's body is %q, want the merged text %q", got, want)
+		}
+
+		// A checkpoint root holding the merge's entry is refused.
+		forged := forgeRelicMergesEntry(t, repo, checkpoint.Head,
+			"040000 tree "+gitOutput(t, repo, "rev-parse", written.Head+":merges")+"\tmerges")
+		pointRelicRef(t, repo, relicID, forged)
+		_, err := repo.GetRelic(ctx, config, relicID)
+		assertGetRelicRefused(t, err)
+		_, err = repo.ReadRelicTips(ctx, config, []core.RelicHead{{RelicID: relicID, ObjectID: forged}})
+		assertRelicCategory(t, err, core.CategoryCorruptData)
+		assertRelicHistoryStopsAt(t, repo, config, relicID, forged, forged, 0, core.CategoryCorruptData)
+	})
+}
+
+func TestRelicSnapshotReadIgnoresMergesForParts(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		merge := relicMergeFor(t, repo, config, 1)
+		relicID := merge.pack.RelicID
+		written := merge.write(t, repo, config)
+		next := writeRelicChild(t, repo, config, written, nil, relicTitleSet(739401, "After the merge"))
+		without := written
+		without.Head = forgeRelicMergesEntry(t, repo, written.Head, "")
+
+		for _, bodies := range []bool{false, true} {
+			want, err := repo.ReadRelicParts(ctx, config, written, []string{merge.part}, bodies)
+			if err != nil {
+				t.Fatalf("ReadRelicParts(merge, bodies %t) error = %v", bodies, err)
+			}
+			if bodies && !bytes.Equal(want[merge.part].Body, merge.merged) {
+				t.Fatalf("ReadRelicParts() body = %q, want the merged text %q", want[merge.part].Body, merge.merged)
+			}
+			if want[merge.part].MergeInput != nil {
+				t.Fatalf("ReadRelicParts() returned a merge input %q", want[merge.part].MergeInput)
+			}
+			for label, snapshot := range map[string]core.RelicSnapshot{"no merges entry": without, "the next commit": next} {
+				got, err := repo.ReadRelicParts(ctx, config, snapshot, []string{merge.part}, bodies)
+				if err != nil {
+					t.Fatalf("ReadRelicParts(%s, bodies %t) error = %v", label, bodies, err)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("ReadRelicParts(%s, bodies %t) = %#v, want %#v", label, bodies, got, want)
+				}
+			}
+		}
+
+		// The index pass reads the merge commit's parts as it reads the next
+		// commit's, which shares its parts tree.
+		indexed, errs := repo.ReadIndexedRelics(ctx, config, []RelicIndexRequest{
+			{Head: core.RelicHead{RelicID: relicID, ObjectID: written.Head}},
+			{Head: core.RelicHead{RelicID: relicID, ObjectID: next.Head}},
+		})
+		for index, err := range errs {
+			if err != nil {
+				t.Fatalf("ReadIndexedRelics()[%d] error = %v", index, err)
+			}
+		}
+		if !reflect.DeepEqual(indexed[0].Parts, indexed[1].Parts) || !reflect.DeepEqual(indexed[0].Fields, indexed[1].Fields) {
+			t.Fatalf("the index pass read %#v and %#v for the merge, want %#v and %#v as for the next commit",
+				indexed[0].Parts, indexed[0].Fields, indexed[1].Parts, indexed[1].Fields)
+		}
+	})
+}

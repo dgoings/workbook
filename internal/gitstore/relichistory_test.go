@@ -1371,3 +1371,26 @@ func TestPreCheckpointRelicStillValidates(t *testing.T) {
 		}
 	})
 }
+
+// The other side of a merge is text: a read takes its size from the tree
+// listing, and validation also reads it.
+func TestValidateReadsTheMergeInputAsText(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		merge := relicMergeFor(t, repo, config, 1)
+		relicID := merge.pack.RelicID
+		written := merge.write(t, repo, config)
+		assertRelicHistoryValid(t, repo, config, relicID, written.Head, 3)
+
+		notText := append([]byte{0xff}, merge.other[1:]...)
+		forged := forgeRelicMergesEntry(t, repo, written.Head, "040000 tree "+forgeRelicTree(t, repo, []string{
+			"100644 blob " + forgeRelicBlob(t, repo, notText) + "\t" + merge.mergeID,
+		})+"\tmerges")
+		pointRelicRef(t, repo, relicID, forged)
+		if _, err := repo.GetRelic(ctx, config, relicID); err != nil {
+			t.Fatalf("GetRelic() of a merge whose input is the right size error = %v", err)
+		}
+		assertRelicHistoryStopsAt(t, repo, config, relicID, forged, forged, 2, core.CategoryCorruptData, merge.mergeID)
+	})
+}
