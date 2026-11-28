@@ -257,6 +257,76 @@
         relicPinnedPart = section;
         section.scrollIntoView({ block: "start" });
       }
+      // ─── A task's relics ───
+      //
+      // The section of a task's page listing the links relics have to the task.
+      // It is one served element, mounted under the comment thread, and a board
+      // that cannot read a task's relics serves none, which is the whole of the
+      // gate. It is read once when the page opens for a task, and never on the
+      // board's poll or after a change to the task: relics move only with a
+      // relic command, so the poll would read the same links again. With no
+      // links it stays hidden. data-task-relics-state says when what is drawn
+      // is complete.
+      const taskRelicsSection = document.querySelector("[data-task-relics]");
+      // The read the section was last drawn for. It is replaced by the next
+      // task's, so an answer that lands late draws nothing.
+      let taskRelicsRead = null;
+      function mountTaskRelics(taskID, thread) {
+        if (!taskRelicsSection) return;
+        thread.after(taskRelicsSection);
+        // The same page drawn again keeps what it has.
+        if (taskRelicsRead && taskRelicsRead.taskID === taskID) return;
+        taskRelicsRead = { taskID };
+        taskRelicsSection.hidden = true;
+        taskRelicsSection.replaceChildren();
+        taskRelicsSection.dataset.taskRelicsState = relicLoading;
+        readTaskRelics(taskRelicsRead);
+      }
+      function leaveTaskRelics() { taskRelicsRead = null; }
+      async function readTaskRelics(wanted) {
+        const read = await readRelicJSON("/api/tasks/" + encodeURIComponent(wanted.taskID) + "/relics",
+          "This task's relics could not be read from this checkout.");
+        if (taskRelicsRead !== wanted) return;
+        const heading = relicElement("h3", "", "Relics");
+        heading.id = "task-relics-title";
+        const settle = (state, shown, ...nodes) => {
+          taskRelicsSection.replaceChildren(heading, ...nodes);
+          taskRelicsSection.hidden = !shown;
+          taskRelicsSection.dataset.taskRelicsState = state;
+        };
+        if (read.failure) {
+          settle(relicError, true, relicNotice(read.message));
+          return;
+        }
+        const links = Array.isArray(read.document.relics) ? read.document.relics : [];
+        const warnings = (Array.isArray(read.document.warnings) ? read.document.warnings : [])
+          .filter((warning) => warning && warning.message)
+          .map((warning) => {
+            const note = relicElement("p", "relic-warning", warning.message);
+            note.dataset.taskRelicsWarning = "";
+            return note;
+          });
+        const list = relicElement("ul", "task-relics__list");
+        links.forEach((link) => list.append(taskRelicRow(link)));
+        settle(relicReady, links.length > 0, ...warnings, list);
+      }
+      // One link to the task: the relic's title, linking to the relic or to the
+      // part the link is from, then the relationship, the relic's type, the
+      // part's type and the relic's marks.
+      function taskRelicRow(link) {
+        const row = relicElement("li", "task-relics__row");
+        row.dataset.taskRelic = "";
+        const addressable = relicAddressableID(link.relic) && (!link.part || relicAddressableID(link.part));
+        const title = relicElement(addressable ? "a" : "span", "task-relics__title", link.title || link.relic || "Untitled relic");
+        if (addressable) title.href = link.part ? relicPartPath(link.relic, link.part) : relicPath(link.relic);
+        row.append(title, relicElement("span", "relic-link__rel", link.rel || ""), relicElement("span", "task-relics__type", link.type || ""));
+        if (link.part) row.append(relicElement("span", "task-relics__part", "part: " + (link.partType || link.part)));
+        if (link.retired) row.append(relicBadge("Retired"));
+        if (link.deleted) row.append(relicBadge("Deleted"));
+        if (link.removedAt) row.append(relicBadge("Removed on " + recordedAt(link.removedAt)));
+        return row;
+      }
+
       function drawRelicPage(current, viewDocument, draw) {
         const relic = viewDocument.relic || {};
         const parts = Array.isArray(relic.parts) ? relic.parts : [];

@@ -67,6 +67,8 @@
         if (current.view !== "config") leaveConfigRoute();
         // The relic pages stop reading bodies for a page nobody is on.
         if (!relicRouteView(current.view)) leaveRelicRoute();
+        // A task's relics are read again the next time its page is opened.
+        if (current.view !== "detail") leaveTaskRelics();
         if (current.view === "board") {
           document.title = boardName;
           // The board is re-attached rather than rebuilt, which is what makes

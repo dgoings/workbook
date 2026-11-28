@@ -313,5 +313,6 @@ func (board *phoneBoard) handler(t *testing.T) http.Handler {
 	t.Helper()
 	options := board.options(t)
 	relicListFake().apply(&options)
+	options.TaskRelics = func(context.Context, string) ([]core.TaskRelicLink, []core.Warning, error) { return nil, nil, nil }
 	return NewHandler(options)
 }

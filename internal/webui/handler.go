@@ -1326,6 +1326,9 @@ type pageData struct {
 	// RelicsReadable is whether this board was built to show relics. See
 	// handler.relicsReadable.
 	RelicsReadable bool
+	// TaskRelicsReadable is whether a task's page lists the relics linked to
+	// it: the board reads a task's relics and can show the pages they link to.
+	TaskRelicsReadable bool
 }
 
 // expectedHead is the task tip the browser rendered before proposing a change.
@@ -2156,10 +2159,11 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 			handler.EditPriority != nil && handler.RemovePriority != nil &&
 			handler.MovePriority != nil && handler.SetDefaultPriority != nil &&
 			handler.RecolorPriority != nil,
-		Keys:              pageKeys(vocabulary.Keys),
-		CurrentKey:        vocabulary.Keys.Current(),
-		KeysAdministrable: handler.keysAdministrable(),
-		RelicsReadable:    handler.relicsReadable(),
+		Keys:               pageKeys(vocabulary.Keys),
+		CurrentKey:         vocabulary.Keys.Current(),
+		KeysAdministrable:  handler.keysAdministrable(),
+		RelicsReadable:     handler.relicsReadable(),
+		TaskRelicsReadable: handler.relicsReadable() && handler.TaskRelics != nil,
 	}); err != nil {
 		return
 	}

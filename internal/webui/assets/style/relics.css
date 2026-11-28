@@ -90,3 +90,11 @@
     .relic-line__text[data-line-text="delete"] { background: var(--wb-danger-surface-alt); color: var(--wb-danger-ink); }
     .relic-line__text[data-line-text="insert"] { background: var(--wb-success-surface); color: var(--wb-success-ink); }
     .relic-line__note { display: block; color: var(--wb-ink-muted); font-style: italic; }
+    /* The relics linked to a task, on its page under the comment thread and set
+       off from it as the thread is from the form. */
+    .task-relics { display: grid; gap: .55rem; min-width: 0; padding: 1.15rem; border-top: 1px solid var(--wb-hairline); overflow-wrap: anywhere; }
+    .task-relics h3 { margin: 0; font-size: .88rem; }
+    .task-relics__list { display: grid; gap: .4rem; margin: 0; padding: 0; list-style: none; }
+    .task-relics__row { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .7rem; min-width: 0; font-size: .8rem; }
+    .task-relics__title { color: var(--wb-primary); font-weight: 750; text-underline-offset: .16em; }
+    .task-relics__type, .task-relics__part { color: var(--wb-ink-muted); font-size: .74rem; }

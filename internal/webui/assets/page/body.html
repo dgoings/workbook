@@ -420,6 +420,14 @@
        drawn is complete: loading, ready, error or not-found. -->
   <section class="relic-view" data-relic-view aria-labelledby="relic-view-title" hidden></section>
   {{ end }}
+  {{ if .TaskRelicsReadable }}
+  <!-- The relics linked to the task whose page is open. Served empty and
+       hidden, and mounted under that page's comment thread; its presence is
+       the client's whole gate, so a board that cannot read a task's relics asks
+       for none. It stays hidden for a task nothing links to. Everything in it
+       is built from /api/tasks/{id}/relics with text nodes. -->
+  <section class="task-relics" data-task-relics aria-labelledby="task-relics-title" hidden></section>
+  {{ end }}
   {{ if .KeysAdministrable }}
   <!-- This project's task-ID keys: the fourth section of the configuration
        route, served beside the statuses and the priorities and mounted into main

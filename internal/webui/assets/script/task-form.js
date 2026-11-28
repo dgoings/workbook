@@ -879,6 +879,7 @@
           sidebar.append(attachments.section);
           assignments.mountBefore(sidebar, attachments.section);
           section.append(comments.section, taskHistory(task.id));
+          mountTaskRelics(task.id, comments.section);
           assignments.follow(latestPresentation.get(task.id));
         }
         const failedDrafts = isNew
