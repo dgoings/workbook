@@ -539,7 +539,10 @@ func TestBoardLeavesTheWorkingTreeAloneAndSaysSo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the generated guidelines: %v", err)
 	}
-	if !strings.Contains(string(generated), "in-progress") {
+	// The status's row, not the bare word: the built-in plan schema has a
+	// property value of the same name, which no rename touches.
+	const renamedRow = "| `in-progress` |"
+	if !strings.Contains(string(generated), renamedRow) {
 		t.Fatalf("the fixture's guidelines do not name the status this test renames:\n%s", generated)
 	}
 	// A working tree nobody should write into: a detached HEAD with an
@@ -598,7 +601,7 @@ func TestBoardLeavesTheWorkingTreeAloneAndSaysSo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the generated guidelines: %v", err)
 	}
-	if strings.Contains(string(settled), "in-progress") {
+	if strings.Contains(string(settled), renamedRow) || !strings.Contains(string(settled), "| `doing` |") {
 		t.Fatalf("the CLI did not settle the guidelines the board left stale:\n%s", settled)
 	}
 }

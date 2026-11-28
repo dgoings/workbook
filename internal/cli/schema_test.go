@@ -583,10 +583,16 @@ func TestTwoClonesSavingOneTypeKeepBothVersions(t *testing.T) {
 	syncClone(second)
 
 	for name, clone := range map[string]string{"first": first, "second": second} {
-		var listed []schemaListData
-		mustSchema(t, clone, &listed, "list")
-		if len(listed) != 1 || listed[0].Versions != 2 || listed[0].ID != putTwo.ID {
-			t.Fatalf("%s clone's schema list = %+v, want two spec versions, %s newest", name, listed, putTwo.ID)
+		// The project's own rows: plan is listed too, as a built-in.
+		var all, listed []schemaListData
+		mustSchema(t, clone, &all, "list")
+		for _, row := range all {
+			if !row.BuiltIn {
+				listed = append(listed, row)
+			}
+		}
+		if len(listed) != 1 || listed[0].Type != "spec" || listed[0].Versions != 2 || listed[0].ID != putTwo.ID {
+			t.Fatalf("%s clone's schema list = %+v, want two spec versions, %s newest", name, all, putTwo.ID)
 		}
 		for relic, want := range map[string]core.RelicSchemaRef{
 			relicOne.Relic.ID: {Type: "spec", ID: putOne.ID, Version: 1},
