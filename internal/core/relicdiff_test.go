@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -579,5 +580,147 @@ func TestDiffListsARelicLinkWithItsTargetAndPointer(t *testing.T) {
 	if err != nil || !strings.Contains(string(encoded), `"to":{"relic":"WB-R-`+relicTestID(223)+`","part":"`+relicTestID(224)+
 		`"},"rel":"decided-in","seen":"`+relicTestID(225)+`","pointer":{"at":"00:14:32"}`) {
 		t.Fatalf("diff link JSON = %s, %v", encoded, err)
+	}
+}
+
+// mergeDiffService serves a relic whose part was saved twice from its first
+// body and merged, and whose title was then changed: commits c1 to c4.
+func mergeDiffService(t *testing.T) (service RelicService, part, theirs, save, merge, retitle string) {
+	t.Helper()
+	part, theirs, save, merge, retitle = relicTestID(9400), relicTestID(9401), relicTestID(9402), relicTestID(9403), relicTestID(9404)
+	texts := []string{"one\ntwo\nthree\n", "ONE\ntwo\nthree\n", "ONE\ntwo\nTHREE\n", "ONE\ntwo\nTHREE\n"}
+	other := "one\ntwo\nTHREE\n"
+	size := func(text string) int64 { return int64(len(text)) }
+	packs := []RelicOperationPack{
+		relicFoldPack(1,
+			RelicOperation{ID: relicTestID(9405), Type: RelicOperationCreate,
+				Relic: &RelicCreateData{Title: "R", Type: "spec", CreatedAt: relicDocTime}},
+			historyPartAdd(part, "1/1", &RelicBodyChange{Format: "md", Bytes: size(texts[0])})),
+		relicFoldPack(2, historyBodySet(theirs, part, part, size(texts[1]))),
+		relicFoldPack(3, historyBodySet(save, part, part, size(other)),
+			relicMergeOperation(merge, part, theirs, part, save, size(texts[2]))),
+		relicFoldPack(4, RelicOperation{ID: retitle, Type: RelicOperationTitleSet, Title: "Later"}),
+	}
+	store := newMemoryRelicStore()
+	chain := RelicChain{RelicID: relicDocRelic, Head: "c4"}
+	versions := map[string]RelicVersion{}
+	var parent *RelicRecord
+	var tip RelicSnapshot
+	for index, pack := range packs {
+		record, err := ApplyRelic(parent, pack)
+		if err != nil {
+			t.Fatalf("ApplyRelic(%d): %v", index+1, err)
+		}
+		parent = &record
+		commit := fmt.Sprintf("c%d", index+1)
+		tip = RelicSnapshot{Head: commit, Operation: pack, Record: record}
+		store.put(tip)
+		chain.Commits = append(chain.Commits, RelicChainCommit{Commit: commit, Operation: pack})
+		versions[commit] = RelicVersion{Snapshot: tip, Parts: map[string]RelicPartObjectIDs{part: {Fields: "f", Body: texts[index]}}}
+	}
+	service = newRelicTestService(store, nil)
+	service.Reader = mergeDiffReader{store, versions}
+	service.HistoryReader = fixedHistoryReader{chain: chain, versions: versions}
+	return service, part, theirs, save, merge, retitle
+}
+
+// mergeDiffReader reads a part's body at the snapshot asked for, which the
+// test's object IDs name by their text.
+type mergeDiffReader struct {
+	*memoryRelicStore
+	versions map[string]RelicVersion
+}
+
+func (r mergeDiffReader) ReadRelicParts(
+	_ context.Context, _ ProjectConfig, snapshot RelicSnapshot, partIDs []string, bodies bool,
+) (map[string]RelicPartContent, error) {
+	content := map[string]RelicPartContent{}
+	for _, id := range partIDs {
+		content[id] = RelicPartContent{Body: []byte(r.versions[snapshot.Head].Parts[id].Body), HasBody: bodies}
+	}
+	return content, nil
+}
+
+// mergeDiff diffs the part between versions and returns its body diff.
+func mergeDiff(t *testing.T, service RelicService, part string, versions ...string) *RelicBodyDiff {
+	t.Helper()
+	diff, err := service.Diff(context.Background(), relicDocRelic+"#"+part, versions, RelicDiffOptions{Context: -1})
+	if err != nil {
+		t.Fatalf("Diff(%q): %v", versions, err)
+	}
+	if len(diff.Parts) != 1 || diff.Parts[0].Body == nil {
+		t.Fatalf("Diff(%q) parts = %+v, want one body change", versions, diff.Parts)
+	}
+	return diff.Parts[0].Body
+}
+
+func changedDiffLines(body *RelicBodyDiff) []string {
+	var changed []string
+	for _, hunk := range body.Hunks {
+		for _, line := range hunk.Lines {
+			switch line.Kind {
+			case DiffDelete:
+				changed = append(changed, "-"+line.Text)
+			case DiffInsert:
+				changed = append(changed, "+"+line.Text)
+			}
+		}
+	}
+	return changed
+}
+
+func TestDiffOfAMergeIsMarkedAsAMerge(t *testing.T) {
+	service, part, theirs, save, merge, retitle := mergeDiffService(t)
+	want := &RelicBodyDiffMerge{Version: merge, Base: theirs,
+		RelicBodyMerge: RelicBodyMerge{Ancestor: part, Other: save, Method: RelicLineMergeMethod}}
+
+	// The part's latest change is the merge, against the version it met.
+	body := mergeDiff(t, service, part)
+	if !reflect.DeepEqual(body.Merge, want) {
+		t.Fatalf("merge = %+v, want %+v", body.Merge, want)
+	}
+	if changed := changedDiffLines(body); !reflect.DeepEqual(changed, []string{"-three", "+THREE"}) {
+		t.Fatalf("changed lines = %q, want the other side's", changed)
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := `"merge":{"version":"` + merge + `","base":"` + theirs + `","ancestor":"` + part + `","other":"` + save +
+		`","method":"` + RelicLineMergeMethod + `"}`
+	if !strings.Contains(string(encoded), member) {
+		t.Fatalf("body diff JSON %s lacks %s", encoded, member)
+	}
+
+	// A later point whose body is still the merge says so too, though its own
+	// commit holds no merge.
+	if later := mergeDiff(t, service, part, theirs, retitle); !reflect.DeepEqual(later.Merge, want) {
+		t.Fatalf("merge at a later point = %+v, want %+v", later.Merge, want)
+	}
+	// A diff towards a body that no merge made is not marked.
+	for _, versions := range [][]string{{part, theirs}, {merge, theirs}} {
+		plain := mergeDiff(t, service, part, versions...)
+		if plain.Merge != nil {
+			t.Errorf("Diff(%q) is marked as a merge: %+v", versions, plain.Merge)
+		}
+		encoded, err := json.Marshal(plain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), `"merge"`) {
+			t.Errorf("Diff(%q) JSON %s holds a merge member", versions, encoded)
+		}
+	}
+}
+
+func TestDiffFromAncestorToMergeShowsBothSides(t *testing.T) {
+	service, part, _, _, merge, _ := mergeDiffService(t)
+	body := mergeDiff(t, service, part, part, merge)
+	if body.Merge == nil || body.Merge.Version != merge || body.Merge.Ancestor != part {
+		t.Fatalf("merge = %+v, want the merge", body.Merge)
+	}
+	want := []string{"-one", "+ONE", "-three", "+THREE"}
+	if changed := changedDiffLines(body); !reflect.DeepEqual(changed, want) {
+		t.Fatalf("changed lines = %q, want both sides %q", changed, want)
 	}
 }

@@ -144,6 +144,9 @@ func writeRelicHistory(stdout io.Writer, history core.RelicHistory) {
 			if part := relicHistoryPartColumn(operation.RelicOperation); part != "" {
 				fmt.Fprintf(stdout, "\t%s", singleLine(part))
 			}
+			if operation.Merge != nil && operation.Body != nil {
+				fmt.Fprintf(stdout, "\tmerged %s", relicMergeText(operation.Merge.Other, operation.Body.Base, operation.Merge.Ancestor))
+			}
 			if operation.Applied != nil && !*operation.Applied {
 				fmt.Fprint(stdout, " (not applied)")
 			}
@@ -159,6 +162,9 @@ func writeRelicHistory(stdout io.Writer, history core.RelicHistory) {
 			if version.Current {
 				fmt.Fprint(stdout, "\tcurrent")
 			}
+			if version.Merge != nil {
+				fmt.Fprint(stdout, "\tmerged")
+			}
 			fmt.Fprintln(stdout)
 		}
 	}
@@ -172,6 +178,11 @@ func writeRelicHistory(stdout io.Writer, history core.RelicHistory) {
 			relicDay(compacted.At), compacted.Changes, relicDay(compacted.From), relicDay(compacted.To),
 			singleLine(compacted.Version))
 	}
+}
+
+// relicMergeText names a merge's inputs as history and diffs print them.
+func relicMergeText(other, base, ancestor string) string {
+	return fmt.Sprintf("%s onto %s from %s", singleLine(other), singleLine(base), singleLine(ancestor))
 }
 
 // relicHistoryPartColumn is the part a history line shows for an operation: the
@@ -272,10 +283,15 @@ func writeRelicPartDiff(stdout io.Writer, part core.RelicPartDiff) {
 	}
 	fmt.Fprintf(stdout, "\tBody:\t%s → %s", side(body.From), side(body.To))
 	if !body.Text {
-		fmt.Fprintln(stdout, "\tnot text")
-		return
+		fmt.Fprint(stdout, "\tnot text")
 	}
 	fmt.Fprintln(stdout)
+	if merge := body.Merge; merge != nil {
+		fmt.Fprintf(stdout, "\tMerged:\t%s\n", relicMergeText(merge.Other, merge.Base, merge.Ancestor))
+	}
+	if !body.Text {
+		return
+	}
 	for _, hunk := range body.Hunks {
 		fmt.Fprintf(stdout, "\t@@ -%d,%d +%d,%d @@\n", hunk.FromStart, hunk.FromLines, hunk.ToStart, hunk.ToLines)
 		for _, line := range hunk.Lines {

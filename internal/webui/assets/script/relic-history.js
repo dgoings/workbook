@@ -331,6 +331,10 @@
           return block;
         }
         block.append(relicElement("p", "relic-view__note", "Body: " + relicBodySide(body.from) + " → " + relicBodySide(body.to)));
+        if (body.merge) {
+          block.append(relicElement("p", "relic-view__note", "Merged from " + body.merge.other + " onto " + body.merge.base +
+            ", both started from " + body.merge.ancestor));
+        }
         if (body.approximate) {
           block.append(relicElement("p", "relic-warning",
             "This diff is approximate: too much changed to match line by line."));

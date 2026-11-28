@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -481,4 +482,35 @@ func TestRelicDiffOfACompactedRelic(t *testing.T) {
 	if text := mustRun(t, repository, "relic", "diff", relicID); !strings.Contains(text, "Retired:\ttrue → false\n") {
 		t.Fatalf("diff text = %q", text)
 	}
+}
+
+func TestRelicDiffShowsAMerge(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, objectFormat string) {
+		m := newMergedRelic(t, objectFormat)
+		part := m.relic + "#" + m.part
+		want := &core.RelicBodyDiffMerge{Version: m.merge, Base: m.theirs,
+			RelicBodyMerge: core.RelicBodyMerge{Ancestor: m.ancestor, Other: m.ours, Method: core.RelicLineMergeMethod}}
+
+		diff := relicDiffOf(t, m.second, part, "--context", "all")
+		from, to := rebuiltBodies(t, diff)
+		if from != m.theirsText || to != m.mergedText || !reflect.DeepEqual(diff.Parts[0].Body.Merge, want) {
+			t.Fatalf("diff = %q → %q with merge %+v, want the merge %+v", from, to, diff.Parts[0].Body.Merge, want)
+		}
+		diff = relicDiffOf(t, m.second, part, m.ancestor, m.merge, "--context", "all")
+		if from, to = rebuiltBodies(t, diff); from != "one\ntwo\nthree\nfour\nfive\nsix\n" || to != m.mergedText ||
+			!reflect.DeepEqual(diff.Parts[0].Body.Merge, want) {
+			t.Fatalf("diff from the ancestor = %q → %q with merge %+v", from, to, diff.Parts[0].Body.Merge)
+		}
+
+		text := mustRun(t, m.second, "relic", "diff", part)
+		line := fmt.Sprintf("\tBody:\tmd %d bytes → md %d bytes\n\tMerged:\t%s onto %s from %s\n\t@@ ",
+			len(m.theirsText), len(m.mergedText), m.ours, m.theirs, m.ancestor)
+		if !strings.Contains(text, line) {
+			t.Fatalf("diff text = %q, want %q", text, line)
+		}
+		if text = mustRun(t, m.second, "relic", "diff", part, m.ancestor, m.theirs); strings.Contains(text, "Merged:") {
+			t.Fatalf("diff to a save no merge made = %q", text)
+		}
+	})
 }

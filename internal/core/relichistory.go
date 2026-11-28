@@ -86,6 +86,9 @@ type RelicHistoryBodyVersion struct {
 	// wall time are the checkpoint's, because the save that made it was
 	// dropped, and with it the version's base.
 	Compacted bool `json:"compacted,omitempty"`
+	// Merge is set on a version a part.body.merge made: the two edits it
+	// combined and how.
+	Merge *RelicBodyMerge `json:"merge,omitempty"`
 }
 
 // RelicHistoryCompaction describes the checkpoint a compacted relic's history
@@ -352,6 +355,7 @@ func BuildRelicHistory(chain RelicChain, summary RelicSummary, partID string, li
 				Actor:    pack.Actor.ID,
 				WallTime: pack.WallTime,
 				Commit:   commit.Commit,
+				Merge:    operation.Merge,
 			})
 		}
 	}
@@ -707,6 +711,7 @@ func (s RelicService) Diff(ctx context.Context, address string, versions []strin
 	if err := diff.Err(); err != nil {
 		return RelicDiff{}, err
 	}
+	markRelicBodyMerges(&diff, chain)
 	diff.Relic = relicID
 	diff.Compacted = relicHistoryCompaction(chain.Commits)
 	diff.From = relicDiffPointOf(from)

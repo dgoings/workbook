@@ -43,6 +43,42 @@ type RelicBodyDiff struct {
 	Text        bool            `json:"text"`
 	Approximate bool            `json:"approximate,omitempty"`
 	Hunks       []RelicDiffHunk `json:"hunks,omitempty"`
+	// Merge is set when To is a version a part.body.merge made.
+	Merge *RelicBodyDiffMerge `json:"merge,omitempty"`
+}
+
+// RelicBodyDiffMerge describes the merge that made a body version: the version
+// itself, the version it was applied onto, and what the merge records.
+type RelicBodyDiffMerge struct {
+	Version string `json:"version"`
+	Base    string `json:"base"`
+	RelicBodyMerge
+}
+
+// markRelicBodyMerges sets Merge on every body diff whose to side is a version
+// a part.body.merge of the chain made. It looks through the whole chain,
+// because a later point still holds the merged body, and reads nothing.
+func markRelicBodyMerges(diff *RelicDiff, chain RelicChain) {
+	merges := map[string]RelicOperation{}
+	for _, commit := range chain.Commits {
+		for _, operation := range commit.Operation.Operations {
+			if operation.Type == RelicOperationPartBodyMerge && operation.Merge != nil && operation.Body != nil {
+				merges[operation.ID] = operation
+			}
+		}
+	}
+	for _, part := range diff.Parts {
+		if part.Body == nil || part.Body.To == nil {
+			continue
+		}
+		operation, merged := merges[part.Body.To.Version]
+		if !merged || operation.Part != part.ID {
+			continue
+		}
+		part.Body.Merge = &RelicBodyDiffMerge{
+			Version: operation.ID, Base: operation.Body.Base, RelicBodyMerge: *operation.Merge,
+		}
+	}
 }
 
 // RelicPartChanged is the kind of a part diff whose part is live on both sides

@@ -504,3 +504,104 @@ func TestHistoryFromIndexEqualsGitAfterCompaction(t *testing.T) {
 		}
 	})
 }
+
+// mergedRelic is a relic whose part two clones saved from one version, on
+// different lines, merged by the second clone's sync.
+type mergedRelic struct {
+	first, second                    string
+	relic, part                      string
+	ancestor, theirs, ours, merge    string
+	theirsText, oursText, mergedText string
+}
+
+func newMergedRelic(t *testing.T, objectFormat string) mergedRelic {
+	t.Helper()
+	const shared = "one\ntwo\nthree\nfour\nfive\nsix\n"
+	m := mergedRelic{
+		theirsText: strings.Replace(shared, "two", "TWO", 1),
+		oursText:   strings.Replace(shared, "five", "FIVE", 1),
+		mergedText: strings.Replace(strings.Replace(shared, "two", "TWO", 1), "five", "FIVE", 1),
+	}
+	m.first, m.second = relicSyncPairIn(t, objectFormat)
+	var versions []string
+	m.relic, m.part, versions = savedRelicPart(t, m.first, shared)
+	m.ancestor = versions[0]
+	succeed := func(repository, command string) {
+		t.Helper()
+		if code, stdout, stderr := run(t, repository, command); code != 0 {
+			t.Fatalf("%s = (%d, %q, %q)", command, code, stdout, stderr)
+		}
+	}
+	succeed(m.second, "fetch")
+	save := func(repository, text string, options ...string) string {
+		t.Helper()
+		return mustUpdateRelic(t, repository, m.relic, append([]string{"--part", m.part,
+			"--body-file", writeRelicBodyFile(t, "body.md", text), "--base", m.ancestor}, options...)...).Parts[0].Body.Version
+	}
+	m.theirs = save(m.first, m.theirsText)
+	m.ours = save(m.second, m.oursText, "--no-sync")
+	succeed(m.second, "sync")
+	body := relicHistoryOf(t, m.second, m.relic+"#"+m.part).BodyVersions
+	m.merge = body[len(body)-1].Version
+	if got := showPartBody(t, m.second, m.relic, m.part); got != m.mergedText || m.merge == m.theirs || m.merge == m.ours {
+		t.Fatalf("after the sync the body is %q at version %s, want the merge", got, m.merge)
+	}
+	return m
+}
+
+func TestRelicHistoryShowsAMerge(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, objectFormat string) {
+		m := newMergedRelic(t, objectFormat)
+		want := &core.RelicBodyMerge{Ancestor: m.ancestor, Other: m.ours, Method: core.RelicLineMergeMethod}
+		history := relicHistoryOf(t, m.second, m.relic+"#"+m.part)
+		change := history.Changes[len(history.Changes)-1]
+		if len(change.Operations) != 2 || change.Operations[0].ID != m.ours || *change.Operations[0].Applied ||
+			change.Operations[1].ID != m.merge || !*change.Operations[1].Applied ||
+			!reflect.DeepEqual(change.Operations[1].Merge, want) {
+			t.Fatalf("last change = %+v, want the save and the merge with %+v", change, want)
+		}
+		last := history.BodyVersions[len(history.BodyVersions)-1]
+		if last.Base != m.theirs || !reflect.DeepEqual(last.Merge, want) {
+			t.Fatalf("last body version = %+v, want the merge onto %s", last, m.theirs)
+		}
+
+		text := mustRun(t, m.second, "relic", "show", m.relic+"#"+m.part, "--history")
+		for _, line := range []string{
+			"\tpart.body.set, part.body.merge\n",
+			"\t" + m.ours + "\tpart.body.set\t" + m.part + " (not applied)\n",
+			"\t" + m.merge + "\tpart.body.merge\t" + m.part + "\tmerged " + m.ours + " onto " + m.theirs + " from " + m.ancestor + "\n",
+			fmt.Sprintf("\t%d bytes\tcurrent\tmerged\n", len(m.mergedText)),
+		} {
+			if !strings.Contains(text, line) {
+				t.Errorf("history text = %q, want it to hold %q", text, line)
+			}
+		}
+		if count := strings.Count(text, "\tmerged\n"); count != 1 {
+			t.Errorf("history text = %q, marks %d body versions as merged", text, count)
+		}
+	})
+}
+
+// A history and a diff of a merged relic are the same bytes whether the index
+// or Git answers.
+func TestHistoryFromIndexEqualsGitWithAMerge(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, objectFormat string) {
+		m := newMergedRelic(t, objectFormat)
+		part := m.relic + "#" + m.part
+		outputs := fromIndexAndGit(t, m.second,
+			[]string{"relic", "show", m.relic, "--history", "--all", "--json"},
+			[]string{"relic", "show", part, "--history", "--all", "--json"},
+			[]string{"relic", "show", part, "--history"},
+			[]string{"relic", "diff", part, "--json"},
+			[]string{"relic", "diff", part},
+			[]string{"relic", "diff", m.relic, m.ancestor, "--json"},
+		)
+		for _, index := range []int{0, 1, 3, 5} {
+			if !strings.Contains(outputs[index], `"ancestor":"`+m.ancestor+`","other":"`+m.ours+`"`) {
+				t.Errorf("output %d = %s, want the merge's inputs", index, outputs[index])
+			}
+		}
+	})
+}

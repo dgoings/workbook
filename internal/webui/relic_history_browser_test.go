@@ -501,6 +501,30 @@ func TestBrowserRelicDiffDrawsHunksSideBySideAndInline(t *testing.T) {
 	})
 }
 
+// A body a merge made says so, naming the two edits and the version they
+// started from.
+func TestBrowserRelicDiffLabelsAMerge(t *testing.T) {
+	t.Parallel()
+	diff := richDiff(t)
+	diff.Parts[0].Body.Merge = &core.RelicBodyDiffMerge{Version: historyVersion(5), Base: historyVersion(3),
+		RelicBodyMerge: core.RelicBodyMerge{Ancestor: historyVersion(2), Other: historyVersion(4), Method: core.RelicLineMergeMethod}}
+	var result struct {
+		Parts []string
+	}
+	openInBrowser(t, (&historyFake{diff: diff}).handler(t), browserPage{Width: 1440, Height: 900,
+		Path: "/relics/" + pageRelicID + "/diff?from=" + historyVersion(1) + "&to=" + historyVersion(2),
+		Script: relicPageHelpers + historyRows + diffHelpers + `
+(async () => {
+  await waitForRelicState("ready");
+  await waitForDiffState("ready");
+  return { parts: [...diffRoot().querySelectorAll("[data-relic-diff-part]")].map((part) => part.textContent) };
+})()`}, &result)
+	want := "Merged from " + historyVersion(4) + " onto " + historyVersion(3) + ", both started from " + historyVersion(2)
+	if len(result.Parts) != 2 || !strings.Contains(result.Parts[0], want) || strings.Contains(result.Parts[1], "Merged") {
+		t.Errorf("parts = %q, want only the first to say %q", result.Parts, want)
+	}
+}
+
 func TestBrowserRelicDiffDrawsHostileLinesAsText(t *testing.T) {
 	t.Parallel()
 	hostile := rawJSON(t, hostileText)

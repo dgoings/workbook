@@ -680,3 +680,103 @@ func keysOf(members map[string]json.RawMessage) []string {
 	}
 	return keys
 }
+
+// historyMergeChain is a chain whose third commit is a replayed stale save with
+// the merge it was given: Bo's save from the first body, not taken, then its
+// merge onto Ana's save.
+func historyMergeChain() (chain RelicChain, part, theirs, save, merge string) {
+	part, theirs, save, merge = relicTestID(9300), relicTestID(9301), relicTestID(9302), relicTestID(9303)
+	chain = historyChain(
+		historyPack(1, "ana@example.com", historyCreate(relicTestID(9304)), historyPartAdd(part, "1/1", &RelicBodyChange{Format: "md", Bytes: 10})),
+		historyPack(2, "ana@example.com", historyBodySet(theirs, part, part, 20)),
+		historyPack(3, "bo@example.com", historyBodySet(save, part, part, 30),
+			relicMergeOperation(merge, part, theirs, part, save, 40)),
+	)
+	return chain, part, theirs, save, merge
+}
+
+func TestHistoryListsAMergeWithItsInputs(t *testing.T) {
+	chain, part, theirs, save, merge := historyMergeChain()
+	want := &RelicBodyMerge{Ancestor: part, Other: save, Method: RelicLineMergeMethod}
+	for _, partID := range []string{part, ""} {
+		history := BuildRelicHistory(chain, RelicSummary{ID: relicDocRelic}, partID, 0, true)
+		change := history.Changes[len(history.Changes)-1]
+		if change.Summary != "part.body.set, part.body.merge" || len(change.Operations) != 2 {
+			t.Fatalf("part %q: last change = %+v, want the save and the merge", partID, change)
+		}
+		saved, merged := change.Operations[0], change.Operations[1]
+		if saved.Applied == nil || *saved.Applied || saved.Merge != nil {
+			t.Errorf("part %q: save = %+v, want it not applied", partID, saved)
+		}
+		if merged.Applied == nil || !*merged.Applied || !reflect.DeepEqual(merged.Merge, want) || merged.Body.Base != theirs {
+			t.Errorf("part %q: merge = %+v, want it applied onto %s with %+v", partID, merged, theirs, want)
+		}
+	}
+
+	history := BuildRelicHistory(chain, RelicSummary{ID: relicDocRelic}, part, 0, false)
+	if len(history.BodyVersions) != 3 {
+		t.Fatalf("body versions = %+v, want the first, Ana's and the merge", history.BodyVersions)
+	}
+	last := history.BodyVersions[2]
+	if last.Version != merge || last.Base != theirs || !last.Current || !reflect.DeepEqual(last.Merge, want) {
+		t.Fatalf("last body version = %+v, want the merge with %+v", last, want)
+	}
+	for _, version := range history.BodyVersions[:2] {
+		if version.Merge != nil {
+			t.Errorf("body version %+v is marked as a merge", version)
+		}
+	}
+	encoded, err := json.Marshal(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := `"merge":{"ancestor":"` + part + `","other":"` + save + `","method":"` + RelicLineMergeMethod + `"}`
+	if count := strings.Count(string(encoded), member); count != 2 {
+		t.Fatalf("history JSON holds %s %d times, want on the operation and the body version: %s", member, count, encoded)
+	}
+}
+
+// A merged commit replayed again holds two merges of one part, the second
+// merging in the first.
+func TestHistoryListsBothMergesOfAReplayedMerge(t *testing.T) {
+	chain, part, theirs, save, first := historyMergeChain()
+	newer, second := relicTestID(9310), relicTestID(9311)
+	chain = historyChain(
+		chain.Commits[0].Operation, chain.Commits[1].Operation,
+		historyPack(3, "cy@example.com", historyBodySet(newer, part, theirs, 25)),
+		historyPack(4, "bo@example.com", historyBodySet(save, part, part, 30),
+			relicMergeOperation(first, part, theirs, part, save, 40),
+			relicMergeOperation(second, part, newer, theirs, first, 45)),
+	)
+	history := BuildRelicHistory(chain, RelicSummary{ID: relicDocRelic}, part, 0, true)
+	operations := history.Changes[len(history.Changes)-1].Operations
+	if len(operations) != 3 || operations[1].ID != first || operations[2].ID != second ||
+		*operations[1].Applied || !*operations[2].Applied || operations[2].Merge.Other != first {
+		t.Fatalf("operations = %+v, want both merges, the second applied", operations)
+	}
+	last := history.BodyVersions[len(history.BodyVersions)-1]
+	if last.Version != second || last.Merge == nil || last.Merge.Other != first {
+		t.Fatalf("last body version = %+v, want the second merge", last)
+	}
+	for _, version := range history.BodyVersions {
+		if version.Version == first {
+			t.Fatalf("body versions = %+v, want no version for the merge that was not applied", history.BodyVersions)
+		}
+	}
+}
+
+func TestHistoryOfAMergeFromANewerBuildTruncates(t *testing.T) {
+	chain, part, _, _, merge := historyMergeChain()
+	newer := historyPack(4, "cy@example.com", historyBodySet(relicTestID(9320), part, merge, 50))
+	newer.MinReader = 10
+	chain = historyChain(chain.Commits[0].Operation, chain.Commits[1].Operation, chain.Commits[2].Operation, newer)
+	history := BuildRelicHistory(chain, RelicSummary{ID: relicDocRelic}, part, 0, true)
+	if history.Total != 3 || history.Truncated == nil || history.Truncated.Category != CategoryNewerWriter ||
+		history.Truncated.Commit != historyCommitID(4) {
+		t.Fatalf("history = total %d, truncated %+v; want three changes and the newer writer's", history.Total, history.Truncated)
+	}
+	last := history.BodyVersions[len(history.BodyVersions)-1]
+	if last.Version != merge || !last.Current || last.Merge == nil {
+		t.Fatalf("last body version = %+v, want the merge", last)
+	}
+}
