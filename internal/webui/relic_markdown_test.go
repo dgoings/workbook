@@ -219,6 +219,34 @@ setTimeout(() => {
     const shape = shapeOf(renderMarkdown(document.createElement("div"), source, { tables: true }));
     if (shape !== want) failures.push(JSON.stringify(source) + " rendered as " + shape + ", want " + want);
   }
+  // A line separator is not a line end here, and a pattern whose dot stopped
+  // at one tried every way to divide the run before it.
+  const long = 1 << 17;
+  const separated = {
+    "a heading ending in a line separator": "# " + " ".repeat(long) + "\u2028",
+    "a heading of tabs ending in a paragraph separator": "#" + "\t".repeat(long) + "\u2029x",
+    "a bullet ending in a line separator": "- " + " ".repeat(long) + "\u2028",
+    "a numbered item ending in a line separator": "1. " + " ".repeat(long) + "\u2028",
+    "a backtick fence ending in a line separator": "` + "`" + `".repeat(long) + "\u2028",
+    "a tilde fence ending in a line separator": "~".repeat(long) + "\u2028",
+    "many bullet-like lines in one paragraph": ("x\n" + ("- " + " ".repeat(5000) + "\u2028\n").repeat(200)),
+  };
+  Object.keys(separated).forEach((name) => draw(name, separated[name], 2000));
+  if (!draw("a heading holding a line separator", "# a\u2028b", 2000).some((element) => element.tagName === "H3")) {
+    failures.push("a heading holding a line separator is not a heading");
+  }
+  // An opening bracket whose label or target is refused is not searched for
+  // again from the next one.
+  const brackets = {
+    "a run of opening brackets": "[".repeat((1 << 20) - 1) + "]",
+    "a run of image openers": "![".repeat((1 << 19) - 1) + "]",
+    "a run of empty links": "[](".repeat(349525) + ")",
+  };
+  Object.keys(brackets).forEach((name) => draw(name, brackets[name], 2000));
+  // A long body of short lines is drawn whole: 200,000 lines in one paragraph.
+  const lines = 200000;
+  const breaks = draw("a paragraph of many lines", "a\n".repeat(lines), 5000).filter((element) => element.tagName === "BR").length;
+  if (breaks !== lines - 1) failures.push("a paragraph of " + lines + " lines drew " + breaks + " line breaks");
   if (failures.length) throw new Error(failures.join("\n"));
 }, 0);
 `

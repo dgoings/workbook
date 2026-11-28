@@ -90,10 +90,15 @@
       // Every character of a rendering is drawn without its direction controls;
       // see withoutDirectionControls.
       function markdownText(value) { return document.createTextNode(withoutDirectionControls(value)); }
-      function markdownNode(tagName, children) {
-        const element = document.createElement(tagName);
-        if (children && children.length) element.append(...children);
+      // Children go in one at a time: a call that spread them as arguments
+      // would fail past some hundred thousand, and a long body of short lines
+      // draws that many at one level.
+      function markdownAppend(element, children) {
+        for (const child of children || []) element.append(child);
         return element;
+      }
+      function markdownNode(tagName, children) {
+        return markdownAppend(document.createElement(tagName), children);
       }
       // The attachment a reference names, or null.
       //
@@ -193,6 +198,7 @@
         const text = String(source);
         const nodes = [];
         const exhausted = new Set();
+        const found = new Map();
         let plain = "";
         let index = 0;
         function flush() {
@@ -202,11 +208,17 @@
         }
         // The next occurrence of a delimiter, remembering the ones that have run
         // out. A search that fails from here fails from anywhere later, because
-        // every later search looks at less of the string.
+        // every later search looks at less of the string. The last one found
+        // is remembered too: while it is still at or past where a search
+        // starts it is that search's answer, so a run of openers whose spans
+        // are refused does not scan the same stretch once each.
         function closerAt(mark, from) {
           if (exhausted.has(mark)) return -1;
+          const seen = found.get(mark);
+          if (seen !== undefined && seen >= from) return seen;
           const at = text.indexOf(mark, from);
           if (at < 0) exhausted.add(mark);
+          else found.set(mark, at);
           return at;
         }
         // The label of a link or an image, or null when there is not one here.
@@ -290,7 +302,7 @@
                 const label = markdownInline(span.label, context, depth + 1, false);
                 flush();
                 if (drawn) {
-                  drawn.append(...(label.length ? label : [markdownText(span.target)]));
+                  markdownAppend(drawn, label.length ? label : [markdownText(span.target)]);
                   nodes.push(drawn);
                 } else {
                   // A card, or a target this page will not link to. The words
@@ -378,18 +390,22 @@
         while (body[run] === marker) run += 1;
         return run >= length && body.slice(run).trim() === "";
       }
-      const markdownBullet = /^[ \t]{0,7}[-*+][ \t]+(.*)$/;
-      const markdownOrdered = /^[ \t]{0,7}\d{1,9}[.)][ \t]+(.*)$/;
+      // The dot in these four takes any character (the `s` flag). A line is
+      // split at CR and LF only, so it can hold a line or paragraph separator,
+      // and a dot that stopped at one would fail the pattern and have it try
+      // every way to divide the run before it.
+      const markdownBullet = /^[ \t]{0,7}[-*+][ \t]+(.*)$/s;
+      const markdownOrdered = /^[ \t]{0,7}\d{1,9}[.)][ \t]+(.*)$/s;
       // A heading's text is taken with the blanks after it, which
       // markdownHeadingText then drops: a lazy match that stopped before them
       // would take the square of a long line's length.
-      const markdownHeading = /^ {0,3}(#{1,6})(?:[ \t]+(.*))?$/;
+      const markdownHeading = /^ {0,3}(#{1,6})(?:[ \t]+(.*))?$/s;
       function markdownHeadingText(text) {
         let end = text ? text.length : 0;
         while (end > 0 && (text[end - 1] === " " || text[end - 1] === "\t")) end -= 1;
         return text ? text.slice(0, end) : "";
       }
-      const markdownFence = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+      const markdownFence = /^ {0,3}(`{3,}|~{3,})(.*)$/s;
       const markdownQuote = /^ {0,3}>/;
       // One cell of a pipe table's delimiter row: dashes, with an optional
       // colon at either end.
@@ -546,11 +562,11 @@
       // The element is the caller's — it carries the class, the label and the
       // scrolling — and everything inside it is built here.
       function renderMarkdown(target, source, context) {
-        target.replaceChildren(...markdownBlocks(source || "", context || {}, 0));
-        return target;
+        target.replaceChildren();
+        return markdownAppend(target, markdownBlocks(source || "", context || {}, 0));
       }
       // Draws the inline half of the subset into an element: a card.
       function renderInlineMarkdown(target, source) {
-        target.replaceChildren(...markdownInlineLines(source || "", { inline: true }, true));
-        return target;
+        target.replaceChildren();
+        return markdownAppend(target, markdownInlineLines(source || "", { inline: true }, true));
       }
