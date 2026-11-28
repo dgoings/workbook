@@ -56,10 +56,17 @@ type Skip struct {
 // the refs moved and the run is done, but the projection cache could not be
 // moved onto the checkpoints. The cache can be rebuilt from the refs, and has
 // to be before Git prunes the heads it last saw. Any other Execute error means
-// the run did not finish.
-type ProjectionError struct{ Err error }
+// the run did not finish. ExecuteRelics returns it with Relics set when the
+// relic index could not follow its checkpoints.
+type ProjectionError struct {
+	Err    error
+	Relics bool
+}
 
 func (e *ProjectionError) Error() string {
+	if e.Relics {
+		return "relics were compacted, but the relic index could not follow: " + e.Err.Error()
+	}
 	return "tasks were compacted, but the projection cache could not follow: " + e.Err.Error()
 }
 

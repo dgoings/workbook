@@ -40,6 +40,22 @@ type ArchiveManifest struct {
 	// Flags are the compact flags as given.
 	Flags []string      `json:"flags"`
 	Tasks []ArchiveTask `json:"tasks"`
+	// Relics are the relics a relic compaction run bundled. A task run lists
+	// none, and then the member is not written, so a task bundle's manifest
+	// keeps the bytes it always had.
+	Relics []ArchiveRelic `json:"relics,omitempty"`
+}
+
+// ArchiveRelic is one compacted relic in a backup bundle: the tip the bundle
+// holds for it under refs/workbook/relics/<id>, and the generations either
+// side of the compaction.
+type ArchiveRelic struct {
+	RelicID       string `json:"relicId"`
+	Title         string `json:"title"`
+	OldTip        string `json:"oldTip"`
+	OldGeneration string `json:"oldGeneration"`
+	NewGeneration string `json:"newGeneration"`
+	Commits       int    `json:"commits"`
 }
 
 // ArchiveTask is one compacted task in a backup bundle: the tip the bundle
@@ -90,7 +106,43 @@ func ResolveArchivePath(commonGitDir, runID, flagValue string) (string, error) {
 // *ArchiveTasksMovedError naming them all. Every failure removes the temporary file, and
 // archiveManifestRef is gone from this repository whenever it returns.
 func (r *Repository) WriteArchiveBundle(ctx context.Context, config core.ProjectConfig, path string, manifest ArchiveManifest) error {
+	if len(manifest.Relics) > 0 {
+		// This bundle holds task refs only, so a relic listed here would be
+		// named in the manifest and missing from the bundle.
+		return core.Errorf(core.CategoryValidation, "a task archive cannot hold relics; relics are bundled by a relic run")
+	}
 	return r.writeArchiveBundle(ctx, config, path, manifest, taskRefPrefix)
+}
+
+// WriteRelicArchiveBundle writes a verified Git bundle at path holding every
+// relic in manifest at its old tip under refs/workbook/relics/<id>, and the
+// manifest itself at archiveManifestRef, as WriteArchiveBundle does for tasks:
+// it moves no relic ref, never overwrites a file, and publishes the bundle by
+// an atomic rename. A relic run holds no parked tips (it skips a relic with
+// any), so the bundle holds none. Relics whose refs no longer point at their
+// OldTip are an *ArchiveTasksMovedError naming them all in RelicIDs.
+func (r *Repository) WriteRelicArchiveBundle(ctx context.Context, config core.ProjectConfig, path string, manifest ArchiveManifest) error {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return err
+	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return err
+	}
+	if err := r.ensureGitObjectIDWidth(ctx); err != nil {
+		return err
+	}
+	if len(manifest.Tasks) > 0 {
+		return core.Errorf(core.CategoryValidation, "a relic archive cannot hold tasks; tasks are bundled by a task run")
+	}
+	manifest, err := r.canonicalArchiveManifest(ctx, config, manifest)
+	if err != nil {
+		return err
+	}
+	refs := make([]bundledRef, 0, len(manifest.Relics))
+	for _, relic := range manifest.Relics {
+		refs = append(refs, bundledRef{name: relicRefPrefix + relic.RelicID, expected: relic.OldTip, relicID: relic.RelicID})
+	}
+	return r.writeRefsBundle(ctx, path, manifest, refs)
 }
 
 // writeArchiveBundle is WriteArchiveBundle with the namespace each task's old
@@ -129,9 +181,10 @@ func (r *Repository) writeArchiveBundle(ctx context.Context, config core.Project
 // when set, is the commit the bundle must hold it at: a ref that moved
 // before the bundle was written fails the write. taskID names the task a
 // moved ref belongs to, which is reported as an *ArchiveTasksMovedError so a
-// compaction can leave that task out and bundle the rest.
+// compaction can leave that task out and bundle the rest; relicID does the
+// same for a relic.
 type bundledRef struct {
-	name, expected, taskID string
+	name, expected, taskID, relicID string
 }
 
 // writeRefsBundle writes the verified bundle at path holding refs and the
@@ -244,6 +297,21 @@ func (r *Repository) canonicalArchiveManifest(ctx context.Context, config core.P
 				fmt.Sprintf("archived task %s must name its full old tip", task.TaskID), err)
 		}
 	}
+	seenRelics := make(map[string]struct{}, len(manifest.Relics))
+	for _, relic := range manifest.Relics {
+		if err := core.ValidateRelicIDShape(relic.RelicID); err != nil || !keys.OwnsRelic(relic.RelicID) {
+			return ArchiveManifest{}, core.Errorf(core.CategoryValidation,
+				"archived relic ID %q is not one of this project's relics", relic.RelicID)
+		}
+		if _, duplicate := seenRelics[relic.RelicID]; duplicate {
+			return ArchiveManifest{}, core.Errorf(core.CategoryValidation, "archive manifest lists relic %s twice", relic.RelicID)
+		}
+		seenRelics[relic.RelicID] = struct{}{}
+		if err := r.validateFullObjectID(relic.OldTip); err != nil {
+			return ArchiveManifest{}, core.Wrap(core.CategoryValidation,
+				fmt.Sprintf("archived relic %s must name its full old tip", relic.RelicID), err)
+		}
+	}
 
 	return normalizedArchiveManifest(manifest), nil
 }
@@ -256,6 +324,7 @@ func normalizedArchiveManifest(manifest ArchiveManifest) ArchiveManifest {
 	manifest.CreatedAt = manifest.CreatedAt.UTC()
 	manifest.Flags = append([]string{}, manifest.Flags...)
 	manifest.Tasks = append([]ArchiveTask{}, manifest.Tasks...)
+	manifest.Relics = append([]ArchiveRelic(nil), manifest.Relics...)
 	return manifest
 }
 
@@ -369,20 +438,31 @@ func (r *Repository) checkArchiveHeads(ctx context.Context, bundle, manifestComm
 			if ref.taskID != "" {
 				return core.Errorf(core.CategoryOperational, "the backup bundle lacks task %s", ref.taskID)
 			}
+			if ref.relicID != "" {
+				return core.Errorf(core.CategoryOperational, "the backup bundle lacks relic %s", ref.relicID)
+			}
 			return core.Errorf(core.CategoryOperational, "the backup bundle lacks %s", ref.name)
 		}
 		if ref.expected == "" || got == ref.expected {
 			continue
 		}
-		if ref.taskID == "" {
+		kind, recordID := "task", ref.taskID
+		if ref.relicID != "" {
+			kind, recordID = "relic", ref.relicID
+		}
+		if recordID == "" {
 			return core.Errorf(core.CategoryStaleWrite,
 				"%s moved from %s to %s while the backup bundle was written", ref.name, ref.expected, got)
 		}
 		if moved == nil {
 			moved = &ArchiveTasksMovedError{err: core.Errorf(core.CategoryStaleWrite,
-				"task %s moved from %s to %s since it was selected for compaction", ref.taskID, ref.expected, got)}
+				"%s %s moved from %s to %s since it was selected for compaction", kind, recordID, ref.expected, got)}
 		}
-		moved.TaskIDs = append(moved.TaskIDs, ref.taskID)
+		if ref.relicID != "" {
+			moved.RelicIDs = append(moved.RelicIDs, ref.relicID)
+		} else {
+			moved.TaskIDs = append(moved.TaskIDs, ref.taskID)
+		}
 	}
 	if moved != nil {
 		return moved
@@ -394,10 +474,12 @@ func (r *Repository) checkArchiveHeads(ctx context.Context, bundle, manifestComm
 // some tasks' refs had moved from the tips the manifest names. It is a
 // CategoryStaleWrite error naming the first such task, and carries every one,
 // in manifest order, so a caller can leave those tasks out and bundle the
-// rest. No bundle was written.
+// rest. No bundle was written. WriteRelicArchiveBundle refuses the same way,
+// naming the relics in RelicIDs.
 type ArchiveTasksMovedError struct {
-	TaskIDs []string
-	err     error
+	TaskIDs  []string
+	RelicIDs []string
+	err      error
 }
 
 func (e *ArchiveTasksMovedError) Error() string { return e.err.Error() }
