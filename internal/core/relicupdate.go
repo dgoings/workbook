@@ -143,9 +143,22 @@ func (s RelicService) writeRelicChange(
 	content map[string]RelicPartContent,
 	reason string,
 ) (RelicSnapshot, error) {
+	return s.writeRelicChangeAt(ctx, parent, operations, content, reason, s.now())
+}
+
+// writeRelicChangeAt is writeRelicChange with the pack's wall time given, for
+// an update whose merge operation's ID is derived from it.
+func (s RelicService) writeRelicChangeAt(
+	ctx context.Context,
+	parent RelicSnapshot,
+	operations []RelicOperation,
+	content map[string]RelicPartContent,
+	reason string,
+	wallTime time.Time,
+) (RelicSnapshot, error) {
 	state := parent.Record.State
 	pack := NewRelicOperationPack(s.Config.ProjectID, state.RelicID, state.History.Generation, s.actorFor(ctx),
-		state.LogicalClock+1, s.now(), operations)
+		state.LogicalClock+1, wallTime, operations)
 	record, err := ApplyRelic(&parent.Record, pack)
 	if err != nil {
 		return RelicSnapshot{}, err
@@ -198,6 +211,10 @@ func (s RelicService) Update(ctx context.Context, idOrPrefix string, edits []Rel
 		before:  map[string]map[string]json.RawMessage{},
 		added:   map[string]struct{}{},
 		bodies:  map[string][]byte{},
+		inputs:  map[string][]byte{},
+		// The pack's wall time is read once, before any edit, because a
+		// merge operation's ID is derived from it.
+		wallTime: s.now(),
 	}
 	for _, edit := range edits {
 		if err := update.apply(ctx, edit); err != nil {
@@ -236,17 +253,19 @@ func (s RelicService) Update(ctx context.Context, idOrPrefix string, edits []Rel
 		if body, saved := update.bodies[partID]; saved {
 			stored.Body, stored.HasBody = body, true
 		}
+		stored.MergeInput = update.inputs[partID]
 		content[partID] = stored
 	}
 
-	written, err := s.writeRelicChange(ctx, snapshot, update.operations, content, "update relic "+relicID)
+	written, err := s.writeRelicChangeAt(ctx, snapshot, update.operations, content, "update relic "+relicID, update.wallTime)
 	if err != nil {
 		return RelicMutationResult{}, err
 	}
 	result := RelicMutationResult{
-		Relic:   relicSummaryUnder(written, listing),
-		Parts:   make([]RelicDocumentPart, 0, len(update.changed)),
-		Changed: true,
+		Relic:    relicSummaryUnder(written, listing),
+		Parts:    make([]RelicDocumentPart, 0, len(update.changed)),
+		Changed:  true,
+		Warnings: update.warnings,
 	}
 	for _, partID := range update.changed {
 		part, _ := written.Record.State.Relic.Part(partID)
@@ -468,6 +487,13 @@ type relicUpdate struct {
 	added  map[string]struct{}
 	// bodies holds each body an edit saved, by part.
 	bodies map[string][]byte
+	// inputs holds, by part, the text a save from an older version gave, which
+	// its part.body.merge merges in; bodies then holds the merged text.
+	inputs map[string][]byte
+	// wallTime is the wall time the update's pack records.
+	wallTime time.Time
+	// warnings are the update's warnings: one for each merge.
+	warnings []Warning
 	// changed lists the parts an edit added or edited, in the order first
 	// changed.
 	changed []string
@@ -802,6 +828,7 @@ func (u *relicUpdate) editPart(ctx context.Context, edit RelicEdit) error {
 	}
 	var body RelicBodyInput
 	var base string
+	var older *relicOlderBody
 	if edit.Body != nil {
 		if body, err = relicBodyToSave(part, edit); err != nil {
 			return err
@@ -809,7 +836,7 @@ func (u *relicUpdate) editPart(ctx context.Context, edit RelicEdit) error {
 		if err := checkRelicBodyInput("part "+part.ID, body); err != nil {
 			return err
 		}
-		if base, err = checkRelicBodyBase(u.relicID, part, edit.Base); err != nil {
+		if base, older, err = u.checkBodyBase(ctx, part, edit.Base); err != nil {
 			return err
 		}
 	} else if edit.Base != "" {
@@ -842,7 +869,11 @@ func (u *relicUpdate) editPart(ctx context.Context, edit RelicEdit) error {
 			return err
 		}
 	}
-	if edit.Body != nil {
+	if older != nil {
+		if err := u.mergeBody(ctx, part, body, *older); err != nil {
+			return err
+		}
+	} else if edit.Body != nil {
 		operation := RelicOperation{
 			Type: RelicOperationPartBodySet,
 			Part: part.ID,

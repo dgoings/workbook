@@ -564,7 +564,17 @@ func runRelicUpdate(ctx context.Context, args []string, cwd string, stdout, stde
 		if err := checkRelicUpdatePartRelics(ctx, service, request); err != nil {
 			return core.RelicMutationResult{}, err
 		}
+		// A save from an older version reads the part's history, through the
+		// index when it holds the chain. The index is brought up to the relic
+		// refs only then, after the fetch.
+		service.HistoryReader = session.store.RelicReader()
 		return service.Update(ctx, request.Relic, request.Edits)
 	})
+	// A save the update could not merge is a relic conflict of its own, which
+	// the envelope carries as a fetch's are.
+	var failure core.RelicConflictFailure
+	if errors.As(err, &failure) {
+		session.relicConflicts = append(session.relicConflicts, failure.Conflicts...)
+	}
 	return writeRelicMutationOutcome(stdout, stderr, "relic update", session, result, err, request.JSON)
 }

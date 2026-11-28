@@ -126,6 +126,19 @@ func RelicConflictError(conflicts []RelicConflict) error {
 		"%d relic(s) need a decision before their local changes can be replayed", len(conflicts))
 }
 
+// RelicConflictFailure is a command's failure on relic conflicts it met
+// itself, such as a relic update whose save from an older version could not
+// be merged. Its category is conflict and its message RelicConflictError's;
+// the caller puts Conflicts in the envelope's relicConflict list.
+type RelicConflictFailure struct {
+	Conflicts []RelicConflict
+}
+
+func (failure RelicConflictFailure) Error() string { return failure.Unwrap().Error() }
+
+// Unwrap is the categorized error, so CategoryOf reads conflict.
+func (failure RelicConflictFailure) Unwrap() error { return RelicConflictError(failure.Conflicts) }
+
 // RelicConflictDetail renders one relic conflict as a single line that names
 // the relic, says what happened and what to do. It never holds body text.
 func RelicConflictDetail(conflict RelicConflict) string {
@@ -163,6 +176,9 @@ func RelicConflictDetail(conflict RelicConflict) string {
 // three commands of the recovery when the local tip is parked, and the two
 // that still apply when it is not.
 func relicBodyConflictDetail(conflict RelicConflict, remote string) string {
+	if relicUpdateBodyConflict(conflict) {
+		return relicUpdateBodyConflictDetail(conflict)
+	}
 	part := conflict.Part
 	detail := "part " + part + ": the body was saved here and on " + remote +
 		" from the same version; the text from " + remote + " stands" + relicMergeReasonDetail(conflict.Body)
@@ -185,6 +201,32 @@ func relicBodyConflictDetail(conflict RelicConflict, remote string) string {
 		"; run `git cat-file blob " + conflict.ParkedRef + ":parts/" + part + "/body > mine.md` to write it, " +
 		base + show + " to write the text that stands, " + combine + ", then run " +
 		"`workbook relic update " + conflict.RelicID + " --part " + part + " --body-file mine.md --base " + theirs + "`"
+}
+
+// relicUpdateBodyConflict reports whether a body conflict is a relic update's
+// own: its save was never recorded, so ours has no version. Every conflict a
+// replay meets names the local save it parked.
+func relicUpdateBodyConflict(conflict RelicConflict) bool {
+	return conflict.Body != nil && conflict.Body.Ours.Version == ""
+}
+
+// relicUpdateBodyConflictDetail is the detail of a relic update's body
+// conflict: the version the save started from and the one that stands, why
+// they were not merged, and how to save the edits again.
+func relicUpdateBodyConflictDetail(conflict RelicConflict) string {
+	part, body := conflict.Part, conflict.Body
+	theirs := body.Theirs.Version
+	var detail string
+	if body.Base != nil {
+		detail = "part " + part + ": this save started from version " + body.Base.Version +
+			", and the body has since been saved as version " + theirs + relicMergeReasonDetail(body)
+	} else {
+		detail = "part " + part + ": this save started from a version that was dropped when the relic was compacted" +
+			", so it cannot be merged onto version " + theirs
+	}
+	return detail + "; nothing was saved; the file given still holds this save's text; run `workbook relic show " +
+		conflict.RelicID + "#" + part + " --body > current.md` to write the text that stands, make the edits again in current.md, " +
+		"then run `workbook relic update " + conflict.RelicID + " --part " + part + " --body-file current.md --base " + theirs + "`"
 }
 
 // relicMergeReasonDetail says why a body conflict's edits were not merged, as

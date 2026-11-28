@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -126,9 +127,21 @@ func TestRelicBodyBaseIsEchoedSafelyAndMatchedWithoutCase(t *testing.T) {
 	if !saved.Changed || saved.Parts[0].Body.Version == part {
 		t.Fatalf("a save from the current version typed in lower case = %+v, want a new version", saved)
 	}
-	message := relicErrorMessage(t, repository, 6, core.CategoryStaleWrite,
-		"update", id, "--part", part, "--body-file", second, "--base", strings.ToLower(part))
-	if !strings.Contains(message, "not "+part+";") || strings.Contains(message, strings.ToLower(part)) {
+	// A save from the older version, typed in lower case, that changes the
+	// same line is a conflict naming the version as it is stored.
+	third := writeRelicBodyFile(t, "third.md", "third\n")
+	code, stdout, stderr := run(t, repository, "relic", "update", id, "--part", part, "--body-file", third,
+		"--base", strings.ToLower(part), "--json")
+	if code != 8 || stdout == "" {
+		t.Fatalf("a stale base typed in lower case = (%d, %q, %q), want exit 8", code, stdout, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryConflict, "")
+	var document errorDocument
+	if err := json.Unmarshal([]byte(stderr), &document); err != nil {
+		t.Fatal(err)
+	}
+	if message := document.Error.Message; !strings.Contains(message, "started from version "+part+",") ||
+		strings.Contains(message, strings.ToLower(part)) {
 		t.Fatalf("a stale base typed in lower case: message %q, want the version shown as it is stored", message)
 	}
 	assertRelicHistoriesValid(t, repository, 1)

@@ -40,6 +40,9 @@ func newRelicService(
 		// shows them.
 		Now:   func() time.Time { return recordedNow().UTC() },
 		Actor: actor,
+
+		// Git answers history; relic update reads it through the index.
+		HistoryReader: repository,
 	}
 }
 

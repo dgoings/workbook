@@ -213,3 +213,16 @@ func RelicBodyMergedWarning(relicID, remote string, merge RelicOperation) Warnin
 			"; `workbook relic diff " + relicID + "#" + merge.Part + "` shows the merge",
 	}
 }
+
+// RelicBodyMergedByUpdateWarning reports a relic update whose save started
+// from an older version of a part's body and was merged onto the version that
+// stood: RelicBodyMergedWarning's report, worded for a save made here.
+func RelicBodyMergedByUpdateWarning(relicID string, merge RelicOperation) Warning {
+	return Warning{
+		Code: WarningRelicBodyMerged,
+		Message: "relic " + relicID + ": part " + merge.Part + ": this save started from version " +
+			merge.Merge.Ancestor + ", and the body has since been saved as version " + merge.Body.Base +
+			"; the two edits changed different lines and were merged as version " + merge.ID +
+			"; `workbook relic diff " + relicID + "#" + merge.Part + "` shows the merge",
+	}
+}

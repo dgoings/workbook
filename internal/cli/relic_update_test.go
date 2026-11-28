@@ -664,11 +664,15 @@ func TestRelicBodyEditNeedsTheCurrentVersion(t *testing.T) {
 	assertRelicHistoriesValid(t, repository, 1)
 	head := relicHeadOf(t, repository, id)
 
-	// A save from the version the body has moved past writes nothing.
-	message := relicErrorMessage(t, repository, 6, core.CategoryStaleWrite,
-		"update", id, "--part", part, "--body-file", third, "--base", v1)
-	if !strings.Contains(message, v2) || !strings.Contains(message, "relic show "+id+"#"+part) {
-		t.Fatalf("stale save message = %q, want the current version %s and how to read it", message, v2)
+	// A save from the version the body has moved past that changes the same
+	// line is a conflict, and writes nothing.
+	code, stdout, stderr := run(t, repository, "relic", "update", id, "--part", part, "--body-file", third, "--base", v1, "--json")
+	if code != 8 || !strings.Contains(stdout, `"relicConflict"`) {
+		t.Fatalf("stale save = (%d, %q, %q), want exit 8 with the conflict", code, stdout, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryConflict, "")
+	if !strings.Contains(stderr, v2) || !strings.Contains(stderr, "relic show "+id+"#"+part) {
+		t.Fatalf("stale save message = %q, want the current version %s and how to read it", stderr, v2)
 	}
 	if after := relicHeadOf(t, repository, id); after != head {
 		t.Fatalf("a stale save moved the relic from %s to %s", head, after)
@@ -679,12 +683,14 @@ func TestRelicBodyEditNeedsTheCurrentVersion(t *testing.T) {
 
 	// So does a save that names no version at all, and one command with a good
 	// change beside the stale save.
-	message = relicErrorMessage(t, repository, 6, core.CategoryStaleWrite, "update", id, "--part", part, "--body-file", third)
+	message := relicErrorMessage(t, repository, 6, core.CategoryStaleWrite, "update", id, "--part", part, "--body-file", third)
 	if !strings.Contains(message, "--base "+v2) {
 		t.Fatalf("save with no base message = %q, want --base %s", message, v2)
 	}
-	relicErrorMessage(t, repository, 6, core.CategoryStaleWrite,
-		"update", id, "--title", "Never recorded", "--part", part, "--body-file", third, "--base", v1)
+	if code, stdout, stderr := run(t, repository, "relic", "update", id, "--title", "Never recorded", "--part", part,
+		"--body-file", third, "--base", v1); code != 8 {
+		t.Fatalf("stale save beside a title = (%d, %q, %q), want exit 8", code, stdout, stderr)
+	}
 	if after := relicHeadOf(t, repository, id); after != head {
 		t.Fatalf("a refused save moved the relic from %s to %s", head, after)
 	}

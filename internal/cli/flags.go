@@ -972,8 +972,9 @@ var commandSchemas = map[string]commandMetadata{
 					"--title, --set, --set-json and --clear always act on the relic, wherever they are typed.\n" +
 					"After --part, --clear still removes a property of the relic; --clear-field removes a field of the part.\n\n" +
 					"Saving a body over an existing one needs --base <version>, the version shown by\n" +
-					"\"workbook relic show <relic>#<part>\". A save from an older version is refused: read\n" +
-					"the part again and save from the version it is at now.\n\n" +
+					"\"workbook relic show <relic>#<part>\". A save from an older version is merged onto the\n" +
+					"version the body is at now when the two changed different lines. When they overlap,\n" +
+					"nothing is saved and the command exits 8 with the three texts; save again from that version.\n\n" +
 					"A part's first body takes its format label from the file's ending. A save over a body\n" +
 					"keeps the label the body has. --body-format sets the label in either case.\n\n" +
 					"--set and --field store text. --set-json and --field-json store any JSON value.\n" +

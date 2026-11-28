@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -23,6 +24,11 @@ type memoryRelicStore struct {
 	snapshots map[string]RelicSnapshot
 	content   map[string]map[string]RelicPartContent
 	writes    []memoryRelicWrite
+	// chains, atHead and contentAt keep every commit the store holds, so a
+	// service given the store as its HistoryReader reads past versions.
+	chains    map[string][]RelicChainCommit
+	atHead    map[string]RelicSnapshot
+	contentAt map[string]map[string]RelicPartContent
 }
 
 type memoryRelicWrite struct {
@@ -37,6 +43,9 @@ func newMemoryRelicStore() *memoryRelicStore {
 	return &memoryRelicStore{
 		snapshots: map[string]RelicSnapshot{},
 		content:   map[string]map[string]RelicPartContent{},
+		chains:    map[string][]RelicChainCommit{},
+		atHead:    map[string]RelicSnapshot{},
+		contentAt: map[string]map[string]RelicPartContent{},
 	}
 }
 
@@ -50,6 +59,67 @@ func (s *memoryRelicStore) put(snapshot RelicSnapshot) {
 		parts[part.ID] = RelicPartContent{Fields: map[string]json.RawMessage{}}
 	}
 	s.content[relicID] = parts
+	s.remember(snapshot, "", true)
+}
+
+// remember keeps a commit for history reads: the snapshot and its parts as
+// they stand, after parent, or as the only commit when root is set.
+func (s *memoryRelicStore) remember(snapshot RelicSnapshot, parent string, root bool) {
+	relicID := snapshot.Record.State.RelicID
+	commit := RelicChainCommit{Commit: snapshot.Head, Parent: parent, Operation: snapshot.Operation}
+	if root {
+		s.chains[relicID] = []RelicChainCommit{commit}
+	} else {
+		s.chains[relicID] = append(s.chains[relicID], commit)
+	}
+	s.atHead[snapshot.Head] = snapshot
+	parts := make(map[string]RelicPartContent, len(s.content[relicID]))
+	for partID, content := range s.content[relicID] {
+		parts[partID] = content
+	}
+	s.contentAt[snapshot.Head] = parts
+}
+
+// RelicChain is the store's chain of the relic up to the head, as Git reads it.
+func (s *memoryRelicStore) RelicChain(_ context.Context, _ ProjectConfig, head RelicHead) (RelicChain, error) {
+	for index, commit := range s.chains[head.RelicID] {
+		if commit.Commit == head.ObjectID {
+			return RelicChain{RelicID: head.RelicID, Head: head.ObjectID,
+				Commits: append([]RelicChainCommit(nil), s.chains[head.RelicID][:index+1]...)}, nil
+		}
+	}
+	return RelicChain{}, Errorf(CategoryNotFound, "relic %s has no commit %s", head.RelicID, head.ObjectID)
+}
+
+// ReadRelicVersions reads the relic at each commit, naming each part's content
+// by a digest of it, as Git names a blob by its content.
+func (s *memoryRelicStore) ReadRelicVersions(_ context.Context, _ ProjectConfig, relicID string, commits []string) ([]RelicVersion, error) {
+	versions := make([]RelicVersion, 0, len(commits))
+	for _, commit := range commits {
+		snapshot, ok := s.atHead[commit]
+		if !ok || snapshot.Record.State.RelicID != relicID {
+			return nil, Errorf(CategoryNotFound, "relic %s has no commit %s", relicID, commit)
+		}
+		parts := s.contentAt[commit]
+		if s.snapshots[relicID].Head == commit {
+			parts = s.content[relicID]
+		}
+		objects := map[string]RelicPartObjectIDs{}
+		for partID, content := range parts {
+			fields, _ := json.Marshal(content.Fields)
+			ids := RelicPartObjectIDs{Fields: memoryObjectID(fields)}
+			if content.HasBody {
+				ids.Body = memoryObjectID(content.Body)
+			}
+			objects[partID] = ids
+		}
+		versions = append(versions, RelicVersion{Snapshot: snapshot, Parts: objects})
+	}
+	return versions, nil
+}
+
+func memoryObjectID(content []byte) string {
+	return fmt.Sprintf("%x", sha256.Sum256(content))
 }
 
 func (s *memoryRelicStore) ListRelicHeads(context.Context, ProjectConfig) ([]RelicHead, error) {
@@ -89,9 +159,15 @@ func (s *memoryRelicStore) ReadRelicParts(
 	bodies bool,
 ) (map[string]RelicPartContent, error) {
 	relicID := snapshot.Record.State.RelicID
+	// The tip reads the content as it stands, which a test may have changed;
+	// an older commit reads the content kept for it.
+	stored := s.content[relicID]
+	if at, kept := s.contentAt[snapshot.Head]; kept && s.snapshots[relicID].Head != snapshot.Head {
+		stored = at
+	}
 	contents := make(map[string]RelicPartContent, len(partIDs))
 	for _, partID := range partIDs {
-		stored, ok := s.content[relicID][partID]
+		stored, ok := stored[partID]
 		if !ok {
 			return nil, Errorf(CategoryNotFound, "relic %s has no part %s", relicID, partID)
 		}
@@ -155,6 +231,11 @@ func (s *memoryRelicStore) WriteRelic(
 		parts[partID] = stored
 	}
 	s.content[pack.RelicID] = parts
+	parentHead := ""
+	if parent != nil {
+		parentHead = parent.Head
+	}
+	s.remember(snapshot, parentHead, parent == nil)
 	return snapshot, nil
 }
 

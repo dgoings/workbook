@@ -240,7 +240,8 @@ func (u *relicUpdate) checkSchema(ctx context.Context, version RelicSchemaVersio
 			problem = schema.CheckPropertyClear(operation.Name)
 		case RelicOperationPartAdd:
 			partID = operation.ID
-		case RelicOperationPartFieldSet, RelicOperationPartFieldClear, RelicOperationPartBodySet, RelicOperationPartRestore:
+		case RelicOperationPartFieldSet, RelicOperationPartFieldClear, RelicOperationPartBodySet, RelicOperationPartBodyMerge,
+			RelicOperationPartRestore:
 			partID = operation.Part
 		case RelicOperationLinkAdd:
 			added := operation.Link
