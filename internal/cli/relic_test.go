@@ -785,7 +785,7 @@ func TestDocsRecordTheRelicBenchmarkDecisions(t *testing.T) {
 		"scripts/benchmark.sh --relics",
 		"--relic-scale smoke",
 		"`relic-first-read-fresh-clone`",
-		"1,389",
+		"1,487",
 		"git gc",
 	} {
 		if !strings.Contains(benchmarks, required) {
@@ -834,11 +834,16 @@ func TestDocsDocumentRelicHistoryAndDiffs(t *testing.T) {
 	}
 	benchmarks := docSection(repositoryDoc(t, "docs", "architecture.md"), "### Relic benchmarks")
 	for _, required := range []string{
-		"`relic-history-100`", "`relic-diff-latest-100kib`", "`relic-diff-first-last-100kib`", "not yet measured",
+		"| `relic-history-100` | 89 ms | 300 ms |",
+		"| `relic-diff-latest-100kib` | 169 ms | 300 ms |",
+		"| `relic-diff-first-last-100kib` | 179 ms | 500 ms |",
 	} {
 		if !strings.Contains(benchmarks, required) {
 			t.Errorf("the architecture's relic benchmark section is missing %q", required)
 		}
+	}
+	if strings.Contains(benchmarks, "not yet measured") {
+		t.Error("the architecture's relic benchmark section still has a row that is not yet measured")
 	}
 	if readme := strings.Join(strings.Fields(repositoryDoc(t, "README.md")), " "); !strings.Contains(readme, "`workbook relic diff") {
 		t.Error("the README's relic text does not name workbook relic diff")
@@ -888,8 +893,8 @@ func TestDocsDocumentRelicLinks(t *testing.T) {
 		}
 	}
 	benchmarks := docSection(architecture, "### Relic benchmarks")
-	for _, scenario := range []string{"relic-linked-to-part-hot", "relic-show-linked-part-hot"} {
-		if row := "| `" + scenario + "` | not yet measured | 200 ms |"; !strings.Contains(benchmarks, row) {
+	for scenario, median := range map[string]string{"relic-linked-to-part-hot": "101 ms", "relic-show-linked-part-hot": "119 ms"} {
+		if row := "| `" + scenario + "` | " + median + " | 200 ms |"; !strings.Contains(benchmarks, row) {
 			t.Errorf("the architecture's relic benchmark table is missing the row %q", row)
 		}
 	}

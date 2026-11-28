@@ -2329,7 +2329,7 @@ rebuild a missing or outdated cache triggers: after a cache loss the
 relic tables stay empty until the first relic read, which finds every relic
 changed and indexes them all. `workbook rebuild` indexes every relic into the
 new cache before installing it and reports the count as `relicCount`. On a
-fresh clone of 1,000 relics that first pass took 1,389 ms; see
+fresh clone of 1,000 relics that first pass took 1,487 ms; see
 [Relic benchmarks](#relic-benchmarks).
 
 **Conformance.** A relic's row also stores how it stands against the
@@ -2394,51 +2394,54 @@ design was set when relics were designed; one whose source is the benchmark
 is a figure chosen for it, at about three times a cold Workbook command.
 
 These are the medians of one full-scale run with `--samples 15`, at commit
-`bbc88078`, on an Apple M5 Pro with 18 cores and 64 GB of memory, macOS
-27.0.1, Git 2.54.0 (Apple Git-157) and Go 1.27.3. The machine was not idle:
-Spotlight indexing used about two and a half cores during the run.
+`5ce8bb32`, on an Apple M5 Pro with 18 cores and 64 GB of memory, macOS
+27.0.1, Git 2.54.0 (Apple Git-157) and Go 1.27.3. `sync-divergent-descriptions`
+and `sync-divergent-tips` are from a run of those two scenarios on the default
+fixture, at the same commit with the same samples. The machine was not idle:
+its load average was about 5 during the relic run, and fell from 9 to 5 during
+the task run.
 
 | What | Scenario | Median | Budget | Source |
 | --- | --- | ---: | --- | --- |
-| Fresh-clone index build | `relic-rebuild-fresh-clone` | 1,372 ms | under 5,000 ms | design |
-| | `relic-first-read-fresh-clone` | 1,389 ms | under 5,000 ms | design |
-| Reverse lookup | `relic-linked-to-hot` | 121 ms | 200 ms | design (no relic read from Git); time: benchmark |
-| | `relic-linked-to-typical` | 114 ms | 200 ms | as above |
-| | `task-show-linked-hot` | 145 ms | 200 ms | as above |
-| | `relic-linked-to-part-hot` | not yet measured | 200 ms | design (no linking relic read from Git); time: benchmark |
-| | `relic-show-linked-part-hot` | not yet measured | 200 ms | as above |
-| Cost follows the change | `relic-refresh-0` | 125 ms | within 20 ms of `relic-list` (121 ms) | benchmark |
-| | `relic-refresh-1` | 221 ms | at most 150 ms above `relic-refresh-0` | benchmark |
-| | `relic-refresh-100` | 285 ms | at most 30 % of `relic-first-read-fresh-clone`, 417 ms | benchmark |
-| Body read | `relic-show-part-2kib` | 92 ms | | |
-| | `relic-body-2kib` | 110 ms | at most 20 ms above `relic-show-part-2kib`, and one more Git process | benchmark |
-| | `relic-body-1mib` | 106 ms | at most 100 ms above `relic-show-part-2kib` | benchmark |
-| Large relic, 2,000 parts | `relic-create-large` | 1,124 ms | 2,000 ms | benchmark |
-| | `relic-edit-part-large` | 413 ms | 1,000 ms | benchmark |
-| | `relic-move-part-large` | 368 ms | 1,000 ms | benchmark |
-| | `relic-show-large` | 113 ms | 1,000 ms | benchmark |
-| Lists | `relic-list` | 121 ms | 500 ms | benchmark |
-| | `relic-list-type` | 124 ms | 500 ms | benchmark |
-| Fetch | `relic-clone-setup` | 2,802 ms | under 60 s | design ("never minutes") |
-| | `relic-fetch-100` | 774 ms | under 60 s | design |
-| Merge | `relic-sync-merge-100` | not yet measured | under 3,000 ms; Git processes at most 1.5 × `relic-fetch-100`'s, plus 100 | benchmark |
-| | `relic-merge-repetitive-1mib` | not yet measured | under 1,000 ms | benchmark |
-| | `sync-divergent-descriptions` | not yet measured | at most 50 ms above `sync-divergent-tips`, and the same Git process count | benchmark |
-| Bodies at their limits | `relic-create-16mib` | 333 ms | | |
-| | `relic-show-16mib` | 98 ms | | |
-| | `relic-edit-part-16mib` | 340 ms | | |
-| | `relic-edit-body-1mib` | 354 ms | | |
-| Descriptive | `relic-push-100` | 1,433 ms | none | |
-| | `relic-validate-full` | 144.7 s, one sample | none | |
-| History and diffs | `relic-history-100` | not yet measured | 300 ms | benchmark |
-| | `relic-diff-latest-100kib` | not yet measured | 300 ms | benchmark |
-| | `relic-diff-first-last-100kib` | not yet measured | 500 ms | benchmark |
+| Fresh-clone index build | `relic-rebuild-fresh-clone` | 1,477 ms | under 5,000 ms | design |
+| | `relic-first-read-fresh-clone` | 1,487 ms | under 5,000 ms | design |
+| Reverse lookup | `relic-linked-to-hot` | 118 ms | 200 ms | design (no relic read from Git); time: benchmark |
+| | `relic-linked-to-typical` | 100 ms | 200 ms | as above |
+| | `task-show-linked-hot` | 136 ms | 200 ms | as above |
+| | `relic-linked-to-part-hot` | 101 ms | 200 ms | design (no linking relic read from Git); time: benchmark |
+| | `relic-show-linked-part-hot` | 119 ms | 200 ms | as above |
+| Cost follows the change | `relic-refresh-0` | 132 ms | within 20 ms of `relic-list` (124 ms) | benchmark |
+| | `relic-refresh-1` | 230 ms | at most 150 ms above `relic-refresh-0` | benchmark |
+| | `relic-refresh-100` | 467 ms, over | at most 30 % of `relic-first-read-fresh-clone`, 446 ms | benchmark |
+| Body read | `relic-show-part-2kib` | 94 ms | | |
+| | `relic-body-2kib` | 100 ms | at most 20 ms above `relic-show-part-2kib`, and one more Git process | benchmark |
+| | `relic-body-1mib` | 103 ms | at most 100 ms above `relic-show-part-2kib` | benchmark |
+| Large relic, 2,000 parts | `relic-create-large` | 1,062 ms | 2,000 ms | benchmark |
+| | `relic-edit-part-large` | 405 ms | 1,000 ms | benchmark |
+| | `relic-move-part-large` | 356 ms | 1,000 ms | benchmark |
+| | `relic-show-large` | 104 ms | 1,000 ms | benchmark |
+| Lists | `relic-list` | 124 ms | 500 ms | benchmark |
+| | `relic-list-type` | 130 ms | 500 ms | benchmark |
+| Fetch | `relic-clone-setup` | 2,646 ms | under 60 s | design ("never minutes") |
+| | `relic-fetch-100` | 867 ms | under 60 s | design |
+| Merge | `relic-sync-merge-100` | 14,313 ms and 849 Git processes, both over | under 3,000 ms; Git processes at most 1.5 × `relic-fetch-100`'s, plus 100, which is 136 | benchmark |
+| | `relic-merge-repetitive-1mib` | 1,188 ms, over | under 1,000 ms | benchmark |
+| | `sync-divergent-descriptions` | 971 ms and 48 Git processes; the count is over | at most 50 ms above `sync-divergent-tips` (961 ms), and the same Git process count (45) | benchmark |
+| Bodies at their limits | `relic-create-16mib` | 328 ms | | |
+| | `relic-show-16mib` | 90 ms | | |
+| | `relic-edit-part-16mib` | 326 ms | | |
+| | `relic-edit-body-1mib` | 346 ms | | |
+| Descriptive | `relic-push-100` | 1,724 ms | none | |
+| | `relic-validate-full` | 152.1 s, one sample | none | |
+| History and diffs | `relic-history-100` | 89 ms | 300 ms | benchmark |
+| | `relic-diff-latest-100kib` | 169 ms | 300 ms | benchmark |
+| | `relic-diff-first-last-100kib` | 179 ms | 500 ms | benchmark |
 
 `sync-divergent-descriptions` is a task scenario of the default run, not a
 relic one: `sync-divergent-tips` with a description of 1,000 lines, about
 60 KiB, whose line 10 origin changed and whose line 990 this clone did.
 
-The two merge scenarios were added after that run too. Each times the `sync`
+Each of the two merge scenarios times the `sync`
 of a clone whose body saves have to be merged onto saves another clone
 published: `relic-sync-merge-100` saves line 2,000 of each of 100 relics'
 100 KiB, 2,500-line body after the other clone saved line 10, and
@@ -2449,34 +2452,52 @@ first's budget are one batch read for each merged relic. Both run in a copy of
 the fixture with an origin of its own, so their relics are in no other
 scenario's repository.
 
-The last three scenarios were added after that run and are not part of it. They
-list the history, with `--all`, of a part whose 100 KiB body was saved 100 times
-after it was added, compare its newest change with the one before, and compare
-its first and last versions. The history relic, 101 commits at full scale, is
-part of every fixture from this version on, so list, rebuild, cold-index and
-fetch scenarios of a later run are not directly comparable with figures
-measured before it.
+The three history and diff scenarios list the history, with `--all`, of a part
+whose 100 KiB body was saved 100 times after it was added, compare its newest
+change with the one before, and compare its first and last versions.
 
-`relic-linked-to-part-hot` and `relic-show-linked-part-hot` were added later too.
-They ask what links to that first part of the first relic, which 999 relics do at
-full scale, with `relic list --linked-to` and with `relic show`. The relic show
-also marks that part's own link to a task, so it lists the tasks. The 5,000 links
-between relics are in every fixture from this version on, so
-`task-show-linked-hot` and the other relic scenarios of a later run are timed
-beside them and are not directly comparable with the figures above.
+`relic-linked-to-part-hot` and `relic-show-linked-part-hot` ask what links to
+that first part of the first relic, which 999 relics do at full scale, with
+`relic list --linked-to` and with `relic show`. The relic show also marks that
+part's own link to a task, so it lists the tasks.
 
-Every measured budget was met. What the table does not show:
+The history relic, 101 commits at full scale, and the 5,000 links between
+relics were added to the fixture after the first full run, at commit
+`bbc88078`. A report made at or before that commit is not directly comparable
+with this one.
 
-- `relic-create-large` has a P95 of 2,450 ms, over its median budget; the
+Four budgets in the table were not met. No change is decided for any of them.
+
+- `relic-sync-merge-100` took 14,313 ms against 3,000 ms, and its P95 was 849
+  Git processes against 136. For its 100 merged relics the Git command table
+  shows 100 `hash-object`, 400 `mktree`, 100 `commit-tree` and 216 `cat-file`
+  processes: each replayed relic's commit is written by processes of its own,
+  about 8 of them and 143 ms for each relic. The budget allowed one process
+  for each.
+  The synchronization stays inside the design's "never minutes".
+- `relic-merge-repetitive-1mib` took 1,188 ms against 1,000 ms, with 52 Git
+  processes, for one relic. A report does not say whether a sample merged or
+  was refused.
+- `relic-refresh-100` took 467 ms against 446 ms. It was 285 ms at
+  `bbc88078`, before the fixture grew. Its Git process count is unchanged at
+  13, so the added time is spent in Workbook and not in Git. It has not been
+  investigated.
+- `sync-divergent-descriptions` was 10 ms above `sync-divergent-tips`, inside
+  its time budget, and started 48 Git processes against 45, three more than
+  the same count its budget asked for.
+
+What the table does not show:
+
+- `relic-create-large` has a P95 of 2,516 ms, over its median budget; the
   budget is on the median.
 - The Git command table shows no `rev-list` and no `ls-tree` for the reverse
   lookups, and one `cat-file` process, as many as the no-change refresh
   `relic-refresh-0` starts.
-- `relic-refresh-1`, 96 ms above `relic-refresh-0`, starts seven more Git
+- `relic-refresh-1`, 98 ms above `relic-refresh-0`, starts seven more Git
   processes, 13 against 6.
 - `relic-body-2kib` and `relic-body-1mib` start 7 Git processes, one more than
   `relic-show-part-2kib`'s 6.
-- `relic-validate-full` started 10,543 Git processes. Relic validation is not
+- `relic-validate-full` started 10,949 Git processes. Relic validation is not
   cached, so `workbook validate --full` checks every relic on every run.
 - Ordering: after 10,000 moves of 2,000 parts, the longest position was 12
   bytes with random moves and 7 bytes with the last part moved to the front
@@ -2484,9 +2505,9 @@ Every measured budget was met. What the table does not show:
   gap between the two placed last, reached the 256-byte position limit: 9,393
   of its 10,000 moves were refused, the first at move 608, since it tries a
   refused move again.
-- Storage: the main repository's object directory, packed, was 22,986,693
-  bytes after the relics were created and 26,017,428 bytes after their links
-  and moves. The disposable cache was 41,357,312 bytes: 36,982,784 of
+- Storage: the main repository's object directory, packed, was 23,121,856
+  bytes after the relics were created and 26,662,144 bytes after their links
+  and moves. The disposable cache was 46,469,120 bytes: 42,094,592 of
   projection and 4,374,528 of validation.
 
 **Task commands beside relics.** Every `cli-*` scenario runs twice, without
@@ -2496,12 +2517,13 @@ and nothing else. The task the `cli-*` scenarios show and edit has a typical
 number of relic links, about 19; `task-show-linked-hot` shows the task all
 1,000 relics link to. The budget is equal P95 Git processes and a median
 within 10 % or 5 ms, whichever is larger, read from the design's "not
-measurably slower". Every row had equal P95 Git processes, and every median
-was within 10 %; the largest differences were `cli-free` +7.3 %, `cli-show`
-+6.9 % and `cli-move` +5.5 %. The two scenarios that synchronize run against an
-origin with its refs loose, as a push leaves a bare repository, and against
-one with them packed: `cli-update-autosync` was +4.0 % loose and +2.9 %
-packed, and `cli-next` 0.0 % and +2.7 %. Their time budget is judged against
+measurably slower". Every row had equal P95 Git processes. Every median but
+one was within 10 %: `cli-burst-independent-10` was +10.6 %, 33 ms, with 160
+Git processes on both sides. The next largest differences were `cli-show`
++6.4 %, `cli-update` +4.3 % and `cli-create` +3.8 %. The two scenarios that
+synchronize run against an origin with its refs loose, as a push leaves a bare
+repository, and against one with them packed: `cli-update-autosync` was +6.0 %
+loose and +4.8 % packed, and `cli-next` +0.9 % and +0.4 %. Their time budget is judged against
 the packed origin. A self-hosted origin with loose refs costs every
 synchronizing command more than a packed one, with or without relics; see
 [A self-hosted origin keeps its refs loose](hosting.md#a-self-hosted-origin-keeps-its-refs-loose).
@@ -2523,7 +2545,7 @@ changes this today, and no change is decided.
 **Decisions made on these measurements.**
 
 1. **Bodies are not cached.** A body is read from Git by its object ID, which
-   adds one Git process: 18 ms for a 2 KiB body and 14 ms for a 1 MiB one over
+   adds one Git process: 6 ms for a 2 KiB body and 9 ms for a 1 MiB one over
    `relic-show-part-2kib`, inside budgets of 20 ms and 100 ms.
 2. **Part positions are not renumbered.** Random and front-insert ordering
    reached 12 and 7 bytes after 10,000 moves, far below the 256-byte limit.
@@ -2532,7 +2554,7 @@ changes this today, and no change is decided.
 3. **Every relic limit is confirmed as a starting limit**, as the reference's
    [table](reference.md#what-a-relic-may-hold) gives them. A limit can be
    raised later and never lowered, because a lower limit would refuse relics
-   a released Workbook wrote. Every measured row met its budget, the 1 MiB
+   a released Workbook wrote. Every row that measures a limit met its budget, the 1 MiB
    body and 2,000-part relic among them, and the 16 MiB live-body limit was
    written, read and edited with medians under 400 ms.
 
