@@ -80,23 +80,36 @@ file and save it naming the version you read:
 workbook relic update <relic> --part <part> --body-file <file> --base <version> --json
 ```
 
-Two edits to the same body are never merged:
+Two edits to one body that changed different lines are
+merged, both when your `--base` is an older version and when a sync meets
+another clone's save. You have nothing to do then; the warning
+`relic-body-merged` says it happened. A save repeated from the version it
+replaced records nothing for the body and exits 0, so a retried save is safe;
+if the body was saved again in between, the repeat is merged or refused like
+any older save.
 
-- A save whose `--base` is no longer the current version exits 6
-  (`stale-write`) and writes nothing. Repeating the identical command fails
-  the same way.
-- A sync that meets another clone's different edit of the same body exits 8
-  and reports it in the result envelope's `relicConflict` list, an entry of
-  `type` `body` whose `body` carries `base`, `ours` and `theirs`; your text is
-  kept at `parkedRef`. Other local changes the sync did not apply are listed
-  in `unapplied`; make them again after saving the body. When a relic change
-  exits 8 this way, it recorded nothing; run it again after you resolve the
-  body.
+Edits to the same or adjacent lines, and a few other cases, are not merged.
+`workbook relic update` or the sync then exits 8 and reports each such part in
+the result envelope's `relicConflict` list: an entry of `type` `body` whose
+`body` carries `reason`, `base` (the text the save started from), `ours` (the
+saved text) and `theirs` (the text that stands), such as:
 
-On either, read the part again. When your intent is clear, apply your change
-to the current text and save with `--base` set to the current version.
-Otherwise show the user both versions and ask; never save over text you have
-not read.
+```json
+{"type":"body","part":"<part>","body":{"reason":"overlap","base":{"text":"Run it.\n"},"ours":{"text":"Run it by hand.\n"},"theirs":{"version":"<version>","text":"Run it nightly.\n"}}}
+```
+
+`base` is absent when the part had no body there, or a compaction dropped that
+version. A sync keeps your text at `parkedRef`, and lists other local changes
+it did not apply in `unapplied`; make them again after saving the body. A
+`relic update` that could not merge your file keeps nothing. When a relic change
+exits 8 this way, it recorded nothing, its other changes included; make it
+again after you resolve the body.
+
+When your intent is clear, combine your edit with the text of `theirs` and save
+with `--base` set to its `version`. Otherwise show the user both versions and
+ask; never save over text you have not read. A `--base` that is not a version of
+the part, or none for a part with a body, exits 6 (`stale-write`) and writes
+nothing; read the part again, because repeating the command fails the same way.
 
 The types `spec` and `plan` have built-in schemas, and a project may save its
 own schema for any type; `.workbook/guidelines.md` lists the types with one,

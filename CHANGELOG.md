@@ -38,6 +38,15 @@ every Workbook on a machine before creating one; see Compatibility across
 versions below.
 
 ### Added
+- **Body edits on different lines merge automatically.** When two saves of one
+  part's body started from the same version and changed different lines,
+  Workbook stores the combined text once, as a recorded merge, in a sync or in
+  `relic update --base <older version>`, with a `relic-body-merged` warning.
+  Other clones read the stored text. Changes to the same or adjacent lines, and
+  bodies that cannot be merged safely, stay a `body` conflict. `relic show
+  --history`, `relic diff` and the board mark a merge. See [Merged
+  bodies](docs/reference.md#merged-bodies) and [the stored
+  format](docs/architecture.md#merged-bodies).
 - **Relics on the web board.** `workbook serve`, and the desktop app that loads
   it, show a list of relics filtered by type, retired and deleted; a page for
   each relic with its parts, links both ways, history and diffs; and a
@@ -121,8 +130,8 @@ versions below.
   declare writer-format generation 6. See [Relics](docs/reference.md#relics)
   and [Relic refs](docs/architecture.md#relic-refs).
 - **A save over a part's body names the version it started from.** `--base
-  <version>` is required, and a save from an older version is refused with exit
-  6 instead of overwriting the newer text. The body keeps its format label
+  <version>` is required, and a save from an older version never overwrites the
+  newer text: it is merged or refused. The body keeps its format label
   unless `--body-format` gives another. `relic show <relic>#<part> --body`
   writes the body byte for byte into a file or a pipe, and on a terminal prints
   it with its indentation and line breaks kept and its control characters
@@ -149,7 +158,8 @@ versions below.
   carries no relic ref, so its cost does not grow with the number of relics.
 - **A relic changed in two clones is combined** by replaying one clone's
   commits onto the other's, operation by operation. Two saves over the same
-  body version, and an edit to a relic the remote has deleted, stop the replay:
+  body version that cannot be merged, and an edit to a relic the remote has
+  deleted, stop the replay:
   the remote's version stands, the local tip is parked under
   `refs/workbook/reconciled-relics/`, and the command reports a relic conflict,
   exit 8, in text and in a new `relicConflict` envelope member that carries all
@@ -225,8 +235,8 @@ versions below.
   relics.** `.workbook/guidelines.md` gains a `Relics` section: what a relic
   is, its ID under the project's current key, the four commands that find the
   relics linked to a task, read one part and save an edit with `--base`, and
-  what to do when that save is refused as `stale-write` (exit 6) or meets
-  another clone's edit as a relic conflict (exit 8). Its exit-code table says a
+  what to do when that save is merged, is refused as `stale-write` (exit 6), or
+  cannot be merged and is reported as a relic conflict (exit 8). Its exit-code table says a
   relic save refused for its `--base` needs a fresh read first. The skill tells
   an agent to read each linked part before editing files. Run `workbook docs
   update` to refresh both. See [Relics for
@@ -249,6 +259,16 @@ versions below.
   benchmarks](docs/architecture.md#relic-benchmarks).
 
 ### Changed
+- **`relic update --base <older version>` merges, or exits 8,** where it was
+  refused with exit 6. It merges when the file and the newer body changed
+  different lines. Otherwise it records nothing and reports a relic conflict
+  with the three texts. Exit 6 remains for a `--base` that is not a version of
+  the part, for no `--base` when the part has a body, and for a `--base` when it
+  has none. A save repeated from the version it replaced now records nothing and
+  exits 0.
+- **A `body` relic conflict says why.** It carries a `reason`, and for
+  `overlap` the lines in `overlaps`. Its `base` is the text the save started
+  from, and a sync's line also names the command that writes it to a file.
 - The board's header has a **Relics** link between **Board** and **Config**.
 - **New `spec` and `plan` relics are checked.** `relic create <title> --type spec`
   alone is now refused, exit 5, because the built-in requires `status`; add `--set
@@ -288,6 +308,11 @@ versions below.
   refuse a version the compaction dropped as `not-found`.
 
 ### Compatibility across versions
+- **A merged relic needs a build with this change to be changed.** A merge is
+  written at writer-format generation 9. A build from before merging shows the
+  relic from its stored state, refuses `relic update` and `relic diff` as
+  `newer-writer`, and reports a clone that holds its own change to the relic as
+  `needs-upgrade`, moving nothing. v0.7.0 and earlier never fetch relics.
 - **Upgrade every Workbook on the machine before creating relics.** A Workbook
   from before relics does not know the refs that hold them. Its `workbook reset
   --no-backup` deletes the relic refs without writing a bundle, and the restore

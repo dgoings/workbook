@@ -325,20 +325,32 @@ func relicGuidelines(keys core.KeySet, relicTypes []RelicTypeRules) string {
 		"they show the relics this checkout holds. Run `workbook sync` or\n" +
 		"`workbook fetch` first to get the latest relics.\n\n" +
 		"To save, write the whole new body to a file and pass the version you read\n" +
-		"as `--base`. Two edits to the same body are never merged.\n\n" +
-		"A save whose `--base` is no longer the current version exits 6\n" +
-		"(`stale-write`) and writes nothing; repeating the identical command fails\n" +
-		"the same way. A sync that meets another clone's different edit of the same\n" +
-		"body exits 8 and reports it in the result envelope's `relicConflict` list:\n" +
-		"an entry of `type` `body` whose `body` carries `base`, `ours` and `theirs`,\n" +
-		"with your text kept at `parkedRef`. Other local changes the sync did not\n" +
-		"apply are listed in `unapplied`; make them again after saving the body.\n" +
-		"When a relic change exits 8 this way, it recorded nothing; run it again\n" +
-		"after you resolve the body.\n\n" +
-		"On either, read the part again. When your intent is clear, apply your\n" +
-		"change to the current text and save with `--base` set to the current\n" +
-		"version. Otherwise show the user both versions and ask; never save over\n" +
-		"text you have not read.\n\n" +
+		"as `--base`. Two edits to one body that changed different lines are\n" +
+		"merged, both when your `--base` is an older version and when a sync meets\n" +
+		"another clone's save. You have nothing to do then; the warning\n" +
+		"`relic-body-merged` says it happened. A save repeated from the version it\n" +
+		"replaced records nothing for the body and exits 0, so a retried save is safe;\n" +
+		"if the body was saved again in between, the repeat is merged or refused like\n" +
+		"any older save.\n\n" +
+		"Edits to the same or adjacent lines, and a few other cases, are not merged.\n" +
+		"`workbook relic update` or the sync then exits 8 and reports each such part in\n" +
+		"the result envelope's `relicConflict` list: an entry of `type` `body` whose\n" +
+		"`body` carries `reason`, `base` (the text the save started from), `ours` (the\n" +
+		"saved text) and `theirs` (the text that stands), such as:\n\n" +
+		"```json\n" +
+		"{\"type\":\"body\",\"part\":\"<part>\",\"body\":{\"reason\":\"overlap\",\"base\":{\"text\":\"Run it.\\n\"},\"ours\":{\"text\":\"Run it by hand.\\n\"},\"theirs\":{\"version\":\"<version>\",\"text\":\"Run it nightly.\\n\"}}}\n" +
+		"```\n\n" +
+		"`base` is absent when the part had no body there, or a compaction dropped that\n" +
+		"version. A sync keeps your text at `parkedRef`, and lists other local changes\n" +
+		"it did not apply in `unapplied`; make them again after saving the body. A\n" +
+		"`relic update` that could not merge your file keeps nothing. When a relic change\n" +
+		"exits 8 this way, it recorded nothing, its other changes included; make it\n" +
+		"again after you resolve the body.\n\n" +
+		"When your intent is clear, combine your edit with the text of `theirs` and save\n" +
+		"with `--base` set to its `version`. Otherwise show the user both versions and\n" +
+		"ask; never save over text you have not read. A `--base` that is not a version of\n" +
+		"the part, or none for a part with a body, exits 6 (`stale-write`) and writes\n" +
+		"nothing; read the part again, because repeating the command fails the same way.\n\n" +
 		"To see what changed since the version you passed as `--base`, run\n" +
 		"`workbook relic diff <relic>#<part> <version> --json` with that version.\n\n" +
 		"For other edits (the title, a property or field, or adding, moving,\n" +

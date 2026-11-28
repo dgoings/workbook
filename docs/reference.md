@@ -904,8 +904,10 @@ Properties:
 **No change.** A change that would leave the relic as it is records nothing.
 When no change in a command records anything, the command exits `0`, prints
 `No change: <relic-id>`, and reports `"changed": false` in JSON, so a repeated
-command is safe. Saving a body is the exception: it always records a new body
-version, even when the bytes are the same.
+command is safe. Saving a body is the exception: a save from the current body
+version always records a new body version, even when the bytes are the same. A
+save from an older version records nothing for the body when its
+[merge](#merged-bodies) comes to the text that stands.
 
 ```sh
 workbook relic update WB-R-01M87F0S --set status=draft
@@ -1106,10 +1108,13 @@ version. `relic show` prints the version, and `relic update` prints the new
 one after a save.
 
 To save over a body, say which version the edit started from, with `--base
-<version>`. The save is recorded only when that is the part's current body
-version. The version is written out in full: a prefix is not accepted here.
-Letter case is ignored, as it is for every ID. The session adds a third line
-to `goals.md` and saves it over the body it showed above:
+<version>`. When that is the part's current body version, the file becomes the
+body. When it is an [older body version](#a-save-from-an-older-version) of the
+part, the edit is merged onto the current one, or refused as a
+[relic conflict](#a-relic-conflict). The version is written out in full: a
+prefix is not accepted here. Letter case is ignored, as it is for every ID. The
+session adds a third line to `goals.md` and saves it over the body it showed
+above:
 
 ```sh
 workbook relic update WB-R-01M87F0S --part 01M87F0T8ZA --body-file goals.md --base 01M87F0T8ZACFWH3F27EK4CYVH
@@ -1123,22 +1128,22 @@ Sync:	completed
 
 The body is still labeled `md`: a save over a body keeps its label.
 
-A save from any other version is refused as `stale-write` (exit `6`), and
-nothing is written. Repeating the same command, with the base it has just
-replaced:
+A save from a version the part's history does not hold is refused as
+`stale-write` (exit `6`), and nothing is written. Here the version given is the
+ID of the second part, which has no body:
 
 ```sh
-workbook relic update WB-R-01M87F0S --part 01M87F0T8ZA --body-file goals.md --base 01M87F0T8ZACFWH3F27EK4CYVH
+workbook relic update WB-R-01M87F0S --part 01M87F0T8ZA --body-file goals.md --base 01M87F0T8ZDXPZV8WNS006CBKV
 ```
 
 ```text
-workbook: part 01M87F0T8ZACFWH3F27EK4CYVH body is at version 01M87F0ZKD0X1MC06E1JCG5QBY, not 01M87F0T8ZACFWH3F27EK4CYVH; read it again with "workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body" and save from that version
+workbook: part 01M87F0T8ZACFWH3F27EK4CYVH body is at version 01M87F0ZKD0X1MC06E1JCG5QBY, not 01M87F0T8ZDXPZV8WNS006CBKV; read it again with "workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body" and save from that version
 ```
 
 With `--json` the same refusal is the error envelope:
 
 ```json
-{"format":"workbook.error","version":1,"error":{"category":"stale-write","message":"part 01M87F0T8ZACFWH3F27EK4CYVH body is at version 01M87F0ZKD0X1MC06E1JCG5QBY, not 01M87F0T8ZACFWH3F27EK4CYVH; read it again with \"workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body\" and save from that version"}}
+{"format":"workbook.error","version":1,"error":{"category":"stale-write","message":"part 01M87F0T8ZACFWH3F27EK4CYVH body is at version 01M87F0ZKD0X1MC06E1JCG5QBY, not 01M87F0T8ZDXPZV8WNS006CBKV; read it again with \"workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body\" and save from that version"}}
 ```
 
 `--base` is required whenever the part has a body, and the refusal names the
@@ -1163,12 +1168,145 @@ workbook: part 01M87F0T8ZDXPZV8WNS006CBKV has no body, so there is no version 01
 ```
 
 **These three refusals are exit `6`, and none of them is got past by running
-the same command again**: a base that is not the current version, no base
-when the part has a body, and a base when the part has none. Each fails the
+the same command again**: a base that is not a body version of the part, no
+base when the part has a body, and a base when the part has none. Each fails the
 same way until the command changes. Read the part again, with `relic show
 <relic>#<part>` for its version and `--body` for its text, carry the change
-over to that text, and save with the new version as the base. Fields and
-properties have no versions and take no base.
+over to that text, and save with the new version as the base. The ID of a save
+marked `(not applied)` in a [history](#listing-history) is not a body version.
+A command that saves one part's body twice gets the same refusal when its
+second save names an older version. Fields and properties have no versions and
+take no base.
+
+#### A save from an older version
+
+The body versions of a part are the ones its [history](#listing-history) lists.
+A save whose `--base` is one of them, and not the current one, started from text
+that has been saved over since. Workbook [merges](#merged-bodies) the two edits:
+the ancestor is the body at the base version, one side is the body that stands,
+and the other is the file. It does so with or without `--no-sync`. With
+synchronization on, the command fetches first, so the body that stands is the
+newest one it received.
+
+When the two edits changed different lines, the command exits `0` with the
+warning `relic-body-merged`. It records two operations in one commit: the save
+itself, a `part.body.set` from the older version that is not applied, and a
+`part.body.merge` that applies the combined text. The body's new version is the
+merge's ID. In a later stretch of the session under
+[Merged bodies](#merged-bodies), alice saves a new first line over version
+`…BPE2` and then saves a new last line from that same version:
+
+```sh
+workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file first.md --base 01M8GNBDA5ZWBX84GBHKWWBPE2
+workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file mine.md --base 01M8GNBDA5ZWBX84GBHKWWBPE2
+workbook relic show WB-R-01M8GNAZAVFRA1R36JHMVRJX9V#01M8GNB0EK75GMNM4K6MFS7R7J --body
+```
+
+```text
+WB-R-01M8GNAZAVFRA1R36JHMVRJX9V	agenda	Release agenda
+part	01M8GNB0EK75GMNM4K6MFS7R7J	section	01M8GNBFTCK613YQF0BSAMD9GK
+Sync:	completed
+WB-R-01M8GNAZAVFRA1R36JHMVRJX9V	agenda	Release agenda
+part	01M8GNB0EK75GMNM4K6MFS7R7J	section	01M8GNBGVGB3VEBVE8ZR043G2R
+Sync:	completed
+workbook: warning: relic WB-R-01M8GNAZAVFRA1R36JHMVRJX9V: part 01M8GNB0EK75GMNM4K6MFS7R7J: this save started from version 01M8GNBDA5ZWBX84GBHKWWBPE2, and the body has since been saved as version 01M8GNBFTCK613YQF0BSAMD9GK; the two edits changed different lines and were merged as version 01M8GNBGVGB3VEBVE8ZR043G2R; `workbook relic diff WB-R-01M8GNAZAVFRA1R36JHMVRJX9V#01M8GNB0EK75GMNM4K6MFS7R7J` shows the merge
+Open last week's notes.
+Read both decisions.
+Check the bundle twice.
+Write the summary today.
+Publish it on Monday.
+```
+
+With `--json`, the warning is in `data.warnings` and in the envelope's
+`warnings`, as every relic change's warning is. A merged update is judged
+against the relic's [schema](#relic-schemas) as it leaves the part, with the
+merged body, and a misfit is refused with exit `5`. When the merge comes to the
+text that stands, nothing is recorded for the body, so a command that makes no
+other change prints `No change:`.
+
+**A retried body save is safe.** A save repeated from the version it replaced,
+such as a command run again because its answer was lost, merges to the text that
+stands: it records nothing for the body and exits `0`, with `changed` `false` in
+JSON when there is no other change. When the body was saved again in between, the
+repeat is merged or refused like any save from an older version. A merge
+compares texts only, so a repeat made after somebody put the replaced text back
+applies the change again, as a merge with the warning `relic-body-merged`.
+
+When the two edits cannot be merged, the command records **nothing**, not even
+its other changes, and exits `8` (`conflict`) with a
+[relic conflict](#a-relic-conflict) of type `body`. Alice then saves another
+first line, again from `…BPE2`:
+
+```sh
+workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file mine2.md --base 01M8GNBDA5ZWBX84GBHKWWBPE2
+```
+
+```text
+Relic conflict:	WB-R-01M8GNAZAVFRA1R36JHMVRJX9V	body	relic WB-R-01M8GNAZAVFRA1R36JHMVRJX9V: part 01M8GNB0EK75GMNM4K6MFS7R7J: this save started from version 01M8GNBDA5ZWBX84GBHKWWBPE2, and the body has since been saved as version 01M8GNBGVGB3VEBVE8ZR043G2R; the edits overlap at base lines 1; nothing was saved; the file given still holds this save's text; run `workbook relic show WB-R-01M8GNAZAVFRA1R36JHMVRJX9V#01M8GNB0EK75GMNM4K6MFS7R7J --body > current.md` to write the text that stands, make the edits again in current.md, then run `workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file current.md --base 01M8GNBGVGB3VEBVE8ZR043G2R`
+workbook: relic WB-R-01M8GNAZAVFRA1R36JHMVRJX9V: part 01M8GNB0EK75GMNM4K6MFS7R7J: this save started from version 01M8GNBDA5ZWBX84GBHKWWBPE2, and the body has since been saved as version 01M8GNBGVGB3VEBVE8ZR043G2R; the edits overlap at base lines 1; nothing was saved; the file given still holds this save's text; run `workbook relic show WB-R-01M8GNAZAVFRA1R36JHMVRJX9V#01M8GNB0EK75GMNM4K6MFS7R7J --body > current.md` to write the text that stands, make the edits again in current.md, then run `workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file current.md --base 01M8GNBGVGB3VEBVE8ZR043G2R`
+```
+
+With `--json`, the result envelope on standard output has `data` `null` and the
+conflict in `relicConflict`, and the error envelope goes to standard error.
+Nothing was saved, so the save has no version and no blob: `ours.version` and
+`ours.object` are empty, and there is no `parkedRef`, `unapplied` or `remote`.
+The result of the same command with `--json`, through `jq .`:
+
+```json
+{
+  "format": "workbook.result",
+  "version": 1,
+  "command": "relic update",
+  "data": null,
+  "relicConflict": [
+    {
+      "relicId": "WB-R-01M8GNAZAVFRA1R36JHMVRJX9V",
+      "type": "body",
+      "part": "01M8GNB0EK75GMNM4K6MFS7R7J",
+      "body": {
+        "base": {
+          "version": "01M8GNBDA5ZWBX84GBHKWWBPE2",
+          "format": "md",
+          "bytes": 108,
+          "object": "de0058a64efccce05cacb8054ec68cd537ad46c6",
+          "text": "Open the notes.\nRead both decisions.\nCheck the bundle twice.\nWrite the summary today.\nPublish it on Friday.\n"
+        },
+        "ours": {
+          "version": "",
+          "format": "md",
+          "bytes": 112,
+          "object": "",
+          "text": "Open the old notes.\nRead both decisions.\nCheck the bundle twice.\nWrite the summary today.\nPublish it on Friday.\n"
+        },
+        "theirs": {
+          "version": "01M8GNBGVGB3VEBVE8ZR043G2R",
+          "format": "md",
+          "bytes": 116,
+          "object": "c4d80ff54e1d2ffb8723379856c763cd125ee167",
+          "text": "Open last week's notes.\nRead both decisions.\nCheck the bundle twice.\nWrite the summary today.\nPublish it on Monday.\n"
+        },
+        "reason": "overlap",
+        "overlaps": [
+          {
+            "baseStart": 1,
+            "baseLines": 1
+          }
+        ]
+      },
+      "unreplayed": 0
+    }
+  ]
+}
+```
+
+A `--base` that a [compaction](#after-a-compaction) dropped cannot be merged,
+because its text is gone. The conflict's `reason` is `base-dropped`, it has no
+`base`, and its line reads `this save started from a version that was dropped
+when the relic was compacted, so it cannot be merged onto version <version>`.
+Workbook knows a dropped version only by its ID, so a `--base` naming any
+operation the compaction dropped, a title change's included, is reported this
+way. The body version a compaction kept still has its text, and a save from it
+merges.
 
 **One exit `6` is got past by running the same command again**: two commands
 changing one relic at the same moment. Each started from the same newest
@@ -1181,9 +1319,10 @@ workbook: relic ref changed concurrently: another change to relic <relic-id> was
 ```
 
 The refused command succeeds when it is run again, unless it saves a body the
-first command also saved, which is then a save from a stale base. Both kinds
-of refusal are category `stale-write` and carry no other member in JSON, so a
-script tells them apart by the message: only the one a retry gets past begins
+first command also saved. That save is then from an older version, so running it
+again merges it or reports a conflict. Both kinds of exit `6` are category
+`stale-write` and carry no other member in JSON, so a script tells them apart by
+the message: only the one a retry gets past begins
 `relic ref changed concurrently`.
 
 ### History and diffs
@@ -1237,15 +1376,18 @@ operations: the part's `part.add`, every operation on it, and a link added from
 it.
 
 An operation that saves a body is **applied** or not. A `part.add` with a body
-is applied. A `part.body.set` is applied when its base was the part's body
-version at that point; one whose base was out of date changed nothing and is
-marked `(not applied)`. A replay records such a save when the text equals the
-one already there and its change holds something else to keep. Only its author,
-time, base, format and size are stored for it, not its text.
+is applied. A `part.body.set` or a `part.body.merge` is applied when its base was
+the part's body version at that point; one whose base was out of date changed
+nothing and is marked `(not applied)`. A replay records such a save when the text
+equals the one already there and its change holds something else to keep, and a
+[merge](#merged-bodies) records one as the side it merges in. Only its author,
+time, base, format and size are stored for a save that was not applied, except
+that the text of a merged-in save is
+[kept with the merge](#what-a-merge-records).
 
 For a part, the list ends with the part's **body versions**: every applied body
-save, oldest first, the last marked `current`. The list is never shortened by
-`--limit`.
+save and merge, oldest first, the last marked `current`. The list is never
+shortened by `--limit`.
 
 These examples are a session of their own. In it `alice@example.com` creates a
 relic and a part with a one-line body, and bob synchronizes. Both then add the
@@ -1325,16 +1467,44 @@ The members of `data`:
 | `part` | The part ID, for a part address only. |
 | `total`, `showing` | How many changes there are, and how many `changes` lists. |
 | `changes` | The window, oldest first. Each has `commit`, `actor`, `wallTime`, `logicalClock`, `summary` and `operations`. |
-| `bodyVersions` | For a part with a saved body: each has `version`, `base` (absent for a first body), `format` (absent without a label), `bytes`, `actor`, `wallTime`, `commit` and, on the last, `current`. The version a compaction kept also has `compacted: true`; see [After a compaction](#after-a-compaction). |
+| `bodyVersions` | For a part with a saved body: each has `version`, `base` (absent for a first body), `format` (absent without a label), `bytes`, `actor`, `wallTime`, `commit` and, on the last, `current`. A version a [merge](#merged-bodies) made also has `merge`, with `ancestor`, `other` and `method`. The version a compaction kept also has `compacted: true`; see [After a compaction](#after-a-compaction). |
 | `compacted` | Present for a compacted relic only: the checkpoint the history starts at. See [After a compaction](#after-a-compaction). |
 | `truncated` | Present when the listing stopped early: `commit`, `message` and, for a change a newer Workbook wrote, `category` `newer-writer`. |
 
 An entry in `operations` carries the operation's members: `id` and `type`, those
 the type uses (`relic`, `title`, `name`, `value`, `part`, `partType`,
 `position`, `body` with `format`, `bytes` and `base`, `link`, `linkId`,
-`relicType`, `schema`), and
+`relicType`, `schema`, `merge` with `ancestor`, `other` and `method`), and
 `applied` on an operation that saves a body. It is not the stored JSON itself.
 Commit IDs appear in output as information only.
+
+**A merge in a history.** A change that holds a merge is listed like any other.
+Its summary is `part.body.set, part.body.merge`, the merged-in save is marked
+`(not applied)`, the merge's line ends `merged <other> onto <base> from
+<ancestor>`, and the merge's body version ends `merged`. A replayed change keeps
+its author and time, so the merge is listed as the person's whose save was merged
+in, here bob's. This is the history of the part in the session under
+[Merged bodies](#merged-bodies):
+
+```sh
+workbook relic show WB-R-01M8GNAZAVFRA1R36JHMVRJX9V#01M8GNB0EK75GMNM4K6MFS7R7J --history
+```
+
+```text
+WB-R-01M8GNAZAVFRA1R36JHMVRJX9V	agenda	Release agenda
+Showing all 3 change(s).
+2026-11-28T08:46:21Z	alice@example.com	part.add
+	01M8GNB0EK75GMNM4K6MFS7R7J	part.add	01M8GNB0EK75GMNM4K6MFS7R7J
+2026-11-28T08:46:24Z	alice@example.com	part.body.set
+	01M8GNB2YNFC6G9X2HSXJKKE7N	part.body.set	01M8GNB0EK75GMNM4K6MFS7R7J
+2026-11-28T08:46:23Z	bob@example.com	part.body.set, part.body.merge
+	01M8GNB27QNMDCY5SSESPBGYMT	part.body.set	01M8GNB0EK75GMNM4K6MFS7R7J (not applied)
+	01M8GNB2743T8DN5DV2N9AKHK5	part.body.merge	01M8GNB0EK75GMNM4K6MFS7R7J	merged 01M8GNB27QNMDCY5SSESPBGYMT onto 01M8GNB2YNFC6G9X2HSXJKKE7N from 01M8GNB0EK75GMNM4K6MFS7R7J
+Body versions:
+	01M8GNB0EK75GMNM4K6MFS7R7J	2026-11-28T08:46:21Z	alice@example.com	md	84 bytes
+	01M8GNB2YNFC6G9X2HSXJKKE7N	2026-11-28T08:46:24Z	alice@example.com	md	86 bytes
+	01M8GNB2743T8DN5DV2N9AKHK5	2026-11-28T08:46:23Z	bob@example.com	md	96 bytes	current	merged
+```
 
 A history that meets a change a newer Workbook wrote ends before it, and one that
 meets a change that cannot be read ends there too; both say so, in `truncated`
@@ -1430,7 +1600,10 @@ The members of `data`, each left out when it has nothing:
 `relic`, `from` and `to` are always present. A part's `body` is there when the
 body was added, removed or changed. It has `from` and `to`, each `format`,
 `version` and `bytes` or `null` where the part has no body, then `text`,
-`approximate` and `hunks`. A hunk has `fromStart`, `fromLines`, `toStart`,
+`merge`, `approximate` and `hunks`. `merge` is there when the `to` side's body
+version is a [merge](#merged-bodies): `version` (the merge's ID), `base` (the
+version it was applied onto), `ancestor` (the version both saves started from),
+`other` (the save merged in) and `method`. A hunk has `fromStart`, `fromLines`, `toStart`,
 `toLines` and `lines`, and a line has `kind` (`equal`, `delete` or `insert`),
 `text`, `from` and `to` line numbers, counted from 1 and absent on the side the
 line is not on, and `noNewline`. A start is the number of the hunk's first line
@@ -1512,7 +1685,10 @@ Part 01M8G3PP69KRVFK5TAPVH1XKPT	section	changed
   with the body the checkpoint kept, listed under the ID of the save that made
   it, with the checkpoint's `commit`, `actor` and `wallTime`, no `base`, and
   `compacted: true` in JSON; text output does not mark it. That ID is what
-  `relic update --base` takes. The save itself was dropped, so as a version for
+  `relic update --base` takes, and a save from it
+  [merges](#a-save-from-an-older-version) when the body has been saved since. A
+  merged body kept this way is not marked as a merge, in history or in a diff:
+  the checkpoint dropped the merge operation. The save itself was dropped, so as a version for
   `relic diff` the whole ID stands for the checkpoint, where that body is the
   part's body: a diff from it shows what changed since. A prefix of it is
   refused as any dropped change is.
@@ -1564,6 +1740,35 @@ Part 01M8ERE3J06CHHJXXN7TEXAZXS	section	changed
 	+no newline at end
 	\ No newline at end of file
 ```
+
+**A merge in a diff.** When the body on the `to` side is a version a
+[merge](#merged-bodies) made, the part's body diff carries `merge`, and text
+output prints a `Merged:` line after the `Body:` line. That holds for any later
+point that still holds the merged body, and not when the two points hold the
+same body, which has no body diff. While the merge is the newest change to the
+part, a diff of the part with no version compares the version the merge was
+applied onto with the merge, so its lines are what the merged-in save changed:
+
+```sh
+workbook relic diff WB-R-01M8GNAZAVFRA1R36JHMVRJX9V#01M8GNB0EK75GMNM4K6MFS7R7J
+```
+
+```text
+Comparing:	01M8GNB2YNFC6G9X2HSXJKKE7N	→	01M8GNB2743T8DN5DV2N9AKHK5
+Part 01M8GNB0EK75GMNM4K6MFS7R7J	section	changed
+	Body:	md 86 bytes → md 96 bytes
+	Merged:	01M8GNB27QNMDCY5SSESPBGYMT onto 01M8GNB2YNFC6G9X2HSXJKKE7N from 01M8GNB0EK75GMNM4K6MFS7R7J
+	@@ -2,4 +2,4 @@
+	 Read both decisions.
+	 Check the bundle.
+	 Write the summary.
+	-Publish it.
+	+Publish it on Friday.
+```
+
+The ID of the merged-in save names the same change as the merge, so a diff that
+gives it as a version shows the merged body. Its own text is not a body any point
+holds; [Git reads it](#what-a-merge-records) from the merge's commit.
 
 A body is text when its bytes are valid UTF-8; its format label does not decide.
 When either side is not text, `text` is `false`, there are no hunks, and the
@@ -2684,6 +2889,16 @@ still be shown, as far as this build can read it. `relic update`,
 saying to upgrade, and write nothing. `workbook validate`
 counts it under `newerWriter` rather than as invalid.
 
+A [merged body](#merged-bodies) makes a relic such a one for a build from before
+merging. That build shows the relic from its stored state, the merged body
+included, and exits `0`. Its `relic update` and `relic diff` exit `9` with a
+message that says to upgrade, and its history stops at the merge, truncated as
+`newer-writer`. When its clone holds an unpublished
+change to that relic, its sync reports the relic `needs-upgrade`, exits `9`, and
+moves neither its own ref nor the remote's. Its `workbook validate` counts the
+relic under `newerWriter`, not as invalid. A current build run in that clone then
+syncs it.
+
 ### Sharing relics
 
 Relics travel with the tasks, to and from the tasks remote: `origin`, unless
@@ -2772,11 +2987,12 @@ WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	fast-forwarded
 **What a sync reads.** A relic whose ref and tracking ref name the same commit
 has not changed, and nothing of it is read. For a changed relic, a sync reads
 the commit, its operations, its state and the sizes of its parts, and checks
-the fetched tip as `relic show` checks a relic's newest commit. It never reads
-a body's text. It reads a part's fields only when both sides changed fields of
-that part. The only command that reads a body during a sync is the one
-reporting a [body conflict](#a-relic-conflict), which reads at most the three
-texts the report carries. A relic whose two tips are in different history
+the fetched tip as `relic show` checks a relic's newest commit. It reads a
+part's fields only when both sides changed fields of that part. It reads body
+text in two cases only: to
+[merge](#merged-bodies) a part whose body both sides saved, which reads three
+texts, and to report a [body conflict](#a-relic-conflict), which reads at most
+the three texts the report carries. A relic whose two tips are in different history
 generations, because one side compacted it, is the exception: the sync reads the
 operations of both histories; see
 [Other clones adopt a relic compaction](#other-clones-adopt-a-relic-compaction).
@@ -2928,8 +3144,9 @@ first and bob second:
 | Different parts, different fields of one part, or different properties | `reconciled` | both changes, even when together they pass a total | nothing, or the warning `relic-over-limit` when a total or a count is passed | `0` |
 | The same field or property, to different values | `reconciled` | bob's value; both operations in the history | nothing | `0` |
 | The title, or the position of the same part | `reconciled` | bob's value; both operations in the history | nothing | `0` |
-| The same body, to the same bytes, when that was all bob changed, or only changes origin already holds | `fast-forwarded` | alice's tip | nothing | `0` |
-| The same body, to different bytes | `conflicted` | alice's body; bob's old tip parked | a `relicConflict` entry of type `body` naming the part, with the base, bob's and alice's texts | `8` |
+| The same body, to the same bytes, or to edits that [merge](#merged-bodies) to alice's text, when that was all bob changed, or only changes origin already holds | `fast-forwarded` | alice's tip | nothing | `0` |
+| The same body, on different lines | `reconciled` | the [merged](#merged-bodies) text, and bob's other changes | the warning `relic-body-merged` naming the relic and the part | `0` |
+| The same body, on overlapping lines, or in a way that [cannot be merged](#why-a-body-was-not-merged) | `conflicted` | alice's body; bob's old tip parked | a `relicConflict` entry of type `body` naming the part, with its `reason` and the base, bob's and alice's texts | `8` |
 | Alice removed a part, bob edited it | `reconciled` | the part stays removed and holds bob's edit | the warning `relic-edit-on-removed-part` naming the relic and the part | `0` |
 | Alice deleted the relic, bob edited it | `conflicted` | deleted; bob's old tip parked | a `relicConflict` entry of type `tombstone` | `8` |
 | Alice edited the relic, bob deleted it | `reconciled` | deleted, holding alice's edit | nothing | `0` |
@@ -2937,14 +3154,15 @@ first and bob second:
 | One retired it and the other unretired it | `reconciled` | bob's mark; both operations in the history | nothing | `0` |
 | Alice compacted the relic, bob changed a part her checkpoint kept, or the title, a property or a link | `reconciled` | bob's change on top of the checkpoint | nothing | `0` |
 | Alice compacted the relic, bob changed a part her checkpoint made a stub, other than by removing it | `conflicted` | the checkpoint, plus bob's changes before that one; bob's old tip parked | a `relicConflict` entry of type `dropped` naming the part | `8` |
-| Alice compacted the relic, bob saved a body from a version that is no longer current | `conflicted` | the checkpoint's body; bob's old tip parked | a `relicConflict` entry of type `body` | `8` |
+| Alice compacted the relic, bob saved a body from a version that is no longer current | `conflicted` | the checkpoint's body; bob's old tip parked | a `relicConflict` entry of type `body`, with `reason` `base-dropped` | `8` |
 
-These are guarantees. No stored value is ever half of one side's: every body,
-property, field and title is one side's whole value or the result of applying
-whole operations in order, and no conflict marker is written anywhere. Each
-operation is recorded once, whatever the order the clones synchronize in, and
-a sync repeated, retried after it was interrupted, or run on the same commits
-in two clones, ends in the same state.
+These are guarantees. Every property, field and title is one side's whole value
+or the result of applying whole operations in order. A body is one side's whole
+text or a [recorded merge](#merged-bodies) of two saves, whose inputs stay in
+the history. No conflict marker and no half-merged text is written anywhere.
+Each operation is recorded once, whatever the order the clones synchronize in,
+and a sync repeated, retried after it was interrupted, or run on the same
+commits in two clones, ends in the same state.
 
 **A deletion that synchronizes second applies without a word.** When alice
 edits a relic and bob deletes it, bob's sync reports the relic `reconciled`
@@ -3060,11 +3278,148 @@ watcher ran, on the watcher's terminal; it is not kept for a later command.
 
 **Two saves of one body usually meet at `--base`.** With synchronization on, a
 command fetches before it saves, so the second of two people saving the same
-body is refused as a save from a stale base (exit `6`), as under
-[Body versions](#body-versions), and nothing reaches the remote. A body
-conflict comes from a save that was already recorded in this checkout without
-being published, with `--no-sync`, offline, or with `auto-sync` off, meeting
-another save of the same body.
+body saves [from an older version](#a-save-from-an-older-version): the command
+merges the edits or exits `8`, and records nothing when it exits `8`. A replay
+meets two saves of one body when a save was already recorded in this checkout
+without being published, with `--no-sync`, offline, or with `auto-sync` off.
+
+### Merged bodies
+
+When two saves of one part's body started from the same version and changed
+different lines, Workbook stores the combined text once, as a recorded merge.
+It does so in two places and nowhere else: in a replay, when a save made in this
+checkout meets a newer save of the same body that it never saw, and in
+`relic update`, when [`--base` is an older version](#a-save-from-an-older-version)
+of the part. A replay merges the same way whichever command ran the fetch that
+led to it, a relic command that changes a relic, `workbook fetch`, `sync`
+(`--watch` included), `setup` or `move-tasks` among them. Two different parts
+never conflict, and titles, properties and fields keep the rules above; they are
+never merged line by line.
+
+Bob changes the last line of a five-line body with `--no-sync`, alice changes
+the second line and publishes it, and bob synchronizes. This is a session of its
+own:
+
+```sh
+workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file mine.md --base 01M8GNB0EK75GMNM4K6MFS7R7J --no-sync
+workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file alice.md --base 01M8GNB0EK75GMNM4K6MFS7R7J
+workbook sync
+workbook relic show WB-R-01M8GNAZAVFRA1R36JHMVRJX9V#01M8GNB0EK75GMNM4K6MFS7R7J --body
+```
+
+```text
+WB-R-01M8GNAZAVFRA1R36JHMVRJX9V	agenda	Release agenda
+part	01M8GNB0EK75GMNM4K6MFS7R7J	section	01M8GNB27QNMDCY5SSESPBGYMT
+WB-R-01M8GNAZAVFRA1R36JHMVRJX9V	agenda	Release agenda
+part	01M8GNB0EK75GMNM4K6MFS7R7J	section	01M8GNB2YNFC6G9X2HSXJKKE7N
+Sync:	completed
+Fetch:
+No task refs on origin.
+WB-R-01M8GNAZAVFRA1R36JHMVRJX9V	reconciled	relic WB-R-01M8GNAZAVFRA1R36JHMVRJX9V: replayed 1 local change(s); 0 already on origin or changing nothing
+Push:
+No task refs on origin.
+WB-R-01M8GNAZAVFRA1R36JHMVRJX9V	published
+workbook: warning: relic WB-R-01M8GNAZAVFRA1R36JHMVRJX9V: part 01M8GNB0EK75GMNM4K6MFS7R7J: the body was saved here from version 01M8GNB0EK75GMNM4K6MFS7R7J and on origin as version 01M8GNB2YNFC6G9X2HSXJKKE7N; the two edits changed different lines and were merged as version 01M8GNB2743T8DN5DV2N9AKHK5; `workbook relic diff WB-R-01M8GNAZAVFRA1R36JHMVRJX9V#01M8GNB0EK75GMNM4K6MFS7R7J` shows the merge
+Open the notes.
+Read both decisions.
+Check the bundle.
+Write the summary.
+Publish it on Friday.
+```
+
+A merge needs nothing from anyone: the sync exits `0`, parks nothing and
+publishes the result. It reports the relic `reconciled` and one warning,
+`relic-body-merged`, for each part merged. The warning is in `warnings` under
+`--json`. Another clone reads the stored text, and never runs the merge itself.
+
+#### How lines are merged
+
+The three texts are the **ancestor** (the version both saves started from), the
+one that **stands** (the newer one, already recorded) and the **other** side's
+(the save being merged in). Each is split into lines at each newline. Lines are
+compared byte for byte, terminator included, so a line ending in a carriage
+return differs from one that does not, and a last line without a newline differs
+from the same line with one.
+
+- A run of lines one side changed takes that side's lines.
+- Where both sides changed the same lines in the same way, those lines are taken
+  once.
+- Changes that **touch** and differ are an overlap: changes to the same lines or
+  to **adjacent** lines, such as one side's line 3 and the other's line 4,
+  an insertion at the edge of a change, and two insertions at one point. These
+  are the rules of `git merge-file`, which also conflicts on adjacent lines.
+  Workbook does not run Git for it.
+- Every other line is the ancestor's.
+
+#### Why a body was not merged
+
+Anything not merged is a [relic conflict](#a-relic-conflict), and its
+`body.reason` says why. When one reason applies to a part, no merged text is
+stored for any part of that change.
+
+| `reason` | When |
+| --- | --- |
+| `overlap` | The edits overlap. `body.overlaps` lists each overlap as `baseStart` and `baseLines`: the first line of the ancestor involved, counted from 1, and how many lines. With `baseLines` `0`, two insertions meet after line `baseStart`, and `0` is the top. |
+| `too-many-changes` | Comparing one side with the ancestor passes 2,000 inserted plus deleted lines, counted after the lines the two share at the start and end are set aside, or the work budget of 67,108,864 steps (2^26). |
+| `too-large` | The merged text would be over 1 MiB, the [limit for a body](#what-a-relic-may-hold). |
+| `not-text` | One of the three texts is not valid UTF-8. |
+| `format` | The three bodies do not carry the same format label. |
+| `no-base` | The part had no body at the ancestor, or has none at the version that stands. |
+| `base-dropped` | A [compaction](#compacting-relics) replaced the history the save was made in, or dropped the version the save started from. |
+| `unmergeable` | The saves recorded here do not follow from the version they started from. No `workbook` command makes such a history. |
+
+A conflict's line says the overlapping lines (`the edits overlap at base lines
+4-5, 12`, or `after 20` for an insertion point) or the reason in words, after `it
+cannot be merged:`. The work budget is a count of steps, not a time limit, so the
+same texts give the same answer on every machine. These bounds may be raised in a
+later release and never lowered.
+
+#### What is guaranteed
+
+- **No silent overwrite.** A save from an older version is merged, with a
+  warning, or reported as a conflict. A merge keeps what each side's text
+  changed from the ancestor; a change one side made and then put back counts as
+  no change.
+- **Determinism.** The same three texts give the same merged text. The merge's ID
+  is derived from its inputs and the change's recorded time, so replaying the
+  same tips gives the same bytes, and the stored result is what every clone
+  reads.
+- **Nothing lost.** Both sides' texts stay in the history.
+- **Best effort: whether two edits merge depends on the method.** A clean line
+  merge can still be wrong in meaning, for example when one side renames a thing
+  another side refers to on a different line. The merge is recorded and marked,
+  so read it with `relic diff`, and undo it by saving the text you want over it.
+  A later release may merge more cases under a new `method` name; a merge already
+  stored never changes.
+
+#### What a merge records
+
+A merge is an operation of type `part.body.merge`, recorded in the same commit
+as the save it merges in, so the two apply together or not at all. In history and
+JSON the operation has `part`, `body` (the label, the merged size and `base`, the
+version it was applied onto) and `merge`:
+
+| Member | Value |
+| --- | --- |
+| `merge.ancestor` | The version both saves started from. |
+| `merge.other` | The ID of the save merged in, an earlier body operation of the same part in the same change. |
+| `merge.method` | `line-3way-1`, the method that made it. |
+
+The merge's ID becomes the part's body version, so the next save passes it as
+`--base`. The commit also keeps the merged-in save's text, which no body version
+holds, in the entry `merges/<merge-id>`; Git reads it:
+
+```sh
+git cat-file blob <commit>:merges/<merge-id>
+```
+
+`<commit>` is the commit of the change that holds the merge, which `--history
+--json` gives, and which the next commit's tree does not repeat. A merged relic
+is written at writer-format generation 9, so an older build can show it and
+refuses to change it; see
+[Mixed Workbook versions](architecture.md#mixed-workbook-versions). Merged
+bodies are stored as described in
+[Relic refs](architecture.md#relic-refs).
 
 ### A relic conflict
 
@@ -3076,34 +3431,41 @@ compare-and-swap. That parked tip is never pushed and never removed
 automatically: it holds the only copy of the text that was not applied, until
 `workbook reset` writes it to a bundle and removes it. The command reports the
 conflict once, exits `8`, and every other relic and task is still
-synchronized. Bob and alice each saved a new third line over the same version
-of the first part's body, bob first and with `--no-sync`, and bob then
-synchronized:
+synchronized. A [`relic update` that cannot merge](#a-save-from-an-older-version)
+reports a conflict of type `body` too, but it stops no replay: it records and
+parks nothing.
+
+A `body` conflict is two saves of one part's body that were
+[not merged](#why-a-body-was-not-merged), most often because they changed the
+same lines. Going on from the session under [Merged bodies](#merged-bodies),
+after alice synchronizes too, bob and alice both change the third line, bob first
+and with `--no-sync`, and bob synchronizes:
 
 ```sh
-workbook relic update WB-R-01M87F0S --part 01M87F0T8ZA --body-file goals.md --base 01M87F0ZKD0X1MC06E1JCG5QBY --no-sync
-workbook relic update WB-R-01M87F0S --part 01M87F0T8ZA --body-file goals.md --base 01M87F0ZKD0X1MC06E1JCG5QBY
+workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file mine.md --base 01M8GNB2743T8DN5DV2N9AKHK5 --no-sync
+workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file alice.md --base 01M8GNB2743T8DN5DV2N9AKHK5
 workbook sync
 ```
 
 ```text
-WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
-part	01M87F0T8ZACFWH3F27EK4CYVH	section	01M87F205BTS8BJX4REAA4KMWJ
-WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
-part	01M87F0T8ZACFWH3F27EK4CYVH	section	01M87F211MQKDWR4N1Q504HW4X
+WB-R-01M8GNAZAVFRA1R36JHMVRJX9V	agenda	Release agenda
+part	01M8GNB0EK75GMNM4K6MFS7R7J	section	01M8GNB6QD81FTB3AVNTVTAK58
+WB-R-01M8GNAZAVFRA1R36JHMVRJX9V	agenda	Release agenda
+part	01M8GNB0EK75GMNM4K6MFS7R7J	section	01M8GNB7H1HGGZMCGMSA1FWTP0
 Sync:	completed
 Fetch:
-WB-01M87F19RB1PVEE87F7PS1D1FJ	unchanged
-WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	conflicted	relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: part 01M87F0T8ZACFWH3F27EK4CYVH: the body was saved here and on origin from the same version; the text from origin stands; the text saved here is kept at refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1; run `git cat-file blob refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1:parts/01M87F0T8ZACFWH3F27EK4CYVH/body > mine.md` to write it, `workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body > current.md` to write the text that stands, combine the two in mine.md, then run `workbook relic update WB-R-01M87F0SQYHP3HCR4QEN3RTVEX --part 01M87F0T8ZACFWH3F27EK4CYVH --body-file mine.md --base 01M87F211MQKDWR4N1Q504HW4X`
+No task refs on origin.
+WB-R-01M8GNAZAVFRA1R36JHMVRJX9V	conflicted	relic WB-R-01M8GNAZAVFRA1R36JHMVRJX9V: part 01M8GNB0EK75GMNM4K6MFS7R7J: the body was saved here and on origin from the same version; the text from origin stands; the edits overlap at base lines 3; the text saved here is kept at refs/workbook/reconciled-relics/WB-R-01M8GNAZAVFRA1R36JHMVRJX9V/1; run `git cat-file blob refs/workbook/reconciled-relics/WB-R-01M8GNAZAVFRA1R36JHMVRJX9V/1:parts/01M8GNB0EK75GMNM4K6MFS7R7J/body > mine.md` to write it, `git cat-file blob 458026c0d6f497059d61ffb745641b96a0bf81fe > base.md` to write the text the save here started from, `workbook relic show WB-R-01M8GNAZAVFRA1R36JHMVRJX9V#01M8GNB0EK75GMNM4K6MFS7R7J --body > current.md` to write the text that stands, combine the edits in mine.md, then run `workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file mine.md --base 01M8GNB7H1HGGZMCGMSA1FWTP0`
 Push:
-WB-01M87F19RB1PVEE87F7PS1D1FJ	up-to-date
-Relic conflict:	WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	body	relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: part 01M87F0T8ZACFWH3F27EK4CYVH: the body was saved here and on origin from the same version; the text from origin stands; the text saved here is kept at refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1; run `git cat-file blob refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1:parts/01M87F0T8ZACFWH3F27EK4CYVH/body > mine.md` to write it, `workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body > current.md` to write the text that stands, combine the two in mine.md, then run `workbook relic update WB-R-01M87F0SQYHP3HCR4QEN3RTVEX --part 01M87F0T8ZACFWH3F27EK4CYVH --body-file mine.md --base 01M87F211MQKDWR4N1Q504HW4X`
-workbook: relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: part 01M87F0T8ZACFWH3F27EK4CYVH: the body was saved here and on origin from the same version; the text from origin stands; the text saved here is kept at refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1; run `git cat-file blob refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1:parts/01M87F0T8ZACFWH3F27EK4CYVH/body > mine.md` to write it, `workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body > current.md` to write the text that stands, combine the two in mine.md, then run `workbook relic update WB-R-01M87F0SQYHP3HCR4QEN3RTVEX --part 01M87F0T8ZACFWH3F27EK4CYVH --body-file mine.md --base 01M87F211MQKDWR4N1Q504HW4X`
+No task refs on origin.
+Relic conflict:	WB-R-01M8GNAZAVFRA1R36JHMVRJX9V	body	relic WB-R-01M8GNAZAVFRA1R36JHMVRJX9V: part 01M8GNB0EK75GMNM4K6MFS7R7J: the body was saved here and on origin from the same version; the text from origin stands; the edits overlap at base lines 3; the text saved here is kept at refs/workbook/reconciled-relics/WB-R-01M8GNAZAVFRA1R36JHMVRJX9V/1; run `git cat-file blob refs/workbook/reconciled-relics/WB-R-01M8GNAZAVFRA1R36JHMVRJX9V/1:parts/01M8GNB0EK75GMNM4K6MFS7R7J/body > mine.md` to write it, `git cat-file blob 458026c0d6f497059d61ffb745641b96a0bf81fe > base.md` to write the text the save here started from, `workbook relic show WB-R-01M8GNAZAVFRA1R36JHMVRJX9V#01M8GNB0EK75GMNM4K6MFS7R7J --body > current.md` to write the text that stands, combine the edits in mine.md, then run `workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file mine.md --base 01M8GNB7H1HGGZMCGMSA1FWTP0`
+workbook: relic WB-R-01M8GNAZAVFRA1R36JHMVRJX9V: part 01M8GNB0EK75GMNM4K6MFS7R7J: the body was saved here and on origin from the same version; the text from origin stands; the edits overlap at base lines 3; the text saved here is kept at refs/workbook/reconciled-relics/WB-R-01M8GNAZAVFRA1R36JHMVRJX9V/1; run `git cat-file blob refs/workbook/reconciled-relics/WB-R-01M8GNAZAVFRA1R36JHMVRJX9V/1:parts/01M8GNB0EK75GMNM4K6MFS7R7J/body > mine.md` to write it, `git cat-file blob 458026c0d6f497059d61ffb745641b96a0bf81fe > base.md` to write the text the save here started from, `workbook relic show WB-R-01M8GNAZAVFRA1R36JHMVRJX9V#01M8GNB0EK75GMNM4K6MFS7R7J --body > current.md` to write the text that stands, combine the edits in mine.md, then run `workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file mine.md --base 01M8GNB7H1HGGZMCGMSA1FWTP0`
 ```
 
-The text that stands is alice's, the one the remote held first. Text output
-names the versions and the commands that write each text to a file, and never
-prints the text itself. The next sync does not report the conflict again:
+The first command is bob's, the second alice's. The text that stands is alice's,
+the one the remote held first. Text output names the versions, the overlapping
+lines of the ancestor and the commands that write each text to a file, and never
+prints a text. The next sync does not report the conflict again:
 
 ```sh
 workbook sync
@@ -3112,52 +3474,56 @@ git for-each-ref refs/workbook/reconciled-relics/
 
 ```text
 Fetch:
-WB-01M87F19RB1PVEE87F7PS1D1FJ	unchanged
+No task refs on origin.
 Push:
-WB-01M87F19RB1PVEE87F7PS1D1FJ	up-to-date
-735d9a70c9284f3e7443555e6e24bc42e111e70a commit	refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1
+No task refs on origin.
+879e17b6e66760da932dce8faaae624218710238 commit	refs/workbook/reconciled-relics/WB-R-01M8GNAZAVFRA1R36JHMVRJX9V/1
 ```
 
-**Getting the text back.** Three commands bring the text that was not applied
-back and save it, where `<parked-ref>` and `<theirs-version>` are the
-report's `parkedRef` and `body.theirs.version`, both of which the conflict's
-line spells out:
+**Getting the texts back.** Four commands bring back the three texts and save a
+combined one. `<parked-ref>`, `<base-object>` and `<theirs-version>` are the
+report's `parkedRef`, `body.base.object` and `body.theirs.version`, all of which
+the conflict's line spells out:
 
 1. `git cat-file blob <parked-ref>:parts/<part-id>/body > mine.md` writes the
    text that was not applied. Reading a relic at an older commit is a Git
    command for now.
-2. `workbook relic show <relic>#<part> --body > current.md` writes the text
+2. `git cat-file blob <base-object> > base.md` writes the text the save here
+   started from. The line leaves this out when the part had no body there.
+3. `workbook relic show <relic>#<part> --body > current.md` writes the text
    that stands.
-3. After combining the two by hand in `mine.md`, `workbook relic update
+4. After combining the edits by hand in `mine.md`, `workbook relic update
    <relic> --part <part> --body-file mine.md --base <theirs-version>` saves it.
 
 ```sh
-git cat-file blob refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1:parts/01M87F0T8ZACFWH3F27EK4CYVH/body > mine.md
-workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body > current.md
-diff current.md mine.md
+git cat-file blob refs/workbook/reconciled-relics/WB-R-01M8GNAZAVFRA1R36JHMVRJX9V/1:parts/01M8GNB0EK75GMNM4K6MFS7R7J/body > mine.md
+git cat-file blob 458026c0d6f497059d61ffb745641b96a0bf81fe > base.md
+workbook relic show WB-R-01M8GNAZAVFRA1R36JHMVRJX9V#01M8GNB0EK75GMNM4K6MFS7R7J --body > current.md
+diff base.md mine.md
+diff base.md current.md
 ```
 
 ```text
 3c3
-< The old history is saved to a bundle under .git first.
+< Check the bundle.
 ---
-> The old history is saved to a bundle first, and the bundle is kept.
+> Check the bundle and its manifest.
+3c3
+< Check the bundle.
+---
+> Check the bundle twice.
 ```
 
 Bob combined the two third lines in `mine.md` and saved it:
 
 ```sh
-workbook relic update WB-R-01M87F0SQYHP3HCR4QEN3RTVEX --part 01M87F0T8ZACFWH3F27EK4CYVH --body-file mine.md --base 01M87F211MQKDWR4N1Q504HW4X
-workbook relic show WB-R-01M87F0S#01M87F0T8ZA --body
+workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file mine.md --base 01M8GNB7H1HGGZMCGMSA1FWTP0
 ```
 
 ```text
-WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
-part	01M87F0T8ZACFWH3F27EK4CYVH	section	01M87F244F21JP9K0HBRMFJX04
+WB-R-01M8GNAZAVFRA1R36JHMVRJX9V	agenda	Release agenda
+part	01M8GNB0EK75GMNM4K6MFS7R7J	section	01M8GNBABZ6FN9DCTS5NPA3ASC
 Sync:	completed
-Finished tasks keep every commit they ever had.
-Compaction replaces that history with one checkpoint.
-The old history is saved to a bundle under .git first, and the bundle is kept.
 ```
 
 To keep the text that stands instead, do nothing: the relic already holds it.
@@ -3174,81 +3540,90 @@ also set a property with `--no-sync` before he synchronized, his line would
 end like this, where `<operation-id>` and `<commit>` are that change's:
 
 ```text
-; 1 other local change(s) were not applied either: property.set <operation-id>; they are kept at refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/1; `git cat-file blob <commit>:operation.json` shows the first, and the report's `unapplied` list under --json gives the commit of each; make them again after saving the body
+; 1 other local change(s) were not applied either: property.set <operation-id>; they are kept at refs/workbook/reconciled-relics/WB-R-01M8GNAZAVFRA1R36JHMVRJX9V/1; `git cat-file blob <commit>:operation.json` shows the first, and the report's `unapplied` list under --json gives the commit of each; make them again after saving the body
 ```
 
 **The report in JSON.** With `--json`, the result envelope carries the
 conflicts in `relicConflict`, a list beside `conflict` and `configConflict`,
 and the relic's line in the fetch carries the same detail text mode prints.
-Bob and alice made the same two saves again, this time each adding a fourth
-line, and bob synchronized with `--json`. The result went to `conflict.json`,
-and the error envelope bob's command wrote to standard error is the line
-that follows it. The result envelope in the file holds the conflict:
+Bob and alice then both change the fourth line, and bob synchronizes with
+`--json`. The result goes to `conflict.json`, and the error envelope bob's
+command writes to standard error is the line that follows. The result envelope
+in the file holds the conflict:
 
 ```sh
-workbook relic update WB-R-01M87F0S --part 01M87F0T8ZA --body-file mine.md --base 01M87F244F21JP9K0HBRMFJX04 --no-sync
-workbook relic update WB-R-01M87F0S --part 01M87F0T8ZA --body-file goals.md --base 01M87F244F21JP9K0HBRMFJX04
+workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file mine.md --base 01M8GNBABZ6FN9DCTS5NPA3ASC --no-sync
+workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file alice.md --base 01M8GNBABZ6FN9DCTS5NPA3ASC
 workbook sync --json > conflict.json
 jq .relicConflict conflict.json
 jq -c .data.fetch.relics conflict.json
 ```
 
 ```text
-WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
-part	01M87F0T8ZACFWH3F27EK4CYVH	section	01M87F273245GW2Y9NJSWHEMWQ
-WB-R-01M87F0SQYHP3HCR4QEN3RTVEX	spec	Task archive compaction, second draft
-part	01M87F0T8ZACFWH3F27EK4CYVH	section	01M87F283AZ3GZ7ZW9GZKM2RK9
+WB-R-01M8GNAZAVFRA1R36JHMVRJX9V	agenda	Release agenda
+part	01M8GNB0EK75GMNM4K6MFS7R7J	section	01M8GNBCHJAPHGAMQEMMNQWYS9
+WB-R-01M8GNAZAVFRA1R36JHMVRJX9V	agenda	Release agenda
+part	01M8GNB0EK75GMNM4K6MFS7R7J	section	01M8GNBDA5ZWBX84GBHKWWBPE2
 Sync:	completed
-{"format":"workbook.error","version":1,"error":{"category":"conflict","message":"relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: part 01M87F0T8ZACFWH3F27EK4CYVH: the body was saved here and on origin from the same version; the text from origin stands; the text saved here is kept at refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/2; run `git cat-file blob refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/2:parts/01M87F0T8ZACFWH3F27EK4CYVH/body \u003e mine.md` to write it, `workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body \u003e current.md` to write the text that stands, combine the two in mine.md, then run `workbook relic update WB-R-01M87F0SQYHP3HCR4QEN3RTVEX --part 01M87F0T8ZACFWH3F27EK4CYVH --body-file mine.md --base 01M87F283AZ3GZ7ZW9GZKM2RK9`"}}
+{"format":"workbook.error","version":1,"error":{"category":"conflict","message":"relic WB-R-01M8GNAZAVFRA1R36JHMVRJX9V: part 01M8GNB0EK75GMNM4K6MFS7R7J: the body was saved here and on origin from the same version; the text from origin stands; the edits overlap at base lines 4; the text saved here is kept at refs/workbook/reconciled-relics/WB-R-01M8GNAZAVFRA1R36JHMVRJX9V/2; run `git cat-file blob refs/workbook/reconciled-relics/WB-R-01M8GNAZAVFRA1R36JHMVRJX9V/2:parts/01M8GNB0EK75GMNM4K6MFS7R7J/body \u003e mine.md` to write it, `git cat-file blob a437d64a95e2e37555ed33b8818c2e4aaad5b43a \u003e base.md` to write the text the save here started from, `workbook relic show WB-R-01M8GNAZAVFRA1R36JHMVRJX9V#01M8GNB0EK75GMNM4K6MFS7R7J --body \u003e current.md` to write the text that stands, combine the edits in mine.md, then run `workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file mine.md --base 01M8GNBDA5ZWBX84GBHKWWBPE2`"}}
 [
   {
-    "relicId": "WB-R-01M87F0SQYHP3HCR4QEN3RTVEX",
+    "relicId": "WB-R-01M8GNAZAVFRA1R36JHMVRJX9V",
     "type": "body",
-    "part": "01M87F0T8ZACFWH3F27EK4CYVH",
+    "part": "01M8GNB0EK75GMNM4K6MFS7R7J",
     "body": {
       "base": {
-        "version": "01M87F244F21JP9K0HBRMFJX04",
+        "version": "01M8GNBABZ6FN9DCTS5NPA3ASC",
         "format": "md",
-        "bytes": 181,
-        "object": "d7236f6a859ec647e42393432fe28f3e6d72c2e1",
-        "text": "Finished tasks keep every commit they ever had.\nCompaction replaces that history with one checkpoint.\nThe old history is saved to a bundle under .git first, and the bundle is kept.\n"
+        "bytes": 102,
+        "object": "a437d64a95e2e37555ed33b8818c2e4aaad5b43a",
+        "text": "Open the notes.\nRead both decisions.\nCheck the bundle twice.\nWrite the summary.\nPublish it on Friday.\n"
       },
       "ours": {
-        "version": "01M87F273245GW2Y9NJSWHEMWQ",
+        "version": "01M8GNBCHJAPHGAMQEMMNQWYS9",
         "format": "md",
-        "bytes": 201,
-        "object": "8d2d80b3f13ec98d2ad0f516697cfe783b3c208f",
-        "text": "Finished tasks keep every commit they ever had.\nCompaction replaces that history with one checkpoint.\nThe old history is saved to a bundle under .git first, and the bundle is kept.\nBob, a fourth line.\n"
+        "bytes": 106,
+        "object": "9d26048c96e53a513268c9729a4cbb6d03f6ffc5",
+        "text": "Open the notes.\nRead both decisions.\nCheck the bundle twice.\nWrite a short summary.\nPublish it on Friday.\n"
       },
       "theirs": {
-        "version": "01M87F283AZ3GZ7ZW9GZKM2RK9",
+        "version": "01M8GNBDA5ZWBX84GBHKWWBPE2",
         "format": "md",
-        "bytes": 203,
-        "object": "ebf87e493debb69e0f4432b1196a964a220a41b2",
-        "text": "Finished tasks keep every commit they ever had.\nCompaction replaces that history with one checkpoint.\nThe old history is saved to a bundle under .git first, and the bundle is kept.\nAlice, a fourth line.\n"
-      }
+        "bytes": 108,
+        "object": "de0058a64efccce05cacb8054ec68cd537ad46c6",
+        "text": "Open the notes.\nRead both decisions.\nCheck the bundle twice.\nWrite the summary today.\nPublish it on Friday.\n"
+      },
+      "reason": "overlap",
+      "overlaps": [
+        {
+          "baseStart": 4,
+          "baseLines": 1
+        }
+      ]
     },
-    "parkedRef": "refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/2",
+    "parkedRef": "refs/workbook/reconciled-relics/WB-R-01M8GNAZAVFRA1R36JHMVRJX9V/2",
     "unreplayed": 1,
     "remote": "origin"
   }
 ]
-[{"relicId":"WB-R-01M87F0SQYHP3HCR4QEN3RTVEX","status":"conflicted","detail":"relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX: part 01M87F0T8ZACFWH3F27EK4CYVH: the body was saved here and on origin from the same version; the text from origin stands; the text saved here is kept at refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/2; run `git cat-file blob refs/workbook/reconciled-relics/WB-R-01M87F0SQYHP3HCR4QEN3RTVEX/2:parts/01M87F0T8ZACFWH3F27EK4CYVH/body > mine.md` to write it, `workbook relic show WB-R-01M87F0SQYHP3HCR4QEN3RTVEX#01M87F0T8ZACFWH3F27EK4CYVH --body > current.md` to write the text that stands, combine the two in mine.md, then run `workbook relic update WB-R-01M87F0SQYHP3HCR4QEN3RTVEX --part 01M87F0T8ZACFWH3F27EK4CYVH --body-file mine.md --base 01M87F283AZ3GZ7ZW9GZKM2RK9`"}]
+[{"relicId":"WB-R-01M8GNAZAVFRA1R36JHMVRJX9V","status":"conflicted","detail":"relic WB-R-01M8GNAZAVFRA1R36JHMVRJX9V: part 01M8GNB0EK75GMNM4K6MFS7R7J: the body was saved here and on origin from the same version; the text from origin stands; the edits overlap at base lines 4; the text saved here is kept at refs/workbook/reconciled-relics/WB-R-01M8GNAZAVFRA1R36JHMVRJX9V/2; run `git cat-file blob refs/workbook/reconciled-relics/WB-R-01M8GNAZAVFRA1R36JHMVRJX9V/2:parts/01M8GNB0EK75GMNM4K6MFS7R7J/body > mine.md` to write it, `git cat-file blob a437d64a95e2e37555ed33b8818c2e4aaad5b43a > base.md` to write the text the save here started from, `workbook relic show WB-R-01M8GNAZAVFRA1R36JHMVRJX9V#01M8GNB0EK75GMNM4K6MFS7R7J --body > current.md` to write the text that stands, combine the edits in mine.md, then run `workbook relic update WB-R-01M8GNAZAVFRA1R36JHMVRJX9V --part 01M8GNB0EK75GMNM4K6MFS7R7J --body-file mine.md --base 01M8GNBDA5ZWBX84GBHKWWBPE2`"}]
 ```
 
 | Member | Value |
 | --- | --- |
 | `relicId`, `type` | The relic, and `body`, `tombstone` or `dropped`. |
 | `part` | For `body`, the part whose body both sides saved; for `dropped`, the stub the local change names. |
-| `body.base` | The part's body at the commit both histories share. Absent when the part had no body there. |
-| `body.ours` | The body at the parked local tip: the text that was not applied. |
-| `body.theirs` | The body at the remote's tip: the text that stands. Its `version` is the `--base` to save from. |
+| `body.base` | The text the save here started from. For a sync, the part's body at the parent of the local commit that stopped the replay, which is the commit both histories share when that is the first local commit. For `relic update`, the body at `--base`. Absent when the part had no body there, and for a `relic update` whose `--base` a compaction dropped. |
+| `body.ours` | For a sync, the body at the parked local tip: the text that was not applied. For `relic update`, the file's text, with `version` and `object` empty, since it was never saved. |
+| `body.theirs` | The body that stands: at the remote's tip for a sync, and the current one for `relic update`. Its `version` is the `--base` to save from. |
 | `body.*` | Each version has `version`, `format` when it has a label, `bytes`, `object` (the blob that holds it), and the content as `text`, or as `base64` when it is not UTF-8 text. |
+| `body.reason` | Why the edits were not merged: one of the [reasons](#why-a-body-was-not-merged). |
+| `body.overlaps` | For `reason` `overlap` only: where the edits meet, each with `baseStart` and `baseLines`, in the ancestor's lines. |
 | `tombstone` | For `tombstone`, the local operation the deletion stopped: `operationId` and `operation`. |
-| `parkedRef` | Where the old local tip is kept. |
-| `unreplayed` | How many of this checkout's commits did not replay. |
+| `parkedRef` | Where the old local tip is kept. Absent for a `relic update` conflict. |
+| `unreplayed` | How many of this checkout's commits did not replay; `0` for a `relic update` conflict. |
 | `unapplied` | The other local operations that did not apply, oldest first: every one of the commits that did not replay except the one the conflict names, and except any the remote already holds. Each has `operationId`, `operation` (its type) and `commit` (the local commit whose `operation.json` holds it). Absent when there are none. |
-| `remote` | The remote the conflict was met with. |
+| `remote` | The remote the conflict was met with. Absent for a `relic update` conflict. |
 
 A body is at most 1 MiB, so one body conflict's report can reach about 4 MiB
 once its three texts are escaped as JSON.
@@ -3302,8 +3677,10 @@ relic <relic-id>: part <part-id>: origin compacted this relic and dropped the pa
 
 Other local changes that were not applied are named after it, and listed in
 `unapplied`, as for a body. A body saved from a version that was replaced before
-the compaction, or after it, is the ordinary `body` conflict, whose `ours` text
-is at the parked ref.
+the compaction, or after it, is a `body` conflict with `reason` `base-dropped`,
+whose `ours` text is at the parked ref. The same holds for a save made above a
+compaction this checkout had not published, when it drops that compaction for the
+remote's later changes, even where the lines would have merged.
 
 **A conflict met by a relic command.** `relic update`, `relic migrate`,
 `relic delete`, `relic restore`, `relic retire` and `relic unretire` fetch before
@@ -4165,7 +4542,10 @@ listed, so a phase that changed no relic gives the JSON it gave before relics
 were shared. A relic that could not be replayed is also listed in the
 envelope's `relicConflict`, as under [A relic conflict](#a-relic-conflict),
 and a relic over a limit after a merge gives a `relic-over-limit` warning in
-`warnings`. A restore of a relic whose content a compaction dropped gives the
+`warnings`. A [merged body](#merged-bodies) gives a `relic-body-merged` warning
+for each part merged, from those three commands and from `relic update`. A
+`relic update` that cannot merge its save lists the conflict in `relicConflict`
+too, with `data` `null`. A restore of a relic whose content a compaction dropped gives the
 warning `relic-content-dropped`, and a synchronization that dropped an
 unpublished relic compaction gives `relic-compaction-dropped`.
 
@@ -4198,17 +4578,21 @@ links in `data.linkedFrom`. The part's body and its version are
 each linked part before editing files, as part of the task's context.
 
 They also say what to do when a save meets another edit of the same body. A
-save from a version that is no longer current is refused with exit `6`
-(`stale-write`), as under [Body versions](#body-versions), and repeating it
-fails the same way. A sync that meets another clone's save reports a
-[relic conflict](#a-relic-conflict), exit `8`. Either way the agent reads the
-part again and, when its intent is clear, applies its change to the current
-text and saves from the current version. Otherwise it shows the user both
-versions and asks. A relic change that exits `8` this way recorded nothing,
-and is run again once the body is resolved. The exit-code table in the
-guidelines says that a relic save refused for its `--base` needs a fresh read
-first, where most exit `6` refusals succeed when retried, and its exit `8` row
-names `relicConflict` for a relic.
+save whose `--base` is an older version, and a sync that meets another clone's
+save, [merge](#merged-bodies) two edits that changed different lines; the agent
+has nothing to do, and the warning `relic-body-merged` says it happened. When
+they cannot be merged, `relic update` or the sync exits `8` with a
+[relic conflict](#a-relic-conflict). The agent reads the `body` member of each
+`relicConflict` entry of `type` `body`: its `reason` and the `base`, `ours` and
+`theirs` texts. When its intent is clear, it combines the edits into the text of
+`theirs` and saves with `--base` set to `theirs.version`. Otherwise it shows the
+user both versions and asks. A relic change that exits `8` recorded nothing,
+and is run again once the body is resolved. A `--base` that is not a version of
+the part at all is refused with exit `6` (`stale-write`), as under
+[Body versions](#body-versions), and repeating it fails the same way. The
+exit-code table in the guidelines says that a relic save refused for its
+`--base` needs a fresh read first, where most exit `6` refusals succeed when
+retried, and its exit `8` row names `relicConflict` for a relic.
 
 The guidelines describe relic IDs under the project's current key, as
 `WB-R-<ULID>` and `WB-<ULID>` here. They name only commands and options that
@@ -4243,7 +4627,7 @@ without parsing a message:
 | 3 | `not-initialized` | This repository has no Workbook project. Run `workbook setup`. |
 | 4 | `not-found` | No such task, relic, part, commit, or setting. |
 | 5 | `validation` | The input is well-formed but not allowed, such as an unknown status or restoring an active task. It fails the same way on every retry. |
-| 6 | `stale-write` | The task or relic ref moved between read and write, so the compare-and-swap was refused, or a bounded wait on the shared SQLite cache ran out while another process held or replaced it. Nothing was written. Retrying the identical command usually succeeds. A relic body saved from the wrong `--base` is exit `6` as well, and retrying that one does not. |
+| 6 | `stale-write` | The task or relic ref moved between read and write, so the compare-and-swap was refused, or a bounded wait on the shared SQLite cache ran out while another process held or replaced it. Nothing was written. Retrying the identical command usually succeeds. A relic body saved with a `--base` that is not a version of the part is exit `6` as well, and retrying that one does not. |
 | 7 | `corrupt-data` | Stored data could not be read as Workbook wrote it. Read the message; repair or rebuild before continuing. |
 | 8 | `conflict` | Reconciliation stopped on a decision Workbook will not make, for a task, a status or priority, or a relic. See [Reconciling divergent histories](#reconciling-divergent-histories) and [A relic conflict](#a-relic-conflict). |
 | 9 | `newer-writer` | A newer Workbook wrote this history and this build cannot fold it. Nothing is damaged; upgrade Workbook. See [Mixed Workbook versions](architecture.md#mixed-workbook-versions). |
@@ -4282,16 +4666,19 @@ and `workbook sync`, not a retry, gets past it; see
 
 Three relic refusals are exit `6` and are not got past by a retry of the
 identical command. All three are about `--base` when a body is saved with
-`relic update --part <part> --body-file <file>`: a `--base` that is not the
-part's current body version, no `--base` when the part has a body, and a
-`--base` when the part has none. Each fails the same way until the command
-changes; see [Body versions](#body-versions).
+`relic update --part <part> --body-file <file>`: a `--base` that is not a body
+version of the part, no `--base` when the part has a body, and a `--base` when
+the part has none. Each fails the same way until the command changes; see
+[Body versions](#body-versions). A `--base` that is an older body version is not
+one of them: the save is [merged](#a-save-from-an-older-version), or refused
+with exit `8`.
 
 Reporting a conflict and failing over one are separate things. `workbook next`
 exits `0` while listing conflicts in its envelope, because a caller asking which
 task to pick up next is not the caller who has to resolve them; a mutation that
 could not replay past one exits `8`. A relic conflict follows the same rule.
-`workbook fetch` and `sync` exit `8` when they park one. A relic command exits
+`workbook fetch` and `sync` exit `8` when they park one, and `relic update`
+exits `8` when it cannot merge its own save from an older version. A relic command exits
 `8` when its fetch parks one on the relic it names, and exits `0`, listing the
 conflict in `relicConflict`, when the conflict is on another relic.
 
@@ -6159,9 +6546,9 @@ all consume the same list.
 Relics are reconciled the same way, by replaying local commits onto the
 fetched tip and parking the old local tip, under
 `refs/workbook/reconciled-relics/<relic-id>/<n>`. Three situations stop a
-relic's replay, `body`, `tombstone` and `dropped`, and they are reported in the
-envelope's `relicConflict` list rather than in `conflict`; see
-[When two edits meet](#when-two-edits-meet) and
+relic's replay, a `body` that cannot be [merged](#merged-bodies), `tombstone`
+and `dropped`, and they are reported in the envelope's `relicConflict` list
+rather than in `conflict`; see [When two edits meet](#when-two-edits-meet) and
 [A relic conflict](#a-relic-conflict). A parked relic tip is never pushed and
 never removed automatically: only `workbook reset` removes one, after writing it
 to its bundle. A relic with a parked tip is not compacted.
@@ -8489,7 +8876,9 @@ window, **Side by side** and **Inline** switch between them; the browser
 remembers the choice for that viewer, and a browser that refuses storage forgets
 it on reload. Removed and added lines carry `-` and `+` as well as color. A
 line with no final newline says `No newline at end`, an approximate diff says so,
-and a body that is not text shows only the two sizes. When nothing differs the
+and a body that is not text shows only the two sizes. A body diff that carries
+[`merge`](#comparing-two-points) says `Merged from <other> onto <base>, both
+started from <ancestor>` under the body's sizes. When nothing differs the
 page says `These two versions hold the same relic.` or `… the same part.`
 
 **A task's page** has a **Relics** section under its comments when a relic links

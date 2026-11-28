@@ -110,7 +110,8 @@ a112b0c1b8059dfafa88aefc65ad45d447da7426 commit	refs/workbook/relics/WB-R-01M87F
 The ref points to a commit, and a relic's history is a chain of them. The
 chain's first commit has no parent: it creates the relic or, once the relic is
 [compacted](#compacted-relics), is its checkpoint. Every later commit has exactly
-one parent, and a relic commit is never a merge. No command changes a relic
+one parent, and a relic commit is never a Git merge commit, even when it records
+a [merged body](#merged-bodies). No command changes a relic
 commit, and deleting a relic is a tombstone operation that leaves the ref in
 place.
 
@@ -123,12 +124,14 @@ state.json                    workbook.relic-state            the relic after th
 links.json                    workbook.relic-links            the relic's live links
 parts/<part-id>/fields.json   workbook.relic-part-fields      one part's fields
 parts/<part-id>/body          raw bytes, exactly as given     one part's body
+merges/<operation-id>         raw bytes, exactly as given     the text one merge took in
 ```
 
 `parts/` is there exactly when the relic has at least one part. It holds one
 subtree for each part the state lists, live or removed, named by the part's
 ID. A subtree always holds `fields.json`, even when the part has no fields,
-and holds `body` only when the part has a body. This is the second commit of
+and holds `body` only when the part has a body. `merges/` is there only in a
+commit whose pack holds a [merge](#merged-bodies). This is the second commit of
 the first relic, the one that added its first two parts:
 
 ```sh
@@ -236,6 +239,7 @@ ones its type takes:
 | `part.field.set` | `name`, `value`, `part` |
 | `part.field.clear` | `name`, `part` |
 | `part.body.set` | `part`, and `body`: `format` when it has a label, then `bytes`, then `base`, the body version the save started from, left out when the part had no body |
+| `part.body.merge` | `part`, `body`: `format` when it has a label, then `bytes`, then `base`, the version the merge is applied onto; and `merge`: `ancestor`, `other`, `method`. See [Merged bodies](#merged-bodies). |
 | `part.move` | `part`, `position` |
 | `part.remove`, `part.restore` | `part` |
 | `link.add` | `link`: `from` when the link is from a part, `to` (`{"task": "<task-id>"}`, or `{"relic": "<relic-id>"}` with `part` after `relic` for a link to a part), then `rel`, then `seen` for a link to a relic, then `pointer` when there is one. The operation's `id` is the new link's ID. |
@@ -252,8 +256,8 @@ most 32 levels deep, and it is at most 65,536 bytes as a property's value and
 16,384 bytes as a field's. A `name` is 1 to 100 bytes of valid UTF-8 with no
 `=`, no control character (Unicode category Cc), no format character
 (category Cf), and no white space (Unicode `White_Space`) at either end. Names are not normalized, and are compared byte
-for byte. `part.add` and `part.body.set` carry a body's label and size and
-never its content, and a new part's fields are not in the pack either: both
+for byte. `part.add`, `part.body.set` and `part.body.merge` carry a body's label
+and size and never its content, and a new part's fields are not in the pack either: both
 are in the commit's tree. An operation pack therefore does not grow with the
 content it records.
 
@@ -307,8 +311,8 @@ content it records.
 `parts` is ordered by position, then by part ID. A part has `removed` only
 when it is `true`, and a body has `format` only when it has a label. A body's
 `version` is the ID of the operation that saved it: the `part.add` for a
-part's first body, which is why it equals the part's ID above, and the
-`part.body.set` after that. `author` is the actor of the creating commit, and
+part's first body, which is why it equals the part's ID above, and a
+`part.body.set` or a `part.body.merge` after that. `author` is the actor of the creating commit, and
 `updatedAt` is the `wallTime` of this one. `schema` is `null` for a relic that
 names no [schema version](#relic-schemas), and otherwise the version's ID, a
 string; `relic.create` sets it and `relic.migrate` sets it with `type`.
@@ -432,10 +436,12 @@ pass the 2,000-link limit are kept with `relic-over-limit`.
 
 **Generations.** A relic pack declares what its operations need, the largest
 writer-format generation among them: `relic.retire`, `relic.unretire` and
-`history.checkpoint` need generation 7, and the operation types of the first
-relic stories need 6; see [Mixed Workbook versions](#mixed-workbook-versions).
-A state declares the larger of its parent's and its pack's, so every state after
-a retirement or a checkpoint stays at 7 or higher, an `unretire` included. A
+`history.checkpoint` need generation 7, `part.body.merge` needs 9, and the
+operation types of the first relic stories need 6; see
+[Mixed Workbook versions](#mixed-workbook-versions). A state declares the larger
+of its parent's and its pack's, so every state after a retirement or a
+checkpoint stays at 7 or higher, an `unretire` included, and every state after a
+merge stays at 9. A
 relic pack that declares less than its operations need, or a state that is
 retired or compacted and declares less than 7, is `corrupt-data`. One that
 declares a generation above what this build folds was written by a newer
@@ -456,8 +462,8 @@ a build writes.
 **The fold.** `state.json` is what folding the commit's operations onto its
 parent's state computes. A checkpoint is the exception: it carries no content,
 and is judged by the [checkpoint's own rules](#compacted-relics). Some operations fold to no change and stay in the
-history: a `part.body.set` whose `base` is not the part's current body
-version, an operation that names a part the relic does not have or a stub,
+history: a `part.body.set` or `part.body.merge` whose `base` is not the part's
+current body version, an operation that names a part the relic does not have or a stub,
 removing a removed part, restoring a live one, retiring a retired relic,
 unretiring one that is not, and clearing a name that is not set.
 Deletion is stricter, as it is for tasks: `relic.restore` needs a deleted
@@ -472,7 +478,8 @@ of the `part.add` that made it, and a body's version is the ID of the
 operation that saved it, so an ID used twice would name two things. The fold
 refuses the reuse the parent's state shows, as `corrupt-data`: a `part.add`
 whose ID is the ID of a part the relic already has or the current body version
-of one, and a `part.body.set` whose ID is a part's ID. A second `part.add`
+of one, and a `part.body.set` or `part.body.merge` whose ID is a part's ID. A
+second `part.add`
 for a part is therefore not ignored. Any other reuse leaves no trace in the
 state, and only a walk over the whole history sees it.
 
@@ -482,8 +489,8 @@ commit (none for the first) and its stored state and links:
 1. The stored state and links are what folding P onto the parent's computes,
    byte for byte.
 2. The tree holds `operation.json`, `state.json` and `links.json` as regular
-   blobs, the tree `parts` exactly when the state lists a part, and nothing
-   else. The first commit has no parent and its pack opens with
+   blobs, the tree `parts` exactly when the state lists a part, the tree
+   `merges` exactly when the pack holds a `part.body.merge`, and nothing else. The first commit has no parent and its pack opens with
    `relic.create` or, for a compacted relic, is one `history.checkpoint`; every
    other commit has exactly one parent.
 3. `parts/` holds one subtree for each part the state lists, named by part ID.
@@ -503,14 +510,21 @@ commit (none for the first) and its stored state and links:
    adds, it is a canonical fields document that agrees with any field
    operations P carries for it.
 
+A commit whose pack holds a merge also follows **R-merges**: `merges/` holds
+one regular blob for each `part.body.merge` of P, named by that operation's ID,
+and nothing else, and each blob is the size the save `merge.other` names records
+in `body.bytes`. `workbook validate` also requires each to be UTF-8 text. A
+checkpoint holds no merge, so it has no `merges/`.
+
 A stub's subtree never changes after its checkpoint, named by the pack or not,
 so a commit after the checkpoint holds the stub to its parent's subtree and
 applies none of P's field operations to it. A checkpoint commit has no parent to
 follow from, so rules 1, 5, 6 and 7 give way to the
 [checkpoint's own rules](#compacted-relics).
 
-Rules 1 to 6 are judged from object IDs and sizes: the `parts` tree and each
-part's subtree are read, but no `fields.json` or `body` blob is opened. The
+Rules 1 to 6 and R-merges are judged from object IDs and sizes: the `parts` tree,
+each part's subtree and the `merges` tree are read, but no `fields.json`, `body`
+or `merges` blob is opened. The
 exception is the limit on one field value, which takes reading the
 `fields.json` that holds it. One case of rule 7 is also judged from object IDs:
 a part that P names without setting or clearing a field keeps the `fields.json`
@@ -527,13 +541,13 @@ checks one when a relic is read, so a relic over a total still reads. See
   object, so a commit stores only what it changed.
 - **`relic show`, `export`, `update`, `migrate`, `delete`, `restore`, `retire`
   and `unretire`** check the
-  relic's newest commit against its parent by rules 1 to 6 and the case of
-  rule 7 that needs no read, and check the limit on one field value for the
+  relic's newest commit against its parent by rules 1 to 6, R-merges and the
+  case of rule 7 that needs no read, and check the limit on one field value for the
   parts whose fields they read.
 - **`relic list`** reads each relic's newest commit alone: rule 2, and that
   the three documents are the bytes this build writes.
 - **`workbook validate`** checks every commit of every relic, first to
-  newest, by all seven rules (a checkpoint by its own), and caches nothing. It
+  newest, by all seven rules and R-merges (a checkpoint by its own), and caches nothing. It
   also refuses a relic in which one operation ID is recorded by two commits of
   that relic's own history, or by a later commit and the checkpoint's list. It
   compares nothing across relics.
@@ -646,16 +660,19 @@ its pack, so those tracking refs stay loose until such a fetch.
 the relics whose ref and tracking ref differ, and nothing of any other relic
 is read. For each changed relic, one batch reads its new commits' parents, and
 the commit, `operation.json`, `state.json` and `links.json` of the fetched tip
-and of its parent. The `parts` tree is refused unless its size is exactly what
+and of its parent. A commit whose pack holds a merge also has its `merges`
+tree read and the sizes of its blobs checked. The `parts` tree is refused unless its size is exactly what
 the state's part count implies, and a part's subtree unless it has one of the
 two sizes a part can have, so a tree padded with extra entries is refused
 before it is read. Each `fields.json` and `body` blob is checked by its size
 and type from `git cat-file --batch-check`, without opening it. Every object
 is refused above the 4 MiB object limit before it is allocated. The fetched
-tip is checked as `relic show` checks a newest commit, by rules 1 to 6 and the
-case of rule 7 that needs no read; `workbook validate` stays the full check.
-No sync opens a `body` blob. A `fields.json` is read only when the replay must
-combine field changes both sides made to one part.
+tip is checked as `relic show` checks a newest commit, by rules 1 to 6, R-merges
+and the case of rule 7 that needs no read; `workbook validate` stays the full
+check. Checking a tip opens no `body` blob. A sync opens `body` blobs only to
+[merge](#merged-bodies) a stale save and to report a body conflict, and a
+`fields.json` only when the replay must combine field changes both sides made to
+one part.
 
 **Replay.** A relic changed on both sides is replayed: each local commit the
 fetched history does not hold is written again, oldest first, on top of the
@@ -673,8 +690,9 @@ bd840f6 Alice update relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
 
 The fold ignores a `part.body.set` whose `base` is not the part's current
 version, so replay decides before it writes. A body save over a version that
-is no longer current stops the replay, unless it saved the same blob with the
-same label as the body that stands, and so does any change to a relic the
+is no longer current is [merged](#merged-bodies), and stops the replay when it
+cannot be; one that saved the same blob with the same label as the body that
+stands needs neither. The replay also stops at any change to a relic the
 fetched history has deleted, and any change but a removal that names a part the
 fetched history shows as a stub. Counts and totals never stop it: two changes that
 each fit may pass one together, and the replay keeps both and warns. When a
@@ -693,8 +711,10 @@ reached the remote first:
 * 93c5a41 Alice update relic WB-R-01M87F0SQYHP3HCR4QEN3RTVEX
 ```
 
-The commit on the side line is bob's save, which only the parked ref reaches,
-and the relic's ref is alice's commit on top of the commit both share. See
+The two saves changed the same line, so they could not be
+[merged](#merged-bodies). The commit on the side line is bob's save, which only
+the parked ref reaches, and the relic's ref is alice's commit on top of the
+commit both share. See
 [Concurrency and synchronization](#concurrency-and-synchronization) for what
 each pair of concurrent changes gives, and
 [A relic conflict](reference.md#a-relic-conflict) for getting parked text back.
@@ -731,11 +751,136 @@ Whether a body save was applied is computed from the chain's packs alone, by the
 fold's rule: the save's base was the part's body version at that point. The
 packs come from the index's `relic_operations` rows or from Git, under the rule
 in [SQLite projection](#sqlite-projection), with equal answers. A stale
-save's text was never stored. Nothing derived is stored: no diff, no cached text,
-no index table. The two versions a diff compares are read from Git by commit, and
+save's text is stored only when a [merge](#merged-bodies) took it in. Nothing
+derived is stored: no diff, no cached text, no index table. The two versions a diff compares are read from Git by commit, and
 only the part objects whose IDs differ between them are opened, so equal
 `fields.json` or `body` object IDs cost no read. A line diff is computed on each
 run and bounded; see [History and diffs](reference.md#history-and-diffs).
+
+#### Merged bodies
+
+Two saves of one part's body that started from the same version and changed
+different lines are combined once and stored as a recorded merge. This happens
+where a save meets a newer version of the body that it never saw: in a replay,
+when the stale save is the local clone's, and in `relic update --base` naming an
+older version. Nothing else is merged. What a person sees is in
+[the reference](reference.md#merged-bodies).
+
+Bob's replay onto alice's save, after alice published first, from a repository
+of its own rather than the one the rest of this section shows:
+
+```text
+refs/workbook/relics/WB-R-01M8GN6RWX…
+ d424959 (part.add 01M8GN6SH7…)
+  └── fa15286 (alice: part.body.set 01M8GN6V4P… base 01M8GN6SH7…)          origin's tip
+       └── eb28c6c (bob's change, replayed)
+            operation.json  [part.body.set   01M8GN6TJG… base 01M8GN6SH7…   (not applied)
+                             part.body.merge 01M8GN6THZ… base 01M8GN6V4P…,
+                               ancestor 01M8GN6SH7…, other 01M8GN6TJG…]     minReader 9
+            state.json          part body version 01M8GN6THZ…, minReader 9
+            links.json
+            parts/01M8GN6SH7…/fields.json
+            parts/01M8GN6SH7…/body  the merged text (new blob)
+            merges/01M8GN6THZ…      bob's text: the body blob of his original commit
+```
+
+Its `operation.json`, as stored:
+
+```json
+{"format":"workbook.relic-operation-pack","version":1,"minReader":9,"projectId":"01M8GN6GCR3KHZMF3KD8Z72N6F","relicId":"WB-R-01M8GN6RWXJQCJPSFHT54G7EYB","historyGeneration":"01M8GN6RWXM0R7GAKH351NDEDE","actor":{"id":"bob@example.com"},"logicalClock":4,"wallTime":"2026-11-28T08:44:04.543361Z","operations":[{"id":"01M8GN6TJG9TC72GXTE0CJE3VV","type":"part.body.set","part":"01M8GN6SH7XE3XGXZTD0NTNG78","body":{"format":"md","bytes":127,"base":"01M8GN6SH7XE3XGXZTD0NTNG78"}},{"id":"01M8GN6THZ78QAG3NVX7VD3P74","type":"part.body.merge","part":"01M8GN6SH7XE3XGXZTD0NTNG78","body":{"format":"md","bytes":134,"base":"01M8GN6V4PCFEF52CEGGHC0KB5"},"merge":{"ancestor":"01M8GN6SH7XE3XGXZTD0NTNG78","other":"01M8GN6TJG9TC72GXTE0CJE3VV","method":"line-3way-1"}}]}
+```
+
+The next commit's tree has no `merges/`. The merged-in text is reached through
+this commit, so a push and a fetch carry it like any other object of the history.
+A [compaction](#compacted-relics) writes a checkpoint with no `merges/`: the
+merged body is kept when it is the part's body, and the merged-in text goes with
+the replaced commits, which the backup bundle holds unless the run skipped it.
+
+**The operation.** `body.base` is the version the merge is applied onto, the one
+that stands. `merge.ancestor` is the version both saves started from.
+`merge.other` is the save merged in. The fold reads only `body.base`:
+`part.body.merge` applies when `body.base` is the part's current version, and the
+part's version then becomes the merge's ID, as for `part.body.set`. A pack is
+`corrupt-data` unless every merge has a `body.base`; an `ancestor` that is a
+canonical ULID other than the operation's ID and `body.base`; an `other` that
+names an earlier `part.body.set` or `part.body.merge` of the same part in the
+same pack, with the same format label; and a `method` of 1 to 32 bytes of
+`[a-z0-9-]`. The method is a free label, so a better method needs no new
+generation. This build writes `line-3way-1`.
+
+**A deterministic ID.** A merge's ID is a ULID whose 48-bit time is the pack's
+wall time in milliseconds, and whose 80 random bits are the first 10 bytes of
+SHA-256 over `workbook.relic-merge`, the relic ID, the part ID, `other`,
+`body.base` and `method`, separated by zero bytes. The wall time only fills the
+ULID's time field; no merge decision reads it. The operation carries the actor
+and wall time of the pack it is in: those of the person whose save is merged in.
+
+**In a replay.** A pack is judged twice, onto its own parent as the local fold
+took it and onto the fetched side as the replay's fold would. A part is merged
+when the local fold took its body saves, the fetched side would take none of
+them, and the saved body differs from the one that stands. The ancestor is the
+part's body in the local commit's parent, the other side's is the body in the
+local commit, and the current one is the body at the commit replayed onto. Any
+other shape, which only a writer that skipped the command's `--base` check can
+produce, is a `body` conflict with reason `unmergeable`. A save the local fold
+had already ignored, and the fetched side ignores too, changed nothing and is no
+conflict. The replayed commit records the local pack byte for byte except the
+logical clock, the merge operations appended (one for each merged part, in part ID
+order) and the minimum reader. The stale save and its merge are in one commit, so
+they apply together or not at all. A merged text equal to the one that stands
+records no merge.
+
+When any part of a pack cannot be merged, nothing of the pack is written, and the
+replay stops with a conflict for the first such part in part ID order. The checks
+run in this order. A local commit in another history generation than the commit
+replayed onto is `base-dropped`. Then each part's versions and format labels are
+checked, up to the first part they refuse. The texts of the parts before it are
+read in one `git cat-file --batch`, and those parts are merged.
+
+A merged commit that is still unpublished, because its push was refused, is
+replayed by the same rules. Its `part.body.set` was already ignored, and its
+`part.body.merge` is now the stale body operation, so a second merge is appended
+with `ancestor` the first merge's `body.base`, `other` the first merge, and
+`body.base` the new tip's version. The new commit's `merges/` holds both entries,
+and history shows both merges.
+
+**In `relic update`.** A `--base` naming an older body version of the part reads
+that version's text from the commit that holds it. A clean merge records
+`part.body.set` from that version, with the file's bytes and not applied, then
+`part.body.merge`, and `merges/` holds the file's bytes. A conflict records
+nothing. A version the chain's checkpoint lists in `compactedOperations`, other
+than the one whose body it kept, is `base-dropped`.
+
+**The method.** `line-3way-1` is a three-way merge over lines, run by Workbook
+and not by Git. Lines keep their terminators and compare byte for byte. Each
+side's line diff from the ancestor, the same bounded search `relic diff` uses,
+gives change hunks. Hunks of the two sides that overlap or are adjacent,
+transitively, form a region. A region one side changed takes that side's lines.
+A region both changed takes them only when both give the same bytes, and is
+otherwise an overlap. Lines outside every region are the ancestor's. These are
+the rules `git merge-file` applies without its zealous simplification.
+
+| Bound | Value | Past it |
+| --- | --- | --- |
+| Inserted plus deleted lines in one side's diff | 2,000 | `too-many-changes` |
+| Search steps in one side's diff (diagonal visits plus line comparisons) | 67,108,864 (2^26) | `too-many-changes` |
+| The merged text | 1,048,576 bytes | `too-large` |
+
+The step bound is a count, not a clock, so it holds a merge's time down inside a
+sync and still gives every machine the same answer. A merged part reads three
+blobs of at most 1 MiB each, parts are merged one at a time, and a pack that
+needs no merge reads no body for one. Each bound may be raised, never lowered.
+The index changes no table: it stores each operation's JSON, `merge` included.
+
+**Guarantees and best effort.** No save from an older version silently
+overwrites a newer one: it is merged, with a warning, or reported as a conflict.
+A merge compares the three texts only, so a change one side made and then put
+back counts as no change. The same inputs give the same operation, tree and
+text, a merge is computed only by the clone that writes it, and every other clone
+reads the stored result without running the method. No conflict marker or
+half-merged text is stored. Whether two edits merge depends on the method, which
+is best effort: a clean line merge can be wrong in meaning. The merge is recorded
+so that it can be reviewed with `relic diff` and reverted with a save.
 
 #### Relics on the web board
 
@@ -1320,13 +1465,14 @@ than per release:
 | 6 | `schema.put`, and these relic operations: `relic.migrate`, `relic.create`, `title.set`, `relic.tombstone`, `relic.restore`, `property.set`, `property.clear`, `part.add`, `part.field.set`, `part.field.clear`, `part.body.set`, `part.move`, `part.remove`, `part.restore`, `link.add`, `link.remove` |
 | 7 | the relic operations `relic.retire`, `relic.unretire` and `history.checkpoint` |
 | 8 | a `relic.create` or `relic.migrate` that names a [built-in schema](#relic-schemas) |
+| 9 | the relic operation `part.body.merge`; see [Merged bodies](#merged-bodies) |
 
 Generations 5 and 8 are decided by an operation's payload rather than its type: a
 `field.set` of any other field is still generation 0, and so is a create with no
 due date; see [Due dates](#due-dates) for why. A `relic.create` or
 `relic.migrate` that names a project version, or none, stays at generation 6.
 
-Generations 6, 7 and 8 belong to relics, and 6 to project schemas too. None marks
+Generations 6 to 9 belong to relics, and 6 to project schemas too. None marks
 a task pack, so a task history is written exactly as before. A relic pack carries
 the generation its operations need, and a state the larger of its parent's and
 its pack's. It marks a configuration pack only when the pack holds a
@@ -1365,6 +1511,18 @@ folds generation 6 or 7, treats it the same way: it shows the relic from its
 stored state, refuses to change it, and never pushes over it. The new generation
 is what keeps such a build from judging the built-in name a malformed version ID
 and calling the relic corrupt. A release from before relics sees no relic at all.
+
+A relic holding a merged body is generation 9, as is every state after it. A
+build from before merging, one that folds generation 8 or less, decodes its pack
+and state leniently and shows the relic from its stored state, exiting `0`.
+`relic update` and `relic diff` exit `9` (`newer-writer`), history stops at the
+merge, truncated as `newer-writer`, and `validate` counts the relic as a newer
+writer's rather than invalid. Its sync takes the merged tip when it has nothing
+to replay onto it. When it holds its own unpublished change to the relic, it
+reports `needs-upgrade` and moves neither its ref nor the remote's. A current
+build in the same clone then syncs it. Such a build never judges the tree's
+`merges/`, since it refuses the commit as newer first, and its index stores no row
+for the relic. Nothing is lost.
 
 Generation 0 is every operation type Workbook shipped before assignments, and it
 is the only generation that writes no marker. So a create, a field change, a
@@ -1824,17 +1982,19 @@ holds. What each pair of concurrent changes gives:
 | Two changes that each fit a total and together pass it | both kept, `relic-over-limit` warning | no |
 | An edit to a part removed elsewhere | the part stays removed and holds the edit, `relic-edit-on-removed-part` warning | no |
 | A deletion that syncs second, over an edit | deleted, holding the edit, no report | no |
-| Two body saves over the same version, to different bytes | the first syncer's body; the second's tip parked | yes, `body` |
+| Two body saves over the same version, on different lines | both edits, as a recorded [merge](#merged-bodies), `relic-body-merged` warning | no |
+| Two body saves over the same version, on overlapping or adjacent lines, or that cannot be merged otherwise | the first syncer's body; the second's tip parked | yes, `body` with a `reason` |
 | An edit that syncs second, over a deletion | deleted; the edit's tip parked | yes, `tombstone` |
 | A retirement and an edit, either order | both applied | no |
 | A retirement and an unretirement | the second syncer's mark | no |
 | A change to a part a compaction made a stub, other than removing it | the checkpoint; the change's tip parked | yes, `dropped` |
-| A body save from a version that is no longer current, a version a compaction dropped among them | the current body; the save's tip parked | yes, `body` |
+| A body save made in a history a compaction replaced, from a version no longer current | the current body; the save's tip parked | yes, `body`, `base-dropped` |
 
 The replay decides before it writes: the fold ignores a `part.body.set` whose
 `base` is not the part's current version, so the replay checks every body save
-against the fetched state and stops on the first that would be dropped, unless
-it saved the same blob with the same label. It never stops for a count or a
+against the fetched state. One that would be dropped, and did not save the same
+blob with the same label, is [merged](#merged-bodies), or stops the replay when
+it cannot be. It never stops for a count or a
 total, because refusing would lose one clone's work that was valid where it was
 made. A stopped replay moves the relic's ref to the fetched tip plus whatever
 replayed before the stop, parks the old local tip under
@@ -1842,8 +2002,9 @@ replayed before the stop, parks the old local tip under
 reports a `relicConflict` entry; see
 [A relic conflict](reference.md#a-relic-conflict).
 
-These are guarantees: every stored value is one side's whole value or the
-result of applying whole operations in order; each operation is recorded once
+These are guarantees: every stored value is one side's whole value, the result
+of applying whole operations in order, or, for a body, a recorded merge of two
+saves whose texts stay in the history; each operation is recorded once
 whatever the order of delivery, and a repeated or interrupted sync changes
 nothing further; a change that did not apply is kept in a parked tip until a
 reset bundles and removes it. The deletion that syncs second is the one case

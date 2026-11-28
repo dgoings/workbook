@@ -153,9 +153,11 @@ edits them. Relics are shared with the tasks: `workbook fetch`, `push` and
 fresh clone gets them from `workbook setup`. A task command's own
 synchronization carries no relic, so run `workbook sync` or `workbook fetch` to
 get the latest ones. Two clones' changes to one relic
-are combined, and the one kind that cannot be, two saves over the same body
-version or an edit to a relic deleted elsewhere, is reported as a relic
-conflict that keeps the change that did not apply. A relic, or one of its
+are combined. Two saves over one body version that changed different lines are
+[merged](docs/reference.md#merged-bodies). What cannot be combined, such as two
+saves that changed the same lines or an edit to a relic deleted elsewhere, is
+reported as a [relic conflict](docs/reference.md#a-relic-conflict) that keeps
+the change that did not apply. A relic, or one of its
 parts, links to a task, a relic or a part of a relic with `workbook relic update
 <relic> --link <task|relic[#part]> --rel <rel>`, and an optional `--pointer` says
 where in the target it points. A link is followed from both ends: `workbook relic
