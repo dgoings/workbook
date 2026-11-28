@@ -913,3 +913,105 @@ func TestFoldIgnoresChangesToStubs(t *testing.T) {
 		}
 	}
 }
+
+// aliceSavedPartA is the golden relic after Alice saved part A from its first
+// body, as version current.
+func aliceSavedPartA(t *testing.T, current string) RelicRecord {
+	t.Helper()
+	return mustApplyRelic(t, goldenRelicRecord(t), aliceSavePack(current))
+}
+
+func aliceSavePack(current string) RelicOperationPack {
+	return relicFoldPack(2, RelicOperation{ID: current, Type: RelicOperationPartBodySet, Part: relicDocPartA,
+		Body: &RelicBodyChange{Format: "md", Bytes: 20, Base: relicDocPartA}})
+}
+
+func TestRelicMergeFoldsLikeASaveFromTheCurrentVersion(t *testing.T) {
+	save, merge, current := relicTestID(9100), relicTestID(9101), relicTestID(9102)
+	alice := aliceSavedPartA(t, current)
+
+	// Applied when body.base is the part's current version.
+	merged := mustApplyRelic(t, alice, relicStaleSaveThenMerge(3, save, merge, current))
+	body := requirePartForTest(t, merged.State.Relic, relicDocPartA).Body
+	if body == nil || body.Version != merge || body.Bytes != 40 || body.Format != "md" {
+		t.Fatalf("after the merge: body = %#v, want version %s with 40 bytes", body, merge)
+	}
+
+	// Ignored when body.base is stale: a version other than Alice's.
+	stale, err := ApplyRelic(&alice, relicFoldPack(3,
+		RelicOperation{ID: save, Type: RelicOperationPartBodySet, Part: relicDocPartA,
+			Body: &RelicBodyChange{Format: "md", Bytes: 30, Base: relicDocPartA}},
+		relicMergeOperation(merge, relicDocPartA, relicTestID(9109), relicDocPartA, save, 40)))
+	if err != nil {
+		t.Fatalf("a stale merge: %v", err)
+	}
+	requireRelicEqual(t, "a merge from a stale version", withoutUpdatedAt(stale.State.Relic), withoutUpdatedAt(alice.State.Relic))
+
+	// Delivered twice, it changes nothing the second time: the save and the
+	// merge are both stale against the merge's own version.
+	again := mustApplyRelic(t, merged, relicStaleSaveThenMerge(4, save, merge, current))
+	requireRelicEqual(t, "the merge delivered twice", withoutUpdatedAt(again.State.Relic), withoutUpdatedAt(merged.State.Relic))
+
+	// Applied on a removed part, which stays removed.
+	removed := mustApplyRelic(t, alice, relicFoldPack(3,
+		RelicOperation{ID: relicTestID(9103), Type: RelicOperationPartRemove, Part: relicDocPartA}))
+	mergedRemoved := mustApplyRelic(t, removed, relicStaleSaveThenMerge(4, save, merge, current))
+	part := requirePartForTest(t, mergedRemoved.State.Relic, relicDocPartA)
+	if !part.Removed || part.Body == nil || part.Body.Version != merge {
+		t.Fatalf("a merge on a removed part: part = %#v (body %#v), want removed with version %s", part, part.Body, merge)
+	}
+
+	// Ignored on a part the relic does not have.
+	unknown := relicTestID(9104)
+	missing := mustApplyRelic(t, alice, relicFoldPack(3,
+		RelicOperation{ID: save, Type: RelicOperationPartBodySet, Part: unknown, Body: &RelicBodyChange{Format: "md", Bytes: 3, Base: relicTestID(9105)}},
+		relicMergeOperation(merge, unknown, relicTestID(9106), relicTestID(9105), save, 4)))
+	requireRelicEqual(t, "a merge on a part the relic does not have", withoutUpdatedAt(missing.State.Relic), withoutUpdatedAt(alice.State.Relic))
+
+	// Ignored on a stub, even from the version the stub had.
+	_, root := relicCheckpointForTest(RelicBoundaryRetired)
+	stub := relicDocPartB
+	stubPack := NewRelicOperationPack(relicDocProject, relicDocRelic, relicCheckpointGeneration, relicDocActor, 5,
+		relicCheckpointWall.Add(time.Minute), []RelicOperation{
+			{ID: save, Type: RelicOperationPartBodySet, Part: stub, Body: &RelicBodyChange{Format: "md", Bytes: 3, Base: relicTestID(9107)}},
+			relicMergeOperation(merge, stub, relicTestID(9108), relicTestID(9107), save, 4),
+		})
+	onStub, err := ApplyRelic(&root, stubPack)
+	if err != nil {
+		t.Fatalf("a merge on a stub: %v", err)
+	}
+	if got, want := stateBytesWithoutClock(t, onStub.State), stateBytesWithoutClock(t, withMinReader(root.State, RelicMergeMinReader)); got != want {
+		t.Fatalf("a merge on a stub changed the relic:\n got %s\nwant %s", got, want)
+	}
+}
+
+func TestStaleSaveThenMergeInOnePack(t *testing.T) {
+	save, merge, current := relicTestID(9110), relicTestID(9111), relicTestID(9112)
+	alice := aliceSavedPartA(t, current)
+	pack := relicStaleSaveThenMerge(3, save, merge, current)
+
+	// The save alone, cut from the pack, is stale and changes nothing.
+	cut := relicFoldPack(3, pack.Operations[0])
+	saved := mustApplyRelic(t, alice, cut)
+	if body := requirePartForTest(t, saved.State.Relic, relicDocPartA).Body; body.Version != current {
+		t.Fatalf("the stale save alone gave version %s, want %s", body.Version, current)
+	}
+
+	merged := mustApplyRelic(t, alice, pack)
+	body := requirePartForTest(t, merged.State.Relic, relicDocPartA).Body
+	if body.Version != merge || body.Bytes != 40 {
+		t.Fatalf("after the pack: body = %#v, want the merge %s", body, merge)
+	}
+	if !RelicBodySavedBy(&alice, pack, merged, relicDocPartA) {
+		t.Fatal("RelicBodySavedBy says the merge pack saved no body")
+	}
+	applied := RelicBodySavesApplied(historyChain(goldenRelicPack(), aliceSavePack(current), pack))
+	if applied[save] || !applied[merge] {
+		t.Fatalf("applied = %v, want the save not applied and the merge applied", applied)
+	}
+}
+
+func withMinReader(state RelicStateDocument, minReader int) RelicStateDocument {
+	state.MinReader = minReader
+	return state
+}

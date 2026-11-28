@@ -38,12 +38,15 @@ const (
 	RelicOperationPartFieldSet   RelicOperationType = "part.field.set"
 	RelicOperationPartFieldClear RelicOperationType = "part.field.clear"
 	RelicOperationPartBodySet    RelicOperationType = "part.body.set"
-	RelicOperationPartMove       RelicOperationType = "part.move"
-	RelicOperationPartRemove     RelicOperationType = "part.remove"
-	RelicOperationPartRestore    RelicOperationType = "part.restore"
-	RelicOperationMigrate        RelicOperationType = "relic.migrate"
-	RelicOperationRetire         RelicOperationType = "relic.retire"
-	RelicOperationUnretire       RelicOperationType = "relic.unretire"
+	// RelicOperationPartBodyMerge saves a body that combines a stale save
+	// with the version that stood; see RelicBodyMerge.
+	RelicOperationPartBodyMerge RelicOperationType = "part.body.merge"
+	RelicOperationPartMove      RelicOperationType = "part.move"
+	RelicOperationPartRemove    RelicOperationType = "part.remove"
+	RelicOperationPartRestore   RelicOperationType = "part.restore"
+	RelicOperationMigrate       RelicOperationType = "relic.migrate"
+	RelicOperationRetire        RelicOperationType = "relic.retire"
+	RelicOperationUnretire      RelicOperationType = "relic.unretire"
 	// RelicOperationCheckpoint is the root of a compacted relic: the sole
 	// operation of a parentless commit, carrying a summary of the history it
 	// replaced and none of the relic's content.
@@ -60,9 +63,10 @@ type RelicCreateData struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-// RelicBodyChange describes a body that part.add or part.body.set stores in the
-// commit's tree: its label and size, never its text. Base is the body version
-// a part.body.set started from, left out when the part had no body.
+// RelicBodyChange describes a body that part.add, part.body.set or
+// part.body.merge stores in the commit's tree: its label and size, never its
+// text. Base is the body version a part.body.set started from, left out when
+// the part had no body, and the version a part.body.merge is applied onto.
 type RelicBodyChange struct {
 	Format string `json:"format,omitempty"`
 	Bytes  int64  `json:"bytes"`
@@ -91,6 +95,8 @@ type RelicOperation struct {
 	Schema    string             `json:"schema,omitempty"`
 	// Checkpoint is the summary a history.checkpoint carries.
 	Checkpoint *RelicCheckpointData `json:"checkpoint,omitempty"`
+	// Merge is what a part.body.merge merged.
+	Merge *RelicBodyMerge `json:"merge,omitempty"`
 }
 
 // RelicOperationPack is a relic commit's operation.json.
@@ -269,6 +275,7 @@ var relicOperationMinReader = map[RelicOperationType]int{
 	RelicOperationRetire:         RelicCheckpointMinReader,
 	RelicOperationUnretire:       RelicCheckpointMinReader,
 	RelicOperationCheckpoint:     RelicCheckpointMinReader,
+	RelicOperationPartBodyMerge:  RelicMergeMinReader,
 }
 
 // relicPackMinReader is the generation a pack of these operations declares:
@@ -469,17 +476,19 @@ func DecodeRelicFieldsDocument(data []byte) (RelicFieldsDocument, error) {
 }
 
 // validateRelicMarker checks a relic document's generation: above this build's
-// it was written by a newer Workbook, and anything but six, seven or eight is
-// corrupt.
+// it was written by a newer Workbook, and anything but six, seven, eight or
+// nine is corrupt.
 func validateRelicMarker(document string, minReader int, relicID string) error {
 	if minReader > SupportedFormatGeneration {
 		// This is also what stops EncodeDocument from writing a newer document
 		// back out with the members it could not decode silently dropped.
 		return newerWriterRelic(relicID)
 	}
-	if minReader != RelicMinReader && minReader != RelicCheckpointMinReader && minReader != RelicBuiltInSchemaMinReader {
-		return corrupt("%s minimum reader generation %d is invalid; a relic declares %d, %d or %d",
-			document, minReader, RelicMinReader, RelicCheckpointMinReader, RelicBuiltInSchemaMinReader)
+	switch minReader {
+	case RelicMinReader, RelicCheckpointMinReader, RelicBuiltInSchemaMinReader, RelicMergeMinReader:
+	default:
+		return corrupt("%s minimum reader generation %d is invalid; a relic declares %d, %d, %d or %d",
+			document, minReader, RelicMinReader, RelicCheckpointMinReader, RelicBuiltInSchemaMinReader, RelicMergeMinReader)
 	}
 	return nil
 }
@@ -528,6 +537,9 @@ func validateRelicOperationPackDocument(pack RelicOperationPack) error {
 		}
 		seen[operation.ID] = struct{}{}
 	}
+	if err := validateRelicMergeOthers(pack.Operations); err != nil {
+		return err
+	}
 	// A pack declares exactly the generation its operations need, so a retire
 	// cannot reach a generation-six build marked as something it can fold, nor
 	// a built-in name a generation-seven build.
@@ -542,7 +554,7 @@ func validateRelicOperationPackDocument(pack RelicOperationPack) error {
 // operation type carries. Anything outside its list must be absent, which is
 // what stops a future build's operation from being folded as an older one.
 type relicOperationMembers struct {
-	relic, title, name, value, part, partType, position, body, link, linkID, relicType, schema, checkpoint bool
+	relic, title, name, value, part, partType, position, body, link, linkID, relicType, schema, checkpoint, merge bool
 }
 
 var relicOperationShapes = map[RelicOperationType]relicOperationMembers{
@@ -556,6 +568,7 @@ var relicOperationShapes = map[RelicOperationType]relicOperationMembers{
 	RelicOperationPartFieldSet:   {part: true, name: true, value: true},
 	RelicOperationPartFieldClear: {part: true, name: true},
 	RelicOperationPartBodySet:    {part: true, body: true},
+	RelicOperationPartBodyMerge:  {part: true, body: true, merge: true},
 	RelicOperationPartMove:       {part: true, position: true},
 	RelicOperationPartRemove:     {part: true},
 	RelicOperationPartRestore:    {part: true},
@@ -589,6 +602,7 @@ func validateRelicOperationDocument(operation RelicOperation) error {
 		relicType:  operation.RelicType != "",
 		schema:     operation.Schema != "",
 		checkpoint: operation.Checkpoint != nil,
+		merge:      operation.Merge != nil,
 	}
 	// part.add and relic.migrate are the types with an optional member: a part
 	// may be added without a body, and a relic may move to a type with no
@@ -694,18 +708,28 @@ func validateRelicOperationDocument(operation RelicOperation) error {
 		}
 		if operation.Body.Base != "" {
 			// Only an edit has a version it started from.
-			if operation.Type != RelicOperationPartBodySet {
+			if operation.Type != RelicOperationPartBodySet && operation.Type != RelicOperationPartBodyMerge {
 				return corrupt("%s carries the wrong members", operation.Type)
 			}
-			if err := validateCanonicalULID("part.body.set base", operation.Body.Base); err != nil {
+			if err := validateCanonicalULID(string(operation.Type)+" base", operation.Body.Base); err != nil {
 				return err
 			}
 			// The edit's own ID is the version it saves, so naming itself as
 			// the version it started from would relabel a body without a new
 			// version.
 			if operation.Body.Base == operation.ID {
-				return corrupt("part.body.set %s names itself as its base", operation.ID)
+				return corrupt("%s %s names itself as its base", operation.Type, operation.ID)
 			}
+		}
+	}
+	if operation.Type == RelicOperationPartBodyMerge {
+		// A merge is always applied onto a version: the one that stood when
+		// the stale save met it.
+		if operation.Body.Base == "" {
+			return corrupt("part.body.merge %s names no version it is applied onto", operation.ID)
+		}
+		if err := validateRelicBodyMerge(operation); err != nil {
+			return err
 		}
 	}
 	return nil

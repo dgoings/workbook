@@ -252,10 +252,10 @@ func staleRelicBody(parent RelicData, pack RelicOperationPack, sameBody map[stri
 			if operation.Body != nil {
 				versions[operation.ID] = operation.ID
 			}
-		case RelicOperationPartBodySet:
+		case RelicOperationPartBodySet, RelicOperationPartBodyMerge:
 			current, exists := versions[operation.Part]
 			if !exists {
-				return nil, corrupt("part.body.set %s names part %s, which the relic does not have", operation.ID, operation.Part)
+				return nil, corrupt("%s %s names part %s, which the relic does not have", operation.Type, operation.ID, operation.Part)
 			}
 			if operation.Body.Base == current {
 				versions[operation.Part] = operation.ID
@@ -327,7 +327,8 @@ func relicPartChanges(packs []RelicOperationPack, other map[string]bool) relicPa
 			switch operation.Type {
 			case RelicOperationPartRemove:
 				changes.removed[operation.Part] = true
-			case RelicOperationPartFieldSet, RelicOperationPartFieldClear, RelicOperationPartBodySet, RelicOperationPartMove:
+			case RelicOperationPartFieldSet, RelicOperationPartFieldClear, RelicOperationPartBodySet,
+				RelicOperationPartBodyMerge, RelicOperationPartMove:
 				changes.edited[operation.Part] = true
 			case RelicOperationLinkAdd:
 				// A link from a part is an edit of that part.

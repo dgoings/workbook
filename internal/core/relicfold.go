@@ -227,7 +227,7 @@ func checkRelicChild(parent RelicStateDocument, pack RelicOperationPack) error {
 // is the ID of the part.add that made it and the version of its first body,
 // and a body's version, which is the ID of the operation that saved it.
 //
-// A part.body.set that took a part's ID would give a body a version that
+// A part.body.set or part.body.merge that took a part's ID would give a body a version that
 // already named other text, so a later save from that version would overwrite
 // text its author never saw. A part.add that took a part's ID or a body's
 // current version would make one name stand for two things the same way. The
@@ -236,9 +236,9 @@ func checkRelicChild(parent RelicStateDocument, pack RelicOperationPack) error {
 // link's ID is refused by refuseReusedRelicLinkID.
 func refuseReusedRelicID(relic RelicData, operation RelicOperation) error {
 	switch operation.Type {
-	case RelicOperationPartBodySet:
+	case RelicOperationPartBodySet, RelicOperationPartBodyMerge:
 		if _, exists := relic.Part(operation.ID); exists {
-			return corrupt("part.body.set %s takes the ID of a part of the relic; an operation ID is used once", operation.ID)
+			return corrupt("%s %s takes the ID of a part of the relic; an operation ID is used once", operation.Type, operation.ID)
 		}
 	case RelicOperationPartAdd:
 		for _, part := range relic.Parts {
@@ -285,7 +285,9 @@ func applyRelicOperation(relic *RelicData, operation RelicOperation) {
 			part.Body = &RelicBody{Format: operation.Body.Format, Version: operation.ID, Bytes: operation.Body.Bytes}
 		}
 		relic.Parts = append(relic.Parts, part)
-	case RelicOperationPartBodySet:
+	case RelicOperationPartBodySet, RelicOperationPartBodyMerge:
+		// A merge folds exactly as a save does: its base is the version it
+		// is applied onto, and its text is the merged body.
 		part := relicPartRef(relic, operation.Part)
 		if part == nil {
 			return

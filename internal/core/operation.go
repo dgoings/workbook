@@ -137,6 +137,20 @@ const (
 // and so is every task and configuration pack. A later built-in version needs
 // no new generation.
 //
+// Nine is the generation merged relic bodies introduce, through one relic
+// operation type: part.body.merge (see RelicMergeMinReader). It records the
+// body that combines a stale save with the version that stood, and it folds
+// as a save from that version. A build that folds generation eight does not
+// know the type and would call the relic corrupt data; with the marker it
+// shows the relic from its stored state, warns that a newer Workbook wrote it,
+// and refuses to change it or to replay its own edits onto it. A pack holding
+// a merge declares nine, and a state the larger of its parent's and its
+// pack's, so every state after a merge stays at nine; a checkpoint's pack
+// stays at seven while its state keeps the watermark of the tip it replaced.
+// Every other relic is written exactly as before, at six, seven or eight, and
+// so is every task and configuration pack. A better merge method records a
+// new method label and needs no new generation.
+//
 // Raising this constant is the last step of shipping a new operation type, not
 // the first: the build has to be able to fold generation N before it may claim
 // to. It is also inseparable from the table that declares N — a pack this build
@@ -152,7 +166,7 @@ const (
 // has already happened, from cache, while the mutations it refused now succeed.
 // See historyvalidation.readerGeneration. Any future cache of a fold's outcome
 // owes the same.
-const SupportedFormatGeneration = 8
+const SupportedFormatGeneration = 9
 
 type Actor struct {
 	ID string `json:"id"`

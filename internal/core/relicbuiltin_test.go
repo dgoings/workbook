@@ -176,8 +176,8 @@ func builtInCreate(schema string) RelicOperation {
 }
 
 func TestBuiltInSchemaNamesDeclareGeneration8(t *testing.T) {
-	if SupportedFormatGeneration != 8 || RelicBuiltInSchemaMinReader != 8 {
-		t.Fatalf("SupportedFormatGeneration = %d, RelicBuiltInSchemaMinReader = %d, want 8 and 8",
+	if SupportedFormatGeneration < 8 || RelicBuiltInSchemaMinReader != 8 {
+		t.Fatalf("SupportedFormatGeneration = %d, RelicBuiltInSchemaMinReader = %d, want at least 8 and 8",
 			SupportedFormatGeneration, RelicBuiltInSchemaMinReader)
 	}
 	migrate := func(schema string) RelicOperation {

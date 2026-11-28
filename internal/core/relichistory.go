@@ -180,7 +180,7 @@ func savesRelicBody(operation RelicOperation) (partID string, saves bool) {
 	switch {
 	case operation.Type == RelicOperationPartAdd && operation.Body != nil:
 		return operation.ID, true
-	case operation.Type == RelicOperationPartBodySet && operation.Body != nil:
+	case (operation.Type == RelicOperationPartBodySet || operation.Type == RelicOperationPartBodyMerge) && operation.Body != nil:
 		return operation.Part, true
 	}
 	return "", false
@@ -189,9 +189,9 @@ func savesRelicBody(operation RelicOperation) (partID string, saves bool) {
 // RelicBodySavesApplied returns, for every operation of the chain that saves a
 // body, whether the fold took it. It replays body versions alone, part by part
 // in chain and pack order, and folds no state: a part exists from its part.add,
-// whose body is always taken, and a part.body.set is taken exactly when the
-// part exists, live or removed, and its base is the part's version at that
-// point, empty when it has no body. A chain that starts at a checkpoint starts
+// whose body is always taken, and a part.body.set or part.body.merge is taken
+// exactly when the part exists, live or removed, and its base is the part's
+// version at that point, empty when it has no body. A chain that starts at a checkpoint starts
 // from the parts the checkpoint kept (see RelicChain.Kept); a stub is not one,
 // because the fold ignores every change to it. These are ApplyRelic's rules, so
 // index and Git chains give the same answer. The replay stops where the history
@@ -227,7 +227,7 @@ func RelicBodySavesApplied(chain RelicChain) map[string]bool {
 					versions[operation.ID] = operation.ID
 					applied[operation.ID] = true
 				}
-			case RelicOperationPartBodySet:
+			case RelicOperationPartBodySet, RelicOperationPartBodyMerge:
 				if !saves {
 					continue
 				}

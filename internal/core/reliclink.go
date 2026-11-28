@@ -265,7 +265,7 @@ func sortRelicLinks(links []RelicLink) {
 // refuseReusedRelicID.
 func refuseReusedRelicLinkID(relic RelicData, links RelicLinksDocument, operation RelicOperation) error {
 	switch operation.Type {
-	case RelicOperationLinkAdd, RelicOperationPartAdd, RelicOperationPartBodySet:
+	case RelicOperationLinkAdd, RelicOperationPartAdd, RelicOperationPartBodySet, RelicOperationPartBodyMerge:
 		if _, exists := links.Link(operation.ID); exists {
 			return corrupt("%s %s takes the ID of a link the relic has; an operation ID is used once", operation.Type, operation.ID)
 		}

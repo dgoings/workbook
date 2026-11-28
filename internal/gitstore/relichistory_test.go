@@ -482,7 +482,7 @@ func TestValidateRelicHistoryStopsAtTheFirstBadCommit(t *testing.T) {
 
 // forgeNewerRelicTip puts on top of root, as the relic's tip, what a later
 // Workbook writes when it archives and retires the relic: an operation type
-// and a state this build has no rules for, marked generation 9. It returns
+// and a state this build has no rules for, marked generation 10. It returns
 // that commit.
 func forgeNewerRelicTip(t *testing.T, repo *Repository, config core.ProjectConfig, root core.RelicSnapshot) string {
 	t.Helper()
@@ -497,13 +497,13 @@ func forgeNewerRelicTip(t *testing.T, repo *Repository, config core.ProjectConfi
 		}
 		return document
 	}
-	operationJSON := []byte(`{"format":"workbook.relic-operation-pack","version":1,"minReader":9,` +
+	operationJSON := []byte(`{"format":"workbook.relic-operation-pack","version":1,"minReader":10,` +
 		`"projectId":"` + config.ProjectID + `","relicId":"` + relicID + `",` +
 		`"historyGeneration":"` + root.Operation.HistoryGeneration + `","actor":{"id":"` + relicTestActor + `"},` +
 		`"logicalClock":2,"wallTime":"2026-11-23T10:01:00Z",` +
 		`"operations":[{"id":"` + relicTestID(700001) + `","type":"relic.archive"}]}` + "\n")
 	stateJSON := raise(relicBlob(t, repo, root.Head+":state.json"),
-		`"minReader":6`, `"minReader":9`,
+		`"minReader":6`, `"minReader":10`,
 		`"logicalClock":1`, `"logicalClock":2`,
 		`"retired":false`, `"retired":true`)
 	forged := forgeRelicCommit(t, repo, root.Head, operationJSON, stateJSON, forgedPartsOf(t, repo, root.Head))

@@ -590,14 +590,14 @@ func TestRelicDocumentsFromANewerWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newerPack := strings.Replace(string(encodedPack), `"minReader":6,`, `"minReader":9,`, 1)
+	newerPack := strings.Replace(string(encodedPack), `"minReader":6,`, `"minReader":10,`, 1)
 	newerPack = strings.Replace(newerPack, `]}`+"\n",
 		`,{"id":"`+relicTestID(8)+`","type":"relic.archive","reason":"superseded"}]}`+"\n", 1)
 	pack, err := DecodeRelicOperationPack([]byte(newerPack))
 	if err != nil {
 		t.Fatalf("DecodeRelicOperationPack(newer) = %v", err)
 	}
-	if !pack.RequiresNewerReader() || pack.MinReader != 9 || len(pack.Operations) != 5 ||
+	if !pack.RequiresNewerReader() || pack.MinReader != 10 || len(pack.Operations) != 5 ||
 		pack.Operations[4].Type != "relic.archive" {
 		t.Fatalf("newer pack decoded as %#v", pack)
 	}
@@ -606,14 +606,14 @@ func TestRelicDocumentsFromANewerWriter(t *testing.T) {
 		err.Error() != "relic "+relicDocRelic+" was written by a newer workbook; upgrade workbook to change it" {
 		t.Fatalf("EncodeDocument(newer pack) = %v, want the newer-writer refusal", err)
 	}
-	_, err = DecodeRelicOperationPack([]byte(strings.Replace(newerPack, `"minReader":9,`, "", 1)))
+	_, err = DecodeRelicOperationPack([]byte(strings.Replace(newerPack, `"minReader":10,`, "", 1)))
 	requireCorruptData(t, "the newer pack without its marker", err)
 
 	encodedState, err := EncodeDocument(goldenRelicState())
 	if err != nil {
 		t.Fatal(err)
 	}
-	newerState := strings.Replace(string(encodedState), `"minReader":6,`, `"minReader":9,`, 1)
+	newerState := strings.Replace(string(encodedState), `"minReader":6,`, `"minReader":10,`, 1)
 	newerState = strings.Replace(newerState, `"retired":false,`, `"retired":true,"archivedBy":"x",`, 1)
 	state, err := DecodeRelicStateDocument([]byte(newerState))
 	if err != nil {
@@ -627,7 +627,7 @@ func TestRelicDocumentsFromANewerWriter(t *testing.T) {
 	if CategoryOf(err) != CategoryNewerWriter {
 		t.Fatalf("EncodeDocument(newer state) = %v, want newer writer", err)
 	}
-	_, err = DecodeRelicStateDocument([]byte(strings.Replace(newerState, `"minReader":9,`, "", 1)))
+	_, err = DecodeRelicStateDocument([]byte(strings.Replace(newerState, `"minReader":10,`, "", 1)))
 	requireCorruptData(t, "the newer state without its marker", err)
 
 	// A newer state whose lists are null still reads as a total value.
@@ -639,9 +639,9 @@ func TestRelicDocumentsFromANewerWriter(t *testing.T) {
 }
 
 func TestRelicGenerationSevenMarkers(t *testing.T) {
-	if SupportedFormatGeneration != 8 || RelicMinReader != 6 || RelicCheckpointMinReader != 7 {
-		t.Fatalf("SupportedFormatGeneration = %d, RelicMinReader = %d, RelicCheckpointMinReader = %d, want 8, 6 and 7",
-			SupportedFormatGeneration, RelicMinReader, RelicCheckpointMinReader)
+	if SupportedFormatGeneration != RelicMergeMinReader || RelicMinReader != 6 || RelicCheckpointMinReader != 7 {
+		t.Fatalf("SupportedFormatGeneration = %d, RelicMinReader = %d, RelicCheckpointMinReader = %d, want %d, 6 and 7",
+			SupportedFormatGeneration, RelicMinReader, RelicCheckpointMinReader, RelicMergeMinReader)
 	}
 	for _, operation := range validRelicOperations() {
 		if got := singleRelicOperationPack(operation).MinReader; got != 6 {

@@ -253,7 +253,7 @@ func (g *historyGenerator) chain(t *testing.T) []RelicOperationPack {
 			return ""
 		}
 		for count := 1 + g.random.Intn(4); count > 0; count-- {
-			choice := g.random.Intn(7)
+			choice := g.random.Intn(8)
 			if len(parts) == 0 {
 				choice = 0
 			}
@@ -296,6 +296,26 @@ func (g *historyGenerator) chain(t *testing.T) []RelicOperationPack {
 			case 6: // remove a part; later saves to it still count
 				part := parts[g.random.Intn(len(parts))]
 				pack = append(pack, RelicOperation{ID: g.id(), Type: RelicOperationPartRemove, Part: part.ID})
+			case 7: // a stale save merged onto the current version, or onto a stale one
+				part := parts[g.random.Intn(len(parts))]
+				ancestor := g.id()
+				if versions := seen[part.ID]; len(versions) > 0 && g.random.Intn(2) == 0 {
+					ancestor = versions[g.random.Intn(len(versions))]
+				}
+				if ancestor == current(part) {
+					ancestor = g.id()
+				}
+				save := g.id()
+				pack = append(pack, historyBodySet(save, part.ID, ancestor, 7))
+				base := current(part)
+				if base == "" || g.random.Intn(3) == 0 {
+					base = g.id()
+				}
+				merge := g.id()
+				pack = append(pack, relicMergeOperation(merge, part.ID, base, ancestor, save, 11))
+				if base == current(part) {
+					pending[part.ID] = merge
+				}
 			}
 		}
 		next := relicFoldPack(clock, pack...)
@@ -327,13 +347,15 @@ func foldApplied(t *testing.T, packs []RelicOperationPack) map[string]bool {
 			switch {
 			case operation.Type == RelicOperationPartAdd && operation.Body != nil:
 				partID = operation.ID
-			case operation.Type == RelicOperationPartBodySet:
+			case operation.Type == RelicOperationPartBodySet, operation.Type == RelicOperationPartBodyMerge:
 				partID = operation.Part
 			default:
 				continue
 			}
 			cut := pack
 			cut.Operations = pack.Operations[:index+1]
+			// A cut before a merge holds none, so it declares less.
+			cut.MinReader = relicPackMinReader(cut.Operations)
 			record, err := ApplyRelic(parent, cut)
 			if err != nil {
 				t.Fatalf("ApplyRelic(clock %d cut at %d): %v", pack.LogicalClock, index, err)
@@ -352,7 +374,7 @@ func foldApplied(t *testing.T, packs []RelicOperationPack) map[string]bool {
 
 func TestAppliedMatchesTheFold(t *testing.T) {
 	generator := &historyGenerator{random: rand.New(rand.NewSource(20261127))}
-	stale := 0
+	stale, merges, mergesApplied := 0, 0, 0
 	for run := 0; run < 200; run++ {
 		packs := generator.chain(t)
 		want := foldApplied(t, packs)
@@ -363,6 +385,16 @@ func TestAppliedMatchesTheFold(t *testing.T) {
 		for _, applied := range want {
 			if !applied {
 				stale++
+			}
+		}
+		for _, pack := range packs {
+			for _, operation := range pack.Operations {
+				if operation.Type == RelicOperationPartBodyMerge {
+					merges++
+					if want[operation.ID] {
+						mergesApplied++
+					}
+				}
 			}
 		}
 		history := BuildRelicHistory(historyChain(packs...), RelicSummary{ID: relicDocRelic}, "", 0, true)
@@ -377,6 +409,36 @@ func TestAppliedMatchesTheFold(t *testing.T) {
 	}
 	if stale == 0 {
 		t.Fatal("the generated chains held no stale save")
+	}
+	if mergesApplied == 0 || mergesApplied == merges {
+		t.Fatalf("the generated chains held %d merges, %d applied; want some applied and some not", merges, mergesApplied)
+	}
+}
+
+func TestBodySavesAppliedCountsMerges(t *testing.T) {
+	part := relicTestID(9200)
+	current, save, merge := relicTestID(9201), relicTestID(9202), relicTestID(9203)
+	staleSave, staleMerge := relicTestID(9204), relicTestID(9205)
+	chain := historyChain(
+		historyPack(1, "ana@example.com", historyCreate(relicTestID(9206)), historyPartAdd(part, "1/1", &RelicBodyChange{Format: "md", Bytes: 10})),
+		historyPack(2, "ana@example.com", historyBodySet(current, part, part, 20)),
+		historyPack(3, "bo@example.com", historyBodySet(save, part, part, 30),
+			relicMergeOperation(merge, part, current, part, save, 40)),
+		// A merge from a version that no longer stands is not taken.
+		historyPack(4, "cy@example.com", historyBodySet(staleSave, part, part, 50),
+			relicMergeOperation(staleMerge, part, current, part, staleSave, 60)),
+	)
+	applied := RelicBodySavesApplied(chain)
+	want := map[string]bool{part: true, current: true, save: false, merge: true, staleSave: false, staleMerge: false}
+	if !reflect.DeepEqual(applied, want) {
+		t.Fatalf("RelicBodySavesApplied = %v, want %v", applied, want)
+	}
+	if fold := foldApplied(t, []RelicOperationPack{chain.Commits[0].Operation, chain.Commits[1].Operation,
+		chain.Commits[2].Operation, chain.Commits[3].Operation}); !reflect.DeepEqual(fold, want) {
+		t.Fatalf("the fold says %v, want %v", fold, want)
+	}
+	if id, saves := savesRelicBody(chain.Commits[2].Operation.Operations[1]); !saves || id != part {
+		t.Fatalf("savesRelicBody(merge) = %q, %v; want %s and true", id, saves, part)
 	}
 }
 
