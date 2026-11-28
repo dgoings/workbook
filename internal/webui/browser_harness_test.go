@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -193,14 +194,24 @@ func driveBrowser(node, chrome, profile, base string, page browserPage, deadline
 		arguments = append([]string{"--no-sandbox"}, arguments...)
 	}
 	browser := exec.Command(chrome, arguments...)
+	// Chrome's helper processes hold its stderr too, and can outlive it for a
+	// moment; the wait for Chrome does not wait longer than this for them.
+	var browserSaid bytes.Buffer
+	browser.Stderr = &browserSaid
+	browser.WaitDelay = 2 * time.Second
 	if err := browser.Start(); err != nil {
 		return nil, fmt.Errorf("start Chrome: %w", err)
 	}
 	// Stopped before this returns, and so before the profile directory is
 	// removed: Windows cannot remove it while Chrome still holds it open.
+	browserGone := make(chan error, 1)
+	go func() { browserGone <- browser.Wait() }()
+	reaped := false
 	defer func() {
-		_ = browser.Process.Kill()
-		_ = browser.Wait()
+		if !reaped {
+			_ = browser.Process.Kill()
+			<-browserGone
+		}
 	}()
 
 	request, err := json.Marshal(map[string]any{
@@ -237,6 +248,20 @@ func driveBrowser(node, chrome, profile, base string, page browserPage, deadline
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
 			stderr = string(exit.Stderr)
+		}
+		// A driver that failed because Chrome went away fails a moment before
+		// Chrome's exit can be collected, so it is given that moment. A Chrome
+		// that crashed or was killed by the system is the machine's failure,
+		// not the page's, and the report has to let a reader tell the two apart.
+		select {
+		case gone := <-browserGone:
+			reaped = true
+			said := browserSaid.String()
+			if len(said) > 4000 {
+				said = said[len(said)-4000:]
+			}
+			stderr += fmt.Sprintf("\nChrome had exited by itself (%v); its last words were:\n%s", gone, said)
+		case <-time.After(2 * time.Second):
 		}
 		return nil, fmt.Errorf("measure %s at %dx%d: %w\n%s", page.Path, page.Width, page.Height, err, stderr)
 	}
@@ -357,6 +382,15 @@ async function evaluateInOpened(port, openerID, opened) {
   let next = 0;
   const pending = new Map();
   const waiters = [];
+  // A socket Chrome closes leaves every answer below waiting for ever, and a
+  // node with nothing left to wait for exits 0 having printed nothing. So a
+  // close before the answer is written is reported as the failure it is.
+  let answering = false;
+  socket.onclose = (event) => {
+    if (answering) return;
+    process.stderr.write("Chrome closed the DevTools socket (code " + event.code + (event.reason ? ", " + event.reason : "") + ") before the page answered\n");
+    process.exit(1);
+  };
   socket.onmessage = (event) => {
     const message = JSON.parse(event.data);
     if (message.method === "Runtime.bindingCalled" && message.params.name === "__workbookTouch") {
@@ -472,10 +506,12 @@ async function evaluateInOpened(port, openerID, opened) {
     const valueOf = (result) => result.result.value === undefined ? null : result.result.value;
     const opened = await evaluateInOpened(port, target.id, request.opened);
     const then = request.opened.Then ? valueOf(await evaluate(request.opened.Then)) : null;
+    answering = true;
     process.stdout.write(JSON.stringify({ page: value, opened, then }));
     socket.close();
     process.exit(0);
   }
+  answering = true;
   process.stdout.write(JSON.stringify(request.manifest ? { page: value, manifest } : value));
   socket.close();
   process.exit(0);

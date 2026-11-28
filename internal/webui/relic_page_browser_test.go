@@ -620,8 +620,11 @@ func TestBrowserRelicPageDrawsHostileContentAsText(t *testing.T) {
 
 // Review Focus 3: a 2,000-part relic with 1 MiB bodies loads only what is near
 // the screen, four at a time, each once.
+//
+// It is not parallel: its page keeps one browser busy for many seconds, and
+// run beside the package's other browsers it both timed out under load and
+// starved them. Alone, it runs before the parallel tests resume.
 func TestBrowserLargeRelicLoadsBodiesAsTheyNearTheScreen(t *testing.T) {
-	t.Parallel()
 	large := "# A large body\n\n" + strings.Repeat("word ", (1<<20)/5)
 	document := core.RelicDocument{Format: core.RelicDocumentFormat, Version: 1, ID: pageRelicID, Head: "head-large",
 		Title: "Large relic", Type: "transcript"}
