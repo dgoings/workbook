@@ -31,9 +31,9 @@ Workbook has a second kind of record, the relic, for specs, plans, decisions
 and similar material. A relic has a title, a type, properties and an ordered
 list of parts, and a part has a type, fields and an optional body. Relics are
 shared through the tasks remote as tasks are, can link to tasks, and are taught
-to agents by the generated guidelines and the skill. Relics are not on the
-board. A relic can be retired, and `workbook compact --relics` compacts retired
-and deleted relics. Upgrade
+to agents by the generated guidelines and the skill. The web board shows relics
+and cannot change them. A relic can be retired, and `workbook compact --relics`
+compacts retired and deleted relics. Upgrade
 every Workbook on a machine before creating one; see Compatibility across
 versions below.
 
@@ -189,7 +189,8 @@ versions below.
   with `linkedBy` in JSON, and `workbook show <task>` ends with a `Relics:`
   section, `relics` in JSON, listing the linked relics this checkout holds; a
   relic it cannot read gives a `relic-links-unread` warning instead of a
-  failure. The web board's task API does not list links.
+  failure. On the web board, `/api/tasks/<id>` does not list links;
+  `/api/tasks/<id>/relics` does.
 - **Relic reads are served from the SQLite cache.** `relic list`, `relic show`
   and `relic export` answer from four new relic tables and a `relic_links`
   table, refreshing only the relics whose ref changed since, so a change made
