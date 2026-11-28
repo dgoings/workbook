@@ -175,8 +175,8 @@ func (f relicPropertyFlag) Set(typed string) error {
 
 // relicCreateProperties turns relic create's --set and --set-json into the
 // properties of the new relic, split and encoded as relic update does it. A
-// command line that is put together wrongly, one naming a property twice
-// among them, is refused before any value on it is judged.
+// property named twice is refused as relic update refuses it, and before any
+// value on the command line is judged.
 func relicCreateProperties(options []relicPropertyOption) (map[string]json.RawMessage, error) {
 	if len(options) == 0 {
 		return nil, nil
@@ -189,7 +189,7 @@ func relicCreateProperties(options []relicPropertyOption) (map[string]json.RawMe
 			return nil, err
 		}
 		if seen[name] {
-			return nil, core.Errorf(core.CategoryInvocation,
+			return nil, core.Errorf(core.CategoryValidation,
 				"relic create sets property %s twice; name a property once", relicUpdateTyped(name))
 		}
 		names[index], texts[index], seen[name] = name, text, true

@@ -39,13 +39,12 @@ func TestRelicCreateSetsProperties(t *testing.T) {
 			}{
 				{[]string{"--set", "status"}, 2, core.CategoryInvocation, "relic create --set takes <name>=<value>"},
 				{[]string{"--set-json", "status"}, 2, core.CategoryInvocation, "relic create --set-json takes <name>=<json>"},
-				{[]string{"--set", "status=draft", "--set", "status=approved"}, 2, core.CategoryInvocation,
+				{[]string{"--set", "status=draft", "--set", "status=approved"}, 5, core.CategoryValidation,
 					`relic create sets property "status" twice; name a property once`},
-				{[]string{"--set", "status=draft", "--set-json", "status=1"}, 2, core.CategoryInvocation,
+				{[]string{"--set", "status=draft", "--set-json", "status=1"}, 5, core.CategoryValidation,
 					`relic create sets property "status" twice; name a property once`},
-				// A command line put together wrongly is refused before any
-				// value on it is judged.
-				{[]string{"--set-json", "owners=[", "--set", "status=a", "--set", "status=b"}, 2, core.CategoryInvocation,
+				// A property named twice is refused before any value is judged.
+				{[]string{"--set-json", "owners=[", "--set", "status=a", "--set", "status=b"}, 5, core.CategoryValidation,
 					`relic create sets property "status" twice; name a property once`},
 				{[]string{"--set", "status=draft", "--set-json", "owners=["}, 5, core.CategoryValidation, `--set-json "owners": `},
 				{[]string{"--set", "status=wip"}, 5, core.CategoryValidation, "(enum)"},
