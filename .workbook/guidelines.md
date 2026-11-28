@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=v0.7.0-226-g7ad89db4 sha256=535a53698797f909f0aaf3c231d663fe654a4671671d854858252a944924f558 -->
+<!-- workbook:begin generator=v0.7.0-236-gaa69ae1d sha256=82d410fba2d60575c1db0e0eb95730336f55d289915f033a508fe4c81f721228 -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`
@@ -315,9 +315,10 @@ published, so a divergent task needs no separate reconciliation step.
 ## Conflicts
 
 Concurrent edits to different fields are applied silently. Exactly three
-situations stop a replay and exit `8`: both sides changed the description, a
-replayed dependency would close a cycle, and the tasks remote tombstoned a task a
-local operation still edits.
+situations stop a replay and exit `8`: both sides changed the same lines of a
+description (or the two edits cannot be merged), a replayed dependency would
+close a cycle, and the tasks remote tombstoned a task a local operation still
+edits.
 
 They are reported in the result envelope's `conflict` list, which names each
 task and a `type` of `description`, `dependency-cycle`, or `tombstone`. The
@@ -326,6 +327,17 @@ that point is published, and the remaining local operations are dropped.
 Resolve one by reading the reported values and running the ordinary command
 again; there is no reconcile or continue command. A conflict on one task
 never blocks a command that touches a different task.
+
+A description both sides changed on different lines is merged and is not a
+conflict. The warning `description-merged` says it happened; you have nothing
+to do, and `workbook show <id> --history` shows the merge.
+
+A `description` conflict therefore means the two
+edits changed the same or adjacent lines, or could not be merged otherwise.
+Its `base`, `ours` and `theirs` are the three texts, and `theirs` stands. When
+the intent is clear, combine your edit with `theirs` and save the result with
+`workbook update <id> --description <text>`; otherwise show the user both
+versions and ask.
 
 A running watcher does remember conflicts between invocations, because it
 meets them with nobody present and a stopped replay leaves nothing for the
