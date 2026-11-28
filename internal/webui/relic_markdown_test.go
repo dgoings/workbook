@@ -68,9 +68,9 @@ func TestRelicTablesOnlyInRelicContext(t *testing.T) {
 			Plain:  `p["a | b",br,"--- | ---",br,"1 | 2"]`,
 		},
 		{
-			Name:   "a short row is padded and a long one cut to the header",
+			Name:   "a short row is left short and a long one cut to the header",
 			Source: "| a | b |\n|---|---|\n| 1 |\n| 1 | 2 | 3 |",
-			Relic:  `table[thead[tr[th["a"],th["b"]]],tbody[tr[td["1"],td],tr[td["1"],td["2"]]]]`,
+			Relic:  `table[thead[tr[th["a"],th["b"]]],tbody[tr[td["1"]],tr[td["1"],td["2"]]]]`,
 			Plain:  `p["| a | b |",br,"|---|---|",br,"| 1 |",br,"| 1 | 2 | 3 |"]`,
 		},
 		{
@@ -182,5 +182,47 @@ setTimeout(() => {
 `
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("draw long delimiter rows: %v\n%s", err, output)
+	}
+}
+
+// A body is drawn in time that grows with its length, whatever it holds. Two
+// shapes once took the square of it: a wide header over many short rows,
+// when every row was padded to the header's width, and a heading line with a
+// long run of blanks inside it.
+func TestRelicBodyIsDrawnInLinearTime(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	document := mustJSON(t, TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: boardTasks()})
+	program := clientDOMHarness("/", string(document)) + liftedMarkdownRenderer(t) + markdownHelpers + `
+setTimeout(() => {
+  const failures = [];
+  const draw = (name, source, limit) => {
+    const began = performance.now();
+    const root = renderMarkdown(document.createElement("div"), source, { tables: true });
+    const took = performance.now() - began;
+    if (took > limit) failures.push(name + " took " + Math.round(took) + " ms");
+    return elementsUnder(root);
+  };
+  const wide = 20000;
+  const cells = draw("a wide header over short rows",
+    "a|".repeat(wide) + "\n" + "-|".repeat(wide) + "\n" + "|\n".repeat(wide), 5000)
+    .filter((element) => element.tagName === "TH" || element.tagName === "TD").length;
+  // The header's cells and one for each short row: never rows times columns.
+  if (cells > 3 * wide) failures.push("a wide header over short rows built " + cells + " cells");
+  const run = " ".repeat(1 << 20);
+  const inside = draw("blanks inside a heading", "# x" + run + "y", 5000).filter((element) => /^H[1-6]$/.test(element.tagName));
+  if (inside.length !== 1) failures.push("blanks inside a heading drew " + inside.length + " headings");
+  const after = draw("blanks after a heading", "# x" + run, 5000).filter((element) => /^H[1-6]$/.test(element.tagName));
+  if (after.length !== 1) failures.push("blanks after a heading drew " + after.length + " headings");
+  // What a heading holds is unchanged: its text without the blanks around it.
+  for (const [source, want] of [["#  title \t ", 'h3["title"]'], ["#", "h3"], ["# a #", 'h3["a #"]'], ["####### seven", 'p["####### seven"]'], ["#\t", "h3"]]) {
+    const shape = shapeOf(renderMarkdown(document.createElement("div"), source, { tables: true }));
+    if (shape !== want) failures.push(JSON.stringify(source) + " rendered as " + shape + ", want " + want);
+  }
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 0);
+`
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("draw hostile bodies: %v\n%s", err, output)
 	}
 }

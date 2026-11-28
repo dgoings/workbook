@@ -380,7 +380,15 @@
       }
       const markdownBullet = /^[ \t]{0,7}[-*+][ \t]+(.*)$/;
       const markdownOrdered = /^[ \t]{0,7}\d{1,9}[.)][ \t]+(.*)$/;
-      const markdownHeading = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$/;
+      // A heading's text is taken with the blanks after it, which
+      // markdownHeadingText then drops: a lazy match that stopped before them
+      // would take the square of a long line's length.
+      const markdownHeading = /^ {0,3}(#{1,6})(?:[ \t]+(.*))?$/;
+      function markdownHeadingText(text) {
+        let end = text ? text.length : 0;
+        while (end > 0 && (text[end - 1] === " " || text[end - 1] === "\t")) end -= 1;
+        return text ? text.slice(0, end) : "";
+      }
       const markdownFence = /^ {0,3}(`{3,}|~{3,})(.*)$/;
       const markdownQuote = /^ {0,3}>/;
       // One cell of a pipe table's delimiter row: dashes, with an optional
@@ -416,16 +424,15 @@
         return markdownTableCells(lines[at]).length === markdownTableCells(lines[at + 1]).length;
       }
       // The table that starts at this line, and the line after it. A row with
-      // fewer cells than the header is padded and one with more is cut, so
-      // every row is as wide as the header. The alignment colons are read and
-      // dropped, because an alignment would be an attribute.
+      // more cells than the header is cut to it. One with fewer is left short,
+      // not padded: padding builds rows times columns cells, so a wide header
+      // over many short rows would cost the square of the body's length. The
+      // alignment colons are read and dropped, because an alignment would be
+      // an attribute.
       function markdownTable(lines, at, context) {
         const width = markdownTableCells(lines[at]).length;
-        const row = (line, tag) => {
-          const cells = markdownTableCells(line);
-          return markdownNode("tr", Array.from({ length: width }, (_, index) =>
-            markdownNode(tag, cells[index] ? markdownInline(cells[index], context, 0, true) : [])));
-        };
+        const row = (line, tag) => markdownNode("tr", markdownTableCells(line).slice(0, width).map((cell) =>
+          markdownNode(tag, cell ? markdownInline(cell, context, 0, true) : [])));
         const head = markdownNode("thead", [row(lines[at], "th")]);
         const rows = [];
         let scan = at + 2;
@@ -483,7 +490,7 @@
             // page's own h2 and a seventh `#` is not a heading at all — it fell
             // out of the pattern above and is a paragraph.
             const level = Math.min(6, heading[1].length + 2);
-            blocks.push(markdownNode("h" + level, markdownInline(heading[2] || "", context, 0, true)));
+            blocks.push(markdownNode("h" + level, markdownInline(markdownHeadingText(heading[2]), context, 0, true)));
             at += 1;
             continue;
           }
