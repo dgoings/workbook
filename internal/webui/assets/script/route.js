@@ -65,6 +65,8 @@
         // would drop them from the document either way, and what they were
         // drawing has to go with them.
         if (current.view !== "config") leaveConfigRoute();
+        // The relic pages stop reading bodies for a page nobody is on.
+        if (!relicRouteView(current.view)) leaveRelicRoute();
         if (current.view === "board") {
           document.title = boardName;
           // The board is re-attached rather than rebuilt, which is what makes
@@ -111,6 +113,23 @@
           }
           return;
         }
+        // The relic list and a relic's page. They are drawn before the task
+        // data is asked about, because they need none of it.
+        if (current.view === "relics" || current.view === "relic") {
+          renderRelicRoute(current);
+          return;
+        }
+        // ─── A relic's history and its diffs ───────────────────────────────
+        // Both addresses are served and read by route(); the two views are
+        // drawn here, in this block and nowhere else. Until they exist each
+        // answers as a page this board does not have.
+        if (current.view === "relic-history" || current.view === "relic-diff") {
+          leaveRelicRoute();
+          document.title = "Page not found" + boardTitleSuffix;
+          main.replaceChildren(routeMessage("Page not found", "This Workbook route does not exist."));
+          return;
+        }
+        // ─── End of the relic history and diff views ───────────────────────
         if (current.view === "unknown") {
           document.title = "Page not found" + boardTitleSuffix;
           main.replaceChildren(routeMessage("Page not found", "This Workbook route does not exist."));

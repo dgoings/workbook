@@ -7,6 +7,7 @@ body display:flex flex-direction:column overflow-x:hidden overflow-y:hidden heig
     h1 display:block box-sizing:border-box font-size:25.6px font-weight:700
    nav.header-links display:flex flex-wrap:wrap align-items:baseline row-gap:4.8px column-gap:12.8px padding-bottom:1.92px box-sizing:border-box
     a.header-link display:block box-sizing:border-box font-size:13.12px font-weight:750 draggable
+    a.header-link display:block box-sizing:border-box font-size:13.12px font-weight:750 draggable
   div.header-settings display:flex flex-direction:column align-items:flow-end row-gap:8px column-gap:8px min-width:0px box-sizing:border-box
    p.updated display:block box-sizing:border-box font-size:12px
     span.sync-dot display:inline-block width:7.2px height:7.2px margin-right:5.6px box-sizing:border-box

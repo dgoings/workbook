@@ -43,13 +43,14 @@ var pageFragments = []string{
 	"page/head.html",
 	// The stylesheet, in cascade order: tokens first, then the page chrome,
 	// the configuration route, the board, a task's page, rendered markdown,
-	// the width and motion queries, and the dark scheme.
+	// the relic pages, the width and motion queries, and the dark scheme.
 	"style/theme.css",
 	"style/chrome.css",
 	"style/config.css",
 	"style/board.css",
 	"style/task.css",
 	"style/markdown.css",
+	"style/relics.css",
 	"style/layout.css",
 	"style/dark.css",
 	// The closing </style>, the theme and priority-ink blocks the server
@@ -68,6 +69,8 @@ var pageFragments = []string{
 	"script/thread.js",
 	"script/attachments.js",
 	"script/history.js",
+	"script/relics.js",
+	"script/relic-page.js",
 	"script/set-aside.js",
 	"script/task-form.js",
 	"script/mutations.js",

@@ -273,6 +273,12 @@
         if (url.pathname === "/config") {
           return vocabularyPanel ? { view: "config" } : { view: "unknown" };
         }
+        // The relic pages are routes only on a board that was served their
+        // view, which is a board that can read relics; on any other the
+        // addresses are unknown here exactly as they are on the server.
+        if (url.pathname === "/relics" || url.pathname.startsWith("/relics/")) {
+          return relicView ? relicRoute(url) : { view: "unknown" };
+        }
         if (url.pathname === "/tasks/new") {
           const requestedStatus = url.searchParams.get("status");
           return { view: "new", status: statuses.has(requestedStatus) ? requestedStatus : defaultStatus };

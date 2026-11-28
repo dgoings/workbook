@@ -33,7 +33,7 @@
   <header class="app-header">
     <!-- The routes, beside the title and before anything that comes and goes,
          so they are in the same place on every page this board serves. -->
-    <div class="app-header__lead"><div><p class="eyebrow">{{ .Eyebrow }}</p><h1>{{ shown .ProjectName }}</h1></div><nav class="header-links" aria-label="Primary"><a class="header-link" href="/">Board</a>{{ if .Administrable }}<a class="header-link" href="/config">Config</a>{{ end }}</nav></div>
+    <div class="app-header__lead"><div><p class="eyebrow">{{ .Eyebrow }}</p><h1>{{ shown .ProjectName }}</h1></div><nav class="header-links" aria-label="Primary"><a class="header-link" href="/">Board</a>{{ if .RelicsReadable }}<a class="header-link" href="/relics">Relics</a>{{ end }}{{ if .Administrable }}<a class="header-link" href="/config">Config</a>{{ end }}</nav></div>
     <!-- The three settings, and above them the reading of when the board last
          heard from the server.
 
@@ -406,6 +406,19 @@
     <div class="admin__status" data-display-panel-status role="status" aria-live="polite"></div>
     <div data-display-panel-body></div>
   </div>
+  {{ end }}
+  {{ if .RelicsReadable }}
+  <!-- Where the relic pages are drawn: the list, a relic and its parts. It is
+       served empty and hidden and mounted into main by the render for those
+       routes, the way the configuration page's sections are, and its presence
+       is the whole of the client's gate — a board that cannot read relics
+       serves none of this, its header offers no Relics link, and every relic
+       address is a page that does not exist on both sides. Everything inside it
+       is the client's, built from the /api/relics documents with text nodes
+       and the markdown renderer and nothing else, because every string in a
+       relic was written by a teammate. data-relic-state says when what is
+       drawn is complete: loading, ready, error or not-found. -->
+  <section class="relic-view" data-relic-view aria-labelledby="relic-view-title" hidden></section>
   {{ end }}
   {{ if .KeysAdministrable }}
   <!-- This project's task-ID keys: the fourth section of the configuration

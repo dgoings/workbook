@@ -81,9 +81,11 @@
       // sentence rather than as a check — the code below creates these tags and
       // no others, and the tests assert the rendered tree against this list:
       // p, h3, h4, h5, h6, strong, em, code, pre, ul, ol, li, blockquote, a,
-      // img, br. Every attribute it is allowed to set: href, rel and target on
-      // an anchor, src and alt on an image. No class, no id, no data, no style,
-      // and no event listener is ever attached to anything built here.
+      // img, br, and, only where the context asks for tables (a relic body),
+      // table, thead, tbody, tr, th and td. Every attribute it is allowed to
+      // set: href, rel and target on an anchor, src and alt on an image. No
+      // class, no id, no data, no style, and no event listener is ever
+      // attached to anything built here.
 
       // Every character of a rendering is drawn without its direction controls;
       // see withoutDirectionControls.
@@ -381,6 +383,46 @@
       const markdownHeading = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$/;
       const markdownFence = /^ {0,3}(`{3,}|~{3,})(.*)$/;
       const markdownQuote = /^ {0,3}>/;
+      // A pipe table's delimiter row: cells of dashes, each with an optional
+      // colon at either end, between optional outer pipes.
+      const markdownTableDelimiter = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+      // The cells of one table row, without its outer pipes. There are no
+      // escapes in this subset, so every pipe divides.
+      function markdownTableCells(line) {
+        let row = line.trim();
+        if (row.startsWith("|")) row = row.slice(1);
+        if (row.endsWith("|")) row = row.slice(0, -1);
+        return row.split("|").map((cell) => cell.trim());
+      }
+      // Whether a table starts at this line: a row with a pipe in it, then a
+      // delimiter row of the same width. Only a context that asks for tables
+      // has them — a relic body does, and a task's description and comments do
+      // not, so what they draw is what they always drew.
+      function markdownStartsTable(lines, at, context) {
+        if (!context || context.tables !== true || at + 1 >= lines.length) return false;
+        if (!lines[at].includes("|") || !markdownTableDelimiter.test(lines[at + 1])) return false;
+        return markdownTableCells(lines[at]).length === markdownTableCells(lines[at + 1]).length;
+      }
+      // The table that starts at this line, and the line after it. A row with
+      // fewer cells than the header is padded and one with more is cut, so
+      // every row is as wide as the header. The alignment colons are read and
+      // dropped, because an alignment would be an attribute.
+      function markdownTable(lines, at, context) {
+        const width = markdownTableCells(lines[at]).length;
+        const row = (line, tag) => {
+          const cells = markdownTableCells(line);
+          return markdownNode("tr", Array.from({ length: width }, (_, index) =>
+            markdownNode(tag, cells[index] ? markdownInline(cells[index], context, 0, true) : [])));
+        };
+        const head = markdownNode("thead", [row(lines[at], "th")]);
+        const rows = [];
+        let scan = at + 2;
+        while (scan < lines.length && lines[scan].trim() && lines[scan].includes("|") && !markdownStartsBlock(lines[scan])) {
+          rows.push(row(lines[scan], "td"));
+          scan += 1;
+        }
+        return { table: markdownNode("table", rows.length ? [head, markdownNode("tbody", rows)] : [head]), next: scan };
+      }
       // Whether a line begins a block other than the paragraph it is being read
       // into, which is what ends that paragraph.
       function markdownStartsBlock(line) {
@@ -415,6 +457,12 @@
             // which is what makes interleaved fences boring.
             blocks.push(markdownNode("pre", [markdownNode("code", [markdownText(body.join("\n"))])]));
             at = scan < lines.length ? scan + 1 : scan;
+            continue;
+          }
+          if (markdownStartsTable(lines, at, context)) {
+            const drawn = markdownTable(lines, at, context);
+            blocks.push(drawn.table);
+            at = drawn.next;
             continue;
           }
           const heading = markdownHeading.exec(line);
@@ -465,7 +513,8 @@
             continue;
           }
           const paragraph = [];
-          while (at < lines.length && lines[at].trim() && !(paragraph.length && markdownStartsBlock(lines[at]))) {
+          while (at < lines.length && lines[at].trim() &&
+            !(paragraph.length && (markdownStartsBlock(lines[at]) || markdownStartsTable(lines, at, context)))) {
             paragraph.push(lines[at]);
             at += 1;
           }

@@ -307,7 +307,11 @@ func (board *phoneBoard) options(t *testing.T) Options {
 	}
 }
 
+// handler is the board as serve builds it, relic reads included, so the
+// header these layouts are measured with carries the Relics link.
 func (board *phoneBoard) handler(t *testing.T) http.Handler {
 	t.Helper()
-	return NewHandler(board.options(t))
+	options := board.options(t)
+	relicListFake().apply(&options)
+	return NewHandler(options)
 }

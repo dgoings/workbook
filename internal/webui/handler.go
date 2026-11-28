@@ -1682,6 +1682,11 @@ func NewHandler(options Options) http.Handler {
 	handler.mux.HandleFunc("GET /api/relics/{id}/diff", handler.serveRelicDiff)
 	handler.mux.HandleFunc("GET /api/tasks/{id}/relics", handler.serveTaskRelics)
 	handler.mux.HandleFunc("GET /relics/{id}/parts/{part}/body", handler.serveRelicBody)
+	handler.mux.HandleFunc("GET /relics", handler.serveRelicPage)
+	handler.mux.HandleFunc("GET /relics/{id}", handler.serveRelicPage)
+	handler.mux.HandleFunc("GET /relics/{id}/parts/{part}", handler.serveRelicPage)
+	handler.mux.HandleFunc("GET /relics/{id}/history", handler.serveRelicPage)
+	handler.mux.HandleFunc("GET /relics/{id}/diff", handler.serveRelicPage)
 	handler.mux.HandleFunc("GET /api/sync", handler.serveSyncState)
 	handler.mux.HandleFunc("PUT /api/sync", handler.updateSyncMode)
 	handler.mux.HandleFunc("GET /healthz", handler.serveHealth)
@@ -2222,6 +2227,20 @@ func phoneColumnStorageKey(keys core.KeySet, name string) string {
 // with a 404 rather than a page whose every control would be refused.
 func (handler *handler) serveConfig(writer http.ResponseWriter, request *http.Request) {
 	if !handler.administrable() {
+		http.NotFound(writer, request)
+		return
+	}
+	handler.serveBoard(writer, request)
+}
+
+// serveRelicPage answers the relic pages — the list, a relic, one of its
+// parts, its history and a diff — which are the board's page under other
+// paths, as a task's page is: the client draws the route it reads out of the
+// address. A board that cannot read relics answers them 404, as it does every
+// /api/relics route, so neither side offers a page whose every read would be
+// refused.
+func (handler *handler) serveRelicPage(writer http.ResponseWriter, request *http.Request) {
+	if !handler.relicsReadable() {
 		http.NotFound(writer, request)
 		return
 	}

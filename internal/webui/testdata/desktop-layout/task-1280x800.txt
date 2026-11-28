@@ -7,6 +7,7 @@ body display:flex flex-direction:column overflow-x:hidden overflow-y:hidden heig
     h1 display:block box-sizing:border-box font-size:25.6px font-weight:700
    nav.header-links display:flex flex-wrap:wrap align-items:baseline row-gap:4.8px column-gap:12.8px padding-bottom:1.92px box-sizing:border-box
     a.header-link display:block box-sizing:border-box font-size:13.12px font-weight:750 draggable
+    a.header-link display:block box-sizing:border-box font-size:13.12px font-weight:750 draggable
   div.header-settings display:flex flex-direction:column align-items:flow-end row-gap:8px column-gap:8px min-width:0px box-sizing:border-box
    p.updated display:block box-sizing:border-box font-size:12px
     span.sync-dot display:inline-block width:7.2px height:7.2px margin-right:5.6px box-sizing:border-box
@@ -49,6 +50,10 @@ body display:flex flex-direction:column overflow-x:hidden overflow-y:hidden heig
        div.field display:grid align-items:center grid-template-columns:72px minmax(0px, 1fr) row-gap:7.2px column-gap:7.2px box-sizing:border-box
         label display:block box-sizing:border-box font-size:12.48px font-weight:750
         select display:block align-items:center overflow-x:clip overflow-y:clip width:100% padding-top:8px padding-right:9.28px padding-bottom:8px padding-left:9.28px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px white-space:pre
+       div.field display:grid align-items:center grid-template-columns:72px minmax(0px, 1fr) row-gap:7.2px column-gap:7.2px box-sizing:border-box
+        label display:block box-sizing:border-box font-size:12.48px font-weight:750
+        div.due-field display:grid row-gap:4.8px column-gap:4.8px box-sizing:border-box
+         input display:block overflow-x:clip overflow-y:clip width:100% padding-top:8px padding-right:9.28px padding-bottom:8px padding-left:9.28px box-sizing:border-box border-top-width:1px border-right-width:1px border-bottom-width:1px border-left-width:1px
        div.field.field--wide.field--labels display:grid align-items:start grid-template-columns:72px minmax(0px, 1fr) grid-column-start:1 grid-column-end:-1 row-gap:7.2px column-gap:7.2px box-sizing:border-box
         label display:block padding-top:10.4px box-sizing:border-box font-size:12.48px font-weight:750
         div.label-editor display:grid row-gap:5.6px column-gap:5.6px box-sizing:border-box
