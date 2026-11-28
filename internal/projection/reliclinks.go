@@ -151,8 +151,9 @@ func (s *Store) queryRelicLinksTo(ctx context.Context, target core.RelicLinkTarg
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT l.relic_id, l.link_id, l.from_part, l.to_kind, l.to_id, l.to_part, l.rel, l.seen, l.pointer,
 		r.head, r.title, r.type, r.schema, r.author, r.retired, r.deleted, r.created_at, r.updated_at,
+		r.compacted_run, r.compacted_at, r.compacted_boundary, r.compacted_since,
 		(SELECT COUNT(*) FROM relic_parts live WHERE live.relic_id = l.relic_id AND live.removed = 0),
-		p.type, p.removed, p.ordinal
+		p.type, p.removed, p.ordinal, p.dropped_removed_at, p.dropped_at
 		FROM relic_links l
 		JOIN relics r ON r.relic_id = l.relic_id
 		LEFT JOIN relic_parts p ON p.relic_id = l.relic_id AND p.part_id = l.from_part
@@ -169,12 +170,14 @@ func (s *Store) queryRelicLinksTo(ctx context.Context, target core.RelicLinkTarg
 		var retired, deleted int
 		var partType sql.NullString
 		var partRemoved, partOrdinal sql.NullInt64
+		var run, at, boundary, since, droppedRemovedAt, droppedAt sql.NullString
 		summary := &source.Relic
 		var kind, to, toPart, pointer string
 		if err := rows.Scan(&summary.ID, &source.Link.ID, &source.Link.From, &kind, &to, &toPart, &source.Link.Rel,
 			&source.Link.Seen, &pointer,
 			&summary.Head, &summary.Title, &summary.Type, &schema, &summary.Author, &retired, &deleted, &createdAt, &updatedAt,
-			&summary.Parts, &partType, &partRemoved, &partOrdinal); err != nil {
+			&run, &at, &boundary, &since,
+			&summary.Parts, &partType, &partRemoved, &partOrdinal, &droppedRemovedAt, &droppedAt); err != nil {
 			return nil, s.databaseError("read relic link to a target", err)
 		}
 		if summary.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
@@ -184,6 +187,11 @@ func (s *Store) queryRelicLinksTo(ctx context.Context, target core.RelicLinkTarg
 			return nil, core.Wrap(core.CategoryCorruptData, "indexed relic "+summary.ID+" has an invalid update time", err)
 		}
 		summary.Retired, summary.Deleted = retired != 0, deleted != 0
+		if run.Valid || at.Valid || boundary.Valid || since.Valid {
+			if summary.Compacted, err = scanRelicCompaction(summary.ID, run, at, boundary, since); err != nil {
+				return nil, err
+			}
+		}
 		if schema != "" {
 			summary.Schema = &core.RelicSchemaRef{Type: summary.Type, ID: schema}
 		}
@@ -202,6 +210,11 @@ func (s *Store) queryRelicLinksTo(ctx context.Context, target core.RelicLinkTarg
 					"indexed relic %s has link %s from part %s, which it has no row for", summary.ID, source.Link.ID, source.Link.From)
 			}
 			source.PartType, source.PartRemoved, source.PartOrdinal = partType.String, partRemoved.Int64 != 0, int(partOrdinal.Int64)
+			if droppedRemovedAt.Valid || droppedAt.Valid {
+				if source.Dropped, err = scanRelicPartDrop(summary.ID, source.Link.From, droppedRemovedAt, droppedAt); err != nil {
+					return nil, err
+				}
+			}
 		}
 		sources = append(sources, source)
 	}

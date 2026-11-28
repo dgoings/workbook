@@ -40,9 +40,10 @@ func writeRelicMutation(stdout io.Writer, command string, result core.RelicMutat
 	}
 }
 
-// writeRelicList prints one line per relic. A deleted relic, which only relic
-// list --all lists, gets a last column saying so, as a removed part does in
-// writeRelicDocument; a live relic's line is the same with or without --all.
+// writeRelicList prints one line per relic. A retired relic, which only relic
+// list --retired and --all list, and a deleted one, which only --all lists,
+// get a last column each saying so, retired first, as a removed part does in
+// writeRelicDocument; a live relic's line is the same with or without them.
 // toRelic says that the links listed under each line point at a relic.
 func writeRelicList(stdout io.Writer, summaries []core.RelicSummary, toRelic bool) {
 	for _, summary := range summaries {
@@ -52,11 +53,14 @@ func writeRelicList(stdout io.Writer, summaries []core.RelicSummary, toRelic boo
 		}
 		fmt.Fprintf(stdout, "%s\t%s\t%d %s\t%s",
 			summary.ID, singleLine(summary.Type), summary.Parts, parts, singleLine(summary.Title))
+		if summary.Retired {
+			fmt.Fprint(stdout, "\tretired")
+		}
 		if summary.Deleted {
 			fmt.Fprint(stdout, "\tdeleted")
 		}
 		fmt.Fprintln(stdout)
-		writeRelicLinkMatches(stdout, summary.LinkedBy, toRelic)
+		writeRelicLinkMatches(stdout, summary, toRelic)
 	}
 }
 
@@ -68,8 +72,14 @@ func writeRelicDocument(stdout io.Writer, document core.RelicDocument, bodies bo
 	if document.UpdatedAt != nil {
 		fmt.Fprintf(stdout, "Updated:\t%s\n", document.UpdatedAt.UTC().Format(time.RFC3339))
 	}
+	if document.Retired {
+		fmt.Fprintln(stdout, "Retired:\tyes")
+	}
 	if document.Deleted {
 		fmt.Fprintln(stdout, "Deleted:\tyes")
+	}
+	if compacted := document.Compacted; compacted != nil {
+		fmt.Fprintf(stdout, "Compacted:\t%s (%s)\n", relicDay(compacted.At), singleLine(compacted.Boundary))
 	}
 	writeRelicSchema(stdout, document)
 	if len(document.Properties) > 0 {
@@ -77,9 +87,15 @@ func writeRelicDocument(stdout io.Writer, document core.RelicDocument, bodies bo
 		writeRelicValues(stdout, "  ", document.Properties)
 	}
 	for _, part := range document.Parts {
-		fmt.Fprintf(stdout, "#%s\t%s\t%s", part.ID, singleLine(part.Type), relicBodySummary(part.Body))
-		if part.Removed {
-			fmt.Fprint(stdout, "\tremoved")
+		fmt.Fprintf(stdout, "#%s\t%s\t", part.ID, singleLine(part.Type))
+		switch {
+		case part.Dropped != nil:
+			fmt.Fprintf(stdout, "removed on %s, content dropped %s",
+				relicDay(part.Dropped.RemovedAt), relicDay(part.Dropped.DroppedAt))
+		case part.Removed:
+			fmt.Fprintf(stdout, "%s\tremoved", relicBodySummary(part.Body))
+		default:
+			fmt.Fprint(stdout, relicBodySummary(part.Body))
 		}
 		fmt.Fprintln(stdout)
 		writeRelicValues(stdout, "  ", part.Fields)
@@ -110,9 +126,10 @@ func writeRelicSchema(stdout io.Writer, document core.RelicDocument) {
 
 // writeRelicLinks prints a relic's links after its parts, one line each: the
 // link's ID, the part it is from or "relic", its relationship and its target,
-// with "(removed)" after a target that is deleted or removed, "(not in this
-// clone)" after one this clone does not have and "(retired)" after a retired
-// relic, then its pointer when it has one.
+// with "(removed)" after a target that is deleted or removed, "(removed on
+// <date>)" when a compaction dropped it, "(not in this clone)" after one this
+// clone does not have and "(retired)" after a retired relic, then its pointer
+// when it has one.
 func writeRelicLinks(stdout io.Writer, links []core.RelicDocumentLink) {
 	if len(links) == 0 {
 		return
@@ -125,6 +142,8 @@ func writeRelicLinks(stdout io.Writer, links []core.RelicDocumentLink) {
 		}
 		fmt.Fprintf(stdout, "\t%s\t%s\t%s\t%s", singleLine(link.ID), singleLine(from), singleLine(link.Rel), singleLine(link.To.Address()))
 		switch {
+		case link.RemovedAt != nil:
+			fmt.Fprintf(stdout, " (removed on %s)", relicDay(*link.RemovedAt))
 		case link.TargetState == core.RelicLinkTargetMissing:
 			fmt.Fprint(stdout, " (not in this clone)")
 		case link.TargetState == core.RelicLinkTargetRetired:
@@ -162,6 +181,27 @@ func writeRelicIncomingLinks(stdout io.Writer, links []core.RelicIncomingLink) {
 			fmt.Fprintf(stdout, "\t%s", singleLine(string(link.Pointer)))
 		}
 		fmt.Fprintln(stdout)
+	}
+}
+
+// relicDay is a time as relic text output dates a removal or a compaction.
+func relicDay(when time.Time) string {
+	return when.UTC().Format("2006-01-02")
+}
+
+// relicMark is what follows a link of a relic that is no longer in use:
+// when its content was removed, if a compaction dropped it, or else that it is
+// deleted or retired; nothing otherwise.
+func relicMark(retired, deleted bool, removedAt *time.Time) string {
+	switch {
+	case removedAt != nil:
+		return " (removed on " + relicDay(*removedAt) + ")"
+	case deleted:
+		return " (deleted)"
+	case retired:
+		return " (retired)"
+	default:
+		return ""
 	}
 }
 

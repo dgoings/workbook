@@ -875,7 +875,7 @@ var commandSchemas = map[string]commandMetadata{
 			"(origin unless configured) as tasks are: a command that changes a relic fetches\n" +
 			"first and publishes the relic after, unless --no-sync is given or auto-sync is off.",
 		Positionals:     []string{"<command>"},
-		SubcommandOrder: []string{"create", "list", "show", "diff", "update", "migrate", "delete", "restore", "export"},
+		SubcommandOrder: []string{"create", "list", "show", "diff", "update", "migrate", "delete", "restore", "retire", "unretire", "export"},
 		Subcommands: map[string]commandMetadata{
 			"create": {
 				Name:     "create",
@@ -895,16 +895,18 @@ var commandSchemas = map[string]commandMetadata{
 			},
 			"list": {
 				Name:     "list",
-				Synopsis: "workbook relic list [--type <type>] [--all] [--linked-to <task|relic[#part]>] [--behind] [--json]",
+				Synopsis: "workbook relic list [--type <type>] [--retired] [--all] [--linked-to <task|relic[#part]>] [--behind] [--json]",
 				Description: "List relics in ID order, which is the order they were created in under one\n" +
-					"project key. Deleted relics are left out unless --all is given.\n\n" +
+					"project key. Retired relics are left out unless --retired or --all is given,\n" +
+					"and deleted relics unless --all is given.\n\n" +
 					"--linked-to lists only the relics that link to a task, a relic or a part of one,\n" +
 					"each with its links to it. A link to a part counts as a link to its relic.\n\n" +
 					"--behind lists only the relics behind their type's newest schema version: those\n" +
 					"naming an older version, or none, of a type that has one.",
 				Options: []optionMetadata{
 					{Name: "type", Kind: stringFlag, Value: "<type>", Description: "show only relics of this type"},
-					{Name: "all", Kind: boolFlag, Description: "include deleted relics, each marked deleted"},
+					{Name: "retired", Kind: boolFlag, Description: "include retired relics, each marked retired"},
+					{Name: "all", Kind: boolFlag, Description: "include retired and deleted relics, each marked"},
 					{Name: "linked-to", Kind: stringFlag, Value: "<task|relic[#part]>", Description: "show only relics that link to this task, relic or part"},
 					{Name: "behind", Kind: boolFlag, Description: "show only relics behind their type's newest schema version"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
@@ -1038,11 +1040,34 @@ var commandSchemas = map[string]commandMetadata{
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},
+			"retire": {
+				Name:     "retire",
+				Synopsis: "workbook relic retire <relic> [--no-sync] [--json]",
+				Description: "Retire a relic that is no longer relevant. It keeps its content and can still\n" +
+					"be read and changed, but leaves relic list unless --retired or --all is given.\n" +
+					"relic unretire takes the mark off.",
+				Positionals: []string{"<relic>"},
+				Options: []optionMetadata{
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"unretire": {
+				Name:        "unretire",
+				Synopsis:    "workbook relic unretire <relic> [--no-sync] [--json]",
+				Description: "Take a relic's retired mark off.",
+				Positionals: []string{"<relic>"},
+				Options: []optionMetadata{
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
 			"export": {
 				Name:     "export",
 				Synopsis: "workbook relic export <relic> [--json]",
 				Description: "Write a relic, with its live parts and their bodies, as one workbook.relic\n" +
-					"document that relic create --from-file reads.",
+					"document that relic create --from-file reads. A compacted relic also lists the\n" +
+					"parts whose content compaction dropped, which create leaves out.",
 				Positionals: []string{"<relic>"},
 				Options: []optionMetadata{
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},

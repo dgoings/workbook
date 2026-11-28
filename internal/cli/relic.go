@@ -45,9 +45,13 @@ func runRelic(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	case "migrate":
 		return runRelicMigrate(ctx, args, cwd, stdout, stderr)
 	case "delete":
-		return runRelicSetDeleted(ctx, "delete", args, cwd, stdout, stderr)
+		return runRelicSetMark(ctx, "delete", args, cwd, stdout, stderr)
 	case "restore":
-		return runRelicSetDeleted(ctx, "restore", args, cwd, stdout, stderr)
+		return runRelicSetMark(ctx, "restore", args, cwd, stdout, stderr)
+	case "retire":
+		return runRelicSetMark(ctx, "retire", args, cwd, stdout, stderr)
+	case "unretire":
+		return runRelicSetMark(ctx, "unretire", args, cwd, stdout, stderr)
 	case "export":
 		return runRelicExport(ctx, args, cwd, stdout, stderr)
 	default:
@@ -194,7 +198,8 @@ func readRelicDocument(path string, stdin io.Reader) (core.RelicDocument, error)
 func runRelicList(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("relic", "list")
 	relicType := flags.String("type", "", "show only relics of this type")
-	all := flags.Bool("all", false, "include deleted relics, each marked deleted")
+	all := flags.Bool("all", false, "include retired and deleted relics, each marked")
+	retired := flags.Bool("retired", false, "include retired relics, each marked retired")
 	linkedTo := flags.String("linked-to", "", "show only relics that link to this task, relic or part")
 	behind := flags.Bool("behind", false, "show only relics behind their type's newest schema version")
 	jsonMode := flags.Bool("json", false, "emit JSON")
@@ -206,7 +211,9 @@ func runRelicList(ctx context.Context, args []string, cwd string, stdout, stderr
 		return err
 	}
 	defer release()
-	filter := core.RelicListFilter{Type: *relicType, IncludeDeleted: *all, Behind: *behind}
+	filter := core.RelicListFilter{
+		Type: *relicType, IncludeDeleted: *all, IncludeRetired: *retired || *all, Behind: *behind,
+	}
 	if flagGiven(flags, "linked-to") {
 		return runRelicListLinkedTo(ctx, service, *linkedTo, filter, *jsonMode, stdout, stderr)
 	}
@@ -315,7 +322,9 @@ func writeRelicPartBody(stdout io.Writer, document core.RelicDocument, terminal 
 	return err
 }
 
-func runRelicSetDeleted(ctx context.Context, verb string, args []string, cwd string, stdout, stderr io.Writer) error {
+// runRelicSetMark is delete, restore, retire and unretire, which set one of a
+// relic's two marks or take it off.
+func runRelicSetMark(ctx context.Context, verb string, args []string, cwd string, stdout, stderr io.Writer) error {
 	command := "relic " + verb
 	values, args, err := requiredArguments(command, []string{"<relic>"}, args)
 	if err != nil {
@@ -333,10 +342,11 @@ func runRelicSetDeleted(ctx context.Context, verb string, args []string, cwd str
 	}
 	defer session.Close()
 	result, err := session.mutateRelic(ctx, values[0], func(ctx context.Context, service core.RelicService) (core.RelicMutationResult, error) {
-		if verb == "restore" {
-			return service.Restore(ctx, values[0])
-		}
-		return service.Delete(ctx, values[0])
+		change := map[string]func(context.Context, string) (core.RelicMutationResult, error){
+			"delete": service.Delete, "restore": service.Restore,
+			"retire": service.Retire, "unretire": service.Unretire,
+		}[verb]
+		return change(ctx, values[0])
 	})
 	return writeRelicMutationOutcome(stdout, stderr, command, session, result, err, *jsonMode)
 }

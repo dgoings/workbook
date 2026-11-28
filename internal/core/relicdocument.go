@@ -28,6 +28,7 @@ type RelicDocumentPart struct {
 	Type     string                     `json:"type"`
 	Position string                     `json:"position,omitempty"`
 	Removed  bool                       `json:"removed,omitempty"`
+	Dropped  *RelicPartDrop             `json:"dropped,omitempty"`
 	Fields   map[string]json.RawMessage `json:"fields"`
 	Body     *RelicDocumentBody         `json:"body,omitempty"`
 }
@@ -46,6 +47,7 @@ type RelicDocument struct {
 	Author     string                     `json:"author,omitempty"`
 	Retired    bool                       `json:"retired"`
 	Deleted    bool                       `json:"deleted"`
+	Compacted  *RelicCompaction           `json:"compacted,omitempty"`
 	CreatedAt  *time.Time                 `json:"createdAt,omitempty"`
 	UpdatedAt  *time.Time                 `json:"updatedAt,omitempty"`
 	Properties map[string]json.RawMessage `json:"properties"`
@@ -102,8 +104,9 @@ func DecodeRelicDocument(data []byte) (RelicDocument, error) {
 
 // RelicCreateInputFromDocument turns a relic document into a create. The new
 // relic gets new IDs, so the document's ID, head, author, retired and deleted
-// flags, dates, part IDs, positions and removed flags, and body versions and
-// sizes are ignored; parts are placed in document order, every one live.
+// flags, compaction, dates, part IDs, positions and removed flags, and body
+// versions and sizes are ignored; parts are placed in document order, every
+// one live. A part that carries dropped is left out: it has no content.
 func RelicCreateInputFromDocument(document RelicDocument) (RelicCreateInput, error) {
 	if document.Format != RelicDocumentFormat {
 		return RelicCreateInput{}, Errorf(CategoryValidation,
@@ -141,6 +144,9 @@ func RelicCreateInputFromDocument(document RelicDocument) (RelicCreateInput, err
 		Parts:      make([]RelicPartInput, 0, len(document.Parts)),
 	}
 	for index, part := range document.Parts {
+		if part.Dropped != nil {
+			continue
+		}
 		partInput := RelicPartInput{Type: part.Type, Fields: part.Fields}
 		if part.Body != nil {
 			content, err := relicDocumentBodyContent(index, *part.Body)
@@ -197,6 +203,7 @@ func newRelicDocument(snapshot RelicSnapshot, parts []RelicPart, content map[str
 		Author:     relic.Author,
 		Retired:    relic.Retired,
 		Deleted:    relic.Deleted,
+		Compacted:  relic.Compacted,
 		CreatedAt:  &createdAt,
 		UpdatedAt:  &updatedAt,
 		Properties: properties,
@@ -221,6 +228,7 @@ func newRelicDocumentPart(part RelicPart, content RelicPartContent) RelicDocumen
 		Type:     part.Type,
 		Position: part.Position,
 		Removed:  part.Removed,
+		Dropped:  part.Dropped,
 		Fields:   copied,
 	}
 	if part.Body != nil {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -35,6 +36,9 @@ type RelicDocumentLink struct {
 	RelicLink
 	TargetRemoved bool   `json:"targetRemoved,omitempty"`
 	TargetState   string `json:"targetState,omitempty"`
+	// RemovedAt is the date the target's content was removed, when a
+	// compaction dropped it. relic show prints it; it is not in the document.
+	RemovedAt *time.Time `json:"-"`
 }
 
 // markTarget records the state of a link's target.
@@ -193,6 +197,9 @@ func (u *relicUpdate) linkTarget(ctx context.Context, typed string) (target Reli
 		part, err := resolvePartPrefix(head.RelicID, relic.Parts, partPrefix)
 		if err != nil {
 			return RelicLinkTarget{}, "", nil, err
+		}
+		if part.Dropped != nil && gone == nil {
+			gone = relicStubRefusal(head.RelicID, part)
 		}
 		if part.Removed && gone == nil {
 			gone = Errorf(CategoryValidation, "part %s of relic %s is removed; restore it first", part.ID, head.RelicID)
@@ -356,6 +363,14 @@ func (s RelicService) markRelicLinkTargets(ctx context.Context, shown RelicSnaps
 		if relic == nil {
 			presented[index].markTarget(RelicLinkTargetMissing)
 			continue
+		}
+		if relic.Compacted != nil && relic.Compacted.Boundary == RelicBoundaryDeleted && relic.Deleted {
+			since := relic.Compacted.Since
+			presented[index].RemovedAt = &since
+		}
+		if part, ok := relic.Part(target.Part); target.Part != "" && ok && part.Dropped != nil {
+			removed := part.Dropped.RemovedAt
+			presented[index].RemovedAt = &removed
 		}
 		if relic.Deleted {
 			presented[index].markTarget(RelicLinkTargetDeleted)

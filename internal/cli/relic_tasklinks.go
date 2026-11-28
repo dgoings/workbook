@@ -39,9 +39,10 @@ func runRelicListLinkedTo(
 // writeRelicLinkMatches prints, under a relic's line, each of its links to
 // what relic list --linked-to asked about: the link, the part it is from or
 // "relic", and its relationship; for a link to a relic, the part it points at
-// or "relic"; then its pointer when it has one.
-func writeRelicLinkMatches(stdout io.Writer, matches []core.RelicLinkMatch, toRelic bool) {
-	for _, match := range matches {
+// or "relic"; then its pointer when it has one. A line ends with relicMark of
+// the listed relic.
+func writeRelicLinkMatches(stdout io.Writer, relic core.RelicSummary, toRelic bool) {
+	for _, match := range relic.LinkedBy {
 		from := match.Part
 		if from == "" {
 			from = "relic"
@@ -57,7 +58,7 @@ func writeRelicLinkMatches(stdout io.Writer, matches []core.RelicLinkMatch, toRe
 		if match.Pointer != nil {
 			fmt.Fprintf(stdout, "\t%s", singleLine(string(match.Pointer)))
 		}
-		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, relicMark(relic.Retired, relic.Deleted, core.RelicLinkRemovedAt(relic, match.Dropped)))
 	}
 }
 
@@ -78,7 +79,8 @@ func taskRelicLinks(ctx context.Context, service core.Service, taskID string) ([
 	// A task command judges no relic and reads no schema.
 	index := store.RelicReaderForTasks()
 	relics := core.RelicService{Config: service.Config, Keys: service.Keys, Reader: index, Links: index}
-	summaries, warnings, err := relics.LinkedToTask(ctx, taskID, core.RelicListFilter{})
+	// A retired relic is listed, and marked: it still links to the task.
+	summaries, warnings, err := relics.LinkedToTask(ctx, taskID, core.RelicListFilter{IncludeRetired: true})
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()
@@ -94,7 +96,7 @@ func taskRelicLinks(ctx context.Context, service core.Service, taskID string) ([
 // writeShowRelics prints the links relics have to the task, after its thread,
 // and nothing when there are none: a blank line, Relics:, and one line per
 // link with the relic, or the relic and its part, the relationship and the
-// relic's title.
+// relic's title. The relic or part is followed by relicMark of the relic.
 func writeShowRelics(output io.Writer, links []core.TaskRelicLink) {
 	if len(links) == 0 {
 		return
@@ -106,6 +108,7 @@ func writeShowRelics(output io.Writer, links []core.TaskRelicLink) {
 		if link.Part != "" {
 			address += "#" + link.Part
 		}
-		fmt.Fprintf(output, "\t%s\t%s\t%s\n", singleLine(address), singleLine(link.Rel), singleLine(link.Title))
+		fmt.Fprintf(output, "\t%s%s\t%s\t%s\n", singleLine(address),
+			relicMark(link.Retired, link.Deleted, link.RemovedAt), singleLine(link.Rel), singleLine(link.Title))
 	}
 }

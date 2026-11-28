@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 )
 
 // RelicEditKind names one kind of change relic update makes.
@@ -179,8 +180,7 @@ func (s RelicService) Update(ctx context.Context, idOrPrefix string, edits []Rel
 	}
 	relicID := snapshot.Record.State.RelicID
 	if snapshot.Record.State.Relic.Deleted {
-		return RelicMutationResult{}, Errorf(CategoryValidation,
-			"relic %s is deleted; restore it first with \"workbook relic restore %s\"", relicID, relicID)
+		return RelicMutationResult{}, errRelicDeleted(relicID)
 	}
 	listing, version, schema, err := s.schemaForUpdate(ctx, snapshot.Record.State.Relic, relicID)
 	if err != nil {
@@ -255,6 +255,64 @@ func (s RelicService) Update(ctx context.Context, idOrPrefix string, edits []Rel
 	return result, nil
 }
 
+// Retire marks a relic retired with a relic.retire: it leaves default lists
+// and keeps everything it holds. Retiring a retired relic changes nothing.
+func (s RelicService) Retire(ctx context.Context, idOrPrefix string) (RelicMutationResult, error) {
+	return s.setRelicRetired(ctx, idOrPrefix, true)
+}
+
+// Unretire takes a relic's retired mark off with a relic.unretire. Unretiring
+// a relic that is not retired changes nothing.
+func (s RelicService) Unretire(ctx context.Context, idOrPrefix string) (RelicMutationResult, error) {
+	return s.setRelicRetired(ctx, idOrPrefix, false)
+}
+
+// setRelicRetired writes the retired mark. A deleted relic is refused, as by
+// an update. Like delete and restore, it is not checked against the schema.
+func (s RelicService) setRelicRetired(ctx context.Context, idOrPrefix string, retired bool) (RelicMutationResult, error) {
+	snapshot, err := s.relicToChange(ctx, idOrPrefix)
+	if err != nil {
+		return RelicMutationResult{}, err
+	}
+	relicID := snapshot.Record.State.RelicID
+	if snapshot.Record.State.Relic.Deleted {
+		return RelicMutationResult{}, errRelicDeleted(relicID)
+	}
+	kind, verb := RelicOperationUnretire, "unretire"
+	if retired {
+		kind, verb = RelicOperationRetire, "retire"
+	}
+	return s.writeRelicMark(ctx, snapshot, snapshot.Record.State.Relic.Retired == retired, kind, verb)
+}
+
+// errRelicDeleted refuses a change to a deleted relic, naming the way back.
+func errRelicDeleted(relicID string) error {
+	return Errorf(CategoryValidation,
+		"relic %s is deleted; restore it first with \"workbook relic restore %s\"", relicID, relicID)
+}
+
+// writeRelicMark records the one operation of a command that sets or takes off
+// a mark, or writes nothing when the relic already stands that way.
+func (s RelicService) writeRelicMark(ctx context.Context, snapshot RelicSnapshot, unchanged bool, kind RelicOperationType, verb string) (RelicMutationResult, error) {
+	listing, err := s.schemaListing(ctx)
+	if err != nil {
+		return RelicMutationResult{}, err
+	}
+	if unchanged {
+		return relicMutationUnder(snapshot, false, listing), nil
+	}
+	ids, err := s.newIDs(1)
+	if err != nil {
+		return RelicMutationResult{}, err
+	}
+	written, err := s.writeRelicChange(ctx, snapshot, []RelicOperation{{ID: ids[0], Type: kind}}, nil,
+		verb+" relic "+snapshot.Record.State.RelicID)
+	if err != nil {
+		return RelicMutationResult{}, err
+	}
+	return relicMutationUnder(written, true, listing), nil
+}
+
 // Delete marks a relic deleted with a relic.tombstone. Its ref and everything
 // it holds stay. Deleting a deleted relic changes nothing.
 func (s RelicService) Delete(ctx context.Context, idOrPrefix string) (RelicMutationResult, error) {
@@ -272,27 +330,48 @@ func (s RelicService) setRelicDeleted(ctx context.Context, idOrPrefix string, de
 	if err != nil {
 		return RelicMutationResult{}, err
 	}
-	listing, err := s.schemaListing(ctx)
-	if err != nil {
-		return RelicMutationResult{}, err
-	}
-	if snapshot.Record.State.Relic.Deleted == deleted {
-		return relicMutationUnder(snapshot, false, listing), nil
-	}
+	relic := snapshot.Record.State.Relic
 	kind, verb := RelicOperationRestore, "restore"
 	if deleted {
 		kind, verb = RelicOperationTombstone, "delete"
 	}
-	ids, err := s.newIDs(1)
-	if err != nil {
-		return RelicMutationResult{}, err
+	result, err := s.writeRelicMark(ctx, snapshot, relic.Deleted == deleted, kind, verb)
+	if err == nil && result.Changed && !deleted && relicContentDropped(relic) {
+		result.Warnings = append(result.Warnings, Warning{
+			Code: WarningRelicContentDropped,
+			Message: fmt.Sprintf("relic %s is back, but its content was dropped when it was compacted on %s; only its title, type, author, dates and links remain",
+				snapshot.Record.State.RelicID, relicDate(relic.Compacted.At)),
+		})
 	}
-	written, err := s.writeRelicChange(ctx, snapshot, []RelicOperation{{ID: ids[0], Type: kind}}, nil,
-		verb+" relic "+snapshot.Record.State.RelicID)
-	if err != nil {
-		return RelicMutationResult{}, err
+	return result, err
+}
+
+// relicContentDropped reports whether a compaction of the deleted relic left
+// it with nothing but stubs: it was compacted at the deleted boundary and has
+// been given no property or part since.
+func relicContentDropped(relic RelicData) bool {
+	if relic.Compacted == nil || relic.Compacted.Boundary != RelicBoundaryDeleted || len(relic.Properties) != 0 {
+		return false
 	}
-	return relicMutationUnder(written, true, listing), nil
+	for _, part := range relic.Parts {
+		if part.Dropped == nil {
+			return false
+		}
+	}
+	return true
+}
+
+// relicDate is a time as a message about a compaction gives it: its UTC day.
+func relicDate(when time.Time) string {
+	return when.UTC().Format("2006-01-02")
+}
+
+// relicStubRefusal refuses a change to a stub, a part whose content a
+// compaction dropped, which no command can bring back.
+func relicStubRefusal(relicID string, part RelicPart) error {
+	return Errorf(CategoryValidation,
+		"part %s of relic %s was removed on %s; its content was dropped when the relic was compacted on %s, and only the backup bundle written then holds it",
+		part.ID, relicID, relicDate(part.Dropped.RemovedAt), relicDate(part.Dropped.DroppedAt))
 }
 
 // relicMessageNameLimit is the longest property or field name a refusal
@@ -496,6 +575,9 @@ func (u *relicUpdate) livePart(prefix string) (RelicPart, error) {
 	part, err := resolvePartPrefix(u.relicID, u.relic.Parts, prefix)
 	if err != nil {
 		return RelicPart{}, err
+	}
+	if part.Dropped != nil {
+		return RelicPart{}, relicStubRefusal(u.relicID, part)
 	}
 	if part.Removed {
 		return RelicPart{}, Errorf(CategoryValidation,
@@ -830,6 +912,9 @@ func (u *relicUpdate) setPartRemoved(edit RelicEdit, removed bool) error {
 	}
 	if part.Removed == removed {
 		return nil
+	}
+	if part.Dropped != nil {
+		return relicStubRefusal(u.relicID, part)
 	}
 	kind := RelicOperationPartRestore
 	if removed {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // WarningRelicLinksUnread says that a relic that may link to the task could
@@ -25,6 +26,8 @@ type RelicLinkSource struct {
 	Link        RelicLink
 	PartType    string
 	PartRemoved bool
+	// Dropped says that the part the link is from is a stub.
+	Dropped     *RelicPartDrop
 	PartOrdinal int
 }
 
@@ -51,6 +54,7 @@ type RelicLinkMatch struct {
 	Rel      string          `json:"rel"`
 	ToPart   string          `json:"toPart,omitempty"`
 	Pointer  json.RawMessage `json:"pointer,omitempty"`
+	Dropped  *RelicPartDrop  `json:"dropped,omitempty"`
 }
 
 // RelicIncomingLink is one link another relic, or a part of one, has to the
@@ -80,6 +84,28 @@ type TaskRelicLink struct {
 	PartType string `json:"partType,omitempty"`
 	Link     string `json:"link"`
 	Rel      string `json:"rel"`
+	// Retired and Deleted are the relic's marks, and RemovedAt the date its
+	// content, or the part's, was removed when compaction dropped it.
+	Retired   bool       `json:"retired,omitempty"`
+	Deleted   bool       `json:"deleted,omitempty"`
+	RemovedAt *time.Time `json:"removedAt,omitempty"`
+}
+
+// RelicLinkRemovedAt is the date a link of the relic, from the part dropped
+// belongs to if it is from a stub, shows as "removed on": when the stub's part
+// was removed, or else, for a deleted relic whose content a compaction
+// dropped, when it was deleted. It is nil when nothing was dropped.
+func RelicLinkRemovedAt(relic RelicSummary, dropped *RelicPartDrop) *time.Time {
+	switch {
+	case dropped != nil:
+		removed := dropped.RemovedAt
+		return &removed
+	case relic.Deleted && relic.Compacted != nil && relic.Compacted.Boundary == RelicBoundaryDeleted:
+		since := relic.Compacted.Since
+		return &since
+	default:
+		return nil
+	}
 }
 
 // RelicLinkSourcesOf returns the links of one relic that point at target, as
@@ -102,6 +128,7 @@ func RelicLinkSourcesOf(snapshot RelicSnapshot, target RelicLinkTarget) []RelicL
 			for ordinal, part := range parts {
 				if part.ID == link.From {
 					source.PartType, source.PartRemoved, source.PartOrdinal = part.Type, part.Removed, ordinal
+					source.Dropped = part.Dropped
 					break
 				}
 			}
@@ -140,9 +167,9 @@ func RelicLinksUnreadWarning(relicID string) Warning {
 // A relic or part is found by prefix among this clone's relics; a full relic
 // ID this clone lacks, and a full part ID under it, are looked up as given,
 // so links to a relic not fetched yet are listed. Links from removed parts
-// are left out, and so are deleted relics unless filter.IncludeDeleted;
-// filter.Type keeps only relics of that type. A relic the index cannot read
-// is a warning, not a failure.
+// are left out, and so are deleted relics unless filter.IncludeDeleted and
+// retired ones unless filter.IncludeRetired; filter.Type keeps only relics of
+// that type. A relic the index cannot read is a warning, not a failure.
 func (s RelicService) LinkedTo(ctx context.Context, target string, filter RelicListFilter) ([]RelicSummary, []Warning, error) {
 	if s.Links == nil {
 		return nil, nil, Errorf(CategoryOperational, "relic service has no link index")
@@ -232,7 +259,8 @@ func (s RelicService) linkedToTarget(ctx context.Context, target RelicLinkTarget
 	summaries := []RelicSummary{}
 	for _, source := range lookup.Sources {
 		relic := source.Relic
-		if relic.Deleted && !filter.IncludeDeleted || source.PartRemoved || filter.Type != "" && relic.Type != filter.Type {
+		if relic.Deleted && !filter.IncludeDeleted || relic.Retired && !filter.IncludeRetired ||
+			source.PartRemoved || filter.Type != "" && relic.Type != filter.Type {
 			continue
 		}
 		if len(summaries) == 0 || summaries[len(summaries)-1].ID != relic.ID {
@@ -254,7 +282,7 @@ func (s RelicService) linkedToTarget(ctx context.Context, target RelicLinkTarget
 		last := &summaries[len(summaries)-1]
 		last.LinkedBy = append(last.LinkedBy, RelicLinkMatch{
 			Link: source.Link.ID, Part: source.Link.From, PartType: source.PartType, Rel: source.Link.Rel,
-			ToPart: source.Link.To.Part, Pointer: source.Link.Pointer,
+			ToPart: source.Link.To.Part, Pointer: source.Link.Pointer, Dropped: source.Dropped,
 		})
 	}
 	return summaries, relicLinksUnreadWarnings(lookup.Unread), nil
@@ -320,6 +348,8 @@ func TaskRelicLinks(summaries []RelicSummary) []TaskRelicLink {
 			links = append(links, TaskRelicLink{
 				Relic: summary.ID, Title: summary.Title, Type: summary.Type,
 				Part: match.Part, PartType: match.PartType, Link: match.Link, Rel: match.Rel,
+				Retired: summary.Retired, Deleted: summary.Deleted,
+				RemovedAt: RelicLinkRemovedAt(summary, match.Dropped),
 			})
 		}
 	}

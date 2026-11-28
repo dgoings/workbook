@@ -61,13 +61,16 @@ type RelicSummary struct {
 	*RelicConformance
 	// Behind is set only by list: the relic's type has a schema version newer
 	// than the one the relic names, or the relic names none.
-	Behind    bool      `json:"behind,omitempty"`
-	Author    string    `json:"author"`
-	Retired   bool      `json:"retired"`
-	Deleted   bool      `json:"deleted"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
-	Parts     int       `json:"parts"`
+	Behind  bool   `json:"behind,omitempty"`
+	Author  string `json:"author"`
+	Retired bool   `json:"retired"`
+	Deleted bool   `json:"deleted"`
+	// Compacted says that the relic's history was replaced by a checkpoint,
+	// or is null.
+	Compacted *RelicCompaction `json:"compacted"`
+	CreatedAt time.Time        `json:"createdAt"`
+	UpdatedAt time.Time        `json:"updatedAt"`
+	Parts     int              `json:"parts"`
 	// LinkedBy is set only by LinkedTo: the relic's links to the task asked
 	// about.
 	LinkedBy []RelicLinkMatch `json:"linkedBy,omitempty"`
@@ -107,10 +110,13 @@ type RelicCreateInput struct {
 }
 
 // RelicListFilter narrows relic list. An empty Type matches every type.
-// Behind keeps only the relics behind their type's newest schema version.
+// Deleted relics are left out unless IncludeDeleted and retired ones unless
+// IncludeRetired, so a relic that is both needs both. Behind keeps only the
+// relics behind their type's newest schema version.
 type RelicListFilter struct {
 	Type           string
 	IncludeDeleted bool
+	IncludeRetired bool
 	Behind         bool
 }
 
@@ -497,7 +503,7 @@ func (s RelicService) List(ctx context.Context, filter RelicListFilter) ([]Relic
 	summaries := make([]RelicSummary, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		relic := snapshot.Record.State.Relic
-		if relic.Deleted && !filter.IncludeDeleted {
+		if relic.Deleted && !filter.IncludeDeleted || relic.Retired && !filter.IncludeRetired {
 			continue
 		}
 		if filter.Type != "" && relic.Type != filter.Type {
@@ -565,9 +571,9 @@ func (s RelicService) Show(ctx context.Context, address string, options RelicSho
 	return document, nil
 }
 
-// Export returns the whole relic with its bodies and live parts, as the
-// workbook.relic document create --from-file reads, and every link it stores,
-// as stored: no task is read.
+// Export returns the whole relic with its bodies, its live parts and the
+// stubs of parts a compaction dropped, as the workbook.relic document create
+// --from-file reads, and every link it stores, as stored: no task is read.
 func (s RelicService) Export(ctx context.Context, idOrPrefix string) (RelicDocument, error) {
 	snapshot, err := s.getRelic(ctx, idOrPrefix)
 	if err != nil {
@@ -577,7 +583,13 @@ func (s RelicService) Export(ctx context.Context, idOrPrefix string) (RelicDocum
 	for _, link := range snapshot.Record.Links.Links {
 		links = append(links, RelicDocumentLink{RelicLink: link})
 	}
-	return s.relicDocument(ctx, snapshot, snapshot.Record.State.Relic.LiveParts(), links, true)
+	var parts []RelicPart
+	for _, part := range snapshot.Record.State.Relic.Parts {
+		if !part.Removed || part.Dropped != nil {
+			parts = append(parts, part)
+		}
+	}
+	return s.relicDocument(ctx, snapshot, parts, links, true)
 }
 
 // getRelic resolves an ID or prefix and reads that relic, checked against its
@@ -622,6 +634,7 @@ func relicSummaryOf(snapshot RelicSnapshot) RelicSummary {
 		Author:    relic.Author,
 		Retired:   relic.Retired,
 		Deleted:   relic.Deleted,
+		Compacted: relic.Compacted,
 		CreatedAt: relic.CreatedAt,
 		UpdatedAt: relic.UpdatedAt,
 		Parts:     len(relic.LiveParts()),

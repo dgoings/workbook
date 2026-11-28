@@ -169,6 +169,14 @@ const WarningStatusRenameReresolves = "status-rename-reresolves"
 // removed part is not shown and the edit would otherwise seem to have gone.
 const WarningRelicEditOnRemovedPart = "relic-edit-on-removed-part"
 
+// WarningRelicContentDropped says that a restored relic came back without the
+// content its compaction dropped.
+const WarningRelicContentDropped = "relic-content-dropped"
+
+// WarningRelicCompactionDropped says that a synchronization dropped this
+// clone's unpublished relic compaction in favor of origin's history.
+const WarningRelicCompactionDropped = "relic-compaction-dropped"
+
 // WarningRelicOverLimit reports that a synchronization joined two changes
 // that together take a relic past a count or a total: its live parts, its
 // parts counting removed ones, the bodies of its live parts together, all of

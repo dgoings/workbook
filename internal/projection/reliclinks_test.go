@@ -378,3 +378,43 @@ func relicLinkMutations(t *testing.T, repository *gitstore.Repository, config co
 		},
 	}
 }
+
+// A link row of a compacted relic, from a stub or from the relic, carries the
+// compaction and the drop as Git does, from the index alone.
+func TestRelicLinksToCompactedRelicsComeFromTheIndex(t *testing.T) {
+	t.Parallel()
+	forBothRelicIndexFormats(t, func(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig) {
+		retired, _ := compactionIndexFixture(t, repository, config)
+		compacted := compactIndexRelic(t, repository, config, retired, core.RelicBoundaryRetired)
+		task := compacted.Record.Links.Links[0].To.Task
+		// A relic never compacted links from a part to the same task.
+		service := relicServiceForIndex(repository, config, 80000)
+		plain := createIndexRelic(t, service, "Never compacted", 1)
+		linkRelic(t, service, plain, core.RelicEdit{
+			Kind: core.RelicEditAddLink, Target: task, From: relicPartIDOf(t, repository, config, plain, 0), Rel: "relates-to",
+		})
+		source := newCountingRelicSource(repository)
+		store := openRelicStore(t, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+		assertLinkIndexMatchesGit(t, "compacted", store, repository, config, []string{task})
+
+		source.reset()
+		lookup := relicLinksTo(t, store, config, task)
+		if source.listCalls != 1 || source.relicCalls() != 1 {
+			t.Fatalf("a warm RelicLinksTo made %d relic calls, want one ListRelicHeads", source.relicCalls())
+		}
+		var whole, stubbed, never int
+		for _, found := range lookup.Sources {
+			switch {
+			case found.Relic.ID == plain && found.Relic.Compacted == nil && found.Dropped == nil:
+				never++
+			case found.Relic.ID == retired && found.Relic.Compacted != nil && found.Link.From == "" && found.Dropped == nil:
+				whole++
+			case found.Relic.ID == retired && found.Relic.Compacted != nil && found.Link.From != "" && found.Dropped != nil:
+				stubbed++
+			}
+		}
+		if len(lookup.Sources) != 3 || whole != 1 || stubbed != 1 || never != 1 {
+			t.Fatalf("RelicLinksTo = %+v, want the relic's link, the stub's and the live part's, each with its own members", lookup.Sources)
+		}
+	})
+}
