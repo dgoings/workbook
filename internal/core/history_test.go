@@ -226,3 +226,62 @@ func historyOf(t *testing.T, packs ...[]Operation) TaskHistory {
 func historyULID(sequence int) string {
 	return fmt.Sprintf("01K0M6B8A4FTT8C39MXXY%05X", sequence)
 }
+
+func TestDescribeStepOfAMergedPack(t *testing.T) {
+	// Mutation caught: describing a merged pack by the local edit, whose text is
+	// not the one the task holds, or by one row per description operation.
+	base, theirs, ours := "one\ntwo\nthree\n", "one\nTWO\nthree\n", "one\ntwo\nTHREE\n"
+	merged := "one\nTWO\nTHREE\n"
+	mergeOf := func(other, value, ancestor, current string) Operation {
+		return Operation{Type: OperationDescriptionMerge, Value: value, Merge: &DescriptionMerge{
+			Other: other, Ancestor: ancestor, Current: current, Method: DescriptionLineMergeMethod,
+		}}
+	}
+	// historyOf numbers pack 2's operations from 20.
+	setID, mergeID, secondID := historyULID(20), historyULID(21), historyULID(22)
+
+	history := historyOf(t,
+		createOperation("Merged", base),
+		[]Operation{{Type: OperationFieldSet, Field: "description", Value: theirs}},
+		[]Operation{
+			{Type: OperationFieldSet, Field: "description", Value: ours},
+			mergeOf(setID, merged, base, theirs),
+		},
+	)
+	change := BuildChangeLog(history, 0, true).Changes[2]
+	if len(change.Fields) != 1 || change.Summary != "changed description" {
+		t.Fatalf("change = %q %#v, want one description change", change.Summary, change.Fields)
+	}
+	field := change.Fields[0]
+	if field.Field != "description" || field.Kind != ChangeSet || field.From != theirs || field.To != merged || len(field.Diff) == 0 {
+		t.Fatalf("field = %#v, want the description set from the text before the pack to the merged one", field)
+	}
+	want := FieldMerge{Operation: mergeID, Method: DescriptionLineMergeMethod, Ancestor: base, Other: ours, Current: theirs}
+	if field.Merge == nil || *field.Merge != want {
+		t.Fatalf("merge = %#v, want %#v", field.Merge, want)
+	}
+
+	// Replayed again before it was published, the pack holds a second merge,
+	// which names the first. The row is described by the last one.
+	newer := "ONE\ntwo\nthree\n"
+	final := "ONE\nTWO\nTHREE\n"
+	history = historyOf(t,
+		createOperation("Merged", base),
+		[]Operation{{Type: OperationFieldSet, Field: "description", Value: newer}},
+		[]Operation{
+			{Type: OperationFieldSet, Field: "description", Value: ours},
+			mergeOf(setID, merged, base, theirs),
+			mergeOf(mergeID, final, theirs, newer),
+			{Type: OperationFieldSet, Field: "title", Value: "Renamed"},
+		},
+	)
+	change = BuildChangeLog(history, 0, true).Changes[2]
+	if len(change.Fields) != 2 || change.Fields[0].Field != "title" || change.Fields[0].Merge != nil {
+		t.Fatalf("fields = %#v, want the title and one description change", change.Fields)
+	}
+	field = change.Fields[1]
+	want = FieldMerge{Operation: secondID, Method: DescriptionLineMergeMethod, Ancestor: theirs, Other: merged, Current: newer}
+	if field.Field != "description" || field.From != newer || field.To != final || field.Merge == nil || *field.Merge != want {
+		t.Fatalf("field = %#v %#v, want the second merge", field, field.Merge)
+	}
+}

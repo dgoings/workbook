@@ -198,9 +198,9 @@ func (session *taskSession) withheldRelic(relicID string) (gitstore.SyncRelicRes
 	return gitstore.SyncRelicResult{}, false
 }
 
-// noteRelicReport keeps what a completed fetch reported about relics, with
-// every body a body conflict names read in, and hands both lists to the sync
-// report so every command's envelope carries them.
+// noteRelicReport keeps what relicReport takes from a completed fetch, and
+// hands both lists to the sync report so every command's envelope carries
+// them.
 func (session *taskSession) noteRelicReport(ctx context.Context, fetched gitstore.SyncResult) {
 	session.relicConflicts, session.relicWarnings = relicReport(ctx, session.repository, fetched)
 	session.report.relicConflicts = session.relicConflicts
@@ -208,16 +208,18 @@ func (session *taskSession) noteRelicReport(ctx context.Context, fetched gitstor
 }
 
 // relicReport is a fetch's relic conflicts, with the content of each body
-// version filled in, and its warnings: the relic warnings, after any the
-// configuration stage raised about a relic schema version saved here. A body
-// that cannot be read is left without content and said in one more warning:
-// the conflict is still reported, and the report names the blob that holds
-// each body.
+// version filled in, and the warnings every command that reports a fetch
+// carries: any the configuration stage raised about a relic schema version
+// saved here, then one per task description the fetch merged, then the relic
+// warnings. A body that cannot be read is left without content and said in one
+// more warning: the conflict is still reported, and the report names the blob
+// that holds each body.
 func relicReport(ctx context.Context, repository *gitstore.Repository, fetched gitstore.SyncResult) ([]core.RelicConflict, []core.Warning) {
 	var warnings []core.Warning
 	if fetched.Config != nil {
 		warnings = append(warnings, fetched.Config.Warnings...)
 	}
+	warnings = append(warnings, fetched.TaskWarnings...)
 	warnings = append(warnings, fetched.RelicWarnings...)
 	if len(fetched.RelicConflicts) == 0 {
 		return nil, warnings

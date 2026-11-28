@@ -24,9 +24,10 @@ type heldOperation struct {
 }
 
 // operationContent is one operation as its operation.json records it: the
-// pack's JSON encoding with that operation alone in it, and with the two
-// members a replay rewrites cleared, the logical clock and the history
-// generation (see taskReplay.next). It is encoding/json's rendering of the
+// pack's JSON encoding with that operation alone in it, and with the three
+// members a replay rewrites cleared, the logical clock, the history
+// generation and the minimum reader, which a description merge appended to a
+// pack raises (see taskReplay.next). It is encoding/json's rendering of the
 // decoded pack, which is what the canonical form of operation.json is
 // (decodeCanonicalOperation), without the validation a stored document gets:
 // the cleared members would not pass it. The actor, the wall time and every member
@@ -35,6 +36,7 @@ type heldOperation struct {
 func operationContent(pack core.OperationPack, operation core.Operation) (string, error) {
 	pack.LogicalClock = 0
 	pack.HistoryGeneration = ""
+	pack.MinReader = 0
 	pack.Operations = []core.Operation{operation}
 	encoded, err := json.Marshal(pack)
 	if err != nil {

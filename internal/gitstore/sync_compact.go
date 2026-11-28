@@ -1155,6 +1155,9 @@ type CompactionAdoption struct {
 	Head     string
 	// Bundle is the bundle written before a discard, or "".
 	Bundle string
+	// Warnings is one description-merged warning per merge the retry's replay
+	// landed, as SyncResult.TaskWarnings holds them for a fetch.
+	Warnings []core.Warning
 }
 
 // AdoptCompaction settles one stuck task (see StuckCompactions) by hand. The
@@ -1323,6 +1326,7 @@ func (r *Repository) retryAdoption(ctx context.Context, config core.ProjectConfi
 	}
 	adoption.Result = outcome.Result
 	adoption.Head = outcome.Update.Next
+	adoption.Warnings = r.descriptionMergedWarnings(nil, []compactedOutcome{outcome})
 	return adoption, nil
 }
 

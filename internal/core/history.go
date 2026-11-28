@@ -80,6 +80,21 @@ type FieldChange struct {
 	// Diff carries a word-level comparison for the description, the one field
 	// whose old and new values are too large to read side by side.
 	Diff []DiffSpan `json:"diff,omitempty"`
+	// Merge is set on a description change that a synchronization made by
+	// merging two edits.
+	Merge *FieldMerge `json:"merge,omitempty"`
+}
+
+// FieldMerge is what one description.merge recorded: the operation that holds
+// the result, the method that made it, and the three texts it was made from.
+// Ancestor is what both edits started from, Other is the local edit that was
+// merged, and Current is the text already shared when it was merged.
+type FieldMerge struct {
+	Operation string `json:"operation"`
+	Method    string `json:"method"`
+	Ancestor  string `json:"ancestor"`
+	Other     string `json:"other"`
+	Current   string `json:"current"`
 }
 
 // Change is one operation pack rendered as one row. Entries are per pack rather
@@ -272,8 +287,18 @@ func describeStep(step ReplayStep) Change {
 	if step.Before != nil {
 		before = *step.Before
 	}
-	for _, operation := range pack.Operations {
-		change.Fields = append(change.Fields, describeOperation(operation, before, step.After)...)
+	// A merged pack holds the description more than once: the local edit, then
+	// each merge of it. The task holds the last merge's text, so that merge
+	// alone describes the description.
+	last := lastDescriptionMerge(pack.Operations)
+	for index, operation := range pack.Operations {
+		switch {
+		case last >= 0 && index == last:
+			change.Fields = append(change.Fields, describeMerge(pack.Operations, last, before, step.After))
+		case last >= 0 && describesDescription(operation):
+		default:
+			change.Fields = append(change.Fields, describeOperation(operation, before, step.After)...)
+		}
 	}
 	sortFieldChanges(change.Fields)
 	change.Summary = summarizeFields(change.Fields)
@@ -313,6 +338,38 @@ func describeOperation(operation Operation, before, after TaskData) []FieldChang
 	default:
 		return nil
 	}
+}
+
+// lastDescriptionMerge is the position of a pack's last description.merge, or
+// -1 when it holds none.
+func lastDescriptionMerge(operations []Operation) int {
+	for index := len(operations) - 1; index >= 0; index-- {
+		if operations[index].Type == OperationDescriptionMerge {
+			return index
+		}
+	}
+	return -1
+}
+
+// describeMerge renders the merge at position last as one description change,
+// from the text before the pack to the text after it. Other is the text of the
+// operation the merge names, which validation requires to come earlier in the
+// same pack.
+func describeMerge(operations []Operation, last int, before, after TaskData) FieldChange {
+	merge := operations[last]
+	change := scalarChange("description", before.Description, after.Description)
+	change.Merge = &FieldMerge{
+		Operation: merge.ID,
+		Method:    merge.Merge.Method,
+		Ancestor:  merge.Merge.Ancestor,
+		Current:   merge.Merge.Current,
+	}
+	for _, operation := range operations[:last] {
+		if operation.ID == merge.Merge.Other {
+			change.Merge.Other = operation.Value
+		}
+	}
+	return change
 }
 
 // describeAssignment renders an assignment operation by what it did, not by

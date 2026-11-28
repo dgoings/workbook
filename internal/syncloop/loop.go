@@ -256,10 +256,12 @@ func (l *loop) syncOnce(ctx context.Context) {
 	conflicts := append(append([]core.Conflict{}, result.Fetch.Conflicts...), result.Push.Conflicts...)
 	l.recordConflicts(ctx, conflicts)
 	l.recordRelicConflicts(ctx, append(append([]core.RelicConflict{}, result.Fetch.RelicConflicts...), result.Push.RelicConflicts...))
-	// A relic warning is said here and nowhere else: unlike a conflict it is
-	// not kept for the next command, and it came from the one replay that
-	// joined the two changes, so it is written once.
-	for _, warning := range append(append([]core.Warning{}, result.Fetch.RelicWarnings...), result.Push.RelicWarnings...) {
+	// A merged task description or a relic warning is said here and nowhere
+	// else: unlike a conflict it is not kept for the next command, and it came
+	// from the one replay that joined the two changes, so it is written once.
+	// Only a fetch replays tasks.
+	replayed := append(append([]core.Warning{}, result.Fetch.TaskWarnings...), result.Fetch.RelicWarnings...)
+	for _, warning := range append(replayed, result.Push.RelicWarnings...) {
 		fmt.Fprintf(l.options.Stderr, "workbook: %s: %s\n", core.DisplayLine(warning.Code), core.DisplayLine(warning.Message))
 	}
 	// A configuration replay's warning, such as a relic schema version saved

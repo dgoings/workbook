@@ -224,6 +224,9 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 		for _, bundle := range result.Bundles {
 			fmt.Fprintf(stderr, "Backup:\t%s\n", bundle)
 		}
+		// So is a description it merged before it stopped: running the command
+		// again does not make that merge again.
+		writeRelicWarnings(stderr, result.TaskWarnings)
 		return err
 	}
 	summary := moveTasksSummary{MoveTasksResult: result}
@@ -263,9 +266,10 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 		}
 	}
 	if *jsonMode {
-		writeResult(stdout, "move-tasks", summary)
+		writeResultWithWarnings(stdout, "move-tasks", summary, result.TaskWarnings)
 		return err
 	}
+	writeRelicWarnings(stderr, result.TaskWarnings)
 	fmt.Fprintf(stdout, "Moved:\t%s (%s)\t->\t%s (%s)\n", result.From.Remote, result.From.URL, result.To.Remote, result.To.URL)
 	fmt.Fprintf(stdout, "Tasks:\t%d\t(%d at the same commit, %d holding every operation under other commits)\n",
 		result.Tasks, result.Identical, result.Carried)

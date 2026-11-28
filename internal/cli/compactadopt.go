@@ -78,6 +78,7 @@ func runCompactAdopt(ctx context.Context, request compactAdoptRequest, cwd strin
 			return err
 		}
 		result.Status, result.Detail, result.Bundle = adoption.Result.Status, adoption.Result.Detail, adoption.Bundle
+		warnings = append(warnings, adoption.Warnings...)
 		switch {
 		case adoption.Result.Status == gitstore.SyncDiscardedLocal:
 			if warning, failed := settleDiscardProjection(ctx, session, adoption); failed {

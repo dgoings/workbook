@@ -437,8 +437,13 @@ func writeThreadMutationOutcome(
 		if core.CategoryOf(err) != core.CategoryConflict {
 			return err
 		}
-		writeSyncPhaseResultWithConfig(stdout, command, nil, session.conflicts, nil, session.relicConflicts, nil, jsonMode,
-			func(io.Writer) {})
+		// The warnings are said here too: a merge the stopping fetch made is not
+		// made again by a later one.
+		writeSyncPhaseResultWithConfig(stdout, command, nil, session.conflicts, nil, session.relicConflicts,
+			session.relicWarnings, jsonMode, func(io.Writer) {})
+		if !jsonMode {
+			writeRelicWarnings(stderr, session.relicWarnings)
+		}
 		return err
 	}
 	writeThreadMutationResult(stdout, stderr, command, result, &session.report, session.conflicts, jsonMode, changes)
@@ -630,8 +635,8 @@ func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
 	}
 }
 
-// withRelicWarnings is warnings followed by relicWarnings, for one envelope
-// member, leaving both lists as they were.
+// withRelicWarnings is warnings followed by relicWarnings, what relicReport
+// took from a fetch, for one envelope member, leaving both lists as they were.
 func withRelicWarnings(warnings, relicWarnings []core.Warning) []core.Warning {
 	if len(relicWarnings) == 0 {
 		return warnings
@@ -814,6 +819,10 @@ func writeFieldChanges(output io.Writer, fields []core.FieldChange) {
 		default:
 			if len(change.Diff) > 0 {
 				fmt.Fprintf(output, "\t%s:\t%s\n", label, renderWordDiff(change.Diff))
+				if change.Merge != nil {
+					fmt.Fprintf(output, "\t\tmerged two edits that changed different lines (%s)\n",
+						singleLine(change.Merge.Method))
+				}
 				continue
 			}
 			if change.From == "" {

@@ -631,3 +631,63 @@ func TestDescriptionMergesWhenReplayingOntoOriginsCheckpoint(t *testing.T) {
 		}
 	})
 }
+
+// compact --adopt's retry can be what takes origin's checkpoint, and the
+// merge it makes then has no fetch to report it. The tracking ref is moved by
+// Git alone here, so no Workbook fetch settles the task first.
+func TestAdoptCompactionWarnsOfAMergedDescription(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		base := sixLines(nil)
+		task := sharedDescribedTask(t, first, second, config, "Adopted by hand", base)
+		setSyncTaskDescription(t, second, config, task.ID, sixLines(map[int]string{5: "second's line 5"}))
+		setSyncTaskDescription(t, first, config, task.ID, sixLines(map[int]string{2: "first's line 2"}))
+		syncClean(t, first, config)
+		publishCheckpoint(t, first, config, compactLocally(t, first, config, task.ID))
+		syncGit(t, second.Root, "fetch", "--quiet", "--no-tags", "origin",
+			"+"+taskRefPrefix+task.ID+":"+second.remoteTaskRefPrefix()+task.ID)
+
+		adoption, err := second.AdoptCompaction(context.Background(), config, task.ID, AdoptOptions{})
+		if err != nil {
+			t.Fatalf("AdoptCompaction() error = %v", err)
+		}
+		if adoption.Result.Status != SyncAdoptedReplayed {
+			t.Fatalf("adoption = %+v, want %q", adoption.Result, SyncAdoptedReplayed)
+		}
+		want := []core.Warning{core.DescriptionMergedWarning(task.ID, "origin")}
+		if !slices.Equal(adoption.Warnings, want) {
+			t.Fatalf("Warnings = %+v, want %+v", adoption.Warnings, want)
+		}
+	})
+}
+
+// A move carries the old place's edits onto this checkout's by replaying them,
+// which can merge a description no synchronization of the run replays.
+func TestMoveTasksWarnsOfADescriptionMergedWhileCarrying(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newMoveFixture(t, testrepo.FormatSHA1)
+	task := fixture.ids[0]
+	setSyncTaskDescription(t, fixture.second, fixture.stale, task, sixLines(nil))
+	syncClean(t, fixture.second, fixture.stale)
+	// The mover already reads the new tasks remote, so Git alone brings it the
+	// description both edits start from.
+	ref := taskRefPrefix + task
+	syncGit(t, fixture.first.Root, "fetch", "--quiet", "--no-tags", "origin", "+"+ref+":"+ref)
+	setSyncTaskDescription(t, fixture.first, fixture.config, task, sixLines(map[int]string{5: "the mover's line 5"}))
+	setSyncTaskDescription(t, fixture.second, fixture.stale, task, sixLines(map[int]string{2: "the teammate's line 2"}))
+	syncClean(t, fixture.second, fixture.stale)
+
+	result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
+	if err != nil {
+		t.Fatalf("MoveTasks() = %v", err)
+	}
+	want := []core.Warning{core.DescriptionMergedWarning(task, "origin")}
+	if !slices.Equal(result.TaskWarnings, want) {
+		t.Fatalf("TaskWarnings = %+v, want %+v", result.TaskWarnings, want)
+	}
+	merged := sixLines(map[int]string{2: "the teammate's line 2", 5: "the mover's line 5"})
+	if got := currentSnapshot(t, fixture.first, fixture.config, task).State.Task.Description; got != merged {
+		t.Fatalf("description = %q, want %q", got, merged)
+	}
+}

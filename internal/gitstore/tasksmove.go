@@ -72,10 +72,11 @@ type MoveTasksResult struct {
 	// first (tasksmove_backup.go). Both are absent when there were none.
 	Replaced []string `json:"replaced,omitempty"`
 	Bundles  []string `json:"bundles,omitempty"`
-	// TaskWarnings is every description-merged warning the run's
+	// TaskWarnings is every description-merged warning of the run: those its
 	// synchronizations with the new place reported, including those of a
 	// synchronization a later one in the same step replaced in Copy or
-	// Recopy. Callers lift it to the result envelope, as for SyncResult.
+	// Recopy, and one for each merge made while carrying the old place's
+	// operations. Callers lift it to the result envelope, as for SyncResult.
 	TaskWarnings []core.Warning `json:"-"`
 }
 
@@ -856,8 +857,9 @@ func (r *Repository) carryFromTracking(
 	if err != nil {
 		return false, err
 	}
+	var merged []core.Warning
 	for _, taskID := range byIdentity {
-		update, err := r.carryTask(ctx, config, from, taskID, canonical[taskID], source[taskID], parked[taskID],
+		update, warnings, err := r.carryTask(ctx, config, from, taskID, canonical[taskID], source[taskID], parked[taskID],
 			parkedIndexes[taskID], dependencies, carried, result)
 		if err != nil {
 			return false, err
@@ -865,6 +867,7 @@ func (r *Repository) carryFromTracking(
 		if update != nil {
 			updates = append(updates, *update)
 		}
+		merged = append(merged, warnings...)
 	}
 	if len(updates) == 0 {
 		return configChanged, nil
@@ -872,12 +875,15 @@ func (r *Repository) carryFromTracking(
 	if err := r.updateCanonicalRefsFromValidated(ctx, config, canonicalRefs, updates); err != nil {
 		return false, err
 	}
+	// Only now have the refs moved onto the merges.
+	result.TaskWarnings = append(result.TaskWarnings, merged...)
 	return true, nil
 }
 
 // carryTask applies onto this checkout's history of one task the operations
 // the old place holds for it and this checkout lacks, skipping those already
-// set aside here. It returns the canonical ref update to make, if any.
+// set aside here. It returns the canonical ref update to make, if any, and the
+// description-merged warnings that hold once that update has landed.
 func (r *Repository) carryTask(
 	ctx context.Context,
 	config core.ProjectConfig,
@@ -888,19 +894,19 @@ func (r *Repository) carryTask(
 	dependencies map[string][]string,
 	carried *moveCarry,
 	result *MoveTasksResult,
-) (*canonicalRefUpdate, error) {
+) (*canonicalRefUpdate, []core.Warning, error) {
 	chains, err := r.completeTaskChains(ctx, config, []TaskHead{{TaskID: taskID, ObjectID: mine.Head}})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if chains[0] == nil {
-		return nil, core.Errorf(core.CategoryCorruptData,
+		return nil, nil, core.Errorf(core.CategoryCorruptData,
 			"this checkout cannot read the whole history of task %s, so %s's copy of it was not carried", taskID, from)
 	}
 	var exclude map[string]struct{}
 	held := heldOperations{}
 	if err := held.recordChain(chains[0]); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if checkpoint, ok := chains[0][0].Operation.Checkpoint(); ok {
 		exclude = operationIDSet(checkpoint.CompactedOperations)
@@ -912,19 +918,19 @@ func (r *Repository) carryTask(
 	// counted as held and its task reported carried.
 	sourceChains, err := r.completeTaskChains(ctx, config, []TaskHead{{TaskID: taskID, ObjectID: theirs.Head}})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, commit := range sourceChains[0] {
 		if _, err := held.match(taskID, commit.ObjectID, commit.Operation); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	missing, err := r.operationsNotIn(ctx, config, taskID, theirs.Head, mine.Head, exclude)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(missing) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// What this checkout parked earlier is set aside, not missing: a person
@@ -932,7 +938,7 @@ func (r *Repository) carryTask(
 	// if it were new.
 	setAside, err := r.parkedAccount(ctx, config, taskID, parkedHeads)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var pending []OperationCommit
 	var aside []string
@@ -949,11 +955,11 @@ func (r *Repository) carryTask(
 		// The second copy of a run finds what its first one parked.
 		for _, earlier := range result.SetAside {
 			if earlier.TaskID == taskID {
-				return nil, nil
+				return nil, nil, nil
 			}
 		}
 		result.SetAside = append(result.SetAside, MoveSetAside{TaskID: taskID, Title: mine.State.Task.Title, Operations: aside})
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// The replay adds what it writes to held, so whether a pack was carried
@@ -965,10 +971,10 @@ func (r *Repository) carryTask(
 	replay, failure, err := r.replayOperations(ctx, config, taskID, mine, pending, false,
 		mine.Operation.HistoryGeneration, dependencies, held)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if failure != nil {
-		return nil, wrapKeepingCategory(fmt.Sprintf("cannot carry task %s from %s", taskID, from), failure)
+		return nil, nil, wrapKeepingCategory(fmt.Sprintf("cannot carry task %s from %s", taskID, from), failure)
 	}
 	processed := replay.replayed + replay.skipped
 	for _, commit := range pending[:processed] {
@@ -998,9 +1004,14 @@ func (r *Repository) carryTask(
 		})
 	}
 	if update.Next == update.Expected && update.ParkedRef == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return update, nil
+	var warnings []core.Warning
+	for range replay.merges {
+		// The other edit is the old place's, the one being carried.
+		warnings = append(warnings, core.DescriptionMergedWarning(taskID, from))
+	}
+	return update, warnings, nil
 }
 
 // parkedAccount is the operations this checkout holds parked for one task.

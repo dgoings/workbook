@@ -247,8 +247,8 @@ func (session *taskSession) probeWatcher(ctx context.Context) {
 		session.conflicts = append(session.conflicts, entry.Conflict)
 	}
 	// Its relic conflicts too, with each body read from this clone as an
-	// inline fetch's are: the watcher keeps no body text. Its relic warnings
-	// are not carried; they were said on the watcher's terminal.
+	// inline fetch's are: the watcher keeps no body text. Its relic and task
+	// warnings are not carried; they were said on the watcher's terminal.
 	if len(status.RelicConflicts) > 0 {
 		var fetched gitstore.SyncResult
 		for _, entry := range status.RelicConflicts {

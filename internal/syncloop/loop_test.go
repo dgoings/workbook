@@ -789,6 +789,7 @@ type fakeSyncer struct {
 	relicConflicts []core.RelicConflict
 	relicWarnings  []core.Warning
 	configWarnings []core.Warning
+	taskWarnings   []core.Warning
 }
 
 func (f *fakeSyncer) PublicationWarnings() []core.Warning {
@@ -813,6 +814,7 @@ func (f *fakeSyncer) Sync(ctx context.Context, _ core.ProjectConfig) (gitstore.S
 	relicConflicts := append([]core.RelicConflict{}, f.relicConflicts...)
 	relicWarnings := append([]core.Warning{}, f.relicWarnings...)
 	configWarnings := append([]core.Warning{}, f.configWarnings...)
+	taskWarnings := append([]core.Warning{}, f.taskWarnings...)
 	f.mu.Unlock()
 
 	if blocker != nil {
@@ -831,6 +833,7 @@ func (f *fakeSyncer) Sync(ctx context.Context, _ core.ProjectConfig) (gitstore.S
 			Ignored:        ignored,
 			RelicConflicts: relicConflicts,
 			RelicWarnings:  relicWarnings,
+			TaskWarnings:   taskWarnings,
 		},
 		Push: gitstore.SyncResult{Remote: "origin", Status: gitstore.SyncPhaseCompleted},
 	}
@@ -866,6 +869,12 @@ func (f *fakeSyncer) setRelicWarnings(warnings []core.Warning) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.relicWarnings = warnings
+}
+
+func (f *fakeSyncer) setTaskWarnings(warnings []core.Warning) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.taskWarnings = warnings
 }
 
 func (f *fakeSyncer) setRelicHead(relicID, head string) {
@@ -1133,4 +1142,26 @@ func watcherGit(t *testing.T, directory string, args ...string) string {
 		t.Fatalf("git %v: %v\n%s", args, err, output)
 	}
 	return strings.TrimRight(string(output), "\r\n")
+}
+
+// A merge a watcher's synchronization made is made once, so its terminal is the
+// one place it is said, and no later round says it again.
+func TestWatcherReportsEachMergedDescriptionToItsTerminal(t *testing.T) {
+	syncer := &fakeSyncer{
+		origin:       true,
+		taskWarnings: []core.Warning{core.DescriptionMergedWarning("WB-01K0M6B8A4FTT8C39MXXYTW7C1", "origin")},
+	}
+	directory, output := startWatcher(t, syncer, func(options *Options) {
+		options.Interval = time.Hour
+		options.Quiet = 10 * time.Millisecond
+	})
+	line := "workbook: " + core.WarningDescriptionMerged + ": task WB-01K0M6B8A4FTT8C39MXXYTW7C1: the description was changed"
+	waitForOutput(t, output, line)
+
+	syncer.setTaskWarnings(nil)
+	nudge(t, directory)
+	waitForPublished(t, syncer, 2)
+	if got := strings.Count(output.String(), line); got != 1 {
+		t.Fatalf("the merge was reported %d times, want once:\n%s", got, output.String())
+	}
 }
