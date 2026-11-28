@@ -61,7 +61,7 @@ func LineDiff(from, to []byte, context int) (hunks []RelicDiffHunk, approximate 
 		return nil, false
 	}
 	fromLines, toLines := splitRelicLines(from), splitRelicLines(to)
-	kinds, approximate := relicLineEdits(fromLines, toLines)
+	kinds, approximate := relicLineEdits(fromLines, toLines, maxRelicDiffEditLines, 0)
 	lines := relicDiffLines(fromLines, toLines, kinds)
 	// No hunk reaches further than every line, and the bound keeps the hunk
 	// arithmetic from overflowing.
@@ -71,8 +71,11 @@ func LineDiff(from, to []byte, context int) (hunks []RelicDiffHunk, approximate 
 
 // relicLineEdits returns the edit script turning from into to, one kind per
 // line of the result in order: equal lines consume a line of each side, delete
-// lines one of from and insert lines one of to.
-func relicLineEdits(from, to []string) ([]DiffKind, bool) {
+// lines one of from and insert lines one of to. After the common prefix and
+// suffix are trimmed, the search gives up past bound inserted plus deleted
+// lines or past work steps (work <= 0 is no budget); the differing middle is
+// then one delete run and one insert run, and approximate is true.
+func relicLineEdits(from, to []string, bound int, work int64) (kinds []DiffKind, approximate bool) {
 	ids := map[string]int32{}
 	intern := func(lines []string) []int32 {
 		interned := make([]int32, len(lines))
@@ -98,11 +101,11 @@ func relicLineEdits(from, to []string) ([]DiffKind, bool) {
 	}
 	middleA, middleB := a[prefix:len(a)-suffix], b[prefix:len(b)-suffix]
 
-	kinds := make([]DiffKind, 0, len(a)+len(b))
+	kinds = make([]DiffKind, 0, len(a)+len(b))
 	for range prefix {
 		kinds = append(kinds, DiffEqual)
 	}
-	middle, exact := myersLineEdits(middleA, middleB, maxRelicDiffEditLines)
+	middle, exact := myersLineEdits(middleA, middleB, bound, work)
 	if !exact {
 		middle = middle[:0]
 		for range middleA {
@@ -120,9 +123,12 @@ func relicLineEdits(from, to []string) ([]DiffKind, bool) {
 }
 
 // myersLineEdits runs Myers' greedy search for the shortest edit script, giving
-// up when it needs more than bound inserted plus deleted lines. It records the
-// frontier of each step, 2d+1 entries for step d, and walks them back.
-func myersLineEdits(a, b []int32, bound int) ([]DiffKind, bool) {
+// up when it needs more than bound inserted plus deleted lines, or more than
+// work steps when work is positive. A step is one diagonal visited or one
+// pair of lines compared along a snake, so the cut-off is a count that is the
+// same on every machine. It records the frontier of each step, 2d+1 entries
+// for step d, and walks them back.
+func myersLineEdits(a, b []int32, bound int, work int64) ([]DiffKind, bool) {
 	n, m := len(a), len(b)
 	if n == 0 && m == 0 {
 		return nil, true
@@ -137,8 +143,10 @@ func myersLineEdits(a, b []int32, bound int) ([]DiffKind, bool) {
 	offset := maximum + 1
 	frontier := make([]int32, 2*offset+1)
 	trace := make([][]int32, 0, 16)
+	var steps int64
 	for d := 0; d <= maximum; d++ {
 		for k := -d; k <= d; k += 2 {
+			steps++
 			var x int
 			if k == -d || (k != d && frontier[offset+k-1] < frontier[offset+k+1]) {
 				x = int(frontier[offset+k+1])
@@ -146,9 +154,14 @@ func myersLineEdits(a, b []int32, bound int) ([]DiffKind, bool) {
 				x = int(frontier[offset+k-1]) + 1
 			}
 			y := x - k
+			snakeStart := x
 			for x < n && y < m && a[x] == b[y] {
 				x++
 				y++
+			}
+			steps += int64(x - snakeStart)
+			if work > 0 && steps > work {
+				return nil, false
 			}
 			frontier[offset+k] = int32(x)
 			if x >= n && y >= m {
