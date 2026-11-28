@@ -452,19 +452,25 @@ func TestGuidelinesRelicWorkflowRunsAsWritten(t *testing.T) {
 	}
 	values["<version>"] = first.Version
 	mustSucceed(block[3])
-	if second := readPart(); *second.Text != "two\n" || second.Version == first.Version {
+	second := readPart()
+	if *second.Text != "two\n" || second.Version == first.Version {
 		t.Fatalf("body after the save = %q at %s, want %q at a new version", *second.Text, second.Version, "two\n")
 	}
 
-	// The identical save again starts from the version it replaced.
-	args := command(block[3])
-	code, stdout, stderr := run(t, repository, args...)
-	if code != 6 || stdout != "" {
-		t.Fatalf("%v again = (%d, %q, %q), want exit 6", args, code, stdout, stderr)
+	// The identical save again starts from the version it replaced. Both
+	// saves made the same change, so it merges to the text that stands and
+	// records nothing: a retried save is safe.
+	var again struct {
+		Changed bool `json:"changed"`
 	}
-	assertJSONError(t, stderr, core.CategoryStaleWrite, "")
-	if body := readPart(); *body.Text != "two\n" {
-		t.Fatalf("body after the refused save = %q, want %q", *body.Text, "two\n")
+	if err := json.Unmarshal(mustSucceed(block[3]).Data, &again); err != nil {
+		t.Fatal(err)
+	}
+	if again.Changed {
+		t.Fatalf("%v again reported a change, want none", command(block[3]))
+	}
+	if body := readPart(); *body.Text != "two\n" || body.Version != second.Version {
+		t.Fatalf("body after the repeated save = %q at %s, want %q still at %s", *body.Text, body.Version, "two\n", second.Version)
 	}
 }
 
