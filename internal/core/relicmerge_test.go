@@ -173,8 +173,8 @@ func TestRelicMergeDeclaresGenerationNine(t *testing.T) {
 }
 
 func TestRelicGenerationNineMarkers(t *testing.T) {
-	if SupportedFormatGeneration != 9 || RelicMergeMinReader != SupportedFormatGeneration {
-		t.Fatalf("SupportedFormatGeneration = %d, RelicMergeMinReader = %d, want 9 and 9",
+	if RelicMergeMinReader != 9 || SupportedFormatGeneration < RelicMergeMinReader {
+		t.Fatalf("SupportedFormatGeneration = %d, RelicMergeMinReader = %d, want at least 9 and 9",
 			SupportedFormatGeneration, RelicMergeMinReader)
 	}
 	for _, generation := range []int{RelicMinReader, RelicCheckpointMinReader, RelicBuiltInSchemaMinReader, RelicMergeMinReader} {
@@ -187,8 +187,8 @@ func TestRelicGenerationNineMarkers(t *testing.T) {
 			t.Errorf("validateRelicMarker(%d) = %v, want corrupt data", generation, err)
 		}
 	}
-	if err := validateRelicMarker("relic state", 10, relicDocRelic); CategoryOf(err) != CategoryNewerWriter {
-		t.Errorf("validateRelicMarker(10) = %v, want newer writer", err)
+	if err := validateRelicMarker("relic state", SupportedFormatGeneration+1, relicDocRelic); CategoryOf(err) != CategoryNewerWriter {
+		t.Errorf("validateRelicMarker(%d) = %v, want newer writer", SupportedFormatGeneration+1, err)
 	}
 
 	// A state at nine round-trips.
@@ -196,26 +196,26 @@ func TestRelicGenerationNineMarkers(t *testing.T) {
 	state.MinReader = 9
 	requireRelicStateRoundTrips(t, "a state at generation 9", state)
 
-	// A pack marked 10 holding an operation this build does not know decodes
+	// A pack marked 11 holding an operation this build does not know decodes
 	// leniently and every fold refuses it as written by a newer Workbook.
 	encodedPack, err := EncodeDocument(relicFoldPack(2, RelicOperation{ID: relicTestID(9030), Type: RelicOperationTitleSet, Title: "T"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	newer := strings.Replace(string(encodedPack), `"minReader":6,`, `"minReader":10,`, 1)
+	newer := strings.Replace(string(encodedPack), `"minReader":6,`, `"minReader":11,`, 1)
 	newer = strings.Replace(newer, `]}`+"\n", `,{"id":"`+relicTestID(9031)+`","type":"part.body.rebase","part":"x"}]}`+"\n", 1)
 	pack, err := DecodeRelicOperationPack([]byte(newer))
 	if err != nil {
-		t.Fatalf("DecodeRelicOperationPack(generation 10) = %v", err)
+		t.Fatalf("DecodeRelicOperationPack(generation 11) = %v", err)
 	}
-	if !pack.RequiresNewerReader() || pack.MinReader != 10 || len(pack.Operations) != 2 {
-		t.Fatalf("the generation-10 pack decoded as %#v", pack)
+	if !pack.RequiresNewerReader() || pack.MinReader != 11 || len(pack.Operations) != 2 {
+		t.Fatalf("the generation-11 pack decoded as %#v", pack)
 	}
 	record := goldenRelicRecord(t)
 	if _, err := ApplyRelic(&record, pack); CategoryOf(err) != CategoryNewerWriter {
-		t.Fatalf("ApplyRelic(generation 10) = %v, want newer writer", err)
+		t.Fatalf("ApplyRelic(generation 11) = %v, want newer writer", err)
 	}
-	if _, err := DecodeRelicOperationPack([]byte(strings.Replace(newer, `"minReader":10,`, `"minReader":9,`, 1))); CategoryOf(err) != CategoryCorruptData {
+	if _, err := DecodeRelicOperationPack([]byte(strings.Replace(newer, `"minReader":11,`, `"minReader":9,`, 1))); CategoryOf(err) != CategoryCorruptData {
 		t.Fatalf("the same unknown operation at generation 9 = %v, want corrupt data", err)
 	}
 }

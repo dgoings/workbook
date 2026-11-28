@@ -151,6 +151,23 @@ const (
 // so is every task and configuration pack. A better merge method records a
 // new method label and needs no new generation.
 //
+// Ten is the generation merged task descriptions introduce, through one task
+// operation type: description.merge (see DescriptionMergeMinReader). It records
+// the description that combines a local edit with the one it met on the remote,
+// together with the texts it was merged from, and it folds by setting the
+// description to that text; no reader ever runs the merge again. It is the
+// first task generation since five, and it marks task packs only: no relic or
+// configuration pack declares it, and a relic marked ten is corrupt data. A
+// build that folds generation nine does not know the type and would call the
+// task corrupt data; with the marker it shows the task from its stored state,
+// warns that a newer Workbook wrote it, and refuses to change it or to replay
+// its own edits onto it. A pack holding a merge declares ten, and a state the
+// larger of its parent's and its pack's, so every state after a merge stays at
+// ten, until compaction writes a checkpoint at four, or five with a due date,
+// that holds the merged text. Every task whose description was never merged is
+// written exactly as before. A better merge method records a new method label
+// and needs no new generation.
+//
 // Raising this constant is the last step of shipping a new operation type, not
 // the first: the build has to be able to fold generation N before it may claim
 // to. It is also inseparable from the table that declares N — a pack this build
@@ -166,7 +183,7 @@ const (
 // has already happened, from cache, while the mutations it refused now succeed.
 // See historyvalidation.readerGeneration. Any future cache of a fold's outcome
 // owes the same.
-const SupportedFormatGeneration = 9
+const SupportedFormatGeneration = 10
 
 type Actor struct {
 	ID string `json:"id"`
@@ -209,6 +226,11 @@ const (
 	// replaced. Like task.create it is legal only as the sole operation of a
 	// root pack.
 	OperationHistoryCheckpoint OperationType = "history.checkpoint"
+	// OperationDescriptionMerge records the description a replay made by
+	// merging a local edit of it with the edit it met on the remote. It
+	// carries the merged text in Value and what it merged in Merge, and folds
+	// as a field.set of the description does. See DescriptionMerge.
+	OperationDescriptionMerge OperationType = "description.merge"
 )
 
 // The two values CheckpointData.Attachments takes: whether the checkpoint tree
@@ -277,6 +299,9 @@ type Operation struct {
 	// Checkpoint is the compaction summary a history.checkpoint carries beside
 	// its Task. It is a pointer, as Task is, so Operation stays comparable.
 	Checkpoint *CheckpointData `json:"checkpoint,omitempty"`
+	// Merge is what a description.merge merged, beside the merged text in its
+	// Value. It is a pointer, as Task is, so Operation stays comparable.
+	Merge *DescriptionMerge `json:"merge,omitempty"`
 }
 
 type OperationPack struct {
@@ -373,6 +398,9 @@ var operationMinReader = map[OperationType]int{
 	// A checkpoint is generation four: a reader has to know that a root may be
 	// a checkpoint before it can fold a compacted task at all.
 	OperationHistoryCheckpoint: 4,
+	// A description merge is generation ten: a reader has to know the type
+	// before it can fold the task it merged.
+	OperationDescriptionMerge: DescriptionMergeMinReader,
 }
 
 // checkpointMinReader is the generation every checkpoint pack, and every
@@ -770,6 +798,11 @@ func applyOperation(task *TaskData, operation Operation, authored authorship) er
 		return applyAttachmentAdd(task, operation, authored)
 	case OperationAttachmentRemove:
 		return applyAttachmentRemove(task, operation)
+	case OperationDescriptionMerge:
+		// The stored text is the merge. It is set unconditionally, as a
+		// field.set is, and never recomputed from the texts beside it.
+		task.Description = operation.Value
+		return nil
 	default:
 		return corrupt("unsupported operation type %q", operation.Type)
 	}
@@ -1036,6 +1069,8 @@ func validateOperation(operation Operation) error {
 		return validateCommentOperation(operation)
 	case OperationAttachmentAdd, OperationAttachmentRemove:
 		return validateAttachmentOperation(operation)
+	case OperationDescriptionMerge:
+		return validateDescriptionMergeOperation(operation)
 	default:
 		return corrupt("unsupported operation type %q", operation.Type)
 	}
@@ -1083,7 +1118,7 @@ func validateOperationPackDocument(pack OperationPack) error {
 		}
 		seen[operation.ID] = struct{}{}
 	}
-	return nil
+	return validateDescriptionMergeOthers(pack)
 }
 
 func validateOperationDocument(operation Operation) error {
@@ -1091,6 +1126,9 @@ func validateOperationDocument(operation Operation) error {
 		return err
 	}
 	if err := validateNoCheckpointPayload(operation); err != nil {
+		return err
+	}
+	if err := validateNoMergePayload(operation); err != nil {
 		return err
 	}
 	switch operation.Type {
@@ -1124,6 +1162,8 @@ func validateOperationDocument(operation Operation) error {
 		return validateCommentOperation(operation)
 	case OperationAttachmentAdd, OperationAttachmentRemove:
 		return validateAttachmentOperation(operation)
+	case OperationDescriptionMerge:
+		return validateDescriptionMergeOperation(operation)
 	default:
 		return corrupt("unsupported operation type %q", operation.Type)
 	}

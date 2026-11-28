@@ -768,7 +768,7 @@ func TestHistoryListsBothMergesOfAReplayedMerge(t *testing.T) {
 func TestHistoryOfAMergeFromANewerBuildTruncates(t *testing.T) {
 	chain, part, _, _, merge := historyMergeChain()
 	newer := historyPack(4, "cy@example.com", historyBodySet(relicTestID(9320), part, merge, 50))
-	newer.MinReader = 10
+	newer.MinReader = SupportedFormatGeneration + 1
 	chain = historyChain(chain.Commits[0].Operation, chain.Commits[1].Operation, chain.Commits[2].Operation, newer)
 	history := BuildRelicHistory(chain, RelicSummary{ID: relicDocRelic}, part, 0, true)
 	if history.Total != 3 || history.Truncated == nil || history.Truncated.Category != CategoryNewerWriter ||
