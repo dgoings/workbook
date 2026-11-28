@@ -1217,6 +1217,8 @@ var commandSchemas = map[string]commandMetadata{
 		// combinations the command rejects.
 		Synopsis: "workbook compact [--done-only [<duration>] | --deleted-only [<duration>]] [--since <duration>] " +
 			"[--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--json]\n" +
+			"workbook compact --relics [--retired-only | --deleted-only] [--dry-run] [--backup <path> | --no-backup] " +
+			"[--no-sync] [--json]\n" +
 			"workbook compact --adopt <task> [--discard-local] [--no-backup | --backup <path>] [--json]",
 		Description: "Replace the history of Done and Deleted tasks with one checkpoint each.\n\n" +
 			"A real run first writes a verified backup bundle of the history it drops.\n" +
@@ -1224,6 +1226,12 @@ var commandSchemas = map[string]commandMetadata{
 			"given. A duration such as 30d limits the run to tasks that finished more\n" +
 			"than that long ago. --dry-run reports what a run would do and changes\n" +
 			"nothing.\n\n" +
+			"--relics compacts relics instead of tasks: each retired or deleted relic's\n" +
+			"history becomes one checkpoint, which drops the content of removed parts, or\n" +
+			"of every part of a deleted relic. It writes the backup bundle first, and\n" +
+			"publishes each checkpoint. --retired-only or --deleted-only narrows the\n" +
+			"selection; a --deleted-only duration, --since, --done-only,\n" +
+			"--keep-attachments and --adopt do not apply.\n\n" +
 			"--adopt <task> settles one task a compaction left stuck: one origin\n" +
 			"compacted while this clone had changes that would not replay onto it, or\n" +
 			"one this clone compacted and deleted while origin changed it. It fetches,\n" +
@@ -1231,13 +1239,15 @@ var commandSchemas = map[string]commandMetadata{
 			"version, after saving the local history to a bundle.",
 		Options: []optionMetadata{
 			{Name: "done-only", Kind: optionalStringFlag, Value: "[<duration>]", Description: "compact only Done tasks, optionally only those done longer ago than this"},
-			{Name: "deleted-only", Kind: optionalStringFlag, Value: "[<duration>]", Description: "compact only Deleted tasks, optionally only those deleted longer ago than this"},
+			{Name: "deleted-only", Kind: optionalStringFlag, Value: "[<duration>]", Description: "compact only Deleted tasks, optionally only those deleted longer ago than this; with --relics, only deleted relics, with no duration"},
+			{Name: "relics", Kind: boolFlag, Description: "compact retired and deleted relics instead of tasks"},
+			{Name: "retired-only", Kind: boolFlag, Description: "with --relics, compact only retired relics"},
 			{Name: "since", Kind: stringFlag, Value: "<duration>", Description: "compact only tasks that became Done or Deleted longer ago than this"},
 			{Name: "keep-attachments", Kind: boolFlag, Description: "keep attachment contents in the checkpoints"},
 			{Name: "no-backup", Kind: boolFlag, Description: "write no backup bundle"},
 			{Name: "backup", Kind: stringFlag, Value: "<path>", Description: "write the backup bundle here, or into this directory"},
 			{Name: "dry-run", Kind: boolFlag, Description: "report what would be compacted and change nothing"},
-			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with the tasks remote (origin unless configured)"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 			{Name: "adopt", Kind: stringFlag, Value: "<task>", Description: "settle one task a compaction left stuck, retrying the replay"},
 			{Name: "discard-local", Kind: boolFlag, Description: "with --adopt, take the tasks remote's version after saving the local history to a bundle"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},

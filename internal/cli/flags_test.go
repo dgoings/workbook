@@ -93,14 +93,16 @@ func TestCommandHelp(t *testing.T) {
 			options:     []string{"full", "json"},
 		},
 		{
-			// Two forms, the second lined up under the first.
+			// Three forms, the later ones lined up under the first.
 			name:   "compact",
 			target: []string{"compact"},
 			synopsis: "Usage: workbook compact [--done-only [<duration>] | --deleted-only [<duration>]] " +
 				"[--since <duration>] [--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--json]\n" +
+				"       workbook compact --relics [--retired-only | --deleted-only] [--dry-run] " +
+				"[--backup <path> | --no-backup] [--no-sync] [--json]\n" +
 				"       workbook compact --adopt <task> [--discard-local] [--no-backup | --backup <path>] [--json]\n",
 			options: []string{
-				"done-only", "deleted-only", "since", "keep-attachments", "no-backup", "backup",
+				"done-only", "deleted-only", "relics", "retired-only", "since", "keep-attachments", "no-backup", "backup",
 				"dry-run", "no-sync", "adopt", "discard-local", "json",
 			},
 		},
@@ -269,6 +271,7 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"validate": {"full": boolFlag, "json": boolFlag},
 		"compact": {
 			"done-only": optionalStringFlag, "deleted-only": optionalStringFlag, "since": stringFlag,
+			"relics": boolFlag, "retired-only": boolFlag,
 			"keep-attachments": boolFlag, "no-backup": boolFlag, "backup": stringFlag,
 			"dry-run": boolFlag, "no-sync": boolFlag, "adopt": stringFlag, "discard-local": boolFlag, "json": boolFlag,
 		},

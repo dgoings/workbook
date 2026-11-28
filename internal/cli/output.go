@@ -33,6 +33,7 @@ Commands:
   rebuild [--json]
   validate [--full] [--json]
   compact [--done-only [<duration>] | --deleted-only [<duration>]] [--since <duration>] [--keep-attachments] [--no-backup | --backup <path>] [--dry-run] [--no-sync] [--json]
+  compact --relics [--retired-only | --deleted-only] [--dry-run] [--backup <path> | --no-backup] [--no-sync] [--json]
   compact --adopt <task> [--discard-local] [--no-backup | --backup <path>] [--json]
   version [--json]
   fetch [--remote <remote>] [--json]

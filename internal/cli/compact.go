@@ -105,6 +105,8 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with the tasks remote (origin unless configured)")
 	adopt := flags.String("adopt", "", "settle one task a compaction left stuck, retrying the replay")
 	discardLocal := flags.Bool("discard-local", false, "with --adopt, take the tasks remote's version after saving the local history to a bundle")
+	relics := flags.Bool("relics", false, "compact retired and deleted relics instead of tasks")
+	retiredOnly := flags.Bool("retired-only", false, "with --relics, compact only retired relics")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -117,6 +119,17 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 	// anything beside it, and it has to fetch to know what origin holds.
 	if *discardLocal && !typed["adopt"] {
 		return core.Errorf(core.CategoryInvocation, "--discard-local requires --adopt")
+	}
+	// A relic run has no age cutoff, keeps no attachments and adopts no task.
+	if *relics && (typed["since"] || doneOnly || deletedCutoff != "" || typed["keep-attachments"] || typed["adopt"]) {
+		return core.Errorf(core.CategoryInvocation,
+			"--relics cannot be combined with --since, --done-only, --keep-attachments or --adopt")
+	}
+	if *retiredOnly && !*relics {
+		return core.Errorf(core.CategoryInvocation, "--retired-only requires --relics")
+	}
+	if *retiredOnly && deletedOnly {
+		return core.Errorf(core.CategoryInvocation, "--retired-only and --deleted-only cannot be combined")
 	}
 	if typed["adopt"] {
 		if doneOnly || deletedOnly || typed["since"] || typed["keep-attachments"] || typed["dry-run"] {
@@ -157,6 +170,18 @@ func runCompact(ctx context.Context, args []string, cwd string, stdout, stderr i
 			backup:       *backup,
 			flags:        given,
 			jsonMode:     *jsonMode,
+		}, cwd, stdout, stderr)
+	}
+
+	if *relics {
+		return runCompactRelics(ctx, compactRelicsRequest{
+			criteria: compaction.RelicCriteria{Retired: !deletedOnly, Deleted: !*retiredOnly},
+			backup:   *backup,
+			noBackup: *noBackup,
+			dryRun:   *dryRun,
+			noSync:   *noSync,
+			flags:    given,
+			jsonMode: *jsonMode,
 		}, cwd, stdout, stderr)
 	}
 

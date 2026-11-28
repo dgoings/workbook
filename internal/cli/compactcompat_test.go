@@ -116,12 +116,32 @@ func TestAGenerationThreeBuildRefusesCompactedTask(t *testing.T) {
 // missing as a capability this checkout lacks.
 func v0061Binary(t *testing.T) string {
 	t.Helper()
+	return revisionBinary(t, "v0.6.1",
+		"the v0.6.1 tag is not in this checkout; fetch tags to run the older-release interop test")
+}
+
+// preRelicCompactionRevision is a build from before relic compaction: it reads
+// relic formats up to generation 6.
+const preRelicCompactionRevision = "d60790648ef718efe474f3068c505b26383fe51e"
+
+// preRelicCompactionBinary compiles preRelicCompactionRevision, or reports the
+// commit missing as a capability this checkout lacks.
+func preRelicCompactionBinary(t *testing.T) string {
+	t.Helper()
+	return revisionBinary(t, preRelicCompactionRevision,
+		"commit "+preRelicCompactionRevision+" is not in this checkout; fetch the full history to run the older-build interop test")
+}
+
+// revisionBinary compiles Workbook as revision holds it, or reports missing as
+// a capability this checkout lacks.
+func revisionBinary(t *testing.T, revision, missing string) string {
+	t.Helper()
 	root := repositoryRoot(t)
-	if exec.Command("git", "-C", root, "rev-parse", "--verify", "--quiet", "v0.6.1^{commit}").Run() != nil {
-		testenv.MissingCapability(t, "the v0.6.1 tag is not in this checkout; fetch tags to run the older-release interop test")
+	if exec.Command("git", "-C", root, "rev-parse", "--verify", "--quiet", revision+"^{commit}").Run() != nil {
+		testenv.MissingCapability(t, "%s", missing)
 	}
 	source := t.TempDir()
-	archive := exec.Command("git", "-C", root, "archive", "--format=tar", "v0.6.1")
+	archive := exec.Command("git", "-C", root, "archive", "--format=tar", revision)
 	extract := exec.Command("tar", "-x", "-C", source)
 	pipe, err := archive.StdoutPipe()
 	if err != nil {
@@ -132,10 +152,10 @@ func v0061Binary(t *testing.T) string {
 		t.Fatalf("start tar: %v", err)
 	}
 	if err := archive.Run(); err != nil {
-		t.Fatalf("git archive v0.6.1: %v", err)
+		t.Fatalf("git archive %s: %v", revision, err)
 	}
 	if err := extract.Wait(); err != nil {
-		t.Fatalf("extract v0.6.1: %v", err)
+		t.Fatalf("extract %s: %v", revision, err)
 	}
 	binary := filepath.Join(t.TempDir(), "workbook")
 	if runtime.GOOS == "windows" {
@@ -148,7 +168,7 @@ func v0061Binary(t *testing.T) string {
 	}
 	command.Env = toolchainEnvironment
 	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build v0.6.1: %v\n%s", err, output)
+		t.Fatalf("build %s: %v\n%s", revision, err, output)
 	}
 	return binary
 }
@@ -216,5 +236,71 @@ func TestReleasedV061FailsSafelyOnCompactedTask(t *testing.T) {
 	}
 	if got := remoteTaskRefValue(t, second, task.ID); got != checkpoint {
 		t.Fatalf("origin holds %s after the code push, want the checkpoint %s", got, checkpoint)
+	}
+}
+
+// A build from before relic compaction meets a relic this build retired and one
+// it compacted. It reads both from their stored state and refuses to change
+// them as written by a newer workbook. A relic it held before the compaction
+// stays on its old history, reported as needing an upgrade, and nothing it does
+// moves a ref on origin.
+func TestPreCompactionBuildReadsRetiredAndCompactedRelics(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a pre-compaction build; skipped in -short mode")
+	}
+	t.Parallel()
+	binary := preRelicCompactionBinary(t)
+	writer, older := cliSyncRepositories(t)
+	held := mustCreateRelic(t, writer, "Held before", "--type", "spec").Relic.ID
+	addRelicParts(t, writer, held, "section")
+	if code, stdout, stderr := runBinary(t, binary, older, "sync"); code != 0 {
+		t.Fatalf("older sync = (%d, %q, %q)", code, stdout, stderr)
+	}
+	heldBefore := relicHeadOf(t, older, held)
+
+	retired := mustCreateRelic(t, writer, "Retired plan", "--type", "plan").Relic.ID
+	compacted := mustCreateRelic(t, writer, "Compacted plan", "--type", "plan").Relic.ID
+	part := addRelicParts(t, writer, compacted, "section")[0]
+	mustUpdateRelic(t, writer, compacted, "--remove-part", part)
+	mustRelic(t, writer, nil, "retire", held)
+	mustRelic(t, writer, nil, "retire", compacted)
+	compactRelicsJSON(t, writer)
+	// Retired after the run, so it stays uncompacted.
+	mustRelic(t, writer, nil, "retire", retired)
+	origin := originRelicRefs(t, writer)
+	originHead := func(id string) string { return originRelicHead(t, writer, id) }
+	if originHead(held) != relicHeadOf(t, writer, held) || originHead(compacted) != relicHeadOf(t, writer, compacted) {
+		t.Fatalf("origin = %s, want the published checkpoints", origin)
+	}
+
+	code, stdout, stderr := runBinary(t, binary, older, "sync", "--json")
+	report := stdout + stderr
+	if !strings.Contains(report, `"relicId":"`+held+`","status":"needs-upgrade"`) {
+		t.Fatalf("older sync = (%d, %q, %q), want %s reported as needs-upgrade", code, stdout, stderr, held)
+	}
+	if got := relicHeadOf(t, older, held); got != heldBefore {
+		t.Fatalf("older clone moved the relic it held to %s from %s", got, heldBefore)
+	}
+	for _, id := range []string{retired, compacted} {
+		if got := relicHeadOf(t, older, id); got != originHead(id) {
+			t.Fatalf("older clone holds %s at %s, want origin's %s", id, got, originHead(id))
+		}
+	}
+	for id, title := range map[string]string{retired: "Retired plan", compacted: "Compacted plan", held: "Held before"} {
+		code, stdout, stderr := runBinary(t, binary, older, "relic", "show", id)
+		if code != 0 || !strings.Contains(stdout, title) {
+			t.Fatalf("older relic show %s = (%d, %q, %q)", id, code, stdout, stderr)
+		}
+	}
+	for _, id := range []string{retired, compacted} {
+		code, stdout, stderr := runBinary(t, binary, older, "relic", "update", id, "--title", "Changed by an older build")
+		if code != 9 || !strings.Contains(stderr, "newer workbook") {
+			t.Fatalf("older relic update %s = (%d, %q, %q), want exit 9", id, code, stdout, stderr)
+		}
+	}
+	runBinary(t, binary, older, "push")
+	runBinary(t, binary, older, "sync")
+	if got := originRelicRefs(t, writer); got != origin {
+		t.Fatalf("origin's relic refs changed:\n%s\nwant\n%s", got, origin)
 	}
 }
