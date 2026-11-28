@@ -32,11 +32,31 @@ and similar material. A relic has a title, a type, properties and an ordered
 list of parts, and a part has a type, fields and an optional body. Relics are
 shared through the tasks remote as tasks are, can link to tasks, and are taught
 to agents by the generated guidelines and the skill. Relics are not on the
-board, and there is no retiring or compaction for them yet. Upgrade
+board. A relic can be retired, and `workbook compact --relics` compacts retired
+and deleted relics. Upgrade
 every Workbook on a machine before creating one; see Compatibility across
 versions below.
 
 ### Added
+- **Retiring a relic.** `workbook relic retire <relic>` and `relic unretire`
+  record a reversible mark. `relic list --retired` and `--all` show retired
+  relics, and `workbook show <task>` lists the links of a retired relic marked
+  `(retired)`. A retired relic can still be edited and linked. See
+  [Retiring a relic](docs/reference.md#retiring-a-relic).
+- **Compacting relics.** `workbook compact --relics [--retired-only |
+  --deleted-only]` replaces the history of retired and deleted relics with one
+  parentless checkpoint each, after writing a verified backup bundle, and
+  publishes each with a leased push. Removed parts, and every part of a deleted
+  relic, stay as stubs with their IDs and dates, so links still resolve; their
+  content is only in the bundle. Other clones adopt the checkpoint at their next
+  fetch, replaying their own changes onto it or parking one that names a dropped
+  part, as a `dropped` relic conflict. A compaction not yet published is dropped,
+  with a `relic-compaction-dropped` warning, when origin changed the relic
+  first, and restoring a relic compacted while deleted warns
+  `relic-content-dropped`. `move-tasks` carries compacted relics. The cache moves
+  to schema version 13, which is rebuilt once. See
+  [Compacting relics](docs/reference.md#compacting-relics) and
+  [Compacted relics](docs/architecture.md#compacted-relics).
 - **Relic schemas.** `workbook schema put <type> <file|->` saves a versioned
   schema for a relic type in the project's settings, and `schema list` and
   `schema show` read them. A schema is a file of properties, part types and
@@ -218,6 +238,11 @@ versions below.
   the same run before it instead of hiding them.
 - **The watcher's status document is now version 2.** A command does not hand a
   change to an older watcher.
+- **`relic list` leaves retired relics out**, as does `relic list --linked-to`,
+  unless `--retired` or `--all` is given.
+- **A compacted relic's history and diffs start at its checkpoint.** `relic show
+  --history` and `relic diff` say so, with a `compacted` member in JSON, and
+  refuse a version the compaction dropped as `not-found`.
 
 ### Compatibility across versions
 - **Upgrade every Workbook on the machine before creating relics.** A Workbook
@@ -226,6 +251,10 @@ versions below.
   command its plain `workbook reset` prints does not fetch them back from the
   bundle it wrote. A relic the tasks remote holds comes back with the next
   sync; a change not yet published can be lost.
+- **A retired or compacted relic needs a build with this change to be
+  changed.** Both are written at writer-format generation 7. A build from before
+  retiring and compaction reads them and refuses to change them as
+  `newer-writer`; v0.7.0 and earlier never fetch relics.
 - **A project's first relic schema makes its settings read-only to an older
   Workbook.** `schema put` marks the settings history as writer-format
   generation 6. A release from before relics, v0.6.1 and v0.7.0 among them,

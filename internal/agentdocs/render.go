@@ -300,10 +300,15 @@ func relicGuidelines(keys core.KeySet, relicTypes []RelicTypeRules) string {
 		"`workbook show` lists the task's links in `data.relics`: each entry names\n" +
 		"the `relic`, the `part` it links from (absent for a link from the whole\n" +
 		"relic) and the `rel`, such as `implemented-by`. `workbook relic list\n" +
-		"--linked-to` lists the same relics. `workbook relic show` with a part and\n" +
+		"--linked-to` lists the same relics, without retired ones unless `--retired`\n" +
+		"is given. `workbook relic show` with a part and\n" +
 		"`--body` carries the body at `data.parts[0].body.text`, or at\n" +
 		"`data.parts[0].body.base64` when it is not text, and its version at\n" +
 		"`data.parts[0].body.version`.\n\n" +
+		"`workbook relic retire <relic>` marks a relic that is no longer in use, and\n" +
+		"`workbook relic unretire <relic>` takes the mark off; do either only when\n" +
+		"asked. A retired relic can still be read and changed. `workbook relic list`\n" +
+		"leaves it out, and its entry in `data.relics` has `retired` set to `true`.\n\n" +
 		"To see what links to a part, run `workbook relic list --linked-to\n" +
 		"<relic>#<part> --json`; `workbook relic show` of that part lists each link\n" +
 		"in `data.linkedFrom`.\n\n" +

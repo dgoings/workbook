@@ -108,9 +108,11 @@ a112b0c1b8059dfafa88aefc65ad45d447da7426 commit	refs/workbook/relics/WB-R-01M87F
 ```
 
 The ref points to a commit, and a relic's history is a chain of them. The
-commit that creates the relic has no parent, every later commit has exactly
-one, and a relic commit is never a merge. No command changes a relic commit,
-and deleting a relic is a tombstone operation that leaves the ref in place.
+chain's first commit has no parent: it creates the relic or, once the relic is
+[compacted](#compacted-relics), is its checkpoint. Every later commit has exactly
+one parent, and a relic commit is never a merge. No command changes a relic
+commit, and deleting a relic is a tombstone operation that leaves the ref in
+place.
 
 Every commit's tree holds the operations the commit records and the whole
 relic as they leave it:
@@ -227,7 +229,7 @@ type takes:
 | --- | --- |
 | `relic.create` | `relic`: `title`, `type`, `schema` when the relic names a [schema version](#relic-schemas), `createdAt` |
 | `title.set` | `title` |
-| `relic.tombstone`, `relic.restore` | none |
+| `relic.tombstone`, `relic.restore`, `relic.retire`, `relic.unretire` | none |
 | `property.set` | `name`, `value` |
 | `property.clear` | `name` |
 | `part.add` | `partType`, `position`, and `body` when the part is added with one: `format` when it has a label, then `bytes`. The operation's `id` is the new part's ID. |
@@ -239,6 +241,7 @@ type takes:
 | `link.add` | `link`: `from` when the link is from a part, `to` (`{"task": "<task-id>"}`, or `{"relic": "<relic-id>"}` with `part` after `relic` for a link to a part), then `rel`, then `seen` for a link to a relic, then `pointer` when there is one. The operation's `id` is the new link's ID. |
 | `link.remove` | `linkId`, the ID of the link it removes |
 | `relic.migrate` | `relicType`, then `schema`, the version the relic moves to, left out when it becomes open |
+| `history.checkpoint` | `checkpoint`: `runId`, `compactedFrom`, `previousGeneration`, `boundary`, `since`, `compactedCommits`, `firstWallTime`, `lastWallTime`, `compactedOperations` |
 
 An operation that carries any other member, lacks one of its own, or writes
 them in another order is `corrupt-data`. A `value` is a JSON value in
@@ -309,7 +312,21 @@ part's first body, which is why it equals the part's ID above, and the
 `updatedAt` is the `wallTime` of this one. `schema` is `null` for a relic that
 names no [schema version](#relic-schemas), and otherwise the version's ID, a
 string; `relic.create` sets it and `relic.migrate` sets it with `type`.
-`retired` is always `false` and `history.compactedFrom` is always `null`.
+`retired` is `true` after a `relic.retire` and `false` again after a
+`relic.unretire`. `history.compactedFrom` is `null` until the relic is
+[compacted](#compacted-relics).
+
+Compaction adds two members, each written only when present, so a state without
+them keeps the bytes it had before they existed:
+
+- `relic.compacted`, after `deleted`: `{"runId", "at", "boundary", "since"}`,
+  the run, when it wrote the checkpoint, `retired` or `deleted`, and when the
+  relic last became retired or deleted, by boundary. Every state after a
+  checkpoint carries it, and it is present exactly when `history.compactedFrom`
+  is.
+- `dropped`, after `removed` on a part: `{"removedAt", "droppedAt"}`. It marks a
+  **stub**, a removed part with no `body` whose content a checkpoint dropped.
+  A stub exists only in a compacted relic.
 
 `links.json` holds the relic's live links, ordered by ID, and is these 57
 bytes in every commit of a relic that has none:
@@ -413,12 +430,17 @@ pass the 2,000-link limit are kept with `relic-over-limit`.
 {"format":"workbook.relic-part-fields","version":1,"fields":{"accepted":true,"heading":"Keep a backup bundle"}}
 ```
 
-**Generation 6.** Every relic operation type declares writer-format generation
-6, so every relic pack and state carries `"minReader": 6`; see
-[Mixed Workbook versions](#mixed-workbook-versions). A relic pack or state
-that declares less is `corrupt-data`. One that declares more was written by a
-newer Workbook: it is read as far as it can be, shown, and neither changed nor
-judged by the rules below.
+**Generations.** A relic pack declares what its operations need, the largest
+writer-format generation among them: `relic.retire`, `relic.unretire` and
+`history.checkpoint` need generation 7, and the operation types of the first
+relic stories need 6; see [Mixed Workbook versions](#mixed-workbook-versions).
+A state declares the larger of its parent's and its pack's, so every state after
+a retirement or a checkpoint stays at 7 or higher, an `unretire` included. A
+relic pack that declares less than its operations need, or a state that is
+retired or compacted and declares less than 7, is `corrupt-data`. One that
+declares a generation above what this build folds was written by a newer
+Workbook: it is read as far as it can be, shown, and neither changed nor judged
+by the rules below.
 
 Links to relics and pointers added members at generation 6 without raising it,
 because no release that reads relics has shipped; releases from before relics
@@ -432,15 +454,18 @@ document that holds only task links without pointers is byte for byte what such
 a build writes.
 
 **The fold.** `state.json` is what folding the commit's operations onto its
-parent's state computes. Some operations fold to no change and stay in the
+parent's state computes. A checkpoint is the exception: it carries no content,
+and is judged by the [checkpoint's own rules](#compacted-relics). Some operations fold to no change and stay in the
 history: a `part.body.set` whose `base` is not the part's current body
-version, an operation that names a part the relic does not have, removing a
-removed part, restoring a live one, and clearing a name that is not set.
+version, an operation that names a part the relic does not have or a stub,
+removing a removed part, restoring a live one, retiring a retired relic,
+unretiring one that is not, and clearing a name that is not set.
 Deletion is stricter, as it is for tasks: `relic.restore` needs a deleted
 relic and comes first in its pack, and any other operation on a deleted relic
 is `corrupt-data`. The commands are stricter than the fold. `relic update`
 refuses a body save from a stale base instead of recording one the fold would
-ignore.
+ignore, and refuses a change to a stub, other than removing it again, which
+records nothing.
 
 **An operation ID is used once in a relic's history.** A part's ID is the ID
 of the `part.add` that made it, and a body's version is the ID of the
@@ -459,7 +484,8 @@ commit (none for the first) and its stored state and links:
 2. The tree holds `operation.json`, `state.json` and `links.json` as regular
    blobs, the tree `parts` exactly when the state lists a part, and nothing
    else. The first commit has no parent and its pack opens with
-   `relic.create`; every other commit has exactly one parent.
+   `relic.create` or, for a compacted relic, is one `history.checkpoint`; every
+   other commit has exactly one parent.
 3. `parts/` holds one subtree for each part the state lists, named by part ID.
    Each holds `fields.json`, `body` exactly when the state records a body, and
    nothing else.
@@ -477,6 +503,12 @@ commit (none for the first) and its stored state and links:
    adds, it is a canonical fields document that agrees with any field
    operations P carries for it.
 
+A stub's subtree never changes after its checkpoint, named by the pack or not,
+so a commit after the checkpoint holds the stub to its parent's subtree and
+applies none of P's field operations to it. A checkpoint commit has no parent to
+follow from, so rules 1, 5, 6 and 7 give way to the
+[checkpoint's own rules](#compacted-relics).
+
 Rules 1 to 6 are judged from object IDs and sizes: the `parts` tree and each
 part's subtree are read, but no `fields.json` or `body` blob is opened. The
 exception is the limit on one field value, which takes reading the
@@ -493,16 +525,18 @@ checks one when a relic is read, so a relic over a total still reads. See
 - A **write** computes the state by folding and refuses to store a record
   that is not the fold's. A part the pack does not name keeps its subtree
   object, so a commit stores only what it changed.
-- **`relic show`, `export`, `update`, `migrate`, `delete` and `restore`** check the
+- **`relic show`, `export`, `update`, `migrate`, `delete`, `restore`, `retire`
+  and `unretire`** check the
   relic's newest commit against its parent by rules 1 to 6 and the case of
   rule 7 that needs no read, and check the limit on one field value for the
   parts whose fields they read.
 - **`relic list`** reads each relic's newest commit alone: rule 2, and that
   the three documents are the bytes this build writes.
 - **`workbook validate`** checks every commit of every relic, first to
-  newest, by all seven rules, and caches nothing. It also refuses a relic in
-  which one operation ID is recorded by two commits of that relic's own
-  history. It compares nothing across relics.
+  newest, by all seven rules (a checkpoint by its own), and caches nothing. It
+  also refuses a relic in which one operation ID is recorded by two commits of
+  that relic's own history, or by a later commit and the checkpoint's list. It
+  compares nothing across relics.
 
 **Writes are compare-and-swap.** Nothing is visible until the ref moves, and
 the ref moves only if it still points at the commit the change started from.
@@ -535,9 +569,10 @@ a112b0c1b8059dfafa88aefc65ad45d447da7426 commit	refs/workbook/remotes/origin/rel
 ```
 
 Relic refs go out in a `git push` of their own, after the task push and only
-when a relic changed. It is never forced and never deletes a ref, so a remote
-that holds newer commits refuses it, and the next fetch replays this clone's
-commits onto them. Relic refs move in their own transaction after the task
+when a relic changed. It deletes no ref and forces none unconditionally, so a
+remote that holds newer commits refuses it, and the next fetch replays this
+clone's commits onto them. The one ref it may move other than forward is a
+[compacted relic's](#compacted-relics), under a lease. Relic refs move in their own transaction after the task
 refs, so a relic can never roll back a task; a sync stopped between the two
 leaves the relics one sync behind, which the next sync repairs.
 
@@ -576,6 +611,7 @@ single path component. The tracking refs of a remote this checkout no longer
 fetches relics from are not packed.
 
 The runs that can move one are a relic command that changes a relic, `workbook
+compact --relics`, `workbook
 fetch`, `sync` (one run, and each round of `sync --watch` or the board's
 loop), `setup` and `move-tasks`; `push` moves no relic ref in the checkout and
 packs nothing. A run that moved no relic ref starts no Git process for it, and
@@ -623,8 +659,9 @@ combine field changes both sides made to one part.
 
 **Replay.** A relic changed on both sides is replayed: each local commit the
 fetched history does not hold is written again, oldest first, on top of the
-fetched tip, with the same operation IDs, actor and wall time and a new
-logical clock, and with the blob IDs of the bodies and fields it saved. A
+fetched tip, with the same operation IDs, actor and wall time, a new logical
+clock and the fetched tip's history generation, and with the blob IDs of the
+bodies and fields it saved. A
 commit whose operations the fetched history already holds is skipped, so an
 operation lands once. Bob's property change, replayed onto alice's:
 
@@ -638,7 +675,8 @@ The fold ignores a `part.body.set` whose `base` is not the part's current
 version, so replay decides before it writes. A body save over a version that
 is no longer current stops the replay, unless it saved the same blob with the
 same label as the body that stands, and so does any change to a relic the
-fetched history has deleted. Counts and totals never stop it: two changes that
+fetched history has deleted, and any change but a removal that names a part the
+fetched history shows as a stub. Counts and totals never stop it: two changes that
 each fit may pass one together, and the replay keeps both and warns. When a
 replay stops, the relic's ref moves to the fetched tip plus what replayed
 before the stop, and the old local tip is parked under
@@ -698,6 +736,123 @@ no index table. The two versions a diff compares are read from Git by commit, an
 only the part objects whose IDs differ between them are opened, so equal
 `fields.json` or `body` object IDs cost no read. A line diff is computed on each
 run and bounded; see [History and diffs](reference.md#history-and-diffs).
+
+#### Compacted relics
+
+`workbook compact --relics`, run by hand, replaces the history of a retired or
+deleted relic with one parentless checkpoint commit. The command, its output and
+what a person sees are in
+[the reference](reference.md#compacting-relics). A retired relic with one
+removed part B:
+
+```text
+before                                   after
+refs/workbook/relics/WB-R-01M…           refs/workbook/relics/WB-R-01M…
+ └── C3 relic.retire                      └── K  history.checkpoint   (history generation G2, no parent)
+      └── C2 part.remove B                     operation.json: compactedFrom = C3,
+           └── C1 relic.create …                 compactedOperations = those of C1, C2, C3
+                (history generation G1)        state.json: history.compactedFrom = C3,
+                                                 relic.compacted.boundary = retired, B has dropped
+                                               links.json: the tip's links
+                                               parts/A/   the same subtree object as C3's
+                                               parts/B/   fields.json = {…,"fields":{}}, no body
+
+                                         C3 ── C2 ── C1   unchanged, reached by no ref,
+                                                          saved first in
+                                                          <git-common-dir>/workbook-archive/<run-id>.bundle
+```
+
+The empty fields document of a stub is, as stored,
+`{"format":"workbook.relic-part-fields","version":1,"fields":{}}`. No commit is
+changed or deleted. The checkpoint's logical clock is the old tip's plus one,
+and its `updatedAt` is the old tip's, because nothing in the relic changed.
+
+**The checkpoint pack carries no content.** Its one operation holds a summary:
+the run, the tip it replaced, the generation it replaced, the boundary, `since`,
+how many commits it replaced and the first and last of their wall times, and
+every replaced operation ID, sorted and unique. A second compaction lists the
+first run's operations, the first checkpoint's ID and the new changes. The
+state, links and part subtrees beside it are what the checkpoint kept, so no
+stored object grows with the relic's content; the one that grows with its
+history, the pack, must fit the 4 MiB object limit, or the relic is not
+compacted. At the `retired` boundary removed parts become stubs. At the
+`deleted` boundary every part does and `properties` is empty. A part ID never
+leaves the state, so a link to it, or from it, always resolves. An earlier stub
+keeps its dates.
+
+**Checkpoint root rules.** A checkpoint cannot be checked by folding from
+nothing, so these take the place of rules 1, 5, 6 and 7 above:
+
+| Rule | A valid checkpoint commit |
+| --- | --- |
+| R1 | its pack is one `history.checkpoint` at generation 7, and its state is at 7 or more, keeping the watermark of the tip it replaced |
+| R2 | its state is in the pack's generation, which is not the one replaced; names the replaced tip in `history.compactedFrom`; and has the pack's clock |
+| R3 | `relic.compacted` is the pack's run and wall time and the summary's boundary and `since` |
+| R4 | the boundary agrees with the relic: a `retired` one is retired, not deleted, and every removed part is a stub; a `deleted` one is deleted, has no properties, and every part is a stub |
+| R5 | every stub is removed, has no body and has both dates; the list of replaced operations is sorted, unique, made of ULIDs and does not hold the checkpoint's own ID. The dates are not compared with the pack's wall time, which is display metadata |
+| R6 | the links are valid against the state |
+| R7 | each stub's subtree holds the empty `fields.json` alone, judged by object ID, and every other part's `fields.json` is a canonical fields document (a deep check, as `workbook validate` makes) |
+
+A checkpoint with a parent is `corrupt-data`. The checkpoint's own clock and
+`updatedAt` are not checked against the replaced tip, which a reader may not
+have.
+
+**The run.** The run writes and verifies a backup bundle of every selected
+relic's old tip, under `refs/workbook/relics/<relic-id>` with the
+`workbook.archive-manifest` manifest listing them in `relics`, before it moves a
+relic ref. Then, relic by relic, it writes the checkpoint, moves the ref to it
+with a compare-and-swap on the tip it read, and expires the ref's reflog.
+Parked relic tips are never deleted; a relic that has one is not compacted. A
+task compaction's manifest is unchanged, since `relics` is left out when empty.
+
+**Publishing is leased.** The push names the ref in a plain refspec with
+`--force-with-lease=refs/workbook/relics/<relic-id>:<tracking tip>`, offered only
+when the local chain starts at a checkpoint, the tracking tip is in another
+generation, and every operation on the tracking tip's chain is in the
+checkpoint's list or on the local chain. A remote that has moved refuses it
+without changing anything. After the remote accepts it the clone moves its
+tracking ref from the leased tip to the checkpoint, writing no reflog entry,
+which is best effort. Reading what the lease needs costs a push one extra batch
+of documents for the relics whose ref and tracking ref differ.
+
+**Fetch adopts or drops.** Two tips of one relic in different history
+generations share no commit, so the replay above cannot find its base by
+ancestry. What ties them is the checkpoint's list. The first rule that applies
+settles the pair:
+
+1. The local chain is rooted at a checkpoint that accounts for every operation
+   on the fetched chain: nothing moves, and the push publishes it with a lease.
+2. The fetched chain is rooted at a checkpoint (**adoption**): local commits the
+   checkpoint's list or the fetched chain holds are dropped, and the rest, from
+   the first one it lacks, are replayed onto the fetched tip. With none left, the
+   ref moves to the fetched tip. The reflog is expired, best effort; parked tips
+   are kept; no bundle is written. Two clones that compacted one relic converge
+   on the remote's checkpoint.
+3. The local chain is rooted at a checkpoint the remote never received, and the
+   fetched tip descends from the tip it replaced (a **dropped compaction**): the
+   local commits above the checkpoint are replayed onto the fetched tip, the
+   checkpoint is left unreachable, and the run warns
+   `relic-compaction-dropped`. The remote's chain reaches `compactedFrom`, so it
+   holds every operation the checkpoint listed.
+4. Otherwise the relic is reported `invalid`, `cannot combine`, and neither
+   moved nor pushed.
+
+The remote's side of a dropped compaction:
+
+```text
+remote   C1 ── C2 ── C3 ── O1          O1 changed the relic after C3
+local    K ── L1                        K compacted C3; neither K nor L1 published
+after    C1 ── C2 ── C3 ── O1 ── L1'    K is left unreachable
+```
+
+**Moving the tasks.** `move-tasks` counts every operation a checkpoint lists as
+held by the side that has the checkpoint. A move back onto an older copy of a
+compacted relic pushes the checkpoint over it with the same lease, and writes
+that copy into the move's bundle, under the relic tracking name, before the push,
+unless `--no-backup`. A copy with a change the checkpoint does not account for
+meets rule 4 and stops the move while it copies, before anything is marked.
+
+**Reset** treats a compacted relic ref as any relic ref.
 
 ### Relic schemas
 
@@ -1091,15 +1246,17 @@ than per release:
 | 3 | `priority.add`, `priority.rename`, `priority.relabel`, `priority.remove`, `priority.reorder`, `priority.tag`, `priority.untag`, `priority.recolor`, `key.add`, `key.current`, `key.retire` |
 | 4 | `history.checkpoint` |
 | 5 | `field.set` of `due`, and a `task.create` or `history.checkpoint` whose task carries a due date |
-| 6 | `schema.put`, and every relic operation: `relic.migrate`, `relic.create`, `title.set`, `relic.tombstone`, `relic.restore`, `property.set`, `property.clear`, `part.add`, `part.field.set`, `part.field.clear`, `part.body.set`, `part.move`, `part.remove`, `part.restore`, `link.add`, `link.remove` |
+| 6 | `schema.put`, and these relic operations: `relic.migrate`, `relic.create`, `title.set`, `relic.tombstone`, `relic.restore`, `property.set`, `property.clear`, `part.add`, `part.field.set`, `part.field.clear`, `part.body.set`, `part.move`, `part.remove`, `part.restore`, `link.add`, `link.remove` |
+| 7 | the relic operations `relic.retire`, `relic.unretire` and `history.checkpoint` |
 
 Generation 5 is the one row decided by an operation's payload rather than its
 type: a `field.set` of any other field is still generation 0, and so is a create
 with no due date. See [Due dates](#due-dates) for why.
 
-Generation 6 belongs to relics and their schemas. It marks no task pack, so a
-task history is written exactly as before, and every relic pack and state
-carries it. It marks a configuration pack only when the pack holds a
+Generations 6 and 7 belong to relics, and 6 to their schemas too. Neither marks
+a task pack, so a task history is written exactly as before. A relic pack carries
+the generation its operations need, and a state the larger of its parent's and
+its pack's. It marks a configuration pack only when the pack holds a
 `schema.put`, or is a genesis that carries a `schemas` section; a configuration
 history with no schema is written exactly as before. See
 [Relic refs](#relic-refs) and [Relic schemas](#relic-schemas).
@@ -1125,6 +1282,12 @@ nothing moved when there is. The watcher's status document moved to version 2
 with relic sharing, and a command does not hand a change to a watcher serving
 another version, so a version 1 watcher, which would not push a relic, is
 bypassed and the command synchronizes inline.
+
+A build from before retiring and compaction, which folds generation 6, reads a
+retired or compacted relic from its stored state, refuses to change it as
+`newer-writer`, and never pushes over it; a relic it already held on the old
+history is left there and reported `needs-upgrade`. A release from before relics
+sees no relic at all.
 
 Generation 0 is every operation type Workbook shipped before assignments, and it
 is the only generation that writes no marker. So a create, a field change, a
@@ -1310,8 +1473,10 @@ checkpoint holding one declares generation 5.
 
 Every commit on a task's ref carries a full `state.json`, so a task's history
 only grows, and every attachment ever added stays in it. `workbook compact`
-lets a team drop the step-by-step history of Done and Deleted tasks when it
-decides to. Workbook never compacts on its own. The command, its flags and its
+lets a team drop the step-by-step history of Done and Deleted tasks, and with
+`--relics`, retired and deleted relics, under the same safeguards, when it
+decides to. Workbook never compacts on its own. The rest of this section is about
+tasks; relics are under [Compacted relics](#compacted-relics). The command, its flags and its
 output are in [reference.md](reference.md#task-archive-compaction); this
 section covers what it does to the storage model.
 
@@ -1584,6 +1749,10 @@ holds. What each pair of concurrent changes gives:
 | A deletion that syncs second, over an edit | deleted, holding the edit, no report | no |
 | Two body saves over the same version, to different bytes | the first syncer's body; the second's tip parked | yes, `body` |
 | An edit that syncs second, over a deletion | deleted; the edit's tip parked | yes, `tombstone` |
+| A retirement and an edit, either order | both applied | no |
+| A retirement and an unretirement | the second syncer's mark | no |
+| A change to a part a compaction made a stub, other than removing it | the checkpoint; the change's tip parked | yes, `dropped` |
+| A body save from a version that is no longer current, a version a compaction dropped among them | the current body; the save's tip parked | yes, `body` |
 
 The replay decides before it writes: the fold ignores a `part.body.set` whose
 `base` is not the part's current version, so the replay checks every body save
@@ -1603,8 +1772,9 @@ nothing further; a change that did not apply is kept in a parked tip until a
 reset bundles and removes it. The deletion that syncs second is the one case
 where a clone's intent is applied with no report: the edit it overrides stays
 in the relic's history, and `relic restore` brings it back. Parked relic tips
-are never pushed and never retired: unlike a parked task tip, nothing judges
-one settled yet, so each stays until a reset bundles and removes it.
+are never pushed and never removed automatically: unlike a parked task tip,
+nothing judges one settled yet, so each stays until a reset bundles and removes
+it. A compaction skips a relic that has one.
 
 Workbook does not rely on Git hooks for correctness. The optional managed
 pre-push hook publishes task refs as a convenience, but fresh clones, alternate
@@ -1718,9 +1888,9 @@ or write.
 
 | Table | One row per | Holds |
 | --- | --- | --- |
-| `relics` | relic | the head commit it was read from, title, type, `schema` (the version ID, or `''`), `conformance` and `schema_problem`, author, times, deleted, and `part_count` and `link_count`, the number of part and link rows it must have |
+| `relics` | relic | the head commit it was read from, title, type, `schema` (the version ID, or `''`), `conformance` and `schema_problem`, author, times, retired, deleted, `compacted_run`, `compacted_at`, `compacted_boundary` and `compacted_since` (all `NULL` for a relic never compacted), and `part_count` and `link_count`, the number of part and link rows it must have |
 | `relic_properties` | property | the name and the stored JSON value |
-| `relic_parts` | part | order, type, position, removed, the `fields.json` object ID and bytes, and the body's format, version, size and `body_object` |
+| `relic_parts` | part | order, type, position, removed, the `fields.json` object ID and bytes, the body's format, version, size and `body_object`, and `dropped_removed_at` and `dropped_at` (both `NULL` unless the part is a stub) |
 | `relic_operations` | recorded operation | commit, place in the chain, operation ID, actor, wall time, type, the part it names and its payload |
 | `relic_links` | live link | the link ID, the part it is from or `''`, the target as `to_kind` (`task` or `relic`), `to_id` (the task or relic) and `to_part` (the part, or `''`), `rel`, and `seen` and `pointer`, each `''` when the link has none (a pointer as its canonical text) |
 
@@ -1756,7 +1926,10 @@ rows end at. One transaction then writes the changed relics, each with a
 compare-and-swap on the head its row had when the pass began. A row another
 writer moved meanwhile is left as that writer left it, and the read answers
 that relic from the pass's own Git read, as the third line of the table above
-does for a task. A row whose ref is gone is deleted.
+does for a task. A row whose ref is gone is deleted. A head that does not
+descend from the one the rows end at, a checkpoint among them, has its operation
+rows replaced by the whole new chain. `workbook compact --relics` runs one such
+pass (`RefreshRelics`) after it has moved refs.
 
 A relic the index cannot hold, damaged or written by a newer Workbook, gets
 no row, and any row it had is deleted, so a verdict is never cached. Such a
@@ -1793,9 +1966,10 @@ WB-R-01M8FNC4Y9ZSCQ6E309E1H65GQ|01M8FNC6ZRCDBFDN2Y8MMKD43C|01M8FNC5BNK2SV4A47G38
 WB-R-01M8FNC4Y9ZSCQ6E309E1H65GQ|01M8FNC7256KH6HRKR57JKYA3D|01M8FNC5BNK2SV4A47G38AB5Y2|relic|WB-R-01M8FNC5V9NMQTZ105DPV173BC|01M8FNC69QHEMTG2FA0F80KBKR|changes|01M8FNC69QHEMTG2FA0F80KBKR|
 ```
 
-The cache, with the relic tables and `relic_links`, is schema version 12; a
+The cache, with the relic tables and `relic_links`, is schema version 13; a
 cache of another version is replaced by the first command this build runs, and
-an older build replaces a version 12 cache the same way.
+an older build replaces a version 13 cache the same way. Version 13 added the
+compaction and stub columns above.
 A relic the index cannot hold is reported by a reverse lookup as unread, with
 a `relic-links-unread` warning, rather than read from Git, so the lookup stays
 one query and a damaged relic's links stay out of sight from the task until it
@@ -1840,7 +2014,8 @@ including when there are no rows at all. So a missing, damaged or unusable index
 changes how long the command takes and not what it answers. Equal
 answers are guaranteed; the speed of the index path is best effort. The two
 versions a diff compares are always read from Git. No table is kept for this
-alone.
+alone. The history of a compacted relic also reads its checkpoint's state from
+Git, which says what the changes above it start from.
 
 The cache can be deleted at any time and rebuilt entirely from Workbook refs.
 Semantic validation results live in a separate `validation.sqlite` beside it, so

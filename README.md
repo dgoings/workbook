@@ -175,6 +175,13 @@ names; `workbook relic migrate <relic> --to <target>` moves it to another, and
 `workbook relic list --behind` finds those behind. A schema guides honest tools
 and is not a security boundary; see
 [Relic schemas](docs/reference.md#relic-schemas).
+`workbook relic retire <relic>` takes a relic that is no longer in use out of
+`relic list`, and `workbook relic unretire` brings it back; see
+[Retiring a relic](docs/reference.md#retiring-a-relic).
+`workbook compact --relics`, run by hand, replaces the history of retired and
+deleted relics with one checkpoint each, after saving it to a backup bundle,
+and keeps every link into them resolving; see
+[Compacting relics](docs/reference.md#compacting-relics).
 Relics are not on the board. Upgrade every Workbook on a machine before
 creating relics there,
 because a `workbook reset` run by a Workbook from before relics can lose a
@@ -279,12 +286,13 @@ Workbook separates its data model, transport, and query engine:
 - **Operation model** — task history is a chain of immutable, append-only
   operations with tip checkpoints; deletes are tombstones, and history is
   inspectable and mergeable. `workbook compact`, run by hand, replaces the
-  history of Done and Deleted tasks with one new checkpoint commit each, after
-  saving the old history to a local backup bundle; it changes no existing
-  commit. `workbook reset`, also run by hand, removes Workbook's refs and
-  caches from one checkout, or its refs from one remote, after saving them to a
-  bundle: to start a checkout over, to clear the copies a move left behind, or
-  to [leave Workbook](docs/reference.md#leaving-workbook).
+  history of Done and Deleted tasks, or with `--relics` of retired and deleted
+  relics, with one new checkpoint commit each, after saving the old history to a
+  local backup bundle; it changes no existing commit. `workbook reset`, also
+  run by hand, removes Workbook's refs and caches from one checkout, or its refs
+  from one remote, after saving them to a bundle: to start a checkout over, to
+  clear the copies a move left behind, or to
+  [leave Workbook](docs/reference.md#leaving-workbook).
 - **Git storage** — operations live in tool-private refs under
   `refs/workbook/`, synchronized explicitly and only with `origin`. Task state
   never touches the checked-out code branch.

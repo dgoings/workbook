@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dgoings/workbook/internal/compaction"
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
@@ -858,7 +859,7 @@ func TestDocsDocumentRelicLinks(t *testing.T) {
 	for _, required := range []string{
 		"--link <task|relic[#part]>", "--pointer <json object>", "--linked-to <task|relic[#part]>",
 		"`seen`", "`pointer`", "`targetState`", "`targetRemoved`",
-		"`deleted`", "`removed`", "`missing`", "`retired`", "reserved",
+		"`deleted`", "`removed`", "`missing`", "`retired`", "(removed on <date>)",
 		"`linkedFrom`", "`toPart`", "`fromType`", "`linkedBy`", "512 bytes",
 		"workbook relic diff <target> <seen>", "(not in this clone)",
 		"a link cannot point at what it starts from", "is in another project",
@@ -881,7 +882,7 @@ func TestDocsDocumentRelicLinks(t *testing.T) {
 		}
 	}
 	projection := docSection(architecture, "## SQLite projection")
-	for _, required := range []string{"`seen`", "`pointer`", "schema version 12", "one query"} {
+	for _, required := range []string{"`seen`", "`pointer`", "schema version 13", "one query"} {
 		if !strings.Contains(projection, required) {
 			t.Errorf("the architecture's SQLite projection section is missing %q", required)
 		}
@@ -912,6 +913,98 @@ func TestDocsDocumentRelicLinks(t *testing.T) {
 				t.Errorf("%s still says %q", name, stale)
 			}
 		}
+	}
+}
+
+// Retiring and compacting relics add commands, flags, stored members, warning
+// codes and refusals a reader meets, so the documents are held to the names
+// the code uses.
+func TestDocsDocumentRelicRetirementAndCompaction(t *testing.T) {
+	t.Parallel()
+	document := repositoryDoc(t, "docs", "reference.md")
+	relics := docSection(document, "## Relics")
+	retiring := docSection(document, "### Retiring a relic")
+	compacting := docSection(document, "### Compacting relics")
+	after := docSection(document, "#### After a compaction")
+	require := func(name, section string, required ...string) {
+		t.Helper()
+		if section == "" {
+			t.Fatalf("%s is missing", name)
+		}
+		for _, text := range required {
+			if !strings.Contains(section, text) {
+				t.Errorf("%s is missing %q", name, text)
+			}
+		}
+	}
+	// member is the quoted JSON name the struct gives a field.
+	member := func(value any, field string) string {
+		t.Helper()
+		found, ok := reflect.TypeOf(value).FieldByName(field)
+		if !ok {
+			t.Fatalf("%T has no field %s", value, field)
+		}
+		name, _, _ := strings.Cut(found.Tag.Get("json"), ",")
+		return "`" + name + "`"
+	}
+
+	require(`the reference's "### Retiring a relic"`, retiring,
+		"workbook relic retire <relic>", "workbook relic unretire <relic>", "`--retired`", "`--all`",
+		"`"+string(core.RelicOperationRetire)+"`", "`"+string(core.RelicOperationUnretire)+"`",
+		"Retired is a mark, not a lock.", "No change: <relic-id>")
+	require(`the reference's "### Compacting relics"`, compacting,
+		"workbook compact --relics", "--retired-only", "--deleted-only", "--dry-run", "--no-backup", "--no-sync",
+		"`"+core.WarningRelicContentDropped+"`", "`"+core.WarningRelicCompactionDropped+"`",
+		"--relics cannot be combined with --since, --done-only, --keep-attachments or --adopt",
+		"--retired-only requires --relics", "--retired-only and --deleted-only cannot be combined",
+		compaction.ReasonAlreadyCompacted, compaction.ReasonNotPushed, compaction.ReasonRelicConflictParked,
+		compaction.ReasonNewerWriter, compaction.ReasonUnreadable, compaction.ReasonChanged,
+		compaction.ReasonTooManyChanges, compactRelicNotice,
+		"--force-with-lease=refs/workbook/relics/<relic-id>:<expected>", "`compaction-published`",
+		"`sync.pushed`", "no `sync.pushRelic`", "A rerun does not publish", "cannot combine",
+		member(compactRelicsSummary{}, "DryRun"), member(compactRelicsSummary{}, "Skipped"),
+		member(compactedRelic{}, "DroppedParts"), member(compactedRelic{}, "DroppedBytes"),
+		member(core.RelicPartDrop{}, "RemovedAt"), member(core.RelicPartDrop{}, "DroppedAt"))
+	require(`the reference's "#### After a compaction"`, after,
+		member(core.RelicHistory{}, "Compacted"), member(core.RelicDiff{}, "Compacted"),
+		"`compacted: true`", member(core.RelicHistoryCompaction{}, "RunID"),
+		member(core.RelicHistoryCompaction{}, "Boundary"), "was dropped when it was compacted on",
+		"has no change to part <part-id> since it was compacted on", "The kept body version cannot be diffed.",
+		"`not-found` (exit `4`)")
+	require("the reference's relic section", relics,
+		member(core.RelicSummary{}, "Compacted"), "`parts[].dropped`", "`retired: true`",
+		"`"+string(core.RelicConflictDropped)+"`", "(removed on <date>)", "`compaction-published`",
+		"`relic retire`")
+	for _, stale := range []string{"There is no retiring", "| `retired` | Always `false`. |", "`retired` is reserved"} {
+		if strings.Contains(relics, stale) {
+			t.Errorf("the reference's relic section still says %q", stale)
+		}
+	}
+
+	architecture := repositoryDoc(t, "docs", "architecture.md")
+	require(`the architecture's "#### Compacted relics"`, docSection(architecture, "#### Compacted relics"),
+		"`"+string(core.RelicOperationCheckpoint)+"`", "R1", "R7", "--force-with-lease=refs/workbook/relics/<relic-id>:",
+		"`"+core.WarningRelicCompactionDropped+"`", "compactedFrom", "move-tasks")
+	refs := docSection(architecture, "### Relic refs")
+	var summary []string
+	checkpoint := reflect.TypeOf(core.RelicCheckpointData{})
+	for index := 0; index < checkpoint.NumField(); index++ {
+		name, _, _ := strings.Cut(checkpoint.Field(index).Tag.Get("json"), ",")
+		summary = append(summary, "`"+name+"`")
+	}
+	require("the architecture's relic section", refs,
+		"`checkpoint`: "+strings.Join(summary, ", "), "`relic.compacted`", "`dropped`",
+		"`relic.retire`, `relic.unretire`", "generation 7")
+	require(`the architecture's "## SQLite projection"`, docSection(architecture, "## SQLite projection"),
+		"`compacted_run`", "`compacted_at`", "`compacted_boundary`", "`compacted_since`",
+		"`dropped_removed_at`", "`dropped_at`", "`RefreshRelics`")
+
+	for name, text := range map[string]string{
+		"README.md":    repositoryDoc(t, "README.md"),
+		"CHANGELOG.md": repositoryDoc(t, "CHANGELOG.md"),
+		"AGENTS.md":    repositoryDoc(t, "AGENTS.md"),
+	} {
+		require(name, strings.Join(strings.Fields(text), " "), "compact --relics")
 	}
 }
 
@@ -978,7 +1071,7 @@ func TestDocsDocumentRelicSchemas(t *testing.T) {
 
 	architecture := strings.Join(strings.Fields(repositoryDoc(t, "docs", "architecture.md")), " ")
 	for _, required := range []string{
-		"schema.put", "relic-schema-", "relic.migrate", "schema version 12", "workbook.relic-schema",
+		"schema.put", "relic-schema-", "relic.migrate", "schema version 13", "workbook.relic-schema",
 		"relic-schema-renumbered",
 	} {
 		if !strings.Contains(architecture, required) {
