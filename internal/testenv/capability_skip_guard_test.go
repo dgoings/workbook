@@ -59,9 +59,16 @@ type bareSkipException struct {
 }
 
 // bareSkipExceptions is the complete list of functions allowed to pair an
-// exec.LookPath probe with a bare skip. It is empty: every capability probe in
-// this repository reports through MissingCapability.
-var bareSkipExceptions []bareSkipException
+// exec.LookPath probe with a bare skip. Every capability probe in this
+// repository reports through MissingCapability; the one function here also
+// skips for a reason no tool can supply.
+var bareSkipExceptions = []bareSkipException{{
+	File:     "internal/cli/relic_compat_test.go",
+	Function: "preMergeBinary",
+	Reason: "its bare skip says the full Git history holds no build of the generation before merged relic bodies, " +
+		"which installing a tool cannot change; missing git or tar, an unreadable history and a shallow checkout " +
+		"all report through MissingCapability",
+}}
 
 // Mutation witness: without this test a contributor can reintroduce the
 // pattern the capability marker replaced -- exec.LookPath followed by t.Skip --

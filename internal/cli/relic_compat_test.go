@@ -122,8 +122,11 @@ func TestReleasedV061IgnoresRelicsOnOrigin(t *testing.T) {
 var supportedGeneration = regexp.MustCompile(`(?m)^const SupportedFormatGeneration = (\d+)$`)
 
 // preMergeBinary compiles the newest first-parent ancestor of HEAD that reads
-// no generation as high as a merged relic body's, found by what its
-// internal/core/operation.go claims rather than by a commit named here.
+// the generation just below a merged relic body's, found by what its
+// internal/core/operation.go claims rather than by a commit named here. Only
+// that generation will do: a build from further back may have no relic
+// commands at all. A history that holds no such commit, as after a squash
+// merge of the work that added both generations, skips the test.
 func preMergeBinary(t *testing.T) string {
 	t.Helper()
 	for _, tool := range []string{"git", "tar"} {
@@ -149,16 +152,19 @@ func preMergeBinary(t *testing.T) string {
 		if err != nil {
 			t.Fatalf("read the generation %s claims: %v", revision, err)
 		}
-		if generation < core.RelicMergeMinReader {
+		if generation == core.RelicMergeMinReader-1 {
 			t.Logf("building %s, which reads generation %d", revision, generation)
 			return revisionBinary(t, revision, "commit "+revision+" is not in this checkout")
+		}
+		if generation < core.RelicMergeMinReader-1 {
+			break
 		}
 	}
 	shallow, err := exec.Command("git", "-C", root, "rev-parse", "--is-shallow-repository").Output()
 	if err != nil || strings.TrimSpace(string(shallow)) != "false" {
 		testenv.MissingCapability(t, "this checkout is shallow; fetch the full history to run the older-build interop test")
 	}
-	t.Skipf("no first-parent ancestor of HEAD reads a generation below %d", core.RelicMergeMinReader)
+	t.Skipf("no first-parent ancestor of HEAD reads generation %d, the one just before merged relic bodies", core.RelicMergeMinReader-1)
 	return ""
 }
 
