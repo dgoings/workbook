@@ -1,6 +1,16 @@
 package projection
 
-// schemaVersion is bumped to 12 because a relic link now points at a relic
+// schemaVersion is bumped to 13 because a relic can now be compacted: its
+// state records the run that replaced its history with a checkpoint, and each
+// removed part whose content that run dropped keeps only its dates. relics
+// gains compacted_run, compacted_at, compacted_boundary and compacted_since,
+// all NULL for a relic never compacted, and relic_parts gains
+// dropped_removed_at and dropped_at, NULL for a part that is no stub, so a
+// snapshot read back from the index keeps both members. A version 12 cache has
+// no column for either and would serve a compacted relic as one that never
+// was, so it is discarded and Git read again.
+//
+// Version 12 was bumped because a relic link now points at a relic
 // or a part of one as well as a task, and records the version of the relic it
 // saw and an optional pointer. relic_links gains a row for every link, with
 // to_kind 'relic', to_id the relic and to_part the part or the empty
@@ -66,7 +76,7 @@ package projection
 // checkpoint and every recorded pack, where a missing column reads as
 // generation zero — a claim rather than an absence, and the one claim that must
 // never be made wrongly.
-const schemaVersion = "12"
+const schemaVersion = "13"
 
 const schema = `
 CREATE TABLE projection_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -110,7 +120,8 @@ CREATE TABLE relics (
   schema TEXT NOT NULL, author TEXT NOT NULL, retired INTEGER NOT NULL,
   deleted INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   part_count INTEGER NOT NULL, link_count INTEGER NOT NULL,
-  conformance TEXT NOT NULL, schema_problem TEXT NOT NULL
+  conformance TEXT NOT NULL, schema_problem TEXT NOT NULL,
+  compacted_run TEXT, compacted_at TEXT, compacted_boundary TEXT, compacted_since TEXT
 );
 CREATE INDEX relics_by_type ON relics (type, relic_id);
 CREATE TABLE relic_properties (
@@ -122,6 +133,7 @@ CREATE TABLE relic_parts (
   type TEXT NOT NULL, position TEXT NOT NULL, removed INTEGER NOT NULL,
   fields_object TEXT NOT NULL, fields TEXT NOT NULL,
   body_object TEXT, body_format TEXT, body_version TEXT, body_bytes INTEGER,
+  dropped_removed_at TEXT, dropped_at TEXT,
   PRIMARY KEY (relic_id, part_id)
 );
 CREATE INDEX relic_parts_by_order ON relic_parts (relic_id, ordinal);

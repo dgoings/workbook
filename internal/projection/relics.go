@@ -108,9 +108,9 @@ func (s repositorySource) ReadRelicBodies(
 // relicSchemaChecks name every column of every relic table, for
 // requiredSchemaExists.
 var relicSchemaChecks = [4]string{
-	`SELECT relic_id, head, project_id, state_version, min_reader, history_generation, compacted_from, logical_clock, title, type, schema, author, retired, deleted, created_at, updated_at, part_count, link_count, conformance, schema_problem FROM relics LIMIT 0`,
+	`SELECT relic_id, head, project_id, state_version, min_reader, history_generation, compacted_from, logical_clock, title, type, schema, author, retired, deleted, created_at, updated_at, part_count, link_count, conformance, schema_problem, compacted_run, compacted_at, compacted_boundary, compacted_since FROM relics LIMIT 0`,
 	`SELECT relic_id, name, value FROM relic_properties LIMIT 0`,
-	`SELECT relic_id, part_id, ordinal, type, position, removed, fields_object, fields, body_object, body_format, body_version, body_bytes FROM relic_parts LIMIT 0`,
+	`SELECT relic_id, part_id, ordinal, type, position, removed, fields_object, fields, body_object, body_format, body_version, body_bytes, dropped_removed_at, dropped_at FROM relic_parts LIMIT 0`,
 	`SELECT relic_id, commit_id, chain_index, pack_index, operation_id, logical_clock, history_generation, min_reader, actor, wall_time, type, part, payload FROM relic_operations LIMIT 0`,
 }
 
@@ -166,6 +166,19 @@ func (s *Store) RebuildWithRelics(ctx context.Context) (RebuildCounts, error) {
 // it indexes.
 func (s *Store) refreshRelicsActive(ctx context.Context) (relicPass, error) {
 	return s.refreshRelics(ctx, true)
+}
+
+// RefreshRelics brings the relic rows up to the relic refs with one judging
+// pass, the pass a relic read runs, and returns its error. A relic compaction
+// calls it once after its refs move: a relic whose head changed is read again
+// and its rows replaced, its operation rows from the new root when the chain
+// no longer reaches the head the rows ended at. Unlike a read, it does not
+// fall back to Git when the index cannot be used; it reports why.
+func (s *Store) RefreshRelics(ctx context.Context) error {
+	return s.withActiveDatabase(ctx, func(ctx context.Context) error {
+		_, err := s.refreshRelicsActive(ctx)
+		return err
+	})
 }
 
 // refreshRelics is refreshRelicsActive, judging only when judging is set. A
@@ -592,16 +605,16 @@ func prepareRelicWriter(ctx context.Context, transaction *sql.Tx) (*relicWriter,
 		{&writer.insertRelic, `INSERT INTO relics (
 			relic_id, head, project_id, state_version, min_reader, history_generation, compacted_from,
 			logical_clock, title, type, schema, author, retired, deleted, created_at, updated_at, part_count, link_count,
-			conformance, schema_problem
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`},
+			conformance, schema_problem, compacted_run, compacted_at, compacted_boundary, compacted_since
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`},
 		{&writer.insertLink, `INSERT INTO relic_links (
 			relic_id, link_id, from_part, to_kind, to_id, to_part, rel, seen, pointer
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`},
 		{&writer.insertProp, `INSERT INTO relic_properties (relic_id, name, value) VALUES (?, ?, ?)`},
 		{&writer.insertPart, `INSERT INTO relic_parts (
 			relic_id, part_id, ordinal, type, position, removed, fields_object, fields,
-			body_object, body_format, body_version, body_bytes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`},
+			body_object, body_format, body_version, body_bytes, dropped_removed_at, dropped_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`},
 		{&writer.insertOperation, `INSERT INTO relic_operations (
 			relic_id, commit_id, chain_index, pack_index, operation_id, logical_clock,
 			history_generation, min_reader, actor, wall_time, type, part, payload
@@ -679,11 +692,19 @@ func (w *relicWriter) writeRelic(ctx context.Context, relic gitstore.IndexedReli
 	if relic.Snapshot.Conformance != nil {
 		conformance = *relic.Snapshot.Conformance
 	}
+	// A relic never compacted has NULL in every compaction column.
+	var compactedRun, compactedAt, compactedBoundary, compactedSince sql.NullString
+	if compaction := data.Compacted; compaction != nil {
+		compactedRun = sql.NullString{String: compaction.RunID, Valid: true}
+		compactedAt = sql.NullString{String: formatTime(compaction.At), Valid: true}
+		compactedBoundary = sql.NullString{String: compaction.Boundary, Valid: true}
+		compactedSince = sql.NullString{String: formatTime(compaction.Since), Valid: true}
+	}
 	if _, err := w.insertRelic.ExecContext(ctx,
 		relicID, relic.Snapshot.Head, state.ProjectID, state.Version, state.MinReader, state.History.Generation, compactedFrom,
 		int64(state.LogicalClock), data.Title, data.Type, data.Schema, data.Author, sqlBool(data.Retired), sqlBool(data.Deleted),
 		formatTime(data.CreatedAt), formatTime(data.UpdatedAt), len(data.Parts), len(relic.Snapshot.Record.Links.Links),
-		conformance.State, conformance.Problem,
+		conformance.State, conformance.Problem, compactedRun, compactedAt, compactedBoundary, compactedSince,
 	); err != nil {
 		return cacheError("index relic", err)
 	}
@@ -718,9 +739,15 @@ func (w *relicWriter) writeRelic(ctx context.Context, relic gitstore.IndexedReli
 			bodyVersion = sql.NullString{String: part.Body.Version, Valid: true}
 			bodyBytes = sql.NullInt64{Int64: part.Body.Bytes, Valid: true}
 		}
+		// Only a stub, a removed part a checkpoint dropped, has the dates.
+		var droppedRemovedAt, droppedAt sql.NullString
+		if part.Dropped != nil {
+			droppedRemovedAt = sql.NullString{String: formatTime(part.Dropped.RemovedAt), Valid: true}
+			droppedAt = sql.NullString{String: formatTime(part.Dropped.DroppedAt), Valid: true}
+		}
 		if _, err := w.insertPart.ExecContext(ctx,
 			relicID, part.ID, ordinal, part.Type, part.Position, sqlBool(part.Removed), objects.Fields, string(relic.Fields[part.ID]),
-			bodyObject, bodyFormat, bodyVersion, bodyBytes,
+			bodyObject, bodyFormat, bodyVersion, bodyBytes, droppedRemovedAt, droppedAt,
 		); err != nil {
 			return cacheError("index relic part", err)
 		}
@@ -1138,7 +1165,8 @@ func (s *Store) queryIndexedRelics(ctx context.Context, relicID string) (map[str
 	partCounts, linkCounts := map[string]int{}, map[string]int{}
 	rows, err := transaction.QueryContext(ctx, `SELECT relic_id, head, project_id, state_version, min_reader,
 		history_generation, compacted_from, logical_clock, title, type, schema, author, retired, deleted,
-		created_at, updated_at, part_count, link_count, conformance, schema_problem FROM relics`+where, args...)
+		created_at, updated_at, part_count, link_count, conformance, schema_problem,
+		compacted_run, compacted_at, compacted_boundary, compacted_since FROM relics`+where, args...)
 	if err != nil {
 		return nil, s.databaseError("query indexed relics", err)
 	}
@@ -1174,7 +1202,7 @@ func (s *Store) queryIndexedRelics(ctx context.Context, relicID string) (map[str
 	}
 
 	parts, err := transaction.QueryContext(ctx, `SELECT relic_id, part_id, type, position, removed,
-		body_format, body_version, body_bytes FROM relic_parts`+where+` ORDER BY relic_id, ordinal`, args...)
+		body_format, body_version, body_bytes, dropped_removed_at, dropped_at FROM relic_parts`+where+` ORDER BY relic_id, ordinal`, args...)
 	if err != nil {
 		return nil, s.databaseError("query indexed relic parts", err)
 	}
@@ -1182,15 +1210,24 @@ func (s *Store) queryIndexedRelics(ctx context.Context, relicID string) (map[str
 		var id string
 		var part core.RelicPart
 		var removed int
-		var format, version sql.NullString
+		var format, version, droppedRemovedAt, droppedAt sql.NullString
 		var size sql.NullInt64
-		if err := parts.Scan(&id, &part.ID, &part.Type, &part.Position, &removed, &format, &version, &size); err != nil {
+		if err := parts.Scan(&id, &part.ID, &part.Type, &part.Position, &removed, &format, &version, &size,
+			&droppedRemovedAt, &droppedAt); err != nil {
 			parts.Close()
 			return nil, s.databaseError("read indexed relic part", err)
 		}
 		part.Removed = removed != 0
 		if version.Valid {
 			part.Body = &core.RelicBody{Format: format.String, Version: version.String, Bytes: size.Int64}
+		}
+		if droppedRemovedAt.Valid || droppedAt.Valid {
+			drop, err := scanRelicPartDrop(id, part.ID, droppedRemovedAt, droppedAt)
+			if err != nil {
+				parts.Close()
+				return nil, err
+			}
+			part.Dropped = drop
 		}
 		if snapshot, found := snapshots[id]; found {
 			snapshot.Record.State.Relic.Parts = append(snapshot.Record.State.Relic.Parts, part)
@@ -1262,13 +1299,14 @@ func scanIndexedRelic(scanner rowScanner) (core.RelicSnapshot, int, int, error) 
 	var head, schema, createdAt, updatedAt string
 	var conformance core.RelicConformance
 	var state core.RelicStateDocument
-	var compactedFrom sql.NullString
+	var compactedFrom, compactedRun, compactedAt, compactedBoundary, compactedSince sql.NullString
 	var clock int64
 	var retired, deleted, partCount, linkCount int
 	relic := &state.Relic
 	if err := scanner.Scan(&state.RelicID, &head, &state.ProjectID, &state.Version, &state.MinReader,
 		&state.History.Generation, &compactedFrom, &clock, &relic.Title, &relic.Type, &schema, &relic.Author,
-		&retired, &deleted, &createdAt, &updatedAt, &partCount, &linkCount, &conformance.State, &conformance.Problem); err != nil {
+		&retired, &deleted, &createdAt, &updatedAt, &partCount, &linkCount, &conformance.State, &conformance.Problem,
+		&compactedRun, &compactedAt, &compactedBoundary, &compactedSince); err != nil {
 		return core.RelicSnapshot{}, 0, 0, cacheError("read indexed relic", err)
 	}
 	if clock < 0 {
@@ -1288,6 +1326,13 @@ func scanIndexedRelic(scanner rowScanner) (core.RelicSnapshot, int, int, error) 
 		from := compactedFrom.String
 		state.History.CompactedFrom = &from
 	}
+	if compactedRun.Valid || compactedAt.Valid || compactedBoundary.Valid || compactedSince.Valid {
+		compaction, err := scanRelicCompaction(state.RelicID, compactedRun, compactedAt, compactedBoundary, compactedSince)
+		if err != nil {
+			return core.RelicSnapshot{}, 0, 0, err
+		}
+		relic.Compacted = compaction
+	}
 	relic.Schema = schema
 	relic.Retired, relic.Deleted = retired != 0, deleted != 0
 	relic.CreatedAt, relic.UpdatedAt = created, updated
@@ -1304,6 +1349,40 @@ func scanIndexedRelic(scanner rowScanner) (core.RelicSnapshot, int, int, error) 
 		snapshot.Conformance = &conformance
 	}
 	return snapshot, partCount, linkCount, nil
+}
+
+// scanRelicCompaction reads a relic row's compaction columns back into the
+// state's member. The writer sets all four or none, so a row with only some is
+// damaged.
+func scanRelicCompaction(relicID string, run, at, boundary, since sql.NullString) (*core.RelicCompaction, error) {
+	if !run.Valid || !at.Valid || !boundary.Valid || !since.Valid {
+		return nil, core.Errorf(core.CategoryCorruptData, "indexed relic %s has a partial compaction", relicID)
+	}
+	atTime, err := time.Parse(time.RFC3339Nano, at.String)
+	if err != nil {
+		return nil, core.Wrap(core.CategoryCorruptData, "indexed relic "+relicID+" has an invalid compaction time", err)
+	}
+	sinceTime, err := time.Parse(time.RFC3339Nano, since.String)
+	if err != nil {
+		return nil, core.Wrap(core.CategoryCorruptData, "indexed relic "+relicID+" has an invalid compaction since time", err)
+	}
+	return &core.RelicCompaction{RunID: run.String, At: atTime, Boundary: boundary.String, Since: sinceTime}, nil
+}
+
+// scanRelicPartDrop reads a stub's two dates back into the part's member.
+func scanRelicPartDrop(relicID, partID string, removedAt, droppedAt sql.NullString) (*core.RelicPartDrop, error) {
+	if !removedAt.Valid || !droppedAt.Valid {
+		return nil, core.Errorf(core.CategoryCorruptData, "indexed relic %s has part %s with a partial drop", relicID, partID)
+	}
+	removed, err := time.Parse(time.RFC3339Nano, removedAt.String)
+	if err != nil {
+		return nil, core.Wrap(core.CategoryCorruptData, "indexed relic "+relicID+" has part "+partID+" with an invalid removal time", err)
+	}
+	dropped, err := time.Parse(time.RFC3339Nano, droppedAt.String)
+	if err != nil {
+		return nil, core.Wrap(core.CategoryCorruptData, "indexed relic "+relicID+" has part "+partID+" with an invalid drop time", err)
+	}
+	return &core.RelicPartDrop{RemovedAt: removed, DroppedAt: dropped}, nil
 }
 
 // indexedPartContent is what the index holds of one part's content: its

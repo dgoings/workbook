@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dgoings/workbook/internal/compaction"
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/testrepo"
@@ -1127,11 +1128,436 @@ func TestSchemaVersionNineCacheIsReplaced(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT value FROM projection_meta WHERE key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != schemaVersion || schemaVersion != "12" {
-		t.Fatalf("schema version = %s (built %s), want 12", version, schemaVersion)
+	if version != schemaVersion || schemaVersion != "13" {
+		t.Fatalf("schema version = %s (built %s), want 13", version, schemaVersion)
 	}
 	countRows(t, store, `SELECT COUNT(link_count) FROM relics`)
 	for _, table := range []string{"relics", "relic_properties", "relic_parts", "relic_operations", "relic_links"} {
 		countRows(t, store, `SELECT COUNT(*) FROM `+table)
 	}
+}
+
+// changeIndexRelic writes one relic commit of operations that carry no
+// content, a minute after the tip, through the repository's own writer. It is
+// how these tests retire a relic.
+func changeIndexRelic(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig, relicID string, operations ...core.RelicOperation) core.RelicSnapshot {
+	t.Helper()
+	ctx := context.Background()
+	tip, err := repository.GetRelic(ctx, config, relicID)
+	if err != nil {
+		t.Fatalf("GetRelic(%s) error = %v", relicID, err)
+	}
+	state := tip.Record.State
+	pack := core.NewRelicOperationPack(config.ProjectID, relicID, state.History.Generation, relicIndexActor,
+		state.LogicalClock+1, tip.Operation.WallTime.Add(time.Minute), operations)
+	record, err := core.ApplyRelic(&tip.Record, pack)
+	if err != nil {
+		t.Fatalf("ApplyRelic(%s) error = %v", relicID, err)
+	}
+	written, err := repository.WriteRelic(ctx, config, &tip, pack, record, nil, "update relic "+relicID)
+	if err != nil {
+		t.Fatalf("WriteRelic(%s) error = %v", relicID, err)
+	}
+	return written
+}
+
+// compactIndexRelic compacts relicID at boundary through the real steps a
+// relic compaction takes, CompactedRelicHistory, BuildRelicCheckpoint and the
+// compare-and-swap of CompactRelicRef, as gitstore's writeRelicCheckpoint
+// does, and returns the checkpoint as Git reads it back. The run is dated an
+// hour after the tip, and its IDs are derived from the tip's clock.
+func compactIndexRelic(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig, relicID, boundary string) core.RelicSnapshot {
+	t.Helper()
+	ctx := context.Background()
+	tip, err := repository.GetRelic(ctx, config, relicID)
+	if err != nil {
+		t.Fatalf("GetRelic(%s) error = %v", relicID, err)
+	}
+	ids, commits, first, last, removedAt, since, err := repository.CompactedRelicHistory(ctx, config, tip.Head)
+	if err != nil {
+		t.Fatalf("CompactedRelicHistory(%s) error = %v", relicID, err)
+	}
+	clock := int(tip.Record.State.LogicalClock + 1)
+	written, err := repository.BuildRelicCheckpoint(ctx, config, gitstore.RelicCheckpointInput{
+		RelicID:     relicID,
+		Tip:         tip,
+		RunID:       relicIndexTestID(980000 + clock),
+		Generation:  relicIndexTestID(970000 + clock),
+		OperationID: relicIndexTestID(990000 + clock),
+		Actor:       relicIndexActor,
+		Boundary:    boundary,
+		Since:       since[boundary],
+		Now:         tip.Operation.WallTime.Add(time.Hour),
+		RemovedAt:   removedAt,
+		Summary: core.RelicCheckpointData{
+			CompactedCommits: commits, FirstWallTime: first, LastWallTime: last, CompactedOperations: ids,
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildRelicCheckpoint(%s, %s) error = %v", relicID, boundary, err)
+	}
+	if err := repository.CompactRelicRef(ctx, config, relicID, tip.Head, written.Head); err != nil {
+		t.Fatalf("CompactRelicRef(%s) error = %v", relicID, err)
+	}
+	read, err := repository.GetRelic(ctx, config, relicID)
+	if err != nil {
+		t.Fatalf("GetRelic(%s) of the checkpoint error = %v", relicID, err)
+	}
+	if read.Head != written.Head || read.Record.State.Relic.Compacted == nil {
+		t.Fatalf("%s reads back at %s with compacted %v, want the checkpoint %s", relicID, read.Head,
+			read.Record.State.Relic.Compacted, written.Head)
+	}
+	return read
+}
+
+// compactionIndexFixture writes a relic to compact at each boundary and
+// returns their IDs: a retired one of four parts with a link to a task, one
+// part removed and one property changed, and a deleted one of three parts
+// with one part removed before the deletion. Neither is compacted yet.
+func compactionIndexFixture(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig) (retired, deleted string) {
+	t.Helper()
+	ctx := context.Background()
+	service := relicServiceForIndex(repository, config, 50000)
+	retired = createIndexRelic(t, service, "Retired", 4)
+	task := linkIndexTask(t, repository, config, 9)
+	linkRelic(t, service, retired,
+		core.RelicEdit{Kind: core.RelicEditAddLink, Target: task, Rel: "relates-to"},
+		core.RelicEdit{Kind: core.RelicEditAddLink, Target: task, From: relicPartIDOf(t, repository, config, retired, 1), Rel: "decided-by"})
+	linkRelic(t, service, retired, core.RelicEdit{Kind: core.RelicEditRemovePart, Part: relicPartIDOf(t, repository, config, retired, 1)})
+	linkRelic(t, service, retired, core.RelicEdit{Kind: core.RelicEditSetProperty, Name: "outcome", Value: relicIndexJSON(t, "kept")})
+	changeIndexRelic(t, repository, config, retired, core.RelicOperation{ID: relicIndexTestID(60001), Type: core.RelicOperationRetire})
+
+	deleted = createIndexRelic(t, service, "Deleted", 3)
+	linkRelic(t, service, deleted, core.RelicEdit{Kind: core.RelicEditRemovePart, Part: relicPartIDOf(t, repository, config, deleted, 0)})
+	if _, err := service.Delete(ctx, deleted); err != nil {
+		t.Fatalf("Delete(%s) error = %v", deleted, err)
+	}
+	return retired, deleted
+}
+
+// encodedRelicSnapshot is a snapshot's head, state.json and links.json as
+// this build encodes them.
+func encodedRelicSnapshot(t *testing.T, snapshot core.RelicSnapshot) string {
+	t.Helper()
+	state, err := core.EncodeDocument(snapshot.Record.State)
+	if err != nil {
+		t.Fatalf("EncodeDocument(state of %s) error = %v", snapshot.Record.State.RelicID, err)
+	}
+	links, err := core.EncodeDocument(snapshot.Record.Links)
+	if err != nil {
+		t.Fatalf("EncodeDocument(links of %s) error = %v", snapshot.Record.State.RelicID, err)
+	}
+	return snapshot.Head + "\n" + string(state) + string(links)
+}
+
+// assertIndexedRelicsEqualGit requires every relic a fresh reader on store
+// answers, by GetRelic and by ReadRelicTips, to encode as Git's does, byte for
+// byte, and to come from a row rather than a Git read.
+func assertIndexedRelicsEqualGit(t *testing.T, label string, store *Store, repository *gitstore.Repository, config core.ProjectConfig) {
+	t.Helper()
+	ctx := context.Background()
+	heads, err := repository.ListRelicHeads(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := store.RelicReader()
+	tips, err := reader.ReadRelicTips(ctx, config, heads)
+	if err != nil {
+		t.Fatalf("%s: ReadRelicTips() error = %v", label, err)
+	}
+	rows, err := store.queryIndexedRelics(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, head := range heads {
+		want, err := repository.GetRelic(ctx, config, head.RelicID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		row, found := rows[head.RelicID]
+		if !found {
+			t.Fatalf("%s: the index holds no usable row for %s", label, head.RelicID)
+		}
+		got, err := reader.GetRelic(ctx, config, head.RelicID)
+		if err != nil {
+			t.Fatalf("%s: index GetRelic(%s) error = %v", label, head.RelicID, err)
+		}
+		for name, snapshot := range map[string]core.RelicSnapshot{"row": row, "GetRelic": got, "ReadRelicTips": tips[index]} {
+			if got, want := encodedRelicSnapshot(t, snapshot), encodedRelicSnapshot(t, want); got != want {
+				t.Fatalf("%s: %s of %s encodes as\n%s\nwant Git's\n%s", label, name, head.RelicID, got, want)
+			}
+		}
+	}
+}
+
+func TestIndexedRelicEqualsGitAfterCompaction(t *testing.T) {
+	t.Parallel()
+	forBothRelicIndexFormats(t, func(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		retired, deleted := compactionIndexFixture(t, repository, config)
+		plain := createIndexRelic(t, relicServiceForIndex(repository, config, 70000), "Never compacted", 2)
+		store := openRelicStore(t, repositorySource{repository: repository}, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+		assertIndexedRelicsEqualGit(t, "before", store, repository, config)
+
+		compactIndexRelic(t, repository, config, retired, core.RelicBoundaryRetired)
+		compactIndexRelic(t, repository, config, deleted, core.RelicBoundaryDeleted)
+		assertIndexedRelicsEqualGit(t, "compacted", store, repository, config)
+		ids := []string{retired, deleted, plain}
+		fromGit := relicAnswers(t, repository, config, func() core.RelicReader { return repository }, ids)
+		assertSameAnswers(t, "warm", relicAnswers(t, repository, config, func() core.RelicReader { return store.RelicReader() }, ids), fromGit)
+		if err := os.Remove(store.CachePath()); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		assertSameAnswers(t, "cold", relicAnswers(t, repository, config, func() core.RelicReader { return store.RelicReader() }, ids), fromGit)
+		assertIndexedRelicsEqualGit(t, "cold", store, repository, config)
+
+		// The columns hold the members as stored: the compaction on the two
+		// compacted relics, NULL on the other, and the dates on each stub.
+		for relicID, boundary := range map[string]string{retired: core.RelicBoundaryRetired, deleted: core.RelicBoundaryDeleted, plain: ""} {
+			snapshot, err := repository.GetRelic(ctx, config, relicID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var run, at, gotBoundary, since sql.NullString
+			if err := store.db.QueryRowContext(ctx, `SELECT compacted_run, compacted_at, compacted_boundary, compacted_since
+				FROM relics WHERE relic_id = ?`, relicID).Scan(&run, &at, &gotBoundary, &since); err != nil {
+				t.Fatal(err)
+			}
+			compacted := snapshot.Record.State.Relic.Compacted
+			if boundary == "" {
+				if run.Valid || at.Valid || gotBoundary.Valid || since.Valid || compacted != nil {
+					t.Fatalf("never-compacted %s has compaction columns %v %v %v %v", relicID, run, at, gotBoundary, since)
+				}
+			} else if !run.Valid || run.String != compacted.RunID || at.String != formatTime(compacted.At) ||
+				gotBoundary.String != boundary || since.String != formatTime(compacted.Since) {
+				t.Fatalf("%s has compaction columns %v %v %v %v, want %+v", relicID, run, at, gotBoundary, since, *compacted)
+			}
+			stubs := 0
+			for _, part := range snapshot.Record.State.Relic.Parts {
+				var removed int
+				var bodyObject, removedAt, droppedAt sql.NullString
+				if err := store.db.QueryRowContext(ctx, `SELECT removed, body_object, dropped_removed_at, dropped_at
+					FROM relic_parts WHERE relic_id = ? AND part_id = ?`, relicID, part.ID).Scan(&removed, &bodyObject, &removedAt, &droppedAt); err != nil {
+					t.Fatal(err)
+				}
+				if part.Dropped == nil {
+					if removedAt.Valid || droppedAt.Valid {
+						t.Fatalf("part %s of %s is no stub but has drop dates %v %v", part.ID, relicID, removedAt, droppedAt)
+					}
+					continue
+				}
+				stubs++
+				if removed != 1 || bodyObject.Valid || removedAt.String != formatTime(part.Dropped.RemovedAt) ||
+					droppedAt.String != formatTime(part.Dropped.DroppedAt) {
+					t.Fatalf("stub %s of %s is stored as removed %d, body %v, dates %v %v; want %+v",
+						part.ID, relicID, removed, bodyObject, removedAt, droppedAt, *part.Dropped)
+				}
+			}
+			want := map[string]int{retired: 1, deleted: 3, plain: 0}[relicID]
+			if stubs != want {
+				t.Fatalf("%s has %d stubs, want %d", relicID, stubs, want)
+			}
+		}
+	})
+}
+
+func TestOperationRowsRebuiltWhenRootBecomesCheckpoint(t *testing.T) {
+	t.Parallel()
+	forBothRelicIndexFormats(t, func(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		retired, _ := compactionIndexFixture(t, repository, config)
+		source := newCountingRelicSource(repository)
+		store := openRelicStore(t, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+		if err := store.RefreshRelics(ctx); err != nil {
+			t.Fatalf("RefreshRelics() error = %v", err)
+		}
+		if got := countRows(t, store, `SELECT COUNT(DISTINCT chain_index) FROM relic_operations WHERE relic_id = ?`, retired); got != 5 {
+			t.Fatalf("the index holds %d commits of %s before compaction, want 5", got, retired)
+		}
+
+		checkpoint := compactIndexRelic(t, repository, config, retired, core.RelicBoundaryRetired)
+		if err := store.RefreshRelics(ctx); err != nil {
+			t.Fatalf("RefreshRelics() error = %v", err)
+		}
+		var commit, operationType, payload string
+		if got := countRows(t, store, `SELECT COUNT(*) FROM relic_operations WHERE relic_id = ?`, retired); got != 1 {
+			t.Fatalf("the index holds %d operation rows of the compacted %s, want 1", got, retired)
+		}
+		if err := store.db.QueryRowContext(ctx, `SELECT commit_id, type, payload FROM relic_operations WHERE relic_id = ?`,
+			retired).Scan(&commit, &operationType, &payload); err != nil {
+			t.Fatal(err)
+		}
+		wantPayload, err := json.Marshal(checkpoint.Operation.Operations[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if commit != checkpoint.Head || operationType != string(core.RelicOperationCheckpoint) || payload != string(wantPayload) {
+			t.Fatalf("the checkpoint row is %s %s %s, want %s %s %s", commit, operationType, payload,
+				checkpoint.Head, core.RelicOperationCheckpoint, wantPayload)
+		}
+		assertIndexChainsEqualGit(t, "compacted", store, source, repository, config, true)
+		assertIndexedRelicsEqualGit(t, "compacted", store, repository, config)
+
+		// A second pass over the compacted relic reads nothing from Git and
+		// writes no row.
+		before := dumpRelicTables(t, store)
+		source.reset()
+		if err := store.RefreshRelics(ctx); err != nil {
+			t.Fatalf("RefreshRelics() error = %v", err)
+		}
+		if source.listCalls != 1 || source.relicCalls() != 1 {
+			t.Fatalf("a warm pass over a compacted relic made %d relic calls, want one ListRelicHeads", source.relicCalls())
+		}
+		if after := dumpRelicTables(t, store); after != before {
+			t.Fatalf("a warm pass changed the index from\n%s\nto\n%s", before, after)
+		}
+
+		// An edit above the checkpoint adds one row to it.
+		updateIndexRelicTitle(t, relicServiceForIndex(repository, config, 90000), retired, "Retired, retitled")
+		if err := store.RefreshRelics(ctx); err != nil {
+			t.Fatalf("RefreshRelics() error = %v", err)
+		}
+		if got := countRows(t, store, `SELECT COUNT(*) FROM relic_operations WHERE relic_id = ?`, retired); got != 2 {
+			t.Fatalf("the index holds %d operation rows after an edit, want 2", got)
+		}
+		assertIndexChainsEqualGit(t, "edited", store, source, repository, config, true)
+		assertIndexedRelicsEqualGit(t, "edited", store, repository, config)
+	})
+}
+
+func TestRelicIndexRebuildFromRefsWithCheckpoint(t *testing.T) {
+	t.Parallel()
+	forBothRelicIndexFormats(t, func(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		retired, deleted := compactionIndexFixture(t, repository, config)
+		createIndexRelic(t, relicServiceForIndex(repository, config, 70000), "Never compacted", 2)
+		stepwise := openRelicStore(t, repositorySource{repository: repository}, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+		runRelicPass(t, stepwise)
+		compactIndexRelic(t, repository, config, retired, core.RelicBoundaryRetired)
+		runRelicPass(t, stepwise)
+		compactIndexRelic(t, repository, config, deleted, core.RelicBoundaryDeleted)
+		runRelicPass(t, stepwise)
+
+		rebuilt := openRelicStore(t, repositorySource{repository: repository}, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+		if _, err := rebuilt.RebuildWithRelics(ctx); err != nil {
+			t.Fatalf("RebuildWithRelics() error = %v", err)
+		}
+		reversed := openRelicStore(t, orderedRelicSource{repositorySource{repository: repository}}, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+		runRelicPass(t, reversed)
+		want := dumpRelicTables(t, rebuilt)
+		for name, store := range map[string]*Store{"stepwise": stepwise, "reversed": reversed} {
+			if got := dumpRelicTables(t, store); got != want {
+				t.Fatalf("%s index holds\n%s\nwant a rebuild's\n%s", name, got, want)
+			}
+		}
+
+		// Deleting the cache and rebuilding gives the same rows again.
+		if err := os.Remove(stepwise.CachePath()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := stepwise.RebuildWithRelics(ctx); err != nil {
+			t.Fatalf("RebuildWithRelics() after deleting the cache error = %v", err)
+		}
+		if got := dumpRelicTables(t, stepwise); got != want {
+			t.Fatalf("the index rebuilt after deleting the cache holds\n%s\nwant\n%s", got, want)
+		}
+		assertIndexedRelicsEqualGit(t, "rebuilt", stepwise, repository, config)
+	})
+}
+
+// RefreshRelics is the relic index a relic compaction settles.
+var _ compaction.RelicIndexRefresher = (*Store)(nil)
+
+func TestRefreshRelicsAloneBringsTheIndexToGit(t *testing.T) {
+	t.Parallel()
+	forBothRelicIndexFormats(t, func(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		retired, deleted := compactionIndexFixture(t, repository, config)
+		store := openRelicStore(t, repositorySource{repository: repository}, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+		if err := store.RefreshRelics(ctx); err != nil {
+			t.Fatalf("RefreshRelics() error = %v", err)
+		}
+		compactIndexRelic(t, repository, config, retired, core.RelicBoundaryRetired)
+		compactIndexRelic(t, repository, config, deleted, core.RelicBoundaryDeleted)
+		if err := store.RefreshRelics(ctx); err != nil {
+			t.Fatalf("RefreshRelics() error = %v", err)
+		}
+		if rows, refs := relicRowHeads(t, store), relicRefHeads(t, repository, config); fmt.Sprint(rows) != fmt.Sprint(refs) {
+			t.Fatalf("after RefreshRelics the row heads are %v, want the refs %v", rows, refs)
+		}
+		// The rows answer as they stand, with no pass of the reader's own
+		// needed to bring them there.
+		rows, err := store.queryIndexedRelics(ctx, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, relicID := range []string{retired, deleted} {
+			want, err := repository.GetRelic(ctx, config, relicID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := encodedRelicSnapshot(t, rows[relicID]), encodedRelicSnapshot(t, want); got != want {
+				t.Fatalf("the row of %s encodes as\n%s\nwant Git's\n%s", relicID, got, want)
+			}
+		}
+		fresh := openRelicStore(t, repositorySource{repository: repository}, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+		if _, err := fresh.RebuildWithRelics(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := dumpRelicTables(t, store), dumpRelicTables(t, fresh); got != want {
+			t.Fatalf("after RefreshRelics the index holds\n%s\nwant a rebuild's\n%s", got, want)
+		}
+
+		// A refresh that cannot reach the cache says so.
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.RefreshRelics(ctx); err == nil {
+			t.Fatal("RefreshRelics() on a closed store succeeded")
+		}
+	})
+}
+
+func TestSchemaVersionTwelveCacheIsReplaced(t *testing.T) {
+	t.Parallel()
+	repository, config := initializeWorkbook(t)
+	ctx := context.Background()
+	cachePath := filepath.Join(repository.CommonGitDir, "workbook", cacheFilename)
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A cache as version 12 wrote it: no column for a compaction or a stub.
+	old, err := sql.Open("sqlite", cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(schema+`;
+		ALTER TABLE relics DROP COLUMN compacted_run; ALTER TABLE relics DROP COLUMN compacted_at;
+		ALTER TABLE relics DROP COLUMN compacted_boundary; ALTER TABLE relics DROP COLUMN compacted_since;
+		ALTER TABLE relic_parts DROP COLUMN dropped_removed_at; ALTER TABLE relic_parts DROP COLUMN dropped_at;
+		INSERT INTO projection_meta (key, value) VALUES ('schema_version', '12'), ('project_id', ?)`, config.ProjectID); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := openForTest(t, ctx, repository, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.cacheUsable(ctx) {
+		t.Fatal("a version 12 cache is usable")
+	}
+	if _, err := store.List(ctx, config); err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	var version string
+	if err := store.db.QueryRowContext(ctx, `SELECT value FROM projection_meta WHERE key = 'schema_version'`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != schemaVersion || schemaVersion != "13" {
+		t.Fatalf("schema version = %s (built %s), want 13", version, schemaVersion)
+	}
+	countRows(t, store, `SELECT COUNT(compacted_run) + COUNT(compacted_at) + COUNT(compacted_boundary) + COUNT(compacted_since) FROM relics`)
+	countRows(t, store, `SELECT COUNT(dropped_removed_at) + COUNT(dropped_at) FROM relic_parts`)
 }
