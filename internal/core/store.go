@@ -169,6 +169,18 @@ const WarningStatusRenameReresolves = "status-rename-reresolves"
 // removed part is not shown and the edit would otherwise seem to have gone.
 const WarningRelicEditOnRemovedPart = "relic-edit-on-removed-part"
 
+// WarningRelicBodyMerged reports that a synchronization met a body saved
+// here from a version another clone had already replaced, and merged the two
+// edits, which changed different lines, into a new version recorded as a
+// part.body.merge.
+//
+// It is a warning rather than a conflict because nothing has to be decided
+// and nothing is lost: both edits stand, and the other side's text is kept
+// beside the merge. The person who saved here is told because the text they
+// saved is no longer the text that stands, and a clean line merge can still
+// be wrong in meaning; `workbook relic diff` shows what the merge did.
+const WarningRelicBodyMerged = "relic-body-merged"
+
 // WarningRelicContentDropped says that a restored relic came back without the
 // content its compaction dropped.
 const WarningRelicContentDropped = "relic-content-dropped"

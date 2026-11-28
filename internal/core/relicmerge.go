@@ -2,6 +2,7 @@ package core
 
 import (
 	"crypto/sha256"
+	"sort"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -114,4 +115,101 @@ func validateRelicMergeOthers(operations []RelicOperation) error {
 		}
 	}
 	return nil
+}
+
+// CheckRelicBodyMerge judges a merge need by its metadata alone, before any
+// text is read: no-base when the ancestor or the current version has no body,
+// format when the three labels differ, and "" when the texts are worth
+// reading.
+func CheckRelicBodyMerge(need RelicBodyMergeNeed) RelicMergeReason {
+	switch {
+	case need.Ancestor.Version == "" || need.Current.Version == "" || need.Other.Version == "":
+		return RelicMergeNoBase
+	case need.Ancestor.Format != need.Current.Format || need.Other.Format != need.Current.Format:
+		return RelicMergeFormat
+	}
+	return ""
+}
+
+// RelicBodyMergeTexts are the three texts of a merge need: the ancestor's,
+// the current version's and the other side's.
+type RelicBodyMergeTexts struct{ Ancestor, Current, Other []byte }
+
+// MergeRelicBody merges the other side's edit of a part's body onto the
+// current version, with the ancestor both started from, by RelicLineMergeMethod
+// under RelicLineMergeLimits. It returns the merged text and an empty reason,
+// or no text and the reason it cannot, with the overlaps for overlap. It reads
+// no clock and nothing beyond its arguments, so every clone given the same
+// texts gets the same answer.
+func MergeRelicBody(need RelicBodyMergeNeed, texts RelicBodyMergeTexts) (merged []byte, reason RelicMergeReason, overlaps []LineMergeOverlap) {
+	if reason := CheckRelicBodyMerge(need); reason != "" {
+		return nil, reason, nil
+	}
+	for _, text := range [][]byte{texts.Ancestor, texts.Current, texts.Other} {
+		if !RelicBodyIsText(text) {
+			return nil, RelicMergeNotText, nil
+		}
+	}
+	result := MergeLines(texts.Ancestor, texts.Current, texts.Other, RelicLineMergeLimits)
+	switch result.Reason {
+	case "":
+		return result.Text, "", nil
+	case LineMergeOverlaps:
+		return nil, RelicMergeOverlap, result.Overlaps
+	case LineMergeTooManyChanges:
+		return nil, RelicMergeTooManyChanges, nil
+	case LineMergeTooLarge:
+		return nil, RelicMergeTooLarge, nil
+	default:
+		return nil, RelicMergeReason(result.Reason), nil
+	}
+}
+
+// RelicBodyMergeOperation is the part.body.merge that records merged as the
+// body of need's part, applied onto the current version. Its ID is
+// RelicMergeOperationID's, from the pack's wall time, so the same merge is
+// the same operation on every clone.
+func RelicBodyMergeOperation(relicID string, need RelicBodyMergeNeed, merged []byte, wallTime time.Time) RelicOperation {
+	return RelicOperation{
+		ID:   RelicMergeOperationID(relicID, need.Part, need.OtherOperation, need.Current.Version, RelicLineMergeMethod, wallTime),
+		Type: RelicOperationPartBodyMerge,
+		Part: need.Part,
+		Body: &RelicBodyChange{Format: need.Current.Format, Bytes: int64(len(merged)), Base: need.Current.Version},
+		Merge: &RelicBodyMerge{
+			Ancestor: need.Ancestor.Version,
+			Other:    need.OtherOperation,
+			Method:   RelicLineMergeMethod,
+		},
+	}
+}
+
+// AppendRelicBodyMerges appends merges to the end of pack, in part order,
+// recomputes the generation the pack declares, and folds it onto parent at
+// the clock of a child of parent. With no merges it is the fold of the pack
+// alone. The caller's pack is left as it was.
+func AppendRelicBodyMerges(parent RelicRecord, pack RelicOperationPack, merges []RelicOperation) (RelicOperationPack, RelicRecord, error) {
+	sorted := append([]RelicOperation(nil), merges...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Part < sorted[j].Part })
+	child := pack
+	child.Operations = append(append([]RelicOperation(nil), pack.Operations...), sorted...)
+	child.MinReader = relicPackMinReader(child.Operations)
+	child.LogicalClock = parent.State.LogicalClock + 1
+	record, err := ApplyRelic(&parent, child)
+	if err != nil {
+		return RelicOperationPack{}, RelicRecord{}, relicReplayError(parent.State.RelicID, err)
+	}
+	return child, record, nil
+}
+
+// RelicBodyMergedWarning reports a replay that merged a stale save of a part's
+// body: the version it was saved from here, the version it met on remote, and
+// the merge that now stands.
+func RelicBodyMergedWarning(relicID, remote string, merge RelicOperation) Warning {
+	return Warning{
+		Code: WarningRelicBodyMerged,
+		Message: "relic " + relicID + ": part " + merge.Part + ": the body was saved here from version " +
+			merge.Merge.Ancestor + " and on " + conflictRemote(remote) + " as version " + merge.Body.Base +
+			"; the two edits changed different lines and were merged as version " + merge.ID +
+			"; `workbook relic diff " + relicID + "#" + merge.Part + "` shows the merge",
+	}
 }

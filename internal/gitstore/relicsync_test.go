@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -2298,5 +2299,528 @@ func TestRelicSyncCarriesAMergeCommit(t *testing.T) {
 			t.Fatalf("the replayed commit lists %q, want no merges entry", listing)
 		}
 		assertRelicHistoryValid(t, second, config, relicID, replayed, 5)
+	})
+}
+
+// mergeText is the six-line body the merge tests start from, with line n
+// (1-based) replaced by its upper-case form for each n given.
+func mergeText(upper ...int) string {
+	lines := []string{"one", "two", "three", "four", "five", "six"}
+	for _, n := range upper {
+		lines[n-1] = strings.ToUpper(lines[n-1])
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// shareMergeRelic shares a relic with one part whose body is mergeText().
+func (c relicClones) shareMergeRelic(t *testing.T, title string) (relicID, partID, version string) {
+	t.Helper()
+	created := c.share(t, core.RelicCreateInput{Title: title, Parts: []core.RelicPartInput{{
+		Type: "section", Body: &core.RelicBodyInput{Format: "md", Content: []byte(mergeText())},
+	}}})
+	return created.Relic.ID, created.Parts[0].ID, created.Parts[0].Body.Version
+}
+
+// relicMergesOf returns the part.body.merge operations of commit's pack.
+func relicMergesOf(t *testing.T, repo *Repository, commit string) []core.RelicOperation {
+	t.Helper()
+	pack, err := core.DecodeRelicOperationPack(relicBlob(t, repo, commit+":operation.json"))
+	if err != nil {
+		t.Fatalf("DecodeRelicOperationPack(%s) error = %v", commit, err)
+	}
+	var merges []core.RelicOperation
+	for _, operation := range pack.Operations {
+		if operation.Type == core.RelicOperationPartBodyMerge {
+			merges = append(merges, operation)
+		}
+	}
+	return merges
+}
+
+func assertShownBody(t *testing.T, service core.RelicService, relicID, partID, want string) {
+	t.Helper()
+	part := shownPart(t, shownRelic(t, service, relicID), partID)
+	if part.Body == nil || part.Body.Text == nil || *part.Body.Text != want {
+		t.Fatalf("body of %s#%s = %+v, want %q", relicID, partID, part.Body, want)
+	}
+}
+
+func assertNoParkedRelics(t *testing.T, repo *Repository) {
+	t.Helper()
+	if parked := relicRefNames(t, repo, "refs/workbook/reconciled-relics/"); len(parked) != 0 {
+		t.Fatalf("parked relic refs %q, want none", parked)
+	}
+}
+
+func TestRelicEditsOnDifferentLinesMerge(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		c := newRelicClones(first, second, config)
+		relicID, p, version := c.shareMergeRelic(t, "Different lines")
+		theirs := c.update(t, c.a, relicID, saveBody(p, version, mergeText(2)))
+		syncClean(t, first, config)
+		ours := c.update(t, c.b, relicID, saveBody(p, version, mergeText(5)))
+
+		result := syncClean(t, second, config)
+		assertRelicSyncOutcome(t, result.Fetch, relicID, SyncReconciled)
+		assertOneWarning(t, result, core.WarningRelicBodyMerged)
+		head := relicRefHead(t, second, relicID)
+		merges := relicMergesOf(t, second, head)
+		if len(merges) != 1 {
+			t.Fatalf("the replayed commit holds merges %+v, want one", merges)
+		}
+		merge := merges[0]
+		if merge.Body.Base != theirs[0] || merge.Merge.Ancestor != version || merge.Merge.Other != ours[0] {
+			t.Fatalf("merge = %+v %+v, want base %s, ancestor %s, other %s", merge.Body, merge.Merge, theirs[0], version, ours[0])
+		}
+		message := result.Fetch.RelicWarnings[0].Message
+		for _, want := range []string{"relic " + relicID + ": part " + p, "from version " + version, "on origin as version " + theirs[0],
+			"merged as version " + merge.ID, "`workbook relic diff " + relicID + "#" + p + "`"} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("warning %q does not hold %q", message, want)
+			}
+		}
+
+		syncClean(t, first, config)
+		c.assertConverged(t, relicID)
+		for _, service := range []core.RelicService{c.a, c.b} {
+			assertShownBody(t, service, relicID, p, mergeText(2, 5))
+		}
+		if got := relicBlob(t, second, head+":merges/"+merge.ID); string(got) != mergeText(5) {
+			t.Fatalf("merges/%s holds %q, want the text saved here", merge.ID, got)
+		}
+		assertNoParkedRelics(t, first)
+		assertNoParkedRelics(t, second)
+	})
+}
+
+func TestRelicEditsOnTheSameLinesConflict(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		c := newRelicClones(first, second, config)
+		relicID, p, version := c.shareMergeRelic(t, "Same lines")
+		theirsText, oursText := "one\nfirst's two\nthree\nfour\nfive\nsix\n", "one\nsecond's two\nthree\nfour\nfive\nsix\n"
+		c.update(t, c.a, relicID, saveBody(p, version, theirsText))
+		syncClean(t, first, config)
+		c.update(t, c.b, relicID, saveBody(p, version, oursText))
+
+		result, err := second.Sync(ctx, config)
+		if core.CategoryOf(err) != core.CategoryConflict {
+			t.Fatalf("second Sync() error = %v, want a conflict; result = %+v", err, result)
+		}
+		conflicts := result.Fetch.RelicConflicts
+		if len(conflicts) != 1 || conflicts[0].Type != core.RelicConflictBody || conflicts[0].Body == nil {
+			t.Fatalf("conflicts = %+v, want one body conflict", conflicts)
+		}
+		body := conflicts[0].Body
+		if body.Reason != core.RelicMergeOverlap || len(body.Overlaps) != 1 || body.Overlaps[0] != (core.LineMergeOverlap{BaseStart: 2, BaseLines: 1}) {
+			t.Fatalf("body conflict reason %q overlaps %+v, want overlap at line 2", body.Reason, body.Overlaps)
+		}
+		filled, err := second.FillRelicConflictBodies(ctx, conflicts)
+		if err != nil {
+			t.Fatalf("FillRelicConflictBodies() error = %v", err)
+		}
+		texts := filled[0].Body
+		for _, check := range []struct {
+			name string
+			got  *string
+			want string
+		}{{"base", texts.Base.Text, mergeText()}, {"ours", texts.Ours.Text, oursText}, {"theirs", texts.Theirs.Text, theirsText}} {
+			if check.got == nil || *check.got != check.want {
+				t.Fatalf("%s text = %v, want %q", check.name, check.got, check.want)
+			}
+		}
+		if !strings.Contains(core.RelicConflictDetail(conflicts[0]), "the edits overlap at base lines 2") {
+			t.Fatalf("detail = %s, want the overlap named", core.RelicConflictDetail(conflicts[0]))
+		}
+		originHead := remoteRefValue(t, second, relicRef(relicID))
+		if got := string(relicBlob(t, second, originHead+":parts/"+p+"/body")); got != theirsText {
+			t.Fatalf("origin's body = %q, want first's", got)
+		}
+		if merges := relicMergesOf(t, second, relicRefHead(t, second, relicID)); len(merges) != 0 {
+			t.Fatalf("a merge was stored: %+v", merges)
+		}
+		if got := string(relicBlob(t, second, conflicts[0].ParkedRef+":parts/"+p+"/body")); got != oursText {
+			t.Fatalf("the parked ref holds %q, want second's text", got)
+		}
+	})
+}
+
+func TestThirdCloneReadsTheStoredMerge(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		c := newRelicClones(first, second, config)
+		relicID, p, version := c.shareMergeRelic(t, "Third clone")
+		c.update(t, c.a, relicID, saveBody(p, version, mergeText(1)))
+		syncClean(t, first, config)
+		c.update(t, c.b, relicID, saveBody(p, version, mergeText(6)))
+		assertOneWarning(t, syncClean(t, second, config), core.WarningRelicBodyMerged)
+		head := relicRefHead(t, second, relicID)
+
+		bare := syncGit(t, first.Root, "remote", "get-url", "origin")
+		third := openSyncClone(t, bare)
+		if _, err := third.LoadConfig(); err != nil {
+			t.Fatal(err)
+		}
+		requests := observeRelicObjects(third)
+		result := syncClean(t, third, config)
+		third.relicObjectObserver = nil
+		assertRelicSyncOutcome(t, result.Fetch, relicID, SyncCreated)
+		assertNoRelicReport(t, result)
+		if got := relicRefHead(t, third, relicID); got != head {
+			t.Fatalf("third's tip %s, want the merge %s", got, head)
+		}
+		texts := map[string]bool{}
+		for _, text := range []string{mergeText(), mergeText(1), mergeText(6), mergeText(1, 6)} {
+			texts[gitOutputWithInput(t, third, []byte(text), "hash-object", "--stdin")] = true
+		}
+		for _, request := range *requests {
+			if texts[request] || strings.HasSuffix(request, "/body") || strings.Contains(request, ":merges/") {
+				t.Fatalf("the third clone asked for body text %q; all requests %q", request, *requests)
+			}
+		}
+		assertShownBody(t, relicServiceFor(third, config, 300000), relicID, p, mergeText(1, 6))
+	})
+}
+
+func TestMergeIsTheSameWhicheverCloneFetchesFirst(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		c := newRelicClones(first, second, config)
+		bare := syncGit(t, first.Root, "remote", "get-url", "origin")
+		third := openSyncClone(t, bare)
+		if _, err := third.LoadConfig(); err != nil {
+			t.Fatal(err)
+		}
+		type outcome struct {
+			tree, state, body string
+			ids               []string
+		}
+		results := map[string]outcome{}
+		for _, order := range []string{"third fetches first", "merge first"} {
+			relicID, p, version := c.shareMergeRelic(t, "Order: "+order)
+			c.update(t, c.a, relicID, saveBody(p, version, mergeText(2)))
+			syncClean(t, first, config)
+			c.update(t, c.b, relicID, saveBody(p, version, mergeText(4)))
+			if order == "third fetches first" {
+				syncClean(t, third, config)
+			}
+			syncClean(t, second, config)
+			syncClean(t, third, config)
+			syncClean(t, first, config)
+			head := c.assertConverged(t, relicID)
+			if got := relicRefHead(t, third, relicID); got != head {
+				t.Fatalf("%s: third's tip %s, want %s", order, got, head)
+			}
+			var ids []string
+			for id := range relicHistoryOperationIDs(t, third, head) {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			got := outcome{
+				body:  string(relicBlob(t, third, head+":parts/"+p+"/body")),
+				state: string(relicBlob(t, first, head+":state.json")),
+				tree:  refValue(t, second, head+"^{tree}"),
+				ids:   ids,
+			}
+			for _, repo := range []*Repository{first, second, third} {
+				if body := string(relicBlob(t, repo, head+":parts/"+p+"/body")); body != got.body {
+					t.Fatalf("%s: bodies differ between clones", order)
+				}
+			}
+			if got.body != mergeText(2, 4) {
+				t.Fatalf("%s: body %q, want both lines", order, got.body)
+			}
+			results[order] = got
+		}
+		// The two relics differ, so compare what the merge made, not the
+		// objects: both runs merged one save into one save the same way.
+		if a, b := results["third fetches first"], results["merge first"]; a.body != b.body || len(a.ids) != len(b.ids) {
+			t.Fatalf("the two orders gave %+v and %+v", a, b)
+		}
+	})
+}
+
+func TestRelicMergeHeldByOriginIsSkipped(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		c := newRelicClones(first, second, config)
+		bare := syncGit(t, first.Root, "remote", "get-url", "origin")
+		relicID, p, version := c.shareMergeRelic(t, "Held")
+		c.update(t, c.a, relicID, saveBody(p, version, mergeText(1)))
+		syncClean(t, first, config)
+		c.update(t, c.b, relicID, saveBody(p, version, mergeText(3)))
+		local := relicRefHead(t, second, relicID)
+
+		// Another copy of second's unmerged commit merges and publishes
+		// first, as a retry after a lost push response would.
+		copyClone := openSyncClone(t, bare)
+		if _, err := copyClone.LoadConfig(); err != nil {
+			t.Fatal(err)
+		}
+		syncGit(t, copyClone.Root, "fetch", "--quiet", second.Root, relicRef(relicID)+":"+relicRef(relicID))
+		assertOneWarning(t, syncClean(t, copyClone, config), core.WarningRelicBodyMerged)
+		published := remoteRefValue(t, first, relicRef(relicID))
+		if got := relicRefHead(t, second, relicID); got != local {
+			t.Fatalf("second's ref moved to %s", got)
+		}
+
+		result := syncClean(t, second, config)
+		assertRelicSyncOutcome(t, result.Fetch, relicID, SyncFastForwarded)
+		assertNoRelicReport(t, result)
+		if got := relicRefHead(t, second, relicID); got != published {
+			t.Fatalf("second ended on %s, want origin's merge %s", got, published)
+		}
+		before := allRefs(t, bare)
+		again, err := second.Sync(ctx, config)
+		if err != nil || len(again.Push.Relics) != 0 {
+			t.Fatalf("syncing again = %+v, %v; want nothing pushed", again.Push.Relics, err)
+		}
+		if after := allRefs(t, bare); after != before {
+			t.Fatalf("syncing again moved origin's refs")
+		}
+		syncClean(t, first, config)
+		c.assertConverged(t, relicID)
+	})
+}
+
+func TestUnpublishedMergeMergesAgainOntoANewerSave(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		c := newRelicClones(first, second, config)
+		bare := syncGit(t, first.Root, "remote", "get-url", "origin")
+		carol := openSyncClone(t, bare)
+		if _, err := carol.LoadConfig(); err != nil {
+			t.Fatal(err)
+		}
+		carolService := relicServiceFor(carol, config, 400000)
+		relicID, p, version := c.shareMergeRelic(t, "Merged again")
+		alice := c.update(t, c.a, relicID, saveBody(p, version, mergeText(1)))
+		syncClean(t, first, config)
+		syncClean(t, carol, config)
+		c.update(t, c.b, relicID, saveBody(p, version, mergeText(6)))
+
+		// Second merges, but its push is refused: carol saved first.
+		fetched := fetchRelics(t, second, config)
+		assertRelicSyncOutcome(t, fetched, relicID, SyncReconciled)
+		merged := relicRefHead(t, second, relicID)
+		first1 := relicMergesOf(t, second, merged)
+		if len(first1) != 1 {
+			t.Fatalf("first merge = %+v", first1)
+		}
+		if _, err := carolService.Update(ctx, relicID, []core.RelicEdit{saveBody(p, alice[0], mergeText(1, 3))}); err != nil {
+			t.Fatalf("carol's Update() error = %v", err)
+		}
+		syncClean(t, carol, config)
+
+		result := syncClean(t, second, config)
+		assertRelicSyncOutcome(t, result.Fetch, relicID, SyncReconciled)
+		if len(result.Fetch.RelicConflicts) != 0 {
+			t.Fatalf("conflicts = %+v, want none", result.Fetch.RelicConflicts)
+		}
+		head := relicRefHead(t, second, relicID)
+		merges := relicMergesOf(t, second, head)
+		if len(merges) != 2 || merges[0].ID != first1[0].ID || merges[1].Merge.Other != first1[0].ID ||
+			merges[1].Merge.Ancestor != alice[0] {
+			t.Fatalf("merges = %+v, want the first merge kept and a second one merging it", merges)
+		}
+		for _, merge := range merges {
+			if got := string(relicBlob(t, second, head+":merges/"+merge.ID)); got != mergeText(6) && merge.ID == first1[0].ID {
+				t.Fatalf("merges/%s = %q, want second's text", merge.ID, got)
+			}
+		}
+		if got := string(relicBlob(t, second, head+":merges/"+merges[1].ID)); got != mergeText(1, 6) {
+			t.Fatalf("merges/%s = %q, want the first merge's text", merges[1].ID, got)
+		}
+		syncClean(t, first, config)
+		c.assertConverged(t, relicID)
+		assertShownBody(t, c.a, relicID, p, mergeText(1, 3, 6))
+	})
+}
+
+func TestMergedOtherTextIsReachableAtOrigin(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		c := newRelicClones(first, second, config)
+		bare := syncGit(t, first.Root, "remote", "get-url", "origin")
+		relicID, p, version := c.shareMergeRelic(t, "Reachable")
+		c.update(t, c.a, relicID, saveBody(p, version, mergeText(2)))
+		syncClean(t, first, config)
+		c.update(t, c.b, relicID, saveBody(p, version, mergeText(5)))
+		syncClean(t, second, config)
+		head := relicRefHead(t, second, relicID)
+		merge := relicMergesOf(t, second, head)[0]
+
+		syncGit(t, bare, "gc", "--quiet", "--prune=now")
+		third := openSyncClone(t, bare)
+		if _, err := third.LoadConfig(); err != nil {
+			t.Fatal(err)
+		}
+		syncClean(t, third, config)
+		if got := syncGit(t, third.Root, "cat-file", "-p", head+":merges/"+merge.ID); got+"\n" != mergeText(5) && got != mergeText(5) {
+			t.Fatalf("merges/%s at origin = %q, want second's text", merge.ID, got)
+		}
+		if got := syncGit(t, bare, "cat-file", "-t", head+":merges/"+merge.ID); got != "blob" {
+			t.Fatalf("origin's merges entry is %q after gc, want a blob", got)
+		}
+	})
+}
+
+func TestMergeKeepsOtherOperationsOfThePack(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		c := newRelicClones(first, second, config)
+		relicID, p, version := c.shareMergeRelic(t, "Other operations")
+		c.update(t, c.a, relicID, saveBody(p, version, mergeText(2)))
+		syncClean(t, first, config)
+		c.update(t, c.b, relicID, saveBody(p, version, mergeText(5)), setProperty(t, "owner", "second"))
+		assertOneWarning(t, syncClean(t, second, config), core.WarningRelicBodyMerged)
+		syncClean(t, first, config)
+		c.assertConverged(t, relicID)
+		document := shownRelic(t, c.a, relicID)
+		assertRawString(t, "owner", document.Properties["owner"], "second")
+		assertShownBody(t, c.a, relicID, p, mergeText(2, 5))
+	})
+}
+
+// lowLevelBodyConflict has first save theirs and second save ours, each from
+// part's first version, with format labels of their own, and returns second's
+// fetch error and result.
+func lowLevelBodyConflict(
+	t *testing.T, first, second *Repository, config core.ProjectConfig, n int, part relicTestPart,
+	theirsFormat string, theirs []byte, oursFormat string, ours []byte,
+) (SyncResult, error, core.RelicSnapshot) {
+	t.Helper()
+	root := sharedRelic(t, first, second, config, n, part)
+	base := 760000 + n*10
+	remote := relicHistoryFrom(t, first, config, root,
+		relicOps(relicBodySetWithFormat(base+1, part.id, bodyBaseOf(root, part.id), theirsFormat, theirs)).withBody(part.id, theirs))
+	publishRelicRefs(t, first)
+	relicHistoryFrom(t, second, config, readRelicTip(t, second, config, root.Record.State.RelicID),
+		relicOps(relicBodySetWithFormat(base+2, part.id, bodyBaseOf(root, part.id), oursFormat, ours)).withBody(part.id, ours))
+	result, err := second.Fetch(context.Background(), config)
+	return result, err, remote
+}
+
+func bodyBaseOf(snapshot core.RelicSnapshot, partID string) string {
+	part, _ := snapshot.Record.State.Relic.Part(partID)
+	if part.Body == nil {
+		return ""
+	}
+	return part.Body.Version
+}
+
+func requireBodyConflictReason(t *testing.T, result SyncResult, err error, want core.RelicMergeReason) core.RelicConflict {
+	t.Helper()
+	if core.CategoryOf(err) != core.CategoryConflict || len(result.RelicConflicts) != 1 {
+		t.Fatalf("Fetch() = %+v, %v; want one conflict", result.RelicConflicts, err)
+	}
+	conflict := result.RelicConflicts[0]
+	if conflict.Type != core.RelicConflictBody || conflict.Body == nil || conflict.Body.Reason != want || conflict.ParkedRef == "" {
+		t.Fatalf("conflict = %+v body %+v, want a parked body conflict with reason %s", conflict, conflict.Body, want)
+	}
+	return conflict
+}
+
+func TestNotTextFormatAndNoBaseAreConflicts(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		six := []byte(mergeText())
+		t.Run("not text", func(t *testing.T) {
+			part := relicTestPartNumbered(761).withBody("md", six)
+			result, err, _ := lowLevelBodyConflict(t, first, second, config, 61, part,
+				"md", []byte(mergeText(1)), "md", append([]byte(mergeText()), 0xff, '\n'))
+			requireBodyConflictReason(t, result, err, core.RelicMergeNotText)
+		})
+		t.Run("format", func(t *testing.T) {
+			part := relicTestPartNumbered(762).withBody("md", six)
+			result, err, _ := lowLevelBodyConflict(t, first, second, config, 62, part,
+				"md", []byte(mergeText(1)), "txt", []byte(mergeText(6)))
+			requireBodyConflictReason(t, result, err, core.RelicMergeFormat)
+		})
+		t.Run("no base", func(t *testing.T) {
+			part := relicTestPartNumbered(763).withField("heading", "No body")
+			result, err, _ := lowLevelBodyConflict(t, first, second, config, 63, part,
+				"md", []byte(mergeText(1)), "md", []byte(mergeText(6)))
+			conflict := requireBodyConflictReason(t, result, err, core.RelicMergeNoBase)
+			if conflict.Body.Base != nil {
+				t.Fatalf("base = %+v, want none", conflict.Body.Base)
+			}
+		})
+	})
+}
+
+func TestMergedBodyOverTheLimitIsTooLarge(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		big := strings.Repeat("y", 600*1024)
+		part := relicTestPartNumbered(764).withBody("md", []byte("a\nb\nc\nd\n"))
+		result, err, remote := lowLevelBodyConflict(t, first, second, config, 64, part,
+			"md", []byte(big+"\nb\nc\nd\n"), "md", []byte("a\nb\nc\n"+big+"\n"))
+		requireBodyConflictReason(t, result, err, core.RelicMergeTooLarge)
+		if got := relicRefHead(t, second, remote.Record.State.RelicID); got != remote.Head {
+			t.Fatalf("second's ref = %s, want origin's %s", got, remote.Head)
+		}
+	})
+}
+
+func TestMergeOnARemovedPartWarnsAndMerges(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		c := newRelicClones(first, second, config)
+		relicID, p, version := c.shareMergeRelic(t, "Removed part")
+		c.update(t, c.a, relicID, saveBody(p, version, mergeText(2)), core.RelicEdit{Kind: core.RelicEditRemovePart, Part: p})
+		syncClean(t, first, config)
+		c.update(t, c.b, relicID, saveBody(p, version, mergeText(5)))
+		result := syncClean(t, second, config)
+		assertRelicSyncOutcome(t, result.Fetch, relicID, SyncReconciled)
+		codes := map[string]int{}
+		for _, warning := range result.Fetch.RelicWarnings {
+			codes[warning.Code]++
+		}
+		if codes[core.WarningRelicBodyMerged] != 1 || codes[core.WarningRelicEditOnRemovedPart] != 1 || len(result.Fetch.RelicConflicts) != 0 {
+			t.Fatalf("warnings = %+v, conflicts = %+v; want one merge and one removed-part warning",
+				result.Fetch.RelicWarnings, result.Fetch.RelicConflicts)
+		}
+		syncClean(t, first, config)
+		c.assertConverged(t, relicID)
+		part := shownPart(t, shownRelic(t, c.a, relicID), p)
+		if !part.Removed || part.Body == nil || part.Body.Text == nil || *part.Body.Text != mergeText(2, 5) {
+			t.Fatalf("part = %+v, want removed with the merged body", part)
+		}
+	})
+}
+
+func TestTaskSyncMovesNoRelicRefWithAMergePending(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		c := newRelicClones(first, second, config)
+		relicID, p, version := c.shareMergeRelic(t, "Pending merge")
+		c.update(t, c.a, relicID, saveBody(p, version, mergeText(2)))
+		syncClean(t, first, config)
+		c.update(t, c.b, relicID, saveBody(p, version, mergeText(5)))
+
+		before := syncGit(t, second.Root, "for-each-ref", "--format=%(refname) %(objectname)")
+		originBefore := syncGit(t, second.Root, "ls-remote", "origin", relicRefPrefix+"*")
+		task := createSyncTask(t, second, config, "A task beside the pending merge")
+		if _, err := second.FetchTasks(ctx, config); err != nil {
+			t.Fatalf("FetchTasks() error = %v", err)
+		}
+		if result, err := second.PushTaskAfterFetch(ctx, config, task.ID); err != nil {
+			t.Fatalf("PushTaskAfterFetch() = %+v, %v", result, err)
+		}
+		after := syncGit(t, second.Root, "for-each-ref", "--format=%(refname) %(objectname)")
+		if relicLinesOf(before) != relicLinesOf(after) {
+			t.Fatalf("a task sync moved relic refs:\nbefore %s\nafter %s", relicLinesOf(before), relicLinesOf(after))
+		}
+		if got := syncGit(t, second.Root, "ls-remote", "origin", relicRefPrefix+"*"); got != originBefore {
+			t.Fatalf("a task sync moved origin's relics")
+		}
+		// The relic sync still merges afterwards.
+		assertOneWarning(t, syncClean(t, second, config), core.WarningRelicBodyMerged)
 	})
 }

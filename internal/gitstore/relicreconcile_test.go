@@ -736,3 +736,122 @@ func TestClassifyRelicHeadsSortsEachPair(t *testing.T) {
 		t.Fatalf("the graph lacks the diverged local tip")
 	}
 }
+
+// writeMergeScenario has both sides save part p's six-line body from its
+// first version, the local side changing line 5 and the remote line 2.
+func writeMergeScenario(t *testing.T, repo *Repository, config core.ProjectConfig) (root, local, remote core.RelicSnapshot, p string) {
+	t.Helper()
+	part := relicTestPartNumbered(1).withBody("md", []byte("one\ntwo\nthree\nfour\nfive\nsix\n"))
+	root = writeRelicRoot(t, repo, config, part)
+	ours, theirs := []byte("one\ntwo\nthree\nfour\nFIVE\nsix\n"), []byte("one\nTWO\nthree\nfour\nfive\nsix\n")
+	local = relicHistoryFrom(t, repo, config, root, relicOps(relicBodySet(101, part.id, part.id, ours)).withBody(part.id, ours))
+	remote = relicHistoryFrom(t, repo, config, root, relicOps(relicBodySet(201, part.id, part.id, theirs)).withBody(part.id, theirs))
+	return root, local, remote, part.id
+}
+
+func TestReplayMergesAStaleSaveDeterministically(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		root, local, remote, p := writeMergeScenario(t, repo, config)
+		relicID := root.Record.State.RelicID
+		outcome := replayDivergedSnapshots(t, repo, config, local, remote)
+		requireReplayed(t, outcome)
+		if outcome.Conflict != nil || outcome.Replayed != 1 || len(outcome.Warnings) != 1 ||
+			outcome.Warnings[0].Code != core.WarningRelicBodyMerged {
+			t.Fatalf("outcome = %+v, want one merged pack and its warning", outcome)
+		}
+		assertReplayedHistory(t, repo, config, relicID, outcome.Next)
+		if got := string(relicBlob(t, repo, outcome.Next+":parts/"+p+"/body")); got != "one\nTWO\nthree\nfour\nFIVE\nsix\n" {
+			t.Fatalf("merged body = %q", got)
+		}
+		next := relicCommitAt(t, repo, config, relicID, outcome.Next)
+		if next.Operation.MinReader != core.RelicMergeMinReader || len(next.Operation.Operations) != 2 {
+			t.Fatalf("replayed pack = %+v, want the save and the merge at %d", next.Operation, core.RelicMergeMinReader)
+		}
+		merge := next.Operation.Operations[1]
+		wantID := core.RelicMergeOperationID(relicID, p, relicTestID(101), relicTestID(201), core.RelicLineMergeMethod, local.Operation.WallTime)
+		if merge.ID != wantID || merge.Type != core.RelicOperationPartBodyMerge {
+			t.Fatalf("merge = %+v, want ID %s", merge, wantID)
+		}
+		if got, want := gitOutput(t, repo, "rev-parse", outcome.Next+":merges/"+merge.ID),
+			gitOutput(t, repo, "rev-parse", local.Head+":parts/"+p+"/body"); got != want {
+			t.Fatalf("merges/%s = %s, want the local commit's body blob %s", merge.ID, got, want)
+		}
+		again := replayDivergedSnapshots(t, repo, config, local, remote)
+		if got, want := gitOutput(t, repo, "rev-parse", again.Next+"^{tree}"), gitOutput(t, repo, "rev-parse", outcome.Next+"^{tree}"); got != want {
+			t.Fatalf("a second replay wrote tree %s, the first %s", got, want)
+		}
+	})
+}
+
+func TestReplayReadsBodiesOnlyForAMerge(t *testing.T) {
+	t.Parallel()
+	repo, config := relicRepository(t, testrepo.FormatSHA1)
+	root, local, remote, p := writeMergeScenario(t, repo, config)
+	requests := observeRelicObjects(repo)
+	outcome := replayDivergedSnapshots(t, repo, config, local, remote)
+	repo.relicObjectObserver = nil
+	requireReplayed(t, outcome)
+	if outcome.Conflict != nil {
+		t.Fatalf("conflict = %+v", outcome.Conflict)
+	}
+	bodies := map[string]bool{}
+	for _, commit := range []string{root.Head, local.Head, remote.Head} {
+		bodies[gitOutput(t, repo, "rev-parse", commit+":parts/"+p+"/body")] = true
+	}
+	read := map[string]int{}
+	for _, request := range *requests {
+		if strings.HasSuffix(request, "/body") {
+			t.Fatalf("the replay asked for %q by path", request)
+		}
+		if bodies[request] {
+			read[request]++
+		}
+	}
+	if len(read) != 3 {
+		t.Fatalf("the replay read bodies %v, want the three texts once each; requests %q", read, *requests)
+	}
+	for blob, count := range read {
+		if count != 1 {
+			t.Fatalf("the replay read body %s %d times", blob, count)
+		}
+	}
+}
+
+func TestSaveFromACompactedVersionIsBaseDropped(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		retired := relicToCompact(t, repo, config, 1, false)
+		relicID := retired.Record.State.RelicID
+		p := relicTestID(1)
+		version := bodyBaseOf(retired, p)
+		ours := []byte("the decision we kept\nand a line saved here\n")
+		local := relicHistoryFrom(t, repo, config, retired, relicOps(relicBodySet(101, p, version, ours)).withBody(p, ours))
+		pointRelicRef(t, repo, relicID, retired.Head)
+		checkpoint := writeRelicCheckpoint(t, repo, config, retired, core.RelicBoundaryRetired)
+		if bodyBaseOf(checkpoint, p) != version {
+			t.Fatalf("the checkpoint holds body version %s, want %s kept", bodyBaseOf(checkpoint, p), version)
+		}
+		theirs := []byte("a line saved there\nthe decision we kept\n")
+		remote := relicHistoryFrom(t, repo, config, checkpoint, relicOps(relicBodySet(201, p, version, theirs)).withBody(p, theirs))
+		summary, _ := checkpoint.Operation.Checkpoint()
+
+		requests := observeRelicObjects(repo)
+		outcome := repo.replayAcrossGenerations(ctx, config, relicReconcileRequest{RelicID: relicID, Local: local.Head, Remote: remote.Head},
+			[]string{retired.Head, local.Head}, []core.RelicOperationPack{checkpoint.Operation, remote.Operation}, summary.CompactedOperations)
+		repo.relicObjectObserver = nil
+		if outcome.Err != nil || outcome.Conflict == nil || outcome.Conflict.Type != core.RelicConflictBody ||
+			outcome.Conflict.Body == nil || outcome.Conflict.Body.Reason != core.RelicMergeBaseDropped {
+			t.Fatalf("outcome = %+v, want a base-dropped body conflict", outcome)
+		}
+		if outcome.Next != remote.Head || outcome.ParkedHead != local.Head {
+			t.Fatalf("next %s parked %s, want %s and %s", outcome.Next, outcome.ParkedHead, remote.Head, local.Head)
+		}
+		for _, request := range *requests {
+			if strings.HasSuffix(request, "/body") {
+				t.Fatalf("a base-dropped replay read body %q", request)
+			}
+		}
+	})
+}

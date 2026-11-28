@@ -36,14 +36,44 @@ type RelicBodyVersion struct {
 	Base64  *string `json:"base64,omitempty"`
 }
 
+// RelicMergeReason says why a body conflict's two edits were not merged.
+type RelicMergeReason string
+
+const (
+	// RelicMergeOverlap is two edits that change the same or touching lines.
+	RelicMergeOverlap RelicMergeReason = "overlap"
+	// RelicMergeTooManyChanges is edits too many, or too costly to compare,
+	// to merge within the merge's bounds.
+	RelicMergeTooManyChanges RelicMergeReason = "too-many-changes"
+	// RelicMergeTooLarge is a merged text over MaxRelicBodyBytes.
+	RelicMergeTooLarge RelicMergeReason = "too-large"
+	// RelicMergeNotText is a text of the three that is not valid UTF-8.
+	RelicMergeNotText RelicMergeReason = "not-text"
+	// RelicMergeFormat is format labels that differ among the three.
+	RelicMergeFormat RelicMergeReason = "format"
+	// RelicMergeNoBase is a part with no body at the version both edits
+	// started from, or at the version that stands.
+	RelicMergeNoBase RelicMergeReason = "no-base"
+	// RelicMergeBaseDropped is an edit from a history a compaction replaced,
+	// whose starting version can no longer be trusted to be shared.
+	RelicMergeBaseDropped RelicMergeReason = "base-dropped"
+	// RelicMergeUnmergeable is a stale save of a shape no honest writer
+	// makes, which is never merged.
+	RelicMergeUnmergeable RelicMergeReason = "unmergeable"
+)
+
 // RelicBodyConflict carries the three bodies of a body conflict. Base is the
-// part's body at the commit both histories share, nil when the part had none
-// there; Ours is the body at the parked local tip; Theirs is the body at the
-// fetched tip, which is the one that stands.
+// part's body at the parent of the local commit whose save stopped the replay,
+// the version that save started from, nil when the part had none there; Ours
+// is the body at the parked local tip; Theirs is the body at the fetched tip,
+// which is the one that stands. Reason says why the edits were not merged,
+// and Overlaps, set only for overlap, where they meet in Base's lines.
 type RelicBodyConflict struct {
-	Base   *RelicBodyVersion `json:"base,omitempty"`
-	Ours   RelicBodyVersion  `json:"ours"`
-	Theirs RelicBodyVersion  `json:"theirs"`
+	Base     *RelicBodyVersion  `json:"base,omitempty"`
+	Ours     RelicBodyVersion   `json:"ours"`
+	Theirs   RelicBodyVersion   `json:"theirs"`
+	Reason   RelicMergeReason   `json:"reason,omitempty"`
+	Overlaps []LineMergeOverlap `json:"overlaps,omitempty"`
 }
 
 // RelicTombstoneConflict names the local operation that could not apply to a
@@ -135,7 +165,7 @@ func RelicConflictDetail(conflict RelicConflict) string {
 func relicBodyConflictDetail(conflict RelicConflict, remote string) string {
 	part := conflict.Part
 	detail := "part " + part + ": the body was saved here and on " + remote +
-		" from the same version; the text from " + remote + " stands"
+		" from the same version; the text from " + remote + " stands" + relicMergeReasonDetail(conflict.Body)
 	show := "`workbook relic show " + conflict.RelicID + "#" + part + " --body > current.md`"
 	if conflict.ParkedRef == "" {
 		return detail + "; run " + show + " to read it, combine it with the text saved here in mine.md, then run " +
@@ -146,10 +176,63 @@ func relicBodyConflictDetail(conflict RelicConflict, remote string) string {
 	if conflict.Body != nil && conflict.Body.Theirs.Version != "" {
 		theirs = conflict.Body.Theirs.Version
 	}
+	base, combine := "", "combine the two in mine.md"
+	if conflict.Body != nil && conflict.Body.Base != nil && conflict.Body.Base.Object != "" {
+		base = "`git cat-file blob " + conflict.Body.Base.Object + " > base.md` to write the text the save here started from, "
+		combine = "combine the edits in mine.md"
+	}
 	return detail + "; the text saved here is kept at " + conflict.ParkedRef +
 		"; run `git cat-file blob " + conflict.ParkedRef + ":parts/" + part + "/body > mine.md` to write it, " +
-		show + " to write the text that stands, combine the two in mine.md, then run " +
+		base + show + " to write the text that stands, " + combine + ", then run " +
 		"`workbook relic update " + conflict.RelicID + " --part " + part + " --body-file mine.md --base " + theirs + "`"
+}
+
+// relicMergeReasonDetail says why a body conflict's edits were not merged, as
+// a clause that follows a semicolon, or "" when the conflict gives no reason.
+func relicMergeReasonDetail(body *RelicBodyConflict) string {
+	if body == nil || body.Reason == "" {
+		return ""
+	}
+	if body.Reason == RelicMergeOverlap {
+		if len(body.Overlaps) == 0 {
+			return "; the edits overlap"
+		}
+		ranges := make([]string, 0, len(body.Overlaps))
+		for _, overlap := range body.Overlaps {
+			switch {
+			case overlap.BaseLines == 0:
+				ranges = append(ranges, "after "+strconv.Itoa(overlap.BaseStart))
+			case overlap.BaseLines == 1:
+				ranges = append(ranges, strconv.Itoa(overlap.BaseStart))
+			default:
+				ranges = append(ranges, strconv.Itoa(overlap.BaseStart)+"-"+strconv.Itoa(overlap.BaseStart+overlap.BaseLines-1))
+			}
+		}
+		return "; the edits overlap at base lines " + strings.Join(ranges, ", ")
+	}
+	return "; it cannot be merged: " + relicMergeReasonWords(body.Reason)
+}
+
+// relicMergeReasonWords is a reason other than overlap in words.
+func relicMergeReasonWords(reason RelicMergeReason) string {
+	switch reason {
+	case RelicMergeTooManyChanges:
+		return "the edits change too many lines to compare"
+	case RelicMergeTooLarge:
+		return fmt.Sprintf("the merged text would be over the %d byte limit for a body", MaxRelicBodyBytes)
+	case RelicMergeNotText:
+		return "one of the texts is not UTF-8 text"
+	case RelicMergeFormat:
+		return "the texts carry different format labels"
+	case RelicMergeNoBase:
+		return "the part had no body at the version one of the edits started from"
+	case RelicMergeBaseDropped:
+		return "the save here was made in a history that a compaction replaced"
+	case RelicMergeUnmergeable:
+		return "the saves recorded here do not follow from the version they started from"
+	default:
+		return string(reason)
+	}
 }
 
 // relicUnappliedNamed bounds how many unapplied operations a detail names.

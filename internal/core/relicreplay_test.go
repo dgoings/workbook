@@ -598,8 +598,9 @@ func TestRelicConflictDetailNamesTheUnappliedChanges(t *testing.T) {
 	theirs := conflict.Body.Theirs.Version
 	body := "relic " + relicDocRelic + ": part " + relicDocPartA + ": the body was saved here and on origin from the same version; " +
 		"the text from origin stands; the text saved here is kept at " + conflict.ParkedRef + "; run `git cat-file blob " +
-		conflict.ParkedRef + ":parts/" + relicDocPartA + "/body > mine.md` to write it, `workbook relic show " + relicDocRelic +
-		"#" + relicDocPartA + " --body > current.md` to write the text that stands, combine the two in mine.md, then run " +
+		conflict.ParkedRef + ":parts/" + relicDocPartA + "/body > mine.md` to write it, `git cat-file blob " + conflict.Body.Base.Object +
+		" > base.md` to write the text the save here started from, `workbook relic show " + relicDocRelic +
+		"#" + relicDocPartA + " --body > current.md` to write the text that stands, combine the edits in mine.md, then run " +
 		"`workbook relic update " + relicDocRelic + " --part " + relicDocPartA + " --body-file mine.md --base " + theirs + "`"
 	tombstone := RelicConflict{
 		RelicID:   relicDocRelic,
@@ -950,5 +951,263 @@ func TestConcurrentRetireMarksLaterSyncWins(t *testing.T) {
 	requireReplayApplied(t, "a local retire onto a remote unretire", remoteUnretired, step)
 	if !step.Record.State.Relic.Retired {
 		t.Errorf("a local retire replayed onto a remote unretire left the relic live")
+	}
+}
+
+// relicSaveOp is a part.body.set of part from base, of size bytes.
+func relicSaveOp(id, part, base string, size int64) RelicOperation {
+	return RelicOperation{ID: id, Type: RelicOperationPartBodySet, Part: part,
+		Body: &RelicBodyChange{Format: "md", Bytes: size, Base: base}}
+}
+
+// relicMergeReplayInput is the replay input for a pack first written onto
+// sourceParent, giving source.
+func relicMergeReplayInput(t *testing.T, sourceParent RelicRecord, pack RelicOperationPack) RelicReplayInput {
+	t.Helper()
+	source := mustApplyRelic(t, sourceParent, pack)
+	return RelicReplayInput{Source: &source, SourceParent: &sourceParent}
+}
+
+func TestPlanReplayAsksToMergeAStaleSave(t *testing.T) {
+	golden := goldenRelicRecord(t)
+	theirs, ours := relicTestID(400), relicTestID(401)
+	parent := mustApplyRelic(t, golden, relicFoldPack(2, relicSaveOp(theirs, relicDocPartA, relicDocPartA, 20)))
+	pack := relicFoldPack(2, relicSaveOp(ours, relicDocPartA, relicDocPartA, 30))
+
+	step := replayStepFor(t, parent, pack, relicMergeReplayInput(t, golden, pack))
+	want := []RelicBodyMergeNeed{{
+		Part:           relicDocPartA,
+		Ancestor:       RelicBody{Format: "md", Version: relicDocPartA, Bytes: 1840},
+		Current:        RelicBody{Format: "md", Version: theirs, Bytes: 20},
+		Other:          RelicBody{Format: "md", Version: ours, Bytes: 30},
+		OtherOperation: ours,
+		Stale:          ours,
+	}}
+	if !reflect.DeepEqual(step.Merges, want) {
+		t.Fatalf("merges = %#v, want %#v", step.Merges, want)
+	}
+	if step.Skip || step.Conflict != nil || step.ConflictOperation != "" || !reflect.DeepEqual(step.Record, RelicRecord{}) {
+		t.Fatalf("step = %#v, want only the merges", step)
+	}
+
+	t.Run("two saves in the pack merge the last", func(t *testing.T) {
+		second := relicTestID(402)
+		pack := relicFoldPack(2, relicSaveOp(ours, relicDocPartA, relicDocPartA, 30), relicSaveOp(second, relicDocPartA, ours, 31))
+		step := replayStepFor(t, parent, pack, relicMergeReplayInput(t, golden, pack))
+		if len(step.Merges) != 1 || step.Merges[0].OtherOperation != second || step.Merges[0].Stale != ours ||
+			step.Merges[0].Other.Version != second {
+			t.Fatalf("merges = %#v, want the second save merged in and the first named", step.Merges)
+		}
+	})
+
+	t.Run("a merged pack replayed again merges its merge", func(t *testing.T) {
+		// This clone merged its save s onto theirs as m; origin then moved on
+		// to carol's save from theirs.
+		saved, merge, carol := relicTestID(403), relicTestID(404), relicTestID(405)
+		merged := mustApplyRelic(t, parent, relicFoldPack(3,
+			relicSaveOp(saved, relicDocPartA, relicDocPartA, 30),
+			RelicOperation{ID: merge, Type: RelicOperationPartBodyMerge, Part: relicDocPartA,
+				Body:  &RelicBodyChange{Format: "md", Bytes: 33, Base: theirs},
+				Merge: &RelicBodyMerge{Ancestor: relicDocPartA, Other: saved, Method: RelicLineMergeMethod}}))
+		_ = merged
+		pack := relicFoldPack(3,
+			relicSaveOp(saved, relicDocPartA, relicDocPartA, 30),
+			RelicOperation{ID: merge, Type: RelicOperationPartBodyMerge, Part: relicDocPartA,
+				Body:  &RelicBodyChange{Format: "md", Bytes: 33, Base: theirs},
+				Merge: &RelicBodyMerge{Ancestor: relicDocPartA, Other: saved, Method: RelicLineMergeMethod}})
+		newer := mustApplyRelic(t, parent, relicFoldPack(3, relicSaveOp(carol, relicDocPartA, theirs, 25)))
+		step := replayStepFor(t, newer, pack, relicMergeReplayInput(t, parent, pack))
+		want := []RelicBodyMergeNeed{{
+			Part:           relicDocPartA,
+			Ancestor:       RelicBody{Format: "md", Version: theirs, Bytes: 20},
+			Current:        RelicBody{Format: "md", Version: carol, Bytes: 25},
+			Other:          RelicBody{Format: "md", Version: merge, Bytes: 33},
+			OtherOperation: merge,
+			Stale:          merge,
+		}}
+		if step.Conflict != nil || !reflect.DeepEqual(step.Merges, want) {
+			t.Fatalf("step = %#v, want merges %#v", step, want)
+		}
+	})
+
+	t.Run("an agreeing body needs no merge", func(t *testing.T) {
+		input := relicMergeReplayInput(t, golden, pack)
+		input.SameBody = map[string]bool{relicDocPartA: true}
+		step := replayStepFor(t, parent, pack, input)
+		requireReplayApplied(t, "agreeing bodies", parent, step)
+		if step.Merges != nil {
+			t.Fatalf("merges = %#v, want none", step.Merges)
+		}
+	})
+
+	t.Run("a part with no body at the ancestor is still asked about", func(t *testing.T) {
+		withB := mustApplyRelic(t, golden, relicFoldPack(2, RelicOperation{ID: relicTestID(406),
+			Type: RelicOperationPartBodySet, Part: relicDocPartB, Body: &RelicBodyChange{Format: "md", Bytes: 5}}))
+		pack := relicFoldPack(2, RelicOperation{ID: relicTestID(407),
+			Type: RelicOperationPartBodySet, Part: relicDocPartB, Body: &RelicBodyChange{Format: "md", Bytes: 6}})
+		step := replayStepFor(t, withB, pack, relicMergeReplayInput(t, golden, pack))
+		if len(step.Merges) != 1 || step.Merges[0].Ancestor.Version != "" ||
+			CheckRelicBodyMerge(step.Merges[0]) != RelicMergeNoBase {
+			t.Fatalf("merges = %#v, want one need with no ancestor body, refused as no-base", step.Merges)
+		}
+	})
+}
+
+func TestPlanReplayStaleSaveIgnoredLocallyIsNoConflict(t *testing.T) {
+	golden := goldenRelicRecord(t)
+	mine, theirs, ignored := relicTestID(410), relicTestID(411), relicTestID(412)
+	sourceParent := mustApplyRelic(t, golden, relicFoldPack(2, relicSaveOp(mine, relicDocPartA, relicDocPartA, 10)))
+	parent := mustApplyRelic(t, golden, relicFoldPack(2, relicSaveOp(theirs, relicDocPartA, relicDocPartA, 20)))
+	// The save starts from the first version, which the local fold had
+	// already moved past, so it changed nothing here.
+	pack := relicFoldPack(3, relicSaveOp(ignored, relicDocPartA, relicDocPartA, 30),
+		RelicOperation{ID: relicTestID(413), Type: RelicOperationTitleSet, Title: "Kept"})
+	step := replayStepFor(t, parent, pack, relicMergeReplayInput(t, sourceParent, pack))
+	requireReplayApplied(t, "an ignored save", parent, step)
+	if step.Merges != nil {
+		t.Fatalf("merges = %#v, want none", step.Merges)
+	}
+	if body := requirePartForTest(t, step.Record.State.Relic, relicDocPartA).Body; body == nil || body.Version != theirs {
+		t.Fatalf("body = %#v, want the parent's", body)
+	}
+	if step.Record.State.Relic.Title != "Kept" {
+		t.Fatalf("title = %q, want the pack's", step.Record.State.Relic.Title)
+	}
+}
+
+func TestPlanReplayForgedStaleShapeIsUnmergeable(t *testing.T) {
+	golden := goldenRelicRecord(t)
+	mine, theirs := relicTestID(420), relicTestID(421)
+	sourceParent := mustApplyRelic(t, golden, relicFoldPack(2, relicSaveOp(mine, relicDocPartA, relicDocPartA, 10)))
+	parent := mustApplyRelic(t, golden, relicFoldPack(2, relicSaveOp(theirs, relicDocPartA, relicDocPartA, 20)))
+	for label, pack := range map[string]RelicOperationPack{
+		// A save from a version only origin has: ignored here, taken there.
+		"a save from origin's version": relicFoldPack(3, relicSaveOp(relicTestID(422), relicDocPartA, theirs, 30)),
+		// The first save is stale onto origin, the second is taken there.
+		"a chain that rejoins origin": relicFoldPack(3,
+			relicSaveOp(relicTestID(423), relicDocPartA, mine, 30),
+			relicSaveOp(relicTestID(424), relicDocPartA, theirs, 31)),
+	} {
+		step := replayStepFor(t, parent, pack, relicMergeReplayInput(t, sourceParent, pack))
+		if step.Conflict == nil || step.Conflict.Type != RelicConflictBody || step.Conflict.Part != relicDocPartA ||
+			step.Conflict.Body == nil || step.Conflict.Body.Reason != RelicMergeUnmergeable {
+			t.Fatalf("%s: conflict = %#v, want an unmergeable body conflict on part A", label, step.Conflict)
+		}
+		if step.Merges != nil || step.ConflictOperation == "" {
+			t.Fatalf("%s: step = %#v, want no merges and a named operation", label, step)
+		}
+	}
+}
+
+func TestMergeRelicBodyReasons(t *testing.T) {
+	base := RelicBody{Format: "md", Version: relicTestID(430)}
+	need := RelicBodyMergeNeed{Part: relicDocPartA, Ancestor: base,
+		Current: RelicBody{Format: "md", Version: relicTestID(431)}, Other: RelicBody{Format: "md", Version: relicTestID(432)},
+		OtherOperation: relicTestID(432)}
+	six := "1\n2\n3\n4\n5\n6\n"
+	var many, manyA, manyB strings.Builder
+	for line := 0; line < 4200; line++ {
+		fmt := strconv.Itoa(line) + "\n"
+		many.WriteString(fmt)
+		if line%2 == 0 && line < 4002 {
+			manyA.WriteString("a" + fmt)
+		} else {
+			manyA.WriteString(fmt)
+		}
+		manyB.WriteString(fmt)
+	}
+	big := strings.Repeat("y", 600*1024)
+	without := func(change func(*RelicBodyMergeNeed)) RelicBodyMergeNeed {
+		changed := need
+		change(&changed)
+		return changed
+	}
+	for _, row := range []struct {
+		name     string
+		need     RelicBodyMergeNeed
+		texts    RelicBodyMergeTexts
+		merged   string
+		reason   RelicMergeReason
+		overlaps []LineMergeOverlap
+	}{
+		{"clean", need, RelicBodyMergeTexts{[]byte(six), []byte("1\nTWO\n3\n4\n5\n6\n"), []byte("1\n2\n3\n4\nFIVE\n6\n")},
+			"1\nTWO\n3\n4\nFIVE\n6\n", "", nil},
+		{"overlap", need, RelicBodyMergeTexts{[]byte(six), []byte("1\nA\n3\n4\n5\n6\n"), []byte("1\nB\n3\n4\n5\n6\n")},
+			"", RelicMergeOverlap, []LineMergeOverlap{{BaseStart: 2, BaseLines: 1}}},
+		{"no ancestor body", without(func(n *RelicBodyMergeNeed) { n.Ancestor = RelicBody{} }), RelicBodyMergeTexts{}, "", RelicMergeNoBase, nil},
+		{"no current body", without(func(n *RelicBodyMergeNeed) { n.Current = RelicBody{} }), RelicBodyMergeTexts{}, "", RelicMergeNoBase, nil},
+		{"format", without(func(n *RelicBodyMergeNeed) { n.Current.Format = "txt" }), RelicBodyMergeTexts{}, "", RelicMergeFormat, nil},
+		{"not text", need, RelicBodyMergeTexts{[]byte(six), []byte(six), []byte("1\n\xff\n")}, "", RelicMergeNotText, nil},
+		{"too many changes", need, RelicBodyMergeTexts{[]byte(many.String()), []byte(manyA.String()), []byte(manyB.String() + "end\n")},
+			"", RelicMergeTooManyChanges, nil},
+		{"too large", need, RelicBodyMergeTexts{[]byte("a\nb\nc\nd\n"), []byte(big + "\nb\nc\nd\n"), []byte("a\nb\nc\n" + big + "\n")},
+			"", RelicMergeTooLarge, nil},
+	} {
+		merged, reason, overlaps := MergeRelicBody(row.need, row.texts)
+		if reason != row.reason || !reflect.DeepEqual(overlaps, row.overlaps) {
+			t.Errorf("%s: reason %q, overlaps %v; want %q, %v", row.name, reason, overlaps, row.reason, row.overlaps)
+			continue
+		}
+		if row.reason == "" && string(merged) != row.merged {
+			t.Errorf("%s: merged %q, want %q", row.name, merged, row.merged)
+		}
+		if row.reason != "" && merged != nil {
+			t.Errorf("%s: merged text %q given beside a reason", row.name, merged)
+		}
+	}
+}
+
+func TestAppendRelicBodyMergesFoldsAtTheNextClock(t *testing.T) {
+	golden := goldenRelicRecord(t)
+	withB := mustApplyRelic(t, golden, relicFoldPack(2, RelicOperation{ID: relicTestID(440),
+		Type: RelicOperationPartBodySet, Part: relicDocPartB, Body: &RelicBodyChange{Format: "md", Bytes: 5}}))
+	parent := mustApplyRelic(t, withB, relicFoldPack(3,
+		relicSaveOp(relicTestID(441), relicDocPartA, relicDocPartA, 20),
+		relicSaveOp(relicTestID(442), relicDocPartB, relicTestID(440), 21)))
+	saveA, saveB := relicTestID(443), relicTestID(444)
+	pack := relicFoldPack(3, relicSaveOp(saveB, relicDocPartB, relicTestID(440), 9), relicSaveOp(saveA, relicDocPartA, relicDocPartA, 8))
+	step := replayStepFor(t, parent, pack, relicMergeReplayInput(t, withB, pack))
+	if len(step.Merges) != 2 || step.Merges[0].Part != relicDocPartA || step.Merges[1].Part != relicDocPartB {
+		t.Fatalf("merges = %#v, want parts A and B in order", step.Merges)
+	}
+	operations := []RelicOperation{
+		RelicBodyMergeOperation(relicDocRelic, step.Merges[1], []byte("merged b\n"), pack.WallTime),
+		RelicBodyMergeOperation(relicDocRelic, step.Merges[0], []byte("merged a text\n"), pack.WallTime),
+	}
+	appended, record, err := AppendRelicBodyMerges(parent, pack, operations)
+	if err != nil {
+		t.Fatalf("AppendRelicBodyMerges: %v", err)
+	}
+	if appended.MinReader != RelicMergeMinReader || appended.LogicalClock != parent.State.LogicalClock+1 {
+		t.Fatalf("pack minReader %d, clock %d; want %d and %d", appended.MinReader, appended.LogicalClock,
+			RelicMergeMinReader, parent.State.LogicalClock+1)
+	}
+	if len(appended.Operations) != 4 || appended.Operations[2].ID != operations[1].ID || appended.Operations[3].ID != operations[0].ID {
+		t.Fatalf("operations = %#v, want the saves then the merges of A and B", appended.Operations)
+	}
+	if len(pack.Operations) != 2 || pack.MinReader == RelicMergeMinReader {
+		t.Fatalf("the caller's pack was changed: %#v", pack)
+	}
+	for _, check := range []struct {
+		part, version string
+		bytes         int64
+	}{
+		{relicDocPartA, operations[1].ID, int64(len("merged a text\n"))},
+		{relicDocPartB, operations[0].ID, int64(len("merged b\n"))},
+	} {
+		body := requirePartForTest(t, record.State.Relic, check.part).Body
+		if body == nil || body.Version != check.version || body.Bytes != check.bytes {
+			t.Fatalf("part %s body = %#v, want version %s of %d bytes", check.part, body, check.version, check.bytes)
+		}
+	}
+	if record.State.MinReader != RelicMergeMinReader {
+		t.Fatalf("state minReader = %d, want %d", record.State.MinReader, RelicMergeMinReader)
+	}
+	again := RelicBodyMergeOperation(relicDocRelic, step.Merges[0], []byte("merged a text\n"), pack.WallTime)
+	if again.ID != operations[1].ID {
+		t.Fatalf("the same merge has IDs %s and %s", again.ID, operations[1].ID)
+	}
+	if merge := operations[1].Merge; merge.Ancestor != relicDocPartA || merge.Other != saveA || operations[1].Body.Base != relicTestID(441) {
+		t.Fatalf("merge of A = %#v base %s, want ancestor A, other %s, base %s", merge, operations[1].Body.Base, saveA, relicTestID(441))
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -16,9 +17,30 @@ import (
 //	       \                \
 //	        l1 - l2          l1' - l2'   Next
 //
-// l1' records l1's operations byte for byte except the logical clock, in a
-// commit of its own whose parent is r2. A pack origin already holds, or that
-// would change nothing, is not written. When replay stops on a conflict, Next
+// l1' records l1's operations byte for byte except the logical clock, the
+// merge operations appended and the minimum reader, in a commit of its own
+// whose parent is r2. A pack origin already holds, or that would change
+// nothing, is not written.
+//
+// A body save in l1 from a version r1 or r2 replaced is merged line by line
+// when the two edits change different lines (mergeReplayedBodies). The merge
+// is a part.body.merge appended to l1's pack, so the stale save and the merge
+// apply together. Bob's replay of b1 onto Alice's save c2:
+//
+//	refs/workbook/relics/WB-R-…
+//	 c1 ── c2 (Alice: part.body.set base c1)               origin's tip
+//	        └── b1' operation.json  [part.body.set 01SAVEBOB… base c1   (not applied)
+//	                                 part.body.merge 01MERGE… base c2,
+//	                                   ancestor c1, other 01SAVEBOB…]  minReader 9
+//	            state.json          part body version 01MERGE…, minReader 9
+//	            parts/01PART…/body  the merged text (new blob)
+//	            merges/01MERGE…     Bob's text: the blob of his original commit b1
+//
+// The merge's ID derives from its inputs and the pack's wall time, so the
+// same replay always writes the same tree, and every other clone reads the
+// stored text rather than merging again. Overlapping edits, and every save
+// that cannot be merged safely, stop the replay with a body conflict whose
+// reason says why. When replay stops on a conflict, Next
 // is the fetched tip plus the packs written before the stop, and the old local
 // tip l2 is returned as ParkedHead for the caller to keep.
 //
@@ -336,16 +358,38 @@ func (r *Repository) replayRelic(
 		pack.HistoryGeneration = parent.Record.State.History.Generation
 		step, err := core.PlanRelicReplay(parent.Record, pack, core.RelicReplayInput{
 			Held: held, SameBody: sameRelicBodies(parent, source, pack),
+			Source: &source.Record, SourceParent: &sourceParent.Record,
 		})
 		if err != nil {
 			return fail(err)
+		}
+		replay := pack
+		replay.LogicalClock = parent.Record.State.LogicalClock + 1
+		record := step.Record
+		var merged relicReplayMerges
+		if step.Merges != nil {
+			merged, err = r.mergeReplayedBodies(ctx, parent, source, sourceParent, pack, step.Merges)
+			if err != nil {
+				return fail(err)
+			}
+			if merged.conflict != nil {
+				step.Conflict, step.ConflictOperation = merged.conflict, merged.conflictOperation
+			} else {
+				replay, record = merged.pack, merged.record
+			}
 		}
 		if step.Conflict != nil {
 			conflict := *step.Conflict
 			conflict.Unreplayed = len(locals) - index
 			conflict.Unapplied = relicUnappliedOperations(locals[index:], step.ConflictOperation, held)
 			if conflict.Type == core.RelicConflictBody {
-				conflict.Body = relicBodyConflictAt(base, locals[len(locals)-1], parent, conflict.Part)
+				// The save that stopped started from its own commit's parent,
+				// so that parent's body is the version both edits share.
+				body := relicBodyConflictAt(sourceParent, locals[len(locals)-1], parent, conflict.Part)
+				if step.Conflict.Body != nil {
+					body.Reason, body.Overlaps = step.Conflict.Body.Reason, step.Conflict.Body.Overlaps
+				}
+				conflict.Body = body
 			}
 			outcome.Conflict, outcome.ParkedHead = &conflict, request.Local
 			break
@@ -355,12 +399,11 @@ func (r *Repository) replayRelic(
 			continue
 		}
 
-		replay := pack
-		replay.LogicalClock = parent.Record.State.LogicalClock + 1
-		written, warnings, err := r.writeReplayedRelic(ctx, parent, source, sourceParent, replay, step.Record)
+		written, warnings, err := r.writeReplayedRelic(ctx, parent, source, sourceParent, replay, record, merged.texts, merged.inputs)
 		if err != nil {
 			return fail(err)
 		}
+		warnings = append(warnings, merged.warnings...)
 		if written.ObjectID == parent.ObjectID {
 			// The pack changes neither the state nor any part's content.
 			outcome.Skipped++
@@ -405,7 +448,7 @@ func relicUnappliedOperations(stopped []RelicCommit, named string, held map[stri
 func sameRelicBodies(parent, source RelicCommit, pack core.RelicOperationPack) map[string]bool {
 	same := map[string]bool{}
 	for _, operation := range pack.Operations {
-		if operation.Type != core.RelicOperationPartBodySet {
+		if operation.Type != core.RelicOperationPartBodySet && operation.Type != core.RelicOperationPartBodyMerge {
 			continue
 		}
 		saved, savedOK := relicBodyVersionAt(source, operation.Part)
@@ -413,6 +456,154 @@ func sameRelicBodies(parent, source RelicCommit, pack core.RelicOperationPack) m
 		same[operation.Part] = savedOK && currentOK && saved.Object == current.Object && saved.Format == current.Format
 	}
 	return same
+}
+
+// relicReplayMerges is what merging one pack's stale body saves produced:
+// the pack with its merges appended and its fold, the merged texts and the
+// other side's blob of each merge by merge ID, and a warning per merge. With
+// conflict set, nothing else is, and conflictOperation is the save it names.
+type relicReplayMerges struct {
+	pack              core.RelicOperationPack
+	record            core.RelicRecord
+	texts             map[string][]byte
+	inputs            map[string]RelicMergeObject
+	warnings          []core.Warning
+	conflict          *core.RelicConflict
+	conflictOperation string
+}
+
+// mergeReplayedBodies merges each stale body save PlanRelicReplay found in
+// pack, recorded in source on top of sourceParent, onto parent:
+//
+//  1. A source in another history generation than parent's is base-dropped:
+//     a compaction lies between them, and the version it started from is not
+//     trusted to be shared (story 12 adopts such a history).
+//  2. Each need's labels are judged in part order, and the three texts of
+//     every need before the first refused one are read in one Git batch.
+//  3. Each is merged in part order; the first that cannot be is the conflict.
+//  4. A merged text equal to parent's records no merge, so the stale save
+//     replays as one the fold ignores; every other one appends a
+//     part.body.merge, and the pack is folded at parent's next clock.
+//
+// No text is read when the first need is refused on its labels or its
+// generation, and nothing is written here.
+func (r *Repository) mergeReplayedBodies(
+	ctx context.Context,
+	parent, source, sourceParent RelicCommit,
+	pack core.RelicOperationPack,
+	needs []core.RelicBodyMergeNeed,
+) (relicReplayMerges, error) {
+	relicID := parent.Record.State.RelicID
+	refuse := func(need core.RelicBodyMergeNeed, reason core.RelicMergeReason, overlaps []core.LineMergeOverlap) relicReplayMerges {
+		return relicReplayMerges{
+			conflict: &core.RelicConflict{RelicID: relicID, Type: core.RelicConflictBody, Part: need.Part,
+				Body: &core.RelicBodyConflict{Reason: reason, Overlaps: overlaps}},
+			conflictOperation: need.Stale,
+		}
+	}
+	if source.Operation.HistoryGeneration != parent.Record.State.History.Generation ||
+		sourceParent.Record.State.History.Generation != source.Record.State.History.Generation {
+		return refuse(needs[0], core.RelicMergeBaseDropped, nil), nil
+	}
+	readable := needs
+	var refused *core.RelicBodyMergeNeed
+	var refusedFor core.RelicMergeReason
+	for index := range needs {
+		if reason := core.CheckRelicBodyMerge(needs[index]); reason != "" {
+			readable, refused, refusedFor = needs[:index], &needs[index], reason
+			break
+		}
+	}
+	texts, err := r.readRelicMergeTexts(ctx, relicID, parent, source, sourceParent, readable)
+	if err != nil {
+		return relicReplayMerges{}, err
+	}
+	result := relicReplayMerges{texts: map[string][]byte{}, inputs: map[string]RelicMergeObject{}}
+	var operations []core.RelicOperation
+	for index, need := range readable {
+		merged, reason, overlaps := core.MergeRelicBody(need, texts[index])
+		if reason != "" {
+			return refuse(need, reason, overlaps), nil
+		}
+		if bytes.Equal(merged, texts[index].Current) {
+			continue
+		}
+		operation := core.RelicBodyMergeOperation(relicID, need, merged, pack.WallTime)
+		operations = append(operations, operation)
+		other := source.Parts[need.Part]
+		result.texts[operation.ID] = merged
+		result.inputs[operation.ID] = RelicMergeObject{Blob: other.Body, Bytes: other.BodyBytes}
+		result.warnings = append(result.warnings, core.RelicBodyMergedWarning(relicID, r.remote(), operation))
+	}
+	if refused != nil {
+		return refuse(*refused, refusedFor, nil), nil
+	}
+	result.pack, result.record, err = core.AppendRelicBodyMerges(parent.Record, pack, operations)
+	if err != nil {
+		return relicReplayMerges{}, err
+	}
+	return result, nil
+}
+
+// readRelicMergeTexts reads the three texts of each need, the source parent's,
+// parent's and the source's body of its part, through one Git batch process,
+// each within the limit for one body.
+func (r *Repository) readRelicMergeTexts(
+	ctx context.Context,
+	relicID string,
+	parent, source, sourceParent RelicCommit,
+	needs []core.RelicBodyMergeNeed,
+) ([]core.RelicBodyMergeTexts, error) {
+	if len(needs) == 0 {
+		return nil, nil
+	}
+	var input bytes.Buffer
+	type wanted struct{ part, side, blob string }
+	var asked []wanted
+	for _, need := range needs {
+		for _, side := range []struct {
+			name   string
+			commit RelicCommit
+		}{{"ancestor", sourceParent}, {"current", parent}, {"other", source}} {
+			blob := side.commit.Parts[need.Part].Body
+			if blob == "" {
+				return nil, corruptRelic(relicID, "commit %s has no body for part %s, which its state records",
+					side.commit.ObjectID, need.Part)
+			}
+			asked = append(asked, wanted{need.Part, side.name, blob})
+			fmt.Fprintf(&input, "%s\n", blob)
+		}
+	}
+	batch, err := r.startRelicObjectBatch(ctx, input.Bytes())
+	if err != nil {
+		return nil, err
+	}
+	defer batch.Close()
+	contents := make([][]byte, len(asked))
+	for index, item := range asked {
+		object, err := readBatchObjectWithin(batch.Reader(), core.MaxRelicBodyBytes)
+		if err != nil {
+			return nil, batch.ReadFailure("cannot read relic bodies to merge from Git batch", err)
+		}
+		switch {
+		case object.missing || object.kind != "blob":
+			return nil, corruptRelic(relicID, "part %s: the %s body %s is missing from Git or is not a blob", item.part, item.side, item.blob)
+		case object.refused != nil:
+			return nil, corruptRelic(relicID, "part %s: the %s body is %d bytes, over the %d byte limit for a body",
+				item.part, item.side, object.size, core.MaxRelicBodyBytes)
+		}
+		contents[index] = object.contents
+	}
+	if err := batch.Finish(); err != nil {
+		return nil, err
+	}
+	texts := make([]core.RelicBodyMergeTexts, len(needs))
+	for index := range needs {
+		texts[index] = core.RelicBodyMergeTexts{
+			Ancestor: contents[3*index], Current: contents[3*index+1], Other: contents[3*index+2],
+		}
+	}
+	return texts, nil
 }
 
 // relicBodyVersionAt describes the body a commit stores for a part, without
@@ -455,6 +646,13 @@ func relicBodyConflictAt(base, local, stands RelicCommit, partID string) *core.R
 //     parent's fields.json, read under the object ceiling, with the pack's
 //     field operations applied, written in the stored form.
 //   - Every other part keeps parent's subtree.
+//   - A body whose version is a merge of merged, which maps each merge this
+//     replay appended to its text, is that text, written as a new blob.
+//
+// The commit's merges tree holds one entry per part.body.merge of pack: the
+// blob inputs gives for a merge this replay appended, which is source's body
+// and so already stored, and source's own entry for a merge source already
+// held. No text is copied.
 //
 // Fields combined that way may pass their total. They are written all the
 // same and returned with a warning, since two honest edits can pass it
@@ -471,6 +669,8 @@ func (r *Repository) writeReplayedRelic(
 	sourceParent RelicCommit,
 	pack core.RelicOperationPack,
 	record core.RelicRecord,
+	merged map[string][]byte,
+	inputs map[string]RelicMergeObject,
 ) (RelicCommit, []core.Warning, error) {
 	relicID := record.State.RelicID
 	if err := core.ValidateRelicCheckpoint(&parent.Record, pack, record); err != nil {
@@ -487,6 +687,7 @@ func (r *Repository) writeReplayedRelic(
 	fieldsEdited := relicPartsWithFieldOperations(pack, record.State.Relic)
 	parts := make(map[string]RelicPartObjects, len(record.State.Relic.Parts))
 	var combine []string
+	var mergedParts []string
 	for _, part := range record.State.Relic.Parts {
 		before, existed := parent.Parts[part.ID]
 		if _, isNamed := named[part.ID]; !isNamed {
@@ -516,7 +717,12 @@ func (r *Repository) writeReplayedRelic(
 
 		objects.Body, objects.BodyBytes = "", 0
 		if part.Body != nil {
+			_, isMerged := merged[part.Body.Version]
 			switch {
+			case isMerged:
+				// Written below, once the merged text is stored.
+				objects.Body, objects.BodyBytes = "", int64(len(merged[part.Body.Version]))
+				mergedParts = append(mergedParts, part.ID)
 			case core.RelicBodySavedBy(&parent.Record, pack, record, part.ID):
 				stored, listed := source.Record.State.Relic.Part(part.ID)
 				if !inSource || !listed || stored.Body == nil || stored.Body.Version != part.Body.Version || saved.Body == "" {
@@ -572,7 +778,7 @@ func (r *Repository) writeReplayedRelic(
 		}
 	}
 
-	changedSubtree := len(fieldBlobs) > 0
+	changedSubtree := len(fieldBlobs) > 0 || len(mergedParts) > 0
 	for partID := range named {
 		objects, listed := parts[partID]
 		before, existed := parent.Parts[partID]
@@ -597,6 +803,10 @@ func (r *Repository) writeReplayedRelic(
 		blobs = append(blobs, encoded)
 	}
 	blobs = append(blobs, fieldBlobs...)
+	for _, partID := range mergedParts {
+		part, _ := record.State.Relic.Part(partID)
+		blobs = append(blobs, merged[part.Body.Version])
+	}
 	blobIDs, err := r.hashRelicBlobs(ctx, blobs)
 	if err != nil {
 		return RelicCommit{}, nil, err
@@ -605,6 +815,15 @@ func (r *Repository) writeReplayedRelic(
 		objects := parts[partID]
 		objects.Fields, objects.FieldsBytes = blobIDs[3+index], int64(len(fieldBlobs[index]))
 		parts[partID] = objects
+	}
+	for index, partID := range mergedParts {
+		objects := parts[partID]
+		objects.Body = blobIDs[3+len(fieldBlobs)+index]
+		parts[partID] = objects
+	}
+	mergeEntries, err := relicReplayedMergeEntries(relicID, source, pack, inputs)
+	if err != nil {
+		return RelicCommit{}, nil, err
 	}
 
 	// A part gets a new subtree when one of its blobs changed.
@@ -651,12 +870,28 @@ func (r *Repository) writeReplayedRelic(
 		}
 		top = append(top, relicTreeEntry{mode: mktreeSubtreeMode, kind: "tree", objectID: partsTree[0], name: relicPartsPath})
 	}
+	if len(mergeEntries) > 0 {
+		names := make([]string, 0, len(mergeEntries))
+		for name := range mergeEntries {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		entries := make([]relicTreeEntry, 0, len(names))
+		for _, name := range names {
+			entries = append(entries, relicTreeEntry{mode: regularBlobMode, kind: "blob", objectID: mergeEntries[name].Blob, name: name})
+		}
+		mergesTree, err := r.writeRelicTrees(ctx, [][]relicTreeEntry{entries})
+		if err != nil {
+			return RelicCommit{}, nil, err
+		}
+		top = append(top, relicTreeEntry{mode: mktreeSubtreeMode, kind: "tree", objectID: mergesTree[0], name: relicMergesPath})
+	}
 	tree, err := r.writeRelicTrees(ctx, [][]relicTreeEntry{top})
 	if err != nil {
 		return RelicCommit{}, nil, err
 	}
 
-	written := RelicCommit{Parent: parent.ObjectID, Operation: pack, Record: record, Parts: parts}
+	written := RelicCommit{Parent: parent.ObjectID, Operation: pack, Record: record, Parts: parts, Merges: mergeEntries}
 	// The commit has to pass what a read of it checks; this costs no Git
 	// process, and a commit that fails is never written.
 	if err := r.VerifyRelicTransition(ctx, &parent, written, false); err != nil {
@@ -667,6 +902,36 @@ func (r *Repository) writeReplayedRelic(
 		return RelicCommit{}, nil, err
 	}
 	return written, warnings, nil
+}
+
+// relicReplayedMergeEntries is the merges tree of a replayed commit, by
+// merge ID: inputs' entry for each merge the replay appended, and source's
+// own for each merge source already recorded. It is nil when pack holds no
+// merge. A merge neither holds is an error: its other text would be lost.
+func relicReplayedMergeEntries(
+	relicID string,
+	source RelicCommit,
+	pack core.RelicOperationPack,
+	inputs map[string]RelicMergeObject,
+) (map[string]RelicMergeObject, error) {
+	ids := relicPackMergeIDs(pack)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	entries := make(map[string]RelicMergeObject, len(ids))
+	for _, id := range ids {
+		if entry, appended := inputs[id]; appended {
+			entries[id] = entry
+			continue
+		}
+		entry, held := source.Merges[id]
+		if !held {
+			return nil, corruptRelic(relicID, "commit %s does not hold %s/%s for the merge its pack records",
+				source.ObjectID, relicMergesPath, id)
+		}
+		entries[id] = entry
+	}
+	return entries, nil
 }
 
 // relicRecordChanged reports whether next records any change from previous,

@@ -4,26 +4,49 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
 // RelicReplayInput is what a replay knows of origin's side beyond the state
 // it writes onto. Held is every operation origin's history holds, by ID.
 // SameBody[partID] is true when the pack's saved body for the part equals the
-// parent's, by blob and stored format label.
+// parent's, by blob and stored format label. Source is the state of the local
+// commit the pack was first recorded in, and SourceParent the state of that
+// commit's parent: a stale body save is merged from them (rule 4). Without
+// both, a stale save is a body conflict that cannot be merged.
 type RelicReplayInput struct {
-	Held     map[string]RelicOperation
-	SameBody map[string]bool
+	Held                 map[string]RelicOperation
+	SameBody             map[string]bool
+	Source, SourceParent *RelicRecord
+}
+
+// RelicBodyMergeNeed is one part whose body a replay has to merge: the body
+// both saves started from (the source parent's), the one that stands (the
+// replay parent's) and the one saved here (the source's), each by version,
+// label and size. A side with no body has an empty Version. OtherOperation is
+// the last body save of the part the local fold took, the save the merge
+// takes in, and Stale is the first, the one a conflict names.
+type RelicBodyMergeNeed struct {
+	Part                     string
+	Ancestor, Current, Other RelicBody
+	OtherOperation           string
+	Stale                    string
 }
 
 // RelicReplayStep is what replay does with one local pack: skip it, stop on
 // Conflict, or write it with Record as the state beside it. ConflictOperation
-// is the ID of the pack's operation that Conflict names.
+// is the ID of the pack's operation that Conflict names. Merges is set,
+// sorted by part, when the pack's stale body saves have to be merged before it
+// is written; Conflict, Skip and Record are then zero, and the caller reads the
+// texts, merges them with MergeRelicBody and folds the pack with
+// AppendRelicBodyMerges.
 type RelicReplayStep struct {
 	Skip              bool
 	Conflict          *RelicConflict
 	ConflictOperation string
 	Record            RelicRecord
+	Merges            []RelicBodyMergeNeed
 }
 
 // PlanRelicReplay decides what replaying one local pack onto parent does. It
@@ -40,9 +63,14 @@ type RelicReplayStep struct {
 //     would ignore it, and the change it records has nothing left to apply
 //     to. A part.remove of a stub is the exception: both sides wanted the
 //     part gone, so it replays as the no-op the fold makes it.
-//  4. A part.body.set whose base is not the part's current version stops on
-//     a body conflict, unless the saved body equals the parent's: then the
-//     two sides agree, and the fold ignores the operation.
+//  4. A body save the local fold took but the fold onto parent would not is
+//     stale. When the saved body equals the parent's, the two sides agree and
+//     the fold ignores it. Otherwise, given Source and SourceParent, the
+//     part's body is merged (Merges) when every save of the part the local
+//     fold took is stale onto parent and every one it ignored is ignored
+//     there too. Any other shape, which no honest writer makes, stops on a
+//     body conflict with reason unmergeable. A save the local fold ignored,
+//     and that parent ignores as well, changed nothing and is no conflict.
 //
 // Retire and unretire need no rule: they set a mark as title.set sets a
 // title, so the replayed pack's mark stands and neither conflicts with an
@@ -82,17 +110,168 @@ func PlanRelicReplay(parent RelicRecord, pack RelicOperationPack, input RelicRep
 	if err != nil {
 		return RelicReplayStep{}, relicReplayError(relicID, err)
 	}
-	stale, err := staleRelicBody(parent.State.Relic, pack, input.SameBody)
+	if input.Source == nil || input.SourceParent == nil {
+		stale, err := staleRelicBody(parent.State.Relic, pack, input.SameBody)
+		if err != nil {
+			return RelicReplayStep{}, relicReplayError(relicID, err)
+		}
+		if stale != nil {
+			return unmergeableRelicBody(relicID, stale.Part, stale.ID), nil
+		}
+		return RelicReplayStep{Record: record}, nil
+	}
+	needs, unmergeable, err := planRelicBodyMerges(parent.State.Relic, *input.SourceParent, *input.Source, pack, input.SameBody)
 	if err != nil {
 		return RelicReplayStep{}, relicReplayError(relicID, err)
 	}
-	if stale != nil {
-		return RelicReplayStep{
-			Conflict:          &RelicConflict{RelicID: relicID, Type: RelicConflictBody, Part: stale.Part},
-			ConflictOperation: stale.ID,
-		}, nil
+	if unmergeable != nil {
+		return unmergeableRelicBody(relicID, unmergeable.Part, unmergeable.ID), nil
+	}
+	if len(needs) > 0 {
+		return RelicReplayStep{Merges: needs}, nil
 	}
 	return RelicReplayStep{Record: record}, nil
+}
+
+// unmergeableRelicBody is the step that stops on a body conflict no merge can
+// settle, naming the stale operation. The caller fills in the three bodies.
+func unmergeableRelicBody(relicID, part, operation string) RelicReplayStep {
+	return RelicReplayStep{
+		Conflict: &RelicConflict{RelicID: relicID, Type: RelicConflictBody, Part: part,
+			Body: &RelicBodyConflict{Reason: RelicMergeUnmergeable}},
+		ConflictOperation: operation,
+	}
+}
+
+// planRelicBodyMerges is rule 4 given the local commit the pack came from. It
+// walks the pack's body saves twice, onto the source parent as the local fold
+// took them and onto parent as the replay's fold will, and judges each part in
+// ID order:
+//
+//   - A part whose saves both folds take alike needs nothing.
+//   - A part where the local fold took some saves and parent takes none is
+//     stale: it needs a merge, unless the saved body equals parent's.
+//   - Any other part is returned as unmergeable, with the first save the two
+//     folds disagree on.
+//
+// The merge takes the source parent's body as the ancestor, parent's as the
+// current one and the source's as the other, so OtherOperation, the last save
+// the local fold took, is the source's body version.
+func planRelicBodyMerges(
+	parent RelicData,
+	sourceParent, source RelicRecord,
+	pack RelicOperationPack,
+	sameBody map[string]bool,
+) ([]RelicBodyMergeNeed, *RelicOperation, error) {
+	onParent, err := relicBodySavesTaken(parent, pack)
+	if err != nil {
+		return nil, nil, err
+	}
+	locally, err := relicBodySavesTaken(sourceParent.State.Relic, pack)
+	if err != nil {
+		return nil, nil, err
+	}
+	saves := map[string][]int{}
+	var parts []string
+	for index, operation := range pack.Operations {
+		if operation.Type != RelicOperationPartBodySet && operation.Type != RelicOperationPartBodyMerge {
+			continue
+		}
+		if _, seen := saves[operation.Part]; !seen {
+			parts = append(parts, operation.Part)
+		}
+		saves[operation.Part] = append(saves[operation.Part], index)
+	}
+	sort.Strings(parts)
+
+	var needs []RelicBodyMergeNeed
+	for _, partID := range parts {
+		first, last, differing, takenThere := -1, -1, -1, false
+		for _, index := range saves[partID] {
+			if locally[index] != onParent[index] && differing < 0 {
+				differing = index
+			}
+			if locally[index] {
+				if first < 0 {
+					first = index
+				}
+				last = index
+			}
+			takenThere = takenThere || onParent[index]
+		}
+		if differing < 0 {
+			continue
+		}
+		if takenThere || first < 0 {
+			return nil, &pack.Operations[differing], nil
+		}
+		if sameBody[partID] {
+			continue
+		}
+		need := RelicBodyMergeNeed{
+			Part:           partID,
+			Ancestor:       relicPartBodyOf(sourceParent.State.Relic, partID),
+			Current:        relicPartBodyOf(parent, partID),
+			Other:          relicPartBodyOf(source.State.Relic, partID),
+			OtherOperation: pack.Operations[last].ID,
+			Stale:          pack.Operations[first].ID,
+		}
+		if need.Other.Version != need.OtherOperation {
+			// The source does not hold what its own pack saved last, which a
+			// verified commit never does; nothing is merged from it.
+			return nil, &pack.Operations[first], nil
+		}
+		needs = append(needs, need)
+	}
+	return needs, nil, nil
+}
+
+// relicBodySavesTaken reports, for each operation of the pack, whether the
+// fold onto start takes it as a body save: a part.body.set or part.body.merge
+// whose base is the part's version at that point, empty when it has no body.
+// A save for a part neither start nor the pack has is an error: no honest
+// writer saved it.
+func relicBodySavesTaken(start RelicData, pack RelicOperationPack) ([]bool, error) {
+	versions := map[string]string{}
+	for _, part := range start.Parts {
+		versions[part.ID] = ""
+		if part.Body != nil {
+			versions[part.ID] = part.Body.Version
+		}
+	}
+	taken := make([]bool, len(pack.Operations))
+	for index, operation := range pack.Operations {
+		switch operation.Type {
+		case RelicOperationPartAdd:
+			if _, exists := versions[operation.ID]; exists {
+				continue
+			}
+			versions[operation.ID] = ""
+			if operation.Body != nil {
+				versions[operation.ID] = operation.ID
+			}
+		case RelicOperationPartBodySet, RelicOperationPartBodyMerge:
+			current, exists := versions[operation.Part]
+			if !exists {
+				return nil, corrupt("%s %s names part %s, which the relic does not have", operation.Type, operation.ID, operation.Part)
+			}
+			if operation.Body.Base == current {
+				versions[operation.Part] = operation.ID
+				taken[index] = true
+			}
+		}
+	}
+	return taken, nil
+}
+
+// relicPartBodyOf is a part's body in data, or the zero body, whose version is
+// empty, when the part has none or is not there.
+func relicPartBodyOf(data RelicData, partID string) RelicBody {
+	part, ok := data.Part(partID)
+	if !ok || part.Body == nil {
+		return RelicBody{}
+	}
+	return *part.Body
 }
 
 // relicReplayError names the relic at the front of an error replay returns,
