@@ -151,3 +151,36 @@ setTimeout(() => {
 		t.Fatalf("draw relic tables: %v\n%s", err, output)
 	}
 }
+
+// A delimiter row is read in time that grows with its length. A body is a
+// megabyte of a teammate's text and is drawn on the page's own thread, so a
+// row that took the square of its length to refuse would hang the board for
+// everyone who opened the relic.
+func TestRelicTableDelimiterRowIsReadInLinearTime(t *testing.T) {
+	t.Parallel()
+	node := requireNode(t)
+	document := mustJSON(t, TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: boardTasks()})
+	program := clientDOMHarness("/", string(document)) + liftedMarkdownRenderer(t) + markdownHelpers + `
+setTimeout(() => {
+  const run = " ".repeat(1 << 20);
+  const sources = {
+    "spaces after a dash": "a|b\n-" + run + "x",
+    "spaces between pipes": "a|b\n|-" + run + "|" + run + "x",
+    "tabs after a colon": "a|b\n:-" + "\t".repeat(1 << 20) + "x",
+    "inside a paragraph": "intro\na|b\n-" + run + "x\nafter",
+  };
+  const failures = [];
+  Object.keys(sources).forEach((name) => {
+    const began = performance.now();
+    const root = renderMarkdown(document.createElement("div"), sources[name], { tables: true });
+    const took = performance.now() - began;
+    if (took > 5000) failures.push(name + " took " + Math.round(took) + " ms");
+    if (elementsUnder(root).some((element) => element.tagName === "TABLE")) failures.push(name + " drew a table");
+  });
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 0);
+`
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("draw long delimiter rows: %v\n%s", err, output)
+	}
+}

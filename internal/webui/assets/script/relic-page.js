@@ -151,8 +151,13 @@
         let running = 0;
         let stopped = false;
         // The board scrolls inside main on a wide screen and the document on a
-        // phone, and the near zone is measured against whichever scrolls.
-        const scroller = getComputedStyle(main).overflowY === "visible" ? null : main;
+        // phone, and the near zone is measured against whichever scrolls. That
+        // changes when a window narrows or a phone turns, so the watcher is
+        // made again then: one still measuring against a main that no longer
+        // scrolls would find every part near, or none.
+        const scrollerNow = () => (getComputedStyle(main).overflowY === "visible" ? null : main);
+        let scroller = scrollerNow();
+        let observer = null;
         const report = () => { relicView.dataset.bodiesPending = String(queue.length + running); };
         const start = async (entry) => {
           entry.started = true;
@@ -171,7 +176,7 @@
           while (!stopped && running < relicBodyLimit && queue.length) start(queue.shift());
           if (!stopped) report();
         };
-        const observer = new IntersectionObserver((records) => {
+        const noticed = (records) => {
           records.forEach((record) => {
             const entry = watched.get(record.target);
             if (!entry || entry.started) return;
@@ -180,7 +185,25 @@
             if (!record.isIntersecting && queued >= 0) queue.splice(queued, 1);
           });
           pump();
-        }, { root: scroller, rootMargin: "100% 0px 100% 0px" });
+        };
+        // Watches every part not yet read against what scrolls now. The queue
+        // is emptied first: the new watcher reports each part afresh, and a
+        // part the old one found near may not be.
+        const watchParts = () => {
+          if (observer) observer.disconnect();
+          queue.length = 0;
+          observer = new IntersectionObserver(noticed, { root: scroller, rootMargin: "100% 0px 100% 0px" });
+          watched.forEach((entry) => { if (!entry.started) observer.observe(entry.section); });
+          report();
+        };
+        const resized = () => {
+          const now = scrollerNow();
+          if (stopped || now === scroller) return;
+          scroller = now;
+          watchParts();
+        };
+        window.addEventListener("resize", resized);
+        watchParts();
         return {
           watch(section, body, partID) {
             watched.set(section, { section, body, partID, started: false });
@@ -188,6 +211,7 @@
           },
           stop() {
             stopped = true;
+            window.removeEventListener("resize", resized);
             observer.disconnect();
             queue.length = 0;
           },

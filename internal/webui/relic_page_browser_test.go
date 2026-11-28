@@ -636,9 +636,9 @@ func TestBrowserLargeRelicLoadsBodiesAsTheyNearTheScreen(t *testing.T) {
 	fake := &relicPageFake{documents: []core.RelicDocument{document}, largeBody: &large, partDelay: 40 * time.Millisecond}
 	last := document.Parts[len(document.Parts)-1].ID
 	var result struct {
-		AtReady, AfterScroll int
-		LastState            string
-		Sections             int
+		AtReady, AfterNarrowing, AfterScroll int
+		LastState                            string
+		Sections                             int
 	}
 	openInBrowser(t, fake.handler(t), browserPage{Width: 1440, Height: 900, Path: "/relics/" + pageRelicID, Script: relicPageHelpers + `
 (async () => {
@@ -646,19 +646,34 @@ func TestBrowserLargeRelicLoadsBodiesAsTheyNearTheScreen(t *testing.T) {
   await waitFor(() => relicView().dataset.bodiesPending === "0" && bodyStates().includes("drawn"), "the bodies near the screen to load");
   const requested = () => performance.getEntriesByType("resource").filter((entry) => entry.name.includes("/parts/")).length;
   const atReady = requested();
+  // What the narrow layout does when a window shrinks or a phone turns: main
+  // stops scrolling and the document scrolls instead. A script cannot resize
+  // its own window, so the rules the narrow layout applies are set here.
+  document.body.style.height = "auto";
+  document.body.style.overflow = "visible";
+  document.querySelector("main").style.flex = "0 0 auto";
+  document.querySelector("main").style.overflow = "visible";
+  window.dispatchEvent(new Event("resize"));
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  await waitFor(() => relicView().dataset.bodiesPending === "0", "the queue to empty after the layout narrowed");
+  const afterNarrowing = requested();
   const lastPart = partSection("` + last + `");
   lastPart.scrollIntoView();
   await waitFor(() => lastPart.querySelector("[data-body-state]").dataset.bodyState === "drawn", "the last part's body");
   await waitFor(() => relicView().dataset.bodiesPending === "0", "the queue to empty");
-  return { atReady, afterScroll: requested(), lastState: lastPart.querySelector("[data-body-state]").dataset.bodyState, sections: document.querySelectorAll("[data-relic-part]").length };
+  return { atReady, afterNarrowing, afterScroll: requested(), lastState: lastPart.querySelector("[data-body-state]").dataset.bodyState, sections: document.querySelectorAll("[data-relic-part]").length };
 })()`}, &result)
 	reads, most := fake.reads()
-	t.Logf("bodies read before scrolling %d, after %d, at most %d at once", result.AtReady, result.AfterScroll, most)
+	t.Logf("bodies read before scrolling %d, after the layout narrowed %d, after scrolling %d, at most %d at once",
+		result.AtReady, result.AfterNarrowing, result.AfterScroll, most)
 	if result.Sections != 2000 {
 		t.Errorf("the page drew %d part sections, want 2000", result.Sections)
 	}
 	if result.AtReady == 0 || result.AtReady >= 40 {
 		t.Errorf("the page asked for %d bodies before scrolling, want between 1 and 39", result.AtReady)
+	}
+	if result.AfterNarrowing >= 40 {
+		t.Errorf("the page had asked for %d bodies once the document scrolled instead of main, want under 40", result.AfterNarrowing)
 	}
 	if most > 4 {
 		t.Errorf("%d body reads were in flight at once, want at most 4", most)

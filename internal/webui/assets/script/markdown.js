@@ -383,9 +383,9 @@
       const markdownHeading = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$/;
       const markdownFence = /^ {0,3}(`{3,}|~{3,})(.*)$/;
       const markdownQuote = /^ {0,3}>/;
-      // A pipe table's delimiter row: cells of dashes, each with an optional
-      // colon at either end, between optional outer pipes.
-      const markdownTableDelimiter = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+      // One cell of a pipe table's delimiter row: dashes, with an optional
+      // colon at either end.
+      const markdownTableDelimiterCell = /^:?-+:?$/;
       // The cells of one table row, without its outer pipes. There are no
       // escapes in this subset, so every pipe divides.
       function markdownTableCells(line) {
@@ -394,13 +394,25 @@
         if (row.endsWith("|")) row = row.slice(0, -1);
         return row.split("|").map((cell) => cell.trim());
       }
+      // Whether a line is a pipe table's delimiter row: delimiter cells
+      // between optional outer pipes, an opening pipe indented by at most
+      // three spaces. The row is cut into cells and each is judged by itself,
+      // because one pattern for the whole row has runs of blanks it can divide
+      // in many ways, and on a long line of a teammate's text it would try
+      // them all on the page's own thread.
+      function markdownIsTableDelimiter(line) {
+        const first = line.search(/\S/);
+        if (first < 0) return false;
+        if (line[first] === "|" && (first > 3 || line.slice(0, first).includes("\t"))) return false;
+        return markdownTableCells(line).every((cell) => markdownTableDelimiterCell.test(cell));
+      }
       // Whether a table starts at this line: a row with a pipe in it, then a
       // delimiter row of the same width. Only a context that asks for tables
       // has them — a relic body does, and a task's description and comments do
       // not, so what they draw is what they always drew.
       function markdownStartsTable(lines, at, context) {
         if (!context || context.tables !== true || at + 1 >= lines.length) return false;
-        if (!lines[at].includes("|") || !markdownTableDelimiter.test(lines[at + 1])) return false;
+        if (!lines[at].includes("|") || !markdownIsTableDelimiter(lines[at + 1])) return false;
         return markdownTableCells(lines[at]).length === markdownTableCells(lines[at + 1]).length;
       }
       // The table that starts at this line, and the line after it. A row with
