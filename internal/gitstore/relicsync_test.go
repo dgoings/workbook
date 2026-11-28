@@ -1635,3 +1635,580 @@ func TestThePreviousReleasesFetchNeverSeesRelics(t *testing.T) {
 		}
 	})
 }
+
+// sharedRetiredRelic writes relicToCompact's retired relic number n in first,
+// publishes it the way a teammate's push would, and fetches it into both
+// clones, so each holds it with its tracking ref at the same tip.
+func sharedRetiredRelic(t *testing.T, first, second *Repository, config core.ProjectConfig, n int) core.RelicSnapshot {
+	t.Helper()
+	tip := relicToCompact(t, first, config, n, false)
+	publishRelicRefs(t, first)
+	assertRelicSyncOutcome(t, fetchRelics(t, second, config), tip.Record.State.RelicID, SyncCreated)
+	fetchRelics(t, first, config)
+	if got := refValue(t, first, relicTrackingRef(tip.Record.State.RelicID)); got != tip.Head {
+		t.Fatalf("first's tracking ref = %s, want %s", got, tip.Head)
+	}
+	return tip
+}
+
+// relicKeptOperations counts every operation the history at head keeps: each
+// operation of its first-parent chain, and each one its root checkpoint lists
+// as replaced. A history.checkpoint operation is the compaction's own marker,
+// not a change anyone made, and is left out.
+func relicKeptOperations(t *testing.T, repo *Repository, head string) map[string]int {
+	t.Helper()
+	kept := map[string]int{}
+	for _, commit := range strings.Fields(gitOutput(t, repo, "rev-list", "--first-parent", head)) {
+		pack, err := core.DecodeRelicOperationPack(relicBlob(t, repo, commit+":operation.json"))
+		if err != nil {
+			t.Fatalf("DecodeRelicOperationPack(%s) error = %v", commit, err)
+		}
+		if summary, ok := pack.Checkpoint(); ok {
+			for _, id := range summary.CompactedOperations {
+				kept[id]++
+			}
+			continue
+		}
+		for _, operation := range pack.Operations {
+			kept[operation.ID]++
+		}
+	}
+	return kept
+}
+
+// assertKeepsEveryOperationOnce requires the histories at heads, together, to
+// keep exactly the operation IDs of want, and the one at heads[0] to keep
+// each of its own once.
+func assertKeepsEveryOperationOnce(t *testing.T, repo *Repository, want map[string]int, heads ...string) {
+	t.Helper()
+	got := map[string]int{}
+	for index, head := range heads {
+		kept := relicKeptOperations(t, repo, head)
+		for id, count := range kept {
+			if index == 0 && count != 1 {
+				t.Errorf("the history at %s keeps operation %s %d times, want once", head, id, count)
+			}
+			got[id] = 1
+		}
+	}
+	for id := range want {
+		if got[id] == 0 {
+			t.Errorf("operation %s was lost: kept %v", id, got)
+		}
+	}
+	for id := range got {
+		if want[id] == 0 {
+			t.Errorf("operation %s appeared from nowhere: want %v", id, want)
+		}
+	}
+}
+
+// unionOfKeptOperations is every operation the histories at heads keep, each
+// counted once.
+func unionOfKeptOperations(t *testing.T, heads map[*Repository][]string) map[string]int {
+	t.Helper()
+	union := map[string]int{}
+	for repo, list := range heads {
+		for _, head := range list {
+			for id := range relicKeptOperations(t, repo, head) {
+				union[id] = 1
+			}
+		}
+	}
+	return union
+}
+
+func relicReflogHolds(t *testing.T, repo *Repository, relicID, commit string) bool {
+	t.Helper()
+	output, err := repo.Git(context.Background(), nil, "reflog", "show", "--format=%H", relicRef(relicID))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(output), commit)
+}
+
+// leasedRelicPush returns the relic push among commands that leases relicID,
+// or nil.
+func leasedRelicPush(commands [][]string, relicID string) []string {
+	for _, command := range relicPushes(commands) {
+		for _, arg := range command {
+			if strings.HasPrefix(arg, "--force-with-lease="+relicRefPrefix+relicID+":") {
+				return command
+			}
+		}
+	}
+	return nil
+}
+
+func assertPlainRelicRefspecs(t *testing.T, command []string) {
+	t.Helper()
+	for _, arg := range command {
+		if strings.HasPrefix(arg, "+") || arg == "--force" || arg == "-f" || strings.HasPrefix(arg, ":") ||
+			arg == "--delete" || arg == "-d" || arg == "--mirror" || arg == "--prune" {
+			t.Fatalf("a relic push forced or deleted: %q", command)
+		}
+	}
+}
+
+func TestStaleCloneAdoptsRelicCheckpoint(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		tip := sharedRetiredRelic(t, first, second, config, 1)
+		relicID := tip.Record.State.RelicID
+		want := unionOfKeptOperations(t, map[*Repository][]string{first: {tip.Head}, second: {tip.Head}})
+		checkpoint := writeRelicCheckpoint(t, first, config, tip, core.RelicBoundaryRetired)
+		pushed, err := first.Push(context.Background(), config)
+		if err != nil {
+			t.Fatalf("Push() error = %v; result = %+v", err, pushed)
+		}
+		assertRelicSyncOutcome(t, pushed, relicID, SyncCompactionPublished)
+
+		fetched := fetchRelics(t, second, config)
+		assertRelicSyncOutcome(t, fetched, relicID, SyncFastForwarded)
+		if len(fetched.RelicConflicts) != 0 || len(fetched.RelicWarnings) != 0 {
+			t.Fatalf("Fetch() reported conflicts %+v and warnings %+v", fetched.RelicConflicts, fetched.RelicWarnings)
+		}
+		if got := relicRefHead(t, second, relicID); got != checkpoint.Head {
+			t.Fatalf("second's relic ref = %s, want the checkpoint %s", got, checkpoint.Head)
+		}
+		if relicReflogHolds(t, second, relicID, tip.Head) {
+			t.Fatalf("second's reflog of %s still names the compacted tip %s", relicID, tip.Head)
+		}
+		assertRelicHistoryValid(t, second, config, relicID, checkpoint.Head, 1)
+		assertKeepsEveryOperationOnce(t, second, want, checkpoint.Head)
+		if parked := relicRefNames(t, second, relicParkedRefPrefix); len(parked) != 0 {
+			t.Fatalf("adoption parked %q", parked)
+		}
+	})
+}
+
+func TestStaleCloneReplaysLocalEditOntoCheckpoint(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		tip := sharedRetiredRelic(t, first, second, config, 1)
+		relicID := tip.Record.State.RelicID
+		edited := writeRelicChild(t, second, config, tip, nil, relicPropertySet(720001, "reviewer", "sam"))
+		want := unionOfKeptOperations(t, map[*Repository][]string{first: {tip.Head}, second: {edited.Head}})
+		checkpoint := writeRelicCheckpoint(t, first, config, tip, core.RelicBoundaryRetired)
+		syncClean(t, first, config)
+
+		commands := observeCommands(second)
+		synced := syncClean(t, second, config)
+		second.commandObserver = nil
+		assertRelicSyncOutcome(t, synced.Fetch, relicID, SyncReconciled)
+		assertRelicSyncOutcome(t, synced.Push, relicID, SyncPublished)
+		assertNoRelicReport(t, synced)
+		pushes := relicPushes(*commands)
+		if len(pushes) != 1 || leasedRelicPush(*commands, relicID) != nil {
+			t.Fatalf("second's relic pushes = %q, want one ordinary push", pushes)
+		}
+		assertPlainRelicRefspecs(t, pushes[0])
+		for _, arg := range pushes[0] {
+			if strings.HasPrefix(arg, "--force") {
+				t.Fatalf("second's push of the replayed edit was leased: %q", pushes[0])
+			}
+		}
+
+		head := relicRefHead(t, second, relicID)
+		if got := relicParents(t, second, head); len(got) != 1 || got[0] != checkpoint.Head {
+			t.Fatalf("the replayed edit's parents = %q, want the checkpoint %s", got, checkpoint.Head)
+		}
+		if got := remoteRefValue(t, second, relicRef(relicID)); got != head {
+			t.Fatalf("origin's relic = %s, want second's %s", got, head)
+		}
+		assertRelicHistoryValid(t, second, config, relicID, head, 2)
+		assertKeepsEveryOperationOnce(t, second, want, head)
+		replayed := readRelicTip(t, second, config, relicID)
+		if replayed.Operation.HistoryGeneration != checkpoint.Operation.HistoryGeneration {
+			t.Fatalf("the replayed edit is in generation %s, want the checkpoint's %s",
+				replayed.Operation.HistoryGeneration, checkpoint.Operation.HistoryGeneration)
+		}
+		if replayed.Record.State.Relic.Compacted == nil {
+			t.Fatal("the replayed state lost the compacted member")
+		}
+		if relicReflogHolds(t, second, relicID, tip.Head) || relicReflogHolds(t, second, relicID, edited.Head) {
+			t.Fatalf("second's reflog of %s still names the old history", relicID)
+		}
+	})
+}
+
+func TestStaleCloneEditOfDroppedPartIsParked(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		tip := sharedRetiredRelic(t, first, second, config, 1)
+		relicID := tip.Record.State.RelicID
+		stub := relicTestID(2)
+		// Part 2 was removed before the relic was retired, so the checkpoint
+		// drops its content. The stale clone sets a field on it: an edit of
+		// the removed part, not a removal of it.
+		setStatus := relicFieldSet(720001, stub, "status", "revived")
+		edited := writeRelicChild(t, second, config, tip, map[string]core.RelicPartContent{
+			stub: {Fields: relicFieldsAfter(t, second, config, tip, stub, setStatus)},
+		}, setStatus)
+		want := unionOfKeptOperations(t, map[*Repository][]string{first: {tip.Head}, second: {edited.Head}})
+		checkpoint := writeRelicCheckpoint(t, first, config, tip, core.RelicBoundaryRetired)
+		syncClean(t, first, config)
+
+		fetched, err := second.Fetch(context.Background(), config)
+		if core.CategoryOf(err) != core.CategoryConflict {
+			t.Fatalf("Fetch() error = %v, want a conflict; result = %+v", err, fetched)
+		}
+		assertRelicSyncOutcome(t, fetched, relicID, SyncConflicted)
+		if len(fetched.RelicConflicts) != 1 {
+			t.Fatalf("conflicts = %+v, want one", fetched.RelicConflicts)
+		}
+		conflict := fetched.RelicConflicts[0]
+		if conflict.Type != core.RelicConflictDropped || conflict.Part != stub {
+			t.Fatalf("conflict = %+v, want a dropped conflict on part %s", conflict, stub)
+		}
+		if got := refValue(t, second, conflict.ParkedRef); got != edited.Head {
+			t.Fatalf("parked ref %s = %s, want second's commit %s", conflict.ParkedRef, got, edited.Head)
+		}
+		if !strings.HasPrefix(conflict.ParkedRef, relicParkedRefPrefix) {
+			t.Fatalf("parked ref %s is not under %s", conflict.ParkedRef, relicParkedRefPrefix)
+		}
+		if got := relicRefHead(t, second, relicID); got != checkpoint.Head {
+			t.Fatalf("second's relic ref = %s, want the checkpoint %s", got, checkpoint.Head)
+		}
+		assertKeepsEveryOperationOnce(t, second, want, checkpoint.Head, edited.Head)
+
+		// The parked tip is never pushed.
+		commands := observeCommands(second)
+		syncClean(t, second, config)
+		second.commandObserver = nil
+		for _, command := range *commands {
+			if command[0] == "push" && strings.Contains(strings.Join(command, " "), relicParkedRefPrefix) {
+				t.Fatalf("a push named the parked tip: %q", command)
+			}
+		}
+	})
+}
+
+func TestStaleCloneBodySaveFromDroppedVersionIsParked(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		part := relicTestPartNumbered(1).withBody("md", []byte("first text\n"))
+		root := sharedRelic(t, first, second, config, 1, part)
+		relicID := root.Operation.RelicID
+		first0, _ := root.Record.State.Relic.Part(part.id)
+		v1 := first0.Body.Version
+		rewritten := []byte("second text\n")
+		tip := writeRelicChild(t, first, config, root, map[string]core.RelicPartContent{part.id: {Body: rewritten, HasBody: true}},
+			relicBodySet(720001, part.id, v1, rewritten))
+		tip = writeRelicChild(t, first, config, tip, nil, core.RelicOperation{ID: relicTestID(720002), Type: core.RelicOperationRetire})
+		syncClean(t, first, config)
+		// Version v1 is not current at the tip, so the checkpoint keeps
+		// only the rewritten text.
+		checkpoint := writeRelicCheckpoint(t, first, config, tip, core.RelicBoundaryRetired)
+		syncClean(t, first, config)
+
+		stale := []byte("text saved from the first version\n")
+		edited := writeRelicChild(t, second, config, root, map[string]core.RelicPartContent{part.id: {Body: stale, HasBody: true}},
+			relicBodySet(720101, part.id, v1, stale))
+		want := unionOfKeptOperations(t, map[*Repository][]string{first: {tip.Head}, second: {edited.Head}})
+
+		fetched, err := second.Fetch(ctx, config)
+		if core.CategoryOf(err) != core.CategoryConflict {
+			t.Fatalf("Fetch() error = %v, want a conflict; result = %+v", err, fetched)
+		}
+		assertRelicSyncOutcome(t, fetched, relicID, SyncConflicted)
+		if len(fetched.RelicConflicts) != 1 || fetched.RelicConflicts[0].Type != core.RelicConflictBody ||
+			fetched.RelicConflicts[0].Part != part.id {
+			t.Fatalf("conflicts = %+v, want one body conflict on part %s", fetched.RelicConflicts, part.id)
+		}
+		conflict := fetched.RelicConflicts[0]
+		if got := refValue(t, second, conflict.ParkedRef); got != edited.Head {
+			t.Fatalf("parked ref %s = %s, want second's commit %s", conflict.ParkedRef, got, edited.Head)
+		}
+		if got := relicRefHead(t, second, relicID); got != checkpoint.Head {
+			t.Fatalf("second's relic ref = %s, want the checkpoint %s", got, checkpoint.Head)
+		}
+		assertKeepsEveryOperationOnce(t, second, want, checkpoint.Head, edited.Head)
+	})
+}
+
+func TestRelicCheckpointPushIsLeased(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		publish := map[int]func() SyncRelicResult{
+			1: func() SyncRelicResult {
+				result, err := first.Push(ctx, config)
+				if err != nil {
+					t.Fatalf("Push() error = %v; result = %+v", err, result)
+				}
+				return assertRelicSyncOutcome(t, result, relicTestRelicID(1), SyncCompactionPublished)
+			},
+			2: func() SyncRelicResult {
+				result, err := first.PushRelic(ctx, config, relicTestRelicID(2))
+				if err != nil {
+					t.Fatalf("PushRelic() error = %v; result = %+v", err, result)
+				}
+				return result
+			},
+			3: func() SyncRelicResult {
+				synced := syncClean(t, first, config)
+				for _, item := range synced.Fetch.Relics {
+					if item.RelicID == relicTestRelicID(3) {
+						t.Fatalf("the fetch before the push reported the compacted relic: %+v", item)
+					}
+				}
+				return assertRelicSyncOutcome(t, synced.Push, relicTestRelicID(3), SyncCompactionPublished)
+			},
+		}
+		for n := 1; n <= 3; n++ {
+			tip := sharedRetiredRelic(t, first, second, config, n)
+			relicID := tip.Record.State.RelicID
+			checkpoint := writeRelicCheckpoint(t, first, config, tip, core.RelicBoundaryRetired)
+			commands := observeCommands(first)
+			result := publish[n]()
+			first.commandObserver = nil
+			if result.Status != SyncCompactionPublished {
+				t.Fatalf("relic %d: publication = %+v, want %s", n, result, SyncCompactionPublished)
+			}
+			leased := leasedRelicPush(*commands, relicID)
+			if leased == nil {
+				t.Fatalf("relic %d: no relic push leased it: %q", n, relicPushes(*commands))
+			}
+			assertPlainRelicRefspecs(t, leased)
+			wantLease := "--force-with-lease=" + relicRef(relicID) + ":" + tip.Head
+			wantRefspec := checkpoint.Head + ":" + relicRef(relicID)
+			var hasLease, hasRefspec bool
+			for _, arg := range leased {
+				hasLease = hasLease || arg == wantLease
+				hasRefspec = hasRefspec || arg == wantRefspec
+			}
+			if !hasLease || !hasRefspec {
+				t.Fatalf("relic %d: leased push = %q, want %q and %q", n, leased, wantLease, wantRefspec)
+			}
+			if got := remoteRefValue(t, first, relicRef(relicID)); got != checkpoint.Head {
+				t.Fatalf("relic %d: origin's relic = %s, want the checkpoint %s", n, got, checkpoint.Head)
+			}
+			if got := refValue(t, first, relicTrackingRef(relicID)); got != checkpoint.Head {
+				t.Fatalf("relic %d: first's tracking ref = %s, want the checkpoint %s", n, got, checkpoint.Head)
+			}
+			// Published, it is an ordinary relic: nothing more to push.
+			commands = observeCommands(first)
+			if result, err := first.Push(ctx, config); err != nil {
+				t.Fatalf("relic %d: Push() again error = %v; result = %+v", n, err, result)
+			}
+			first.commandObserver = nil
+			if pushes := relicPushes(*commands); len(pushes) != 0 {
+				t.Fatalf("relic %d: a second Push() pushed relics: %q", n, pushes)
+			}
+		}
+	})
+}
+
+func TestRelicCheckpointPushRefusedAfterOriginMoved(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		tip := sharedRetiredRelic(t, first, second, config, 1)
+		relicID := tip.Record.State.RelicID
+		checkpoint := writeRelicCheckpoint(t, first, config, tip, core.RelicBoundaryRetired)
+		theirs := writeRelicChild(t, second, config, tip, nil, relicPropertySet(720101, "reviewer", "ana"))
+		if result, err := second.Push(ctx, config); err != nil {
+			t.Fatalf("second Push() error = %v; result = %+v", err, result)
+		}
+
+		result, err := first.Push(ctx, config)
+		if core.CategoryOf(err) != core.CategoryOperational {
+			t.Fatalf("first Push() error = %v, want operational; result = %+v", err, result)
+		}
+		refused := assertRelicSyncOutcome(t, result, relicID, SyncRejected)
+		if !strings.HasPrefix(refused.Detail, "relic "+relicID+":") {
+			t.Fatalf("detail %q, want it to name the relic", refused.Detail)
+		}
+		single, err := first.PushRelic(ctx, config, relicID)
+		if core.CategoryOf(err) != core.CategoryOperational || single.Status != SyncRejected {
+			t.Fatalf("PushRelic() = %+v, %v; want rejected", single, err)
+		}
+		if got := remoteRefValue(t, first, relicRef(relicID)); got != theirs.Head {
+			t.Fatalf("origin's relic = %s, want second's edit %s", got, theirs.Head)
+		}
+		if got := relicRefHead(t, first, relicID); got != checkpoint.Head {
+			t.Fatalf("first's relic ref = %s, want its checkpoint %s", got, checkpoint.Head)
+		}
+		if got := refValue(t, first, relicTrackingRef(relicID)); got != tip.Head {
+			t.Fatalf("first's tracking ref = %s, want the tip it last fetched %s", got, tip.Head)
+		}
+	})
+}
+
+func TestUnpublishedRelicCheckpointDroppedWhenOriginMovedOn(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		tip := sharedRetiredRelic(t, first, second, config, 1)
+		relicID := tip.Record.State.RelicID
+		checkpoint := writeRelicCheckpoint(t, first, config, tip, core.RelicBoundaryRetired)
+		theirs := writeRelicChild(t, second, config, tip, nil, relicPropertySet(720101, "reviewer", "ana"))
+		if result, err := second.Push(ctx, config); err != nil {
+			t.Fatalf("second Push() error = %v; result = %+v", err, result)
+		}
+		if _, err := first.Push(ctx, config); core.CategoryOf(err) != core.CategoryOperational {
+			t.Fatalf("first Push() error = %v, want the lease refused", err)
+		}
+		ours := writeRelicChild(t, first, config, checkpoint, nil, relicTitleSet(720001, "Kept after the compaction"))
+		want := unionOfKeptOperations(t, map[*Repository][]string{first: {ours.Head}, second: {theirs.Head}})
+
+		synced := syncClean(t, first, config)
+		assertRelicSyncOutcome(t, synced.Fetch, relicID, SyncReconciled)
+		assertRelicSyncOutcome(t, synced.Push, relicID, SyncPublished)
+		warnings := synced.Fetch.RelicWarnings
+		if len(warnings) != 1 || warnings[0].Code != WarningRelicCompactionDropped ||
+			!strings.Contains(warnings[0].Message, relicID) || !strings.Contains(warnings[0].Message, "compact") {
+			t.Fatalf("warnings = %+v, want one %s naming the relic and saying to compact again",
+				warnings, WarningRelicCompactionDropped)
+		}
+		head := relicRefHead(t, first, relicID)
+		if got := relicParents(t, first, head); len(got) != 1 || got[0] != theirs.Head {
+			t.Fatalf("first's replayed edit has parents %q, want origin's tip %s", got, theirs.Head)
+		}
+		if got := remoteRefValue(t, first, relicRef(relicID)); got != head {
+			t.Fatalf("origin's relic = %s, want first's %s", got, head)
+		}
+		assertRelicHistoryValid(t, first, config, relicID, head, 7)
+		assertKeepsEveryOperationOnce(t, first, want, head)
+		replayed := readRelicTip(t, first, config, relicID)
+		if replayed.Record.State.Relic.Title != "Kept after the compaction" || replayed.Record.State.Relic.Compacted != nil {
+			t.Fatalf("first's relic = %+v, want the replayed title and no compaction", replayed.Record.State.Relic)
+		}
+
+		synced = syncClean(t, second, config)
+		assertRelicSyncOutcome(t, synced.Fetch, relicID, SyncFastForwarded)
+		if got := relicRefHead(t, second, relicID); got != head {
+			t.Fatalf("second's relic = %s, want %s", got, head)
+		}
+	})
+}
+
+func TestUnrelatedRelicHistoriesStayWithheld(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		tip := relicToCompact(t, first, config, 1, false)
+		relicID := tip.Record.State.RelicID
+		publishRelicRefs(t, first)
+		fetchRelics(t, first, config)
+		checkpoint := writeRelicCheckpoint(t, first, config, tip, core.RelicBoundaryRetired)
+
+		// The one forged tip: a history of the same relic ID, in another
+		// generation, that shares nothing with first's and holds no
+		// checkpoint, put on origin by hand over first's.
+		pack, content := relicRootPack(config, 1)
+		pack.HistoryGeneration = relicTestID(950001)
+		pack.Operations[0].ID = relicTestID(850001)
+		forged, err := second.WriteRelic(ctx, config, nil, pack, foldRelic(t, nil, pack), content, "forge relic "+relicID)
+		if err != nil {
+			t.Fatalf("WriteRelic(forged) error = %v", err)
+		}
+		syncGit(t, second.Root, "push", "--quiet", "--force", "origin", relicRef(relicID)+":"+relicRef(relicID))
+
+		fetched, err := first.Fetch(ctx, config)
+		if core.CategoryOf(err) != core.CategoryCorruptData {
+			t.Fatalf("Fetch() error = %v, want corrupt data; result = %+v", err, fetched)
+		}
+		invalid := assertRelicSyncOutcome(t, fetched, relicID, SyncInvalid)
+		if !strings.Contains(invalid.Detail, "cannot combine") {
+			t.Fatalf("detail %q, want it to say the histories cannot combine", invalid.Detail)
+		}
+		if got := relicRefHead(t, first, relicID); got != checkpoint.Head {
+			t.Fatalf("first's relic ref = %s, want its checkpoint %s", got, checkpoint.Head)
+		}
+		if got := remoteRefValue(t, first, relicRef(relicID)); got != forged.Head {
+			t.Fatalf("origin's relic = %s, want the forged %s", got, forged.Head)
+		}
+		synced, err := first.Sync(ctx, config)
+		if err == nil {
+			t.Fatalf("Sync() over an unrelated history succeeded: %+v", synced)
+		}
+		if got := relicRefHead(t, first, relicID); got != checkpoint.Head {
+			t.Fatalf("first's relic ref = %s after Sync, want its checkpoint %s", got, checkpoint.Head)
+		}
+		if got := remoteRefValue(t, first, relicRef(relicID)); got != forged.Head {
+			t.Fatalf("origin's relic = %s after Sync, want the forged %s", got, forged.Head)
+		}
+	})
+}
+
+func TestTwoClonesCompactSameRelic(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		tip := sharedRetiredRelic(t, first, second, config, 1)
+		relicID := tip.Record.State.RelicID
+		ours := writeRelicCheckpoint(t, first, config, tip, core.RelicBoundaryRetired)
+		theirs := writeRelicCheckpointNumbered(t, second, config, tip, core.RelicBoundaryRetired, 1000)
+		if ours.Operation.HistoryGeneration == theirs.Operation.HistoryGeneration || ours.Head == theirs.Head {
+			t.Fatal("the two clones wrote the same checkpoint")
+		}
+		later := writeRelicChild(t, second, config, theirs, nil, relicTitleSet(720101, "Edited after the second compaction"))
+		want := unionOfKeptOperations(t, map[*Repository][]string{first: {ours.Head}, second: {later.Head}})
+
+		assertRelicSyncOutcome(t, syncClean(t, first, config).Push, relicID, SyncCompactionPublished)
+		synced := syncClean(t, second, config)
+		assertRelicSyncOutcome(t, synced.Fetch, relicID, SyncReconciled)
+		assertRelicSyncOutcome(t, synced.Push, relicID, SyncPublished)
+		assertNoRelicReport(t, synced)
+		head := relicRefHead(t, second, relicID)
+		if got := relicParents(t, second, head); len(got) != 1 || got[0] != ours.Head {
+			t.Fatalf("second's edit has parents %q, want origin's checkpoint %s", got, ours.Head)
+		}
+		if relicReflogHolds(t, second, relicID, theirs.Head) {
+			t.Fatalf("second's reflog still names its own checkpoint %s", theirs.Head)
+		}
+		assertKeepsEveryOperationOnce(t, second, want, head)
+		assertRelicHistoryValid(t, second, config, relicID, head, 2)
+
+		assertRelicSyncOutcome(t, syncClean(t, first, config).Fetch, relicID, SyncFastForwarded)
+		c := newRelicClones(first, second, config)
+		c.assertConverged(t, relicID)
+	})
+}
+
+func TestTaskSyncMovesNoRelicRefAfterCompaction(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		published := sharedRetiredRelic(t, first, second, config, 1)
+		unpublished := sharedRetiredRelic(t, first, second, config, 2)
+		writeRelicCheckpoint(t, first, config, published, core.RelicBoundaryRetired)
+		if result, err := first.Push(ctx, config); err != nil {
+			t.Fatalf("Push() error = %v; result = %+v", err, result)
+		}
+		writeRelicCheckpoint(t, first, config, unpublished, core.RelicBoundaryRetired)
+
+		for _, repo := range []*Repository{first, second} {
+			before := syncGit(t, repo.Root, "for-each-ref", "--format=%(refname) %(objectname)")
+			originBefore := syncGit(t, repo.Root, "ls-remote", "origin", relicRefPrefix+"*")
+			task := createSyncTask(t, repo, config, "A task beside the relics")
+			if _, err := repo.FetchTasks(ctx, config); err != nil {
+				t.Fatalf("FetchTasks() error = %v", err)
+			}
+			if result, err := repo.PushTaskAfterFetch(ctx, config, task.ID); err != nil {
+				t.Fatalf("PushTaskAfterFetch() = %+v, %v", result, err)
+			}
+			after := syncGit(t, repo.Root, "for-each-ref", "--format=%(refname) %(objectname)")
+			if relicLinesOf(before) != relicLinesOf(after) {
+				t.Fatalf("a task sync moved relic refs:\nbefore %s\nafter %s", relicLinesOf(before), relicLinesOf(after))
+			}
+			if got := syncGit(t, repo.Root, "ls-remote", "origin", relicRefPrefix+"*"); got != originBefore {
+				t.Fatalf("a task sync moved origin's relics:\nbefore %s\nafter %s", originBefore, got)
+			}
+		}
+	})
+}
+
+// relicLinesOf keeps the lines of a ref listing that name a relic ref, a
+// relic tracking ref or a parked relic tip.
+func relicLinesOf(listing string) string {
+	var kept []string
+	for _, line := range strings.Split(listing, "\n") {
+		if strings.Contains(line, "relics/") {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}

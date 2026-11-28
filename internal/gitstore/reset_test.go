@@ -680,3 +680,50 @@ func TestResetStillBundlesADamagedRelicOnceRelicsArePublished(t *testing.T) {
 		t.Fatalf("the bundle holds %v, want %s at %s and %s at %s", heads, relicRef(damagedID), damaged, parked, forgedParked)
 	}
 }
+
+// A compacted relic ref is an ordinary relic ref to a reset: a checkpoint
+// this checkout has not published is work that exists only here, so the
+// bundle holds the ref at the checkpoint, and restoring it brings back the
+// parentless checkpoint itself.
+func TestResetBundlesCompactedRelic(t *testing.T) {
+	t.Parallel()
+	forBothSyncFormats(t, func(t *testing.T, first, second *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		tip := sharedRetiredRelic(t, first, second, config, 1)
+		relicID := tip.Record.State.RelicID
+		checkpoint := writeRelicCheckpoint(t, first, config, tip, core.RelicBoundaryRetired)
+
+		plan, err := first.PlanLocalReset(ctx, "origin")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var unpublished *UnpublishedRef
+		for index := range plan.Unpublished {
+			if plan.Unpublished[index].Ref == relicRef(relicID) {
+				unpublished = &plan.Unpublished[index]
+			}
+		}
+		if unpublished == nil || unpublished.RelicID != relicID {
+			t.Fatalf("PlanLocalReset() = %+v, want the compacted relic as unpublished work", plan)
+		}
+		result, err := first.ResetLocal(ctx, config.ProjectID, plan, ResetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if heads := bundleHeads(t, first.Root, result.Bundle); heads[relicRef(relicID)] != checkpoint.Head {
+			t.Fatalf("the bundle holds %v, want %s at the checkpoint %s", heads, relicRef(relicID), checkpoint.Head)
+		}
+		if got := workbookRefs(t, first.Root); len(got) != 0 {
+			t.Fatalf("refs left after the reset: %v", got)
+		}
+		fresh := t.TempDir()
+		syncGit(t, fresh, "init", "--quiet", "--object-format="+syncGit(t, first.Root, "rev-parse", "--show-object-format"))
+		syncGit(t, fresh, "fetch", "--quiet", result.Bundle, relicRefPrefix+"*:"+relicRefPrefix+"*")
+		if got := syncGit(t, fresh, "rev-parse", "--verify", relicRef(relicID)); got != checkpoint.Head {
+			t.Fatalf("the bundle restores %s at %q, want the checkpoint %s", relicRef(relicID), got, checkpoint.Head)
+		}
+		if parents := strings.Fields(syncGit(t, fresh, "rev-list", "--parents", "-n", "1", checkpoint.Head)); len(parents) != 1 {
+			t.Fatalf("the restored checkpoint has parents %q, want none", parents[1:])
+		}
+	})
+}

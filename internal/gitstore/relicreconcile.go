@@ -37,12 +37,22 @@ type relicReconcileRequest struct {
 // tip, set only when Conflict is set. With Err set, Next is empty and nothing
 // may move. Skipped counts the local packs not written because origin already
 // holds them or because they would change nothing.
+//
+// Four flags are set only by reconcileCompactedRelics, for two tips in
+// different history generations. Adopted is a move onto a checkpoint origin
+// holds (the relic's reflog is expired once the ref moves). Dropped is this
+// clone's unpublished checkpoint left behind for origin's history, with the
+// warning. Unrelated is two histories neither accounts for, set beside Err.
+// AwaitsPublication is a local checkpoint that accounts for everything origin
+// holds: nothing moves, and the push publishes it with a lease.
 type relicReconcileOutcome struct {
 	RelicID, Next, ParkedHead string
 	Replayed, Skipped         int
 	Conflict                  *core.RelicConflict
 	Warnings                  []core.Warning
 	Err                       error
+
+	Adopted, Dropped, Unrelated, AwaitsPublication bool
 }
 
 // classifyRelicHeads sorts pairs of tips by how they relate, with one Git
@@ -247,19 +257,32 @@ func (r *Repository) reconcileDivergentRelics(
 			outcomes[index].Err = namedRelicError(request.RelicID, err)
 			continue
 		}
-		outcomes[index] = r.replayRelic(ctx, config, request, commits[divergence.at:end], divergence.remote)
+		remotePacks, err := r.relicChainPacks(ctx, config, request.RelicID, divergence.remote)
+		if err != nil {
+			outcomes[index].Err = namedRelicError(request.RelicID, err)
+			continue
+		}
+		outcomes[index] = r.replayRelic(ctx, request, commits[divergence.at:end], remotePacks, nil)
 	}
 	return outcomes
 }
 
-// replayRelic replays one relic. read is the shared commit, then the local
-// commits oldest first, then the fetched tip; remote is origin's own commits.
+// replayRelic replays one relic. read is the commit the local commits build
+// on, then the local commits oldest first, then the fetched tip; remotePacks
+// are the packs of origin's own commits, which origin holds with their
+// content. listed is operation IDs origin holds without their content, those
+// a checkpoint on either side lists as replaced: a local operation with one
+// of those IDs counts as held, since an operation ID is used once.
+//
+// Each pack is written in the fetched tip's history generation. Within one
+// generation that changes nothing; across a checkpoint it is what puts a
+// local change from the old history onto the new one.
 func (r *Repository) replayRelic(
 	ctx context.Context,
-	config core.ProjectConfig,
 	request relicReconcileRequest,
 	read []RelicCommit,
-	remote []string,
+	remotePacks []core.RelicOperationPack,
+	listed []string,
 ) relicReconcileOutcome {
 	relicID := request.RelicID
 	fail := func(err error) relicReconcileOutcome {
@@ -279,14 +302,25 @@ func (r *Repository) replayRelic(
 		}
 	}
 
-	remotePacks, err := r.relicChainPacks(ctx, config, relicID, remote)
-	if err != nil {
-		return fail(err)
-	}
 	held := map[string]core.RelicOperation{}
 	for _, pack := range remotePacks {
 		for _, operation := range pack.Operations {
 			held[operation.ID] = operation
+		}
+	}
+	if len(listed) > 0 {
+		replaced := make(map[string]struct{}, len(listed))
+		for _, id := range listed {
+			replaced[id] = struct{}{}
+		}
+		for _, local := range locals {
+			for _, operation := range local.Operation.Operations {
+				if _, isListed := replaced[operation.ID]; isListed {
+					if _, holds := held[operation.ID]; !holds {
+						held[operation.ID] = operation
+					}
+				}
+			}
 		}
 	}
 
@@ -299,6 +333,7 @@ func (r *Repository) replayRelic(
 			sourceParent = locals[index-1]
 		}
 		pack := source.Operation
+		pack.HistoryGeneration = parent.Record.State.History.Generation
 		step, err := core.PlanRelicReplay(parent.Record, pack, core.RelicReplayInput{
 			Held: held, SameBody: sameRelicBodies(parent, source, pack),
 		})
@@ -685,4 +720,269 @@ func (r *Repository) readRelicFieldsBlobs(ctx context.Context, relicID string, c
 		return nil, err
 	}
 	return contents, nil
+}
+
+// Two tips of one relic in different history generations meet when either
+// side compacted it, which is a parentless history.checkpoint that opens a
+// new generation:
+//
+//	origin   K' ── e1              this clone   C1 ── C2 ── C3 ── l1
+//	         (checkpoint of C3)                 (the old generation)
+//
+// They share no commit, so replay cannot find a base by ancestry. What ties
+// them is the checkpoint's list of the operations it replaced: an operation
+// ID is used once, so a commit whose operations a checkpoint lists, or that
+// the other side's chain holds, is a change both sides have.
+// reconcileCompactedRelics settles each such pair by the first rule that
+// applies:
+//
+//  1. This clone's tip is rooted at a checkpoint that accounts for every
+//     operation on origin's chain (relicSides.localAccountsForRemote): it
+//     waits for its leased push, and nothing moves.
+//  2. Origin's tip is rooted at a checkpoint (adoption). Local commits that
+//     origin's list or chain holds are dropped; the rest, from the first one
+//     origin lacks, are replayed onto origin's tip. With none left, the ref
+//     moves to origin's tip.
+//  3. This clone's tip is rooted at a checkpoint origin never received, and
+//     origin's tip descends from the tip it replaced (compactedFrom): origin
+//     moved on with changes the checkpoint lacks. The local commits above
+//     the checkpoint are replayed onto origin's tip and the checkpoint is left
+//     unreachable, with the relic-compaction-dropped warning. Origin's chain
+//     reaches compactedFrom, so it holds every operation the checkpoint
+//     listed, and nothing is lost.
+//  4. Otherwise neither history accounts for the other, and the relic is
+//     withheld as unrelated.
+//
+// A replay that stops parks the old local tip as any relic replay does.
+// Wall-clock time decides nothing here: ancestry, generations and operation
+// IDs do. Nothing moves a ref; each outcome is for the caller to apply.
+
+// relicSides is both chains of a pair in different generations, oldest first,
+// with their packs.
+type relicSides struct {
+	localChain, remoteChain []string
+	localPacks, remotePacks []core.RelicOperationPack
+}
+
+// readRelicSides walks both chains of request in graph and reads their packs.
+func (r *Repository) readRelicSides(
+	ctx context.Context,
+	config core.ProjectConfig,
+	graph map[string][]string,
+	request relicReconcileRequest,
+) (relicSides, error) {
+	var sides relicSides
+	localChain, err := commitChain(graph, request.Local)
+	if err != nil {
+		return sides, corruptRelic(request.RelicID, "cannot walk the local history: %v", err)
+	}
+	remoteChain, err := commitChain(graph, request.Remote)
+	if err != nil {
+		return sides, corruptRelic(request.RelicID, "cannot walk the fetched history: %v", err)
+	}
+	sides.localChain, sides.remoteChain = oldestFirst(localChain), oldestFirst(remoteChain)
+	if sides.localPacks, err = r.relicChainPacks(ctx, config, request.RelicID, sides.localChain); err != nil {
+		return sides, err
+	}
+	if sides.remotePacks, err = r.relicChainPacks(ctx, config, request.RelicID, sides.remoteChain); err != nil {
+		return sides, err
+	}
+	return sides, nil
+}
+
+// rootCheckpoint is the summary of the checkpoint a chain's packs are rooted
+// at, if they are.
+func rootCheckpoint(packs []core.RelicOperationPack) (core.RelicCheckpointData, bool) {
+	if len(packs) == 0 {
+		return core.RelicCheckpointData{}, false
+	}
+	return packs[0].Checkpoint()
+}
+
+// relicOperationSet is every operation ID of packs, with extra.
+func relicOperationSet(packs []core.RelicOperationPack, extra []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(extra))
+	for _, id := range extra {
+		set[id] = struct{}{}
+	}
+	for _, pack := range packs {
+		for _, operation := range pack.Operations {
+			set[operation.ID] = struct{}{}
+		}
+	}
+	return set
+}
+
+// localAccountsForRemote reports whether the local chain is rooted at a
+// checkpoint and every operation on origin's chain is in that checkpoint's
+// list or on the local chain. That is the condition for publishing the local
+// tip over origin's with a lease (Decision 20), and for a fetch to leave it
+// waiting for that push.
+func (sides relicSides) localAccountsForRemote() bool {
+	summary, ok := rootCheckpoint(sides.localPacks)
+	if !ok {
+		return false
+	}
+	accounted := relicOperationSet(sides.localPacks, summary.CompactedOperations)
+	for _, pack := range sides.remotePacks {
+		for _, operation := range pack.Operations {
+			if _, found := accounted[operation.ID]; !found {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// relicCannotCombine is the refusal for two histories of a relic neither of
+// which accounts for the other.
+func relicCannotCombine(relicID, remote string) error {
+	return core.Errorf(core.CategoryCorruptData,
+		"relic %s: cannot combine this clone's history of it with %s's: they share no commit, and no checkpoint on "+
+			"either side accounts for the other's changes; it was left where it is and not published", relicID, remote)
+}
+
+// relicCompactionDroppedWarning says that this clone's unpublished checkpoint
+// gave way to origin's history.
+func relicCompactionDroppedWarning(relicID, remote string) core.Warning {
+	return core.Warning{
+		Code: WarningRelicCompactionDropped,
+		Message: fmt.Sprintf("relic %s: this clone compacted it, but %s changed it before the checkpoint was published, "+
+			"so the compaction was dropped and %s's history kept, with every change the checkpoint replaced and "+
+			"this clone's later changes replayed onto it; run `workbook compact --relics` to compact it again",
+			relicID, remote, remote),
+	}
+}
+
+// reconcileCompactedRelics settles each pair, whose tips are in different
+// history generations, as the comment above says, and returns one outcome per
+// request in the same order. graph is classifyRelicHeads's. One relic's
+// failure never fails another's.
+func (r *Repository) reconcileCompactedRelics(
+	ctx context.Context,
+	config core.ProjectConfig,
+	requests []relicReconcileRequest,
+	graph map[string][]string,
+) []relicReconcileOutcome {
+	outcomes := make([]relicReconcileOutcome, len(requests))
+	for index, request := range requests {
+		outcomes[index] = r.reconcileCompactedRelic(ctx, config, request, graph)
+	}
+	return outcomes
+}
+
+func (r *Repository) reconcileCompactedRelic(
+	ctx context.Context,
+	config core.ProjectConfig,
+	request relicReconcileRequest,
+	graph map[string][]string,
+) relicReconcileOutcome {
+	relicID := request.RelicID
+	fail := func(err error) relicReconcileOutcome {
+		return relicReconcileOutcome{RelicID: relicID, Err: namedRelicError(relicID, err)}
+	}
+	unrelated := func() relicReconcileOutcome {
+		return relicReconcileOutcome{RelicID: relicID, Err: relicCannotCombine(relicID, r.remote()), Unrelated: true}
+	}
+	sides, err := r.readRelicSides(ctx, config, graph, request)
+	if err != nil {
+		return fail(err)
+	}
+	local, localRooted := rootCheckpoint(sides.localPacks)
+	remote, remoteRooted := rootCheckpoint(sides.remotePacks)
+
+	switch {
+	case sides.localAccountsForRemote():
+		return relicReconcileOutcome{RelicID: relicID, AwaitsPublication: true}
+
+	case remoteRooted:
+		// Adoption: what origin holds is its checkpoint's list and its chain.
+		held := relicOperationSet(sides.remotePacks, remote.CompactedOperations)
+		first := -1
+		for index, pack := range sides.localPacks {
+			if summary, ok := pack.Checkpoint(); ok && index == 0 {
+				// This clone's own checkpoint is no change of anyone's; what
+				// it stands for is the operations it lists.
+				for _, id := range summary.CompactedOperations {
+					if _, found := held[id]; !found {
+						return unrelated()
+					}
+				}
+				continue
+			}
+			if !relicPackHeldBy(pack, held) {
+				first = index
+				break
+			}
+		}
+		if first < 0 {
+			return relicReconcileOutcome{RelicID: relicID, Next: request.Remote, Adopted: true}
+		}
+		if first == 0 {
+			return unrelated()
+		}
+		outcome := r.replayAcrossGenerations(ctx, config, request,
+			sides.localChain[first-1:], sides.remotePacks, remote.CompactedOperations)
+		outcome.Adopted = outcome.Err == nil
+		return outcome
+
+	case localRooted && graphReaches(graph, request.Remote, local.CompactedFrom):
+		// Origin moved on from the tip this clone compacted. Its own commits
+		// since then are what it holds with content; the list is the rest.
+		above := sides.remotePacks
+		for index, commit := range sides.remoteChain {
+			if commit == local.CompactedFrom {
+				above = sides.remotePacks[index+1:]
+				break
+			}
+		}
+		var outcome relicReconcileOutcome
+		if len(sides.localChain) == 1 {
+			outcome = relicReconcileOutcome{RelicID: relicID, Next: request.Remote}
+		} else {
+			outcome = r.replayAcrossGenerations(ctx, config, request, sides.localChain, above, local.CompactedOperations)
+		}
+		if outcome.Err == nil {
+			outcome.Dropped = true
+			outcome.Warnings = append([]core.Warning{relicCompactionDroppedWarning(relicID, r.remote())}, outcome.Warnings...)
+		}
+		return outcome
+
+	default:
+		return unrelated()
+	}
+}
+
+// relicPackHeldBy reports whether held names every operation of pack.
+func relicPackHeldBy(pack core.RelicOperationPack, held map[string]struct{}) bool {
+	for _, operation := range pack.Operations {
+		if _, found := held[operation.ID]; !found {
+			return false
+		}
+	}
+	return true
+}
+
+// replayAcrossGenerations replays chain[1:] onto request.Remote, with chain[0]
+// as the commit they build on. remotePacks are what origin holds with
+// content and listed what it holds by ID alone (replayRelic).
+func (r *Repository) replayAcrossGenerations(
+	ctx context.Context,
+	config core.ProjectConfig,
+	request relicReconcileRequest,
+	chain []string,
+	remotePacks []core.RelicOperationPack,
+	listed []string,
+) relicReconcileOutcome {
+	heads := make([]core.RelicHead, 0, len(chain)+1)
+	for _, commit := range append(append([]string(nil), chain...), request.Remote) {
+		heads = append(heads, core.RelicHead{RelicID: request.RelicID, ObjectID: commit})
+	}
+	commits, errs := r.readRelicCommitsPartial(ctx, config, heads)
+	for _, err := range errs {
+		if err != nil {
+			return relicReconcileOutcome{RelicID: request.RelicID, Err: namedRelicError(request.RelicID, err)}
+		}
+	}
+	return r.replayRelic(ctx, request, commits, remotePacks, listed)
 }

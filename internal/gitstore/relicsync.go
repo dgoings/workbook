@@ -37,6 +37,12 @@ import (
 // only copy of the text that was not applied.
 const relicParkedRefPrefix = "refs/workbook/reconciled-relics/"
 
+// WarningRelicCompactionDropped says that this clone's checkpoint of a relic
+// was never published and origin's history of the relic moved on, so the fetch
+// dropped the checkpoint and kept origin's history, which holds every change
+// the checkpoint replaced. Compacting the relic again is what remains.
+const WarningRelicCompactionDropped = "relic-compaction-dropped"
+
 // relicFetchReflogMessage opens the reflog message of the relic transaction.
 // The remote's name follows it.
 const relicFetchReflogMessage = "workbook: fetch relics from "
@@ -216,7 +222,10 @@ func (r *Repository) syncFetchedRelics(ctx context.Context, config core.ProjectC
 			heads = append(heads, core.RelicHead{RelicID: relicID, ObjectID: local})
 		}
 	}
-	_, errs := r.verifyRelicTips(ctx, config, heads)
+	tips, errs := r.verifyRelicTips(ctx, config, heads)
+	// generationsDiffer is true for a relic whose two tips were both read and
+	// are in different history generations, which only a checkpoint makes.
+	generationsDiffer := map[string]bool{}
 
 	var updates []relicRefUpdate
 	planned := map[string]SyncRelicResult{}
@@ -248,6 +257,9 @@ func (r *Repository) syncFetchedRelics(ctx context.Context, config core.ProjectC
 			invalid(relicID, err)
 			continue
 		}
+		localGeneration, remoteGeneration := tips[at].Operation.HistoryGeneration, tips[index].Operation.HistoryGeneration
+		generationsDiffer[relicID] = errs[index] == nil && errs[at] == nil &&
+			localGeneration != "" && remoteGeneration != "" && localGeneration != remoteGeneration
 		pairs = append(pairs, relicReconcileRequest{RelicID: relicID, Local: state.Local[relicID], Remote: remote})
 	}
 
@@ -259,17 +271,26 @@ func (r *Repository) syncFetchedRelics(ctx context.Context, config core.ProjectC
 		updates = append(updates, relicRefUpdate{RelicID: pair.RelicID, Next: pair.Remote, Expected: pair.Local})
 		planned[pair.RelicID] = SyncRelicResult{RelicID: pair.RelicID, Status: SyncFastForwarded}
 	}
-	replays := diverged[:0:0]
+	// A diverged relic whose tips are in one generation is replayed; one
+	// whose tips are in two meets a checkpoint (reconcileCompactedRelics).
+	replays, compacted := diverged[:0:0], diverged[:0:0]
 	for _, pair := range diverged {
-		if newerFetched[pair.RelicID] {
+		switch {
+		case newerFetched[pair.RelicID]:
 			needsUpgrade(pair.RelicID)
-			continue
+		case generationsDiffer[pair.RelicID]:
+			compacted = append(compacted, pair)
+		default:
+			replays = append(replays, pair)
 		}
-		replays = append(replays, pair)
 	}
+	requests := append(append([]relicReconcileRequest(nil), replays...), compacted...)
+	outcomes := append(r.reconcileDivergentRelics(ctx, config, replays, graph),
+		r.reconcileCompactedRelics(ctx, config, compacted, graph)...)
 	var conflicts []core.RelicConflict
 	var warnings []core.Warning
-	for index, outcome := range r.reconcileDivergentRelics(ctx, config, replays, graph) {
+	adopted := map[string]bool{}
+	for index, outcome := range outcomes {
 		relicID := outcome.RelicID
 		if outcome.Err != nil {
 			if core.CategoryOf(outcome.Err) == core.CategoryNewerWriter {
@@ -279,7 +300,15 @@ func (r *Repository) syncFetchedRelics(ctx context.Context, config core.ProjectC
 			}
 			continue
 		}
-		update := relicRefUpdate{RelicID: relicID, Next: outcome.Next, Expected: replays[index].Local}
+		if outcome.AwaitsPublication {
+			// This clone's checkpoint accounts for all origin holds; the push
+			// publishes it with a lease, and nothing moves here.
+			continue
+		}
+		if outcome.Adopted {
+			adopted[relicID] = true
+		}
+		update := relicRefUpdate{RelicID: relicID, Next: outcome.Next, Expected: requests[index].Local}
 		warnings = append(warnings, outcome.Warnings...)
 		if outcome.Conflict != nil {
 			conflict := *outcome.Conflict
@@ -287,7 +316,7 @@ func (r *Repository) syncFetchedRelics(ctx context.Context, config core.ProjectC
 			update.ParkedHead = outcome.ParkedHead
 			conflicts = append(conflicts, conflict)
 			planned[relicID] = SyncRelicResult{RelicID: relicID, Status: SyncConflicted}
-		} else if outcome.Replayed == 0 && outcome.Next == replays[index].Remote {
+		} else if outcome.Replayed == 0 && outcome.Next == requests[index].Remote {
 			// Every local change was already on origin or changed nothing, so
 			// the ref simply moves to origin's tip.
 			planned[relicID] = SyncRelicResult{RelicID: relicID, Status: SyncFastForwarded}
@@ -325,6 +354,13 @@ func (r *Repository) syncFetchedRelics(ctx context.Context, config core.ProjectC
 	for _, update := range updates {
 		state.Local[update.RelicID] = update.Next
 		stage.Results = append(stage.Results, planned[update.RelicID])
+		// The transaction logged the move, naming the old tip, and that entry
+		// would keep the history origin's checkpoint replaced alive. A failure
+		// to expire it is left alone: the ref is right, and only reclaiming
+		// space waits.
+		if adopted[update.RelicID] {
+			_ = r.ExpireRelicReflog(ctx, update.RelicID)
+		}
 	}
 	sort.Slice(stage.Results, func(i, j int) bool { return stage.Results[i].RelicID < stage.Results[j].RelicID })
 	stage.Conflicts, stage.Warnings = conflicts, warnings
@@ -465,19 +501,33 @@ func (r *Repository) relicMovedDuringSync(ctx context.Context, updates []relicRe
 
 // A push carries relics beside tasks, in a `git push` of its own that runs
 // after the task push, so a relic origin refuses can never change what
-// happened to a task. Every refspec is plain: no relic ref is ever forced,
-// leased or deleted, so Git's own non-fast-forward rule is the only race
-// guard, and a refused relic is replayed onto origin's tip by the next fetch.
+// happened to a task. Every refspec is plain: no relic ref is ever forced or
+// deleted, so Git's own non-fast-forward rule is the race guard, and a refused
+// relic is replayed onto origin's tip by the next fetch. The one exception to
+// moving origin's ref only forward is a checkpoint this clone compacted: it is
+// pushed with --force-with-lease on the tip the checkpoint accounts for
+// (leaseRelicCheckpoints), which Git honours only while origin still holds
+// exactly that tip.
 
-// relicPushCandidate is one relic ref to publish at Head.
+// relicPushCandidate is one relic ref to publish at Head. Lease, when set, is
+// the tip origin must still hold for Head to replace it: the tracking tip a
+// checkpoint at Head accounts for.
 type relicPushCandidate struct {
 	RelicID, Head string
+	Lease         string
 }
 
 // pushRelicHeads publishes candidates in one push and returns one outcome per
-// relic, read from Git's porcelain: published, up-to-date or rejected. It does
-// not check the remote afterwards; the caller lists the identity ref again
-// for the relics origin accepted (strandedPublication).
+// relic, read from Git's porcelain: published, up-to-date, compaction
+// published or rejected. It does not check the remote afterwards; the caller
+// lists the identity ref again for the relics origin accepted
+// (strandedPublication).
+//
+// A leased candidate is named in --force-with-lease=<ref>:<lease> beside its
+// plain refspec. The refspec never carries `+`, which would override the
+// lease. After origin accepts a leased ref, its tracking ref is moved from the
+// lease to the pushed tip by compare-and-swap, so it stops holding the
+// compacted history; one a fetch beside this push moved is left alone.
 func (r *Repository) pushRelicHeads(ctx context.Context, candidates []relicPushCandidate) (map[string]SyncRelicResult, error) {
 	outcomes := make(map[string]SyncRelicResult, len(candidates))
 	if len(candidates) == 0 {
@@ -487,26 +537,145 @@ func (r *Repository) pushRelicHeads(ctx context.Context, candidates []relicPushC
 		return nil, readOnlyRemotePublication(r.remote(), r.configuredRemote())
 	}
 	expected := make(map[string]string, len(candidates))
-	args := []string{"push", "--porcelain", r.remote()}
+	forced := map[string]bool{}
+	args := []string{"push", "--porcelain"}
 	for _, candidate := range candidates {
 		refName := relicRefPrefix + candidate.RelicID
 		expected[refName] = candidate.RelicID
-		args = append(args, candidate.Head+":"+refName)
+		if candidate.Lease != "" {
+			forced[refName] = true
+			args = append(args, "--force-with-lease="+refName+":"+candidate.Lease)
+		}
+	}
+	args = append(args, r.remote())
+	for _, candidate := range candidates {
+		args = append(args, candidate.Head+":"+relicRefPrefix+candidate.RelicID)
 	}
 	push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil, args...)
-	pushed, err := parsePushPorcelain(r.remote(), push.stdout, expected, nil, gitCommandResultError(push))
+	pushed, err := parsePushPorcelain(r.remote(), push.stdout, expected, forced, gitCommandResultError(push))
 	if err != nil {
 		return nil, err
 	}
+	leases := make(map[string]relicPushCandidate, len(forced))
+	for _, candidate := range candidates {
+		if candidate.Lease != "" {
+			leases[candidate.RelicID] = candidate
+		}
+	}
 	for relicID, item := range pushed {
 		outcome := SyncRelicResult{RelicID: relicID, Status: item.Status}
-		if item.Status == SyncRejected {
+		leased, isLeased := leases[relicID]
+		switch {
+		case item.Status == SyncCompactionPublished:
+			_ = r.advanceRelicTrackingRef(ctx, relicID, leased.Lease, leased.Head)
+		case item.Status == SyncRejected && isLeased && item.Detail == compactionStaleDetail(r.remote()):
+			outcome.Detail = fmt.Sprintf("relic %s: %s changed it since this clone compacted it, so the checkpoint was "+
+				"not published; the next sync keeps %s's history, with every change, and drops this compaction",
+				relicID, r.remote(), r.remote())
+		case item.Status == SyncRejected && isLeased:
+			outcome.Detail = fmt.Sprintf("relic %s: %s refused the compacted checkpoint: %s; the relic stays compacted here",
+				relicID, r.remote(), item.Detail)
+		case item.Status == SyncRejected:
 			outcome.Detail = fmt.Sprintf("relic %s: %s refused it %s; the next sync replays any local changes onto %s's tip",
 				relicID, r.remote(), item.Detail, r.remote())
 		}
 		outcomes[relicID] = outcome
 	}
 	return outcomes, nil
+}
+
+// advanceRelicTrackingRef compare-and-swaps a relic's tracking ref from
+// expected, the tip a lease was taken against, to next, as advanceTrackingRef
+// does for a task. A tracking ref holding anything else was moved by a fetch
+// beside this push and is left for the next fetch. The update writes no
+// reflog entry, which would keep the compacted history reachable.
+func (r *Repository) advanceRelicTrackingRef(ctx context.Context, relicID, expected, next string) error {
+	ref := r.remoteRelicRefPrefix() + relicID
+	var input bytes.Buffer
+	input.WriteString("start\noption no-deref\n")
+	fmt.Fprintf(&input, "update %s %s %s\n", ref, next, expected)
+	input.WriteString("prepare\ncommit\n")
+	_, err := r.Git(ctx, input.Bytes(), "update-ref", "--no-deref", "--stdin")
+	return err
+}
+
+// leaseRelicCheckpoints gives each candidate whose tip publishes a checkpoint
+// over origin's older history its lease (Decision 20). That holds when origin's
+// tip, as this clone last fetched it, is in another generation than the
+// candidate's, the candidate's chain is rooted at a checkpoint, and every
+// operation on origin's chain is in that checkpoint's list or on the
+// candidate's chain (relicSides.localAccountsForRemote). The lease is on that
+// tracking tip, so a push after origin moved again is refused and the next
+// fetch settles the relic.
+//
+// tracking is every relic's tracking tip; nil reads them. Only a candidate
+// whose state records a compaction and whose tracking tip is in another
+// generation has its chains read. A candidate that cannot be read is pushed
+// unleased, and Git refuses it as an ordinary non-fast-forward.
+func (r *Repository) leaseRelicCheckpoints(
+	ctx context.Context,
+	config core.ProjectConfig,
+	candidates []relicPushCandidate,
+	tracking map[string]string,
+) error {
+	if len(candidates) == 0 {
+		return nil
+	}
+	if tracking == nil {
+		trackingPrefix := r.remoteRelicRefPrefix()
+		records, err := r.relicRefRecords(ctx, trackingPrefix)
+		if err != nil {
+			return err
+		}
+		tracking = make(map[string]string, len(records))
+		for _, record := range records {
+			tracking[strings.TrimPrefix(record.name, trackingPrefix)] = record.objectID
+		}
+	}
+	var heads []core.RelicHead
+	var at []int
+	for index, candidate := range candidates {
+		remote := tracking[candidate.RelicID]
+		if remote == "" || remote == candidate.Head {
+			continue
+		}
+		at = append(at, index)
+		heads = append(heads,
+			core.RelicHead{RelicID: candidate.RelicID, ObjectID: candidate.Head},
+			core.RelicHead{RelicID: candidate.RelicID, ObjectID: remote})
+	}
+	if len(heads) == 0 {
+		return nil
+	}
+	read, errs := r.readRelicCommitDocuments(ctx, config, heads)
+	var pairs []relicReconcileRequest
+	pairAt := map[string]int{}
+	for position, index := range at {
+		local, remote := read[2*position], read[2*position+1]
+		if errs[2*position] != nil || errs[2*position+1] != nil ||
+			local.Record.State.History.CompactedFrom == nil ||
+			local.Operation.HistoryGeneration == remote.Operation.HistoryGeneration {
+			continue
+		}
+		candidate := candidates[index]
+		pairAt[candidate.RelicID] = index
+		pairs = append(pairs, relicReconcileRequest{RelicID: candidate.RelicID, Local: candidate.Head, Remote: remote.ObjectID})
+	}
+	if len(pairs) == 0 {
+		return nil
+	}
+	_, _, diverged, graph, err := r.classifyRelicHeads(ctx, pairs)
+	if err != nil {
+		return err
+	}
+	for _, pair := range diverged {
+		sides, err := r.readRelicSides(ctx, config, graph, pair)
+		if err != nil || !sides.localAccountsForRemote() {
+			continue
+		}
+		candidates[pairAt[pair.RelicID]].Lease = pair.Remote
+	}
+	return nil
 }
 
 // relicPublication is what one publication of relic refs did.
@@ -540,6 +709,7 @@ func (r *Repository) publishRelics(
 	config core.ProjectConfig,
 	candidates []relicPushCandidate,
 	unchecked map[string]bool,
+	tracking map[string]string,
 ) (relicPublication, error) {
 	var publication relicPublication
 	if len(candidates) == 0 {
@@ -567,6 +737,9 @@ func (r *Repository) publishRelics(
 			kept = append(kept, candidate)
 		}
 	}
+	if err := r.leaseRelicCheckpoints(ctx, config, kept, tracking); err != nil {
+		return publication, err
+	}
 	pushed, err := r.pushRelicHeads(ctx, kept)
 	if err != nil {
 		return publication, err
@@ -574,7 +747,7 @@ func (r *Repository) publishRelics(
 	var accepted []string
 	for relicID, outcome := range pushed {
 		results[relicID] = outcome
-		if outcome.Status == SyncPublished {
+		if outcome.Status == SyncPublished || outcome.Status == SyncCompactionPublished {
 			accepted = append(accepted, relicID)
 		}
 	}
@@ -767,12 +940,16 @@ func (r *Repository) pushRelic(ctx context.Context, config core.ProjectConfig, r
 	if _, err := r.publishConfigLedger(ctx); err != nil {
 		return result, err
 	}
-	pushed, err := r.pushRelicHeads(ctx, []relicPushCandidate{{RelicID: relicID, Head: head}})
+	candidates := []relicPushCandidate{{RelicID: relicID, Head: head}}
+	if err := r.leaseRelicCheckpoints(ctx, config, candidates, nil); err != nil {
+		return result, err
+	}
+	pushed, err := r.pushRelicHeads(ctx, candidates)
 	if err != nil {
 		return result, err
 	}
 	result = pushed[relicID]
-	if result.Status == SyncPublished {
+	if result.Status == SyncPublished || result.Status == SyncCompactionPublished {
 		if err := r.strandedRelicPublication(ctx, []string{relicID}); err != nil {
 			return result, err
 		}

@@ -317,7 +317,7 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 			for _, candidate := range kept {
 				unchecked[candidate.RelicID] = true
 			}
-			if relics, err = r.publishRelics(ctx, config, kept, unchecked); err != nil {
+			if relics, err = r.publishRelics(ctx, config, kept, unchecked, nil); err != nil {
 				return err
 			}
 			for _, outcome := range withheld {
@@ -1302,7 +1302,7 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 	// every relic origin holds that changed; only a relic origin does not hold
 	// is checked here.
 	relicCandidates, unchecked := fetchedRelicPushCandidates(state.Relics)
-	relics, relicPushErr := r.publishRelics(ctx, config, relicCandidates, unchecked)
+	relics, relicPushErr := r.publishRelics(ctx, config, relicCandidates, unchecked, state.Relics.Tracking)
 	result.Relics = relics.Results
 	result.Status = SyncPhaseCompleted
 	return relicPushFailed(result, relicPushErr, func() error {

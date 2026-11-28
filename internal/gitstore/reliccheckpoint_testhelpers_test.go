@@ -29,13 +29,28 @@ func writeRelicCheckpoint(
 	boundary string,
 ) core.RelicSnapshot {
 	t.Helper()
+	return writeRelicCheckpointNumbered(t, repo, config, tip, boundary, 0)
+}
+
+// writeRelicCheckpointNumbered is writeRelicCheckpoint with offset added to
+// the numbers of the run, the generation and the checkpoint's operation, so
+// two clones compacting the same tip write two different checkpoints.
+func writeRelicCheckpointNumbered(
+	t *testing.T,
+	repo *Repository,
+	config core.ProjectConfig,
+	tip core.RelicSnapshot,
+	boundary string,
+	offset int,
+) core.RelicSnapshot {
+	t.Helper()
 	ctx := context.Background()
 	relicID := tip.Record.State.RelicID
 	ids, commits, first, last, removedAt, since, err := repo.CompactedRelicHistory(ctx, config, tip.Head)
 	if err != nil {
 		t.Fatalf("writeRelicCheckpoint: CompactedRelicHistory(%s) error = %v", relicID, err)
 	}
-	clock := int(tip.Record.State.LogicalClock + 1)
+	clock := int(tip.Record.State.LogicalClock+1) + offset
 	written, err := repo.BuildRelicCheckpoint(ctx, config, RelicCheckpointInput{
 		RelicID:     relicID,
 		Tip:         tip,
