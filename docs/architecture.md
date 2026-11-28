@@ -2651,7 +2651,11 @@ is only read into its tracking prefix, as above, but the old place's relics
 are folded into this checkout's relic refs at once, by the same relic stage a
 fetch runs. That is safe for relics, as it is not for tasks, because a relic
 replay skips every commit whose operations the other side already holds, so
-alternating between two places never writes a relic operation twice. The two
+alternating between two places never writes a relic operation twice. A
+`part.body.merge` is derived from the save it names as `other`, so it counts
+as held wherever that save is held, and a commit whose only operations the
+other side lacks are such merges is skipped like a held one; any other partly
+held commit is refused. The two
 synchronizations with the new place then publish them. Verification lists
 both places' relic refs and requires the new place to hold every operation of
 every relic of this project's the old place holds, at the same commit, under

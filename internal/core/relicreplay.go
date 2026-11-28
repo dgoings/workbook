@@ -56,8 +56,9 @@ type RelicReplayStep struct {
 //     tombstone conflict; a pack of only relic.tombstone is skipped, as is a
 //     pack of only relic.restore onto a live relic.
 //  2. A pack whose every operation origin already holds, with the same
-//     content, is skipped. One held in part, or held with other content, is
-//     an error.
+//     content, is skipped, as is one whose only operations origin lacks are
+//     body merges of a save it holds (RelicPackHeldBy). One held in part
+//     otherwise, or held with other content, is an error.
 //  3. A pack with an operation naming a stub of the parent, a part whose
 //     content a checkpoint dropped, stops on a dropped conflict: the fold
 //     would ignore it, and the change it records has nothing left to apply
@@ -366,7 +367,9 @@ func relicPackOnly(pack RelicOperationPack, kind RelicOperationType) bool {
 }
 
 // relicPackHeld is rule 2: true when origin holds every operation of the pack
-// with the same content, false when it holds none, and an error otherwise.
+// with the same content, false when it holds none, and an error otherwise,
+// unless the pack counts as held by RelicPackHeldBy: every operation origin
+// lacks is a part.body.merge derived from one it holds.
 func relicPackHeld(pack RelicOperationPack, held map[string]RelicOperation) (bool, error) {
 	count := 0
 	for _, operation := range pack.Operations {
@@ -383,15 +386,75 @@ func relicPackHeld(pack RelicOperationPack, held map[string]RelicOperation) (boo
 			return false, corrupt("operation %s is held on the remote with other content; an operation ID is used once", operation.ID)
 		}
 	}
-	switch count {
-	case 0:
+	switch {
+	case count == 0:
 		return false, nil
-	case len(pack.Operations):
+	case count == len(pack.Operations):
+		return true, nil
+	case RelicPackHeldBy(pack, func(id string) bool { _, found := held[id]; return found }):
 		return true, nil
 	default:
 		return false, corrupt("the remote holds %d of the %d operations of the local pack at logical clock %d; a pack is written whole",
 			count, len(pack.Operations), pack.LogicalClock)
 	}
+}
+
+// RelicPackHeldBy reports whether a history counts as holding the whole of
+// pack, given isHeld, which says whether the history records an operation.
+// It does when it records every operation of the pack, or when every one it
+// does not record is a part.body.merge derived from one it does. This is the
+// one rule by which a relic operation a history does not record still counts
+// as held there.
+//
+// A part.body.merge is derived from the save it names as merge.other: it
+// records that save merged onto the body it met, and other names an earlier
+// body operation of its own pack. It counts as held where following other, on
+// through any earlier merge of the pack that is not held, ends at an
+// operation that is held. The history holding that save already has it, and
+// whichever replay there brought it together with the other side's body
+// recorded its own merge, under another ID. Writing this pack there would
+// record the held save a second time.
+//
+// It arises when move-tasks reads the old place after a save there met one
+// published at the new place: the read replays this checkout's save onto the
+// old place's and appends a merge, [save L, merge M], while the new place
+// holds [save L] alone. Any operation that is not held and is not such a merge
+// makes this false, so a pack only part of whose own changes are held is
+// still refused. Replay (rule 2 of PlanRelicReplay) and the move's
+// verification (relicChangesNotHeld), which the clean-up after a move relies
+// on, apply it; nothing else does.
+func RelicPackHeldBy(pack RelicOperationPack, isHeld func(string) bool) bool {
+	byID := make(map[string]RelicOperation, len(pack.Operations))
+	for _, operation := range pack.Operations {
+		byID[operation.ID] = operation
+	}
+	for _, operation := range pack.Operations {
+		if !isHeld(operation.ID) && !relicMergeOfHeld(operation, byID, isHeld) {
+			return false
+		}
+	}
+	return true
+}
+
+// relicMergeOfHeld reports whether operation is a part.body.merge whose other
+// chain within its pack (byID) ends at an operation isHeld holds.
+func relicMergeOfHeld(operation RelicOperation, byID map[string]RelicOperation, isHeld func(string) bool) bool {
+	// Each step goes to an earlier operation of the pack, so the chain is at
+	// most as long as the pack; the bound only guards one that loops.
+	for steps := 0; steps <= len(byID); steps++ {
+		if operation.Type != RelicOperationPartBodyMerge || operation.Merge == nil {
+			return false
+		}
+		other, found := byID[operation.Merge.Other]
+		if !found {
+			return false
+		}
+		if isHeld(other.ID) {
+			return true
+		}
+		operation = other
+	}
+	return false
 }
 
 // sameRelicOperation compares two operations by their stored form.

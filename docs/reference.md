@@ -6108,6 +6108,10 @@ quiet after that.
 
 Relics move with the tasks: `move-tasks` fetches the old place's relics
 itself, and the two synchronizations with the new place publish them there.
+A relic body save [merged](#merged-bodies) onto one the old place
+received while the tasks moved counts as held, by the replay and by the check
+in step 7, wherever the save it merged is held, so the run that carries the
+old place's save to the new place completes.
 A relic change that cannot be replayed is a
 [relic conflict](#a-relic-conflict): its local tip is parked under
 `refs/workbook/reconciled-relics/<relic>/<n>`, the run finishes and is

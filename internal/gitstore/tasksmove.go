@@ -1653,7 +1653,8 @@ func ownsWorkbookRef(keys core.KeySet, ref string) bool {
 // as identical without reading anything. For any other, the commits of the
 // old place's history that neither the new place's history nor a parked tip
 // reaches are read, and each operation in them must be found by ID in the
-// commits on the other side that the old place's history does not reach.
+// commits on the other side that the old place's history does not reach,
+// except a body merge derived from a save found there (core.RelicPackHeldBy).
 // A name under the relic namespace that is not one of this project's relic
 // IDs (ownsWorkbookRef) is left out, as verifyMovedTasks leaves such a task
 // ref out, and --clean-up leaves it at the old place.
@@ -1741,7 +1742,10 @@ func (r *Repository) parkedRelicTips(ctx context.Context) (map[string][]string, 
 // superseded without being listed (two compactions of the same history, or
 // one a fetch dropped) holds nothing the other side lacks. Every other
 // operation, a real change, is held only when the other side records it or
-// a checkpoint there lists it.
+// a checkpoint there lists it, and a commit counts as held when
+// core.RelicPackHeldBy says so: a body merge the other side does not record
+// is held when the save it merged is, since a replay there merged that save
+// itself.
 func (r *Repository) relicChangesNotHeld(ctx context.Context, config core.ProjectConfig, relicID, tip string, others []string) (int, error) {
 	exclusive := func(include string, exclude []string) ([]string, error) {
 		input := include + "\n"
@@ -1811,11 +1815,7 @@ func (r *Repository) relicChangesNotHeld(ctx context.Context, config core.Projec
 			}
 			continue
 		}
-		ids := make([]string, 0, len(pack.Operations))
-		for _, operation := range pack.Operations {
-			ids = append(ids, operation.ID)
-		}
-		if !allHeld(ids) {
+		if !core.RelicPackHeldBy(pack, func(id string) bool { _, found := held[id]; return found }) {
 			lacking++
 		}
 	}
