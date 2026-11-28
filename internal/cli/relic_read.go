@@ -5,6 +5,8 @@ import (
 	"io"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/projection"
 )
 
 // openRelicReadService opens the repository for a command that only reads, so
@@ -25,12 +27,20 @@ func openRelicReadService(ctx context.Context, cwd string, stderr io.Writer) (co
 	if err != nil {
 		return core.RelicService{}, nil, err
 	}
+	return relicReadServiceOver(service, store, repository), release, nil
+}
+
+// relicReadServiceOver is service reading through store's relic index, which
+// answers from repository what it cannot answer itself. Each call takes a new
+// index reader, which brings the index up to the relic refs once, so a caller
+// that outlives one read, as workbook serve does, calls this for each.
+func relicReadServiceOver(service core.RelicService, store *projection.Store, repository *gitstore.Repository) core.RelicService {
 	index := store.RelicReader()
 	service.Reader = index
 	service.Links = index
 	service.HistoryReader = index
 	service.Tasks = indexedTaskReader{index: store, repository: repository}
-	return service, release, nil
+	return service
 }
 
 // indexedTaskReader is the task reader a relic read marks removed link

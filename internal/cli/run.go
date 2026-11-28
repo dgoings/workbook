@@ -2004,6 +2004,11 @@ func runServeWithEnvironment(
 	// and is closed once the server is down.
 	defer releaseProjection()
 	publisher := &boardPublisher{repository: repository, config: service.Config}
+	// The relic schema listing of each configuration tip a request has read,
+	// by that tip, for the relic reads below: the state a request carries names
+	// the tip and not the listing. A commit's listing never changes, so one
+	// kept here is never out of date.
+	var relicSchemas sync.Map
 	// Every request reads the project's statuses again rather than reusing the
 	// ones this process opened with.
 	//
@@ -2044,6 +2049,7 @@ func runServeWithEnvironment(
 		// no Git process — the head below is this read's own, and a head that
 		// has not moved is a string comparison.
 		repository.ForgetKeySetUnlessAt(state.Head)
+		relicSchemas.Store(state.Head, state.Schemas)
 		return webui.VocabularyState{
 			Vocabulary: state.Vocabulary,
 			Head:       state.Head,
@@ -2084,6 +2090,25 @@ func runServeWithEnvironment(
 		// together; see taskSession.refreshConfiguration.
 		fresh.Keys = state.Keys
 		return fresh, nil
+	}
+	// relicReads is current for a relic read: a service built for one request,
+	// under the keys and relic schemas of the configuration that request
+	// resolved, reading through the index. It has no actor, since the board
+	// changes no relic, and it synchronizes nothing.
+	relicReads := func(requestContext context.Context) (core.RelicService, error) {
+		state, carried := webui.VocabularyFrom(requestContext)
+		if !carried {
+			read, err := readVocabulary(requestContext)
+			if err != nil {
+				return core.RelicService{}, err
+			}
+			state = read
+		}
+		// readVocabulary kept the listing before it returned the state.
+		kept, _ := relicSchemas.Load(state.Head)
+		schemas, _ := kept.(core.RelicSchemaListing)
+		reader := newRelicService(repository, service.Config, state.Keys, schemas, "")
+		return relicReadServiceOver(reader, store, repository), nil
 	}
 	// writerFor is current for a mutation of one existing task: a task its
 	// compaction left stuck is refused here in the words the command line
@@ -2143,7 +2168,7 @@ func runServeWithEnvironment(
 		publisher:  publisher,
 	}
 	unreadable := &unreadableParkedLog{out: stderr}
-	handler := webui.NewHandler(webui.Options{
+	options := webui.Options{
 		Vocabulary:    readVocabulary,
 		AddStatus:     statuses.add,
 		EditStatus:    statuses.edit,
@@ -2417,6 +2442,59 @@ func runServeWithEnvironment(
 		},
 		SyncState:   publisher.state,
 		SetSyncMode: publisher.setMode,
+		// The relic reads. Each only reads, through the local index.
+		ListRelics: func(requestContext context.Context) ([]core.RelicSummary, error) {
+			reader, err := relicReads(requestContext)
+			if err != nil {
+				return nil, err
+			}
+			return reader.List(requestContext, core.RelicListFilter{IncludeDeleted: true})
+		},
+		ShowRelic: func(requestContext context.Context, id string, removed bool) (core.RelicDocument, error) {
+			reader, err := relicReads(requestContext)
+			if err != nil {
+				return core.RelicDocument{}, err
+			}
+			return reader.Show(requestContext, id, core.RelicShowOptions{Removed: removed})
+		},
+		RelicPart: func(requestContext context.Context, relicID, partID string) (core.RelicPartView, error) {
+			reader, err := relicReads(requestContext)
+			if err != nil {
+				return core.RelicPartView{}, err
+			}
+			return reader.ShowPart(requestContext, relicID+"#"+partID)
+		},
+		RelicHistory: func(requestContext context.Context, address string, window core.RelicHistoryOptions) (core.RelicHistory, error) {
+			reader, err := relicReads(requestContext)
+			if err != nil {
+				return core.RelicHistory{}, err
+			}
+			return reader.History(requestContext, address, window)
+		},
+		RelicDiff: func(requestContext context.Context, address string, versions []string, diffOptions core.RelicDiffOptions) (core.RelicDiff, error) {
+			reader, err := relicReads(requestContext)
+			if err != nil {
+				return core.RelicDiff{}, err
+			}
+			return reader.Diff(requestContext, address, versions, diffOptions)
+		},
+		// The links relics have to a task, as `workbook show` lists them. The
+		// task is found first, so an ID that names none is not found rather
+		// than answered as a task nothing links to. It is found as a relic
+		// read finds one, from Git when the index cannot answer.
+		TaskRelics: func(requestContext context.Context, taskID string) ([]core.TaskRelicLink, []core.Warning, error) {
+			reader, err := current(requestContext)
+			if err != nil {
+				return nil, nil, err
+			}
+			finder := reader
+			finder.Reader = indexedTaskReader{index: store, repository: repository}
+			task, err := finder.Show(requestContext, taskID)
+			if err != nil {
+				return nil, nil, err
+			}
+			return taskRelicLinks(requestContext, reader, task.ID)
+		},
 		// The edits this folder's sync set aside on a conflict, read from the
 		// parked refs on every request so they outlive the process, and shown
 		// to everyone who opens the board. The command line has no view of
@@ -2440,7 +2518,11 @@ func runServeWithEnvironment(
 		// person's own board always has.
 		Hosted:    hosting.public != nil,
 		ServerLog: stderr,
-	})
+	}
+	if change, ok := ctx.Value(boardOptionsKey{}).(func(*webui.Options)); ok {
+		change(&options)
+	}
+	handler := webui.NewHandler(options)
 	listener, fellBack, err := openBoardListenerWith(listen, *addr, addrChosen)
 	if err != nil {
 		return err
@@ -2546,6 +2628,14 @@ type requestActorKey struct{}
 // set their own.
 func withRequestActor(ctx context.Context, resolve requestActor) context.Context {
 	return context.WithValue(ctx, requestActorKey{}, resolve)
+}
+
+type boardOptionsKey struct{}
+
+// withBoardOptions lets a test change the options serve builds its board from,
+// just before the board is built. Only tests set one.
+func withBoardOptions(ctx context.Context, change func(*webui.Options)) context.Context {
+	return context.WithValue(ctx, boardOptionsKey{}, change)
 }
 
 // boardPriorityAnswer carries a priority writer's result across to the board's
