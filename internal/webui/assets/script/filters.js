@@ -277,7 +277,7 @@
         // view, which is a board that can read relics; on any other the
         // addresses are unknown here exactly as they are on the server.
         if (url.pathname === "/relics" || url.pathname.startsWith("/relics/")) {
-          return relicView ? relicRoute(url) : { view: "unknown" };
+          return relicView ? relicVersionsRoute(relicRoute(url), url) : { view: "unknown" };
         }
         if (url.pathname === "/tasks/new") {
           const requestedStatus = url.searchParams.get("status");

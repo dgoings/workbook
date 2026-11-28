@@ -52,3 +52,41 @@
     .markdown table { display: block; max-width: 100%; margin: 0 0 .55rem; overflow-x: auto; border-collapse: collapse; font-size: .92em; }
     .markdown th, .markdown td { padding: .25rem .5rem; border: 1px solid var(--wb-hairline); text-align: left; vertical-align: top; }
     .markdown th { background: var(--wb-surface-3); font-weight: 750; }
+    .relic-part__history { margin: 0; font-size: .78rem; }
+    /* A relic's history: one row a change, newest first. */
+    .relic-history { display: grid; grid-template-columns: minmax(0, 1fr); gap: .4rem; margin: 0; padding: 0; list-style: none; }
+    .relic-change { display: grid; gap: .25rem; min-width: 0; padding: .55rem .65rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface-2); font-size: .8rem; }
+    .relic-change__meta { display: flex; flex-wrap: wrap; gap: .2rem .7rem; margin: 0; color: var(--wb-ink-muted); font-size: .74rem; }
+    .relic-change__summary { margin: 0; font-weight: 750; }
+    .relic-change__operations { display: grid; gap: .15rem; margin: 0; padding-left: 1.1rem; font-size: .76rem; }
+    .relic-change__actions { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .9rem; }
+    .relic-change__pick { display: inline-flex; align-items: center; gap: .25rem; }
+    /* A diff. Its values stand before and after, and each hunk is a table of
+       numbered lines. */
+    .relic-diff { display: grid; grid-template-columns: minmax(0, 1fr); gap: .8rem; min-width: 0; }
+    .relic-diff__part { display: grid; grid-template-columns: minmax(0, 1fr); gap: .4rem; min-width: 0; padding: .65rem .7rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface-2); }
+    .relic-diff__part h4 { margin: 0; font-size: .86rem; }
+    .relic-diff__links, .relic-diff__body, .relic-diff__parts, .relic-diff__members, .relic-diff__properties { grid-template-columns: minmax(0, 1fr); }
+    .relic-diff__body { display: grid; gap: .35rem; min-width: 0; }
+    .relic-diff__side { display: grid; grid-template-columns: 3.5rem minmax(0, 1fr); gap: .5rem; min-width: 0; margin: 0 0 .2rem; }
+    .relic-diff__side-label { color: var(--wb-ink-muted); font-size: .72rem; }
+    .relic-diff__modes { display: flex; gap: .3rem; }
+    .relic-diff__mode { padding: .25rem .6rem; border: 1px solid var(--wb-border); border-radius: 4px; background: var(--wb-surface-2); color: var(--wb-ink); font-size: .74rem; }
+    .relic-diff__mode[aria-pressed="true"] { border-color: var(--wb-primary); background: var(--wb-surface-3); font-weight: 750; }
+    .relic-hunk__range { margin: 0; color: var(--wb-ink-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .72rem; }
+    .relic-hunk { max-width: 100%; min-width: 0; overflow-x: auto; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface-3); }
+    .relic-hunk__table { min-width: 100%; border-collapse: collapse; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .74rem; line-height: 1.4; }
+    .relic-hunk__table td { padding: 0 .35rem; vertical-align: top; }
+    .relic-line__number { color: var(--wb-ink-muted); text-align: right; user-select: none; white-space: nowrap; }
+    .relic-line__marker { white-space: pre; user-select: none; }
+    /* Inline, a long line keeps its length and the hunk scrolls. Side by side,
+       the two columns share the width and a long line wraps in its own. */
+    .relic-line__text { overflow-wrap: normal; white-space: pre; }
+    .relic-hunk__table--side { width: 100%; table-layout: fixed; }
+    .relic-hunk__table--side .relic-hunk__column--number { width: 3.6rem; }
+    .relic-hunk__table--side .relic-hunk__column--marker { width: 1.6rem; }
+    .relic-hunk__table--side .relic-line__text { overflow-wrap: anywhere; white-space: pre-wrap; }
+    .relic-hunk__table--side td:nth-child(4) { border-left: 1px solid var(--wb-border); }
+    .relic-line__text[data-line-text="delete"] { background: var(--wb-danger-surface-alt); color: var(--wb-danger-ink); }
+    .relic-line__text[data-line-text="insert"] { background: var(--wb-success-surface); color: var(--wb-success-ink); }
+    .relic-line__note { display: block; color: var(--wb-ink-muted); font-style: italic; }

@@ -78,6 +78,15 @@
         const fields = part.fields || {};
         if (Object.keys(fields).length) section.append(relicValues(fields, "relicField"));
         if (links.length) section.append(relicLinkList(links));
+        if (relicAddressableID(relic.id) && relicAddressableID(part.id)) {
+          const past = relicElement("p", "relic-part__history");
+          const anchor = relicElement("a", "", "History of this part");
+          anchor.href = relicHistoryAddress(relic.id, part.id, false);
+          anchor.dataset.relicPartHistory = "";
+          anchor.setAttribute("aria-label", withoutDirectionControls("History of the part " + relicPartCaption(part)));
+          past.append(anchor);
+          section.append(past);
+        }
         let body = null;
         if (part.body) {
           body = relicElement("div", "relic-body");
@@ -258,6 +267,14 @@
         readonly.dataset.relicReadonly = "";
         readonly.append(relicElement("code", "", "workbook relic update"), document.createTextNode("."));
         const lines = [readonly];
+        if (relicAddressableID(relic.id)) {
+          const past = relicElement("p", "relic-view__note");
+          const anchor = relicElement("a", "", "History");
+          anchor.href = relicHistoryAddress(relic.id, "", false);
+          anchor.dataset.relicHistory = "";
+          past.append(anchor);
+          lines.push(past);
+        }
         if (relic.retired || relic.deleted) {
           const badges = relicElement("p", "relic-badges");
           if (relic.retired) badges.append(relicBadge("Retired"));

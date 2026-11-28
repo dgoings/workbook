@@ -119,17 +119,11 @@
           renderRelicRoute(current);
           return;
         }
-        // ─── A relic's history and its diffs ───────────────────────────────
-        // Both addresses are served and read by route(); the two views are
-        // drawn here, in this block and nowhere else. Until they exist each
-        // answers as a page this board does not have.
+        // A relic's history and its diffs, which need no task data either.
         if (current.view === "relic-history" || current.view === "relic-diff") {
-          leaveRelicRoute();
-          document.title = "Page not found" + boardTitleSuffix;
-          main.replaceChildren(routeMessage("Page not found", "This Workbook route does not exist."));
+          renderRelicVersionsRoute(current);
           return;
         }
-        // ─── End of the relic history and diff views ───────────────────────
         if (current.view === "unknown") {
           document.title = "Page not found" + boardTitleSuffix;
           main.replaceChildren(routeMessage("Page not found", "This Workbook route does not exist."));

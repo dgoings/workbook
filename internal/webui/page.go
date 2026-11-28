@@ -71,6 +71,7 @@ var pageFragments = []string{
 	"script/history.js",
 	"script/relics.js",
 	"script/relic-page.js",
+	"script/relic-history.js",
 	"script/set-aside.js",
 	"script/task-form.js",
 	"script/mutations.js",
