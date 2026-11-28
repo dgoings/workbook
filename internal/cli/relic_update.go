@@ -214,7 +214,7 @@ func splitRelicUpdateArgs(args []string) (changes []relicUpdateChange, jsonMode,
 			titled = true
 			changes = append(changes, relicUpdateChange{option: name, value: value})
 		case "set", "set-json":
-			property, text, err := splitRelicNameValue(name, value)
+			property, text, err := splitRelicNameValue("relic update", name, value)
 			if err != nil {
 				return nil, false, false, err
 			}
@@ -252,15 +252,16 @@ func relicUpdateGroupsTaking(option string) string {
 }
 
 // splitRelicNameValue splits what --set, --set-json, --field and --field-json
-// take at its first '=', so a value may hold more of them.
-func splitRelicNameValue(option, typed string) (name, value string, err error) {
+// take at its first '=', so a value may hold more of them. command is the one
+// the option was given to, for the refusal.
+func splitRelicNameValue(command, option, typed string) (name, value string, err error) {
 	name, value, found := strings.Cut(typed, "=")
 	if !found {
 		form := "<name>=<value>"
 		if strings.HasSuffix(option, "-json") {
 			form = "<name>=<json>"
 		}
-		return "", "", core.Errorf(core.CategoryInvocation, "relic update --%s takes %s", option, form)
+		return "", "", core.Errorf(core.CategoryInvocation, "%s --%s takes %s", command, option, form)
 	}
 	return name, value, nil
 }
@@ -273,7 +274,7 @@ func (change *relicUpdateChange) add(option, value string) error {
 	}
 	switch option {
 	case "field", "field-json":
-		name, text, err := splitRelicNameValue(option, value)
+		name, text, err := splitRelicNameValue("relic update", option, value)
 		if err != nil {
 			return err
 		}

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -88,6 +89,9 @@ func runRelicCreate(ctx context.Context, args []string, cwd string, stdin io.Rea
 	}
 	flags := newFlagSet("relic", "create")
 	relicType := flags.String("type", "", "relic type, such as spec or plan")
+	var properties []relicPropertyOption
+	flags.Var(relicPropertyFlag{"set", &properties}, "set", "set a property to text")
+	flags.Var(relicPropertyFlag{"set-json", &properties}, "set-json", "set a property to a JSON value")
 	fromFile := flags.String("from-file", "", "create from a whole relic in one JSON document (- reads standard input)")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with the tasks remote (origin unless configured)")
 	jsonMode := flags.Bool("json", false, "emit JSON")
@@ -100,6 +104,10 @@ func runRelicCreate(ctx context.Context, args []string, cwd string, stdin io.Rea
 
 	var input core.RelicCreateInput
 	if typed["from-file"] {
+		if len(properties) > 0 {
+			return core.Errorf(core.CategoryInvocation,
+				"relic create --from-file takes its properties from the document; leave out --set and --set-json")
+		}
 		document, err := readRelicDocument(*fromFile, stdin)
 		if err != nil {
 			return err
@@ -123,6 +131,11 @@ func runRelicCreate(ctx context.Context, args []string, cwd string, stdin io.Rea
 			return core.Errorf(core.CategoryInvocation,
 				"relic create needs --type <type>, such as spec or plan, or --from-file <file>")
 		}
+		values, err := relicCreateProperties(properties)
+		if err != nil {
+			return err
+		}
+		input.Properties = values
 	}
 	if titleGiven {
 		input.Title = title
@@ -140,6 +153,56 @@ func runRelicCreate(ctx context.Context, args []string, cwd string, stdin io.Rea
 		return service.Create(ctx, input)
 	})
 	return writeRelicMutationOutcome(stdout, stderr, "relic create", session, result, err, *jsonMode)
+}
+
+// relicPropertyOption is one --set or --set-json as typed.
+type relicPropertyOption struct{ option, typed string }
+
+// relicPropertyFlag collects --set and --set-json into one list, which keeps
+// the order they were given in. What each holds is judged after the whole
+// command line has been read.
+type relicPropertyFlag struct {
+	option string
+	given  *[]relicPropertyOption
+}
+
+func (f relicPropertyFlag) String() string { return "" }
+
+func (f relicPropertyFlag) Set(typed string) error {
+	*f.given = append(*f.given, relicPropertyOption{f.option, typed})
+	return nil
+}
+
+// relicCreateProperties turns relic create's --set and --set-json into the
+// properties of the new relic, split and encoded as relic update does it. A
+// command line that is put together wrongly, one naming a property twice
+// among them, is refused before any value on it is judged.
+func relicCreateProperties(options []relicPropertyOption) (map[string]json.RawMessage, error) {
+	if len(options) == 0 {
+		return nil, nil
+	}
+	names, texts := make([]string, len(options)), make([]string, len(options))
+	seen := make(map[string]bool, len(options))
+	for index, option := range options {
+		name, text, err := splitRelicNameValue("relic create", option.option, option.typed)
+		if err != nil {
+			return nil, err
+		}
+		if seen[name] {
+			return nil, core.Errorf(core.CategoryInvocation,
+				"relic create sets property %s twice; name a property once", relicUpdateTyped(name))
+		}
+		names[index], texts[index], seen[name] = name, text, true
+	}
+	properties := make(map[string]json.RawMessage, len(options))
+	for index, option := range options {
+		value, err := relicUpdateStoredValue(option.option, names[index], texts[index])
+		if err != nil {
+			return nil, err
+		}
+		properties[names[index]] = value
+	}
+	return properties, nil
 }
 
 // maxRelicDocumentBytes is the largest workbook.relic document relic create
@@ -357,7 +420,7 @@ func runRelicMigrate(ctx context.Context, args []string, cwd string, stdout, std
 		return err
 	}
 	flags := newFlagSet("relic", "migrate")
-	target := flags.String("to", "", "the schema version to move to: N, <type> or <type>@N")
+	target := flags.String("to", "", "the schema version to move to: N, <type>, <type>@N or a built-in schema's name")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with the tasks remote (origin unless configured)")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
@@ -365,7 +428,7 @@ func runRelicMigrate(ctx context.Context, args []string, cwd string, stdout, std
 	}
 	if !flagGiven(flags, "to") {
 		return core.Errorf(core.CategoryInvocation,
-			"relic migrate needs --to <target>: N for version N of the relic's type, <type> for that type's newest version, or <type>@N")
+			"relic migrate needs --to <target>: N for version N of the relic's type, <type> for that type's newest version, <type>@N, or a built-in schema's name")
 	}
 	session, err := openTaskSession(ctx, cwd, *noSync, true, stderr)
 	if err != nil {

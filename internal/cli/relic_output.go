@@ -114,6 +114,12 @@ func writeRelicSchema(stdout io.Writer, document core.RelicDocument) {
 	switch schema := document.Schema; {
 	case schema == nil:
 		fmt.Fprintln(stdout, "Schema:\topen")
+	case schema.BuiltIn:
+		if _, _, _, shipped := core.BuiltInRelicSchema(schema.ID); shipped {
+			fmt.Fprintf(stdout, "Schema:\t%s (built in)\n", singleLine(schema.ID))
+		} else {
+			fmt.Fprintf(stdout, "Schema:\tunknown built-in %s; upgrade Workbook\n", singleLine(schema.ID))
+		}
 	case schema.Version == 0:
 		fmt.Fprintf(stdout, "Schema:\tunknown version %s\n", singleLine(schema.ID))
 	default:

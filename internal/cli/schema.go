@@ -71,22 +71,26 @@ func runSchema(ctx context.Context, args []string, cwd string, stdin io.Reader, 
 }
 
 // schemaListEntry is one relic type with a schema, described by its newest
-// version.
+// version. A type with no version of the project's own is described by its
+// built-in: no version number, and no saved versions.
 type schemaListEntry struct {
 	Type     string `json:"type"`
-	Version  int    `json:"version"`
+	Version  int    `json:"version,omitempty"`
 	Versions int    `json:"versions"`
 	Bytes    int64  `json:"bytes"`
 	ID       string `json:"id"`
+	BuiltIn  bool   `json:"builtIn,omitempty"`
 }
 
-// schemaVersionView is one saved version: what the settings list of it and the
-// stored document's references and schema.
+// schemaVersionView is one version, saved or built in: what a listing holds of
+// it and the stored document's references and schema. A built-in has no
+// version number.
 type schemaVersionView struct {
 	Type       string            `json:"type"`
-	Version    int               `json:"version"`
+	Version    int               `json:"version,omitempty"`
 	ID         string            `json:"id"`
 	Bytes      int64             `json:"bytes"`
+	BuiltIn    bool              `json:"builtIn,omitempty"`
 	References map[string]string `json:"references"`
 	Schema     json.RawMessage   `json:"schema"`
 }
@@ -103,7 +107,7 @@ func schemaView(version core.RelicSchemaVersion, document core.RelicSchemaDocume
 	if references == nil {
 		references = map[string]string{}
 	}
-	return schemaVersionView{
+	view := schemaVersionView{
 		Type:       version.Type,
 		Version:    version.Version,
 		ID:         version.ID,
@@ -111,6 +115,10 @@ func schemaView(version core.RelicSchemaVersion, document core.RelicSchemaDocume
 		References: references,
 		Schema:     document.Schema,
 	}
+	if version.IsBuiltIn() {
+		view.Version, view.BuiltIn = 0, true
+	}
+	return view
 }
 
 // readSchemaListing opens the project and reads the saved versions, which reads
@@ -141,8 +149,9 @@ func runSchemaList(ctx context.Context, args []string, cwd string, stdout, stder
 	if err != nil {
 		return err
 	}
+	listing = listing.WithBuiltIns()
 	entries := []schemaListEntry{}
-	for _, relicType := range listing.Types() {
+	for _, relicType := range listing.EffectiveTypes() {
 		newest, _ := listing.Newest(relicType)
 		count := 0
 		for _, version := range listing.Versions {
@@ -150,15 +159,23 @@ func runSchemaList(ctx context.Context, args []string, cwd string, stdout, stder
 				count++
 			}
 		}
-		entries = append(entries, schemaListEntry{
+		entry := schemaListEntry{
 			Type: relicType, Version: newest.Version, Versions: count, Bytes: newest.Bytes, ID: newest.ID,
-		})
+		}
+		if newest.IsBuiltIn() {
+			entry.Version, entry.BuiltIn = 0, true
+		}
+		entries = append(entries, entry)
 	}
 	if *jsonMode {
 		writeResult(stdout, "schema list", entries)
 		return nil
 	}
 	for _, entry := range entries {
+		if entry.BuiltIn {
+			writeBuiltInSchemaLine(stdout, entry.Type, entry.ID, entry.Bytes)
+			continue
+		}
 		plural := "versions"
 		if entry.Versions == 1 {
 			plural = "version"
@@ -169,12 +186,20 @@ func runSchemaList(ctx context.Context, args []string, cwd string, stdout, stder
 	return nil
 }
 
+// writeBuiltInSchemaLine is the line that names a built-in, in schema list
+// and above the schema in schema show.
+func writeBuiltInSchemaLine(output io.Writer, relicType, id string, size int64) {
+	fmt.Fprintf(output, "%s\tbuilt in %s\t%d bytes\n", singleLine(relicType), singleLine(id), size)
+}
+
 func runSchemaShow(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
-	values, args, err := requiredArguments("schema show", []string{"<type>"}, args)
+	values, args, err := requiredArguments("schema show", []string{"<type|built-in name>"}, args)
 	if err != nil {
 		return err
 	}
-	relicType := values[0]
+	// A built-in's name holds ':', which no relic type does.
+	named := values[0]
+	byName := core.IsBuiltInRelicSchemaID(named)
 	flags := newFlagSet("schema", "show")
 	numberText := flags.String("version", "", "show this version instead of the newest")
 	jsonMode := flags.Bool("json", false, "emit JSON")
@@ -183,29 +208,30 @@ func runSchemaShow(ctx context.Context, args []string, cwd string, stdout, stder
 	}
 	number := 0
 	if flagGiven(flags, "version") {
+		if byName {
+			return core.Errorf(core.CategoryInvocation,
+				"schema show takes no --version with a built-in schema's name, which already names one version")
+		}
 		number, err = strconv.Atoi(*numberText)
 		if err != nil || number < 1 {
 			return core.Errorf(core.CategoryInvocation,
 				"schema show --version %q is not a version number; give 1 or more", *numberText)
 		}
 	}
-	if err := core.ValidateRelicType(relicType); err != nil {
-		return err
+	if !byName {
+		if err := core.ValidateRelicType(named); err != nil {
+			return err
+		}
 	}
 	repository, config, listing, err := readSchemaListing(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
-	version, found := listing.Newest(relicType)
-	if !found {
-		return core.Errorf(core.CategoryNotFound, "type %s has no schema", relicType)
+	version, err := schemaToShow(listing.WithBuiltIns(), named, byName, number)
+	if err != nil {
+		return err
 	}
-	if number != 0 {
-		if version, found = listing.Number(relicType, number); !found {
-			return core.Errorf(core.CategoryNotFound, "type %s has no schema version %d", relicType, number)
-		}
-	}
-	document, _, err := repository.ReadRelicSchema(ctx, config, version)
+	document, _, err := core.ReadRelicSchemaVersion(ctx, repository, config, version)
 	if err != nil {
 		return err
 	}
@@ -217,6 +243,37 @@ func runSchemaShow(ctx context.Context, args []string, cwd string, stdout, stder
 	return writeSchemaVersion(stdout, view)
 }
 
+// schemaToShow picks the version schema show was asked for: the built-in
+// named; or, for a type, its newest version (its built-in when the project has
+// saved none), or the project's version of the given number when number is not
+// zero.
+func schemaToShow(listing core.RelicSchemaListing, named string, byName bool, number int) (core.RelicSchemaVersion, error) {
+	if byName {
+		version, found := listing.ByID(named)
+		if !found {
+			return core.RelicSchemaVersion{}, core.Errorf(core.CategoryNotFound,
+				"this Workbook has no built-in schema %s", named)
+		}
+		return version, nil
+	}
+	newest, found := listing.Newest(named)
+	if !found {
+		return core.RelicSchemaVersion{}, core.Errorf(core.CategoryNotFound, "type %s has no schema", named)
+	}
+	if number == 0 {
+		return newest, nil
+	}
+	if version, found := listing.Number(named, number); found {
+		return version, nil
+	}
+	if newest.IsBuiltIn() {
+		return core.RelicSchemaVersion{}, core.Errorf(core.CategoryNotFound,
+			"type %s has no schema version %d of this project's own; its built-in schema is %s", named, number, newest.ID)
+	}
+	return core.RelicSchemaVersion{}, core.Errorf(core.CategoryNotFound,
+		"type %s has no schema version %d", named, number)
+}
+
 // writeSchemaVersion prints a version's line and then its schema indented. The
 // schema's strings are written by anyone who can push, so the text passes
 // through the control-character filter, which keeps its layout.
@@ -225,8 +282,12 @@ func writeSchemaVersion(output io.Writer, view schemaVersionView) error {
 	if err := json.Indent(&indented, view.Schema, "  ", "  "); err != nil {
 		return core.Wrap(core.CategoryCorruptData, "the stored schema cannot be indented", err)
 	}
-	fmt.Fprintf(output, "%s\tversion %d\t%s\t%d bytes\n",
-		singleLine(view.Type), view.Version, singleLine(view.ID), view.Bytes)
+	if view.BuiltIn {
+		writeBuiltInSchemaLine(output, view.Type, view.ID, view.Bytes)
+	} else {
+		fmt.Fprintf(output, "%s\tversion %d\t%s\t%d bytes\n",
+			singleLine(view.Type), view.Version, singleLine(view.ID), view.Bytes)
+	}
 	fmt.Fprintf(output, "  %s\n", core.DisplayText(indented.String()))
 	return nil
 }

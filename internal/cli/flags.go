@@ -879,15 +879,22 @@ var commandSchemas = map[string]commandMetadata{
 		Subcommands: map[string]commandMetadata{
 			"create": {
 				Name:     "create",
-				Synopsis: "workbook relic create [<title>] [--type <type>] [--from-file <file>] [--no-sync] [--json]",
+				Synopsis: "workbook relic create [<title>] [--type <type>] [--set <name>=<value>]... [--set-json <name>=<json>]... [--from-file <file>] [--no-sync] [--json]",
 				Description: "Create a relic.\n\n" +
 					"Without --from-file the title and --type are both required and the relic has\n" +
-					"no parts. With it, the relic is created from a whole workbook.relic document,\n" +
-					"as relic export writes one, with new IDs; a title or --type given here\n" +
-					"replaces the document's.",
+					"no parts. --set stores a property as text and --set-json as any JSON value, as\n" +
+					"on relic update; one command names a property once. With --from-file, the relic\n" +
+					"is created from a whole workbook.relic document, as relic export writes one,\n" +
+					"with new IDs and the document's properties; a title or --type given here\n" +
+					"replaces the document's.\n\n" +
+					"A relic is checked against its type's newest schema. Until the project saves\n" +
+					"its own, spec and plan have the built-ins workbook:spec:1 and workbook:plan:1,\n" +
+					"which require a status, as in --set status=draft.",
 				Positionals: []string{"[<title>]"},
 				Options: []optionMetadata{
 					{Name: "type", Kind: stringFlag, Value: "<type>", Description: "relic type, such as spec or plan"},
+					{Name: "set", Kind: stringFlag, Value: "<name>=<value>", Description: "set a property to text"},
+					{Name: "set-json", Kind: stringFlag, Value: "<name>=<json>", Description: "set a property to a JSON value"},
 					{Name: "from-file", Kind: stringFlag, Value: "<file>", Description: "create from a whole relic in one JSON document (- reads standard input)"},
 					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
@@ -1007,15 +1014,18 @@ var commandSchemas = map[string]commandMetadata{
 			},
 			"migrate": {
 				Name:     "migrate",
-				Synopsis: "workbook relic migrate <relic> --to <target> [--no-sync] [--json]",
+				Synopsis: "workbook relic migrate <relic> --to <N|type|type@N|built-in name> [--no-sync] [--json]",
 				Description: "Move a relic to another schema version.\n\n" +
 					"--to takes N, for version N of the relic's type; <type>, for that type's newest\n" +
-					"version, or an open relic when the type has no schema; or <type>@N. An older\n" +
-					"version may be the target. The whole relic, its removed parts aside, must fit the\n" +
-					"version it moves to. Moving to the version it already names changes nothing.",
+					"version, or an open relic when the type has no schema; <type>@N; or a built-in\n" +
+					"schema's name, such as workbook:spec:1. N and <type>@N name the project's own\n" +
+					"versions; a type with none has its built-in, if any, as its newest version. An\n" +
+					"older version may be the target. The whole relic, its removed parts aside, must\n" +
+					"fit the version it moves to. Moving to the version it already names changes\n" +
+					"nothing.",
 				Positionals: []string{"<relic>"},
 				Options: []optionMetadata{
-					{Name: "to", Kind: stringFlag, Value: "<target>", Description: "the version to move to: N, <type> or <type>@N"},
+					{Name: "to", Kind: stringFlag, Value: "<N|type|type@N|built-in name>", Description: "the version to move to: N, <type>, <type>@N or a built-in schema's name"},
 					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
@@ -1083,22 +1093,27 @@ var commandSchemas = map[string]commandMetadata{
 			"shared with everyone who fetches. Saving one adds a version to its type, and\n" +
 			"every version is kept: a relic names the version it was written under and is\n" +
 			"checked against it when it is saved, until relic migrate moves it to another.\n" +
-			"A type with no schema accepts anything. Reading or synchronizing a relic never\n" +
-			"refuses it for not fitting its schema.",
+			"The types spec and plan have a built-in schema, named workbook:<type>:<n>, until\n" +
+			"the project saves its own. A type with no schema accepts anything. Reading or\n" +
+			"synchronizing a relic never refuses it for not fitting its schema.",
 		Positionals:     []string{"<command>"},
 		SubcommandOrder: []string{"list", "show", "put"},
 		Subcommands: map[string]commandMetadata{
 			"list": {
-				Name:        "list",
-				Synopsis:    "workbook schema list [--json]",
-				Description: "List the relic types that have a schema, with each one's newest version.",
-				Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+				Name:     "list",
+				Synopsis: "workbook schema list [--json]",
+				Description: "List the relic types that have a schema, with each one's newest version, or its\n" +
+					"built-in schema where the project has saved none.",
+				Options: []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
 			},
 			"show": {
-				Name:        "show",
-				Synopsis:    "workbook schema show <type> [--version <n>] [--json]",
-				Description: "Show a relic type's schema: its newest version, or the one --version names.",
-				Positionals: []string{"<type>"},
+				Name:     "show",
+				Synopsis: "workbook schema show <type|built-in name> [--version <n>] [--json]",
+				Description: "Show a relic type's schema: its newest version, or the one --version names. A\n" +
+					"type with no version of the project's own shows its built-in, if it has one.\n" +
+					"A built-in schema's name, such as workbook:spec:1, shows that built-in, also\n" +
+					"after the project has saved its own; it takes no --version.",
+				Positionals: []string{"<type|built-in name>"},
 				Options: []optionMetadata{
 					{Name: "version", Kind: stringFlag, Value: "<n>", Description: "show this version instead of the newest"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},

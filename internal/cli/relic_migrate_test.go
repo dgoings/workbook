@@ -148,6 +148,63 @@ func TestRelicShowTextNamesTheSchema(t *testing.T) {
 	}
 }
 
+// relic show says a relic names a built-in, and says to upgrade for one this
+// build does not have.
+func TestRelicShowTextNamesABuiltIn(t *testing.T) {
+	t.Parallel()
+	for id, want := range map[string]string{
+		"workbook:spec:1": "\nSchema:\tworkbook:spec:1 (built in)\n",
+		"workbook:spec:2": "\nSchema:\tunknown built-in workbook:spec:2; upgrade Workbook\n",
+	} {
+		var output bytes.Buffer
+		writeRelicDocument(&output, core.RelicDocument{
+			Schema: &core.RelicSchemaRef{Type: "spec", ID: id, BuiltIn: true},
+		}, false)
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("%s: output = %q, want %q", id, output.String(), want)
+		}
+	}
+}
+
+func TestRelicMigrateToABuiltInName(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	mustPutSchema(t, repository, "spec", specSchemaOne)
+	fromJSON := mustCreateRelic(t, repository, "JSON", "--type", "spec", "--set", "status=draft").Relic.ID
+	fromText := mustCreateRelic(t, repository, "Text", "--type", "spec", "--set", "status=draft").Relic.ID
+
+	var migrated core.RelicMutationResult
+	mustRelic(t, repository, &migrated, "migrate", fromJSON, "--to", "workbook:spec:1")
+	if !migrated.Changed || migrated.Relic.Schema == nil ||
+		*migrated.Relic.Schema != (core.RelicSchemaRef{Type: "spec", ID: "workbook:spec:1", BuiltIn: true}) {
+		t.Fatalf("migrate --to workbook:spec:1 = %s", mustJSON(t, migrated))
+	}
+	code, stdout, stderr := run(t, repository, "relic", "migrate", fromText, "--to", "workbook:spec:1")
+	if code != 0 || !strings.HasPrefix(stdout, fromText+"\tspec\tText\n") {
+		t.Fatalf("migrate in text = (%d, %q, %q)", code, stdout, stderr)
+	}
+	code, stdout, stderr = run(t, repository, "relic", "show", fromText)
+	if code != 0 || !strings.Contains(stdout, "\nSchema:\tworkbook:spec:1 (built in)\n") {
+		t.Fatalf("show = (%d, %q, %q), want the built-in's schema line", code, stdout, stderr)
+	}
+	message := relicErrorMessage(t, repository, 4, core.CategoryNotFound, "migrate", fromText, "--to", "workbook:spec:9")
+	if message != "this Workbook has no built-in schema workbook:spec:9" {
+		t.Errorf("migrate to an unshipped built-in = %q", message)
+	}
+
+	message = relicErrorMessage(t, repository, 2, core.CategoryInvocation, "migrate", fromText)
+	if !strings.Contains(message, "built-in schema's name") {
+		t.Errorf("migrate without --to = %q, want it to name the built-in form", message)
+	}
+	output := assertHelpOutput(t, []string{"relic", "migrate", "--help"},
+		"Usage: workbook relic migrate <relic> --to <N|type|type@N|built-in name> [--no-sync] [--json]\n")
+	for _, want := range []string{"workbook:spec:1", "\n  --to <N|type|type@N|built-in name> "} {
+		if !strings.Contains(output, want) {
+			t.Errorf("relic migrate help = %q, want %q", output, want)
+		}
+	}
+}
+
 // Results carry a conformance state where the whole relic was judged (list,
 // create, migrate) and leave the member out where it was not (update,
 // delete, restore); an empty state is never written.

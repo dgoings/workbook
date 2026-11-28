@@ -33,6 +33,7 @@ type schemaVersionData struct {
 	References map[string]string `json:"references"`
 	Schema     json.RawMessage   `json:"schema"`
 	Changed    bool              `json:"changed"`
+	BuiltIn    bool              `json:"builtIn"`
 }
 
 type schemaListData struct {
@@ -41,6 +42,7 @@ type schemaListData struct {
 	Versions int    `json:"versions"`
 	Bytes    int64  `json:"bytes"`
 	ID       string `json:"id"`
+	BuiltIn  bool   `json:"builtIn"`
 }
 
 func writeSchemaFile(t *testing.T, content string) string {
@@ -98,10 +100,10 @@ func TestSchemaPutShowList(t *testing.T) {
 			t.Parallel()
 			repository := relicRepositoryFor(t, objectFormat)
 
-			var empty []schemaListData
-			mustSchema(t, repository, &empty, "list")
-			if empty == nil || len(empty) != 0 {
-				t.Fatalf("schema list of no schemas = %#v, want an empty list", empty)
+			var fresh []schemaListData
+			mustSchema(t, repository, &fresh, "list")
+			if len(fresh) != 2 || !fresh[0].BuiltIn || !fresh[1].BuiltIn {
+				t.Fatalf("schema list of no schemas = %#v, want only the two built-ins", fresh)
 			}
 
 			first := mustPutSchema(t, repository, "spec", specSchemaOne)
@@ -117,7 +119,7 @@ func TestSchemaPutShowList(t *testing.T) {
 			var listed []schemaListData
 			mustSchema(t, repository, &listed, "list")
 			want := schemaListData{Type: "spec", Version: 2, Versions: 2, Bytes: second.Bytes, ID: second.ID}
-			if len(listed) != 1 || listed[0] != want {
+			if len(listed) != 2 || !listed[0].BuiltIn || listed[1] != want {
 				t.Fatalf("schema list = %+v, want %+v", listed, want)
 			}
 
@@ -231,13 +233,13 @@ func TestSchemaTextOutput(t *testing.T) {
 	mustSchema(t, repository, &shown, "show", "spec")
 
 	code, stdout, stderr = run(t, repository, "schema", "list")
-	want := "spec\tversion 1\t1 version\t" + itoa(shown.Bytes) + " bytes\n"
+	want := builtInListLine(t, "plan") + "spec\tversion 1\t1 version\t" + itoa(shown.Bytes) + " bytes\n"
 	if code != 0 || stdout != want || stderr != "" {
 		t.Fatalf("schema list = (%d, %q, %q), want %q", code, stdout, stderr, want)
 	}
 	mustPutSchema(t, repository, "spec", specSchemaTwo)
 	code, stdout, _ = run(t, repository, "schema", "list")
-	if code != 0 || !strings.HasPrefix(stdout, "spec\tversion 2\t2 versions\t") {
+	if code != 0 || !strings.Contains(stdout, "\nspec\tversion 2\t2 versions\t") {
 		t.Fatalf("schema list = (%d, %q), want 2 versions", code, stdout)
 	}
 
@@ -252,6 +254,159 @@ func TestSchemaTextOutput(t *testing.T) {
 func itoa(number int64) string {
 	encoded, _ := json.Marshal(number)
 	return string(encoded)
+}
+
+// builtInListLine is schema list's text line for the type's built-in.
+func builtInListLine(t *testing.T, relicType string) string {
+	t.Helper()
+	version, _, _, found := core.BuiltInRelicSchema("workbook:" + relicType + ":1")
+	if !found {
+		t.Fatalf("no built-in schema for %s", relicType)
+	}
+	return relicType + "\tbuilt in " + version.ID + "\t" + itoa(version.Bytes) + " bytes\n"
+}
+
+// schemaData is the data member of a schema command's JSON result, byte for
+// byte.
+func schemaData(t *testing.T, repository string, args ...string) string {
+	t.Helper()
+	var data json.RawMessage
+	mustSchema(t, repository, &data, args...)
+	return string(data)
+}
+
+// canonicalBuiltInFile is the canonical form of a built-in's source file.
+func canonicalBuiltInFile(t *testing.T, name string) string {
+	t.Helper()
+	source, err := os.ReadFile(filepath.Join("..", "core", "relicschemas", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := core.CanonicalRelicValue(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(canonical)
+}
+
+func TestSchemaListShowsBuiltIns(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	plan, _, _, _ := core.BuiltInRelicSchema("workbook:plan:1")
+	spec, _, _, _ := core.BuiltInRelicSchema("workbook:spec:1")
+	planRow := `{"type":"plan","versions":0,"bytes":` + itoa(plan.Bytes) + `,"id":"workbook:plan:1","builtIn":true}`
+	specRow := `{"type":"spec","versions":0,"bytes":` + itoa(spec.Bytes) + `,"id":"workbook:spec:1","builtIn":true}`
+	if got, want := schemaData(t, repository, "list"), "["+planRow+","+specRow+"]"; got != want {
+		t.Fatalf("schema list of a new project = %s, want %s", got, want)
+	}
+	code, stdout, stderr := run(t, repository, "schema", "list")
+	if want := builtInListLine(t, "plan") + builtInListLine(t, "spec"); code != 0 || stdout != want || stderr != "" {
+		t.Fatalf("schema list = (%d, %q, %q), want %q", code, stdout, stderr, want)
+	}
+
+	put := mustPutSchema(t, repository, "spec", specSchemaOne)
+	memo := mustPutSchema(t, repository, "memo", specSchemaOne)
+	projectRow := func(saved schemaVersionData) string {
+		return `{"type":"` + saved.Type + `","version":1,"versions":1,"bytes":` + itoa(saved.Bytes) + `,"id":"` + saved.ID + `"}`
+	}
+	want := "[" + projectRow(memo) + "," + planRow + "," + projectRow(put) + "]"
+	if got := schemaData(t, repository, "list"); got != want {
+		t.Fatalf("schema list after the puts = %s, want %s", got, want)
+	}
+	code, stdout, stderr = run(t, repository, "schema", "list")
+	wantText := "memo\tversion 1\t1 version\t" + itoa(memo.Bytes) + " bytes\n" +
+		builtInListLine(t, "plan") +
+		"spec\tversion 1\t1 version\t" + itoa(put.Bytes) + " bytes\n"
+	if code != 0 || stdout != wantText || stderr != "" {
+		t.Fatalf("schema list = (%d, %q, %q), want %q", code, stdout, stderr, wantText)
+	}
+}
+
+func TestSchemaShowBuiltIn(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	spec, _, _, _ := core.BuiltInRelicSchema("workbook:spec:1")
+	canonical := canonicalBuiltInFile(t, "spec-1.json")
+	view := `{"type":"spec","id":"workbook:spec:1","bytes":` + itoa(spec.Bytes) +
+		`,"builtIn":true,"references":{},"schema":` + canonical + `}`
+	header := "spec\tbuilt in workbook:spec:1\t" + itoa(spec.Bytes) + " bytes\n"
+	requireShown := func(argument string) {
+		t.Helper()
+		if got := schemaData(t, repository, "show", argument); got != view {
+			t.Fatalf("schema show %s = %s, want %s", argument, got, view)
+		}
+		code, stdout, stderr := run(t, repository, "schema", "show", argument)
+		if code != 0 || stderr != "" || !strings.HasPrefix(stdout, header+"  {\n") || !strings.HasSuffix(stdout, "\n  }\n") {
+			t.Fatalf("schema show %s = (%d, %q, %q), want %q and the schema indented", argument, code, stdout, stderr, header)
+		}
+	}
+	requireShown("spec")
+	requireShown("workbook:spec:1")
+	var plan schemaVersionData
+	mustSchema(t, repository, &plan, "show", "plan")
+	if want := canonicalBuiltInFile(t, "plan-1.json"); !plan.BuiltIn || plan.ID != "workbook:plan:1" || string(plan.Schema) != want {
+		t.Errorf("schema show plan = %+v, want the built-in %s", plan, want)
+	}
+
+	message := schemaErrorMessage(t, repository, 4, core.CategoryNotFound, "show", "spec", "--version", "1")
+	if want := "type spec has no schema version 1 of this project's own; its built-in schema is workbook:spec:1"; message != want {
+		t.Errorf("schema show spec --version 1 = %q, want %q", message, want)
+	}
+	for _, number := range []string{"1", "0"} {
+		message = schemaErrorMessage(t, repository, 2, core.CategoryInvocation, "show", "workbook:spec:1", "--version", number)
+		if want := "schema show takes no --version with a built-in schema's name, which already names one version"; message != want {
+			t.Errorf("schema show workbook:spec:1 --version %s = %q, want %q", number, message, want)
+		}
+	}
+	message = schemaErrorMessage(t, repository, 4, core.CategoryNotFound, "show", "workbook:spec:9")
+	if message != "this Workbook has no built-in schema workbook:spec:9" {
+		t.Errorf("schema show workbook:spec:9 = %q", message)
+	}
+	// A name that is not well formed is judged as a type.
+	schemaErrorMessage(t, repository, 5, core.CategoryValidation, "show", "workbook:spec:01")
+
+	// After a takeover the type is the project's, byte for byte as before the
+	// built-ins, and the built-in is still shown by name.
+	put := mustPutSchema(t, repository, "spec", specSchemaOne)
+	stored, err := core.CanonicalRelicValue([]byte(specSchemaOne))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"type":"spec","version":1,"id":"` + put.ID + `","bytes":` + itoa(put.Bytes) +
+		`,"references":{},"schema":` + string(stored) + `}`
+	if got := schemaData(t, repository, "show", "spec"); got != want {
+		t.Fatalf("schema show spec after the takeover = %s, want %s", got, want)
+	}
+	requireShown("workbook:spec:1")
+
+	output := assertHelpOutput(t, []string{"schema", "show", "--help"},
+		"Usage: workbook schema show <type|built-in name> [--version <n>] [--json]\n")
+	if !strings.Contains(output, "workbook:spec:1") {
+		t.Errorf("schema show help = %q, want it to name the built-in form", output)
+	}
+}
+
+func TestSchemaPutCopyOfABuiltInTakesOver(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	var builtIn schemaVersionData
+	mustSchema(t, repository, &builtIn, "show", "spec")
+	code, stdout, stderr := runWithInput(t, repository, strings.NewReader(string(builtIn.Schema)),
+		"schema", "put", "spec", "-", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("schema put spec - = (%d, %q, %q)", code, stdout, stderr)
+	}
+	var put schemaVersionData
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "schema put").Data, &put); err != nil {
+		t.Fatal(err)
+	}
+	if !put.Changed || put.Version != 1 || put.BuiltIn || string(put.Schema) != string(builtIn.Schema) {
+		t.Fatalf("schema put of the built-in's copy = %+v, want version 1 with the same schema", put)
+	}
+	created := mustCreateRelic(t, repository, "Compaction", "--type", "spec", "--set", "status=draft").Relic
+	if created.Schema == nil || *created.Schema != (core.RelicSchemaRef{Type: "spec", ID: put.ID, Version: 1}) {
+		t.Fatalf("a new spec names %+v, want version 1", created.Schema)
+	}
 }
 
 // A schema's strings are written by anyone who can push, so no control
@@ -392,7 +547,7 @@ func TestSchemaHelp(t *testing.T) {
 	assertHelpOutput(t, []string{"schema", "put", "--help"},
 		"Usage: workbook schema put <type> <file|-> [--no-sync] [--no-docs] [--json]")
 	assertHelpOutput(t, []string{"relic", "migrate", "--help"},
-		"Usage: workbook relic migrate <relic> --to <target> [--no-sync] [--json]")
+		"Usage: workbook relic migrate <relic> --to <N|type|type@N|built-in name> [--no-sync] [--json]")
 	if !strings.Contains(usage, "  schema <command> [options]\n") {
 		t.Fatalf("usage = %q, want the schema line", usage)
 	}
